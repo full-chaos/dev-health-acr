@@ -38,6 +38,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -202,21 +203,55 @@ func (c *comparisonConn) observedQueries() []string {
 }
 
 // newComparisonAdapter wires the recording connection into a REAL Adapter.
-func newComparisonAdapter(t *testing.T, conn *comparisonConn) *Adapter {
+//
+// `vectorRows` non-nil makes the adapter VECTOR-CAPABLE, which is not a
+// convenience: ResolveDeps.SearchQuestion is wired to
+// questionVectorSearchNodes (reader.go), and that function returns nothing at
+// all when a.embedder is nil. newFakeAdapter configures no embedder, so on a
+// plain fixture the whole-question pass NEVER RUNS -- an arm about what the
+// question pass may not do would measure nothing, and a mutant deleting the
+// question-search exclusion would read as killed while the path stayed dead.
+// The fence needs an operational vector index of the stub vector's own
+// dimension, or the pass is refused one step later for a different reason.
+func newComparisonAdapter(t *testing.T, conn *comparisonConn, vectorRows []row) *Adapter {
 	t.Helper()
 	fake := &fakeConn{queryFunc: func(_ context.Context, _ string, cypher string, params map[string]interface{}, _ bool) ([]row, error) {
-		query, _ := params["query"].(string)
-		if !strings.Contains(cypher, "fulltext") {
-			return nil, nil
+		switch {
+		case strings.Contains(cypher, "db.idx.vector.queryNodes"):
+			conn.record(comparisonVectorQueryMarker)
+			return vectorRows, nil
+		case strings.Contains(cypher, "fulltext"):
+			query, _ := params["query"].(string)
+			conn.record(query)
+			if conn.rowsForTerm == nil {
+				return nil, nil
+			}
+			return conn.rowsForTerm(query), nil
 		}
-		conn.record(query)
-		if conn.rowsForTerm == nil {
-			return nil, nil
-		}
-		return conn.rowsForTerm(query), nil
+		return nil, nil
 	}}
-	return newFakeAdapter(t, fake)
+	if vectorRows == nil {
+		return newFakeAdapter(t, fake)
+	}
+	fake.indexesFunc = func(context.Context, string) ([]indexStatus, error) {
+		return []indexStatus{operationalVectorIndex(comparisonVectorDimension)}, nil
+	}
+	adapter := newFakeAdapter(t, fake)
+	adapter.attachEmbedder(EmbedderOptions{
+		Embedder:        &stubEmbedder{vector: comparisonStubVector()},
+		SimilarityFloor: 0.55,
+	})
+	return adapter
 }
+
+// comparisonVectorQueryMarker is what the recorder logs for the vector arm, so
+// an arm can prove the whole-question pass actually reached the backend rather
+// than inferring it from a candidate that could have come from a term pass.
+const comparisonVectorQueryMarker = "[vector question pass]"
+
+const comparisonVectorDimension = 2
+
+func comparisonStubVector() []float32 { return []float32{1, 0} }
 
 // termQueryContains reports whether a retrieval query carries the given
 // operand term. runFulltextQuery joins tokenized terms with "|", so a
@@ -302,7 +337,26 @@ type refusingSynthesizer struct {
 func (s refusingSynthesizer) Synthesize(context.Context, storage.Principal, contextfabric.SynthesisInput) (contextfabric.InvestigationResult, error) {
 	s.t.Helper()
 	s.t.Error("the synthesizer was invoked for a held comparison -- a hold publishes no judgment and must terminate before synthesis")
-	return contextfabric.InvestigationResult{}, nil
+	// WELL-FORMED, DELIBERATELY, even though reaching here is already the
+	// failure. The first version of this double returned a zero-value result;
+	// the engine then rejected it ("result identity or status violates v1
+	// bounds") and Investigate returned an ERROR, which the drive turns into
+	// a t.Fatalf -- so five arms died on a validation message instead of on
+	// the assertion they exist to make. The t.Error above had already fired,
+	// so the arms were red for the right reason, but the reason was masked.
+	// A refusing double must still let the call it is refusing COMPLETE.
+	return contextfabric.InvestigationResult{
+		Status: contextfabric.InvestigationNoMatch, StrongestPressures: []string{}, Drivers: []contextfabric.DriverJudgment{},
+		RemainingWork: []contextfabric.Finding{}, ReadinessGaps: []contextfabric.Finding{}, Paths: []contextfabric.RelationshipPath{},
+		Conflicts: []contextfabric.Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{},
+		ClaimedFacts:        []contextfabric.ClaimedFact{},
+		Coverage:            contextfabric.Coverage{Sources: []contextfabric.SourceObservation{}, DegradedReasons: []string{}},
+		DeterministicAnswer: "No confidently resolved subject was found in the authorized organization graph.", Warnings: []string{},
+		Versions: contextfabric.VersionSet{
+			Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",
+			InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1",
+		},
+	}, nil
 }
 
 // comparisonDrive is one full investigation. `facts` and `synthesizer` are
@@ -319,6 +373,9 @@ type comparisonDrive struct {
 	priorResults contextfabric.InvestigationResultStore
 	receipts     []contextfabric.BoundSubjectReceipt
 	question     string
+	// vectorRows, when non-nil, makes this drive's adapter vector-capable so
+	// the whole-question pass runs at all. See newComparisonAdapter.
+	vectorRows []row
 }
 
 func (d comparisonDrive) run(t *testing.T) contextfabric.InvestigationResult {
@@ -345,7 +402,7 @@ func (d comparisonDrive) run(t *testing.T) contextfabric.InvestigationResult {
 			frame:  d.frame,
 			family: d.family,
 		},
-		Graph:        newComparisonAdapter(t, d.conn),
+		Graph:        newComparisonAdapter(t, d.conn, d.vectorRows),
 		Facts:        d.facts,
 		Synthesizer:  d.synthesizer,
 		Results:      results,
@@ -452,11 +509,39 @@ func assertHeldComparison(t *testing.T, result contextfabric.InvestigationResult
 		t.Fatal("the held comparison carries an empty clarification prompt -- the user is asked nothing and cannot complete the comparison")
 	}
 	lowered := strings.ToLower(prompt)
+	// NECESSARY, NOT SUFFICIENT -- and the first version of this helper
+	// stopped here, which made two arms VACUOUS. An exact label match
+	// requires EqualFold(term, subject.Label) (graphrank/candidate.go), so
+	// these fixtures' candidate labels MUST equal their operand terms; and
+	// the parent's own prompt is graphrank.ClarificationPrompt, which is a
+	// list of the first three candidate LABELS. So the single-subject prompt
+	// contained both operand names by construction and satisfied these two
+	// checks at the parent, on a resolution that had not held for any
+	// operand reason at all. Measured, not argued: both arms passed at the
+	// parent before the check below existed.
 	if !strings.Contains(lowered, strings.ToLower(operandOne)) {
-		t.Errorf("clarification prompt %q does not name operand one (%q) -- a two-subject request answered with a single-subject question is the reported harm", prompt, operandOne)
+		t.Errorf("clarification prompt %q does not name operand one (%q)", prompt, operandOne)
 	}
 	if !strings.Contains(lowered, strings.ToLower(operandTwo)) {
-		t.Errorf("clarification prompt %q does not name operand two (%q) -- a two-subject request answered with a single-subject question is the reported harm", prompt, operandTwo)
+		t.Errorf("clarification prompt %q does not name operand two (%q)", prompt, operandTwo)
+	}
+	// THE DISCRIMINATING CHECK, and the plan's actual stated harm: "a
+	// SINGLE-SUBJECT disambiguation prompt for a two-subject request". A held
+	// comparison must not be asking the generic "which of these subjects did
+	// you mean" question -- it must name each operand, its state, and the
+	// action required to complete the comparison.
+	//
+	// Expressed as a CALL, never as a copied literal. Asserting the absence
+	// of the string "Which subject did you mean" would silently stop
+	// discriminating the day that wording changed, and pinning another
+	// function's prose in this file is the accretion this codebase keeps
+	// paying for. Comparing against what the generic builder would produce
+	// FOR THIS RESOLUTION'S OWN PUBLISHED CANDIDATES cannot go stale: the two
+	// move together or the assertion fires.
+	if generic := graphrank.ClarificationPrompt(result.SubjectResolution.Candidates); prompt == generic {
+		t.Errorf("the held comparison's prompt is byte-identical to the generic single-subject enumeration %q -- "+
+			"the operand names appear in it only because it lists candidate labels and exactness forces label==term, "+
+			"so a two-subject request is still being answered with a one-subject question", generic)
 	}
 	if len(result.ClaimedFacts) != 0 {
 		t.Errorf("the held comparison published %d claimed facts, want none", len(result.ClaimedFacts))
@@ -724,33 +809,79 @@ func TestANamedOperandPairedWithAScopedOperandHoldsBeforeAnyRead(t *testing.T) {
 // AT THE PARENT the question pass's hit joins the same flat pool as everything
 // else, and with no rival it is free to clear the ordinary commit gate: the
 // turn commits a subject that answers neither operand and reads facts for it.
+//
+// THIS ARM IS MEASURABLE ONLY ON A VECTOR-CAPABLE FIXTURE, and the first
+// version of it was not one. ResolveDeps.SearchQuestion is
+// questionVectorSearchNodes (reader.go), which returns immediately when
+// a.embedder is nil -- so on a plain newFakeAdapter the whole-question pass
+// never ran and the arm's own fixture control refused to measure
+// ("candidates = []"). The rider this arm pins is about the VECTOR arm; any
+// future mutant of the question-search exclusion has to be measured here, on
+// this fixture, or it reads as killed while the path stays dead.
 func TestAWholeQuestionOnlySubjectCannotStandInForAnOperand(t *testing.T) {
 	t.Parallel()
 
-	conn := &comparisonConn{rowsForTerm: perOperandRows(
-		nil,
-		nil,
-		[]row{comparisonAuthorizedRow(comparisonQuestionOnlySubject, comparisonQuestion, 0.99)},
-	)}
+	// Distance 0, i.e. as close as the ANN query can report, so the candidate
+	// arrives with the highest confidence this path can produce. The fixture
+	// control below asserts what that actually came out as rather than
+	// trusting this number to mean what it looks like it means.
+	closest := 0.0
+	questionOnlyRow := row{"node": &node{Properties: map[string]interface{}{
+		propKind:                     string(comparisonQuestionOnlySubject.Kind),
+		propCanonicalID:              comparisonQuestionOnlySubject.CanonicalID,
+		propLabel:                    comparisonQuestionOnlySubject.Label,
+		propSearchText:               comparisonQuestion,
+		"authorization_repositories": "*",
+	}}, "score": closest}
+
+	conn := &comparisonConn{rowsForTerm: perOperandRows(nil, nil, nil)}
 
 	result := comparisonDrive{
 		frame:       twoNamedOperandComparisonFrame(),
 		family:      contextfabric.QuestionFamilyExplicitComparison,
 		terms:       []string{comparisonTermA, comparisonTermB},
 		conn:        conn,
+		vectorRows:  []row{questionOnlyRow},
 		facts:       refusingFactReader{t: t},
 		synthesizer: refusingSynthesizer{t: t},
 	}.run(t)
 
-	// FIXTURE CONTROL, and the sharpest one in this file. The question-only
+	// FIXTURE CONTROL 1. The whole-question pass must actually have REACHED
+	// the backend. Without this the arm cannot tell "the question pass ran and
+	// its hit was refused" -- the property -- from "the question pass never
+	// ran", which is what the first version of this fixture silently did.
+	sawVectorPass := false
+	for _, query := range conn.observedQueries() {
+		if query == comparisonVectorQueryMarker {
+			sawVectorPass = true
+		}
+	}
+	if !sawVectorPass {
+		t.Fatalf("the whole-question vector pass never reached the backend (queries = %v) -- this arm measures nothing about a rider on a pass that did not run",
+			conn.observedQueries())
+	}
+
+	// FIXTURE CONTROL 2, and the sharpest one in this file. The question-only
 	// subject must actually have been RETRIEVED and must actually be
-	// high-scoring. A fixture whose question pass returned nothing would
-	// satisfy every assertion below while measuring the empty-pool path.
+	// commit-eligible. A fixture whose question pass returned nothing, or
+	// whose hit landed below the ordinary floor, would satisfy every
+	// assertion below while measuring the empty-pool path or a
+	// confidence refusal instead of the rider.
 	candidate := requireRetrieved(t, result.SubjectResolution, comparisonQuestionOnlySubject,
 		"the whole-question pass is the only source this arm has, and its hit is the thing under test")
 	if candidate.Confidence < 0.72 {
 		t.Fatalf("the question-only candidate's confidence = %.2f, below the ordinary commit floor -- this fixture cannot distinguish 'refused for want of an identity witness' from 'refused for want of confidence', so it measures nothing about the rider",
 			candidate.Confidence)
+	}
+
+	// AND IT MUST CARRY NO OPERAND-TERM PROVENANCE. The question pass records
+	// a bounded provenance marker rather than a caller-typed term, so a
+	// candidate that somehow arrived carrying an operand term would mean the
+	// fixture leaked a term pass into this arm.
+	for _, term := range candidate.MatchedTerms {
+		if termQueryContains(term, comparisonTermA) || termQueryContains(term, comparisonTermB) {
+			t.Fatalf("the question-only candidate carries the operand term %q in its matched terms -- it was reached by a term pass, not by the question pass, and this arm is measuring the wrong thing", term)
+		}
 	}
 
 	if subjectCommitted(result.SubjectResolution, comparisonQuestionOnlySubject) {
