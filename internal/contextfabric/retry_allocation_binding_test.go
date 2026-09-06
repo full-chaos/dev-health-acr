@@ -175,6 +175,26 @@ func TestTheConsumedAllocationIsTheReturnedOne(t *testing.T) {
 			"the first pass's allocation still rides through on the struct copy")
 	}
 
+	// THE THIRD LEG: what the producer RETURNS must be what its consumers SPENT.
+	//
+	// Without this, `return result, params.Allocation, pending, nil` compiles,
+	// reads as correct, and silently restores the whole defect: narration and
+	// synthesis spend `synthesisAllocation` while the guard measures a pristine
+	// copy that no producer-local fault can ever touch. The invariant needs all
+	// three legs -- one binding, every consumer reads it, and the return is that
+	// same identifier -- and only the third one makes the other two observable
+	// outside the function.
+	consumers, returned := producerAllocationIdents(t, files)
+	for _, r := range returned {
+		if r == "" {
+			continue
+		}
+		if !containsIdent(consumers, r) {
+			t.Errorf("synthesizeAndAssemble returns %q, which is not the identifier its consumers "+
+				"spend (%v): the guard would measure a copy the producer never used", r, consumers)
+		}
+	}
+
 	// THE FIRST PASS's binding, which the checks below do not reach.
 	//
 	// fitAssembledResult receives the first pass's consumed allocation as a
@@ -405,4 +425,64 @@ func firstPassAllocationSource(t *testing.T, files []*ast.File) string {
 		t.Fatal("fitAssembledResult binds no `allocation`; this pin is stale and asserts nothing")
 	}
 	return out
+}
+
+// producerAllocationIdents returns (identifiers passed as the allocation to
+// synthesis and narration, identifiers returned in the ItemAllocation position).
+func producerAllocationIdents(t *testing.T, files []*ast.File) ([]string, []string) {
+	t.Helper()
+	fn := findFuncDecl(t, files, "synthesizeAndAssemble")
+	var consumers, returned []string
+	ast.Inspect(fn, func(n ast.Node) bool {
+		switch node := n.(type) {
+		case *ast.CompositeLit:
+			// SynthesisInput{Allocation: X, ...}
+			for _, elt := range node.Elts {
+				kv, ok := elt.(*ast.KeyValueExpr)
+				if !ok {
+					continue
+				}
+				if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "Allocation" {
+					if ident, ok := kv.Value.(*ast.Ident); ok {
+						consumers = append(consumers, ident.Name)
+					}
+				}
+			}
+		case *ast.CallExpr:
+			if ident, ok := node.Fun.(*ast.Ident); ok && ident.Name == "narrateCohortDriverJudgments" && len(node.Args) > 0 {
+				if last, ok := node.Args[len(node.Args)-1].(*ast.Ident); ok {
+					consumers = append(consumers, last.Name)
+				}
+			}
+		case *ast.ReturnStmt:
+			// The allocation is the SECOND result.
+			if len(node.Results) >= 2 {
+				if ident, ok := node.Results[1].(*ast.Ident); ok {
+					returned = append(returned, ident.Name)
+				} else {
+					var buf bytes.Buffer
+					if err := printer.Fprint(&buf, token.NewFileSet(), node.Results[1]); err == nil {
+						returned = append(returned, buf.String())
+					}
+				}
+			}
+		}
+		return true
+	})
+	if len(consumers) == 0 {
+		t.Fatal("found no allocation consumer inside synthesizeAndAssemble; this pin is stale")
+	}
+	if len(returned) == 0 {
+		t.Fatal("found no allocation return inside synthesizeAndAssemble; this pin is stale")
+	}
+	return consumers, returned
+}
+
+func containsIdent(haystack []string, needle string) bool {
+	for _, h := range haystack {
+		if h == needle {
+			return true
+		}
+	}
+	return false
 }
