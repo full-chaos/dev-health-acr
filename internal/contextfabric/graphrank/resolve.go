@@ -1080,6 +1080,25 @@ type ResolutionTraceEvent struct {
 	Rank           int
 	Survived       bool
 	CoverageBypass bool
+	// RankedCutSummary/RankedCutCandidateCount/RankedCutSurvivedCount/
+	// RankedCutSurvivedIDs/RankedCutMax (stage=="ranked_cut" ONLY,
+	// CHAOS-5222): the per-candidate Rank/Survived/Subject event above stays
+	// at Debug (measured: up to ~1 per pool candidate, unbounded by the
+	// resolution's own retrieval size, not the cut budget -- an operator
+	// tailing a rig log at the production default cannot afford that
+	// volume). This is a SECOND event, emitted ONCE per resolution
+	// (RankedCutSummary=true marks it, so a consumer can tell it apart from
+	// the per-candidate events sharing the same Stage token), at Info,
+	// folding the whole cut into one line: how many candidates were ranked,
+	// how many survived, which ones (bounded by the cut's own `max`, so its
+	// size is the CONFIGURED budget, not the retrieval size), and the
+	// threshold applied. No new Stage value -- same closed-vocabulary
+	// token, a richer payload.
+	RankedCutSummary        bool
+	RankedCutCandidateCount int
+	RankedCutSurvivedCount  int
+	RankedCutSurvivedIDs    []string
+	RankedCutMax            int
 	// IdentityUniverseComplete (identity_universe stage; chris ruling,
 	// 2026-08-17): the RAW devhealthsource.IdentityUniverse completeness
 	// flag, BEFORE falkorgraph/reader.go folds it with graphMissing into

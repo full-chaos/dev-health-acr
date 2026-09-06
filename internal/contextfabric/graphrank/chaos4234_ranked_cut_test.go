@@ -51,7 +51,7 @@ func TestCHAOS4234_RankedCutTrace_OneEventPerCandidateInRankOrderWithSurvival(t 
 	if len(resolution.Candidates) != 2 {
 		t.Fatalf("resolution.Candidates = %#v, want the 2 survivors of max=2", resolution.Candidates)
 	}
-	events := tracer.eventsForStage("ranked_cut")
+	events := perCandidateRankedCutEvents(tracer)
 	if len(events) != 4 {
 		t.Fatalf("ranked_cut events = %d, want one per pool candidate (4), including the two the cut dropped", len(events))
 	}
@@ -96,7 +96,7 @@ func TestCHAOS4234_RankedCutTrace_UnboundedMaxMarksEverySurvivor(t *testing.T) {
 		DefaultCommitGatePolicy(), identityClaimants{}, identityMatchTerms{},
 		false, tracer, "request_4234", "",
 	)
-	for _, event := range tracer.eventsForStage("ranked_cut") {
+	for _, event := range perCandidateRankedCutEvents(tracer) {
 		if !event.Survived {
 			t.Fatalf("ranked_cut %#v: Survived=false under max=0 (no cut), want true", event)
 		}
@@ -218,8 +218,8 @@ func TestCHAOS4234_OffersOnlyResolution_SkipsCensusAndFlagsTheKindOfferEvent(t *
 	if !ok || !event.OfferedUnderWindowGate {
 		t.Fatalf("offers-only kind_offer event = %#v (ok=%v), want OfferedUnderWindowGate=true", event, ok)
 	}
-	if len(tracer.eventsForStage("ranked_cut")) != 2 {
-		t.Fatalf("offers-only ranked_cut events = %d, want 2: ranking and its trace still run under the gate", len(tracer.eventsForStage("ranked_cut")))
+	if got := perCandidateRankedCutEvents(tracer); len(got) != 2 {
+		t.Fatalf("offers-only ranked_cut events = %d, want 2: ranking and its trace still run under the gate", len(got))
 	}
 }
 
@@ -325,4 +325,20 @@ func lastEventForStage(tracer *captureResolutionTracer, stage string) (Resolutio
 		return ResolutionTraceEvent{}, false
 	}
 	return events[len(events)-1], true
+}
+
+// perCandidateRankedCutEvents is CHAOS-5222 (the per-resolution
+// RankedCutSummary line shares the SAME "ranked_cut" Stage token as the
+// per-candidate events this file's own tests expect -- see
+// ResolutionTraceEvent.RankedCutSummary's own doc comment). Every existing
+// test in this file wants "one event per candidate," which is what this
+// filters down to.
+func perCandidateRankedCutEvents(tracer *captureResolutionTracer) []ResolutionTraceEvent {
+	var out []ResolutionTraceEvent
+	for _, e := range tracer.eventsForStage("ranked_cut") {
+		if !e.RankedCutSummary {
+			out = append(out, e)
+		}
+	}
+	return out
 }

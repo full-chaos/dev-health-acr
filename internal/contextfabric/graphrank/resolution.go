@@ -1277,6 +1277,25 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 				Rank: i + 1, Survived: keptIndex[i],
 			})
 		}
+		// CHAOS-5222: the once-per-resolution Info summary -- see
+		// ResolutionTraceEvent.RankedCutSummary's own doc comment for why
+		// this is a second event on the same token rather than promoting
+		// the per-candidate loop above (measured: that loop is one event
+		// per RETRIEVAL-sized pool candidate, up to 91 in one representative
+		// fixture, against a ceiling of 25 for an unconditional per-resolution
+		// Info line). survivedIDs is bounded by `max`, the CONFIGURED cut
+		// budget, not the pool size.
+		survivedIDs := make([]string, 0, len(ordered))
+		for i, candidate := range ordered {
+			if keptIndex[i] {
+				survivedIDs = append(survivedIDs, candidate.Subject.CanonicalID)
+			}
+		}
+		tracer.Trace(ResolutionTraceEvent{
+			RequestID: requestID, Stage: "ranked_cut", RankedCutSummary: true,
+			RankedCutCandidateCount: len(ordered), RankedCutSurvivedCount: len(survivedIDs),
+			RankedCutSurvivedIDs: survivedIDs, RankedCutMax: max,
+		})
 	}
 	if max > 0 && len(ordered) > max {
 		retained := make([]contextfabric.SubjectCandidate, 0, max)
