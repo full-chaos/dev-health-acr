@@ -18,6 +18,7 @@ package devhealthsource_test
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"strings"
@@ -67,6 +68,18 @@ func orgIsolationClickHouseFixture(t *testing.T) (query *runtimeclickhouse.Clien
 	return orgIsolationClickHouseQuery, orgIsolationClickHouseConn
 }
 
+// logCleanupErr surfaces a cleanup-path error instead of silently discarding
+// it (CHAOS-5270 codex round-1 finding F-1). These closures run from
+// TestMain's post-m.Run() teardown or mid-setup error unwinding, neither of
+// which has a *testing.T in scope, so a logged line -- not t.Logf -- is what
+// makes a real leak (a container that failed to terminate, a connection that
+// failed to close) diagnosable instead of invisible.
+func logCleanupErr(step string, err error) {
+	if err != nil {
+		log.Printf("chaos5270 org-isolation ClickHouse fixture: %s: %v", step, err)
+	}
+}
+
 func startOrgIsolationClickHouseContainer() (*runtimeclickhouse.Client, clickhousedriver.Conn, func(), error) {
 	ctx := context.Background()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -80,7 +93,7 @@ func startOrgIsolationClickHouseContainer() (*runtimeclickhouse.Client, clickhou
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("start ClickHouse container: %w", err)
 	}
-	terminate := func() { _ = container.Terminate(context.Background()) }
+	terminate := func() { logCleanupErr("terminate container", container.Terminate(context.Background())) }
 	host, err := container.Host(ctx)
 	if err != nil {
 		terminate()
@@ -105,7 +118,7 @@ func startOrgIsolationClickHouseContainer() (*runtimeclickhouse.Client, clickhou
 		if pingErr := direct.Ping(ctx); pingErr == nil {
 			break
 		} else if time.Now().After(pingDeadline) {
-			_ = direct.Close()
+			logCleanupErr("close native connection", direct.Close())
 			terminate()
 			return nil, nil, nil, fmt.Errorf("clickhouse not ready for connections: %w", pingErr)
 		}
@@ -116,21 +129,21 @@ func startOrgIsolationClickHouseContainer() (*runtimeclickhouse.Client, clickhou
 		DSN: "clickhouse://acr:acr@" + addr + "/default", DialTimeout: 10 * time.Second,
 	})
 	if err != nil {
-		_ = direct.Close()
+		logCleanupErr("close native connection", direct.Close())
 		terminate()
 		return nil, nil, nil, fmt.Errorf("open production ClickHouse query client: %w", err)
 	}
 	for _, statement := range devhealthschema.DDL(sourceSchemaTables...) {
 		if err := direct.Exec(ctx, statement); err != nil {
-			_ = query.Close()
-			_ = direct.Close()
+			logCleanupErr("close query client", query.Close())
+			logCleanupErr("close native connection", direct.Close())
 			terminate()
 			return nil, nil, nil, fmt.Errorf("create table: %w\n%s", err, statement)
 		}
 	}
 	fullTerminate := func() {
-		_ = query.Close()
-		_ = direct.Close()
+		logCleanupErr("close query client", query.Close())
+		logCleanupErr("close native connection", direct.Close())
 		terminate()
 	}
 	return query, direct, fullTerminate, nil
