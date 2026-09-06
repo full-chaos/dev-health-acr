@@ -222,3 +222,140 @@ func TestAnAdmittedPairCommitsBothOperandsAtTheResolverUnit(t *testing.T) {
 		t.Errorf("published commit bases = %d, want one per committed subject", len(bases))
 	}
 }
+
+// ---------------------------------------------------------------------------
+// STEP 4 -- THE EMPTINESS GATE IS INVOKED INDEPENDENTLY PER SLOT
+// ---------------------------------------------------------------------------
+//
+// §4.5's requirement is met by INVOCATION rather than by modification:
+// resolution.go is untouched, its `len(committedIndex) == 0` guard is intact,
+// and its six singleton commit assignments are still six singletons and one
+// accumulating append. What makes that sufficient is that the existing gate is
+// called ONCE PER OPERAND over that operand's OWN pool.
+//
+// "resolution.go is untouched" is a fact about a diff, and a diff is not a
+// property. These two arms are the property.
+
+// TestOneSlotsAmbiguityDoesNotSuppressTheOthersCommit is independence, stated
+// as the thing that would break if the invocation were shared.
+//
+// Operand A has TWO exact claimants and must refuse. Operand B has one and must
+// commit anyway. Under a single shared pool -- which is exactly what the
+// pre-fix resolver had -- A's two claimants and B's one would land together,
+// the pool-wide exact-uniqueness test would see three, and B would be refused
+// for A's ambiguity. That is the defect in miniature, and this arm fails if it
+// ever returns.
+func TestOneSlotsAmbiguityDoesNotSuppressTheOthersCommit(t *testing.T) {
+	t.Parallel()
+
+	tracer := &slotGateTracer{}
+	deps := slotGateDeps(map[string][]CandidateNode{
+		// TWO subjects whose labels both equal operand A's term.
+		"alpha": {
+			exactMatchNode(contextfabric.SubjectTeam, "team_alpha_one", "alpha"),
+			exactMatchNode(contextfabric.SubjectTeam, "team_alpha_two", "alpha"),
+		},
+		"beta": {exactMatchNode(contextfabric.SubjectTeam, "team_beta", "beta")},
+	}, tracer)
+
+	comparison := contextfabric.ComparisonOperands{
+		Admission: contextfabric.ComparisonAdmittedNamedPair,
+		Slots: []contextfabric.ComparisonOperandSlot{
+			{Position: 0, Variant: contextfabric.ComparisonOperandNamed, Kind: contextfabric.SubjectTeam, Terms: []string{"alpha"}},
+			{Position: 1, Variant: contextfabric.ComparisonOperandNamed, Kind: contextfabric.SubjectTeam, Terms: []string{"beta"}},
+		},
+	}
+
+	runA, err := resolveOneOperandSlot(context.Background(), storage.Principal{OrgID: "org-1"}, slotGateRequest(), deps, comparison.Slots[0])
+	if err != nil {
+		t.Fatalf("slot A: %v", err)
+	}
+	runB, err := resolveOneOperandSlot(context.Background(), storage.Principal{OrgID: "org-1"}, slotGateRequest(), deps, comparison.Slots[1])
+	if err != nil {
+		t.Fatalf("slot B: %v", err)
+	}
+
+	// FIXTURE CONTROL: A must genuinely be ambiguous, or there is no
+	// suppression to be absent.
+	if len(runA.candidates) != 2 {
+		t.Fatalf("slot A holds %d candidates, want 2 rivals -- without a genuinely ambiguous slot this arm cannot show that its ambiguity did not travel", len(runA.candidates))
+	}
+	if len(runA.committed) != 0 {
+		t.Errorf("slot A committed %v despite two exact claimants on its own term -- its own uniqueness check is gone", runA.committed)
+	}
+
+	// THE PROPERTY.
+	if len(runB.committed) != 1 {
+		t.Errorf("slot B committed %v (%d), want its lone exact match -- one operand's ambiguity suppressed the other's commit, which is the pooled-resolution defect this design removes.\ndecisions = %#v",
+			runB.committed, len(runB.committed), tracer.decisions())
+	}
+}
+
+// TestAnOutOfCutOperandCountIsLeftToTheExistingPath is the other half of
+// "narrow": the shapes OUTSIDE the cut must be untouched, not refused.
+//
+// Three named operands, each exactly resolvable. The classifier reports the
+// count as out of cut, nothing dispatches, and the existing pooled path
+// behaves exactly as it always has -- three exact claimants in one pool, so
+// pool-wide uniqueness fails and nothing commits. The contrast with the
+// two-operand fixture directly above is the whole point: the same retrieval,
+// the same nodes, a different operand count, and a deliberately different
+// answer.
+func TestAnOutOfCutOperandCountIsLeftToTheExistingPath(t *testing.T) {
+	t.Parallel()
+
+	expected := contextfabric.SubjectTeam
+	operand := func(term string) contextfabric.SubjectOperand {
+		kind := expected
+		return contextfabric.SubjectOperand{
+			Kind:  contextfabric.SubjectOperandNamed,
+			Named: &contextfabric.NamedSubjectExpression{Terms: []string{term}, ExpectedKind: &kind},
+		}
+	}
+	frame := contextfabric.DeriveFrameObligations(contextfabric.QuestionFrame{
+		Goals: []contextfabric.InvestigationGoal{contextfabric.GoalCompare},
+		SubjectExpression: contextfabric.SubjectExpression{
+			Kind: contextfabric.SubjectExpressionExplicitSet,
+			Explicit: &contextfabric.ExplicitSetExpression{Operands: []contextfabric.SubjectOperand{
+				operand("alpha"), operand("beta"), operand("gamma"),
+			}},
+		},
+		Temporal: contextfabric.TemporalIntentCurrent,
+		Version:  contextfabric.QuestionFrameVersion,
+	}, nil)
+
+	// THE CLASSIFIER'S OWN VERDICT, asserted so this arm cannot silently
+	// become a test of something else if the cut ever widens.
+	if got := contextfabric.ClassifyComparisonOperands(&frame); got.Admission != contextfabric.ComparisonOutOfCutOperandCount {
+		t.Fatalf("three operands classified %q, want %q -- if the cut widened, this arm is measuring the wrong thing and must be rewritten deliberately rather than left to pass",
+			got.Admission, contextfabric.ComparisonOutOfCutOperandCount)
+	}
+
+	tracer := &slotGateTracer{}
+	deps := slotGateDeps(map[string][]CandidateNode{
+		"alpha": {exactMatchNode(contextfabric.SubjectTeam, "team_alpha", "alpha")},
+		"beta":  {exactMatchNode(contextfabric.SubjectTeam, "team_beta", "beta")},
+		"gamma": {exactMatchNode(contextfabric.SubjectTeam, "team_gamma", "gamma")},
+	}, tracer)
+
+	interpreted := contextfabric.InterpretedQuestion{
+		Shape: contextfabric.ShapeExplicitCohort, SubjectTerms: []string{"alpha", "beta", "gamma"},
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, FactRequirements: []contextfabric.FactRequirement{},
+	}
+	bases := contextfabric.CommitBasisSet{}
+	digests := contextfabric.CommitDecisionDigestSet{}
+	resolution, _, err := resolveSubjects(context.Background(), storage.Principal{OrgID: "org-1"}, slotGateRequest(), interpreted, deps, nil, nil, bases, digests, &frame, "")
+	if err != nil {
+		t.Fatalf("resolveSubjects() error = %v", err)
+	}
+
+	// FIXTURE CONTROL: all three must have reached one pool, or the arm is
+	// measuring a retrieval failure rather than pooled behaviour.
+	if len(resolution.Candidates) != 3 {
+		t.Fatalf("pooled candidates = %d, want 3 -- the existing path did not retrieve all three operands, so nothing below measures its behaviour", len(resolution.Candidates))
+	}
+	if len(resolution.Committed) != 0 {
+		t.Errorf("an out-of-cut three-operand frame committed %v -- the existing pooled path refuses three exact claimants, and a shape outside the cut must keep the behaviour it has today rather than gaining the comparison path's",
+			resolution.Committed)
+	}
+}
