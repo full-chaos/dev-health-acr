@@ -260,7 +260,15 @@ func TestPlanRefusalPredictsForTheCohortItMeasured(t *testing.T) {
 	engine := &Engine{telemetry: telemetry}
 	err := engine.planRefusal(
 		context.Background(), storage.Principal{OrgID: "org_predicted_call_site"}, plan,
-		MeasuredAttempt{Availability: ItemQuotaUnavailable}, contractsv1.ContextFabricBudgetOverrunItems,
+		// The axis now comes FROM the attempt rather than beside it, so the
+		// fixture has to carry a measured one. That is the point of the
+		// change: an attempt and an axis that could disagree is exactly how a
+		// refusal came to publish post-reduction counts under a pre-reduction
+		// axis.
+		MeasuredAttempt{
+			Availability: ItemQuotaUnavailable,
+			Overrun:      contractsv1.ContextFabricBudgetOverrunItems,
+		},
 		false, true, contractsv1.ContextFabricNarrowingBasisOverlapAwareSetCover,
 		synthesizedMembers, declinedRetryTarget, RetryDeclinedInsufficientDeadline,
 		OutcomeReductionNotItemsAxis,

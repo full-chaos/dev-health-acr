@@ -185,12 +185,33 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// published it as a no-op -- the basis field naming an order and the
 		// count pair denying that anything happened, with no way for a
 		// reader to tell which to believe.
-		// The refusal carries the MEASURED ATTEMPT the reduction returned --
-		// which is this arm's own attempt when nothing narrowed. A refusal
-		// is where a per-group breach matters most, and both refusal arms
-		// used to emit zeros for it while a real exposure sat on the
-		// attempt one branch over.
-		return InvestigationResult{}, assemblyTelemetry{}, e.planRefusal(ctx, principal, plan, attempt.Measured, overrun, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined)
+		// THE REFUSAL DESCRIBES ONE DOCUMENT: the assembled result this
+		// stage measured, `measured`. Not `attempt.Measured`.
+		//
+		// A review found the difference. On the `insufficient` exit --
+		// the reduction ran and still did not fit -- `attempt.Measured` is
+		// the REDUCED document, while the axis was the pre-reduction one,
+		// so the refusal published post-reduction counts under a
+		// pre-reduction axis: 30 items against a ceiling of 30 (not over)
+		// and 9593 bytes against 9500 (over), while naming `items`. The
+		// numbers and the axis described different documents.
+		//
+		// Naming the reduced document instead would ALSO be wrong, and
+		// that is the part worth writing down: #422 fixed the meaning of
+		// this refusal's axis, and its regime test reads `items` here as
+		// "the reduction was never applied". Making the axis follow the
+		// reduced document breaks that reading, which is a real invariant
+		// and not merely a passing test.
+		//
+		// So both halves come from `measured`, and planRefusal derives the
+		// axis FROM it rather than taking one beside it -- there is no
+		// second value left to diverge. The reduced document's own numbers
+		// are not lost; they are on the candidate_narrowing record, which
+		// is where a reader looking for what the reduction did will go.
+		// A refusal is still where a per-group breach matters most, and it
+		// still carries real quota fields rather than the zeros both
+		// refusal arms used to emit.
+		return InvestigationResult{}, assemblyTelemetry{}, e.planRefusal(ctx, principal, plan, measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined)
 	}
 
 	e.recordPlanNarrowingStep(plan, PlanNarrowing{
@@ -498,7 +519,22 @@ func (e *Engine) retryDeadlineAvailable(ctx context.Context) bool {
 // matters MOST, and both refusal arms used to emit zero quota fields while the
 // real exposure sat on an object one branch away. An enforcement layer told
 // nothing on the one path that refuses has been told nothing.
-func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, plan *AnswerPlan, measured MeasuredAttempt, overrun contractsv1.ContextFabricBudgetOverrun, retryAttempted, grouped bool, basis contractsv1.ContextFabricNarrowingBasis, members, selected int, declined RetryDeclinedReason, reductionDeclined OutcomeReductionDeclined) error {
+func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, plan *AnswerPlan, measured MeasuredAttempt, retryAttempted, grouped bool, basis contractsv1.ContextFabricNarrowingBasis, members, selected int, declined RetryDeclinedReason, reductionDeclined OutcomeReductionDeclined) error {
+	// THE AXIS COMES FROM THE MEASURED ATTEMPT, not from a parameter.
+	//
+	// This function used to take `overrun` separately while taking the
+	// measurement from `measured`, and the caller's value is the PRE-reduction
+	// one: after the candidate reduction runs, the document is a different
+	// document. A refusal therefore published post-reduction counts under a
+	// pre-reduction axis -- measured at 30 items against a ceiling of 30 (not
+	// over) and 9593 bytes against 9500 (over), while naming `items`. The
+	// numbers and the axis described different documents, and a reader had no
+	// way to tell which to believe.
+	//
+	// One value, one derivation. The same rule the allocator's Agreement()
+	// applies to grants: if two things must agree, do not carry them
+	// separately and hope.
+	overrun := measured.Overrun
 	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, members, selected, grouped, false, overrun, basis)
 	event.recordMeasurement(measured)
 	// `members` is the cohort synthesis ran against, which is the count the

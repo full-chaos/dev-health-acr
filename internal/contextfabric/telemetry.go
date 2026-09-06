@@ -937,7 +937,7 @@ func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal 
 		"before", event.Before,
 		"after", event.After,
 		"groups", event.Groups,
-		"overrun", string(event.Overrun),
+		"overrun", string(validBudgetOverrunOrUnclassified(event.Overrun)),
 		"measured_items", event.MeasuredItems,
 		// Beside measured_items on purpose: the plan's own arithmetic for this
 		// cohort (members + reserved SynthesisHeadroom), NOT a per-member rate
@@ -1064,7 +1064,7 @@ func (t SlogEngineTelemetry) RecordMembershipCardinality(ctx context.Context, pr
 		args = append(args, "basis", string(event.Basis))
 	}
 	if event.Overrun != "" {
-		args = append(args, "overrun", string(event.Overrun))
+		args = append(args, "overrun", string(validBudgetOverrunOrUnclassified(event.Overrun)))
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric membership cardinality", args...)
@@ -1083,7 +1083,7 @@ func (t SlogEngineTelemetry) RecordBudgetAssertion(ctx context.Context, principa
 		"org_id", principal.OrgID,
 		"assert_stage", string(event.Stage),
 		"fits", event.Fits,
-		"overrun", string(event.Overrun),
+		"overrun", string(validBudgetOverrunOrUnclassified(event.Overrun)),
 		"measured_items", event.MeasuredItems,
 		"measured_bytes_post_label", event.MeasuredBytesPostLabel,
 		"max_items", event.MaxItems,
@@ -1189,6 +1189,21 @@ func (t SlogEngineTelemetry) RecordPlanCarry(ctx context.Context, principal stor
 func (t SlogEngineTelemetry) RecordPlanCarryOutcome(ctx context.Context, principal storage.Principal, outcome PlanCarryOutcome, sourceResultID string, seedSource CarrySeedSource) {
 	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome), "source_result_id", sourceResultID, "seed_source", string(seedSource)}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric plan carry outcome", args...)
+}
+
+// validBudgetOverrunOrUnclassified fails closed on a value outside the closed
+// vocabulary, so an UNMEASURED overrun cannot reach a log field as an empty
+// string that reads like a measurement of nothing.
+//
+// The zero value of ContextFabricBudgetOverrun is "" -- not `fits`, and not a
+// member -- so an arm that published an attempt nobody measured used to emit
+// `overrun=` and say nothing at all. That is the same absence-versus-measured
+// distinction this package keeps everywhere else; it was simply missing here.
+func validBudgetOverrunOrUnclassified(overrun contractsv1.ContextFabricBudgetOverrun) contractsv1.ContextFabricBudgetOverrun {
+	if contractsv1.ValidContextFabricBudgetOverrun(overrun) {
+		return overrun
+	}
+	return contractsv1.ContextFabricBudgetOverrun("unclassified")
 }
 
 // validNarrationAllocatorOrUnclassified fails closed on a value outside the
