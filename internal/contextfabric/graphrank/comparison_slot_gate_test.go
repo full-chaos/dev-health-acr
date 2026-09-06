@@ -24,14 +24,14 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-// recordingTracer captures every ResolutionTraceEvent the resolver emits.
-type recordingTracer struct{ events []ResolutionTraceEvent }
+// slotGateTracer captures every ResolutionTraceEvent the resolver emits.
+type slotGateTracer struct{ events []ResolutionTraceEvent }
 
-func (r *recordingTracer) Trace(event ResolutionTraceEvent) { r.events = append(r.events, event) }
+func (r *slotGateTracer) Trace(event ResolutionTraceEvent) { r.events = append(r.events, event) }
 
 // decisions returns the decision-stage events, which are the ones that name
 // the commit gate that fired (or that nothing did).
-func (r *recordingTracer) decisions() []ResolutionTraceEvent {
+func (r *slotGateTracer) decisions() []ResolutionTraceEvent {
 	var out []ResolutionTraceEvent
 	for _, event := range r.events {
 		if event.Stage == "decision" {
@@ -98,7 +98,7 @@ func TestOneOperandSlotCommitsItsLoneExactMatch(t *testing.T) {
 	t.Parallel()
 
 	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team_alpha", Label: "alpha"}
-	tracer := &recordingTracer{}
+	tracer := &slotGateTracer{}
 	deps := slotGateDeps(map[string][]CandidateNode{
 		"alpha": {exactMatchNode(contextfabric.SubjectTeam, "team_alpha", "alpha")},
 	}, tracer)
@@ -142,7 +142,7 @@ func TestOneOperandSlotCommitsItsLoneExactMatch(t *testing.T) {
 func TestOneOperandSlotSeesOnlyItsOwnTerms(t *testing.T) {
 	t.Parallel()
 
-	tracer := &recordingTracer{}
+	tracer := &slotGateTracer{}
 	deps := slotGateDeps(map[string][]CandidateNode{
 		"alpha": {exactMatchNode(contextfabric.SubjectTeam, "team_alpha", "alpha")},
 		"beta":  {exactMatchNode(contextfabric.SubjectTeam, "team_beta", "beta")},
