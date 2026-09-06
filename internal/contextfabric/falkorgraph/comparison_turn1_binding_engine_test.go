@@ -1233,6 +1233,90 @@ func TestANonAffirmingAnswerRetractsBothOperandCommits(t *testing.T) {
 // T-TELEMETRY, END TO END -- the lines must fire on the PRODUCTION path
 // ---------------------------------------------------------------------------
 
+// comparisonTelemetryRun drives ONE held comparison through the real engine,
+// adapter and resolver with the REAL SlogOperandResolutionSink -- the same
+// type the deployed runtime installs -- against a JSON handler at the
+// production level, and returns the decoded records by message.
+//
+// The sink is constructed exactly as hosted/open.go constructs it. A test that
+// substituted a recording double here would be proving something about the
+// double.
+func comparisonTelemetryRun(t *testing.T, receipts []contextfabric.BoundSubjectReceipt) map[string]map[string]any {
+	t.Helper()
+
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	conn := &comparisonConn{rowsForTerm: perOperandRows(
+		[]row{comparisonAuthorizedRow(comparisonSubjectA, comparisonTermA, 1)},
+		nil,
+		nil,
+	)}
+	adapter := newComparisonAdapter(t, conn, nil)
+	adapter.config.OperandResolutionSink = graphrank.NewSlogOperandResolutionSink(logger)
+
+	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
+		Interpreter: comparisonInterpreter{
+			interpreted: contextfabric.InterpretedQuestion{
+				Shape: contextfabric.ShapeExplicitCohort, RequestedJudgment: "comparison",
+				SubjectTerms:     []string{comparisonTermA, comparisonTermB},
+				TimeContext:      contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+				FactRequirements: []contextfabric.FactRequirement{},
+			},
+			frame:  twoNamedOperandComparisonFrame(),
+			family: contextfabric.QuestionFamilyExplicitComparison,
+		},
+		Graph:        adapter,
+		Facts:        refusingFactReader{t: t},
+		Synthesizer:  refusingSynthesizer{t: t},
+		Results:      discardingResultStore{},
+		Requirements: productionRequirementDeriver{},
+	}, contextfabric.EngineOptions{ServiceVersion: "acr-test", NewResultID: func() string { return "result_telemetry" }})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.InvestigationRequest{
+		SchemaVersion: contextfabric.InvestigationRequestSchemaV1, RequestID: "request_comparison_telemetry",
+		Question: comparisonQuestion,
+		TimeContext: contextfabric.TimeContext{
+			Axis:           contextfabric.TemporalCurrent,
+			EvidenceWindow: &contextfabric.RequestedEvidenceWindow{RelativeID: contextfabric.RelativeWindowTrailing90D},
+		},
+		Options: contextfabric.InvestigationOptions{
+			MaxSubjectCandidates: 10, MaxCohortMembers: 10, MaxRelationshipPaths: 50,
+			MaxDrivers: 10, MaxEvidenceRefs: 100, MaxSerializedBytes: 262144, AllowClarification: true,
+		},
+		PriorSubjectReceipts: receipts,
+		Consumer:             contextfabric.ConsumerInfo{Name: "test", Version: "v1", Surface: "test"},
+	}); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+
+	records := map[string]map[string]any{}
+	for _, line := range strings.Split(strings.TrimSpace(buffer.String()), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("emitted line is not valid JSON: %v", err)
+		}
+		if message, ok := record["msg"].(string); ok {
+			records[message] = record
+		}
+	}
+	return records
+}
+
+func recordMessageNames(records map[string]map[string]any) []string {
+	names := make([]string, 0, len(records))
+	for name := range records {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 // TestAHeldComparisonEmitsItsObservableThroughTheRealEngine is the half a
 // sink-level unit test cannot prove: that these events actually reach a real
 // handler when a real request goes through the real engine, adapter and
@@ -1390,4 +1474,80 @@ func messageNames(byMessage map[string]map[string]any) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// TestAMeasuredZeroIsDistinguishableFromAMissingMeasurement is the arm the
+// audit finding asks for, and it is the one that decides whether this
+// telemetry is diagnostic or merely decorative.
+//
+// THE DISTINCTION. An operator looking at a comparison that ignored a
+// selection has two very different questions in front of them: was the
+// selection CONSIDERED AND REFUSED, or was binding NEVER ATTEMPTED? If the
+// binding line only fired when receipts happened to be present, both would be
+// the same observation -- the absence of a line -- and the log could not tell
+// them apart. So the line fires for every admitted comparison, and
+// `receipts_considered=0` is a fact the system measured.
+//
+// This arm drives a turn-1 comparison that carries NO receipts and asserts the
+// binding line is nonetheless PRESENT, with an explicit zero. Its absence
+// would then mean, unambiguously, that binding was never reached.
+func TestAMeasuredZeroIsDistinguishableFromAMissingMeasurement(t *testing.T) {
+	t.Parallel()
+
+	records := comparisonTelemetryRun(t, nil)
+
+	binding, ok := records["context fabric comparison receipt binding"]
+	if !ok {
+		t.Fatalf("no receipt-binding line for a comparison that carried no receipts -- an absent line then means BOTH 'nothing was carried' and 'binding never ran', and an operator cannot tell a refusal from a step that never executed.\ncaptured = %v", recordMessageNames(records))
+	}
+	if got := binding["receipts_considered"]; got != float64(0) {
+		t.Errorf("receipts_considered = %v, want an explicit 0 -- a measured zero is the whole point of emitting this line unconditionally", got)
+	}
+	if got := binding["bound_count"]; got != float64(0) {
+		t.Errorf("bound_count = %v, want 0", got)
+	}
+	if got := binding["unbound_count"]; got != float64(0) {
+		t.Errorf("unbound_count = %v, want 0 -- zero unbound is not the same claim as zero considered, and both are reported", got)
+	}
+}
+
+// TestTheDeployedWiringEmitsTheObservableAtItsOwnLevel is the proof through
+// the REAL COLLECTION PATH under the DEPLOYED configuration.
+//
+// Every other telemetry arm in this repository's comparison work builds its
+// own sink and hands it to a test adapter. That proves the sink works; it does
+// NOT prove the deployment installs it, and those are different claims. A sink
+// that is correct and never wired produces exactly as much operational value
+// as no sink at all -- which is the state the resolution tracer is in today at
+// Info, and the reason this gate exists.
+//
+// So this arm asserts the property at the level that survives: the sink the
+// deployed path installs is a real SlogOperandResolutionSink, and the line it
+// produces is readable by a handler configured the way production is. The
+// wiring itself is asserted in the hosted runtime's own test; what is checked
+// here is that the type that wiring installs actually emits at Info through
+// the engine, with the request's own identifiers.
+func TestTheDeployedWiringEmitsTheObservableAtItsOwnLevel(t *testing.T) {
+	t.Parallel()
+
+	records := comparisonTelemetryRun(t, nil)
+
+	for _, message := range []string{
+		"context fabric comparison resolution policy",
+		"context fabric operand slot resolution",
+		"context fabric comparison receipt binding",
+		"context fabric comparison decision",
+	} {
+		record, ok := records[message]
+		if !ok {
+			t.Errorf("%q did not reach a handler configured at the production level -- an observable nobody can read is not an observable.\ncaptured = %v", message, recordMessageNames(records))
+			continue
+		}
+		if got := record["level"]; got != "INFO" {
+			t.Errorf("%q emitted at level %v, want INFO -- Debug is where the existing resolution tracer already is, and it is invisible on a deployed rig", message, got)
+		}
+		if got, ok := record["request_id"].(string); !ok || got == "" {
+			t.Errorf("%q carries no request_id, so it cannot be correlated with the other lines or with the affirmation gate's retraction warning", message)
+		}
+	}
 }

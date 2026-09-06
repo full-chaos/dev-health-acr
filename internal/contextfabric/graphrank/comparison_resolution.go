@@ -473,6 +473,11 @@ func resolveNamedComparison(
 			recordOperandSlot(ctx, principal, request, deps, slotRun)
 			run.slots = append(run.slots, slotRun)
 		}
+		// THE SCOPED HOLD OWES THE BINDING LINE TOO, as a measured zero. It
+		// returns before receipt binding runs, so without this an operator
+		// could not tell a scoped hold from a comparison whose binding step
+		// crashed before emitting -- the absence would look identical.
+		recordComparisonReceiptBinding(ctx, principal, request, deps, 0, nil, 0)
 		resolution, bases, digests := publishComparisonResolution(run, request.Options.MaxSubjectCandidates)
 		recordComparisonDecision(ctx, principal, request, deps, run, resolution)
 		return resolution, bases, digests, nil
@@ -494,23 +499,27 @@ func resolveNamedComparison(
 		return contextfabric.SubjectResolution{}, nil, nil, err
 	}
 	run.unboundReceipts = unbound
-	if len(request.RequestedScope.SubjectHints) > 0 && deps.OperandResolutionSink != nil {
-		positions := make([]int, 0, len(preCommitted))
-		boundCount := 0
-		for index := range comparison.Slots {
-			if candidates := preCommitted[index]; len(candidates) > 0 {
-				positions = append(positions, index)
-				boundCount += len(candidates)
-			}
+	// EMITTED UNCONDITIONALLY FOR AN ADMITTED COMPARISON -- NOT only when
+	// receipts were carried.
+	//
+	// A MEASURED ZERO IS NOT A MISSING MEASUREMENT, and this line is where
+	// that distinction lives. Firing only when hints exist would make
+	// `receipts_considered=0` and "the binding path never ran" the same
+	// observation: both would be the ABSENCE of a line, and an operator
+	// staring at a comparison that ignored a selection could not tell whether
+	// the selection was considered and refused, or never looked at. So the
+	// line always fires for an admitted pair; `receipts_considered=0` is a
+	// fact the system measured, and only its ABSENCE means binding was never
+	// reached at all.
+	positions := make([]int, 0, len(preCommitted))
+	boundCount := 0
+	for index := range comparison.Slots {
+		if candidates := preCommitted[index]; len(candidates) > 0 {
+			positions = append(positions, index)
+			boundCount += len(candidates)
 		}
-		deps.OperandResolutionSink.RecordComparisonReceiptBinding(ctx, ComparisonReceiptBindingEvent{
-			RequestID: request.RequestID, OrgID: principal.OrgID,
-			ReceiptsConsidered: len(request.RequestedScope.SubjectHints),
-			BoundCount:         boundCount,
-			UnboundCount:       unbound,
-			BoundSlotPositions: positions,
-		})
 	}
+	recordComparisonReceiptBinding(ctx, principal, request, deps, boundCount, positions, unbound)
 
 	for index, slot := range comparison.Slots {
 		if err := ctx.Err(); err != nil {
@@ -578,6 +587,22 @@ func recordOperandSlot(ctx context.Context, principal storage.Principal, request
 		Outcome:           slot.state(),
 		ReceiptBound:      slot.receiptBound,
 		RetrievalDegraded: slot.retrievalDegraded,
+	})
+}
+
+func recordComparisonReceiptBinding(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, boundCount int, positions []int, unbound int) {
+	if deps.OperandResolutionSink == nil {
+		return
+	}
+	if positions == nil {
+		positions = []int{}
+	}
+	deps.OperandResolutionSink.RecordComparisonReceiptBinding(ctx, ComparisonReceiptBindingEvent{
+		RequestID: request.RequestID, OrgID: principal.OrgID,
+		ReceiptsConsidered: len(request.RequestedScope.SubjectHints),
+		BoundCount:         boundCount,
+		UnboundCount:       unbound,
+		BoundSlotPositions: positions,
 	})
 }
 

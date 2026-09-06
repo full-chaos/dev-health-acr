@@ -424,6 +424,22 @@ func buildContextFabricGraphReader(request buildRequest, postgres postgresCompon
 	} else {
 		graphConfig.ResolutionTracer = graphrank.NewSlogResolutionTracer(request.options.Logger)
 	}
+	// THE COMPARISON OBSERVABLE, WIRED UNCONDITIONALLY AND AT INFO.
+	//
+	// Read the comment immediately above this one: the resolution tracer is
+	// "silent for any deployment running at its usual Info/Warn level". That
+	// is a correct description of a DEBUGGING aid, and it is exactly why it
+	// cannot be the observable for a behaviour change -- on a deployed rig it
+	// emits nothing, and it carries a background context so even raising the
+	// level would not let an operator correlate a line to a request.
+	//
+	// This sink is the other kind of thing. It emits at Info, on the caller's
+	// own context, so every comparison decision is legible under the DEPLOYED
+	// configuration rather than only under a debugging one. There is no
+	// boolean toggle for the same reason the tracer has none: an observable
+	// behind a flag somebody has to remember to flip is an observable that
+	// will be off when it is needed.
+	graphConfig.OperandResolutionSink = graphrank.NewSlogOperandResolutionSink(request.options.Logger)
 	// CHAOS-3972 P3: wired UNCONDITIONALLY, not gated alongside
 	// wireIdentityUniverse below -- graphrank.ValidateHandleGrammar/
 	// HandleSourceColumn are pure, no-I/O registry lookups (no ClickHouse
