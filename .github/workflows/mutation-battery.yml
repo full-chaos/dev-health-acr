@@ -19,6 +19,15 @@
 # table reported a verdict, none of them survived unexpectedly, and no arm hit a
 # harness error. Anything less fails the workflow.
 #
+# TWO CHECKOUTS, AND THE DISTINCTION IS LOAD BEARING. The HARNESS
+# (scripts/battery/*) is checked out at the ref this workflow runs from, into
+# `harness/`. The TREE UNDER TEST is checked out at `tip`, into `target/`. They
+# are different things: `tip` is almost always a historical commit that predates
+# the harness entirely, so running the harness "from the checkout" finds nothing
+# there. The first real dispatch failed exactly this way -- every stage read
+# scripts/battery/ out of a 63011dec checkout that has no such directory -- and
+# it is the normal case, not an edge one.
+#
 # Hosted runners only. SELF_HOSTED_RUNNERS is disabled fleet-wide and the ARC
 # pool is gone, so there is no runner-label pair here to keep in sync.
 name: Mutation battery
@@ -150,10 +159,17 @@ jobs:
       sentinel_file: ${{ steps.plan.outputs.sentinel_file }}
       floor: ${{ steps.floor.outputs.floor }}
     steps:
-      # actions/checkout v7.0.0
+      # THE HARNESS, at this workflow's own ref. actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          path: harness
+          persist-credentials: false
+
+      # THE TREE UNDER TEST, at the tip being measured. actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           ref: ${{ needs.config.outputs.tip }}
+          path: target
           persist-credentials: false
 
       - name: Assert the tip is a full sha and is what we checked out
@@ -172,9 +188,10 @@ jobs:
             *) echo "tip [$tip] is not lowercase hex -- pass a full 40-hex sha, not a branch"; exit 1 ;;
           esac
           [ "${#tip}" -eq 40 ] || { echo "tip [$tip] is ${#tip} chars, want 40"; exit 1; }
-          head=$(git rev-parse HEAD)
-          [ "$head" = "$tip" ] || { echo "checked out $head, asked for $tip"; exit 1; }
-          echo "ok tip: $head"
+          head=$(git -C target rev-parse HEAD)
+          [ "$head" = "$tip" ] || { echo "target/ is at $head, asked for $tip"; exit 1; }
+          echo "ok tip: target/ is at $head"
+          echo "ok harness: harness/ is at $(git -C harness rev-parse HEAD)"
 
       - name: Resolve the mutant table
         env:
@@ -191,8 +208,10 @@ jobs:
             echo "give exactly one of table_path / table_b64"; exit 1
           fi
           if [ -n "$p" ]; then
-            [ -f "$p" ] || { echo "table_path [$p] does not exist at this tip"; exit 1; }
-            cp "$p" table.raw
+            # A committed table is read from the TREE UNDER TEST: it describes
+            # that tree's source, so it belongs to that tree's history.
+            [ -f "target/$p" ] || { echo "table_path [$p] does not exist at this tip"; exit 1; }
+            cp "target/$p" table.raw
           else
             printf '%s' "$b" | base64 -d > table.raw
           fi
@@ -200,12 +219,12 @@ jobs:
           wc -c table.raw
 
       - name: Normalise and validate the table
-        run: python3 scripts/battery/normalize_table.py table.raw --out table.jsonl
+        run: python3 harness/scripts/battery/normalize_table.py table.raw --out table.jsonl
 
       - name: Pre-flight every needle against this tree
         # EARLY, before a single runner is spent on a suite: a stale table is
         # cheap to detect here and expensive to discover across fifty jobs.
-        run: python3 scripts/battery/preflight.py --root . --table table.jsonl
+        run: python3 harness/scripts/battery/preflight.py --root target --table table.jsonl
 
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
@@ -224,7 +243,7 @@ jobs:
           # only words -- and a bad word fails `go list` loudly rather than
           # executing.
           # shellcheck disable=SC2086
-          bash scripts/battery/floor.sh . $PACKAGES | tee floor.tsv
+          bash harness/scripts/battery/floor.sh target $PACKAGES | tee floor.tsv
           total=$(awk -F'\t' '$1=="TOTAL"{print $2}' floor.tsv)
           case "$total" in ''|*[!0-9]*) echo "floor unparseable [$total]"; exit 1 ;; esac
           echo "floor=$total" >> "$GITHUB_OUTPUT"
@@ -233,7 +252,7 @@ jobs:
         id: plan
         run: |
           set -euo pipefail
-          python3 scripts/battery/plan_matrix.py --table table.jsonl > matrix.json 2> plan.err
+          python3 harness/scripts/battery/plan_matrix.py --table table.jsonl > matrix.json 2> plan.err
           cat plan.err
           echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"
           grep -E '^(arm_count|matrix_size|sentinel_file)=' plan.err >> "$GITHUB_OUTPUT"
@@ -284,10 +303,17 @@ jobs:
       max-parallel: ${{ fromJson(needs.config.outputs.max_parallel) }}
       matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
     steps:
-      # actions/checkout v7.0.0
+      # THE HARNESS. actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          path: harness
+          persist-credentials: false
+
+      # THE TREE UNDER TEST. actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           ref: ${{ needs.config.outputs.tip }}
+          path: target
           persist-credentials: false
 
       # actions/setup-go v6.5.0
@@ -295,6 +321,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          cache-dependency-path: target/go.sum
 
       # actions/download-artifact v6.0.0
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -329,8 +356,9 @@ jobs:
       - name: Run the arm
         env:
           MB_GO_TEST_TIMEOUT: ${{ needs.config.outputs.go_test_timeout }}
-          MB_SENTINEL_FILE: ${{ needs.plan.outputs.sentinel_file }}
-          MB_ARM_LOG: .battery/out/arm.log
+          # A path inside the TREE UNDER TEST, not the harness.
+          MB_SENTINEL_FILE: ${{ github.workspace }}/target/${{ needs.plan.outputs.sentinel_file }}
+          MB_ARM_LOG: ${{ github.workspace }}/.battery/out/arm.log
           ARM_ID: ${{ matrix.id }}
           PACKAGES: ${{ needs.config.outputs.packages }}
           FLOOR: ${{ needs.plan.outputs.floor }}
@@ -338,10 +366,10 @@ jobs:
         # travels as an artifact and the aggregate decides. A failing step here
         # would lose the artifact and turn a real SURVIVED into a missing arm.
         run: |
-          bash scripts/battery/run_arm.sh \
-            "$PWD" "$ARM_ID" ".battery/spec.json" \
+          bash harness/scripts/battery/run_arm.sh \
+            "$PWD/target" "$ARM_ID" "$PWD/.battery/spec.json" \
             "$PACKAGES" "$FLOOR" \
-            ".battery/out/$ARM_ID.json"
+            "$PWD/.battery/out/$ARM_ID.json"
 
       - name: Show this arm's verdict
         env:
@@ -367,10 +395,11 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
+      # ONLY the harness: the aggregate reads verdicts, never source.
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
-          ref: ${{ needs.config.outputs.tip }}
+          path: harness
           persist-credentials: false
 
       # actions/download-artifact v6.0.0
@@ -403,7 +432,7 @@ jobs:
           # job on a pull request.
           set +e
           set -uo pipefail
-          python3 scripts/battery/aggregate.py \
+          python3 harness/scripts/battery/aggregate.py \
             --table .battery/table.jsonl \
             --arms-dir .battery/arms \
             --expected-survivors "$EXPECTED_SURVIVORS" \
@@ -451,7 +480,7 @@ jobs:
           TIP: ${{ needs.config.outputs.tip }}
           FLOOR: ${{ needs.plan.outputs.floor }}
         run: |
-          python3 scripts/battery/aggregate.py \
+          python3 harness/scripts/battery/aggregate.py \
             --table .battery/table.jsonl \
             --arms-dir .battery/arms \
             --expected-survivors "$EXPECTED_SURVIVORS" \

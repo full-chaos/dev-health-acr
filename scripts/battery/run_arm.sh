@@ -36,12 +36,23 @@
 # disagreeing about what a battery measured.
 set -uo pipefail
 
+# RESOLVED BEFORE ANY cd. This script cds into the tree under test, which is a
+# DIFFERENT checkout from the one this file lives in -- the harness is at the
+# workflow's ref, the tree under test is at the tip being measured, and a tip
+# older than the harness has no scripts/battery/ at all. A relative $0 or a
+# relative output path silently resolves inside the tree under test after the
+# cd: the sibling script is not found, and the verdict JSON is written where
+# nothing collects it.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+abspath() { case "$1" in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$PWD" "$1" ;; esac; }
+
 ROOT="${1:?usage: run_arm.sh <repo-root> <arm-id> <spec-json|-> <packages> <floor> <out-json>}"
 ARM_ID="${2:?arm id}"
 SPEC="${3:?spec json or -}"
 PKGS="${4:?package list}"
 FLOOR="${5:?floor}"
-OUT="${6:?out json}"
+OUT="$(abspath "${6:?out json}")"
+[ "$SPEC" = "-" ] || SPEC="$(abspath "$SPEC")"
 
 # The go test timeout is EXPLICIT and applied ONLY to `go test`. It is never
 # routed through $PKGS (which is also the floor and vet input, where a stray
@@ -57,7 +68,7 @@ case "$ARM_ID" in
   */*|*' '*) echo "run_arm.sh: refusing an arm id with a path separator or space: [$ARM_ID]" >&2; exit 2 ;;
 esac
 
-LOG="${MB_ARM_LOG:-$(dirname "$OUT")/arm-$ARM_ID.log}"
+LOG="$(abspath "${MB_ARM_LOG:-$(dirname "$OUT")/arm-$ARM_ID.log}")"
 mkdir -p "$(dirname "$OUT")" "$(dirname "$LOG")"
 : > "$LOG"
 
@@ -101,7 +112,7 @@ case "$ARM_ID" in
     ;;
   *)
     [ -f "$SPEC" ] || { emit HARNESS_ERROR "no spec file at $SPEC"; exit 0; }
-    applied=$(python3 "$(dirname "$0")/apply_mutant.py" --root "$ROOT" --spec "$SPEC" 2>>"$LOG")
+    applied=$(python3 "$SCRIPT_DIR/apply_mutant.py" --root "$ROOT" --spec "$SPEC" 2>>"$LOG")
     if [ "$applied" != "APPLIED" ]; then
       emit HARNESS_ERROR "apply=$applied -- an unapplied mutant is unproven, never a pass"
       exit 0
