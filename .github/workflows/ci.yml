@@ -190,7 +190,7 @@ jobs:
       - name: Verify the race shards cover every package
         run: scripts/ci/test-shard-closure.sh
       - name: Check known Go vulnerabilities
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.5.0 ./...
+        run: scripts/ci/retry.sh go run golang.org/x/vuln/cmd/govulncheck@v1.5.0 ./...
 
   # Renders every fenced ```mermaid block under docs/** with mermaid-cli so a
   # diagram mermaid's own parser rejects fails CI instead of rotting silently
