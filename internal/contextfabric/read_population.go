@@ -254,23 +254,27 @@ func operandPopulation(frame *QuestionFrame, committed []SubjectRef, kind Subjec
 		return population
 	}
 
+	// THE COUNT COMES FROM frameRoleSlots ITSELF, not from a second walk that
+	// happens to agree with it today. A mirrored walk is a second authority
+	// for "how many operands does this frame name", and the two would drift
+	// the first time the slot rules change -- which is the defect class this
+	// whole file exists to avoid, reproduced inside it.
 	slots := 0
+	for _, slot := range frameRoleSlots(expression) {
+		if slot.Role == SubjectRoleOperand && slot.Subject == kind {
+			slots++
+		}
+	}
+	// ENUMERABILITY is the one question frameRoleSlots cannot answer: it
+	// reports (role, kind) and not which VARIANT produced the slot. A SCOPED
+	// operand is not enumerable and its anchor is not a substitute -- a scoped
+	// operand denotes the members under an anchor, a committed anchor is one
+	// subject rather than that population, and the derivation artifact's own
+	// header says the anchor cannot name it. So this walk asks ONLY that, and
+	// counts nothing.
 	enumerable := true
 	for _, operand := range expression.Explicit.Operands {
-		// Both operand variants, mirroring frameRoleSlots: a SCOPED operand
-		// is valid in an explicit set and carries its own MemberKind.
-		if operand.Named != nil && operand.Named.ExpectedKind != nil && *operand.Named.ExpectedKind == kind {
-			slots++
-			continue
-		}
 		if operand.Scoped != nil && operand.Scoped.MemberKind == kind {
-			slots++
-			// A SCOPED OPERAND IS NOT ENUMERABLE, and its anchor is not a
-			// substitute. A scoped operand denotes the members under an
-			// anchor; a committed anchor is one subject, not that
-			// population, and the derivation artifact's own header says the
-			// anchor cannot name it. Substituting it would be the
-			// denominator-substitution defect with a different source.
 			enumerable = false
 		}
 	}

@@ -700,3 +700,257 @@ func TestADistributiveRowWithoutPopulationEvidenceReachesTheCallerDefectBranch(t
 			"without this the assertion above passes on an evaluator that drops everything", len(rows))
 	}
 }
+
+// TestTheDenominatorIsNeverTheReturnedOrInvokedSet (T-DENOM) pins the first
+// named residual: the population comes from its OWNER, never from the facts
+// that came back.
+//
+// This is the arm that would fail a "fix" that derived the denominator from
+// returned facts -- which would make every distributive requirement
+// unfalsifiable, because a read returning nothing would shrink the population
+// it failed to cover until it covered it.
+func TestTheDenominatorIsNeverTheReturnedOrInvokedSet(t *testing.T) {
+	t.Parallel()
+	alpha, beta := teamRef("team_alpha"), teamRef("team_beta")
+	gamma := teamRef("team_gamma")
+	flow := contractsv1.ContextFabricFactFlow
+	requirement := operandRequirement(SubjectTeam, CompletionQuantifierAtLeastOne, flow)
+	coverage := factCoverage(flow, SourceAvailable)
+	frame := namedOperandFrame(SubjectTeam, SubjectTeam)
+
+	t.Run("facts for A only against committed {A,B} declares 2", func(t *testing.T) {
+		t.Parallel()
+		rows := evaluateOperands([]contractsv1.ContextFabricPlanRequirement{requirement},
+			frame, []SubjectRef{alpha, beta}, coverage, factsFor(alpha, kindList(flow)))
+		row := rowFor(t, rows, requirement.Requirement)
+		if row.Declared != 2 {
+			t.Fatalf("Declared = %d, want 2 -- the denominator is the frame's slot count, "+
+				"never the number of subjects whose facts came back", row.Declared)
+		}
+		if row.Served != 1 {
+			t.Fatalf("Served = %d, want 1", row.Served)
+		}
+	})
+
+	t.Run("a third subject's facts are not a witness for a slot the frame never named", func(t *testing.T) {
+		t.Parallel()
+		// Facts for A, B AND C, but the frame names two slots and only A and
+		// B committed. C must not inflate either number.
+		rows := evaluateOperands([]contractsv1.ContextFabricPlanRequirement{requirement},
+			frame, []SubjectRef{alpha, beta}, coverage,
+			factsFor(alpha, kindList(flow), beta, kindList(flow), gamma, kindList(flow)))
+		assertRow(t, rowFor(t, rows, requirement.Requirement),
+			contractsv1.ContextFabricRequirementSatisfied,
+			contractsv1.ContextFabricAnswerImpactNone, "", false, 2, 2)
+	})
+
+	t.Run("the bundle's own scope changes nothing", func(t *testing.T) {
+		t.Parallel()
+		facts := factsFor(alpha, kindList(flow))
+		// The bundle's own read SCOPE -- the derived targets a capability was
+		// authorized over -- names a wider world here. It is the INVOKED set,
+		// not the population, and must not become a denominator.
+		facts.Scope = &FactReadScope{
+			DerivedSubjects: map[FactKind][]SubjectRef{flow: {alpha, beta, gamma}},
+		}
+		rows := evaluateOperands([]contractsv1.ContextFabricPlanRequirement{requirement},
+			frame, []SubjectRef{alpha, beta}, coverage, facts)
+		row := rowFor(t, rows, requirement.Requirement)
+		if row.Declared != 2 {
+			t.Fatalf("Declared = %d, want 2 -- the INVOKED set is not the population", row.Declared)
+		}
+	})
+}
+
+// TestReadPopulationAgreesWithTheCohortOwnersOwnRule is the CROSS-LAYER
+// AGREEMENT test, in BOTH directions.
+//
+// Direction 1 catches this layer drifting (re-deriving the rule instead of
+// calling the owner). It ALSO pins the owner's rule literally against the shape
+// table, so a drift on the OWNER's side -- which this layer would silently
+// inherit and therefore never notice -- is caught here too.
+func TestReadPopulationAgreesWithTheCohortOwnersOwnRule(t *testing.T) {
+	t.Parallel()
+	members := []SubjectRef{projectRef("project_1"), projectRef("project_2")}
+	for _, shape := range []struct {
+		name                string
+		cohort              *Cohort
+		wantCensus          populationCensus
+		wantOwnerIncomplete bool
+		ownerResolves       bool
+	}{
+		{"nil cohort", nil, populationAbsent, false, false},
+		{"complete", cohortWith(contractsv1.ContextFabricSubjectProject, members, nil, true), populationEnumerated, false, true},
+		{"incomplete", cohortWith(contractsv1.ContextFabricSubjectProject, members, nil, false), populationIncomplete, true, true},
+		{"truncated", func() *Cohort {
+			c := cohortWith(contractsv1.ContextFabricSubjectProject, members, nil, true)
+			c.Truncated = true
+			return c
+		}(), populationIncomplete, true, true},
+	} {
+		shape := shape
+		t.Run(shape.name, func(t *testing.T) {
+			t.Parallel()
+			population := cohortMemberPopulation(shape.cohort, nil)
+			if population.Census != shape.wantCensus {
+				t.Fatalf("census = %q, want %q", population.Census, shape.wantCensus)
+			}
+
+			// DIRECTION 1: every field is the OWNER's own.
+			cardinality, resolved := ComputeMembershipCardinality(shape.cohort, nil)
+			if resolved != shape.ownerResolves {
+				t.Fatalf("the owner's second return = %v, want %v", resolved, shape.ownerResolves)
+			}
+			if !resolved {
+				if population.Census != populationAbsent {
+					t.Fatalf("the owner reports NO resolved member set and this layer says %q", population.Census)
+				}
+				return
+			}
+			if (population.Census == populationIncomplete) != cardinality.PopulationIncomplete {
+				t.Fatalf("this layer says census %q while the owner says PopulationIncomplete=%v -- "+
+					"one of the two is re-deriving the rule", population.Census, cardinality.PopulationIncomplete)
+			}
+			if population.Declared != cardinality.Declared {
+				t.Fatalf("Declared = %d while the owner says %d", population.Declared, cardinality.Declared)
+			}
+
+			// THE OWNER'S RULE, pinned literally against the shape table, so a
+			// drift THERE is caught here rather than silently inherited.
+			wantIncomplete := !shape.cohort.Complete || shape.cohort.Truncated
+			if cardinality.PopulationIncomplete != wantIncomplete {
+				t.Fatalf("the OWNER's rule moved: PopulationIncomplete=%v for complete=%v truncated=%v",
+					cardinality.PopulationIncomplete, shape.cohort.Complete, shape.cohort.Truncated)
+			}
+			if wantIncomplete != shape.wantOwnerIncomplete {
+				t.Fatalf("the shape table disagrees with the rule for %q", shape.name)
+			}
+		})
+	}
+}
+
+// TestOperandPopulationAgreesWithFrameRoleSlots pins the OPERAND owner's count
+// against frameRoleSlots.
+//
+// operandPopulation now CALLS frameRoleSlots rather than mirroring it, so the
+// first assertion is close to tautological by construction -- and that is the
+// point: it fails loudly if anyone reintroduces a second walk. The assertion
+// that carries the real weight is the last one, that two same-kind slots do NOT
+// collapse: the coordinate layer dedups them, and counting coordinates instead
+// of slots would reproduce this ticket's own defect inside its fix.
+func TestOperandPopulationAgreesWithFrameRoleSlots(t *testing.T) {
+	t.Parallel()
+	frame := namedOperandFrame(SubjectTeam, SubjectTeam, contractsv1.ContextFabricSubjectProject)
+	slots := frameRoleSlots(frame.SubjectExpression)
+
+	wantByKind := map[SubjectKind]int{}
+	for _, slot := range slots {
+		if slot.Role == SubjectRoleOperand {
+			wantByKind[slot.Subject]++
+		}
+	}
+	if len(wantByKind) == 0 {
+		t.Fatal("the fixture produced no operand slots; this test would prove nothing")
+	}
+	for kind, want := range wantByKind {
+		population := operandPopulation(frame, nil, kind)
+		if population.Declared != want {
+			t.Fatalf("operandPopulation(%q).Declared = %d while frameRoleSlots names %d slots of that kind -- "+
+				"the two walks disagree", kind, population.Declared, want)
+		}
+	}
+	// The dedup the coordinate layer applies must NOT reach the denominator:
+	// two team slots collapse to ONE coordinate, and counting coordinates
+	// would reproduce the defect inside its own fix.
+	if wantByKind[SubjectTeam] != 2 {
+		t.Fatalf("the fixture names %d team slots, want 2 -- the point is that they do NOT collapse here",
+			wantByKind[SubjectTeam])
+	}
+}
+
+// TestSubjectOrderNeverChangesTheRow permutes the inputs 200 times.
+//
+// 200 rather than one: a map-iteration dependency passes a single read about
+// half the time, and a determinism claim asserted once is a coin flip recorded
+// as a fact. It asserts the CAUSE too, which the worst-state fold could
+// otherwise make order-dependent.
+func TestSubjectOrderNeverChangesTheRow(t *testing.T) {
+	t.Parallel()
+	alpha, beta, gamma := teamRef("team_alpha"), teamRef("team_beta"), teamRef("team_gamma")
+	flow, health := contractsv1.ContextFabricFactFlow, contractsv1.ContextFabricFactHealth
+	requirement := operandRequirement(SubjectTeam, CompletionQuantifierCorroborated, flow, health)
+	coverage := factCoverage(flow, SourceAvailable, health, SourceAvailable)
+	frame := namedOperandFrame(SubjectTeam, SubjectTeam, SubjectTeam)
+
+	orders := [][]SubjectRef{
+		{alpha, beta, gamma}, {gamma, beta, alpha}, {beta, gamma, alpha}, {beta, alpha, gamma},
+	}
+	var first RequirementOutcomeRow
+	for iteration := 0; iteration < 200; iteration++ {
+		committed := orders[iteration%len(orders)]
+		facts := CanonicalFactBundle{}
+		// Permute the FACT order independently of the committed order.
+		for _, subject := range orders[(iteration+1)%len(orders)] {
+			if subject == gamma {
+				continue // gamma is unread, so the row is a real shortfall
+			}
+			for _, kind := range []FactKind{health, flow} {
+				facts.Facts = append(facts.Facts, CanonicalFact{Kind: kind, Subject: subject, SourceState: SourceAvailable})
+			}
+		}
+		rows := evaluateOperands([]contractsv1.ContextFabricPlanRequirement{requirement},
+			frame, committed, coverage, facts)
+		row := rowFor(t, rows, requirement.Requirement)
+		if iteration == 0 {
+			first = row
+			continue
+		}
+		if row.Outcome != first.Outcome || row.Impact != first.Impact ||
+			row.CauseCoverage != first.CauseCoverage || row.CauseObserved != first.CauseObserved ||
+			row.Served != first.Served || row.Declared != first.Declared {
+			t.Fatalf("iteration %d produced {%q %q %q %v %d/%d}, first produced {%q %q %q %v %d/%d} -- "+
+				"the row depends on input order", iteration,
+				row.Outcome, row.Impact, row.CauseCoverage, row.CauseObserved, row.Served, row.Declared,
+				first.Outcome, first.Impact, first.CauseCoverage, first.CauseObserved, first.Served, first.Declared)
+		}
+	}
+	// NON-VACUITY: the fixture must be a real shortfall, or 200 identical
+	// `satisfied` rows would pass while proving nothing about ordering.
+	if first.Outcome != contractsv1.ContextFabricRequirementNarrowed || first.Served == first.Declared {
+		t.Fatalf("the fixture is not a shortfall (%q %d/%d); an order test over a uniform row proves nothing",
+			first.Outcome, first.Served, first.Declared)
+	}
+}
+
+// TestAStaleFactStillReadsTheSubject closes the gap the battery found: no arm
+// drove a SUBJECT whose fact came back `stale`.
+//
+// `stale` is SERVED evidence at the kind level (`:217`), and the per-subject
+// test must agree with that classification rather than inventing a stricter
+// one -- a second authority in the narrow direction is still a second
+// authority. Dropping `SourceStale` from the per-subject served set survived
+// every other arm.
+func TestAStaleFactStillReadsTheSubject(t *testing.T) {
+	t.Parallel()
+	alpha, beta := teamRef("team_alpha"), teamRef("team_beta")
+	flow, health := contractsv1.ContextFabricFactFlow, contractsv1.ContextFabricFactHealth
+	requirement := operandRequirement(SubjectTeam, CompletionQuantifierCorroborated, flow, health)
+
+	// Beta's facts are STALE, alpha's available. Both subjects are read, so
+	// the row is satisfied 2/2 -- and reads 1/2 if stale stops counting.
+	facts := factsFor(alpha, kindList(flow, health))
+	for _, kind := range []FactKind{flow, health} {
+		facts.Facts = append(facts.Facts, CanonicalFact{Kind: kind, Subject: beta, SourceState: SourceStale})
+	}
+	rows := evaluateOperands(
+		[]contractsv1.ContextFabricPlanRequirement{requirement},
+		namedOperandFrame(SubjectTeam, SubjectTeam),
+		[]SubjectRef{alpha, beta},
+		// The kind-level coverage says stale, which the kind arms count as
+		// served -- so the population layer must agree.
+		factCoverage(flow, SourceStale, health, SourceStale),
+		facts)
+	assertRow(t, rowFor(t, rows, requirement.Requirement),
+		contractsv1.ContextFabricRequirementSatisfied,
+		contractsv1.ContextFabricAnswerImpactNone, "", false, 2, 2)
+}
