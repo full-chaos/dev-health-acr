@@ -1933,23 +1933,52 @@ do, grouping is refused **wholesale** — keeping the members whose source
 happened to agree would present a partial axis as a complete one — and the
 question is answered flat.
 
+**There are TWO ways the axis fails, not one, and the reader is owed the
+difference.** A *mismatch* means the source disagreed: it grouped by something,
+just not the asked-for thing, so the disclosure can name where to look instead.
+*No placement* means the source was **silent** — not one member's facts carried
+a group-scoped row of any kind — so there is no second axis to name, and the
+outcome carries the planned kind and the unplaced COUNT rather than a second
+kind. Both deliver no group axis, both clear `plan.GroupKind`, both owe the
+reader a sentence; they are two members of one closed vocabulary
+(`CohortGroupingRefusal`), not two mechanisms.
+
+The no-placement arm used to be **silent in both directions**: it returned a
+zero-valued outcome and its engine branch emitted no telemetry line at all, so
+the only surviving trace was the cleared `plan.GroupKind` — indistinguishable
+from a plan that never asked for a group axis. Neither the operator nor the
+reader was told.
+
+**A partial placement is neither of these and is not a refusal.** Some members
+unplaced while groups were built is a served grouped answer; the unplaced
+members ride the flat list and the outcome stays zero-valued. The firing
+condition for `no_member_placed` is ZERO groups built.
+
 A flat answer to a grouped question is only honest if the reader is told. That
 is the half this sub-diagram exists to make visible, because it is the half
 that broke: the disclosure was composed correctly and then silently **dropped**
 by a later composer, and nothing in this document showed that such a thing
-could happen.
+could happen. That hazard is now doubled and named: the two disclosure families
+share their opening and closing words, so each must be **registered** in
+`IsContextFabricServiceAuthoredLimitation` and each recogniser must refuse the
+other's sentence — an unregistered interpolated disclosure is, to the
+displacement rule, a model caveat.
 
 ```mermaid
 flowchart TD
     PLAN["AnswerPlan.GroupKind<br/>(the model's question frame)"]
     ROWS["group assignment rows<br/>(kind read where the row was ACCEPTED)"]
-    PLAN --> CMP{"kinds agree?"}
-    ROWS --> CMP
-    CMP -->|yes| BUILD["build groups<br/>COHORT_GROUP per group"]
-    CMP -->|"no"| REFUSE["REFUSE WHOLESALE<br/>outcome.Refusal = group_kind_source_mismatch<br/>+ planned_group_kind on grouping telemetry"]
+    PLAN --> ANY{"any row names a group?"}
+    ROWS --> ANY
+    ANY -->|"no row, any member"| NONE["REFUSE — SOURCE SILENT<br/>outcome.Refusal = no_member_placed<br/>+ planned_group_kind, ungrouped_members<br/>on grouping telemetry"]
+    ANY -->|yes| CMP{"kinds agree?"}
+    CMP -->|"yes, every row"| BUILD["build groups<br/>COHORT_GROUP per group<br/>(members with no row stay ungrouped —<br/>a SERVED answer, not a refusal)"]
+    CMP -->|"no"| REFUSE["REFUSE WHOLESALE — SOURCE DISAGREED<br/>outcome.Refusal = group_kind_source_mismatch<br/>+ planned_group_kind on grouping telemetry"]
 
     REFUSE --> FLAT["answer is composed FLAT"]
+    NONE --> FLAT
     REFUSE --> DISC["applyGroupingRefusalDisclosure"]
+    NONE --> DISC
 
     subgraph bounded["appendBoundedLimitations — the ONE path into Limitations"]
         DEDUP["dedup → normalize to cap → append"]
@@ -1961,8 +1990,8 @@ flowchart TD
         FULL -->|no| COUNT
     end
 
-    DISC -->|"sentence from contracts/v1<br/>ContextFabricGroupingRefusalLimitation(planned, source)"| DEDUP
-    REG["IsContextFabricServiceAuthoredLimitation<br/>= fixed list OR a PARSE of the interpolated sentence<br/>(both kinds must be closed-vocabulary members)"]
+    DISC -->|"ALLOW-LIST per vocabulary member (D10)<br/>mismatch → ContextFabricGroupingRefusalLimitation(planned, source)<br/>no_member_placed → ContextFabricGroupingUnplaceableLimitation(planned)<br/>unknown → discloses NOTHING (fail closed)"| DEDUP
+    REG["IsContextFabricServiceAuthoredLimitation<br/>= fixed list OR a PARSE of EITHER interpolated family<br/>(every interpolated kind must be a closed-vocabulary member;<br/>the two parses must refuse each other's sentence)"]
     REG -.->|"answers 'service or model?'"| DROP
     REG -.->|"coherence oracle for a positive count"| VAL
 
