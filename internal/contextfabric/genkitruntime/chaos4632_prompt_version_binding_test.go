@@ -79,10 +79,13 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			name:    "synthesis system prompt",
 			version: DefaultSynthesisPromptVersion,
 			content: synthesisSystemPrompt,
-			// v13 -> v14 (CHAOS-4690 Commit F): the coverage_disclosures
-			// paragraph. See DefaultSynthesisPromptVersion's own doc
-			// comment for what changed and why.
-			digest: "f29c3351272cffa109843d398a9fca9d3b4f2a4be51848a7b74b9309340d36a4",
+			// v14 -> v15: the answer_budget paragraph. The payload gained
+			// the object and the prompt gained the sentence that tells the
+			// model what it is for -- including that the cohort member rows
+			// are charged before per_member is published, a sentence an
+			// earlier revision stated while it was false. See
+			// DefaultSynthesisPromptVersion's own doc comment.
+			digest: "adcbfd8303c2119967b91ff29216944ad78fc0586ed644646ba5d4ef4d3ed5e7",
 		},
 		{
 			name:    "interpretation model-output schema",

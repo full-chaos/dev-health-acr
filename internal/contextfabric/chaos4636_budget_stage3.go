@@ -101,14 +101,23 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// but it never narrows on a budget it was not told about.
 		return result, firstPass, nil
 	}
-	measurement, err := contractsv1.MeasureContextFabricResponse(result)
+	// The ONE allocator, derived HERE from the plan every other spender
+	// reads. The member ROWS are charged to it: they are counted by
+	// CountContextFabricResultItems and debited by the ledger, so an
+	// allocator that did not commit capacity for them would publish grants
+	// that, fully respected, still overrun the ceiling by exactly the number
+	// of rows -- which is the defect three rounds found in three shapes.
+	allocation := AllocateItems(*plan, groupCountOf(params.Graph.Cohort), cohortMemberCount(params.Graph.Cohort))
+	measured, err := e.measureAssembledAttempt(ctx, principal, "assembled_result", allocation, result, budget)
 	if err != nil {
 		// A result that cannot be marshaled is a server defect, not an
 		// over-budget answer. Conflating the two would let a serialization
-		// bug present to the caller as "your question was too big".
-		return InvestigationResult{}, assemblyTelemetry{}, stageError(StageValidation, fmt.Errorf("measure assembled result: %w", err))
+		// bug present to the caller as "your question was too big". An
+		// account that does not reconcile is the SAME kind of defect and
+		// takes the same exit -- never the budget refusal.
+		return InvestigationResult{}, assemblyTelemetry{}, err
 	}
-	overrun := measurement.Overrun(budget)
+	overrun := measured.Overrun
 	if overrun == contractsv1.ContextFabricBudgetFits {
 		// A FIT is a decision, and this event's own doc comment calls it
 		// "one narrowing decision, or one measured fit". Emitting nothing
@@ -120,7 +129,12 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 			cohortMemberCount(params.Graph.Cohort), cohortMemberCount(params.Graph.Cohort),
 			params.Graph.Cohort != nil && len(params.Graph.Cohort.Groups) > 0, false,
 			contractsv1.ContextFabricBudgetFits, params.GroupedNarrowingBasis)
-		fit.recordMeasurement(measurement)
+		// The FIT arm measures its quota too, and that is the whole of
+		// class B's fix. Exposure used to be computed only inside the
+		// narrowing path, so on every fitting answer -- the majority path
+		// -- the quota fields were zero because nothing had produced them,
+		// not because nothing was over.
+		fit.recordMeasurement(measured)
 		// Predicted beside measured on the SAME line, for the cohort synthesis
 		// actually ran against. A fit is where the rate is confirmed; a
 		// refusal is where it has already failed, so recording it only on
@@ -157,7 +171,10 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// single-subject investigation has no cohort, so `declined` is
 		// always nothing_to_narrow here and the refusal was reached
 		// without any content reduction ever being attempted.
-		attempt := e.planCandidateNarrowing(plan, params.Frame, result, budget, measurement, overrun, params.Facts)
+		attempt, accountingErr := e.planCandidateNarrowing(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts)
+		if accountingErr != nil {
+			return InvestigationResult{}, assemblyTelemetry{}, accountingErr
+		}
 		if attempt.Served {
 			e.recordCandidateNarrowing(ctx, principal, plan, attempt, overrun, grouped, narrowed.Basis, before, after, declined, false, false)
 			return attempt.Result, firstPass, nil
@@ -168,7 +185,33 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// published it as a no-op -- the basis field naming an order and the
 		// count pair denying that anything happened, with no way for a
 		// reader to tell which to believe.
-		return InvestigationResult{}, assemblyTelemetry{}, e.planRefusal(ctx, principal, plan, measurement, overrun, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined)
+		// THE REFUSAL DESCRIBES ONE DOCUMENT: the assembled result this
+		// stage measured, `measured`. Not `attempt.Measured`.
+		//
+		// A review found the difference. On the `insufficient` exit --
+		// the reduction ran and still did not fit -- `attempt.Measured` is
+		// the REDUCED document, while the axis was the pre-reduction one,
+		// so the refusal published post-reduction counts under a
+		// pre-reduction axis: 30 items against a ceiling of 30 (not over)
+		// and 9593 bytes against 9500 (over), while naming `items`. The
+		// numbers and the axis described different documents.
+		//
+		// Naming the reduced document instead would ALSO be wrong, and
+		// that is the part worth writing down: #422 fixed the meaning of
+		// this refusal's axis, and its regime test reads `items` here as
+		// "the reduction was never applied". Making the axis follow the
+		// reduced document breaks that reading, which is a real invariant
+		// and not merely a passing test.
+		//
+		// So both halves come from `measured`, and planRefusal derives the
+		// axis FROM it rather than taking one beside it -- there is no
+		// second value left to diverge. The reduced document's own numbers
+		// are not lost; they are on the candidate_narrowing record, which
+		// is where a reader looking for what the reduction did will go.
+		// A refusal is still where a per-group breach matters most, and it
+		// still carries real quota fields rather than the zeros both
+		// refusal arms used to emit.
+		return InvestigationResult{}, assemblyTelemetry{}, e.planRefusal(ctx, principal, plan, measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined)
 	}
 
 	e.recordPlanNarrowingStep(plan, PlanNarrowing{
@@ -207,8 +250,8 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// so it was the one path publishing a selection as a no-op while a
 		// real answer had genuinely been attempted over the narrowed set.
 		event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, overrun, narrowed.Basis)
-		event.recordMeasurement(measurement)
-		// The measurement here is the FIRST synthesis's, taken against the
+		event.recordMeasurement(measured)
+		// The attempt here is the FIRST synthesis's, taken against the
 		// pre-narrowing cohort, so the prediction pairs with `before`.
 		event.PredictedItems = PredictedItemsForPlan(*plan, before)
 		event.RetryAttempted = true
@@ -227,15 +270,32 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	}
 	// Finalize the retry too, or the second pass repeats round 1 finding 1's
 	// defect: measuring a pre-final shape and serving a larger one.
-	// retryParams.Facts, NEVER params.Facts: this result was synthesized from
-	// the NARROWED bundle, and evaluating it against the first pass's facts
-	// would report coverage for a document nobody served.
+	// TWO BINDINGS AT ONE SITE, and they are not alternatives.
+	//
+	// The retry is a DIFFERENT DOCUMENT from the first pass, and two separate
+	// things must follow it here or the retry is judged against the first
+	// pass's world:
+	//
+	//   * its EVIDENCE -- `retryParams.Facts`, never `params.Facts`. This
+	//     result was synthesized from the NARROWED bundle, so evaluating its
+	//     read populations against the first pass's facts would report
+	//     coverage for a document nobody served.
+	//   * its ALLOCATION -- grants computed over the NARROWED cohort, never
+	//     the first pass's. Measuring a document against grants written for a
+	//     different member and group population is the "selecting the wrong
+	//     attempt" residual.
+	//
+	// They are the same "stale document at the retry" class on different
+	// axes, and each was found independently by a different lane. Taking one
+	// without the other re-opens the half it did not fix.
 	retried = e.finalizeResult(retried, *plan, params.Frame, retryParams.Facts)
-	retryMeasurement, err := contractsv1.MeasureContextFabricResponse(retried)
+	retryAllocation := AllocateItems(*plan, groupCountOf(narrowed.Graph.Cohort), cohortMemberCount(narrowed.Graph.Cohort))
+	retryMeasured, err := e.measureAssembledAttempt(ctx, principal, "re_synthesized_result", retryAllocation, retried, budget)
 	if err != nil {
-		return InvestigationResult{}, assemblyTelemetry{}, stageError(StageValidation, fmt.Errorf("measure re-synthesized result: %w", err))
+		return InvestigationResult{}, assemblyTelemetry{}, err
 	}
-	retryOverrun := retryMeasurement.Overrun(budget)
+	retryMeasurement := retryMeasured.Measurement
+	retryOverrun := retryMeasured.Overrun
 	// The outcome layer's attempt runs BEFORE this event is built, because
 	// the event's own `refusal_planned` field is a claim about what happens
 	// next. Emitting it first published refusal_planned=true for every
@@ -243,9 +303,19 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// counter counting answers that were never refused, and the exact
 	// telemetry-describes-a-different-artifact class the deferred emitters
 	// in this file already fix elsewhere.
-	outcomeAttempt := outcomeNarrowingAttempt{}
+	//
+	// The attempt starts as the RETRY'S OWN measured attempt, never as a zero
+	// value. That zero value is round 3's finding in one line: a retry that
+	// FITS skipped the branch below, and the event then read three quota
+	// fields off a struct nobody had filled -- reporting no groups and no
+	// quota for a two-group answer that had just been served.
+	outcomeAttempt := outcomeNarrowingAttempt{Measured: retryMeasured}
 	if retryOverrun != contractsv1.ContextFabricBudgetFits {
-		outcomeAttempt = e.planCandidateNarrowing(plan, params.Frame, retried, budget, retryMeasurement, retryOverrun, retryParams.Facts)
+		var accountingErr error
+		outcomeAttempt, accountingErr = e.planCandidateNarrowing(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts)
+		if accountingErr != nil {
+			return InvestigationResult{}, assemblyTelemetry{}, accountingErr
+		}
 	}
 	// ONE decision event per investigation. When the reduction rescues a
 	// retry that did not fit, the event that describes the SERVED answer is
@@ -260,8 +330,27 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		retryPending.CohortRanked = &retryRanked
 		return outcomeAttempt.Result, retryPending, nil
 	}
-	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, overrun, narrowed.Basis)
-	event.recordMeasurement(retryMeasurement)
+	// ONE DOCUMENT: the RETRY's, which is what the refusal below reports.
+	//
+	// This event used to take its axis from `overrun` -- the FIRST pass's --
+	// and its measurement from `outcomeAttempt.Measured`, which on the
+	// insufficient exit is the REDUCED document, while the refusal at the end
+	// of this arm reports `retryMeasurement`/`retryOverrun`. Three documents
+	// for one decision. Measured by a keystone review: the refusal reported 29
+	// items / 11,567 bytes while its sole assembled_result event reported 20
+	// items / 9,918 bytes and kept `overrun=items` against a 20-item ceiling.
+	//
+	// It is the sibling of the same defect at the declined arm, and finding it
+	// is why a defect class gets a SWEEP rather than a patch at the reported
+	// line. The pair is now enumerated and pinned by
+	// TestEveryRefusalSitePairsOneDocument.
+	//
+	// `outcomeAttempt` still supplies the reduction's own dimensions below --
+	// Declined, and the served/declared counts on the served path -- because
+	// WHY the reduction did not save this answer is a different fact from WHAT
+	// was measured, and it is not a measurement.
+	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, before, after, grouped, false, retryMeasured.Overrun, narrowed.Basis)
+	event.recordMeasurement(retryMeasured)
 	// `after`, not `before`: this event measures the RE-synthesized answer,
 	// which ran against the narrowed cohort. Predicting from `before` would
 	// pair a measurement of one cohort with an expectation for a larger one.
@@ -457,9 +546,29 @@ func (e *Engine) retryDeadlineAvailable(ctx context.Context) bool {
 // false -- the selection was computed and then discarded -- and a reader
 // needs both halves, because "we would have narrowed to four" and "we
 // answered over four" are different statements about the run.
-func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, plan *AnswerPlan, measurement ResponseMeasurement, overrun contractsv1.ContextFabricBudgetOverrun, retryAttempted, grouped bool, basis contractsv1.ContextFabricNarrowingBasis, members, selected int, declined RetryDeclinedReason, reductionDeclined OutcomeReductionDeclined) error {
+// It takes the MEASURED ATTEMPT rather than a bare measurement, and that is
+// this seam's own history: a refusal is the case where a per-group breach
+// matters MOST, and both refusal arms used to emit zero quota fields while the
+// real exposure sat on an object one branch away. An enforcement layer told
+// nothing on the one path that refuses has been told nothing.
+func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, plan *AnswerPlan, measured MeasuredAttempt, retryAttempted, grouped bool, basis contractsv1.ContextFabricNarrowingBasis, members, selected int, declined RetryDeclinedReason, reductionDeclined OutcomeReductionDeclined) error {
+	// THE AXIS COMES FROM THE MEASURED ATTEMPT, not from a parameter.
+	//
+	// This function used to take `overrun` separately while taking the
+	// measurement from `measured`, and the caller's value is the PRE-reduction
+	// one: after the candidate reduction runs, the document is a different
+	// document. A refusal therefore published post-reduction counts under a
+	// pre-reduction axis -- measured at 30 items against a ceiling of 30 (not
+	// over) and 9593 bytes against 9500 (over), while naming `items`. The
+	// numbers and the axis described different documents, and a reader had no
+	// way to tell which to believe.
+	//
+	// One value, one derivation. The same rule the allocator's Agreement()
+	// applies to grants: if two things must agree, do not carry them
+	// separately and hope.
+	overrun := measured.Overrun
 	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, members, selected, grouped, false, overrun, basis)
-	event.recordMeasurement(measurement)
+	event.recordMeasurement(measured)
 	// `members` is the cohort synthesis ran against, which is the count the
 	// measurement describes -- NOT `selected`, which is what the declined
 	// retry would have narrowed to. Predicting from `selected` would publish a
@@ -477,7 +586,7 @@ func (e *Engine) planRefusal(ctx context.Context, principal storage.Principal, p
 	event.OutcomeReductionDeclined = reductionDeclined
 	event.NarrowerContinuationAxis = narrowerContinuationAxisFor(*plan)
 	e.recordPlanNarrowing(ctx, principal, event)
-	return e.refusalFrom(plan, measurement, overrun, retryAttempted)
+	return e.refusalFrom(plan, measured.Measurement, overrun, retryAttempted)
 }
 
 func (e *Engine) refusalFrom(plan *AnswerPlan, measurement ResponseMeasurement, overrun contractsv1.ContextFabricBudgetOverrun, retryAttempted bool) error {

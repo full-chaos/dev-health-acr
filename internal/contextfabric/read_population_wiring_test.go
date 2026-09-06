@@ -53,8 +53,8 @@ func TestTheRetryEvaluatesReadsOverTheBundleItSynthesizedFrom(t *testing.T) {
 		},
 		{
 			name: "the SECOND planCandidateNarrowing, on the retried result",
-			want: "e.planCandidateNarrowing(plan, params.Frame, retried, budget, retryMeasurement, retryOverrun, retryParams.Facts)",
-			bad:  "e.planCandidateNarrowing(plan, params.Frame, retried, budget, retryMeasurement, retryOverrun, params.Facts)",
+			want: "e.planCandidateNarrowing(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts)",
+			bad:  "e.planCandidateNarrowing(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, params.Facts)",
 		},
 	} {
 		if strings.Count(source, call.want) != 1 {
@@ -67,10 +67,28 @@ func TestTheRetryEvaluatesReadsOverTheBundleItSynthesizedFrom(t *testing.T) {
 		}
 	}
 
+	// THE OTHER LANE'S HALF OF THE SAME SITE, pinned here because the two
+	// fixes now live together and a resolution that kept only one would still
+	// compile and still pass every arm that pins the other.
+	//
+	// The retry's ALLOCATION must be computed over the NARROWED cohort, just
+	// as its EVIDENCE must come from the narrowed bundle. They are the same
+	// "stale document at the retry" class on different axes, found
+	// independently by two lanes; taking one without the other re-opens the
+	// half it did not fix.
+	if !strings.Contains(source, "retryAllocation := AllocateItems(*plan, groupCountOf(narrowed.Graph.Cohort), cohortMemberCount(narrowed.Graph.Cohort))") {
+		t.Error("the retry does not compute its OWN allocation over the narrowed cohort; measuring the " +
+			"retried document against the first pass's grants is the sibling of evaluating it against " +
+			"the first pass's facts")
+	}
+	if !strings.Contains(source, "e.measureAssembledAttempt(ctx, principal, \"re_synthesized_result\", retryAllocation, retried, budget)") {
+		t.Error("the retry is not measured against its own allocation")
+	}
+
 	// The FIRST planCandidateNarrowing runs on the first-pass result and must
 	// take the first-pass bundle -- the mirror image, asserted so a lane
 	// "fixing" the above does not make both sites pass the retry bundle.
-	first := "attempt := e.planCandidateNarrowing(plan, params.Frame, result, budget, measurement, overrun, params.Facts)"
+	first := "e.planCandidateNarrowing(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts)"
 	if strings.Count(source, first) != 1 {
 		t.Errorf("the FIRST planCandidateNarrowing must take the first-pass bundle; it runs on the "+
 			"first-pass result:\n  %s", first)
