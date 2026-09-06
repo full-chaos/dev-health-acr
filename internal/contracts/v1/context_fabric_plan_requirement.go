@@ -47,8 +47,17 @@ import (
 // member cannot ship without its wire mirror and a mirror entry cannot
 // outlive the member it mirrors.
 var contextFabricSubjectRoles = [...]string{
-	"subject", "member", "group", "operand",
+	contextFabricSubjectRoleSubject, "member", "group", "operand",
 }
+
+// contextFabricSubjectRoleSubject is the ONE role that owns no population.
+//
+// Named rather than spelled inline because two places now need to agree on it:
+// the mirror above, and the census exception's role gate, which admits every
+// role EXCEPT this one. A literal in both would let them drift apart silently,
+// and the drift would show up as a validator quietly granting an exception to a
+// row with no population.
+const contextFabricSubjectRoleSubject = "subject"
 
 // ContextFabricSubjectRoleVocabulary returns the mirrored vocabulary, for the
 // domain-side parity test.
