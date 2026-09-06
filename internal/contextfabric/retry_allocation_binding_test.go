@@ -175,6 +175,20 @@ func TestTheConsumedAllocationIsTheReturnedOne(t *testing.T) {
 			"the first pass's allocation still rides through on the struct copy")
 	}
 
+	// THE FIRST PASS's binding, which the checks below do not reach.
+	//
+	// fitAssembledResult receives the first pass's consumed allocation as a
+	// PARAMETER, so it is not bound from a producer call inside this function
+	// and the producer-binding walk cannot see it. Assert directly that the
+	// value the first-pass guard measures comes from that parameter and not
+	// from params: `allocation := params.Allocation` is exactly the pre-#5
+	// shape, it compiles, and nothing else here would catch it.
+	if src := firstPassAllocationSource(t, files); src != "consumed" {
+		t.Errorf("the first-pass guard binds its allocation from %q, want the `consumed` parameter -- "+
+			"binding it from params reads the caller's own copy, which no producer-local fault can "+
+			"ever reach", src)
+	}
+
 	// A GUARD ARGUMENT IS ONLY AS GOOD AS WHAT THE IDENTIFIER STILL HOLDS.
 	//
 	// Asserting the argument's spelling is not enough, and a negative control
@@ -363,4 +377,32 @@ func reassigns(t *testing.T, files []*ast.File, fnName, name string) bool {
 		return true
 	})
 	return found
+}
+
+// firstPassAllocationSource returns the source expression the first-pass guard's
+// `allocation` is bound from inside fitAssembledResult.
+func firstPassAllocationSource(t *testing.T, files []*ast.File) string {
+	t.Helper()
+	fn := findFuncDecl(t, files, "fitAssembledResult")
+	out := ""
+	ast.Inspect(fn, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
+			return true
+		}
+		ident, ok := assign.Lhs[0].(*ast.Ident)
+		if !ok || ident.Name != "allocation" {
+			return true
+		}
+		var buf bytes.Buffer
+		if err := printer.Fprint(&buf, token.NewFileSet(), assign.Rhs[0]); err != nil {
+			t.Fatalf("print allocation source: %v", err)
+		}
+		out = buf.String()
+		return false
+	})
+	if out == "" {
+		t.Fatal("fitAssembledResult binds no `allocation`; this pin is stale and asserts nothing")
+	}
+	return out
 }
