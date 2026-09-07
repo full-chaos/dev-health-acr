@@ -2394,12 +2394,20 @@ func (c *Coordinator) due(key string) bool {
 // reproduced it with a deterministic clock. Two reads deciding one question
 // is the defect; one read deciding both is the fix.
 // truncatedBy reports whether err is the TICK's cancellation reaching this
-// pair rather than a failure the source owns. BOTH halves are load bearing.
-// Without the error check, a source returning context.Canceled under a live
-// tick would be filed as truncation and its outage hidden. Without the
-// context check, a real backend error stops counting as a failure merely
-// because the tick died immediately after it -- which lost an observed
-// dependency_unavailable and left the source unnamed.
+// pair rather than a failure the source owns.
+//
+// The context check is load bearing on its own: a source returning a context
+// error while the tick is LIVE owns that error, has failed, and is named.
+//
+// KNOWN LIMIT, recorded rather than papered over. When the tick is cancelled
+// AND the error is a context error, this cannot say who owned it, so it files
+// the pair as truncation and the source is not named. Resolving it by the
+// source's own choice of error -- bare sentinel means propagation, a wrapped
+// one means the source describing its own failure -- is not implementable
+// here, because ProjectionWorker.RunOnce (projector.go) wraps EVERY source
+// error unconditionally, so the source's own identity is already destroyed by
+// the time it arrives. Closing this needs that wrapping to change, which is
+// outside this ticket's blast radius and is tracked as a follow-up.
 func truncatedBy(ctx context.Context, err error) bool {
 	if ctx.Err() == nil {
 		return false

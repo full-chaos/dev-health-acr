@@ -10,6 +10,8 @@ import (
 	"go/parser"
 	"go/token"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1736,7 +1738,7 @@ func TestConfirm5_ACancelledSteadyStateTickDoesNotAssertAReading(t *testing.T) {
 // recordBuildPairOutcome call must sit inside a scope.recordPair closure.
 func TestEveryPairOutcomeGoesThroughTheScope(t *testing.T) {
 	t.Parallel()
-	if got := countPairRecordingsOutsideScope(t, "coordinator.go"); got != 0 {
+	if got := countPairRecordingsOutsideScope(t, "."); got != 0 {
 		t.Errorf("%d pair-outcome recording(s) bypass scope.recordPair -- a truncated tick can assert a reading it never took, which is exactly how the build path shipped broken", got)
 	}
 
@@ -1793,13 +1795,40 @@ func g(scope *orgScope, source string) {
 // countPairRecordingsOutsideScope counts recordPairOutcome /
 // recordBuildPairOutcome calls that are not lexically inside a
 // scope.recordPair(func(){...}) argument.
-func countPairRecordingsOutsideScope(t *testing.T, filename string) int {
+// It scans EVERY non-test file in the package, not just coordinator.go: a
+// recorder added from a sibling file was invisible to the earlier version,
+// which confirm7 demonstrated with an out-of-scope control.
+//
+// KNOWN LIMIT, stated rather than implied. This is a syntactic walk, so it
+// sees direct selectors and method values but cannot follow a recorder
+// reached through an interface, a struct field, or a function returned by a
+// helper -- confirm7 executed all three and this pin reports 0 for each. It
+// catches the way a call site is actually added by hand; it is not a proof
+// that no path exists. A pin that pretended otherwise would be worse than one
+// that names its boundary.
+func countPairRecordingsOutsideScope(t *testing.T, dir string) int {
 	t.Helper()
-	file, err := parser.ParseFile(token.NewFileSet(), filename, nil, 0)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Fatalf("parse %s: %v", filename, err)
+		t.Fatalf("read %s: %v", dir, err)
 	}
-	return countPairRecordingsOutsideScopeIn(file)
+	scanned, found := 0, 0
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), filepath.Join(dir, name), nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		scanned++
+		found += countPairRecordingsOutsideScopeIn(file)
+	}
+	if scanned == 0 {
+		t.Fatalf("scanned no production files in %s -- the pin would pass vacuously", dir)
+	}
+	return found
 }
 
 func countPairRecordingsOutsideScopeIn(root ast.Node) int {
@@ -1980,5 +2009,43 @@ func TestConfirm6_ACancellationAfterAFailureDoesNotUnobserveIt(t *testing.T) {
 				t.Errorf("failed_sources = %v, want it NAMED -- an unnamed failing source is the defect this line exists to prevent", summary["failed_sources"])
 			}
 		})
+	}
+}
+
+// TestConfirm7_ABarePropagatedCancellationIsStillTruncation is the other half,
+// and it is what stops the rule above from simply naming everything. A source
+// that returns the sentinel UNCHANGED added nothing of its own: that is the
+// tick's cancellation passing through, and it must stay truncation.
+func TestConfirm7_ABarePropagatedCancellationIsStillTruncation(t *testing.T) {
+	t.Parallel()
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// cancellingSource returns ctx.Err() bare, after cancelling.
+	source := &cancellingSource{name: "dev_health_teams_projects", cancel: cancel}
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:         []string{"org-a"},
+		Sources:        []projectionrun.SourcePair{{Name: "dev_health_teams_projects", Source: source}},
+		Backend:        newFakeBackend(),
+		Checkpoints:    newFakeCheckpointStore(),
+		RebuildMarkers: newFakeRebuildMarker(),
+		Logger:         logger,
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	coordinator.Tick(ctx)
+
+	if source.calls.Load() == 0 {
+		t.Fatal("the source never ran")
+	}
+	summary := freshnessSummary(t, &buffer)
+	if got := summaryNumber(t, summary, "sources_failed"); got != 0 {
+		t.Errorf("sources_failed = %v, want 0 -- a BARE propagated sentinel is the tick's own cancellation passing through, not a source failure", got)
+	}
+	if got := summaryBool(t, summary, "tick_complete"); got {
+		t.Errorf("tick_complete = true, want false")
 	}
 }
