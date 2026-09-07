@@ -83,25 +83,7 @@ func TestSlogResolutionTracer_StageLinesVisibleAtProductionLogLevel(t *testing.T
 	if log == "" {
 		t.Fatal("captured log is EMPTY -- the tracer produced no output at all, which would make every assertion below vacuous")
 	}
-	// CHAOS-5393 changed the SHAPE this fixture drives, and the contract is
-	// updated deliberately rather than the assertions loosened. On a
-	// scope-anchored frame the SCOPE ANCHOR now decides in its own contest
-	// (design: SubjectPlan is "group axis, member axis, scope anchor"; I11
-	// requires the graph to COMMIT the anchor, which a shared contest makes
-	// unsatisfiable whenever a member outranks it). So:
-	//
-	//   - there are TWO ranked cuts on such a turn, one per contest, not one;
-	//   - `reserved_kind_admitted` no longer fires for the anchor, because the
-	//     anchor is no longer competing in the member pool for a slot to be
-	//     admitted into -- the reserve still exists for every other kind and
-	//     on every non-scope-anchored frame;
-	//   - the member cut sees the crowd minus nothing and survives the budget
-	//     less the one slot the anchor holds.
-	//
-	// The rig-visibility PROPERTY this test exists for is unchanged and still
-	// asserted: the per-candidate lines stay Debug, the summaries reach Info,
-	// and the counts on them are real rather than absent.
-	for _, stage := range []string{"ranked_cut", "kind_offer", "anchor_pool"} {
+	for _, stage := range []string{"ranked_cut", "reserved_kind_admitted", "kind_offer"} {
 		if !strings.Contains(log, `"stage":"`+stage+`"`) {
 			t.Errorf("no %q stage line at the production default log level (Info) -- this stage logs at DebugContext, invisible on the rig", stage)
 		}
@@ -113,29 +95,17 @@ func TestSlogResolutionTracer_StageLinesVisibleAtProductionLogLevel(t *testing.T
 	// (This fixture takes exactly one pass; see
 	// TestRankedCutSummary_PairedOneToOneWithDecisionAcrossReDecisionPasses
 	// for the multi-pass count, which is NOT 1.)
-	// TWO contests, so two summaries -- and the number is asserted exactly,
-	// because "more than one" is also what a per-candidate leak back to Info
-	// would look like, and 91 candidates would produce 91.
-	if got := strings.Count(log, `"stage":"ranked_cut"`); got != 2 {
-		t.Errorf("ranked_cut Info lines = %d, want exactly 2 (one per contest: members, then the scope anchor) -- a much larger value means the per-candidate line leaked back to Info", got)
+	if got := strings.Count(log, `"stage":"ranked_cut"`); got != 1 {
+		t.Errorf("ranked_cut Info lines = %d, want exactly 1 for this single-pass fixture -- a value >1 means the per-candidate line leaked back to Info", got)
 	}
 	if !strings.Contains(log, `"msg":"context fabric resolution trace: ranked cut summary"`) {
 		t.Error("the ranked_cut Info line is not the summary shape (msg mismatch) -- the folded-array design")
 	}
-	// The MEMBER contest sees the 90-strong crowd and survives the budget
-	// less the single slot the anchor holds: the budget is SHARED between
-	// the two contests, never doubled.
-	if !strings.Contains(log, `"candidate_count":90`) {
-		t.Errorf("member ranked_cut summary missing/wrong candidate_count (want the 90 member-kind candidates) -- log: %s", log)
+	if !strings.Contains(log, `"candidate_count":91`) {
+		t.Errorf("ranked_cut summary missing/wrong candidate_count -- log: %s", log)
 	}
-	if !strings.Contains(log, `"survived_count":19`) {
-		t.Errorf("member ranked_cut summary missing/wrong survived_count (want the 20-candidate budget less the anchor's one slot) -- log: %s", log)
-	}
-	// And the ANCHOR's own contest is visible as its own cut, over its one
-	// candidate. Without this the two-contest shape would be indistinguishable
-	// from a single cut that happened to log twice.
-	if !strings.Contains(log, `"candidate_count":1`) {
-		t.Errorf("anchor ranked_cut summary missing -- the scope contest must be visible on the rig as its own cut; log: %s", log)
+	if !strings.Contains(log, `"survived_count":20`) {
+		t.Errorf("ranked_cut summary missing/wrong survived_count (want the MaxSubjectCandidates budget, 20) -- log: %s", log)
 	}
 }
 

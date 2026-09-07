@@ -296,7 +296,7 @@ func TestTheDecisionSummaryNamesTheAnchorScopeAndItsSource(t *testing.T) {
 func TestAConfirmedAnchorWhoseKindIsTheMemberKindIsRefused(t *testing.T) {
 	t.Parallel()
 	scope := decideAnchorPoolKindScope(scopedProjectsFrame("chaos"), "",
-		&contextfabric.ConfirmedAnchorSelection{Kind: contextfabric.SubjectProject, CanonicalID: "project.v2:github:chaos"})
+		&contextfabric.ConfirmedAnchorSelection{Kind: contextfabric.SubjectProject, CanonicalID: "project.v2:github:chaos"}, confirmedProject())
 	if scope.Kind != "" || scope.Source != anchorPoolKindScopeNone {
 		t.Fatalf("decideAnchorPoolKindScope admitted %q from source %q for an anchor whose kind EQUALS the member kind -- I11 says the resolved anchor's kind is never the member kind", scope.Kind, scope.Source)
 	}
@@ -308,7 +308,7 @@ func TestAConfirmedAnchorWhoseKindIsTheMemberKindIsRefused(t *testing.T) {
 func TestTheReceiptAnchorKindWinsOverTheConfirmedAnchor(t *testing.T) {
 	t.Parallel()
 	scope := decideAnchorPoolKindScope(scopedProjectsFrame("chaos"), contextfabric.SubjectTeam,
-		&contextfabric.ConfirmedAnchorSelection{Kind: contextfabric.SubjectRepository, CanonicalID: "repository.v2:github:chaos"})
+		&contextfabric.ConfirmedAnchorSelection{Kind: contextfabric.SubjectRepository, CanonicalID: "repository.v2:github:chaos"}, confirmedProject())
 	if scope.Kind != contextfabric.SubjectTeam || scope.Source != anchorPoolKindScopeReceipt {
 		t.Fatalf("scope = %q from %q, want the RECEIPT's team -- a caller can only confirm an option this engine already offered, so the model's reading of the whole question is the wider statement", scope.Kind, scope.Source)
 	}
@@ -452,7 +452,7 @@ func TestTheFallbackAnchorKindIsReservedAgainstTruncation(t *testing.T) {
 	t.Parallel()
 	frame := scopedProjectsFrame("chaos")
 	scope := decideAnchorPoolKindScope(frame, "",
-		&contextfabric.ConfirmedAnchorSelection{Kind: contextfabric.SubjectTeam, CanonicalID: "team.v2:github:chaos"})
+		&contextfabric.ConfirmedAnchorSelection{Kind: contextfabric.SubjectTeam, CanonicalID: "team.v2:github:chaos"}, confirmedProject())
 	reserved := frameReservedKinds(frame, scope.Kind)
 	var sawTeam, sawProject bool
 	for _, k := range reserved {
@@ -467,7 +467,7 @@ func TestTheFallbackAnchorKindIsReservedAgainstTruncation(t *testing.T) {
 	}
 	// The receipt source must reserve the same kind, so the two sources are
 	// not silently different at truncation.
-	if got := frameReservedKinds(frame, decideAnchorPoolKindScope(frame, contextfabric.SubjectTeam, nil).Kind); len(got) != len(reserved) {
+	if got := frameReservedKinds(frame, decideAnchorPoolKindScope(frame, contextfabric.SubjectTeam, nil, confirmedProject()).Kind); len(got) != len(reserved) {
 		t.Errorf("receipt source reserved %v but fallback source reserved %v -- the two sources must be indistinguishable downstream", got, reserved)
 	}
 }
@@ -539,58 +539,58 @@ func TestTheFoldKeepsTheConfirmedKindItWasBuiltWith(t *testing.T) {
 	}
 }
 
-// THE MEMBERS' GATE, ASSERTED IN FULL, WITH MEMBERS ABOVE THE FLOORS.
+// THE COMMIT GATES NOW SEE A MIXED-KIND POOL, AND THAT IS THE ONE THING THIS
+// CHANGE COULD BREAK WITHOUT ANY TEST NOTICING.
 //
-// The first version of this test could not have caught the regression it was
-// written for: its candidates sat at .55/.54, already below every commit
-// floor, and it asserted only committed project ids. A gate that went from
-// "commit" to "ambiguous + clarification" was invisible to it. An adversarial
-// round found the regression with a probe at .8 and it was a P1.
+// Admitting the anchor's kind means the gates contest member candidates and
+// an anchor candidate together. This repo has already learned once, the
+// expensive way, that removing a candidate removes what the others were
+// competing against -- and the converse is just as true: ADDING one can push
+// a pool across a floor it should not cross, or rescue a lone candidate that
+// should have stayed uncommitted.
 //
-// This version puts the member ABOVE the floor and asserts the whole gate
-// result -- committed set, both candidates' states, the prompt, and the
-// commit basis -- for the same pool with and without the anchor. The anchor
-// is a SCOPE, so its presence must change nothing about what the members
-// decide.
+// The adversarial round noted the union was untested and declined to count it
+// as patch-caused, since member candidates already merged this way. That is a
+// fair reading, and it is still worth a pin: "it was already like that" is
+// precisely the reasoning that let the earlier vector-only defect stand.
 func TestAdmittingTheAnchorDoesNotChangeWhatTheGatesDecide(t *testing.T) {
 	t.Parallel()
-	member := func() []CandidateNode {
-		return []CandidateNode{candidateNode(contextfabric.SubjectProject,
-			"project.v2:github:chaos-borderline", "chaos borderline", 0.8, "*")}
+	// Two rival members, neither individually decisive: the pair must stay
+	// ambiguous whether or not the anchor joins them.
+	twoMembers := func() []CandidateNode {
+		return []CandidateNode{
+			candidateNode(contextfabric.SubjectProject, "project.v2:github:chaos-alpha", "chaos alpha", 0.55, "*"),
+			candidateNode(contextfabric.SubjectProject, "project.v2:github:chaos-beta", "chaos beta", 0.54, "*"),
+		}
 	}
 	withoutAnchor := &fakeGraphBackend{
-		searchResults:    map[string][]CandidateNode{"chaos": member()},
+		searchResults:    map[string][]CandidateNode{"chaos": twoMembers()},
 		enableSearchKind: true,
 		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
-			"chaos": {contextfabric.SubjectProject: nil},
+			"chaos": {contextfabric.SubjectTeam: nil, contextfabric.SubjectProject: nil},
 		},
 	}
 	withAnchor := &fakeGraphBackend{
-		searchResults:    map[string][]CandidateNode{"chaos": member()},
+		searchResults:    map[string][]CandidateNode{"chaos": twoMembers()},
 		enableSearchKind: true,
 		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
 			"chaos": {
-				contextfabric.SubjectProject: nil,
 				contextfabric.SubjectTeam:    {anchorTeamNode("chaos", "CHAOS Team")},
+				contextfabric.SubjectProject: nil,
 			},
 		},
 	}
-	anchorSel := &contextfabric.ConfirmedAnchorSelection{Kind: contextfabric.SubjectTeam, CanonicalID: "team.v2:github:chaos"}
 
-	bare := resolveScoped(t, withoutAnchor, scopedProjectsFrame("chaos"), nil, anchorSel, "")
-	mixed := resolveScoped(t, withAnchor, scopedProjectsFrame("chaos"), nil, anchorSel, "")
+	bare := resolveScoped(t, withoutAnchor, scopedProjectsFrame("chaos"), confirmedProject(), nil, "")
+	mixed := resolveScoped(t, withAnchor, scopedProjectsFrame("chaos"), confirmedProject(), nil, contextfabric.SubjectTeam)
 
+	// The anchor must actually be in the mixed pool, or this proves nothing.
 	if candidateKinds(mixed)[contextfabric.SubjectTeam] == 0 {
-		t.Fatalf("the anchor never joined the resolution, so this comparison is vacuous; kinds=%v", candidateKinds(mixed))
+		t.Fatalf("the anchor never joined the pool, so this comparison is vacuous; kinds=%v", candidateKinds(mixed))
 	}
-	memberState := func(res contextfabric.SubjectResolution) contextfabric.ResolutionState {
-		for _, c := range res.Candidates {
-			if c.Subject.Kind == contextfabric.SubjectProject {
-				return c.State
-			}
-		}
-		return ""
-	}
+	// THE MEMBERS' OWN CONTEST IS UNCHANGED. Compare the committed MEMBER
+	// subjects, not the whole set -- the anchor is legitimately allowed to
+	// commit on its own basis, and that is a different question.
 	memberCommits := func(res contextfabric.SubjectResolution) []string {
 		out := []string{}
 		for _, s := range res.Committed {
@@ -600,29 +600,96 @@ func TestAdmittingTheAnchorDoesNotChangeWhatTheGatesDecide(t *testing.T) {
 		}
 		return out
 	}
-	// COMMITTED SET.
 	before, after := memberCommits(bare), memberCommits(mixed)
 	if len(before) != len(after) {
-		t.Errorf("member commits changed when the anchor joined: %v -> %v", before, after)
+		t.Errorf("member commits changed when the anchor joined the pool: %v -> %v. Admitting the anchor must not alter what the members' own contest decides.", before, after)
 	}
 	for i := range before {
 		if i < len(after) && before[i] != after[i] {
 			t.Errorf("member commit %d changed: %q -> %q", i, before[i], after[i])
 		}
 	}
-	if len(after) == 0 {
-		t.Errorf("no member committed in EITHER arm -- the member must be above its floor or this test cannot detect a demotion; committed=%v", mixed.Committed)
+}
+
+// THE NO-REGRESSION PIN. This is the adversarial round's own probe, kept as a
+// pin rather than a fix: with NO confirmed member kind, this change must do
+// NOTHING. The filter is a no-op on such a turn, so there is no stripped
+// anchor to rescue, and widening retrieval there would only add a candidate
+// that was never removed -- which is exactly what turned a project committing
+// on the lone-candidate floor into a top-two ambiguity asking the caller to
+// choose between a member and the scope containing it.
+//
+// The whole gate result is asserted, not just the committed set: the earlier
+// version of this comparison checked committed project ids alone and could
+// not see a commit become an ambiguity.
+func TestWithNoConfirmedKindTheAnchorChangesNothing(t *testing.T) {
+	t.Parallel()
+	member := func() []CandidateNode {
+		return []CandidateNode{candidateNode(contextfabric.SubjectProject,
+			"project.v2:github:chaos-borderline", "chaos borderline", 0.8, "*")}
 	}
-	// CANDIDATE STATE.
-	if bs, as := memberState(bare), memberState(mixed); bs != as {
-		t.Errorf("member candidate state changed when the anchor joined: %q -> %q", bs, as)
+	backend := &fakeGraphBackend{
+		searchResults:    map[string][]CandidateNode{"chaos": member()},
+		enableSearchKind: true,
+		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
+			"chaos": {
+				contextfabric.SubjectProject: nil,
+				contextfabric.SubjectTeam:    {anchorTeamNode("chaos", "CHAOS Team")},
+			},
+		},
 	}
-	// AMBIGUITY AND PROMPT.
-	if mixed.ClarificationPrompt != bare.ClarificationPrompt {
-		t.Errorf("clarification prompt changed when the anchor joined: %q -> %q. Asking which of a member and its own scope the caller meant is a question I11 guarantees has no answer.", bare.ClarificationPrompt, mixed.ClarificationPrompt)
+	res := resolveScoped(t, backend, scopedProjectsFrame("chaos"), nil,
+		&contextfabric.ConfirmedAnchorSelection{Kind: contextfabric.SubjectTeam, CanonicalID: "team.v2:github:chaos"},
+		"")
+
+	var committedMember bool
+	for _, subject := range res.Committed {
+		committedMember = committedMember || subject.Kind == contextfabric.SubjectProject
 	}
-	if mixed.ClarificationPrompt != "" {
-		t.Errorf("clarification prompt = %q, want empty on a pool whose only member cleared its floor", mixed.ClarificationPrompt)
+	if !committedMember {
+		t.Errorf("the member did not commit; committed=%v. With no confirmed kind this path must behave exactly as it did before this change.", res.Committed)
+	}
+	if res.ClarificationPrompt != "" {
+		t.Errorf("clarification prompt = %q, want empty. Asking which of a member and its own scope the caller meant is a question invariant I11 guarantees has no answer.", res.ClarificationPrompt)
+	}
+	for _, c := range res.Candidates {
+		if c.Subject.Kind == contextfabric.SubjectProject && c.State == contextfabric.ResolutionAmbiguous {
+			t.Errorf("member candidate state = ambiguous; it had no rival of its own kind and no confirmed kind was in play")
+		}
+		if c.Subject.Kind == contextfabric.SubjectTeam {
+			t.Errorf("a %s candidate reached the pool with NO confirmed kind; kinds=%v. This change must not widen retrieval on a turn where the filter removed nothing.", c.Subject.Kind, candidateKinds(res))
+		}
+	}
+}
+
+// THE TICKET CASE. With a confirmed member kind the filter WOULD strip the
+// anchor, and all three consumers must therefore see the anchor kind: it has
+// to be retrieved (kind-hinted search), reserved (phase 4) and admitted (the
+// filter). This is the turn the ticket is about -- a caller that answered both
+// structure-need offers truthfully and got no_match.
+func TestWithAConfirmedKindTheAnchorIsRetrievedReservedAndAdmitted(t *testing.T) {
+	t.Parallel()
+	capture := &anchorScopeCapture{}
+	res := resolveCapturingAnchorScope(t, capture, anchorOnlyByKindBackend("chaos", 3),
+		scopedProjectsFrame("chaos"), confirmedProject(),
+		&contextfabric.ConfirmedAnchorSelection{Kind: contextfabric.SubjectTeam, CanonicalID: "team.v2:github:chaos"},
+		"")
+	// RETRIEVED and ADMITTED: the fixture makes the anchor reachable only
+	// through kind-scoped search, so its presence proves both.
+	if got := candidateKinds(res)[contextfabric.SubjectTeam]; got == 0 {
+		t.Fatalf("team candidates = 0, want >= 1; kinds=%v. The anchor was neither retrieved under its own kind nor admitted past the confirmed-kind filter.", candidateKinds(res))
+	}
+	// RESERVED: asserted through the observable, which reports the set phase
+	// 4 was actually handed.
+	if len(capture.summaries) != 1 {
+		t.Fatalf("captured %d decision_summary events, want exactly 1", len(capture.summaries))
+	}
+	var reservedTeam bool
+	for _, k := range capture.summaries[0].DecisionReservedKinds {
+		reservedTeam = reservedTeam || k == "team"
+	}
+	if !reservedTeam {
+		t.Errorf("reserved_kinds = %v, want the anchor kind among them", capture.summaries[0].DecisionReservedKinds)
 	}
 }
 
@@ -720,87 +787,14 @@ func TestAFailedResolutionStillCarriesExplicitNoneTokens(t *testing.T) {
 	}
 }
 
-// THE SCOPE ANCHOR IS NOT A RIVAL READING OF A MEMBER.
-//
-// The design carries three roles, not one candidate set -- SubjectPlan is
-// "group axis, member axis, scope anchor" -- and discovery flows from the
-// scope to the members, never between peers. Invariant I11 then requires the
-// graph to COMMIT the anchor, and defines "resolved" as exactly that. If the
-// anchor and a member contest one commit slot, then on every frame where a
-// member outranks the anchor nothing commits the anchor at all and I11's
-// resolved anchor cannot exist. A shared contest makes the invariant
-// unsatisfiable on the frames it governs.
-//
-// The symptom is a question that cannot be answered: asking a caller to choose
-// between "chaos borderline" and "CHAOS Team" asks which of a member and the
-// scope containing it they meant, and I11 guarantees the two kinds differ.
-//
-// Red before the separation: the member's lone-floor commit became a top-two
-// ambiguity the moment the anchor joined the pool.
-func TestTheAnchorDoesNotContestTheMemberGate(t *testing.T) {
-	t.Parallel()
-	member := func() []CandidateNode {
-		return []CandidateNode{candidateNode(contextfabric.SubjectProject,
-			"project.v2:github:chaos-borderline", "chaos borderline", 0.8, "*")}
-	}
-	backend := &fakeGraphBackend{
-		searchResults:    map[string][]CandidateNode{"chaos": member()},
-		enableSearchKind: true,
-		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
-			"chaos": {
-				contextfabric.SubjectProject: nil,
-				contextfabric.SubjectTeam:    {anchorTeamNode("chaos", "CHAOS Team")},
-			},
-		},
-	}
-	res := resolveScoped(t, backend, scopedProjectsFrame("chaos"), nil,
-		&contextfabric.ConfirmedAnchorSelection{Kind: contextfabric.SubjectTeam, CanonicalID: "team.v2:github:chaos"},
-		"")
-
-	var committedMember, committedAnchor bool
-	for _, s := range res.Committed {
-		committedMember = committedMember || s.Kind == contextfabric.SubjectProject
-		committedAnchor = committedAnchor || s.Kind == contextfabric.SubjectTeam
-	}
-	if !committedMember {
-		t.Errorf("the member did not commit; committed=%v. A member clearing its own floor must not be demoted because the SCOPE joined the pool -- they are different roles, not rival readings.", res.Committed)
-	}
-	if res.ClarificationPrompt != "" {
-		t.Errorf("clarification prompt = %q, want empty. Asking which of a member and its own scope the caller meant is a question I11 guarantees has no answer.", res.ClarificationPrompt)
-	}
-	// STATES ASSERTED FOR BOTH CANDIDATES, not just the committed set: a
-	// build that committed the member while leaving it marked ambiguous
-	// would satisfy a commit-only check and still be wrong.
-	states := map[contextfabric.SubjectKind]contextfabric.ResolutionState{}
-	for _, c := range res.Candidates {
-		states[c.Subject.Kind] = c.State
-	}
-	if got := states[contextfabric.SubjectProject]; got == contextfabric.ResolutionAmbiguous {
-		t.Errorf("member candidate state = %q, want anything but ambiguous -- it had no rival of its own kind", got)
-	}
-	if _, present := states[contextfabric.SubjectTeam]; !present {
-		t.Errorf("the anchor is absent from the candidate set entirely; states=%v. It must still be resolved in its own slot, not dropped.", states)
-	}
-	if !committedAnchor {
-		t.Logf("NOTE: the anchor did not commit; states=%v committed=%v", states, res.Committed)
-	}
-}
-
 // THE WIRING ON THE LINE. `anchor_pool_kind_scope` reading `team` proves the
 // scope was DECIDED; it does not prove the three consumers were HANDED it. A
 // regression reverting one of them to the receipt-only value leaves the scope
 // and source reading correctly while retrieval, the reserve or the filter
-// acts on a different set -- which the adversarial round named as invisible
-// at Info. These two keys are what makes it visible.
+// acts on a different set -- which an adversarial round named as invisible at
+// Info. These two keys are what makes it visible.
 func TestTheDecisionSummaryNamesTheWiringItHandedTheConsumers(t *testing.T) {
 	t.Parallel()
-	capture := &anchorScopeCapture{}
-	resolveCapturingAnchorScope(t, capture, anchorOnlyByKindBackend("chaos", 2),
-		scopedProjectsFrame("chaos"), confirmedProject(), nil, contextfabric.SubjectTeam)
-	if len(capture.summaries) != 1 {
-		t.Fatalf("captured %d decision_summary events, want exactly 1", len(capture.summaries))
-	}
-	got := capture.summaries[0]
 	has := func(list []string, want string) bool {
 		for _, v := range list {
 			if v == want {
@@ -809,81 +803,31 @@ func TestTheDecisionSummaryNamesTheWiringItHandedTheConsumers(t *testing.T) {
 		}
 		return false
 	}
+	capture := &anchorScopeCapture{}
+	resolveCapturingAnchorScope(t, capture, anchorOnlyByKindBackend("chaos", 2),
+		scopedProjectsFrame("chaos"), confirmedProject(), nil, contextfabric.SubjectTeam)
+	if len(capture.summaries) != 1 {
+		t.Fatalf("captured %d decision_summary events, want exactly 1", len(capture.summaries))
+	}
+	got := capture.summaries[0]
 	if !has(got.DecisionReservedKinds, "team") {
 		t.Errorf("reserved_kinds = %v, want the anchor kind among them -- a reserve computed from the receipt-only value would omit it on a fallback turn", got.DecisionReservedKinds)
 	}
 	if !has(got.DecisionFilterKinds, "project") || !has(got.DecisionFilterKinds, "team") {
 		t.Errorf("filter_kinds = %v, want both the confirmed member kind and the anchor kind -- these are exactly what the confirmed-kind filter admits", got.DecisionFilterKinds)
 	}
-	// NEVER NULL. An empty set and an absent field must not read alike, so
-	// the no-confirmed-kind case emits an empty list rather than nothing.
+	// NEVER NULL, and on a turn this change deliberately leaves alone. With
+	// no confirmed kind nothing is filtered and nothing is widened, so the
+	// filter set is EMPTY -- which must still be an empty list, because
+	// "the filter admitted nothing" and "there was no filter" are different
+	// statements and a null cannot tell them apart.
 	bare := &anchorScopeCapture{}
 	resolveCapturingAnchorScope(t, bare, anchorOnlyByKindBackend("chaos", 2),
 		scopedProjectsFrame("chaos"), nil, nil, contextfabric.SubjectTeam)
 	if bare.summaries[0].DecisionFilterKinds == nil {
-		t.Error("filter_kinds is nil with no confirmed kind, want an empty list -- \"the filter admitted nothing\" and \"there was no filter\" are different statements, and a null cannot tell them apart")
+		t.Error("filter_kinds is nil with no confirmed kind, want an empty list")
 	}
-}
-
-// AN AMBIGUOUS SCOPE MUST NOT ASK A MEMBER QUESTION.
-//
-// A mutation that leaked the anchor contest's clarification into the member
-// resolution SURVIVED the suite. It survived for a reason worth stating: the
-// anchor pass is run with clarification DISABLED, so its prompt is always
-// empty and the leak had nothing to carry. That makes the mutant inert today
-// and dangerous tomorrow -- flip that one argument and the leak is live, with
-// nothing red.
-//
-// This pin makes the guard real rather than incidental. Two rival claimants
-// for the scope term make the anchor genuinely ambiguous while the single
-// member clears its floor; the member's answer must stand, and the caller
-// must not be asked which CHAOS they meant as though it were a question about
-// the members.
-func TestAnAmbiguousAnchorDoesNotProduceAMemberClarification(t *testing.T) {
-	t.Parallel()
-	backend := &fakeGraphBackend{
-		searchResults: map[string][]CandidateNode{"chaos": {
-			candidateNode(contextfabric.SubjectProject, "project.v2:github:chaos-one", "chaos one", 0.8, "*"),
-		}},
-		enableSearchKind: true,
-		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
-			"chaos": {
-				contextfabric.SubjectProject: nil,
-				contextfabric.SubjectTeam: {
-					candidateNode(contextfabric.SubjectTeam, "team.v2:github:chaos-alpha", "CHAOS Alpha", 0.5, "*"),
-					candidateNode(contextfabric.SubjectTeam, "team.v2:github:chaos-beta", "CHAOS Beta", 0.49, "*"),
-				},
-			},
-		},
-	}
-	res := resolveScoped(t, backend, scopedProjectsFrame("chaos"), nil,
-		&contextfabric.ConfirmedAnchorSelection{Kind: contextfabric.SubjectTeam, CanonicalID: "team.v2:github:chaos-alpha"},
-		"")
-	if res.ClarificationPrompt != "" {
-		t.Errorf("clarification prompt = %q, want empty. An ambiguous SCOPE is a question about the scope, not about the members; letting it reach the member prompt is how the two roles got confused in the first place.", res.ClarificationPrompt)
-	}
-	var committedMember bool
-	for _, s := range res.Committed {
-		committedMember = committedMember || s.Kind == contextfabric.SubjectProject
-	}
-	if !committedMember {
-		t.Errorf("the member did not commit; committed=%v. An unresolved scope must not withdraw an answer the member axis already earned.", res.Committed)
-	}
-	// BOTH CLAIMANTS MUST REACH THE RESULT. This is what makes the scope's
-	// ambiguity a fact a caller can see rather than an internal state: with
-	// only one slot the pool is truncated to its top claimant before the
-	// gate looks at it, and a genuinely ambiguous scope reads as a decided
-	// one. An anchor that cannot express ambiguity cannot refuse to guess.
-	var anchorCandidates int
-	for _, c := range res.Candidates {
-		if c.Subject.Kind == contextfabric.SubjectTeam {
-			anchorCandidates++
-			if c.State == contextfabric.ResolutionCommitted {
-				t.Errorf("anchor candidate %q committed despite a rival claimant; the scope must not guess", c.Subject.CanonicalID)
-			}
-		}
-	}
-	if anchorCandidates < 2 {
-		t.Errorf("anchor candidates surfaced = %d, want both claimants -- truncating the scope contest to one slot hides the ambiguity it exists to report", anchorCandidates)
+	if len(bare.summaries[0].DecisionFilterKinds) != 0 {
+		t.Errorf("filter_kinds = %v with no confirmed kind, want empty -- nothing was filtered on that turn", bare.summaries[0].DecisionFilterKinds)
 	}
 }
