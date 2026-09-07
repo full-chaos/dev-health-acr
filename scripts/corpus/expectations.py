@@ -45,16 +45,27 @@ def expectation_for(row):
     #   (c) the unservable guard was `"unservable" not in low` over the WHOLE note, so a
     #       row that merely mentioned unservable kinds lost its own SERVABLE declaration.
     #       The guard now only rejects "unservable" as the SERVABLE token itself.
-    _REFUSE_RE = re.compile(r"\bexpect(?:ed|s)?\s+(?:to\s+)?(?:refuse|refusal)\b")
-    _DECLINE_RE = re.compile(r"\bexpect(?:ed|s)?\s+(?:to\s+)?(?:decline|declining)\b")
-    # SERVABLE as its own word, not preceded by a negation and not part of "unservable".
-    _SERVE_RE = re.compile(r"(?<!un)\bservable\b")
-    _NEGATED_SERVE_RE = re.compile(r"\b(?:not|non|never)[\s-]+servable\b")
+    # r2 #3. The r1 regex covered exactly the two spellings the first reviewer named, so
+    # "un-SERVABLE", "not currently SERVABLE", "expecting to decline" and "expected a
+    # refusal" all still misread. These match the FAMILY: any inflection of expect/expects/
+    # expecting/expected, optionally separated from the verb by a few words, and a negation
+    # window before SERVABLE rather than only the immediately preceding token.
+    _EXPECT = r"expect(?:s|ing|ed)?\b(?:\s+\w+){0,3}?\s+"
+    _REFUSE_RE = re.compile(_EXPECT + r"(?:to\s+)?(?:be\s+)?(?:refuse|refused|refusal)\b")
+    _DECLINE_RE = re.compile(_EXPECT + r"(?:to\s+)?(?:be\s+)?(?:decline|declined|declining|declination)\b")
+    # also accept the noun-first forms: "declination expected", "refusal expected"
+    _REFUSE_RE2 = re.compile(r"\brefusal\s+(?:is\s+)?expect(?:ed)?\b")
+    _DECLINE_RE2 = re.compile(r"\bdeclination\s+(?:is\s+)?expect(?:ed)?\b")
+    # SERVABLE as its own token: not part of "unservable", not hyphen-negated ("un-SERVABLE"),
+    # and not preceded within a short window by a negation word.
+    _SERVE_RE = re.compile(r"(?<![a-z-])servable\b")
+    _NEGATED_SERVE_RE = re.compile(
+        r"\b(?:not|non|never|no)\b[\s-]*(?:\w+[\s-]+){0,2}servable\b|\bun[-\s]servable\b")
 
-    if _REFUSE_RE.search(low):
+    if _REFUSE_RE.search(low) or _REFUSE_RE2.search(low):
         cls = REFUSE
         basis = "member_kind_unservable" if "member_kind_unservable" in low else None
-    elif _DECLINE_RE.search(low):
+    elif _DECLINE_RE.search(low) or _DECLINE_RE2.search(low):
         cls = DECLINE
         basis = "named_basis" if "named basis" in low else None
     elif _SERVE_RE.search(low) and not _NEGATED_SERVE_RE.search(low):
@@ -130,12 +141,21 @@ def _score_core(expectation, bucket, subject_substitution=False,
         return "disagree", f"expected a refusal, observed {bucket}"
     if cls == DECLINE:
         if bucket == "unserved":
-            if expectation.get("expectation_basis") == "named_basis" \
-                    and terminal_status is not None \
-                    and terminal_status not in NAMED_BASIS_TERMINALS:
-                return "agree_weak", (
-                    f"did not serve, but terminated as {terminal_status} rather than a "
-                    "decline carrying the named basis the row asks for")
+            if expectation.get("expectation_basis") == "named_basis":
+                # r2 #4. This branch used to FAIL OPEN: an absent terminal status returned
+                # `agree`, so a row we could not measure was scored as if it had passed. A
+                # missing measurement is not a measured zero. It is now `unscored` with the
+                # reason stated, and a bare no_match -- which is not a decline carrying a
+                # named basis -- is a plain disagreement rather than a soft one.
+                if terminal_status is None:
+                    return "unscored", (
+                        "row declares a named-basis decline, but the terminal status is "
+                        "absent from the artefact -- the basis cannot be checked, so this "
+                        "row is NOT scored rather than assumed to agree")
+                if terminal_status not in NAMED_BASIS_TERMINALS:
+                    return "disagree", (
+                        f"row declares a decline with a named basis; terminated as "
+                        f"{terminal_status}, which carries no named basis")
             return "agree", "declined as declared"
         if bucket == "clarification_needed":
             return "agree_weak", "no fabricated answer, but no named-basis decline either"

@@ -79,8 +79,13 @@ def main():
         return
 
     print(f"{len(hits)} row(s) hit a deadline under load; re-running each ONCE, sequentially:")
-    outroot = HERE / REPLAY_DIRNAME
-    outroot.mkdir(exist_ok=True)
+    # r2 #11. This used to be `HERE / REPLAY_DIRNAME` -- the SCRIPT directory, a sibling
+    # of the shard tree. The identity scan globs relative to the root it is given (the
+    # shards dir), so replayed attempts were invisible to it: the summary described the
+    # re-run while identity still scored the pre-reclassification attempts. One path
+    # convention -- the replay lives under the shards root the scanner reads.
+    outroot = shards_dir / REPLAY_DIRNAME
+    outroot.mkdir(parents=True, exist_ok=True)
     changed = []
 
     for summary_path, qid in hits:

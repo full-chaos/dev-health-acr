@@ -11,9 +11,13 @@ HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 
 import corpus_example
-_saved = sys.modules.get("corpus")
-sys.modules["corpus"] = corpus_example
+# r2 regression check: importing this pin file must not leave a synthetic corpus in
+# sys.modules -- that is the very contamination finding #9 was about, and this file
+# reintroduced it. The install is undone at interpreter exit AND on plain import.
 
+
+
+from corpus_stub import using_example_corpus  # noqa: E402
 import expectations as E          # noqa: E402
 import subject_identity as SI     # noqa: E402
 import engine_failures            # noqa: E402
@@ -208,7 +212,8 @@ def test_f10_a_non_json_504_attempt_is_still_classified():
 
 # ---------------------------------------------------------------- #11
 def test_f11_reclassified_attempts_are_visible_to_the_identity_scan():
-    import reclassify_deadlines as RD
+    with using_example_corpus():
+        import reclassify_deadlines as RD
     assert hasattr(RD, "REPLAY_DIRNAME"), "no shared name for the replay dir"
     assert SI.EXTRA_ATTEMPT_GLOBS, "identity scan has no reclassify-aware glob"
     assert any(RD.REPLAY_DIRNAME in g for g in SI.EXTRA_ATTEMPT_GLOBS), \
@@ -240,9 +245,5 @@ if __name__ == "__main__":
             except Exception as exc:
                 fails += 1
                 print(f"FAIL  {name}: {type(exc).__name__}: {exc}")
-    if _saved is not None:
-        sys.modules["corpus"] = _saved
-    else:
-        sys.modules.pop("corpus", None)
     print(f"\n{fails} failing")
     raise SystemExit(1 if fails else 0)

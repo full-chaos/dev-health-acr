@@ -11,7 +11,6 @@ HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 
 import corpus_example                      # noqa: E402
-sys.modules["corpus"] = corpus_example     # noqa: E402
 
 import expectations  # noqa: E402
 from shard_plan import plan  # noqa: E402
@@ -58,7 +57,7 @@ def test_a_substitution_is_a_disagreement_whatever_the_bucket():
 def test_shard_plan_is_total_and_disjoint():
     ids = {r["id"] for r in corpus_example.CORPUS}
     for n in range(1, len(ids) + 1):
-        shards = plan(n)["shards"]
+        shards = plan(n, corpus_example.CORPUS)["shards"]
         seen = [i for s in shards for i in s["ids"]]
         assert len(seen) == len(ids), n
         assert set(seen) == ids, n

@@ -57,13 +57,28 @@ def _last_attempt(replicate_dir, corpus_id, rep=1):
     return files[-1] if files else None
 
 
-def _result_of(path):
+def _read_attempt(path):
+    """(parsed_ok, result). A well-formed attempt that carries a FAILURE instead of a
+    result is parsed_ok=True with result=None.
+
+    The first fix for r2 #2 tainted a row whenever any attempt yielded no `result`, which
+    swept in every legitimate 4xx/5xx attempt -- a 422 the harness later retried into a
+    200 is a normal, fully readable artefact, not an unreadable one. Conflating "the
+    engine returned a failure" with "we could not read the file" would have marked a
+    large share of rows unverifiable and quietly capped their verdicts.
+    """
     try:
         with open(path) as fh:
             d = json.load(fh)
     except Exception:
-        return None
-    return ((d.get("response") or {}) or {}).get("result") or None
+        return False, None
+    if not isinstance(d, dict):
+        return False, None
+    return True, ((d.get("response") or {}) or {}).get("result") or None
+
+
+def _result_of(path):
+    return _read_attempt(path)[1]
 
 
 def inspect(root, corpus_id, expectation, rep=1):
@@ -94,10 +109,19 @@ def inspect(root, corpus_id, expectation, rep=1):
     committed = list(sr.get("committed") or [])
     mechs, matched_terms = [], []
     seen = {(c.get("kind"), c.get("canonical_id")) for c in committed}
+    # r2 #2. The r1 fix only reported `unreadable_artefact` when the TERMINAL attempt was
+    # malformed; an unreadable EARLIER attempt was silently skipped and a readable terminal
+    # attempt set state="read", so the cap never fired on a mixed history and a genuine
+    # `agree` escaped. Any unreadable attempt in the chain taints the whole record: we do
+    # not know what that attempt committed.
+    unreadable = []
     for f in hits:
-        r = _result_of(str(f))
-        if not r:
+        parsed, r = _read_attempt(str(f))
+        if not parsed:
+            unreadable.append(str(f))
             continue
+        if not r:
+            continue   # a readable attempt that carried a failure, not a result
         s = r.get("subject_resolution") or {}
         for c in (s.get("committed") or []):
             k = (c.get("kind"), c.get("canonical_id"))
@@ -126,6 +150,10 @@ def inspect(root, corpus_id, expectation, rep=1):
         "substitution_detail": None,
     }
 
+    if unreadable:
+        rec["state"] = "unreadable_artefact"
+        rec["unreadable_attempts"] = unreadable
+
     # R1 -- the row declares the named entity does not exist.
     if expectation.get("declares_nonexistent") and committed:
         rec["subject_substitution"] = True
@@ -149,7 +177,11 @@ def inspect(root, corpus_id, expectation, rep=1):
         w = _norm(want)
 
         def _matches(c):
-            if want_kind and c.get("kind") and c["kind"] != want_kind:
+            # r2 #5. This used to read `if want_kind and c.get("kind") and ...`, so a
+            # committed subject with kind None or "" skipped the check entirely and
+            # satisfied a declared anchor kind. An absent kind is not a matching kind:
+            # when the row declares one, the commit must state it and it must agree.
+            if want_kind and c.get("kind") != want_kind:
                 return False
             if _norm(c.get("label")) == w:
                 return True

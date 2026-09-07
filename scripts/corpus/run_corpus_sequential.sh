@@ -23,7 +23,7 @@ mkdir -p "$HERE/logs"
 # the configured endpoint was not. Extra probes stay available via CORPUS_EXTRA_PROBES.
 CORPUS_BASE="${CORPUS_BASE:-http://127.0.0.1:3040/api/investigations}"
 export CORPUS_BASE
-base_root="$(printf '%s' "$CORPUS_BASE" | sed -E 's#(https?://[^/]+).*#\1#')"
+base_root="$("$HERE/corpus_origin.sh" "$CORPUS_BASE")"
 probes=("$base_root/")
 for extra in ${CORPUS_EXTRA_PROBES:-}; do probes+=("$extra"); done
 for probe in "${probes[@]}"; do
