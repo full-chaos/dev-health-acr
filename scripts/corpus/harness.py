@@ -56,6 +56,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from corpus import CORPUS, REQUESTED_KIND, ANCHOR_KIND  # noqa: E402
+from validators import validate_attempt  # noqa: E402
 
 # ONE env var, default
 # byte-identical to the frozen value, so an unset environment reproduces the rig
@@ -69,6 +70,28 @@ MAX_TURNS = 5
 MAX_ATTEMPTS_PER_TURN = 5
 SERVED_STATUSES = {"complete", "partial", "degraded", "answered"}
 TERMINAL_STATUSES = SERVED_STATUSES | {"no_match", "refused"}
+
+
+def validate_live_payload(status, payload):
+    """Validate a LIVE response before anything dereferences it.
+
+    The artefact path has one validating loader; this is the same boundary on the other
+    ingestion point. `load_attempt` cannot serve here because there is no file -- but the
+    SHAPE check is the same one, so a server returning `{"result": [1]}` is rejected here
+    rather than crashing a `.get()` three frames later. A payload that fails is replaced
+    by a failure envelope naming the reason, so the row records what happened instead of
+    the run dying.
+    """
+    ok, reason = validate_attempt({"status": status, "response": payload}
+                                  if isinstance(payload, dict) else {"status": status})
+    if isinstance(payload, dict) and not ok:
+        return {"failure": {"code": "acr_malformed_response", "message": reason,
+                            "httpStatus": status}}
+    if not isinstance(payload, dict):
+        return {"failure": {"code": "acr_malformed_response",
+                            "message": f"response body is {type(payload).__name__}, not a mapping",
+                            "httpStatus": status}}
+    return payload
 
 
 def post(body):
@@ -86,7 +109,7 @@ def post(body):
             payload = {"error": "unparseable body"}
     except Exception as e:  # noqa: BLE001 -- a transport failure is a row, not a crash
         return 0, {"error": str(e)}, time.time() - t0
-    return status, payload, time.time() - t0
+    return status, validate_live_payload(status, payload), time.time() - t0
 
 
 def is_retryable(status, payload):

@@ -191,6 +191,20 @@ def test_load_attempt_is_the_only_decoder_of_attempt_artefacts():
     assert not offenders, f"artefact JSON decoded outside load_attempt: {offenders}"
 
 
+def test_the_live_payload_is_validated_at_ingestion_too():
+    """harness has no FILE to load, so it cannot use load_attempt -- but it must apply the
+    same shape check before dereferencing a live response, or a server returning
+    `{"result": [1]}` crashes three frames later."""
+    import importlib, os
+    os.environ.setdefault("CORPUS_BASE", "http://127.0.0.1:1/api/investigations")
+    h = importlib.import_module("harness")
+    bad = h.validate_live_payload(200, {"result": [1]})
+    assert bad.get("failure", {}).get("code") == "acr_malformed_response", bad
+    assert h.validate_live_payload(200, "a string").get("failure")
+    good = {"result": {"status": "partial"}}
+    assert h.validate_live_payload(200, good) is good
+
+
 def test_the_allowlisted_decoders_do_not_read_attempt_artefacts():
     """Negative control for the pin above: the allowlist must not be a loophole. Each
     allowed module is checked to decode only the document kinds its reason names."""
