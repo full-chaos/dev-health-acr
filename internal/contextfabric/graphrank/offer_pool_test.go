@@ -694,10 +694,17 @@ func TestTheClarificationPromptNeverNamesAWithheldCandidate(t *testing.T) {
 	// vector-only guess that is not. Two offered candidates keep the
 	// resolution ambiguous, so a prompt is genuinely built rather than
 	// skipped.
+	// The withheld candidate's DISPLAY LABEL differs from its canonical id.
+	// A confirmation round found that the shared fixture set them equal, so
+	// a regression leaking a candidate whose label differs from its id would
+	// slip past a check written against the id -- and the prompt is built
+	// from LABELS. The assertion below therefore checks the label.
+	withheld := vectorOfferCandidate("team_withheld_guess", 0.5, contextfabric.ResolutionProposed, contextfabric.MatchVector)
+	withheld.Subject.Label = "Withheld Guess"
 	resolution := resolveOfferPool(
 		vectorOfferCandidate("team_lexical_one", 0.5, contextfabric.ResolutionProposed, contextfabric.MatchLexical),
 		vectorOfferCandidate("team_lexical_two", 0.5, contextfabric.ResolutionProposed, contextfabric.MatchLexical),
-		vectorOfferCandidate("team_withheld_guess", 0.5, contextfabric.ResolutionProposed, contextfabric.MatchVector),
+		withheld,
 	)
 	if resolution.ClarificationPrompt == "" {
 		t.Fatal("no clarification prompt was built on an ambiguous mixed pool; this test cannot see what it exists to check")
@@ -705,12 +712,79 @@ func TestTheClarificationPromptNeverNamesAWithheldCandidate(t *testing.T) {
 	if offered := offeredIDs(resolution); len(offered) != 2 {
 		t.Fatalf("offered %v, want the two lexical candidates -- the fixture must be mixed for this assertion to mean anything", offered)
 	}
-	if strings.Contains(resolution.ClarificationPrompt, "team_withheld_guess") {
-		t.Fatalf("the prompt names a WITHHELD candidate: %q -- it hands back by name the guess the exclusion withheld from the machine-readable result", resolution.ClarificationPrompt)
+	for _, leaked := range []string{"Withheld Guess", "team_withheld_guess"} {
+		if strings.Contains(resolution.ClarificationPrompt, leaked) {
+			t.Fatalf("the prompt names a WITHHELD candidate (%q): %q -- it hands back by name the guess the exclusion withheld from the machine-readable result", leaked, resolution.ClarificationPrompt)
+		}
 	}
 	// The positive half: it does name what it offered, so "names nothing"
 	// cannot satisfy this test.
 	if !strings.Contains(resolution.ClarificationPrompt, "team_lexical_one") {
 		t.Fatalf("the prompt names none of the OFFERED candidates: %q", resolution.ClarificationPrompt)
+	}
+}
+
+// THE FOLD ACCUMULATES ACROSS PASSES, which the four arms above cannot see.
+//
+// A confirmation round found this: the entry-point fixture reaches only ONE
+// resolution, so the identity there compares the folded value with a single
+// source summary -- the same thing the literal assertion beside it already
+// checks. A fold changed from `+=` to overwrite, or one that dropped a later
+// summary, passes every one of those arms. Production DOES emit a second
+// offer_pool summary when the confirmed-kind or evidence-census re-decision
+// paths run, so the accumulating behaviour is real and was unpinned.
+//
+// Driving those re-decision paths from the entry point needs a census
+// dependency and a truncated backend; this instead feeds the fold the event
+// sequence they produce, which is what the accumulation contract is ABOUT.
+// The arms above keep the wiring honest; this one keeps the arithmetic honest.
+func TestTheFoldAccumulatesEveryOfferPoolSummaryItSees(t *testing.T) {
+	t.Parallel()
+	sink := &decisionSummaryCapture{}
+	fold := &decisionSummaryBuffer{real: sink, requestID: "req_fold_accumulation_pin_00000"}
+
+	// Two passes, as a re-decision produces: 2+3 excluded, 1+0 demoted, and
+	// the emptied flag true on only the SECOND -- so an OR that reads only
+	// the first, or a counter that overwrites, both go red.
+	fold.Trace(ResolutionTraceEvent{Stage: "offer_pool", OfferPoolSummary: true,
+		OfferPoolVectorOnlyExcluded: 2, OfferPoolVectorOnlyDemoted: 1, OfferPoolEmptiedByExclusion: false})
+	fold.Trace(ResolutionTraceEvent{Stage: "offer_pool", OfferPoolSummary: true,
+		OfferPoolVectorOnlyExcluded: 3, OfferPoolVectorOnlyDemoted: 0, OfferPoolEmptiedByExclusion: true})
+	fold.flush()
+
+	if len(sink.summaries) != 1 {
+		t.Fatalf("flush produced %d decision summaries, want 1", len(sink.summaries))
+	}
+	got := sink.summaries[0]
+	if got.OfferPoolVectorOnlyExcluded != 5 {
+		t.Errorf("excluded = %d, want 5 (2+3) -- an overwrite would report 3 and a dropped second summary 2", got.OfferPoolVectorOnlyExcluded)
+	}
+	if got.OfferPoolVectorOnlyDemoted != 1 {
+		t.Errorf("demoted = %d, want 1 (1+0) -- an overwrite would report 0", got.OfferPoolVectorOnlyDemoted)
+	}
+	if !got.OfferPoolEmptiedByExclusion {
+		t.Error("emptied flag is false; it is an OR across passes and the SECOND summary set it, so reading only the first loses it")
+	}
+}
+
+// THE NIL-FRAME BRANCH, value-pinned. A confirmation round found that a
+// nil-only regression -- the `frame == nil` branch returning `passed` --
+// passes every arm above, because all of them supply a frame. A no-frame
+// turn's summary would then claim a frame passed the gate, which is the same
+// "a key that can lie" failure the tripwire exists to prevent, on the one
+// branch that is legitimately reached in production.
+func TestTheTripwireReportsNotProposedForANilFrame(t *testing.T) {
+	t.Parallel()
+	gate, basis := frameGateObservable(nil)
+	if gate != "not_proposed" {
+		t.Fatalf("frameGateObservable(nil) = %q, want %q -- a turn that proposed no frame must never read as one that passed the gate", gate, "not_proposed")
+	}
+	if basis != "none" {
+		t.Errorf("refuse basis for a nil frame = %q, want the explicit token %q", basis, "none")
+	}
+	// The discriminating half: a passing frame must NOT render the same,
+	// so a build hardcoding either value fails one of these two.
+	if passing, _ := frameGateObservable(passingCohortFrame()); passing == gate {
+		t.Fatalf("a passing frame and a nil frame both render %q; the two states are indistinguishable on the line", passing)
 	}
 }
