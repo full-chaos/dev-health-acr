@@ -310,13 +310,26 @@ const interpretedTimeBoundPlaceholderJudgment = "interpreted time bound"
 // windowVetoResult, which already establishes this shape for "this turn
 // cannot proceed, and here is why".
 //
-// The persisted Interpretation deliberately carries the REQUEST's own time
-// context, not the interpreter's. The interpreter's is the value being
-// refused -- it is unrepresentable, malformed, or on an axis the contract
-// does not define, so persisting it would fail the result's own Validate
-// and leave the refusal unreadable. The request's context reached this
-// point already validated by the wire-request site, and the basis the
-// Limitation states is what tells a reader why the turn ended.
+// The persisted Interpretation carries the INTERPRETER's own time context
+// wherever the contract can represent it, and falls back to the REQUEST's
+// where it cannot.
+//
+// Which of the two applies is decided by RUNNING the contract's own
+// validator, never by a second list of which members qualify -- a hand-kept
+// list here would be a second authority on representability and would drift
+// from the first.
+//
+// The distinction is real and it is not per-member cosmetics. An absent or
+// zero instant, an axis the contract does not define and an inverted range
+// are values Validate REFUSES, so persisting one would fail the result's own
+// Validate and leave the refusal unreadable -- there the request's context is
+// the only thing that can be carried. But a range this service will not READ
+// is still perfectly representable: Validate owns shape and representability,
+// not the maxHistoricalRangeDays bound. Dropping it left the persisted answer
+// unable to say what span was refused, which is the one thing a reader of
+// that refusal needs, and contradicted the time-axis design's statement that
+// Interpretation.TimeContext round-trips {axis, as_of, start, end} in the
+// result.
 func (e *Engine) interpretedTimeBoundResult(
 	ctx context.Context, principal storage.Principal, request InvestigationRequest,
 	decision InterpretedTimeBoundDecision, binding ResolvedGraphBinding,
@@ -341,10 +354,16 @@ func (e *Engine) interpretedTimeBoundResult(
 			fmt.Errorf("interpreted time bound outcome %q has no stated basis", decision.Outcome))
 	}
 	emptyCoverage := Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}
+	// The interpreter's own context when the wire contract can carry it,
+	// the request's when it cannot. Decided by the validator itself.
+	persistedTime := request.TimeContext
+	if decision.Bound.Validate() == nil {
+		persistedTime = decision.Bound
+	}
 	resolvedInterpretation := InterpretedQuestion{
 		Shape:             ShapeOpen,
 		RequestedJudgment: interpretedTimeBoundPlaceholderJudgment,
-		TimeContext:       request.TimeContext,
+		TimeContext:       persistedTime,
 		FactRequirements:  []FactRequirement{},
 	}
 	result := InvestigationResult{
@@ -369,9 +388,10 @@ func (e *Engine) interpretedTimeBoundResult(
 		EvidenceRefIDs:     []string{},
 		ClaimedFacts:       []ClaimedFact{},
 		Coverage:           emptyCoverage,
-		// Nil on the current axis, which resolvedInterpretation always
-		// carries here -- kept rather than hardcoded so the composition
-		// rule stays in one place.
+		// Nil on the current axis; non-nil once a representable historical
+		// context is carried, which the result contract REQUIRES for a
+		// non-current axis. Composed rather than hardcoded so the rule
+		// stays in one place.
 		Temporal:            composeTemporalLabel(resolvedInterpretation, emptyCoverage, ""),
 		Versions:            e.terminalVersions(),
 		DeterministicAnswer: limitation,
@@ -393,9 +413,11 @@ func (e *Engine) interpretedTimeBoundResult(
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}
 	if e.results != nil {
-		// Keyed on the REQUEST's own context, exactly like windowVetoResult's
-		// pre-Interpret branch: the interpreted context is the value being
-		// refused and must never become a lookup key.
+		// Keyed on the REQUEST's own context even when the interpreter's is
+		// the one persisted, exactly like windowVetoResult's pre-Interpret
+		// branch: a refused span must never become a lookup key, and the
+		// nil reuse snapshots below mean this row never becomes reusable
+		// anyway.
 		if err := e.results.Save(ctx, principal, result, nil, nil, TimeAxisKeyFor(request.TimeContext), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch, ancestryParent); err != nil {
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}

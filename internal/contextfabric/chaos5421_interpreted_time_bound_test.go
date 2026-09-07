@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -392,5 +393,365 @@ func TestCHAOS5421_EveryOutcomeIsAMemberAndIsClassified(t *testing.T) {
 	}
 	if ValidInterpretedTimeBoundOutcome("") {
 		t.Error("the empty value is a member; an absent outcome must never stand in for one")
+	}
+}
+
+// CHAOS-5421 r1 P1-1, ANSWERED BY PROOF RATHER THAN BY A CODE CHANGE.
+//
+// The reviewer read design §1 item 1 correctly -- "an as_of/end after now is
+// refused (ErrInvalidTimeBound, 400) ... Tolerance: +1m for clock skew, then
+// clamp to now" -- and concluded that clamping every future value at the
+// post-Interpret site erases the distinction between clock skew and a
+// prediction request.
+//
+// The distinction is not erased, because a CALLER-supplied future bound can
+// never reach the post-Interpret site at all. engine.go's request clamp runs
+// first and its clamped value REPLACES the caller's on the request every layer
+// below sees, INCLUDING the one handed to Interpret as its default time
+// context (genkitruntime's toDomain falls back to it when the model emits no
+// axis, which is the only way a caller's own instants can re-enter the
+// interpretation). So by the time the post-Interpret evaluator runs:
+//
+//   - a caller bound beyond the tolerance was already REFUSED, 400, caller-side
+//   - a caller bound within the tolerance was already CLAMPED to now
+//
+// and the only future bound left for it to see is one the INTERPRETER derived
+// -- a calendar window whose end has not arrived yet, which is not a prediction
+// request. These two pin exactly that, so the claim cannot silently stop being
+// true: if a future caller bound ever did reach the second site, the first of
+// these goes red.
+
+// The RED half: beyond the tolerance, the caller's own bound is refused by the
+// REQUEST site, with the caller-side sentinel, before Interpret ever runs.
+func TestCHAOS5421_ACallerBoundBeyondTheToleranceIsRefusedBeforeInterpretRuns(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
+	farFuture := now.Add(2 * time.Hour)
+
+	// The interpreter is answerable; only the CALLER is out of bounds.
+	engine, probe := mustHistoricalEngine(t, TimeContext{Axis: TemporalCurrent}, now)
+	request := validInvestigationRequest()
+	request.TimeContext = TimeContext{Axis: TemporalRange, Start: &now, End: &farFuture}
+
+	_, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	if !errors.Is(err, ErrInvalidTimeBound) {
+		t.Fatalf("Investigate() error = %v, want ErrInvalidTimeBound -- a caller asking about a time 2h away is a prediction request and the design refuses it 400", err)
+	}
+	// Refused before ANY capability call, which is also what stops the
+	// interpreter from ever seeing it.
+	if probe.graph.resolveCalls != 0 || probe.factsRead || probe.synthesized {
+		t.Fatal("work ran on a caller bound the request site should have refused")
+	}
+	if len(probe.interpretedContext.Axis) != 0 && probe.factContext.End != nil {
+		t.Fatal("the interpreter was reached with a refused caller bound")
+	}
+}
+
+// The GREEN half: within the tolerance, the caller's own bound is absorbed as
+// clock skew by the REQUEST site and the turn is served.
+//
+// The interpreter here echoes the request's own context, which is exactly what
+// toDomain does when a model emits no axis -- the only route by which a
+// caller's instants reach the second site. What it receives is already `now`,
+// so the post-Interpret verdict is `ok` with clamp_applied FALSE: the skew was
+// absorbed one site earlier, by the check the design assigns it to. That is
+// the point. A `future_end` here would mean the request site had not clamped.
+func TestCHAOS5421_ACallerBoundWithinTheToleranceIsAbsorbedAsSkewAndServed(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
+	start := now.Add(-30 * 24 * time.Hour)
+	withinSkew := now.Add(30 * time.Second)
+
+	telemetry := &recordingTelemetry{}
+	engine, probe := mustHistoricalEngineEchoingTheRequest(t, now, telemetry)
+	request := validInvestigationRequest()
+	request.TimeContext = TimeContext{Axis: TemporalRange, Start: &start, End: &withinSkew}
+
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v, want a served answer -- 30s is clock skew, not a question about the future", err)
+	}
+	if result.Status != InvestigationComplete {
+		t.Fatalf("Status = %q, want a served answer", result.Status)
+	}
+	// The bound every layer below binds to is `now`, never the caller's
+	// +30s: the request site pulled it back before Interpret ran.
+	if probe.factContext.End == nil || !probe.factContext.End.Equal(now) {
+		t.Fatalf("fact request end = %v, want it clamped to now (%s) by the REQUEST site", probe.factContext.End, now)
+	}
+	if len(telemetry.interpretedTimeBounds) != 1 {
+		t.Fatalf("recorded %d interpreted-time verdicts, want exactly 1", len(telemetry.interpretedTimeBounds))
+	}
+	decision := telemetry.interpretedTimeBounds[0]
+	if decision.Outcome != InterpretedTimeBoundOK || decision.ClampApplied {
+		t.Fatalf("post-Interpret verdict = %q clamp_applied=%v, want ok/false -- a future value reaching THIS site would mean the caller-side clamp had not run, which is the invariant these two pins exist to hold",
+			decision.Outcome, decision.ClampApplied)
+	}
+}
+
+// CHAOS-5421 r1 P1-2. The refusal terminal persisted the REQUEST's time
+// context for every member. That is right for three of them -- an absent or
+// zero instant, an axis the contract does not define, and an inverted range
+// are all values ContextFabricTimeContext.Validate REFUSES, so persisting one
+// would fail the result's own Validate and leave the refusal unreadable.
+//
+// It is WRONG for range_too_wide. An ordered 3000-day range is perfectly
+// representable: Validate owns shape and representability, not this service's
+// 400-day read bound, so that context can round-trip -- and the time-axis
+// design says Interpretation.TimeContext round-trips {axis, as_of, start, end}
+// in the result. Dropping it means the persisted answer cannot say what span
+// was refused, which is the one thing a reader of that refusal needs.
+//
+// So the rule is not "the request's, always" but "the interpreter's wherever
+// the contract can carry it" -- decided by RUNNING the contract's own
+// validator, never by a second hand-maintained list of which members qualify.
+func TestCHAOS5421_ARefusedButRepresentableInterpretedContextIsCarriedNotDropped(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
+	ancient := now.Add(-3000 * 24 * time.Hour)
+	interpreted := TimeContext{Axis: TemporalRange, Start: &ancient, End: &now}
+
+	// PREMISE, asserted rather than assumed: this context is refused by the
+	// engine's 400-day bound AND accepted by the wire contract. If the
+	// contract ever rejected it, the finding would not exist and this test
+	// would be pinning nothing.
+	if err := interpreted.Validate(); err != nil {
+		t.Fatalf("premise: the contract must accept this context (it is ordered and representable), got %v", err)
+	}
+
+	engine, _ := mustHistoricalEngine(t, interpreted, now)
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v, want a terminal refusal", err)
+	}
+	if result.Status != InvestigationNoMatch {
+		t.Fatalf("Status = %q, want %q", result.Status, InvestigationNoMatch)
+	}
+	got := result.Interpretation.TimeContext
+	if got.Axis != TemporalRange {
+		t.Fatalf("persisted interpretation axis = %q, want %q -- the refusal must say what span it refused", got.Axis, TemporalRange)
+	}
+	if got.Start == nil || !got.Start.Equal(ancient) || got.End == nil || !got.End.Equal(now) {
+		t.Fatalf("persisted interpretation bounds = %v..%v, want %s..%s", got.Start, got.End, ancient, now)
+	}
+	// A non-current axis REQUIRES a temporal label, so carrying the context
+	// and dropping the label would trade one unreadable refusal for another
+	// -- and would fail the result's own Validate.
+	if result.Temporal == nil {
+		t.Fatal("a refusal carrying a historical axis must carry the temporal label that axis requires")
+	}
+}
+
+// The complement, and the reason this is decided by the validator rather than
+// by a list of members: a context the contract CANNOT carry must still fall
+// back to the request's, or the refusal fails its own Validate and the caller
+// gets an error in place of a readable no_match.
+func TestCHAOS5421_AnUnrepresentableInterpretedContextStillFallsBackToTheRequests(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
+	for _, testCase := range []struct {
+		name string
+		time TimeContext
+	}{
+		{"an axis the contract does not define", TimeContext{Axis: TemporalAxis("sideways")}},
+		{"a point-in-time axis with no as-of", TimeContext{Axis: TemporalValidTime}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if err := testCase.time.Validate(); err == nil {
+				t.Fatal("premise: the contract must REJECT this context, or it belongs in the carried case above")
+			}
+			engine, _ := mustHistoricalEngine(t, testCase.time, now)
+			result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
+			if err != nil {
+				t.Fatalf("Investigate() error = %v, want a terminal refusal", err)
+			}
+			if result.Interpretation.TimeContext.Axis != TemporalCurrent {
+				t.Fatalf("persisted axis = %q, want the REQUEST's current axis -- an unrepresentable context cannot be persisted", result.Interpretation.TimeContext.Axis)
+			}
+		})
+	}
+}
+
+// CHAOS-5421 r1: the four mutants the reviewer predicted would survive, and
+// did. Each was run and reported SURVIVED before these were written, so every
+// one of them is a measured coverage gap rather than a defensive guess.
+
+// RV1. A range whose WHOLE span is in the future. Clamping only the end would
+// invert it -- the end lands on now while the start stays ahead of it -- so
+// the start is pulled back too. No test constructed this shape, so the guard
+// that prevents the inversion was unpinned.
+func TestCHAOS5421_ARangeWhollyInTheFutureClampsBothEnds(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
+	start := now.Add(24 * time.Hour)
+	end := now.Add(48 * time.Hour)
+
+	decision := resolveInterpretedTimeContext(TimeContext{Axis: TemporalRange, Start: &start, End: &end}, now)
+	if decision.Outcome != InterpretedTimeBoundFutureEnd || !decision.ClampApplied {
+		t.Fatalf("outcome = %q clamp = %v, want future_end/true", decision.Outcome, decision.ClampApplied)
+	}
+	if decision.Bound.Start == nil || !decision.Bound.Start.Equal(now) {
+		t.Fatalf("clamped start = %v, want now (%s) -- clamping only the end inverts the range", decision.Bound.Start, now)
+	}
+	if decision.Bound.End == nil || !decision.Bound.End.Equal(now) {
+		t.Fatalf("clamped end = %v, want now (%s)", decision.Bound.End, now)
+	}
+	if decision.Bound.End.Before(*decision.Bound.Start) {
+		t.Fatal("the clamped range is inverted, which is the exact defect the start clamp exists to prevent")
+	}
+	if decision.RangeDays != 0 {
+		t.Errorf("range_days = %d, want 0 for a span collapsed onto now", decision.RangeDays)
+	}
+}
+
+// RV2. A range missing an endpoint. The point-in-time axis's missing as-of and
+// the present-zero instant were both covered; the range's own missing-endpoint
+// guard was not, so deleting it left nil dereferences one line away.
+func TestCHAOS5421_ARangeMissingAnEndpointIsRefusedNotDereferenced(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
+	for _, testCase := range []struct {
+		name string
+		time TimeContext
+	}{
+		{"no start", TimeContext{Axis: TemporalRange, End: &now}},
+		{"no end", TimeContext{Axis: TemporalRange, Start: &now}},
+		{"neither", TimeContext{Axis: TemporalRange}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			decision := resolveInterpretedTimeContext(testCase.time, now)
+			if decision.Outcome != InterpretedTimeBoundAbsentOrZero {
+				t.Fatalf("outcome = %q, want %q", decision.Outcome, InterpretedTimeBoundAbsentOrZero)
+			}
+			if decision.Answerable() {
+				t.Error("a range missing an endpoint was reported answerable")
+			}
+		})
+	}
+}
+
+// RV3. THE POPULATION ITSELF, pinned independently of the array.
+//
+// Every other test here derives its iteration FROM InterpretedTimeBoundOutcomeVocabulary(),
+// so deleting a member from that array deletes its own coverage along with it
+// and every derived assertion still passes over the smaller set. A checker that
+// takes its expectations from the thing under test cannot see that thing shrink.
+// So this names the members and the count by hand -- the one place a
+// hand-maintained list is the right instrument, because it is the independent
+// side of the comparison.
+func TestCHAOS5421_TheOutcomeVocabularyPopulationIsPinnedByName(t *testing.T) {
+	t.Parallel()
+	want := []InterpretedTimeBoundOutcome{
+		InterpretedTimeBoundOK,
+		InterpretedTimeBoundFutureEnd,
+		InterpretedTimeBoundRangeTooWide,
+		InterpretedTimeBoundAbsentOrZero,
+		InterpretedTimeBoundUnknownAxis,
+		InterpretedTimeBoundMalformedRange,
+	}
+	if InterpretedTimeBoundOutcomeCount != len(want) {
+		t.Fatalf("vocabulary size = %d, want %d -- a member was added or removed; classify it and update this list deliberately", InterpretedTimeBoundOutcomeCount, len(want))
+	}
+	got := InterpretedTimeBoundOutcomeVocabulary()
+	if len(got) != len(want) {
+		t.Fatalf("vocabulary array length = %d, want %d", len(got), len(want))
+	}
+	for i, member := range want {
+		if got[i] != member {
+			t.Errorf("vocabulary[%d] = %q, want %q -- published order is part of the contract", i, got[i], member)
+		}
+		if !ValidInterpretedTimeBoundOutcome(member) {
+			t.Errorf("%q is named here but not admitted by the membership test", member)
+		}
+	}
+}
+
+// RV4. THE BASIS TEXT, not merely its presence.
+//
+// Every refusal assertion so far read `len(Limitations) != 0`, which cannot
+// see a basis lose the thing that makes it a basis. A refusal that says
+// nothing specific is the defect one layer along from a refusal that says
+// nothing at all -- the corpus row's whole problem was a 400 whose body named
+// no cause.
+func TestCHAOS5421_EveryRefusingMemberStatesItsOwnDistinctBasis(t *testing.T) {
+	t.Parallel()
+	// An INDEPENDENT expectation table: the keyword each basis must carry to
+	// be about its own rule, not lifted from the strings under test.
+	wantKeyword := map[InterpretedTimeBoundOutcome]string{
+		InterpretedTimeBoundRangeTooWide:   "wider",
+		InterpretedTimeBoundAbsentOrZero:   "could not be established",
+		InterpretedTimeBoundUnknownAxis:    "kind of time",
+		InterpretedTimeBoundMalformedRange: "ended before it began",
+	}
+	seen := map[string]InterpretedTimeBoundOutcome{}
+	for _, member := range InterpretedTimeBoundOutcomeVocabulary() {
+		basis, ok := interpretedTimeBoundLimitation(member)
+		if (InterpretedTimeBoundDecision{Outcome: member}).Answerable() {
+			if ok {
+				t.Errorf("%q is answerable but carries a refusal basis", member)
+			}
+			continue
+		}
+		if !ok || strings.TrimSpace(basis) == "" {
+			t.Errorf("refusing member %q states no basis", member)
+			continue
+		}
+		keyword, named := wantKeyword[member]
+		if !named {
+			t.Errorf("refusing member %q has no expected keyword; the table above must name every refusing member", member)
+			continue
+		}
+		if !strings.Contains(basis, keyword) {
+			t.Errorf("basis for %q does not say what it refused (missing %q): %q", member, keyword, basis)
+		}
+		// Distinct, so no member can silently inherit another's sentence.
+		if prior, dup := seen[basis]; dup {
+			t.Errorf("members %q and %q share one basis; a caller cannot tell them apart", prior, member)
+		}
+		seen[basis] = member
+	}
+}
+
+// RV5. The key the refusal is PERSISTED under.
+//
+// Nothing read it, so replacing it with "" survived. The reviewer noted the
+// row is safely non-reusable today because the terminal passes nil reuse
+// snapshots and the store treats nil as "never becomes reusable" -- true, and
+// the reason this is a coverage gap rather than a live defect. It is still
+// worth pinning: "harmless because a DIFFERENT argument happens to be nil" is
+// an invariant owned by another layer, and an empty key would become wrong the
+// moment that layer changed. The key is asserted where it is decided.
+//
+// The value is the REQUEST's, never the refused interpreted span: a span this
+// service will not read must not become a lookup key, even one nothing reads.
+func TestCHAOS5421_TheRefusalIsPersistedUnderTheRequestsOwnTimeAxisKey(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
+	ancient := now.Add(-3000 * 24 * time.Hour)
+	interpreted := TimeContext{Axis: TemporalRange, Start: &ancient, End: &now}
+
+	store := &keyRecordingResultStore{}
+	engine, _ := mustHistoricalEngineWithStore(t, interpreted, now, store)
+	request := validInvestigationRequest()
+
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationNoMatch {
+		t.Fatalf("Status = %q, want %q", result.Status, InvestigationNoMatch)
+	}
+	want := TimeAxisKeyFor(request.TimeContext)
+	if want == "" {
+		t.Fatal("premise: the request's own key must be non-empty, or this test cannot tell it from the empty one")
+	}
+	if store.savedKey != want {
+		t.Fatalf("persisted time-axis key = %q, want the REQUEST's own %q", store.savedKey, want)
+	}
+	// And explicitly NOT the refused span's key.
+	if refused := TimeAxisKeyFor(interpreted); store.savedKey == refused {
+		t.Fatalf("the refusal was keyed on the span it refused (%q); a span this service will not read must never become a lookup key", refused)
 	}
 }
