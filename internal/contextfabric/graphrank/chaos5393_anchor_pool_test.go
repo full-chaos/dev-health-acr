@@ -691,3 +691,58 @@ func TestTheFallbackFixtureCannotLeakTheAnchorThroughPlainSearch(t *testing.T) {
 		t.Fatalf("team candidates = %d with SearchKind disabled, want 0; kinds=%v. The anchor reached the pool by some route other than kind-scoped retrieval, so the fallback pins prove nothing about the path they name.", got, candidateKinds(res))
 	}
 }
+
+// THE ERROR PATH THAT FLUSHES WITHOUT AN anchor_pool EVENT.
+//
+// A hosted battery arm caught this and it is a genuine consequence of the
+// fix, not a stale needle: moving the scope decision above retrieval means
+// every SUCCESSFUL path now emits an anchor_pool event, so the fold's
+// `none`-token fallback stopped being reachable through any of them -- and a
+// mutation removing that fallback survived the whole suite.
+//
+// It is still reachable, on the paths that return an ERROR before the
+// decision is made: the fold is installed by the caller and flushed by a
+// defer, so it emits its summary even when the resolution failed at the very
+// first check. Without the fallback those lines carry empty strings, which a
+// JSON sink renders indistinguishably from a build that emits no keys.
+//
+// This is the third time on this seam that a value has been proven only on
+// the paths a fixture happened to reach. The lesson is written here rather
+// than in a commit message: a key that is "always set" must be pinned on a
+// path that sets it by fallback, not only on paths that set it directly.
+func TestAFailedResolutionStillCarriesExplicitNoneTokens(t *testing.T) {
+	t.Parallel()
+	capture := &anchorScopeCapture{}
+	deps := (&fakeGraphBackend{}).deps()
+	deps.ResolutionTracer = capture
+	// An empty OrgID fails at the first check in resolveSubjects, which is
+	// ABOVE the anchor-scope decision -- so no anchor_pool event is emitted
+	// and the fold has nothing to learn the tokens from.
+	_, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+		storage.Principal{OrgID: ""}, testRequest(), testInterpreted("chaos"),
+		deps, confirmedProject(), nil, scopedProjectsFrame("chaos"), contextfabric.SubjectTeam)
+	if err == nil {
+		t.Fatal("expected an error from an empty OrgID; this pin only means anything on a path that fails before the scope is decided")
+	}
+	if len(capture.anchorPool) != 0 {
+		t.Fatalf("the failing path emitted %d anchor_pool events, want 0 -- it must return BEFORE the decision for this pin to cover the fallback", len(capture.anchorPool))
+	}
+	if len(capture.summaries) != 1 {
+		t.Fatalf("captured %d decision_summary events, want exactly 1 -- the fold is deferred, so an error path still flushes", len(capture.summaries))
+	}
+	got := capture.summaries[0]
+	for key, value := range map[string]string{
+		"anchor_pool_kind_scope":        got.DecisionAnchorPoolKindScope,
+		"anchor_pool_kind_scope_source": got.DecisionAnchorPoolKindScopeSource,
+	} {
+		if value != anchorPoolKindScopeNone {
+			t.Errorf("%s = %q on a resolution that failed before deciding a scope, want the explicit %q", key, value, anchorPoolKindScopeNone)
+		}
+	}
+	// member_kind_confirmed is stamped at construction, so it survives even
+	// this path with its real value -- asserted so the two mechanisms stay
+	// visibly different.
+	if got.DecisionMemberKindConfirmed != "project" {
+		t.Errorf("member_kind_confirmed = %q, want \"project\" -- it is stamped from the parameter at construction and must survive a path that never reached the decision", got.DecisionMemberKindConfirmed)
+	}
+}
