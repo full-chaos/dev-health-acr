@@ -1532,3 +1532,304 @@ func TestASteadyStateTickReportsExplicitBuildZeros(t *testing.T) {
 		t.Errorf("build_failed_sources = %v, want empty", names)
 	}
 }
+
+// --- confirm5 findings: the build phase did not honour the steady-state
+// three-state contract. All three are the SAME class -- the build path was
+// given a disclosure but not the rules that make a disclosure honest.
+
+// TestConfirm5_ACancelledBuildDoesNotAssertAReading is confirm5's first P1.
+// runBuildTick recorded its pair outcome unconditionally after scope.run, so a
+// tick truncated mid-drain still asserted sources_evaluated:1 -- a reading it
+// never finished taking. This is the model 1-7 defect at PAIR granularity: the
+// organization was correctly marked unevaluated while the per-source counters
+// beside it claimed the work had been done.
+func TestConfirm5_ACancelledBuildDoesNotAssertAReading(t *testing.T) {
+	t.Parallel()
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	canceller := &cancellingSource{name: "dev_health_teams_projects", cancel: cancel}
+	checkpoints := newFakeCheckpointStore()
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:           []string{"org-a"},
+		Sources:          []projectionrun.SourcePair{{Name: "dev_health_teams_projects", Source: canceller}},
+		Backend:          newFakeBackend(),
+		Checkpoints:      checkpoints,
+		RebuildMarkers:   newFakeRebuildMarker(),
+		Lifecycle:        &buildFailingLifecycleStore{epoch: 1},
+		EpochCheckpoints: func(int64) contextfabric.ProjectionCheckpointStore { return checkpoints },
+		GraceWindow:      time.Hour,
+		Logger:           logger,
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	coordinator.Tick(ctx)
+
+	if canceller.calls.Load() == 0 {
+		t.Fatal("the source never ran -- the tick did not reach the build drain, so this arm would prove nothing")
+	}
+	summary := freshnessSummary(t, &buffer)
+	if got := summaryBool(t, summary, "tick_complete"); got {
+		t.Fatalf("tick_complete = true on a cancelled tick -- the fixture did not truncate, so the arm proves nothing")
+	}
+	if got := summaryNumber(t, summary, "sources_evaluated"); got != 0 {
+		t.Errorf("sources_evaluated = %v on a TRUNCATED tick, want 0 -- a tick that did not finish has no reading to report for the pair it cut short", got)
+	}
+	if got := summaryNumber(t, summary, "orgs_unevaluated"); got != 1 {
+		t.Errorf("orgs_unevaluated = %v, want 1", got)
+	}
+}
+
+// TestConfirm5_ASourceOwnedCancelDuringBuildIsAFailure is confirm5's second
+// P1. runBuildPair reported failure only for DrainYieldError, but a source
+// returning context.Canceled from its OWN internals under a live tick yields
+// DrainYieldContextDone -- so the build path called it healthy while the
+// steady-state path (TestASourceOwnedContextErrorIsAFailureNotATruncation)
+// calls the identical shape a failure. The same source must not read
+// differently depending on which phase happened to be running.
+func TestConfirm5_ASourceOwnedCancelDuringBuildIsAFailure(t *testing.T) {
+	t.Parallel()
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	source := &selfCancellingSource{name: "dev_health_teams_projects"}
+	checkpoints := newFakeCheckpointStore()
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:           []string{"org-a"},
+		Sources:          []projectionrun.SourcePair{{Name: "dev_health_teams_projects", Source: source}},
+		Backend:          newFakeBackend(),
+		Checkpoints:      checkpoints,
+		RebuildMarkers:   newFakeRebuildMarker(),
+		Lifecycle:        &buildFailingLifecycleStore{epoch: 1},
+		EpochCheckpoints: func(int64) contextfabric.ProjectionCheckpointStore { return checkpoints },
+		GraceWindow:      time.Hour,
+		Logger:           logger,
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	// context.Background() -- the TICK is never cancelled.
+	coordinator.Tick(context.Background())
+
+	if source.calls.Load() == 0 {
+		t.Fatal("the source never ran -- the tick did not reach the build drain")
+	}
+	summary := freshnessSummary(t, &buffer)
+	if got := summaryBool(t, summary, "tick_complete"); !got {
+		t.Fatalf("tick_complete = false, but the tick's own context was never cancelled -- the fixture is wrong, not the code")
+	}
+	if got := summaryNumber(t, summary, "sources_failed"); got != 1 {
+		t.Errorf("sources_failed = %v, want 1 -- a source returning context.Canceled under a LIVE tick has failed, in the build phase exactly as in steady state", got)
+	}
+	names, _ := summary["failed_sources"].([]any)
+	if len(names) != 1 || names[0] != "dev_health_teams_projects" {
+		t.Errorf("failed_sources = %v, want it NAMED", summary["failed_sources"])
+	}
+	if got := summaryNumber(t, summary, "build_sources_failed"); got != 1 {
+		t.Errorf("build_sources_failed = %v, want 1", got)
+	}
+}
+
+// TestConfirm5_ABuildSourceStaysNamedOnTheSecondTick is confirm5's third and
+// worst P1: the CHAOS-4789 outage shape, reproduced inside the phase this
+// change had just claimed to cover. The build drain has its own failure
+// backoff key, so on tick two the pair is withheld and never runs -- and
+// because build outcomes had no withheld state, the source vanished from the
+// line entirely. That is the exact silence this ticket exists to end, and it
+// made summary_scope:"steady_state_and_build" a false claim.
+func TestConfirm5_ABuildSourceStaysNamedOnTheSecondTick(t *testing.T) {
+	t.Parallel()
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	failing := &fakeSource{name: "dev_health_teams_projects", err: fmt.Errorf("teams projects read: %w", contextfabric.ErrUnavailable)}
+	checkpoints := newFakeCheckpointStore()
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:           []string{"org-a"},
+		Sources:          []projectionrun.SourcePair{{Name: "dev_health_teams_projects", Source: failing}},
+		Backend:          newFakeBackend(),
+		Checkpoints:      checkpoints,
+		RebuildMarkers:   newFakeRebuildMarker(),
+		Lifecycle:        &buildFailingLifecycleStore{epoch: 1},
+		EpochCheckpoints: func(int64) contextfabric.ProjectionCheckpointStore { return checkpoints },
+		GraceWindow:      time.Hour,
+		Logger:           logger,
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+
+	for tick := 1; tick <= 2; tick++ {
+		buffer.Reset()
+		coordinator.Tick(context.Background())
+		summary := freshnessSummary(t, &buffer)
+		requireBucketIdentity(t, summary)
+
+		failedNames, _ := summary["failed_sources"].([]any)
+		withheldNames, _ := summary["failure_backoff_sources"].([]any)
+		named := false
+		for _, list := range [][]any{failedNames, withheldNames} {
+			for _, n := range list {
+				if n == "dev_health_teams_projects" {
+					named = true
+				}
+			}
+		}
+		if !named {
+			t.Errorf("tick %d: the failing build source is named in NEITHER failed_sources (%v) nor failure_backoff_sources (%v) -- this is the CHAOS-4789 silence, inside the build phase",
+				tick, summary["failed_sources"], summary["failure_backoff_sources"])
+		}
+		if got := summaryNumber(t, summary, "sources_failed") + summaryNumber(t, summary, "sources_in_failure_backoff"); got != 1 {
+			t.Errorf("tick %d: sources_failed + sources_in_failure_backoff = %v, want 1 -- a source that is still down must be counted on EVERY tick, not only the one it happened to run on", tick, got)
+		}
+	}
+	if failing.calls.Load() == 0 {
+		t.Fatal("the source never ran on either tick")
+	}
+}
+
+// TestConfirm5_ACancelledSteadyStateTickDoesNotAssertAReading is the SWEEP.
+// confirm5 found the unconditional pair recording in the build path, but the
+// steady-state loop had the identical shape and the identical consequence, so
+// fixing only the reported instance would have left the class alive in the
+// path the ticket is actually about.
+func TestConfirm5_ACancelledSteadyStateTickDoesNotAssertAReading(t *testing.T) {
+	t.Parallel()
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	canceller := &cancellingSource{name: "source-cancel", cancel: cancel}
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:         []string{"org-a"},
+		Sources:        []projectionrun.SourcePair{{Name: "source-cancel", Source: canceller}},
+		Backend:        newFakeBackend(),
+		Checkpoints:    newFakeCheckpointStore(),
+		RebuildMarkers: newFakeRebuildMarker(),
+		Logger:         logger,
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	coordinator.Tick(ctx)
+
+	if canceller.calls.Load() == 0 {
+		t.Fatal("the source never ran -- the tick did not reach the steady-state drain")
+	}
+	summary := freshnessSummary(t, &buffer)
+	if got := summaryBool(t, summary, "tick_complete"); got {
+		t.Fatalf("tick_complete = true on a cancelled tick -- the fixture did not truncate")
+	}
+	if got := summaryNumber(t, summary, "sources_evaluated"); got != 0 {
+		t.Errorf("sources_evaluated = %v on a TRUNCATED steady-state tick, want 0 -- the same rule the build path now follows", got)
+	}
+}
+
+// TestEveryPairOutcomeGoesThroughTheScope pins the rule structurally, because
+// the behavioural arms above only cover the two call sites that exist today.
+// The build path was added WITHOUT the truncation guard and no test noticed;
+// a third path would be added the same way. Every recordPairOutcome and
+// recordBuildPairOutcome call must sit inside a scope.recordPair closure.
+func TestEveryPairOutcomeGoesThroughTheScope(t *testing.T) {
+	t.Parallel()
+	if got := countPairRecordingsOutsideScope(t, "coordinator.go"); got != 0 {
+		t.Errorf("%d pair-outcome recording(s) bypass scope.recordPair -- a truncated tick can assert a reading it never took, which is exactly how the build path shipped broken", got)
+	}
+
+	// Negative control: a bare recording outside the closure must be counted.
+	file, err := parser.ParseFile(token.NewFileSet(), "control.go", `package projectionrun
+
+func f(scope *orgScope, source string) {
+	scope.stats.recordPairOutcome(source, true, false, false)
+}
+`, 0)
+	if err != nil {
+		t.Fatalf("parse the negative control: %v", err)
+	}
+	if got := countPairRecordingsOutsideScopeIn(file); got != 1 {
+		t.Fatalf("negative control counted %d bypasses, want 1 -- the walk is not seeing the bypass it exists to catch", got)
+	}
+
+	// Positive control: the guarded form must NOT be counted, or the pin
+	// would fire on correct code and get "fixed" by deleting it.
+	ok, err := parser.ParseFile(token.NewFileSet(), "ok.go", `package projectionrun
+
+func g(scope *orgScope, source string) {
+	scope.recordPair(func() {
+		scope.stats.recordPairOutcome(source, true, false, false)
+	})
+}
+`, 0)
+	if err != nil {
+		t.Fatalf("parse the positive control: %v", err)
+	}
+	if got := countPairRecordingsOutsideScopeIn(ok); got != 0 {
+		t.Fatalf("positive control counted %d bypasses in correctly guarded code, want 0", got)
+	}
+}
+
+// countPairRecordingsOutsideScope counts recordPairOutcome /
+// recordBuildPairOutcome calls that are not lexically inside a
+// scope.recordPair(func(){...}) argument.
+func countPairRecordingsOutsideScope(t *testing.T, filename string) int {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), filename, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", filename, err)
+	}
+	return countPairRecordingsOutsideScopeIn(file)
+}
+
+func countPairRecordingsOutsideScopeIn(root ast.Node) int {
+	// Collect the closure bodies passed to recordPair; anything inside one is
+	// guarded. Positions are used rather than node identity so the second
+	// walk does not have to rebuild the parent chain.
+	type span struct{ lo, hi token.Pos }
+	var guarded []span
+	ast.Inspect(root, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "recordPair" {
+			return true
+		}
+		for _, arg := range call.Args {
+			if lit, ok := arg.(*ast.FuncLit); ok {
+				guarded = append(guarded, span{lit.Pos(), lit.End()})
+			}
+		}
+		return true
+	})
+
+	found := 0
+	ast.Inspect(root, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		// Match the METHOD name only; the receiver is stats, not scope, so a
+		// receiver-qualified match would miss the very calls being pinned.
+		if sel.Sel.Name != "recordPairOutcome" && sel.Sel.Name != "recordBuildPairOutcome" {
+			return true
+		}
+		// The method DECLARATIONS are not calls, so they cannot land here.
+		for _, g := range guarded {
+			if call.Pos() >= g.lo && call.End() <= g.hi {
+				return true
+			}
+		}
+		found++
+		return true
+	})
+	return found
+}

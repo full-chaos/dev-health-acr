@@ -881,6 +881,24 @@ func (o *orgScope) logCtx() context.Context { return o.parent }
 // would be a second place that has to remember.
 func (o *orgScope) done() bool { return o.parent.Err() != nil }
 
+// recordPair folds ONE (org, source) pair's outcome into the tick aggregate,
+// unless this organization's evaluation was truncated. A tick cut short
+// mid-drain has no reading to report for the pair it interrupted: recording
+// one asserts work it did not finish. That is the model 1-7 defect at PAIR
+// granularity -- the organization was correctly marked unevaluated while the
+// per-source counters beside it claimed the drain had happened.
+//
+// It is a method on the scope rather than a check at each call site for the
+// same reason model 7 exists: a rule that lives at call sites is a rule the
+// next call site forgets. The build path was added without it and reported a
+// reading for a cancelled drain.
+func (o *orgScope) recordPair(record func()) {
+	if o.truncated {
+		return
+	}
+	record()
+}
+
 // finish commits exactly one bucket. A cancelled evaluation that never chose
 // one is unevaluated and marks the tick incomplete: the tick did not
 // establish a verdict about this organization, whatever exit it left through.
@@ -953,20 +971,33 @@ func (s *tickFreshnessStats) recordPairOutcome(source string, evaluated, failed,
 // counters as the steady-state drain, and additionally into the build-only
 // pair, so neither question loses its answer: "is a required source down"
 // stays one number, and "was it down during a build" is still answerable.
-func (s *tickFreshnessStats) recordBuildPairOutcome(source string, evaluated, failed bool) {
+func (s *tickFreshnessStats) recordBuildPairOutcome(source string, evaluated, failed, withheld bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !evaluated {
-		return
+	switch {
+	case withheld:
+		// A build pair serving its own failure backoff is the previous
+		// failure still in force, and it goes in the SHARED withheld
+		// counters so the source keeps being named on every tick. Without
+		// this the source ran on tick one, was withheld on tick two, and
+		// disappeared from the line while still down.
+		s.sourcesWithheld++
+		s.withheldSources = appendDistinctSourceName(s.withheldSources, source)
+	case !evaluated:
+		// Did not run and is not in a failure backoff -- the same
+		// structurally unreachable branch recordPairOutcome carries, left
+		// explicit so a future reason has to come here and be classified.
+	case failed:
+		s.sourcesEvaluated++
+		s.sourcesFailed++
+		s.failedSources = appendDistinctSourceName(s.failedSources, source)
+		// and again in the build-only pair, so "was it down during a build"
+		// stays answerable without the shared counters losing it.
+		s.buildSourcesFailed++
+		s.buildFailedSources = appendDistinctSourceName(s.buildFailedSources, source)
+	default:
+		s.sourcesEvaluated++
 	}
-	s.sourcesEvaluated++
-	if !failed {
-		return
-	}
-	s.sourcesFailed++
-	s.failedSources = appendDistinctSourceName(s.failedSources, source)
-	s.buildSourcesFailed++
-	s.buildFailedSources = appendDistinctSourceName(s.buildFailedSources, source)
 }
 
 // appendDistinctSourceName adds source to names once, up to the cap. The
@@ -1263,7 +1294,9 @@ func (c *Coordinator) runOrgLegacy(scope *orgScope, orgID string) {
 		// the first, which is precisely the shape this disclosure exists
 		// to end.
 		sourceFailed = sourceFailed || pairFailed || pairWithheld
-		scope.stats.recordPairOutcome(source, pairEvaluated, pairFailed, pairWithheld)
+		scope.recordPair(func() {
+			scope.stats.recordPairOutcome(source, pairEvaluated, pairFailed, pairWithheld)
+		})
 	}
 	// A failed source can no longer land in ok. It sits BELOW stale in
 	// precedence -- rebuild_required is the bucket that demands an operator
@@ -1351,7 +1384,9 @@ func (c *Coordinator) runOrgLifecycle(scope *orgScope, orgID string) {
 		// the first, which is precisely the shape this disclosure exists
 		// to end.
 		sourceFailed = sourceFailed || pairFailed || pairWithheld
-		scope.stats.recordPairOutcome(source, pairEvaluated, pairFailed, pairWithheld)
+		scope.recordPair(func() {
+			scope.stats.recordPairOutcome(source, pairEvaluated, pairFailed, pairWithheld)
+		})
 	}
 	_ = scope.run(func(ctx context.Context) error {
 		c.recordCheckpointEpochState(ctx, orgID, epoch, contextfabric.CheckpointEpochActive, checkpoints)
@@ -1451,12 +1486,14 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 			}
 			continue
 		}
-		var buildEvaluated, buildFailed bool
+		var buildEvaluated, buildFailed, buildWithheld bool
 		_ = scope.run(func(ctx context.Context) error {
-			buildEvaluated, buildFailed = c.runBuildPair(ctx, orgID, source, targetEpoch, checkpoints, &budget)
+			buildEvaluated, buildFailed, buildWithheld = c.runBuildPair(ctx, orgID, source, targetEpoch, checkpoints, &budget)
 			return nil
 		})
-		scope.stats.recordBuildPairOutcome(source, buildEvaluated, buildFailed)
+		scope.recordPair(func() {
+			scope.stats.recordBuildPairOutcome(source, buildEvaluated, buildFailed, buildWithheld)
+		})
 	}
 	_ = scope.run(func(ctx context.Context) error {
 		c.recordCheckpointEpochState(ctx, orgID, targetEpoch, contextfabric.CheckpointEpochBuilding, checkpoints)
@@ -1526,7 +1563,7 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 // cf_build_source_progress's own last-successful (now stale) value, with
 // no way to recover the lost batches' rows once the checkpoint had already
 // advanced past them.
-func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, epoch int64, checkpoints contextfabric.ProjectionCheckpointStore, budget *int) (evaluated, failed bool) {
+func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, epoch int64, checkpoints contextfabric.ProjectionCheckpointStore, budget *int) (evaluated, failed, withheld bool) {
 	key := orgID + "\x00build\x00" + source
 	started := c.now()
 	var total int64
@@ -1536,21 +1573,40 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 	// that would need retrying if the loop exits before it succeeds --
 	// see the finalizing write below.
 	var lastMode contextfabric.BuildCompletionMode
+	// lastErr carries the final attempt's error out of the loop so failure is
+	// decided by the TICK's context rather than by the yield reason. A source
+	// returning context.Canceled from its own internals yields
+	// DrainYieldContextDone, and reading that as "not a failure" let a
+	// terminal source outage read healthy under build while the identical
+	// shape counted as a failure under steady state.
+	var lastErr error
 	progressStale := false
 	for {
-		if !c.due(key) {
+		// ONE clock read decides both "may it attempt" and "is it withheld by
+		// its own failure backoff" -- see dueState. The build drain has its
+		// OWN backoff key, so without the withheld answer a source that
+		// failed on tick one simply vanished from the line on tick two: the
+		// CHAOS-4789 silence, reproduced inside the phase this disclosure had
+		// just claimed to cover.
+		due, withheldByBackoff := c.dueState(key)
+		if !due {
+			if batches == 0 {
+				withheld = withheldByBackoff
+			}
 			break
 		}
 		batches++ // Codex round-2 F3: every attempt counts, matching runPair -- a worker-construction or RunOnce failure is still a real round-trip.
 		attemptStarted := c.now()
 		worker, werr := c.workerFor(source, checkpoints)
 		if werr != nil {
+			lastErr = werr
 			c.recordBackoff(key, werr)
 			c.logger.WarnContext(ctx, "build tick worker construction failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(werr))
 			reason = DrainYieldError
 			break
 		}
 		run, err := worker.RunOnce(ctx, orgID, source)
+		lastErr = err
 		c.recordBackoff(key, err)
 		outcome := Outcome{OrgID: orgID, Source: source, Run: run, Err: err, Duration: c.now().Sub(attemptStarted), At: c.now()}
 		c.observer.ObserveProjectionOutcome(outcome)
@@ -1643,13 +1699,16 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 			Duration: c.now().Sub(started), At: c.now(),
 		})
 	}
-	// The build phase reports its pair outcome exactly as the steady-state
-	// drain does. It did not, until a reviewer drove a source failing during
-	// a live build and watched the summary print sources_failed:0 with the
-	// failing source unnamed. A required source that is down is the one fact
-	// this line exists to publish, and which PHASE it was down in does not
-	// make it less true.
-	return batches > 0, reason == DrainYieldError
+	// The build phase reports its pair outcome under exactly the steady-state
+	// contract -- see runPair, whose three states these mirror. It did not,
+	// until a reviewer drove a source failing during a live build and watched
+	// the summary print sources_failed:0 with the failing source unnamed. A
+	// required source that is down is the one fact this line exists to
+	// publish, and which PHASE it was down in does not make it less true.
+	//
+	// failed is decided by the tick's context and not by the yield reason,
+	// for the reason lastErr exists above.
+	return batches > 0, lastErr != nil && ctx.Err() == nil, withheld
 }
 
 // classifyBuildCompletion maps one build tick's ProjectionRun onto design
