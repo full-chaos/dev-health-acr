@@ -1,0 +1,36 @@
+{
+ "_why": "Paths CONSUMERS DEREFERENCE that the measured artefacts never contained.\n\nGeneration types what the engine emitted. It cannot type what the engine did not emit in these runs, and the 413-overrun fields are exactly that: real engine fields that no artefact in the 746 measured happens to carry. Left to measurement alone the boundary would be SHALLOWER than the hand-written one it replaces on precisely those paths -- a str would pass `failure.narrowerContinuation` and crash the consumer that reads it.\n\nSo the boundary is measurement PLUS these, and the generator FAILS if a consumer reads a path that is in neither. That is what makes it total: not that someone remembered every path, but that forgetting one is an error rather than a silent hole.\n\nEvery entry is marked unmeasured in the emitted schema. These types are inherited from the hand-written schema at 66610f4d and are the weakest part of this file -- they are the only types here not derived from data. When an artefact carrying one of these fields is measured, the entry should be deleted and the measurement should type it.",
+ "declared": [
+  {
+   "node": "attempt.response.failure",
+   "key": "overrun",
+   "type": "string",
+   "consumer": "run_shard.attempt_diagnostics -- 413 ceiling overrun accounting"
+  },
+  {
+   "node": "attempt.response.failure",
+   "key": "maxItems",
+   "type": "int",
+   "consumer": "run_shard / engine_failures -- overrun ceiling"
+  },
+  {
+   "node": "attempt.response.failure",
+   "key": "measuredItems",
+   "type": "int",
+   "consumer": "run_shard / engine_failures -- measured size against the ceiling"
+  },
+  {
+   "node": "attempt.response.failure",
+   "key": "narrowerContinuation",
+   "type": "object",
+   "consumer": "run_shard / engine_failures -- the continuation offered after an overrun"
+  },
+  {
+   "node": "attempt.response",
+   "key": "request_id",
+   "type": "string",
+   "consumer": "run_shard -- request evidence on a failed attempt"
+  }
+ ],
+ "_why_required": "NO required-ness is declared here any more, deliberately.\n\nRound 1 found `candidates[].receipt_id` unrequired; I declared that one path, and round 2 found eleven siblings -- the pin narrower than the finding, on the finding that named the class. The fix is not a longer list. The sweep now follows the shapes that made the path underivable: a comprehension result, a local stash dict, and tuple unpacking, which is how the candidate list travels from `prev_result` into `memory` and back out several turns later. With those resolved, required-ness is DERIVED for every one of them and this section is empty. If it ever needs an entry again, that is evidence the sweep cannot see a shape, and the sweep is what should change."
+}

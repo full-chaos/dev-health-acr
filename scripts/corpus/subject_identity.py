@@ -272,11 +272,63 @@ def inspect(root, corpus_id, expectation, rep=1):
     return rec
 
 
-def scan(root, corpus_rows, expectations_for, rep=1):
-    """Identity records for every corpus row present under `root`."""
+class NoArtefactsFound(Exception):
+    """Every row scanned as absent. A whole-arm miss is a WRONG PATH, not a result."""
+
+
+def rep_from_summaries(root):
+    """The replicate tag the run actually wrote, read from the shard summaries.
+
+    `scan(rep=1)` was a default nobody passed, so a run tagged rep2 would glob for rep1,
+    match nothing, and report 36 clean `no_artefact` rows -- a whole arm of "the engine
+    answered nothing" that is really "we looked in the wrong place". Every arm measured so
+    far happens to be rep1, which is exactly why the default survived: it was right by
+    luck, and would have stayed right until the first multi-replicate run.
+    """
+    import json
+    import re
+    tags = set()
+    for summary in Path(root).glob("**/summary.json"):
+        try:
+            doc = json.loads(summary.read_text())
+        except Exception:
+            continue
+        for row in (doc.get("rows") or []):
+            for key in ("replicate", "rep"):
+                if isinstance(row.get(key), int):
+                    tags.add(row[key])
+    if not tags:
+        for f in Path(root).glob("**/replicate/*.json"):
+            m = re.search(r"-rep(\d+)-t\d+-a\d+\.json$", f.name)
+            if m:
+                tags.add(int(m.group(1)))
+    return sorted(tags)
+
+
+def scan(root, corpus_rows, expectations_for, rep=None):
+    """Identity records for every corpus row present under `root`.
+
+    `rep` is READ FROM THE RUN unless a caller names one. A silent 36/36 miss is treated as
+    what it is -- a bad root or a bad rep -- and raises, because a scan that finds nothing
+    and returns cleanly reports an engine failure that never happened.
+    """
+    if rep is None:
+        tags = rep_from_summaries(root)
+        if len(tags) > 1:
+            raise NoArtefactsFound(
+                f"{root} carries more than one replicate tag {tags}; name one with --rep "
+                "rather than scanning a mixture as if it were one run")
+        rep = tags[0] if tags else 1
     out = {}
     for r in corpus_rows:
         out[r["id"]] = inspect(root, r["id"], expectations_for(r), rep=rep)
+    absent = [k for k, v in out.items()
+              if v.get("state") in ("no_artefact", None)]
+    if corpus_rows and len(absent) == len(out):
+        raise NoArtefactsFound(
+            f"all {len(out)} rows scanned as no_artefact under {root} at rep={rep}. "
+            f"Replicate tags present: {rep_from_summaries(root) or 'none'}. This is a wrong "
+            "root or a wrong rep, not a run in which the engine answered nothing.")
     return out
 
 

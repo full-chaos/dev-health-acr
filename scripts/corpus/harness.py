@@ -56,7 +56,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from corpus import CORPUS, REQUESTED_KIND, ANCHOR_KIND  # noqa: E402
-from validators import validate_attempt  # noqa: E402
+from validators import validate_attempt, validate_response  # noqa: E402
 
 # ONE env var, default
 # byte-identical to the frozen value, so an unset environment reproduces the rig
@@ -82,8 +82,13 @@ def validate_live_payload(status, payload):
     by a failure envelope naming the reason, so the row records what happened instead of
     the run dying.
     """
-    ok, reason = validate_attempt({"status": status, "response": payload}
-                                  if isinstance(payload, dict) else {"status": status})
+    # Validated as a RESPONSE, which is what it is. Wrapping it in a synthetic attempt
+    # envelope made the measured envelope fields -- `dt` and `request`, which only exist
+    # once the harness has WRITTEN the artefact -- required of a live body that cannot
+    # carry them, so every live response would come back malformed. Presence is measured
+    # from stored artefacts; the live payload is only the response half of one.
+    ok, reason = (validate_response(payload) if isinstance(payload, dict)
+                  else (False, f"response body is {type(payload).__name__}, not a mapping"))
     if isinstance(payload, dict) and not ok:
         return {"failure": {"code": "acr_malformed_response", "message": reason,
                             "httpStatus": status}}

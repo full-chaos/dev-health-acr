@@ -187,69 +187,28 @@ def test_that_no_derivation_pin_can_itself_see_the_trap():
 # an inline loop it could only ever be run against the real consumers, which pass -- so a
 # broken sweep and a clean codebase were indistinguishable, and that is what let the
 # aliased `prev_result` dereference through.
-_SEEDS = {"result": "result", "sr": "subject_resolution", "failure": "failure",
-          "fail": "failure", "resp": "response", "payload": "response",
+# CHAOS-5430: nodes are addressed by their full measured path now that the schema is
+# generated. The seeds move with them; the sweep's property is unchanged.
+_SEEDS = {"result": "attempt.response.result",
+          "sr": "attempt.response.result.subject_resolution",
+          "failure": "attempt.response.failure", "fail": "attempt.response.failure",
+          "resp": "attempt.response", "payload": "attempt.response",
           "a": "attempt", "attempt": "attempt", "last": "attempt"}
 
 
 def _unschemad_paths(src, label, schema=None):
-    """Keys read off an attempt-shaped object that the schema does not type.
+    """Delegates to consumer_paths.sweep -- ONE implementation.
 
-    Aliases propagate: anything assigned from a seed (or from a key of one) becomes a
-    seed, so renaming the variable cannot hide the dereference.
+    This module used to carry its own copy of the sweep, and round 1 found the copy was
+    weaker than the code it guarded: it recognised only `Name["key"]` and `Name.get("key")`.
+    Two implementations of "what does the code read" will always drift, and the weaker one
+    is the one that passes.
     """
+    import consumer_paths
     schema = V.schema() if schema is None else schema
-    tree = ast.parse(src)
-    roots = dict(_SEEDS)
-
-    def _base_key(val):
-        if isinstance(val, ast.Call) and isinstance(val.func, ast.Attribute) \
-                and val.func.attr == "get" and val.args \
-                and isinstance(val.func.value, ast.Name) \
-                and isinstance(val.args[0], ast.Constant):
-            return val.func.value.id, val.args[0].value
-        if isinstance(val, ast.Subscript) and isinstance(val.value, ast.Name) \
-                and isinstance(val.slice, ast.Constant):
-            return val.value.id, val.slice.value
-        return None, None
-
-    # to a fixed point: `a = payload["result"]` then `b = a` then `b.get("k")` is one chain,
-    # and a single pass sees only its first link.
-    for _ in range(len(list(ast.walk(tree))) or 1):
-        grew = False
-        for node in ast.walk(tree):
-            if not (isinstance(node, ast.Assign) and len(node.targets) == 1
-                    and isinstance(node.targets[0], ast.Name)):
-                continue
-            tgt = node.targets[0].id
-            base, key = _base_key(node.value)
-            if base in roots and isinstance(key, str) and key in schema:
-                if roots.get(tgt) != key:
-                    roots[tgt] = key; grew = True
-            elif isinstance(node.value, ast.Name) and node.value.id in roots:
-                if roots.get(tgt) != roots[node.value.id]:
-                    roots[tgt] = roots[node.value.id]; grew = True
-        if not grew:
-            break
-
-    out = []
-    for node in ast.walk(tree):
-        base = key = None
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
-                and node.func.attr == "get" and node.args \
-                and isinstance(node.func.value, ast.Name) \
-                and isinstance(node.args[0], ast.Constant) \
-                and isinstance(node.args[0].value, str):
-            base, key = node.func.value.id, node.args[0].value
-        elif isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) \
-                and isinstance(node.slice, ast.Constant) \
-                and isinstance(node.slice.value, str):
-            base, key = node.value.id, node.slice.value
-        if base in roots and key:
-            node_name = roots[base]
-            if node_name in schema and key not in schema[node_name]:
-                out.append(f"{label}: {node_name}.{key}")
-    return out
+    reads, _unresolved = consumer_paths.sweep(src, schema, label)
+    return [f"{label}: {node}.{key}" for node, key, _u in sorted(reads)
+            if node in schema and key not in schema[node]]
 
 
 def test_the_consumer_sweep_catches_an_ALIASED_dereference():
@@ -266,7 +225,7 @@ def test_the_consumer_sweep_catches_an_ALIASED_dereference():
         '    return q.get("invented_key")\n', "probe")
     assert aliased, "an aliased unschema'd dereference is invisible to the sweep"
     assert two_hop, "a two-hop alias is invisible to the sweep"
-    assert "result.invented_key" in aliased[0], aliased
+    assert "attempt.response.result.invented_key" in aliased[0], aliased
     # and it must not fire on a key the schema DOES type, or it is just noise
     assert not _unschemad_paths(
         'def f(payload):\n    r = payload["result"]\n    return r.get("limitations")\n',
@@ -285,8 +244,9 @@ def test_no_consumer_dereferences_a_path_absent_from_the_schema():
 def test_the_schema_pin_would_notice_a_new_path():
     """Negative control: the pin must fail on an added dereference, or it proves nothing."""
     schema = V.schema()
-    assert "subject_resolution" in schema["result"], "schema shape changed"
-    assert "invented_key" not in schema["result"]
+    R = "attempt.response.result"
+    assert "subject_resolution" in schema[R], "schema shape changed"
+    assert "invented_key" not in schema[R]
 
 
 def test_validation_is_recursive_not_shallow():
@@ -442,10 +402,13 @@ def test_the_element_pin_reflects_MEASURED_types_not_assumed_ones():
     which would have shipped as a scoring regression. So the types are asserted against
     what the artefacts contain, and the schema records that they were measured."""
     schema = V.schema()
-    assert schema["result"]["limitations"]["items"] == "string", schema["result"]["limitations"]
-    assert schema["result"]["structure_needs"]["type"] == "object", schema["result"]["structure_needs"]
-    assert schema["subject_resolution"]["committed"]["items"] == "object"
-    assert "_types_are_measured" in schema, "the schema no longer records its provenance"
+    R = "attempt.response.result"
+    assert schema[R]["limitations"]["items"] == "string", schema[R]["limitations"]
+    assert schema[R]["structure_needs"]["type"] == "object", schema[R]["structure_needs"]
+    assert schema[f"{R}.subject_resolution"]["committed"]["items"] == "object"
+    # CHAOS-5430: provenance is no longer a note asserting the types were measured -- every
+    # entry CARRIES its observation counts, which is the same claim backed by the data.
+    assert schema[R]["limitations"]["observed"], "types no longer carry their observations"
 
 
 def test_the_LIVE_body_goes_through_the_same_boundary_as_a_file():

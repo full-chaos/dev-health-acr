@@ -80,12 +80,30 @@ def test_nothing_outside_the_golden_file_ever_scores():
 
 
 def test_unknown_terminal_variants_are_not_scored_by_a_prefix():
+    """CHAOS-5430 moved `clarification_required` OUT of this list, deliberately.
+
+    The bare spelling is what the engine actually emits -- 54/50/89/100 occurrences across
+    the four measured arms -- and it is now authored for the scorer as well as the
+    bucketer, so it is SCORED. It was listed here as an unknown variant only because the
+    scorer had never been taught a status the bucketer already knew, and treating a status
+    the engine emits in every run as "unknown" is the bug, not the guard.
+
+    What this pin defends is unchanged: a variant nobody authored must never reach a
+    verdict through a prefix match.
+    """
     for term in ("clarification_required(future)", "clarification_required()",
-                 "http_599:unknown", "http_", "clarification_required"):
+                 "http_599:unknown", "http_", "clarification_requiredX"):
         for cls in ("serve", "refuse", "decline", "clarify"):
             v = E.score({"expectation": cls, "expectation_basis": None},
                         "clarification_needed", terminal_status=term)[0]
             assert v == "unscored", f"{cls} + {term!r} -> {v}"
+    # and the authored bare form IS scored, in both directions
+    assert E.score({"expectation": "clarify", "expectation_basis": None},
+                   "clarification_needed",
+                   terminal_status="clarification_required")[0] == "agree"
+    assert E.score({"expectation": "serve", "expectation_basis": None},
+                   "clarification_needed",
+                   terminal_status="clarification_required")[0] == "disagree"
 
 
 def test_the_bucket_can_never_rescue_an_absent_terminal_status():
@@ -177,16 +195,40 @@ def test_load_attempt_is_the_only_decoder_of_attempt_artefacts():
         "merge_corpus.py": "shard summaries, provenance and the baseline verdict",
         "reclassify_deadlines.py": "shard summaries",
         "harness.py": "live HTTP responses, validated by validate_attempt at the call site",
+        # CHAOS-5430. The generator reads raw artefacts because that is its whole job: it
+        # DERIVES the boundary from them, so it cannot be gated by the boundary it
+        # produces. It is also off the measurement path entirely -- it emits a schema and
+        # never a verdict -- so a malformed artefact here corrupts a type, not a score,
+        # and the regeneration pin would catch that as a diff.
+        "measure_schema.py": "derives the schema FROM the artefacts; cannot use the "
+                             "boundary it generates, and produces no verdict",
+        "schema_report.py": "reads the GENERATED SCHEMA, never an attempt artefact; a "
+                            "reporting tool off the measurement path entirely",
+    }
+    # LINE-scoped, not file-scoped. Allowlisting subject_identity.py wholesale would hide
+    # the next raw-attempt decode added to it, which is the exact defect this pin exists to
+    # catch -- the guard must not be widened to fit the one call that is legitimate.
+    ALLOWED_CALLS = {
+        ("subject_identity.py", "rep_from_summaries"):
+            "shard summaries only, to read the run's replicate tag; attempt artefacts "
+            "still go through load_attempt",
     }
     offenders = []
     for f in sorted(HERE.glob("*.py")):
         if f.name.startswith("test_") or f.name in ALLOWED:
             continue
         tree = ast.parse(f.read_text())
+        enclosing = {}
+        for fn in ast.walk(tree):
+            if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for sub in ast.walk(fn):
+                    enclosing[id(sub)] = fn.name
         for node in ast.walk(tree):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
                     and node.func.attr in ("load", "loads") \
                     and isinstance(node.func.value, ast.Name) and node.func.value.id == "json":
+                if (f.name, enclosing.get(id(node))) in ALLOWED_CALLS:
+                    continue
                 offenders.append(f"{f.name}:{node.lineno}")
     assert not offenders, f"artefact JSON decoded outside load_attempt: {offenders}"
 

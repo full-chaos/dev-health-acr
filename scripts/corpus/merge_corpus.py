@@ -143,6 +143,24 @@ def check_coverage(rows):
     return problems
 
 
+def classification_by_row(records):
+    """The engine's failure classification per row, from the post-hoc attempt records.
+
+    UNREADABLE_ARTEFACT is excluded deliberately: it is the class we are trying to
+    attribute, and letting it classify a row would make every unreadable artefact its own
+    explanation.
+    """
+    out = {}
+    for r in records:
+        kind = r.get("kind")
+        if not kind or kind == "UNREADABLE_ARTEFACT":
+            continue
+        out.setdefault(r["corpus_id"], sorted({kind}))
+        if kind not in out[r["corpus_id"]]:
+            out[r["corpus_id"]] = sorted(set(out[r["corpus_id"]]) | {kind})
+    return out
+
+
 def _post_hoc(root):
     """Per-attempt failure classes read back from the artefacts, with the request
     ids the follow-up tickets need. Empty dict if the artefacts are unreadable —
@@ -178,11 +196,13 @@ def per_family(rows):
 # rounds: the pin passes because it reimplemented the thing it was meant to hold.
 VECTOR_COLUMNS_DOC = (
     "vector_matched_rows = a committed candidate had vector among its match mechanisms. "
-    "vector_committed_rows = a committed candidate had vector and NO exact match, so the "
-    "commit rests on the vector hit. Derived from "
-    "subject_resolution.candidates[state=committed].match_mechanisms, per candidate. The "
-    "engine emits no decision_summary/commit_bases field -- this was measured across all "
-    "425 artefacts of the four arms.")
+    "vector_committed_rows = a committed candidate with vector participation and no exact "
+    "mechanism. NEITHER column says the commit RESTED on the vector hit: match_mechanisms "
+    "are PROPOSAL mechanisms, and the engine's actual CommitBasisSet is log-side and "
+    "non-reconstructible from the artefact -- a vector+lexical candidate can commit on a "
+    "statistical basis. The log-side CommitBasisSet is the authority; this harness does not "
+    "capture that line, and capturing it is separate work. Derived per candidate from "
+    "subject_resolution.candidates[state=committed].match_mechanisms.")
 
 
 def vector_columns(identity):
@@ -237,6 +257,22 @@ def main():
     identity = subject_identity.scan(args.indir, CORPUS, expectations.expectation_for)
     subs_by_id = {k: v.get("subject_substitution") for k, v in identity.items()}
     unreadable = sorted(k for k, v in identity.items() if v.get("state") != "read")
+
+    # CHAOS-5430 (3). An unreadable artefact on a row the ENGINE already failed is not a
+    # second defect. An http-400 row was being counted twice -- once as the engine's
+    # failure class and once as UNREADABLE_ARTEFACT -- which inflates the defect count with
+    # a consequence of the first defect and makes a one-fault run read as a two-fault run.
+    # The unreadable artefact is ATTRIBUTED to the row's own failure classification where
+    # the row has one, and only stands alone where it does not.
+    failure_class = classification_by_row(engine_failures.scan(args.indir))
+    unreadable_detail = [
+        {"corpus_id": k,
+         "state": identity[k].get("state"),
+         "attributed_to": failure_class.get(k),
+         "standalone": failure_class.get(k) is None}
+        for k in unreadable
+    ]
+    unreadable_standalone = [d["corpus_id"] for d in unreadable_detail if d["standalone"]]
 
     prov_path = HERE / "provenance.json"
     provenance = json.loads(prov_path.read_text()) if prov_path.exists() else {}
@@ -304,6 +340,12 @@ def main():
                 for k, v in sorted(identity.items()) if v.get("subject_substitution")
             ],
             "unreadable_artefact_rows": unreadable,
+            # The same rows, each said to be its own defect or a consequence of the row's
+            # engine failure. `unreadable_artefact_rows` is kept as-is so a reader
+            # comparing against an older verdict sees the same list it saw before.
+            "unreadable_artefact_detail": unreadable_detail,
+            "unreadable_artefact_rows_standalone": unreadable_standalone,
+            "failure_classification_by_row": failure_class,
             **vector_columns(identity),
             "committed_kind_not_requested_kind": [
                 {"corpus_id": k, "requested_kind": BY_ID[k].get("requested_kind"),
@@ -398,6 +440,10 @@ def main():
     print(f"  SUBJECT SUBSTITUTION: {si['substitution_count']} row(s) {si['substitution_rows']}")
     if si["unreadable_artefact_rows"]:
         print(f"  unreadable artefacts (NOT a pass): {si['unreadable_artefact_rows']}")
+        for d in si["unreadable_artefact_detail"]:
+            where = ("standalone defect" if d["standalone"]
+                     else f"attributed to {d['attributed_to']}")
+            print(f"    {d['corpus_id']}: {d['state']} -- {where}")
     print(f"  vector-matched rows:   {len(si['vector_matched_rows'])} {si['vector_matched_rows']}")
     print(f"  vector-committed rows: {len(si['vector_committed_rows'])} {si['vector_committed_rows']}")
     print(f"  EXPECTATION: agree={es['agree']} agree_weak={es['agree_weak']} disagree={es['disagree']} unscored={es['unscored']}")
