@@ -50,14 +50,20 @@ def _type_ok(val, want, rule_type, nullable, container=None, when=None, parent=N
     """
     if val is None:
         if nullable and when:
-            # The condition names a field of the ENCLOSING object as often as of this one:
-            # `state` lives on the candidate, while the nullable field lives on its
-            # `subject`. Look here first, then at the parent, so a `when` clause can refer
-            # to the shape that actually carries the discriminator.
-            field = when.get("field")
-            got = (container or {}).get(field)
-            if got is None and isinstance(parent, dict):
-                got = parent.get(field)
+            # The clause NAMES its object: "parent.state" or "self.state". No fallback.
+            # Looking in the container first and falling back to the parent let a PROPOSED
+            # candidate carry `subject.state="committed"` and satisfy a clause meant to
+            # read the candidate's own state -- a discriminator any nested object can
+            # satisfy is not a discriminator.
+            field = when.get("field", "")
+            scope, _, name = field.partition(".")
+            if not name:
+                return False, (f"malformed nullable_when {field!r}: name the object, "
+                               "e.g. 'parent.state'")
+            source = {"self": container, "parent": parent}.get(scope)
+            if source is None and scope not in ("self", "parent"):
+                return False, f"unknown nullable_when scope {scope!r}"
+            got = (source or {}).get(name)
             if got != when.get("equals"):
                 return False, (f"is explicitly null, which is admitted only when "
                                f"{field}=={when['equals']!r} (got {got!r})")

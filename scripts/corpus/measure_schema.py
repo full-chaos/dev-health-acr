@@ -103,10 +103,11 @@ def main():
                     help="run roots; every */replicate/*.json beneath each is measured")
     ap.add_argument("--out", required=True)
     ap.add_argument("--min-count", type=int, default=1)
-    ap.add_argument("--consumers", nargs="*", default=None,
-                    help="consumer modules. A key they dereference UNCONDITIONALLY "
-                         "(x['k'], which raises when absent) and that was observed on "
-                         "every visit to its node is emitted `required`.")
+    ap.add_argument("--consumers", nargs="+", required=True,
+                    help="consumer modules. MANDATORY: required-ness is derived from "
+                         "them, so a schema generated without them is silently weaker "
+                         "than one generated with them, and the two are hard to tell "
+                         "apart by looking.")
     ap.add_argument("--declared-paths", default=None,
                     help="paths consumers dereference that the artefacts never contained "
                          "(see schema_declared_paths.json). Marked unmeasured in the output.")
@@ -192,27 +193,6 @@ def main():
                 entry["required"] = True
         entry["observed"] = observed
 
-    if args.consumers:
-        import consumer_paths
-        provisional = {n: dict(ks) for n, ks in nodes.items()}
-        for path in args.consumers:
-            reads, unresolved = consumer_paths.sweep(
-                Path(path).read_text(), provisional, Path(path).name)
-            if unresolved:
-                sys.exit("consumer reads the generator cannot resolve: "
-                         + "; ".join(unresolved))
-            for node, key, uncond in reads:
-                if uncond:
-                    unconditional.add((node, key))
-        for node, keys in nodes.items():
-            for key, entry in keys.items():
-                if entry.get("type") is None:
-                    continue
-                n_visits = entry.get("node_visits") or 0
-                seen_n = sum((entry.get("observed") or {}).values())
-                if n_visits and seen_n == n_visits and (node, key) in unconditional:
-                    entry["required"] = True
-
     declared = []
     declared_required = []
     if args.declared_paths:
@@ -233,6 +213,53 @@ def main():
             entry["observed"] = {}
             declared.append(f'{e["node"]}.{e["key"]}')
 
+    # AFTER the declarations, deliberately: the sweep asks whether a field is declared
+    # `unmeasured` so it can treat reads beneath it as a KNOWN gap rather than an
+    # unresolvable base. Sweeping first made the generator exit on a hole it documents.
+    import consumer_paths
+    provisional = {n: dict(ks) for n, ks in nodes.items()}
+    reached_unconditionally = set()
+    for path in args.consumers:
+        reads, unresolved = consumer_paths.sweep(
+            Path(path).read_text(), provisional, Path(path).name)
+        if unresolved:
+            sys.exit("consumer reads the generator cannot resolve: "
+                     + "; ".join(unresolved))
+        for node, key, uncond in reads:
+            if not uncond:
+                continue
+            unconditional.add((node, key))
+            # The NODE this unconditional read leads into is reached unconditionally, and
+            # so is the element node when it leads into an array. That is the CLASS:
+            # `sn["kind_options"]` reaches kind_options[], so every always-present key of
+            # kind_options[] is required -- including the eleven sibling `receipt_id`
+            # fields that a per-path declaration missed. Round 1 named ONE of them and I
+            # declared exactly that one, which is the "pin narrower than the finding"
+            # failure, committed on the finding that named the class.
+            rule = (provisional.get(node) or {}).get(key) or {}
+            for child in (rule.get("node"), rule.get("element_node")):
+                if child:
+                    reached_unconditionally.add(child)
+
+    for node, keys in nodes.items():
+        node_reached = node in reached_unconditionally
+        for key, entry in keys.items():
+            if entry.get("type") is None:
+                continue
+            n_visits = entry.get("node_visits") or 0
+            seen_n = sum((entry.get("observed") or {}).values())
+            if not (n_visits and seen_n == n_visits):
+                continue          # not always present: never required
+            # Required if the KEY ITSELF is read unconditionally. NOT if merely its node
+            # is: `payload["result"]` reaches the result node, and requiring every
+            # always-present key there demands `answer_plan` and thirty siblings of every
+            # artefact -- the presence-only rule again, one level up. What actually breaks
+            # is `x["k"]` on an absent k, so that is the rule, and the sweep resolving
+            # comprehensions and stashes is what makes it reach the whole class rather
+            # than the one path a review happened to name.
+            if (node, key) in unconditional:
+                entry["required"] = True
+
     out = {
         "_generated_by": "scripts/corpus/measure_schema.py",
         "_why": __doc__.strip(),
@@ -241,11 +268,19 @@ def main():
         "_unchecked_polymorphic": sorted(unchecked),
         "_required_keys": sorted(f"{n}.{k}" for n, ks in nodes.items()
                                  for k, r in ks.items() if r.get("required")),
-        "_required_rule": ("observed on every visit to its node AND dereferenced "
-                           "unconditionally (x['k']) by a consumer. Presence alone is not "
-                           "a contract: a field every one of these runs happened to carry "
-                           "may still be optional, and requiring it would reject a "
-                           "legitimate response."),
+        "_nodes_reached_unconditionally": sorted(reached_unconditionally),
+        "_required_rule": ("observed on every visit to its node AND its node reached by "
+                           "an unconditional read (x['k'], which raises when absent) "
+                           "anywhere in the consumers. Derived for the CLASS, never "
+                           "declared per path. Presence alone is not a contract: a field "
+                           "every one of these runs happened to carry may still be "
+                           "optional, and requiring it would reject a legitimate "
+                           "response, so `.get()` -- which tolerates absence and says so "
+                           "-- never makes a key required."),
+        "_generator_argv": ["--null-policy", args.null_policy or "",
+                            "--declared-paths", args.declared_paths or "",
+                            "--consumers", *args.consumers,
+                            "--roots", *args.roots],
         "_declared_unmeasured": sorted(declared),
         "_declared_required": sorted(declared_required),
         "_null_policy_applied": applied_policy,

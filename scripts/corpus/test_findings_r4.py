@@ -202,6 +202,8 @@ def test_load_attempt_is_the_only_decoder_of_attempt_artefacts():
         # and the regeneration pin would catch that as a diff.
         "measure_schema.py": "derives the schema FROM the artefacts; cannot use the "
                              "boundary it generates, and produces no verdict",
+        "schema_report.py": "reads the GENERATED SCHEMA, never an attempt artefact; a "
+                            "reporting tool off the measurement path entirely",
     }
     # LINE-scoped, not file-scoped. Allowlisting subject_identity.py wholesale would hide
     # the next raw-attempt decode added to it, which is the exact defect this pin exists to

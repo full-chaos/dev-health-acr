@@ -32,12 +32,5 @@
    "consumer": "run_shard -- request evidence on a failed attempt"
   }
  ],
- "_why_required": "REQUIRED-ness that the two-pass rule cannot derive.\n\n`required` is normally measured: observed on every visit to its node AND dereferenced unconditionally by a consumer. That second half is a static read of the code, and it stops where the dataflow leaves what static analysis can follow. `subject_resolution.candidates[].receipt_id` is the case round 1 found: the candidates list is carried into a local `memory` dict as one half of a tuple, unpacked several turns later, indexed, and only then read as `c[\"receipt_id\"]`. That is a real unconditional dereference -- a candidate without the key raises KeyError and kills the run -- and no AST sweep is going to follow a dict-of-tuples to reach it.\n\nSo it is declared, with the consumer named, exactly like the unmeasured types above. The rule is the same one this whole change rests on: derive it where the evidence allows, declare it where it does not, and never leave it silent.",
- "required": [
-  {
-   "node": "attempt.response.result.subject_resolution.candidates[]",
-   "key": "receipt_id",
-   "consumer": "harness.py:177,192,218,228 -- c[\"receipt_id\"] on candidates carried through the local `memory` dict; absence raises KeyError mid-run"
-  }
- ]
+ "_why_required": "NO required-ness is declared here any more, deliberately.\n\nRound 1 found `candidates[].receipt_id` unrequired; I declared that one path, and round 2 found eleven siblings -- the pin narrower than the finding, on the finding that named the class. The fix is not a longer list. The sweep now follows the shapes that made the path underivable: a comprehension result, a local stash dict, and tuple unpacking, which is how the candidate list travels from `prev_result` into `memory` and back out several turns later. With those resolved, required-ness is DERIVED for every one of them and this section is empty. If it ever needs an entry again, that is evidence the sweep cannot see a shape, and the sweep is what should change."
 }

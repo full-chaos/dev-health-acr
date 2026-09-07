@@ -75,24 +75,91 @@ def test_the_schema_is_GENERATED_and_says_so():
 def test_regenerating_from_the_same_artefacts_is_BYTE_IDENTICAL():
     """Determinism, and the negative control for hand-editing.
 
-    If the file can be hand-edited and still pass, "generated" is a claim rather than a
-    property. Regenerating must reproduce it exactly, so an edit is visible as a diff.
+    The pin replays the EXACT arguments the committed schema was built with, recorded in
+    the file itself. Round 2 found it passing while omitting `--consumers`, which is the
+    input required-ness is derived from -- so it was checking that a WEAKER schema
+    regenerates, and a schema built without consumers is hard to tell from one built with
+    them by looking.
     """
-    roots = SCHEMA_DOC["_roots"]
+    argv = SCHEMA_DOC.get("_generator_argv")
+    assert argv, "the schema does not record how it was generated"
+    assert "--consumers" in argv, "the recorded argv omits the consumers"
+    roots = argv[argv.index("--roots") + 1:]
     missing = [r for r in roots if not Path(r).exists()]
     if missing:
         print(f"    SKIP: measured roots absent here: {missing[:1]}")
         return
+    resolved = [str(HERE / a) if a.endswith(".py") or a.endswith(".json") else a
+                for a in argv]
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "regen.json"
         subprocess.run([sys.executable, str(HERE / "measure_schema.py"),
-                        "--out", str(out),
-                        "--null-policy", str(HERE / "schema_null_policy.json"),
-                        "--declared-paths", str(HERE / "schema_declared_paths.json"),
-                        "--roots", *roots],
-                       check=True, capture_output=True)
-        assert out.read_text() == (HERE / "artefact_schema.json").read_text(), \
-            "the committed schema is not what the generator produces from these artefacts"
+                        "--out", str(out), *resolved],
+                       check=True, capture_output=True, cwd=str(HERE))
+        got = json.loads(out.read_text())
+        want = json.loads((HERE / "artefact_schema.json").read_text())
+        got.pop("_generator_argv", None)
+        want.pop("_generator_argv", None)
+        assert got == want, \
+            "the committed schema is not what the generator produces from these inputs"
+
+
+def test_required_ness_is_DERIVED_for_the_class_with_nothing_declared():
+    """Round 2's P1. One path was declared required and eleven siblings were missed.
+
+    The list is read from the GENERATED schema, never hand-written here -- a hand list is
+    the same mistake with more rows. Every key that is observed on every visit AND
+    dereferenced unconditionally must be required, and nothing may be declared.
+    """
+    doc = SCHEMA_DOC
+    assert doc["_declared_required"] == [], \
+        f"required-ness is still declared by hand: {doc['_declared_required']}"
+    assert doc["_required_keys"], "nothing came out required -- the derivation is dead"
+
+    schema = V.schema()
+    gaps = []
+    for node, keys in schema.items():
+        for key, rule in keys.items():
+            observed = rule.get("observed") or {}
+            visits = rule.get("node_visits") or 0
+            if not (visits and sum(observed.values()) == visits):
+                continue
+            if (node, key) in _unconditional_reads() and not rule.get("required"):
+                gaps.append(f"{node}.{key}")
+    assert not gaps, f"observed-always and unconditionally read, but not required: {gaps}"
+
+    # the receipt_id CLASS specifically, since that is what round 2 found
+    rid = {k for k in doc["_required_keys"] if k.endswith(".receipt_id")}
+    assert len(rid) >= 3, f"only {len(rid)} receipt_id keys required: {sorted(rid)}"
+
+
+def _unconditional_reads():
+    import consumer_paths
+    schema = V.schema()
+    out = set()
+    for name in CONSUMERS:
+        reads, unresolved = consumer_paths.sweep((HERE / name).read_text(), schema, name)
+        assert not unresolved, f"{name}: unresolved reads {unresolved}"
+        for node, key, uncond in reads:
+            if uncond:
+                out.add((node, key))
+    return out
+
+
+def test_a_key_read_only_via_GET_stays_optional():
+    """The negative control the class rule needs. `.get()` tolerates absence and says so,
+    so it must not make a key required -- requiring every always-present key is the rule
+    that marked 359 of them and demanded `answer_plan` of every artefact."""
+    schema = V.schema()
+    uncond = _unconditional_reads()
+    tolerant = [(n, k) for n, keys in schema.items() for k, r in keys.items()
+                if r.get("observed") and (r.get("node_visits") or 0)
+                and sum(r["observed"].values()) == r["node_visits"]
+                and (n, k) not in uncond]
+    assert tolerant, "no always-present, never-unconditionally-read key exists"
+    still_required = [f"{n}.{k}" for n, k in tolerant if schema[n][k].get("required")]
+    assert not still_required, \
+        f"keys required though never read unconditionally: {still_required[:5]}"
 
 
 def test_a_hand_added_key_does_NOT_survive_regeneration():
@@ -489,6 +556,38 @@ def test_a_READABLE_identity_is_untouched_by_the_new_rule():
         {"declared_anchor_name": "Platform"}) is True
     assert E.expectation_depends_on_identity({"declares_nonexistent": True}) is True
     assert E.expectation_depends_on_identity({}) is False
+
+
+def test_the_null_discriminator_cannot_be_SPOOFED_by_a_nested_field():
+    """Round 2's second P1. The `when` check looked in the immediate container first and
+    fell back to the parent, so a PROPOSED candidate carrying `subject.state="committed"`
+    satisfied a clause meant to read the CANDIDATE's state and got its null subject
+    admitted. A discriminator any nested object can satisfy is not a discriminator, so the
+    clause names its object -- `parent.state` -- with no fallback."""
+    def cand(state, extra=None):
+        subj = {"kind": None, "canonical_id": None, "label": "P"}
+        if extra:
+            subj.update(extra)
+        return {"receipt_id": "rc", "state": state, "subject": subj,
+                "match_mechanisms": [], "matched_terms": [], "match_reasons": [],
+                "evidence_ref_ids": [], "confidence": 1.0}
+
+    def check(c):
+        return V.validate_attempt({"status": 200, "dt": 1.0, "request": {}, "response": {
+            "result": {"subject_resolution": {"committed": [], "candidates": [c]}}}})[0]
+
+    assert check(cand("committed")), "a committed candidate's null subject was rejected"
+    assert not check(cand("proposed")), "a proposed candidate's null subject was admitted"
+    assert not check(cand("proposed", {"state": "committed"})), \
+        "THE SPOOF WORKS: a nested subject.state satisfied a clause about the candidate"
+    assert not check(cand("ambiguous", {"state": "committed"}))
+
+    # the clause itself must name its object, or the fallback can come back quietly
+    policy = json.loads((HERE / "schema_null_policy.json").read_text())
+    for e in policy["admit_null"]:
+        when = e.get("when")
+        if when:
+            assert when["field"].startswith(("parent.", "self.")), when
 
 
 if __name__ == "__main__":
