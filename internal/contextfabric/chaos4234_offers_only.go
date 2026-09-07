@@ -111,6 +111,15 @@ const (
 	// makes for the decisive path (see TestEngineInvestigate_
 	// NeverProjectedOrgDegradesToCleanTerminal, chaos4077_never_projected_org_test.go).
 	GatedOfferResolutionNotProjected GatedOfferResolutionOutcome = "not_projected"
+	// GatedOfferResolutionFrameRefused: the frame gate refused this turn
+	// before any retrieval, so there is nothing to offer candidates FOR.
+	//
+	// DISTINCT from `refused` above, which means the CALLER declined
+	// clarification. Folding the two would put "the user does not want to
+	// be asked" and "the server will not act on this question at all" in
+	// one bucket, and they send an operator to opposite ends of the
+	// pipeline.
+	GatedOfferResolutionFrameRefused GatedOfferResolutionOutcome = "frame_refused"
 )
 
 // gatedOfferMaterial runs the offers-only resolution for a class-default
@@ -137,6 +146,29 @@ func (e *Engine) gatedOfferMaterial(ctx context.Context, principal storage.Princ
 	}
 	if e.regimeAOffersDisabled {
 		record(GatedOfferResolutionDisabled)
+		return StructureOfferMaterial{}, true
+	}
+	// THE SECOND CALL SITE OF THE ORDERING GATE, and it is the one that
+	// matters most for a refusing verdict.
+	//
+	// The decisive path in engine.go refuses above ResolveSubjects. THIS
+	// path is a different resolution -- offers-only, whose result is
+	// discarded and whose StructureOfferMaterial is kept -- and gating only
+	// the decisive one left it running a full retrieval on a frame the
+	// server had already refused, then handing the caller offers to answer.
+	// Measured on the rig: a row whose frame gate said
+	// `refused:member_kind_unservable` produced a decision summary anyway
+	// (from here), received offers, and looped to max_turns for five turns
+	// -- reproducing the very embeddings-ON clarification loop this seam
+	// exists to end, at the one call site the gate did not cover.
+	//
+	// A refusal that holds at one of two call sites is not a refusal. The
+	// scope-anchor gate learned this in this same package and its own
+	// engine tests say so; TestAFrameRefusalStopsBothResolutionCallSites
+	// is this one's version, and it drives Investigate rather than either
+	// call site directly, because that is the only way to see both.
+	if familyOutcome.Gate.Refuses() {
+		record(GatedOfferResolutionFrameRefused)
 		return StructureOfferMaterial{}, true
 	}
 	// The SAME carried frame the main resolution gets. The offers-only read

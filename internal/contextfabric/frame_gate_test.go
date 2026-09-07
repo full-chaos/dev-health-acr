@@ -559,3 +559,73 @@ func TestTheWithheldPoolHasItsOwnTerminalReason(t *testing.T) {
 		t.Errorf("terminal reason for a genuinely empty pool = %q, want %q -- the control", got, "empty_pool")
 	}
 }
+
+// THE OFFERS-ONLY CALL SITE, driven through the regime that actually reaches
+// it. This is the pin that would have caught the rig defect, and the first
+// version of it did NOT: written against this file's own engine fixture it
+// passed while the gate was removed, because that fixture never enters the
+// class-default window gate and so never calls gatedOfferMaterial at all.
+// A mutation re-injecting the defect SURVIVED, which is what exposed the
+// vacuity -- the assertions were green because they never ran on this path.
+//
+// It reuses the window-gate regime's own fixtures (countingInterpreter,
+// chaos4234GatedGraph, buildWindowGateEngine) rather than inventing a
+// second way to reach the same code, so a change to that regime moves this
+// pin with it instead of leaving it quietly testing nothing.
+func TestAFrameRefusalStopsTheOffersOnlyResolution(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name  string
+		frame *QuestionFrame
+	}{
+		{"refused by an invariant", selfGroupedFrame()},
+		{"refused on the basis", unservableMemberKindFrame()},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			gate := DecideFrameGate(ValidateFrame(*testCase.frame, nil, ""), true)
+			if !gate.Refuses() {
+				t.Fatalf("fixture defect: the frame gates as %q, which does not refuse", gate.Outcome)
+			}
+			interpreter := &countingInterpreter{
+				interpretation: bootstrapInterpretation(),
+				family:         QuestionFamilyOutcome{Gate: gate},
+			}
+			graph := chaos4234GatedGraph()
+			engine := buildWindowGateEngine(t, interpreter, graph, &staticResultStore{results: map[string]InvestigationResult{}})
+
+			if _, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest()); err != nil {
+				t.Fatalf("Investigate() error = %v", err)
+			}
+			if graph.resolveCalls != 0 {
+				t.Fatalf("the offers-only pass ran ResolveSubjects %d time(s) on a refused frame, want 0 -- it is a full retrieval whose result is discarded, and running it hands the caller offers to answer for a question the server has refused", graph.resolveCalls)
+			}
+		})
+	}
+}
+
+// THE CONTROL, and it is what proves the pin above is not green by accident:
+// with a PASSING gate the very same fixture DOES reach the offers-only
+// resolution. Without it, "zero resolutions" could be satisfied by a fixture
+// that never enters this regime -- which is exactly how the first version of
+// the pin above fooled itself.
+func TestAPassingFrameStillReachesTheOffersOnlyResolution(t *testing.T) {
+	t.Parallel()
+	gate := DecideFrameGate(ValidateFrame(*namedSubjectFrame(), nil, ""), true)
+	if gate.Refuses() {
+		t.Fatalf("fixture defect: a well-formed named_subject frame gates as %q", gate.Outcome)
+	}
+	interpreter := &countingInterpreter{
+		interpretation: bootstrapInterpretation(),
+		family:         QuestionFamilyOutcome{Gate: gate},
+	}
+	graph := chaos4234GatedGraph()
+	engine := buildWindowGateEngine(t, interpreter, graph, &staticResultStore{results: map[string]InvestigationResult{}})
+
+	if _, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest()); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if graph.resolveCalls == 0 {
+		t.Fatal("the offers-only pass did NOT run on a passing frame -- this fixture no longer reaches the call site, so the refusal pin beside it proves nothing")
+	}
+}
