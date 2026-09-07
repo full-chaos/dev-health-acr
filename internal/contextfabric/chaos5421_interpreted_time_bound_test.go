@@ -259,17 +259,36 @@ func TestCHAOS5421_TheInterpretedTimeBoundVerdictIsRecordedOnEveryArm(t *testing
 	futureAsOf := now.Add(48 * time.Hour)
 	ancient := now.Add(-3000 * 24 * time.Hour)
 
+	// The RANGE clamp needs its own arm, and this is the battery's finding,
+	// not a hypothetical: M5421-CLAMP-NEVER-REPORTED deleted `clampApplied =
+	// true` from the range branch and SURVIVED. The bound is still pulled
+	// back, so the answer is still served against the right window and every
+	// binding assertion stays green -- only the VERDICT lies, reporting `ok`
+	// with clamp_applied=false on a turn whose evidence window this engine
+	// moved. That is precisely the regression this line exists to make
+	// visible, and nothing pinned it on the range axis: the clamped arm below
+	// was valid_time only, and the two branches set the flag independently.
+	rangeStart := now.Add(-90 * 24 * time.Hour)
+	rangeFutureEnd := now.Add(23 * 24 * time.Hour)
 	for _, testCase := range []struct {
 		name         string
 		time         TimeContext
 		wantOutcome  InterpretedTimeBoundOutcome
 		wantClamp    bool
 		wantAnswered bool
+		// wantRangeDays is asserted on every arm, so the explicit 0 off the
+		// range axis is pinned too -- "not a range" and "we did not measure"
+		// must never read alike.
+		wantRangeDays int
 	}{
-		{"ordinary current axis", TimeContext{Axis: TemporalCurrent}, InterpretedTimeBoundOK, false, true},
-		{"ordinary historical", TimeContext{Axis: TemporalValidTime, AsOf: &asOf}, InterpretedTimeBoundOK, false, true},
-		{"clamped", TimeContext{Axis: TemporalValidTime, AsOf: &futureAsOf}, InterpretedTimeBoundFutureEnd, true, true},
-		{"refused", TimeContext{Axis: TemporalRange, Start: &ancient, End: &now}, InterpretedTimeBoundRangeTooWide, false, false},
+		{"ordinary current axis", TimeContext{Axis: TemporalCurrent}, InterpretedTimeBoundOK, false, true, 0},
+		{"ordinary historical", TimeContext{Axis: TemporalValidTime, AsOf: &asOf}, InterpretedTimeBoundOK, false, true, 0},
+		{"clamped as-of", TimeContext{Axis: TemporalValidTime, AsOf: &futureAsOf}, InterpretedTimeBoundFutureEnd, true, true, 0},
+		// The corpus shape, and the arm the surviving mutant exposed. The
+		// reported width is the CLAMPED one (90 days), never the 113 the
+		// model asked for, or the line would describe a window nothing read.
+		{"clamped range", TimeContext{Axis: TemporalRange, Start: &rangeStart, End: &rangeFutureEnd}, InterpretedTimeBoundFutureEnd, true, true, 90},
+		{"refused", TimeContext{Axis: TemporalRange, Start: &ancient, End: &now}, InterpretedTimeBoundRangeTooWide, false, false, 3000},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -298,6 +317,9 @@ func TestCHAOS5421_TheInterpretedTimeBoundVerdictIsRecordedOnEveryArm(t *testing
 			}
 			if decision.Axis != testCase.time.Axis {
 				t.Errorf("axis = %q, want the interpreted axis %q echoed", decision.Axis, testCase.time.Axis)
+			}
+			if decision.RangeDays != testCase.wantRangeDays {
+				t.Errorf("range_days = %d, want %d -- the width reported is the one actually read, and an explicit 0 off the range axis", decision.RangeDays, testCase.wantRangeDays)
 			}
 			if decision.Answerable() != testCase.wantAnswered {
 				t.Errorf("Answerable() = %v, want %v for outcome %q", decision.Answerable(), testCase.wantAnswered, decision.Outcome)
