@@ -406,7 +406,50 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 	// CommitBasisSet value type.
 	digests := make(contextfabric.CommitDecisionDigestSet)
 	candidates := make([]contextfabric.SubjectCandidate, 0, len(candidatesBySubject))
+	// THE RECEIPT DEMOTION, half one of the offer-pool seam (AC-3778-3).
+	//
+	// A candidate that ARRIVES already Committed came from a caller-supplied
+	// canonical id -- in production, from a prior subject receipt. The
+	// pre_committed_exact_hint loop below commits every such arrival as
+	// CommitBasisCallerCanonicalID with identity_proven set, on the ground that
+	// the caller named it. Measured on the rig, that ground was false:
+	//
+	//	t2  a vector-only candidate, confidence 0.5, matched on a term naming a
+	//	    subject that does not exist, is OFFERED with a receipt id
+	//	t3  the client answers with that receipt, the receipt's own label joins
+	//	    SubjectTerms, the engine exact-matches the label it had itself
+	//	    offered, and the arrival commits identity_proven
+	//
+	// The caller did name it -- with an identifier the engine had guessed for
+	// it one turn earlier. Stripping the arrival back to Proposed is what makes
+	// "a vector hit alone never commits a subject" hold across turns as well as
+	// within one: demoted, it competes on its ordinary confidence, which for a
+	// single-mechanism candidate cannot reach LoneFloor.
+	//
+	// DEMOTED, NEVER DROPPED, at this point. It stays in the candidate set the
+	// commit decision runs over, because removing a candidate changes what the
+	// REMAINING ones are competing against -- see the offer-pool exclusion at
+	// phase 4 for the measured reason that distinction is load-bearing.
+	offerPoolVectorOnlyDemoted := 0
+	// demotedKeys keeps the two counters DISJOINT. A demoted candidate is
+	// vector-only, so the phase-4 exclusion below would otherwise count it a
+	// second time and `excluded + demoted` would exceed the number of
+	// candidates the seam actually acted on -- an operator adding the two
+	// would over-report. Each candidate lands in exactly one bucket, so the
+	// pair sums to the population, which is the identity the tests assert.
+	demotedKeys := make(map[string]bool)
 	for _, candidate := range candidatesBySubject {
+		if candidate.State == contextfabric.ResolutionCommitted && isVectorOnlyCandidate(candidate.MatchMechanisms) {
+			candidate.State = contextfabric.ResolutionProposed
+			offerPoolVectorOnlyDemoted++
+			demotedKeys[SubjectKey(candidate.Subject)] = true
+			if tracer != nil {
+				tracer.Trace(ResolutionTraceEvent{
+					RequestID: requestID, Stage: "offer_pool", Subject: candidate.Subject,
+					OfferPoolDisposition: "vector_only_demoted",
+				})
+			}
+		}
 		candidates = append(candidates, candidate)
 	}
 	// Phase 2.5 (CHAOS-3778): apply the corroborated band EXACTLY ONCE, here
@@ -1379,15 +1422,80 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 		}
 		ordered = retained
 	}
-	resolution.Candidates = ordered
+	// THE OFFER POOL EXCLUSION, half two of the seam (AC-3778-3).
+	//
+	// "A vector hit alone never commits a subject" held at every commit gate
+	// above and the substitution happened anyway, because an OFFER is a
+	// commit the engine has deferred to the next turn: offer a vector-only
+	// candidate with a receipt id, and the client hands it back as a
+	// caller-supplied canonical id. So the standard has to hold where the
+	// candidate becomes ANSWERABLE, which is here.
+	//
+	// 🛑 HERE, AND NOT BEFORE THE COMMIT DECISION. The first version of this
+	// change excluded these candidates at the top of the function, before
+	// phase 2.5, so that one candidate set decided everything. That is
+	// WRONG, and an existing pin caught it:
+	// TestChaos3829_UncorroboratedTopVectorCandidateNeverFires builds a
+	// vector-only top beside a corroborated second, and both must lose.
+	// Excluding the vector-only one made the corroborated one UNOPPOSED, it
+	// cleared LoneFloor, and a fixture that had committed nothing for the
+	// life of the ticket started committing. Removing a candidate does not
+	// only remove its own chance to win -- it removes what the others were
+	// competing against, and this seam exists to make the engine commit
+	// LESS on a guess, never more.
+	//
+	// So a vector-only candidate still COMPETES (it is real evidence that
+	// retrieval found more than one plausible subject, and suppressing it
+	// manufactures confidence the pool does not have) and is simply never
+	// OFFERED. A resolution left ambiguous by candidates the caller may not
+	// pick reaches the same honest "nothing to answer" terminal an
+	// embeddings-off run reaches.
+	offered := make([]contextfabric.SubjectCandidate, 0, len(ordered))
+	offerPoolVectorOnlyExcluded := 0
+	for _, candidate := range ordered {
+		if isVectorOnlyCandidate(candidate.MatchMechanisms) {
+			// A demoted arrival is withheld from the offer for the same
+			// reason and is NOT counted twice -- re-offering the receipt the
+			// caller just answered would hand the same guess round again
+			// under a new id. It already has its own disposition event.
+			if !demotedKeys[SubjectKey(candidate.Subject)] {
+				offerPoolVectorOnlyExcluded++
+				if tracer != nil {
+					tracer.Trace(ResolutionTraceEvent{
+						RequestID: requestID, Stage: "offer_pool", Subject: candidate.Subject,
+						OfferPoolDisposition: "vector_only_excluded",
+					})
+				}
+			}
+			continue
+		}
+		offered = append(offered, candidate)
+	}
+	if tracer != nil {
+		// ONE summary per call, emitted unconditionally with explicit zeros,
+		// so a resolution that acted on nothing stays distinguishable from a
+		// build where this seam never ran. The per-candidate events are
+		// retrieval-pool-sized -- 186 of 329 offered candidates were
+		// vector-only in one measured 36-question arm -- so they stay Debug
+		// and this is what the folded Info line reads.
+		tracer.Trace(ResolutionTraceEvent{
+			RequestID: requestID, Stage: "offer_pool", OfferPoolSummary: true,
+			OfferPoolVectorOnlyExcluded: offerPoolVectorOnlyExcluded,
+			OfferPoolVectorOnlyDemoted:  offerPoolVectorOnlyDemoted,
+		})
+	}
+	resolution.Candidates = offered
 	// Codex round-4 finding 1: the clarification prompt must be built from
 	// the RETAINED (post-truncation) candidate set, not the full set --
 	// naming a subject in the prompt that Phase 4 truncation already
 	// dropped from resolution.Candidates would offer the caller a choice
 	// absent from the machine-readable result they would resolve it
-	// against.
-	if ambiguous && allowClarification {
-		resolution.ClarificationPrompt = ClarificationPrompt(ordered)
+	// against. The offer-pool exclusion above is the same rule with a
+	// second cause, so the prompt is built from the OFFERED set: a prompt
+	// naming an excluded subject would hand back by name the very choice
+	// the exclusion exists to withhold.
+	if ambiguous && allowClarification && len(offered) > 0 {
+		resolution.ClarificationPrompt = ClarificationPrompt(offered)
 	}
 	if tracer != nil {
 		// ONE decision event PER COMMITTED SUBJECT (CHAOS-4096: cardinality

@@ -1319,6 +1319,42 @@ type ResolutionTraceEvent struct {
 	// the fold sees per-event tags, and that is the only guarantee this
 	// emission site can keep.
 	DecisionOfferedUnderWindowGate bool
+	// DecisionFrameGate / DecisionRefuseBasis (stage=="decision_summary"
+	// ONLY) are the ORDERING VERDICT this resolution ran under: what the
+	// frame gate decided at interpretation, and the refuse basis it decided
+	// it on.
+	//
+	// THEY MAKE THE ORDER ITSELF READABLE. Every other key on the summary
+	// says what resolution did; these two say what it was ALLOWED to do
+	// before it started, which is the property this seam adds and the one a
+	// regression in it would otherwise hide -- a gate silently reverted to
+	// the shadow it replaced produces byte-identical counts, committed ids,
+	// gates and bases on this line. Without them the only symptom at Info
+	// would be a substituted subject that looks exactly like a correct one.
+	//
+	// ALWAYS SET, with explicit `not_proposed` / `none` tokens rather than
+	// empty strings, so an absent key means "this build predates the seam"
+	// and can never be read as "the gate passed".
+	DecisionFrameGate   string
+	DecisionRefuseBasis string
+	// OfferPoolDisposition (stage=="offer_pool", per-candidate) names what
+	// the offer-pool exclusion did with one candidate:
+	// `vector_only_excluded` (never offered) or `vector_only_demoted` (a
+	// pre-committed arrival stripped back to Proposed so it can clarify but
+	// not commit). Closed vocabulary; no term, no confidence.
+	OfferPoolDisposition string
+	// OfferPoolSummary marks the once-per-call folded offer_pool event, the
+	// counterpart of DecisionSummary for this stage. Per-candidate
+	// offer_pool lines are retrieval-pool-sized and stay Debug; the summary
+	// is the Info-readable count.
+	OfferPoolSummary bool
+	// OfferPoolVectorOnlyExcluded / OfferPoolVectorOnlyDemoted are that
+	// summary's counts, and they are also folded onto the decision summary
+	// so ONE Info line answers "what did this resolution decide, and what
+	// was it not allowed to consider". Explicit zeros: a resolution that
+	// excluded nothing must not read like one where the exclusion never ran.
+	OfferPoolVectorOnlyExcluded int
+	OfferPoolVectorOnlyDemoted  int
 	// ShadowOutcome/ShadowReason/ShadowDIdentityHash/ShadowPreconditionUnproven/
 	// ShadowUnscopedVisibility/ShadowNonCensusedSurvivor/
 	// ShadowHandleGrammarBound/ShadowAnchorUniqueClaimant/ShadowKindsCensused
@@ -1775,7 +1811,11 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 	// including a panic -- silence must mean "never entered", never "left
 	// through an exit the fold did not cover".
 	if deps.ResolutionTracer != nil {
-		decisionFold := &decisionSummaryBuffer{real: deps.ResolutionTracer, requestID: request.RequestID}
+		gate, refuseBasis := frameGateObservable(frame)
+		decisionFold := &decisionSummaryBuffer{
+			real: deps.ResolutionTracer, requestID: request.RequestID,
+			frameGate: gate, refuseBasis: refuseBasis,
+		}
 		deps.ResolutionTracer = decisionFold
 		defer decisionFold.flush()
 	}
@@ -1856,6 +1896,19 @@ type decisionSummaryBuffer struct {
 	commitGates            []string
 	commitBases            []string
 	offeredUnderWindowGate bool
+	// frameGate / refuseBasis are the ordering verdict this resolution ran
+	// under, stamped at CONSTRUCTION from the carried frame rather than
+	// accumulated from events: the gate is an INPUT to the call, not
+	// something the call decides, and reading it off the events would make
+	// this buffer a second authority on a verdict interpretation already
+	// reached.
+	frameGate   string
+	refuseBasis string
+	// vectorOnlyExcluded / vectorOnlyDemoted accumulate from the
+	// offer_pool summary event, the same "the fold sees the events" shape
+	// the decision counts above use.
+	vectorOnlyExcluded int
+	vectorOnlyDemoted  int
 }
 
 // appendDistinctCapped adds value to seen when it is non-empty and not
@@ -1877,6 +1930,16 @@ func appendDistinctCapped(seen []string, value string) []string {
 
 func (b *decisionSummaryBuffer) Trace(event ResolutionTraceEvent) {
 	b.real.Trace(event)
+	// The offer_pool SUMMARY is folded in, the per-candidate offer_pool
+	// events are not: the summary is already this call's total, so adding
+	// the per-candidate events would double-count exactly the quantity the
+	// identity `excluded + demoted == the offer_pool summary's own pair`
+	// exists to check.
+	if event.Stage == "offer_pool" && event.OfferPoolSummary {
+		b.vectorOnlyExcluded += event.OfferPoolVectorOnlyExcluded
+		b.vectorOnlyDemoted += event.OfferPoolVectorOnlyDemoted
+		return
+	}
 	if event.Stage != "decision" {
 		return
 	}
@@ -1915,7 +1978,46 @@ func (b *decisionSummaryBuffer) flush() {
 		DecisionCommitGates:            nonNil(b.commitGates),
 		DecisionCommitBases:            nonNil(b.commitBases),
 		DecisionOfferedUnderWindowGate: b.offeredUnderWindowGate,
+		DecisionFrameGate:              b.frameGate,
+		DecisionRefuseBasis:            b.refuseBasis,
+		OfferPoolVectorOnlyExcluded:    b.vectorOnlyExcluded,
+		OfferPoolVectorOnlyDemoted:     b.vectorOnlyDemoted,
 	})
+}
+
+// frameGateObservable renders, for the decision summary, the ordering
+// verdict this resolution is running under -- re-read from the CARRIED
+// frame rather than taken on trust.
+//
+// IT IS A TRIPWIRE, NOT A SECOND DECISION. The engine refuses a rejected or
+// refuse-basis frame above ResolveSubjects, so in a correct build the only
+// values this can produce are `passed` and `not_proposed`. The other two
+// arms exist precisely because they should be unreachable: if the engine's
+// enforcement is ever weakened back toward the shadow it replaced, a
+// resolution will run on a frame that should have refused, and this line
+// will say `rejected:<invariant>` or `refused:<basis>` beside a
+// committed_count that is not zero. Without them that regression is
+// invisible at Info -- the counts, the committed ids, the gates and the
+// bases of a laundered commit are byte-identical to a correct one.
+//
+// Reading the frame here is not a re-derivation of the gate's verdict in
+// the "two authorities" sense law L6 refuses: the gate DECIDES and binds;
+// this only reports what the frame in hand would have decided, so a
+// disagreement between the two is exactly the alarm it exists to raise. A
+// nil frame reports `not_proposed` because that is all this layer can
+// honestly say -- by the time a frame is nil here, the engine has already
+// separated "never proposed" from "refused" and let this call through.
+func frameGateObservable(frame *contextfabric.QuestionFrame) (gate string, refuseBasis string) {
+	if frame == nil {
+		return "not_proposed", "none"
+	}
+	if failure, bad := contextfabric.ValidateFramePhaseA1(*frame); bad {
+		return "rejected:" + string(failure.Invariant), "none"
+	}
+	if _, _, basis := cohortKindFromFrame(frame); basis == CohortKindMemberKindUnservable {
+		return "refused:" + string(basis), string(basis)
+	}
+	return "passed", "none"
 }
 
 func nonNil(values []string) []string {

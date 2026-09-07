@@ -192,7 +192,36 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// only one of its two states cannot be told apart from a build
 			// that does not emit it, which is the same explicit-zero rule
 			// every count on this line follows.
-			"offered_under_window_gate", event.DecisionOfferedUnderWindowGate)
+			"offered_under_window_gate", event.DecisionOfferedUnderWindowGate,
+			// THE ORDERING SEAM, on the one Info line that says what the
+			// resolver decided. frame_gate/refuse_basis say what this
+			// resolution was ALLOWED to decide before it began;
+			// offer_pool_vector_only_excluded/_demoted say what it was not
+			// allowed to consider. All four always present with explicit
+			// tokens and zeros -- a laundered commit and a correct one are
+			// otherwise indistinguishable on every other key of this line.
+			"frame_gate", event.DecisionFrameGate,
+			"refuse_basis", event.DecisionRefuseBasis,
+			"offer_pool_vector_only_excluded", event.OfferPoolVectorOnlyExcluded,
+			"offer_pool_vector_only_demoted", event.OfferPoolVectorOnlyDemoted)
+	case "offer_pool":
+		// Same volume split as corroboration and identity_gate: the
+		// per-candidate line is retrieval-pool-sized (186 of 329 offered
+		// candidates were vector-only in one measured 36-question arm) and
+		// stays Debug; the once-per-call summary is Info. Both carry closed
+		// vocabulary and counts only -- the subject's kind and canonical id,
+		// never a term, never a confidence.
+		if event.OfferPoolSummary {
+			t.logger.InfoContext(ctx, "context fabric resolution trace: offer pool summary",
+				"request_id", sanitizeLogString(event.RequestID), "stage", sanitizeLogString(event.Stage),
+				"vector_only_excluded", event.OfferPoolVectorOnlyExcluded,
+				"vector_only_demoted", event.OfferPoolVectorOnlyDemoted)
+			return
+		}
+		t.logger.DebugContext(ctx, "context fabric resolution trace: offer pool",
+			"request_id", event.RequestID, "stage", event.Stage,
+			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
+			"disposition", event.OfferPoolDisposition)
 	case "kind_coverage_floor":
 		// CHAOS-4086: the operator-visible half of CHAOS-4038's floor. The
 		// harness reads the same event off an in-process tracer to put

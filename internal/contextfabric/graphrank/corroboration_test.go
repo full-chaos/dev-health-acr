@@ -88,8 +88,24 @@ func TestAC_3778_3_VectorOnlyCandidateCannotReachTheLoneCommitGate(t *testing.T)
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("a vector-only candidate at the band ceiling must not commit, got %v", resolution.Committed)
 	}
-	if resolution.Candidates[0].Confidence != vectorBandCeiling {
-		t.Fatalf("a single-mechanism candidate must keep its own band confidence, got %v", resolution.Candidates[0].Confidence)
+	// AND IT IS NO LONGER OFFERED EITHER (the offer-pool exclusion,
+	// resolution.go phase 4). AC-3778-3 held at every commit gate on the rig
+	// and a vector-only candidate was still committed the next turn, because
+	// the engine had OFFERED it with a receipt id and the client handed that
+	// id back as caller-supplied identity. An offer is a commit deferred by
+	// one turn, so the same standard now applies to it.
+	if len(resolution.Candidates) != 0 {
+		t.Fatalf("a vector-only candidate at the band ceiling is still OFFERED (%d candidate(s)); answering that offer is how it commits on the next turn", len(resolution.Candidates))
+	}
+	// The band-confidence assertion this test used to make by reading
+	// resolution.Candidates[0] moves HERE, one to one: the property was
+	// always about CorroboratedConfidence (a single-mechanism candidate must
+	// not be boosted), never about the offer pool, and reading it off an
+	// offered candidate is no longer possible now that vector-only
+	// candidates are not offered. Nothing is lost -- the same claim, asserted
+	// against the function that owns it.
+	if got := CorroboratedConfidence([]contextfabric.MatchMechanism{contextfabric.MatchVector}, vectorBandCeiling); got != vectorBandCeiling {
+		t.Fatalf("a single-mechanism candidate must keep its own band confidence, got %v", got)
 	}
 }
 
@@ -157,7 +173,13 @@ func TestMaxOnlyMergeFailsTheCorroborationCase(t *testing.T) {
 	if len(legacy.Committed) != 0 {
 		t.Fatal("RED case is not red: the legacy max-only merge was expected to fail to commit")
 	}
-	if count := DistinctMechanismCount(legacy.Candidates[0].MatchMechanisms); count != 1 {
+	// Read off the MERGED VALUE, not off legacy.Candidates[0]. The claim is
+	// about what the legacy merge rule retains, which is a property of the
+	// merge, and the legacy winner here is single-mechanism `vector` -- so
+	// the offer-pool exclusion (resolution.go phase 4) correctly keeps it
+	// out of the offered set and there is no candidate to index. Same claim,
+	// asserted against the thing that owns it.
+	if count := DistinctMechanismCount(legacyMaxOnlyMerge(fromVector, fromTraversal).MatchMechanisms); count != 1 {
 		t.Fatalf("the legacy merge must retain only the winner's single mechanism, got %d", count)
 	}
 

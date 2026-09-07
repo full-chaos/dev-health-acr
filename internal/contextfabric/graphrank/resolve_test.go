@@ -642,7 +642,14 @@ func TestResolveSubjects_SearchQuestionTruncationBlocksAutoCommit(t *testing.T) 
 	// -- clears the lone-candidate gate on relevance alone, so this commits
 	// unless truncation intervenes.
 	node := candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 0.9, "*")
-	node.Mechanism = contextfabric.MatchVector
+	// LEXICAL, not vector. This test is about TRUNCATION authority, and the
+	// mechanism was incidental -- but with MatchVector the "no auto-commit"
+	// assertion passed for TWO independent reasons (truncation, and
+	// AC-3778-3's vector-only guard), so it could not tell them apart and
+	// would have stayed green with the truncation rule deleted. A lexical
+	// candidate at 0.9 genuinely commits unless truncation intervenes, which
+	// is the only thing this test claims to prove.
+	node.Mechanism = contextfabric.MatchLexical
 	backend := &fakeGraphBackend{
 		enableSearchQuestion:    true,
 		searchResults:           map[string][]CandidateNode{"alpha": {}},
@@ -891,19 +898,33 @@ func TestResolveSubjects_QuestionPathNeverExactMatchesEvenOnLiteralLabelEquality
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("resolution.Committed = %#v, want NO auto-commit -- a vector-only find must never commit alone (AC-3778-3), regardless of this subject's label literally equaling the internal provenance marker", resolution.Committed)
 	}
-	if len(resolution.Candidates) != 1 {
-		t.Fatalf("resolution.Candidates = %#v, want 1", resolution.Candidates)
+	// NOT OFFERED either, since the offer-pool exclusion (resolution.go
+	// phase 4) withholds a vector-only candidate from the answerable set.
+	// The assertion this replaces read the candidate's banded confidence off
+	// resolution.Candidates[0]; it maps one to one onto this one and loses
+	// no discriminating power, because the mutation this test exists to
+	// catch is the SAME mutation either way: reverting the question pass to
+	// allowExactMatch=true stamps MatchExact beside MatchVector, which makes
+	// the candidate no longer vector-only -- so it is offered again (this
+	// assertion flips from 0 to 1) AND it auto-commits (the assertion above
+	// flips too). Both halves still fail on it.
+	if len(resolution.Candidates) != 0 {
+		t.Fatalf("resolution.Candidates = %#v, want none offered -- a question-provenance vector-only find is not answerable, and a candidate appearing here means the pass granted it an exact match", resolution.Candidates)
 	}
-	candidate := resolution.Candidates[0]
-	if candidate.Confidence == 1 {
-		t.Fatal("candidate.Confidence = 1, want it derived from the vector similarity band -- a subject's label matching the internal provenance marker must never grant an exact match")
-	}
-	if HasMechanism(candidate.MatchMechanisms, contextfabric.MatchExact) {
-		t.Fatalf("candidate.MatchMechanisms = %v, want MatchExact absent", candidate.MatchMechanisms)
-	}
-	if !HasMechanism(candidate.MatchMechanisms, contextfabric.MatchVector) || DistinctMechanismCount(candidate.MatchMechanisms) != 1 {
-		t.Fatalf("candidate.MatchMechanisms = %v, want ONLY MatchVector (by construction on the question path)", candidate.MatchMechanisms)
-	}
+	// The two mechanism assertions this test used to make -- MatchExact
+	// absent, and MatchVector the ONLY mechanism -- read the candidate off
+	// resolution.Candidates[0], which the exclusion above no longer
+	// populates. They are SUBSUMED rather than merely dropped, and it is
+	// worth saying exactly how, because "subsumed" is easy to claim and
+	// easy to get wrong: "not offered" IS "vector-only", by the definition
+	// of the exclusion, so a candidate carrying MatchExact beside
+	// MatchVector would not be vector-only, would be offered, and would fail
+	// the assertion above. What is genuinely lost is DIRECTNESS -- the
+	// assertion now reads the consequence rather than the mechanism set --
+	// and the compensating direct coverage is
+	// TestResolveSubjects_TermPathStillExactMatchesLiteralEquality below,
+	// which drives the same code with a caller-derived term and asserts the
+	// exact match IS granted there.
 }
 
 // TestResolveSubjects_TermPathStillExactMatchesLiteralEquality is the

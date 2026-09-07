@@ -1730,6 +1730,46 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// CARRIED, NOT RE-DERIVED (CHAOS-4736 bar 5): resolution gets this
 	// turn's validated frame so the kind-hinted pool search reads declared
 	// kinds instead of guessing at the question's words.
+	// THE ORDERING SEAM (design §13.5.2, §13.1's `refuse to guess` terminal).
+	//
+	// Frame validity and the refuse basis were decided at interpretation,
+	// before any retrieval existed; this is where that decision BINDS. A
+	// refusing gate terminates the turn HERE -- above ResolveSubjects, above
+	// DiscoverContext, above every fact read -- so no matcher of any kind,
+	// vector included, can offer or commit a subject into a frame the server
+	// has already refused.
+	//
+	// WHY ABOVE THE CALL AND NOT INSIDE IT. Putting the check inside
+	// resolution would leave discovery, the census gate and the kind-hinted
+	// pool search each needing their own copy of it, which is four
+	// enforcers for one verdict and three chances for them to drift -- the
+	// same "two authorities" defect law L6 refuses and that seam 7 was
+	// created to remove. One gate, at the one point every retrieval path is
+	// still downstream of.
+	//
+	// The terminal is the graph-not-projected branch's own shape, minus its
+	// GraphNotProjected flag: an empty-but-non-nil resolution through
+	// terminalResult, which yields a served refusal with no committed
+	// subject, no cohort and no claimed facts. Deliberately NOT a stage
+	// error -- a question whose frame the server will not act on is a real
+	// product outcome the caller must be able to read, not a 5xx.
+	if familyOutcome.Gate.Refuses() {
+		// Candidates/Committed non-nil empty for the same reason the
+		// branch below spells out: v1 bounds reject a nil array, and
+		// "resolved to zero" must stay distinguishable from "never
+		// populated".
+		gateResolution := SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}
+		// Mirrors the graph-not-projected terminal exactly. A no-op here
+		// in practice (nothing has computed a Missing set yet), kept for
+		// the same assert-don't-assume reason that branch records, and so
+		// the two terminals cannot drift apart as either is edited.
+		gateMaterial := e.consultPriorStructureOffers(ctx, principal, priorEntries, StructureOfferMaterial{})
+		if len(request.PriorSubjectReceipts) > 0 {
+			gateResolution.PriorSubjectReceiptDispositions = composePriorSubjectReceiptDispositions(priorOutcomes, gateResolution)
+			e.recordPriorSubjectReceiptSkips(ctx, principal, gateResolution.PriorSubjectReceiptDispositions, priorHintsStaleGraphEpochDelta)
+		}
+		return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, gateResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, gateMaterial, effectiveWindow, windowCarry.Outcome == WindowCarryHit, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent))
+	}
 	resolution, structureMaterial, commitBases, commitDigests, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, effectiveConfirmedKind(structureCanon.Confirmed, kindCarry), confirmedAnchorSelection(structureCanon.Confirmed), familyOutcome.Frame, ScopeAnchorRetrievalKind(familyOutcome.Frame, familyOutcome.WinningSample.ScopeAnchorKind))
 	if err != nil {
 		// CHAOS-4077: a never-projected org (ResolveSubjects queried a

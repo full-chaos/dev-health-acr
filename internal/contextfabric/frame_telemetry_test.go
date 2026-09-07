@@ -55,6 +55,15 @@ var frameValidationEventLogKeys = map[string]string{
 	// the very gap this map exists to close -- so the companion test
 	// enforces the same exhaustiveness one level down.
 	"RequirementDerivation": "requirement_derivation_version",
+	// Gate is a STRUCT flattened across TWO keys, the same shape as
+	// RequirementDerivation above: `frame_gate` renders the verdict with the
+	// invariant or basis that decided it, and `refuse_basis` carries the
+	// basis on its own so an operator can group by it without parsing a
+	// compound token. This entry names the first; the leak guard's allow-list
+	// carries both. Both are closed vocabularies -- an invariant id, a
+	// discoverability reason, or one of the outcome tokens -- so neither can
+	// carry a term, a label or a count of anything the caller wrote.
+	"Gate": "frame_gate",
 }
 
 // requirementDerivationLogKeys is the same explicit field -> key map, one
@@ -384,6 +393,13 @@ func TestFrameValidationTelemetryLeaksNoQuestionContent(t *testing.T) {
 	for _, execution := range ComputedStepExecutionVocabulary() {
 		allowed["requirement_computed_step_"+string(execution)] = true
 	}
+	// The ordering verdict's two keys. Admitted for the same reason
+	// `cohort_discoverability` is: both render CLOSED vocabularies only --
+	// FrameGateOutcome members, a frame invariant id (i1...i19), or a
+	// CohortDiscoverability member -- never a term, a label, or anything
+	// derived from the question text.
+	allowed["frame_gate"] = true
+	allowed["refuse_basis"] = true
 	for key := range records[0] {
 		if !allowed[key] {
 			t.Errorf("frame validation record carries unexpected key %q -- this event is closed enums, counts and an org id only", key)
