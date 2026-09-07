@@ -249,10 +249,23 @@ type ModelExecutionReceipt struct {
 	FrameOutcome FrameValidationOutcome `json:"frame_outcome,omitempty"`
 	// FrameFailedInvariant is the FIRST failed invariant in table order,
 	// i1...i19, empty on a valid frame.
-	FrameFailedInvariant  FrameInvariant `json:"frame_failed_invariant,omitempty"`
-	FrameGoalsDropped     int            `json:"frame_goals_dropped,omitempty"`
-	FrameTermsTruncated   int            `json:"frame_terms_truncated,omitempty"`
-	FrameKindUnrecognized bool           `json:"frame_kind_unrecognized,omitempty"`
+	FrameFailedInvariant FrameInvariant `json:"frame_failed_invariant,omitempty"`
+	// FrameGateOutcome is the ORDERING verdict DecideFrameGate reached for
+	// this receipt's frame -- validity and the refuse basis, decided here
+	// at interpretation because that is where §13.5.2's order puts them,
+	// and carried rather than re-derived downstream.
+	//
+	// Present on EVERY interpret receipt, including the ones that proposed
+	// no frame (`not_proposed`), for the same countable-denominator reason
+	// FrameOutcome above is: a verdict that appears only when it refuses
+	// makes "never refused" and "never decided" one observation.
+	FrameGateOutcome FrameGateOutcome `json:"frame_gate_outcome,omitempty"`
+	// FrameGateRefuseBasis names the cohort discoverability reason when
+	// FrameGateOutcome is refused_basis, empty otherwise.
+	FrameGateRefuseBasis  CohortDiscoverability `json:"frame_gate_refuse_basis,omitempty"`
+	FrameGoalsDropped     int                   `json:"frame_goals_dropped,omitempty"`
+	FrameTermsTruncated   int                   `json:"frame_terms_truncated,omitempty"`
+	FrameKindUnrecognized bool                  `json:"frame_kind_unrecognized,omitempty"`
 	// FrameTemporalUnrecognized / FrameEmphasisDropped / FrameDimensionsDropped /
 	// FrameMemberKindUnrecognized / FrameGroupKindUnrecognized close the
 	// same countability gap the three fields above already closed for
@@ -1546,6 +1559,13 @@ type RuntimeQuestionInterpreter struct {
 // clarification changes because of any of it. Zero behaviour change is a
 // required, provable property of this slice.
 func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal storage.Principal, receipt *ModelExecutionReceipt, emittedShape InvestigationShape) {
+	if receipt != nil && receipt.QuestionFrame == nil {
+		// A turn that proposed no frame still DECIDES -- to `not_proposed`,
+		// which allows. Stamped here rather than left as the zero value so
+		// that `not_evaluated` keeps its one meaning ("nothing ran this
+		// gate") and can never be produced by the deployed interpreter.
+		receipt.FrameGateOutcome = FrameGateNotProposed
+	}
 	if receipt == nil || receipt.QuestionFrame == nil {
 		// No proposal is NOT a validation failure and must not be
 		// recorded as one: a model that emitted no frame at all and a
@@ -1578,6 +1598,26 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 	if result.Outcome == FrameValidationOutcomeValid {
 		result.Frame = backfillNamedSubjectExpectedKind(result.Frame, receipt)
 	}
+
+	// THE ORDERING DECISION, TAKEN HERE. §13.5.2 puts frame validity and
+	// the refuse basis strictly before resolution; this is the last point
+	// at which both are knowable and nothing has retrieved anything yet, so
+	// deciding anywhere else would either be too early to see the validated
+	// expression or too late to bind retrieval. Downstream CARRIES this
+	// verdict; no consumer re-derives it, which is the property that keeps
+	// the frame's "one object, validated once" discipline intact.
+	//
+	// AFTER the backfill, deliberately: the telemetry event below reads
+	// CohortMemberKindFor off this SAME post-backfill frame, and a gate
+	// decided before it would be a second reading of the discoverability
+	// predicate taken at a different moment -- the exact two-frames-from-
+	// one-interpretation drift the backfill's own comment above records
+	// having already shipped once. (The backfill cannot in fact move this
+	// predicate -- named_subject is not a cohort variant either way -- and
+	// a test pins that, so the ordering here is belt to that test's braces.)
+	gate := DecideFrameGate(result, true)
+	receipt.FrameGateOutcome = gate.Outcome
+	receipt.FrameGateRefuseBasis = gate.RefuseBasis
 
 	// The requirement rows are derived from the VALIDATED (and, for
 	// named_subject, now backfilled) frame, so this runs before the
@@ -1796,6 +1836,18 @@ func (r RuntimeQuestionInterpreter) recordFamilyResolution(ctx context.Context, 
 	// where the B8 shadow measures against them rather than against the
 	// plan's registry-copied flags. Empty when no frame validated, which
 	// the shadow treats as "cannot measure" rather than "nothing required".
+	// The GATE rides out on EVERY interpretation, unconditionally, and
+	// deliberately outside the valid-frame branch below. Frame is nil both
+	// for a frame that refused and for a frame that was never proposed;
+	// carrying the verdict separately is what lets the engine tell those
+	// two apart, which is the whole of this seam.
+	outcome.Gate = FrameGate{
+		Outcome:     receipt.FrameGateOutcome,
+		RefuseBasis: receipt.FrameGateRefuseBasis,
+	}
+	if receipt.FrameGateOutcome == FrameGateRejectedInvalid {
+		outcome.Gate.FailedInvariant = receipt.FrameFailedInvariant
+	}
 	if receipt.QuestionFrame != nil && receipt.FrameOutcome == FrameValidationOutcomeValid {
 		// The frame itself and its obligation set leave this point
 		// TOGETHER, from the same receipt, in one branch. Setting them in

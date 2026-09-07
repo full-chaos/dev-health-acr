@@ -406,7 +406,50 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 	// CommitBasisSet value type.
 	digests := make(contextfabric.CommitDecisionDigestSet)
 	candidates := make([]contextfabric.SubjectCandidate, 0, len(candidatesBySubject))
+	// THE RECEIPT DEMOTION, half one of the offer-pool seam (AC-3778-3).
+	//
+	// A candidate that ARRIVES already Committed came from a caller-supplied
+	// canonical id -- in production, from a prior subject receipt. The
+	// pre_committed_exact_hint loop below commits every such arrival as
+	// CommitBasisCallerCanonicalID with identity_proven set, on the ground that
+	// the caller named it. Measured on the rig, that ground was false:
+	//
+	//	t2  a vector-only candidate, confidence 0.5, matched on a term naming a
+	//	    subject that does not exist, is OFFERED with a receipt id
+	//	t3  the client answers with that receipt, the receipt's own label joins
+	//	    SubjectTerms, the engine exact-matches the label it had itself
+	//	    offered, and the arrival commits identity_proven
+	//
+	// The caller did name it -- with an identifier the engine had guessed for
+	// it one turn earlier. Stripping the arrival back to Proposed is what makes
+	// "a vector hit alone never commits a subject" hold across turns as well as
+	// within one: demoted, it competes on its ordinary confidence, which for a
+	// single-mechanism candidate cannot reach LoneFloor.
+	//
+	// DEMOTED, NEVER DROPPED, at this point. It stays in the candidate set the
+	// commit decision runs over, because removing a candidate changes what the
+	// REMAINING ones are competing against -- see the offer-pool exclusion at
+	// phase 4 for the measured reason that distinction is load-bearing.
+	offerPoolVectorOnlyDemoted := 0
+	// demotedKeys keeps the two counters DISJOINT. A demoted candidate is
+	// vector-only, so the phase-4 exclusion below would otherwise count it a
+	// second time and `excluded + demoted` would exceed the number of
+	// candidates the seam actually acted on -- an operator adding the two
+	// would over-report. Each candidate lands in exactly one bucket, so the
+	// pair sums to the population, which is the identity the tests assert.
+	demotedKeys := make(map[string]bool)
 	for _, candidate := range candidatesBySubject {
+		if candidate.State == contextfabric.ResolutionCommitted && isVectorOnlyCandidate(candidate.MatchMechanisms) {
+			candidate.State = contextfabric.ResolutionProposed
+			offerPoolVectorOnlyDemoted++
+			demotedKeys[SubjectKey(candidate.Subject)] = true
+			if tracer != nil {
+				tracer.Trace(ResolutionTraceEvent{
+					RequestID: requestID, Stage: "offer_pool", Subject: candidate.Subject,
+					OfferPoolDisposition: "vector_only_demoted",
+				})
+			}
+		}
 		candidates = append(candidates, candidate)
 	}
 	// Phase 2.5 (CHAOS-3778): apply the corroborated band EXACTLY ONCE, here
@@ -498,6 +541,18 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 	if len(candidates) == 0 {
 		resolution.Candidates = candidates
 		if tracer != nil {
+			// The offer-pool summary fires HERE too, with explicit zeros
+			// and the flag false. This early return is the "the graph held
+			// nothing" path, and it is precisely the state an operator must
+			// be able to tell apart from "the graph held candidates I may
+			// not offer you" -- so it is the one path that must not be
+			// silent. Caught by this seam's own explicit-on-every-pass
+			// test, which read zero summaries here.
+			tracer.Trace(ResolutionTraceEvent{
+				RequestID: requestID, Stage: "offer_pool", OfferPoolSummary: true,
+				OfferPoolVectorOnlyExcluded: 0, OfferPoolVectorOnlyDemoted: 0,
+				OfferPoolEmptiedByExclusion: false,
+			})
 			// CHAOS-4154 (codex review finding, Low, confirmed): PopulationBasis
 			// is explicit "none" here too -- an earlier version left this
 			// event's PopulationBasis at its Go zero value (empty string)
@@ -1379,15 +1434,138 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 		}
 		ordered = retained
 	}
-	resolution.Candidates = ordered
+	// THE OFFER POOL EXCLUSION, half two of the seam (AC-3778-3).
+	//
+	// "A vector hit alone never commits a subject" held at every commit gate
+	// above and the substitution happened anyway, because an OFFER is a
+	// commit the engine has deferred to the next turn: offer a vector-only
+	// candidate with a receipt id, and the client hands it back as a
+	// caller-supplied canonical id. So the standard has to hold where the
+	// candidate becomes ANSWERABLE, which is here.
+	//
+	// 🛑 HERE, AND NOT BEFORE THE COMMIT DECISION. The first version of this
+	// change excluded these candidates at the top of the function, before
+	// phase 2.5, so that one candidate set decided everything. That is
+	// WRONG, and an existing pin caught it:
+	// TestChaos3829_UncorroboratedTopVectorCandidateNeverFires builds a
+	// vector-only top beside a corroborated second, and both must lose.
+	// Excluding the vector-only one made the corroborated one UNOPPOSED, it
+	// cleared LoneFloor, and a fixture that had committed nothing for the
+	// life of the ticket started committing. Removing a candidate does not
+	// only remove its own chance to win -- it removes what the others were
+	// competing against, and this seam exists to make the engine commit
+	// LESS on a guess, never more.
+	//
+	// So a vector-only candidate still COMPETES (it is real evidence that
+	// retrieval found more than one plausible subject, and suppressing it
+	// manufactures confidence the pool does not have) and is simply never
+	// OFFERED. A resolution left ambiguous by candidates the caller may not
+	// pick reaches the same honest "nothing to answer" terminal an
+	// embeddings-off run reaches.
+	offered := make([]contextfabric.SubjectCandidate, 0, len(ordered))
+	offerPoolVectorOnlyExcluded := 0
+	for _, candidate := range ordered {
+		if isVectorOnlyCandidate(candidate.MatchMechanisms) {
+			// A demoted arrival is withheld from the offer for the same
+			// reason and is NOT counted twice -- re-offering the receipt the
+			// caller just answered would hand the same guess round again
+			// under a new id. It already has its own disposition event.
+			if !demotedKeys[SubjectKey(candidate.Subject)] {
+				offerPoolVectorOnlyExcluded++
+				if tracer != nil {
+					tracer.Trace(ResolutionTraceEvent{
+						RequestID: requestID, Stage: "offer_pool", Subject: candidate.Subject,
+						OfferPoolDisposition: "vector_only_excluded",
+					})
+				}
+			}
+			continue
+		}
+		offered = append(offered, candidate)
+	}
+	// THE POOL WAS EMPTIED BY THE EXCLUSION, and that is not the same fact
+	// as a graph with no candidates.
+	//
+	// Measured on the rig: a scoped question left resolution AMBIGUOUS with
+	// three vector-only candidates, all of the wrong kind for the anchor the
+	// row declared. Withholding them is right. But the caller then received
+	// an empty candidate list, the engine read that as `no_match` -- the
+	// same terminal a genuinely empty graph produces -- and the
+	// conversation ENDED. On the previous build the same turn offered those
+	// three guesses, the client could not use them, the conversation
+	// continued, and two turns later the engine offered the real
+	// exact-matched candidates and committed the right subject.
+	//
+	// So the cost of the exclusion was not the guess: it was the TURN. The
+	// design's rule is clarify rather than guess, not collapse to nothing,
+	// and this flag is what lets the layer above tell the two empties
+	// apart. A resolution that found nothing carries it false and keeps its
+	// `no_match`; only a resolution that found candidates and may offer
+	// none of them carries it true.
+	// ONE CONJUNCT, and the two that are missing were REMOVED rather than
+	// forgotten. This condition started as
+	// `ambiguous && len(offered) == 0 && withheld > 0`, and mutations
+	// deleting each of the other two turned NOTHING red -- which under this
+	// repo's own rule is a finding, not a pass. Neither was pinnable,
+	// because on THIS path neither can be false while `len(offered) == 0`
+	// is true:
+	//
+	//   - a committed candidate is never vector-only (the commit gates
+	//     refuse that), so it is never withheld, so it is always in
+	//     `offered` -- an empty `offered` already implies nothing committed,
+	//     which is what `ambiguous` was standing in for;
+	//   - reaching this line at all means the candidate set was non-empty
+	//     (the empty case returns early, above), so if `offered` is empty
+	//     every candidate was withheld -- `withheld > 0` cannot be false
+	//     here.
+	//
+	// The empty-GRAPH case is excluded STRUCTURALLY by that early return,
+	// which emits its own summary with the flag hardcoded false, and not by
+	// a conjunct here. TestTheFlagNeedsSomethingWithheld pins the early
+	// return's false; TestAnUnambiguousEmptyPoolCarriesNoPrompt and the
+	// "ambiguous but still offerable" arm pin this comparison. Keeping
+	// clauses whose own tests cannot exist is how a guard comes to look
+	// stronger than it is.
+	offerPoolEmptiedByExclusion := len(offered) == 0
+	if tracer != nil {
+		// ONE summary per call, emitted unconditionally with explicit zeros,
+		// so a resolution that acted on nothing stays distinguishable from a
+		// build where this seam never ran. The per-candidate events are
+		// retrieval-pool-sized -- 186 of 329 offered candidates were
+		// vector-only in one measured 36-question arm -- so they stay Debug
+		// and this is what the folded Info line reads.
+		tracer.Trace(ResolutionTraceEvent{
+			RequestID: requestID, Stage: "offer_pool", OfferPoolSummary: true,
+			OfferPoolVectorOnlyExcluded: offerPoolVectorOnlyExcluded,
+			OfferPoolVectorOnlyDemoted:  offerPoolVectorOnlyDemoted,
+			OfferPoolEmptiedByExclusion: offerPoolEmptiedByExclusion,
+		})
+	}
+	resolution.Candidates = offered
 	// Codex round-4 finding 1: the clarification prompt must be built from
 	// the RETAINED (post-truncation) candidate set, not the full set --
 	// naming a subject in the prompt that Phase 4 truncation already
 	// dropped from resolution.Candidates would offer the caller a choice
 	// absent from the machine-readable result they would resolve it
-	// against.
-	if ambiguous && allowClarification {
-		resolution.ClarificationPrompt = ClarificationPrompt(ordered)
+	// against. The offer-pool exclusion above is the same rule with a
+	// second cause, so the prompt is built from the OFFERED set: a prompt
+	// naming an excluded subject would hand back by name the very choice
+	// the exclusion exists to withhold.
+	if ambiguous && allowClarification && len(offered) > 0 {
+		resolution.ClarificationPrompt = ClarificationPrompt(offered)
+	}
+	// The prompt is ALSO the carrier for the emptied-pool case, and it
+	// carries it deliberately rather than through a new wire field: a
+	// resolution with zero candidates cannot otherwise reach the layer that
+	// decides the terminal, and widening the published SubjectResolution
+	// would fail every consumer that pins it with additionalProperties
+	// false until their pin is bumped -- a contract change for a
+	// server-side ordering fact. `resolveTerminalStatus` reads exactly this
+	// pairing (no candidates, but a prompt) and nothing else produces it:
+	// the two builders above and the reorder site in resolve.go all require
+	// a non-empty candidate list.
+	if offerPoolEmptiedByExclusion && allowClarification {
+		resolution.ClarificationPrompt = contextfabric.OfferPoolEmptiedClarificationPrompt
 	}
 	if tracer != nil {
 		// ONE decision event PER COMMITTED SUBJECT (CHAOS-4096: cardinality
@@ -1789,6 +1967,15 @@ func ClarificationPrompt(candidates []contextfabric.SubjectCandidate) string {
 		if len(labels) == 3 {
 			break
 		}
+	}
+	if len(labels) == 0 {
+		// An empty candidate list has no subject to ask about, and the
+		// prompt this used to build -- "Which subject did you mean: ?" --
+		// is prose no caller can act on. Returning empty also means that if
+		// the guarded rebuild site in resolve.go is ever called on an empty
+		// list, it degrades to "no prompt" (and so to the ordinary no_match
+		// terminal) rather than shipping a broken question to a user.
+		return ""
 	}
 	return "Which subject did you mean: " + strings.Join(labels, ", ") + "?"
 }

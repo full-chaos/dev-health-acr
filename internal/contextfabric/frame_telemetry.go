@@ -179,6 +179,24 @@ type FrameValidationEvent struct {
 	// evaluated" would put a non-decision in a decision vocabulary.
 	CohortDiscoverability CohortDiscoverability
 
+	// Gate is the ORDERING VERDICT this validation reached -- whether
+	// retrieval is allowed to run at all for this turn, and what refused it
+	// when it is not.
+	//
+	// IT IS THE ENFORCEMENT, NOT THE INPUTS. Outcome and
+	// CohortDiscoverability above already say what validation FOUND; before
+	// this field nothing on any line said whether the finding was ACTED ON,
+	// and for the whole life of the shadow slice the answer was "no". An
+	// operator reading a refused frame beside a served answer could not tell
+	// a gate that was consulted and passed from a gate that was never
+	// consulted at all -- so the two states this seam exists to separate
+	// were, on the rig, one log line.
+	//
+	// ALWAYS SET on this event, including `not_proposed`, and rendered
+	// through FrameGate.Observable so an unset value prints as `unset`
+	// rather than as a passing one.
+	Gate FrameGate
+
 	// RequirementDerivation is the obligation -> requirement layer's row:
 	// how many requirement cells the validated frame demanded, how many
 	// the registry can serve, and the closed reason token for each one it
@@ -216,6 +234,13 @@ func FrameValidationEventFrom(proposed QuestionFrame, result FrameValidationResu
 		ProposedKind:    vocabularyKindOnly(proposed.SubjectExpression.Kind),
 		ProposedGoals:   vocabularyGoalsOnly(proposed.Goals),
 		FrameVersion:    QuestionFrameVersion,
+		// SET UNCONDITIONALLY, unlike every field in the valid-only block
+		// below. The refusing verdicts are precisely the ones a refused
+		// frame produces, so a Gate populated only for valid frames would
+		// be blank on every line the gate actually acted on -- the same
+		// "appears only when it did not fire" defect the outcome field's
+		// own doc comment refuses.
+		Gate: DecideFrameGate(result, true),
 	}
 	if result.Outcome == FrameValidationOutcomeValid {
 		event.DerivedObligationCount = len(result.Frame.Obligations)

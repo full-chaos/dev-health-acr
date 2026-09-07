@@ -838,6 +838,14 @@ func (t SlogEngineTelemetry) RecordFrameValidation(ctx context.Context, principa
 		// real reason cannot be confused, and this line's own `outcome` key
 		// says which.
 		"cohort_discoverability", string(event.CohortDiscoverability),
+		// WHETHER THE FINDING WAS ACTED ON. Every key above reports what
+		// validation observed; these two report what the server then did
+		// about it, which for the whole life of the shadow slice was
+		// nothing. Both are ALWAYS present with an explicit token
+		// (`not_proposed`, `none`, `unset`), so a line missing them means
+		// the emitter predates this seam -- never that the gate passed.
+		"frame_gate", event.Gate.Observable(),
+		"refuse_basis", event.Gate.ObservableRefuseBasis(),
 	}
 	args = append(args, requirementDerivationLogAttrs(event.RequirementDerivation)...)
 	args = append(args, requestIDLogAttrs(ctx)...)

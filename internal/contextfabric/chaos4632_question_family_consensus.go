@@ -110,6 +110,20 @@ type QuestionFamilyOutcome struct {
 	// from interpretation to finalization, which is exactly the span the
 	// shadow needs. NOTHING ROUTES ON IT.
 	FrameObligations []AnswerObligation
+	// Gate is the ORDERING VERDICT this interpretation reached about its
+	// own frame -- see FrameGate. Unlike Frame above it is set on EVERY
+	// interpretation, including the ones whose frame refused and the ones
+	// that proposed no frame at all, because a verdict only a valid frame
+	// carries is a verdict the refusing case cannot express.
+	//
+	// THIS IS THE FIELD THAT MAKES THE REFUSAL SURVIVE. Frame is nil both
+	// when the model emitted nothing and when the server refused what it
+	// emitted; before this field those two states were indistinguishable
+	// one line after validation, and the second one -- an I6-illegal frame
+	// -- was served with a cohort on the rig.
+	//
+	// The engine READS it and refuses the turn; nothing re-derives it.
+	Gate FrameGate
 	// Family is never empty -- unclassified is a real member, not a zero
 	// value standing in for absence.
 	Family QuestionFamily

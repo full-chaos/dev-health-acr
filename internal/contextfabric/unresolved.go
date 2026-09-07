@@ -169,6 +169,25 @@ const (
 const (
 	fallbackClarificationPromptOne = "One authorized subject matched this question but could not be confirmed. Confirm it, using the candidate receipt in this result."
 	fallbackClarificationPrompt    = "Several authorized subjects matched this question. Confirm which one you mean, using the candidate receipts in this result."
+	// OfferPoolEmptiedClarificationPrompt is what a caller is told when
+	// retrieval found candidates and could offer NONE of them, because
+	// every one was matched by semantic similarity alone.
+	//
+	// It names no subject, and it cannot: every candidate it speaks about
+	// was withheld precisely because naming it would hand back the guess
+	// the exclusion exists to withhold. That is why it is a constant and
+	// not a built prompt -- there is nothing legitimate to interpolate.
+	//
+	// It lives HERE, beside the other two, rather than in graphrank where
+	// it is set: this package owns the prompt vocabulary, graphrank imports
+	// it, and a second package holding prompt text is a second authority
+	// for what a caller is told. It is EXPORTED because graphrank sets it
+	// and this package's own terminal reads it -- the pairing of an empty
+	// candidate list with this exact prompt is the signal, so both ends
+	// must name the same constant rather than two equal literals.
+	OfferPoolEmptiedClarificationPrompt = "Retrieval matched one or more subjects only by " +
+		"semantic similarity, which is not enough to identify a subject. Name the subject you " +
+		"mean, or rephrase the question so it names one."
 )
 
 // terminalResult composes the model-free result for an investigation that
@@ -532,6 +551,15 @@ func subjectlessTerminalReason(resolution SubjectResolution, subjectCandidatesAu
 	if len(resolution.Candidates) > 0 {
 		return "ambiguous"
 	}
+	// Checked BEFORE graph_not_projected and the authz/empty arms, because
+	// it is the most specific claim available about WHY this pool is empty:
+	// the other three all describe what retrieval found, and this one
+	// describes what retrieval declined to offer. Ordering it after them
+	// would report a withheld pool as `empty_pool`, which is the exact
+	// conflation this arm exists to end.
+	if strings.TrimSpace(resolution.ClarificationPrompt) != "" {
+		return "offer_pool_emptied_by_exclusion"
+	}
 	if resolution.GraphNotProjected {
 		return "graph_not_projected"
 	}
@@ -543,6 +571,30 @@ func subjectlessTerminalReason(resolution SubjectResolution, subjectCandidatesAu
 
 func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectResolution) (InvestigationStatus, string) {
 	if len(resolution.Candidates) == 0 {
+		// AN OFFER POOL EMPTIED BY THE VECTOR-ONLY EXCLUSION IS NOT AN
+		// EMPTY GRAPH. Retrieval found candidates and withheld every one of
+		// them because identifying a subject by semantic similarity alone
+		// is not identification; the caller is owed the question, not a
+		// flat "nothing matched". Measured on the rig: reporting this as
+		// `no_match` ended a conversation one turn before the engine would
+		// have offered the real exact-matched candidates.
+		//
+		// The pairing is the carrier -- zero candidates AND a prompt --
+		// because a resolution with no candidates has no other channel to
+		// this decision, and widening the published SubjectResolution for a
+		// server-side ordering fact would break every consumer pinning it
+		// with additionalProperties false until their pin is bumped. The
+		// pairing cannot arise by accident: every OTHER producer of a
+		// prompt requires a non-empty candidate list (graphrank's two
+		// builders and its reorder site), so a prompt standing beside zero
+		// candidates has exactly one source.
+		//
+		// AllowClarification is honoured here exactly as it is below: a
+		// caller who will not accept a clarification gets the terminal it
+		// asked for, not one invented for it.
+		if request.Options.AllowClarification && strings.TrimSpace(resolution.ClarificationPrompt) != "" {
+			return InvestigationClarificationRequired, clarificationRequiredLimitationOne
+		}
 		return InvestigationNoMatch, noMatchLimitationForEmptyPool(resolution)
 	}
 	// Exactly one uncommitted candidate is a REACHABLE state, not a

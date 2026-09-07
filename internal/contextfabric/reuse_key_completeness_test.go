@@ -213,9 +213,20 @@ var modelExecutionReceiptAuthorities = map[string]versionAuthority{
 	// once the family began fencing anything. That promotion must
 	// reclassify this entry as a member, and this test is what will stop
 	// it shipping without one.
-	"QuestionFrame":         {reason: "per-call shadow capture of the compositional frame (receipt-only, phase 1), not a version identity -- nothing downstream reads it, so it cannot make a reused answer wrong. Its embedded Version field is a package constant (QuestionFrameVersion), and design §13.2 makes it a ReuseKey member only at promotion, when the derivation replaces the precedence table; until then there is nothing for it to fence"},
-	"FrameOutcome":          {reason: "per-call validation-outcome echo (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
-	"FrameFailedInvariant":  {reason: "per-call validation-outcome echo (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
+	"QuestionFrame":        {reason: "per-call shadow capture of the compositional frame (receipt-only, phase 1), not a version identity -- nothing downstream reads it, so it cannot make a reused answer wrong. Its embedded Version field is a package constant (QuestionFrameVersion), and design §13.2 makes it a ReuseKey member only at promotion, when the derivation replaces the precedence table; until then there is nothing for it to fence"},
+	"FrameOutcome":         {reason: "per-call validation-outcome echo (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
+	"FrameFailedInvariant": {reason: "per-call validation-outcome echo (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
+	// The ordering verdict. EXCLUDED, and the reasoning has to clear a
+	// higher bar than its two siblings above, because unlike them this one
+	// DOES change what the server serves -- a refusing gate terminates the
+	// turn before retrieval. It is still not a reuse-key member: the gate is
+	// a pure function of the frame the SAME interpretation produced, so two
+	// calls whose frames agree cannot have gates that disagree, and a call
+	// whose gate refused never produces an answer to reuse in the first
+	// place. Fencing on it would fence on a value already determined by the
+	// frame beside it, which is a second authority for one fact.
+	"FrameGateOutcome":      {reason: "per-call ordering verdict, derived deterministically from QuestionFrame by DecideFrameGate -- two calls with the same frame have the same gate, and a refusing gate produces no answer to reuse, so it fences nothing the frame does not already fence"},
+	"FrameGateRefuseBasis":  {reason: "the refusing gate's basis, carried beside FrameGateOutcome and derived from the same frame by the same function -- excluded for the identical reason"},
 	"FrameGoalsDropped":     {reason: "per-call sanitize-outcome count (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
 	"FrameTermsTruncated":   {reason: "per-call sanitize-outcome count (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
 	"FrameKindUnrecognized": {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as QuestionFamily"},

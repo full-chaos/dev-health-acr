@@ -400,8 +400,20 @@ func TestVectorOnlyGuardBlocksLoneCommitRegardlessOfConfidence(t *testing.T) {
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("a vector-only candidate at confidence 0.99 must not auto-commit alone, got %v", resolution.Committed)
 	}
-	if resolution.Candidates[0].Confidence != 0.99 {
-		t.Fatalf("the guard must not alter the candidate's own confidence, got %v", resolution.Candidates[0].Confidence)
+	// The candidate is also no longer OFFERED (the offer-pool exclusion,
+	// resolution.go phase 4): AC-3778-3 held at this gate on the rig and a
+	// vector-only candidate was still committed the next turn, because the
+	// engine had offered it with a receipt id the client handed back as
+	// caller-supplied identity.
+	if len(resolution.Candidates) != 0 {
+		t.Fatalf("a vector-only candidate at confidence 0.99 is still OFFERED (%d candidate(s)); answering that offer is how it commits on the next turn", len(resolution.Candidates))
+	}
+	// "The guard must not alter the candidate's own confidence" moves here,
+	// one to one: the claim is about CorroboratedConfidence leaving a
+	// single-mechanism candidate alone, and it was only ever read off the
+	// offered candidate for convenience.
+	if got := CorroboratedConfidence([]contextfabric.MatchMechanism{contextfabric.MatchVector}, 0.99); got != 0.99 {
+		t.Fatalf("the guard must not alter the candidate's own confidence, got %v", got)
 	}
 }
 
