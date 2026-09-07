@@ -3,9 +3,11 @@ package projectionrun_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -404,26 +406,35 @@ func TestStructural_ASourceFailingThroughABuildReachesTheSourceFailedBucket(t *t
 	failing := &fakeSource{name: "dev_health_teams_projects", err: fmt.Errorf("teams projects read: %w", contextfabric.ErrUnavailable)}
 	checkpoints := newFakeCheckpointStore()
 
-	for tick := 1; tick <= 3; tick++ {
-		var buffer bytes.Buffer
-		logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
-		coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
-			OrgIDs:           []string{"org-a"},
-			Sources:          []projectionrun.SourcePair{{Name: "dev_health_teams_projects", Source: failing}},
-			Backend:          newFakeBackend(),
-			Checkpoints:      checkpoints,
-			RebuildMarkers:   newFakeRebuildMarker(),
-			Lifecycle:        &buildFailingLifecycleStore{epoch: 1},
-			EpochCheckpoints: func(int64) contextfabric.ProjectionCheckpointStore { return checkpoints },
-			GraceWindow:      time.Hour,
-			Logger:           logger,
-		})
-		if err != nil {
-			t.Fatalf("tick %d: new coordinator: %v", tick, err)
-		}
+	// ONE coordinator across all three ticks. The failure backoff lives in
+	// the coordinator, so a fresh one per tick re-runs the pair every time
+	// and never reaches the withheld state -- which is exactly the state
+	// this arm exists to cover, and my first version of it silently did not.
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:           []string{"org-a"},
+		Sources:          []projectionrun.SourcePair{{Name: "dev_health_teams_projects", Source: failing}},
+		Backend:          newFakeBackend(),
+		Checkpoints:      checkpoints,
+		RebuildMarkers:   newFakeRebuildMarker(),
+		Lifecycle:        &buildFailingLifecycleStore{epoch: 1},
+		EpochCheckpoints: func(int64) contextfabric.ProjectionCheckpointStore { return checkpoints },
+		GraceWindow:      time.Hour,
+		Logger:           logger,
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	for i := 0; i < 3; i++ {
 		coordinator.Tick(context.Background())
-
-		summary := freshnessSummary(t, &buffer)
+	}
+	summaries := allFreshnessSummaries(t, &buffer)
+	if len(summaries) != 3 {
+		t.Fatalf("freshness summaries = %d, want 3 (one per tick)", len(summaries))
+	}
+	for i, summary := range summaries {
+		tick := i + 1
 		requireBucketIdentity(t, summary)
 
 		if got := summaryNumber(t, summary, "orgs_source_failed"); got != 1 {
@@ -612,29 +623,37 @@ func TestStructural_TheOutageShapeExactlyDuringABuild(t *testing.T) {
 	failing := &fakeSource{name: "dev_health_teams_projects", err: fmt.Errorf("teams projects read: %w", contextfabric.ErrUnavailable)}
 	checkpoints := newFakeCheckpointStore()
 
-	for tick := 1; tick <= 3; tick++ {
-		var buffer bytes.Buffer
-		logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
-		coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
-			OrgIDs: []string{"org-a"},
-			Sources: []projectionrun.SourcePair{
-				{Name: "source-healthy", Source: healthy},
-				{Name: "dev_health_teams_projects", Source: failing},
-			},
-			Backend:          newFakeBackend(),
-			Checkpoints:      checkpoints,
-			RebuildMarkers:   newFakeRebuildMarker(),
-			Lifecycle:        &twoSourceBuildLifecycleStore{epoch: 1},
-			EpochCheckpoints: func(int64) contextfabric.ProjectionCheckpointStore { return checkpoints },
-			GraceWindow:      time.Hour,
-			Logger:           logger,
-		})
-		if err != nil {
-			t.Fatalf("tick %d: new coordinator: %v", tick, err)
-		}
+	// ONE coordinator across all three ticks -- see the sibling arm: the
+	// failure backoff is coordinator state, and a fresh coordinator per tick
+	// silently turns "withheld on later ticks" back into "failed again".
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs: []string{"org-a"},
+		Sources: []projectionrun.SourcePair{
+			{Name: "source-healthy", Source: healthy},
+			{Name: "dev_health_teams_projects", Source: failing},
+		},
+		Backend:          newFakeBackend(),
+		Checkpoints:      checkpoints,
+		RebuildMarkers:   newFakeRebuildMarker(),
+		Lifecycle:        &twoSourceBuildLifecycleStore{epoch: 1},
+		EpochCheckpoints: func(int64) contextfabric.ProjectionCheckpointStore { return checkpoints },
+		GraceWindow:      time.Hour,
+		Logger:           logger,
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	for i := 0; i < 3; i++ {
 		coordinator.Tick(context.Background())
-
-		summary := freshnessSummary(t, &buffer)
+	}
+	summaries := allFreshnessSummaries(t, &buffer)
+	if len(summaries) != 3 {
+		t.Fatalf("freshness summaries = %d, want 3 (one per tick)", len(summaries))
+	}
+	for i, summary := range summaries {
+		tick := i + 1
 		requireBucketIdentity(t, summary)
 		requireSummaryScope(t, summary)
 
@@ -934,5 +953,136 @@ func TestStructural_ASourceFailureUnderATruncatedTickKeepsItsBucket(t *testing.T
 				t.Error("tick_complete = true, want false -- the tick was cancelled mid-flight, and keeping the established failure must not turn it into a finished tick")
 			}
 		})
+	}
+}
+
+// TestStructural_AWithheldSourceReachesTheSourceBucketWithNothingEvaluated
+// answers, as a pin rather than as prose, what the ladder returns for
+// sourceFailed && !evaluated -- and shows the combination is REACHABLE rather
+// than hypothetical.
+//
+// It is the second tick of an outage. The pair failed on tick one and entered
+// its own failure backoff, so on tick two it is not due: nothing runs,
+// `evaluated` is false, and `sourceFailed` is true because a pair withheld by
+// the backoff its own failure set is still a source that is down.
+//
+// Under a ladder that opens with `!evaluated -> backoff` this reads
+// orgs_backoff:1 orgs_source_failed:0 -- backoff hiding a source failure,
+// which is the same class as the build path's defect. Established facts first
+// is what makes it source_failed.
+func TestStructural_AWithheldSourceReachesTheSourceBucketWithNothingEvaluated(t *testing.T) {
+	t.Parallel()
+
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	failing := &fakeSource{name: "dev_health_teams_projects", err: fmt.Errorf("teams projects read: %w", contextfabric.ErrUnavailable)}
+
+	// ONE coordinator across both ticks. The failure backoff lives in the
+	// coordinator, not in the checkpoint store, so a fresh coordinator per
+	// tick would re-run the pair every time and never reach the withheld
+	// state this arm is about.
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:         []string{"org-a"},
+		Sources:        []projectionrun.SourcePair{{Name: "dev_health_teams_projects", Source: failing}},
+		Backend:        newFakeBackend(),
+		Checkpoints:    newFakeCheckpointStore(),
+		RebuildMarkers: newFakeRebuildMarker(),
+		Logger:         logger,
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+
+	coordinator.Tick(context.Background()) // establishes the failure, arms the backoff
+	callsAfterFirst := failing.calls.Load()
+	if callsAfterFirst == 0 {
+		t.Fatal("the source never ran on tick one -- no failure was established, so tick two would not be the shape under test")
+	}
+	coordinator.Tick(context.Background()) // withheld: nothing runs
+
+	if failing.calls.Load() != callsAfterFirst {
+		t.Fatalf("the source ran again on tick two (calls %d -> %d) -- it was not withheld, so this arm does not exercise sourceFailed && !evaluated", callsAfterFirst, failing.calls.Load())
+	}
+
+	summaries := allFreshnessSummaries(t, &buffer)
+	if len(summaries) != 2 {
+		t.Fatalf("freshness summaries = %d, want 2 (one per tick)", len(summaries))
+	}
+	summary := summaries[1]
+	requireBucketIdentity(t, summary)
+
+	if got := summaryNumber(t, summary, "sources_evaluated"); got != 0 {
+		t.Errorf("sources_evaluated = %v, want 0 -- the premise of this arm is that nothing ran this tick", got)
+	}
+	if got := summaryNumber(t, summary, "sources_in_failure_backoff"); got != 1 {
+		t.Errorf("sources_in_failure_backoff = %v, want 1", got)
+	}
+	if got := summaryNumber(t, summary, "orgs_source_failed"); got != 1 {
+		t.Errorf("orgs_source_failed = %v, want 1 -- a source withheld by the backoff its OWN failure set is still down, and the bucket has to say so", got)
+	}
+	if got := summaryNumber(t, summary, "orgs_backoff"); got != 0 {
+		t.Errorf("orgs_backoff = %v, want 0 -- backoff here would be the failure hiding behind \"not due\", which is how this outage went quiet after tick one", got)
+	}
+}
+
+// allFreshnessSummaries returns every summary the capture holds, in order, for
+// the arms that drive more than one tick through one logger.
+func allFreshnessSummaries(t *testing.T, buffer *bytes.Buffer) []map[string]any {
+	t.Helper()
+	var found []map[string]any
+	for _, line := range strings.Split(strings.TrimRight(buffer.String(), "\n"), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var record map[string]any
+		if json.Unmarshal([]byte(line), &record) != nil {
+			continue
+		}
+		if msg, _ := record["msg"].(string); msg == "context_fabric: projection tick freshness summary" {
+			found = append(found, record)
+		}
+	}
+	return found
+}
+
+// TestStructural_OrgsTruncatedIsEmittedUnguardedAndAtZero pins the new key on
+// the emission that can actually observe the raw state, and on the zero path.
+//
+// A counter that appears only when non-zero cannot be told from a projector
+// that does not emit it at all -- the same ambiguity one level up that let the
+// outage hide behind orgs_ok. So a COMPLETE tick must print orgs_truncated=0
+// explicitly, and tick_complete must be true beside it.
+func TestStructural_OrgsTruncatedIsEmittedUnguardedAndAtZero(t *testing.T) {
+	t.Parallel()
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:         []string{"org-a"},
+		Sources:        []projectionrun.SourcePair{{Name: "source-healthy", Source: &fakeSource{name: "source-healthy", pages: 1}}},
+		Backend:        newFakeBackend(),
+		Checkpoints:    newFakeCheckpointStore(),
+		RebuildMarkers: newFakeRebuildMarker(),
+		Logger:         logger,
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	coordinator.Tick(context.Background())
+
+	summary := freshnessSummary(t, &buffer)
+	requireBucketIdentity(t, summary)
+	// summaryNumber fatals when the key is ABSENT, which is the assertion:
+	// present and zero, never omitted because there was nothing to report.
+	if got := summaryNumber(t, summary, "orgs_truncated"); got != 0 {
+		t.Errorf("orgs_truncated = %v on a healthy complete tick, want an explicit 0", got)
+	}
+	if got := summaryNumber(t, summary, "orgs_stale"); got != 0 {
+		t.Errorf("orgs_stale = %v on a healthy complete tick, want an explicit 0", got)
+	}
+	if !summaryBool(t, summary, "tick_complete") {
+		t.Error("tick_complete = false on a tick that finished every organization, want true -- the derivation must not read every tick as truncated")
+	}
+	if got := summaryNumber(t, summary, "orgs_ok"); got != 1 {
+		t.Errorf("orgs_ok = %v, want 1", got)
 	}
 }
