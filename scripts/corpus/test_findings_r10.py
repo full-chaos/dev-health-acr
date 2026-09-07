@@ -131,17 +131,18 @@ def test_the_candidate_fields_the_derivation_reads_are_TYPED_in_the_schema():
     assert schema[CAND]["confidence"]["type"] == "number"
 
     bad = {"response": {"result": {"subject_resolution": {"candidates": [
-        {"state": "committed", "match_mechanisms": [1]}]}}}}
+        {"receipt_id": "rc0", "state": "committed", "match_mechanisms": [1]}]}}}}
     ok, reason = V.validate_attempt(bad)
     assert not ok, "a non-string mechanism inside a candidate validated true"
     assert "match_mechanisms[0]" in reason, reason
     bad2 = {"response": {"result": {"subject_resolution": {"candidates": [
-        {"state": 7}]}}}}
+        {"receipt_id": "rc0", "state": 7}]}}}}
     ok, reason = V.validate_attempt(bad2)
     assert not ok and "state" in reason, reason
     ok, reason = V.validate_attempt(
         {"response": {"result": {"subject_resolution": {"candidates": [
-            {"state": "committed", "match_mechanisms": ["vector"], "confidence": 1}]}}}})
+            {"receipt_id": "rc0", "state": "committed",
+             "match_mechanisms": ["vector"], "confidence": 1}]}}}})
     assert ok, f"a MEASURED candidate shape was rejected: {reason}"
 
 
@@ -182,8 +183,11 @@ def test_element_typing_never_UPGRADES_a_failed_row():
         with tempfile.TemporaryDirectory() as tmp:
             d = Path(tmp) / "replicate"
             d.mkdir(parents=True)
-            cands = [{"state": "committed", "subject": c, "match_mechanisms": [],
-                      "matched_terms": []} for c in committed]
+            # CHAOS-5430: receipt_id is required; a candidate without one is a shape the
+            # engine never emits.
+            cands = [{"receipt_id": f"rc{i}", "state": "committed", "subject": c,
+                      "match_mechanisms": [],
+                      "matched_terms": []} for i, c in enumerate(committed)]
             (d / "q-rep1-t1-a1.json").write_text(json.dumps({
                 "request": {}, "status": 200, "dt": 1.0, "response": {"result": {
                     "request_id": "r", "result_id": "res", "status": "complete",

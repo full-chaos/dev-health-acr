@@ -197,72 +197,18 @@ _SEEDS = {"result": "attempt.response.result",
 
 
 def _unschemad_paths(src, label, schema=None):
-    """Keys read off an attempt-shaped object that the schema does not type.
+    """Delegates to consumer_paths.sweep -- ONE implementation.
 
-    Aliases propagate: anything assigned from a seed (or from a key of one) becomes a
-    seed, so renaming the variable cannot hide the dereference.
+    This module used to carry its own copy of the sweep, and round 1 found the copy was
+    weaker than the code it guarded: it recognised only `Name["key"]` and `Name.get("key")`.
+    Two implementations of "what does the code read" will always drift, and the weaker one
+    is the one that passes.
     """
+    import consumer_paths
     schema = V.schema() if schema is None else schema
-    tree = ast.parse(src)
-    roots = dict(_SEEDS)
-
-    def _base_key(val):
-        if isinstance(val, ast.Call) and isinstance(val.func, ast.Attribute) \
-                and val.func.attr == "get" and val.args \
-                and isinstance(val.func.value, ast.Name) \
-                and isinstance(val.args[0], ast.Constant):
-            return val.func.value.id, val.args[0].value
-        if isinstance(val, ast.Subscript) and isinstance(val.value, ast.Name) \
-                and isinstance(val.slice, ast.Constant):
-            return val.value.id, val.slice.value
-        return None, None
-
-    # to a fixed point: `a = payload["result"]` then `b = a` then `b.get("k")` is one chain,
-    # and a single pass sees only its first link.
-    for _ in range(len(list(ast.walk(tree))) or 1):
-        grew = False
-        for node in ast.walk(tree):
-            if not (isinstance(node, ast.Assign) and len(node.targets) == 1
-                    and isinstance(node.targets[0], ast.Name)):
-                continue
-            tgt = node.targets[0].id
-            base, key = _base_key(node.value)
-            # CHAOS-5430: the child NODE is named by the schema rule (`node` for a mapping,
-            # `element_node` for array elements), not by the bare key. With generated
-            # full-path node names, matching `key in schema` resolves nothing and the alias
-            # chain stops at its first link -- the sweep goes quiet, which is the failure it
-            # exists to prevent.
-            child = None
-            if base in roots and isinstance(key, str):
-                rule = schema.get(roots[base], {}).get(key) or {}
-                child = rule.get("node") or rule.get("element_node")
-            if child and child in schema:
-                if roots.get(tgt) != child:
-                    roots[tgt] = child; grew = True
-            elif isinstance(node.value, ast.Name) and node.value.id in roots:
-                if roots.get(tgt) != roots[node.value.id]:
-                    roots[tgt] = roots[node.value.id]; grew = True
-        if not grew:
-            break
-
-    out = []
-    for node in ast.walk(tree):
-        base = key = None
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
-                and node.func.attr == "get" and node.args \
-                and isinstance(node.func.value, ast.Name) \
-                and isinstance(node.args[0], ast.Constant) \
-                and isinstance(node.args[0].value, str):
-            base, key = node.func.value.id, node.args[0].value
-        elif isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) \
-                and isinstance(node.slice, ast.Constant) \
-                and isinstance(node.slice.value, str):
-            base, key = node.value.id, node.slice.value
-        if base in roots and key:
-            node_name = roots[base]
-            if node_name in schema and key not in schema[node_name]:
-                out.append(f"{label}: {node_name}.{key}")
-    return out
+    reads, _unresolved = consumer_paths.sweep(src, schema, label)
+    return [f"{label}: {node}.{key}" for node, key, _u in sorted(reads)
+            if node in schema and key not in schema[node]]
 
 
 def test_the_consumer_sweep_catches_an_ALIASED_dereference():

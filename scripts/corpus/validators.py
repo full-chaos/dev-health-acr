@@ -40,9 +40,28 @@ def schema():
     return _SCHEMA
 
 
-def _type_ok(val, want, rule_type, nullable):
-    """(ok, reason_fragment). None is admitted only where the schema says so."""
+def _type_ok(val, want, rule_type, nullable, container=None, when=None, parent=None):
+    """(ok, reason_fragment). None is admitted only where the schema says so.
+
+    A `nullable_when` clause narrows that to the shape that needs it: the candidate mirror
+    admits a null subject field only on a COMMITTED candidate, because only committed
+    candidates reach the substitution rule. A proposed candidate with a null subject is
+    just malformed.
+    """
     if val is None:
+        if nullable and when:
+            # The condition names a field of the ENCLOSING object as often as of this one:
+            # `state` lives on the candidate, while the nullable field lives on its
+            # `subject`. Look here first, then at the parent, so a `when` clause can refer
+            # to the shape that actually carries the discriminator.
+            field = when.get("field")
+            got = (container or {}).get(field)
+            if got is None and isinstance(parent, dict):
+                got = parent.get(field)
+            if got != when.get("equals"):
+                return False, (f"is explicitly null, which is admitted only when "
+                               f"{field}=={when['equals']!r} (got {got!r})")
+            return True, None
         return (True, None) if nullable else (False, "is explicitly null; omit it instead")
     if rule_type in _NUMERIC and isinstance(val, bool):
         return False, f"must be {rule_type}, got bool"
@@ -51,7 +70,7 @@ def _type_ok(val, want, rule_type, nullable):
     return True, None
 
 
-def _check_node(node, node_name, path="attempt"):
+def _check_node(node, node_name, path="attempt", parent=None):
     """Recursive shape check against the MEASURED schema. Returns a reason, or None.
 
     Every node the generator found is walked, to whatever depth it was found at. There is
@@ -70,7 +89,8 @@ def _check_node(node, node_name, path="attempt"):
         rule_type = rule.get("type")
         if rule_type is None:                 # measured as polymorphic: deliberately unchecked
             continue
-        ok, why = _type_ok(val, _TYPES[rule_type], rule_type, rule.get("nullable"))
+        ok, why = _type_ok(val, _TYPES[rule_type], rule_type, rule.get("nullable"),
+                           container=node, when=rule.get("nullable_when"), parent=parent)
         if not ok:
             return f"{path}.{key} {why}"
         if val is None:
@@ -88,13 +108,13 @@ def _check_node(node, node_name, path="attempt"):
                         continue
                     child = rule.get("element_node")
                     if child:
-                        deeper = _check_node(item, child, f"{path}.{key}[{i}]")
+                        deeper = _check_node(item, child, f"{path}.{key}[{i}]", node)
                         if deeper:
                             return deeper
         elif rule_type == "object":
             child = rule.get("node")
             if child:
-                deeper = _check_node(val, child, f"{path}.{key}")
+                deeper = _check_node(val, child, f"{path}.{key}", node)
                 if deeper:
                     return deeper
     return None
@@ -145,6 +165,22 @@ def validate_attempt(attempt):
         return False, f"attempt is not a mapping, got {type(attempt).__name__}"
 
     reason = _check_node(attempt, "attempt")
+    if reason:
+        return False, reason
+    return True, None
+
+
+def validate_response(response):
+    """(ok, reason). The RESPONSE half of an attempt, for the live ingestion point.
+
+    The live path has no artefact envelope -- no `dt`, no `request`, because those are
+    written by the harness after the call returns -- so it is checked against the response
+    node rather than a synthetic attempt. Same schema, same depth, same required keys
+    below `response`; only the envelope it cannot have is not demanded of it.
+    """
+    if not isinstance(response, dict):
+        return False, f"response is not a mapping, got {type(response).__name__}"
+    reason = _check_node(response, "attempt.response", "attempt.response")
     if reason:
         return False, reason
     return True, None

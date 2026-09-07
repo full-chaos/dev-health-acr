@@ -30,8 +30,12 @@ def _attempt(result):
 
 
 def _row(committed, mechs=None):
-    cands = [{"state": "committed", "subject": c, "match_mechanisms": mechs or [],
-              "matched_terms": []} for c in committed]
+    # receipt_id is REQUIRED now, and every real candidate carries one (observed 1597
+    # times). A fixture without it is not a smaller artefact, it is an artefact the engine
+    # never emits -- so the fixture changes, not the boundary.
+    cands = [{"receipt_id": f"rc{i}", "state": "committed", "subject": c,
+              "match_mechanisms": mechs or [], "matched_terms": []}
+             for i, c in enumerate(committed)]
     return _attempt({"request_id": "r", "result_id": "res", "status": "complete",
                      "claimed_facts": [{"claim_id": "c0"}],
                      "subject_resolution": {"committed": committed,
@@ -264,57 +268,154 @@ def test_the_vector_column_does_not_claim_causality():
 
 
 # ==================================================== the boundary is TOTAL
-CONSUMER_SEEDS = {"result": "attempt.response.result",
-                  "sr": "attempt.response.result.subject_resolution",
-                  "failure": "attempt.response.failure",
-                  "fail": "attempt.response.failure",
-                  "resp": "attempt.response", "payload": "attempt.response",
-                  "a": "attempt", "attempt": "attempt", "last": "attempt"}
 CONSUMERS = ("subject_identity.py", "engine_failures.py", "run_shard.py", "harness.py",
              "merge_corpus.py", "reclassify_deadlines.py")
 
 
-def _consumer_paths(src):
-    import ast
-    out = set()
-    for n in ast.walk(ast.parse(src)):
-        base = key = None
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) \
-                and n.func.attr == "get" and n.args \
-                and isinstance(n.func.value, ast.Name) \
-                and isinstance(n.args[0], ast.Constant) \
-                and isinstance(n.args[0].value, str):
-            base, key = n.func.value.id, n.args[0].value
-        elif isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name) \
-                and isinstance(n.slice, ast.Constant) \
-                and isinstance(n.slice.value, str):
-            base, key = n.value.id, n.slice.value
-        if base in CONSUMER_SEEDS and key:
-            out.add((CONSUMER_SEEDS[base], key))
-    return out
-
-
 def test_every_path_a_consumer_READS_is_in_the_boundary():
-    """Generation types what the engine EMITTED. It cannot type what the engine did not
-    emit in these runs -- the 413-overrun fields are real and absent from all 746
-    artefacts -- so measurement alone would leave the boundary SHALLOWER than the
-    hand-written schema it replaces, on exactly those paths. Measurement plus declared
-    paths, and a consumer path in neither is an error rather than a silent hole.
+    """Round 1's P1. The old sweep recognised only `Name["key"]` and `Name.get("key")`, so
+    `match[0]["receipt_id"]` and `(failure.get("x") or {}).get("y")` were invisible to it --
+    the pin passed while a missing receipt_id crashed the consumer. It now walks the
+    EXPRESSION, and it FAILS on a read it cannot resolve instead of skipping one.
     """
+    import consumer_paths
     schema = V.schema()
-    missing = sorted(f"{node}.{key}"
-                     for name in CONSUMERS
-                     for node, key in _consumer_paths((HERE / name).read_text())
-                     if node in schema and key not in schema[node])
-    assert not missing, f"consumer paths outside the boundary: {missing}"
+    missing, unresolved = [], []
+    for name in CONSUMERS:
+        reads, unres = consumer_paths.sweep((HERE / name).read_text(), schema, name)
+        unresolved += unres
+        for node, key, _uncond in reads:
+            if node in schema and key not in schema[node]:
+                missing.append(f"{name}: {node}.{key}")
+    assert not unresolved, f"consumer reads the sweep cannot resolve: {unresolved}"
+    assert not missing, f"consumer paths outside the boundary: {sorted(set(missing))}"
 
 
-def test_the_totality_pin_can_actually_FAIL():
-    """Negative control. A sweep that finds nothing because it looks for nothing is the
-    trap this lane has hit repeatedly, so the detector is shown catching a planted read."""
-    found = _consumer_paths('def f(result):\n    return result.get("invented_key")\n')
-    assert ("attempt.response.result", "invented_key") in found, found
-    assert "invented_key" not in V.schema()["attempt.response.result"]
+def test_the_sweep_resolves_EVERY_shape_round_1_found_it_missing():
+    """One negative control per pattern shape. A sweep is only as good as the expressions
+    it can see, and every shape here is one it was blind to when round 1 ran."""
+    import consumer_paths
+    schema = V.schema()
+    R = "attempt.response.result"
+    SR = f"{R}.subject_resolution"
+    CANDS = f"{SR}.candidates[]"
+    shapes = {
+        "plain get":        ('def f(result):\n    return result.get("invented")\n', R),
+        "plain subscript":  ('def f(result):\n    return result["invented"]\n', R),
+        "index result":     ('def f(sr):\n    c = sr["candidates"]\n'
+                             '    return c[0]["invented"]\n', CANDS),
+        "or-fallback chain": ('def f(result):\n'
+                              '    return (result.get("subject_resolution") or {})'
+                              '.get("invented")\n', SR),
+        "for-loop binding": ('def f(sr):\n    for c in sr["candidates"]:\n'
+                             '        c["invented"]\n', CANDS),
+        "comprehension":    ('def f(sr):\n'
+                             '    return [c["invented"] for c in sr["candidates"]]\n',
+                             CANDS),
+        "two-hop alias":    ('def f(payload):\n    r = payload["result"]\n'
+                             '    q = r\n    return q.get("invented")\n', R),
+        "list() wrapper":   ('def f(sr):\n'
+                             '    return list(sr["candidates"])[0]["invented"]\n', CANDS),
+    }
+    for label, (src, want_node) in shapes.items():
+        reads, _ = consumer_paths.sweep(src, schema, "probe")
+        hit = [(n, k) for n, k, _u in reads if k == "invented"]
+        assert hit, f"{label}: the sweep cannot see this shape at all"
+        assert hit[0][0] == want_node, f"{label}: resolved to {hit[0][0]}, want {want_node}"
+
+
+def test_the_sweep_FAILS_on_a_read_it_cannot_resolve():
+    """The vacuous pass, made impossible. `if node in schema` silently skipped anything
+    unresolved, which is why the pin passed against the merge base where NO generated node
+    name exists. An unresolvable read is reported, and the pin above asserts on it."""
+    import consumer_paths
+    _, unresolved = consumer_paths.sweep(
+        'def f(result):\n    x = result.get("nowhere")\n    return x["deep"]\n',
+        {"attempt.response.result": {}}, "probe")
+    reads, _ = consumer_paths.sweep(
+        'def f(result):\n    return result["k"]\n',
+        {"attempt.response.result": {"k": {"type": "string"}}}, "probe")
+    assert reads, "the sweep sees nothing at all"
+    # THE VACUOUS PASS, made visible. Against a schema whose node names do not match, the
+    # sweep resolves nothing -- which is exactly what happened at the merge base. The pin
+    # must be able to tell "nothing to check" from "nothing wrong", so it asserts the sweep
+    # finds a non-trivial number of reads against the REAL schema before trusting a clean
+    # result.
+    real = V.schema()
+    total = 0
+    for name in CONSUMERS:
+        r, _u = consumer_paths.sweep((HERE / name).read_text(), real, name)
+        total += len(r)
+    assert total > 25, (f"the sweep resolved only {total} reads against the real schema; a "
+                        "clean totality result would be vacuous")
+    stale = sum(len(consumer_paths.sweep((HERE / n).read_text(),
+                                         {"result": {}}, n)[0]) for n in CONSUMERS)
+    assert stale < total, ("against stale node names the sweep must resolve FEWER reads; "
+                           "if it resolves as many, node naming is not being checked")
+
+
+def test_UNCONDITIONAL_reads_are_distinguished_from_tolerant_ones():
+    """`required` rests on this distinction: x["k"] raises when absent, x.get("k") does
+    not. Getting it backwards would mark half the schema required and reject real data."""
+    import consumer_paths
+    schema = V.schema()
+    reads, _ = consumer_paths.sweep(
+        'def f(result):\n    a = result["status"]\n    b = result.get("status")\n',
+        schema, "probe")
+    flags = {u for n, k, u in reads if k == "status"}
+    assert flags == {True, False}, flags
+
+
+def test_a_required_key_is_rejected_when_ABSENT_by_both_boundaries():
+    """Round 1's repro, both ingestion points."""
+    import copy
+    import harness
+    good = {"result": {"status": "complete", "subject_resolution": {"committed": [], "candidates": [
+        {"receipt_id": "rc1", "state": "proposed",
+         "subject": {"kind": "team", "canonical_id": "t", "label": "P"},
+         "match_mechanisms": ["exact"], "matched_terms": [], "match_reasons": [],
+         "evidence_ref_ids": [], "confidence": 0.9}]}}}
+    bad = copy.deepcopy(good)
+    del bad["result"]["subject_resolution"]["candidates"][0]["receipt_id"]
+
+    assert "failure" not in harness.validate_live_payload(200, good)
+    out = harness.validate_live_payload(200, bad)
+    assert "failure" in out, "the live boundary accepted a missing required key"
+    assert "receipt_id is required and absent" in out["failure"]["message"], out
+
+    ok, _ = V.validate_attempt({"status": 200, "dt": 1.0, "request": {}, "response": good})
+    assert ok
+    ok, reason = V.validate_attempt(
+        {"status": 200, "dt": 1.0, "request": {}, "response": bad})
+    assert not ok and "receipt_id is required and absent" in reason, reason
+    # the KeyError path cannot be reached: nothing that validates is missing the key
+    for c in good["result"]["subject_resolution"]["candidates"]:
+        assert c["receipt_id"]
+
+
+def test_a_key_observed_LESS_than_always_is_NOT_required():
+    """Negative control for presence. Requiring everything always-present rejects a
+    legitimate response that merely omits a field these runs all happened to carry."""
+    schema = V.schema()
+    R = "attempt.response.result"
+    optional = [k for k, r in schema[R].items()
+                if not r.get("required") and r.get("observed")
+                and sum(r["observed"].values()) < (r.get("node_visits") or 0)]
+    assert optional, "no partially-observed key found -- the control is vacuous"
+    k = optional[0]
+    ok, reason = V.validate_attempt(
+        {"status": 200, "dt": 1.0, "request": {}, "response": {"result": {}}})
+    assert ok or k not in (reason or ""), f"{k} was demanded though not always observed"
+
+
+def test_required_is_measured_or_DECLARED_never_assumed():
+    doc = SCHEMA_DOC
+    assert doc["_required_rule"], "the required rule is not recorded"
+    for full in doc["_declared_required"]:
+        node, key = full.rsplit(".", 1)
+        rule = V.schema()[node][key]
+        assert rule.get("required_declared") is True, full
+        assert rule.get("required_consumer"), f"{full} declared with no consumer named"
 
 
 def test_declared_paths_are_marked_UNMEASURED_and_name_their_consumer():

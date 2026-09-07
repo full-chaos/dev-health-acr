@@ -48,24 +48,33 @@ def type_of(v):
     return SCALARS.get(type(v), "unknown")
 
 
-def walk(node, node_name, seen, sample_of):
-    """Record every key of every mapping, under the node it belongs to."""
+def walk(node, node_name, seen, sample_of, visits=None):
+    """Record every key of every mapping, under the node it belongs to.
+
+    `visits` counts how many times each node was SEEN, so presence is measurable: a key
+    that occurs on every visit to its node is REQUIRED. That count was already being
+    collected and thrown away, and discarding it is what let `receipt_id` -- observed 1597
+    times and dereferenced unconditionally -- be typed but never required, so an artefact
+    missing it passed the boundary and crashed the consumer.
+    """
     if not isinstance(node, dict):
         return
+    if visits is not None:
+        visits[node_name] += 1
     for key, val in node.items():
         seen[(node_name, key)][type_of(val)] += 1
         t = type_of(val)
         if t == "object":
             child = f"{node_name}.{key}"
             sample_of[(node_name, key)] = child
-            walk(val, child, seen, sample_of)
+            walk(val, child, seen, sample_of, visits)
         elif t == "array":
             for item in val:
                 seen[(node_name, key + "[]")][type_of(item)] += 1
                 if isinstance(item, dict):
                     child = f"{node_name}.{key}[]"
                     sample_of[(node_name, key + "[]")] = child
-                    walk(item, child, seen, sample_of)
+                    walk(item, child, seen, sample_of, visits)
 
 
 def merge_types(counts):
@@ -94,6 +103,10 @@ def main():
                     help="run roots; every */replicate/*.json beneath each is measured")
     ap.add_argument("--out", required=True)
     ap.add_argument("--min-count", type=int, default=1)
+    ap.add_argument("--consumers", nargs="*", default=None,
+                    help="consumer modules. A key they dereference UNCONDITIONALLY "
+                         "(x['k'], which raises when absent) and that was observed on "
+                         "every visit to its node is emitted `required`.")
     ap.add_argument("--declared-paths", default=None,
                     help="paths consumers dereference that the artefacts never contained "
                          "(see schema_declared_paths.json). Marked unmeasured in the output.")
@@ -104,6 +117,7 @@ def main():
     args = ap.parse_args()
 
     seen = defaultdict(Counter)
+    visits = Counter()
     sample_of = {}
     files = polymorphic = 0
     for root in args.roots:
@@ -113,7 +127,7 @@ def main():
             except Exception:
                 continue                      # unreadable input is not evidence of a type
             files += 1
-            walk(data, "attempt", seen, sample_of)
+            walk(data, "attempt", seen, sample_of, visits)
 
     if not files:
         sys.exit("no artefacts matched --roots; refusing to emit a schema from nothing")
@@ -121,11 +135,16 @@ def main():
     policy = {}
     if args.null_policy:
         doc = json.loads(Path(args.null_policy).read_text())
-        policy = {e["path"]: e["consumer"] for e in doc.get("admit_null", [])}
+        policy = {e["path"]: e for e in doc.get("admit_null", [])}
 
+    # TWO PASSES, and the order matters. The consumer sweep resolves `x["a"]["b"]` by
+    # following the schema's own node links, so it needs a schema to resolve against. Pass
+    # one types everything; pass two asks the consumers which of those keys they
+    # dereference unconditionally; only then can `required` be decided.
     nodes = defaultdict(dict)
     unchecked = []
     applied_policy = []
+    unconditional = set()
     for (node, key), counts in sorted(seen.items()):
         if sum(counts.values()) < args.min_count:
             continue
@@ -134,7 +153,9 @@ def main():
         full = f"{node}.{key}"
         if full in policy:
             nullable = True
-            applied_policy.append({"path": full, "consumer": policy[full],
+            pol = policy[full]
+            applied_policy.append({"path": full, "consumer": pol["consumer"],
+                                   "when": pol.get("when"),
                                    "observed_nulls": observed.get("null", 0)})
         entry = nodes[node].setdefault(base, {})
         if key.endswith("[]"):
@@ -154,13 +175,54 @@ def main():
                 entry["type"] = t
                 if nullable:
                     entry["nullable"] = True
+                    if policy.get(full, {}).get("when"):
+                        entry["nullable_when"] = policy[full]["when"]
                 if t == "object":
                     entry["node"] = sample_of.get((node, key))
+            # PRESENCE. Observed on EVERY visit to its node, AND read unconditionally by
+            # a consumer. Both halves are load-bearing: "present in all 746 samples" is not
+            # "required by the contract" -- marking every always-present key required
+            # rejected legitimate responses that merely omit a field these runs all had.
+            # What actually breaks is an unconditional `x['k']` on a key that is absent, so
+            # that is what `required` means here.
+            n_visits = visits.get(node, 0)
+            entry["node_visits"] = n_visits
+            if n_visits and sum(counts.values()) == n_visits \
+                    and (node, key) in unconditional:
+                entry["required"] = True
         entry["observed"] = observed
 
+    if args.consumers:
+        import consumer_paths
+        provisional = {n: dict(ks) for n, ks in nodes.items()}
+        for path in args.consumers:
+            reads, unresolved = consumer_paths.sweep(
+                Path(path).read_text(), provisional, Path(path).name)
+            if unresolved:
+                sys.exit("consumer reads the generator cannot resolve: "
+                         + "; ".join(unresolved))
+            for node, key, uncond in reads:
+                if uncond:
+                    unconditional.add((node, key))
+        for node, keys in nodes.items():
+            for key, entry in keys.items():
+                if entry.get("type") is None:
+                    continue
+                n_visits = entry.get("node_visits") or 0
+                seen_n = sum((entry.get("observed") or {}).values())
+                if n_visits and seen_n == n_visits and (node, key) in unconditional:
+                    entry["required"] = True
+
     declared = []
+    declared_required = []
     if args.declared_paths:
         doc = json.loads(Path(args.declared_paths).read_text())
+        for e in doc.get("required", []):
+            entry = nodes[e["node"]].setdefault(e["key"], {})
+            entry["required"] = True
+            entry["required_declared"] = True
+            entry["required_consumer"] = e["consumer"]
+            declared_required.append(f'{e["node"]}.{e["key"]}')
         for e in doc.get("declared", []):
             entry = nodes[e["node"]].setdefault(e["key"], {})
             if "type" in entry:
@@ -177,7 +239,15 @@ def main():
         "_artefacts_measured": files,
         "_roots": list(args.roots),
         "_unchecked_polymorphic": sorted(unchecked),
+        "_required_keys": sorted(f"{n}.{k}" for n, ks in nodes.items()
+                                 for k, r in ks.items() if r.get("required")),
+        "_required_rule": ("observed on every visit to its node AND dereferenced "
+                           "unconditionally (x['k']) by a consumer. Presence alone is not "
+                           "a contract: a field every one of these runs happened to carry "
+                           "may still be optional, and requiring it would reject a "
+                           "legitimate response."),
         "_declared_unmeasured": sorted(declared),
+        "_declared_required": sorted(declared_required),
         "_null_policy_applied": applied_policy,
         "_null_policy_unused": sorted(set(policy) - {a["path"] for a in applied_policy}),
         "nodes": {k: dict(sorted(v.items())) for k, v in sorted(nodes.items())},

@@ -1,15 +1,43 @@
 {
  "_why": "Paths CONSUMERS DEREFERENCE that the measured artefacts never contained.\n\nGeneration types what the engine emitted. It cannot type what the engine did not emit in these runs, and the 413-overrun fields are exactly that: real engine fields that no artefact in the 746 measured happens to carry. Left to measurement alone the boundary would be SHALLOWER than the hand-written one it replaces on precisely those paths -- a str would pass `failure.narrowerContinuation` and crash the consumer that reads it.\n\nSo the boundary is measurement PLUS these, and the generator FAILS if a consumer reads a path that is in neither. That is what makes it total: not that someone remembered every path, but that forgetting one is an error rather than a silent hole.\n\nEvery entry is marked unmeasured in the emitted schema. These types are inherited from the hand-written schema at 66610f4d and are the weakest part of this file -- they are the only types here not derived from data. When an artefact carrying one of these fields is measured, the entry should be deleted and the measurement should type it.",
  "declared": [
-  {"node": "attempt.response.failure", "key": "overrun", "type": "string",
-   "consumer": "run_shard.attempt_diagnostics -- 413 ceiling overrun accounting"},
-  {"node": "attempt.response.failure", "key": "maxItems", "type": "int",
-   "consumer": "run_shard / engine_failures -- overrun ceiling"},
-  {"node": "attempt.response.failure", "key": "measuredItems", "type": "int",
-   "consumer": "run_shard / engine_failures -- measured size against the ceiling"},
-  {"node": "attempt.response.failure", "key": "narrowerContinuation", "type": "object",
-   "consumer": "run_shard / engine_failures -- the continuation offered after an overrun"},
-  {"node": "attempt.response", "key": "request_id", "type": "string",
-   "consumer": "run_shard -- request evidence on a failed attempt"}
+  {
+   "node": "attempt.response.failure",
+   "key": "overrun",
+   "type": "string",
+   "consumer": "run_shard.attempt_diagnostics -- 413 ceiling overrun accounting"
+  },
+  {
+   "node": "attempt.response.failure",
+   "key": "maxItems",
+   "type": "int",
+   "consumer": "run_shard / engine_failures -- overrun ceiling"
+  },
+  {
+   "node": "attempt.response.failure",
+   "key": "measuredItems",
+   "type": "int",
+   "consumer": "run_shard / engine_failures -- measured size against the ceiling"
+  },
+  {
+   "node": "attempt.response.failure",
+   "key": "narrowerContinuation",
+   "type": "object",
+   "consumer": "run_shard / engine_failures -- the continuation offered after an overrun"
+  },
+  {
+   "node": "attempt.response",
+   "key": "request_id",
+   "type": "string",
+   "consumer": "run_shard -- request evidence on a failed attempt"
+  }
+ ],
+ "_why_required": "REQUIRED-ness that the two-pass rule cannot derive.\n\n`required` is normally measured: observed on every visit to its node AND dereferenced unconditionally by a consumer. That second half is a static read of the code, and it stops where the dataflow leaves what static analysis can follow. `subject_resolution.candidates[].receipt_id` is the case round 1 found: the candidates list is carried into a local `memory` dict as one half of a tuple, unpacked several turns later, indexed, and only then read as `c[\"receipt_id\"]`. That is a real unconditional dereference -- a candidate without the key raises KeyError and kills the run -- and no AST sweep is going to follow a dict-of-tuples to reach it.\n\nSo it is declared, with the consumer named, exactly like the unmeasured types above. The rule is the same one this whole change rests on: derive it where the evidence allows, declare it where it does not, and never leave it silent.",
+ "required": [
+  {
+   "node": "attempt.response.result.subject_resolution.candidates[]",
+   "key": "receipt_id",
+   "consumer": "harness.py:177,192,218,228 -- c[\"receipt_id\"] on candidates carried through the local `memory` dict; absence raises KeyError mid-run"
+  }
  ]
 }

@@ -44,8 +44,12 @@ def _attempt(tmp, qid, turn, attempt, committed=None, mechs=None, status="partia
     if raw is not None:
         f.write_text(raw)
         return f
-    cands = [{"state": "committed", "subject": c, "match_mechanisms": mechs or [],
-              "matched_terms": []} for c in (committed or [])]
+    # CHAOS-5430: receipt_id is REQUIRED (observed on every one of 1597 real
+    # candidates and dereferenced unconditionally by the harness). A fixture without
+    # it is an artefact the engine never emits, so the FIXTURE changes.
+    cands = [{"receipt_id": f"rc{i}", "state": "committed", "subject": c,
+              "match_mechanisms": mechs or [],
+              "matched_terms": []} for i, c in enumerate(committed or [])]
     body = {"request": {}, "status": 200, "dt": 1.0, "response": {
         "result": {"request_id": f"req_{qid}_{turn}", "result_id": f"res_{qid}",
                    "status": status,

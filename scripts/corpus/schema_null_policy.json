@@ -1,5 +1,5 @@
 {
- "_why": "Nullability that MEASUREMENT CANNOT SUPPLY, declared as data so it is visible instead of hand-edited into the generated file.\n\nThe engine emits no explicit null anywhere in the 746 measured artefacts, so every field measures as non-nullable. For most fields that is the right boundary. For the few fields the SUBJECT SUBSTITUTION rule reads, it is not: rejecting an artefact whose committed subject carries an explicit null kind makes the row unreadable, and an unreadable identity CAPS the verdict at agree_weak -- so a row that earns `disagree` as a substitution is upgraded by our own doubt. That is strictly worse than the malformed value it was meant to catch, and it is a bug this instrument has already shipped once.\n\nSo these paths ADMIT an explicit null and reject every other wrong type. `kind: []` and `kind: 1` are still rejected; `kind: null` reaches the substitution rule, which is the code that knows a null kind cannot satisfy a declared anchor. The policy is narrow on purpose: it names paths, not types, and every entry carries the consumer that depends on it.\n\nThe candidate mirror is listed too, and that is not padding: a malformed commit carries the same null in `candidates[].subject`, so admitting it on `committed[]` alone leaves the artefact rejected by the other path and the upgrade bug intact. Found by executing the null-kind row end to end rather than by reading the policy and assuming it covered the case -- the schema said ok and the ROW still scored agree_weak.",
+ "_why": "Nullability that MEASUREMENT CANNOT SUPPLY, declared as data so it is visible instead of hand-edited into the generated file.\n\nThe engine emits no explicit null anywhere in the 746 measured artefacts, so every field measures as non-nullable. For most fields that is the right boundary. For the few fields the SUBJECT SUBSTITUTION rule reads, it is not: rejecting an artefact whose committed subject carries an explicit null kind makes the row unreadable, and an unreadable identity CAPS the verdict at agree_weak -- so a row that earns `disagree` as a substitution is upgraded by our own doubt. That is strictly worse than the malformed value it was meant to catch, and it is a bug this instrument has already shipped once.\n\nSo these paths ADMIT an explicit null and reject every other wrong type. `kind: []` and `kind: 1` are still rejected; `kind: null` reaches the substitution rule, which is the code that knows a null kind cannot satisfy a declared anchor. The policy is narrow on purpose: it names paths, not types, and every entry carries the consumer that depends on it.\n\nThe candidate mirror is listed too, and that is not padding: a malformed commit carries the same null in `candidates[].subject`, so admitting it on `committed[]` alone leaves the artefact rejected by the other path and the upgrade bug intact. Found by executing the null-kind row end to end rather than by reading the policy and assuming it covered the case -- the schema said ok and the ROW still scored agree_weak.\n\nCHAOS-5430 r2, P2 from round 1: the candidate mirror is CONDITIONAL. Round 1 observed that an all-null UNCOMMITTED candidate also validated -- true, and wider than the substitution rule needs, since identity scoring only reads committed candidates. The mirror entries now carry a `when` clause and admit null only where the candidate's own `state` is `committed`. A proposed or ambiguous candidate with a null subject is rejected, as it was before the mirror was added.",
  "admit_null": [
   {
    "path": "attempt.response.result.subject_resolution.committed[].kind",
@@ -15,15 +15,27 @@
   },
   {
    "path": "attempt.response.result.subject_resolution.candidates[].subject.kind",
-   "consumer": "subject_identity -- the committed candidate MIRRORS the committed subject; rejecting the mirror makes the artefact unreadable and re-upgrades the row the committed[] policy exists to keep at disagree"
+   "consumer": "subject_identity -- the committed candidate MIRRORS the committed subject; rejecting the mirror makes the artefact unreadable and re-upgrades the row the committed[] policy exists to keep at disagree -- CONDITIONAL on state=committed",
+   "when": {
+    "field": "state",
+    "equals": "committed"
+   }
   },
   {
    "path": "attempt.response.result.subject_resolution.candidates[].subject.canonical_id",
-   "consumer": "subject_identity dedup key, via the candidate mirror"
+   "consumer": "subject_identity dedup key, via the candidate mirror -- CONDITIONAL on state=committed",
+   "when": {
+    "field": "state",
+    "equals": "committed"
+   }
   },
   {
    "path": "attempt.response.result.subject_resolution.candidates[].subject.label",
-   "consumer": "subject_identity.anchor_satisfied, via the candidate mirror"
+   "consumer": "subject_identity.anchor_satisfied, via the candidate mirror -- CONDITIONAL on state=committed",
+   "when": {
+    "field": "state",
+    "equals": "committed"
+   }
   }
  ]
 }

@@ -12,6 +12,10 @@
   "/home/ubuntu/.cache/acr-kiac-askdev/proofs/2026-09-07-main-0ad85ef4/main-rep3/seq"
  ],
  "_unchecked_polymorphic": [],
+ "_required_keys": [
+  "attempt.response.result.subject_resolution.candidates[].receipt_id"
+ ],
+ "_required_rule": "observed on every visit to its node AND dereferenced unconditionally (x['k']) by a consumer. Presence alone is not a contract: a field every one of these runs happened to carry may still be optional, and requiring it would reject a legitimate response.",
  "_declared_unmeasured": [
   "attempt.response.failure.maxItems",
   "attempt.response.failure.measuredItems",
@@ -19,35 +23,53 @@
   "attempt.response.failure.overrun",
   "attempt.response.request_id"
  ],
+ "_declared_required": [
+  "attempt.response.result.subject_resolution.candidates[].receipt_id"
+ ],
  "_null_policy_applied": [
   {
    "path": "attempt.response.result.subject_resolution.candidates[].subject.canonical_id",
-   "consumer": "subject_identity dedup key, via the candidate mirror",
+   "consumer": "subject_identity dedup key, via the candidate mirror -- CONDITIONAL on state=committed",
+   "when": {
+    "field": "state",
+    "equals": "committed"
+   },
    "observed_nulls": 0
   },
   {
    "path": "attempt.response.result.subject_resolution.candidates[].subject.kind",
-   "consumer": "subject_identity -- the committed candidate MIRRORS the committed subject; rejecting the mirror makes the artefact unreadable and re-upgrades the row the committed[] policy exists to keep at disagree",
+   "consumer": "subject_identity -- the committed candidate MIRRORS the committed subject; rejecting the mirror makes the artefact unreadable and re-upgrades the row the committed[] policy exists to keep at disagree -- CONDITIONAL on state=committed",
+   "when": {
+    "field": "state",
+    "equals": "committed"
+   },
    "observed_nulls": 0
   },
   {
    "path": "attempt.response.result.subject_resolution.candidates[].subject.label",
-   "consumer": "subject_identity.anchor_satisfied, via the candidate mirror",
+   "consumer": "subject_identity.anchor_satisfied, via the candidate mirror -- CONDITIONAL on state=committed",
+   "when": {
+    "field": "state",
+    "equals": "committed"
+   },
    "observed_nulls": 0
   },
   {
    "path": "attempt.response.result.subject_resolution.committed[].canonical_id",
    "consumer": "subject_identity dedup key (kind, canonical_id) -- a null id is a distinct subject, not an unreadable artefact",
+   "when": null,
    "observed_nulls": 0
   },
   {
    "path": "attempt.response.result.subject_resolution.committed[].kind",
    "consumer": "subject_identity.anchor_satisfied -- a null kind must FAIL the anchor check, not skip it",
+   "when": null,
    "observed_nulls": 0
   },
   {
    "path": "attempt.response.result.subject_resolution.committed[].label",
    "consumer": "subject_identity.anchor_satisfied -- a null label cannot correspond to a declared anchor NAME",
+   "when": null,
    "observed_nulls": 0
   }
  ],
@@ -56,6 +78,7 @@
   "attempt": {
    "dt": {
     "type": "number",
+    "node_visits": 746,
     "observed": {
      "number": 746
     }
@@ -63,6 +86,7 @@
    "request": {
     "type": "object",
     "node": "attempt.request",
+    "node_visits": 746,
     "observed": {
      "object": 746
     }
@@ -70,12 +94,14 @@
    "response": {
     "type": "object",
     "node": "attempt.response",
+    "node_visits": 746,
     "observed": {
      "object": 746
     }
    },
    "status": {
     "type": "int",
+    "node_visits": 746,
     "observed": {
      "int": 746
     }
@@ -84,6 +110,7 @@
   "attempt.request": {
    "priorKindReceipts": {
     "type": "array",
+    "node_visits": 746,
     "observed": {
      "object": 69
     },
@@ -92,6 +119,7 @@
    },
    "priorSubjectReceipts": {
     "type": "array",
+    "node_visits": 746,
     "observed": {
      "object": 71
     },
@@ -100,6 +128,7 @@
    },
    "priorWindowReceipts": {
     "type": "array",
+    "node_visits": 746,
     "observed": {
      "object": 243
     },
@@ -108,6 +137,7 @@
    },
    "question": {
     "type": "string",
+    "node_visits": 746,
     "observed": {
      "string": 746
     }
@@ -116,12 +146,14 @@
   "attempt.request.priorKindReceipts[]": {
    "receipt_id": {
     "type": "string",
+    "node_visits": 69,
     "observed": {
      "string": 69
     }
    },
    "result_id": {
     "type": "string",
+    "node_visits": 69,
     "observed": {
      "string": 69
     }
@@ -130,12 +162,14 @@
   "attempt.request.priorSubjectReceipts[]": {
    "receipt_id": {
     "type": "string",
+    "node_visits": 71,
     "observed": {
      "string": 71
     }
    },
    "result_id": {
     "type": "string",
+    "node_visits": 71,
     "observed": {
      "string": 71
     }
@@ -144,12 +178,14 @@
   "attempt.request.priorWindowReceipts[]": {
    "receipt_id": {
     "type": "string",
+    "node_visits": 243,
     "observed": {
      "string": 243
     }
    },
    "result_id": {
     "type": "string",
+    "node_visits": 243,
     "observed": {
      "string": 243
     }
@@ -159,6 +195,7 @@
    "failure": {
     "type": "object",
     "node": "attempt.response.failure",
+    "node_visits": 746,
     "observed": {
      "object": 40
     }
@@ -172,6 +209,7 @@
    "result": {
     "type": "object",
     "node": "attempt.response.result",
+    "node_visits": 746,
     "observed": {
      "object": 706
     }
@@ -180,12 +218,14 @@
   "attempt.response.failure": {
    "code": {
     "type": "string",
+    "node_visits": 40,
     "observed": {
      "string": 40
     }
    },
    "httpStatus": {
     "type": "int",
+    "node_visits": 40,
     "observed": {
      "int": 40
     }
@@ -204,6 +244,7 @@
    },
    "message": {
     "type": "string",
+    "node_visits": 40,
     "observed": {
      "string": 40
     }
@@ -222,18 +263,21 @@
    },
    "retryable": {
     "type": "bool",
+    "node_visits": 40,
     "observed": {
      "bool": 40
     }
    },
    "upstreamCode": {
     "type": "string",
+    "node_visits": 40,
     "observed": {
      "string": 40
     }
    },
    "upstreamRequestId": {
     "type": "string",
+    "node_visits": 40,
     "observed": {
      "string": 40
     }
@@ -243,12 +287,14 @@
    "answer_plan": {
     "type": "object",
     "node": "attempt.response.result.answer_plan",
+    "node_visits": 706,
     "observed": {
      "object": 706
     }
    },
    "claimed_facts": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "object": 407
     },
@@ -258,6 +304,7 @@
    "cohort": {
     "type": "object",
     "node": "attempt.response.result.cohort",
+    "node_visits": 706,
     "observed": {
      "object": 63
     }
@@ -265,12 +312,14 @@
    "completeness": {
     "type": "object",
     "node": "attempt.response.result.completeness",
+    "node_visits": 706,
     "observed": {
      "object": 706
     }
    },
    "confirmed_structure": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "object": 359
     },
@@ -279,6 +328,7 @@
    },
    "conflicts": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "array": 706
     }
@@ -286,30 +336,35 @@
    "coverage": {
     "type": "object",
     "node": "attempt.response.result.coverage",
+    "node_visits": 706,
     "observed": {
      "object": 706
     }
    },
    "current_state": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
    },
    "deterministic_answer": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
    },
    "direct_judgment": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
    },
    "drivers": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "object": 343
     },
@@ -319,12 +374,14 @@
    "effective_evidence_window": {
     "type": "object",
     "node": "attempt.response.result.effective_evidence_window",
+    "node_visits": 706,
     "observed": {
      "object": 528
     }
    },
    "evidence_ref_ids": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "string": 553
     },
@@ -333,12 +390,14 @@
    "evidence_ref_labels": {
     "type": "object",
     "node": "attempt.response.result.evidence_ref_labels",
+    "node_visits": 706,
     "observed": {
      "object": 294
     }
    },
    "generated_at": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
@@ -346,12 +405,14 @@
    "interpretation": {
     "type": "object",
     "node": "attempt.response.result.interpretation",
+    "node_visits": 706,
     "observed": {
      "object": 706
     }
    },
    "limitations": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "string": 1197
     },
@@ -359,6 +420,7 @@
    },
    "paths": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "object": 2453
     },
@@ -367,12 +429,14 @@
    },
    "question": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
    },
    "readiness_gaps": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "object": 9
     },
@@ -381,6 +445,7 @@
    },
    "remaining_work": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "object": 13
     },
@@ -389,6 +454,7 @@
    },
    "render_shapes": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "object": 110
     },
@@ -397,36 +463,42 @@
    },
    "request_id": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
    },
    "result_id": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
    },
    "reused": {
     "type": "bool",
+    "node_visits": 706,
     "observed": {
      "bool": 706
     }
    },
    "schema_version": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
    },
    "status": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
    },
    "strongest_pressures": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "string": 233
     },
@@ -435,12 +507,14 @@
    "structure_needs": {
     "type": "object",
     "node": "attempt.response.result.structure_needs",
+    "node_visits": 706,
     "observed": {
      "object": 404
     }
    },
    "structure_offer_snapshot": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "object": 336
     },
@@ -450,6 +524,7 @@
    "subject_resolution": {
     "type": "object",
     "node": "attempt.response.result.subject_resolution",
+    "node_visits": 706,
     "observed": {
      "object": 706
     }
@@ -457,6 +532,7 @@
    "temporal": {
     "type": "object",
     "node": "attempt.response.result.temporal",
+    "node_visits": 706,
     "observed": {
      "object": 16
     }
@@ -464,12 +540,14 @@
    "versions": {
     "type": "object",
     "node": "attempt.response.result.versions",
+    "node_visits": 706,
     "observed": {
      "object": 706
     }
    },
    "warnings": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "string": 131
     },
@@ -478,6 +556,7 @@
    "window_clarification": {
     "type": "object",
     "node": "attempt.response.result.window_clarification",
+    "node_visits": 706,
     "observed": {
      "object": 269
     }
@@ -486,6 +565,7 @@
   "attempt.response.result.answer_plan": {
    "axes": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "string": 1924
     },
@@ -494,12 +574,14 @@
    "budget": {
     "type": "object",
     "node": "attempt.response.result.answer_plan.budget",
+    "node_visits": 706,
     "observed": {
      "object": 706
     }
    },
    "fact_kinds": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "string": 4140
     },
@@ -507,36 +589,42 @@
    },
    "family": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
    },
    "family_source": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
    },
    "family_version": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
    },
    "group_kind": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 141
     }
    },
    "member_kind": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 63
     }
    },
    "narrowing": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "object": 412
     },
@@ -545,6 +633,7 @@
    },
    "render_kinds": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "string": 975
     },
@@ -552,18 +641,21 @@
    },
    "require_drivers": {
     "type": "bool",
+    "node_visits": 706,
     "observed": {
      "bool": 706
     }
    },
    "require_ranking": {
     "type": "bool",
+    "node_visits": 706,
     "observed": {
      "bool": 706
     }
    },
    "requirements": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "object": 1570
     },
@@ -574,30 +666,35 @@
   "attempt.response.result.answer_plan.budget": {
    "max_items": {
     "type": "int",
+    "node_visits": 706,
     "observed": {
      "int": 706
     }
    },
    "max_members": {
     "type": "int",
+    "node_visits": 706,
     "observed": {
      "int": 706
     }
    },
    "max_serialized_bytes": {
     "type": "int",
+    "node_visits": 706,
     "observed": {
      "int": 706
     }
    },
    "narrowing_basis": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
    },
    "synthesis_headroom": {
     "type": "int",
+    "node_visits": 706,
     "observed": {
      "int": 706
     }
@@ -606,24 +703,28 @@
   "attempt.response.result.answer_plan.narrowing[]": {
    "after": {
     "type": "int",
+    "node_visits": 412,
     "observed": {
      "int": 412
     }
    },
    "basis": {
     "type": "string",
+    "node_visits": 412,
     "observed": {
      "string": 412
     }
    },
    "before": {
     "type": "int",
+    "node_visits": 412,
     "observed": {
      "int": 412
     }
    },
    "stage": {
     "type": "string",
+    "node_visits": 412,
     "observed": {
      "string": 412
     }
@@ -632,6 +733,7 @@
   "attempt.response.result.answer_plan.requirements[]": {
    "fact_kinds": {
     "type": "array",
+    "node_visits": 1570,
     "observed": {
      "string": 3579
     },
@@ -639,12 +741,14 @@
    },
    "input_class": {
     "type": "string",
+    "node_visits": 1570,
     "observed": {
      "string": 85
     }
    },
    "input_fact_kinds": {
     "type": "array",
+    "node_visits": 1570,
     "observed": {
      "string": 355
     },
@@ -652,60 +756,70 @@
    },
    "kind": {
     "type": "string",
+    "node_visits": 1570,
     "observed": {
      "string": 1570
     }
    },
    "obligation": {
     "type": "string",
+    "node_visits": 1570,
     "observed": {
      "string": 1570
     }
    },
    "quantifier": {
     "type": "string",
+    "node_visits": 1570,
     "observed": {
      "string": 1570
     }
    },
    "requirement": {
     "type": "string",
+    "node_visits": 1570,
     "observed": {
      "string": 1570
     }
    },
    "role": {
     "type": "string",
+    "node_visits": 1570,
     "observed": {
      "string": 1570
     }
    },
    "scope": {
     "type": "string",
+    "node_visits": 1570,
     "observed": {
      "string": 1570
     }
    },
    "step": {
     "type": "string",
+    "node_visits": 1570,
     "observed": {
      "string": 85
     }
    },
    "step_execution": {
     "type": "string",
+    "node_visits": 1570,
     "observed": {
      "string": 85
     }
    },
    "subject": {
     "type": "string",
+    "node_visits": 1570,
     "observed": {
      "string": 1570
     }
    },
    "unavailable": {
     "type": "string",
+    "node_visits": 1570,
     "observed": {
      "string": 579
     }
@@ -714,24 +828,28 @@
   "attempt.response.result.claimed_facts[]": {
    "claim_id": {
     "type": "string",
+    "node_visits": 407,
     "observed": {
      "string": 407
     }
    },
    "field": {
     "type": "string",
+    "node_visits": 407,
     "observed": {
      "string": 407
     }
    },
    "kind": {
     "type": "string",
+    "node_visits": 407,
     "observed": {
      "string": 407
     }
    },
    "rows": {
     "type": "array",
+    "node_visits": 407,
     "observed": {
      "object": 910
     },
@@ -741,6 +859,7 @@
    "subject": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].subject",
+    "node_visits": 407,
     "observed": {
      "object": 407
     }
@@ -748,12 +867,14 @@
    "table": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].table",
+    "node_visits": 407,
     "observed": {
      "object": 282
     }
    },
    "time_series_rows": {
     "type": "array",
+    "node_visits": 407,
     "observed": {
      "object": 6207
     },
@@ -763,6 +884,7 @@
    "time_series_table": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].time_series_table",
+    "node_visits": 407,
     "observed": {
      "object": 215
     }
@@ -770,6 +892,7 @@
    "value": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].value",
+    "node_visits": 407,
     "observed": {
      "object": 407
     }
@@ -779,6 +902,7 @@
    "fields": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields",
+    "node_visits": 910,
     "observed": {
      "object": 910
     }
@@ -788,6 +912,7 @@
    "backlog_size": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.backlog_size",
+    "node_visits": 910,
     "observed": {
      "object": 545
     }
@@ -795,6 +920,7 @@
    "bug_completed_ratio": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.bug_completed_ratio",
+    "node_visits": 910,
     "observed": {
      "object": 24
     }
@@ -802,6 +928,7 @@
    "churn_loc": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.churn_loc",
+    "node_visits": 910,
     "observed": {
      "object": 24
     }
@@ -809,6 +936,7 @@
    "computed_at": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.computed_at",
+    "node_visits": 910,
     "observed": {
      "object": 291
     }
@@ -816,6 +944,7 @@
    "cycle_p50_hours": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.cycle_p50_hours",
+    "node_visits": 910,
     "observed": {
      "object": 24
     }
@@ -823,6 +952,7 @@
    "day": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.day",
+    "node_visits": 910,
     "observed": {
      "object": 499
     }
@@ -830,6 +960,7 @@
    "delivery_units": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.delivery_units",
+    "node_visits": 910,
     "observed": {
      "object": 24
     }
@@ -837,6 +968,7 @@
    "estimate_coverage_ratio": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.estimate_coverage_ratio",
+    "node_visits": 910,
     "observed": {
      "object": 193
     }
@@ -844,6 +976,7 @@
    "estimated_count": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.estimated_count",
+    "node_visits": 910,
     "observed": {
      "object": 193
     }
@@ -851,6 +984,7 @@
    "forecast_p50_days": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.forecast_p50_days",
+    "node_visits": 910,
     "observed": {
      "object": 74
     }
@@ -858,6 +992,7 @@
    "high_variance": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.high_variance",
+    "node_visits": 910,
     "observed": {
      "object": 74
     }
@@ -865,6 +1000,7 @@
    "insufficient_history": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.insufficient_history",
+    "node_visits": 910,
     "observed": {
      "object": 74
     }
@@ -872,6 +1008,7 @@
    "investment_area": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.investment_area",
+    "node_visits": 910,
     "observed": {
      "object": 24
     }
@@ -879,6 +1016,7 @@
    "items_completed": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.items_completed",
+    "node_visits": 910,
     "observed": {
      "object": 24
     }
@@ -886,6 +1024,7 @@
    "items_started": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.items_started",
+    "node_visits": 910,
     "observed": {
      "object": 24
     }
@@ -893,6 +1032,7 @@
    "norm_value": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.norm_value",
+    "node_visits": 910,
     "observed": {
      "object": 100
     }
@@ -900,6 +1040,7 @@
    "project_stream": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.project_stream",
+    "node_visits": 910,
     "observed": {
      "object": 24
     }
@@ -907,6 +1048,7 @@
    "provider": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.provider",
+    "node_visits": 910,
     "observed": {
      "object": 69
     }
@@ -914,6 +1056,7 @@
    "prs_merged": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.prs_merged",
+    "node_visits": 910,
     "observed": {
      "object": 24
     }
@@ -921,6 +1064,7 @@
    "scope": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.scope",
+    "node_visits": 910,
     "observed": {
      "object": 217
     }
@@ -928,6 +1072,7 @@
    "scope_id": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.scope_id",
+    "node_visits": 910,
     "observed": {
      "object": 217
     }
@@ -935,6 +1080,7 @@
    "scope_name": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.scope_name",
+    "node_visits": 910,
     "observed": {
      "object": 217
     }
@@ -942,6 +1088,7 @@
    "severity": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.severity",
+    "node_visits": 910,
     "observed": {
      "object": 217
     }
@@ -949,6 +1096,7 @@
    "signal": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.signal",
+    "node_visits": 910,
     "observed": {
      "object": 100
     }
@@ -956,6 +1104,7 @@
    "story_points_completed": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.story_points_completed",
+    "node_visits": 910,
     "observed": {
      "object": 24
     }
@@ -963,6 +1112,7 @@
    "team_id": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.team_id",
+    "node_visits": 910,
     "observed": {
      "object": 183
     }
@@ -970,6 +1120,7 @@
    "team_name": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.team_name",
+    "node_visits": 910,
     "observed": {
      "object": 163
     }
@@ -977,6 +1128,7 @@
    "throughput_mean": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.throughput_mean",
+    "node_visits": 910,
     "observed": {
      "object": 352
     }
@@ -984,6 +1136,7 @@
    "throughput_stddev": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.throughput_stddev",
+    "node_visits": 910,
     "observed": {
      "object": 352
     }
@@ -991,6 +1144,7 @@
    "unestimated_count": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.unestimated_count",
+    "node_visits": 910,
     "observed": {
      "object": 193
     }
@@ -998,6 +1152,7 @@
    "weight": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.weight",
+    "node_visits": 910,
     "observed": {
      "object": 100
     }
@@ -1005,6 +1160,7 @@
    "weighted_contribution": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.weighted_contribution",
+    "node_visits": 910,
     "observed": {
      "object": 100
     }
@@ -1012,6 +1168,7 @@
    "wip_age_p50_hours": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.wip_age_p50_hours",
+    "node_visits": 910,
     "observed": {
      "object": 6
     }
@@ -1019,6 +1176,7 @@
    "wip_age_p90_hours": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.wip_age_p90_hours",
+    "node_visits": 910,
     "observed": {
      "object": 6
     }
@@ -1026,6 +1184,7 @@
    "wip_count_end_of_day": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.wip_count_end_of_day",
+    "node_visits": 910,
     "observed": {
      "object": 24
     }
@@ -1033,6 +1192,7 @@
    "work_items_completed": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.work_items_completed",
+    "node_visits": 910,
     "observed": {
      "object": 24
     }
@@ -1040,6 +1200,7 @@
    "work_scope_id": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].rows[].fields.work_scope_id",
+    "node_visits": 910,
     "observed": {
      "object": 143
     }
@@ -1048,6 +1209,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.backlog_size": {
    "integer": {
     "type": "int",
+    "node_visits": 545,
     "observed": {
      "int": 545
     }
@@ -1056,6 +1218,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.bug_completed_ratio": {
    "number": {
     "type": "int",
+    "node_visits": 24,
     "observed": {
      "int": 24
     }
@@ -1064,6 +1227,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.churn_loc": {
    "integer": {
     "type": "int",
+    "node_visits": 24,
     "observed": {
      "int": 24
     }
@@ -1072,6 +1236,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.computed_at": {
    "string": {
     "type": "string",
+    "node_visits": 291,
     "observed": {
      "string": 291
     }
@@ -1080,6 +1245,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.cycle_p50_hours": {
    "number": {
     "type": "number",
+    "node_visits": 24,
     "observed": {
      "number": 22,
      "int": 2
@@ -1089,6 +1255,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.day": {
    "string": {
     "type": "string",
+    "node_visits": 499,
     "observed": {
      "string": 499
     }
@@ -1097,6 +1264,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.delivery_units": {
    "integer": {
     "type": "int",
+    "node_visits": 24,
     "observed": {
      "int": 24
     }
@@ -1105,6 +1273,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.estimate_coverage_ratio": {
    "number": {
     "type": "number",
+    "node_visits": 193,
     "observed": {
      "int": 121,
      "number": 72
@@ -1114,6 +1283,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.estimated_count": {
    "integer": {
     "type": "int",
+    "node_visits": 193,
     "observed": {
      "int": 193
     }
@@ -1122,6 +1292,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.forecast_p50_days": {
    "integer": {
     "type": "int",
+    "node_visits": 74,
     "observed": {
      "int": 74
     }
@@ -1130,6 +1301,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.high_variance": {
    "boolean": {
     "type": "bool",
+    "node_visits": 74,
     "observed": {
      "bool": 74
     }
@@ -1138,6 +1310,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.insufficient_history": {
    "boolean": {
     "type": "bool",
+    "node_visits": 74,
     "observed": {
      "bool": 74
     }
@@ -1146,6 +1319,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.investment_area": {
    "string": {
     "type": "string",
+    "node_visits": 24,
     "observed": {
      "string": 24
     }
@@ -1154,6 +1328,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.items_completed": {
    "integer": {
     "type": "int",
+    "node_visits": 24,
     "observed": {
      "int": 24
     }
@@ -1162,6 +1337,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.items_started": {
    "integer": {
     "type": "int",
+    "node_visits": 24,
     "observed": {
      "int": 24
     }
@@ -1170,12 +1346,14 @@
   "attempt.response.result.claimed_facts[].rows[].fields.norm_value": {
    "null": {
     "type": "bool",
+    "node_visits": 100,
     "observed": {
      "bool": 25
     }
    },
    "number": {
     "type": "number",
+    "node_visits": 100,
     "observed": {
      "int": 41,
      "number": 34
@@ -1185,6 +1363,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.project_stream": {
    "string": {
     "type": "string",
+    "node_visits": 24,
     "observed": {
      "string": 24
     }
@@ -1193,6 +1372,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.provider": {
    "string": {
     "type": "string",
+    "node_visits": 69,
     "observed": {
      "string": 69
     }
@@ -1201,6 +1381,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.prs_merged": {
    "integer": {
     "type": "int",
+    "node_visits": 24,
     "observed": {
      "int": 24
     }
@@ -1209,6 +1390,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.scope": {
    "string": {
     "type": "string",
+    "node_visits": 217,
     "observed": {
      "string": 217
     }
@@ -1217,6 +1399,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.scope_id": {
    "string": {
     "type": "string",
+    "node_visits": 217,
     "observed": {
      "string": 217
     }
@@ -1225,6 +1408,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.scope_name": {
    "string": {
     "type": "string",
+    "node_visits": 217,
     "observed": {
      "string": 217
     }
@@ -1233,6 +1417,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.severity": {
    "string": {
     "type": "string",
+    "node_visits": 217,
     "observed": {
      "string": 217
     }
@@ -1241,6 +1426,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.signal": {
    "string": {
     "type": "string",
+    "node_visits": 100,
     "observed": {
      "string": 100
     }
@@ -1249,6 +1435,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.story_points_completed": {
    "number": {
     "type": "int",
+    "node_visits": 24,
     "observed": {
      "int": 24
     }
@@ -1257,6 +1444,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.team_id": {
    "string": {
     "type": "string",
+    "node_visits": 183,
     "observed": {
      "string": 183
     }
@@ -1265,6 +1453,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.team_name": {
    "string": {
     "type": "string",
+    "node_visits": 163,
     "observed": {
      "string": 163
     }
@@ -1273,6 +1462,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.throughput_mean": {
    "number": {
     "type": "number",
+    "node_visits": 352,
     "observed": {
      "number": 314,
      "int": 38
@@ -1282,6 +1472,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.throughput_stddev": {
    "number": {
     "type": "number",
+    "node_visits": 352,
     "observed": {
      "number": 314,
      "int": 38
@@ -1291,6 +1482,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.unestimated_count": {
    "integer": {
     "type": "int",
+    "node_visits": 193,
     "observed": {
      "int": 193
     }
@@ -1299,6 +1491,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.weight": {
    "number": {
     "type": "number",
+    "node_visits": 100,
     "observed": {
      "number": 100
     }
@@ -1307,12 +1500,14 @@
   "attempt.response.result.claimed_facts[].rows[].fields.weighted_contribution": {
    "null": {
     "type": "bool",
+    "node_visits": 100,
     "observed": {
      "bool": 25
     }
    },
    "number": {
     "type": "number",
+    "node_visits": 100,
     "observed": {
      "number": 67,
      "int": 8
@@ -1322,6 +1517,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.wip_age_p50_hours": {
    "number": {
     "type": "number",
+    "node_visits": 6,
     "observed": {
      "number": 6
     }
@@ -1330,6 +1526,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.wip_age_p90_hours": {
    "number": {
     "type": "number",
+    "node_visits": 6,
     "observed": {
      "number": 6
     }
@@ -1338,6 +1535,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.wip_count_end_of_day": {
    "integer": {
     "type": "int",
+    "node_visits": 24,
     "observed": {
      "int": 24
     }
@@ -1346,6 +1544,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.work_items_completed": {
    "integer": {
     "type": "int",
+    "node_visits": 24,
     "observed": {
      "int": 24
     }
@@ -1354,6 +1553,7 @@
   "attempt.response.result.claimed_facts[].rows[].fields.work_scope_id": {
    "string": {
     "type": "string",
+    "node_visits": 143,
     "observed": {
      "string": 143
     }
@@ -1362,18 +1562,21 @@
   "attempt.response.result.claimed_facts[].subject": {
    "canonical_id": {
     "type": "string",
+    "node_visits": 407,
     "observed": {
      "string": 407
     }
    },
    "kind": {
     "type": "string",
+    "node_visits": 407,
     "observed": {
      "string": 407
     }
    },
    "label": {
     "type": "string",
+    "node_visits": 407,
     "observed": {
      "string": 407
     }
@@ -1382,12 +1585,14 @@
   "attempt.response.result.claimed_facts[].table": {
    "field": {
     "type": "string",
+    "node_visits": 282,
     "observed": {
      "string": 282
     }
    },
    "key": {
     "type": "array",
+    "node_visits": 282,
     "observed": {
      "string": 966
     },
@@ -1395,6 +1600,7 @@
    },
    "measures": {
     "type": "array",
+    "node_visits": 282,
     "observed": {
      "string": 1139
     },
@@ -1402,6 +1608,7 @@
    },
    "observations": {
     "type": "array",
+    "node_visits": 282,
     "observed": {
      "string": 150
     },
@@ -1409,6 +1616,7 @@
    },
    "shape": {
     "type": "string",
+    "node_visits": 282,
     "observed": {
      "string": 282
     }
@@ -1418,6 +1626,7 @@
    "fields": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].time_series_rows[].fields",
+    "node_visits": 6207,
     "observed": {
      "object": 6207
     }
@@ -1427,6 +1636,7 @@
    "backlog_size": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].time_series_rows[].fields.backlog_size",
+    "node_visits": 6207,
     "observed": {
      "object": 3124
     }
@@ -1434,6 +1644,7 @@
    "bug_completed_ratio": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].time_series_rows[].fields.bug_completed_ratio",
+    "node_visits": 6207,
     "observed": {
      "object": 542
     }
@@ -1441,6 +1652,7 @@
    "compounding_risk": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].time_series_rows[].fields.compounding_risk",
+    "node_visits": 6207,
     "observed": {
      "object": 2224
     }
@@ -1448,6 +1660,7 @@
    "day": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].time_series_rows[].fields.day",
+    "node_visits": 6207,
     "observed": {
      "object": 6207
     }
@@ -1455,6 +1668,7 @@
    "estimate_coverage_ratio": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].time_series_rows[].fields.estimate_coverage_ratio",
+    "node_visits": 6207,
     "observed": {
      "object": 2516
     }
@@ -1462,6 +1676,7 @@
    "estimated_count": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].time_series_rows[].fields.estimated_count",
+    "node_visits": 6207,
     "observed": {
      "object": 2976
     }
@@ -1469,6 +1684,7 @@
    "items_completed": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].time_series_rows[].fields.items_completed",
+    "node_visits": 6207,
     "observed": {
      "object": 542
     }
@@ -1476,6 +1692,7 @@
    "items_started": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].time_series_rows[].fields.items_started",
+    "node_visits": 6207,
     "observed": {
      "object": 542
     }
@@ -1483,6 +1700,7 @@
    "severity": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].time_series_rows[].fields.severity",
+    "node_visits": 6207,
     "observed": {
      "object": 2541
     }
@@ -1490,6 +1708,7 @@
    "story_points_completed": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].time_series_rows[].fields.story_points_completed",
+    "node_visits": 6207,
     "observed": {
      "object": 542
     }
@@ -1497,6 +1716,7 @@
    "throughput_mean": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].time_series_rows[].fields.throughput_mean",
+    "node_visits": 6207,
     "observed": {
      "object": 148
     }
@@ -1504,6 +1724,7 @@
    "throughput_stddev": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].time_series_rows[].fields.throughput_stddev",
+    "node_visits": 6207,
     "observed": {
      "object": 148
     }
@@ -1511,6 +1732,7 @@
    "unestimated_count": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].time_series_rows[].fields.unestimated_count",
+    "node_visits": 6207,
     "observed": {
      "object": 2976
     }
@@ -1518,6 +1740,7 @@
    "wip_count_end_of_day": {
     "type": "object",
     "node": "attempt.response.result.claimed_facts[].time_series_rows[].fields.wip_count_end_of_day",
+    "node_visits": 6207,
     "observed": {
      "object": 542
     }
@@ -1526,6 +1749,7 @@
   "attempt.response.result.claimed_facts[].time_series_rows[].fields.backlog_size": {
    "integer": {
     "type": "int",
+    "node_visits": 3124,
     "observed": {
      "int": 3124
     }
@@ -1534,6 +1758,7 @@
   "attempt.response.result.claimed_facts[].time_series_rows[].fields.bug_completed_ratio": {
    "number": {
     "type": "number",
+    "node_visits": 542,
     "observed": {
      "int": 446,
      "number": 96
@@ -1543,6 +1768,7 @@
   "attempt.response.result.claimed_facts[].time_series_rows[].fields.compounding_risk": {
    "number": {
     "type": "number",
+    "node_visits": 2224,
     "observed": {
      "number": 2224
     }
@@ -1551,6 +1777,7 @@
   "attempt.response.result.claimed_facts[].time_series_rows[].fields.day": {
    "string": {
     "type": "string",
+    "node_visits": 6207,
     "observed": {
      "string": 6207
     }
@@ -1559,6 +1786,7 @@
   "attempt.response.result.claimed_facts[].time_series_rows[].fields.estimate_coverage_ratio": {
    "number": {
     "type": "int",
+    "node_visits": 2516,
     "observed": {
      "int": 2516
     }
@@ -1567,6 +1795,7 @@
   "attempt.response.result.claimed_facts[].time_series_rows[].fields.estimated_count": {
    "integer": {
     "type": "int",
+    "node_visits": 2976,
     "observed": {
      "int": 2976
     }
@@ -1575,6 +1804,7 @@
   "attempt.response.result.claimed_facts[].time_series_rows[].fields.items_completed": {
    "integer": {
     "type": "int",
+    "node_visits": 542,
     "observed": {
      "int": 542
     }
@@ -1583,6 +1813,7 @@
   "attempt.response.result.claimed_facts[].time_series_rows[].fields.items_started": {
    "integer": {
     "type": "int",
+    "node_visits": 542,
     "observed": {
      "int": 542
     }
@@ -1591,6 +1822,7 @@
   "attempt.response.result.claimed_facts[].time_series_rows[].fields.severity": {
    "string": {
     "type": "string",
+    "node_visits": 2541,
     "observed": {
      "string": 2541
     }
@@ -1599,6 +1831,7 @@
   "attempt.response.result.claimed_facts[].time_series_rows[].fields.story_points_completed": {
    "number": {
     "type": "int",
+    "node_visits": 542,
     "observed": {
      "int": 542
     }
@@ -1607,6 +1840,7 @@
   "attempt.response.result.claimed_facts[].time_series_rows[].fields.throughput_mean": {
    "number": {
     "type": "number",
+    "node_visits": 148,
     "observed": {
      "number": 110,
      "int": 38
@@ -1616,6 +1850,7 @@
   "attempt.response.result.claimed_facts[].time_series_rows[].fields.throughput_stddev": {
    "number": {
     "type": "number",
+    "node_visits": 148,
     "observed": {
      "number": 110,
      "int": 38
@@ -1625,6 +1860,7 @@
   "attempt.response.result.claimed_facts[].time_series_rows[].fields.unestimated_count": {
    "integer": {
     "type": "int",
+    "node_visits": 2976,
     "observed": {
      "int": 2976
     }
@@ -1633,6 +1869,7 @@
   "attempt.response.result.claimed_facts[].time_series_rows[].fields.wip_count_end_of_day": {
    "integer": {
     "type": "int",
+    "node_visits": 542,
     "observed": {
      "int": 542
     }
@@ -1641,12 +1878,14 @@
   "attempt.response.result.claimed_facts[].time_series_table": {
    "field": {
     "type": "string",
+    "node_visits": 215,
     "observed": {
      "string": 215
     }
    },
    "key": {
     "type": "array",
+    "node_visits": 215,
     "observed": {
      "string": 215
     },
@@ -1654,6 +1893,7 @@
    },
    "measures": {
     "type": "array",
+    "node_visits": 215,
     "observed": {
      "string": 638
     },
@@ -1661,6 +1901,7 @@
    },
    "observations": {
     "type": "array",
+    "node_visits": 215,
     "observed": {
      "string": 56
     },
@@ -1668,6 +1909,7 @@
    },
    "shape": {
     "type": "string",
+    "node_visits": 215,
     "observed": {
      "string": 215
     }
@@ -1676,18 +1918,21 @@
   "attempt.response.result.claimed_facts[].value": {
    "boolean": {
     "type": "bool",
+    "node_visits": 407,
     "observed": {
      "bool": 11
     }
    },
    "integer": {
     "type": "int",
+    "node_visits": 407,
     "observed": {
      "int": 198
     }
    },
    "number": {
     "type": "number",
+    "node_visits": 407,
     "observed": {
      "int": 109,
      "number": 10
@@ -1695,6 +1940,7 @@
    },
    "string": {
     "type": "string",
+    "node_visits": 407,
     "observed": {
      "string": 79
     }
@@ -1703,12 +1949,14 @@
   "attempt.response.result.cohort": {
    "complete": {
     "type": "bool",
+    "node_visits": 63,
     "observed": {
      "bool": 63
     }
    },
    "groups": {
     "type": "array",
+    "node_visits": 63,
     "observed": {
      "object": 141
     },
@@ -1717,12 +1965,14 @@
    },
    "kind": {
     "type": "string",
+    "node_visits": 63,
     "observed": {
      "string": 63
     }
    },
    "members": {
     "type": "array",
+    "node_visits": 63,
     "observed": {
      "object": 503
     },
@@ -1731,12 +1981,14 @@
    },
    "rationale": {
     "type": "string",
+    "node_visits": 63,
     "observed": {
      "string": 63
     }
    },
    "truncated": {
     "type": "bool",
+    "node_visits": 63,
     "observed": {
      "bool": 63
     }
@@ -1745,12 +1997,14 @@
   "attempt.response.result.cohort.groups[]": {
    "complete": {
     "type": "bool",
+    "node_visits": 141,
     "observed": {
      "bool": 141
     }
    },
    "member_canonical_ids": {
     "type": "array",
+    "node_visits": 141,
     "observed": {
      "string": 164
     },
@@ -1759,18 +2013,21 @@
    "subject": {
     "type": "object",
     "node": "attempt.response.result.cohort.groups[].subject",
+    "node_visits": 141,
     "observed": {
      "object": 141
     }
    },
    "total": {
     "type": "int",
+    "node_visits": 141,
     "observed": {
      "int": 141
     }
    },
    "truncated": {
     "type": "bool",
+    "node_visits": 141,
     "observed": {
      "bool": 141
     }
@@ -1779,18 +2036,21 @@
   "attempt.response.result.cohort.groups[].subject": {
    "canonical_id": {
     "type": "string",
+    "node_visits": 141,
     "observed": {
      "string": 141
     }
    },
    "kind": {
     "type": "string",
+    "node_visits": 141,
     "observed": {
      "string": 141
     }
    },
    "label": {
     "type": "string",
+    "node_visits": 141,
     "observed": {
      "string": 141
     }
@@ -1799,18 +2059,21 @@
   "attempt.response.result.cohort.members[]": {
    "attention_rank": {
     "type": "int",
+    "node_visits": 503,
     "observed": {
      "int": 503
     }
    },
    "data_completeness": {
     "type": "string",
+    "node_visits": 503,
     "observed": {
      "string": 503
     }
    },
    "drivers": {
     "type": "array",
+    "node_visits": 503,
     "observed": {
      "object": 100
     },
@@ -1819,6 +2082,7 @@
    },
    "evidence_ref_ids": {
     "type": "array",
+    "node_visits": 503,
     "observed": {
      "string": 503
     },
@@ -1826,6 +2090,7 @@
    },
    "inclusion_reasons": {
     "type": "array",
+    "node_visits": 503,
     "observed": {
      "string": 503
     },
@@ -1833,6 +2098,7 @@
    },
    "missing_signals": {
     "type": "array",
+    "node_visits": 503,
     "observed": {
      "string": 2166
     },
@@ -1840,18 +2106,21 @@
    },
    "outcome": {
     "type": "string",
+    "node_visits": 503,
     "observed": {
      "string": 503
     }
    },
    "rank": {
     "type": "int",
+    "node_visits": 503,
     "observed": {
      "int": 503
     }
    },
    "ranking_basis": {
     "type": "array",
+    "node_visits": 503,
     "observed": {
      "string": 100
     },
@@ -1859,12 +2128,14 @@
    },
    "ranking_computed": {
     "type": "bool",
+    "node_visits": 503,
     "observed": {
      "bool": 503
     }
    },
    "score": {
     "type": "int",
+    "node_visits": 503,
     "observed": {
      "int": 25
     }
@@ -1872,6 +2143,7 @@
    "subject": {
     "type": "object",
     "node": "attempt.response.result.cohort.members[].subject",
+    "node_visits": 503,
     "observed": {
      "object": 503
     }
@@ -1880,24 +2152,28 @@
   "attempt.response.result.cohort.members[].drivers[]": {
    "concentration": {
     "type": "number",
+    "node_visits": 100,
     "observed": {
      "number": 25
     }
    },
    "concentration_method": {
     "type": "string",
+    "node_visits": 100,
     "observed": {
      "string": 25
     }
    },
    "signal": {
     "type": "string",
+    "node_visits": 100,
     "observed": {
      "string": 100
     }
    },
    "source_claimed_fact_ids": {
     "type": "array",
+    "node_visits": 100,
     "observed": {
      "string": 75
     },
@@ -1905,18 +2181,21 @@
    },
    "value": {
     "type": "int",
+    "node_visits": 100,
     "observed": {
      "int": 100
     }
    },
    "weight": {
     "type": "int",
+    "node_visits": 100,
     "observed": {
      "int": 100
     }
    },
    "weight_contributed": {
     "type": "number",
+    "node_visits": 100,
     "observed": {
      "int": 50,
      "number": 50
@@ -1924,6 +2203,7 @@
    },
    "window": {
     "type": "string",
+    "node_visits": 100,
     "observed": {
      "string": 100
     }
@@ -1932,18 +2212,21 @@
   "attempt.response.result.cohort.members[].subject": {
    "canonical_id": {
     "type": "string",
+    "node_visits": 503,
     "observed": {
      "string": 503
     }
    },
    "kind": {
     "type": "string",
+    "node_visits": 503,
     "observed": {
      "string": 503
     }
    },
    "label": {
     "type": "string",
+    "node_visits": 503,
     "observed": {
      "string": 503
     }
@@ -1952,12 +2235,14 @@
   "attempt.response.result.completeness": {
    "claimed_facts_count": {
     "type": "int",
+    "node_visits": 706,
     "observed": {
      "int": 706
     }
    },
    "outcomes": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "object": 1804
     },
@@ -1966,24 +2251,28 @@
    },
    "rows_count": {
     "type": "int",
+    "node_visits": 706,
     "observed": {
      "int": 706
     }
    },
    "state": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
    },
    "terminal_reason": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
    },
    "terminal_status": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
@@ -1992,42 +2281,49 @@
   "attempt.response.result.completeness.outcomes[]": {
    "cause_coverage": {
     "type": "string",
+    "node_visits": 1804,
     "observed": {
      "string": 1530
     }
    },
    "cause_observed": {
     "type": "bool",
+    "node_visits": 1804,
     "observed": {
      "bool": 1804
     }
    },
    "declared": {
     "type": "int",
+    "node_visits": 1804,
     "observed": {
      "int": 1804
     }
    },
    "impact": {
     "type": "string",
+    "node_visits": 1804,
     "observed": {
      "string": 1804
     }
    },
    "obligation": {
     "type": "string",
+    "node_visits": 1804,
     "observed": {
      "string": 1804
     }
    },
    "outcome": {
     "type": "string",
+    "node_visits": 1804,
     "observed": {
      "string": 1804
     }
    },
    "refinements": {
     "type": "array",
+    "node_visits": 1804,
     "observed": {
      "object": 165
     },
@@ -2036,18 +2332,21 @@
    },
    "requirement": {
     "type": "string",
+    "node_visits": 1804,
     "observed": {
      "string": 1804
     }
    },
    "served": {
     "type": "int",
+    "node_visits": 1804,
     "observed": {
      "int": 1804
     }
    },
    "stage": {
     "type": "string",
+    "node_visits": 1804,
     "observed": {
      "string": 1804
     }
@@ -2056,24 +2355,28 @@
   "attempt.response.result.completeness.outcomes[].refinements[]": {
    "after": {
     "type": "int",
+    "node_visits": 165,
     "observed": {
      "int": 165
     }
    },
    "before": {
     "type": "int",
+    "node_visits": 165,
     "observed": {
      "int": 165
     }
    },
    "coverage": {
     "type": "string",
+    "node_visits": 165,
     "observed": {
      "string": 165
     }
    },
    "stage": {
     "type": "string",
+    "node_visits": 165,
     "observed": {
      "string": 165
     }
@@ -2082,48 +2385,56 @@
   "attempt.response.result.confirmed_structure[]": {
    "applied_value": {
     "type": "string",
+    "node_visits": 359,
     "observed": {
      "string": 359
     }
    },
    "disposition": {
     "type": "string",
+    "node_visits": 359,
     "observed": {
      "string": 359
     }
    },
    "member": {
     "type": "string",
+    "node_visits": 359,
     "observed": {
      "string": 359
     }
    },
    "offer_source": {
     "type": "string",
+    "node_visits": 359,
     "observed": {
      "string": 293
     }
    },
    "prior_result_id": {
     "type": "string",
+    "node_visits": 359,
     "observed": {
      "string": 359
     }
    },
    "provenance": {
     "type": "string",
+    "node_visits": 359,
     "observed": {
      "string": 359
     }
    },
    "receipt_id": {
     "type": "string",
+    "node_visits": 359,
     "observed": {
      "string": 293
     }
    },
    "source": {
     "type": "string",
+    "node_visits": 359,
     "observed": {
      "string": 359
     }
@@ -2132,6 +2443,7 @@
   "attempt.response.result.coverage": {
    "degraded_reasons": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "string": 353
     },
@@ -2139,6 +2451,7 @@
    },
    "details": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "object": 531
     },
@@ -2147,12 +2460,14 @@
    },
    "partial": {
     "type": "bool",
+    "node_visits": 706,
     "observed": {
      "bool": 706
     }
    },
    "sources": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "object": 1262
     },
@@ -2163,84 +2478,98 @@
   "attempt.response.result.coverage.details[]": {
    "basis": {
     "type": "string",
+    "node_visits": 531,
     "observed": {
      "string": 198
     }
    },
    "code": {
     "type": "string",
+    "node_visits": 531,
     "observed": {
      "string": 531
     }
    },
    "count": {
     "type": "int",
+    "node_visits": 531,
     "observed": {
      "int": 16
     }
    },
    "degrading": {
     "type": "bool",
+    "node_visits": 531,
     "observed": {
      "bool": 531
     }
    },
    "detail_id": {
     "type": "string",
+    "node_visits": 531,
     "observed": {
      "string": 531
     }
    },
    "fact_kind": {
     "type": "string",
+    "node_visits": 531,
     "observed": {
      "string": 520
     }
    },
    "label": {
     "type": "string",
+    "node_visits": 531,
     "observed": {
      "string": 531
     }
    },
    "narrowed": {
     "type": "bool",
+    "node_visits": 531,
     "observed": {
      "bool": 5
     }
    },
    "origin_kind": {
     "type": "string",
+    "node_visits": 531,
     "observed": {
      "string": 198
     }
    },
    "phrasing": {
     "type": "string",
+    "node_visits": 531,
     "observed": {
      "string": 97
     }
    },
    "policy": {
     "type": "string",
+    "node_visits": 531,
     "observed": {
      "string": 198
     }
    },
    "raw": {
     "type": "string",
+    "node_visits": 531,
     "observed": {
      "string": 531
     }
    },
    "scope_outcome": {
     "type": "string",
+    "node_visits": 531,
     "observed": {
      "string": 198
     }
    },
    "skipped_kinds": {
     "type": "array",
+    "node_visits": 531,
     "observed": {
      "string": 5
     },
@@ -2248,18 +2577,21 @@
    },
    "source": {
     "type": "string",
+    "node_visits": 531,
     "observed": {
      "string": 531
     }
    },
    "source_state": {
     "type": "string",
+    "node_visits": 531,
     "observed": {
      "string": 520
     }
    },
    "supported_kinds": {
     "type": "array",
+    "node_visits": 531,
     "observed": {
      "string": 955
     },
@@ -2269,36 +2601,42 @@
   "attempt.response.result.coverage.sources[]": {
    "label": {
     "type": "string",
+    "node_visits": 1262,
     "observed": {
      "string": 1262
     }
    },
    "observed_at": {
     "type": "string",
+    "node_visits": 1262,
     "observed": {
      "string": 423
     }
    },
    "reason": {
     "type": "string",
+    "node_visits": 1262,
     "observed": {
      "string": 531
     }
    },
    "source": {
     "type": "string",
+    "node_visits": 1262,
     "observed": {
      "string": 1262
     }
    },
    "state": {
     "type": "string",
+    "node_visits": 1262,
     "observed": {
      "string": 1262
     }
    },
    "state_label": {
     "type": "string",
+    "node_visits": 1262,
     "observed": {
      "string": 1262
     }
@@ -2307,6 +2645,7 @@
   "attempt.response.result.drivers[]": {
    "affected_subjects": {
     "type": "array",
+    "node_visits": 343,
     "observed": {
      "object": 472
     },
@@ -2315,12 +2654,14 @@
    },
    "category": {
     "type": "string",
+    "node_visits": 343,
     "observed": {
      "string": 343
     }
    },
    "claimed_fact_ids": {
     "type": "array",
+    "node_visits": 343,
     "observed": {
      "string": 403
     },
@@ -2328,6 +2669,7 @@
    },
    "confidence": {
     "type": "number",
+    "node_visits": 343,
     "observed": {
      "number": 241,
      "int": 102
@@ -2335,30 +2677,35 @@
    },
    "current": {
     "type": "bool",
+    "node_visits": 343,
     "observed": {
      "bool": 343
     }
    },
    "derivation": {
     "type": "string",
+    "node_visits": 343,
     "observed": {
      "string": 343
     }
    },
    "driver_id": {
     "type": "string",
+    "node_visits": 343,
     "observed": {
      "string": 343
     }
    },
    "epistemic_status": {
     "type": "string",
+    "node_visits": 343,
     "observed": {
      "string": 343
     }
    },
    "evidence_ref_ids": {
     "type": "array",
+    "node_visits": 343,
     "observed": {
      "string": 751
     },
@@ -2366,6 +2713,7 @@
    },
    "path_ids": {
     "type": "array",
+    "node_visits": 343,
     "observed": {
      "string": 75
     },
@@ -2373,24 +2721,28 @@
    },
    "qualification": {
     "type": "string",
+    "node_visits": 343,
     "observed": {
      "string": 11
     }
    },
    "standing": {
     "type": "string",
+    "node_visits": 343,
     "observed": {
      "string": 343
     }
    },
    "summary": {
     "type": "string",
+    "node_visits": 343,
     "observed": {
      "string": 343
     }
    },
    "title": {
     "type": "string",
+    "node_visits": 343,
     "observed": {
      "string": 343
     }
@@ -2399,18 +2751,21 @@
   "attempt.response.result.drivers[].affected_subjects[]": {
    "canonical_id": {
     "type": "string",
+    "node_visits": 472,
     "observed": {
      "string": 472
     }
    },
    "kind": {
     "type": "string",
+    "node_visits": 472,
     "observed": {
      "string": 472
     }
    },
    "label": {
     "type": "string",
+    "node_visits": 472,
     "observed": {
      "string": 472
     }
@@ -2419,36 +2774,42 @@
   "attempt.response.result.effective_evidence_window": {
    "confidence": {
     "type": "string",
+    "node_visits": 528,
     "observed": {
      "string": 269
     }
    },
    "end": {
     "type": "string",
+    "node_visits": 528,
     "observed": {
      "string": 528
     }
    },
    "provenance": {
     "type": "string",
+    "node_visits": 528,
     "observed": {
      "string": 528
     }
    },
    "relative_id": {
     "type": "string",
+    "node_visits": 528,
     "observed": {
      "string": 528
     }
    },
    "start": {
     "type": "string",
+    "node_visits": 528,
     "observed": {
      "string": 528
     }
    },
    "window_class": {
     "type": "string",
+    "node_visits": 528,
     "observed": {
      "string": 269
     }
@@ -2457,3012 +2818,3514 @@
   "attempt.response.result.evidence_ref_labels": {
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29103196850": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29104130605": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29104207622": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29106663498": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29110434891": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29110549731": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29112030118": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29112169319": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29123257420": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29123398829": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29125322794": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29127311172": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29127319515": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29127448209": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29127589152": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29127872604": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29127974761": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29128021601": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29128106930": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29136336627": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29136372846": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29139177223": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29139768546": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29139898696": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29213415002": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 9
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29263566555": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 9
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29267045240": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 9
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29335971351": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 21
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29336323652": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 21
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29381087933": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 21
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29386211442": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 21
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29424568714": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 21
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29425915658": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 21
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29426799738": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 21
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29427479287": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 9
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29436589847": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 9
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:29492563222": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 9
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:30041367152": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:30106484479": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:30106484495": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:30471049349": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:31585932461": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:31593999252": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:31707432501": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:31722786288": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:31724663858": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:31839027592": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:31839027650": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:31900838865": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:31900838905": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:32083472892": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:32670823430": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:32670823482": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:33329800938": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 44
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:33676148534": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:33680016617": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:33681980195": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:33684164282": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:33685111871": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:33687413935": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:33687621012": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:33787759019": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:33794003264": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:33816655186": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:33821413356": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:7b9583ee-4d24-2be7-4d09-34f815bebdd7:33823011251": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25505788772": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25559913436": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25559968454": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25559971203": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25559971233": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25559971246": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25559971255": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25559971267": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25559971285": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25559971297": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25559971334": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25565450137": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25565587509": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25565587538": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25565587539": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25565587543": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25565587563": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25565587568": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25565587570": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25565587616": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25565598628": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25595577099": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25620409711": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25666825581": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25747752637": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25747766184": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:25755373218": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:26125502227": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:26132482982": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:26134404475": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:26243723411": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:26243747182": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:26243747183": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:26243747184": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:26243747187": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:26243747228": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:26243747229": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:26243747231": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:26243747268": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:26766076834": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 23
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:26766093453": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 23
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:26766093862": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 20
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:26766094465": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 20
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:26766094490": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 20
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:26766094503": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 20
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:26766094504": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 20
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:26766094522": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 10
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:26766170539": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:26766175439": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:27640180317": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:27645821120": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:27705785703": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:27728472374": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:27732365634": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:27760088755": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:27760661641": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:28063194073": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:28066761992": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:28103501616": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:28137578010": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:28615415830": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 10
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:28615989563": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 10
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:29386026077": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:29386026078": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:29386026082": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:29386026091": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:29386026117": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:29386026155": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:29386026166": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:29386026184": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:29386026191": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:29386168462": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:29546865060": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:29547200942": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:29547896390": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30604297528": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30604297534": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30604297535": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30604297539": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30604297550": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30604297553": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30604297554": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30604297561": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30858443440": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30858443444": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30858443454": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30858443483": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30872063326": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 18
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30872063328": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 18
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30872063337": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 18
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30872063338": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 18
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30872063357": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 18
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30872063363": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 18
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30872063393": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 18
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30872063405": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 18
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30872409036": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 15
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30934800138": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 14
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30934800185": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 14
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30934800246": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 14
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30934800287": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 14
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30934800828": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 12
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30934801078": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 12
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30934803495": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 12
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30934828965": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 12
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30934847634": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 12
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:30947483401": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:31028027112": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:31135457064": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 12
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:31135457069": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 12
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:31135457070": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 12
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:31135457085": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 12
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:31135457089": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 12
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:31135457094": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 12
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:31135457098": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 12
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:31136423085": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 10
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:31136423101": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 10
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:31136423107": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 10
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:31136423118": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 10
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:31136423129": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:31230926088": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32360157523": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32372920106": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32423485233": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32439899049": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32577296023": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32779334552": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32779354090": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32866726728": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32891474182": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32891692617": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32891692622": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32891692665": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32891692670": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32891692687": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32891692746": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32891692755": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32891692811": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32891692825": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32895110018": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32896929222": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32896934191": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32896934193": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32896934207": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32896934243": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32896934259": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32896934296": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32896934320": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32982611653": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32985234693": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32991536737": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32992032837": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32992546988": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32992649188": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32992859332": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32994462375": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32994520184": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32998646636": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:32998725742": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33025035950": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33196239783": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33196269821": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33196269823": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33196269827": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33196269835": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33196269844": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33196269848": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33196269850": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33196269852": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33196269857": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33197498155": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33197502240": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33197502263": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33197502281": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33197502296": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33197502306": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33197502312": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33197502314": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33197502319": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33197502354": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33198722766": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33345736292": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33493616879": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33493616886": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33493616900": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33493616921": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33493616927": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33493616976": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33493616983": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33493617018": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33812706078": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33812706081": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33812706084": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33812706102": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33812706104": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33812706113": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33812706114": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33812706130": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:920f9442-07df-4217-4dc4-c5833c0b8268:33812706189": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:cd620f84-2602-8dea-7809-8d1f11825cf4:2419223424": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:ci:cd620f84-2602-8dea-7809-8d1f11825cf4:2419248022": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:ci:cd620f84-2602-8dea-7809-8d1f11825cf4:2446728310": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:cd620f84-2602-8dea-7809-8d1f11825cf4:2446728403": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:ci:cd620f84-2602-8dea-7809-8d1f11825cf4:2446728595": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:cd620f84-2602-8dea-7809-8d1f11825cf4:2567652162": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:cd620f84-2602-8dea-7809-8d1f11825cf4:2567670552": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:cd620f84-2602-8dea-7809-8d1f11825cf4:2567720020": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:cd620f84-2602-8dea-7809-8d1f11825cf4:2599057111": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:ci:d29d160a-95fe-5b45-d4c1-fd1f5427b772:27348860854": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:d29d160a-95fe-5b45-d4c1-fd1f5427b772:27348860865": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:d29d160a-95fe-5b45-d4c1-fd1f5427b772:27348860929": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:d29d160a-95fe-5b45-d4c1-fd1f5427b772:27348860963": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:ci:d4f322ad-2102-1fbf-8425-7400573194f7:26364433782": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:ci:d4f322ad-2102-1fbf-8425-7400573194f7:26364433805": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:ci:d4f322ad-2102-1fbf-8425-7400573194f7:26364601913": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:ci:d4f322ad-2102-1fbf-8425-7400573194f7:26364601975": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:ci:d4f322ad-2102-1fbf-8425-7400573194f7:26364857766": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:ci:d4f322ad-2102-1fbf-8425-7400573194f7:26364857780": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:deployment:920f9442-07df-4217-4dc4-c5833c0b8268:3530993037": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:deployment:920f9442-07df-4217-4dc4-c5833c0b8268:3531079047": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:deployment:920f9442-07df-4217-4dc4-c5833c0b8268:3531139110": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:deployment:920f9442-07df-4217-4dc4-c5833c0b8268:3531280774": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:deployment:920f9442-07df-4217-4dc4-c5833c0b8268:3531347360": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:deployment:920f9442-07df-4217-4dc4-c5833c0b8268:3531386712": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:deployment:920f9442-07df-4217-4dc4-c5833c0b8268:3531415421": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:project-team:gitlab:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891:gl:full.chaos": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:project-team:gitlab:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:77145099:gl:full.chaos": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:project-team:linear:00c93eb7-be3a-48e5-8169-eecf30df0947:CHAOS": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 44
     }
    },
    "acr:v1:project-team:linear:04b686b0-dc67-4468-9aa4-e76dd4aff2bd:CHAOS": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 44
     }
    },
    "acr:v1:project-team:linear:13e65c04-40ec-4a95-8216-f7c2ce233244:CHAOS": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 44
     }
    },
    "acr:v1:project-team:linear:272efdae-c682-45b6-ae30-e8877eff15f4:CHAOS": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 44
     }
    },
    "acr:v1:project-team:linear:2fb2c2b3-c52a-441a-b5f6-0453ce894e32:CHAOS": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 44
     }
    },
    "acr:v1:project-team:linear:32f7879e-00ed-486f-884a-bfb4e93e2f48:CHAOS": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 44
     }
    },
    "acr:v1:project-team:linear:468890d1-7500-443c-80bb-ce648172e28e:CHAOS": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 44
     }
    },
    "acr:v1:project-team:linear:523e2582-b54b-4e86-8f4d-0db6e5224b72:CHAOS": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 44
     }
    },
    "acr:v1:project-team:linear:60997592-f9f4-462b-87c3-ef82671df270:CHAOS": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 44
     }
    },
    "acr:v1:project-team:linear:6241316a-85be-42ce-b243-8e41f2b18c8d:CHAOS": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 44
     }
    },
    "acr:v1:project-team:linear:631fcb5f-c3e9-49ff-b17c-07877aaac9b7:CHAOS": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 44
     }
    },
    "acr:v1:project-team:linear:b5478371-71a4-411a-84fe-07afdeac9c36:CHAOS": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 44
     }
    },
    "acr:v1:project-team:linear:c040b7df-5488-4ddc-adf2-858bcf45ae0b:CHAOS": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 44
     }
    },
    "acr:v1:project-team:linear:c67b1602-31db-4422-8dec-a4a02bbcc513:CHAOS": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 44
     }
    },
    "acr:v1:project-team:linear:c8ea0211-113b-45b3-96dd-0bdef8a23476:CHAOS": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 44
     }
    },
    "acr:v1:project-team:linear:e4e4afb2-c25a-4d59-8302-1a32c8c448c4:CHAOS": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 44
     }
    },
    "acr:v1:project-team:linear:e9f0f962-0969-4ad6-be9c-3d031aeb649c:CHAOS": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 44
     }
    },
    "acr:v1:project-team:linear:f2394e62-d78c-461e-bec1-af13124ebed2:CHAOS": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 44
     }
    },
    "acr:v1:project:gitlab:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 45
     }
    },
    "acr:v1:project:gitlab:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:77145099": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 81
     }
    },
    "acr:v1:project:jira:10111": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 33
     }
    },
    "acr:v1:project:jira:10114": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 33
     }
    },
    "acr:v1:project:jira:70d529e0-3c06-4597-8480-794fd02328b6:jira:API": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 33
     }
    },
    "acr:v1:project:jira:70d529e0-3c06-4597-8480-794fd02328b6:jira:AUTH": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 33
     }
    },
    "acr:v1:project:jira:70d529e0-3c06-4597-8480-794fd02328b6:jira:BILL": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 33
     }
    },
    "acr:v1:project:jira:70d529e0-3c06-4597-8480-794fd02328b6:jira:DATA": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 33
     }
    },
    "acr:v1:project:jira:70d529e0-3c06-4597-8480-794fd02328b6:jira:FC": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 45
     }
    },
    "acr:v1:project:jira:70d529e0-3c06-4597-8480-794fd02328b6:jira:FCD": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 33
     }
    },
    "acr:v1:project:jira:70d529e0-3c06-4597-8480-794fd02328b6:jira:ML": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:project:jira:70d529e0-3c06-4597-8480-794fd02328b6:jira:NOTIF": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:project:jira:70d529e0-3c06-4597-8480-794fd02328b6:jira:OPS": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:project:jira:70d529e0-3c06-4597-8480-794fd02328b6:jira:SEC": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:project:linear:00c93eb7-be3a-48e5-8169-eecf30df0947": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 15
     }
    },
    "acr:v1:project:linear:04b686b0-dc67-4468-9aa4-e76dd4aff2bd": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:project:linear:13e65c04-40ec-4a95-8216-f7c2ce233244": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 43
     }
    },
    "acr:v1:project:linear:272efdae-c682-45b6-ae30-e8877eff15f4": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:project:linear:2fb2c2b3-c52a-441a-b5f6-0453ce894e32": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:project:linear:32f7879e-00ed-486f-884a-bfb4e93e2f48": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:project:linear:468890d1-7500-443c-80bb-ce648172e28e": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:project:linear:523e2582-b54b-4e86-8f4d-0db6e5224b72": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:project:linear:60997592-f9f4-462b-87c3-ef82671df270": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 53
     }
    },
    "acr:v1:project:linear:6241316a-85be-42ce-b243-8e41f2b18c8d": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 54
     }
    },
    "acr:v1:project:linear:631fcb5f-c3e9-49ff-b17c-07877aaac9b7": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 15
     }
    },
    "acr:v1:project:linear:b5478371-71a4-411a-84fe-07afdeac9c36": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:project:linear:c040b7df-5488-4ddc-adf2-858bcf45ae0b": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:project:linear:c67b1602-31db-4422-8dec-a4a02bbcc513": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:pull-request:7b9583ee-4d24-2be7-4d09-34f815bebdd7:246": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:pull-request:7b9583ee-4d24-2be7-4d09-34f815bebdd7:270": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:pull-request:7b9583ee-4d24-2be7-4d09-34f815bebdd7:340": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 14
     }
    },
    "acr:v1:pull-request:7b9583ee-4d24-2be7-4d09-34f815bebdd7:355": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:pull-request:7b9583ee-4d24-2be7-4d09-34f815bebdd7:371": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:pull-request:7b9583ee-4d24-2be7-4d09-34f815bebdd7:376": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:pull-request:7b9583ee-4d24-2be7-4d09-34f815bebdd7:391": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:pull-request:7b9583ee-4d24-2be7-4d09-34f815bebdd7:396": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:pull-request:7b9583ee-4d24-2be7-4d09-34f815bebdd7:407": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:pull-request:7b9583ee-4d24-2be7-4d09-34f815bebdd7:426": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:pull-request:7b9583ee-4d24-2be7-4d09-34f815bebdd7:427": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 9
     }
    },
    "acr:v1:pull-request:7b9583ee-4d24-2be7-4d09-34f815bebdd7:431": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 23
     }
    },
    "acr:v1:pull-request:7b9583ee-4d24-2be7-4d09-34f815bebdd7:5": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:pull-request:7b9583ee-4d24-2be7-4d09-34f815bebdd7:71": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:pull-request:7c2911fe-a928-c392-f6be-67448656e5a6:21": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:pull-request:7c2911fe-a928-c392-f6be-67448656e5a6:6": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 15
     }
    },
    "acr:v1:pull-request:7c2911fe-a928-c392-f6be-67448656e5a6:8": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:1022": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 9
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:1023": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:1090": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:1181": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:1262": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:1337": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:1374": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:1453": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 20
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:1539": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:1548": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 21
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:1574": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:1673": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 14
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:1707": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 33
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:1723": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 14
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:1789": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 21
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:1831": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:1910": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:1931": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:196": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:2046": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:2064": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:2092": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:2098": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 16
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:2104": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:31": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 10
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:319": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 33
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:320": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 33
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:405": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 14
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:412": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 15
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:47": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:55": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 41
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:635": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:641": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:766": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 26
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:783": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:842": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 21
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:876": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:893": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 35
     }
    },
    "acr:v1:pull-request:920f9442-07df-4217-4dc4-c5833c0b8268:990": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:pull-request:cd620f84-2602-8dea-7809-8d1f11825cf4:4": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 9
     }
    },
    "acr:v1:pull-request:d29d160a-95fe-5b45-d4c1-fd1f5427b772:121": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:pull-request:d29d160a-95fe-5b45-d4c1-fd1f5427b772:507": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 9
     }
    },
    "acr:v1:pull-request:d29d160a-95fe-5b45-d4c1-fd1f5427b772:510": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 13
     }
    },
    "acr:v1:pull-request:d29d160a-95fe-5b45-d4c1-fd1f5427b772:512": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:pull-request:d29d160a-95fe-5b45-d4c1-fd1f5427b772:55": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:pull-request:d29d160a-95fe-5b45-d4c1-fd1f5427b772:552": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 31
     }
    },
    "acr:v1:pull-request:d29d160a-95fe-5b45-d4c1-fd1f5427b772:64": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:pull-request:d29d160a-95fe-5b45-d4c1-fd1f5427b772:680": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:pull-request:d29d160a-95fe-5b45-d4c1-fd1f5427b772:715": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:pull-request:d29d160a-95fe-5b45-d4c1-fd1f5427b772:866": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 7
     }
    },
    "acr:v1:pull-request:d4f322ad-2102-1fbf-8425-7400573194f7:152": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:pull-request:d4f322ad-2102-1fbf-8425-7400573194f7:373": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:pull-request:d4f322ad-2102-1fbf-8425-7400573194f7:448": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:pull-request:d4f322ad-2102-1fbf-8425-7400573194f7:487": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:repository:78b801c4-b54f-7c54-8087-5abec322d009": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 19
     }
    },
    "acr:v1:repository:7b9583ee-4d24-2be7-4d09-34f815bebdd7": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 19
     }
    },
    "acr:v1:repository:7c2911fe-a928-c392-f6be-67448656e5a6": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 19
     }
    },
    "acr:v1:repository:920f9442-07df-4217-4dc4-c5833c0b8268": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 19
     }
    },
    "acr:v1:repository:d29d160a-95fe-5b45-d4c1-fd1f5427b772": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 19
     }
    },
    "acr:v1:repository:d4f322ad-2102-1fbf-8425-7400573194f7": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 19
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:3569919336": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:3569933963": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:3569963636": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:3571606852": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:3571615119": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:3571633221": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:3571647435": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:3571659506": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:3571676405": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:3571982186": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:3572102835": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:3572362152": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:3572448573": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:3572789315": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:3572815857": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:3573947933": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:3573961180": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:3595877246": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:3736491873": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 33
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:3736495359": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 28
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:3851456170": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 10
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:3851456332": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 10
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:3883674802": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 10
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:3883679704": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 10
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:3883765394": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 10
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:3883765625": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 10
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:4402606785": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 10
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:4499548588": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:4499549526": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:4534875076": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 43
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:4534882466": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 42
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:4534885546": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 42
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:4570605848": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:4570608126": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:4576155487": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:4629798009": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:4629799126": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:4686795980": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 10
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:4686799155": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 10
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:4740956108": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:4741186066": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:4741361491": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:4741372568": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 2
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:4823639468": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:4823854821": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:4849647305": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:4849738664": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 4
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:4857348093": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:4891545780": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:4891825469": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:4902556974": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 14
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:5014746718": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 16
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:5014814334": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 16
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:5014983034": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 16
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:5014983169": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 16
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:5030901034": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 22
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:5035414657": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:5035523031": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:5036060860": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:5060953016": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:5061015110": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:5061415323": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:5061506170": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:5061572085": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:review:920f9442-07df-4217-4dc4-c5833c0b8268:5061624799": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:review:d29d160a-95fe-5b45-d4c1-fd1f5427b772:3636628654": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 1
     }
    },
    "acr:v1:review:d29d160a-95fe-5b45-d4c1-fd1f5427b772:3742410076": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:team:AUTH": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 9
     }
    },
    "acr:v1:team:BILL": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:team:CHAOS": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 100
     }
    },
    "acr:v1:team:DATA": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:team:FC": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 6
     }
    },
    "acr:v1:team:FCD": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 3
     }
    },
    "acr:v1:team:gh:ops-team": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 35
     }
    },
    "acr:v1:team:gl:full.chaos": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 98
     }
    },
    "acr:v1:work-item-team:70660419-b2bc-ecc9-fe03-5f1e30b3579c:gitlab:full.chaos/chaos-ops#1:gl:full.chaos": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:work-item-team:cd620f84-2602-8dea-7809-8d1f11825cf4:gitlab:full.chaos/dev-health-ops!1:gl:full.chaos": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:work-item-team:cd620f84-2602-8dea-7809-8d1f11825cf4:gitlab:full.chaos/dev-health-ops!2:gl:full.chaos": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:work-item-team:cd620f84-2602-8dea-7809-8d1f11825cf4:gitlab:full.chaos/dev-health-ops!3:gl:full.chaos": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:work-item-team:cd620f84-2602-8dea-7809-8d1f11825cf4:gitlab:full.chaos/dev-health-ops!4:gl:full.chaos": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:work-item-team:cd620f84-2602-8dea-7809-8d1f11825cf4:gitlab:full.chaos/dev-health-ops!5:gl:full.chaos": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:work-item:70660419-b2bc-ecc9-fe03-5f1e30b3579c:gitlab:full.chaos/chaos-ops#1": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:work-item:cd620f84-2602-8dea-7809-8d1f11825cf4:gitlab:full.chaos/dev-health-ops!1": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:work-item:cd620f84-2602-8dea-7809-8d1f11825cf4:gitlab:full.chaos/dev-health-ops!2": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:work-item:cd620f84-2602-8dea-7809-8d1f11825cf4:gitlab:full.chaos/dev-health-ops!3": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:work-item:cd620f84-2602-8dea-7809-8d1f11825cf4:gitlab:full.chaos/dev-health-ops!4": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
    },
    "acr:v1:work-item:cd620f84-2602-8dea-7809-8d1f11825cf4:gitlab:full.chaos/dev-health-ops!5": {
     "type": "string",
+    "node_visits": 294,
     "observed": {
      "string": 5
     }
@@ -5471,18 +6334,21 @@
   "attempt.response.result.interpretation": {
    "clarification_needed": {
     "type": "bool",
+    "node_visits": 706,
     "observed": {
      "bool": 706
     }
    },
    "clarification_reason": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 20
     }
    },
    "comparison_terms": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "string": 29
     },
@@ -5490,6 +6356,7 @@
    },
    "fact_requirements": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "object": 2086
     },
@@ -5498,18 +6365,21 @@
    },
    "requested_judgment": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
    },
    "shape": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
    },
    "subject_terms": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "string": 486
     },
@@ -5518,6 +6388,7 @@
    "time_context": {
     "type": "object",
     "node": "attempt.response.result.interpretation.time_context",
+    "node_visits": 706,
     "observed": {
      "object": 706
     }
@@ -5526,6 +6397,7 @@
   "attempt.response.result.interpretation.fact_requirements[]": {
    "kind": {
     "type": "string",
+    "node_visits": 2086,
     "observed": {
      "string": 2086
     }
@@ -5534,18 +6406,21 @@
   "attempt.response.result.interpretation.time_context": {
    "axis": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
    },
    "end": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 16
     }
    },
    "start": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 16
     }
@@ -5554,6 +6429,7 @@
   "attempt.response.result.paths[]": {
    "edges": {
     "type": "array",
+    "node_visits": 2453,
     "observed": {
      "object": 2453
     },
@@ -5562,6 +6438,7 @@
    },
    "evidence_ref_ids": {
     "type": "array",
+    "node_visits": 2453,
     "observed": {
      "string": 2453
     },
@@ -5569,6 +6446,7 @@
    },
    "nodes": {
     "type": "array",
+    "node_visits": 2453,
     "observed": {
      "object": 4906
     },
@@ -5577,18 +6455,21 @@
    },
    "path_id": {
     "type": "string",
+    "node_visits": 2453,
     "observed": {
      "string": 2453
     }
    },
    "truncated": {
     "type": "bool",
+    "node_visits": 2453,
     "observed": {
      "bool": 2453
     }
    },
    "why_relevant": {
     "type": "string",
+    "node_visits": 2453,
     "observed": {
      "string": 2453
     }
@@ -5597,18 +6478,21 @@
   "attempt.response.result.paths[].edges[]": {
    "derivation": {
     "type": "string",
+    "node_visits": 2453,
     "observed": {
      "string": 2453
     }
    },
    "epistemic_status": {
     "type": "string",
+    "node_visits": 2453,
     "observed": {
      "string": 2453
     }
    },
    "evidence_ref_ids": {
     "type": "array",
+    "node_visits": 2453,
     "observed": {
      "string": 2453
     },
@@ -5617,12 +6501,14 @@
    "from": {
     "type": "object",
     "node": "attempt.response.result.paths[].edges[].from",
+    "node_visits": 2453,
     "observed": {
      "object": 2453
     }
    },
    "observed_at": {
     "type": "string",
+    "node_visits": 2453,
     "observed": {
      "string": 2453
     }
@@ -5630,24 +6516,28 @@
    "to": {
     "type": "object",
     "node": "attempt.response.result.paths[].edges[].to",
+    "node_visits": 2453,
     "observed": {
      "object": 2453
     }
    },
    "type": {
     "type": "string",
+    "node_visits": 2453,
     "observed": {
      "string": 2453
     }
    },
    "valid_from": {
     "type": "string",
+    "node_visits": 2453,
     "observed": {
      "string": 2423
     }
    },
    "valid_to": {
     "type": "string",
+    "node_visits": 2453,
     "observed": {
      "string": 1603
     }
@@ -5656,18 +6546,21 @@
   "attempt.response.result.paths[].edges[].from": {
    "canonical_id": {
     "type": "string",
+    "node_visits": 2453,
     "observed": {
      "string": 2453
     }
    },
    "kind": {
     "type": "string",
+    "node_visits": 2453,
     "observed": {
      "string": 2453
     }
    },
    "label": {
     "type": "string",
+    "node_visits": 2453,
     "observed": {
      "string": 2453
     }
@@ -5676,18 +6569,21 @@
   "attempt.response.result.paths[].edges[].to": {
    "canonical_id": {
     "type": "string",
+    "node_visits": 2453,
     "observed": {
      "string": 2453
     }
    },
    "kind": {
     "type": "string",
+    "node_visits": 2453,
     "observed": {
      "string": 2453
     }
    },
    "label": {
     "type": "string",
+    "node_visits": 2453,
     "observed": {
      "string": 2453
     }
@@ -5696,18 +6592,21 @@
   "attempt.response.result.paths[].nodes[]": {
    "canonical_id": {
     "type": "string",
+    "node_visits": 4906,
     "observed": {
      "string": 4906
     }
    },
    "kind": {
     "type": "string",
+    "node_visits": 4906,
     "observed": {
      "string": 4906
     }
    },
    "label": {
     "type": "string",
+    "node_visits": 4906,
     "observed": {
      "string": 4906
     }
@@ -5716,6 +6615,7 @@
   "attempt.response.result.readiness_gaps[]": {
    "claimed_fact_ids": {
     "type": "array",
+    "node_visits": 9,
     "observed": {
      "string": 13
     },
@@ -5723,6 +6623,7 @@
    },
    "evidence_ref_ids": {
     "type": "array",
+    "node_visits": 9,
     "observed": {
      "string": 15
     },
@@ -5730,18 +6631,21 @@
    },
    "finding_id": {
     "type": "string",
+    "node_visits": 9,
     "observed": {
      "string": 9
     }
    },
    "kind": {
     "type": "string",
+    "node_visits": 9,
     "observed": {
      "string": 9
     }
    },
    "subjects": {
     "type": "array",
+    "node_visits": 9,
     "observed": {
      "object": 8
     },
@@ -5750,6 +6654,7 @@
    },
    "summary": {
     "type": "string",
+    "node_visits": 9,
     "observed": {
      "string": 9
     }
@@ -5758,18 +6663,21 @@
   "attempt.response.result.readiness_gaps[].subjects[]": {
    "canonical_id": {
     "type": "string",
+    "node_visits": 8,
     "observed": {
      "string": 8
     }
    },
    "kind": {
     "type": "string",
+    "node_visits": 8,
     "observed": {
      "string": 8
     }
    },
    "label": {
     "type": "string",
+    "node_visits": 8,
     "observed": {
      "string": 8
     }
@@ -5778,6 +6686,7 @@
   "attempt.response.result.remaining_work[]": {
    "claimed_fact_ids": {
     "type": "array",
+    "node_visits": 13,
     "observed": {
      "string": 17
     },
@@ -5785,6 +6694,7 @@
    },
    "evidence_ref_ids": {
     "type": "array",
+    "node_visits": 13,
     "observed": {
      "string": 23
     },
@@ -5792,18 +6702,21 @@
    },
    "finding_id": {
     "type": "string",
+    "node_visits": 13,
     "observed": {
      "string": 13
     }
    },
    "kind": {
     "type": "string",
+    "node_visits": 13,
     "observed": {
      "string": 13
     }
    },
    "subjects": {
     "type": "array",
+    "node_visits": 13,
     "observed": {
      "object": 12
     },
@@ -5812,6 +6725,7 @@
    },
    "summary": {
     "type": "string",
+    "node_visits": 13,
     "observed": {
      "string": 13
     }
@@ -5820,18 +6734,21 @@
   "attempt.response.result.remaining_work[].subjects[]": {
    "canonical_id": {
     "type": "string",
+    "node_visits": 12,
     "observed": {
      "string": 12
     }
    },
    "kind": {
     "type": "string",
+    "node_visits": 12,
     "observed": {
      "string": 12
     }
    },
    "label": {
     "type": "string",
+    "node_visits": 12,
     "observed": {
      "string": 12
     }
@@ -5840,36 +6757,42 @@
   "attempt.response.result.render_shapes[]": {
    "axis_kind": {
     "type": "string",
+    "node_visits": 110,
     "observed": {
      "string": 110
     }
    },
    "axis_label": {
     "type": "string",
+    "node_visits": 110,
     "observed": {
      "string": 110
     }
    },
    "kind": {
     "type": "string",
+    "node_visits": 110,
     "observed": {
      "string": 110
     }
    },
    "presentation": {
     "type": "string",
+    "node_visits": 110,
     "observed": {
      "string": 110
     }
    },
    "selected_by": {
     "type": "string",
+    "node_visits": 110,
     "observed": {
      "string": 110
     }
    },
    "series": {
     "type": "array",
+    "node_visits": 110,
     "observed": {
      "object": 176
     },
@@ -5878,18 +6801,21 @@
    },
    "shape_id": {
     "type": "string",
+    "node_visits": 110,
     "observed": {
      "string": 110
     }
    },
    "title": {
     "type": "string",
+    "node_visits": 110,
     "observed": {
      "string": 110
     }
    },
    "value_label": {
     "type": "string",
+    "node_visits": 110,
     "observed": {
      "string": 110
     }
@@ -5898,18 +6824,21 @@
   "attempt.response.result.render_shapes[].series[]": {
    "key": {
     "type": "string",
+    "node_visits": 176,
     "observed": {
      "string": 176
     }
    },
    "label": {
     "type": "string",
+    "node_visits": 176,
     "observed": {
      "string": 176
     }
    },
    "points": {
     "type": "array",
+    "node_visits": 176,
     "observed": {
      "object": 1406
     },
@@ -5920,6 +6849,7 @@
   "attempt.response.result.render_shapes[].series[].points[]": {
    "label": {
     "type": "string",
+    "node_visits": 1406,
     "observed": {
      "string": 1406
     }
@@ -5927,12 +6857,14 @@
    "source": {
     "type": "object",
     "node": "attempt.response.result.render_shapes[].series[].points[].source",
+    "node_visits": 1406,
     "observed": {
      "object": 1406
     }
    },
    "value": {
     "type": "number",
+    "node_visits": 1406,
     "observed": {
      "int": 1285,
      "number": 121
@@ -5942,36 +6874,42 @@
   "attempt.response.result.render_shapes[].series[].points[].source": {
    "claim_id": {
     "type": "string",
+    "node_visits": 1406,
     "observed": {
      "string": 1296
     }
    },
    "field": {
     "type": "string",
+    "node_visits": 1406,
     "observed": {
      "string": 1296
     }
    },
    "kind": {
     "type": "string",
+    "node_visits": 1406,
     "observed": {
      "string": 1406
     }
    },
    "row_index": {
     "type": "int",
+    "node_visits": 1406,
     "observed": {
      "int": 1296
     }
    },
    "signal": {
     "type": "string",
+    "node_visits": 1406,
     "observed": {
      "string": 88
     }
    },
    "subject_canonical_id": {
     "type": "string",
+    "node_visits": 1406,
     "observed": {
      "string": 110
     }
@@ -5980,6 +6918,7 @@
   "attempt.response.result.structure_needs": {
    "candidate_options": {
     "type": "array",
+    "node_visits": 404,
     "observed": {
      "object": 908
     },
@@ -5988,6 +6927,7 @@
    },
    "handle_options": {
     "type": "array",
+    "node_visits": 404,
     "observed": {
      "object": 1947
     },
@@ -5996,6 +6936,7 @@
    },
    "kind_options": {
     "type": "array",
+    "node_visits": 404,
     "observed": {
      "object": 483
     },
@@ -6004,6 +6945,7 @@
    },
    "missing": {
     "type": "array",
+    "node_visits": 404,
     "observed": {
      "string": 1050
     },
@@ -6011,6 +6953,7 @@
    },
    "window_expand_options": {
     "type": "array",
+    "node_visits": 404,
     "observed": {
      "object": 246
     },
@@ -6019,6 +6962,7 @@
    },
    "window_options": {
     "type": "array",
+    "node_visits": 404,
     "observed": {
      "object": 1076
     },
@@ -6029,42 +6973,49 @@
   "attempt.response.result.structure_needs.candidate_options[]": {
    "canonical_id": {
     "type": "string",
+    "node_visits": 908,
     "observed": {
      "string": 908
     }
    },
    "kind": {
     "type": "string",
+    "node_visits": 908,
     "observed": {
      "string": 908
     }
    },
    "label": {
     "type": "string",
+    "node_visits": 908,
     "observed": {
      "string": 908
     }
    },
    "offer_source": {
     "type": "string",
+    "node_visits": 908,
     "observed": {
      "string": 908
     }
    },
    "option_id": {
     "type": "string",
+    "node_visits": 908,
     "observed": {
      "string": 908
     }
    },
    "phrasing": {
     "type": "string",
+    "node_visits": 908,
     "observed": {
      "string": 129
     }
    },
    "receipt_id": {
     "type": "string",
+    "node_visits": 908,
     "observed": {
      "string": 908
     }
@@ -6073,54 +7024,63 @@
   "attempt.response.result.structure_needs.handle_options[]": {
    "kind": {
     "type": "string",
+    "node_visits": 1947,
     "observed": {
      "string": 1947
     }
    },
    "label": {
     "type": "string",
+    "node_visits": 1947,
     "observed": {
      "string": 1947
     }
    },
    "offer_source": {
     "type": "string",
+    "node_visits": 1947,
     "observed": {
      "string": 1947
     }
    },
    "option_id": {
     "type": "string",
+    "node_visits": 1947,
     "observed": {
      "string": 1947
     }
    },
    "pattern_id": {
     "type": "string",
+    "node_visits": 1947,
     "observed": {
      "string": 1947
     }
    },
    "phrasing": {
     "type": "string",
+    "node_visits": 1947,
     "observed": {
      "string": 143
     }
    },
    "receipt_id": {
     "type": "string",
+    "node_visits": 1947,
     "observed": {
      "string": 1947
     }
    },
    "source_column": {
     "type": "string",
+    "node_visits": 1947,
     "observed": {
      "string": 1947
     }
    },
    "value": {
     "type": "string",
+    "node_visits": 1947,
     "observed": {
      "string": 1947
     }
@@ -6129,36 +7089,42 @@
   "attempt.response.result.structure_needs.kind_options[]": {
    "kind": {
     "type": "string",
+    "node_visits": 483,
     "observed": {
      "string": 483
     }
    },
    "label": {
     "type": "string",
+    "node_visits": 483,
     "observed": {
      "string": 483
     }
    },
    "offer_source": {
     "type": "string",
+    "node_visits": 483,
     "observed": {
      "string": 483
     }
    },
    "option_id": {
     "type": "string",
+    "node_visits": 483,
     "observed": {
      "string": 483
     }
    },
    "phrasing": {
     "type": "string",
+    "node_visits": 483,
     "observed": {
      "string": 71
     }
    },
    "receipt_id": {
     "type": "string",
+    "node_visits": 483,
     "observed": {
      "string": 483
     }
@@ -6167,42 +7133,49 @@
   "attempt.response.result.structure_needs.window_expand_options[]": {
    "candidate_kind": {
     "type": "string",
+    "node_visits": 246,
     "observed": {
      "string": 128
     }
    },
    "candidate_label": {
     "type": "string",
+    "node_visits": 246,
     "observed": {
      "string": 128
     }
    },
    "label": {
     "type": "string",
+    "node_visits": 246,
     "observed": {
      "string": 246
     }
    },
    "option_id": {
     "type": "string",
+    "node_visits": 246,
     "observed": {
      "string": 246
     }
    },
    "receipt_id": {
     "type": "string",
+    "node_visits": 246,
     "observed": {
      "string": 246
     }
    },
    "relative_id": {
     "type": "string",
+    "node_visits": 246,
     "observed": {
      "string": 246
     }
    },
    "window_class": {
     "type": "string",
+    "node_visits": 246,
     "observed": {
      "string": 246
     }
@@ -6211,36 +7184,42 @@
   "attempt.response.result.structure_needs.window_options[]": {
    "end": {
     "type": "string",
+    "node_visits": 1076,
     "observed": {
      "string": 807
     }
    },
    "label": {
     "type": "string",
+    "node_visits": 1076,
     "observed": {
      "string": 1076
     }
    },
    "option_id": {
     "type": "string",
+    "node_visits": 1076,
     "observed": {
      "string": 1076
     }
    },
    "receipt_id": {
     "type": "string",
+    "node_visits": 1076,
     "observed": {
      "string": 1076
     }
    },
    "relative_id": {
     "type": "string",
+    "node_visits": 1076,
     "observed": {
      "string": 1076
     }
    },
    "start": {
     "type": "string",
+    "node_visits": 1076,
     "observed": {
      "string": 807
     }
@@ -6249,24 +7228,28 @@
   "attempt.response.result.structure_offer_snapshot[]": {
    "member": {
     "type": "string",
+    "node_visits": 336,
     "observed": {
      "string": 336
     }
    },
    "offer_id": {
     "type": "string",
+    "node_visits": 336,
     "observed": {
      "string": 336
     }
    },
    "offer_source": {
     "type": "string",
+    "node_visits": 336,
     "observed": {
      "string": 336
     }
    },
    "rank": {
     "type": "int",
+    "node_visits": 336,
     "observed": {
      "int": 336
     }
@@ -6275,6 +7258,7 @@
   "attempt.response.result.subject_resolution": {
    "candidates": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "object": 1597
     },
@@ -6283,12 +7267,14 @@
    },
    "clarification_prompt": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 553
     }
    },
    "commit_decision_digests": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "object": 49
     },
@@ -6297,6 +7283,7 @@
    },
    "committed": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "object": 49
     },
@@ -6305,6 +7292,7 @@
    },
    "prior_subject_receipt_dispositions": {
     "type": "array",
+    "node_visits": 706,
     "observed": {
      "object": 54
     },
@@ -6313,6 +7301,7 @@
    },
    "retrieval_degraded": {
     "type": "bool",
+    "node_visits": 706,
     "observed": {
      "bool": 11
     }
@@ -6321,6 +7310,7 @@
   "attempt.response.result.subject_resolution.candidates[]": {
    "confidence": {
     "type": "number",
+    "node_visits": 1597,
     "observed": {
      "number": 1469,
      "int": 128
@@ -6328,6 +7318,7 @@
    },
    "evidence_ref_ids": {
     "type": "array",
+    "node_visits": 1597,
     "observed": {
      "string": 1597
     },
@@ -6335,6 +7326,7 @@
    },
    "match_mechanisms": {
     "type": "array",
+    "node_visits": 1597,
     "observed": {
      "string": 1832
     },
@@ -6342,6 +7334,7 @@
    },
    "match_reasons": {
     "type": "array",
+    "node_visits": 1597,
     "observed": {
      "string": 1721
     },
@@ -6349,6 +7342,7 @@
    },
    "matched_terms": {
     "type": "array",
+    "node_visits": 1597,
     "observed": {
      "string": 1775
     },
@@ -6356,12 +7350,17 @@
    },
    "receipt_id": {
     "type": "string",
+    "node_visits": 1597,
     "observed": {
      "string": 1597
-    }
+    },
+    "required": true,
+    "required_declared": true,
+    "required_consumer": "harness.py:177,192,218,228 -- c[\"receipt_id\"] on candidates carried through the local `memory` dict; absence raises KeyError mid-run"
    },
    "state": {
     "type": "string",
+    "node_visits": 1597,
     "observed": {
      "string": 1597
     }
@@ -6369,6 +7368,7 @@
    "subject": {
     "type": "object",
     "node": "attempt.response.result.subject_resolution.candidates[].subject",
+    "node_visits": 1597,
     "observed": {
      "object": 1597
     }
@@ -6378,6 +7378,11 @@
    "canonical_id": {
     "type": "string",
     "nullable": true,
+    "nullable_when": {
+     "field": "state",
+     "equals": "committed"
+    },
+    "node_visits": 1597,
     "observed": {
      "string": 1597
     }
@@ -6385,6 +7390,11 @@
    "kind": {
     "type": "string",
     "nullable": true,
+    "nullable_when": {
+     "field": "state",
+     "equals": "committed"
+    },
+    "node_visits": 1597,
     "observed": {
      "string": 1597
     }
@@ -6392,6 +7402,11 @@
    "label": {
     "type": "string",
     "nullable": true,
+    "nullable_when": {
+     "field": "state",
+     "equals": "committed"
+    },
+    "node_visits": 1597,
     "observed": {
      "string": 1597
     }
@@ -6400,24 +7415,28 @@
   "attempt.response.result.subject_resolution.commit_decision_digests[]": {
    "alias_lookup_complete": {
     "type": "bool",
+    "node_visits": 49,
     "observed": {
      "bool": 45
     }
    },
    "commit_gate": {
     "type": "string",
+    "node_visits": 49,
     "observed": {
      "string": 49
     }
    },
    "identity_proven": {
     "type": "bool",
+    "node_visits": 49,
     "observed": {
      "bool": 42
     }
    },
    "search_truncated": {
     "type": "bool",
+    "node_visits": 49,
     "observed": {
      "bool": 42
     }
@@ -6425,6 +7444,7 @@
    "subject": {
     "type": "object",
     "node": "attempt.response.result.subject_resolution.commit_decision_digests[].subject",
+    "node_visits": 49,
     "observed": {
      "object": 49
     }
@@ -6433,18 +7453,21 @@
   "attempt.response.result.subject_resolution.commit_decision_digests[].subject": {
    "canonical_id": {
     "type": "string",
+    "node_visits": 49,
     "observed": {
      "string": 49
     }
    },
    "kind": {
     "type": "string",
+    "node_visits": 49,
     "observed": {
      "string": 49
     }
    },
    "label": {
     "type": "string",
+    "node_visits": 49,
     "observed": {
      "string": 49
     }
@@ -6454,6 +7477,7 @@
    "canonical_id": {
     "type": "string",
     "nullable": true,
+    "node_visits": 49,
     "observed": {
      "string": 49
     }
@@ -6461,6 +7485,7 @@
    "kind": {
     "type": "string",
     "nullable": true,
+    "node_visits": 49,
     "observed": {
      "string": 49
     }
@@ -6468,6 +7493,7 @@
    "label": {
     "type": "string",
     "nullable": true,
+    "node_visits": 49,
     "observed": {
      "string": 49
     }
@@ -6476,18 +7502,21 @@
   "attempt.response.result.subject_resolution.prior_subject_receipt_dispositions[]": {
    "disposition": {
     "type": "string",
+    "node_visits": 54,
     "observed": {
      "string": 54
     }
    },
    "prior_result_id": {
     "type": "string",
+    "node_visits": 54,
     "observed": {
      "string": 54
     }
    },
    "receipt_id": {
     "type": "string",
+    "node_visits": 54,
     "observed": {
      "string": 54
     }
@@ -6496,6 +7525,7 @@
   "attempt.response.result.temporal": {
    "coverage_complete": {
     "type": "bool",
+    "node_visits": 16,
     "observed": {
      "bool": 16
     }
@@ -6503,12 +7533,14 @@
    "effective": {
     "type": "object",
     "node": "attempt.response.result.temporal.effective",
+    "node_visits": 16,
     "observed": {
      "object": 16
     }
    },
    "grain": {
     "type": "string",
+    "node_visits": 16,
     "observed": {
      "string": 16
     }
@@ -6516,6 +7548,7 @@
    "requested": {
     "type": "object",
     "node": "attempt.response.result.temporal.requested",
+    "node_visits": 16,
     "observed": {
      "object": 16
     }
@@ -6524,18 +7557,21 @@
   "attempt.response.result.temporal.effective": {
    "axis": {
     "type": "string",
+    "node_visits": 16,
     "observed": {
      "string": 16
     }
    },
    "end": {
     "type": "string",
+    "node_visits": 16,
     "observed": {
      "string": 16
     }
    },
    "start": {
     "type": "string",
+    "node_visits": 16,
     "observed": {
      "string": 16
     }
@@ -6544,18 +7580,21 @@
   "attempt.response.result.temporal.requested": {
    "axis": {
     "type": "string",
+    "node_visits": 16,
     "observed": {
      "string": 16
     }
    },
    "end": {
     "type": "string",
+    "node_visits": 16,
     "observed": {
      "string": 16
     }
    },
    "start": {
     "type": "string",
+    "node_visits": 16,
     "observed": {
      "string": 16
     }
@@ -6564,54 +7603,63 @@
   "attempt.response.result.versions": {
    "backend": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
    },
    "canonical_service_version": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
    },
    "contract_version": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
    },
    "interpretation_version": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
    },
    "model_identity": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
    },
    "projection_version": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
    },
    "query_version": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
    },
    "service_version": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
    },
    "synthesis_version": {
     "type": "string",
+    "node_visits": 706,
     "observed": {
      "string": 706
     }
@@ -6620,6 +7668,7 @@
   "attempt.response.result.window_clarification": {
    "options": {
     "type": "array",
+    "node_visits": 269,
     "observed": {
      "object": 1076
     },
@@ -6630,36 +7679,42 @@
   "attempt.response.result.window_clarification.options[]": {
    "end": {
     "type": "string",
+    "node_visits": 1076,
     "observed": {
      "string": 807
     }
    },
    "label": {
     "type": "string",
+    "node_visits": 1076,
     "observed": {
      "string": 1076
     }
    },
    "option_id": {
     "type": "string",
+    "node_visits": 1076,
     "observed": {
      "string": 1076
     }
    },
    "receipt_id": {
     "type": "string",
+    "node_visits": 1076,
     "observed": {
      "string": 1076
     }
    },
    "relative_id": {
     "type": "string",
+    "node_visits": 1076,
     "observed": {
      "string": 1076
     }
    },
    "start": {
     "type": "string",
+    "node_visits": 1076,
     "observed": {
      "string": 807
     }

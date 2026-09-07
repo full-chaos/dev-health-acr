@@ -42,8 +42,12 @@ def _write(tmp, qid, turn, attempt, committed=None, status="partial", facts=0, r
     if raw is not None:
         f.write_text(raw)
         return f
-    cands = [{"state": "committed", "subject": c, "match_mechanisms": [], "matched_terms": []}
-             for c in (committed or [])]
+    # CHAOS-5430: receipt_id is REQUIRED (observed on every one of 1597 real
+    # candidates and dereferenced unconditionally by the harness). A fixture without
+    # it is an artefact the engine never emits, so the FIXTURE changes.
+    cands = [{"receipt_id": f"rc{i}", "state": "committed", "subject": c,
+              "match_mechanisms": [], "matched_terms": []}
+             for i, c in enumerate(committed or [])]
     f.write_text(json.dumps({"request": {}, "status": 200, "dt": 1.0, "response": {"result": {
         "request_id": f"req_{turn}", "result_id": "res", "status": status,
         "claimed_facts": [{"claim_id": f"c{i}"} for i in range(facts)],
