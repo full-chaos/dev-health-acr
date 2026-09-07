@@ -1833,3 +1833,56 @@ func countPairRecordingsOutsideScopeIn(root ast.Node) int {
 	})
 	return found
 }
+
+// TestConfirm5_AHealthyBuildSourceIsCountedAsEvaluated closes a real gap a
+// surviving mutant found: deleting sourcesEvaluated++ from
+// recordBuildPairOutcome's success branch changed nothing any test could see.
+// Every build arm drove a FAILING source, so the branch that reports a build
+// source having run CLEANLY was never exercised.
+//
+// It matters for the same reason the steady-state twin does: a successful
+// source must be reported as a success, never as an absence. `sources_failed:0`
+// only means "everything that ran, ran clean" if the things that ran are
+// actually counted -- otherwise a healthy tick and a tick that measured
+// nothing print the same line.
+func TestConfirm5_AHealthyBuildSourceIsCountedAsEvaluated(t *testing.T) {
+	t.Parallel()
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	healthy := &fakeSource{name: "dev_health_teams_projects", pages: 1}
+	checkpoints := newFakeCheckpointStore()
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:           []string{"org-a"},
+		Sources:          []projectionrun.SourcePair{{Name: "dev_health_teams_projects", Source: healthy}},
+		Backend:          newFakeBackend(),
+		Checkpoints:      checkpoints,
+		RebuildMarkers:   newFakeRebuildMarker(),
+		Lifecycle:        &buildFailingLifecycleStore{epoch: 1},
+		EpochCheckpoints: func(int64) contextfabric.ProjectionCheckpointStore { return checkpoints },
+		GraceWindow:      time.Hour,
+		Logger:           logger,
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	coordinator.Tick(context.Background())
+
+	if healthy.calls.Load() == 0 {
+		t.Fatal("the source never ran -- the tick did not take the build path, so this arm would prove nothing")
+	}
+	summary := freshnessSummary(t, &buffer)
+	if got := summaryNumber(t, summary, "sources_evaluated"); got != 1 {
+		t.Errorf("sources_evaluated = %v, want 1 -- a build source that RAN and succeeded must be counted, or a healthy tick is indistinguishable from one that measured nothing", got)
+	}
+	if got := summaryNumber(t, summary, "sources_failed"); got != 0 {
+		t.Errorf("sources_failed = %v, want 0 -- the source succeeded", got)
+	}
+	if got := summaryNumber(t, summary, "build_sources_failed"); got != 0 {
+		t.Errorf("build_sources_failed = %v, want 0", got)
+	}
+	names, ok := summary["failed_sources"].([]any)
+	if !ok || len(names) != 0 {
+		t.Errorf("failed_sources = %v, want an empty list", summary["failed_sources"])
+	}
+}
