@@ -19,6 +19,7 @@ package graphrank
 // candidate becomes answerable.
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -72,10 +73,22 @@ func TestAVectorOnlyCandidateIsNeverOffered(t *testing.T) {
 	if len(resolution.Committed) != 0 {
 		t.Fatalf("committed %d subject(s) on a vector-only pool, want 0", len(resolution.Committed))
 	}
-	// The clarification prompt is built from the retained set, so an empty
-	// pool must not leave a prompt naming a subject the caller cannot see.
-	if resolution.ClarificationPrompt != "" {
-		t.Fatalf("clarification prompt = %q on an empty offer pool; the prompt would name a choice absent from the machine-readable result", resolution.ClarificationPrompt)
+	// The prompt this leaves behind is the EMPTIED-POOL one, not a built
+	// one. The concern the original assertion here encoded -- a prompt must
+	// never name a choice absent from the machine-readable result -- is
+	// preserved and is now structural rather than incidental: the constant
+	// interpolates nothing, so it cannot name a withheld candidate even by
+	// accident, which a built prompt could. The turn clarifies instead of
+	// collapsing to no_match (team-lead ruling 04:21Z); see
+	// TestAnOfferPoolEmptiedByTheExclusionStillClarifies for that claim and
+	// TestAWithheldOfferPoolClarifiesInsteadOfNoMatch for the terminal.
+	if resolution.ClarificationPrompt != contextfabric.OfferPoolEmptiedClarificationPrompt {
+		t.Fatalf("clarification prompt = %q, want the emptied-pool constant", resolution.ClarificationPrompt)
+	}
+	for _, candidate := range []string{"team_vector_only"} {
+		if strings.Contains(resolution.ClarificationPrompt, candidate) {
+			t.Fatalf("the prompt names %q, a candidate the caller cannot see in the result", candidate)
+		}
 	}
 }
 
@@ -276,6 +289,169 @@ func TestTheOfferPoolSummaryEqualsWhatItFolded(t *testing.T) {
 			}
 			if excluded+demoted != len(tracer.perCandidate) {
 				t.Fatalf("the two dispositions sum to %d over %d events; a candidate the seam acted on is unaccounted for", excluded+demoted, len(tracer.perCandidate))
+			}
+		})
+	}
+}
+
+// AN OFFER POOL EMPTIED BY THE EXCLUSION IS NOT AN EMPTY GRAPH.
+//
+// This is the one regression the rig arm found, and the shape is exactly the
+// row that lost it: resolution AMBIGUOUS, every offerable candidate withheld
+// because it was vector-only, and the caller handed an empty candidate list
+// that the layer above then read as `no_match` -- the same terminal a
+// genuinely empty graph produces. The conversation ended one turn before the
+// engine would have offered the real exact-matched candidates.
+//
+// The resolution's job here is to make the two empties DISTINGUISHABLE. It
+// does that by carrying a prompt beside zero candidates, a pairing nothing
+// else in this package produces.
+func TestAnOfferPoolEmptiedByTheExclusionStillClarifies(t *testing.T) {
+	t.Parallel()
+	// Two vector-only candidates: ambiguous by construction, and both
+	// withheld. Two rather than one so the pool is genuinely ambiguous
+	// rather than a lone candidate that merely missed its gate.
+	resolution := resolveOfferPool(
+		vectorOfferCandidate("team_guess_one", 0.5, contextfabric.ResolutionProposed, contextfabric.MatchVector),
+		vectorOfferCandidate("team_guess_two", 0.5, contextfabric.ResolutionProposed, contextfabric.MatchVector),
+	)
+	if len(resolution.Candidates) != 0 {
+		t.Fatalf("offered %v, want none -- the exclusion must still withhold them", offeredIDs(resolution))
+	}
+	if len(resolution.Committed) != 0 {
+		t.Fatalf("committed %v, want none", resolution.Committed)
+	}
+	if resolution.ClarificationPrompt != contextfabric.OfferPoolEmptiedClarificationPrompt {
+		t.Fatalf("clarification prompt = %q, want the emptied-pool prompt -- without it the layer above cannot tell a withheld pool from an absent one, and the turn collapses to no_match", resolution.ClarificationPrompt)
+	}
+}
+
+// THE CONTROL, and the whole change turns on it: a graph that genuinely
+// found nothing must keep its `no_match`. If this ever carries a prompt the
+// fix has stopped discriminating and has simply turned every empty
+// resolution into a clarification.
+func TestAGenuinelyEmptyPoolCarriesNoPrompt(t *testing.T) {
+	t.Parallel()
+	resolution := resolveOfferPool()
+	if len(resolution.Candidates) != 0 {
+		t.Fatalf("offered %v on an empty input, want none", offeredIDs(resolution))
+	}
+	if resolution.ClarificationPrompt != "" {
+		t.Fatalf("clarification prompt = %q on a pool that never had a candidate; the emptied-by-exclusion signal must not fire when nothing was excluded", resolution.ClarificationPrompt)
+	}
+}
+
+// THE FLAG REQUIRES SOMETHING TO HAVE BEEN WITHHELD. This is what replaced
+// the `ambiguous` conjunct after a mutation deleting that conjunct turned
+// nothing red: the conjunct was unprovable (a committed candidate is never
+// vector-only, so it is never withheld, so it is always offered, so an empty
+// offered list already implies nothing committed), and an unprovable clause
+// is not a guard. This holds the condition at what a fixture CAN distinguish.
+func TestTheFlagNeedsSomethingWithheld(t *testing.T) {
+	t.Parallel()
+	tracer := &offerPoolTracer{}
+	// An empty input: nothing offered, and nothing withheld either.
+	resolveOfferPoolTraced(tracer)
+	if len(tracer.summaries) != 1 {
+		t.Fatalf("emitted %d offer_pool summaries on an empty pool, want 1", len(tracer.summaries))
+	}
+	if tracer.summaries[0].OfferPoolEmptiedByExclusion {
+		t.Fatal("the flag fired on a pool that never held a candidate; it would make every empty graph a clarification")
+	}
+}
+
+// A prompt built from an EMPTY candidate list is prose no caller can act on.
+// This is the pinned half of the guard at resolve.go's rebuild site, whose
+// own reachability no fixture in this repo constructs (see that site's
+// reported limit): even if the rebuild ever ran on an empty list, it degrades
+// to no prompt -- and so to the ordinary no_match terminal -- rather than
+// asking the user "Which subject did you mean: ?".
+func TestAPromptIsNeverBuiltFromAnEmptyCandidateList(t *testing.T) {
+	t.Parallel()
+	if got := ClarificationPrompt(nil); got != "" {
+		t.Fatalf("ClarificationPrompt(nil) = %q, want empty", got)
+	}
+	if got := ClarificationPrompt([]contextfabric.SubjectCandidate{}); got != "" {
+		t.Fatalf("ClarificationPrompt(empty) = %q, want empty", got)
+	}
+	// The positive control: with candidates it still asks the question.
+	got := ClarificationPrompt([]contextfabric.SubjectCandidate{
+		vectorOfferCandidate("team_one", 1, contextfabric.ResolutionProposed, contextfabric.MatchExact),
+	})
+	if got == "" {
+		t.Fatal("ClarificationPrompt built nothing from a real candidate; the empty-list guard has swallowed the ordinary case")
+	}
+}
+
+// A pool emptied by TRUNCATION rather than by the exclusion is also not this
+// case. Without this arm the flag could be "the offered list is empty and
+// something happened", which would fire on states the rig never produced.
+func TestAnUnambiguousEmptyPoolCarriesNoPrompt(t *testing.T) {
+	t.Parallel()
+	// One exact candidate: it COMMITS, so the resolution is not ambiguous,
+	// and the emptied-by-exclusion condition must not fire even though the
+	// sibling vector-only candidate was excluded.
+	resolution := resolveOfferPool(
+		vectorOfferCandidate("team_exact", 1, contextfabric.ResolutionProposed, contextfabric.MatchExact),
+		vectorOfferCandidate("team_guess", 0.5, contextfabric.ResolutionProposed, contextfabric.MatchVector),
+	)
+	if len(resolution.Committed) != 1 {
+		t.Fatalf("committed %v, want the exact-matched subject", resolution.Committed)
+	}
+	if resolution.ClarificationPrompt == contextfabric.OfferPoolEmptiedClarificationPrompt {
+		t.Fatal("a resolution that COMMITTED carries the emptied-pool prompt; the flag must require ambiguity")
+	}
+}
+
+// The flag reaches the folded Info line, on both of its values, and agrees
+// with the pool counters it sits beside. A flag that only ever appears true
+// cannot be told apart from a build that hardcodes it.
+func TestTheEmptiedByExclusionFlagIsExplicitOnEveryPass(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name       string
+		candidates []contextfabric.SubjectCandidate
+		want       bool
+	}{
+		{
+			name: "emptied by the exclusion",
+			candidates: []contextfabric.SubjectCandidate{
+				vectorOfferCandidate("team_guess_one", 0.5, contextfabric.ResolutionProposed, contextfabric.MatchVector),
+				vectorOfferCandidate("team_guess_two", 0.5, contextfabric.ResolutionProposed, contextfabric.MatchVector),
+			},
+			want: true,
+		},
+		{
+			name:       "genuinely empty",
+			candidates: nil,
+			want:       false,
+		},
+		{
+			name: "ambiguous but still offerable",
+			candidates: []contextfabric.SubjectCandidate{
+				vectorOfferCandidate("team_lexical_one", 0.5, contextfabric.ResolutionProposed, contextfabric.MatchLexical),
+				vectorOfferCandidate("team_lexical_two", 0.5, contextfabric.ResolutionProposed, contextfabric.MatchLexical),
+			},
+			want: false,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			tracer := &offerPoolTracer{}
+			resolveOfferPoolTraced(tracer, testCase.candidates...)
+			if len(tracer.summaries) != 1 {
+				t.Fatalf("emitted %d offer_pool summaries, want exactly 1 on every pass", len(tracer.summaries))
+			}
+			got := tracer.summaries[0].OfferPoolEmptiedByExclusion
+			if got != testCase.want {
+				t.Fatalf("offer_pool_emptied_by_exclusion = %t, want %t", got, testCase.want)
+			}
+			// The identity that keeps the flag honest: it may only be true
+			// when the counters say something was actually withheld.
+			s := tracer.summaries[0]
+			withheld := s.OfferPoolVectorOnlyExcluded + s.OfferPoolVectorOnlyDemoted
+			if got && withheld == 0 {
+				t.Fatalf("the flag is true while the counters report %d withheld candidates; it would fire on an empty graph", withheld)
 			}
 		})
 	}

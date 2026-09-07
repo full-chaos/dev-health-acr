@@ -20,6 +20,7 @@ package contextfabric
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -475,5 +476,86 @@ func TestFrameGateReachesTheProductionFrameValidationLine(t *testing.T) {
 				t.Errorf("refuse_basis = %q, want %q", got, testCase.wantRefuseBasis)
 			}
 		})
+	}
+}
+
+// THE TERMINAL, driven through the production entry point.
+//
+// The graphrank pins prove the resolution CARRIES the signal; this proves the
+// engine ACTS on it. They are different claims and the rig arm is why both
+// exist: the resolution was already correct there -- ambiguous, three
+// vector-only candidates withheld -- and the turn still ended as `no_match`,
+// because nothing above read that state as different from an empty graph.
+//
+// Red at 9c3ed3dc: the withheld-pool arm returns no_match.
+func TestAWithheldOfferPoolClarifiesInsteadOfNoMatch(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name       string
+		resolution SubjectResolution
+		allow      bool
+		want       InvestigationStatus
+	}{
+		{
+			// Retrieval found candidates and may offer none of them. The
+			// pairing -- zero candidates, a prompt -- is what graphrank
+			// emits for a pool emptied by the vector-only exclusion.
+			name: "a pool emptied by the exclusion clarifies",
+			resolution: SubjectResolution{
+				Candidates: []SubjectCandidate{}, Committed: []SubjectRef{},
+				ClarificationPrompt: OfferPoolEmptiedClarificationPrompt,
+			},
+			allow: true, want: InvestigationClarificationRequired,
+		},
+		{
+			// THE CONTROL. A graph that genuinely found nothing keeps its
+			// no_match; if this ever flips, the change has stopped
+			// discriminating and has turned every empty resolution into a
+			// clarification.
+			name:       "a genuinely empty pool still reports no_match",
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+			allow:      true, want: InvestigationNoMatch,
+		},
+		{
+			// A caller that will not accept a clarification gets the
+			// terminal it asked for, not one invented for it.
+			name: "clarification refused by the caller stays no_match",
+			resolution: SubjectResolution{
+				Candidates: []SubjectCandidate{}, Committed: []SubjectRef{},
+				ClarificationPrompt: OfferPoolEmptiedClarificationPrompt,
+			},
+			allow: false, want: InvestigationNoMatch,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			resolution := testCase.resolution
+			request := InvestigationRequest{Options: InvestigationOptions{AllowClarification: testCase.allow}}
+			got, limitation := resolveTerminalStatus(request, &resolution)
+			if got != testCase.want {
+				t.Fatalf("status = %q, want %q", got, testCase.want)
+			}
+			if strings.TrimSpace(limitation) == "" {
+				t.Fatal("the terminal carries no limitation; a caller must be told why nothing was resolved")
+			}
+		})
+	}
+}
+
+// The terminal REASON names the withheld pool specifically. `empty_pool`
+// would send an operator to look for a graph that never had the data, which
+// is the opposite of what happened.
+func TestTheWithheldPoolHasItsOwnTerminalReason(t *testing.T) {
+	t.Parallel()
+	withheld := SubjectResolution{
+		Candidates: []SubjectCandidate{}, Committed: []SubjectRef{},
+		ClarificationPrompt: OfferPoolEmptiedClarificationPrompt,
+	}
+	if got := subjectlessTerminalReason(withheld, 0); got != "offer_pool_emptied_by_exclusion" {
+		t.Errorf("terminal reason = %q, want %q", got, "offer_pool_emptied_by_exclusion")
+	}
+	empty := SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}
+	if got := subjectlessTerminalReason(empty, 0); got != "empty_pool" {
+		t.Errorf("terminal reason for a genuinely empty pool = %q, want %q -- the control", got, "empty_pool")
 	}
 }

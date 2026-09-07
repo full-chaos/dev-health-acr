@@ -541,6 +541,18 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 	if len(candidates) == 0 {
 		resolution.Candidates = candidates
 		if tracer != nil {
+			// The offer-pool summary fires HERE too, with explicit zeros
+			// and the flag false. This early return is the "the graph held
+			// nothing" path, and it is precisely the state an operator must
+			// be able to tell apart from "the graph held candidates I may
+			// not offer you" -- so it is the one path that must not be
+			// silent. Caught by this seam's own explicit-on-every-pass
+			// test, which read zero summaries here.
+			tracer.Trace(ResolutionTraceEvent{
+				RequestID: requestID, Stage: "offer_pool", OfferPoolSummary: true,
+				OfferPoolVectorOnlyExcluded: 0, OfferPoolVectorOnlyDemoted: 0,
+				OfferPoolEmptiedByExclusion: false,
+			})
 			// CHAOS-4154 (codex review finding, Low, confirmed): PopulationBasis
 			// is explicit "none" here too -- an earlier version left this
 			// event's PopulationBasis at its Go zero value (empty string)
@@ -1471,6 +1483,50 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 		}
 		offered = append(offered, candidate)
 	}
+	// THE POOL WAS EMPTIED BY THE EXCLUSION, and that is not the same fact
+	// as a graph with no candidates.
+	//
+	// Measured on the rig: a scoped question left resolution AMBIGUOUS with
+	// three vector-only candidates, all of the wrong kind for the anchor the
+	// row declared. Withholding them is right. But the caller then received
+	// an empty candidate list, the engine read that as `no_match` -- the
+	// same terminal a genuinely empty graph produces -- and the
+	// conversation ENDED. On the previous build the same turn offered those
+	// three guesses, the client could not use them, the conversation
+	// continued, and two turns later the engine offered the real
+	// exact-matched candidates and committed the right subject.
+	//
+	// So the cost of the exclusion was not the guess: it was the TURN. The
+	// design's rule is clarify rather than guess, not collapse to nothing,
+	// and this flag is what lets the layer above tell the two empties
+	// apart. A resolution that found nothing carries it false and keeps its
+	// `no_match`; only a resolution that found candidates and may offer
+	// none of them carries it true.
+	// ONE CONJUNCT, and the two that are missing were REMOVED rather than
+	// forgotten. This condition started as
+	// `ambiguous && len(offered) == 0 && withheld > 0`, and mutations
+	// deleting each of the other two turned NOTHING red -- which under this
+	// repo's own rule is a finding, not a pass. Neither was pinnable,
+	// because on THIS path neither can be false while `len(offered) == 0`
+	// is true:
+	//
+	//   - a committed candidate is never vector-only (the commit gates
+	//     refuse that), so it is never withheld, so it is always in
+	//     `offered` -- an empty `offered` already implies nothing committed,
+	//     which is what `ambiguous` was standing in for;
+	//   - reaching this line at all means the candidate set was non-empty
+	//     (the empty case returns early, above), so if `offered` is empty
+	//     every candidate was withheld -- `withheld > 0` cannot be false
+	//     here.
+	//
+	// The empty-GRAPH case is excluded STRUCTURALLY by that early return,
+	// which emits its own summary with the flag hardcoded false, and not by
+	// a conjunct here. TestTheFlagNeedsSomethingWithheld pins the early
+	// return's false; TestAnUnambiguousEmptyPoolCarriesNoPrompt and the
+	// "ambiguous but still offerable" arm pin this comparison. Keeping
+	// clauses whose own tests cannot exist is how a guard comes to look
+	// stronger than it is.
+	offerPoolEmptiedByExclusion := len(offered) == 0
 	if tracer != nil {
 		// ONE summary per call, emitted unconditionally with explicit zeros,
 		// so a resolution that acted on nothing stays distinguishable from a
@@ -1482,6 +1538,7 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 			RequestID: requestID, Stage: "offer_pool", OfferPoolSummary: true,
 			OfferPoolVectorOnlyExcluded: offerPoolVectorOnlyExcluded,
 			OfferPoolVectorOnlyDemoted:  offerPoolVectorOnlyDemoted,
+			OfferPoolEmptiedByExclusion: offerPoolEmptiedByExclusion,
 		})
 	}
 	resolution.Candidates = offered
@@ -1496,6 +1553,19 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 	// the exclusion exists to withhold.
 	if ambiguous && allowClarification && len(offered) > 0 {
 		resolution.ClarificationPrompt = ClarificationPrompt(offered)
+	}
+	// The prompt is ALSO the carrier for the emptied-pool case, and it
+	// carries it deliberately rather than through a new wire field: a
+	// resolution with zero candidates cannot otherwise reach the layer that
+	// decides the terminal, and widening the published SubjectResolution
+	// would fail every consumer that pins it with additionalProperties
+	// false until their pin is bumped -- a contract change for a
+	// server-side ordering fact. `resolveTerminalStatus` reads exactly this
+	// pairing (no candidates, but a prompt) and nothing else produces it:
+	// the two builders above and the reorder site in resolve.go all require
+	// a non-empty candidate list.
+	if offerPoolEmptiedByExclusion && allowClarification {
+		resolution.ClarificationPrompt = contextfabric.OfferPoolEmptiedClarificationPrompt
 	}
 	if tracer != nil {
 		// ONE decision event PER COMMITTED SUBJECT (CHAOS-4096: cardinality
@@ -1897,6 +1967,15 @@ func ClarificationPrompt(candidates []contextfabric.SubjectCandidate) string {
 		if len(labels) == 3 {
 			break
 		}
+	}
+	if len(labels) == 0 {
+		// An empty candidate list has no subject to ask about, and the
+		// prompt this used to build -- "Which subject did you mean: ?" --
+		// is prose no caller can act on. Returning empty also means that if
+		// the guarded rebuild site in resolve.go is ever called on an empty
+		// list, it degrades to "no prompt" (and so to the ordinary no_match
+		// terminal) rather than shipping a broken question to a user.
+		return ""
 	}
 	return "Which subject did you mean: " + strings.Join(labels, ", ") + "?"
 }

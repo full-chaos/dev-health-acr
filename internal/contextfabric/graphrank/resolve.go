@@ -1355,6 +1355,16 @@ type ResolutionTraceEvent struct {
 	// excluded nothing must not read like one where the exclusion never ran.
 	OfferPoolVectorOnlyExcluded int
 	OfferPoolVectorOnlyDemoted  int
+	// OfferPoolEmptiedByExclusion reports that this resolution was
+	// AMBIGUOUS and had every offerable candidate withheld by the exclusion
+	// -- the state that must clarify rather than collapse to `no_match`.
+	//
+	// ALWAYS emitted, true or false. It is the discriminator between two
+	// empties that look identical on every other key of the line ("the
+	// graph had nothing" and "the graph had something I may not offer you"),
+	// and a field present in only one of its two states cannot be told
+	// apart from a build that does not emit it.
+	OfferPoolEmptiedByExclusion bool
 	// ShadowOutcome/ShadowReason/ShadowDIdentityHash/ShadowPreconditionUnproven/
 	// ShadowUnscopedVisibility/ShadowNonCensusedSurvivor/
 	// ShadowHandleGrammarBound/ShadowAnchorUniqueClaimant/ShadowKindsCensused
@@ -1909,6 +1919,7 @@ type decisionSummaryBuffer struct {
 	// the decision counts above use.
 	vectorOnlyExcluded int
 	vectorOnlyDemoted  int
+	emptiedByExclusion bool
 }
 
 // appendDistinctCapped adds value to seen when it is non-empty and not
@@ -1938,6 +1949,13 @@ func (b *decisionSummaryBuffer) Trace(event ResolutionTraceEvent) {
 	if event.Stage == "offer_pool" && event.OfferPoolSummary {
 		b.vectorOnlyExcluded += event.OfferPoolVectorOnlyExcluded
 		b.vectorOnlyDemoted += event.OfferPoolVectorOnlyDemoted
+		// OR across the call for the same reason DecisionOfferedUnderWindowGate
+		// is: the fold sees per-event facts, and "at least one pass of this
+		// resolution was emptied by the exclusion" is the only claim this
+		// emission site can keep.
+		if event.OfferPoolEmptiedByExclusion {
+			b.emptiedByExclusion = true
+		}
 		return
 	}
 	if event.Stage != "decision" {
@@ -1982,6 +2000,7 @@ func (b *decisionSummaryBuffer) flush() {
 		DecisionRefuseBasis:            b.refuseBasis,
 		OfferPoolVectorOnlyExcluded:    b.vectorOnlyExcluded,
 		OfferPoolVectorOnlyDemoted:     b.vectorOnlyDemoted,
+		OfferPoolEmptiedByExclusion:    b.emptiedByExclusion,
 	})
 }
 
@@ -3112,7 +3131,23 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// the candidate list around an already-committed subject is
 		// harmless and keeps this call site's shape unconditional.
 		resolution.Candidates = SurvivorsFirstOrder(resolution.Candidates, attestation, deps.ResolutionTracer, request.RequestID)
-		if resolution.ClarificationPrompt != "" {
+		// len>0 guard: the emptied-by-exclusion prompt travels on a
+		// resolution with ZERO candidates, and rebuilding from an empty
+		// list would destroy the one signal that separates a withheld pool
+		// from an absent one, and with it the clarification terminal that
+		// signal exists to produce.
+		//
+		// 🛑 REPORTED LIMIT, not a claimed one: NO FIXTURE IN THIS REPO
+		// REACHES THIS LINE WITH AN EMPTY CANDIDATE LIST. Getting here at
+		// all needs a truncated search, no commit, a census round that
+		// attests exactly one satisfier, and a re-decision that then leaves
+		// the pool empty. A mutation removing this conjunct SURVIVES the
+		// suite, and that is recorded rather than papered over. The guard
+		// is kept because the state is reachable in principle and the cost
+		// of the conjunct is one comparison; what it is NOT is proven, and
+		// ClarificationPrompt returning "" on an empty list (resolution.go)
+		// is the second line of defence that IS pinned.
+		if resolution.ClarificationPrompt != "" && len(resolution.Candidates) > 0 {
 			resolution.ClarificationPrompt = ClarificationPrompt(resolution.Candidates)
 		}
 	}

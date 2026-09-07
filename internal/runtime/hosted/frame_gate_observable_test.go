@@ -60,7 +60,15 @@ func TestTheDeployedDecisionSummaryCarriesAPassingFrameGate(t *testing.T) {
 		DecisionCommitBases:  []string{"statistical"},
 		DecisionFrameGate:    "passed", DecisionRefuseBasis: "none",
 		OfferPoolVectorOnlyExcluded: 0, OfferPoolVectorOnlyDemoted: 0,
+		OfferPoolEmptiedByExclusion: false,
 	})
+	// FALSE is emitted, not omitted. This key separates two empties that are
+	// identical on every other key of the line, so a build that printed it
+	// only when true would be indistinguishable from one that never prints
+	// it -- and the false case is the ordinary one.
+	if got, ok := rec["offer_pool_emptied_by_exclusion"].(bool); !ok || got {
+		t.Errorf("offer_pool_emptied_by_exclusion = %v (present=%t), want an explicit false", got, ok)
+	}
 	if got, _ := rec["frame_gate"].(string); got != "passed" {
 		t.Errorf("frame_gate = %q, want \"passed\" -- without this key an operator cannot tell a gate that was consulted from one that was never consulted at all", got)
 	}
@@ -101,6 +109,32 @@ func TestTheDeployedDecisionSummaryCarriesARefusingFrameGate(t *testing.T) {
 	}
 	if got, _ := rec["offer_pool_vector_only_demoted"].(float64); got != 1 {
 		t.Errorf("offer_pool_vector_only_demoted = %v, want 1", got)
+	}
+}
+
+// THE WITHHELD-POOL LINE. The rig arm's one regression was invisible until
+// this key existed: a resolution that found candidates and offered none of
+// them printed a decision summary identical to one from an empty graph, and
+// the turn it cost could only be diagnosed by replaying the whole chain.
+func TestTheDeployedDecisionSummarySaysWhenThePoolWasEmptiedByTheExclusion(t *testing.T) {
+	rec := emitFrameGateDecisionSummary(t, graphrank.ResolutionTraceEvent{
+		RequestID: "request_offer_pool_emptied", Stage: "decision_summary",
+		DecisionEventCount: 1, DecisionAmbiguousCount: 1,
+		DecisionCommittedIDs: []string{}, DecisionCommitGates: []string{}, DecisionCommitBases: []string{},
+		DecisionFrameGate: "passed", DecisionRefuseBasis: "none",
+		OfferPoolVectorOnlyExcluded: 3, OfferPoolEmptiedByExclusion: true,
+	})
+	if got, ok := rec["offer_pool_emptied_by_exclusion"].(bool); !ok || !got {
+		t.Fatalf("offer_pool_emptied_by_exclusion = %v (present=%t), want true -- without it a withheld pool and an empty graph print the same line", got, ok)
+	}
+	// The counters must corroborate it on the same line: a true flag beside
+	// zero withheld candidates would be unreadable, and is the shape a
+	// hardcoded `true` would produce.
+	if got, _ := rec["offer_pool_vector_only_excluded"].(float64); got != 3 {
+		t.Errorf("offer_pool_vector_only_excluded = %v, want 3 standing beside the flag", got)
+	}
+	if got, _ := rec["ambiguous_count"].(float64); got != 1 {
+		t.Errorf("ambiguous_count = %v, want 1 -- the flag only means anything on an ambiguous resolution", got)
 	}
 }
 

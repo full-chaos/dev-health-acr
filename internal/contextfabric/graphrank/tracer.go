@@ -203,7 +203,12 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"frame_gate", event.DecisionFrameGate,
 			"refuse_basis", event.DecisionRefuseBasis,
 			"offer_pool_vector_only_excluded", event.OfferPoolVectorOnlyExcluded,
-			"offer_pool_vector_only_demoted", event.OfferPoolVectorOnlyDemoted)
+			"offer_pool_vector_only_demoted", event.OfferPoolVectorOnlyDemoted,
+			// The discriminator between two empties that are identical on
+			// every other key of this line: a graph that held nothing, and
+			// a graph that held candidates this resolution may not offer.
+			// Always emitted, true or false.
+			"offer_pool_emptied_by_exclusion", event.OfferPoolEmptiedByExclusion)
 	case "offer_pool":
 		// Same volume split as corroboration and identity_gate: the
 		// per-candidate line is retrieval-pool-sized (186 of 329 offered
@@ -215,7 +220,8 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			t.logger.InfoContext(ctx, "context fabric resolution trace: offer pool summary",
 				"request_id", sanitizeLogString(event.RequestID), "stage", sanitizeLogString(event.Stage),
 				"vector_only_excluded", event.OfferPoolVectorOnlyExcluded,
-				"vector_only_demoted", event.OfferPoolVectorOnlyDemoted)
+				"vector_only_demoted", event.OfferPoolVectorOnlyDemoted,
+				"emptied_by_exclusion", event.OfferPoolEmptiedByExclusion)
 			return
 		}
 		t.logger.DebugContext(ctx, "context fabric resolution trace: offer pool",
