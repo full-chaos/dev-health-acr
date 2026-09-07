@@ -145,7 +145,7 @@ def test_validation_is_recursive_not_shallow():
 
 
 # ============================================================ (b) no substrings
-FROZEN_CLASSIFY_SHA = "af37f7364fa5b71c"
+ACCEPTED_CLASSIFY_SHA = "5171dfe1c6091b7c"
 
 
 def _classify_source():
@@ -156,35 +156,41 @@ def _classify_source():
     return m.group(0)
 
 
-def test_classify_is_still_byte_frozen():
-    """The allowlist below is keyed to this hash. If classify() changes, the allowlist is
-    void and the substring pin must fail rather than quietly keep excusing it."""
+def test_classify_no_longer_matches_by_substring():
+    """classify() was byte-frozen for eight commits and the freeze was withdrawn on the
+    evidence that changing it moves no bucket. The hash is pinned so a further change is
+    a deliberate act with its own re-check, not a drift."""
     import hashlib
     got = hashlib.sha256(_classify_source().encode()).hexdigest()[:16]
-    assert got == FROZEN_CLASSIFY_SHA, (
-        f"classify() changed ({got}); the substring allowlist no longer applies and the "
-        "positive-control invariant needs re-checking")
+    assert got == ACCEPTED_CLASSIFY_SHA, (
+        f"classify() changed ({got}); re-verify per-row buckets across all four arms "
+        "before accepting it")
+    # Assert on the AST, not the text. The function's own comment explains the substring
+    # test it replaced, so a text search matches its documentation -- the third time that
+    # trap has appeared in this lane (a pin grepping a comment, a pin matching its own
+    # assertion string, and now this).
+    import ast as _ast
+    fn = next(n for n in _ast.walk(_ast.parse(_classify_source()))
+              if isinstance(n, _ast.FunctionDef) and n.name == "classify")
+    substrings = [n for n in _ast.walk(fn)
+                  if isinstance(n, _ast.Compare) and n.ops and isinstance(n.ops[0], _ast.In)
+                  and isinstance(n.left, _ast.Constant)
+                  and isinstance(n.left.value, str) and "clarification" in n.left.value]
+    assert not substrings, "the substring test is back in the bucketer (AST)"
+    names = {n.id for n in _ast.walk(fn) if isinstance(n, _ast.Name)}
+    assert "CLARIFICATION_VALUES" in names, "the bucketer no longer reads the authored vocabulary"
 
 
-def test_no_substring_matching_on_status_anywhere_except_frozen_classify():
-    """AST across ALL modules. classify() is allowlisted BY HASH, not by name: it is
-    byte-frozen so a prior run re-merges identically, and that invariant outranks internal
-    consistency here. The exception is recorded in golden_verdicts.json
-    `_known_inconsistencies` and surfaced at runtime as `unauthored_terminal:<status>`.
-    Every OTHER site is an offence."""
-    classify_lines = set()
-    src = (HERE / "merge_corpus.py").read_text()
-    start = src[:src.index("def classify(row):")].count("\n") + 1
-    classify_lines = set(range(start, start + _classify_source().count("\n") + 1))
-
+def test_no_substring_matching_on_status_anywhere():
+    """AST across ALL modules, WITH NO EXCEPTION. The bucketer used to be allowlisted by
+    hash because it was frozen; the freeze was withdrawn once the evidence showed the
+    change moves no bucket, so the allowlist is gone and every site is an offence."""
     offenders = []
     for f in sorted(HERE.glob("*.py")):
         if f.name.startswith("test_"):
             continue
         tree = ast.parse(f.read_text())
         for node in ast.walk(tree):
-            if f.name == "merge_corpus.py" and getattr(node, "lineno", None) in classify_lines:
-                continue
             if isinstance(node, ast.Compare) and node.ops and isinstance(node.ops[0], ast.In):
                 left = node.left
                 if isinstance(left, ast.Constant) and isinstance(left.value, str) \
@@ -211,45 +217,32 @@ def test_the_substring_pin_would_catch_a_new_offence():
     assert found, "the detector cannot see a substring test at all"
 
 
-def test_an_unauthored_terminal_is_named_and_counted():
-    """The inconsistency is VISIBLE, not silent: the scorer names the status and the merge
-    counts it with an explicit zero, so a future clarification_required(x) appears on the
-    line instead of being absorbed into clarification_needed by the frozen bucketer."""
-    v, why = E.score({"expectation": "clarify", "expectation_basis": None},
-                     "clarification_needed", terminal_status="clarification_required(future)")
-    assert v == "unscored" and why == "unauthored_terminal:clarification_required(future)", (v, why)
-    assert "_known_inconsistencies" in _G, "the golden file does not record the exception"
-    rec = _G["_known_inconsistencies"][0]
-    assert rec["frozen_function_sha256_prefix"] == FROZEN_CLASSIFY_SHA
-    assert rec["observed_in_the_four_measured_runs"] == 0
 
 
-def test_the_known_divergence_between_bucketer_and_scorer_is_pinned():
-    """Pin the divergence the ruling ACCEPTS, not its absence.
-
-    classify() is byte-frozen, so it still buckets by substring: an unauthored
-    `clarification_required(future)` lands in clarification_needed there. The scorer does
-    NOT score it and names it. Asserting that classify() rejects it would pin behaviour the
-    ruling deliberately did not adopt, and would go red the moment someone read the code
-    and believed the pin. This states what is true, so the divergence cannot be forgotten.
-    """
+def test_an_unauthored_terminal_is_unserved_named_and_counted():
+    """The bucketer is now fail-closed, so an unauthored terminal lands in `unserved` --
+    quietly, unless it is named. Both halves are pinned: the bucket it falls into AND the
+    reason plus count that make it visible."""
     from merge_corpus import classify
     row = lambda st: {"final_http": 200, "final_payload_status": st,
                       "chain": f"t1={st}", "claimed_facts_n": 0}
-    # the frozen bucketer, substring behaviour intact
     assert classify(row("clarification_required(max_turns_exhausted)")) == "clarification_needed"
-    assert classify(row("clarification_required(future)")) == "clarification_needed", \
-        "classify() no longer buckets by substring -- the recorded inconsistency is stale"
-    # the scorer, authored instances only
-    known = E.score({"expectation": "clarify", "expectation_basis": None},
-                    "clarification_needed",
-                    terminal_status="clarification_required(max_turns_exhausted)")[0]
-    unknown = E.score({"expectation": "clarify", "expectation_basis": None},
-                      "clarification_needed", terminal_status="clarification_required(future)")
-    assert known == "agree"
-    assert unknown[0] == "unscored" and unknown[1].startswith("unauthored_terminal:")
-    # and neither occurs in the measured runs
-    assert _G["_known_inconsistencies"][0]["observed_in_the_four_measured_runs"] == 0
+    assert classify(row("clarification_required")) == "clarification_needed"
+    # fail-closed: an unauthored terminal is NOT bucketed as a clarification
+    assert classify(row("clarification_required(future)")) == "unserved"
+    assert classify(row("clarification_bogus")) == "unserved"
+
+    v, why = E.score({"expectation": "clarify", "expectation_basis": None},
+                     "unserved", terminal_status="clarification_required(future)")
+    assert v == "unscored", v
+    assert why == "unauthored_terminal:clarification_required(future)", why
+
+    rows = {"q": {"id": "q", "expect": "clarify", "basis": None, "anchor": None,
+                  "nonexistent": False, "family": "f"}}
+    tb = E.table(rows, {"q": "unserved"}, {"q": False},
+                 terminals_by_id={"q": "clarification_required(future)"})
+    n = sum(1 for e in tb if str(e.get("why", "")).startswith("unauthored_terminal:"))
+    assert n == 1, f"an unauthored terminal was not counted: {tb}"
 
 
 # ============================================================ (d) unsequenced + separators
