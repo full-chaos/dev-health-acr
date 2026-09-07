@@ -1086,3 +1086,88 @@ func TestStructural_OrgsTruncatedIsEmittedUnguardedAndAtZero(t *testing.T) {
 		t.Errorf("orgs_ok = %v, want 1", got)
 	}
 }
+
+// buildPairBreakingStore fails the BUILD's own checkpoint load with a
+// concrete error of OURS -- not a cancellation, and not the source -- and only
+// THEN cancels the tick.
+//
+// The build path has no divergence probe, so its first load is RunOnce's.
+type buildPairBreakingStore struct {
+	*fakeCheckpointStore
+	cancel context.CancelFunc
+	loads  atomic.Int32
+}
+
+func (s *buildPairBreakingStore) LoadProjectionCheckpoint(context.Context, string, string) (contextfabric.ProjectionCheckpoint, error) {
+	s.loads.Add(1)
+	err := fmt.Errorf("load projection checkpoint from postgres: %w", contextfabric.ErrUnavailable)
+	s.cancel() // the tick dies AFTER our step has definitively broken
+	return contextfabric.ProjectionCheckpoint{}, err
+}
+
+// TestStructural_ABuildPairFailureSurvivesATruncatedTick closes a genuine
+// coverage gap that the mutation battery found, not a reviewer.
+//
+// Battery 34126152011 arm M4-BUILD-PAIR-FAILURE-DROPPED-WHEN-TRUNCATED
+// SURVIVED: guarding the build path's recordPairFailure call on !truncated
+// passed 2215 tests. Nothing in the suite drove a BUILD-path PAIR break under
+// a truncated tick.
+//
+// The neighbouring arms look like they cover it and do not. (f)'s build_phase
+// drives a SOURCE failure, so buildBroke is false there; the named-pair-failure
+// pin drives the steady-state path. The build path's own copy of the rule was
+// therefore unpinned -- which is exactly how this class survived eleven review
+// rounds: the reported site was fixed and its sibling was not.
+//
+// Same rule as everywhere else: truncation suppresses claims of health, never
+// facts already established.
+func TestStructural_ABuildPairFailureSurvivesATruncatedTick(t *testing.T) {
+	t.Parallel()
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store := &buildPairBreakingStore{fakeCheckpointStore: newFakeCheckpointStore(), cancel: cancel}
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:           []string{"org-a"},
+		Sources:          []projectionrun.SourcePair{{Name: "dev_health_teams_projects", Source: &fakeSource{name: "dev_health_teams_projects", pages: 1}}},
+		Backend:          newFakeBackend(),
+		Checkpoints:      store,
+		RebuildMarkers:   newFakeRebuildMarker(),
+		Lifecycle:        &buildFailingLifecycleStore{epoch: 1},
+		EpochCheckpoints: func(int64) contextfabric.ProjectionCheckpointStore { return store },
+		GraceWindow:      time.Hour,
+		Logger:           logger,
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	coordinator.Tick(ctx)
+
+	if store.loads.Load() == 0 {
+		t.Fatal("the build never reached a checkpoint load -- the tick did not take the path under test")
+	}
+	summary := freshnessSummary(t, &buffer)
+	requireBucketIdentity(t, summary)
+
+	if got := summaryNumber(t, summary, "pair_failures"); got != 1 {
+		t.Errorf("pair_failures = %v, want 1 -- OUR checkpoint load broke during the build BEFORE the tick was cancelled, and a cancellation arriving afterwards does not un-observe it", got)
+	}
+	names, _ := summary["pair_failed"].([]any)
+	if len(names) != 1 || names[0] != "dev_health_teams_projects:checkpoint_load" {
+		t.Errorf("pair_failed = %v, want [dev_health_teams_projects:checkpoint_load]", summary["pair_failed"])
+	}
+	if got := summaryNumber(t, summary, "orgs_pair_failed"); got != 1 {
+		t.Errorf("orgs_pair_failed = %v, want 1 -- the build broke at OUR step, and the bucket has to carry that rather than lose it to the cancellation", got)
+	}
+	if got := summaryNumber(t, summary, "sources_failed"); got != 0 {
+		t.Errorf("sources_failed = %v, want 0 -- our checkpoint store broke, not the source", got)
+	}
+	if got := summaryNumber(t, summary, "orgs_truncated"); got != 1 {
+		t.Errorf("orgs_truncated = %v, want 1", got)
+	}
+	if summaryBool(t, summary, "tick_complete") {
+		t.Error("tick_complete = true, want false")
+	}
+}
