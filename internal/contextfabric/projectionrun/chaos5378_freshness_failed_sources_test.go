@@ -1206,41 +1206,188 @@ func TestASourceOwnedContextErrorIsAFailureNotATruncation(t *testing.T) {
 	}
 }
 
-// TestNoCompletionIsAssertedByHand is the invariant pin for this class's
-// fifth and final form. Five successive attempts asserted completion at a
-// hand-picked site and each failed on a site the previous had not considered:
-// before the build tick ran, before recovery finished, at a classification
-// the drain had been cut short before reaching.
+// TestTheScopeOwnsTheContext is the invariant pin for model 7, the seventh
+// and last structural form of this rule. Six earlier models recorded
+// completion, or truncation, at sites chosen by hand; each was refuted by the
+// next review on a site the previous had not considered — including, in the
+// end, an operation nobody had noticed took a context at all.
 //
-// Completion is now DERIVED from observations, so the pin asserts the
-// absence of the mechanism that kept failing: no markComplete anywhere, and
-// the finalizer deriving its answer rather than reading one.
-func TestNoCompletionIsAssertedByHand(t *testing.T) {
+// Enumerating the sites is what kept failing. Model 7 removes the ability to
+// have an unobserved site: the per-org functions take no context, so the only
+// way to reach the tick's context for an operation is scope.run, which
+// observes automatically. This pin asserts that shape rather than any
+// symptom, because every symptom-level pin so far was satisfied by a broken
+// model.
+func TestTheScopeOwnsTheContext(t *testing.T) {
 	t.Parallel()
-	if got := countCallsNamed(t, "coordinator.go", "markComplete"); got != 0 {
-		t.Errorf("markComplete is called %d time(s) -- completion is derived from observe(), never asserted at a site; every hand-placed mark in this file's history was placed before work that could still be cancelled", got)
-	}
-	if got := countCallsNamed(t, "coordinator.go", "observe"); got < 4 {
-		t.Errorf("scope.observe is called %d time(s), want at least 4 -- every cancellable operation on the org path (pair drain, build tick, divergence recovery, lifecycle read, lock) must pass through it", got)
+	const file = "coordinator.go"
+	perOrg := []string{"runOrgLegacy", "runOrgLifecycle", "recoverFromDivergence", "recoverFromDivergenceLifecycle", "runBuildTick"}
+
+	// 1. No per-org function may take a context: that is what makes an
+	//    unobserved operation unwritable rather than merely discouraged.
+	for _, fn := range perOrg {
+		if takesContext(t, file, fn) {
+			t.Errorf("%s takes a context.Context -- a per-org function holding the tick context can invoke an operation without observation, which is how six earlier models failed", fn)
+		}
 	}
 
-	// Negative control: the walk must see a real call and not a commented one.
-	for _, tc := range []struct {
-		name string
-		src  string
-		want int
-	}{
-		{"commented out", "package projectionrun\n\nfunc f(o *orgScope) {\n\t// o.markComplete()\n\t_ = o\n}\n", 0},
-		{"a real call", "package projectionrun\n\nfunc f(o *orgScope) {\n\to.markComplete()\n}\n", 1},
-	} {
-		file, err := parser.ParseFile(token.NewFileSet(), "control.go", tc.src, 0)
-		if err != nil {
-			t.Fatalf("%s: parse: %v", tc.name, err)
-		}
-		if got := countCallsNamedIn(file, "markComplete"); got != tc.want {
-			t.Errorf("negative control %q counted %d, want %d", tc.name, got, tc.want)
+	// 2. Inside those functions, every call that passes a context must be
+	//    lexically inside scope.run — except slog, which cannot be cancelled
+	//    and has no outcome to observe.
+	for _, fn := range perOrg {
+		if bad := contextCallsOutsideRun(t, file, fn); len(bad) != 0 {
+			t.Errorf("%s passes a context outside scope.run at: %v", fn, bad)
 		}
 	}
+
+	// 3. logCtx is the logging exemption and must not become a back door: it
+	//    may appear ONLY as the ctx argument of a c.logger.*Context call.
+	if bad := logCtxMisuses(t, file); len(bad) != 0 {
+		t.Errorf("scope.logCtx() reaches a non-logger call at: %v -- the exemption exists for slog and nothing else", bad)
+	}
+
+	// 4. tick_complete is derived at the summary, never assigned.
+	if got := countCallsNamed(t, file, "markIncomplete"); got != 0 {
+		t.Errorf("markIncomplete is called %d time(s) -- tick_complete is derived from the bucket identity, never set by hand; the flag and orgs_unevaluated disagreed on every path that forgot it", got)
+	}
+
+	// Negative controls, both directions.
+	ctlBad, err := parser.ParseFile(token.NewFileSet(), "c.go", `package projectionrun
+
+func (c *Coordinator) runOrgLegacy(scope *orgScope, orgID string) {
+	c.thing(scope.logCtx(), orgID)
+}
+`, 0)
+	if err != nil {
+		t.Fatalf("parse control: %v", err)
+	}
+	if got := logCtxMisusesIn(ctlBad); len(got) != 1 {
+		t.Fatalf("negative control: a logCtx() handed to a non-logger call was NOT caught (%v)", got)
+	}
+	ctlOK, err := parser.ParseFile(token.NewFileSet(), "c.go", `package projectionrun
+
+func (c *Coordinator) runOrgLegacy(scope *orgScope, orgID string) {
+	c.logger.WarnContext(scope.logCtx(), "x")
+}
+`, 0)
+	if err != nil {
+		t.Fatalf("parse control: %v", err)
+	}
+	if got := logCtxMisusesIn(ctlOK); len(got) != 0 {
+		t.Fatalf("negative control: a logCtx() in a logger call was wrongly flagged (%v)", got)
+	}
+}
+
+func funcDecl(t *testing.T, filename, fnName string) *ast.FuncDecl {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), filename, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", filename, err)
+	}
+	for _, decl := range file.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == fnName {
+			return fn
+		}
+	}
+	t.Fatalf("no function %q in %s -- the pin asserts about code that no longer exists", fnName, filename)
+	return nil
+}
+
+func takesContext(t *testing.T, filename, fnName string) bool {
+	t.Helper()
+	for _, param := range funcDecl(t, filename, fnName).Type.Params.List {
+		if sel, ok := param.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "Context" {
+			return true
+		}
+	}
+	return false
+}
+
+// contextCallsOutsideRun returns the callee names that receive a context
+// argument while NOT lexically inside a scope.run literal. slog calls are
+// exempt by name.
+func contextCallsOutsideRun(t *testing.T, filename, fnName string) []string {
+	t.Helper()
+	fn := funcDecl(t, filename, fnName)
+	var bad []string
+	var walk func(n ast.Node, insideRun bool)
+	walk = func(n ast.Node, insideRun bool) {
+		ast.Inspect(n, func(m ast.Node) bool {
+			call, ok := m.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "run" {
+				for _, arg := range call.Args {
+					if lit, ok := arg.(*ast.FuncLit); ok {
+						walk(lit.Body, true)
+					}
+				}
+				return false
+			}
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && strings.HasSuffix(sel.Sel.Name, "Context") {
+				return true // slog: exempt
+			}
+			if !insideRun {
+				for _, arg := range call.Args {
+					if ident, ok := arg.(*ast.Ident); ok && ident.Name == "ctx" {
+						bad = append(bad, exprName(call.Fun))
+					}
+				}
+			}
+			return true
+		})
+	}
+	walk(fn.Body, false)
+	return bad
+}
+
+func logCtxMisuses(t *testing.T, filename string) []string {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), filename, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", filename, err)
+	}
+	return logCtxMisusesIn(file)
+}
+
+func logCtxMisusesIn(n ast.Node) []string {
+	var bad []string
+	ast.Inspect(n, func(m ast.Node) bool {
+		call, ok := m.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		carries := false
+		for _, arg := range call.Args {
+			inner, ok := arg.(*ast.CallExpr)
+			if !ok {
+				continue
+			}
+			if sel, ok := inner.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "logCtx" {
+				carries = true
+			}
+		}
+		if !carries {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || !strings.HasSuffix(sel.Sel.Name, "Context") {
+			bad = append(bad, exprName(call.Fun))
+		}
+		return true
+	})
+	return bad
+}
+
+func exprName(e ast.Expr) string {
+	switch v := e.(type) {
+	case *ast.Ident:
+		return v.Name
+	case *ast.SelectorExpr:
+		return exprName(v.X) + "." + v.Sel.Name
+	}
+	return "?"
 }
 
 func countCallsNamed(t *testing.T, filename, name string) int {

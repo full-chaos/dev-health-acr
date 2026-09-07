@@ -762,11 +762,6 @@ type tickFreshnessStats struct {
 	// Info. An organization the tick did not finish evaluating must never
 	// count as healthy.
 	orgsUnevaluated int64
-	// tickIncomplete marks that this tick returned early. Reported as
-	// tick_complete on the line (inverted, so the healthy state is the
-	// positive one) and always present, so "the tick finished" is an
-	// assertion rather than the absence of a warning.
-	tickIncomplete int64
 	// sourcesEvaluated/sourcesFailed count (org, source) PAIRS across the
 	// whole tick, and failedSources names the distinct sources behind
 	// sourcesFailed -- a count alone cannot tell an operator whether the
@@ -825,14 +820,14 @@ func (s *tickFreshnessStats) recordUnevaluated()     { atomic.AddInt64(&s.orgsUn
 // because it -- not the call site -- decides what is committed.
 type orgScope struct {
 	stats     *tickFreshnessStats
-	ctx       context.Context
+	parent    context.Context
 	bucket    func()
 	truncated bool
 }
 
 // beginOrg opens one organization's scope. The caller MUST defer finish().
 func (s *tickFreshnessStats) beginOrg(ctx context.Context) *orgScope {
-	return &orgScope{stats: s, ctx: ctx}
+	return &orgScope{stats: s, parent: ctx}
 }
 
 // record names the bucket this organization belongs in. Last call wins, and
@@ -840,35 +835,44 @@ func (s *tickFreshnessStats) beginOrg(ctx context.Context) *orgScope {
 // one that never decides at all, cannot leave a half-written verdict behind.
 func (o *orgScope) record(bucket func()) { o.bucket = bucket }
 
-// observe records the outcome of ONE cancellable operation on this
-// organization's path -- a pair drain, a build tick, a divergence recovery, a
-// lifecycle read, a lock. Every such call site passes through here.
+// run executes ONE context-taking operation and observes its outcome. It is
+// the only way to reach the tick's context for anything that can be
+// cancelled: the per-org functions take no context.Context at all, so an
+// operation cannot be invoked outside this method even by accident.
 //
-// Completion is DERIVED from these observations, never asserted. Five
-// successive attempts to assert it by hand each failed on a site the previous
-// one had not thought of: marked before the build tick ran, marked before
-// recovery finished, marked at a classification the drain had been cut short
-// before reaching. A hand-placed mark is a claim about work that has not
-// happened yet; an observation is a fact about work that has.
+// Six earlier models tried to record completion, or truncation, at sites
+// chosen by hand. Each failed on a site the previous one had not considered
+// -- before the build tick ran, before recovery finished, at a classification
+// the drain had been cut short before reaching, and finally at an operation
+// nobody had noticed took a context at all. Enumerating the sites is what
+// kept failing; removing the ability to have a site is what this replaces it
+// with.
 //
-// The discriminator is THE TICK'S OWN CONTEXT, read HERE, at the moment the
-// operation returned -- not at the end of the scope, where a cancellation
-// arriving after a completed evaluation is indistinguishable from one that
-// interrupted it, and not from the error's identity:
-//
-//   - context done at observation  -> truncated, whatever the error was, so a
-//     cancellation that arrives through a route with no error of its own
-//     (a freshness read that cancels and returns no batch) is still caught;
-//   - context live and err non-nil -> NOT truncated, even when the error IS
-//     context.Canceled. A source that manufactures a context error under a
-//     live tick has FAILED, and must be counted and named as a failing
-//     source rather than disappearing into "unevaluated".
-func (o *orgScope) observe(err error) {
-	if o.ctx.Err() != nil {
+// The discriminator is the TICK's own context, read HERE, immediately after
+// the operation returned -- never from the error's identity. A cancellation
+// arriving with no error of its own is still caught, because the context is
+// what is read; and a source returning context.Canceled under a live tick has
+// FAILED, and is counted and named as a failing source rather than
+// disappearing into unevaluated work.
+func (o *orgScope) run(op func(context.Context) error) error {
+	err := op(o.parent)
+	if o.parent.Err() != nil {
 		o.truncated = true
 	}
-	_ = err
+	return err
 }
+
+// logCtx hands the context to a slog call and nothing else. A log line cannot
+// be cancelled and has no outcome to observe, so routing the 18 logging sites
+// through run() would be churn that protects nothing. A structural test pins
+// that logCtx() appears ONLY as the ctx argument of a c.logger.*Context call.
+func (o *orgScope) logCtx() context.Context { return o.parent }
+
+// done reports whether the tick's context is finished, for loop guards that
+// need to stop early. It does NOT observe: run() has already recorded the
+// truncation for whatever operation ended the tick, and observing again here
+// would be a second place that has to remember.
+func (o *orgScope) done() bool { return o.parent.Err() != nil }
 
 // finish commits exactly one bucket. A cancelled evaluation that never chose
 // one is unevaluated and marks the tick incomplete: the tick did not
@@ -882,7 +886,6 @@ func (o *orgScope) finish() {
 	// interrupted the work and one that arrived after it finished look
 	// identical, which is the mistake three earlier versions made.
 	if o.truncated {
-		o.stats.markIncomplete()
 		o.stats.recordUnevaluated()
 		return
 	}
@@ -895,7 +898,6 @@ func (o *orgScope) finish() {
 	}
 	o.bucket()
 }
-func (s *tickFreshnessStats) markIncomplete() { atomic.StoreInt64(&s.tickIncomplete, 1) }
 
 // freshnessFailedSourceNameCap bounds the failed_sources array on one log
 // line independently of how many sources a deployment configures, the same
@@ -1043,7 +1045,18 @@ func (c *Coordinator) Tick(ctx context.Context) {
 		// Present on every line so a finished tick is an assertion, not the
 		// absence of a warning -- a cancelled tick used to be visible only
 		// as a Warn below the operator's level.
-		"tick_complete", atomic.LoadInt64(&stats.tickIncomplete) == 0,
+		// DERIVED, never assigned: a tick is complete when every configured
+		// organization reached a verdict and the buckets account for all of
+		// them. It was a hand-set flag until the seventh model, and the flag
+		// disagreed with orgs_unevaluated on the paths nobody remembered to
+		// set it -- two fields describing one fact is one field too many.
+		"tick_complete", atomic.LoadInt64(&stats.orgsUnevaluated) == 0 &&
+			int64(len(c.orgIDs)) == atomic.LoadInt64(&stats.orgsOK)+
+				atomic.LoadInt64(&stats.orgsRebuildRequired)+
+				atomic.LoadInt64(&stats.orgsBackoff)+
+				atomic.LoadInt64(&stats.orgsSourceFailed)+
+				atomic.LoadInt64(&stats.orgsDivergenceRecovered)+
+				atomic.LoadInt64(&stats.orgsUnevaluated),
 		"orgs_unevaluated", atomic.LoadInt64(&stats.orgsUnevaluated),
 		"orgs_source_failed", atomic.LoadInt64(&stats.orgsSourceFailed),
 		"sources_evaluated", sourcesEvaluated,
@@ -1105,10 +1118,14 @@ func (c *Coordinator) runOrg(ctx context.Context, orgID string, stats *tickFresh
 	}
 	defer mutex.Unlock()
 
-	unlock, err := c.locker.Lock(ctx, orgID)
+	var unlock func() error
+	err := scope.run(func(ctx context.Context) error {
+		var e error
+		unlock, e = c.locker.Lock(ctx, orgID)
+		return e
+	})
 	if err != nil {
 		scope.record(scope.stats.recordBackoff)
-		scope.observe(err)
 		if !errors.Is(err, ErrOrgLocked) {
 			c.logger.WarnContext(ctx, "projection organization lock failed", "org_id", orgID, "failure_class", classifyOutcomeError(err))
 		}
@@ -1121,16 +1138,16 @@ func (c *Coordinator) runOrg(ctx context.Context, orgID string, stats *tickFresh
 	}()
 
 	if c.lifecycle != nil {
-		c.runOrgLifecycle(ctx, orgID, scope)
+		c.runOrgLifecycle(scope, orgID)
 		return
 	}
-	c.runOrgLegacy(ctx, orgID, scope)
+	c.runOrgLegacy(scope, orgID)
 }
 
 // runOrgLegacy is the pre-CHAOS-3898 per-org tick body, unchanged: marker-based
 // crash-resume, epoch-0-pinned divergence check, epoch-0-pinned per-source
 // ticking. The caller (runOrg) already holds both organization locks.
-func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, scope *orgScope) {
+func (c *Coordinator) runOrgLegacy(scope *orgScope, orgID string) {
 	// CHAOS-3753 codex finding C2 invariant: never run incremental
 	// projection against a purged-but-not-reset graph. A marker present
 	// here means a prior Rebuild (this replica or another) crashed between
@@ -1138,16 +1155,22 @@ func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, scope *org
 	// that exact sequence instead of proceeding, and skip ordinary
 	// projection for this org this tick regardless of outcome (the marker
 	// state, not a stale checkpoint, is the true source of truth right now).
-	if inProgress, err := c.rebuildMarkers.IsRebuildInProgress(ctx, orgID); err != nil {
+	var inProgress bool
+	err := scope.run(func(ctx context.Context) error {
+		var e error
+		inProgress, e = c.rebuildMarkers.IsRebuildInProgress(ctx, orgID)
+		return e
+	})
+	if err != nil {
 		scope.record(scope.stats.recordBackoff)
-		c.logger.WarnContext(ctx, "check rebuild marker failed; skipping tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
+		c.logger.WarnContext(scope.logCtx(), "check rebuild marker failed; skipping tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
 		return
 	} else if inProgress {
 		scope.record(scope.stats.recordBackoff)
-		if err := c.performRebuild(ctx, orgID); err != nil {
-			c.logger.WarnContext(ctx, "resume interrupted rebuild failed; will retry next tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
+		if err := scope.run(func(ctx context.Context) error { return c.performRebuild(ctx, orgID) }); err != nil {
+			c.logger.WarnContext(scope.logCtx(), "resume interrupted rebuild failed; will retry next tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
 		} else {
-			c.logger.InfoContext(ctx, "resumed an interrupted rebuild", "org_id", orgID)
+			c.logger.InfoContext(scope.logCtx(), "resumed an interrupted rebuild", "org_id", orgID)
 		}
 		return
 	}
@@ -1160,20 +1183,31 @@ func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, scope *org
 	// resume branch: skip ordinary projection this tick regardless of
 	// outcome and drive recovery through the SAME performRebuild sequence,
 	// under the SAME org lock this method already holds.
-	if c.checkpointStoreDiverged(ctx, orgID, c.checkpoints) {
-		c.recoverFromDivergence(ctx, orgID, scope)
+	diverged := false
+	_ = scope.run(func(ctx context.Context) error {
+		diverged = c.checkpointStoreDiverged(ctx, orgID, c.checkpoints)
+		return nil
+	})
+	if diverged {
+		c.recoverFromDivergence(scope, orgID)
 		return
 	}
 
 	evaluated, stale, sourceFailed := false, false, false
 	budget := c.drainBudget // CHAOS-3826: shared across every source this org drains this tick
 	for _, source := range c.sourceNames {
-		if ctx.Err() != nil {
+		if scope.done() {
 			// No bookkeeping here on purpose: the org-scope finalizer
-			// commits the verdict for every exit, including this one.
+			// commits the verdict for every exit, including this one, and
+			// run() has already observed the truncation.
 			return
 		}
-		pairEvaluated, pairStale, pairFailed, pairWithheld, pairErr := c.runPair(ctx, orgID, source, c.checkpoints, &budget)
+		var pairEvaluated, pairStale, pairFailed, pairWithheld bool
+		_ = scope.run(func(ctx context.Context) error {
+			var err error
+			pairEvaluated, pairStale, pairFailed, pairWithheld, err = c.runPair(ctx, orgID, source, c.checkpoints, &budget)
+			return err
+		})
 		evaluated = evaluated || pairEvaluated
 		stale = stale || pairStale
 		// A pair withheld by its own failure backoff counts as a failing
@@ -1182,7 +1216,6 @@ func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, scope *org
 		// the first, which is precisely the shape this disclosure exists
 		// to end.
 		sourceFailed = sourceFailed || pairFailed || pairWithheld
-		scope.observe(pairErr)
 		scope.stats.recordPairOutcome(source, pairEvaluated, pairFailed, pairWithheld)
 	}
 	// A failed source can no longer land in ok. It sits BELOW stale in
@@ -1209,12 +1242,17 @@ func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, scope *org
 // reads/advances the organization's CURRENT ACTIVE epoch's checkpoint set
 // (design brief §3.4), not always epoch 0. The caller (runOrg) already
 // holds both organization locks.
-func (c *Coordinator) runOrgLifecycle(ctx context.Context, orgID string, scope *orgScope) {
-	row, found, err := c.lifecycle.Get(ctx, orgID)
+func (c *Coordinator) runOrgLifecycle(scope *orgScope, orgID string) {
+	var row contextfabric.OrgGraphLifecycle
+	var found bool
+	err := scope.run(func(ctx context.Context) error {
+		var e error
+		row, found, e = c.lifecycle.Get(ctx, orgID)
+		return e
+	})
 	if err != nil {
-		scope.observe(err)
 		scope.record(scope.stats.recordBackoff)
-		c.logger.WarnContext(ctx, "read graph lifecycle row failed; skipping tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
+		c.logger.WarnContext(scope.logCtx(), "read graph lifecycle row failed; skipping tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
 		return
 	}
 	if found && row.Status == contextfabric.LifecycleStatusBuilding {
@@ -1222,8 +1260,7 @@ func (c *Coordinator) runOrgLifecycle(ctx context.Context, orgID string, scope *
 		// Observed AFTER the build tick, not before it: the build is
 		// cancellable work, and marking completion ahead of it claimed a
 		// verdict for work that had not run.
-		c.runBuildTick(ctx, orgID, row)
-		scope.observe(nil)
+		c.runBuildTick(scope, orgID, row)
 		return
 	}
 
@@ -1234,20 +1271,31 @@ func (c *Coordinator) runOrgLifecycle(ctx context.Context, orgID string, scope *
 		checkpoints = c.epochCheckpoints(epoch)
 	}
 
-	if c.checkpointStoreDiverged(ctx, orgID, checkpoints) {
-		c.recoverFromDivergenceLifecycle(ctx, orgID, scope)
+	diverged := false
+	_ = scope.run(func(ctx context.Context) error {
+		diverged = c.checkpointStoreDiverged(ctx, orgID, checkpoints)
+		return nil
+	})
+	if diverged {
+		c.recoverFromDivergenceLifecycle(scope, orgID)
 		return
 	}
 
 	evaluated, stale, sourceFailed := false, false, false
 	budget := c.drainBudget // CHAOS-3826: shared across every source this org drains this tick
 	for _, source := range c.sourceNames {
-		if ctx.Err() != nil {
+		if scope.done() {
 			// No bookkeeping here on purpose: the org-scope finalizer
-			// commits the verdict for every exit, including this one.
+			// commits the verdict for every exit, including this one, and
+			// run() has already observed the truncation.
 			return
 		}
-		pairEvaluated, pairStale, pairFailed, pairWithheld, pairErr := c.runPair(ctx, orgID, source, checkpoints, &budget)
+		var pairEvaluated, pairStale, pairFailed, pairWithheld bool
+		_ = scope.run(func(ctx context.Context) error {
+			var err error
+			pairEvaluated, pairStale, pairFailed, pairWithheld, err = c.runPair(ctx, orgID, source, checkpoints, &budget)
+			return err
+		})
 		evaluated = evaluated || pairEvaluated
 		stale = stale || pairStale
 		// A pair withheld by its own failure backoff counts as a failing
@@ -1256,10 +1304,12 @@ func (c *Coordinator) runOrgLifecycle(ctx context.Context, orgID string, scope *
 		// the first, which is precisely the shape this disclosure exists
 		// to end.
 		sourceFailed = sourceFailed || pairFailed || pairWithheld
-		scope.observe(pairErr)
 		scope.stats.recordPairOutcome(source, pairEvaluated, pairFailed, pairWithheld)
 	}
-	c.recordCheckpointEpochState(ctx, orgID, epoch, contextfabric.CheckpointEpochActive, checkpoints)
+	_ = scope.run(func(ctx context.Context) error {
+		c.recordCheckpointEpochState(ctx, orgID, epoch, contextfabric.CheckpointEpochActive, checkpoints)
+		return nil
+	})
 	// See runOrgLegacy's identical switch for why a failed source cannot
 	// land in ok and why it sits below stale.
 	switch {
@@ -1296,17 +1346,22 @@ func (c *Coordinator) runOrgLifecycle(ctx context.Context, orgID string, scope *
 // checkpoint's rows_applied column moves in the SAME CAS statement as its
 // cursor, so it cannot go stale independently of cf_build_source_progress
 // the way byName[source].RowsProjected could.
-func (c *Coordinator) runBuildTick(ctx context.Context, orgID string, row contextfabric.OrgGraphLifecycle) {
+func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfabric.OrgGraphLifecycle) {
 	if row.TargetEpoch == nil {
-		c.logger.WarnContext(ctx, "graph lifecycle row is building with no target epoch; skipping", "org_id", orgID)
+		c.logger.WarnContext(scope.logCtx(), "graph lifecycle row is building with no target epoch; skipping", "org_id", orgID)
 		return
 	}
 	targetEpoch := *row.TargetEpoch
 	checkpoints := c.epochCheckpoints(targetEpoch)
 
-	progress, err := c.lifecycle.SourceProgress(ctx, orgID, targetEpoch)
+	var progress []contextfabric.BuildSourceProgress
+	err := scope.run(func(ctx context.Context) error {
+		var e error
+		progress, e = c.lifecycle.SourceProgress(ctx, orgID, targetEpoch)
+		return e
+	})
 	if err != nil {
-		c.logger.WarnContext(ctx, "read build source progress failed; skipping build tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
+		c.logger.WarnContext(scope.logCtx(), "read build source progress failed; skipping build tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
 		return
 	}
 	byName := make(map[string]contextfabric.BuildSourceProgress, len(progress))
@@ -1330,7 +1385,7 @@ func (c *Coordinator) runBuildTick(ctx context.Context, orgID string, row contex
 	// organizations' next tick).
 	budget := c.drainBudget
 	for _, source := range row.RequiredSources {
-		if ctx.Err() != nil {
+		if scope.done() {
 			return
 		}
 		if existing, ok := byName[source]; ok && existing.CompletionMode != contextfabric.BuildCompletionPending {
@@ -1338,20 +1393,33 @@ func (c *Coordinator) runBuildTick(ctx context.Context, orgID string, row contex
 		}
 		projectionSource, configured := c.sources[source]
 		if !configured {
-			c.logger.WarnContext(ctx, "required build source is no longer configured; flip will remain blocked until it is restored", "org_id", orgID, "source", source)
+			c.logger.WarnContext(scope.logCtx(), "required build source is no longer configured; flip will remain blocked until it is restored", "org_id", orgID, "source", source)
 			continue
 		}
 		if enablement, ok := projectionSource.(contextfabric.ProjectionSourceEnablement); ok && !enablement.Enabled() {
-			if rerr := c.lifecycle.RecordSourceProgress(ctx, orgID, targetEpoch, source, contextfabric.BuildCompletionDisabledAtFreeze, 0, c.now()); rerr != nil {
-				c.logger.WarnContext(ctx, "record disabled-at-freeze source progress failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(rerr))
+			if rerr := scope.run(func(ctx context.Context) error {
+				return c.lifecycle.RecordSourceProgress(ctx, orgID, targetEpoch, source, contextfabric.BuildCompletionDisabledAtFreeze, 0, c.now())
+			}); rerr != nil {
+				c.logger.WarnContext(scope.logCtx(), "record disabled-at-freeze source progress failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(rerr))
 			}
 			continue
 		}
-		c.runBuildPair(ctx, orgID, source, targetEpoch, checkpoints, &budget)
+		_ = scope.run(func(ctx context.Context) error {
+			c.runBuildPair(ctx, orgID, source, targetEpoch, checkpoints, &budget)
+			return nil
+		})
 	}
-	c.recordCheckpointEpochState(ctx, orgID, targetEpoch, contextfabric.CheckpointEpochBuilding, checkpoints)
+	_ = scope.run(func(ctx context.Context) error {
+		c.recordCheckpointEpochState(ctx, orgID, targetEpoch, contextfabric.CheckpointEpochBuilding, checkpoints)
+		return nil
+	})
 
-	flipped, err := c.lifecycle.Flip(ctx, orgID, targetEpoch, c.graceWindow, c.now())
+	var flipped contextfabric.OrgGraphLifecycle
+	err = scope.run(func(ctx context.Context) error {
+		var e error
+		flipped, e = c.lifecycle.Flip(ctx, orgID, targetEpoch, c.graceWindow, c.now())
+		return e
+	})
 	switch {
 	case err == nil:
 		attrs := []any{"org_id", orgID, "from_epoch", row.ActiveEpoch, "to_epoch", flipped.ActiveEpoch}
@@ -1360,20 +1428,25 @@ func (c *Coordinator) runBuildTick(ctx context.Context, orgID string, row contex
 		if started, ok := c.buildStarted.LoadAndDelete(orgID); ok {
 			attrs = append(attrs, "build_wall_clock_ms", c.now().Sub(started.(time.Time)).Milliseconds())
 		}
-		c.logger.InfoContext(ctx, "context_fabric: graph epoch flip", attrs...)
-		c.invalidateEpochResolution(ctx, orgID, contextfabric.LifecycleTransitionFlip)
+		c.logger.InfoContext(scope.logCtx(), "context_fabric: graph epoch flip", attrs...)
+		_ = scope.run(func(ctx context.Context) error {
+			c.invalidateEpochResolution(ctx, orgID, contextfabric.LifecycleTransitionFlip)
+			return nil
+		})
 		if c.reuseInvalidator != nil {
-			if invalidateErr := c.reuseInvalidator.InvalidateOrganizationReuse(ctx, orgID); invalidateErr != nil {
-				c.logger.WarnContext(ctx, "invalidate answer reuse after flip failed", "org_id", orgID, "failure_class", classifyOutcomeError(invalidateErr))
+			if invalidateErr := scope.run(func(ctx context.Context) error {
+				return c.reuseInvalidator.InvalidateOrganizationReuse(ctx, orgID)
+			}); invalidateErr != nil {
+				c.logger.WarnContext(scope.logCtx(), "invalidate answer reuse after flip failed", "org_id", orgID, "failure_class", classifyOutcomeError(invalidateErr))
 			}
 		}
 	case errors.Is(err, contextfabric.ErrLifecycleTransitionRefused):
 		// Expected, ordinary mid-build state: not every required source has
 		// reported a terminal completion yet. Next tick tries again.
 	case errors.Is(err, contextfabric.ErrLifecycleConflict):
-		c.logger.WarnContext(ctx, "flip lost a lifecycle CAS race", "org_id", orgID, "failure_class", classifyOutcomeError(err))
+		c.logger.WarnContext(scope.logCtx(), "flip lost a lifecycle CAS race", "org_id", orgID, "failure_class", classifyOutcomeError(err))
 	default:
-		c.logger.WarnContext(ctx, "flip attempt failed", "org_id", orgID, "failure_class", classifyOutcomeError(err))
+		c.logger.WarnContext(scope.logCtx(), "flip attempt failed", "org_id", orgID, "failure_class", classifyOutcomeError(err))
 	}
 }
 
@@ -1688,7 +1761,7 @@ func (c *Coordinator) LivenessCheck(ctx context.Context) error {
 // Every log line here is content-safe: org_id_hash and a bounded failure
 // class only, matching classifyOutcomeError's closed vocabulary -- never a
 // raw organization identifier or dependency error text.
-func (c *Coordinator) recoverFromDivergence(ctx context.Context, orgID string, scope *orgScope) {
+func (c *Coordinator) recoverFromDivergence(scope *orgScope, orgID string) {
 	key := orgID + "\x00" + divergenceBackoffKey
 	if !c.due(key) {
 		scope.record(scope.stats.recordBackoff)
@@ -1698,17 +1771,17 @@ func (c *Coordinator) recoverFromDivergence(ctx context.Context, orgID string, s
 	// LOUD and unconditional (Error, not Debug/Info): this is an active
 	// incident signal -- the durable checkpoint says data was projected and
 	// the graph backend says otherwise -- not routine scheduling chatter.
-	c.logger.ErrorContext(ctx, "context_fabric: projection checkpoint-store divergence detected (CHAOS-3882); the durable checkpoint outran the graph backend's own state -- triggering automatic recovery instead of serving resolution against a silently empty or stale graph",
+	c.logger.ErrorContext(scope.logCtx(), "context_fabric: projection checkpoint-store divergence detected (CHAOS-3882); the durable checkpoint outran the graph backend's own state -- triggering automatic recovery instead of serving resolution against a silently empty or stale graph",
 		"org_id_hash", hash)
-	err := c.performRebuild(ctx, orgID)
+	err := scope.run(func(ctx context.Context) error { return c.performRebuild(ctx, orgID) })
 	c.recordBackoff(key, err)
 	scope.record(scope.stats.recordDivergenceRecovered)
 	if err != nil {
-		c.logger.ErrorContext(ctx, "context_fabric: automatic projection-liveness recovery failed; will retry with backoff",
+		c.logger.ErrorContext(scope.logCtx(), "context_fabric: automatic projection-liveness recovery failed; will retry with backoff",
 			"org_id_hash", hash, "failure_class", classifyOutcomeError(err))
 		return
 	}
-	c.logger.WarnContext(ctx, "context_fabric: automatic projection-liveness recovery completed; every configured source's checkpoint was reset and replay will resume on the next tick",
+	c.logger.WarnContext(scope.logCtx(), "context_fabric: automatic projection-liveness recovery completed; every configured source's checkpoint was reset and replay will resume on the next tick",
 		"org_id_hash", hash)
 }
 
@@ -1721,20 +1794,25 @@ func (c *Coordinator) recoverFromDivergence(ctx context.Context, orgID string, s
 // the build flips, runOrgLifecycle's steady branch resolves the NEW active
 // epoch and checkpointStoreDiverged naturally reports false again, the same
 // way resetAllCheckpoints made the legacy path self-clearing.
-func (c *Coordinator) recoverFromDivergenceLifecycle(ctx context.Context, orgID string, scope *orgScope) {
+func (c *Coordinator) recoverFromDivergenceLifecycle(scope *orgScope, orgID string) {
 	key := orgID + "\x00" + divergenceBackoffKey
 	if !c.due(key) {
 		scope.record(scope.stats.recordBackoff)
 		return
 	}
 	hash := orgIDHash(orgID)
-	c.logger.ErrorContext(ctx, "context_fabric: projection checkpoint-store divergence detected (CHAOS-3882); the durable checkpoint outran the graph backend's own state -- triggering automatic build-aside recovery instead of serving resolution against a silently empty or stale graph",
+	c.logger.ErrorContext(scope.logCtx(), "context_fabric: projection checkpoint-store divergence detected (CHAOS-3882); the durable checkpoint outran the graph backend's own state -- triggering automatic build-aside recovery instead of serving resolution against a silently empty or stale graph",
 		"org_id_hash", hash)
-	opened, err := c.beginLifecycleBuild(ctx, orgID)
+	var opened bool
+	err := scope.run(func(ctx context.Context) error {
+		var e error
+		opened, e = c.beginLifecycleBuild(ctx, orgID)
+		return e
+	})
 	c.recordBackoff(key, err)
 	scope.record(scope.stats.recordDivergenceRecovered)
 	if err != nil {
-		c.logger.ErrorContext(ctx, "context_fabric: automatic projection-liveness recovery failed to open a build-aside epoch; will retry with backoff",
+		c.logger.ErrorContext(scope.logCtx(), "context_fabric: automatic projection-liveness recovery failed to open a build-aside epoch; will retry with backoff",
 			"org_id_hash", hash, "failure_class", classifyOutcomeError(err))
 		return
 	}
@@ -1747,7 +1825,7 @@ func (c *Coordinator) recoverFromDivergenceLifecycle(ctx context.Context, orgID 
 		// for an unrelated reason and no epoch was opened).
 		return
 	}
-	c.logger.WarnContext(ctx, "context_fabric: automatic projection-liveness recovery opened a build-aside epoch; replay will proceed over subsequent ticks",
+	c.logger.WarnContext(scope.logCtx(), "context_fabric: automatic projection-liveness recovery opened a build-aside epoch; replay will proceed over subsequent ticks",
 		"org_id_hash", hash)
 }
 
