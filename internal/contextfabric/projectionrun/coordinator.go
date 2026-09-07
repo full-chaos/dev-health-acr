@@ -1008,6 +1008,7 @@ func (s *tickFreshnessStats) snapshotBuild() (failed int64, names []string) {
 	copy(names, s.buildFailedSources)
 	return s.buildSourcesFailed, names
 }
+
 func (s *tickFreshnessStats) recordDivergenceRecovered() {
 	atomic.AddInt64(&s.orgsDivergenceRecovered, 1)
 }
