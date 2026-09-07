@@ -187,7 +187,12 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"no_commit_count", event.DecisionNoCommitCount,
 			"committed_ids", event.DecisionCommittedIDs,
 			"commit_gates", event.DecisionCommitGates,
-			"commit_bases", event.DecisionCommitBases)
+			"commit_bases", event.DecisionCommitBases,
+			// Always emitted, true or false: a provenance field present in
+			// only one of its two states cannot be told apart from a build
+			// that does not emit it, which is the same explicit-zero rule
+			// every count on this line follows.
+			"offered_under_window_gate", event.DecisionOfferedUnderWindowGate)
 	case "kind_coverage_floor":
 		// CHAOS-4086: the operator-visible half of CHAOS-4038's floor. The
 		// harness reads the same event off an in-process tracer to put

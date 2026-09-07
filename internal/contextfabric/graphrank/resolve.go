@@ -1297,6 +1297,28 @@ type ResolutionTraceEvent struct {
 	DecisionCommittedIDs   []string
 	DecisionCommitGates    []string
 	DecisionCommitBases    []string
+	// DecisionOfferedUnderWindowGate (stage=="decision_summary" ONLY) is
+	// true when AT LEAST ONE decision folded into this summary was produced
+	// under the offers-only window gate -- a pass whose resolution the
+	// engine discards unconditionally, keeping only the StructureOfferMaterial
+	// (see offersOnlyDecisionTracer and contextfabric.OffersOnlyResolution).
+	//
+	// It exists because without it a discarded resolution and a served one
+	// print the SAME summary: same committed_count, same committed_ids, same
+	// gates. The per-subject decision line already carries this provenance,
+	// and carries it because an earlier review found exactly that defect
+	// there -- an "outcome=committed" line with no indication the resolution
+	// behind it was thrown away. Omitting it from the fold reintroduced that
+	// defect at the level an operator actually reads.
+	//
+	// Derived from the events this buffer already sees, which
+	// offersOnlyDecisionTracer has tagged before they arrive -- never
+	// re-read from the context, so there is ONE authority for the fact and a
+	// summary can never disagree with the per-subject lines beneath it. The
+	// claim is deliberately "at least one", not "this call was offers-only":
+	// the fold sees per-event tags, and that is the only guarantee this
+	// emission site can keep.
+	DecisionOfferedUnderWindowGate bool
 	// ShadowOutcome/ShadowReason/ShadowDIdentityHash/ShadowPreconditionUnproven/
 	// ShadowUnscopedVisibility/ShadowNonCensusedSurvivor/
 	// ShadowHandleGrammarBound/ShadowAnchorUniqueClaimant/ShadowKindsCensused
@@ -1824,15 +1846,16 @@ func (b *identityGateSummaryBuffer) flush() {
 // doc comment for what the counts mean and why this one flushes even when
 // it counted nothing.
 type decisionSummaryBuffer struct {
-	real           ResolutionTracer
-	requestID      string
-	eventCount     int
-	committedCount int
-	ambiguousCount int
-	noCommitCount  int
-	committedIDs   []string
-	commitGates    []string
-	commitBases    []string
+	real                   ResolutionTracer
+	requestID              string
+	eventCount             int
+	committedCount         int
+	ambiguousCount         int
+	noCommitCount          int
+	committedIDs           []string
+	commitGates            []string
+	commitBases            []string
+	offeredUnderWindowGate bool
 }
 
 // appendDistinctCapped adds value to seen when it is non-empty and not
@@ -1858,6 +1881,12 @@ func (b *decisionSummaryBuffer) Trace(event ResolutionTraceEvent) {
 		return
 	}
 	b.eventCount++
+	// OR across the call: see DecisionOfferedUnderWindowGate's own doc
+	// comment for why "at least one" is the claim rather than a whole-call
+	// mode.
+	if event.OfferedUnderWindowGate {
+		b.offeredUnderWindowGate = true
+	}
 	switch event.Outcome {
 	case "committed":
 		b.committedCount++
@@ -1882,9 +1911,10 @@ func (b *decisionSummaryBuffer) flush() {
 		RequestID: b.requestID, Stage: "decision_summary",
 		DecisionEventCount: b.eventCount, DecisionCommittedCount: b.committedCount,
 		DecisionAmbiguousCount: b.ambiguousCount, DecisionNoCommitCount: b.noCommitCount,
-		DecisionCommittedIDs: nonNil(b.committedIDs),
-		DecisionCommitGates:  nonNil(b.commitGates),
-		DecisionCommitBases:  nonNil(b.commitBases),
+		DecisionCommittedIDs:           nonNil(b.committedIDs),
+		DecisionCommitGates:            nonNil(b.commitGates),
+		DecisionCommitBases:            nonNil(b.commitBases),
+		DecisionOfferedUnderWindowGate: b.offeredUnderWindowGate,
 	})
 }
 
