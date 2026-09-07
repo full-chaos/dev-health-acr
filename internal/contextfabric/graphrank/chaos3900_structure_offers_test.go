@@ -650,13 +650,13 @@ func TestFilterCandidatesByConfirmedKind_NilIsNoOp(t *testing.T) {
 		candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1"),
 		candidateOf(contractsv1.ContextFabricSubjectWorkItem, "wi_1"),
 	)
-	got := filterCandidatesByConfirmedKind(pool, nil)
+	got := filterCandidatesByConfirmedKind(pool, nil, anchorPoolKindScope{})
 	if len(got) != len(pool) {
-		t.Fatalf("filterCandidatesByConfirmedKind(pool, nil) returned %d entries, want %d (unchanged)", len(got), len(pool))
+		t.Fatalf("filterCandidatesByConfirmedKind(pool, nil, anchorPoolKindScope{}) returned %d entries, want %d (unchanged)", len(got), len(pool))
 	}
 	for key, candidate := range pool {
 		if got[key].Subject.CanonicalID != candidate.Subject.CanonicalID {
-			t.Errorf("filterCandidatesByConfirmedKind(pool, nil)[%q] = %+v, want unchanged %+v", key, got[key], candidate)
+			t.Errorf("filterCandidatesByConfirmedKind(pool, nil, anchorPoolKindScope{})[%q] = %+v, want unchanged %+v", key, got[key], candidate)
 		}
 	}
 }
@@ -668,7 +668,7 @@ func TestFilterCandidatesByConfirmedKind_NarrowsToConfirmedKindOnly(t *testing.T
 		candidateOf(contractsv1.ContextFabricSubjectWorkItem, "wi_1"),
 		candidateOf(contractsv1.ContextFabricSubjectWorkItem, "wi_2"),
 	)
-	got := filterCandidatesByConfirmedKind(pool, &contextfabric.ConfirmedExpectedKind{Kind: contractsv1.ContextFabricSubjectWorkItem})
+	got := filterCandidatesByConfirmedKind(pool, &contextfabric.ConfirmedExpectedKind{Kind: contractsv1.ContextFabricSubjectWorkItem}, anchorPoolKindScope{})
 	if len(got) != 2 {
 		t.Fatalf("len(got) = %d, want 2 (only the two work_item candidates)", len(got))
 	}
@@ -682,7 +682,7 @@ func TestFilterCandidatesByConfirmedKind_NarrowsToConfirmedKindOnly(t *testing.T
 func TestFilterCandidatesByConfirmedKind_NoMatchingCandidatesEmptiesThePool(t *testing.T) {
 	t.Parallel()
 	pool := poolOf(candidateOf(contractsv1.ContextFabricSubjectPullRequest, "pr_1"))
-	got := filterCandidatesByConfirmedKind(pool, &contextfabric.ConfirmedExpectedKind{Kind: contractsv1.ContextFabricSubjectWorkItem})
+	got := filterCandidatesByConfirmedKind(pool, &contextfabric.ConfirmedExpectedKind{Kind: contractsv1.ContextFabricSubjectWorkItem}, anchorPoolKindScope{})
 	if len(got) != 0 {
 		t.Errorf("len(got) = %d, want 0: nothing in the pool matches the confirmed kind", len(got))
 	}

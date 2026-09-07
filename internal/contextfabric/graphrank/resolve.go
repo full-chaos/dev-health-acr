@@ -1365,6 +1365,28 @@ type ResolutionTraceEvent struct {
 	// and a field present in only one of its two states cannot be told
 	// apart from a build that does not emit it.
 	OfferPoolEmptiedByExclusion bool
+	// AnchorPoolSummary marks the once-per-call `anchor_pool` event
+	// (CHAOS-5393) that reports which kind the SCOPE ANCHOR was allowed to
+	// resolve under, and where that kind came from. Emitted from the same
+	// statement that hands the value to the confirmed-kind filter, so the
+	// line reports the value the pool actually obeyed rather than a second
+	// derivation of it beside the pool.
+	AnchorPoolSummary bool
+	// DecisionAnchorPoolKindScope is the admitted anchor kind, or `none`.
+	// DecisionAnchorPoolKindScopeSource is `receipt`, `confirmed_anchor` or
+	// `none` -- carried separately because the two sources fail
+	// independently: a model that stopped emitting scope_anchor_kind and a
+	// caller that stopped redeeming anchor receipts produce the SAME
+	// admitted kind on the line and need entirely different fixes.
+	// DecisionMemberKindConfirmed is the confirmed MEMBER kind, or `none`;
+	// the scope means nothing without the kind it widened.
+	//
+	// ALL THREE ALWAYS SET, with explicit `none` tokens: a resolution that
+	// admitted no anchor kind must never read like a build that stopped
+	// deciding one.
+	DecisionAnchorPoolKindScope       string
+	DecisionAnchorPoolKindScopeSource string
+	DecisionMemberKindConfirmed       string
 	// ShadowOutcome/ShadowReason/ShadowDIdentityHash/ShadowPreconditionUnproven/
 	// ShadowUnscopedVisibility/ShadowNonCensusedSurvivor/
 	// ShadowHandleGrammarBound/ShadowAnchorUniqueClaimant/ShadowKindsCensused
@@ -1920,6 +1942,17 @@ type decisionSummaryBuffer struct {
 	vectorOnlyExcluded int
 	vectorOnlyDemoted  int
 	emptiedByExclusion bool
+	// anchorPoolKindScope / anchorPoolKindScopeSource / memberKindConfirmed
+	// accumulate from the `anchor_pool` summary event rather than being
+	// stamped at construction like frameGate above. The distinction is
+	// deliberate: the gate is decided BEFORE this call and is an input to
+	// it, while the anchor scope is decided INSIDE it, and folding the
+	// emitted value is what makes the reported scope the same value the
+	// filter obeyed instead of a second call to the same helper that a
+	// regression could change on one side only.
+	anchorPoolKindScope       string
+	anchorPoolKindScopeSource string
+	memberKindConfirmed       string
 }
 
 // appendDistinctCapped adds value to seen when it is non-empty and not
@@ -1956,6 +1989,17 @@ func (b *decisionSummaryBuffer) Trace(event ResolutionTraceEvent) {
 		if event.OfferPoolEmptiedByExclusion {
 			b.emptiedByExclusion = true
 		}
+		return
+	}
+	// The anchor-pool summary is decided once per call, so the LAST one
+	// wins rather than accumulating -- unlike the offer_pool counters, this
+	// is a single decision restated, not a quantity summed. A second event
+	// would mean a second filter pass, and the value the last pass obeyed
+	// is the one that produced the pool this line describes.
+	if event.Stage == "anchor_pool" && event.AnchorPoolSummary {
+		b.anchorPoolKindScope = event.DecisionAnchorPoolKindScope
+		b.anchorPoolKindScopeSource = event.DecisionAnchorPoolKindScopeSource
+		b.memberKindConfirmed = event.DecisionMemberKindConfirmed
 		return
 	}
 	if event.Stage != "decision" {
@@ -2001,7 +2045,24 @@ func (b *decisionSummaryBuffer) flush() {
 		OfferPoolVectorOnlyExcluded:    b.vectorOnlyExcluded,
 		OfferPoolVectorOnlyDemoted:     b.vectorOnlyDemoted,
 		OfferPoolEmptiedByExclusion:    b.emptiedByExclusion,
+		// orNone keeps the contract that these three are never empty on a
+		// line: a resolution that returned before the filter ran emits no
+		// anchor_pool event at all, and `none` is the honest reading of
+		// that -- no anchor kind was admitted, because no pool was built.
+		DecisionAnchorPoolKindScope:       orNone(b.anchorPoolKindScope),
+		DecisionAnchorPoolKindScopeSource: orNone(b.anchorPoolKindScopeSource),
+		DecisionMemberKindConfirmed:       orNone(b.memberKindConfirmed),
 	})
+}
+
+// orNone renders an unset observable as the explicit `none` token. An empty
+// string on one of these keys would be indistinguishable from a JSON null
+// and from a build that stopped setting the field.
+func orNone(value string) string {
+	if value == "" {
+		return anchorPoolKindScopeNone
+	}
+	return value
 }
 
 // frameGateObservable renders, for the decision summary, the ordering
@@ -2776,7 +2837,25 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// byte-identical to the pre-P1.D code path. See
 	// ConfirmedExpectedKind's own doc comment (ports.go) for why
 	// non-confirmed narrowing cannot reach this same call.
-	candidatesBySubject = filterCandidatesByConfirmedKind(candidatesBySubject, confirmedKind)
+	// CHAOS-5393: decided BEFORE the filter runs, so the same value the
+	// filter obeyed is the one the observable reports -- a scope derived a
+	// second time beside the line could drift from the pool it claims to
+	// describe.
+	anchorScope := decideAnchorPoolKindScope(frame, scopeAnchorKind, confirmedAnchor)
+	if deps.ResolutionTracer != nil {
+		scope, source := anchorScope.observable()
+		memberKind := anchorPoolKindScopeNone
+		if confirmedKind != nil {
+			memberKind = string(confirmedKind.Kind)
+		}
+		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+			RequestID: request.RequestID, Stage: "anchor_pool", AnchorPoolSummary: true,
+			DecisionAnchorPoolKindScope:       scope,
+			DecisionAnchorPoolKindScopeSource: source,
+			DecisionMemberKindConfirmed:       memberKind,
+		})
+	}
+	candidatesBySubject = filterCandidatesByConfirmedKind(candidatesBySubject, confirmedKind, anchorScope)
 	// CHAOS-4132: filterCandidatesByConfirmedKind can legitimately empty the
 	// pool -- see applyConfirmedKindRescue's own doc comment for exactly
 	// when and why (a confirmed kind whose only route into a PRIOR turn's

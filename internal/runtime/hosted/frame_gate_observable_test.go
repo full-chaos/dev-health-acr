@@ -183,3 +183,94 @@ func TestTheDeployedOfferPoolSummaryReachesTheProductionLogLevel(t *testing.T) {
 		t.Fatalf("the per-candidate offer_pool line reached the production log level: %s", buf.String())
 	}
 }
+
+// THE ANCHOR-POOL SCOPE, READ BACK OUT OF THE DEPLOYED SINK (CHAOS-5393).
+//
+// Same argument as the four above: the seam's behaviour is an ADMISSION that
+// did or did not happen, and a resolution that filtered its own scope anchor
+// out of the pool prints a decision summary identical to one whose graph
+// simply held nothing -- same zero committed_count, same empty ids, same
+// gates. `anchor_pool_kind_scope` beside `member_kind_confirmed` is the only
+// thing at Info that separates them.
+func TestTheDeployedDecisionSummaryNamesTheAnchorPoolKindScope(t *testing.T) {
+	rec := emitFrameGateDecisionSummary(t, graphrank.ResolutionTraceEvent{
+		RequestID: "request_anchor_scope", Stage: "decision_summary",
+		DecisionEventCount: 1, DecisionCommittedCount: 1,
+		DecisionCommittedIDs: []string{"team.v2:github:chaos"},
+		DecisionCommitGates:  []string{"exact_index"},
+		DecisionCommitBases:  []string{"statistical"},
+		DecisionFrameGate:    "passed", DecisionRefuseBasis: "none",
+		DecisionAnchorPoolKindScope:       "team",
+		DecisionAnchorPoolKindScopeSource: "receipt",
+		DecisionMemberKindConfirmed:       "project",
+	})
+	for key, want := range map[string]string{
+		"anchor_pool_kind_scope":        "team",
+		"anchor_pool_kind_scope_source": "receipt",
+		"member_kind_confirmed":         "project",
+	} {
+		got, ok := rec[key].(string)
+		if !ok {
+			t.Errorf("the emitted line carries no %q; without it an operator cannot tell a pool that admitted the anchor from one that filtered it out -- line: %v", key, rec)
+			continue
+		}
+		if got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	// The two kinds on a scope-anchored line are never equal -- invariant
+	// I11 -- and a build where they ARE equal is one that scoped the anchor
+	// search to the member kind. Asserted here because that equality is the
+	// defect's signature, readable with no other context.
+	if rec["anchor_pool_kind_scope"] == rec["member_kind_confirmed"] {
+		t.Errorf("anchor_pool_kind_scope == member_kind_confirmed (%v): the resolved anchor's kind is never the member kind", rec["anchor_pool_kind_scope"])
+	}
+}
+
+// THE ORDINARY LINE still carries all three keys, with explicit `none`
+// tokens. Without this arm the keys could appear only on scope-anchored
+// resolutions, and their absence elsewhere would be indistinguishable from a
+// build that stopped emitting them.
+func TestTheDeployedDecisionSummaryCarriesExplicitNoneForTheAnchorScope(t *testing.T) {
+	rec := emitFrameGateDecisionSummary(t, graphrank.ResolutionTraceEvent{
+		RequestID: "request_no_anchor_scope", Stage: "decision_summary",
+		DecisionCommittedIDs: []string{}, DecisionCommitGates: []string{}, DecisionCommitBases: []string{},
+		DecisionFrameGate: "passed", DecisionRefuseBasis: "none",
+		DecisionAnchorPoolKindScope:       "none",
+		DecisionAnchorPoolKindScopeSource: "none",
+		DecisionMemberKindConfirmed:       "none",
+	})
+	for _, key := range []string{"anchor_pool_kind_scope", "anchor_pool_kind_scope_source", "member_kind_confirmed"} {
+		if got, _ := rec[key].(string); got != "none" {
+			t.Errorf("%s = %q, want the explicit token \"none\", never an empty value or an absent key", key, got)
+		}
+	}
+}
+
+// THE ANCHOR-POOL STAGE LINE reaches the production log level on its own.
+// It is once per resolution, so unlike offer_pool there is no per-candidate
+// volume split to make: if this line is Debug the scope is invisible in
+// production on exactly the turns that need it.
+func TestTheDeployedAnchorPoolSummaryReachesTheProductionLogLevel(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	defaultResolutionTracer(nil, logger).Trace(graphrank.ResolutionTraceEvent{
+		RequestID: "request_anchor_pool_stage", Stage: "anchor_pool", AnchorPoolSummary: true,
+		DecisionAnchorPoolKindScope:       "team",
+		DecisionAnchorPoolKindScopeSource: "confirmed_anchor",
+		DecisionMemberKindConfirmed:       "project",
+	})
+	if buf.Len() == 0 {
+		t.Fatal("the anchor_pool summary emitted nothing at the production log level")
+	}
+	var rec map[string]any
+	if err := json.Unmarshal(bytes.TrimRight(buf.Bytes(), "\n"), &rec); err != nil {
+		t.Fatalf("captured line is not JSON: %v -- line: %s", err, buf.String())
+	}
+	if level, _ := rec["level"].(string); level != "INFO" {
+		t.Fatalf("level = %q, want INFO", level)
+	}
+	if got, _ := rec["anchor_pool_kind_scope_source"].(string); got != "confirmed_anchor" {
+		t.Errorf("anchor_pool_kind_scope_source = %q, want \"confirmed_anchor\" -- the fallback source must be distinguishable from the receipt in production", got)
+	}
+}

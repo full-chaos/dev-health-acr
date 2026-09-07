@@ -208,7 +208,27 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// every other key of this line: a graph that held nothing, and
 			// a graph that held candidates this resolution may not offer.
 			// Always emitted, true or false.
-			"offer_pool_emptied_by_exclusion", event.OfferPoolEmptiedByExclusion)
+			"offer_pool_emptied_by_exclusion", event.OfferPoolEmptiedByExclusion,
+			// CHAOS-5393. anchor_pool_kind_scope says which kind the SCOPE
+			// ANCHOR was allowed to resolve under; member_kind_confirmed
+			// says the kind that scoped MEMBER discovery. On a scope-
+			// anchored frame those two are never equal (invariant I11), and
+			// a build where they ARE equal is one that filtered the anchor
+			// out of its own pool -- the shape that turns a truthfully
+			// answered pair of offers into no_match. _source separates the
+			// two ways the scope can go missing, which need different fixes.
+			"anchor_pool_kind_scope", event.DecisionAnchorPoolKindScope,
+			"anchor_pool_kind_scope_source", event.DecisionAnchorPoolKindScopeSource,
+			"member_kind_confirmed", event.DecisionMemberKindConfirmed)
+	case "anchor_pool":
+		// Once per resolution, Info: there is no per-candidate counterpart
+		// here, so no volume split is needed. Emitted from the same
+		// statement that hands the scope to the confirmed-kind filter.
+		t.logger.InfoContext(ctx, "context fabric resolution trace: anchor pool kind scope",
+			"request_id", sanitizeLogString(event.RequestID), "stage", sanitizeLogString(event.Stage),
+			"anchor_pool_kind_scope", event.DecisionAnchorPoolKindScope,
+			"anchor_pool_kind_scope_source", event.DecisionAnchorPoolKindScopeSource,
+			"member_kind_confirmed", event.DecisionMemberKindConfirmed)
 	case "offer_pool":
 		// Same volume split as corroboration and identity_gate: the
 		// per-candidate line is retrieval-pool-sized (186 of 329 offered

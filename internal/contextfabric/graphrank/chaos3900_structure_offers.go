@@ -756,13 +756,24 @@ func distinctCandidateKinds(candidates []contextfabric.SubjectCandidate) []strin
 // kind-insensitivity rule's own enforcement mechanism, not merely a
 // convenience wrapper: only canonicalizeStructure's receipt-confirmation
 // path can construct one.
-func filterCandidatesByConfirmedKind(candidatesBySubject map[string]contextfabric.SubjectCandidate, confirmed *contextfabric.ConfirmedExpectedKind) map[string]contextfabric.SubjectCandidate {
+//
+// CHAOS-5393: anchorScope widens this to a SECOND admitted kind on a
+// scope-anchored frame, and only there. The confirmed kind is the kind of the
+// MEMBERS the caller asked for; on a children_of_scope frame the subject this
+// resolution has to commit is the ANCHOR, whose kind differs from the
+// member's by invariant I11. Filtering that anchor out does not lose a
+// candidate, it makes the resolution unsatisfiable -- anything surviving a
+// member-kind-only filter would violate I11 by construction. Member
+// discovery is unchanged: every other kind is still dropped, and a zero-value
+// anchorScope admits nothing, so every non-scope-anchored request keeps the
+// pool it had.
+func filterCandidatesByConfirmedKind(candidatesBySubject map[string]contextfabric.SubjectCandidate, confirmed *contextfabric.ConfirmedExpectedKind, anchorScope anchorPoolKindScope) map[string]contextfabric.SubjectCandidate {
 	if confirmed == nil {
 		return candidatesBySubject
 	}
 	filtered := make(map[string]contextfabric.SubjectCandidate, len(candidatesBySubject))
 	for key, candidate := range candidatesBySubject {
-		if candidate.Subject.Kind == confirmed.Kind {
+		if candidate.Subject.Kind == confirmed.Kind || anchorScope.admits(candidate.Subject.Kind) {
 			filtered[key] = candidate
 		}
 	}
