@@ -806,7 +806,28 @@ func (s *tickFreshnessStats) recordRebuildRequired() { atomic.AddInt64(&s.orgsRe
 func (s *tickFreshnessStats) recordBackoff()         { atomic.AddInt64(&s.orgsBackoff, 1) }
 func (s *tickFreshnessStats) recordSourceFailedOrg() { atomic.AddInt64(&s.orgsSourceFailed, 1) }
 func (s *tickFreshnessStats) recordUnevaluated()     { atomic.AddInt64(&s.orgsUnevaluated, 1) }
-func (s *tickFreshnessStats) markIncomplete()        { atomic.StoreInt64(&s.tickIncomplete, 1) }
+
+// classify records exactly ONE bucket for one organization and is the ONLY
+// way a bucket is ever recorded. Every caller goes through it.
+//
+// This exists because the same defect was found THREE times in a row, each
+// time at a different exit: the classification switch, then the per-source
+// loop's early return, then the organization-lock and lifecycle-build paths.
+// Patching a fourth site would have been the third instance of one class, so
+// the invariant is enforced here instead of at each call site -- a tick that
+// has been cancelled has not established a verdict about this organization,
+// whatever exit it happens to be leaving through. Any future exit that
+// records a bucket inherits the check for free, and a structural test
+// asserts that no caller bypasses it.
+func (s *tickFreshnessStats) classify(ctx context.Context, bucket func()) {
+	if ctx.Err() != nil {
+		s.markIncomplete()
+		s.recordUnevaluated()
+		return
+	}
+	bucket()
+}
+func (s *tickFreshnessStats) markIncomplete() { atomic.StoreInt64(&s.tickIncomplete, 1) }
 
 // freshnessFailedSourceNameCap bounds the failed_sources array on one log
 // line independently of how many sources a deployment configures, the same
@@ -997,14 +1018,14 @@ func (c *Coordinator) runOrg(ctx context.Context, orgID string, stats *tickFresh
 	mutexAny, _ := c.orgMu.LoadOrStore(orgID, &sync.Mutex{})
 	mutex := mutexAny.(*sync.Mutex)
 	if !mutex.TryLock() {
-		stats.recordBackoff()
+		stats.classify(ctx, stats.recordBackoff)
 		return
 	}
 	defer mutex.Unlock()
 
 	unlock, err := c.locker.Lock(ctx, orgID)
 	if err != nil {
-		stats.recordBackoff()
+		stats.classify(ctx, stats.recordBackoff)
 		if !errors.Is(err, ErrOrgLocked) {
 			c.logger.WarnContext(ctx, "projection organization lock failed", "org_id", orgID, "failure_class", classifyOutcomeError(err))
 		}
@@ -1035,11 +1056,11 @@ func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, stats *tic
 	// projection for this org this tick regardless of outcome (the marker
 	// state, not a stale checkpoint, is the true source of truth right now).
 	if inProgress, err := c.rebuildMarkers.IsRebuildInProgress(ctx, orgID); err != nil {
-		stats.recordBackoff()
+		stats.classify(ctx, stats.recordBackoff)
 		c.logger.WarnContext(ctx, "check rebuild marker failed; skipping tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
 		return
 	} else if inProgress {
-		stats.recordBackoff()
+		stats.classify(ctx, stats.recordBackoff)
 		if err := c.performRebuild(ctx, orgID); err != nil {
 			c.logger.WarnContext(ctx, "resume interrupted rebuild failed; will retry next tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
 		} else {
@@ -1092,21 +1113,14 @@ func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, stats *tic
 	// but the per-source disclosure on the summary line reports the failure
 	// either way, so nothing depends on which bucket won.
 	switch {
-	// Cancellation first: a tick cut short did not finish evaluating this
-	// organization, so no verdict about it is available -- least of all a
-	// healthy one. This arm is above every other because the others all
-	// assert something the tick did not get to establish.
-	case ctx.Err() != nil:
-		stats.markIncomplete()
-		stats.recordUnevaluated()
 	case !evaluated:
-		stats.recordBackoff()
+		stats.classify(ctx, stats.recordBackoff)
 	case stale:
-		stats.recordRebuildRequired()
+		stats.classify(ctx, stats.recordRebuildRequired)
 	case sourceFailed:
-		stats.recordSourceFailedOrg()
+		stats.classify(ctx, stats.recordSourceFailedOrg)
 	default:
-		stats.recordOK()
+		stats.classify(ctx, stats.recordOK)
 	}
 }
 
@@ -1120,12 +1134,12 @@ func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, stats *tic
 func (c *Coordinator) runOrgLifecycle(ctx context.Context, orgID string, stats *tickFreshnessStats) {
 	row, found, err := c.lifecycle.Get(ctx, orgID)
 	if err != nil {
-		stats.recordBackoff()
+		stats.classify(ctx, stats.recordBackoff)
 		c.logger.WarnContext(ctx, "read graph lifecycle row failed; skipping tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
 		return
 	}
 	if found && row.Status == contextfabric.LifecycleStatusBuilding {
-		stats.recordBackoff()
+		stats.classify(ctx, stats.recordBackoff)
 		c.runBuildTick(ctx, orgID, row)
 		return
 	}
@@ -1171,21 +1185,14 @@ func (c *Coordinator) runOrgLifecycle(ctx context.Context, orgID string, stats *
 	// See runOrgLegacy's identical switch for why a failed source cannot
 	// land in ok and why it sits below stale.
 	switch {
-	// Cancellation first: a tick cut short did not finish evaluating this
-	// organization, so no verdict about it is available -- least of all a
-	// healthy one. This arm is above every other because the others all
-	// assert something the tick did not get to establish.
-	case ctx.Err() != nil:
-		stats.markIncomplete()
-		stats.recordUnevaluated()
 	case !evaluated:
-		stats.recordBackoff()
+		stats.classify(ctx, stats.recordBackoff)
 	case stale:
-		stats.recordRebuildRequired()
+		stats.classify(ctx, stats.recordRebuildRequired)
 	case sourceFailed:
-		stats.recordSourceFailedOrg()
+		stats.classify(ctx, stats.recordSourceFailedOrg)
 	default:
-		stats.recordOK()
+		stats.classify(ctx, stats.recordOK)
 	}
 }
 
@@ -1606,7 +1613,7 @@ func (c *Coordinator) LivenessCheck(ctx context.Context) error {
 func (c *Coordinator) recoverFromDivergence(ctx context.Context, orgID string, stats *tickFreshnessStats) {
 	key := orgID + "\x00" + divergenceBackoffKey
 	if !c.due(key) {
-		stats.recordBackoff()
+		stats.classify(ctx, stats.recordBackoff)
 		return
 	}
 	hash := orgIDHash(orgID)
@@ -1617,7 +1624,7 @@ func (c *Coordinator) recoverFromDivergence(ctx context.Context, orgID string, s
 		"org_id_hash", hash)
 	err := c.performRebuild(ctx, orgID)
 	c.recordBackoff(key, err)
-	stats.recordDivergenceRecovered()
+	stats.classify(ctx, stats.recordDivergenceRecovered)
 	if err != nil {
 		c.logger.ErrorContext(ctx, "context_fabric: automatic projection-liveness recovery failed; will retry with backoff",
 			"org_id_hash", hash, "failure_class", classifyOutcomeError(err))
@@ -1639,7 +1646,7 @@ func (c *Coordinator) recoverFromDivergence(ctx context.Context, orgID string, s
 func (c *Coordinator) recoverFromDivergenceLifecycle(ctx context.Context, orgID string, stats *tickFreshnessStats) {
 	key := orgID + "\x00" + divergenceBackoffKey
 	if !c.due(key) {
-		stats.recordBackoff()
+		stats.classify(ctx, stats.recordBackoff)
 		return
 	}
 	hash := orgIDHash(orgID)
@@ -1647,7 +1654,7 @@ func (c *Coordinator) recoverFromDivergenceLifecycle(ctx context.Context, orgID 
 		"org_id_hash", hash)
 	opened, err := c.beginLifecycleBuild(ctx, orgID)
 	c.recordBackoff(key, err)
-	stats.recordDivergenceRecovered()
+	stats.classify(ctx, stats.recordDivergenceRecovered)
 	if err != nil {
 		c.logger.ErrorContext(ctx, "context_fabric: automatic projection-liveness recovery failed to open a build-aside epoch; will retry with backoff",
 			"org_id_hash", hash, "failure_class", classifyOutcomeError(err))
