@@ -25,38 +25,49 @@ CONTRACT a real corpus module must satisfy:
   REQUESTED_KIND  {id: requested_kind}
   ANCHOR_KIND     {id: anchor_kind}
 
-PHRASES `expectations.py` KEYS OFF, inside `note` (case-insensitive):
-  "expect refuse"   -> the row must refuse; serving it is a failure
-  "expect decline"  -> the row must decline; serving it is a failure
-  "SERVABLE"        -> the row is expected to serve with facts
-  "nonexistent"     -> the named entity does not exist, so committing ANY
-                       subject is a substitution (subject_identity rule R1)
-  "anchor=<NAME>/<kind>" -> the committed subject must correspond to NAME
-                       (subject_identity rule R2)
-Rows whose note carries none of these are reported but not scored.
+STRUCTURED EXPECTATION -- the scorer reads THESE FIELDS, never `note`:
+  expect       "serve" | "refuse" | "decline" | "clarify" | None
+               None means UNSCORED. An expectation is never inferred from text.
+  basis        the named basis the row demands, or None
+  anchor       {"kind": ..., "label": ...} when the row names a specific subject,
+               else None. Only a NAMED anchor is checkable (identity rule R2);
+               a kind alone is not an anchor.
+  nonexistent  True when the row names an entity that does not exist, so committing
+               ANY subject is a substitution (identity rule R1).
+`note` is prose for humans and carries no machine meaning. It used to be parsed for
+these declarations, and three review rounds found the same class of misparse each
+time -- "not only SERVABLE", "not expected to be SERVABLE", "unexpected refusal".
 """
 
 CORPUS = [
-    {"id": "example-serve-named-project", "text": "Example question, synthetic.",
+    {"id": "example-serve-named-project",
+     "expect": "serve", "basis": None,
+     "anchor": {"kind": "project", "label": "Example Project"}, "nonexistent": False, "text": "Example question, synthetic.",
      "family": "subject_investigation", "variant": "named_subject",
      "member_kind": None, "group_kind": None, "requested_kind": "project",
      "anchor_kind": "project",
      "note": "SERVABLE; anchor=Example Project/project; goal=explain_drivers"},
 
-    {"id": "example-refuse-unservable-kind", "text": "Example question, synthetic.",
+    {"id": "example-refuse-unservable-kind",
+     "expect": "refuse", "basis": "member_kind_unservable",
+     "anchor": None, "nonexistent": False, "text": "Example question, synthetic.",
      "family": "grouped_cohort_status", "variant": "grouped_members",
      "member_kind": "document", "group_kind": "team", "requested_kind": "document",
      "anchor_kind": None,
      "note": "member-kind class; expect refuse basis=member_kind_unservable"},
 
-    {"id": "example-decline-nonexistent-team", "text": "Example question, synthetic.",
+    {"id": "example-decline-nonexistent-team",
+     "expect": "decline", "basis": "named_basis",
+     "anchor": None, "nonexistent": True, "text": "Example question, synthetic.",
      "family": "subject_investigation", "variant": "named_subject",
      "member_kind": None, "group_kind": None, "requested_kind": "team",
      "anchor_kind": "team",
      "note": "NEGATIVE: nonexistent team name; expect decline with a named basis, "
              "never a fabricated answer"},
 
-    {"id": "example-unscored-open-question", "text": "Example question, synthetic.",
+    {"id": "example-unscored-open-question",
+     "expect": None, "basis": None,
+     "anchor": None, "nonexistent": False, "text": "Example question, synthetic.",
      "family": "subject_investigation", "variant": "organization_scope",
      "member_kind": None, "group_kind": None, "requested_kind": None,
      "anchor_kind": None,

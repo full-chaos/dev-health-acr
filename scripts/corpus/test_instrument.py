@@ -20,28 +20,29 @@ BY_ID = {r["id"]: r for r in corpus_example.CORPUS}
 
 def test_expectation_classes():
     got = {i: expectations.expectation_for(r)["expectation"] for i, r in BY_ID.items()}
-    assert got["example-serve-named-project"] == "expect_serve"
-    assert got["example-refuse-unservable-kind"] == "expect_refuse"
-    assert got["example-decline-nonexistent-team"] == "expect_decline"
-    assert got["example-unscored-open-question"] == "unscored"
+    assert got["example-serve-named-project"] == expectations.SERVE
+    assert got["example-refuse-unservable-kind"] == expectations.REFUSE
+    assert got["example-decline-nonexistent-team"] == expectations.DECLINE
+    assert got["example-unscored-open-question"] == expectations.UNSCORED
 
 
-def test_declared_anchor_and_nonexistent_are_read_from_the_note():
+def test_declared_anchor_and_nonexistent_are_read_from_the_structured_field():
     e = expectations.expectation_for(BY_ID["example-serve-named-project"])
     assert e["declared_anchor_name"] == "Example Project"
     assert e["declared_anchor_kind"] == "project"
     n = expectations.expectation_for(BY_ID["example-decline-nonexistent-team"])
     assert n["declares_nonexistent"] is True
-    assert n["forbids_fabrication"] is True
 
 
 def test_serving_a_refuse_row_is_a_disagreement():
     e = expectations.expectation_for(BY_ID["example-refuse-unservable-kind"])
-    assert expectations.score(e, "unserved")[0] == "agree"
+    assert expectations.score(e, "unserved", terminal_status="refused")[0] == "agree"
     # looping to MAX_TURNS is NOT agreement -- it never terminated
-    assert expectations.score(e, "clarification_needed")[0] == "agree_weak"
-    assert expectations.score(e, "served_with_data")[0] == "disagree"
-    assert expectations.score(e, "served_degraded")[0] == "disagree"
+    assert expectations.score(
+        e, "clarification_needed",
+        terminal_status="clarification_required(max_turns_exhausted)")[0] == "agree_weak"
+    assert expectations.score(e, "served_with_data", terminal_status="partial")[0] == "disagree"
+    assert expectations.score(e, "served_degraded", terminal_status="degraded")[0] == "disagree"
 
 
 def test_a_substitution_is_a_disagreement_whatever_the_bucket():
@@ -49,7 +50,8 @@ def test_a_substitution_is_a_disagreement_whatever_the_bucket():
         e = expectations.expectation_for(BY_ID[rid])
         if e["expectation"] == "unscored":
             continue
-        v, why = expectations.score(e, "served_with_data", subject_substitution=True)
+        v, why = expectations.score(e, "served_with_data", subject_substitution=True,
+                                    terminal_status="partial")
         assert v == "disagree", rid
         assert "substitution" in why
 

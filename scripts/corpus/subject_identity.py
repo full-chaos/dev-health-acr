@@ -31,6 +31,10 @@ import json
 import re
 from pathlib import Path
 
+# The directory name reclassify_deadlines writes replays into. Kept here so ordering can
+# put replays after originals without importing that module (which needs a corpus).
+REPLAY_HINT = "reclassify"
+
 
 # r1 #11. reclassify_deadlines re-runs a deadlined row and writes its raw attempts
 # under <root>/<REPLAY_DIRNAME>/<id>/replicate/, but rewrites the row inside the
@@ -57,6 +61,43 @@ def _last_attempt(replicate_dir, corpus_id, rep=1):
     return files[-1] if files else None
 
 
+RESULT, FAILURE, UNPARSEABLE = "result", "failure", "unparseable"
+
+
+def classify_attempt(attempt):
+    """The SINGLE definition of what an attempt is. Used by identity, the failure
+    scanner and the merge, so the three can never disagree about the same file.
+
+    result       a parsed attempt carrying a result document
+    failure      a parsed attempt carrying a failure envelope, or an HTTP failure status
+                 -- a NORMAL artefact; the engine answered, unsuccessfully
+    unparseable  the bytes could not be read as an attempt at all
+
+    Rounds 2 and 3 both landed here. First `no result` was treated as unreadable, which
+    swept in every retried rejection. Then the narrowing let `{"response": {}}` count as
+    readable while a terminal `response.failure` was still called unreadable. Both ends
+    were wrong because "readable" was being decided in two places; it is decided here.
+    """
+    if not isinstance(attempt, dict):
+        return UNPARSEABLE, None
+    resp = attempt.get("response")
+    if isinstance(resp, dict):
+        if resp.get("result"):
+            return RESULT, resp["result"]
+        if resp.get("failure"):
+            return FAILURE, None
+    status = attempt.get("status")
+    if isinstance(status, int) and status >= 400:
+        return FAILURE, None
+    if resp in (None, {}) and status is None:
+        return UNPARSEABLE, None
+    if isinstance(resp, dict) and not resp:
+        # a parsed attempt with an EMPTY response envelope carries no outcome at all;
+        # we cannot say what it committed, so it is not evidence of a clean row.
+        return UNPARSEABLE, None
+    return UNPARSEABLE, None
+
+
 def _read_attempt(path):
     """(parsed_ok, result). A well-formed attempt that carries a FAILURE instead of a
     result is parsed_ok=True with result=None.
@@ -71,14 +112,28 @@ def _read_attempt(path):
         with open(path) as fh:
             d = json.load(fh)
     except Exception:
-        return False, None
-    if not isinstance(d, dict):
-        return False, None
-    return True, ((d.get("response") or {}) or {}).get("result") or None
+        return UNPARSEABLE, None
+    return classify_attempt(d)
 
 
 def _result_of(path):
     return _read_attempt(path)[1]
+
+
+def _attempt_order(path):
+    """Order attempts by RECORDED SEQUENCE, never by path.
+
+    Round 3: moving replays under the shards root made `sorted()` place
+    `reclassify/<id>/...` before `shard-00/...`, so `hits[-1]` selected the ORIGINAL
+    attempt and identity scored the pre-reclassification result -- the defect the replay
+    move existed to fix, reintroduced through sort order. Sequence comes from the turn and
+    attempt indices in the filename; a replay sorts after every original by construction.
+    """
+    name = Path(path).name
+    m = re.search(r"-rep(\d+)-t(\d+)-a(\d+)\.json$", name)
+    rep, turn, att = (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else (0, 0, 0)
+    is_replay = 1 if f"/{REPLAY_HINT}/" in str(path).replace("\\", "/") else 0
+    return (is_replay, rep, turn, att, str(path))
 
 
 def inspect(root, corpus_id, expectation, rep=1):
@@ -90,7 +145,7 @@ def inspect(root, corpus_id, expectation, rep=1):
     hits = []
     for g in ATTEMPT_GLOBS:
         hits.extend(Path(root).glob(g.format(cid=corpus_id, rep=rep)))
-    hits = sorted(set(hits))
+    hits = sorted(set(hits), key=_attempt_order)
     if not hits:
         return {"corpus_id": corpus_id, "state": "no_artefact",
                 "subject_substitution": False, "committed": [], "match_mechanisms": []}
@@ -99,12 +154,16 @@ def inspect(root, corpus_id, expectation, rep=1):
     # Every attempt is now examined; the terminal attempt still supplies the row's
     # headline fields, but a substitution ANYWHERE in the chain is a substitution.
     path = str(hits[-1])
-    result = _result_of(path)
-    if result is None:
+    terminal_class, result = _read_attempt(path)
+    if terminal_class == UNPARSEABLE:
         return {"corpus_id": corpus_id, "state": "unreadable_artefact",
                 "subject_substitution": False, "committed": [], "match_mechanisms": [],
                 "artefact": path}
 
+    # A terminal FAILURE attempt is readable and carries no result document: the engine
+    # answered, unsuccessfully. It has no subject resolution, which is not the same as an
+    # unreadable artefact. (Found by the round-3 history matrix, which crashed here.)
+    result = result or {}
     sr = result.get("subject_resolution") or {}
     committed = list(sr.get("committed") or [])
     mechs, matched_terms = [], []
@@ -116,12 +175,12 @@ def inspect(root, corpus_id, expectation, rep=1):
     # not know what that attempt committed.
     unreadable = []
     for f in hits:
-        parsed, r = _read_attempt(str(f))
-        if not parsed:
+        cls, r = _read_attempt(str(f))
+        if cls == UNPARSEABLE:
             unreadable.append(str(f))
             continue
         if not r:
-            continue   # a readable attempt that carried a failure, not a result
+            continue   # a FAILURE attempt: normal, carries no subject resolution
         s = r.get("subject_resolution") or {}
         for c in (s.get("committed") or []):
             k = (c.get("kind"), c.get("canonical_id"))

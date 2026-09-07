@@ -26,9 +26,13 @@ BY = {r["id"]: r for r in corpus_example.CORPUS}
 
 
 def _row(note, rid="r", **kw):
+    """Rows now carry a STRUCTURED expectation. `note` is prose and is no longer parsed
+    (round 3), so these pins declare the expectation explicitly. The BEHAVIOURS they pin
+    are unchanged; only the way a row states its expectation moved."""
     d = {"id": rid, "text": "synthetic", "family": "f", "variant": "v",
          "member_kind": None, "group_kind": None, "requested_kind": None,
-         "anchor_kind": None, "note": note}
+         "anchor_kind": None, "note": note,
+         "expect": None, "basis": None, "anchor": None, "nonexistent": False}
     d.update(kw)
     return d
 
@@ -66,56 +70,48 @@ def test_f1_substitution_on_an_unscored_row_is_disagree_in_the_table():
 def test_f2_unreadable_artefact_never_scores_as_agreement():
     with tempfile.TemporaryDirectory() as tmp:
         _attempt(tmp, "q", 1, 1, raw="{not json")
-        e = E.expectation_for(_row("SERVABLE", rid="q"))
+        e = E.expectation_for(_row("SERVABLE", rid="q", expect="serve"))
         rec = SI.inspect(tmp, "q", e)
         assert rec["state"] == "unreadable_artefact"
-        v = E.score(e, "served_with_data", identity_state=rec["state"])
+        v = E.score(e, "served_with_data", identity_state=rec["state"],
+                    terminal_status="partial")
         assert v[0] != "agree", f"unreadable artefact scored {v}"
 
 
 def test_f2_missing_artefact_never_scores_as_agreement():
     with tempfile.TemporaryDirectory() as tmp:
-        e = E.expectation_for(_row("SERVABLE", rid="q"))
+        e = E.expectation_for(_row("SERVABLE", rid="q", expect="serve"))
         rec = SI.inspect(tmp, "q", e)
         assert rec["state"] == "no_artefact"
-        v = E.score(e, "served_with_data", identity_state=rec["state"])
+        v = E.score(e, "served_with_data", identity_state=rec["state"],
+                    terminal_status="partial")
         assert v[0] != "agree", f"missing artefact scored {v}"
 
 
 def test_f2_untrusted_identity_caps_an_agree_but_never_improves_a_disagree():
-    e = E.expectation_for(_row("SERVABLE"))
+    e = E.expectation_for(_row("SERVABLE", expect="serve"))
     # a row that plainly failed stays failed
-    assert E.score(e, "error", identity_state="unreadable_artefact")[0] == "disagree"
-    assert E.score(e, "unserved", identity_state="no_artefact")[0] == "disagree"
+    assert E.score(e, "error", identity_state="unreadable_artefact",
+                   terminal_status="no_match")[0] == "disagree"
+    assert E.score(e, "unserved", identity_state="no_artefact",
+                   terminal_status="no_match")[0] == "disagree"
     # only an agree is capped
-    assert E.score(e, "served_with_data", identity_state="unreadable_artefact")[0] == "agree_weak"
-    assert E.score(e, "served_with_data")[0] == "agree"
+    assert E.score(e, "served_with_data", identity_state="unreadable_artefact",
+                   terminal_status="partial")[0] == "agree_weak"
+    assert E.score(e, "served_with_data", terminal_status="partial")[0] == "agree"
 
 
 # ---------------------------------------------------------------- #3
-def test_f3_decline_synonyms_are_not_silently_unscored():
-    for note in ("expected to decline with a named basis", "expect refusal of this shape"):
-        got = E.expectation_for(_row(note))["expectation"]
-        assert got != E.UNSCORED, f'{note!r} -> {got}'
-
-
-def test_f3_negated_servable_is_not_expect_serve():
-    got = E.expectation_for(_row("not SERVABLE; negative control"))["expectation"]
-    assert got != E.SERVE, f'"not SERVABLE" -> {got}'
-
-
-def test_f3_a_mention_of_unservable_does_not_suppress_a_real_servable():
-    note = "SERVABLE; contrast with the unservable member kinds"
-    got = E.expectation_for(_row(note))["expectation"]
-    assert got == E.SERVE, f'{note!r} -> {got}'
-
+# The three note-parsing pins that lived here are SUPERSEDED: notes are no longer parsed
+# at all (round 3). test_findings_r3.test_f3_the_note_no_longer_influences_the_expectation
+# pins that inertness over every string that used to misparse, which is strictly stronger.
 
 # ---------------------------------------------------------------- #4
 def test_f4_named_basis_decline_does_not_agree_on_bare_no_match():
-    e = E.expectation_for(_row("NEGATIVE: expect decline with a named basis"))
+    e = E.expectation_for(_row("decline, named basis", expect="decline", basis="named_basis"))
     assert e["expectation_basis"] == "named_basis"
     v = E.score(e, "unserved", terminal_status="no_match")
-    assert v[0] != "agree", f"bare no_match scored {v}"
+    assert v[0] == "disagree", f"bare no_match scored {v}"
     assert E.score(e, "unserved", terminal_status="refused")[0] == "agree"
 
 
@@ -124,7 +120,7 @@ def test_f5_r2_rejects_a_merely_similar_label():
     with tempfile.TemporaryDirectory() as tmp:
         _attempt(tmp, "q", 1, 1, committed=[{"kind": "team", "canonical_id": "team:PE",
                                              "label": "Platform Engineering"}])
-        e = E.expectation_for(_row("anchor=Platform/team", rid="q"))
+        e = E.expectation_for(_row("anchor", rid="q", anchor={"kind": "team", "label": "Platform"}))
         assert SI.inspect(tmp, "q", e)["subject_substitution"] is True
 
 
@@ -132,7 +128,7 @@ def test_f5_r2_rejects_a_right_name_on_the_wrong_kind():
     with tempfile.TemporaryDirectory() as tmp:
         _attempt(tmp, "q", 1, 1, committed=[{"kind": "repository", "canonical_id": "repo:Alpha",
                                              "label": "Alpha"}])
-        e = E.expectation_for(_row("anchor=Alpha/team", rid="q"))
+        e = E.expectation_for(_row("anchor", rid="q", anchor={"kind": "team", "label": "Alpha"}))
         assert SI.inspect(tmp, "q", e)["subject_substitution"] is True
 
 
@@ -140,7 +136,7 @@ def test_f5_r2_still_accepts_the_declared_anchor():
     with tempfile.TemporaryDirectory() as tmp:
         _attempt(tmp, "q", 1, 1, committed=[{"kind": "team", "canonical_id": "team:CHAOS",
                                              "label": "Fullchaos"}])
-        e = E.expectation_for(_row("anchor=Fullchaos/team", rid="q"))
+        e = E.expectation_for(_row("anchor", rid="q", anchor={"kind": "team", "label": "Fullchaos"}))
         assert SI.inspect(tmp, "q", e)["subject_substitution"] is False
 
 
@@ -150,7 +146,7 @@ def test_f6_a_subject_committed_on_an_earlier_attempt_is_not_lost():
         _attempt(tmp, "q", 1, 1, committed=[{"kind": "team", "canonical_id": "team:W",
                                              "label": "Wrong"}], facts=3)
         _attempt(tmp, "q", 2, 1, committed=[], status="no_match")
-        e = E.expectation_for(_row("NEGATIVE: nonexistent team name", rid="q"))
+        e = E.expectation_for(_row("nonexistent", rid="q", expect="decline", nonexistent=True))
         rec = SI.inspect(tmp, "q", e)
         assert rec["subject_substitution"] is True, rec
 

@@ -30,7 +30,8 @@ import subject_identity as SI     # noqa: E402
 def _row(note, **kw):
     d = {"id": "r", "text": "synthetic", "family": "f", "variant": "v",
          "member_kind": None, "group_kind": None, "requested_kind": None,
-         "anchor_kind": None, "note": note}
+         "anchor_kind": None, "note": note,
+         "expect": None, "basis": None, "anchor": None, "nonexistent": False}
     d.update(kw)
     return d
 
@@ -58,10 +59,11 @@ def test_f2_reviewer_mixed_unreadable_history_does_not_escape_the_cap():
         _write(tmp, "q", 1, 1, raw="{not json")                      # earlier: malformed
         _write(tmp, "q", 2, 1, committed=[{"kind": "team", "canonical_id": "t:1",
                                            "label": "T"}], facts=2)  # terminal: readable
-        e = E.expectation_for(_row("SERVABLE", id="q"))
+        e = E.expectation_for(_row("SERVABLE", id="q", expect="serve"))
         rec = SI.inspect(tmp, "q", e)
         assert rec["state"] != "read", f'mixed history reported state={rec["state"]!r}'
-        v = E.score(e, "served_with_data", identity_state=rec["state"])
+        v = E.score(e, "served_with_data", identity_state=rec["state"],
+                    terminal_status="partial")
         assert v[0] != "agree", f"mixed-readability history scored {v[0]}"
 
 
@@ -71,10 +73,11 @@ def test_f2_mine_unreadable_in_the_middle_of_a_long_chain():
         _write(tmp, "q", 2, 1, raw='{"truncated"')
         _write(tmp, "q", 3, 1, committed=[{"kind": "team", "canonical_id": "t:1", "label": "T"}],
                facts=1)
-        e = E.expectation_for(_row("SERVABLE", id="q"))
+        e = E.expectation_for(_row("SERVABLE", id="q", expect="serve"))
         rec = SI.inspect(tmp, "q", e)
         assert rec["state"] != "read", rec["state"]
-        assert E.score(e, "served_with_data", identity_state=rec["state"])[0] != "agree"
+        assert E.score(e, "served_with_data", identity_state=rec["state"],
+                       terminal_status="partial")[0] != "agree"
 
 
 def test_f2_mine_a_failure_response_is_readable_not_unreadable():
@@ -86,66 +89,36 @@ def test_f2_mine_a_failure_response_is_readable_not_unreadable():
              "response": {"failure": {"httpStatus": 422, "code": "acr_answer_rejected"}}}))
         _write(tmp, "q", 2, 1, committed=[{"kind": "team", "canonical_id": "t:1",
                                            "label": "T"}], facts=2)
-        e = E.expectation_for(_row("SERVABLE", id="q"))
+        e = E.expectation_for(_row("SERVABLE", id="q", expect="serve"))
         rec = SI.inspect(tmp, "q", e)
         assert rec["state"] == "read", f"a failure response was treated as {rec['state']}"
-        assert E.score(e, "served_with_data", identity_state=rec["state"])[0] == "agree"
+        assert E.score(e, "served_with_data", identity_state=rec["state"],
+                       terminal_status="partial")[0] == "agree"
 
 
 # ============================================================ #3
-def test_f3_reviewer_note_forms():
-    """r2 repros, verbatim."""
-    cases = {
-        "un-SERVABLE": ("!=", E.SERVE),
-        "not currently SERVABLE": ("!=", E.SERVE),
-        "expecting to decline": ("!=", E.UNSCORED),
-        "expected a refusal": ("!=", E.UNSCORED),
-    }
-    bad = []
-    for note, (op, cls) in cases.items():
-        got = E.expectation_for(_row(note))["expectation"]
-        if got == cls:
-            bad.append((note, got))
-    assert not bad, f"still misread: {bad}"
-
-
-def test_f3_mine_more_of_the_same_families():
-    bad = []
-    for note, must_not_be in [
-        ("NON-SERVABLE member kind", E.SERVE),
-        ("this row is never servable", E.SERVE),
-        ("unservable/servable boundary; expect refuse", E.SERVE),
-        ("we expect this to be refused", E.UNSCORED),
-        ("expects to decline with a named basis", E.UNSCORED),
-        ("declination expected", E.SERVE),
-    ]:
-        got = E.expectation_for(_row(note))["expectation"]
-        if got == must_not_be:
-            bad.append((note, got))
-    assert not bad, f"still misread: {bad}"
-    # and the positive cases must survive
-    assert E.expectation_for(_row("SERVABLE; goal=rank"))["expectation"] == E.SERVE
-    assert E.expectation_for(_row("expect refuse basis=member_kind_unservable"))["expectation"] == E.REFUSE
-
+# SUPERSEDED by round 3: notes are no longer parsed. See
+# test_findings_r3.test_f3_the_note_no_longer_influences_the_expectation, which pins that
+# every one of these strings is now inert -- strictly stronger than asserting each parse.
 
 # ============================================================ #4
 def test_f4_reviewer_fail_open_matrix():
     """r2: 'no_match=agree_weak, missing=agree, refused=agree'. Only refused may agree."""
-    e = E.expectation_for(_row("NEGATIVE: expect decline with a named basis"))
+    e = E.expectation_for(_row("decline, named basis", expect="decline", basis="named_basis"))
     assert E.score(e, "unserved", terminal_status="refused")[0] == "agree"
     # an ABSENT terminal status is a MISSING MEASUREMENT, not a measured pass
     v_missing = E.score(e, "unserved", terminal_status=None)
     assert v_missing[0] == "unscored", f"absent terminal status scored {v_missing[0]}"
     assert "terminal status" in v_missing[1].lower()
-    # a bare no_match is NOT a named-basis decline
     assert E.score(e, "unserved", terminal_status="no_match")[0] == "disagree"
 
 
 def test_f4_mine_a_decline_without_a_named_basis_is_unaffected():
-    e = E.expectation_for(_row("NEGATIVE: expect decline"))
+    e = E.expectation_for(_row("decline", expect="decline"))
     assert e["expectation_basis"] is None
-    for t in ("no_match", "refused", None):
+    for t in ("no_match", "refused"):
         assert E.score(e, "unserved", terminal_status=t)[0] == "agree", t
+    assert E.score(e, "unserved", terminal_status=None)[0] == "unscored"
 
 
 # ============================================================ #5
@@ -154,7 +127,7 @@ def test_f5_reviewer_missing_kind_does_not_satisfy_a_declared_anchor_kind():
     with tempfile.TemporaryDirectory() as tmp:
         _write(tmp, "q", 1, 1, committed=[{"kind": None, "canonical_id": None,
                                            "label": "Platform"}])
-        e = E.expectation_for(_row("anchor=Platform/team", id="q"))
+        e = E.expectation_for(_row("anchor", id="q", anchor={"kind": "team", "label": "Platform"}))
         assert SI.inspect(tmp, "q", e)["subject_substitution"] is True
 
 
@@ -163,13 +136,13 @@ def test_f5_mine_empty_and_absent_kind_keys():
                       [{"canonical_id": "x", "label": "Platform"}]):
         with tempfile.TemporaryDirectory() as tmp:
             _write(tmp, "q", 1, 1, committed=committed)
-            e = E.expectation_for(_row("anchor=Platform/team", id="q"))
+            e = E.expectation_for(_row("anchor", id="q", anchor={"kind": "team", "label": "Platform"}))
             assert SI.inspect(tmp, "q", e)["subject_substitution"] is True, committed
     # the correct kind still passes
     with tempfile.TemporaryDirectory() as tmp:
         _write(tmp, "q", 1, 1, committed=[{"kind": "team", "canonical_id": "team:P",
                                            "label": "Platform"}])
-        e = E.expectation_for(_row("anchor=Platform/team", id="q"))
+        e = E.expectation_for(_row("anchor", id="q", anchor={"kind": "team", "label": "Platform"}))
         assert SI.inspect(tmp, "q", e)["subject_substitution"] is False
 
 
@@ -185,7 +158,7 @@ def test_f11_reviewer_sibling_replay_round_trip():
         replay.mkdir(parents=True)
         _write(str(replay.parent), "q", 9, 1,
                committed=[{"kind": "team", "canonical_id": "t:W", "label": "Wrong"}], facts=1)
-        e = E.expectation_for(_row("NEGATIVE: nonexistent team name", id="q"))
+        e = E.expectation_for(_row("nonexistent", id="q", expect="decline", nonexistent=True))
         rec = SI.inspect(str(root), "q", e)
         assert rec["state"] == "read", f"replay attempts invisible: {rec['state']}"
         assert rec["subject_substitution"] is True, rec
@@ -223,7 +196,7 @@ def test_f11_mine_replay_and_shard_attempts_merge():
         (replay / "replicate").mkdir(parents=True)
         _write(str(replay), "q", 9, 1,
                committed=[{"kind": "team", "canonical_id": "t:W", "label": "Wrong"}], facts=1)
-        e = E.expectation_for(_row("NEGATIVE: nonexistent team name", id="q"))
+        e = E.expectation_for(_row("nonexistent", id="q", expect="decline", nonexistent=True))
         rec = SI.inspect(str(root), "q", e)
         assert rec["subject_substitution"] is True, rec
 

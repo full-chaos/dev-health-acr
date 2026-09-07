@@ -26,6 +26,10 @@ def scan(root):
         except (ValueError, OSError) as e:      # a truncated artefact is reported, never skipped silently
             out.append({"corpus_id": f.stem, "kind": "UNREADABLE_ARTEFACT", "detail": str(e), "file": str(f)})
             continue
+        # the SINGLE attempt classifier, shared with identity and the merge, so the
+        # three cannot disagree about the same file (round 3 ruling).
+        import subject_identity as _si
+        _cls, _ = _si.classify_attempt(a)
         fail = (a.get("response") or {}).get("failure") or {}
         if not fail:
             # r1 #10. A gateway 504 often carries a non-JSON body, so there is no parsed
