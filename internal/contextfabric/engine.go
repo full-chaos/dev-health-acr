@@ -621,6 +621,24 @@ type EngineTelemetry interface {
 	// redeemed by turn 2). Called only on full redemption success, never on
 	// a veto/conflict/stale-superseded branch.
 	RecordWindowExpandOfferRedeemed(ctx context.Context, principal storage.Principal)
+	// RecordInterpretedTimeBound (CHAOS-5421) reports what this engine
+	// decided about the time context its OWN INTERPRETER produced --
+	// see chaos5421_interpreted_time_bound.go.
+	//
+	// Called UNCONDITIONALLY, exactly once per Investigate call that
+	// reaches the post-Interpret verdict, on every arm including the
+	// ordinary one. That is deliberate and load-bearing: before this
+	// event, an interpreter drifting into unanswerable bounds was
+	// indistinguishable in the logs from a caller sending them, and the
+	// rule that refused was unreadable at any level, because the arms
+	// differ only in error text the failure classifier will never log.
+	// An event that fired only on a refusal would have no denominator,
+	// so "the interpreter produced a future bound on 4% of turns" would
+	// stay underivable.
+	//
+	// Every field is written on every call, zeros included, so a missing
+	// line has exactly one meaning: this site was never reached.
+	RecordInterpretedTimeBound(ctx context.Context, principal storage.Principal, decision InterpretedTimeBoundDecision)
 	// RecordStructureOfferCount (CHAOS-3900 P1.F, design brief §2.1's
 	// cf_structure_offer_count{member,source}) reports how many offers one
 	// member's StructureNeeds carried, split by OfferSource (engine|prior
@@ -1441,10 +1459,51 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// Interpret necessarily runs before its output can be time-bounded.
 	// The prior "zero work before axis rejection" guarantee now holds for
 	// every capability call below this point, not for receipt resolution.
-	clampedInterpretedTime, err := resolveTimeContext(interpretation.TimeContext, e.now())
-	if err != nil {
-		return InvestigationResult{}, err
+	//
+	// CHAOS-5421: this site no longer shares resolveTimeContext with the
+	// wire-request clamp above. It asked the same question of a different
+	// ACTOR and returned the same sentinel BARE, so the route classifier
+	// wrote an interpreter defect back as `400 invalid_request` on a
+	// request whose only content was a question, with failure_stage
+	// "unknown" because nothing wrapped it. The verdict here follows
+	// docs/design/context-fabric-historical-time-axis.md §1 -- "only the
+	// verdict changes from 'refuse' to 'bind the as-of and label it'" --
+	// so a bound reaching past now is CLAMPED and answered, and a bound
+	// that is genuinely unanswerable refuses the TURN with a stated basis
+	// the caller can read. The wire-request site above is untouched and
+	// still owns the caller's own 400.
+	interpretedTimeBound := resolveInterpretedTimeContext(interpretation.TimeContext, e.now())
+	// Recorded UNCONDITIONALLY, before the branch, so the ordinary arm has
+	// a line too and the refusal rate has a denominator.
+	if e.telemetry != nil {
+		e.telemetry.RecordInterpretedTimeBound(ctx, principal, interpretedTimeBound)
 	}
+	if !interpretedTimeBound.Answerable() {
+		// Returns before ResolveSubjects, DiscoverContext, ReadFacts and
+		// Synthesize ever run -- the same "no capability call pays for a
+		// question this engine will not answer" guarantee the refusal it
+		// replaces bought, now delivered as a readable terminal instead of
+		// an error attributed to the wrong party.
+		//
+		// CHAOS-3478/CHAOS-3813's own rule, applied here for the same
+		// reason the axis-conflict veto below applies it: this exit returns
+		// before ResolveSubjects ever runs, so any prior-subject receipt
+		// the caller sent is skipped, and a never-resolved terminal that
+		// drops them silently is the defect that finding named. The old
+		// code returned an error from this site and so reached neither
+		// disclosure nor telemetry at all.
+		//
+		// The plan is deliberately nil: this exit precedes the planning
+		// stage, exactly like the pre-Interpret window and structure vetoes
+		// above, so there is no plan to stamp rather than one being
+		// dropped.
+		timeBoundDispositions := composePriorSubjectReceiptDispositions(priorOutcomes, SubjectResolution{})
+		if len(timeBoundDispositions) > 0 {
+			e.recordPriorSubjectReceiptSkips(ctx, principal, timeBoundDispositions, priorHintsStaleGraphEpochDelta)
+		}
+		return e.interpretedTimeBoundResult(ctx, principal, request, interpretedTimeBound, binding, timeBoundDispositions, nil, ancestryRoot(request, receiptsValidated(priorValidatedReceipts)))
+	}
+	clampedInterpretedTime := interpretedTimeBound.Bound
 	interpretation.TimeContext = clampedInterpretedTime
 	// CHAOS-4636 -- the PLANNING STAGE (design §6.1). Deterministic, no
 	// model call, no I/O, placed between interpretation and discovery

@@ -586,10 +586,34 @@ func TestR5_4_AnOutOfRangeInterpretedTimeIsRefusedAtTheEngineBoundary(t *testing
 				t.Fatalf("fixture axis = %q, want a current-axis wire request so only the interpreter is out of range", request.TimeContext.Axis)
 			}
 
-			_, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
-			if !errors.Is(err, ErrInvalidTimeBound) {
-				t.Fatalf("Investigate() error = %v, want ErrInvalidTimeBound -- an unrepresentable interpreted time must be refused, not wrapped", err)
+			// CHAOS-5421 MAPPED THE VERDICT, NOT THE CLAIM. This test's
+			// claim is unchanged and is still the whole reason it exists:
+			// an unrepresentable INTERPRETED time is caught at the engine
+			// boundary, before any capability call, whatever the port
+			// implementation did. What moved is who is told, and how.
+			//
+			// The old assertion was ErrInvalidTimeBound, the CALLER's own
+			// sentinel, which internal/api maps to
+			// `400 invalid_request / "ACR rejected the investigation
+			// request"`. On this path the caller's request is a bare
+			// question and is not what is wrong -- the interpreter's own
+			// output is -- so the refusal is now a RESULT naming its
+			// basis, and the sentinel stays exclusively caller-side.
+			// TestCHAOS5421_TheWireRequestSiteStillRefusesTheCallersOwnBounds
+			// pins that half.
+			result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+			if err != nil {
+				t.Fatalf("Investigate() error = %v, want a terminal refusal -- an unrepresentable interpreted time is the interpreter's defect, never the caller's", err)
 			}
+			if result.Status != InvestigationNoMatch {
+				t.Fatalf("Status = %q, want %q for an unrepresentable interpreted time", result.Status, InvestigationNoMatch)
+			}
+			if len(result.Limitations) == 0 {
+				t.Fatal("the refusal stated no basis; the point of moving off the error channel is that the caller can read WHY")
+			}
+			// UNCHANGED, and the reason this test was written: the refusal
+			// still precedes every capability call. Trading an error for a
+			// terminal must not buy the work back.
 			if probe.graph.resolveCalls != 0 || probe.factsRead || probe.synthesized {
 				t.Fatal("work ran with an unrepresentable time; the refusal must precede every capability call")
 			}

@@ -64,6 +64,10 @@ var auditedLimitationWrites = map[string]limitationAudit{
 		sameShapedTotal: 1,
 		reason:          "the SEED, not an addition: a one-element list holding the single fixed window-veto disclosure windowVetoLimitation chose (CHAOS-3900 W1) -- identical shape and reasoning to terminalResult's own seed write above. Nothing is ever appended to this list afterward: a window-veto result is composed once and saved, never passed through a further limitation appender",
 	},
+	"interpretedTimeBoundResult#composite literal []string{limitation}#0": {
+		sameShapedTotal: 1,
+		reason:          "the SEED, not an addition: a one-element list holding the single fixed interpreted-time-bound disclosure interpretedTimeBoundLimitation chose (CHAOS-5421) -- identical shape and reasoning to windowVetoResult's own seed write above, and this exit returns BEFORE resolution, facts and synthesis, so nothing is ever appended to the list afterward. interpretedTimeBoundLimitation itself refuses to return a value for an outcome with no stated basis, so the seed can never be an empty or invented sentence",
+	},
 	"structureVetoResult#composite literal []string{limitation}#0": {
 		sameShapedTotal: 1,
 		reason:          "the SEED, not an addition: a one-element list holding the single fixed structure-veto disclosure structureVetoLimitation chose (CHAOS-3900 P1) -- identical shape and reasoning to windowVetoResult's own seed write above. Nothing is ever appended to this list afterward: a structure-veto result is composed once and saved, never passed through a further limitation appender",

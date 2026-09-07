@@ -351,6 +351,33 @@ func (t SlogEngineTelemetry) RecordWindowExpandOfferRedeemed(ctx context.Context
 	t.logger.InfoContext(ctx, "context fabric window expand offer redeemed", args...)
 }
 
+// RecordInterpretedTimeBound (CHAOS-5421) logs at Info -- the PRODUCTION
+// level, which is the whole requirement: the arms of the interpreted-time
+// verdict are distinguished only by wrapped error text that the failure
+// classifier deliberately never logs at any level, so before this line an
+// operator could read `failure_classification="invalid_time_bound"` and
+// still not know which of six rules refused the turn, or whether the
+// caller or this engine's own interpreter produced the bound.
+//
+// Every field is emitted on every call, including the zeros: axis and
+// outcome always, clamp_applied as an explicit true/false, and range_days
+// as an explicit 0 off the range axis. A reader must never have to
+// distinguish "we measured zero" from "we did not measure".
+//
+// Closed enums and counts only -- no instant, no question text, no
+// interpreter output -- so the stream stays corpus-safe and readable as a
+// dashboard, the same discipline every sibling event here holds.
+func (t SlogEngineTelemetry) RecordInterpretedTimeBound(ctx context.Context, principal storage.Principal, decision InterpretedTimeBoundDecision) {
+	args := append([]any{
+		"org_id", principal.OrgID,
+		"axis", string(decision.Axis),
+		"outcome", string(decision.Outcome),
+		"clamp_applied", decision.ClampApplied,
+		"range_days", decision.RangeDays,
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric interpreted time bound", args...)
+}
+
 func (t SlogEngineTelemetry) RecordStructureOfferCount(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind, source contractsv1.ContextFabricStructureOfferSource, count int) {
 	args := append([]any{"org_id", principal.OrgID, "member", string(member), "source", string(source), "count", count}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric structure offer count", args...)
