@@ -28,6 +28,20 @@ def scan(root):
             continue
         fail = (a.get("response") or {}).get("failure") or {}
         if not fail:
+            # r1 #10. A gateway 504 often carries a non-JSON body, so there is no parsed
+            # `failure` object at all. Skipping on that dropped the attempt entirely --
+            # run_shard.attempt_diagnostics() counted it while this scanner reported
+            # nothing, so the two counters disagreed and the request evidence was lost.
+            # An attempt whose own HTTP status is a failure is classified from that.
+            st = a.get("status")
+            if isinstance(st, int) and st >= 400:
+                out.append({"corpus_id": f.stem.split("-rep")[0],
+                            "kind": f"UPSTREAM_{st}" if st in (504, 502, 503) else f"OTHER_{st}",
+                            "attempt_http": st, "upstream_http": st,
+                            "request_id": (a.get("response") or {}).get("request_id")
+                                          if isinstance(a.get("response"), dict) else None,
+                            "detail": "attempt carried no parsed failure object",
+                            "file": str(f)})
             continue
         qid = f.stem.split("-rep")[0]
         up = fail.get("httpStatus")

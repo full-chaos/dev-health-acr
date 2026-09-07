@@ -1,63 +1,94 @@
 #!/usr/bin/env python3
-"""Unit test for the shard layout. Reaches nothing live — the sibling of acr's
-scripts/trial/test-shard-plan.sh, and the reason the layout is a separate module."""
+"""Unit test for the shard layout. Reaches nothing live.
+
+r1 #8: the old script asserted only over whatever corpus happened to be importable, so
+an empty or one-row corpus printed PASS while proving nothing, and the family-spread
+map it built was never asserted on. `verify()` now REFUSES a degenerate corpus and
+checks the spread it computes.
+
+r1 #9: importing this module used to install the synthetic corpus into sys.modules and
+leave it there, so a later in-process import of merge_corpus could produce a
+measurement-shaped verdict from four example rows. The fallback is now scoped to the
+call and removed again.
+"""
 import sys
+from contextlib import contextmanager
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent))
 
-# Fall back to the synthetic example when no real corpus module is supplied, so
-# this test runs in CI. See README.md, "Supplying a corpus".
-try:
-    from corpus import CORPUS
-except ModuleNotFoundError:
+HERE = Path(__file__).parent
+sys.path.insert(0, str(HERE))
+
+from shard_plan import plan  # noqa: E402
+
+MIN_ROWS = 2
+
+
+@contextmanager
+def _corpus_rows():
+    """Yield the real corpus if one is supplied, else the synthetic example.
+
+    The example is installed as `corpus` only for the duration of the call, then the
+    previous state of sys.modules is restored exactly.
+    """
+    try:
+        from corpus import CORPUS
+        yield CORPUS
+        return
+    except ModuleNotFoundError:
+        pass
     import corpus_example
+    had = "corpus" in sys.modules
+    prev = sys.modules.get("corpus")
     sys.modules["corpus"] = corpus_example
-    from corpus import CORPUS
-from shard_plan import plan
+    try:
+        yield corpus_example.CORPUS
+    finally:
+        if had:
+            sys.modules["corpus"] = prev
+        else:
+            sys.modules.pop("corpus", None)
 
-ALL = {r["id"] for r in CORPUS}
-fails = []
 
-for n in range(1, len(ALL) + 1):
-    p = plan(n)
-    flat = [q for s in p["shards"] for q in s["ids"]]
-    if set(flat) != ALL:
-        fails.append(f"n={n}: id set differs from the corpus")
-    if len(flat) != len(ALL):
-        fails.append(f"n={n}: {len(flat)} placements for {len(ALL)} rows (dupes or drops)")
-    sizes = [s["n"] for s in p["shards"]]
-    if max(sizes) - min(sizes) > 1:
-        fails.append(f"n={n}: unbalanced shard sizes {sizes}")
-    # Families must be spread, not pooled: the two known 60s-timeout rows both
-    # live in grouped_cohort_status, so a layout that puts a whole family in one
-    # shard makes wall time that family.
-    if n >= 4:
+def verify(rows):
+    """Assert the layout is total, disjoint, balanced and family-spread. Raises on failure."""
+    assert len(rows) >= MIN_ROWS, (
+        f"refusing to verify a layout over {len(rows)} row(s): a corpus of fewer than "
+        f"{MIN_ROWS} rows cannot distinguish a working planner from a broken one")
+    ids = {r["id"] for r in rows}
+    assert len(ids) == len(rows), "corpus contains duplicate ids"
+
+    for n in range(1, len(ids) + 1):
+        p = plan(n, rows)
+        shards = p["shards"]
+        flat = [q for s in shards for q in s["ids"]]
+        assert len(flat) == len(ids), f"n={n}: {len(flat)} placed, {len(ids)} expected"
+        assert set(flat) == ids, f"n={n}: id set changed"
+        assert len(flat) == len(set(flat)), f"n={n}: an id appears twice"
+        sizes = [s["n"] for s in shards]
+        assert max(sizes) - min(sizes) <= 1, f"n={n}: unbalanced {sizes}"
+        assert p == plan(n, rows), f"n={n}: not deterministic"
+
+        # r1 #8: assert on the family spread instead of merely computing it. With more
+        # shards than members of a family, no shard may hold two of that family.
         by_shard = {}
-        for s in p["shards"]:
+        for s in shards:
             for q in s["ids"]:
-                fam = next(r.get("family") or "_none" for r in CORPUS if r["id"] == q)
-                by_shard.setdefault(s["shard"], set()).add(fam)
-        big = max((len([q for q in s["ids"]]) for s in p["shards"]))
-        if big > (len(ALL) // n) + 1:
-            fails.append(f"n={n}: a shard is oversized ({big})")
+                fam = next(r.get("family") or "_none" for r in rows if r["id"] == q)
+                by_shard.setdefault(s["shard"], []).append(fam)
+        fams = {}
+        for r in rows:
+            fams.setdefault(r.get("family") or "_none", 0)
+            fams[r.get("family") or "_none"] += 1
+        for fam, count in fams.items():
+            if n >= count:
+                per_shard = [v.count(fam) for v in by_shard.values()]
+                assert max(per_shard) <= 1, (
+                    f"n={n}: family {fam!r} ({count} rows) piled up {max(per_shard)} "
+                    f"in one shard despite {n} shards")
+    return True
 
-# Determinism: the same n twice is the same layout.
-if plan(6) != plan(6):
-    fails.append("layout is not deterministic")
 
-# n=1 is the sequential control and must be the whole corpus in order.
-if plan(1)["shards"][0]["n"] != len(ALL):
-    fails.append("n=1 did not produce the whole corpus in one shard")
-
-try:
-    plan(0)
-    fails.append("plan(0) should have raised")
-except ValueError:
-    pass
-
-if fails:
-    print("FAIL")
-    for f in fails:
-        print("  -", f)
-    sys.exit(1)
-print(f"PASS  layout verified for n=1..{len(ALL)} over {len(ALL)} rows")
+if __name__ == "__main__":
+    with _corpus_rows() as rows:
+        verify(rows)
+        print(f"PASS  layout verified for n=1..{len(rows)} over {len(rows)} rows")

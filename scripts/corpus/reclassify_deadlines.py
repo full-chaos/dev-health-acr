@@ -23,6 +23,10 @@ import json
 import os
 import subprocess
 import sys
+
+# r1 #11. The identity scan must know where a re-run's raw attempts land. This name is
+# the contract between the two modules; subject_identity.EXTRA_ATTEMPT_GLOBS reads it.
+REPLAY_DIRNAME = "reclassify"
 import time
 from pathlib import Path
 
@@ -75,7 +79,7 @@ def main():
         return
 
     print(f"{len(hits)} row(s) hit a deadline under load; re-running each ONCE, sequentially:")
-    outroot = HERE / "reclassify"
+    outroot = HERE / REPLAY_DIRNAME
     outroot.mkdir(exist_ok=True)
     changed = []
 

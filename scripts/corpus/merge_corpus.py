@@ -193,6 +193,15 @@ def main():
     provenance["execution_shape"] = args.shape
     provenance["shard_count"] = len(shards)
 
+    # r1 #2/#4: identity state and terminal status now reach the scorer, so an
+    # unverifiable identity cannot score as agreement and a named-basis decline is not
+    # satisfied by a bare no_match. Built once and reused, rather than twice as before.
+    _states = {k: (v or {}).get("state", "read") for k, v in identity.items()}
+    _terminals = {r["corpus_id"]: r.get("final_payload_status") for r in rows}
+    _exp_table = expectations.table(
+        BY_ID, {r["corpus_id"]: classify(r) for r in rows}, subs_by_id,
+        states_by_id=_states, terminals_by_id=_terminals)
+
     counts = Counter(classify(r) for r in rows)
     verdict = {
         "ticket": os.environ.get("CORPUS_TICKET", ""),
@@ -249,20 +258,19 @@ def main():
                 k for k, v in identity.items() if "vector" in (v.get("match_mechanisms") or [])),
             "committed_kind_not_requested_kind": [
                 {"corpus_id": k, "requested_kind": BY_ID[k].get("requested_kind"),
+                 "wrong_kind_commits": subject_identity.kind_observations(BY_ID[k], v.get("committed")),
                  "committed_kinds": sorted({c.get("kind") for c in (v.get("committed") or [])}),
                  "committed_labels": [c.get("label") for c in (v.get("committed") or [])],
                  "match_mechanisms": v.get("match_mechanisms")}
                 for k, v in sorted(identity.items())
-                if v.get("committed") and BY_ID[k].get("requested_kind")
-                and BY_ID[k]["requested_kind"] not in {c.get("kind") for c in v["committed"]}
+                if subject_identity.kind_observations(BY_ID[k], v.get("committed"))
             ],
         },
-        "expectation_scoring": expectations.table(
-            BY_ID, {r["corpus_id"]: classify(r) for r in rows}, subs_by_id),
-        "expectation_summary": (lambda tb: {
-            v: sum(1 for e in tb if e["verdict"] == v)
+        "expectation_scoring": _exp_table,
+        "expectation_summary": {
+            v: sum(1 for e in _exp_table if e["verdict"] == v)
             for v in ("agree", "agree_weak", "disagree", "unscored")
-        })(expectations.table(BY_ID, {r["corpus_id"]: classify(r) for r in rows}, subs_by_id)),
+        },
         # v1 buckets with confirmed substitutions pulled out into their own failure
         # bucket. `totals` above is untouched and remains the like-for-like number.
         "totals_v2": {
@@ -280,13 +288,13 @@ def main():
             [{**r, "bucket": classify(r),
               "bucket_v2": classify_v2(r, subs_by_id.get(r["corpus_id"])),
               "subject_substitution": bool(subs_by_id.get(r["corpus_id"])),
+              "identity_state": (identity.get(r["corpus_id"]) or {}).get("state"),
               "substitution_rule": (identity.get(r["corpus_id"]) or {}).get("substitution_rule"),
               "committed_subjects": (identity.get(r["corpus_id"]) or {}).get("committed"),
               "match_mechanisms": (identity.get(r["corpus_id"]) or {}).get("match_mechanisms"),
               "expectation": expectations.expectation_for(BY_ID[r["corpus_id"]])["expectation"],
-              "expectation_verdict": expectations.score(
-                  expectations.expectation_for(BY_ID[r["corpus_id"]]), classify(r),
-                  bool(subs_by_id.get(r["corpus_id"])))[0],
+              "expectation_verdict": next(
+                  e["verdict"] for e in _exp_table if e["corpus_id"] == r["corpus_id"]),
               # Additive flag so the deliverable can show the split
               # with and without rows the RIG's 30-item ceiling rejected (prod = 45).
               # Derived here, not in run_shard — run_shard stays frozen between the

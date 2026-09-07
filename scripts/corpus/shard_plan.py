@@ -25,21 +25,33 @@ from collections import OrderedDict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from corpus import CORPUS  # noqa: E402
 
 
-def families():
+def _corpus():
+    """The corpus, imported lazily.
+
+    r1 #8/#9: this used to be a module-level `from corpus import CORPUS`, which made
+    shard_plan unimportable without a corpus on sys.path and forced every caller that
+    wanted to exercise the planner to install one globally. Importing lazily lets the
+    layout be verified against arbitrary rows without touching sys.modules.
+    """
+    from corpus import CORPUS
+    return CORPUS
+
+
+def families(rows=None):
     """id lists grouped by family, in first-appearance order (stable)."""
     out = OrderedDict()
-    for row in CORPUS:
+    for row in (rows if rows is not None else _corpus()):
         out.setdefault(row.get("family") or "_none", []).append(row["id"])
     return out
 
 
-def plan(shard_count):
+def plan(shard_count, rows=None):
     if shard_count < 1:
         raise ValueError("shard-count must be >= 1")
-    fams = families()
+    rows = rows if rows is not None else _corpus()
+    fams = families(rows)
     shards = [[] for _ in range(shard_count)]
     cursor = 0
     for _family, ids in fams.items():
@@ -48,12 +60,12 @@ def plan(shard_count):
             cursor += 1
 
     total = sum(len(s) for s in shards)
-    assert total == len(CORPUS), f"layout dropped rows: {total} != {len(CORPUS)}"
+    assert total == len(rows), f"layout dropped rows: {total} != {len(rows)}"
     flat = [q for s in shards for q in s]
     assert len(set(flat)) == total, "layout duplicated a row across shards"
 
     return {
-        "corpus_rows": len(CORPUS),
+        "corpus_rows": len(rows),
         "shard_count": shard_count,
         "families": {k: len(v) for k, v in fams.items()},
         "shards": [

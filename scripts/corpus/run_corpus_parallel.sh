@@ -31,7 +31,21 @@ MAX_CONCURRENT="${CORPUS_MAX_CONCURRENT_SHARDS:-4}"
 # Refuse to run against a rig that is not up. A corpus row that fails because a
 # leg is down is not a measurement, and a half-up rig is the easiest way to
 # manufacture a fake regression.
-for probe in "http://127.0.0.1:18090/readyz" "http://127.0.0.1:18095/readyz" "http://127.0.0.1:3040/"; do
+# r1 #12: the run dirs are created here. Neither launcher used to create logs/, and the
+# repository ships no such directory, so a fresh checkout died on the first tee/redirect
+# before producing any artefact at all.
+mkdir -p "$HERE/logs"
+
+# r1 #13: probe the base the harness will ACTUALLY use. These probes used to hard-code
+# :3040/:18090/:18095, so pointing CORPUS_BASE at a private leg aborted against ports
+# that were not under test -- or, worse, passed because the SHARED rig was healthy while
+# the configured endpoint was not. Extra probes stay available via CORPUS_EXTRA_PROBES.
+CORPUS_BASE="${CORPUS_BASE:-http://127.0.0.1:3040/api/investigations}"
+export CORPUS_BASE
+base_root="$(printf '%s' "$CORPUS_BASE" | sed -E 's#(https?://[^/]+).*#\1#')"
+probes=("$base_root/")
+for extra in ${CORPUS_EXTRA_PROBES:-}; do probes+=("$extra"); done
+for probe in "${probes[@]}"; do
   code="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "$probe" || true)"
   [[ "$code" == "200" ]] || { echo "ABORT: $probe returned $code, expected 200" >&2; exit 1; }
 done

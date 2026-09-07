@@ -37,11 +37,27 @@ def expectation_for(row):
     """Classify one corpus row. Returns a dict; never raises on an unknown shape."""
     note = row.get("note") or ""
     low = note.lower()
-    if "expect refuse" in low:
-        cls, basis = REFUSE, "member_kind_unservable" if "member_kind_unservable" in low else None
-    elif "expect decline" in low:
-        cls, basis = DECLINE, "named_basis" if "named basis" in low else None
-    elif "servable" in low and "unservable" not in low:
+
+    # r1 #3. Three separate defects, each fixed by being explicit rather than clever:
+    #   (a) only the exact phrases "expect refuse"/"expect decline" were recognised, so
+    #       "expected to decline" and "expect refusal" fell through to UNSCORED;
+    #   (b) SERVABLE was a bare substring test, so "not SERVABLE" read as expect_serve;
+    #   (c) the unservable guard was `"unservable" not in low` over the WHOLE note, so a
+    #       row that merely mentioned unservable kinds lost its own SERVABLE declaration.
+    #       The guard now only rejects "unservable" as the SERVABLE token itself.
+    _REFUSE_RE = re.compile(r"\bexpect(?:ed|s)?\s+(?:to\s+)?(?:refuse|refusal)\b")
+    _DECLINE_RE = re.compile(r"\bexpect(?:ed|s)?\s+(?:to\s+)?(?:decline|declining)\b")
+    # SERVABLE as its own word, not preceded by a negation and not part of "unservable".
+    _SERVE_RE = re.compile(r"(?<!un)\bservable\b")
+    _NEGATED_SERVE_RE = re.compile(r"\b(?:not|non|never)[\s-]+servable\b")
+
+    if _REFUSE_RE.search(low):
+        cls = REFUSE
+        basis = "member_kind_unservable" if "member_kind_unservable" in low else None
+    elif _DECLINE_RE.search(low):
+        cls = DECLINE
+        basis = "named_basis" if "named basis" in low else None
+    elif _SERVE_RE.search(low) and not _NEGATED_SERVE_RE.search(low):
         cls, basis = SERVE, None
     else:
         cls, basis = UNSCORED, None
@@ -65,7 +81,37 @@ def expectation_for(row):
     }
 
 
-def score(expectation, bucket, subject_substitution=False):
+# r1 #2. An identity record that could not be read is NOT evidence of a clean row.
+# These states must never reach an `agree`.
+UNTRUSTED_IDENTITY_STATES = {"no_artefact", "unreadable_artefact"}
+
+# r1 #4. classify() collapses no_match and refused into `unserved`, so a bucket alone
+# cannot tell a named-basis decline from a bare no-match. A row declaring
+# basis=named_basis needs the terminal status to distinguish them.
+NAMED_BASIS_TERMINALS = {"refused"}
+
+
+def score(expectation, bucket, subject_substitution=False,
+          identity_state="read", terminal_status=None):
+    """Agreement of an observed bucket with the declared expectation.
+
+    An unverifiable identity CAPS the verdict at `agree_weak`; it never improves one.
+    Getting that backwards was a defect in the first fix for r1 #2: routing untrusted
+    identity through an early return turned a legitimate `disagree` (a row that plainly
+    failed its declared expectation) into `agree_weak` merely because its artefact was
+    unreadable. Doubt about the subject cannot make a failed row look better.
+    """
+    verdict, why = _score_core(expectation, bucket, subject_substitution,
+                               identity_state, terminal_status)
+    if verdict == "agree" and identity_state in UNTRUSTED_IDENTITY_STATES:
+        return "agree_weak", (
+            f"{why}; but identity could not be checked ({identity_state}), so the "
+            "committed subject is unverified and this is not counted as agreement")
+    return verdict, why
+
+
+def _score_core(expectation, bucket, subject_substitution=False,
+                identity_state="read", terminal_status=None):
     """Agreement of an observed bucket with the declared expectation.
 
     A confirmed subject substitution is `disagree` unconditionally: serving a
@@ -75,6 +121,7 @@ def score(expectation, bucket, subject_substitution=False):
     cls = expectation["expectation"]
     if subject_substitution:
         return "disagree", "subject substitution: a subject was committed that the row did not name"
+    untrusted = identity_state in UNTRUSTED_IDENTITY_STATES
     if cls == REFUSE:
         if bucket == "unserved":
             return "agree", "refused/no_match as declared"
@@ -83,6 +130,12 @@ def score(expectation, bucket, subject_substitution=False):
         return "disagree", f"expected a refusal, observed {bucket}"
     if cls == DECLINE:
         if bucket == "unserved":
+            if expectation.get("expectation_basis") == "named_basis" \
+                    and terminal_status is not None \
+                    and terminal_status not in NAMED_BASIS_TERMINALS:
+                return "agree_weak", (
+                    f"did not serve, but terminated as {terminal_status} rather than a "
+                    "decline carrying the named basis the row asks for")
             return "agree", "declined as declared"
         if bucket == "clarification_needed":
             return "agree_weak", "no fabricated answer, but no named-basis decline either"
@@ -98,15 +151,27 @@ def score(expectation, bucket, subject_substitution=False):
     return "unscored", "row declares no expectation"
 
 
-def table(rows_by_id, buckets_by_id, subs_by_id):
+def table(rows_by_id, buckets_by_id, subs_by_id,
+          states_by_id=None, terminals_by_id=None):
     """Build the expectation table for a whole run."""
     out = []
     for cid in sorted(rows_by_id):
         e = expectation_for(rows_by_id[cid])
-        if e["expectation"] == UNSCORED:
+        sub = bool(subs_by_id.get(cid))
+        st = (states_by_id or {}).get(cid, "read")
+        term = (terminals_by_id or {}).get(cid)
+        # r1 #1. The UNSCORED short-circuit ran BEFORE the substitution check, so a
+        # substituted row with no declared expectation reported `unscored` in this table
+        # while its row record said `disagree` -- the verdict disagreed with itself.
+        # A substitution, and an unverifiable identity, are scored on every row.
+        if sub or st in UNTRUSTED_IDENTITY_STATES:
+            verdict, why = score(e, buckets_by_id.get(cid), sub,
+                                 identity_state=st, terminal_status=term)
+        elif e["expectation"] == UNSCORED:
             verdict, why = "unscored", "row declares no expectation"
         else:
-            verdict, why = score(e, buckets_by_id.get(cid), bool(subs_by_id.get(cid)))
+            verdict, why = score(e, buckets_by_id.get(cid), sub,
+                                 identity_state=st, terminal_status=term)
         out.append({
             "corpus_id": cid,
             "family": rows_by_id[cid].get("family") or "_none",
@@ -115,5 +180,6 @@ def table(rows_by_id, buckets_by_id, subs_by_id):
             "verdict": verdict,
             "why": why,
             "subject_substitution": bool(subs_by_id.get(cid)),
+            "identity_state": (states_by_id or {}).get(cid, "read"),
         })
     return out
