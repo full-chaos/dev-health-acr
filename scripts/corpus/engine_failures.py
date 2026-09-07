@@ -26,10 +26,15 @@ def scan(root):
         except (ValueError, OSError) as e:      # a truncated artefact is reported, never skipped silently
             out.append({"corpus_id": f.stem, "kind": "UNREADABLE_ARTEFACT", "detail": str(e), "file": str(f)})
             continue
-        # the SINGLE attempt classifier, shared with identity and the merge, so the
-        # three cannot disagree about the same file (round 3 ruling).
+        # r4: the classifier's RESULT is used, not merely called. An UNPARSEABLE
+        # artefact is reported as such and never read further -- a string failure
+        # envelope used to reach the field access below and crash.
         import subject_identity as _si
         _cls, _ = _si.classify_attempt(a)
+        if _cls == _si.UNPARSEABLE:
+            out.append({"corpus_id": f.stem.split("-rep")[0], "kind": "UNREADABLE_ARTEFACT",
+                        "detail": "attempt envelope failed validation", "file": str(f)})
+            continue
         fail = (a.get("response") or {}).get("failure") or {}
         if not fail:
             # r1 #10. A gateway 504 often carries a non-JSON body, so there is no parsed

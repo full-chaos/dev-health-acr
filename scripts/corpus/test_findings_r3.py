@@ -17,8 +17,7 @@ from pathlib import Path
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 
-import corpus_example                                   # noqa: E402
-from corpus_stub import using_example_corpus            # noqa: E402
+import corpus_example                                   # noqa: E402,F401
 import expectations as E                                # noqa: E402
 import subject_identity as SI                           # noqa: E402
 
@@ -57,29 +56,18 @@ def _write_chain(tmp, kinds, committed_on=None, subdir="replicate"):
 
 
 # ================================================= #4 : the verdict is TOTAL
-def test_f4_no_agreement_exists_outside_the_declared_table():
-    """Enumerate the WHOLE domain. Nothing may reach agree/agree_weak unless VERDICTS
-    (or the named-basis override) names that cell."""
-    statuses = sorted(E.TERMINAL_STATUSES) + [None, "", "weird_status", "timeout"]
-    buckets = ["served_with_data", "served_degraded", "unserved",
-               "clarification_needed", "error", None, "nonsense"]
-    leaked = []
-    for cls in (E.SERVE, E.REFUSE, E.DECLINE, E.CLARIFY):
-        for basis in (None, "named_basis"):
-            for st in statuses:
-                for bk in buckets:
-                    e = {"expectation": cls, "expectation_basis": basis}
-                    v, why = E.score(e, bk, terminal_status=st)
-                    if v in ("agree", "agree_weak"):
-                        key = E._bucket_of(st, bk)
-                        if key is None:
-                            key = {"served_with_data": "served_with_data",
-                                   "served_degraded": "served_degraded",
-                                   "clarification_needed": "clarification"}.get(bk)
-                        named = (cls, key) in E.NAMED_BASIS_OVERRIDES and basis
-                        if key is None or ((cls, key) not in E.VERDICTS and not named):
-                            leaked.append((cls, basis, st, bk, v))
-    assert not leaked, f"agreement reached outside the table: {leaked[:8]}"
+def test_f4_no_agreement_outside_the_table_SUPERSEDED():
+    """SUPERSEDED by test_findings_r4.GOLDEN.
+
+    This pin enumerated the domain but recomputed the implementation's own key derivation
+    to decide what the table "should" say, so it could only ever agree with the code -- it
+    passed while the bucket fallback it was written to catch was still live. The
+    replacement in test_findings_r4.py compares against a table written by hand from the
+    specification, and asserts the COMPLEMENT (everything not in that table is unscored).
+    Kept as a named marker so the lesson is not silently deleted.
+    """
+    import test_findings_r4 as R4
+    assert R4.GOLDEN and R4.UNRECOGNISED, "the replacement golden table is missing"
 
 
 def test_f4_an_absent_or_unknown_terminal_status_is_never_agreement():
@@ -186,34 +174,23 @@ def test_f6_replay_attempt_wins_over_the_original_it_replaces():
 
 
 def test_f6_ordering_is_not_lexicographic_on_the_path():
-    t = (HERE / "subject_identity.py").read_text()
-    assert "_attempt_order" in t and "key=_attempt_order" in t, \
-        "attempts are still ordered by bare path sort"
+    for name in ("subject_identity.py", "run_shard.py"):
+        t = (HERE / name).read_text()
+        assert "order_attempts" in t, f"{name} does not use the shared ordering helper"
+        assert "sorted(glob.glob" not in t, f"{name} still path-sorts attempts"
 
 
 # ================================================= #9 : isolation via dependents
-def test_f9_no_test_module_leaks_a_synthetic_corpus_into_a_dependent():
-    real = "/home/ubuntu/.cache/acr-kiac-askdev/proofs/2026-09-07-corpus-arm3/instrument-v2"
-    mods = ["test_shard_plan", "test_findings_r1", "test_findings_r2",
-            "test_findings_r3", "test_instrument"]
-    code = (
-        "import sys, importlib\n"
-        f"sys.path.insert(0, {str(HERE)!r})\n"
-        f"sys.path.append({real!r})\n"
-        + "".join(f"importlib.import_module({m!r})\n" for m in mods) +
-        "import merge_corpus\n"
-        "print('ROWS', len(merge_corpus.CORPUS))\n")
-    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
-    assert "ROWS 36" in out.stdout, (
-        f"a dependent resolved to a synthetic corpus after importing the test modules: "
-        f"{out.stdout.strip()!r} {out.stderr.strip()[-200:]!r}")
+def test_f9_isolation_SUPERSEDED_by_process_isolation():
+    """SUPERSEDED. Both previous pins tested a sys.modules helper that no longer exists.
 
-
-def test_f9_the_stub_restores_sys_modules_exactly():
-    before = dict(sys.modules)
-    with using_example_corpus():
-        import merge_corpus  # noqa: F401
-    assert set(sys.modules) == set(before), "sys.modules was not restored exactly"
+    Two attempts at in-process isolation failed for the same reason: restoring the dict
+    cannot retract a reference a module already captured. Isolation is now by SUBPROCESS
+    (run_pins.sh gives each pin file a fresh interpreter), which is what
+    test_findings_r4.test_isolation_is_by_process_not_by_sys_modules asserts.
+    """
+    assert not (HERE / "corpus_stub.py").exists(), "the in-process stub is back"
+    assert (HERE / "run_pins.sh").exists(), "the subprocess runner is missing"
 
 
 if __name__ == "__main__":

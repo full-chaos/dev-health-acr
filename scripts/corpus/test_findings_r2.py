@@ -19,7 +19,6 @@ HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 
 import corpus_example  # noqa: E402
-from corpus_stub import using_example_corpus  # noqa: E402
 
 
 
@@ -149,8 +148,7 @@ def test_f5_mine_empty_and_absent_kind_keys():
 # ============================================================ #11
 def test_f11_reviewer_sibling_replay_round_trip():
     """r2: 'F11 actual sibling replay scan: no_artefact'. Round-trip, not a name check."""
-    with using_example_corpus():
-        import reclassify_deadlines as RD
+    import reclassify_deadlines as RD  # needs a corpus: run via run_pins.sh
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "shards"
         (root / "shard-00" / "replicate").mkdir(parents=True)
@@ -170,8 +168,7 @@ def test_f11_reviewer_replay_root_is_the_shards_root_not_the_script_dir():
     replay output belongs under the shards root the scanner is given."""
     import inspect as _i
     import re as _re
-    with using_example_corpus():
-        import reclassify_deadlines as RD
+    import reclassify_deadlines as RD  # needs a corpus: run via run_pins.sh
     src = _i.getsource(RD.main)
     # Behavioural, not prose: find the ASSIGNMENT to outroot and check what it is rooted
     # at. An earlier version of this pin grepped the whole function text, which also
@@ -185,8 +182,7 @@ def test_f11_reviewer_replay_root_is_the_shards_root_not_the_script_dir():
 
 
 def test_f11_mine_replay_and_shard_attempts_merge():
-    with using_example_corpus():
-        import reclassify_deadlines as RD
+    import reclassify_deadlines as RD  # needs a corpus: run via run_pins.sh
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "shards"
         shard = root / "shard-00"

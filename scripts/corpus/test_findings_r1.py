@@ -17,7 +17,6 @@ import corpus_example
 
 
 
-from corpus_stub import using_example_corpus  # noqa: E402
 import expectations as E          # noqa: E402
 import subject_identity as SI     # noqa: E402
 import engine_failures            # noqa: E402
@@ -208,8 +207,7 @@ def test_f10_a_non_json_504_attempt_is_still_classified():
 
 # ---------------------------------------------------------------- #11
 def test_f11_reclassified_attempts_are_visible_to_the_identity_scan():
-    with using_example_corpus():
-        import reclassify_deadlines as RD
+    import reclassify_deadlines as RD  # needs a corpus: run via run_pins.sh
     assert hasattr(RD, "REPLAY_DIRNAME"), "no shared name for the replay dir"
     assert SI.EXTRA_ATTEMPT_GLOBS, "identity scan has no reclassify-aware glob"
     assert any(RD.REPLAY_DIRNAME in g for g in SI.EXTRA_ATTEMPT_GLOBS), \

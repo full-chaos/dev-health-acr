@@ -24,8 +24,11 @@ does not name is `unscored` with a reason. Agreement therefore has to be declare
 granted; it cannot be reached by falling off the end of a chain of ifs.
 """
 
+from validators import validate_corpus_row  # noqa: E402
+
 SERVE, REFUSE, DECLINE, CLARIFY = "serve", "refuse", "decline", "clarify"
 UNSCORED = "unscored"
+INVALID = "invalid_expectation"
 
 # Back-compat aliases: earlier callers spelled these expect_* .
 EXPECT_SERVE, EXPECT_REFUSE, EXPECT_DECLINE = SERVE, REFUSE, DECLINE
@@ -43,7 +46,7 @@ _W = ("agree_weak", None)
 _D = ("disagree", None)
 
 
-def _bucket_of(terminal_status, bucket=None):
+def terminal_key(terminal_status, bucket=None):
     """Map a terminal status to a table key.
 
     A SERVED status splits on whether the row actually claimed facts: classify() already
@@ -51,12 +54,19 @@ def _bucket_of(terminal_status, bucket=None):
     bucket is authoritative for that split when it is supplied. Collapsing the two lost
     the hollow-serve distinction and turned three agree_weaks into agrees.
     """
+    if not isinstance(terminal_status, str) or not terminal_status:
+        return None
     if terminal_status in ("complete", "partial", "degraded", "answered"):
-        if bucket == "served_degraded":
-            return "served_degraded"
-        if bucket == "served_with_data":
-            return "served_with_data"
+        # The hollow-serve split is a property of the ANSWER (did it claim facts), which
+        # classify() already decided. The bucket is consulted only to choose between two
+        # SERVED keys -- never to rescue an absent or unknown status.
+        if bucket in ("served_degraded", "served_with_data"):
+            return bucket
         return "served_degraded" if terminal_status == "degraded" else "served_with_data"
+    # A terminal HTTP failure is an error terminal, named explicitly rather than reached
+    # by falling back to the bucket.
+    if terminal_status.startswith("http_"):
+        return "error"
     if terminal_status in ("no_match", "refused"):
         return terminal_status
     if terminal_status and terminal_status.startswith("clarification_required"):
@@ -105,7 +115,25 @@ UNTRUSTED_IDENTITY_STATES = {"no_artefact", "unreadable_artefact"}
 
 
 def expectation_for(row):
-    """Read the row's declared expectation. No inference, no text parsing."""
+    """Read the row's declared expectation. No inference, no text parsing.
+
+    The declaration is VALIDATED here (r4): a malformed one is `invalid_expectation` and
+    is never scored. Removing the parser stopped the guessing but left the field trusted
+    absolutely, so a list where a string belonged crashed the scorer and a string
+    "false" read as True.
+    """
+    ok, reason = validate_corpus_row(row)
+    if not ok:
+        return {
+            "corpus_id": (row or {}).get("id") if isinstance(row, dict) else None,
+            "expectation": INVALID,
+            "expectation_basis": None,
+            "declares_nonexistent": False,
+            "declared_anchor_name": None,
+            "declared_anchor_kind": None,
+            "invalid_reason": reason,
+            "note": "",
+        }
     anchor = row.get("anchor") or None
     return {
         "corpus_id": row.get("id"),
@@ -131,20 +159,23 @@ def score(expectation, bucket, subject_substitution=False,
                             "did not name")
 
     cls = expectation.get("expectation") or UNSCORED
+    if cls == INVALID:
+        return "unscored", (
+            f"invalid_expectation: the row's declaration is malformed "
+            f"({expectation.get('invalid_reason')}) -- not scored")
     if cls == UNSCORED:
         return "unscored", "no_expectation: the row declares none"
 
-    key = _bucket_of(terminal_status, bucket)
+    # r4: the bucket fallback is DELETED. It was the fail-open path that survived four
+    # rounds -- an absent or unknown terminal status reached `agree` through the bucket,
+    # and the domain pin could not see it because the pin recomputed this same fallback.
+    # An unrecognised terminal status is now unscored, full stop.
+    key = terminal_key(terminal_status, bucket)
     if key is None:
-        key = {"served_with_data": "served_with_data",
-               "served_degraded": "served_degraded",
-               "unserved": None, "clarification_needed": "clarification",
-               "error": "error"}.get(bucket)
-        if key is None:
-            return "unscored", (
-                f"terminal status is absent or unrecognised (bucket={bucket!r}, "
-                f"terminal={terminal_status!r}) -- the expectation cannot be checked, so "
-                "this row is NOT scored rather than assumed to agree")
+        return "unscored", (
+            f"terminal status is absent or unrecognised ({terminal_status!r}) -- the "
+            "expectation cannot be checked, so this row is NOT scored rather than "
+            "assumed to agree")
 
     if key == "error":
         return "disagree", "engine error; the declared expectation was not reached"

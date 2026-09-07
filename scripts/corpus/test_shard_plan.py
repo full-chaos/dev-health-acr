@@ -12,7 +12,6 @@ measurement-shaped verdict from four example rows. The fallback is now scoped to
 call and removed again.
 """
 import sys
-from contextlib import contextmanager
 from pathlib import Path
 
 HERE = Path(__file__).parent
@@ -23,30 +22,18 @@ from shard_plan import plan  # noqa: E402
 MIN_ROWS = 2
 
 
-@contextmanager
 def _corpus_rows():
-    """Yield the real corpus if one is supplied, else the synthetic example.
+    """The corpus to verify against.
 
-    The example is installed as `corpus` only for the duration of the call, then the
-    previous state of sys.modules is restored exactly.
+    r4: the previous helper installed the synthetic corpus into sys.modules and restored
+    only the `corpus` key, which could not retract references already captured. Isolation
+    is by SUBPROCESS now -- run this file with testdata_corpus/ on PYTHONPATH to verify
+    against the example, or with a real corpus on the path to verify against that. This
+    module mutates nothing.
     """
-    try:
-        from corpus import CORPUS
-        yield CORPUS
-        return
-    except ModuleNotFoundError:
-        pass
-    import corpus_example
-    had = "corpus" in sys.modules
-    prev = sys.modules.get("corpus")
-    sys.modules["corpus"] = corpus_example
-    try:
-        yield corpus_example.CORPUS
-    finally:
-        if had:
-            sys.modules["corpus"] = prev
-        else:
-            sys.modules.pop("corpus", None)
+    from corpus import CORPUS
+    return CORPUS
+
 
 
 def verify(rows):
@@ -89,6 +76,6 @@ def verify(rows):
 
 
 if __name__ == "__main__":
-    with _corpus_rows() as rows:
-        verify(rows)
-        print(f"PASS  layout verified for n=1..{len(rows)} over {len(rows)} rows")
+    rows = _corpus_rows()
+    verify(rows)
+    print(f"PASS  layout verified for n=1..{len(rows)} over {len(rows)} rows")

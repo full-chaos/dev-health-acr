@@ -35,6 +35,7 @@ HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 
 import harness  # noqa: E402
+from attempt_order import order_attempts  # noqa: E402
 from corpus import CORPUS  # noqa: E402
 from shard_plan import plan  # noqa: E402
 
@@ -42,7 +43,10 @@ BY_ID = {row["id"]: row for row in CORPUS}
 
 
 def attempt_files(outdir, qid, rep):
-    return sorted(glob.glob(str(outdir / f"{qid}-rep{rep}-t*-a*.json")))
+    # r4: THE shared ordering helper. A bare sorted() here put `t10` before `t9`, so
+    # last_attempt() -- and therefore the shard summary's terminal result -- named the
+    # wrong file. The identical defect was fixed in subject_identity and left here.
+    return order_attempts(glob.glob(str(outdir / f"{qid}-rep{rep}-t*-a*.json")))
 
 
 def last_attempt_file(outdir, qid, rep):
