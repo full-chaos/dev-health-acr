@@ -652,3 +652,42 @@ func TestTheFallbackAnchorSurvivesACrowdItCanDisplace(t *testing.T) {
 		t.Errorf("returned %d candidates, want exactly 20 -- the reserve must DISPLACE, never grow the budget", len(res.Candidates))
 	}
 }
+
+// THE NEGATIVE CONTROL FOR THE FALLBACK FIXTURE.
+//
+// The FIRST version of the fallback pin went green for a reason that had
+// nothing to do with the fix: its backend also returned the anchor from the
+// ordinary lexical `searchResults` arm, so the filter admitted a candidate
+// retrieval had already found by another route, and the kind-hinted search
+// was never asked for the anchor's kind at all. The pin therefore passed
+// while the production path it names was dead.
+//
+// This control makes that failure mode impossible to repeat silently. It
+// asserts, on the fixture the fallback pins actually use, that the anchor is
+// unreachable WITHOUT kind-scoped search: with SearchKind disabled the pool
+// contains no candidate of the anchor's kind at all. If someone later adds
+// the anchor to `searchResults`, this goes red and the fallback pins stop
+// being able to pass for a fixture reason.
+func TestTheFallbackFixtureCannotLeakTheAnchorThroughPlainSearch(t *testing.T) {
+	t.Parallel()
+	// The fixture's own plain arm must contain nothing of the anchor kind.
+	backend := anchorOnlyByKindBackend("chaos", 3)
+	for _, node := range backend.searchResults["chaos"] {
+		subject, ok := NodeSubject(node)
+		if ok && subject.Kind == contextfabric.SubjectTeam {
+			t.Fatalf("the fixture's plain searchResults arm contains a %s node (%q) -- the fallback pins could pass without kind-scoped retrieval ever running, which is exactly how this defect hid the first time",
+				subject.Kind, subject.CanonicalID)
+		}
+	}
+	// And end to end: with kind-scoped search UNAVAILABLE, the anchor cannot
+	// appear by any other route.
+	noKindSearch := anchorOnlyByKindBackend("chaos", 3)
+	noKindSearch.enableSearchKind = false
+	noKindSearch.searchKindResults = nil
+	res := resolveScoped(t, noKindSearch, scopedProjectsFrame("chaos"), confirmedProject(),
+		&contextfabric.ConfirmedAnchorSelection{Kind: contextfabric.SubjectTeam, CanonicalID: "team.v2:github:chaos"},
+		"")
+	if got := candidateKinds(res)[contextfabric.SubjectTeam]; got != 0 {
+		t.Fatalf("team candidates = %d with SearchKind disabled, want 0; kinds=%v. The anchor reached the pool by some route other than kind-scoped retrieval, so the fallback pins prove nothing about the path they name.", got, candidateKinds(res))
+	}
+}
