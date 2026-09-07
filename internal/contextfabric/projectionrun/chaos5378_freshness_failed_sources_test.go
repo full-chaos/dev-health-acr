@@ -2210,6 +2210,23 @@ func TestConfirm8_OurOwnCancelledIOIsNeverBlamedOnTheSource(t *testing.T) {
 // of this line is that it can be trusted.
 func TestConfirm8_DrainTelemetryAgreesWithTheSummary(t *testing.T) {
 	t.Parallel()
+	for _, buildPhase := range []bool{false, true} {
+		name := "steady state"
+		if buildPhase {
+			name = "build phase"
+		}
+		t.Run(name, func(t *testing.T) {
+			runDrainTelemetryAgreement(t, buildPhase)
+		})
+	}
+}
+
+// runDrainTelemetryAgreement drives one phase. Both are covered because the
+// two yield switches are maintained separately: the steady-state one was
+// unified with the summary's predicate while the build one still used
+// errors.Is, and only a per-phase arm can see that.
+func runDrainTelemetryAgreement(t *testing.T, buildPhase bool) {
+	t.Helper()
 	var buffer bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2217,15 +2234,22 @@ func TestConfirm8_DrainTelemetryAgreesWithTheSummary(t *testing.T) {
 
 	observer := &recordingObserver{}
 	source := &wrappedCancelSource{name: "dev_health_teams_projects", cancel: cancel}
-	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
-		OrgIDs:         []string{"dev_health_teams_projects"},
+	checkpoints := newFakeCheckpointStore()
+	cfg := projectionrun.Config{
+		OrgIDs:         []string{"org-a"},
 		Sources:        []projectionrun.SourcePair{{Name: "dev_health_teams_projects", Source: source}},
 		Backend:        newFakeBackend(),
-		Checkpoints:    newFakeCheckpointStore(),
+		Checkpoints:    checkpoints,
 		RebuildMarkers: newFakeRebuildMarker(),
 		Observer:       observer,
 		Logger:         logger,
-	})
+	}
+	if buildPhase {
+		cfg.Lifecycle = &buildFailingLifecycleStore{epoch: 1}
+		cfg.EpochCheckpoints = func(int64) contextfabric.ProjectionCheckpointStore { return checkpoints }
+		cfg.GraceWindow = time.Hour
+	}
+	coordinator, err := projectionrun.NewCoordinator(cfg)
 	if err != nil {
 		t.Fatalf("new coordinator: %v", err)
 	}
