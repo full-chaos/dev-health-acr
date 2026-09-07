@@ -838,15 +838,120 @@ func (s *tickFreshnessStats) recordBackoff()         { atomic.AddInt64(&s.orgsBa
 func (s *tickFreshnessStats) recordSourceFailedOrg() { atomic.AddInt64(&s.orgsSourceFailed, 1) }
 func (s *tickFreshnessStats) recordPairFailedOrg()   { atomic.AddInt64(&s.orgsPairFailed, 1) }
 
+// orgOutcome is the CLOSED vocabulary of per-organization freshness buckets.
+// An organization sits in exactly one, which is what makes the buckets sum to
+// orgs_configured on the summary line.
+type orgOutcome string
+
+const (
+	orgOutcomeOK              orgOutcome = "ok"
+	orgOutcomeRebuildRequired orgOutcome = "rebuild_required"
+	orgOutcomeBackoff         orgOutcome = "backoff"
+	orgOutcomeSourceFailed    orgOutcome = "source_failed"
+	orgOutcomePairFailed      orgOutcome = "pair_failed"
+)
+
+// orgSignals is what one per-organization path OBSERVED. It carries no
+// decision: orgOutcomeOf owns the precedence ladder, and the paths only fill
+// this in.
+type orgSignals struct {
+	// evaluated: this organization was actually looked at this tick.
+	evaluated bool
+	// stale: a producer-identity drift pending rebuild was found.
+	stale bool
+	// sourceFailed: a configured source failed an attempt, or is withheld
+	// by the failure backoff its own previous failure set. The second half
+	// is what keeps the disclosure alive past tick one -- a failing pair is
+	// not due on the next tick, so a signal that fired only while the
+	// source was RUNNING went quiet with the source still broken.
+	sourceFailed bool
+	// pairBroke: something that is NOT the source failed -- a checkpoint
+	// load, a CAS, the backend apply. Its own bucket, so the bucket and
+	// pair_failed beside it answer the same question.
+	pairBroke bool
+	// healthy names the bucket for "evaluated, and nothing was wrong".
+	// Steady state is ok. A build in progress is backoff, because "still
+	// building" is not a claim of health and never was one.
+	healthy orgOutcome
+}
+
+// orgOutcomeOf is the ONE place a per-organization bucket is decided, for all
+// three paths.
+//
+// It exists because the decision used to be carried by hand in
+// runOrgLegacy, runOrgLifecycle and runBuildTick. That shape lost sourceFailed
+// once and cost three review findings after it, the latest being that the
+// build copy fed its failures into the per-source counters but could only ever
+// override the bucket for pairBroke -- so a required source failing through a
+// live build reported orgs_backoff:1 orgs_source_failed:0 on every tick, the
+// bucket contradicting the counter printed beside it. Patching that copy would
+// have left three copies to drift again; there is now one, and the build path
+// reaches the source bucket through the same ladder as the other two.
+//
+// Precedence, and why: rebuild_required sits ABOVE source_failed because it is
+// the bucket that demands an operator action. Nothing depends on which of the
+// two wins -- the per-source disclosure names the failure either way -- but the
+// order has to be stated once rather than re-derived per path.
+func orgOutcomeOf(signals orgSignals) orgOutcome {
+	switch {
+	case !signals.evaluated:
+		return orgOutcomeBackoff
+	case signals.stale:
+		return orgOutcomeRebuildRequired
+	case signals.sourceFailed:
+		return orgOutcomeSourceFailed
+	case signals.pairBroke:
+		return orgOutcomePairFailed
+	default:
+		return signals.healthy
+	}
+}
+
+// recorderFor maps the closed vocabulary onto this tick's counters as an
+// ALLOW-LIST naming every member -- never a switch with a default arm, which
+// would silently admit a member added later, and the zero value with it.
+//
+// A member with no recorder returns nil, and orgScope.finish() counts a nil
+// bucket as unevaluated: visible on the line as an organization that reached
+// no verdict, rather than silently joining a bucket it does not belong to.
+// TestEveryOrgOutcomeHasARecorder asserts the map is total.
+func (s *tickFreshnessStats) recorderFor(outcome orgOutcome) func() {
+	switch outcome {
+	case orgOutcomeOK:
+		return s.recordOK
+	case orgOutcomeRebuildRequired:
+		return s.recordRebuildRequired
+	case orgOutcomeBackoff:
+		return s.recordBackoff
+	case orgOutcomeSourceFailed:
+		return s.recordSourceFailedOrg
+	case orgOutcomePairFailed:
+		return s.recordPairFailedOrg
+	}
+	return nil
+}
+
 // recordPairFailure discloses a failure of the PAIR that the source did not
 // cause. The source is deliberately NOT added to failedSources: a checkpoint
 // store that is down must not page whoever owns the source. The name carries
 // "source:stage" so a reader still knows which pair and which step broke.
-func (s *tickFreshnessStats) recordPairFailure(source string, stage contextfabric.PairStage, truncated bool) {
-	if truncated {
-		// A tick cut short established nothing about this pair.
-		return
-	}
+//
+// It takes no truncated flag, and that absence is the fix, not an omission.
+// This recorder used to return early on a truncated tick, discarding a failure
+// pairOutcomeOf had ALREADY classified as named -- the same defect confirm6
+// caught in the source counters, reintroduced here. recordPair's own doc
+// comment states the rule it broke: truncation suppresses claims of HEALTH,
+// readings the tick never finished taking, and never a fact already
+// established. A dependency going down and a process being drained happen
+// together during exactly one event -- a shutdown -- which is when an operator
+// most needs to tell them apart.
+//
+// The guard was also redundant once markPair's identity check could actually
+// run: a bare propagated cancellation classifies as TRUNCATION, so
+// pairOutcomeOf reports no pair failure and this recorder is never reached for
+// it. Everything that does reach it is a real failure with a stage. That
+// coupling is why these are one change and not two.
+func (s *tickFreshnessStats) recordPairFailure(source string, stage contextfabric.PairStage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pairFailures++
@@ -1379,32 +1484,22 @@ func (c *Coordinator) runOrgLegacy(scope *orgScope, orgID string) {
 		scope.recordPair(func(truncated bool) {
 			scope.stats.recordPairOutcome(source, pairEvaluated, pairFailed, pairWithheld, truncated)
 			if pairBroke {
-				scope.stats.recordPairFailure(source, pairStage, truncated)
+				scope.stats.recordPairFailure(source, pairStage)
 			}
 		})
 	}
-	// A failed source can no longer land in ok. It sits BELOW stale in
-	// precedence -- rebuild_required is the bucket that demands an operator
-	// action, and an organization is only ever in one bucket so they sum --
-	// but the per-source disclosure on the summary line reports the failure
-	// either way, so nothing depends on which bucket won.
-	switch {
-	case !evaluated:
-		scope.record(scope.stats.recordBackoff)
-	case stale:
-		scope.record(scope.stats.recordRebuildRequired)
-	case sourceFailed:
-		scope.record(scope.stats.recordSourceFailedOrg)
-	case pairBrokeAny:
-		// The pair broke somewhere that is not the source. The organization
-		// is not healthy, but the SOURCE is not the thing that failed, so it
-		// gets its own bucket rather than being folded into
-		// orgs_source_failed -- otherwise the bucket answers a different
-		// question from the counter beside it.
-		scope.record(scope.stats.recordPairFailedOrg)
-	default:
-		scope.record(scope.stats.recordOK)
-	}
+	// The bucket is DECIDED by orgOutcomeOf, shared with the lifecycle and
+	// build paths. This path fills in what it OBSERVED and decides nothing:
+	// three hand-maintained copies of this ladder are what lost sourceFailed
+	// once and cost three review findings after it, the last of them a build
+	// that could not reach the source bucket at all.
+	scope.record(scope.stats.recorderFor(orgOutcomeOf(orgSignals{
+		evaluated:    evaluated,
+		stale:        stale,
+		sourceFailed: sourceFailed,
+		pairBroke:    pairBrokeAny,
+		healthy:      orgOutcomeOK,
+	})))
 }
 
 // runOrgLifecycle is runOrgLegacy's CHAOS-3898 S2a-2 replacement, active
@@ -1428,10 +1523,12 @@ func (c *Coordinator) runOrgLifecycle(scope *orgScope, orgID string) {
 		return
 	}
 	if found && row.Status == contextfabric.LifecycleStatusBuilding {
-		scope.record(scope.stats.recordBackoff)
-		// Observed AFTER the build tick, not before it: the build is
-		// cancellable work, and marking completion ahead of it claimed a
-		// verdict for work that had not run.
+		// No bucket is pre-set here any more. Pre-recording backoff and
+		// letting runBuildTick override it for ONE of the things that can
+		// go wrong is what left a required source failing through a live
+		// build reading orgs_backoff:1 orgs_source_failed:0 every tick.
+		// runBuildTick commits exactly one bucket through the shared
+		// classifier, on every exit including its early ones.
 		c.runBuildTick(scope, orgID, row)
 		return
 	}
@@ -1482,7 +1579,7 @@ func (c *Coordinator) runOrgLifecycle(scope *orgScope, orgID string) {
 		scope.recordPair(func(truncated bool) {
 			scope.stats.recordPairOutcome(source, pairEvaluated, pairFailed, pairWithheld, truncated)
 			if pairBroke {
-				scope.stats.recordPairFailure(source, pairStage, truncated)
+				scope.stats.recordPairFailure(source, pairStage)
 			}
 		})
 	}
@@ -1490,25 +1587,14 @@ func (c *Coordinator) runOrgLifecycle(scope *orgScope, orgID string) {
 		c.recordCheckpointEpochState(ctx, orgID, epoch, contextfabric.CheckpointEpochActive, checkpoints)
 		return nil
 	})
-	// See runOrgLegacy's identical switch for why a failed source cannot
-	// land in ok and why it sits below stale.
-	switch {
-	case !evaluated:
-		scope.record(scope.stats.recordBackoff)
-	case stale:
-		scope.record(scope.stats.recordRebuildRequired)
-	case sourceFailed:
-		scope.record(scope.stats.recordSourceFailedOrg)
-	case pairBrokeAny:
-		// The pair broke somewhere that is not the source. The organization
-		// is not healthy, but the SOURCE is not the thing that failed, so it
-		// gets its own bucket rather than being folded into
-		// orgs_source_failed -- otherwise the bucket answers a different
-		// question from the counter beside it.
-		scope.record(scope.stats.recordPairFailedOrg)
-	default:
-		scope.record(scope.stats.recordOK)
-	}
+	// Same classifier as runOrgLegacy and runBuildTick -- see orgOutcomeOf.
+	scope.record(scope.stats.recorderFor(orgOutcomeOf(orgSignals{
+		evaluated:    evaluated,
+		stale:        stale,
+		sourceFailed: sourceFailed,
+		pairBroke:    pairBrokeAny,
+		healthy:      orgOutcomeOK,
+	})))
 }
 
 // runBuildTick drives one round of per-source ticks for an organization
@@ -1534,6 +1620,21 @@ func (c *Coordinator) runOrgLifecycle(scope *orgScope, orgID string) {
 // cursor, so it cannot go stale independently of cf_build_source_progress
 // the way byName[source].RowsProjected could.
 func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfabric.OrgGraphLifecycle) {
+	// ONE bucket, committed on EVERY exit including the early ones, through
+	// the SAME classifier the two serving paths use.
+	//
+	// evaluated is true unconditionally, and deliberately: an organization
+	// whose lifecycle row says building HAS been looked at, and "no required
+	// source ran this tick" (all already terminal, none configured, the
+	// target epoch missing) is the building state, not the unevaluated one.
+	// stale is not a signal a build can produce and stays false; saying so
+	// here keeps a zero value from carrying meaning by accident.
+	//
+	// healthy is backoff, not ok: "this organization is building" is not a
+	// claim of health. That is the whole reason the ladder needed a healthy
+	// PARAMETER rather than a fourth copy of itself.
+	signals := orgSignals{evaluated: true, healthy: orgOutcomeBackoff}
+	defer func() { scope.record(scope.stats.recorderFor(orgOutcomeOf(signals))) }()
 	if row.TargetEpoch == nil {
 		c.logger.WarnContext(scope.logCtx(), "graph lifecycle row is building with no target epoch; skipping", "org_id", orgID)
 		return
@@ -1571,7 +1672,6 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 	// identically here (a large-backlog build must not starve other
 	// organizations' next tick).
 	budget := c.drainBudget
-	buildPairBroke := false
 	for _, source := range row.RequiredSources {
 		if scope.done() {
 			return
@@ -1598,20 +1698,25 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 			buildEvaluated, buildFailed, buildWithheld, buildStage, buildBroke = c.runBuildPair(ctx, orgID, source, targetEpoch, checkpoints, &budget)
 			return nil
 		})
-		buildPairBroke = buildPairBroke || buildBroke
+		// Folded into signals AS OBSERVED, never into locals copied out
+		// after the loop: this loop has an early return, and a copy step
+		// at the bottom is one more thing an exit has to remember -- the
+		// shape this file already replaced once with orgScope.finish().
+		//
+		// A required source that failed an attempt, or that its own failure
+		// backoff withheld, is a failing source for this organization's
+		// BUCKET too, not only for the counter beside it. Withheld counts
+		// because a pair that errored is not due next tick, so a signal
+		// that fired only while the source was RUNNING went quiet after
+		// tick one with the source still broken.
+		signals.pairBroke = signals.pairBroke || buildBroke
+		signals.sourceFailed = signals.sourceFailed || buildFailed || buildWithheld
 		scope.recordPair(func(truncated bool) {
 			scope.stats.recordBuildPairOutcome(source, buildEvaluated, buildFailed, buildWithheld, truncated)
 			if buildBroke {
-				scope.stats.recordPairFailure(source, buildStage, truncated)
+				scope.stats.recordPairFailure(source, buildStage)
 			}
 		})
-	}
-	if buildPairBroke && !scope.done() {
-		// The caller bucketed this organization as backoff for "is
-		// building". A build in which one of OUR steps broke is not the
-		// same state, and the bucket has to say so or orgs_pair_failed and
-		// the buckets disagree about the same tick.
-		scope.record(scope.stats.recordPairFailedOrg)
 	}
 	_ = scope.run(func(ctx context.Context) error {
 		c.recordCheckpointEpochState(ctx, orgID, targetEpoch, contextfabric.CheckpointEpochBuilding, checkpoints)

@@ -126,36 +126,94 @@ func (e *PairRunError) Unwrap() error { return e.Err }
 // the ONLY condition under which a source may be named in failed_sources.
 func (e *PairRunError) FromSourceRead() bool { return e.Stage == PairStageSourceRead }
 
-// markPair classifies by IDENTITY, never errors.Is: errors.Is is exactly what
-// cannot distinguish a bare context sentinel from a wrapped one, because a
-// wrapped sentinel satisfies it just as well.
-func markPair(stage PairStage, err error) error {
-	if err == nil {
-		return nil
-	}
+// newPairRunError is the ONE place PropagatedCancellation is decided, and it
+// decides it from the RAW cause -- never from the message built around it.
+//
+// It classifies by IDENTITY, never errors.Is: errors.Is is exactly what cannot
+// distinguish a bare context sentinel from a wrapped one, because a wrapped
+// sentinel satisfies it just as well.
+//
+// It is unexported and takes the wrapper ALREADY BUILT because its two callers
+// below are the only shapes this worker uses; nothing outside them may
+// construct a PairRunError, so no site can hand this function a cause it has
+// already wrapped.
+func newPairRunError(stage PairStage, cause, wrapped error) error {
 	return &PairRunError{
 		Stage:                  stage,
-		Err:                    err,
-		PropagatedCancellation: err == context.Canceled || err == context.DeadlineExceeded,
+		Err:                    wrapped,
+		PropagatedCancellation: cause == context.Canceled || cause == context.DeadlineExceeded,
 	}
+}
+
+// markPair marks an error this worker RECEIVED from a dependency, wrapping it
+// as "<description>: <cause>" (or leaving it alone when description is empty).
+//
+// The signature is the fix for the defect that eleven review rounds could not
+// close by patching sites: markPair used to take the FINISHED error, so four of
+// its five callers wrapped first and the identity check -- the whole basis of
+// the invariant -- silently could not run at those stages. It passed 58 of 58
+// mutants while doing nothing. Now the caller hands over the RAW cause and a
+// description, and markPair builds the wrapper AFTER classifying, so call-site
+// ordering cannot bypass the check: there is no ordering left to get wrong.
+//
+// TestTheCauseHandedToMarkPairIsNeverAlreadyWrapped enforces the remaining half
+// -- that no call site passes a fmt.Errorf expression as the cause -- by
+// walking this file's own syntax tree.
+func markPair(stage PairStage, cause error, description string) error {
+	if cause == nil {
+		return nil
+	}
+	if description == "" {
+		return newPairRunError(stage, cause, cause)
+	}
+	return newPairRunError(stage, cause, fmt.Errorf("%s: %w", description, cause))
+}
+
+// markPairSentinel marks an error this worker CONSTRUCTED from one of the
+// package's own sentinels, wrapping it as "<sentinel>: <detail>" -- the suffix
+// shape three of RunOnce's exits already used, kept byte-identical so no
+// consumer reading the text changes.
+//
+// Its PropagatedCancellation is decided the same way, from the sentinel: a
+// value this package chose is never the tick's cancellation passing through,
+// and saying so through the same constructor rather than hardcoding false
+// keeps one decision in one place.
+func markPairSentinel(stage PairStage, sentinel error, detailFormat string, args ...any) error {
+	if sentinel == nil {
+		return nil
+	}
+	detail := fmt.Sprintf(detailFormat, args...)
+	return newPairRunError(stage, sentinel, fmt.Errorf("%w: %s", sentinel, detail))
 }
 
 func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string) (ProjectionRun, error) {
 	if strings.TrimSpace(orgID) == "" || strings.TrimSpace(sourceName) == "" {
-		return ProjectionRun{}, markPair(PairStageValidation, errors.New("projection worker requires organization and source"))
+		return ProjectionRun{}, markPair(PairStageValidation, errors.New("projection worker requires organization and source"), "")
 	}
 	checkpoint, err := w.checkpoints.LoadProjectionCheckpoint(ctx, orgID, sourceName)
 	if err != nil {
-		return ProjectionRun{}, markPair(PairStageCheckpointLoad, fmt.Errorf("load projection checkpoint: %w", err))
+		return ProjectionRun{}, markPair(PairStageCheckpointLoad, err, "load projection checkpoint")
 	}
 	batch, available, err := w.source.NextProjectionBatch(ctx, checkpoint)
 	if err != nil {
-		return ProjectionRun{}, fmt.Errorf("read projection batch: %w", markPair(PairStageSourceRead, err))
+		return ProjectionRun{}, fmt.Errorf("read projection batch: %w", markPair(PairStageSourceRead, err, ""))
 	}
 	if !available {
+		// ALREADY MARKED, at the stage of whatever PRODUCED it. Stamping
+		// everything this helper returns progress_cas is the second defect
+		// of the same family as markPair's: the helper can return a
+		// SOURCE-owned error -- the source's own ConsumedWithoutPublishing
+		// read failing, or its producer identity having changed -- and
+		// labelling that our CAS published a real source outage as a pair
+		// failure. That is CHAOS-4789's own defect wearing the new fields:
+		// the split built to stop us blaming a source for our io was
+		// hiding a source that was down.
+		//
+		// The stage belongs to the error's ORIGIN, so the origin assigns
+		// it. Nothing here may re-stamp it.
 		advanced, progressed, err := w.persistConsumedProgress(ctx, checkpoint)
 		if err != nil {
-			return ProjectionRun{}, markPair(PairStageProgressCAS, err)
+			return ProjectionRun{}, err
 		}
 		if progressed {
 			return ProjectionRun{Source: sourceName, PreviousCursor: checkpoint.Cursor, NextCursor: advanced, RowsApplied: checkpoint.RowsApplied}, nil
@@ -163,10 +221,10 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 		return ProjectionRun{Source: sourceName, PreviousCursor: checkpoint.Cursor, RowsApplied: checkpoint.RowsApplied}, nil
 	}
 	if err := batch.Validate(); err != nil {
-		return ProjectionRun{}, markPair(PairStageSourceRead, fmt.Errorf("projection batch: %w", err))
+		return ProjectionRun{}, markPair(PairStageSourceRead, err, "projection batch")
 	}
 	if batch.OrgID != orgID || batch.Source != sourceName || batch.Cursor != checkpoint.Cursor {
-		return ProjectionRun{}, markPair(PairStageSourceRead, fmt.Errorf("%w: batch scope or cursor does not match checkpoint", ErrProjectionConflict))
+		return ProjectionRun{}, markPairSentinel(PairStageSourceRead, ErrProjectionConflict, "batch scope or cursor does not match checkpoint")
 	}
 	// CHAOS-3779 codex round-2 H2 residual: a checkpoint.SourceVersion of
 	// "" means no prior checkpoint was ever durably saved for this
@@ -181,7 +239,7 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 	// silently doubling it. Refuse before the backend ever sees the
 	// batch; recovery is the existing rebuild path.
 	if checkpoint.SourceVersion != "" && checkpoint.SourceVersion != batch.SourceVersion {
-		return ProjectionRun{}, markPair(PairStageSourceRead, fmt.Errorf("%w: org %s source %s checkpoint source_version %q, batch source_version %q", ErrProjectionSourceVersionChanged, orgID, sourceName, checkpoint.SourceVersion, batch.SourceVersion))
+		return ProjectionRun{}, markPairSentinel(PairStageSourceRead, ErrProjectionSourceVersionChanged, "org %s source %s checkpoint source_version %q, batch source_version %q", orgID, sourceName, checkpoint.SourceVersion, batch.SourceVersion)
 	}
 	// CHAOS-3779 codex round-3 M1: an empty checkpoint.SourceVersion is
 	// deliberately never treated as a mismatch above (a genuine first run,
@@ -212,18 +270,18 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 		}
 		if err := w.checkpoints.CompareAndSwapProjectionCheckpoint(ctx, checkpoint, claim); err != nil {
 			if errors.Is(err, ErrProjectionConflict) {
-				return ProjectionRun{}, markPair(PairStageClaimCAS, err)
+				return ProjectionRun{}, markPair(PairStageClaimCAS, err, "")
 			}
-			return ProjectionRun{}, markPair(PairStageClaimCAS, fmt.Errorf("claim projection source version: %w", err))
+			return ProjectionRun{}, markPair(PairStageClaimCAS, err, "claim projection source version")
 		}
 		checkpoint = claim
 	}
 	receipt, err := w.backend.ApplyProjectionBatch(ctx, batch)
 	if err != nil {
-		return ProjectionRun{}, markPair(PairStageApply, fmt.Errorf("apply projection batch: %w", err))
+		return ProjectionRun{}, markPair(PairStageApply, err, "apply projection batch")
 	}
 	if receipt.BatchID != batch.BatchID {
-		return ProjectionRun{}, markPair(PairStageApply, fmt.Errorf("%w: backend receipt does not match batch", ErrProjectionConflict))
+		return ProjectionRun{}, markPairSentinel(PairStageApply, ErrProjectionConflict, "backend receipt does not match batch")
 	}
 	itemsApplied := receipt.EntitiesApplied + receipt.EdgesApplied + receipt.ContentsApplied + receipt.EpisodesApplied + receipt.TombstonesApplied
 	updated := ProjectionCheckpoint{
@@ -237,9 +295,9 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 	}
 	if err := w.checkpoints.CompareAndSwapProjectionCheckpoint(ctx, checkpoint, updated); err != nil {
 		if errors.Is(err, ErrProjectionConflict) {
-			return ProjectionRun{}, markPair(PairStageFinalCAS, err)
+			return ProjectionRun{}, markPair(PairStageFinalCAS, err, "")
 		}
-		return ProjectionRun{}, markPair(PairStageFinalCAS, fmt.Errorf("advance projection checkpoint: %w", err))
+		return ProjectionRun{}, markPair(PairStageFinalCAS, err, "advance projection checkpoint")
 	}
 	return ProjectionRun{
 		BatchID: batch.BatchID, Source: sourceName, PreviousCursor: checkpoint.Cursor, NextCursor: batch.NextCursor,
@@ -267,7 +325,10 @@ func (w *ProjectionWorker) persistConsumedProgress(ctx context.Context, checkpoi
 	}
 	progress, ok, err := reporter.ConsumedWithoutPublishing(ctx, checkpoint)
 	if err != nil {
-		return "", false, fmt.Errorf("read consumed projection progress: %w", err)
+		// The SOURCE's own read. source_read, exactly as the batch path
+		// marks NextProjectionBatch's error -- the source produced this,
+		// and it is the one error out of this helper that may name it.
+		return "", false, markPair(PairStageSourceRead, err, "read consumed projection progress")
 	}
 	if !ok || strings.TrimSpace(progress.NextCursor) == "" || progress.NextCursor == checkpoint.Cursor {
 		return "", false, nil
@@ -284,7 +345,10 @@ func (w *ProjectionWorker) persistConsumedProgress(ctx context.Context, checkpoi
 	// cursor must NOT move -- rows the new version would publish sit behind
 	// it. Recovery is the existing rebuild path, not a quiet advance.
 	if checkpoint.SourceVersion != "" && checkpoint.SourceVersion != progress.SourceVersion {
-		return "", false, fmt.Errorf("%w: org %s source %s checkpoint source_version %q, progress source_version %q", ErrProjectionSourceVersionChanged, checkpoint.OrgID, checkpoint.Source, checkpoint.SourceVersion, progress.SourceVersion)
+		// source_read, mirroring the batch path's identical guard exactly:
+		// the fact being reported is that the SOURCE's producer identity
+		// changed, and the two paths must not disagree about who owns it.
+		return "", false, markPairSentinel(PairStageSourceRead, ErrProjectionSourceVersionChanged, "org %s source %s checkpoint source_version %q, progress source_version %q", checkpoint.OrgID, checkpoint.Source, checkpoint.SourceVersion, progress.SourceVersion)
 	}
 	updated := checkpoint
 	updated.Cursor = progress.NextCursor
@@ -294,10 +358,14 @@ func (w *ProjectionWorker) persistConsumedProgress(ctx context.Context, checkpoi
 	updated.SourceVersion = progress.SourceVersion
 	updated.UpdatedAt = w.now().UTC()
 	if err := w.checkpoints.CompareAndSwapProjectionCheckpoint(ctx, checkpoint, updated); err != nil {
+		// OURS. This is the one stage in this helper that progress_cas
+		// actually names, and the source stays unnamed for it: a
+		// checkpoint store that refuses our write must not page whoever
+		// owns the source.
 		if errors.Is(err, ErrProjectionConflict) {
-			return "", false, err
+			return "", false, markPair(PairStageProgressCAS, err, "")
 		}
-		return "", false, fmt.Errorf("advance projection checkpoint over unpublishable rows: %w", err)
+		return "", false, markPair(PairStageProgressCAS, err, "advance projection checkpoint over unpublishable rows")
 	}
 	return progress.NextCursor, true, nil
 }
