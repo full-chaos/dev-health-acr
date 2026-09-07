@@ -881,7 +881,7 @@ func (o *orgScope) done() bool { return o.parent.Err() != nil }
 // unevaluated rather than dropped -- that is a defect, and the bucket
 // identity on the line is what makes it visible instead of silent.
 func (o *orgScope) finish() {
-	// Completion is derived, never asserted: see observe. finish() does not
+	// Completion is derived, never asserted: see run(). finish() does not
 	// read the context -- by the time it runs, a cancellation that
 	// interrupted the work and one that arrived after it finished look
 	// identical, which is the mistake three earlier versions made.
