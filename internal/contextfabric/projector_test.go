@@ -645,7 +645,7 @@ func TestPairRunErrorMarksOnlyTheBareSentinel(t *testing.T) {
 			if !errors.As(err, &marked) {
 				t.Fatalf("errors.As found no PairRunError -- the coordinator reads this marker and would fall back to guessing")
 			}
-			if !marked.FromSourceRead {
+			if !marked.FromSourceRead() {
 				t.Errorf("FromSourceRead = false for the SOURCE's own read -- only a source-read error may name a source")
 			}
 			if marked.PropagatedCancellation != tc.want {
@@ -684,8 +684,11 @@ func TestWorkerIOErrorsAreNotAttributedToTheSource(t *testing.T) {
 	if !errors.As(runErr, &marked) {
 		t.Fatalf("errors.As found no PairRunError on a checkpoint-load failure -- an unmarked exit falls back to guessing, which is the defect")
 	}
-	if marked.FromSourceRead {
+	if marked.FromSourceRead() {
 		t.Errorf("FromSourceRead = true for a CHECKPOINT LOAD failure -- the source was never called and must not be blamed for our io")
+	}
+	if marked.Stage != PairStageCheckpointLoad {
+		t.Errorf("Stage = %q, want %q -- the stage is what the summary names, so a wrong one misattributes the failure", marked.Stage, PairStageCheckpointLoad)
 	}
 	if !errors.Is(runErr, context.Canceled) {
 		t.Errorf("errors.Is(err, context.Canceled) = false -- the marker broke unwrapping")

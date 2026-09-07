@@ -77,29 +77,42 @@ func NewProjectionWorker(source ProjectionSource, backend ProjectionBackend, che
 // RunOnce processes at most one canonical projection batch. A checkpoint is
 // advanced only after the selected backend has durably accepted the batch and
 // only when the durable checkpoint still matches the cursor this worker read.
-// PairRunError marks an error coming out of ProjectionWorker.RunOnce with the
-// two facts the freshness disclosure cannot recover later.
+// PairStage names WHICH step of ProjectionWorker.RunOnce produced an error.
+//
+// It exists because the tick freshness summary must not blame a projection
+// source for work the source never did. Only PairStageSourceRead is the source's
+// own; every other stage is this worker's io, and an error there is a failure
+// of the PAIR, disclosed under its own name.
+type PairStage string
+
+const (
+	PairStageValidation     PairStage = "validation"
+	PairStageCheckpointLoad PairStage = "checkpoint_load"
+	PairStageSourceRead     PairStage = "source_read"
+	PairStageProgressCAS    PairStage = "progress_cas"
+	PairStageClaimCAS       PairStage = "claim_cas"
+	PairStageApply          PairStage = "apply"
+	PairStageFinalCAS       PairStage = "final_cas"
+)
+
+// PairRunError marks every error ProjectionWorker.RunOnce returns with the two
+// facts the freshness disclosure cannot recover afterwards: which STAGE
+// produced it, and whether a context error was the tick's cancellation merely
+// passing through.
 //
 // THIS IS THE ONLY PLACE THE RAW ERROR IS VISIBLE. RunOnce wraps everything it
-// returns, so upstream `errors.Is(err, context.Canceled)` can tell neither the
-// tick's cancellation from a source that wrapped one in its own description,
-// nor OUR io from the source's. Both distinctions decide what the tick
-// freshness summary publishes, and getting them wrong cost two rounds of
-// review: once by losing an observed source outage, once by blaming a source
-// that was never called.
+// returns, so upstream neither `errors.Is(err, context.Canceled)` nor any
+// inspection of the text can tell the source's failure from this worker's.
+// Getting that wrong cost several rounds of review: once by losing an observed
+// source outage, once by blaming a source that was never called.
 //
 // It wraps rather than replaces: Error() delegates and Unwrap() returns the
-// original, so `%w` semantics, errors.Is against context sentinels, and every
+// original, so `%w` semantics, errors.Is against context sentinels and every
 // existing message stay byte-identical. No consumer that reads the text
 // changes.
 type PairRunError struct {
-	Err error
-	// FromSourceRead is true ONLY for the projection source's own
-	// NextProjectionBatch error. Everything else RunOnce returns is our own
-	// io -- checkpoint load, progress and version CAS, backend apply -- and a
-	// cancellation there is never the source's fault. Naming a source for it
-	// pages someone to a dependency that is perfectly healthy.
-	FromSourceRead bool
+	Stage PairStage
+	Err   error
 	// PropagatedCancellation is true only for the BARE context sentinel. A
 	// source that WRAPPED a context error added its own description of its
 	// own failure, and that description is what an operator needs.
@@ -109,48 +122,40 @@ type PairRunError struct {
 func (e *PairRunError) Error() string { return e.Err.Error() }
 func (e *PairRunError) Unwrap() error { return e.Err }
 
-// markSourceRead classifies the SOURCE's own error by IDENTITY, never
-// errors.Is: errors.Is is exactly what cannot distinguish a bare sentinel from
-// a wrapped one, because a wrapped sentinel satisfies it just as well.
-func markSourceRead(err error) error {
-	return &PairRunError{
-		Err:                    err,
-		FromSourceRead:         true,
-		PropagatedCancellation: err == context.Canceled || err == context.DeadlineExceeded,
-	}
-}
+// FromSourceRead reports whether the source itself produced this error. It is
+// the ONLY condition under which a source may be named in failed_sources.
+func (e *PairRunError) FromSourceRead() bool { return e.Stage == PairStageSourceRead }
 
-// markWorkerIO marks everything RunOnce returns that is NOT the source's own
-// read. Every exit is marked so the coordinator never has to fall back to
-// guessing: an unmarked error means "never entered the worker at all", which
-// is a different question with a different answer.
-func markWorkerIO(err error) error {
+// markPair classifies by IDENTITY, never errors.Is: errors.Is is exactly what
+// cannot distinguish a bare context sentinel from a wrapped one, because a
+// wrapped sentinel satisfies it just as well.
+func markPair(stage PairStage, err error) error {
 	if err == nil {
 		return nil
 	}
 	return &PairRunError{
+		Stage:                  stage,
 		Err:                    err,
-		FromSourceRead:         false,
 		PropagatedCancellation: err == context.Canceled || err == context.DeadlineExceeded,
 	}
 }
 
 func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string) (ProjectionRun, error) {
 	if strings.TrimSpace(orgID) == "" || strings.TrimSpace(sourceName) == "" {
-		return ProjectionRun{}, markWorkerIO(errors.New("projection worker requires organization and source"))
+		return ProjectionRun{}, markPair(PairStageValidation, errors.New("projection worker requires organization and source"))
 	}
 	checkpoint, err := w.checkpoints.LoadProjectionCheckpoint(ctx, orgID, sourceName)
 	if err != nil {
-		return ProjectionRun{}, markWorkerIO(fmt.Errorf("load projection checkpoint: %w", err))
+		return ProjectionRun{}, markPair(PairStageCheckpointLoad, fmt.Errorf("load projection checkpoint: %w", err))
 	}
 	batch, available, err := w.source.NextProjectionBatch(ctx, checkpoint)
 	if err != nil {
-		return ProjectionRun{}, fmt.Errorf("read projection batch: %w", markSourceRead(err))
+		return ProjectionRun{}, fmt.Errorf("read projection batch: %w", markPair(PairStageSourceRead, err))
 	}
 	if !available {
 		advanced, progressed, err := w.persistConsumedProgress(ctx, checkpoint)
 		if err != nil {
-			return ProjectionRun{}, markWorkerIO(err)
+			return ProjectionRun{}, markPair(PairStageProgressCAS, err)
 		}
 		if progressed {
 			return ProjectionRun{Source: sourceName, PreviousCursor: checkpoint.Cursor, NextCursor: advanced, RowsApplied: checkpoint.RowsApplied}, nil
@@ -158,10 +163,10 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 		return ProjectionRun{Source: sourceName, PreviousCursor: checkpoint.Cursor, RowsApplied: checkpoint.RowsApplied}, nil
 	}
 	if err := batch.Validate(); err != nil {
-		return ProjectionRun{}, markWorkerIO(fmt.Errorf("projection batch: %w", err))
+		return ProjectionRun{}, markPair(PairStageSourceRead, fmt.Errorf("projection batch: %w", err))
 	}
 	if batch.OrgID != orgID || batch.Source != sourceName || batch.Cursor != checkpoint.Cursor {
-		return ProjectionRun{}, markWorkerIO(fmt.Errorf("%w: batch scope or cursor does not match checkpoint", ErrProjectionConflict))
+		return ProjectionRun{}, markPair(PairStageSourceRead, fmt.Errorf("%w: batch scope or cursor does not match checkpoint", ErrProjectionConflict))
 	}
 	// CHAOS-3779 codex round-2 H2 residual: a checkpoint.SourceVersion of
 	// "" means no prior checkpoint was ever durably saved for this
@@ -176,7 +181,7 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 	// silently doubling it. Refuse before the backend ever sees the
 	// batch; recovery is the existing rebuild path.
 	if checkpoint.SourceVersion != "" && checkpoint.SourceVersion != batch.SourceVersion {
-		return ProjectionRun{}, markWorkerIO(fmt.Errorf("%w: org %s source %s checkpoint source_version %q, batch source_version %q", ErrProjectionSourceVersionChanged, orgID, sourceName, checkpoint.SourceVersion, batch.SourceVersion))
+		return ProjectionRun{}, markPair(PairStageSourceRead, fmt.Errorf("%w: org %s source %s checkpoint source_version %q, batch source_version %q", ErrProjectionSourceVersionChanged, orgID, sourceName, checkpoint.SourceVersion, batch.SourceVersion))
 	}
 	// CHAOS-3779 codex round-3 M1: an empty checkpoint.SourceVersion is
 	// deliberately never treated as a mismatch above (a genuine first run,
@@ -207,18 +212,18 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 		}
 		if err := w.checkpoints.CompareAndSwapProjectionCheckpoint(ctx, checkpoint, claim); err != nil {
 			if errors.Is(err, ErrProjectionConflict) {
-				return ProjectionRun{}, markWorkerIO(err)
+				return ProjectionRun{}, markPair(PairStageClaimCAS, err)
 			}
-			return ProjectionRun{}, markWorkerIO(fmt.Errorf("claim projection source version: %w", err))
+			return ProjectionRun{}, markPair(PairStageClaimCAS, fmt.Errorf("claim projection source version: %w", err))
 		}
 		checkpoint = claim
 	}
 	receipt, err := w.backend.ApplyProjectionBatch(ctx, batch)
 	if err != nil {
-		return ProjectionRun{}, markWorkerIO(fmt.Errorf("apply projection batch: %w", err))
+		return ProjectionRun{}, markPair(PairStageApply, fmt.Errorf("apply projection batch: %w", err))
 	}
 	if receipt.BatchID != batch.BatchID {
-		return ProjectionRun{}, markWorkerIO(fmt.Errorf("%w: backend receipt does not match batch", ErrProjectionConflict))
+		return ProjectionRun{}, markPair(PairStageApply, fmt.Errorf("%w: backend receipt does not match batch", ErrProjectionConflict))
 	}
 	itemsApplied := receipt.EntitiesApplied + receipt.EdgesApplied + receipt.ContentsApplied + receipt.EpisodesApplied + receipt.TombstonesApplied
 	updated := ProjectionCheckpoint{
@@ -232,9 +237,9 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 	}
 	if err := w.checkpoints.CompareAndSwapProjectionCheckpoint(ctx, checkpoint, updated); err != nil {
 		if errors.Is(err, ErrProjectionConflict) {
-			return ProjectionRun{}, markWorkerIO(err)
+			return ProjectionRun{}, markPair(PairStageFinalCAS, err)
 		}
-		return ProjectionRun{}, markWorkerIO(fmt.Errorf("advance projection checkpoint: %w", err))
+		return ProjectionRun{}, markPair(PairStageFinalCAS, fmt.Errorf("advance projection checkpoint: %w", err))
 	}
 	return ProjectionRun{
 		BatchID: batch.BatchID, Source: sourceName, PreviousCursor: checkpoint.Cursor, NextCursor: batch.NextCursor,

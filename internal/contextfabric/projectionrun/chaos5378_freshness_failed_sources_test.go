@@ -478,10 +478,11 @@ func requireBucketIdentity(t *testing.T, record map[string]any) {
 		summaryNumber(t, record, "orgs_rebuild_required") +
 		summaryNumber(t, record, "orgs_backoff") +
 		summaryNumber(t, record, "orgs_source_failed") +
+		summaryNumber(t, record, "orgs_pair_failed") +
 		summaryNumber(t, record, "orgs_divergence_recovered") +
 		summaryNumber(t, record, "orgs_unevaluated")
 	if configured != sum {
-		t.Errorf("bucket identity BROKEN: orgs_configured=%v but ok+rebuild_required+backoff+source_failed+divergence_recovered+unevaluated=%v -- an organization is unaccounted for on this line; %v", configured, sum, record)
+		t.Errorf("bucket identity BROKEN: orgs_configured=%v but ok+rebuild_required+backoff+source_failed+pair_failed+divergence_recovered+unevaluated=%v -- an organization is unaccounted for on this line; %v", configured, sum, record)
 	}
 }
 
@@ -2348,5 +2349,134 @@ func TestConfirm9_ABlankSourceNameIsRefusedTheSameWay(t *testing.T) {
 		if err == nil {
 			t.Errorf("NewCoordinator accepted a blank source name %q -- RunOnce refuses it, and the summary then names a source that never ran", name)
 		}
+	}
+}
+
+// failingCheckpointStore fails OUR checkpoint load with a real, non-context
+// error on a perfectly live tick. Nothing about it is the source's fault, and
+// the source is never called.
+type failingCheckpointStore struct {
+	*fakeCheckpointStore
+	loads atomic.Int32
+}
+
+func (f *failingCheckpointStore) LoadProjectionCheckpoint(ctx context.Context, org, source string) (contextfabric.ProjectionCheckpoint, error) {
+	f.loads.Add(1)
+	return contextfabric.ProjectionCheckpoint{}, fmt.Errorf("load checkpoint from postgres: %w", contextfabric.ErrUnavailable)
+}
+
+// TestTheInvariant_OnlyASourcesOwnErrorNamesTheSource is the invariant of
+// record, pinned at RunOnce level rather than through NewCoordinator's
+// argument guards -- those are defence in depth, not the rule.
+//
+//	failed_sources / sources_failed contain a source ONLY for an error the
+//	SOURCE ITSELF produced.
+//
+// Everything else the pair can fail at -- a checkpoint load, a CAS, the
+// backend apply, argument validation -- is a failure of the PAIR, disclosed
+// under its own name. A checkpoint store that is down must not page whoever
+// owns dev_health_teams_projects, and before this split it did: on a LIVE tick
+// every pre-source-read failure printed failed_sources=[<source>] with
+// tick_complete=true.
+func TestTheInvariant_OnlyASourcesOwnErrorNamesTheSource(t *testing.T) {
+	t.Parallel()
+	for _, buildPhase := range []bool{false, true} {
+		name := "steady state"
+		if buildPhase {
+			name = "build phase"
+		}
+		t.Run(name, func(t *testing.T) {
+			var buffer bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+			source := &fakeSource{name: "dev_health_teams_projects", pages: 1}
+			checkpoints := &failingCheckpointStore{fakeCheckpointStore: newFakeCheckpointStore()}
+			cfg := projectionrun.Config{
+				OrgIDs:         []string{"org-a"},
+				Sources:        []projectionrun.SourcePair{{Name: "dev_health_teams_projects", Source: source}},
+				Backend:        newFakeBackend(),
+				Checkpoints:    checkpoints,
+				RebuildMarkers: newFakeRebuildMarker(),
+				Logger:         logger,
+			}
+			if buildPhase {
+				cfg.Lifecycle = &buildFailingLifecycleStore{epoch: 1}
+				cfg.EpochCheckpoints = func(int64) contextfabric.ProjectionCheckpointStore { return checkpoints }
+				cfg.GraceWindow = time.Hour
+			}
+			coordinator, err := projectionrun.NewCoordinator(cfg)
+			if err != nil {
+				t.Fatalf("new coordinator: %v", err)
+			}
+			// The TICK is never cancelled: this is an ordinary, healthy tick
+			// in which OUR dependency failed.
+			coordinator.Tick(context.Background())
+
+			if checkpoints.loads.Load() == 0 {
+				t.Fatal("the checkpoint store was never loaded -- the tick did not reach the path under test")
+			}
+			if got := source.calls.Load(); got != 0 {
+				t.Fatalf("the source ran %d time(s); this arm is only meaningful when the source was NEVER asked", got)
+			}
+			summary := freshnessSummary(t, &buffer)
+			requireBucketIdentity(t, summary)
+
+			if got := summaryNumber(t, summary, "sources_failed"); got != 0 {
+				t.Errorf("sources_failed = %v, want 0 -- OUR checkpoint store failed and the source was never called", got)
+			}
+			names, ok := summary["failed_sources"].([]any)
+			if !ok || len(names) != 0 {
+				t.Errorf("failed_sources = %v, want [] -- naming the source for a fault in our own io pages the wrong team", summary["failed_sources"])
+			}
+			if got := summaryNumber(t, summary, "pair_failures"); got != 1 {
+				t.Errorf("pair_failures = %v, want 1 -- the pair DID fail and must not vanish just because the source is innocent", got)
+			}
+			pairNames, ok := summary["pair_failed"].([]any)
+			if !ok || len(pairNames) != 1 || pairNames[0] != "dev_health_teams_projects:checkpoint_load" {
+				t.Errorf("pair_failed = %v, want [dev_health_teams_projects:checkpoint_load] -- the reader still needs which pair and which step", summary["pair_failed"])
+			}
+			if got := summaryNumber(t, summary, "orgs_pair_failed"); got != 1 {
+				t.Errorf("orgs_pair_failed = %v, want 1", got)
+			}
+			if got := summaryNumber(t, summary, "orgs_source_failed"); got != 0 {
+				t.Errorf("orgs_source_failed = %v, want 0 -- the source did not fail", got)
+			}
+		})
+	}
+}
+
+// TestASteadyStateTickReportsExplicitPairFailureZeros keeps the new fields
+// readable: present and zero on a healthy tick, so "no pair failures" never
+// has to be told apart from "this build does not report them".
+func TestASteadyStateTickReportsExplicitPairFailureZeros(t *testing.T) {
+	t.Parallel()
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:         []string{"org-a"},
+		Sources:        []projectionrun.SourcePair{{Name: "source-healthy", Source: &fakeSource{name: "source-healthy", pages: 1}}},
+		Backend:        newFakeBackend(),
+		Checkpoints:    newFakeCheckpointStore(),
+		RebuildMarkers: newFakeRebuildMarker(),
+		Logger:         logger,
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	coordinator.Tick(context.Background())
+
+	summary := freshnessSummary(t, &buffer)
+	if got := summaryNumber(t, summary, "pair_failures"); got != 0 {
+		t.Errorf("pair_failures = %v, want an explicit 0", got)
+	}
+	names, ok := summary["pair_failed"].([]any)
+	if !ok {
+		t.Fatalf("pair_failed absent on a healthy tick -- it must be present and empty, never null; line: %v", summary)
+	}
+	if len(names) != 0 {
+		t.Errorf("pair_failed = %v, want []", names)
+	}
+	if got := summaryNumber(t, summary, "orgs_pair_failed"); got != 0 {
+		t.Errorf("orgs_pair_failed = %v, want an explicit 0", got)
 	}
 }
