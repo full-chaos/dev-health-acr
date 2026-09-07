@@ -830,4 +830,20 @@ func TestTheDecisionSummaryNamesTheWiringItHandedTheConsumers(t *testing.T) {
 	if len(bare.summaries[0].DecisionFilterKinds) != 0 {
 		t.Errorf("filter_kinds = %v with no confirmed kind, want empty -- nothing was filtered on that turn", bare.summaries[0].DecisionFilterKinds)
 	}
+	// THE STAGE LINE TOO, and it needs its own assertion. The folded
+	// decision summary passes this field through a nil-to-empty guard, so a
+	// builder returning nil is invisible THERE -- a hosted battery arm
+	// proved exactly that by surviving. The anchor_pool line emits the
+	// builder's value directly, with no such guard, so on that line a nil
+	// becomes a JSON null and "the filter admitted nothing" stops being
+	// distinguishable from "this build stopped reporting the filter".
+	if len(bare.anchorPool) == 0 {
+		t.Fatal("no anchor_pool event captured, so the stage line below is unasserted")
+	}
+	if bare.anchorPool[0].DecisionFilterKinds == nil {
+		t.Error("filter_kinds is nil on the anchor_pool STAGE line with no confirmed kind, want an empty list -- the decision summary's nil guard does not cover this line")
+	}
+	if capture.anchorPool[0].DecisionReservedKinds == nil {
+		t.Error("reserved_kinds is nil on the anchor_pool STAGE line, want a list")
+	}
 }
