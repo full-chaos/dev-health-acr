@@ -535,6 +535,21 @@ func TestTheFoldedDecisionSummaryCarriesTheSeamsOwnValues(t *testing.T) {
 			wantGate: "refused:member_kind_unservable", wantRefuseBasis: "member_kind_unservable",
 			wantExcluded: 0, wantEmptied: false, wantCommitted: 1,
 		},
+		{
+			// THE TRIPWIRE'S OTHER BRANCH. A hosted battery arm blanked
+			// the rejected-invariant path and SURVIVED: the arm above
+			// exercises `refused:<basis>` and nothing exercised
+			// `rejected:<invariant>`, so the tripwire could report a
+			// phase-A1-invalid frame as `passed` with the suite green.
+			// Reaching it means calling graphrank with a frame the engine
+			// would have refused -- which is the bypass the tripwire is
+			// for, so simulating it here is the only way to assert it.
+			name:      "a frame that fails an invariant reaches the line as rejected",
+			frame:     invalidCohortFrame(),
+			mechanism: contextfabric.MatchExact, labels: []string{"probe"},
+			wantGate: "rejected:i6", wantRefuseBasis: "none",
+			wantExcluded: 0, wantEmptied: false, wantCommitted: 1,
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -592,6 +607,25 @@ func passingCohortFrame() *contextfabric.QuestionFrame {
 		SubjectExpression: contextfabric.SubjectExpression{
 			Kind:       contextfabric.SubjectExpressionDiscoveredKind,
 			Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: contextfabric.SubjectTeam},
+		},
+		Temporal:    contextfabric.TemporalIntentCurrent,
+		Obligations: []contextfabric.AnswerObligation{contextfabric.ObligationState},
+		Version:     contextfabric.QuestionFrameVersion,
+	}
+}
+
+// invalidCohortFrame FAILS phase-A1 validation: grouped_members whose grouping
+// axis equals its member kind. The engine refuses such a frame above
+// retrieval, so in a correct build graphrank never sees one -- which is
+// exactly why the tripwire's REJECTED branch needs its own fixture: it can
+// only be exercised by calling graphrank directly, i.e. by simulating the
+// bypass the tripwire exists to detect.
+func invalidCohortFrame() *contextfabric.QuestionFrame {
+	return &contextfabric.QuestionFrame{
+		Goals: []contextfabric.InvestigationGoal{contextfabric.GoalAssessState},
+		SubjectExpression: contextfabric.SubjectExpression{
+			Kind:    contextfabric.SubjectExpressionGroupedMembers,
+			Grouped: &contextfabric.GroupedSetExpression{GroupKind: contextfabric.SubjectTeam, MemberKind: contextfabric.SubjectTeam},
 		},
 		Temporal:    contextfabric.TemporalIntentCurrent,
 		Obligations: []contextfabric.AnswerObligation{contextfabric.ObligationState},
