@@ -19,10 +19,13 @@ package graphrank
 // candidate becomes answerable.
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // vectorOfferCandidate builds a candidate in the shape the rig produced: a
@@ -454,5 +457,226 @@ func TestTheEmptiedByExclusionFlagIsExplicitOnEveryPass(t *testing.T) {
 				t.Fatalf("the flag is true while the counters report %d withheld candidates; it would fire on an empty graph", withheld)
 			}
 		})
+	}
+}
+
+// decisionSummaryCapture keeps the FOLDED decision_summary event -- the line an
+// operator actually reads -- as opposed to the per-stage events the fold
+// consumes on its way there.
+type decisionSummaryCapture struct {
+	summaries []ResolutionTraceEvent
+	// offerPool keeps the per-resolution offer_pool summaries the fold
+	// consumes, so the folded line can be checked against WHAT IT FOLDED
+	// rather than against a constant this test also wrote. A pin that
+	// asserts two independent literals cannot catch a fold that drifts from
+	// its own source; an identity can.
+	offerPool []ResolutionTraceEvent
+}
+
+func (c *decisionSummaryCapture) Trace(event ResolutionTraceEvent) {
+	switch {
+	case event.Stage == "decision_summary":
+		c.summaries = append(c.summaries, event)
+	case event.Stage == "offer_pool" && event.OfferPoolSummary:
+		c.offerPool = append(c.offerPool, event)
+	}
+}
+
+// THE FOLDED LINE, NOT THE EVENTS THAT FEED IT.
+//
+// A hosted mutation battery found five survivors on this seam and FOUR were
+// one class: every pin in this file read the offer_pool SUMMARY EVENT, and
+// nothing drove a real resolution and asserted what the decision_summary ends
+// up CARRYING. So the fold could drop the emptied flag, invert its own
+// offer_pool branch, or let the frame-gate tripwire report `passed`
+// unconditionally, and the whole suite stayed green -- on the observable this
+// change exists to add.
+//
+// Every local mutant that killed before that run was one I had already written
+// a pin for. The battery picked the ones I had not thought of. This test is
+// the answer to that, and it goes through ResolveSubjectsWithCommitBasis --
+// the production entry point that INSTALLS the fold -- rather than through
+// the buffer, because a test that constructs the buffer itself proves
+// formatting and would have survived all four.
+func TestTheFoldedDecisionSummaryCarriesTheSeamsOwnValues(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name            string
+		frame           *contextfabric.QuestionFrame
+		mechanism       contextfabric.MatchMechanism
+		labels          []string
+		wantGate        string
+		wantRefuseBasis string
+		wantExcluded    int
+		wantEmptied     bool
+		wantCommitted   int
+	}{
+		{
+			name:      "a passing frame whose pool was emptied by the exclusion",
+			frame:     passingCohortFrame(),
+			mechanism: contextfabric.MatchVector, labels: []string{"guess one", "guess two"},
+			wantGate: "passed", wantRefuseBasis: "none", wantExcluded: 2, wantEmptied: true,
+		},
+		{
+			name:      "a passing frame with nothing withheld",
+			frame:     passingCohortFrame(),
+			mechanism: contextfabric.MatchLexical, labels: []string{"probe"},
+			wantGate: "passed", wantRefuseBasis: "none", wantExcluded: 0, wantEmptied: false,
+		},
+		{
+			// THE TRIPWIRE ARM. The engine refuses this frame above
+			// retrieval, so in a correct build resolution never runs on
+			// one -- which is exactly why the value must be asserted: if
+			// the enforcement is ever weakened, THIS is the line that
+			// says so, and an unconditional `passed` would hide it.
+			name:      "a frame the gate refuses reaches the line as refused",
+			frame:     unservableCohortFrame(),
+			mechanism: contextfabric.MatchExact, labels: []string{"probe"},
+			wantGate: "refused:member_kind_unservable", wantRefuseBasis: "member_kind_unservable",
+			wantExcluded: 0, wantEmptied: false, wantCommitted: 1,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			capture := &decisionSummaryCapture{}
+			resolveThroughTheProductionEntryPoint(t, capture, testCase.frame, testCase.mechanism, testCase.labels...)
+
+			if len(capture.summaries) != 1 {
+				t.Fatalf("captured %d decision_summary events, want exactly 1 -- the fold flushes once per call, including when it counted nothing", len(capture.summaries))
+			}
+			got := capture.summaries[0]
+			if got.DecisionFrameGate != testCase.wantGate {
+				t.Errorf("frame_gate on the FOLDED line = %q, want %q", got.DecisionFrameGate, testCase.wantGate)
+			}
+			if got.DecisionRefuseBasis != testCase.wantRefuseBasis {
+				t.Errorf("refuse_basis on the FOLDED line = %q, want %q", got.DecisionRefuseBasis, testCase.wantRefuseBasis)
+			}
+			if got.OfferPoolVectorOnlyExcluded != testCase.wantExcluded {
+				t.Errorf("offer_pool_vector_only_excluded on the FOLDED line = %d, want %d -- the fold must carry what the offer_pool summary reported", got.OfferPoolVectorOnlyExcluded, testCase.wantExcluded)
+			}
+			if got.OfferPoolEmptiedByExclusion != testCase.wantEmptied {
+				t.Errorf("offer_pool_emptied_by_exclusion on the FOLDED line = %t, want %t", got.OfferPoolEmptiedByExclusion, testCase.wantEmptied)
+			}
+			// THE IDENTITY: the folded line must equal the SUM of the
+			// per-resolution offer_pool summaries it folded, per counter and
+			// for the flag. Expected values above pin the behaviour; this
+			// pins the FOLD, and only this goes red when the fold drifts
+			// from its own source while both happen to agree with a literal.
+			var sumExcluded, sumDemoted int
+			var anyEmptied bool
+			for _, e := range capture.offerPool {
+				sumExcluded += e.OfferPoolVectorOnlyExcluded
+				sumDemoted += e.OfferPoolVectorOnlyDemoted
+				anyEmptied = anyEmptied || e.OfferPoolEmptiedByExclusion
+			}
+			if len(capture.offerPool) == 0 {
+				t.Fatal("no offer_pool summary was emitted, so the identity below would compare the folded line against nothing")
+			}
+			if got.OfferPoolVectorOnlyExcluded != sumExcluded || got.OfferPoolVectorOnlyDemoted != sumDemoted {
+				t.Errorf("folded counters %d/%d disagree with the %d/%d the offer_pool summaries reported", got.OfferPoolVectorOnlyExcluded, got.OfferPoolVectorOnlyDemoted, sumExcluded, sumDemoted)
+			}
+			if got.OfferPoolEmptiedByExclusion != anyEmptied {
+				t.Errorf("folded emptied flag %t disagrees with the OR of what it folded (%t)", got.OfferPoolEmptiedByExclusion, anyEmptied)
+			}
+			if testCase.wantCommitted > 0 && got.DecisionCommittedCount != testCase.wantCommitted {
+				t.Fatalf("committed_count on the FOLDED line = %d, want %d -- the tripwire arm is only meaningful BESIDE a real commit: a refusing verdict standing next to a non-zero committed_count is the bypass it exists to expose", got.DecisionCommittedCount, testCase.wantCommitted)
+			}
+		})
+	}
+}
+
+// passingCohortFrame is a valid, servable cohort frame -- the gate passes it.
+func passingCohortFrame() *contextfabric.QuestionFrame {
+	return &contextfabric.QuestionFrame{
+		Goals: []contextfabric.InvestigationGoal{contextfabric.GoalAssessState},
+		SubjectExpression: contextfabric.SubjectExpression{
+			Kind:       contextfabric.SubjectExpressionDiscoveredKind,
+			Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: contextfabric.SubjectTeam},
+		},
+		Temporal:    contextfabric.TemporalIntentCurrent,
+		Obligations: []contextfabric.AnswerObligation{contextfabric.ObligationState},
+		Version:     contextfabric.QuestionFrameVersion,
+	}
+}
+
+// unservableCohortFrame declares a member kind no discovery arm serves. Valid,
+// but the gate refuses it on the basis.
+func unservableCohortFrame() *contextfabric.QuestionFrame {
+	return &contextfabric.QuestionFrame{
+		Goals: []contextfabric.InvestigationGoal{contextfabric.GoalAssessState},
+		SubjectExpression: contextfabric.SubjectExpression{
+			Kind:       contextfabric.SubjectExpressionDiscoveredKind,
+			Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: contextfabric.SubjectPullRequest},
+		},
+		Temporal:    contextfabric.TemporalIntentCurrent,
+		Obligations: []contextfabric.AnswerObligation{contextfabric.ObligationState},
+		Version:     contextfabric.QuestionFrameVersion,
+	}
+}
+
+// resolveThroughTheProductionEntryPoint drives ResolveSubjectsWithCommitBasis,
+// which is what INSTALLS the decision-summary fold. Going through the buffer
+// directly would prove formatting and nothing about the wiring -- the exact
+// gap the battery exposed.
+//
+// It reuses this package's own fakeGraphBackend rather than a hand-rolled
+// ResolveDeps: a double that returns no nodes produces no candidates, and the
+// test would then assert zeros for a reason that has nothing to do with the
+// seam. The vector mechanism is stamped on the node so the candidates arrive
+// vector-only and the exclusion has something real to withhold.
+func resolveThroughTheProductionEntryPoint(t *testing.T, tracer ResolutionTracer, frame *contextfabric.QuestionFrame, mechanism contextfabric.MatchMechanism, labels ...string) {
+	t.Helper()
+	results := map[string][]CandidateNode{}
+	for i, label := range labels {
+		node := candidateNode(contextfabric.SubjectTeam, fmt.Sprintf("team_probe_%d", i), label, 0.5, "*")
+		node.Mechanism = mechanism
+		results["probe"] = append(results["probe"], node)
+	}
+	backend := &fakeGraphBackend{searchResults: results}
+	deps := backend.deps()
+	deps.ResolutionTracer = tracer
+	request := contextfabric.InvestigationRequest{
+		RequestID: "req_folded_summary_pin_000000000",
+		Options:   contextfabric.InvestigationOptions{MaxSubjectCandidates: 10, AllowClarification: true},
+	}
+	interpreted := contextfabric.InterpretedQuestion{SubjectTerms: []string{"probe"}}
+	_, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"},
+		request, interpreted, deps, nil, nil, frame, "")
+	if err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+}
+
+// THE PROMPT MUST NOT NAME A CANDIDATE THE CALLER CANNOT SEE.
+//
+// A battery arm rebuilt the clarification prompt from the UNFILTERED list and
+// survived: every pin here asserted the prompt's TEXT when the pool was
+// emptied, and none asserted its CONTENTS when the pool was mixed. So the
+// prompt could go on naming withheld candidates -- handing back by name the
+// very guesses the exclusion exists to withhold -- with the suite green.
+func TestTheClarificationPromptNeverNamesAWithheldCandidate(t *testing.T) {
+	t.Parallel()
+	// A mixed pool: two lexical candidates that ARE offered, and one
+	// vector-only guess that is not. Two offered candidates keep the
+	// resolution ambiguous, so a prompt is genuinely built rather than
+	// skipped.
+	resolution := resolveOfferPool(
+		vectorOfferCandidate("team_lexical_one", 0.5, contextfabric.ResolutionProposed, contextfabric.MatchLexical),
+		vectorOfferCandidate("team_lexical_two", 0.5, contextfabric.ResolutionProposed, contextfabric.MatchLexical),
+		vectorOfferCandidate("team_withheld_guess", 0.5, contextfabric.ResolutionProposed, contextfabric.MatchVector),
+	)
+	if resolution.ClarificationPrompt == "" {
+		t.Fatal("no clarification prompt was built on an ambiguous mixed pool; this test cannot see what it exists to check")
+	}
+	if offered := offeredIDs(resolution); len(offered) != 2 {
+		t.Fatalf("offered %v, want the two lexical candidates -- the fixture must be mixed for this assertion to mean anything", offered)
+	}
+	if strings.Contains(resolution.ClarificationPrompt, "team_withheld_guess") {
+		t.Fatalf("the prompt names a WITHHELD candidate: %q -- it hands back by name the guess the exclusion withheld from the machine-readable result", resolution.ClarificationPrompt)
+	}
+	// The positive half: it does name what it offered, so "names nothing"
+	// cannot satisfy this test.
+	if !strings.Contains(resolution.ClarificationPrompt, "team_lexical_one") {
+		t.Fatalf("the prompt names none of the OFFERED candidates: %q", resolution.ClarificationPrompt)
 	}
 }

@@ -629,3 +629,55 @@ func TestAPassingFrameStillReachesTheOffersOnlyResolution(t *testing.T) {
 		t.Fatal("the offers-only pass did NOT run on a passing frame -- this fixture no longer reaches the call site, so the refusal pin beside it proves nothing")
 	}
 }
+
+// THE CARRY ITSELF, which nothing pinned until a battery said so.
+//
+// A hosted mutation battery replaced the carry with `outcome.Gate =
+// FrameGate{}` and the entire suite stayed green. That is the single link
+// between "decided at interpretation" and "enforced in the engine": every
+// other pin in this file BUILDS the outcome by hand through frameGateOutcome,
+// and TestTheCarriedGateAgreesWithTheReceipt asserts the RECEIPT's fields, so
+// the one hop between them was untested. If it regresses, the gate silently
+// stops binding and every existing pin still passes -- the exact shape of the
+// shadow this seam replaces.
+//
+// Drives recordFamilyResolution, the production function that performs the
+// carry, rather than asserting on a hand-built outcome.
+func TestTheGateIsCarriedFromTheReceiptOntoTheFamilyOutcome(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name  string
+		frame *QuestionFrame
+	}{
+		{"refused by an invariant", selfGroupedFrame()},
+		{"refused on the basis", unservableMemberKindFrame()},
+		{"passing", namedSubjectFrame()},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			receipt := ModelExecutionReceipt{QuestionFrame: testCase.frame}
+			interpreter := RuntimeQuestionInterpreter{}
+			interpreter.resolveFrame(context.Background(), storage.Principal{OrgID: "org_1"}, &receipt, "")
+
+			outcome := interpreter.recordFamilyResolution(context.Background(), storage.Principal{OrgID: "org_1"}, InterpretedQuestion{}, receipt)
+
+			if outcome.Gate.Outcome != receipt.FrameGateOutcome {
+				t.Fatalf("the carried gate outcome is %q while the receipt recorded %q -- the verdict does not survive the hop the engine reads it from", outcome.Gate.Outcome, receipt.FrameGateOutcome)
+			}
+			if outcome.Gate.RefuseBasis != receipt.FrameGateRefuseBasis {
+				t.Errorf("the carried refuse basis is %q while the receipt recorded %q", outcome.Gate.RefuseBasis, receipt.FrameGateRefuseBasis)
+			}
+			// The zero value ALLOWS, so a dropped carry reads as "let it
+			// through". Asserting the refusal survives is what makes the
+			// dropped-carry mutant fail rather than pass quietly.
+			if receipt.FrameGateOutcome == FrameGateRejectedInvalid || receipt.FrameGateOutcome == FrameGateRefusedBasis {
+				if !outcome.Gate.Refuses() {
+					t.Fatalf("the receipt recorded %q but the carried gate does not refuse; the engine would run retrieval on a refused frame", receipt.FrameGateOutcome)
+				}
+			}
+			if receipt.FrameGateOutcome == FrameGateRejectedInvalid && outcome.Gate.FailedInvariant != receipt.FrameFailedInvariant {
+				t.Errorf("the carried failed invariant is %q while the receipt recorded %q -- the log line would name the wrong invariant", outcome.Gate.FailedInvariant, receipt.FrameFailedInvariant)
+			}
+		})
+	}
+}
