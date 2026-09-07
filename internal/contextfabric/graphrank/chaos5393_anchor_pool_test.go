@@ -22,6 +22,7 @@ package graphrank
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -349,8 +350,13 @@ func TestAResolutionThatNeverBuiltAPoolStillCarriesExplicitNoneTokens(t *testing
 	if len(res.Committed) != 1 {
 		t.Fatalf("committed %d subjects, want 1 -- this pin is only meaningful on the short-circuit path that actually returns early", len(res.Committed))
 	}
-	if len(capture.anchorPool) != 0 {
-		t.Fatalf("the short-circuit path emitted %d anchor_pool events; this pin exists to cover the case where NONE is emitted, so it now proves nothing", len(capture.anchorPool))
+	// The scope decision is now made ABOVE this short-circuit, so this path
+	// DOES emit exactly one anchor_pool event. Asserted rather than ignored:
+	// the fix for the fallback defect moved the decision earlier, and a
+	// later change moving it back would silently restore the hole this pin
+	// and its sibling were written for.
+	if len(capture.anchorPool) != 1 {
+		t.Fatalf("the short-circuit path emitted %d anchor_pool events, want exactly 1 -- the scope must be decided above every early return", len(capture.anchorPool))
 	}
 	if len(capture.summaries) != 1 {
 		t.Fatalf("captured %d decision_summary events, want exactly 1", len(capture.summaries))
@@ -364,5 +370,285 @@ func TestAResolutionThatNeverBuiltAPoolStillCarriesExplicitNoneTokens(t *testing
 		if value != anchorPoolKindScopeNone {
 			t.Errorf("%s = %q on a resolution that never built a pool, want the explicit %q -- an empty value here is indistinguishable from a build that stopped emitting the key", key, value, anchorPoolKindScopeNone)
 		}
+	}
+}
+
+// THE THREE DEFECTS AN ADVERSARIAL ROUND FOUND, PINNED BEFORE THEY WERE FIXED.
+//
+// All three share one root cause: the anchor scope was decided AFTER retrieval
+// and handed to the filter alone, while the two consumers that decide what is
+// RETRIEVED and what SURVIVES TRUNCATION kept reading the receipt-only value.
+// A kind the filter would admit is worthless if nothing ever searched for it.
+
+// anchorOnlyByKindBackend is the fixture the original pins should have used.
+// The anchor is reachable ONLY through SearchKind -- the plain search arm
+// returns members and a crowd, never the anchor.
+//
+// This distinction is the whole defect. The first version of these tests let
+// the anchor arrive through the ordinary lexical arm, so the filter admitted
+// something retrieval had already found and the pins passed while the
+// kind-hinted search was never even asked for the anchor's kind.
+func anchorOnlyByKindBackend(term string, crowd int) *fakeGraphBackend {
+	// The crowd is the CONFIRMED MEMBER KIND, deliberately. A crowd of some
+	// third kind is stripped by the confirmed-kind filter before phase-4
+	// ever runs, so it never competes for the budget and a truncation pin
+	// built on one passes whether or not the anchor holds a reserved slot --
+	// which is exactly how the first version of this fixture let a
+	// reservation regression survive.
+	members := make([]CandidateNode, 0, crowd+1)
+	members = append(members, candidateNode(contextfabric.SubjectProject,
+		"project.v2:github:"+term+"-one", term+" one", 0.9, "*"))
+	for i := 0; i < crowd; i++ {
+		members = append(members, candidateNode(contextfabric.SubjectProject,
+			fmt.Sprintf("project.v2:github:%s-%d", term, i),
+			fmt.Sprintf("%s project %d", term, i), 0.88, "*"))
+	}
+	return &fakeGraphBackend{
+		searchResults:    map[string][]CandidateNode{term: members},
+		enableSearchKind: true,
+		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
+			term: {
+				contextfabric.SubjectTeam:    {anchorTeamNode(term, "CHAOS Team")},
+				contextfabric.SubjectProject: nil,
+			},
+		},
+	}
+}
+
+// P1-1. With NO scope-anchor kind on the receipt, the caller's confirmed
+// anchor is the only statement of the anchor's kind -- and it must reach
+// KIND-HINTED RETRIEVAL, not merely the filter. Red before the fix: the pool
+// comes back holding only projects, because SearchKind was never called for
+// `team` and the filter had nothing of that kind to admit.
+func TestTheFallbackAnchorKindReachesKindHintedRetrieval(t *testing.T) {
+	t.Parallel()
+	res := resolveScoped(t, anchorOnlyByKindBackend("chaos", 1), scopedProjectsFrame("chaos"),
+		confirmedProject(),
+		&contextfabric.ConfirmedAnchorSelection{Kind: contextfabric.SubjectTeam, CanonicalID: "team.v2:github:chaos"},
+		"")
+	if got := candidateKinds(res)[contextfabric.SubjectTeam]; got == 0 {
+		t.Fatalf("team candidates = 0, want >= 1; kinds=%v. The fallback anchor kind never reached kind-hinted retrieval, so nothing of that kind was ever searched for -- admitting it at the filter cannot rescue a candidate that was never retrieved.", candidateKinds(res))
+	}
+}
+
+// P1-2, PINNED AT THE LEVEL THIS CHANGE ACTUALLY CONTROLS: the fallback
+// anchor kind must be IN the set phase 4 reserves slots for. Before the fix
+// the reservation was computed from the receipt-only value, so a fallback
+// anchor held no slot at all.
+//
+// WHAT THIS PIN DELIBERATELY DOES NOT CLAIM. It does not claim the anchor
+// always survives truncation, because it does not -- and that limit is older
+// and wider than this change. Measured on this tree with a member-kind crowd
+// larger than the budget, the anchor is truncated away identically for the
+// RECEIPT source, for the FALLBACK source, and with NO confirmed kind at all
+// (`kinds=map[project:20]` in all three). The cause is in phase 4's own
+// victim rule: a slot can only be taken from a candidate whose kind is NOT
+// itself reserved, and on a scope-anchored frame the MEMBER kind is reserved
+// too, so a pool saturated with members offers no eligible victim. Writing a
+// pin that asserted survival would therefore be asserting a property the
+// engine does not have, and fixing it means changing a truncation rule shared
+// with every other frame -- reported separately rather than smuggled in here.
+func TestTheFallbackAnchorKindIsReservedAgainstTruncation(t *testing.T) {
+	t.Parallel()
+	frame := scopedProjectsFrame("chaos")
+	scope := decideAnchorPoolKindScope(frame, "",
+		&contextfabric.ConfirmedAnchorSelection{Kind: contextfabric.SubjectTeam, CanonicalID: "team.v2:github:chaos"})
+	reserved := frameReservedKinds(frame, scope.Kind)
+	var sawTeam, sawProject bool
+	for _, k := range reserved {
+		sawTeam = sawTeam || k == contextfabric.SubjectTeam
+		sawProject = sawProject || k == contextfabric.SubjectProject
+	}
+	if !sawTeam {
+		t.Errorf("reserved kinds = %v, want the FALLBACK anchor kind (team) among them -- computed from the receipt-only value it is absent, and the anchor holds no slot at all", reserved)
+	}
+	if !sawProject {
+		t.Errorf("reserved kinds = %v, want the member kind (project) still reserved -- this change must not take the members' slot away", reserved)
+	}
+	// The receipt source must reserve the same kind, so the two sources are
+	// not silently different at truncation.
+	if got := frameReservedKinds(frame, decideAnchorPoolKindScope(frame, contextfabric.SubjectTeam, nil).Kind); len(got) != len(reserved) {
+		t.Errorf("receipt source reserved %v but fallback source reserved %v -- the two sources must be indistinguishable downstream", got, reserved)
+	}
+}
+
+// P1-3. `member_kind_confirmed` is an INPUT to the call, not something the
+// call discovers, so it must be on the line even when the resolution returns
+// before any pool is built. Red before the fix: the exact-canonical-hint
+// short-circuit returns above the anchor_pool event, and the fold -- which
+// learned the value only from that event -- printed `none` while a kind was
+// confirmed. A key that reports "no kind was confirmed" on a turn that
+// confirmed one is worse than an absent key: it is a confident wrong answer.
+func TestTheExactHintSummaryStillNamesTheConfirmedMemberKind(t *testing.T) {
+	t.Parallel()
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	backend := &fakeGraphBackend{exactHints: map[string]CandidateNode{
+		SubjectKey(subject): candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 0.2, "*"),
+	}}
+	req := testRequest()
+	req.RequestedScope.SubjectHints = []contextfabric.SubjectHint{{Kind: subject.Kind, ID: subject.CanonicalID, Label: subject.Label, Source: "workbench"}}
+	capture := &anchorScopeCapture{}
+	deps := backend.deps()
+	deps.ResolutionTracer = capture
+	if _, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+		storage.Principal{OrgID: "org_1"}, req, testInterpreted(), deps,
+		confirmedProject(), nil, nil, ""); err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+	if len(capture.summaries) != 1 {
+		t.Fatalf("captured %d decision_summary events, want exactly 1", len(capture.summaries))
+	}
+	if got := capture.summaries[0].DecisionMemberKindConfirmed; got != "project" {
+		t.Errorf("member_kind_confirmed = %q, want \"project\" -- the kind WAS confirmed on this turn; reporting \"none\" is a confident wrong answer, not a missing one", got)
+	}
+}
+
+// THE FOLD MUST NOT LEARN THE CONFIRMED MEMBER KIND FROM AN EVENT.
+//
+// Both the folded line and the anchor_pool line read the SAME call parameter.
+// If the fold instead adopted whatever the event carried, it would inherit
+// that event's reachability -- the defect that printed `none` on turns which
+// had confirmed a kind -- and a divergence between the two would be
+// unobservable. Feeding a deliberately WRONG member kind on the event is the
+// only way to tell the two designs apart: a fold that reads the parameter
+// ignores it, a fold that reads the event adopts it.
+func TestTheFoldKeepsTheConfirmedKindItWasBuiltWith(t *testing.T) {
+	t.Parallel()
+	capture := &decisionSummaryCapture{}
+	buffer := &decisionSummaryBuffer{
+		real: capture, requestID: "request_member_kind",
+		memberKindConfirmed: "project",
+	}
+	buffer.Trace(ResolutionTraceEvent{
+		RequestID: "request_member_kind", Stage: "anchor_pool", AnchorPoolSummary: true,
+		DecisionAnchorPoolKindScope: "team", DecisionAnchorPoolKindScopeSource: "receipt",
+		DecisionMemberKindConfirmed: "repository",
+	})
+	buffer.flush()
+	if len(capture.summaries) != 1 {
+		t.Fatalf("captured %d decision_summary events, want exactly 1", len(capture.summaries))
+	}
+	got := capture.summaries[0]
+	if got.DecisionMemberKindConfirmed != "project" {
+		t.Errorf("member_kind_confirmed = %q, want \"project\" -- the fold adopted the EVENT's value instead of the confirmed kind it was constructed with", got.DecisionMemberKindConfirmed)
+	}
+	// The scope and its source DO come from the event, and must still.
+	if got.DecisionAnchorPoolKindScope != "team" || got.DecisionAnchorPoolKindScopeSource != "receipt" {
+		t.Errorf("scope/source = %q/%q, want team/receipt -- those are decided inside the call and folded from the event",
+			got.DecisionAnchorPoolKindScope, got.DecisionAnchorPoolKindScopeSource)
+	}
+}
+
+// THE COMMIT GATES NOW SEE A MIXED-KIND POOL, AND THAT IS THE ONE THING THIS
+// CHANGE COULD BREAK WITHOUT ANY TEST NOTICING.
+//
+// Admitting the anchor's kind means the gates contest member candidates and
+// an anchor candidate together. This repo has already learned once, the
+// expensive way, that removing a candidate removes what the others were
+// competing against -- and the converse is just as true: ADDING one can push
+// a pool across a floor it should not cross, or rescue a lone candidate that
+// should have stayed uncommitted.
+//
+// The adversarial round noted the union was untested and declined to count it
+// as patch-caused, since member candidates already merged this way. That is a
+// fair reading, and it is still worth a pin: "it was already like that" is
+// precisely the reasoning that let the earlier vector-only defect stand.
+func TestAdmittingTheAnchorDoesNotChangeWhatTheGatesDecide(t *testing.T) {
+	t.Parallel()
+	// Two rival members, neither individually decisive: the pair must stay
+	// ambiguous whether or not the anchor joins them.
+	twoMembers := func() []CandidateNode {
+		return []CandidateNode{
+			candidateNode(contextfabric.SubjectProject, "project.v2:github:chaos-alpha", "chaos alpha", 0.55, "*"),
+			candidateNode(contextfabric.SubjectProject, "project.v2:github:chaos-beta", "chaos beta", 0.54, "*"),
+		}
+	}
+	withoutAnchor := &fakeGraphBackend{
+		searchResults:    map[string][]CandidateNode{"chaos": twoMembers()},
+		enableSearchKind: true,
+		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
+			"chaos": {contextfabric.SubjectTeam: nil, contextfabric.SubjectProject: nil},
+		},
+	}
+	withAnchor := &fakeGraphBackend{
+		searchResults:    map[string][]CandidateNode{"chaos": twoMembers()},
+		enableSearchKind: true,
+		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
+			"chaos": {
+				contextfabric.SubjectTeam:    {anchorTeamNode("chaos", "CHAOS Team")},
+				contextfabric.SubjectProject: nil,
+			},
+		},
+	}
+
+	bare := resolveScoped(t, withoutAnchor, scopedProjectsFrame("chaos"), confirmedProject(), nil, "")
+	mixed := resolveScoped(t, withAnchor, scopedProjectsFrame("chaos"), confirmedProject(), nil, contextfabric.SubjectTeam)
+
+	// The anchor must actually be in the mixed pool, or this proves nothing.
+	if candidateKinds(mixed)[contextfabric.SubjectTeam] == 0 {
+		t.Fatalf("the anchor never joined the pool, so this comparison is vacuous; kinds=%v", candidateKinds(mixed))
+	}
+	// THE MEMBERS' OWN CONTEST IS UNCHANGED. Compare the committed MEMBER
+	// subjects, not the whole set -- the anchor is legitimately allowed to
+	// commit on its own basis, and that is a different question.
+	memberCommits := func(res contextfabric.SubjectResolution) []string {
+		out := []string{}
+		for _, s := range res.Committed {
+			if s.Kind == contextfabric.SubjectProject {
+				out = append(out, s.CanonicalID)
+			}
+		}
+		return out
+	}
+	before, after := memberCommits(bare), memberCommits(mixed)
+	if len(before) != len(after) {
+		t.Errorf("member commits changed when the anchor joined the pool: %v -> %v. Admitting the anchor must not alter what the members' own contest decides.", before, after)
+	}
+	for i := range before {
+		if i < len(after) && before[i] != after[i] {
+			t.Errorf("member commit %d changed: %q -> %q", i, before[i], after[i])
+		}
+	}
+}
+
+// THE END-TO-END ARM FOR THE RESERVATION, and it took two tries to build one
+// that means anything.
+//
+// A unit pin on frameReservedKinds proves the kind is in the SET but cannot
+// notice the production call site reverting to the receipt-only value. An
+// end-to-end pin under a MEMBER-kind crowd cannot notice it either, because
+// phase 4 will not take a slot from a reserved kind and the member kind is
+// reserved -- so the anchor is lost either way and the arm is blind.
+//
+// This arm is the shape where the reservation can actually act: no confirmed
+// kind (so nothing is filtered), a crowd of a kind that is NOT reserved (so
+// an eligible victim exists), a pool larger than the budget, and the anchor
+// kind supplied ONLY by the caller's confirmed anchor. It exercises both
+// halves of the fix at once -- the fallback must reach kind-hinted retrieval
+// to be found, and must be in the reserved set to survive the cut.
+func TestTheFallbackAnchorSurvivesACrowdItCanDisplace(t *testing.T) {
+	t.Parallel()
+	const crowd = 90
+	backend := &fakeGraphBackend{
+		searchResults: map[string][]CandidateNode{"chaos": append(
+			[]CandidateNode{candidateNode(contextfabric.SubjectProject, "project.v2:github:chaos-one", "chaos one", 0.9, "*")},
+			lexicalCrowd("chaos", crowd)...)},
+		enableSearchKind: true,
+		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
+			"chaos": {
+				contextfabric.SubjectTeam:    {anchorTeamNode("chaos", "CHAOS Team")},
+				contextfabric.SubjectProject: nil,
+			},
+		},
+	}
+	res := resolveScoped(t, backend, scopedProjectsFrame("chaos"), nil,
+		&contextfabric.ConfirmedAnchorSelection{Kind: contextfabric.SubjectTeam, CanonicalID: "team.v2:github:chaos"},
+		"")
+	kinds := candidateKinds(res)
+	if kinds[contextfabric.SubjectTeam] == 0 {
+		t.Fatalf("team candidates = 0, want >= 1; kinds=%v. The fallback anchor kind reached neither kind-hinted retrieval nor the truncation reserve, so a crowd it was entitled to displace evicted it.", kinds)
+	}
+	if len(res.Candidates) != 20 {
+		t.Errorf("returned %d candidates, want exactly 20 -- the reserve must DISPLACE, never grow the budget", len(res.Candidates))
 	}
 }
