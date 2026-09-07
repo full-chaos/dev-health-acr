@@ -46,6 +46,47 @@ func decisionSummaryLines(t *testing.T, buf *bytes.Buffer) []map[string]any {
 	return out
 }
 
+// decisionSummaryMessage is the operator's grep handle. It is pinned as a
+// literal because a mutation that renamed it survived the whole suite: every
+// matcher here keys on the stage FIELD (deliberately -- a substring match on
+// the log text would also match the per-subject "decision" stage), so nothing
+// was left asserting the message an operator actually greps and alerts on.
+const decisionSummaryMessage = "context fabric resolution trace: decision summary"
+
+// requireSummaryShape asserts the invariants that make the line readable, on
+// every arm rather than once:
+//
+//   - the message is the fixed literal (see above);
+//   - the three outcome counts SUM to decision_event_count -- a total that can
+//     drift from its parts is worse than no total, and a mutation deleting the
+//     fold's stage filter (so every event incremented the total) survived
+//     because no arm asserted this;
+//   - every id/vocabulary field decodes as a JSON ARRAY, never null. This is
+//     the explicit-zero contract itself: `null` and `[]` read differently to a
+//     consumer, and a mutation dropping the nil-normalisation survived because
+//     the arms only checked that the KEY was present, which null satisfies.
+func requireSummaryShape(t *testing.T, rec map[string]any) {
+	t.Helper()
+	if msg, _ := rec["msg"].(string); msg != decisionSummaryMessage {
+		t.Errorf("msg = %q, want %q -- the message is the operator's grep handle", msg, decisionSummaryMessage)
+	}
+	total := numField(t, rec, "decision_event_count")
+	parts := numField(t, rec, "committed_count") + numField(t, rec, "ambiguous_count") + numField(t, rec, "no_commit_count")
+	if total != parts {
+		t.Errorf("decision_event_count = %v but committed+ambiguous+no_commit = %v -- the total must be exactly its parts, or an event is being counted that lands in no outcome", total, parts)
+	}
+	for _, key := range []string{"committed_ids", "commit_gates", "commit_bases"} {
+		value, present := rec[key]
+		if !present {
+			t.Errorf("the decision summary carries no %q at all", key)
+			continue
+		}
+		if _, ok := value.([]any); !ok {
+			t.Errorf("%s = %v (%T), want a JSON array -- an empty set must serialise as [] and never as null, or a consumer cannot tell an empty set from a missing one", key, value, value)
+		}
+	}
+}
+
 func numField(t *testing.T, rec map[string]any, key string) float64 {
 	t.Helper()
 	value, ok := rec[key]
@@ -104,6 +145,7 @@ func TestDecisionReachesTheProductionLogLevel(t *testing.T) {
 		t.Fatalf("decision summary lines at Info = %d, want exactly 1 per resolution -- log: %s", len(summaries), buf.String())
 	}
 	summary := summaries[0]
+	requireSummaryShape(t, summary)
 	if got := numField(t, summary, "committed_count"); int(got) != len(resolution.Committed) {
 		t.Errorf("committed_count = %v, want %d (the resolution's own committed set)", got, len(resolution.Committed))
 	}
@@ -161,6 +203,7 @@ func TestAnAmbiguousDecisionIsDistinguishableAtTheProductionLogLevel(t *testing.
 		t.Fatalf("decision summary lines at Info = %d, want exactly 1 -- log: %s", len(summaries), buf.String())
 	}
 	summary := summaries[0]
+	requireSummaryShape(t, summary)
 	if got := numField(t, summary, "ambiguous_count"); got < 1 {
 		t.Errorf("ambiguous_count = %v, want at least 1 -- the outcome the resolver actually took", got)
 	}
@@ -205,6 +248,7 @@ func TestADecisionThatCommitsNothingStillReachesTheProductionLogLevel(t *testing
 		t.Fatalf("decision summary lines at Info = %d, want exactly 1 -- a resolution that commits nothing must still say so; log: %s", len(summaries), buf.String())
 	}
 	summary := summaries[0]
+	requireSummaryShape(t, summary)
 	if got := numField(t, summary, "committed_count"); got != 0 {
 		t.Errorf("committed_count = %v, want an explicit 0", got)
 	}
@@ -213,5 +257,96 @@ func TestADecisionThatCommitsNothingStillReachesTheProductionLogLevel(t *testing
 	}
 	if got := numField(t, summary, "no_commit_count"); got < 1 {
 		t.Errorf("no_commit_count = %v, want at least 1 -- the outcome the resolver actually took", got)
+	}
+}
+
+// TestAnOffersOnlyResolutionSaysSoOnTheSummary closes the one finding a
+// class-wide reviewer raised against the fold, and it is the same defect
+// this whole change exists to prevent, reintroduced one level up.
+//
+// An offers-only pass runs retrieval, ranking and the decision for real,
+// and then the engine DISCARDS the resolution and keeps only the offer
+// material. Its per-subject decision event is tagged
+// OfferedUnderWindowGate precisely because an earlier review found an
+// "outcome=committed" line with no indication the resolution behind it was
+// thrown away. The fold dropped that tag, so at Info a discarded
+// resolution and a served one printed identical committed counts and
+// identical committed ids.
+//
+// The guarantee asserted here is the one the emission site can actually
+// keep: at least one decision in this call was produced under the
+// offers-only window gate. It is derived from the events the fold already
+// sees, never re-read from the context, so there is exactly one authority
+// for it.
+func TestAnOffersOnlyResolutionSaysSoOnTheSummary(t *testing.T) {
+	t.Parallel()
+	const term = "Ask Dev"
+	backend := &fakeGraphBackend{
+		searchResults:   map[string][]CandidateNode{term: exactMatchSearchResults(term, 11)},
+		searchTruncated: true,
+	}
+	buf, logger := infoCapture()
+	deps := backend.deps()
+	deps.ResolutionTracer = NewSlogResolutionTracer(logger)
+
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(
+		contextfabric.WithOffersOnlyResolution(context.Background()),
+		storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted(term),
+		deps, nil, nil, nil, "")
+	if err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+	if len(resolution.Committed) != 1 {
+		t.Fatalf("the fixture committed %d subjects, want 1 -- the point of this arm is that a COMMITTED-looking offers-only pass is distinguishable, so a non-committing fixture proves nothing", len(resolution.Committed))
+	}
+
+	summaries := decisionSummaryLines(t, buf)
+	if len(summaries) != 1 {
+		t.Fatalf("decision summary lines = %d, want exactly 1 -- log: %s", len(summaries), buf.String())
+	}
+	summary := summaries[0]
+	requireSummaryShape(t, summary)
+
+	offered, present := summary["offered_under_window_gate"]
+	if !present {
+		t.Fatalf("the decision summary carries no offered_under_window_gate -- an offers-only resolution, whose result the engine discards, is then indistinguishable at Info from a served one; line: %v", summary)
+	}
+	if offered != true {
+		t.Errorf("offered_under_window_gate = %v, want true on an offers-only resolution", offered)
+	}
+}
+
+// TestAnOrdinaryResolutionSaysItWasNotOffersOnly is the other half: the
+// field must be present and FALSE on a decisive pass, not merely absent.
+// A provenance field that appears only in one of the two states cannot be
+// told apart from a build that does not emit it at all -- the same
+// explicit-zero rule every other count on this line follows.
+func TestAnOrdinaryResolutionSaysItWasNotOffersOnly(t *testing.T) {
+	t.Parallel()
+	const term = "Ask Dev"
+	backend := &fakeGraphBackend{
+		searchResults:   map[string][]CandidateNode{term: exactMatchSearchResults(term, 11)},
+		searchTruncated: true,
+	}
+	buf, logger := infoCapture()
+	deps := backend.deps()
+	deps.ResolutionTracer = NewSlogResolutionTracer(logger)
+
+	if _, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+		storage.Principal{OrgID: "org_1"}, testRequest(), testInterpreted(term),
+		deps, nil, nil, nil, ""); err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+
+	summaries := decisionSummaryLines(t, buf)
+	if len(summaries) != 1 {
+		t.Fatalf("decision summary lines = %d, want exactly 1", len(summaries))
+	}
+	offered, present := summaries[0]["offered_under_window_gate"]
+	if !present {
+		t.Fatalf("offered_under_window_gate is absent on a decisive resolution -- it must be present and false; line: %v", summaries[0])
+	}
+	if offered != false {
+		t.Errorf("offered_under_window_gate = %v, want false on a decisive resolution", offered)
 	}
 }
