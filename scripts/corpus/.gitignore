@@ -1,0 +1,5 @@
+# Bytecode caches. run_pins.sh runs every pin file, which generates these, and a
+# `git add -A` after that run committed sixteen of them once. Ignored so the mistake
+# cannot recur rather than relying on remembering to clean first.
+__pycache__/
+*.pyc
