@@ -742,6 +742,25 @@ type tickFreshnessStats struct {
 	orgsOK              int64
 	orgsRebuildRequired int64
 	orgsBackoff         int64
+	// orgsSourceFailed counts organizations for which at least one
+	// configured source failed every attempt it made this tick. It is a
+	// bucket of its own rather than a flavour of ok, because the line this
+	// summary IS reported orgs_ok:1, orgs_rebuild_required:0 every 15
+	// seconds through an outage in which one required source failed on
+	// every single tick: runPair discarded the pair's error and reported
+	// "evaluated, not stale", and one healthy sibling source was enough to
+	// carry the whole organization to ok.
+	orgsSourceFailed int64
+	// sourcesEvaluated/sourcesFailed count (org, source) PAIRS across the
+	// whole tick, and failedSources names the distinct sources behind
+	// sourcesFailed -- a count alone cannot tell an operator whether the
+	// source that is down is the one their question depends on. Guarded by
+	// mu rather than atomics because the name set is not a counter; Tick
+	// dispatches organizations concurrently.
+	mu               sync.Mutex
+	sourcesEvaluated int64
+	sourcesFailed    int64
+	failedSources    []string
 	// orgsDivergenceRecovered (CHAOS-3882) counts organizations for which
 	// THIS tick detected checkpoint-vs-store divergence and drove an
 	// automatic recovery (successful or not) -- distinct from
@@ -754,6 +773,51 @@ type tickFreshnessStats struct {
 func (s *tickFreshnessStats) recordOK()              { atomic.AddInt64(&s.orgsOK, 1) }
 func (s *tickFreshnessStats) recordRebuildRequired() { atomic.AddInt64(&s.orgsRebuildRequired, 1) }
 func (s *tickFreshnessStats) recordBackoff()         { atomic.AddInt64(&s.orgsBackoff, 1) }
+func (s *tickFreshnessStats) recordSourceFailedOrg() { atomic.AddInt64(&s.orgsSourceFailed, 1) }
+
+// freshnessFailedSourceNameCap bounds the failed_sources array on one log
+// line independently of how many sources a deployment configures, the same
+// reasoning the resolution trace's own summary caps use: the true count
+// always travels beside the names, so a truncated sample never hides the
+// size of the problem.
+const freshnessFailedSourceNameCap = 25
+
+// recordPairOutcome folds one (org, source) pair's tick result into the
+// per-tick aggregate. evaluated is false when the pair was not due, which
+// is not a failure and not a success -- it is the pair having no reading
+// this tick, and it is deliberately not counted in either direction.
+func (s *tickFreshnessStats) recordPairOutcome(source string, evaluated, failed bool) {
+	if !evaluated {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sourcesEvaluated++
+	if !failed {
+		return
+	}
+	s.sourcesFailed++
+	for _, existing := range s.failedSources {
+		if existing == source {
+			return
+		}
+	}
+	if len(s.failedSources) < freshnessFailedSourceNameCap {
+		s.failedSources = append(s.failedSources, source)
+	}
+}
+
+// snapshotSources returns the pair counts and the distinct failed-source
+// names for the log line. Names are returned as a non-nil slice so a
+// healthy tick logs an empty array rather than a null -- "no source failed"
+// and "this build does not report failed sources" must never read alike.
+func (s *tickFreshnessStats) snapshotSources() (evaluated, failed int64, names []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	names = make([]string, len(s.failedSources))
+	copy(names, s.failedSources)
+	return s.sourcesEvaluated, s.sourcesFailed, names
+}
 func (s *tickFreshnessStats) recordDivergenceRecovered() {
 	atomic.AddInt64(&s.orgsDivergenceRecovered, 1)
 }
@@ -782,10 +846,30 @@ func (c *Coordinator) Tick(ctx context.Context) {
 	// wrong, so "no signal" and "zero orgs pending rebuild" stay
 	// distinguishable -- the same reasoning SlogObserver's doc comment
 	// gives for logging successful ticks, not just failures.
+	sourcesEvaluated, sourcesFailed, failedSources := stats.snapshotSources()
 	c.logger.InfoContext(ctx, "context_fabric: projection tick freshness summary",
 		"orgs_ok", atomic.LoadInt64(&stats.orgsOK),
 		"orgs_rebuild_required", atomic.LoadInt64(&stats.orgsRebuildRequired),
 		"orgs_backoff", atomic.LoadInt64(&stats.orgsBackoff),
+		// The failed-source disclosure. Present on EVERY tick, at zero when
+		// nothing failed: a field that appeared only when non-zero could
+		// not be told apart from a projector that does not emit it at all,
+		// which is the same ambiguity one level up that let a source fail
+		// every tick behind an orgs_ok:1 line.
+		//
+		// SCOPE, and it is readable off this same line: these three count
+		// the STEADY-STATE pass only (runPair). An organization mid-build
+		// runs runBuildTick instead and is counted in orgs_backoff, so a
+		// reader seeing sources_failed:0 beside orgs_backoff:0 knows every
+		// organization took the steady-state path, while sources_failed:0
+		// beside a non-zero orgs_backoff means some organization was not
+		// covered by these counters at all. Extending them to the build
+		// path needs the lifecycle fixtures and is deliberately not done
+		// here rather than shipped without a pin.
+		"orgs_source_failed", atomic.LoadInt64(&stats.orgsSourceFailed),
+		"sources_evaluated", sourcesEvaluated,
+		"sources_failed", sourcesFailed,
+		"failed_sources", failedSources,
 		"pending_rebuild_orgs_total", atomic.LoadInt64(&stats.orgsRebuildRequired),
 		// CHAOS-3882: how many organizations this tick found in
 		// checkpoint-vs-store divergence and drove an automatic recovery
@@ -884,21 +968,30 @@ func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, stats *tic
 		return
 	}
 
-	evaluated, stale := false, false
+	evaluated, stale, sourceFailed := false, false, false
 	budget := c.drainBudget // CHAOS-3826: shared across every source this org drains this tick
 	for _, source := range c.sourceNames {
 		if ctx.Err() != nil {
 			return
 		}
-		pairEvaluated, pairStale := c.runPair(ctx, orgID, source, c.checkpoints, &budget)
+		pairEvaluated, pairStale, pairFailed := c.runPair(ctx, orgID, source, c.checkpoints, &budget)
 		evaluated = evaluated || pairEvaluated
 		stale = stale || pairStale
+		sourceFailed = sourceFailed || pairFailed
+		stats.recordPairOutcome(source, pairEvaluated, pairFailed)
 	}
+	// A failed source can no longer land in ok. It sits BELOW stale in
+	// precedence -- rebuild_required is the bucket that demands an operator
+	// action, and an organization is only ever in one bucket so they sum --
+	// but the per-source disclosure on the summary line reports the failure
+	// either way, so nothing depends on which bucket won.
 	switch {
 	case !evaluated:
 		stats.recordBackoff()
 	case stale:
 		stats.recordRebuildRequired()
+	case sourceFailed:
+		stats.recordSourceFailedOrg()
 	default:
 		stats.recordOK()
 	}
@@ -936,22 +1029,28 @@ func (c *Coordinator) runOrgLifecycle(ctx context.Context, orgID string, stats *
 		return
 	}
 
-	evaluated, stale := false, false
+	evaluated, stale, sourceFailed := false, false, false
 	budget := c.drainBudget // CHAOS-3826: shared across every source this org drains this tick
 	for _, source := range c.sourceNames {
 		if ctx.Err() != nil {
 			return
 		}
-		pairEvaluated, pairStale := c.runPair(ctx, orgID, source, checkpoints, &budget)
+		pairEvaluated, pairStale, pairFailed := c.runPair(ctx, orgID, source, checkpoints, &budget)
 		evaluated = evaluated || pairEvaluated
 		stale = stale || pairStale
+		sourceFailed = sourceFailed || pairFailed
+		stats.recordPairOutcome(source, pairEvaluated, pairFailed)
 	}
 	c.recordCheckpointEpochState(ctx, orgID, epoch, contextfabric.CheckpointEpochActive, checkpoints)
+	// See runOrgLegacy's identical switch for why a failed source cannot
+	// land in ok and why it sits below stale.
 	switch {
 	case !evaluated:
 		stats.recordBackoff()
 	case stale:
 		stats.recordRebuildRequired()
+	case sourceFailed:
+		stats.recordSourceFailedOrg()
 	default:
 		stats.recordOK()
 	}
@@ -1496,7 +1595,7 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 // in the same Tick (Tick.wg.Wait blocks the next poll on every dispatched
 // runOrg returning). The 200-row page cap (batch size) is unchanged --
 // only the inter-batch idle inside one tick is removed.
-func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore, budget *int) (evaluated, stale bool) {
+func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore, budget *int) (evaluated, stale, failed bool) {
 	started := c.now()
 	batches, applied := 0, 0
 	reason := DrainYieldExhausted
@@ -1504,11 +1603,19 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 		pairEvaluated, pairApplied, pairErr, pairStale := c.runPairOnce(ctx, orgID, source, checkpoints)
 		if !pairEvaluated {
 			if batches == 0 {
-				return false, false
+				return false, false, false
 			}
 			break
 		}
 		evaluated = true
+		// failed describes THIS attempt, overwritten rather than OR-ed:
+		// a drain whose later attempt succeeds has recovered within the
+		// tick, and reporting it as failed would make the disclosure fire
+		// on ordinary transient blips. The inverse (an early success
+		// followed by a failure) leaves failed true, which is correct --
+		// the pair ended this tick unable to read its source. Cancellation
+		// is not a source failure and is excluded below.
+		failed = pairErr != nil && !errors.Is(pairErr, context.Canceled) && !errors.Is(pairErr, context.DeadlineExceeded)
 		// Codex round-3 F1: OR across every attempt this drain makes, never
 		// overwrite. Before CHAOS-3826's in-tick draining, runPair made
 		// exactly ONE attempt per tick, so assignment and OR were
@@ -1556,7 +1663,7 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 			Duration: c.now().Sub(started), At: c.now(),
 		})
 	}
-	return evaluated, stale
+	return evaluated, stale, failed
 }
 
 // emitProjectionFreshness is the CHAOS-3887 (H1) per-org, per-source
