@@ -748,34 +748,76 @@ func (c *Coordinator) dueState(key string) (bool, bool) {
 	}
 }
 
-// TestEveryBucketRecordingGoesThroughClassify is the INVARIANT pin, and it
-// exists because the same defect was found three times at three different
-// exits: the classification switch, the per-source loop's early return, then
-// the organization-lock and lifecycle-build paths. Each time the fix was a
-// patch at one more call site, and each time a reviewer found another site.
+// lockedLocker cancels the tick from INSIDE the lock attempt, then fails.
 //
-// So the rule is enforced structurally rather than by adding a fourth patch:
-// every bucket recording goes through classify(), which owns the "a cancelled
-// tick has established no verdict" decision once. A new exit that records a
-// bucket directly is a test failure here, not a defect found two rounds
-// later.
+// Cancelling before Tick would not do: the dispatch loop catches an
+// already-cancelled context and the organization is never dispatched at all,
+// so runOrg -- and the org-lock exit this arm exists for -- is never reached
+// and the arm passes on the broken tree. That mistake has now been made
+// twice in this file; the cancellation must come from inside the path under
+// test.
+type lockedLocker struct {
+	cancel context.CancelFunc
+	calls  atomic.Int32
+}
+
+func (l *lockedLocker) Lock(ctx context.Context, orgID string) (func() error, error) {
+	l.calls.Add(1)
+	l.cancel()
+	return nil, context.Canceled
+}
+
+// cancellingLifecycleStore cancels the tick from inside the lifecycle read,
+// which is the second exit the confirmation pass found. Same reasoning as
+// lockedLocker: the cancellation has to happen on the path under test.
+type cancellingLifecycleStore struct {
+	contextfabric.GraphLifecycleStore
+	cancel context.CancelFunc
+	calls  atomic.Int32
+}
+
+func (l *cancellingLifecycleStore) Get(ctx context.Context, orgID string) (contextfabric.OrgGraphLifecycle, bool, error) {
+	l.calls.Add(1)
+	l.cancel()
+	return contextfabric.OrgGraphLifecycle{}, false, context.Canceled
+}
+
+// TestEveryPerOrgPathCommitsThroughTheFinalizer is the INVARIANT pin. The
+// same defect was found at FOUR exits across three review rounds, each fix a
+// patch at one more site. The rule is now structural: a bucket is committed
+// only by the org-scope finalizer, and every per-org function receives the
+// scope rather than the raw stats — so an exit CANNOT record a bucket
+// directly, and one that decides nothing is still accounted for.
 //
-// Walked on the AST, not by text search: a commented-out direct call must not
-// register (negative control below).
-func TestEveryBucketRecordingGoesThroughClassify(t *testing.T) {
+// Walked on the AST, receiver-qualified: Coordinator has its own
+// recordBackoff(key, err) for per-pair retry scheduling, and matching on the
+// selector name alone reported six violations that were not violations —
+// the same "matched something adjacent to the question" shape as the
+// stage-token substring trap.
+func TestEveryPerOrgPathCommitsThroughTheFinalizer(t *testing.T) {
 	t.Parallel()
 	buckets := map[string]bool{
 		"recordBackoff": true, "recordOK": true, "recordRebuildRequired": true,
 		"recordSourceFailedOrg": true, "recordDivergenceRecovered": true,
 	}
-	direct := countDirectBucketCalls(t, "coordinator.go", buckets)
-	if direct != 0 {
-		t.Errorf("bucket recorders CALLED directly %d time(s) outside classify() -- every one must go through classify, which owns the cancelled-tick decision; a direct call is how the same defect reached three separate exits", direct)
+	if got := countDirectBucketCalls(t, "coordinator.go", buckets); got != 0 {
+		t.Errorf("bucket recorders called directly %d time(s) on a `stats` receiver -- every commit must go through the org-scope finalizer", got)
 	}
 
-	// Negative control: a tree whose only direct call is commented out must
-	// count 0, and one with a real direct call must count 1 -- proving the
-	// walk sees code, not text.
+	// The finalizer must actually be installed, and exactly once.
+	if got := countDeferredFinishes(t, "coordinator.go"); got != 1 {
+		t.Errorf("`defer scope.finish()` appears %d time(s), want exactly 1 -- zero means no exit is covered, more than one means an organization can be committed twice", got)
+	}
+
+	// Every per-org function takes the SCOPE, not the raw stats: that is what
+	// makes a direct bucket call unavailable rather than merely discouraged.
+	for _, fn := range []string{"runOrgLegacy", "runOrgLifecycle", "recoverFromDivergence", "recoverFromDivergenceLifecycle"} {
+		if !takesOrgScope(t, "coordinator.go", fn) {
+			t.Errorf("%s does not take *orgScope -- a per-org path holding raw stats can record a bucket without the finalizer", fn)
+		}
+	}
+
+	// Negative controls both ways.
 	for _, tc := range []struct {
 		name string
 		src  string
@@ -794,6 +836,134 @@ func TestEveryBucketRecordingGoesThroughClassify(t *testing.T) {
 	}
 }
 
+func countDeferredFinishes(t *testing.T, filename string) int {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), filename, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", filename, err)
+	}
+	found := 0
+	ast.Inspect(file, func(n ast.Node) bool {
+		def, ok := n.(*ast.DeferStmt)
+		if !ok {
+			return true
+		}
+		if sel, ok := def.Call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "finish" {
+			found++
+		}
+		return true
+	})
+	return found
+}
+
+func takesOrgScope(t *testing.T, filename, fnName string) bool {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), filename, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", filename, err)
+	}
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != fnName {
+			continue
+		}
+		for _, param := range fn.Type.Params.List {
+			star, ok := param.Type.(*ast.StarExpr)
+			if !ok {
+				continue
+			}
+			if ident, ok := star.X.(*ast.Ident); ok && ident.Name == "orgScope" {
+				return true
+			}
+		}
+		return false
+	}
+	t.Fatalf("no function %q in %s -- the pin asserts about code that no longer exists", fnName, filename)
+	return false
+}
+
+// TestReviewCancellationWhileWaitingForOrgLock is the confirmation pass's own
+// test, adopted verbatim in shape: an organization whose lock attempt is
+// interrupted by cancellation must not be published as an ordinary backoff on
+// a line claiming the tick completed.
+func TestReviewCancellationWhileWaitingForOrgLock(t *testing.T) {
+	t.Parallel()
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	locker := &lockedLocker{cancel: cancel}
+
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:         []string{"org-a"},
+		Sources:        []projectionrun.SourcePair{{Name: "source-a", Source: &fakeSource{name: "source-a", pages: 1}}},
+		Backend:        newFakeBackend(),
+		Checkpoints:    newFakeCheckpointStore(),
+		RebuildMarkers: newFakeRebuildMarker(),
+		Locker:         locker,
+		Logger:         logger,
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	coordinator.Tick(ctx)
+
+	if locker.calls.Load() == 0 {
+		t.Fatal("the lock was never attempted -- the organization was not dispatched, so the org-lock exit this arm exists for was never reached")
+	}
+	summary := freshnessSummary(t, &buffer)
+	requireBucketIdentity(t, summary)
+	if summaryBool(t, summary, "tick_complete") {
+		t.Errorf("tick_complete = true while cancellation stopped the tick")
+	}
+	if got := summaryNumber(t, summary, "orgs_unevaluated"); got != 1 {
+		t.Errorf("orgs_unevaluated = %v, want 1", got)
+	}
+	if got := summaryNumber(t, summary, "orgs_backoff"); got != 0 {
+		t.Errorf("orgs_backoff = %v, want 0 -- cancellation is not an ordinary backoff", got)
+	}
+}
+
+// TestReviewCancellationDuringLifecycleBuildIsUnevaluated is the confirmation
+// pass's second test: the lifecycle build path recorded backoff and claimed a
+// complete tick when cancellation was what stopped it.
+func TestReviewCancellationDuringLifecycleBuildIsUnevaluated(t *testing.T) {
+	t.Parallel()
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := &cancellingLifecycleStore{cancel: cancel}
+
+	checkpoints := newFakeCheckpointStore()
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:           []string{"org-a"},
+		Sources:          []projectionrun.SourcePair{{Name: "source-a", Source: &fakeSource{name: "source-a", pages: 1}}},
+		Backend:          newFakeBackend(),
+		Checkpoints:      checkpoints,
+		RebuildMarkers:   newFakeRebuildMarker(),
+		Lifecycle:        store,
+		EpochCheckpoints: func(int64) contextfabric.ProjectionCheckpointStore { return checkpoints },
+		Logger:           logger,
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	coordinator.Tick(ctx)
+
+	if store.calls.Load() == 0 {
+		t.Fatal("the lifecycle row was never read -- the lifecycle exit this arm exists for was never reached")
+	}
+	summary := freshnessSummary(t, &buffer)
+	requireBucketIdentity(t, summary)
+	if summaryBool(t, summary, "tick_complete") {
+		t.Errorf("tick_complete = true on a cancelled lifecycle tick")
+	}
+	if got := summaryNumber(t, summary, "orgs_unevaluated"); got != 1 {
+		t.Errorf("orgs_unevaluated = %v, want 1 -- the lifecycle path must not report a cancelled organization as evaluated", got)
+	}
+}
+
 func countDirectBucketCalls(t *testing.T, filename string, buckets map[string]bool) int {
 	t.Helper()
 	file, err := parser.ParseFile(token.NewFileSet(), filename, nil, 0)
@@ -803,9 +973,15 @@ func countDirectBucketCalls(t *testing.T, filename string, buckets map[string]bo
 	return countDirectBucketCallsIn(file, buckets)
 }
 
-// countDirectBucketCallsIn counts CALLS to a bucket recorder. A bare
-// reference (`stats.recordBackoff` handed to classify as a value) is NOT a
-// call and is exactly the shape that is allowed, so only CallExpr counts.
+// countDirectBucketCallsIn counts CALLS to a bucket recorder on a `stats`
+// receiver. Two deliberate narrowings:
+//
+//   - a bare reference (`scope.stats.recordBackoff` handed to record() as a
+//     value) is not a CallExpr and is exactly the shape that is allowed;
+//   - the receiver must be `stats`. Coordinator has its OWN
+//     recordBackoff(key, err) -- the per-pair retry scheduler, a different
+//     method that merely shares a name -- and counting it reported six
+//     violations that were not violations.
 func countDirectBucketCallsIn(file *ast.File, buckets map[string]bool) int {
 	direct := 0
 	ast.Inspect(file, func(n ast.Node) bool {
@@ -817,65 +993,10 @@ func countDirectBucketCallsIn(file *ast.File, buckets map[string]bool) int {
 		if !ok || !buckets[sel.Sel.Name] {
 			return true
 		}
-		// Receiver-qualified deliberately. Coordinator has its OWN
-		// recordBackoff(key, err) -- the per-pair retry scheduler, an
-		// entirely different method that merely shares a name. Counting it
-		// made this pin report six violations that were not violations,
-		// which is the same "matched something adjacent to the question"
-		// shape the stage-token substring trap has.
-		recv, ok := sel.X.(*ast.Ident)
-		if ok && recv.Name == "stats" {
+		if recv, ok := sel.X.(*ast.Ident); ok && recv.Name == "stats" {
 			direct++
 		}
 		return true
 	})
 	return direct
-}
-
-// lockedLocker refuses the organization lock, which is the reviewer's
-// org-lock cancellation shape: that path recorded orgs_backoff and claimed
-// tick_complete:true even though cancellation was what stopped it.
-type lockedLocker struct{}
-
-func (lockedLocker) Lock(ctx context.Context, orgID string) (func() error, error) {
-	return nil, ctx.Err()
-}
-
-// TestACancelledOrgLockIsNotReportedAsAnOrdinaryBackoff is the confirmation
-// pass's P1. An organization whose lock attempt was interrupted by
-// cancellation is not "backing off" in the ordinary sense -- the tick simply
-// never got to it -- and reporting it as backoff on a line claiming
-// tick_complete:true hides the cancellation entirely at Info.
-func TestACancelledOrgLockIsNotReportedAsAnOrdinaryBackoff(t *testing.T) {
-	t.Parallel()
-	var buffer bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
-		OrgIDs:         []string{"org-a"},
-		Sources:        []projectionrun.SourcePair{{Name: "source-a", Source: &fakeSource{name: "source-a", pages: 1}}},
-		Backend:        newFakeBackend(),
-		Checkpoints:    newFakeCheckpointStore(),
-		RebuildMarkers: newFakeRebuildMarker(),
-		Locker:         lockedLocker{},
-		Logger:         logger,
-	})
-	if err != nil {
-		t.Fatalf("new coordinator: %v", err)
-	}
-	coordinator.Tick(ctx)
-
-	summary := freshnessSummary(t, &buffer)
-	requireBucketIdentity(t, summary)
-	if summaryBool(t, summary, "tick_complete") {
-		t.Errorf("tick_complete = true while cancellation stopped the tick")
-	}
-	if got := summaryNumber(t, summary, "orgs_unevaluated"); got != 1 {
-		t.Errorf("orgs_unevaluated = %v, want 1 -- a cancelled organization is unevaluated, not backing off", got)
-	}
-	if got := summaryNumber(t, summary, "orgs_backoff"); got != 0 {
-		t.Errorf("orgs_backoff = %v, want 0 -- reporting cancellation as ordinary backoff hides it", got)
-	}
 }

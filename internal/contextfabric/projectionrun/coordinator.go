@@ -807,25 +807,65 @@ func (s *tickFreshnessStats) recordBackoff()         { atomic.AddInt64(&s.orgsBa
 func (s *tickFreshnessStats) recordSourceFailedOrg() { atomic.AddInt64(&s.orgsSourceFailed, 1) }
 func (s *tickFreshnessStats) recordUnevaluated()     { atomic.AddInt64(&s.orgsUnevaluated, 1) }
 
-// classify records exactly ONE bucket for one organization and is the ONLY
-// way a bucket is ever recorded. Every caller goes through it.
+// orgScope is one organization's evaluation, and the ONLY way a bucket is
+// ever recorded for it. Installed once per organization with a deferred
+// finish(), it makes "exactly one bucket per organization" true by
+// construction rather than by every exit remembering to do its bookkeeping.
 //
-// This exists because the same defect was found THREE times in a row, each
-// time at a different exit: the classification switch, then the per-source
-// loop's early return, then the organization-lock and lifecycle-build paths.
-// Patching a fourth site would have been the third instance of one class, so
-// the invariant is enforced here instead of at each call site -- a tick that
-// has been cancelled has not established a verdict about this organization,
-// whatever exit it happens to be leaving through. Any future exit that
-// records a bucket inherits the check for free, and a structural test
-// asserts that no caller bypasses it.
-func (s *tickFreshnessStats) classify(ctx context.Context, bucket func()) {
-	if ctx.Err() != nil {
-		s.markIncomplete()
-		s.recordUnevaluated()
+// It exists because the same defect was found at FOUR exits across three
+// review rounds -- the classification switch, the per-source loop's early
+// return, the organization-lock error path, and the lifecycle-build path.
+// Each fix was a patch at one more site, and each time a reviewer found
+// another. The bug was never any individual exit: it was that every exit had
+// to remember, and the ones that forgot published a confident wrong answer.
+//
+// A per-site check (the earlier form of this) closed the cancellation half
+// only. It could not catch an exit that recorded NO bucket on a path that was
+// not cancelled, nor one that recorded TWO. The finalizer catches both,
+// because it -- not the call site -- decides what is committed.
+type orgScope struct {
+	stats  *tickFreshnessStats
+	ctx    context.Context
+	bucket func()
+}
+
+// beginOrg opens one organization's scope. The caller MUST defer finish().
+func (s *tickFreshnessStats) beginOrg(ctx context.Context) *orgScope {
+	return &orgScope{stats: s, ctx: ctx}
+}
+
+// record names the bucket this organization belongs in. Last call wins, and
+// nothing is committed until finish() -- so an exit that changes its mind, or
+// one that never decides at all, cannot leave a half-written verdict behind.
+func (o *orgScope) record(bucket func()) { o.bucket = bucket }
+
+// finish commits exactly one bucket. A cancelled evaluation that never chose
+// one is unevaluated and marks the tick incomplete: the tick did not
+// establish a verdict about this organization, whatever exit it left through.
+// An evaluation that chose nothing without being cancelled is ALSO counted
+// unevaluated rather than dropped -- that is a defect, and the bucket
+// identity on the line is what makes it visible instead of silent.
+func (o *orgScope) finish() {
+	// CANCELLATION WINS, whatever the exit chose. This is deliberately
+	// stronger than "unevaluated when cancelled AND no bucket was recorded":
+	// the defect that started this class was a mid-drain cancellation whose
+	// path DID choose a bucket -- it reached the ordinary classification and
+	// chose ok, because a cancelled read is not a source failure. Committing
+	// that choice is exactly the wrong answer. A verdict reached under
+	// cancellation is not a verdict; the tick did not finish establishing it.
+	if o.ctx.Err() != nil {
+		o.stats.markIncomplete()
+		o.stats.recordUnevaluated()
 		return
 	}
-	bucket()
+	if o.bucket != nil {
+		o.bucket()
+		return
+	}
+	// Chose nothing, and was not cancelled. That is a defect rather than a
+	// legal state, and it is counted rather than dropped so the bucket
+	// identity on the line makes it visible instead of silent.
+	o.stats.recordUnevaluated()
 }
 func (s *tickFreshnessStats) markIncomplete() { atomic.StoreInt64(&s.tickIncomplete, 1) }
 
@@ -1015,17 +1055,22 @@ func (c *Coordinator) Tick(ctx context.Context) {
 // unchanged, which every existing composition root and test that does not
 // configure Lifecycle continues to exercise.
 func (c *Coordinator) runOrg(ctx context.Context, orgID string, stats *tickFreshnessStats) {
+	// ONE scope per organization, committed on every exit below including the
+	// ones that return early. See orgScope's own doc comment for why this is
+	// a finalizer rather than a check at each return.
+	scope := stats.beginOrg(ctx)
+	defer scope.finish()
 	mutexAny, _ := c.orgMu.LoadOrStore(orgID, &sync.Mutex{})
 	mutex := mutexAny.(*sync.Mutex)
 	if !mutex.TryLock() {
-		stats.classify(ctx, stats.recordBackoff)
+		scope.record(scope.stats.recordBackoff)
 		return
 	}
 	defer mutex.Unlock()
 
 	unlock, err := c.locker.Lock(ctx, orgID)
 	if err != nil {
-		stats.classify(ctx, stats.recordBackoff)
+		scope.record(scope.stats.recordBackoff)
 		if !errors.Is(err, ErrOrgLocked) {
 			c.logger.WarnContext(ctx, "projection organization lock failed", "org_id", orgID, "failure_class", classifyOutcomeError(err))
 		}
@@ -1038,16 +1083,16 @@ func (c *Coordinator) runOrg(ctx context.Context, orgID string, stats *tickFresh
 	}()
 
 	if c.lifecycle != nil {
-		c.runOrgLifecycle(ctx, orgID, stats)
+		c.runOrgLifecycle(ctx, orgID, scope)
 		return
 	}
-	c.runOrgLegacy(ctx, orgID, stats)
+	c.runOrgLegacy(ctx, orgID, scope)
 }
 
 // runOrgLegacy is the pre-CHAOS-3898 per-org tick body, unchanged: marker-based
 // crash-resume, epoch-0-pinned divergence check, epoch-0-pinned per-source
 // ticking. The caller (runOrg) already holds both organization locks.
-func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, stats *tickFreshnessStats) {
+func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, scope *orgScope) {
 	// CHAOS-3753 codex finding C2 invariant: never run incremental
 	// projection against a purged-but-not-reset graph. A marker present
 	// here means a prior Rebuild (this replica or another) crashed between
@@ -1056,11 +1101,11 @@ func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, stats *tic
 	// projection for this org this tick regardless of outcome (the marker
 	// state, not a stale checkpoint, is the true source of truth right now).
 	if inProgress, err := c.rebuildMarkers.IsRebuildInProgress(ctx, orgID); err != nil {
-		stats.classify(ctx, stats.recordBackoff)
+		scope.record(scope.stats.recordBackoff)
 		c.logger.WarnContext(ctx, "check rebuild marker failed; skipping tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
 		return
 	} else if inProgress {
-		stats.classify(ctx, stats.recordBackoff)
+		scope.record(scope.stats.recordBackoff)
 		if err := c.performRebuild(ctx, orgID); err != nil {
 			c.logger.WarnContext(ctx, "resume interrupted rebuild failed; will retry next tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
 		} else {
@@ -1078,7 +1123,7 @@ func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, stats *tic
 	// outcome and drive recovery through the SAME performRebuild sequence,
 	// under the SAME org lock this method already holds.
 	if c.checkpointStoreDiverged(ctx, orgID, c.checkpoints) {
-		c.recoverFromDivergence(ctx, orgID, stats)
+		c.recoverFromDivergence(ctx, orgID, scope)
 		return
 	}
 
@@ -1086,14 +1131,8 @@ func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, stats *tic
 	budget := c.drainBudget // CHAOS-3826: shared across every source this org drains this tick
 	for _, source := range c.sourceNames {
 		if ctx.Err() != nil {
-			// The reviewer's second clause, and the one the first cut of
-			// this fix missed: with more than one source the loop returns
-			// HERE, before the classification switch below, so the
-			// organization was recorded in no bucket at all and the
-			// identity summed to zero. Fixing the switch alone left this
-			// path exactly as broken as before.
-			stats.markIncomplete()
-			stats.recordUnevaluated()
+			// No bookkeeping here on purpose: the org-scope finalizer
+			// commits the verdict for every exit, including this one.
 			return
 		}
 		pairEvaluated, pairStale, pairFailed, pairWithheld := c.runPair(ctx, orgID, source, c.checkpoints, &budget)
@@ -1105,7 +1144,7 @@ func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, stats *tic
 		// the first, which is precisely the shape this disclosure exists
 		// to end.
 		sourceFailed = sourceFailed || pairFailed || pairWithheld
-		stats.recordPairOutcome(source, pairEvaluated, pairFailed, pairWithheld)
+		scope.stats.recordPairOutcome(source, pairEvaluated, pairFailed, pairWithheld)
 	}
 	// A failed source can no longer land in ok. It sits BELOW stale in
 	// precedence -- rebuild_required is the bucket that demands an operator
@@ -1114,13 +1153,13 @@ func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, stats *tic
 	// either way, so nothing depends on which bucket won.
 	switch {
 	case !evaluated:
-		stats.classify(ctx, stats.recordBackoff)
+		scope.record(scope.stats.recordBackoff)
 	case stale:
-		stats.classify(ctx, stats.recordRebuildRequired)
+		scope.record(scope.stats.recordRebuildRequired)
 	case sourceFailed:
-		stats.classify(ctx, stats.recordSourceFailedOrg)
+		scope.record(scope.stats.recordSourceFailedOrg)
 	default:
-		stats.classify(ctx, stats.recordOK)
+		scope.record(scope.stats.recordOK)
 	}
 }
 
@@ -1131,15 +1170,15 @@ func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, stats *tic
 // reads/advances the organization's CURRENT ACTIVE epoch's checkpoint set
 // (design brief §3.4), not always epoch 0. The caller (runOrg) already
 // holds both organization locks.
-func (c *Coordinator) runOrgLifecycle(ctx context.Context, orgID string, stats *tickFreshnessStats) {
+func (c *Coordinator) runOrgLifecycle(ctx context.Context, orgID string, scope *orgScope) {
 	row, found, err := c.lifecycle.Get(ctx, orgID)
 	if err != nil {
-		stats.classify(ctx, stats.recordBackoff)
+		scope.record(scope.stats.recordBackoff)
 		c.logger.WarnContext(ctx, "read graph lifecycle row failed; skipping tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
 		return
 	}
 	if found && row.Status == contextfabric.LifecycleStatusBuilding {
-		stats.classify(ctx, stats.recordBackoff)
+		scope.record(scope.stats.recordBackoff)
 		c.runBuildTick(ctx, orgID, row)
 		return
 	}
@@ -1152,7 +1191,7 @@ func (c *Coordinator) runOrgLifecycle(ctx context.Context, orgID string, stats *
 	}
 
 	if c.checkpointStoreDiverged(ctx, orgID, checkpoints) {
-		c.recoverFromDivergenceLifecycle(ctx, orgID, stats)
+		c.recoverFromDivergenceLifecycle(ctx, orgID, scope)
 		return
 	}
 
@@ -1160,14 +1199,8 @@ func (c *Coordinator) runOrgLifecycle(ctx context.Context, orgID string, stats *
 	budget := c.drainBudget // CHAOS-3826: shared across every source this org drains this tick
 	for _, source := range c.sourceNames {
 		if ctx.Err() != nil {
-			// The reviewer's second clause, and the one the first cut of
-			// this fix missed: with more than one source the loop returns
-			// HERE, before the classification switch below, so the
-			// organization was recorded in no bucket at all and the
-			// identity summed to zero. Fixing the switch alone left this
-			// path exactly as broken as before.
-			stats.markIncomplete()
-			stats.recordUnevaluated()
+			// No bookkeeping here on purpose: the org-scope finalizer
+			// commits the verdict for every exit, including this one.
 			return
 		}
 		pairEvaluated, pairStale, pairFailed, pairWithheld := c.runPair(ctx, orgID, source, checkpoints, &budget)
@@ -1179,20 +1212,20 @@ func (c *Coordinator) runOrgLifecycle(ctx context.Context, orgID string, stats *
 		// the first, which is precisely the shape this disclosure exists
 		// to end.
 		sourceFailed = sourceFailed || pairFailed || pairWithheld
-		stats.recordPairOutcome(source, pairEvaluated, pairFailed, pairWithheld)
+		scope.stats.recordPairOutcome(source, pairEvaluated, pairFailed, pairWithheld)
 	}
 	c.recordCheckpointEpochState(ctx, orgID, epoch, contextfabric.CheckpointEpochActive, checkpoints)
 	// See runOrgLegacy's identical switch for why a failed source cannot
 	// land in ok and why it sits below stale.
 	switch {
 	case !evaluated:
-		stats.classify(ctx, stats.recordBackoff)
+		scope.record(scope.stats.recordBackoff)
 	case stale:
-		stats.classify(ctx, stats.recordRebuildRequired)
+		scope.record(scope.stats.recordRebuildRequired)
 	case sourceFailed:
-		stats.classify(ctx, stats.recordSourceFailedOrg)
+		scope.record(scope.stats.recordSourceFailedOrg)
 	default:
-		stats.classify(ctx, stats.recordOK)
+		scope.record(scope.stats.recordOK)
 	}
 }
 
@@ -1610,10 +1643,10 @@ func (c *Coordinator) LivenessCheck(ctx context.Context) error {
 // Every log line here is content-safe: org_id_hash and a bounded failure
 // class only, matching classifyOutcomeError's closed vocabulary -- never a
 // raw organization identifier or dependency error text.
-func (c *Coordinator) recoverFromDivergence(ctx context.Context, orgID string, stats *tickFreshnessStats) {
+func (c *Coordinator) recoverFromDivergence(ctx context.Context, orgID string, scope *orgScope) {
 	key := orgID + "\x00" + divergenceBackoffKey
 	if !c.due(key) {
-		stats.classify(ctx, stats.recordBackoff)
+		scope.record(scope.stats.recordBackoff)
 		return
 	}
 	hash := orgIDHash(orgID)
@@ -1624,7 +1657,7 @@ func (c *Coordinator) recoverFromDivergence(ctx context.Context, orgID string, s
 		"org_id_hash", hash)
 	err := c.performRebuild(ctx, orgID)
 	c.recordBackoff(key, err)
-	stats.classify(ctx, stats.recordDivergenceRecovered)
+	scope.record(scope.stats.recordDivergenceRecovered)
 	if err != nil {
 		c.logger.ErrorContext(ctx, "context_fabric: automatic projection-liveness recovery failed; will retry with backoff",
 			"org_id_hash", hash, "failure_class", classifyOutcomeError(err))
@@ -1643,10 +1676,10 @@ func (c *Coordinator) recoverFromDivergence(ctx context.Context, orgID string, s
 // the build flips, runOrgLifecycle's steady branch resolves the NEW active
 // epoch and checkpointStoreDiverged naturally reports false again, the same
 // way resetAllCheckpoints made the legacy path self-clearing.
-func (c *Coordinator) recoverFromDivergenceLifecycle(ctx context.Context, orgID string, stats *tickFreshnessStats) {
+func (c *Coordinator) recoverFromDivergenceLifecycle(ctx context.Context, orgID string, scope *orgScope) {
 	key := orgID + "\x00" + divergenceBackoffKey
 	if !c.due(key) {
-		stats.classify(ctx, stats.recordBackoff)
+		scope.record(scope.stats.recordBackoff)
 		return
 	}
 	hash := orgIDHash(orgID)
@@ -1654,7 +1687,7 @@ func (c *Coordinator) recoverFromDivergenceLifecycle(ctx context.Context, orgID 
 		"org_id_hash", hash)
 	opened, err := c.beginLifecycleBuild(ctx, orgID)
 	c.recordBackoff(key, err)
-	stats.classify(ctx, stats.recordDivergenceRecovered)
+	scope.record(scope.stats.recordDivergenceRecovered)
 	if err != nil {
 		c.logger.ErrorContext(ctx, "context_fabric: automatic projection-liveness recovery failed to open a build-aside epoch; will retry with backoff",
 			"org_id_hash", hash, "failure_class", classifyOutcomeError(err))
