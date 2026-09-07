@@ -65,6 +65,14 @@ def _check_node(node, node_name, path="attempt"):
                 if not isinstance(item, item_want):
                     return (f"{path}.{key}[{i}] must be {rule['items']}, got "
                             f"{type(item).__name__}")
+                # An element that is itself a described node is checked as one. Typing
+                # `candidates` as an array of objects stopped one level above the fields
+                # the vector-basis derivation reads -- the same shallow boundary, again.
+                if rule.get("element_node"):
+                    deeper = _check_node(item, rule["element_node"],
+                                         f"{path}.{key}[{i}]")
+                    if deeper:
+                        return deeper
         if key in schema():                       # a node the schema describes: recurse
             deeper = _check_node(val, key, f"{path}.{key}")
             if deeper:

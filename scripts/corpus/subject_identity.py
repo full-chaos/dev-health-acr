@@ -147,6 +147,7 @@ def inspect(root, corpus_id, expectation, rep=1):
         state = f"unsequenced:{len(unsequenced)}" if unsequenced else "no_artefact"
         return {"corpus_id": corpus_id, "state": state,
                 "subject_substitution": False, "committed": [], "match_mechanisms": [],
+                "commit_bases": [],
                 "unsequenced_files": unsequenced}
     # r1 #6. Only the lexically LAST attempt was inspected, so a wrong subject committed
     # on an earlier turn vanished when a later turn ended without committing anything.
@@ -157,6 +158,7 @@ def inspect(root, corpus_id, expectation, rep=1):
     if terminal_class == UNPARSEABLE:
         return {"corpus_id": corpus_id, "state": "unreadable_artefact",
                 "subject_substitution": False, "committed": [], "match_mechanisms": [],
+                "commit_bases": [],
                 "artefact": path}
 
     # A terminal FAILURE attempt is readable and carries no result document: the engine
@@ -165,7 +167,7 @@ def inspect(root, corpus_id, expectation, rep=1):
     result = result or {}
     sr = result.get("subject_resolution") or {}
     committed = list(sr.get("committed") or [])
-    mechs, matched_terms = [], []
+    mechs, matched_terms, commit_bases = [], [], []
     seen = {(c.get("kind"), c.get("canonical_id")) for c in committed}
     # r2 #2. The r1 fix only reported `unreadable_artefact` when the TERMINAL attempt was
     # malformed; an unreadable EARLIER attempt was silently skipped and a readable terminal
@@ -188,8 +190,15 @@ def inspect(root, corpus_id, expectation, rep=1):
                 committed.append(c)
         for c in (s.get("candidates") or []):
             if c.get("state") == "committed":
-                mechs.extend(c.get("match_mechanisms") or [])
+                m = list(c.get("match_mechanisms") or [])
+                mechs.extend(m)
                 matched_terms.extend(c.get("matched_terms") or [])
+                # PER-CANDIDATE, not flattened. `match_mechanisms` is a union across every
+                # committed candidate, so a row committing one subject on `exact` and
+                # another on `vector` alone is indistinguishable from one committing a
+                # single subject matched by both. The basis question needs the candidates
+                # kept apart, so each commit's own mechanism set is recorded.
+                commit_bases.append(sorted(set(m)))
 
     rec = {
         "corpus_id": corpus_id,
@@ -203,6 +212,7 @@ def inspect(root, corpus_id, expectation, rep=1):
                        "label": c.get("label")} for c in committed],
         "committed_n": len(committed),
         "match_mechanisms": sorted(set(mechs)),
+        "commit_bases": commit_bases,
         "subject_substitution": False,
         "substitution_rule": None,
         "substitution_detail": None,

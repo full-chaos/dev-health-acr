@@ -102,7 +102,8 @@
   "candidates": {
    "type": "array",
    "items": "object",
-   "required": false
+   "required": false,
+   "element_node": "candidate"
   }
  },
  "failure": {
@@ -178,5 +179,37 @@
    "required": false
   }
  },
- "_types_are_measured": "Every type here is the type OBSERVED in 425 real artefacts, not inferred from a name or from a crash report. Two entries were typed by analogy in the first draft and both were wrong -- limitations carries strings, structure_needs is a mapping -- and together they rejected 233 of 425 real attempts, which would have shipped as a scoring regression. Types are a fact about the data and are measured like one."
+ "_types_are_measured": "Every type here is the type OBSERVED in 425 real artefacts, not inferred from a name or from a crash report. Two entries were typed by analogy in the first draft and both were wrong -- limitations carries strings, structure_needs is a mapping -- and together they rejected 233 of 425 real attempts, which would have shipped as a scoring regression. Types are a fact about the data and are measured like one.",
+ "candidate": {
+  "receipt_id": {
+   "type": "string"
+  },
+  "state": {
+   "type": "string"
+  },
+  "subject": {
+   "type": "object"
+  },
+  "matched_terms": {
+   "type": "array",
+   "items": "string"
+  },
+  "match_reasons": {
+   "type": "array",
+   "items": "string"
+  },
+  "match_mechanisms": {
+   "type": "array",
+   "items": "string"
+  },
+  "evidence_ref_ids": {
+   "type": "array",
+   "items": "string"
+  },
+  "confidence": {
+   "type": "number"
+  }
+ },
+ "_element_nodes": "An array whose `element_node` names a schema node has EVERY element checked against that node. Typing `candidates` as an array of objects stopped one level above the fields the vector-basis derivation reads, which is the same shallow-boundary class r9 found at #1 and #2. `confidence` is `number` because 83 of 1201 are ints and 1118 are floats -- measured, not assumed.",
+ "_committed_not_element_typed": "subject_resolution.committed is typed `array of object` but its ELEMENTS are deliberately NOT checked against committed_subject. Doing so rejects an artefact carrying an explicit null kind, and the row then scores agree_weak through the unreadable-artefact cap instead of the disagree it earns as a subject substitution -- doubt making a failed row look BETTER, which is the exact class this instrument already fixed once. r9 #1's repro (committed: [1]) is caught by the `items` check without element typing. The candidates array IS element-typed because the vector-basis derivation dereferences its fields and nothing there is nullable in any of the 425 measured artefacts."
 }

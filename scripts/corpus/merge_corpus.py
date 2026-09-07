@@ -172,6 +172,45 @@ def per_family(rows):
     )
 
 
+
+# The two vector columns, as ONE function so the merge and its pins read the SAME code.
+# Recomputing this shape inside a test is the mirror trap that has cost this lane four
+# rounds: the pin passes because it reimplemented the thing it was meant to hold.
+VECTOR_COLUMNS_DOC = (
+    "vector_matched_rows = a committed candidate had vector among its match mechanisms. "
+    "vector_committed_rows = a committed candidate had vector and NO exact match, so the "
+    "commit rests on the vector hit. Derived from "
+    "subject_resolution.candidates[state=committed].match_mechanisms, per candidate. The "
+    "engine emits no decision_summary/commit_bases field -- this was measured across all "
+    "425 artefacts of the four arms.")
+
+
+def vector_columns(identity):
+    """RENAMED 08:36Z (CHAOS-5387).
+
+    `vector_committed_rows` has always read `match_mechanisms` -- the mechanisms that
+    MATCHED a committed candidate -- while its name claims the commit RESTED on the vector
+    hit. Those are different claims, and they differ here: every one of the 34 committed
+    candidates across the four measured arms also carries `exact`, so participation is
+    0/0/6/6 and the basis count is 0. The attribution evidence is unchanged and still
+    stands -- it was always a participation signal -- but it is now named as one.
+
+    The basis is derived PER CANDIDATE. `match_mechanisms` is a union across every
+    committed candidate, so a row committing one subject on `exact` and another on
+    `vector` alone is indistinguishable there from one subject matched by both.
+    """
+    return {
+        "vector_matched_rows": sorted(
+            k for k, v in identity.items()
+            if "vector" in (v.get("match_mechanisms") or [])),
+        "vector_committed_rows": sorted(
+            k for k, v in identity.items()
+            if any("vector" in b and "exact" not in b
+                   for b in (v.get("commit_bases") or []))),
+        "_vector_columns": VECTOR_COLUMNS_DOC,
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--shape", required=True, choices=["parallel", "sequential"])
@@ -265,8 +304,7 @@ def main():
                 for k, v in sorted(identity.items()) if v.get("subject_substitution")
             ],
             "unreadable_artefact_rows": unreadable,
-            "vector_committed_rows": sorted(
-                k for k, v in identity.items() if "vector" in (v.get("match_mechanisms") or [])),
+            **vector_columns(identity),
             "committed_kind_not_requested_kind": [
                 {"corpus_id": k, "requested_kind": BY_ID[k].get("requested_kind"),
                  "wrong_kind_commits": subject_identity.kind_observations(BY_ID[k], v.get("committed")),
@@ -360,6 +398,7 @@ def main():
     print(f"  SUBJECT SUBSTITUTION: {si['substitution_count']} row(s) {si['substitution_rows']}")
     if si["unreadable_artefact_rows"]:
         print(f"  unreadable artefacts (NOT a pass): {si['unreadable_artefact_rows']}")
+    print(f"  vector-matched rows:   {len(si['vector_matched_rows'])} {si['vector_matched_rows']}")
     print(f"  vector-committed rows: {len(si['vector_committed_rows'])} {si['vector_committed_rows']}")
     print(f"  EXPECTATION: agree={es['agree']} agree_weak={es['agree_weak']} disagree={es['disagree']} unscored={es['unscored']}")
     d = verdict["rig_diagnostics"]
