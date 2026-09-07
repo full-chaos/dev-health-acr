@@ -246,10 +246,16 @@ def score(expectation, bucket, subject_substitution=False,
 
     key = terminal_key(terminal_status, bucket)
     if key is None:
+        # An unauthored terminal is NAMED, not merely unscored. classify() -- frozen by the
+        # positive-control invariant -- still buckets by substring, so a future
+        # `clarification_required(x)` would land in clarification_needed there while being
+        # unscored here. Naming it puts that divergence on the line instead of leaving it
+        # to be discovered.
+        if isinstance(terminal_status, str) and terminal_status:
+            return "unscored", f"unauthored_terminal:{terminal_status}"
         return "unscored", (
-            f"terminal status is absent or unrecognised ({terminal_status!r}) -- the "
-            "expectation cannot be checked, so this row is NOT scored rather than "
-            "assumed to agree")
+            f"terminal status is absent ({terminal_status!r}) -- the expectation cannot "
+            "be checked, so this row is NOT scored rather than assumed to agree")
 
     if key == "error":
         return "disagree", "engine error; the declared expectation was not reached"

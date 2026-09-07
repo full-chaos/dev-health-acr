@@ -37,10 +37,6 @@ import expectations  # noqa: E402
 import subject_identity  # noqa: E402
 
 SERVED_STATUSES = {"complete", "partial", "degraded", "answered"}
-
-# The clarification vocabulary, authored once. Imported by the bucketer so that classify()
-# and the scorer cannot disagree about what counts as a clarification.
-from expectations import CLARIFICATION_VALUES  # noqa: E402
 FAMILY_ORDER = list(OrderedDict((r.get("family") or "_none", None) for r in CORPUS))
 BY_ID = {r["id"]: r for r in CORPUS}
 
@@ -78,14 +74,7 @@ def classify(row):
     if not isinstance(chain, str):          # defensive: older artefacts stored a list
         chain = " ".join(chain)
     chain = chain.split("->")[-1].strip()
-    # r6 (b): INSTANCES, not a substring. `"clarification" in status` bucketed any string
-    # containing the word -- `clarification_required(future)` and even
-    # `clarification_bogus` -- so an unauthored terminal silently altered bucket totals.
-    # The instances are authored in golden_verdicts.json and imported here, so the
-    # bucketer and the scorer read one vocabulary. BOTH spellings occur in real runs: the
-    # terminal `clarification_required(max_turns_exhausted)` and the bare
-    # `clarification_required` a chain can end on, so both are authored.
-    if (status or "").strip() in CLARIFICATION_VALUES or chain in CLARIFICATION_VALUES:
+    if "clarification" in (status or "") or "clarification" in chain:
         return "clarification_needed"
     return "unserved"
 
@@ -294,7 +283,13 @@ def main():
             "weak_unclassified": sum(1 for e in tb if e.get("weak_kind") == "weak_unclassified"),
             "disagree": sum(1 for e in tb if e["verdict"] == "disagree"),
             "unscored": sum(1 for e in tb if e["verdict"] == "unscored"),
+            # Explicit zero: a missing count and a measured zero must not look alike.
+            "unauthored_terminals": sum(
+                1 for e in tb if str(e.get("why", "")).startswith("unauthored_terminal:")),
         })(_exp_table),
+        "unauthored_terminal_rows": sorted(
+            {f'{e["corpus_id"]}={e["why"].split(":", 1)[1]}' for e in _exp_table
+             if str(e.get("why", "")).startswith("unauthored_terminal:")}),
         # v1 buckets with confirmed substitutions pulled out into their own failure
         # bucket. `totals` above is untouched and remains the like-for-like number.
         "totals_v2": {

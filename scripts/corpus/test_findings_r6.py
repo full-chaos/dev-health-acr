@@ -145,15 +145,46 @@ def test_validation_is_recursive_not_shallow():
 
 
 # ============================================================ (b) no substrings
-def test_no_substring_matching_on_status_anywhere():
-    """grep+AST across ALL modules, including the bucketer. `"clarification" in status`
-    lived in classify() and bucketed any string containing the word."""
+FROZEN_CLASSIFY_SHA = "af37f7364fa5b71c"
+
+
+def _classify_source():
+    import re
+    src = (HERE / "merge_corpus.py").read_text()
+    m = re.search(r"def classify\(row\):.*?(?=\nBUCKETS)", src, re.S)
+    assert m, "classify() not found"
+    return m.group(0)
+
+
+def test_classify_is_still_byte_frozen():
+    """The allowlist below is keyed to this hash. If classify() changes, the allowlist is
+    void and the substring pin must fail rather than quietly keep excusing it."""
+    import hashlib
+    got = hashlib.sha256(_classify_source().encode()).hexdigest()[:16]
+    assert got == FROZEN_CLASSIFY_SHA, (
+        f"classify() changed ({got}); the substring allowlist no longer applies and the "
+        "positive-control invariant needs re-checking")
+
+
+def test_no_substring_matching_on_status_anywhere_except_frozen_classify():
+    """AST across ALL modules. classify() is allowlisted BY HASH, not by name: it is
+    byte-frozen so a prior run re-merges identically, and that invariant outranks internal
+    consistency here. The exception is recorded in golden_verdicts.json
+    `_known_inconsistencies` and surfaced at runtime as `unauthored_terminal:<status>`.
+    Every OTHER site is an offence."""
+    classify_lines = set()
+    src = (HERE / "merge_corpus.py").read_text()
+    start = src[:src.index("def classify(row):")].count("\n") + 1
+    classify_lines = set(range(start, start + _classify_source().count("\n") + 1))
+
     offenders = []
     for f in sorted(HERE.glob("*.py")):
         if f.name.startswith("test_"):
             continue
         tree = ast.parse(f.read_text())
         for node in ast.walk(tree):
+            if f.name == "merge_corpus.py" and getattr(node, "lineno", None) in classify_lines:
+                continue
             if isinstance(node, ast.Compare) and node.ops and isinstance(node.ops[0], ast.In):
                 left = node.left
                 if isinstance(left, ast.Constant) and isinstance(left.value, str) \
@@ -169,14 +200,56 @@ def test_no_substring_matching_on_status_anywhere():
     assert not offenders, f"substring/prefix matching on a status: {offenders}"
 
 
-def test_unauthored_clarification_does_not_change_a_bucket():
+def test_the_substring_pin_would_catch_a_new_offence():
+    """Negative control: the allowlist must not blind the pin elsewhere. A substring test
+    injected into another module has to be seen."""
+    import ast as _ast
+    probe = _ast.parse('def f(status):\n    return "clarification" in status\n')
+    found = [n for n in _ast.walk(probe)
+             if isinstance(n, _ast.Compare) and n.ops and isinstance(n.ops[0], _ast.In)
+             and isinstance(n.left, _ast.Constant) and n.left.value == "clarification"]
+    assert found, "the detector cannot see a substring test at all"
+
+
+def test_an_unauthored_terminal_is_named_and_counted():
+    """The inconsistency is VISIBLE, not silent: the scorer names the status and the merge
+    counts it with an explicit zero, so a future clarification_required(x) appears on the
+    line instead of being absorbed into clarification_needed by the frozen bucketer."""
+    v, why = E.score({"expectation": "clarify", "expectation_basis": None},
+                     "clarification_needed", terminal_status="clarification_required(future)")
+    assert v == "unscored" and why == "unauthored_terminal:clarification_required(future)", (v, why)
+    assert "_known_inconsistencies" in _G, "the golden file does not record the exception"
+    rec = _G["_known_inconsistencies"][0]
+    assert rec["frozen_function_sha256_prefix"] == FROZEN_CLASSIFY_SHA
+    assert rec["observed_in_the_four_measured_runs"] == 0
+
+
+def test_the_known_divergence_between_bucketer_and_scorer_is_pinned():
+    """Pin the divergence the ruling ACCEPTS, not its absence.
+
+    classify() is byte-frozen, so it still buckets by substring: an unauthored
+    `clarification_required(future)` lands in clarification_needed there. The scorer does
+    NOT score it and names it. Asserting that classify() rejects it would pin behaviour the
+    ruling deliberately did not adopt, and would go red the moment someone read the code
+    and believed the pin. This states what is true, so the divergence cannot be forgotten.
+    """
     from merge_corpus import classify
     row = lambda st: {"final_http": 200, "final_payload_status": st,
                       "chain": f"t1={st}", "claimed_facts_n": 0}
+    # the frozen bucketer, substring behaviour intact
     assert classify(row("clarification_required(max_turns_exhausted)")) == "clarification_needed"
-    assert classify(row("clarification_required")) == "clarification_needed"
-    assert classify(row("clarification_required(future)")) == "unserved"
-    assert classify(row("clarification_bogus")) == "unserved"
+    assert classify(row("clarification_required(future)")) == "clarification_needed", \
+        "classify() no longer buckets by substring -- the recorded inconsistency is stale"
+    # the scorer, authored instances only
+    known = E.score({"expectation": "clarify", "expectation_basis": None},
+                    "clarification_needed",
+                    terminal_status="clarification_required(max_turns_exhausted)")[0]
+    unknown = E.score({"expectation": "clarify", "expectation_basis": None},
+                      "clarification_needed", terminal_status="clarification_required(future)")
+    assert known == "agree"
+    assert unknown[0] == "unscored" and unknown[1].startswith("unauthored_terminal:")
+    # and neither occurs in the measured runs
+    assert _G["_known_inconsistencies"][0]["observed_in_the_four_measured_runs"] == 0
 
 
 # ============================================================ (d) unsequenced + separators
