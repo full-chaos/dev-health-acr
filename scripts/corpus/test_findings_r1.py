@@ -89,11 +89,13 @@ def test_f2_missing_artefact_never_scores_as_agreement():
 
 def test_f2_untrusted_identity_caps_an_agree_but_never_improves_a_disagree():
     e = E.expectation_for(_row("SERVABLE", expect="serve"))
-    # a row that plainly failed stays failed
-    assert E.score(e, "error", identity_state="unreadable_artefact",
+    # a row that plainly failed stays failed. NOTE the pairs must be COHERENT under
+    # ruling 1 -- (terminal=no_match, bucket=error) is an incoherent row and is now
+    # unscored, so asserting `disagree` on it would be asserting the wrong thing.
+    assert E.score(e, "unserved", identity_state="unreadable_artefact",
                    terminal_status="no_match")[0] == "disagree"
-    assert E.score(e, "unserved", identity_state="no_artefact",
-                   terminal_status="no_match")[0] == "disagree"
+    assert E.score(e, "error", identity_state="no_artefact",
+                   terminal_status="http_502:acr_investigation_failed")[0] == "disagree"
     # only an agree is capped
     assert E.score(e, "served_with_data", identity_state="unreadable_artefact",
                    terminal_status="partial")[0] == "agree_weak"

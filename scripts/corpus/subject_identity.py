@@ -32,7 +32,7 @@ import re
 from pathlib import Path
 
 from attempt_order import REPLAY_DIRNAME, order_attempts  # noqa: E402
-from validators import validate_attempt  # noqa: E402
+from validators import load_attempt, validate_attempt  # noqa: E402
 
 REPLAY_HINT = REPLAY_DIRNAME
 
@@ -58,7 +58,9 @@ def _norm(s):
 
 
 def _last_attempt(replicate_dir, corpus_id, rep=1):
-    files = order_attempts(glob.glob(str(Path(replicate_dir) / f"{corpus_id}-rep{rep}-t*-a*.json")))
+    files, _ = order_attempts(
+        glob.glob(str(Path(replicate_dir) / f"{corpus_id}-rep{rep}-t*-a*.json")),
+        on_unparseable="skip")
     return files[-1] if files else None
 
 
@@ -86,9 +88,11 @@ def classify_attempt(attempt):  # noqa: C901
         return UNPARSEABLE, None
     resp = attempt.get("response")
     if isinstance(resp, dict):
-        if resp.get("result"):
+        # membership, not truthiness: an EMPTY result mapping is still a result document,
+        # and an empty failure is still a failure. Testing truthiness rejected both.
+        if "result" in resp:
             return RESULT, resp["result"]
-        if resp.get("failure"):
+        if "failure" in resp:
             return FAILURE, None
     status = attempt.get("status")
     if isinstance(status, int) and status >= 400:
@@ -112,10 +116,8 @@ def _read_attempt(path):
     engine returned a failure" with "we could not read the file" would have marked a
     large share of rows unverifiable and quietly capped their verdicts.
     """
-    try:
-        with open(path) as fh:
-            d = json.load(fh)
-    except Exception:
+    ok, d, _reason = load_attempt(path)
+    if not ok:
         return UNPARSEABLE, None
     return classify_attempt(d)
 
@@ -135,7 +137,9 @@ def inspect(root, corpus_id, expectation, rep=1):
     hits = []
     for g in ATTEMPT_GLOBS:
         hits.extend(Path(root).glob(g.format(cid=corpus_id, rep=rep)))
-    hits = order_attempts(hits)
+    # skip mode: a stray file in the directory is RECORDED, not fatal, and never given a
+    # guessed sequence position.
+    hits, unsequenced = order_attempts(hits, on_unparseable="skip")
     if not hits:
         return {"corpus_id": corpus_id, "state": "no_artefact",
                 "subject_substitution": False, "committed": [], "match_mechanisms": []}
@@ -199,6 +203,8 @@ def inspect(root, corpus_id, expectation, rep=1):
         "substitution_detail": None,
     }
 
+    if unsequenced:
+        rec["unsequenced_files"] = unsequenced
     if unreadable:
         rec["state"] = "unreadable_artefact"
         rec["unreadable_attempts"] = unreadable

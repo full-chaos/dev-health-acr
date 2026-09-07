@@ -1,0 +1,6135 @@
+{
+ "_authored": "by hand from the design rules and the 04:16Z rulings, independently of the implementation",
+ "_rulings": {
+  "1": "incoherent (terminal,bucket) -> unscored:incoherent_row, per COHERENCE",
+  "2": "refuse+named+no_match -> agree_weak (basis not stated); refuse+none+no_match -> agree",
+  "3": "http_* -> disagree for every expectation",
+  "4": "serve+degraded+served_with_data -> agree (data presence defines the bucket)",
+  "5": "agree_weak is SPLIT by reason in the summary and the table (04:24Z). THREE kinds exist, not two: the hollow serve was already an agree_weak before ruling 2 and is reported separately rather than folded into either of the other two."
+ },
+ "_coherence": {
+  "complete": [
+   "served_degraded",
+   "served_with_data"
+  ],
+  "answered": [
+   "served_degraded",
+   "served_with_data"
+  ],
+  "partial": [
+   "served_degraded",
+   "served_with_data"
+  ],
+  "degraded": [
+   "served_degraded",
+   "served_with_data"
+  ],
+  "no_match": [
+   "unserved"
+  ],
+  "refused": [
+   "unserved"
+  ],
+  "clarification_required(max_turns_exhausted)": [
+   "clarification_needed"
+  ],
+  "http_502:acr_investigation_failed": [
+   "error"
+  ],
+  "http_400:acr_rejected_request": [
+   "error"
+  ]
+ },
+ "_domain": {
+  "expect": [
+   "serve",
+   "refuse",
+   "decline",
+   "clarify"
+  ],
+  "basis": [
+   "none",
+   "named"
+  ],
+  "terminal": [
+   "complete",
+   "partial",
+   "degraded",
+   "answered",
+   "no_match",
+   "refused",
+   "clarification_required(max_turns_exhausted)",
+   "http_502:acr_investigation_failed",
+   "http_400:acr_rejected_request",
+   null,
+   "",
+   "future_status"
+  ],
+  "bucket": [
+   "served_with_data",
+   "served_degraded",
+   "unserved",
+   "clarification_needed",
+   "error",
+   null,
+   "nonsense"
+  ]
+ },
+ "_cells": 672,
+ "_default": "any combination absent from this file is unscored:<reason>",
+ "cells": [
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": "served_with_data",
+   "verdict": "agree",
+   "reason": "served with facts as declared",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": "served_degraded",
+   "verdict": "agree_weak",
+   "reason": "served, but claimed no facts",
+   "weak_kind": "weak_hollow_serve"
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": "served_with_data",
+   "verdict": "agree",
+   "reason": "served with facts as declared",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": "served_degraded",
+   "verdict": "agree_weak",
+   "reason": "served, but claimed no facts",
+   "weak_kind": "weak_hollow_serve"
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": "served_with_data",
+   "verdict": "agree",
+   "reason": "served with facts as declared",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": "served_degraded",
+   "verdict": "agree_weak",
+   "reason": "served, but claimed no facts",
+   "weak_kind": "weak_hollow_serve"
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": "served_with_data",
+   "verdict": "agree",
+   "reason": "served with facts as declared",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": "served_degraded",
+   "verdict": "agree_weak",
+   "reason": "served, but claimed no facts",
+   "weak_kind": "weak_hollow_serve"
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": "unserved",
+   "verdict": "disagree",
+   "reason": "expected a serve, terminated as no_match",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": "unserved",
+   "verdict": "disagree",
+   "reason": "expected a serve, was refused",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "clarification_needed",
+   "verdict": "disagree",
+   "reason": "expected a serve, exhausted turns",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "error",
+   "verdict": "disagree",
+   "reason": "engine error; the declared outcome was not reached",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "error",
+   "verdict": "disagree",
+   "reason": "engine error; the declared outcome was not reached",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": null,
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": null,
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": null,
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": null,
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": null,
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": null,
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": null,
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": "served_with_data",
+   "verdict": "agree",
+   "reason": "served with facts as declared",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": "served_degraded",
+   "verdict": "agree_weak",
+   "reason": "served, but claimed no facts",
+   "weak_kind": "weak_hollow_serve"
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": "served_with_data",
+   "verdict": "agree",
+   "reason": "served with facts as declared",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": "served_degraded",
+   "verdict": "agree_weak",
+   "reason": "served, but claimed no facts",
+   "weak_kind": "weak_hollow_serve"
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": "served_with_data",
+   "verdict": "agree",
+   "reason": "served with facts as declared",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": "served_degraded",
+   "verdict": "agree_weak",
+   "reason": "served, but claimed no facts",
+   "weak_kind": "weak_hollow_serve"
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": "served_with_data",
+   "verdict": "agree",
+   "reason": "served with facts as declared",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": "served_degraded",
+   "verdict": "agree_weak",
+   "reason": "served, but claimed no facts",
+   "weak_kind": "weak_hollow_serve"
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": "unserved",
+   "verdict": "disagree",
+   "reason": "expected a serve, terminated as no_match",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": "unserved",
+   "verdict": "disagree",
+   "reason": "expected a serve, was refused",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "clarification_needed",
+   "verdict": "disagree",
+   "reason": "expected a serve, exhausted turns",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "error",
+   "verdict": "disagree",
+   "reason": "engine error; the declared outcome was not reached",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "error",
+   "verdict": "disagree",
+   "reason": "engine error; the declared outcome was not reached",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": null,
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": null,
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": null,
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": null,
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": null,
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": null,
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": null,
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "serve",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": "served_with_data",
+   "verdict": "disagree",
+   "reason": "expected a refusal, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": "served_degraded",
+   "verdict": "disagree",
+   "reason": "expected a refusal, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": "served_with_data",
+   "verdict": "disagree",
+   "reason": "expected a refusal, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": "served_degraded",
+   "verdict": "disagree",
+   "reason": "expected a refusal, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": "served_with_data",
+   "verdict": "disagree",
+   "reason": "expected a refusal, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": "served_degraded",
+   "verdict": "disagree",
+   "reason": "expected a refusal, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": "served_with_data",
+   "verdict": "disagree",
+   "reason": "expected a refusal, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": "served_degraded",
+   "verdict": "disagree",
+   "reason": "expected a refusal, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": "unserved",
+   "verdict": "agree",
+   "reason": "did not serve, as declared",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": "unserved",
+   "verdict": "agree",
+   "reason": "refused as declared",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "clarification_needed",
+   "verdict": "agree_weak",
+   "reason": "did not serve, but never terminated",
+   "weak_kind": "weak_never_terminated"
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "error",
+   "verdict": "disagree",
+   "reason": "engine error; the declared outcome was not reached",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "error",
+   "verdict": "disagree",
+   "reason": "engine error; the declared outcome was not reached",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": null,
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": null,
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": null,
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": null,
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": null,
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": null,
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": null,
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": "served_with_data",
+   "verdict": "disagree",
+   "reason": "expected a refusal, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": "served_degraded",
+   "verdict": "disagree",
+   "reason": "expected a refusal, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": "served_with_data",
+   "verdict": "disagree",
+   "reason": "expected a refusal, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": "served_degraded",
+   "verdict": "disagree",
+   "reason": "expected a refusal, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": "served_with_data",
+   "verdict": "disagree",
+   "reason": "expected a refusal, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": "served_degraded",
+   "verdict": "disagree",
+   "reason": "expected a refusal, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": "served_with_data",
+   "verdict": "disagree",
+   "reason": "expected a refusal, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": "served_degraded",
+   "verdict": "disagree",
+   "reason": "expected a refusal, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": "unserved",
+   "verdict": "agree_weak",
+   "reason": "nothing fabricated, but the declared basis was not stated",
+   "weak_kind": "weak_basis_unstated"
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": "unserved",
+   "verdict": "agree",
+   "reason": "refused as declared",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "clarification_needed",
+   "verdict": "agree_weak",
+   "reason": "did not serve, but never terminated",
+   "weak_kind": "weak_never_terminated"
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "error",
+   "verdict": "disagree",
+   "reason": "engine error; the declared outcome was not reached",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "error",
+   "verdict": "disagree",
+   "reason": "engine error; the declared outcome was not reached",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": null,
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": null,
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": null,
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": null,
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": null,
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": null,
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": null,
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "refuse",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": "served_with_data",
+   "verdict": "disagree",
+   "reason": "expected a decline, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": "served_degraded",
+   "verdict": "disagree",
+   "reason": "expected a decline, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": "served_with_data",
+   "verdict": "disagree",
+   "reason": "expected a decline, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": "served_degraded",
+   "verdict": "disagree",
+   "reason": "expected a decline, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": "served_with_data",
+   "verdict": "disagree",
+   "reason": "expected a decline, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": "served_degraded",
+   "verdict": "disagree",
+   "reason": "expected a decline, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": "served_with_data",
+   "verdict": "disagree",
+   "reason": "expected a decline, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": "served_degraded",
+   "verdict": "disagree",
+   "reason": "expected a decline, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": "unserved",
+   "verdict": "agree",
+   "reason": "declined as declared",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": "unserved",
+   "verdict": "agree",
+   "reason": "declined as declared",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "clarification_needed",
+   "verdict": "agree_weak",
+   "reason": "no fabricated answer, but no decline",
+   "weak_kind": "weak_never_terminated"
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "error",
+   "verdict": "disagree",
+   "reason": "engine error; the declared outcome was not reached",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "error",
+   "verdict": "disagree",
+   "reason": "engine error; the declared outcome was not reached",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": null,
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": null,
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": null,
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": null,
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": null,
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": null,
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": null,
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": "served_with_data",
+   "verdict": "disagree",
+   "reason": "expected a decline, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": "served_degraded",
+   "verdict": "disagree",
+   "reason": "expected a decline, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": "served_with_data",
+   "verdict": "disagree",
+   "reason": "expected a decline, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": "served_degraded",
+   "verdict": "disagree",
+   "reason": "expected a decline, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": "served_with_data",
+   "verdict": "disagree",
+   "reason": "expected a decline, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": "served_degraded",
+   "verdict": "disagree",
+   "reason": "expected a decline, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": "served_with_data",
+   "verdict": "disagree",
+   "reason": "expected a decline, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": "served_degraded",
+   "verdict": "disagree",
+   "reason": "expected a decline, served instead",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": "unserved",
+   "verdict": "disagree",
+   "reason": "a named-basis decline is not satisfied by a bare no_match",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": "unserved",
+   "verdict": "agree",
+   "reason": "declined as declared",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "clarification_needed",
+   "verdict": "agree_weak",
+   "reason": "no fabricated answer, but no decline",
+   "weak_kind": "weak_never_terminated"
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "error",
+   "verdict": "disagree",
+   "reason": "engine error; the declared outcome was not reached",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "error",
+   "verdict": "disagree",
+   "reason": "engine error; the declared outcome was not reached",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": null,
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": null,
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": null,
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": null,
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": null,
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": null,
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": null,
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "decline",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": "served_with_data",
+   "verdict": "disagree",
+   "reason": "expected a clarification, served",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": "served_degraded",
+   "verdict": "disagree",
+   "reason": "expected a clarification, served",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "complete",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": "served_with_data",
+   "verdict": "disagree",
+   "reason": "expected a clarification, served",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": "served_degraded",
+   "verdict": "disagree",
+   "reason": "expected a clarification, served",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "partial",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": "served_with_data",
+   "verdict": "disagree",
+   "reason": "expected a clarification, served",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": "served_degraded",
+   "verdict": "disagree",
+   "reason": "expected a clarification, served",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "degraded",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": "served_with_data",
+   "verdict": "disagree",
+   "reason": "expected a clarification, served",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": "served_degraded",
+   "verdict": "disagree",
+   "reason": "expected a clarification, served",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "answered",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": "unserved",
+   "verdict": "disagree",
+   "reason": "expected a clarification, got no_match",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "no_match",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": "unserved",
+   "verdict": "disagree",
+   "reason": "expected a clarification, was refused",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "refused",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "clarification_needed",
+   "verdict": "agree",
+   "reason": "asked for clarification as declared",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "error",
+   "verdict": "disagree",
+   "reason": "engine error; the declared outcome was not reached",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "error",
+   "verdict": "disagree",
+   "reason": "engine error; the declared outcome was not reached",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": null,
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": null,
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": null,
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": null,
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": null,
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": null,
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": null,
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "none",
+   "terminal": "future_status",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": "served_with_data",
+   "verdict": "disagree",
+   "reason": "expected a clarification, served",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": "served_degraded",
+   "verdict": "disagree",
+   "reason": "expected a clarification, served",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "complete",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": "served_with_data",
+   "verdict": "disagree",
+   "reason": "expected a clarification, served",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": "served_degraded",
+   "verdict": "disagree",
+   "reason": "expected a clarification, served",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "partial",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": "served_with_data",
+   "verdict": "disagree",
+   "reason": "expected a clarification, served",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": "served_degraded",
+   "verdict": "disagree",
+   "reason": "expected a clarification, served",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "degraded",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": "served_with_data",
+   "verdict": "disagree",
+   "reason": "expected a clarification, served",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": "served_degraded",
+   "verdict": "disagree",
+   "reason": "expected a clarification, served",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "answered",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": "unserved",
+   "verdict": "disagree",
+   "reason": "expected a clarification, got no_match",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "no_match",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": "unserved",
+   "verdict": "disagree",
+   "reason": "expected a clarification, was refused",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "refused",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "clarification_needed",
+   "verdict": "agree",
+   "reason": "asked for clarification as declared",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "clarification_required(max_turns_exhausted)",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "error",
+   "verdict": "disagree",
+   "reason": "engine error; the declared outcome was not reached",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "http_502:acr_investigation_failed",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "error",
+   "verdict": "disagree",
+   "reason": "engine error; the declared outcome was not reached",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "http_400:acr_rejected_request",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": null,
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": null,
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": null,
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": null,
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": null,
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": null,
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": null,
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": "served_with_data",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": "served_degraded",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": "unserved",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": "clarification_needed",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": "error",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": null,
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  },
+  {
+   "expect": "clarify",
+   "basis": "named",
+   "terminal": "future_status",
+   "bucket": "nonsense",
+   "verdict": "unscored",
+   "reason": "incoherent_row: this terminal status cannot occur with this bucket",
+   "weak_kind": null
+  }
+ ],
+ "_weak_kinds": {
+  "weak_basis_unstated": "did not serve and terminated, but the basis the row declared was never stated (refuse + declared basis + bare no_match)",
+  "weak_never_terminated": "did not serve and never terminated either -- exhausted the turn budget instead of refusing or declining",
+  "weak_hollow_serve": "served, but claimed zero facts"
+ }
+}

@@ -36,6 +36,7 @@ sys.path.insert(0, str(HERE))
 
 import harness  # noqa: E402
 from attempt_order import order_attempts  # noqa: E402
+from validators import load_attempt  # noqa: E402
 from corpus import CORPUS  # noqa: E402
 from shard_plan import plan  # noqa: E402
 
@@ -46,7 +47,9 @@ def attempt_files(outdir, qid, rep):
     # r4: THE shared ordering helper. A bare sorted() here put `t10` before `t9`, so
     # last_attempt() -- and therefore the shard summary's terminal result -- named the
     # wrong file. The identical defect was fixed in subject_identity and left here.
-    return order_attempts(glob.glob(str(outdir / f"{qid}-rep{rep}-t*-a*.json")))
+    ordered, _unsequenced = order_attempts(
+        glob.glob(str(outdir / f"{qid}-rep{rep}-t*-a*.json")), on_unparseable="skip")
+    return ordered
 
 
 def last_attempt_file(outdir, qid, rep):
@@ -73,8 +76,9 @@ def attempt_diagnostics(outdir, qid, rep):
     n504 = n413 = 0
     overrun = None
     for f in attempt_files(outdir, qid, rep):
-        with open(f) as fh:
-            a = json.load(fh)
+        ok, a, _ = load_attempt(f)
+        if not ok:
+            continue
         failure = (a.get("response") or {}).get("failure") or {}
         up = failure.get("httpStatus")
         if a.get("status") == 504 or up == 504:
@@ -111,9 +115,10 @@ def detail_for(outdir, qid, row, r, dt, rep):
     }
     f = last_attempt_file(outdir, qid, rep)
     if f:
-        with open(f) as fh:
-            last = json.load(fh)
-        resp = last.get("response") or {}
+        ok, last, _ = load_attempt(f)
+        if not ok:
+            last = {}
+        resp = (last or {}).get("response") or {}
         result = resp.get("result") or {}
         failure = resp.get("failure") or {}
         detail["last_request_id"] = result.get("request_id") or resp.get("request_id")

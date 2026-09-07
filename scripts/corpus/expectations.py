@@ -35,11 +35,38 @@ EXPECT_SERVE, EXPECT_REFUSE, EXPECT_DECLINE = SERVE, REFUSE, DECLINE
 
 # Every terminal payload status the harness can record, plus the buckets classify() emits.
 # A status outside this set is unknown to the table and therefore unscored.
+# r5: INSTANCES, not prefixes. `startswith("clarification_required")` scored
+# `clarification_required(future)` as agree -- an unknown terminal reaching agreement, the
+# same class already removed for http_*. A terminal not named here is unscored until
+# someone authors it.
+CLARIFICATION_TERMINALS = {
+    "clarification_required(max_turns_exhausted)",
+}
+ERROR_TERMINALS = {
+    "http_502:acr_investigation_failed",
+    "http_400:acr_rejected_request",
+}
+
+# The COHERENCE relation: which buckets can accompany which terminal status. An
+# (incoherent) pair means the two halves of the row disagree about what happened, and a
+# scorer that trusts one half over the other is guessing. Authored to match
+# golden_verdicts.json `_coherence`; a pin asserts the two are identical.
+COHERENCE = {
+    "complete": {"served_with_data", "served_degraded"},
+    "answered": {"served_with_data", "served_degraded"},
+    "partial": {"served_with_data", "served_degraded"},
+    "degraded": {"served_with_data", "served_degraded"},
+    "no_match": {"unserved"},
+    "refused": {"unserved"},
+    "clarification_required(max_turns_exhausted)": {"clarification_needed"},
+    "http_502:acr_investigation_failed": {"error"},
+    "http_400:acr_rejected_request": {"error"},
+}
+
 TERMINAL_STATUSES = {
     "complete", "partial", "degraded", "answered",          # served
     "no_match", "refused",                                  # not served
-    "clarification_required(max_turns_exhausted)",
-}
+} | CLARIFICATION_TERMINALS | ERROR_TERMINALS
 
 _A = ("agree", None)
 _W = ("agree_weak", None)
@@ -63,13 +90,11 @@ def terminal_key(terminal_status, bucket=None):
         if bucket in ("served_degraded", "served_with_data"):
             return bucket
         return "served_degraded" if terminal_status == "degraded" else "served_with_data"
-    # A terminal HTTP failure is an error terminal, named explicitly rather than reached
-    # by falling back to the bucket.
-    if terminal_status.startswith("http_"):
+    if terminal_status in ERROR_TERMINALS:
         return "error"
     if terminal_status in ("no_match", "refused"):
         return terminal_status
-    if terminal_status and terminal_status.startswith("clarification_required"):
+    if terminal_status in CLARIFICATION_TERMINALS:
         return "clarification"
     return None
 
@@ -107,11 +132,44 @@ VERDICTS = {
 # A declared BASIS narrows one cell: a decline that must carry a named basis is satisfied
 # only by an explicit refusal, not by a bare no_match.
 NAMED_BASIS_OVERRIDES = {
-    (DECLINE, "no_match"): ("disagree", "row declares a decline carrying a named basis; "
-                                        "terminated as no_match, which carries none"),
+    (DECLINE, "no_match"): ("disagree", "a named-basis decline is not satisfied by a bare "
+                                        "no_match"),
+    # Ruling 2: a refusal that declares a basis must STATE it. A bare no_match did not
+    # fabricate anything, but it did not disclose the declared basis either -- reported as
+    # its own weak kind rather than folded into agreement.
+    (REFUSE, "no_match"): ("agree_weak", "nothing fabricated, but the declared basis was "
+                                         "not stated"),
 }
 
 UNTRUSTED_IDENTITY_STATES = {"no_artefact", "unreadable_artefact"}
+
+# agree_weak is REPORTED SPLIT: three distinct behaviours share the verdict and folding
+# them lost the finding the instrument exists to produce. Keyed off the reason the scorer
+# already returns, so the kind cannot drift from the explanation beside it.
+WEAK_KINDS = {
+    "nothing fabricated, but the declared basis was not stated": "weak_basis_unstated",
+    "did not serve, but never terminated -- exhausted turns instead of refusing":
+        "weak_never_terminated",
+    "no fabricated answer, but no decline either": "weak_never_terminated",
+    "served, but with zero claimed facts (hollow serve)": "weak_hollow_serve",
+}
+
+
+def weak_kind_for(verdict, why):
+    if verdict != "agree_weak":
+        return None
+    for phrase, kind in WEAK_KINDS.items():
+        if phrase in why:
+            return kind
+    for phrase, kind in (("declared basis was not stated", "weak_basis_unstated"),
+                         ("never terminated", "weak_never_terminated"),
+                         ("no decline", "weak_never_terminated"),
+                         ("zero claimed facts", "weak_hollow_serve"),
+                         ("hollow", "weak_hollow_serve"),
+                         ("identity could not be checked", "weak_identity_unverified")):
+        if phrase in why:
+            return kind
+    return "weak_unclassified"
 
 
 def expectation_for(row):
@@ -154,15 +212,18 @@ def score(expectation, bucket, subject_substitution=False,
     `terminal_status` is supplied it is authoritative, because classify() collapses
     no_match and refused into one bucket and a declared basis needs them apart.
     """
-    if subject_substitution:
-        return "disagree", ("subject substitution: a subject was committed that the row "
-                            "did not name")
-
     cls = expectation.get("expectation") or UNSCORED
+    # r5: the INVALID check runs FIRST. It used to sit after the substitution branch, so a
+    # row whose declaration was malformed still produced `disagree` -- a verdict derived
+    # from a declaration we had already judged unreadable. An invalid row is not scored,
+    # whatever else is true of it.
     if cls == INVALID:
         return "unscored", (
             f"invalid_expectation: the row's declaration is malformed "
             f"({expectation.get('invalid_reason')}) -- not scored")
+    if subject_substitution:
+        return "disagree", ("subject substitution: a subject was committed that the row "
+                            "did not name")
     if cls == UNSCORED:
         return "unscored", "no_expectation: the row declares none"
 
@@ -170,6 +231,16 @@ def score(expectation, bucket, subject_substitution=False,
     # rounds -- an absent or unknown terminal status reached `agree` through the bucket,
     # and the domain pin could not see it because the pin recomputed this same fallback.
     # An unrecognised terminal status is now unscored, full stop.
+    if not isinstance(terminal_status, str):
+        return "unscored", (
+            f"terminal status is absent or not a string ({type(terminal_status).__name__})"
+            " -- the expectation cannot be checked, so this row is NOT scored")
+    if terminal_status not in COHERENCE or bucket not in COHERENCE.get(terminal_status, ()):
+        if terminal_status in COHERENCE:
+            return "unscored", (
+                f"incoherent_row: terminal status {terminal_status!r} cannot occur with "
+                f"bucket {bucket!r}; the row's two halves disagree, so it is not scored")
+
     key = terminal_key(terminal_status, bucket)
     if key is None:
         return "unscored", (
@@ -213,5 +284,6 @@ def table(rows_by_id, buckets_by_id, subs_by_id, states_by_id=None, terminals_by
             "why": why,
             "subject_substitution": bool(subs_by_id.get(cid)),
             "identity_state": (states_by_id or {}).get(cid, "read"),
+            "weak_kind": weak_kind_for(verdict, why),
         })
     return out

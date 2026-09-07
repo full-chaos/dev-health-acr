@@ -271,6 +271,19 @@ def main():
             v: sum(1 for e in _exp_table if e["verdict"] == v)
             for v in ("agree", "agree_weak", "disagree", "unscored")
         },
+        # agree_weak SPLIT by reason. Three behaviours share that verdict and the summary
+        # used to fold them, which hid the contrast between a row that refused without
+        # stating its basis and one that never terminated at all.
+        "expectation_summary_split": (lambda tb: {
+            "agree": sum(1 for e in tb if e["verdict"] == "agree"),
+            "weak_basis_unstated": sum(1 for e in tb if e.get("weak_kind") == "weak_basis_unstated"),
+            "weak_never_terminated": sum(1 for e in tb if e.get("weak_kind") == "weak_never_terminated"),
+            "weak_hollow_serve": sum(1 for e in tb if e.get("weak_kind") == "weak_hollow_serve"),
+            "weak_identity_unverified": sum(1 for e in tb if e.get("weak_kind") == "weak_identity_unverified"),
+            "weak_unclassified": sum(1 for e in tb if e.get("weak_kind") == "weak_unclassified"),
+            "disagree": sum(1 for e in tb if e["verdict"] == "disagree"),
+            "unscored": sum(1 for e in tb if e["verdict"] == "unscored"),
+        })(_exp_table),
         # v1 buckets with confirmed substitutions pulled out into their own failure
         # bucket. `totals` above is untouched and remains the like-for-like number.
         "totals_v2": {

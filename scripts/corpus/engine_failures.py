@@ -17,23 +17,19 @@ Usage: engine_failures.py <run-dir> [<run-dir> ...]
 import json, sys
 from pathlib import Path
 from collections import Counter
+from validators import load_attempt
 
 def scan(root):
     out = []
     for f in sorted(Path(root).rglob("replicate/*.json")):
-        try:
-            a = json.loads(f.read_text())
-        except (ValueError, OSError) as e:      # a truncated artefact is reported, never skipped silently
-            out.append({"corpus_id": f.stem, "kind": "UNREADABLE_ARTEFACT", "detail": str(e), "file": str(f)})
-            continue
-        # r4: the classifier's RESULT is used, not merely called. An UNPARSEABLE
-        # artefact is reported as such and never read further -- a string failure
-        # envelope used to reach the field access below and crash.
-        import subject_identity as _si
-        _cls, _ = _si.classify_attempt(a)
-        if _cls == _si.UNPARSEABLE:
+        # r5: THE loader. This module used to decode and trust the artefact itself,
+        # which is how a malformed envelope reached a field access and crashed. It now
+        # shares one decoder with identity and the shard writer, so the three cannot
+        # hold different opinions about the same file.
+        ok, a, reason = load_attempt(f)
+        if not ok:
             out.append({"corpus_id": f.stem.split("-rep")[0], "kind": "UNREADABLE_ARTEFACT",
-                        "detail": "attempt envelope failed validation", "file": str(f)})
+                        "detail": reason, "file": str(f)})
             continue
         fail = (a.get("response") or {}).get("failure") or {}
         if not fail:
