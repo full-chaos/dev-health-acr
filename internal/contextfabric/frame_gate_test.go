@@ -19,6 +19,7 @@ package contextfabric
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -431,5 +432,48 @@ func TestTheCarriedGateAgreesWithTheReceipt(t *testing.T) {
 		if receipt.FrameGateRefuseBasis != fromResult.RefuseBasis {
 			t.Errorf("receipt refuse basis %q disagrees with the validator's own %q", receipt.FrameGateRefuseBasis, fromResult.RefuseBasis)
 		}
+	}
+}
+
+// THE REFUSING TURNS NEVER REACH RESOLUTION, so the decision summary -- the
+// Info line that carries frame_gate for a turn that DID resolve -- is not
+// emitted for them at all. Their verdict lives on the frame-validation line
+// instead, and this asserts the VALUE there, at the production log level,
+// through the production sink.
+//
+// Found by a surviving mutation, and it is worth recording why the existing
+// guards missed it: the structural test proves the field HAS a log key and
+// the leak guard proves the key is ALLOWED, but neither reads what the key
+// says -- so replacing the verdict with a hardcoded `passed` satisfied both.
+// A key whose value nothing asserts is a key that can lie.
+func TestFrameGateReachesTheProductionFrameValidationLine(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name            string
+		frame           *QuestionFrame
+		wantGate        string
+		wantRefuseBasis string
+	}{
+		{"refused by I6", selfGroupedFrame(), "rejected:i6", "none"},
+		{"refused on the basis", unservableMemberKindFrame(), "refused:member_kind_unservable", "member_kind_unservable"},
+		{"passed", namedSubjectFrame(), "passed", "none"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			event := FrameValidationEventFrom(*testCase.frame, ValidateFrame(*testCase.frame, nil, ""), "", nil)
+			records := captureSlogJSONAtProductionLevel(t, func(logger *slog.Logger) {
+				NewSlogEngineTelemetry(logger).RecordFrameValidation(context.Background(),
+					storage.Principal{OrgID: "org_frame_gate"}, event)
+			})
+			if len(records) != 1 {
+				t.Fatalf("got %d records at the production log level, want 1 -- the verdict for a turn that never resolves lives on THIS line", len(records))
+			}
+			if got, _ := records[0]["frame_gate"].(string); got != testCase.wantGate {
+				t.Errorf("frame_gate = %q, want %q", got, testCase.wantGate)
+			}
+			if got, _ := records[0]["refuse_basis"].(string); got != testCase.wantRefuseBasis {
+				t.Errorf("refuse_basis = %q, want %q", got, testCase.wantRefuseBasis)
+			}
+		})
 	}
 }
