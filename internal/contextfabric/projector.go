@@ -77,40 +77,60 @@ func NewProjectionWorker(source ProjectionSource, backend ProjectionBackend, che
 // RunOnce processes at most one canonical projection batch. A checkpoint is
 // advanced only after the selected backend has durably accepted the batch and
 // only when the durable checkpoint still matches the cursor this worker read.
-// SourceReadError marks whether a projection source's error was the BARE
-// context sentinel -- the tick's own cancellation passing through a source
-// that added nothing of its own -- or a failure the source owns and described.
+// PairRunError marks an error coming out of ProjectionWorker.RunOnce with the
+// two facts the freshness disclosure cannot recover later.
 //
-// THIS IS THE ONLY PLACE THE RAW SOURCE ERROR IS VISIBLE. Every layer above
-// receives it already wrapped by RunOnce, so `errors.Is(err, context.Canceled)`
-// upstream cannot tell the tick's cancellation from a source that wrapped a
-// context error in its own description. Three review rounds were spent trying,
-// and the freshness summary lost an observed source outage twice because the
-// two collapse together. Classification therefore happens HERE, by identity,
-// and travels as a typed marker.
+// THIS IS THE ONLY PLACE THE RAW ERROR IS VISIBLE. RunOnce wraps everything it
+// returns, so upstream `errors.Is(err, context.Canceled)` can tell neither the
+// tick's cancellation from a source that wrapped one in its own description,
+// nor OUR io from the source's. Both distinctions decide what the tick
+// freshness summary publishes, and getting them wrong cost two rounds of
+// review: once by losing an observed source outage, once by blaming a source
+// that was never called.
 //
 // It wraps rather than replaces: Error() delegates and Unwrap() returns the
 // original, so `%w` semantics, errors.Is against context sentinels, and every
 // existing message stay byte-identical. No consumer that reads the text
 // changes.
-type SourceReadError struct {
+type PairRunError struct {
 	Err error
-	// PropagatedCancellation is true only for the bare sentinel. A source
-	// that WRAPPED a context error added its own description of its own
-	// failure, and that description is what an operator needs -- so it is
-	// reported as a failure and the source is named.
+	// FromSourceRead is true ONLY for the projection source's own
+	// NextProjectionBatch error. Everything else RunOnce returns is our own
+	// io -- checkpoint load, progress and version CAS, backend apply -- and a
+	// cancellation there is never the source's fault. Naming a source for it
+	// pages someone to a dependency that is perfectly healthy.
+	FromSourceRead bool
+	// PropagatedCancellation is true only for the BARE context sentinel. A
+	// source that WRAPPED a context error added its own description of its
+	// own failure, and that description is what an operator needs.
 	PropagatedCancellation bool
 }
 
-func (e *SourceReadError) Error() string { return e.Err.Error() }
-func (e *SourceReadError) Unwrap() error { return e.Err }
+func (e *PairRunError) Error() string { return e.Err.Error() }
+func (e *PairRunError) Unwrap() error { return e.Err }
 
-// markSourceRead classifies by IDENTITY, never errors.Is: errors.Is is exactly
-// what cannot distinguish the two cases, because a wrapped sentinel satisfies
-// it just as the bare one does.
+// markSourceRead classifies the SOURCE's own error by IDENTITY, never
+// errors.Is: errors.Is is exactly what cannot distinguish a bare sentinel from
+// a wrapped one, because a wrapped sentinel satisfies it just as well.
 func markSourceRead(err error) error {
-	return &SourceReadError{
+	return &PairRunError{
 		Err:                    err,
+		FromSourceRead:         true,
+		PropagatedCancellation: err == context.Canceled || err == context.DeadlineExceeded,
+	}
+}
+
+// markWorkerIO marks everything RunOnce returns that is NOT the source's own
+// read. Every exit is marked so the coordinator never has to fall back to
+// guessing: an unmarked error means "never entered the worker at all", which
+// is a different question with a different answer.
+func markWorkerIO(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &PairRunError{
+		Err:                    err,
+		FromSourceRead:         false,
 		PropagatedCancellation: err == context.Canceled || err == context.DeadlineExceeded,
 	}
 }
@@ -121,7 +141,7 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 	}
 	checkpoint, err := w.checkpoints.LoadProjectionCheckpoint(ctx, orgID, sourceName)
 	if err != nil {
-		return ProjectionRun{}, fmt.Errorf("load projection checkpoint: %w", err)
+		return ProjectionRun{}, markWorkerIO(fmt.Errorf("load projection checkpoint: %w", err))
 	}
 	batch, available, err := w.source.NextProjectionBatch(ctx, checkpoint)
 	if err != nil {
@@ -130,7 +150,7 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 	if !available {
 		advanced, progressed, err := w.persistConsumedProgress(ctx, checkpoint)
 		if err != nil {
-			return ProjectionRun{}, err
+			return ProjectionRun{}, markWorkerIO(err)
 		}
 		if progressed {
 			return ProjectionRun{Source: sourceName, PreviousCursor: checkpoint.Cursor, NextCursor: advanced, RowsApplied: checkpoint.RowsApplied}, nil
@@ -138,10 +158,10 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 		return ProjectionRun{Source: sourceName, PreviousCursor: checkpoint.Cursor, RowsApplied: checkpoint.RowsApplied}, nil
 	}
 	if err := batch.Validate(); err != nil {
-		return ProjectionRun{}, fmt.Errorf("projection batch: %w", err)
+		return ProjectionRun{}, markWorkerIO(fmt.Errorf("projection batch: %w", err))
 	}
 	if batch.OrgID != orgID || batch.Source != sourceName || batch.Cursor != checkpoint.Cursor {
-		return ProjectionRun{}, fmt.Errorf("%w: batch scope or cursor does not match checkpoint", ErrProjectionConflict)
+		return ProjectionRun{}, markWorkerIO(fmt.Errorf("%w: batch scope or cursor does not match checkpoint", ErrProjectionConflict))
 	}
 	// CHAOS-3779 codex round-2 H2 residual: a checkpoint.SourceVersion of
 	// "" means no prior checkpoint was ever durably saved for this
@@ -156,7 +176,7 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 	// silently doubling it. Refuse before the backend ever sees the
 	// batch; recovery is the existing rebuild path.
 	if checkpoint.SourceVersion != "" && checkpoint.SourceVersion != batch.SourceVersion {
-		return ProjectionRun{}, fmt.Errorf("%w: org %s source %s checkpoint source_version %q, batch source_version %q", ErrProjectionSourceVersionChanged, orgID, sourceName, checkpoint.SourceVersion, batch.SourceVersion)
+		return ProjectionRun{}, markWorkerIO(fmt.Errorf("%w: org %s source %s checkpoint source_version %q, batch source_version %q", ErrProjectionSourceVersionChanged, orgID, sourceName, checkpoint.SourceVersion, batch.SourceVersion))
 	}
 	// CHAOS-3779 codex round-3 M1: an empty checkpoint.SourceVersion is
 	// deliberately never treated as a mismatch above (a genuine first run,
@@ -187,18 +207,18 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 		}
 		if err := w.checkpoints.CompareAndSwapProjectionCheckpoint(ctx, checkpoint, claim); err != nil {
 			if errors.Is(err, ErrProjectionConflict) {
-				return ProjectionRun{}, err
+				return ProjectionRun{}, markWorkerIO(err)
 			}
-			return ProjectionRun{}, fmt.Errorf("claim projection source version: %w", err)
+			return ProjectionRun{}, markWorkerIO(fmt.Errorf("claim projection source version: %w", err))
 		}
 		checkpoint = claim
 	}
 	receipt, err := w.backend.ApplyProjectionBatch(ctx, batch)
 	if err != nil {
-		return ProjectionRun{}, fmt.Errorf("apply projection batch: %w", err)
+		return ProjectionRun{}, markWorkerIO(fmt.Errorf("apply projection batch: %w", err))
 	}
 	if receipt.BatchID != batch.BatchID {
-		return ProjectionRun{}, fmt.Errorf("%w: backend receipt does not match batch", ErrProjectionConflict)
+		return ProjectionRun{}, markWorkerIO(fmt.Errorf("%w: backend receipt does not match batch", ErrProjectionConflict))
 	}
 	itemsApplied := receipt.EntitiesApplied + receipt.EdgesApplied + receipt.ContentsApplied + receipt.EpisodesApplied + receipt.TombstonesApplied
 	updated := ProjectionCheckpoint{
@@ -212,9 +232,9 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 	}
 	if err := w.checkpoints.CompareAndSwapProjectionCheckpoint(ctx, checkpoint, updated); err != nil {
 		if errors.Is(err, ErrProjectionConflict) {
-			return ProjectionRun{}, err
+			return ProjectionRun{}, markWorkerIO(err)
 		}
-		return ProjectionRun{}, fmt.Errorf("advance projection checkpoint: %w", err)
+		return ProjectionRun{}, markWorkerIO(fmt.Errorf("advance projection checkpoint: %w", err))
 	}
 	return ProjectionRun{
 		BatchID: batch.BatchID, Source: sourceName, PreviousCursor: checkpoint.Cursor, NextCursor: batch.NextCursor,

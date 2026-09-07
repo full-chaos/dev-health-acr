@@ -41,9 +41,13 @@ type checkpointStoreStub struct {
 	saved      []ProjectionCheckpoint
 	expected   []ProjectionCheckpoint
 	compareErr error
+	loadErr    error
 }
 
 func (s *checkpointStoreStub) LoadProjectionCheckpoint(context.Context, string, string) (ProjectionCheckpoint, error) {
+	if s.loadErr != nil {
+		return ProjectionCheckpoint{}, s.loadErr
+	}
 	return s.checkpoint, nil
 }
 
@@ -587,7 +591,7 @@ func TestProjectionWorkerRefusesProgressWithoutASourceVersion(t *testing.T) {
 	}
 }
 
-// TestSourceReadErrorMarksOnlyTheBareSentinel pins the classification at the
+// TestPairRunErrorMarksOnlyTheBareSentinel pins the classification at the
 // ONE place that can make it. RunOnce wraps every source error, so by the time
 // the projector's caller sees one, a source that returned the bare context
 // sentinel and a source that wrapped a context error in its own description
@@ -597,7 +601,7 @@ func TestProjectionWorkerRefusesProgressWithoutASourceVersion(t *testing.T) {
 // The distinction is a policy, stated where truncatedBy lives: a bare sentinel
 // under a done tick is the tick's cancellation passing through; anything else
 // is a failure the source owns, and the source is named.
-func TestSourceReadErrorMarksOnlyTheBareSentinel(t *testing.T) {
+func TestPairRunErrorMarksOnlyTheBareSentinel(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		err  error
@@ -637,13 +641,53 @@ func TestSourceReadErrorMarksOnlyTheBareSentinel(t *testing.T) {
 				t.Errorf("errors.Is(err, original) = false -- Unwrap is broken, and %%w semantics with it")
 			}
 
-			var marked *SourceReadError
+			var marked *PairRunError
 			if !errors.As(err, &marked) {
-				t.Fatalf("errors.As found no SourceReadError -- the coordinator reads this marker and would fall back to guessing")
+				t.Fatalf("errors.As found no PairRunError -- the coordinator reads this marker and would fall back to guessing")
+			}
+			if !marked.FromSourceRead {
+				t.Errorf("FromSourceRead = false for the SOURCE's own read -- only a source-read error may name a source")
 			}
 			if marked.PropagatedCancellation != tc.want {
 				t.Errorf("PropagatedCancellation = %v, want %v -- classification is by IDENTITY; errors.Is is exactly what cannot tell these apart", marked.PropagatedCancellation, tc.want)
 			}
 		})
+	}
+}
+
+// TestWorkerIOErrorsAreNotAttributedToTheSource is confirm8's first P1 at its
+// own level. RunOnce has thirteen error exits and only the source read was
+// marked, so a cancellation out of any of the other twelve reached the
+// coordinator unmarked and -- if wrapped -- was disclosed as a failed SOURCE.
+//
+// Only the source's own read may blame the source. Everything else RunOnce
+// returns is our io.
+func TestWorkerIOErrorsAreNotAttributedToTheSource(t *testing.T) {
+	t.Parallel()
+
+	checkpoints := &checkpointStoreStub{loadErr: fmt.Errorf("load checkpoint from postgres: %w", context.Canceled)}
+	worker, err := NewProjectionWorker(
+		projectionSourceStub{batch: validProjectionBatch(), available: true},
+		&projectionBackendStub{},
+		checkpoints,
+		ProjectionWorkerOptions{Now: func() time.Time { return time.Unix(60, 0).UTC() }},
+	)
+	if err != nil {
+		t.Fatalf("NewProjectionWorker() error = %v", err)
+	}
+
+	_, runErr := worker.RunOnce(context.Background(), "org_1", "dev-health-ops")
+	if runErr == nil {
+		t.Fatal("RunOnce returned no error -- the stub was supposed to fail")
+	}
+	var marked *PairRunError
+	if !errors.As(runErr, &marked) {
+		t.Fatalf("errors.As found no PairRunError on a checkpoint-load failure -- an unmarked exit falls back to guessing, which is the defect")
+	}
+	if marked.FromSourceRead {
+		t.Errorf("FromSourceRead = true for a CHECKPOINT LOAD failure -- the source was never called and must not be blamed for our io")
+	}
+	if !errors.Is(runErr, context.Canceled) {
+		t.Errorf("errors.Is(err, context.Canceled) = false -- the marker broke unwrapping")
 	}
 }

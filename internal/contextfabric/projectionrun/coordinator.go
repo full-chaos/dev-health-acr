@@ -1633,7 +1633,8 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 			// cancelled (e.g. process shutdown) at the moment of the check,
 			// hiding the real failure from drain telemetry (retry/backoff
 			// still sees the real error either way via recordBackoff above).
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			// Same predicate as the summary -- see runPair's yield switch.
+			if truncatedBy(ctx, err) {
 				reason = DrainYieldContextDone
 			} else {
 				c.logger.WarnContext(ctx, "build tick pair failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(err), "duration_ms", outcome.Duration.Milliseconds())
@@ -2085,7 +2086,12 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 		// the check, hiding the real failure from drain telemetry --
 		// recordBackoff (inside runPairOnce) still sees the real error
 		// either way, so retry/backoff behavior is unaffected.
-		case pairErr != nil && (errors.Is(pairErr, context.Canceled) || errors.Is(pairErr, context.DeadlineExceeded)):
+		// Classified by the SAME predicate the summary uses. They disagreed
+		// once -- the line named a source failed while this said the pair
+		// merely yielded to a cancelled context, about one event -- and two
+		// of our own outputs contradicting each other is worse than either
+		// being wrong alone.
+		case pairErr != nil && truncatedBy(ctx, pairErr):
 			reason = DrainYieldContextDone
 		case pairErr != nil:
 			reason = DrainYieldError
@@ -2398,38 +2404,50 @@ func (c *Coordinator) due(key string) bool {
 //
 // INVARIANT OF RECORD, and it is a policy choice, not a detection:
 //
-//	truncation  <=>  the error is the BARE context sentinel (Canceled or
-//	                 DeadlineExceeded, unwrapped by the source) AND the
-//	                 tick's own context is done.
-//	everything else  =>  a named source failure.
+//	the SOURCE's own read, bare context sentinel      => truncation
+//	the SOURCE's own read, anything else              => named source failure
+//	OUR io (checkpoint, CAS, backend), cancelled      => truncation
+//	OUR io, any other error                           => the pair failed
 //
-// Ownership is NOT recoverable from a wrapped error, so the policy decides,
-// and the policy of this ticket is: IN DOUBT, NAME THE SOURCE. An unnamed
-// outage is the defect this line exists to prevent -- it is how the projector
-// reported orgs_ok:1 through an entire outage. A source over-named during a
-// cancelled tick is the acceptable error, because it is VISIBLE: tick_complete
-// reads false on the same line, so both facts sit side by side.
+// Two distinctions, and neither survives the trip upstream, which is why both
+// are decided at ProjectionWorker.RunOnce and travel as contextfabric.PairRunError.
 //
-// The bare/wrapped distinction is only decidable at ProjectionWorker.RunOnce,
-// which is the one place the raw source error exists; it travels here as
-// contextfabric.SourceReadError. errors.Is cannot be used for this -- a
-// wrapped sentinel satisfies it exactly as the bare one does, and collapsing
-// them is what lost an observed source failure in two successive rounds.
+// WHO owns the error. A cancellation out of our own checkpoint store is not
+// the source's fault -- the source was never called -- and naming it pages
+// someone to a dependency that is perfectly healthy. "In doubt, name the
+// source" resolves an ambiguity ABOUT a source; there is no source here.
 //
-// The context check stays first and is load bearing on its own: a source
-// returning a context error while the tick is LIVE owns it, has failed, and
-// is named regardless of the marker.
+// WHETHER the source owned its cancellation. Ownership is not recoverable
+// from a wrapped error, so policy decides: a bare sentinel is the tick's
+// cancellation passing through a source that added nothing; anything wrapped
+// carries the source's own description of its own failure, which is what an
+// operator needs. IN DOUBT, NAME THE SOURCE -- an unnamed outage is invisible
+// and is the defect this line exists to prevent, while an over-named source
+// is visible, because tick_complete reads false on the same line.
+//
+// errors.Is cannot make either call: a wrapped sentinel satisfies it exactly
+// as a bare one does, and it says nothing about which stage produced the
+// error. Collapsing these lost an observed source failure in two successive
+// rounds and misattributed one in a third.
+//
+// The context check stays first and is load bearing on its own: any error
+// while the tick is LIVE is a real failure and is named.
 func truncatedBy(ctx context.Context, err error) bool {
 	if ctx.Err() == nil {
 		return false
 	}
-	var sourceRead *contextfabric.SourceReadError
-	if errors.As(err, &sourceRead) {
-		return sourceRead.PropagatedCancellation
+	var pairErr *contextfabric.PairRunError
+	if errors.As(err, &pairErr) {
+		if !pairErr.FromSourceRead {
+			// Our own io. A cancellation here truncates the pair; a real
+			// error is still a genuine failure of it.
+			return errors.Is(pairErr.Err, context.Canceled) || errors.Is(pairErr.Err, context.DeadlineExceeded)
+		}
+		return pairErr.PropagatedCancellation
 	}
-	// Errors that never came from a source read -- worker construction,
-	// checkpoint IO -- carry no marker, so they keep the conservative
-	// identity test rather than defaulting to "named".
+	// Never entered the worker at all (worker construction). No stage
+	// information exists, so it keeps the conservative identity test rather
+	// than inheriting either policy.
 	return err == context.Canceled || err == context.DeadlineExceeded
 }
 

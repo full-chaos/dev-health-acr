@@ -2131,3 +2131,124 @@ func TestConfirm7_ABarePropagatedCancellationIsStillTruncation(t *testing.T) {
 		t.Errorf("tick_complete = true, want false")
 	}
 }
+
+// cancellingCheckpointStore cancels the tick from inside OUR OWN checkpoint
+// load and returns a wrapped cancellation. The source is never asked for
+// anything, so nothing here is the source's fault.
+type cancellingCheckpointStore struct {
+	*fakeCheckpointStore
+	cancel context.CancelFunc
+	loads  atomic.Int32
+}
+
+// The FIRST load succeeds so the drain genuinely starts; the second one is
+// cancelled. Failing the very first load makes the organization unevaluated
+// before any pair outcome exists, which would make this arm prove nothing.
+func (c *cancellingCheckpointStore) LoadProjectionCheckpoint(ctx context.Context, org, source string) (contextfabric.ProjectionCheckpoint, error) {
+	if c.loads.Add(1) == 1 {
+		return c.fakeCheckpointStore.LoadProjectionCheckpoint(ctx, org, source)
+	}
+	c.cancel()
+	return contextfabric.ProjectionCheckpoint{}, fmt.Errorf("load checkpoint from postgres: %w", context.Canceled)
+}
+
+// TestConfirm8_OurOwnCancelledIOIsNeverBlamedOnTheSource is confirm8's first
+// P1. Only the source READ carried the cancellation marker, so a cancellation
+// out of any of RunOnce's twelve other error exits fell through to the
+// identity fallback and -- if wrapped -- was disclosed as a failed SOURCE.
+//
+// "In doubt, name the source" resolves an ambiguity about a source. There is
+// no ambiguity here and no source involved: our own checkpoint store was
+// cancelled and the source was never called. Naming it is a misattribution,
+// and an operator paged to a source that is perfectly healthy is a worse
+// outcome than the silence this ticket set out to fix.
+func TestConfirm8_OurOwnCancelledIOIsNeverBlamedOnTheSource(t *testing.T) {
+	t.Parallel()
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	source := &fakeSource{name: "dev_health_teams_projects", pages: 1}
+	checkpoints := &cancellingCheckpointStore{fakeCheckpointStore: newFakeCheckpointStore(), cancel: cancel}
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:         []string{"org-a"},
+		Sources:        []projectionrun.SourcePair{{Name: "dev_health_teams_projects", Source: source}},
+		Backend:        newFakeBackend(),
+		Checkpoints:    checkpoints,
+		RebuildMarkers: newFakeRebuildMarker(),
+		Logger:         logger,
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	coordinator.Tick(ctx)
+
+	if checkpoints.loads.Load() == 0 {
+		t.Fatal("the checkpoint store was never loaded -- the tick did not reach the path under test")
+	}
+	if checkpoints.loads.Load() < 2 {
+		t.Fatalf("checkpoint loads = %d; the cancelled load never happened, so this arm proves nothing", checkpoints.loads.Load())
+	}
+	summary := freshnessSummary(t, &buffer)
+	if got := summaryNumber(t, summary, "sources_failed"); got != 0 {
+		t.Errorf("sources_failed = %v, want 0 -- OUR checkpoint store was cancelled and the source was never called; blaming it is a misattribution", got)
+	}
+	names, _ := summary["failed_sources"].([]any)
+	if len(names) != 0 {
+		t.Errorf("failed_sources = %v, want empty -- the source never ran", summary["failed_sources"])
+	}
+}
+
+// TestConfirm8_DrainTelemetryAgreesWithTheSummary is confirm8's second P1. The
+// drain reason classified with errors.Is while the summary classified with the
+// marker, so one tick emitted "this pair yielded because the context was done"
+// and "this source failed" about the same event.
+//
+// Two of our own outputs contradicting each other is worse than either being
+// wrong alone: a reader cannot tell which to believe, and the entire purpose
+// of this line is that it can be trusted.
+func TestConfirm8_DrainTelemetryAgreesWithTheSummary(t *testing.T) {
+	t.Parallel()
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	observer := &recordingObserver{}
+	source := &wrappedCancelSource{name: "dev_health_teams_projects", cancel: cancel}
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:         []string{"dev_health_teams_projects"},
+		Sources:        []projectionrun.SourcePair{{Name: "dev_health_teams_projects", Source: source}},
+		Backend:        newFakeBackend(),
+		Checkpoints:    newFakeCheckpointStore(),
+		RebuildMarkers: newFakeRebuildMarker(),
+		Observer:       observer,
+		Logger:         logger,
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	coordinator.Tick(ctx)
+
+	if source.calls.Load() == 0 {
+		t.Fatal("the source never ran")
+	}
+	drains := observer.snapshot()
+	if len(drains) != 1 {
+		t.Fatalf("expected exactly one DrainOutcome, got %d: %+v", len(drains), drains)
+	}
+	summary := freshnessSummary(t, &buffer)
+	named := summaryNumber(t, summary, "sources_failed") == 1
+
+	// The two facts must agree: if the summary names the source as failed, the
+	// drain reason must not simultaneously report the pair as merely cancelled.
+	if named && drains[0].YieldReason == projectionrun.DrainYieldContextDone {
+		t.Errorf("summary names the source failed (sources_failed=1) while drain telemetry says YieldReason=%q -- two of our own outputs contradict each other about one event",
+			drains[0].YieldReason)
+	}
+	if !named && drains[0].YieldReason == projectionrun.DrainYieldError {
+		t.Errorf("drain telemetry says YieldReason=%q while the summary does NOT name the source -- the same contradiction in the other direction",
+			drains[0].YieldReason)
+	}
+}
