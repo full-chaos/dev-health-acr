@@ -180,3 +180,173 @@ func TestTheFreshnessSummaryReportsExplicitZerosOnAHealthyTick(t *testing.T) {
 		t.Errorf("orgs_ok = %v, want 1 -- a genuinely healthy organization must still read green", got)
 	}
 }
+
+// TestAFailedSourceIsDistinguishableFromOneThatNeverRanThisTick is the
+// missing-versus-measured-zero distinction applied to the sources
+// themselves. Two counters -- evaluated and failed -- have a hole in the
+// middle: a source that was not due this tick is absent from both, which
+// looks exactly like a source that does not exist. An operator asking "is
+// dev_health_teams_projects being read at all" cannot answer that from a
+// line that only ever names what it did read.
+//
+// The three states must stay separable on one line: FAILED (ran, errored),
+// NOT DUE (never ran this tick), and the state that is deliberately NOT a
+// gap -- ran and legitimately found nothing, which is a success.
+func TestAFailedSourceIsDistinguishableFromOneThatNeverRanThisTick(t *testing.T) {
+	t.Parallel()
+
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	backend := newFakeBackend()
+	failing := &fakeSource{name: "source-failing", err: fmt.Errorf("teams projects read: %w", contextfabric.ErrUnavailable)}
+	// dormant:true is a source that RUNS and finds nothing -- a successful
+	// empty population, which must never be reported as a gap.
+	empty := &fakeSource{name: "source-empty", dormant: true}
+
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs: []string{"org-a"},
+		Sources: []projectionrun.SourcePair{
+			{Name: "source-failing", Source: failing},
+			{Name: "source-empty", Source: empty},
+		},
+		Backend:        backend,
+		Checkpoints:    newFakeCheckpointStore(),
+		RebuildMarkers: newFakeRebuildMarker(),
+		Logger:         logger,
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	coordinator.Tick(context.Background())
+
+	if failing.calls.Load() == 0 || empty.calls.Load() == 0 {
+		t.Fatalf("both sources must have run (failing=%d empty=%d) for this arm to mean anything", failing.calls.Load(), empty.calls.Load())
+	}
+
+	summary := freshnessSummary(t, &buffer)
+
+	// The line declares what it covers. A summary that does not say its
+	// scope gets read as covering everything, which is how the line this
+	// disclosure repairs came to be trusted as a readiness signal.
+	if scope, _ := summary["summary_scope"].(string); scope == "" {
+		t.Errorf("the freshness summary does not name its scope; line: %v", summary)
+	}
+
+	// The empty source is a SUCCESS, not a gap.
+	if got := summaryNumber(t, summary, "sources_evaluated"); got != 2 {
+		t.Errorf("sources_evaluated = %v, want 2 -- both sources ran; a successful empty population is still an evaluation", got)
+	}
+	if got := summaryNumber(t, summary, "sources_failed"); got != 1 {
+		t.Errorf("sources_failed = %v, want 1 -- only one source errored", got)
+	}
+	names, _ := summary["failed_sources"].([]any)
+	if len(names) != 1 || names[0] != "source-failing" {
+		t.Errorf("failed_sources = %v, want [source-failing] -- the empty source must not appear here", names)
+	}
+
+	// The third state is present and explicitly zero here: nothing was
+	// skipped this tick, and saying so is what makes a NON-zero value on a
+	// later tick readable.
+	if got := summaryNumber(t, summary, "sources_in_failure_backoff"); got != 0 {
+		t.Errorf("sources_in_failure_backoff = %v, want an explicit 0 -- both sources ran this tick", got)
+	}
+	withheld, ok := summary["failure_backoff_sources"].([]any)
+	if !ok {
+		t.Fatalf("the freshness summary carries no failure_backoff_sources list -- a source withheld by its own backoff is then indistinguishable from one that does not exist; line: %v", summary)
+	}
+	if len(withheld) != 0 {
+		t.Errorf("failure_backoff_sources = %v, want empty", withheld)
+	}
+}
+
+// TestTheOutageShapeExactly pins CHAOS-4789 as it actually presented, not a
+// paraphrase of it: one source failing with dependency_unavailable on EVERY
+// tick, beside a healthy sibling, for more than one tick -- and orgs_ok must
+// never read 1 on any of them. The single-tick arm above could in principle
+// be satisfied by a fix that only reports the first failure; this one cannot.
+func TestTheOutageShapeExactly(t *testing.T) {
+	t.Parallel()
+
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	backend := newFakeBackend()
+	// pages:0 would drain unboundedly; the healthy sibling catches up.
+	healthy := &fakeSource{name: "source-healthy", pages: 1}
+	failing := &fakeSource{name: "dev_health_teams_projects", err: fmt.Errorf("teams projects read: %w", contextfabric.ErrUnavailable)}
+
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs: []string{"org-a"},
+		Sources: []projectionrun.SourcePair{
+			{Name: "source-healthy", Source: healthy},
+			{Name: "dev_health_teams_projects", Source: failing},
+		},
+		Backend:        backend,
+		Checkpoints:    newFakeCheckpointStore(),
+		RebuildMarkers: newFakeRebuildMarker(),
+		Logger:         logger,
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+
+	const ticks = 3
+	for i := 0; i < ticks; i++ {
+		coordinator.Tick(context.Background())
+	}
+
+	var summaries []map[string]any
+	for _, line := range strings.Split(strings.TrimRight(buffer.String(), "\n"), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var record map[string]any
+		if json.Unmarshal([]byte(line), &record) != nil {
+			continue
+		}
+		if msg, _ := record["msg"].(string); msg == "context_fabric: projection tick freshness summary" {
+			summaries = append(summaries, record)
+		}
+	}
+	if len(summaries) != ticks {
+		t.Fatalf("tick freshness summaries = %d, want %d (one per tick) -- log:\n%s", len(summaries), ticks, buffer.String())
+	}
+
+	for i, summary := range summaries {
+		okCount, present := summary["orgs_ok"].(float64)
+		if !present {
+			t.Fatalf("tick %d summary carries no orgs_ok: %v", i+1, summary)
+		}
+		if okCount != 0 {
+			t.Errorf("tick %d: orgs_ok = %v, want 0 -- this is the line that read 1 every fifteen seconds through the outage", i+1, okCount)
+		}
+		// On tick one the source FAILS an attempt; on later ticks its own
+		// failure backoff withholds it, so it cannot appear in
+		// sources_failed. The union of the two is what must never go
+		// quiet -- a disclosure that fired only on the first failure would
+		// leave the outage silent from tick two onward, which is exactly
+		// what the real one did.
+		failed, _ := summary["sources_failed"].(float64)
+		withheld, _ := summary["sources_in_failure_backoff"].(float64)
+		if failed+withheld < 1 {
+			t.Errorf("tick %d: sources_failed=%v + sources_in_failure_backoff=%v, want the broken source disclosed on EVERY tick", i+1, failed, withheld)
+		}
+		var names []any
+		if list, ok := summary["failed_sources"].([]any); ok {
+			names = append(names, list...)
+		}
+		if list, ok := summary["failure_backoff_sources"].([]any); ok {
+			names = append(names, list...)
+		}
+		found := false
+		for _, name := range names {
+			if name == "dev_health_teams_projects" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("tick %d: neither failed_sources nor failure_backoff_sources names dev_health_teams_projects (%v)", i+1, names)
+		}
+	}
+}

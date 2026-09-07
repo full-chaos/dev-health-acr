@@ -761,6 +761,21 @@ type tickFreshnessStats struct {
 	sourcesEvaluated int64
 	sourcesFailed    int64
 	failedSources    []string
+	// sourcesWithheld/withheldSources are the third state, and the reason
+	// the two above are not enough. A pair that is not due did not run this
+	// tick, and by construction the only thing that makes a pair not due is
+	// its own failure backoff (recordBackoff sets nextAttempt on error and
+	// clears it on success), so "did not run" here always means "is still
+	// failing, quietly". Counting it as neither success nor failure is what
+	// kept the outage silent from the SECOND tick onward: tick one
+	// disclosed the failure, the failing pair then backed off, and every
+	// later tick reported a healthy sibling and nothing else.
+	//
+	// A source that ran and legitimately found nothing is NOT here -- it is
+	// a success, counted in sourcesEvaluated. A successful empty population
+	// is a real answer and must never be reported as a gap.
+	sourcesWithheld int64
+	withheldSources []string
 	// orgsDivergenceRecovered (CHAOS-3882) counts organizations for which
 	// THIS tick detected checkpoint-vs-store divergence and drove an
 	// automatic recovery (successful or not) -- distinct from
@@ -782,41 +797,71 @@ func (s *tickFreshnessStats) recordSourceFailedOrg() { atomic.AddInt64(&s.orgsSo
 // size of the problem.
 const freshnessFailedSourceNameCap = 25
 
+// freshnessSummaryScope names, on the summary line itself, which pass the
+// per-source counters describe. A health summary that does not declare its
+// scope gets read as covering everything -- the exact way the line this
+// disclosure repairs was trusted as a readiness signal while a required
+// source failed on every tick behind it.
+const freshnessSummaryScope = "steady_state_pass"
+
 // recordPairOutcome folds one (org, source) pair's tick result into the
 // per-tick aggregate. evaluated is false when the pair was not due, which
 // is not a failure and not a success -- it is the pair having no reading
 // this tick, and it is deliberately not counted in either direction.
-func (s *tickFreshnessStats) recordPairOutcome(source string, evaluated, failed bool) {
-	if !evaluated {
-		return
-	}
+// recordPairOutcome folds one (org, source) pair's tick result into the
+// per-tick aggregate. The three states are disjoint and all three are
+// disclosed: it ran (evaluated -- a success, including a successful empty
+// population), it ran and errored (failed), or it did not run because its
+// own failure backoff withheld it (withheld).
+func (s *tickFreshnessStats) recordPairOutcome(source string, evaluated, failed, withheld bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.sourcesEvaluated++
-	if !failed {
-		return
+	switch {
+	case withheld:
+		s.sourcesWithheld++
+		s.withheldSources = appendDistinctSourceName(s.withheldSources, source)
+	case !evaluated:
+		// Did not run and is not in a failure backoff. Unreachable today
+		// -- due() has no other reason to refuse -- so nothing is counted
+		// rather than inventing a state nothing can produce. Left as an
+		// explicit branch so a future scheduling reason has to come here
+		// and be classified, instead of silently joining the successes.
+	case failed:
+		s.sourcesEvaluated++
+		s.sourcesFailed++
+		s.failedSources = appendDistinctSourceName(s.failedSources, source)
+	default:
+		s.sourcesEvaluated++
 	}
-	s.sourcesFailed++
-	for _, existing := range s.failedSources {
+}
+
+// appendDistinctSourceName adds source to names once, up to the cap. The
+// true totals are always the counters beside these lists, never len(names),
+// so a truncated sample can never understate the size of the problem.
+func appendDistinctSourceName(names []string, source string) []string {
+	for _, existing := range names {
 		if existing == source {
-			return
+			return names
 		}
 	}
-	if len(s.failedSources) < freshnessFailedSourceNameCap {
-		s.failedSources = append(s.failedSources, source)
+	if len(names) >= freshnessFailedSourceNameCap {
+		return names
 	}
+	return append(names, source)
 }
 
 // snapshotSources returns the pair counts and the distinct failed-source
 // names for the log line. Names are returned as a non-nil slice so a
 // healthy tick logs an empty array rather than a null -- "no source failed"
 // and "this build does not report failed sources" must never read alike.
-func (s *tickFreshnessStats) snapshotSources() (evaluated, failed int64, names []string) {
+func (s *tickFreshnessStats) snapshotSources() (evaluated, failed, withheld int64, failedNames, withheldNames []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	names = make([]string, len(s.failedSources))
-	copy(names, s.failedSources)
-	return s.sourcesEvaluated, s.sourcesFailed, names
+	failedNames = make([]string, len(s.failedSources))
+	copy(failedNames, s.failedSources)
+	withheldNames = make([]string, len(s.withheldSources))
+	copy(withheldNames, s.withheldSources)
+	return s.sourcesEvaluated, s.sourcesFailed, s.sourcesWithheld, failedNames, withheldNames
 }
 func (s *tickFreshnessStats) recordDivergenceRecovered() {
 	atomic.AddInt64(&s.orgsDivergenceRecovered, 1)
@@ -846,7 +891,7 @@ func (c *Coordinator) Tick(ctx context.Context) {
 	// wrong, so "no signal" and "zero orgs pending rebuild" stay
 	// distinguishable -- the same reasoning SlogObserver's doc comment
 	// gives for logging successful ticks, not just failures.
-	sourcesEvaluated, sourcesFailed, failedSources := stats.snapshotSources()
+	sourcesEvaluated, sourcesFailed, sourcesWithheld, failedSources, withheldSources := stats.snapshotSources()
 	c.logger.InfoContext(ctx, "context_fabric: projection tick freshness summary",
 		"orgs_ok", atomic.LoadInt64(&stats.orgsOK),
 		"orgs_rebuild_required", atomic.LoadInt64(&stats.orgsRebuildRequired),
@@ -857,19 +902,28 @@ func (c *Coordinator) Tick(ctx context.Context) {
 		// which is the same ambiguity one level up that let a source fail
 		// every tick behind an orgs_ok:1 line.
 		//
-		// SCOPE, and it is readable off this same line: these three count
-		// the STEADY-STATE pass only (runPair). An organization mid-build
-		// runs runBuildTick instead and is counted in orgs_backoff, so a
-		// reader seeing sources_failed:0 beside orgs_backoff:0 knows every
-		// organization took the steady-state path, while sources_failed:0
-		// beside a non-zero orgs_backoff means some organization was not
-		// covered by these counters at all. Extending them to the build
-		// path needs the lifecycle fixtures and is deliberately not done
-		// here rather than shipped without a pin.
+		// SCOPE is stated ON THE LINE, not only in this comment: a summary
+		// that does not say what it covers invites being read as covering
+		// everything, which is how the line this one replaces came to be
+		// trusted as a readiness signal it never was. These counters cover
+		// the STEADY-STATE pass (runPair). An organization mid-build runs
+		// runBuildTick instead and is counted in orgs_backoff; extending
+		// the counters to that path needs the lifecycle fixtures and is
+		// deliberately not done here rather than shipped without a pin.
+		"summary_scope", freshnessSummaryScope,
 		"orgs_source_failed", atomic.LoadInt64(&stats.orgsSourceFailed),
 		"sources_evaluated", sourcesEvaluated,
 		"sources_failed", sourcesFailed,
 		"failed_sources", failedSources,
+		// The THIRD state, and the one that decides whether this
+		// disclosure survives past the first tick: a source withheld this
+		// tick by its OWN failure backoff. It did not run, so it cannot
+		// appear in sources_failed, and without this it appears nowhere at
+		// all -- which is exactly how the outage went quiet after tick one
+		// while the source stayed broken. A source that ran and found
+		// nothing is NOT here; that is a success.
+		"sources_in_failure_backoff", sourcesWithheld,
+		"failure_backoff_sources", withheldSources,
 		"pending_rebuild_orgs_total", atomic.LoadInt64(&stats.orgsRebuildRequired),
 		// CHAOS-3882: how many organizations this tick found in
 		// checkpoint-vs-store divergence and drove an automatic recovery
@@ -974,11 +1028,16 @@ func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, stats *tic
 		if ctx.Err() != nil {
 			return
 		}
-		pairEvaluated, pairStale, pairFailed := c.runPair(ctx, orgID, source, c.checkpoints, &budget)
+		pairEvaluated, pairStale, pairFailed, pairWithheld := c.runPair(ctx, orgID, source, c.checkpoints, &budget)
 		evaluated = evaluated || pairEvaluated
 		stale = stale || pairStale
-		sourceFailed = sourceFailed || pairFailed
-		stats.recordPairOutcome(source, pairEvaluated, pairFailed)
+		// A pair withheld by its own failure backoff counts as a failing
+		// source for the organization's bucket too. Otherwise a healthy
+		// sibling carries the organization back to ok on every tick after
+		// the first, which is precisely the shape this disclosure exists
+		// to end.
+		sourceFailed = sourceFailed || pairFailed || pairWithheld
+		stats.recordPairOutcome(source, pairEvaluated, pairFailed, pairWithheld)
 	}
 	// A failed source can no longer land in ok. It sits BELOW stale in
 	// precedence -- rebuild_required is the bucket that demands an operator
@@ -1035,11 +1094,16 @@ func (c *Coordinator) runOrgLifecycle(ctx context.Context, orgID string, stats *
 		if ctx.Err() != nil {
 			return
 		}
-		pairEvaluated, pairStale, pairFailed := c.runPair(ctx, orgID, source, checkpoints, &budget)
+		pairEvaluated, pairStale, pairFailed, pairWithheld := c.runPair(ctx, orgID, source, checkpoints, &budget)
 		evaluated = evaluated || pairEvaluated
 		stale = stale || pairStale
-		sourceFailed = sourceFailed || pairFailed
-		stats.recordPairOutcome(source, pairEvaluated, pairFailed)
+		// A pair withheld by its own failure backoff counts as a failing
+		// source for the organization's bucket too. Otherwise a healthy
+		// sibling carries the organization back to ok on every tick after
+		// the first, which is precisely the shape this disclosure exists
+		// to end.
+		sourceFailed = sourceFailed || pairFailed || pairWithheld
+		stats.recordPairOutcome(source, pairEvaluated, pairFailed, pairWithheld)
 	}
 	c.recordCheckpointEpochState(ctx, orgID, epoch, contextfabric.CheckpointEpochActive, checkpoints)
 	// See runOrgLegacy's identical switch for why a failed source cannot
@@ -1595,7 +1659,7 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 // in the same Tick (Tick.wg.Wait blocks the next poll on every dispatched
 // runOrg returning). The 200-row page cap (batch size) is unchanged --
 // only the inter-batch idle inside one tick is removed.
-func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore, budget *int) (evaluated, stale, failed bool) {
+func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore, budget *int) (evaluated, stale, failed, withheld bool) {
 	started := c.now()
 	batches, applied := 0, 0
 	reason := DrainYieldExhausted
@@ -1603,7 +1667,13 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 		pairEvaluated, pairApplied, pairErr, pairStale := c.runPairOnce(ctx, orgID, source, checkpoints)
 		if !pairEvaluated {
 			if batches == 0 {
-				return false, false, false
+				// Nothing ran at all. If the pair is serving its own
+				// failure backoff, that is not silence -- it is the
+				// previous failure still in force, and the summary has to
+				// keep saying so on every tick. Reporting it as merely
+				// "not due" is what let the outage go quiet after its
+				// first tick.
+				return false, false, false, c.inFailureBackoff(orgID + "\x00" + source)
 			}
 			break
 		}
@@ -1663,7 +1733,7 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 			Duration: c.now().Sub(started), At: c.now(),
 		})
 	}
-	return evaluated, stale, failed
+	return evaluated, stale, failed, false
 }
 
 // emitProjectionFreshness is the CHAOS-3887 (H1) per-org, per-source
@@ -1935,6 +2005,24 @@ func (c *Coordinator) due(key string) bool {
 		return true
 	}
 	return !c.now().Before(state.nextAttempt)
+}
+
+// inFailureBackoff reports whether key is currently being withheld by its
+// OWN failure backoff, as opposed to simply having no entry. It is the
+// difference between "this pair did not run" and "this pair did not run
+// BECAUSE it is still failing", and only the second is a health signal.
+//
+// recordBackoff below is what makes this total: nextAttempt is set only on
+// an error and cleared on success, so a pair due() refuses is always a pair
+// serving a failure backoff.
+func (c *Coordinator) inFailureBackoff(key string) bool {
+	c.backoffMu.Lock()
+	defer c.backoffMu.Unlock()
+	state, ok := c.backoff[key]
+	if !ok {
+		return false
+	}
+	return state.consecutiveFailures > 0 && c.now().Before(state.nextAttempt)
 }
 
 func (c *Coordinator) recordBackoff(key string, err error) {
