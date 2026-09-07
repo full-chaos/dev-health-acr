@@ -824,14 +824,15 @@ func (s *tickFreshnessStats) recordUnevaluated()     { atomic.AddInt64(&s.orgsUn
 // not cancelled, nor one that recorded TWO. The finalizer catches both,
 // because it -- not the call site -- decides what is committed.
 type orgScope struct {
-	stats    *tickFreshnessStats
-	bucket   func()
-	complete bool
+	stats     *tickFreshnessStats
+	ctx       context.Context
+	bucket    func()
+	truncated bool
 }
 
 // beginOrg opens one organization's scope. The caller MUST defer finish().
-func (s *tickFreshnessStats) beginOrg() *orgScope {
-	return &orgScope{stats: s}
+func (s *tickFreshnessStats) beginOrg(ctx context.Context) *orgScope {
+	return &orgScope{stats: s, ctx: ctx}
 }
 
 // record names the bucket this organization belongs in. Last call wins, and
@@ -839,20 +840,35 @@ func (s *tickFreshnessStats) beginOrg() *orgScope {
 // one that never decides at all, cannot leave a half-written verdict behind.
 func (o *orgScope) record(bucket func()) { o.bucket = bucket }
 
-// markComplete says this organization's evaluation REACHED ITS END: every
-// pair drained to a terminal outcome, or the path established a real verdict
-// without needing to (another replica holds the lock; the graph is building).
+// observe records the outcome of ONE cancellable operation on this
+// organization's path -- a pair drain, a build tick, a divergence recovery, a
+// lifecycle read, a lock. Every such call site passes through here.
 //
-// Completion, not cancellation, is what decides whether the chosen bucket is
-// trustworthy, and the difference is not academic. Two shapes both have a
-// cancelled context by the time finish() runs and they need OPPOSITE answers:
-// a drain cut short mid-tick still falls through to the classification and
-// chooses ok -- a cancelled read is correctly not a source failure -- and that
-// choice must be discarded; an organization that finished its work and was
-// cancelled AFTERWARDS established a real verdict that must stand. A check on
-// ctx.Err() in finish() cannot tell them apart, which is why finish() no
-// longer looks at the context at all.
-func (o *orgScope) markComplete() { o.complete = true }
+// Completion is DERIVED from these observations, never asserted. Five
+// successive attempts to assert it by hand each failed on a site the previous
+// one had not thought of: marked before the build tick ran, marked before
+// recovery finished, marked at a classification the drain had been cut short
+// before reaching. A hand-placed mark is a claim about work that has not
+// happened yet; an observation is a fact about work that has.
+//
+// The discriminator is THE TICK'S OWN CONTEXT, read HERE, at the moment the
+// operation returned -- not at the end of the scope, where a cancellation
+// arriving after a completed evaluation is indistinguishable from one that
+// interrupted it, and not from the error's identity:
+//
+//   - context done at observation  -> truncated, whatever the error was, so a
+//     cancellation that arrives through a route with no error of its own
+//     (a freshness read that cancels and returns no batch) is still caught;
+//   - context live and err non-nil -> NOT truncated, even when the error IS
+//     context.Canceled. A source that manufactures a context error under a
+//     live tick has FAILED, and must be counted and named as a failing
+//     source rather than disappearing into "unevaluated".
+func (o *orgScope) observe(err error) {
+	if o.ctx.Err() != nil {
+		o.truncated = true
+	}
+	_ = err
+}
 
 // finish commits exactly one bucket. A cancelled evaluation that never chose
 // one is unevaluated and marks the tick incomplete: the tick did not
@@ -861,12 +877,11 @@ func (o *orgScope) markComplete() { o.complete = true }
 // unevaluated rather than dropped -- that is a defect, and the bucket
 // identity on the line is what makes it visible instead of silent.
 func (o *orgScope) finish() {
-	// NO ctx.Err() HERE, on purpose. An earlier form checked it and
-	// discarded the bucket whenever the context was cancelled by the time
-	// this ran -- which erased the verdict of an organization that had
-	// finished its work and was cancelled afterwards. See markComplete for
-	// why completion is the discriminator and the context is not.
-	if !o.complete {
+	// Completion is derived, never asserted: see observe. finish() does not
+	// read the context -- by the time it runs, a cancellation that
+	// interrupted the work and one that arrived after it finished look
+	// identical, which is the mistake three earlier versions made.
+	if o.truncated {
 		o.stats.markIncomplete()
 		o.stats.recordUnevaluated()
 		return
@@ -977,7 +992,7 @@ func (c *Coordinator) Tick(ctx context.Context) {
 			// than nearly true. Each of these was never dispatched, so each
 			// scope is incomplete by construction.
 			for range c.orgIDs[i:] {
-				undispatched := stats.beginOrg()
+				undispatched := stats.beginOrg(ctx)
 				undispatched.finish()
 			}
 			break
@@ -1077,15 +1092,15 @@ func (c *Coordinator) runOrg(ctx context.Context, orgID string, stats *tickFresh
 	// ONE scope per organization, committed on every exit below including the
 	// ones that return early. See orgScope's own doc comment for why this is
 	// a finalizer rather than a check at each return.
-	scope := stats.beginOrg()
+	scope := stats.beginOrg(ctx)
 	defer scope.finish()
 	mutexAny, _ := c.orgMu.LoadOrStore(orgID, &sync.Mutex{})
 	mutex := mutexAny.(*sync.Mutex)
 	if !mutex.TryLock() {
-		// A real verdict: another goroutine in this process is already
-		// ticking this organization. Nothing was cut short.
+		// Another goroutine in this process is already ticking this
+		// organization. Nothing cancellable happened, so there is nothing to
+		// observe and the scope stays untruncated.
 		scope.record(scope.stats.recordBackoff)
-		scope.markComplete()
 		return
 	}
 	defer mutex.Unlock()
@@ -1093,13 +1108,8 @@ func (c *Coordinator) runOrg(ctx context.Context, orgID string, stats *tickFresh
 	unlock, err := c.locker.Lock(ctx, orgID)
 	if err != nil {
 		scope.record(scope.stats.recordBackoff)
-		// ErrOrgLocked is a real verdict -- another replica holds it. Any
-		// other failure, cancellation included, means this organization was
-		// never actually evaluated, so the scope stays incomplete and the
-		// backoff it chose is discarded by finish().
-		if errors.Is(err, ErrOrgLocked) {
-			scope.markComplete()
-		} else {
+		scope.observe(err)
+		if !errors.Is(err, ErrOrgLocked) {
 			c.logger.WarnContext(ctx, "projection organization lock failed", "org_id", orgID, "failure_class", classifyOutcomeError(err))
 		}
 		return
@@ -1155,7 +1165,7 @@ func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, scope *org
 		return
 	}
 
-	evaluated, stale, sourceFailed, truncated := false, false, false, false
+	evaluated, stale, sourceFailed := false, false, false
 	budget := c.drainBudget // CHAOS-3826: shared across every source this org drains this tick
 	for _, source := range c.sourceNames {
 		if ctx.Err() != nil {
@@ -1163,7 +1173,7 @@ func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, scope *org
 			// commits the verdict for every exit, including this one.
 			return
 		}
-		pairEvaluated, pairStale, pairFailed, pairWithheld, pairTruncated := c.runPair(ctx, orgID, source, c.checkpoints, &budget)
+		pairEvaluated, pairStale, pairFailed, pairWithheld, pairErr := c.runPair(ctx, orgID, source, c.checkpoints, &budget)
 		evaluated = evaluated || pairEvaluated
 		stale = stale || pairStale
 		// A pair withheld by its own failure backoff counts as a failing
@@ -1172,7 +1182,7 @@ func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, scope *org
 		// the first, which is precisely the shape this disclosure exists
 		// to end.
 		sourceFailed = sourceFailed || pairFailed || pairWithheld
-		truncated = truncated || pairTruncated
+		scope.observe(pairErr)
 		scope.stats.recordPairOutcome(source, pairEvaluated, pairFailed, pairWithheld)
 	}
 	// A failed source can no longer land in ok. It sits BELOW stale in
@@ -1190,13 +1200,6 @@ func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, scope *org
 	default:
 		scope.record(scope.stats.recordOK)
 	}
-	// Complete only if every configured source drained to a TERMINAL
-	// outcome. Reaching the switch is not enough on its own: a single-source
-	// drain that yielded on cancellation still falls through to it and still
-	// chooses ok, which is the mid-drain defect that started this class.
-	if !truncated {
-		scope.markComplete()
-	}
 }
 
 // runOrgLifecycle is runOrgLegacy's CHAOS-3898 S2a-2 replacement, active
@@ -1209,16 +1212,18 @@ func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, scope *org
 func (c *Coordinator) runOrgLifecycle(ctx context.Context, orgID string, scope *orgScope) {
 	row, found, err := c.lifecycle.Get(ctx, orgID)
 	if err != nil {
+		scope.observe(err)
 		scope.record(scope.stats.recordBackoff)
 		c.logger.WarnContext(ctx, "read graph lifecycle row failed; skipping tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
 		return
 	}
 	if found && row.Status == contextfabric.LifecycleStatusBuilding {
-		// A real verdict: the graph is being built, which is why this
-		// organization is not ticking normally.
 		scope.record(scope.stats.recordBackoff)
-		scope.markComplete()
+		// Observed AFTER the build tick, not before it: the build is
+		// cancellable work, and marking completion ahead of it claimed a
+		// verdict for work that had not run.
 		c.runBuildTick(ctx, orgID, row)
+		scope.observe(nil)
 		return
 	}
 
@@ -1234,7 +1239,7 @@ func (c *Coordinator) runOrgLifecycle(ctx context.Context, orgID string, scope *
 		return
 	}
 
-	evaluated, stale, sourceFailed, truncated := false, false, false, false
+	evaluated, stale, sourceFailed := false, false, false
 	budget := c.drainBudget // CHAOS-3826: shared across every source this org drains this tick
 	for _, source := range c.sourceNames {
 		if ctx.Err() != nil {
@@ -1242,7 +1247,7 @@ func (c *Coordinator) runOrgLifecycle(ctx context.Context, orgID string, scope *
 			// commits the verdict for every exit, including this one.
 			return
 		}
-		pairEvaluated, pairStale, pairFailed, pairWithheld, pairTruncated := c.runPair(ctx, orgID, source, checkpoints, &budget)
+		pairEvaluated, pairStale, pairFailed, pairWithheld, pairErr := c.runPair(ctx, orgID, source, checkpoints, &budget)
 		evaluated = evaluated || pairEvaluated
 		stale = stale || pairStale
 		// A pair withheld by its own failure backoff counts as a failing
@@ -1251,7 +1256,7 @@ func (c *Coordinator) runOrgLifecycle(ctx context.Context, orgID string, scope *
 		// the first, which is precisely the shape this disclosure exists
 		// to end.
 		sourceFailed = sourceFailed || pairFailed || pairWithheld
-		truncated = truncated || pairTruncated
+		scope.observe(pairErr)
 		scope.stats.recordPairOutcome(source, pairEvaluated, pairFailed, pairWithheld)
 	}
 	c.recordCheckpointEpochState(ctx, orgID, epoch, contextfabric.CheckpointEpochActive, checkpoints)
@@ -1266,11 +1271,6 @@ func (c *Coordinator) runOrgLifecycle(ctx context.Context, orgID string, scope *
 		scope.record(scope.stats.recordSourceFailedOrg)
 	default:
 		scope.record(scope.stats.recordOK)
-	}
-	// See runOrgLegacy's identical guard: reaching the switch is not
-	// completion if any pair yielded on a cancelled context.
-	if !truncated {
-		scope.markComplete()
 	}
 }
 
@@ -1703,7 +1703,6 @@ func (c *Coordinator) recoverFromDivergence(ctx context.Context, orgID string, s
 	err := c.performRebuild(ctx, orgID)
 	c.recordBackoff(key, err)
 	scope.record(scope.stats.recordDivergenceRecovered)
-	scope.markComplete()
 	if err != nil {
 		c.logger.ErrorContext(ctx, "context_fabric: automatic projection-liveness recovery failed; will retry with backoff",
 			"org_id_hash", hash, "failure_class", classifyOutcomeError(err))
@@ -1734,7 +1733,6 @@ func (c *Coordinator) recoverFromDivergenceLifecycle(ctx context.Context, orgID 
 	opened, err := c.beginLifecycleBuild(ctx, orgID)
 	c.recordBackoff(key, err)
 	scope.record(scope.stats.recordDivergenceRecovered)
-	scope.markComplete()
 	if err != nil {
 		c.logger.ErrorContext(ctx, "context_fabric: automatic projection-liveness recovery failed to open a build-aside epoch; will retry with backoff",
 			"org_id_hash", hash, "failure_class", classifyOutcomeError(err))
@@ -1819,10 +1817,11 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 // in the same Tick (Tick.wg.Wait blocks the next poll on every dispatched
 // runOrg returning). The 200-row page cap (batch size) is unchanged --
 // only the inter-batch idle inside one tick is removed.
-func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore, budget *int) (evaluated, stale, failed, withheld, truncated bool) {
+func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore, budget *int) (evaluated, stale, failed, withheld bool, yieldErr error) {
 	started := c.now()
 	batches, applied := 0, 0
 	reason := DrainYieldExhausted
+	var lastErr error
 	for {
 		pairEvaluated, pairApplied, pairErr, pairStale, pairWithheld := c.runPairOnce(ctx, orgID, source, checkpoints)
 		if !pairEvaluated {
@@ -1833,7 +1832,7 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 				// keep saying so on every tick. The withheld fact comes
 				// from the SAME clock read that refused the attempt, so
 				// the two can no longer disagree.
-				return false, false, false, pairWithheld, false
+				return false, false, false, pairWithheld, nil
 			}
 			break
 		}
@@ -1845,7 +1844,13 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 		// followed by a failure) leaves failed true, which is correct --
 		// the pair ended this tick unable to read its source. Cancellation
 		// is not a source failure and is excluded below.
-		failed = pairErr != nil && !errors.Is(pairErr, context.Canceled) && !errors.Is(pairErr, context.DeadlineExceeded)
+		// Decided by the TICK's context, not by this error's identity -- the
+		// same rule observe() uses, and the last place the identity check
+		// survived. A source returning context.Canceled while the tick is
+		// live has FAILED and must be counted and named; only a genuinely
+		// cancelled tick makes an error not-a-failure, and that case is
+		// truncation, which observe() records.
+		failed = pairErr != nil && ctx.Err() == nil
 		// Codex round-3 F1: OR across every attempt this drain makes, never
 		// overwrite. Before CHAOS-3826's in-tick draining, runPair made
 		// exactly ONE attempt per tick, so assignment and OR were
@@ -1858,6 +1863,7 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 		// (tickFreshnessStats) to "OK" despite the tick having genuinely
 		// observed drift.
 		stale = stale || pairStale
+		lastErr = pairErr
 		batches++
 		if pairApplied {
 			applied++
@@ -1893,13 +1899,13 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 			Duration: c.now().Sub(started), At: c.now(),
 		})
 	}
-	// A drain that yielded because the context was done did NOT reach a
-	// terminal outcome for this pair. That is the difference between an
-	// organization whose evaluation completed and one that was cut short,
-	// and it is what the org scope needs -- the context alone cannot say,
-	// because a cancellation arriving AFTER a completed evaluation looks
-	// identical at the end of the tick.
-	return evaluated, stale, failed, false, reason == DrainYieldContextDone
+	// The drain's own last error, handed to scope.observe -- which decides
+	// truncation from the TICK's context at that moment, not from this
+	// error's identity. A source returning context.Canceled under a live
+	// tick has failed and is named as a failing source; a cancellation with
+	// no error of its own is still caught, because the context is what is
+	// read.
+	return evaluated, stale, failed, false, lastErr
 }
 
 // emitProjectionFreshness is the CHAOS-3887 (H1) per-org, per-source

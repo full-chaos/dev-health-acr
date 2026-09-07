@@ -1145,3 +1145,124 @@ func countUnevaluatedWritesIn(n ast.Node) int {
 	})
 	return found
 }
+
+// selfCancellingSource returns a context error OF ITS OWN MAKING while the
+// tick's context stays live. It is a failing source, not a cancelled tick,
+// and the difference is the whole of the reviewer's fourth P1.
+type selfCancellingSource struct {
+	name  string
+	calls atomic.Int32
+}
+
+func (s *selfCancellingSource) NextProjectionBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
+	s.calls.Add(1)
+	return contextfabric.ProjectionBatch{}, false, context.Canceled
+}
+
+func (s *selfCancellingSource) CurrentProjectionSourceVersion() string { return "test.v1" }
+
+// TestASourceOwnedContextErrorIsAFailureNotATruncation is the reviewer's
+// fourth P1. A source returning context.Canceled while the TICK's context is
+// perfectly live has failed. Classifying it as truncation hid a terminal
+// source failure as unevaluated work and, worse, stopped the line naming the
+// failing source -- which is the disclosure this whole ticket exists for.
+func TestASourceOwnedContextErrorIsAFailureNotATruncation(t *testing.T) {
+	t.Parallel()
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	source := &selfCancellingSource{name: "dev_health_teams_projects"}
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:         []string{"org-a"},
+		Sources:        []projectionrun.SourcePair{{Name: "dev_health_teams_projects", Source: source}},
+		Backend:        newFakeBackend(),
+		Checkpoints:    newFakeCheckpointStore(),
+		RebuildMarkers: newFakeRebuildMarker(),
+		Logger:         logger,
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	// context.Background() -- the tick is NEVER cancelled.
+	coordinator.Tick(context.Background())
+
+	if source.calls.Load() == 0 {
+		t.Fatal("the source never ran")
+	}
+	summary := freshnessSummary(t, &buffer)
+	requireBucketIdentity(t, summary)
+	if !summaryBool(t, summary, "tick_complete") {
+		t.Errorf("tick_complete = false although the tick's own context was never cancelled")
+	}
+	if got := summaryNumber(t, summary, "orgs_unevaluated"); got != 0 {
+		t.Errorf("orgs_unevaluated = %v, want 0 -- the tick was not cancelled; the SOURCE failed", got)
+	}
+	if got := summaryNumber(t, summary, "sources_failed"); got != 1 {
+		t.Errorf("sources_failed = %v, want 1 -- a source returning a context error under a live tick has failed", got)
+	}
+	names, _ := summary["failed_sources"].([]any)
+	if len(names) != 1 || names[0] != "dev_health_teams_projects" {
+		t.Errorf("failed_sources = %v, want the failing source NAMED -- hiding it as unevaluated is the defect", names)
+	}
+}
+
+// TestNoCompletionIsAssertedByHand is the invariant pin for this class's
+// fifth and final form. Five successive attempts asserted completion at a
+// hand-picked site and each failed on a site the previous had not considered:
+// before the build tick ran, before recovery finished, at a classification
+// the drain had been cut short before reaching.
+//
+// Completion is now DERIVED from observations, so the pin asserts the
+// absence of the mechanism that kept failing: no markComplete anywhere, and
+// the finalizer deriving its answer rather than reading one.
+func TestNoCompletionIsAssertedByHand(t *testing.T) {
+	t.Parallel()
+	if got := countCallsNamed(t, "coordinator.go", "markComplete"); got != 0 {
+		t.Errorf("markComplete is called %d time(s) -- completion is derived from observe(), never asserted at a site; every hand-placed mark in this file's history was placed before work that could still be cancelled", got)
+	}
+	if got := countCallsNamed(t, "coordinator.go", "observe"); got < 4 {
+		t.Errorf("scope.observe is called %d time(s), want at least 4 -- every cancellable operation on the org path (pair drain, build tick, divergence recovery, lifecycle read, lock) must pass through it", got)
+	}
+
+	// Negative control: the walk must see a real call and not a commented one.
+	for _, tc := range []struct {
+		name string
+		src  string
+		want int
+	}{
+		{"commented out", "package projectionrun\n\nfunc f(o *orgScope) {\n\t// o.markComplete()\n\t_ = o\n}\n", 0},
+		{"a real call", "package projectionrun\n\nfunc f(o *orgScope) {\n\to.markComplete()\n}\n", 1},
+	} {
+		file, err := parser.ParseFile(token.NewFileSet(), "control.go", tc.src, 0)
+		if err != nil {
+			t.Fatalf("%s: parse: %v", tc.name, err)
+		}
+		if got := countCallsNamedIn(file, "markComplete"); got != tc.want {
+			t.Errorf("negative control %q counted %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+func countCallsNamed(t *testing.T, filename, name string) int {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), filename, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", filename, err)
+	}
+	return countCallsNamedIn(file, name)
+}
+
+func countCallsNamedIn(n ast.Node, name string) int {
+	found := 0
+	ast.Inspect(n, func(m ast.Node) bool {
+		call, ok := m.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == name {
+			found++
+		}
+		return true
+	})
+	return found
+}
