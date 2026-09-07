@@ -2441,6 +2441,13 @@ func TestTheInvariant_OnlyASourcesOwnErrorNamesTheSource(t *testing.T) {
 			if got := summaryNumber(t, summary, "orgs_source_failed"); got != 0 {
 				t.Errorf("orgs_source_failed = %v, want 0 -- the source did not fail", got)
 			}
+			// The tick FINISHED -- it was never cancelled. tick_complete is
+			// derived from the bucket identity, so if orgs_pair_failed were
+			// left out of that sum this would read false and nothing else
+			// on the line would show it.
+			if got := summaryBool(t, summary, "tick_complete"); !got {
+				t.Errorf("tick_complete = false on a tick that was never cancelled -- the derived identity does not count orgs_pair_failed")
+			}
 		})
 	}
 }
@@ -2478,5 +2485,63 @@ func TestASteadyStateTickReportsExplicitPairFailureZeros(t *testing.T) {
 	}
 	if got := summaryNumber(t, summary, "orgs_pair_failed"); got != 0 {
 		t.Errorf("orgs_pair_failed = %v, want an explicit 0", got)
+	}
+}
+
+// TestTheInvariant_HoldsOnTheLifecycleServingPathToo is the sweep a surviving
+// mutant demanded: dropping the pair-failed bucket from runOrgLifecycle's
+// classification switch changed nothing any test could see, because the
+// invariant arms drive runOrgLegacy (steady state) and runBuildTick (build)
+// and never the SERVING lifecycle path.
+//
+// The three switches are maintained by hand. That is exactly how the
+// `sourceFailed` propagation went missing from this same path once before.
+func TestTheInvariant_HoldsOnTheLifecycleServingPathToo(t *testing.T) {
+	t.Parallel()
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	source := &fakeSource{name: "dev_health_teams_projects", pages: 1}
+	checkpoints := &failingCheckpointStore{fakeCheckpointStore: newFakeCheckpointStore()}
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:           []string{"org-a"},
+		Sources:          []projectionrun.SourcePair{{Name: "dev_health_teams_projects", Source: source}},
+		Backend:          newFakeBackend(),
+		Checkpoints:      checkpoints,
+		RebuildMarkers:   newFakeRebuildMarker(),
+		Lifecycle:        servingLifecycleStore{},
+		EpochCheckpoints: func(int64) contextfabric.ProjectionCheckpointStore { return checkpoints },
+		GraceWindow:      time.Hour,
+		Logger:           logger,
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	coordinator.Tick(context.Background())
+
+	if checkpoints.loads.Load() == 0 {
+		t.Fatal("the checkpoint store was never loaded -- the tick did not reach the serving path")
+	}
+	if got := source.calls.Load(); got != 0 {
+		t.Fatalf("the source ran %d time(s); this arm is only meaningful when the source was NEVER asked", got)
+	}
+	summary := freshnessSummary(t, &buffer)
+	requireBucketIdentity(t, summary)
+
+	if got := summaryNumber(t, summary, "sources_failed"); got != 0 {
+		t.Errorf("sources_failed = %v, want 0 -- our checkpoint store failed on the SERVING path; the source was never called", got)
+	}
+	names, ok := summary["failed_sources"].([]any)
+	if !ok || len(names) != 0 {
+		t.Errorf("failed_sources = %v, want []", summary["failed_sources"])
+	}
+	if got := summaryNumber(t, summary, "pair_failures"); got != 1 {
+		t.Errorf("pair_failures = %v, want 1", got)
+	}
+	if got := summaryNumber(t, summary, "orgs_pair_failed"); got != 1 {
+		t.Errorf("orgs_pair_failed = %v, want 1 -- the serving path's classification switch must carry the same bucket as the other two", got)
+	}
+	if got := summaryBool(t, summary, "tick_complete"); !got {
+		t.Errorf("tick_complete = false on a tick that was never cancelled")
 	}
 }
