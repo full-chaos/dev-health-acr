@@ -1744,7 +1744,7 @@ func TestEveryPairOutcomeGoesThroughTheScope(t *testing.T) {
 	file, err := parser.ParseFile(token.NewFileSet(), "control.go", `package projectionrun
 
 func f(scope *orgScope, source string) {
-	scope.stats.recordPairOutcome(source, true, false, false)
+	scope.stats.recordPairOutcome(source, true, false, false, false)
 }
 `, 0)
 	if err != nil {
@@ -1754,13 +1754,31 @@ func f(scope *orgScope, source string) {
 		t.Fatalf("negative control counted %d bypasses, want 1 -- the walk is not seeing the bypass it exists to catch", got)
 	}
 
+	// confirm6 P3: the pin matched call expressions only, so `record :=
+	// scope.stats.recordPairOutcome; record(...)` reported ZERO bypasses.
+	// A pin whose job is to stop the next call site being added unguarded
+	// must see the alias too.
+	aliased, err := parser.ParseFile(token.NewFileSet(), "alias.go", `package projectionrun
+
+func h(scope *orgScope, source string) {
+	record := scope.stats.recordPairOutcome
+	record(source, true, false, false, false)
+}
+`, 0)
+	if err != nil {
+		t.Fatalf("parse the aliasing control: %v", err)
+	}
+	if got := countPairRecordingsOutsideScopeIn(aliased); got != 1 {
+		t.Fatalf("aliasing control counted %d bypasses, want 1 -- a method VALUE defeats a call-only pin, which confirm6 executed against the previous version", got)
+	}
+
 	// Positive control: the guarded form must NOT be counted, or the pin
 	// would fire on correct code and get "fixed" by deleting it.
 	ok, err := parser.ParseFile(token.NewFileSet(), "ok.go", `package projectionrun
 
 func g(scope *orgScope, source string) {
-	scope.recordPair(func() {
-		scope.stats.recordPairOutcome(source, true, false, false)
+	scope.recordPair(func(truncated bool) {
+		scope.stats.recordPairOutcome(source, true, false, false, truncated)
 	})
 }
 `, 0)
@@ -1809,22 +1827,23 @@ func countPairRecordingsOutsideScopeIn(root ast.Node) int {
 
 	found := 0
 	ast.Inspect(root, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
+		// Every SELECTOR naming the recorders counts, not only call
+		// expressions: `record := scope.stats.recordPairOutcome` is a method
+		// VALUE that a call-only walk never sees, and confirm6 executed
+		// exactly that against the previous version of this pin and got 0.
+		sel, ok := n.(*ast.SelectorExpr)
 		if !ok {
 			return true
 		}
 		// Match the METHOD name only; the receiver is stats, not scope, so a
-		// receiver-qualified match would miss the very calls being pinned.
+		// receiver-qualified match would miss the very sites being pinned.
 		if sel.Sel.Name != "recordPairOutcome" && sel.Sel.Name != "recordBuildPairOutcome" {
 			return true
 		}
-		// The method DECLARATIONS are not calls, so they cannot land here.
+		// The method DECLARATIONS carry the name on a FuncDecl, not a
+		// selector, so they cannot land here.
 		for _, g := range guarded {
-			if call.Pos() >= g.lo && call.End() <= g.hi {
+			if sel.Pos() >= g.lo && sel.End() <= g.hi {
 				return true
 			}
 		}
@@ -1884,5 +1903,82 @@ func TestConfirm5_AHealthyBuildSourceIsCountedAsEvaluated(t *testing.T) {
 	names, ok := summary["failed_sources"].([]any)
 	if !ok || len(names) != 0 {
 		t.Errorf("failed_sources = %v, want an empty list", summary["failed_sources"])
+	}
+}
+
+// failThenCancelSource fails with a REAL, non-context error and only then
+// cancels the tick. The failure is a fact by the time the cancellation
+// arrives, so it must survive it.
+type failThenCancelSource struct {
+	name   string
+	cancel context.CancelFunc
+	calls  atomic.Int32
+}
+
+func (f *failThenCancelSource) NextProjectionBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
+	f.calls.Add(1)
+	err := fmt.Errorf("teams projects read: %w", contextfabric.ErrUnavailable)
+	f.cancel() // the tick dies AFTER the source has definitively failed
+	return contextfabric.ProjectionBatch{}, false, err
+}
+
+func (f *failThenCancelSource) CurrentProjectionSourceVersion() string { return "test.v1" }
+
+// TestConfirm6_ACancellationAfterAFailureDoesNotUnobserveIt is confirm6's P1,
+// and it is a defect my OWN fix for the previous round introduced. Truncation
+// must suppress claims of HEALTH, not facts already established: a source that
+// failed, failed, and a tick dying afterwards does not un-observe it.
+//
+// Dropping it is the ticket's own defect -- a required source down and
+// unnamed -- reintroduced by the fix for the previous one.
+func TestConfirm6_ACancellationAfterAFailureDoesNotUnobserveIt(t *testing.T) {
+	t.Parallel()
+	for _, buildPhase := range []bool{false, true} {
+		name := "steady state"
+		if buildPhase {
+			name = "build phase"
+		}
+		t.Run(name, func(t *testing.T) {
+			var buffer bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			source := &failThenCancelSource{name: "dev_health_teams_projects", cancel: cancel}
+			checkpoints := newFakeCheckpointStore()
+			cfg := projectionrun.Config{
+				OrgIDs:         []string{"org-a"},
+				Sources:        []projectionrun.SourcePair{{Name: "dev_health_teams_projects", Source: source}},
+				Backend:        newFakeBackend(),
+				Checkpoints:    checkpoints,
+				RebuildMarkers: newFakeRebuildMarker(),
+				Logger:         logger,
+			}
+			if buildPhase {
+				cfg.Lifecycle = &buildFailingLifecycleStore{epoch: 1}
+				cfg.EpochCheckpoints = func(int64) contextfabric.ProjectionCheckpointStore { return checkpoints }
+				cfg.GraceWindow = time.Hour
+			}
+			coordinator, err := projectionrun.NewCoordinator(cfg)
+			if err != nil {
+				t.Fatalf("new coordinator: %v", err)
+			}
+			coordinator.Tick(ctx)
+
+			if source.calls.Load() == 0 {
+				t.Fatal("the source never ran -- the tick did not reach the drain")
+			}
+			summary := freshnessSummary(t, &buffer)
+			if got := summaryBool(t, summary, "tick_complete"); got {
+				t.Fatalf("tick_complete = true -- the fixture did not truncate, so this arm proves nothing")
+			}
+			if got := summaryNumber(t, summary, "sources_failed"); got != 1 {
+				t.Errorf("sources_failed = %v, want 1 -- the source failed with a real error BEFORE the cancellation; a tick dying afterwards does not un-observe it", got)
+			}
+			names, _ := summary["failed_sources"].([]any)
+			if len(names) != 1 || names[0] != "dev_health_teams_projects" {
+				t.Errorf("failed_sources = %v, want it NAMED -- an unnamed failing source is the defect this line exists to prevent", summary["failed_sources"])
+			}
+		})
 	}
 }

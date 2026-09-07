@@ -892,11 +892,14 @@ func (o *orgScope) done() bool { return o.parent.Err() != nil }
 // same reason model 7 exists: a rule that lives at call sites is a rule the
 // next call site forgets. The build path was added without it and reported a
 // reading for a cancelled drain.
-func (o *orgScope) recordPair(record func()) {
-	if o.truncated {
-		return
-	}
-	record()
+// truncated is passed to the recorder rather than gating the whole call,
+// because the two are different claims. A pair that FAILED, or that was
+// withheld by its own backoff, established a fact the tick cannot un-observe
+// by dying afterwards -- and dropping a failure is this ticket's own defect,
+// a required source down and unnamed. A pair that ran CLEANLY established
+// nothing if its drain was cut short, and that claim must still go.
+func (o *orgScope) recordPair(record func(truncated bool)) {
+	record(o.truncated)
 }
 
 // finish commits exactly one bucket. A cancelled evaluation that never chose
@@ -945,7 +948,7 @@ const freshnessSummaryScope = "steady_state_and_build"
 // own failure backoff withheld it (withheld). A pair that was simply not
 // due is none of those -- it is the pair having no reading this tick, and
 // it is deliberately counted in neither direction.
-func (s *tickFreshnessStats) recordPairOutcome(source string, evaluated, failed, withheld bool) {
+func (s *tickFreshnessStats) recordPairOutcome(source string, evaluated, failed, withheld, truncated bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch {
@@ -963,6 +966,12 @@ func (s *tickFreshnessStats) recordPairOutcome(source string, evaluated, failed,
 		s.sourcesFailed++
 		s.failedSources = appendDistinctSourceName(s.failedSources, source)
 	default:
+		if truncated {
+			// Ran clean, but the drain was cut short: nothing was
+			// established, so nothing is claimed. Failures and withheld
+			// above are facts and survive the truncation.
+			return
+		}
 		s.sourcesEvaluated++
 	}
 }
@@ -971,7 +980,7 @@ func (s *tickFreshnessStats) recordPairOutcome(source string, evaluated, failed,
 // counters as the steady-state drain, and additionally into the build-only
 // pair, so neither question loses its answer: "is a required source down"
 // stays one number, and "was it down during a build" is still answerable.
-func (s *tickFreshnessStats) recordBuildPairOutcome(source string, evaluated, failed, withheld bool) {
+func (s *tickFreshnessStats) recordBuildPairOutcome(source string, evaluated, failed, withheld, truncated bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch {
@@ -996,6 +1005,12 @@ func (s *tickFreshnessStats) recordBuildPairOutcome(source string, evaluated, fa
 		s.buildSourcesFailed++
 		s.buildFailedSources = appendDistinctSourceName(s.buildFailedSources, source)
 	default:
+		if truncated {
+			// Ran clean, but the drain was cut short: nothing was
+			// established, so nothing is claimed. Failures and withheld
+			// above are facts and survive the truncation.
+			return
+		}
 		s.sourcesEvaluated++
 	}
 }
@@ -1294,8 +1309,8 @@ func (c *Coordinator) runOrgLegacy(scope *orgScope, orgID string) {
 		// the first, which is precisely the shape this disclosure exists
 		// to end.
 		sourceFailed = sourceFailed || pairFailed || pairWithheld
-		scope.recordPair(func() {
-			scope.stats.recordPairOutcome(source, pairEvaluated, pairFailed, pairWithheld)
+		scope.recordPair(func(truncated bool) {
+			scope.stats.recordPairOutcome(source, pairEvaluated, pairFailed, pairWithheld, truncated)
 		})
 	}
 	// A failed source can no longer land in ok. It sits BELOW stale in
@@ -1384,8 +1399,8 @@ func (c *Coordinator) runOrgLifecycle(scope *orgScope, orgID string) {
 		// the first, which is precisely the shape this disclosure exists
 		// to end.
 		sourceFailed = sourceFailed || pairFailed || pairWithheld
-		scope.recordPair(func() {
-			scope.stats.recordPairOutcome(source, pairEvaluated, pairFailed, pairWithheld)
+		scope.recordPair(func(truncated bool) {
+			scope.stats.recordPairOutcome(source, pairEvaluated, pairFailed, pairWithheld, truncated)
 		})
 	}
 	_ = scope.run(func(ctx context.Context) error {
@@ -1491,8 +1506,8 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 			buildEvaluated, buildFailed, buildWithheld = c.runBuildPair(ctx, orgID, source, targetEpoch, checkpoints, &budget)
 			return nil
 		})
-		scope.recordPair(func() {
-			scope.stats.recordBuildPairOutcome(source, buildEvaluated, buildFailed, buildWithheld)
+		scope.recordPair(func(truncated bool) {
+			scope.stats.recordBuildPairOutcome(source, buildEvaluated, buildFailed, buildWithheld, truncated)
 		})
 	}
 	_ = scope.run(func(ctx context.Context) error {
@@ -1708,7 +1723,7 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 	//
 	// failed is decided by the tick's context and not by the yield reason,
 	// for the reason lastErr exists above.
-	return batches > 0, lastErr != nil && ctx.Err() == nil, withheld
+	return batches > 0, lastErr != nil && !truncatedBy(ctx, lastErr), withheld
 }
 
 // classifyBuildCompletion maps one build tick's ProjectionRun onto design
@@ -2043,7 +2058,7 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 		// live has FAILED and must be counted and named; only a genuinely
 		// cancelled tick makes an error not-a-failure, and that case is
 		// truncation, which observe() records.
-		failed = pairErr != nil && ctx.Err() == nil
+		failed = pairErr != nil && !truncatedBy(ctx, pairErr)
 		// Codex round-3 F1: OR across every attempt this drain makes, never
 		// overwrite. Before CHAOS-3826's in-tick draining, runPair made
 		// exactly ONE attempt per tick, so assignment and OR were
@@ -2378,6 +2393,20 @@ func (c *Coordinator) due(key string) bool {
 // orgs_ok while the failing source was never retried that tick. A reviewer
 // reproduced it with a deterministic clock. Two reads deciding one question
 // is the defect; one read deciding both is the fix.
+// truncatedBy reports whether err is the TICK's cancellation reaching this
+// pair rather than a failure the source owns. BOTH halves are load bearing.
+// Without the error check, a source returning context.Canceled under a live
+// tick would be filed as truncation and its outage hidden. Without the
+// context check, a real backend error stops counting as a failure merely
+// because the tick died immediately after it -- which lost an observed
+// dependency_unavailable and left the source unnamed.
+func truncatedBy(ctx context.Context, err error) bool {
+	if ctx.Err() == nil {
+		return false
+	}
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
 func (c *Coordinator) dueState(key string) (due, withheldByBackoff bool) {
 	c.backoffMu.Lock()
 	defer c.backoffMu.Unlock()
