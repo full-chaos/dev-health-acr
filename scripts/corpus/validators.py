@@ -54,6 +54,17 @@ def _check_node(node, node_name, path="attempt"):
         if not isinstance(val, want):
             return (f"{path}.{key} must be {rule['type']}, got "
                     f"{type(val).__name__}")
+        # r9: an array's ELEMENTS are typed too. Typing the array and trusting its members
+        # was the same shallow boundary one level lower -- `committed: [1]` validated and
+        # then crashed the consumer that read `committed[0].get(...)`.
+        if rule["type"] == "array" and rule.get("items"):
+            item_want = _TYPES[rule["items"]]
+            for i, item in enumerate(val):
+                if rule["items"] == "int" and isinstance(item, bool):
+                    return f"{path}.{key}[{i}] must be an int, got bool"
+                if not isinstance(item, item_want):
+                    return (f"{path}.{key}[{i}] must be {rule['items']}, got "
+                            f"{type(item).__name__}")
         if key in schema():                       # a node the schema describes: recurse
             deeper = _check_node(val, key, f"{path}.{key}")
             if deeper:

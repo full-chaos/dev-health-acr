@@ -215,20 +215,31 @@ def score(expectation, bucket, subject_substitution=False,
     `terminal_status` is supplied it is authoritative, because classify() collapses
     no_match and refused into one bucket and a declared basis needs them apart.
     """
+    # r9: naming an unauthored terminal comes FIRST, before any expectation early-return.
+    # It used to sit after them, so a row with no declared expectation -- 16 of 36 in the
+    # corpus -- reported `no_expectation` and the unauthored terminal was never counted.
+    # The visibility feature was silent on the majority of rows, which is the silence it
+    # exists to remove. The reason carries BOTH facts when both are true.
+    _unauthored = (isinstance(terminal_status, str) and terminal_status
+                   and terminal_key(terminal_status, bucket) is None)
+
     cls = expectation.get("expectation") or UNSCORED
     # r5: the INVALID check runs FIRST. It used to sit after the substitution branch, so a
     # row whose declaration was malformed still produced `disagree` -- a verdict derived
     # from a declaration we had already judged unreadable. An invalid row is not scored,
     # whatever else is true of it.
     if cls == INVALID:
-        return "unscored", (
-            f"invalid_expectation: the row's declaration is malformed "
-            f"({expectation.get('invalid_reason')}) -- not scored")
+        why = (f"invalid_expectation: the row's declaration is malformed "
+               f"({expectation.get('invalid_reason')}) -- not scored")
+        return "unscored", (f"unauthored_terminal:{terminal_status}; {why}"
+                            if _unauthored else why)
     if subject_substitution:
         return "disagree", ("subject substitution: a subject was committed that the row "
                             "did not name")
     if cls == UNSCORED:
-        return "unscored", "no_expectation: the row declares none"
+        return "unscored", ("unauthored_terminal:%s; no_expectation: the row declares none"
+                            % terminal_status if _unauthored
+                            else "no_expectation: the row declares none")
 
     # r4: the bucket fallback is DELETED. It was the fail-open path that survived four
     # rounds -- an absent or unknown terminal status reached `agree` through the bucket,
