@@ -681,3 +681,51 @@ func TestTheGateIsCarriedFromTheReceiptOntoTheFamilyOutcome(t *testing.T) {
 		})
 	}
 }
+
+// THE SAME CARRY, DRIVEN FROM Interpret — the reviewer's own repro shape.
+//
+// The pin above calls resolveFrame and recordFamilyResolution in sequence,
+// which is the carry itself. This one drives the PUBLIC entry point, so it
+// also covers the wiring BETWEEN them: if a future edit stops calling
+// resolveFrame before recordFamilyResolution, or routes around it, the pin
+// above still passes and this one does not.
+//
+// Adopted from the adversarial round that found the gap. Its temporary repro
+// drove Interpret and read `carried gate ""/"" , want a refusing gate`; that
+// shape is kept rather than paraphrased, because it is the one that failed.
+func TestInterpretCarriesARefusingGateOutOfTheReceipt(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name  string
+		frame *QuestionFrame
+		want  FrameGateOutcome
+	}{
+		{"refused by an invariant", selfGroupedFrame(), FrameGateRejectedInvalid},
+		{"refused on the basis", unservableMemberKindFrame(), FrameGateRefusedBasis},
+		{"passing", namedSubjectFrame(), FrameGatePassed},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			receipt := validModelReceiptFixture(ModelOperationInterpret)
+			receipt.QuestionFrame = testCase.frame
+
+			interpreter := RuntimeQuestionInterpreter{
+				Runtime: fakeModelRuntime{interpreted: groupedInterpretation(), receipt: receipt},
+				Sink:    &fakeReceiptSink{},
+			}
+			_, outcome, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
+			if err != nil {
+				t.Fatalf("Interpret() error = %v", err)
+			}
+			if outcome.Gate.Outcome != testCase.want {
+				t.Fatalf("Interpret carried gate %q/%q, want %q -- the engine reads THIS value, and the zero gate allows", outcome.Gate.Outcome, outcome.Gate.RefuseBasis, testCase.want)
+			}
+			// The half that matters: a refusing verdict must still refuse
+			// after the whole of Interpret, not merely be non-zero.
+			wantRefuses := testCase.want == FrameGateRejectedInvalid || testCase.want == FrameGateRefusedBasis
+			if outcome.Gate.Refuses() != wantRefuses {
+				t.Fatalf("carried gate Refuses() = %t, want %t", outcome.Gate.Refuses(), wantRefuses)
+			}
+		})
+	}
+}
