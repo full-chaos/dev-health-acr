@@ -535,12 +535,24 @@ func TestStructural_ANamedPairFailureSurvivesATruncatedTick(t *testing.T) {
 		t.Errorf("pair_failed = %v, want [dev_health_teams_projects:checkpoint_load] -- a count with no name cannot tell an operator which pair and which step broke", summary["pair_failed"])
 	}
 
-	// The other half, and the reason this is not simply "record everything":
-	// the ORGANIZATION still has no verdict. The tick did not finish
-	// evaluating it, so no bucket may claim it is healthy, degraded, or
-	// anything else -- and the line must say the tick did not complete.
-	if got := summaryNumber(t, summary, "orgs_unevaluated"); got != 1 {
-		t.Errorf("orgs_unevaluated = %v, want 1 -- keeping the established failure must not turn a truncated evaluation into a verdict", got)
+	// The organization-bucket half, under the amended ladder: an ESTABLISHED
+	// failure outranks truncation, so this organization is bucketed for the
+	// broken pair rather than swallowed by unevaluated. That is the same
+	// rule as the pair-level one above, one level up.
+	if got := summaryNumber(t, summary, "orgs_pair_failed"); got != 1 {
+		t.Errorf("orgs_pair_failed = %v, want 1 -- the pair broke before the tick was cancelled, and the bucket must carry the fact rather than lose it to the cancellation", got)
+	}
+	if got := summaryNumber(t, summary, "orgs_unevaluated"); got != 0 {
+		t.Errorf("orgs_unevaluated = %v, want 0 -- this organization established something, which is exactly what unevaluated must not swallow", got)
+	}
+
+	// And the tick still has to say it did not finish. Keeping the
+	// established failure moves the organization OUT of unevaluated, so
+	// tick_complete can no longer be derived from that bucket alone --
+	// truncation is observed separately, and this is the assertion that
+	// holds the two apart.
+	if got := summaryNumber(t, summary, "orgs_truncated"); got != 1 {
+		t.Errorf("orgs_truncated = %v, want 1 -- the organization left the unevaluated bucket, so this counter is the only thing left saying the tick was cut short", got)
 	}
 	if summaryBool(t, summary, "tick_complete") {
 		t.Error("tick_complete = true, want false -- the tick was cancelled mid-evaluation")
@@ -765,5 +777,162 @@ func TestStructural_AShutdownNamesNothing(t *testing.T) {
 	}
 	if got := summaryNumber(t, summary, "orgs_unevaluated"); got < 1 {
 		t.Errorf("orgs_unevaluated = %v, want at least 1 -- a cancelled fleet must show up as organizations with no verdict", got)
+	}
+}
+
+// --- (e) and (f): the ladder amendment. Truncation is a MEMBER of the
+// vocabulary, and established facts outrank it. ---
+
+// buildCancellingStore returns a BARE context.Canceled from the build's own
+// RunOnce, having cancelled the tick first: the build cut by a propagated
+// cancellation, not by anything failing.
+type buildCancellingStore struct {
+	*fakeCheckpointStore
+	cancel context.CancelFunc
+	loads  atomic.Int32
+}
+
+func (s *buildCancellingStore) LoadProjectionCheckpoint(context.Context, string, string) (contextfabric.ProjectionCheckpoint, error) {
+	s.loads.Add(1)
+	s.cancel()
+	return contextfabric.ProjectionCheckpoint{}, context.Canceled
+}
+
+// TestStructural_ABuildCutByPropagatedCancellationIsUnevaluated is amendment
+// shape (e).
+//
+// A build that was cut short established nothing. It must not land in
+// backoff -- backoff is what an operator reads as "building, nothing wrong",
+// and that is a claim about a tick that finished looking. Truncation
+// therefore outranks both backoff and stale in the ladder: those two are
+// READINGS, and a tick cut short did not finish taking one.
+//
+// The build path signals this as truncated rather than evaluated:
+// `evaluated: true` is reserved for a build that ran to a verdict.
+func TestStructural_ABuildCutByPropagatedCancellationIsUnevaluated(t *testing.T) {
+	t.Parallel()
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store := &buildCancellingStore{fakeCheckpointStore: newFakeCheckpointStore(), cancel: cancel}
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:           []string{"org-a"},
+		Sources:          []projectionrun.SourcePair{{Name: "dev_health_teams_projects", Source: &fakeSource{name: "dev_health_teams_projects", pages: 1}}},
+		Backend:          newFakeBackend(),
+		Checkpoints:      store,
+		RebuildMarkers:   newFakeRebuildMarker(),
+		Lifecycle:        &buildFailingLifecycleStore{epoch: 1},
+		EpochCheckpoints: func(int64) contextfabric.ProjectionCheckpointStore { return store },
+		GraceWindow:      time.Hour,
+		Logger:           logger,
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	coordinator.Tick(ctx)
+
+	if store.loads.Load() == 0 {
+		t.Fatal("the build never reached a checkpoint load -- the tick did not take the path under test")
+	}
+	summary := freshnessSummary(t, &buffer)
+	requireBucketIdentity(t, summary)
+	requireSummaryScope(t, summary)
+
+	if got := summaryNumber(t, summary, "orgs_unevaluated"); got != 1 {
+		t.Errorf("orgs_unevaluated = %v, want 1 -- a build cut by the tick's own cancellation reached no verdict", got)
+	}
+	if got := summaryNumber(t, summary, "orgs_backoff"); got != 0 {
+		t.Errorf("orgs_backoff = %v, want 0 -- backoff reads as \"building, nothing wrong\", which is a claim about a tick that finished looking", got)
+	}
+	if got := summaryNumber(t, summary, "orgs_source_failed"); got != 0 {
+		t.Errorf("orgs_source_failed = %v, want 0 -- nothing failed here; the tick was cancelled", got)
+	}
+	if got := summaryNumber(t, summary, "sources_failed"); got != 0 {
+		t.Errorf("sources_failed = %v, want 0 -- our own cancelled checkpoint load must never name the source", got)
+	}
+	if summaryBool(t, summary, "tick_complete") {
+		t.Error("tick_complete = true, want false")
+	}
+}
+
+// TestStructural_ASourceFailureUnderATruncatedTickKeepsItsBucket is amendment
+// shape (f), and it is the ORGANIZATION-bucket half of the pair-level rule
+// pinned above.
+//
+// A source that failed, failed. The tick dying afterwards does not un-observe
+// it -- so the organization stays in the source-failed bucket, the source
+// stays NAMED, and the line still says the tick did not complete. Established
+// facts outrank truncation; truncation outranks readings.
+//
+// tick_complete cannot be derived from the unevaluated bucket alone once that
+// is true: this organization is legitimately NOT unevaluated, and a tick
+// cancelled mid-flight must still report itself unfinished. Truncation is
+// therefore observed separately from the bucket it no longer wins, which is
+// also what keeps "cancelled while the source was already down" distinct from
+// "ran to completion with the source down".
+func TestStructural_ASourceFailureUnderATruncatedTickKeepsItsBucket(t *testing.T) {
+	t.Parallel()
+	for _, buildPhase := range []bool{false, true} {
+		name := "steady state"
+		if buildPhase {
+			name = "build phase"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var buffer bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			// The source definitively fails, and only THEN kills the tick.
+			source := &failThenCancelSource{name: "dev_health_teams_projects", cancel: cancel}
+			checkpoints := newFakeCheckpointStore()
+			cfg := projectionrun.Config{
+				OrgIDs:         []string{"org-a"},
+				Sources:        []projectionrun.SourcePair{{Name: "dev_health_teams_projects", Source: source}},
+				Backend:        newFakeBackend(),
+				Checkpoints:    checkpoints,
+				RebuildMarkers: newFakeRebuildMarker(),
+				Logger:         logger,
+			}
+			if buildPhase {
+				cfg.Lifecycle = &buildFailingLifecycleStore{epoch: 1}
+				cfg.EpochCheckpoints = func(int64) contextfabric.ProjectionCheckpointStore { return checkpoints }
+				cfg.GraceWindow = time.Hour
+			}
+			coordinator, err := projectionrun.NewCoordinator(cfg)
+			if err != nil {
+				t.Fatalf("new coordinator: %v", err)
+			}
+			coordinator.Tick(ctx)
+
+			if source.calls.Load() == 0 {
+				t.Fatal("the source never ran -- no failure was established, so this arm proves nothing")
+			}
+			summary := freshnessSummary(t, &buffer)
+			requireBucketIdentity(t, summary)
+
+			if got := summaryNumber(t, summary, "orgs_source_failed"); got != 1 {
+				t.Errorf("orgs_source_failed = %v, want 1 -- the source failed BEFORE the tick was cancelled, and a cancellation arriving afterwards does not un-observe it", got)
+			}
+			if got := summaryNumber(t, summary, "orgs_unevaluated"); got != 0 {
+				t.Errorf("orgs_unevaluated = %v, want 0 -- this organization reached a verdict about a required source, which is exactly what unevaluated must not swallow", got)
+			}
+			if got := summaryNumber(t, summary, "sources_failed"); got != 1 {
+				t.Errorf("sources_failed = %v, want 1", got)
+			}
+			names, _ := summary["failed_sources"].([]any)
+			if len(names) != 1 || names[0] != "dev_health_teams_projects" {
+				t.Errorf("failed_sources = %v, want [dev_health_teams_projects] -- an unnamed failing source is the defect this line exists to prevent", summary["failed_sources"])
+			}
+			if got := summaryNumber(t, summary, "orgs_truncated"); got != 1 {
+				t.Errorf("orgs_truncated = %v, want 1 -- the organization kept its source_failed bucket, so this counter is what still reports the tick unfinished", got)
+			}
+			if summaryBool(t, summary, "tick_complete") {
+				t.Error("tick_complete = true, want false -- the tick was cancelled mid-flight, and keeping the established failure must not turn it into a finished tick")
+			}
+		})
 	}
 }

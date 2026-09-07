@@ -830,6 +830,30 @@ type tickFreshnessStats struct {
 	// no operator action was needed, the coordinator already acted.
 	orgsPairFailed          int64
 	orgsDivergenceRecovered int64
+	// orgsTruncated counts organizations whose evaluation was cut short by
+	// the tick's own cancellation. It is NOT a bucket and is deliberately
+	// outside the bucket identity: an organization can be truncated AND
+	// have established a fact worth publishing (a required source that
+	// failed before the cancellation arrived), in which case its bucket is
+	// that fact and this counter is what still says the tick did not finish.
+	//
+	// Without it, tick_complete -- derived from orgs_unevaluated -- would
+	// read TRUE for a tick cancelled mid-flight as soon as an established
+	// failure outranked truncation, and "cancelled while the source was
+	// already down" would be indistinguishable on the line from "ran to
+	// completion with the source down".
+	orgsTruncated int64
+	// orgsStale counts organizations whose freshness check found a
+	// producer-identity drift pending rebuild, whatever bucket they ended in.
+	//
+	// It exists because the ladder puts ESTABLISHED FAILURES above the stale
+	// reading, so an organization that is both stale and has a failing
+	// required source is bucketed source_failed -- correct, and it would
+	// otherwise have taken pending_rebuild_orgs_total down with it, hiding
+	// from an operator that a rebuild is owed. A bucket is one per
+	// organization; a FACT about that organization is counted on its own.
+	// Same shape and same reason as orgsTruncated.
+	orgsStale int64
 }
 
 func (s *tickFreshnessStats) recordOK()              { atomic.AddInt64(&s.orgsOK, 1) }
@@ -849,6 +873,7 @@ const (
 	orgOutcomeBackoff         orgOutcome = "backoff"
 	orgOutcomeSourceFailed    orgOutcome = "source_failed"
 	orgOutcomePairFailed      orgOutcome = "pair_failed"
+	orgOutcomeUnevaluated     orgOutcome = "unevaluated"
 )
 
 // orgSignals is what one per-organization path OBSERVED. It carries no
@@ -869,6 +894,12 @@ type orgSignals struct {
 	// load, a CAS, the backend apply. Its own bucket, so the bucket and
 	// pair_failed beside it answer the same question.
 	pairBroke bool
+	// truncated: the tick's own cancellation reached this organization.
+	// Filled in by orgScope.finish() at commit time, never by a path -- a
+	// cancellation can arrive after the last thing a path observed (the
+	// deferred organization unlock is one), so reading it any earlier
+	// would answer a question about the wrong moment.
+	truncated bool
 	// healthy names the bucket for "evaluated, and nothing was wrong".
 	// Steady state is ok. A build in progress is backoff, because "still
 	// building" is not a claim of health and never was one.
@@ -888,20 +919,41 @@ type orgSignals struct {
 // have left three copies to drift again; there is now one, and the build path
 // reaches the source bucket through the same ladder as the other two.
 //
-// Precedence, and why: rebuild_required sits ABOVE source_failed because it is
-// the bucket that demands an operator action. Nothing depends on which of the
-// two wins -- the per-source disclosure names the failure either way -- but the
-// order has to be stated once rather than re-derived per path.
+// PRECEDENCE, and the reasoning for each step, because the order is the whole
+// content of this function:
+//
+//  1. ESTABLISHED FACTS FIRST -- sourceFailed, then pairBroke. A source that
+//     failed, failed; a checkpoint store that refused, refused. Neither is
+//     un-observed by the tick dying afterwards. This is the pair-level rule
+//     recordPairFailure already obeys, applied at organization granularity:
+//     truncation suppresses claims of HEALTH, never facts already in hand.
+//     A required source down and unnamed is this ticket's own defect, and
+//     letting a late cancellation swallow the bucket would reintroduce it one
+//     level up.
+//
+//  2. TRUNCATION NEXT. A tick cut short established nothing else about this
+//     organization, and unevaluated is the honest bucket for that.
+//
+//  3. READINGS LAST -- backoff, then stale. Both are claims about a tick that
+//     FINISHED LOOKING: "not due" and "the producer identity has drifted" are
+//     answers, and a cancelled evaluation has no answer to give. Truncation
+//     therefore outranks both, or a cancelled build would land in backoff,
+//     which an operator reads as "building, nothing wrong".
+//
+// source_failed sits above pair_failed, and both above the rest, so the bucket
+// can never disagree with the per-source disclosure printed beside it.
 func orgOutcomeOf(signals orgSignals) orgOutcome {
 	switch {
-	case !signals.evaluated:
-		return orgOutcomeBackoff
-	case signals.stale:
-		return orgOutcomeRebuildRequired
 	case signals.sourceFailed:
 		return orgOutcomeSourceFailed
 	case signals.pairBroke:
 		return orgOutcomePairFailed
+	case signals.truncated:
+		return orgOutcomeUnevaluated
+	case !signals.evaluated:
+		return orgOutcomeBackoff
+	case signals.stale:
+		return orgOutcomeRebuildRequired
 	default:
 		return signals.healthy
 	}
@@ -927,6 +979,8 @@ func (s *tickFreshnessStats) recorderFor(outcome orgOutcome) func() {
 		return s.recordSourceFailedOrg
 	case orgOutcomePairFailed:
 		return s.recordPairFailedOrg
+	case orgOutcomeUnevaluated:
+		return s.recordUnevaluated
 	}
 	return nil
 }
@@ -986,9 +1040,14 @@ func (s *tickFreshnessStats) recordUnevaluated() { atomic.AddInt64(&s.orgsUneval
 // not cancelled, nor one that recorded TWO. The finalizer catches both,
 // because it -- not the call site -- decides what is committed.
 type orgScope struct {
-	stats     *tickFreshnessStats
-	parent    context.Context
-	bucket    func()
+	stats  *tickFreshnessStats
+	parent context.Context
+	bucket func()
+	// signals is set by the three classified paths instead of a bucket, so
+	// the LADDER runs at finish() with the truncation this scope observed --
+	// including a cancellation that arrived after the path's own last
+	// observation, such as the deferred organization unlock.
+	signals   *orgSignals
 	truncated bool
 }
 
@@ -1001,6 +1060,16 @@ func (s *tickFreshnessStats) beginOrg(ctx context.Context) *orgScope {
 // nothing is committed until finish() -- so an exit that changes its mind, or
 // one that never decides at all, cannot leave a half-written verdict behind.
 func (o *orgScope) record(bucket func()) { o.bucket = bucket }
+
+// recordOutcome is record's form for the three CLASSIFIED paths: they hand
+// over what they OBSERVED and orgOutcomeOf chooses the bucket at finish().
+//
+// The bucket is not chosen here on purpose. Truncation is a member of the
+// vocabulary now, and a path that resolved it at its own last line would be
+// answering "was the tick cancelled" at a moment that is not the moment the
+// verdict is committed -- the same class of mistake as the six models that
+// recorded completion at sites chosen by hand.
+func (o *orgScope) recordOutcome(signals orgSignals) { o.signals = &signals }
 
 // run executes ONE context-taking operation and observes its outcome. It is
 // the only way to reach the tick's context for anything that can be
@@ -1072,15 +1141,43 @@ func (o *orgScope) finish() {
 	// Completion is derived, never asserted: see run(). finish() does not
 	// read the context -- by the time it runs, a cancellation that
 	// interrupted the work and one that arrived after it finished look
-	// identical, which is the mistake three earlier versions made.
+	// identical, which is the mistake three earlier versions made. It reads
+	// the truncation run() OBSERVED, which is a different fact.
 	if o.truncated {
+		// Counted beside the bucket, never instead of it. An organization
+		// that established a required source is down is published as
+		// source_failed AND as truncated: the bucket carries the fact, this
+		// counter carries "the tick did not finish", and tick_complete is
+		// derived from it rather than from the bucket.
+		atomic.AddInt64(&o.stats.orgsTruncated, 1)
+	}
+	if o.signals != nil {
+		signals := *o.signals
+		signals.truncated = o.truncated
+		if signals.stale {
+			// Counted whether or not stale WON the bucket: an established
+			// failure outranks it, and an operator still has to be told a
+			// rebuild is owed.
+			atomic.AddInt64(&o.stats.orgsStale, 1)
+		}
+		if bucket := o.stats.recorderFor(orgOutcomeOf(signals)); bucket != nil {
+			bucket()
+			return
+		}
+		// A member of the vocabulary with no recorder. Counted rather than
+		// dropped, so the bucket identity on the line makes it visible.
 		o.stats.recordUnevaluated()
 		return
 	}
-	if o.bucket == nil {
-		// Completed without choosing a bucket. A defect rather than a legal
-		// state, counted rather than dropped so the identity on the line
-		// makes it visible instead of silent.
+	// The unclassified paths -- an organization lock that could not be taken,
+	// divergence recovery -- name their bucket directly. Truncation still
+	// outranks those, for the same reason it outranks backoff and stale in
+	// the ladder: each of them is a reading, and a cancelled evaluation took
+	// none.
+	if o.truncated || o.bucket == nil {
+		// bucket == nil is "completed without choosing one": a defect rather
+		// than a legal state, counted rather than dropped so the identity on
+		// the line makes it visible instead of silent.
 		o.stats.recordUnevaluated()
 		return
 	}
@@ -1299,7 +1396,13 @@ func (c *Coordinator) Tick(ctx context.Context) {
 		// them. It was a hand-set flag until the seventh model, and the flag
 		// disagreed with orgs_unevaluated on the paths nobody remembered to
 		// set it -- two fields describing one fact is one field too many.
+		// DERIVED from BOTH: an organization can now carry an established
+		// fact (a required source down) out of a truncated tick, so it is
+		// no longer unevaluated -- and a tick cancelled mid-flight must
+		// still report itself unfinished. orgs_truncated is the input the
+		// bucket no longer supplies.
 		"tick_complete", atomic.LoadInt64(&stats.orgsUnevaluated) == 0 &&
+			atomic.LoadInt64(&stats.orgsTruncated) == 0 &&
 			int64(len(c.orgIDs)) == atomic.LoadInt64(&stats.orgsOK)+
 				atomic.LoadInt64(&stats.orgsRebuildRequired)+
 				atomic.LoadInt64(&stats.orgsBackoff)+
@@ -1308,6 +1411,12 @@ func (c *Coordinator) Tick(ctx context.Context) {
 				atomic.LoadInt64(&stats.orgsDivergenceRecovered)+
 				atomic.LoadInt64(&stats.orgsUnevaluated),
 		"orgs_unevaluated", atomic.LoadInt64(&stats.orgsUnevaluated),
+		// NOT a bucket, and deliberately outside the identity above: an
+		// organization is truncated AND in whatever bucket its established
+		// facts earned. Present on every tick at zero, like everything else
+		// here, so "no truncation" and "a projector that does not report
+		// truncation" stay different readings.
+		"orgs_truncated", atomic.LoadInt64(&stats.orgsTruncated),
 		"orgs_source_failed", atomic.LoadInt64(&stats.orgsSourceFailed),
 		"orgs_pair_failed", atomic.LoadInt64(&stats.orgsPairFailed),
 		"sources_evaluated", sourcesEvaluated,
@@ -1333,7 +1442,13 @@ func (c *Coordinator) Tick(ctx context.Context) {
 		"pair_failed", pairFailedNames,
 		"build_sources_failed", buildSourcesFailed,
 		"build_failed_sources", buildFailedSources,
-		"pending_rebuild_orgs_total", atomic.LoadInt64(&stats.orgsRebuildRequired),
+		// The number of organizations that OWE A REBUILD, which is not the
+		// same as the number bucketed rebuild_required: an organization
+		// whose required source is also down is bucketed source_failed, and
+		// reading this off the bucket would tell an operator the rebuild
+		// queue had shrunk when a source outage started.
+		"orgs_stale", atomic.LoadInt64(&stats.orgsStale),
+		"pending_rebuild_orgs_total", atomic.LoadInt64(&stats.orgsStale),
 		// CHAOS-3882: how many organizations this tick found in
 		// checkpoint-vs-store divergence and drove an automatic recovery
 		// for -- see checkpointStoreDiverged's doc comment.
@@ -1493,13 +1608,13 @@ func (c *Coordinator) runOrgLegacy(scope *orgScope, orgID string) {
 	// three hand-maintained copies of this ladder are what lost sourceFailed
 	// once and cost three review findings after it, the last of them a build
 	// that could not reach the source bucket at all.
-	scope.record(scope.stats.recorderFor(orgOutcomeOf(orgSignals{
+	scope.recordOutcome(orgSignals{
 		evaluated:    evaluated,
 		stale:        stale,
 		sourceFailed: sourceFailed,
 		pairBroke:    pairBrokeAny,
 		healthy:      orgOutcomeOK,
-	})))
+	})
 }
 
 // runOrgLifecycle is runOrgLegacy's CHAOS-3898 S2a-2 replacement, active
@@ -1588,13 +1703,13 @@ func (c *Coordinator) runOrgLifecycle(scope *orgScope, orgID string) {
 		return nil
 	})
 	// Same classifier as runOrgLegacy and runBuildTick -- see orgOutcomeOf.
-	scope.record(scope.stats.recorderFor(orgOutcomeOf(orgSignals{
+	scope.recordOutcome(orgSignals{
 		evaluated:    evaluated,
 		stale:        stale,
 		sourceFailed: sourceFailed,
 		pairBroke:    pairBrokeAny,
 		healthy:      orgOutcomeOK,
-	})))
+	})
 }
 
 // runBuildTick drives one round of per-source ticks for an organization
@@ -1633,8 +1748,11 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 	// healthy is backoff, not ok: "this organization is building" is not a
 	// claim of health. That is the whole reason the ladder needed a healthy
 	// PARAMETER rather than a fourth copy of itself.
-	signals := orgSignals{evaluated: true, healthy: orgOutcomeBackoff}
-	defer func() { scope.record(scope.stats.recorderFor(orgOutcomeOf(signals))) }()
+	// evaluated is set only when the build RAN TO A VERDICT -- see the
+	// assignment after the loop. A build cut by the tick's own cancellation
+	// is truncated, not evaluated, and finish() supplies that fact.
+	signals := orgSignals{healthy: orgOutcomeBackoff}
+	defer func() { scope.recordOutcome(signals) }()
 	if row.TargetEpoch == nil {
 		c.logger.WarnContext(scope.logCtx(), "graph lifecycle row is building with no target epoch; skipping", "org_id", orgID)
 		return
@@ -1718,6 +1836,11 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 			}
 		})
 	}
+	// The per-source loop returned normally rather than through its
+	// scope.done() guard, so this build reached a verdict about every
+	// required source it was going to look at this tick. A build cut short
+	// never gets here, and finish() classifies it as truncated.
+	signals.evaluated = true
 	_ = scope.run(func(ctx context.Context) error {
 		c.recordCheckpointEpochState(ctx, orgID, targetEpoch, contextfabric.CheckpointEpochBuilding, checkpoints)
 		return nil

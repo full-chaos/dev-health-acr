@@ -55,6 +55,7 @@ var orgOutcomeByConstName = map[string]orgOutcome{
 	"orgOutcomeBackoff":         orgOutcomeBackoff,
 	"orgOutcomeSourceFailed":    orgOutcomeSourceFailed,
 	"orgOutcomePairFailed":      orgOutcomePairFailed,
+	"orgOutcomeUnevaluated":     orgOutcomeUnevaluated,
 }
 
 func declaredOrgOutcomes(t *testing.T, filename string) []string {
@@ -99,6 +100,7 @@ func TestTheOrgBucketIsChosenInExactlyOnePlace(t *testing.T) {
 	buckets := map[string]bool{
 		"recordOK": true, "recordRebuildRequired": true, "recordBackoff": true,
 		"recordSourceFailedOrg": true, "recordPairFailedOrg": true,
+		"recordUnevaluated": true,
 	}
 	inside, outside := bucketReferencesByFunc(t, "coordinator.go", buckets)
 	if inside == 0 {
@@ -108,12 +110,22 @@ func TestTheOrgBucketIsChosenInExactlyOnePlace(t *testing.T) {
 		t.Errorf("bucket recorders are named outside recorderFor, in %v -- every path must hand orgOutcomeOf what it OBSERVED and let one function choose the bucket, or the ladder drifts per path again", outside)
 	}
 
-	// The three paths must reach the classifier. A path that stopped calling
-	// it would satisfy the assertion above by recording nothing.
+	// The three paths must hand their observations to the scope. A path that
+	// stopped doing so would satisfy the assertion above by recording
+	// nothing at all.
 	for _, fn := range []string{"runOrgLegacy", "runOrgLifecycle", "runBuildTick"} {
-		if !callsNamed(t, "coordinator.go", fn, "orgOutcomeOf") {
-			t.Errorf("%s does not call orgOutcomeOf -- it is deciding its own bucket, or recording none", fn)
+		if !callsNamed(t, "coordinator.go", fn, "recordOutcome") && !callsNamedOn(t, "coordinator.go", fn, "recordOutcome") {
+			t.Errorf("%s does not call scope.recordOutcome -- it is deciding its own bucket, or recording none", fn)
 		}
+	}
+
+	// And the ladder itself runs in exactly ONE place: finish(). A path that
+	// resolved it at its own last line would be answering "was the tick
+	// cancelled" at a moment that is not the moment the verdict is
+	// committed.
+	ladderCallers := functionsCalling(t, "coordinator.go", "orgOutcomeOf")
+	if len(ladderCallers) != 1 || ladderCallers[0] != "finish" {
+		t.Errorf("orgOutcomeOf is called from %v, want exactly [finish] -- truncation is a member of the vocabulary now, so the ladder has to run at commit time", ladderCallers)
 	}
 
 	// Negative controls over the AST.
@@ -243,19 +255,37 @@ func TestOrgOutcomeOfPrecedence(t *testing.T) {
 			for _, stale := range []bool{false, true} {
 				for _, sourceFailed := range []bool{false, true} {
 					for _, pairBroke := range []bool{false, true} {
-						signals := orgSignals{
-							evaluated: evaluated, stale: stale,
-							sourceFailed: sourceFailed, pairBroke: pairBroke,
-							healthy: healthy,
-						}
-						want := expectedOutcome(evaluated, stale, sourceFailed, pairBroke, healthy)
-						if got := orgOutcomeOf(signals); got != want {
-							t.Errorf("orgOutcomeOf(%+v) = %q, want %q", signals, got, want)
+						for _, truncated := range []bool{false, true} {
+							signals := orgSignals{
+								evaluated: evaluated, stale: stale,
+								sourceFailed: sourceFailed, pairBroke: pairBroke,
+								truncated: truncated, healthy: healthy,
+							}
+							want := expectedOutcome(signals)
+							if got := orgOutcomeOf(signals); got != want {
+								t.Errorf("orgOutcomeOf(%+v) = %q, want %q", signals, got, want)
+							}
 						}
 					}
 				}
 			}
 		}
+	}
+
+	// The two amendment properties, stated on their own so they cannot be
+	// lost inside the table.
+	//
+	// An established fact outranks truncation: a source that failed before
+	// the cancellation arrived keeps its bucket.
+	established := orgSignals{evaluated: true, sourceFailed: true, truncated: true, healthy: orgOutcomeOK}
+	if got := orgOutcomeOf(established); got != orgOutcomeSourceFailed {
+		t.Errorf("a source failure under a truncated tick = %q, want %q -- a cancellation arriving afterwards does not un-observe it", got, orgOutcomeSourceFailed)
+	}
+	// Truncation outranks the readings: a cancelled build is unevaluated,
+	// never backoff, which an operator reads as "building, nothing wrong".
+	cutShort := orgSignals{truncated: true, stale: true, healthy: orgOutcomeBackoff}
+	if got := orgOutcomeOf(cutShort); got != orgOutcomeUnevaluated {
+		t.Errorf("a truncated evaluation = %q, want %q -- backoff and stale are claims about a tick that finished looking", got, orgOutcomeUnevaluated)
 	}
 
 	// The property the build path depends on, stated on its own so it cannot
@@ -272,18 +302,81 @@ func TestOrgOutcomeOfPrecedence(t *testing.T) {
 // expectedOutcome is the ladder written out independently of the code under
 // test, so a change to the precedence has to be made in two places on purpose
 // rather than in one by accident.
-func expectedOutcome(evaluated, stale, sourceFailed, pairBroke bool, healthy orgOutcome) orgOutcome {
-	if !evaluated {
-		return orgOutcomeBackoff
-	}
-	if stale {
-		return orgOutcomeRebuildRequired
-	}
-	if sourceFailed {
+func expectedOutcome(s orgSignals) orgOutcome {
+	if s.sourceFailed {
 		return orgOutcomeSourceFailed
 	}
-	if pairBroke {
+	if s.pairBroke {
 		return orgOutcomePairFailed
 	}
-	return healthy
+	if s.truncated {
+		return orgOutcomeUnevaluated
+	}
+	if !s.evaluated {
+		return orgOutcomeBackoff
+	}
+	if s.stale {
+		return orgOutcomeRebuildRequired
+	}
+	return s.healthy
+}
+
+// callsNamedOn is callsNamed for a method call on a receiver
+// (scope.recordOutcome), which callsNamed's bare-identifier match cannot see.
+func callsNamedOn(t *testing.T, filename, fnName, callee string) bool {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), filename, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", filename, err)
+	}
+	found := false
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != fnName {
+			continue
+		}
+		ast.Inspect(fn, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == callee {
+				found = true
+			}
+			return true
+		})
+	}
+	return found
+}
+
+// functionsCalling names every function in a file that calls callee, so "in
+// exactly one place" is an assertion rather than a convention.
+func functionsCalling(t *testing.T, filename, callee string) []string {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), filename, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", filename, err)
+	}
+	var callers []string
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok {
+			continue
+		}
+		hit := false
+		ast.Inspect(fn, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if ident, ok := call.Fun.(*ast.Ident); ok && ident.Name == callee {
+				hit = true
+			}
+			return true
+		})
+		if hit {
+			callers = append(callers, fn.Name.Name)
+		}
+	}
+	return callers
 }
