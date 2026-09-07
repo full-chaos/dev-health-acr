@@ -1,0 +1,215 @@
+{
+ "_authored": "the shape an attempt artefact must have, derived from every path the consumers under scripts/corpus actually dereference (AST sweep) and typed by hand",
+ "_why": "Five rounds closed this boundary one level at a time: first the envelope was unchecked, then the envelope was checked and its contents trusted. A malformed value nested one level below a valid mapping validated true and crashed the consumer that read it. The schema is total: every path a consumer dereferences is listed with its type, validation is recursive, and a mismatch makes the artefact unparseable rather than a crash three frames later.",
+ "_pin": "no consumer may dereference a path absent from this schema (AST pin, with a negative control that the pin sees an added path)",
+ "attempt": {
+  "status": {
+   "type": "int",
+   "required": false
+  },
+  "dt": {
+   "type": "number",
+   "required": false
+  },
+  "request": {
+   "type": "object",
+   "required": false
+  },
+  "response": {
+   "type": "object",
+   "required": false
+  }
+ },
+ "response": {
+  "result": {
+   "type": "object",
+   "required": false
+  },
+  "failure": {
+   "type": "object",
+   "required": false
+  },
+  "request_id": {
+   "type": "string",
+   "required": false
+  }
+ },
+ "result": {
+  "request_id": {
+   "type": "string",
+   "required": false
+  },
+  "result_id": {
+   "type": "string",
+   "required": false
+  },
+  "status": {
+   "type": "string",
+   "required": false
+  },
+  "claimed_facts": {
+   "type": "array",
+   "items": "object",
+   "required": false
+  },
+  "limitations": {
+   "type": "array",
+   "items": "string",
+   "required": false
+  },
+  "subject_resolution": {
+   "type": "object",
+   "required": false
+  },
+  "coverage": {
+   "type": "object",
+   "required": false
+  },
+  "completeness": {
+   "type": "object",
+   "required": false
+  },
+  "versions": {
+   "type": "object",
+   "required": false
+  },
+  "structure_needs": {
+   "type": "object",
+   "required": false
+  },
+  "confirmed_structure": {
+   "type": "array",
+   "items": "object",
+   "required": false
+  },
+  "drivers": {
+   "type": "array",
+   "items": "object",
+   "required": false
+  },
+  "paths": {
+   "type": "array",
+   "items": "object",
+   "required": false
+  }
+ },
+ "subject_resolution": {
+  "committed": {
+   "type": "array",
+   "items": "object",
+   "required": false
+  },
+  "candidates": {
+   "type": "array",
+   "items": "object",
+   "required": false,
+   "element_node": "candidate"
+  }
+ },
+ "failure": {
+  "code": {
+   "type": "string",
+   "required": false
+  },
+  "message": {
+   "type": "string",
+   "required": false
+  },
+  "httpStatus": {
+   "type": "int",
+   "required": false
+  },
+  "upstreamCode": {
+   "type": "string",
+   "required": false
+  },
+  "upstreamRequestId": {
+   "type": "string",
+   "required": false
+  },
+  "retryable": {
+   "type": "bool",
+   "required": false
+  },
+  "overrun": {
+   "type": "string",
+   "required": false
+  },
+  "maxItems": {
+   "type": "int",
+   "required": false
+  },
+  "measuredItems": {
+   "type": "int",
+   "required": false
+  },
+  "narrowerContinuation": {
+   "type": "object",
+   "required": false
+  },
+  "axis": {
+   "type": "string",
+   "required": false
+  },
+  "details": {
+   "type": "object",
+   "required": false
+  },
+  "title": {
+   "type": "string",
+   "required": false
+  },
+  "error": {
+   "type": "string",
+   "required": false
+  }
+ },
+ "_array_items": "An array's ELEMENTS are typed here, and the types are READ FROM REAL ARTEFACTS, not assumed: limitations carries strings (196 observed), while claimed_facts, drivers, paths, confirmed_structure, subject_resolution.committed and .candidates carry mappings. Typing limitations as objects by analogy rejected 113 of 118 real attempts and would have shipped a scoring regression -- the array types must be measured like any other fact about the data.",
+ "committed_subject": {
+  "kind": {
+   "type": "string",
+   "required": false
+  },
+  "canonical_id": {
+   "type": "string",
+   "required": false
+  },
+  "label": {
+   "type": "string",
+   "required": false
+  }
+ },
+ "_types_are_measured": "Every type here is the type OBSERVED in 425 real artefacts, not inferred from a name or from a crash report. Two entries were typed by analogy in the first draft and both were wrong -- limitations carries strings, structure_needs is a mapping -- and together they rejected 233 of 425 real attempts, which would have shipped as a scoring regression. Types are a fact about the data and are measured like one.",
+ "candidate": {
+  "receipt_id": {
+   "type": "string"
+  },
+  "state": {
+   "type": "string"
+  },
+  "subject": {
+   "type": "object"
+  },
+  "matched_terms": {
+   "type": "array",
+   "items": "string"
+  },
+  "match_reasons": {
+   "type": "array",
+   "items": "string"
+  },
+  "match_mechanisms": {
+   "type": "array",
+   "items": "string"
+  },
+  "evidence_ref_ids": {
+   "type": "array",
+   "items": "string"
+  },
+  "confidence": {
+   "type": "number"
+  }
+ },
+ "_element_nodes": "An array whose `element_node` names a schema node has EVERY element checked against that node. Typing `candidates` as an array of objects stopped one level above the fields the vector-basis derivation reads, which is the same shallow-boundary class r9 found at #1 and #2. `confidence` is `number` because 83 of 1201 are ints and 1118 are floats -- measured, not assumed.",
+ "_committed_not_element_typed": "subject_resolution.committed is typed `array of object` but its ELEMENTS are deliberately NOT checked against committed_subject. Doing so rejects an artefact carrying an explicit null kind, and the row then scores agree_weak through the unreadable-artefact cap instead of the disagree it earns as a subject substitution -- doubt making a failed row look BETTER, which is the exact class this instrument already fixed once. r9 #1's repro (committed: [1]) is caught by the `items` check without element typing. The candidates array IS element-typed because the vector-basis derivation dereferences its fields and nothing there is nullable in any of the 425 measured artefacts."
+}
