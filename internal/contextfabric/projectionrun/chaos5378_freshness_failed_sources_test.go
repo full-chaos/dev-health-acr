@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -1412,4 +1413,122 @@ func countCallsNamedIn(n ast.Node, name string) int {
 		return true
 	})
 	return found
+}
+
+// buildFailingLifecycleStore puts an organization into a BUILDING lifecycle
+// row so Tick takes runBuildTick, which is the phase whose source failures
+// went unnamed.
+type buildFailingLifecycleStore struct {
+	contextfabric.GraphLifecycleStore
+	epoch int64
+}
+
+func (b *buildFailingLifecycleStore) Get(context.Context, string) (contextfabric.OrgGraphLifecycle, bool, error) {
+	target := b.epoch
+	return contextfabric.OrgGraphLifecycle{
+		Status: contextfabric.LifecycleStatusBuilding, ActiveEpoch: 0, TargetEpoch: &target,
+		RequiredSources: []string{"dev_health_teams_projects"},
+	}, true, nil
+}
+
+func (b *buildFailingLifecycleStore) SourceProgress(context.Context, string, int64) ([]contextfabric.BuildSourceProgress, error) {
+	return nil, nil
+}
+
+func (b *buildFailingLifecycleStore) RecordSourceProgress(context.Context, string, int64, string, contextfabric.BuildCompletionMode, int64, time.Time) error {
+	return nil
+}
+
+func (b *buildFailingLifecycleStore) Flip(context.Context, string, int64, time.Duration, time.Time) (contextfabric.OrgGraphLifecycle, error) {
+	return contextfabric.OrgGraphLifecycle{}, errors.New("not flipping in this fixture")
+}
+
+// TestModel7Review_BuildFailureIsCountedAndNamed is the reviewer's test,
+// adopted as written. A source failing during a LIVE GRAPH BUILD was executed
+// by runBuildPair and then recorded nowhere: the summary printed
+// sources_evaluated:0, sources_failed:0, failed_sources:[] while the source
+// was down.
+//
+// The summary declared its own scope as steady-state-only, and that note was
+// accurate. It was also not an excuse: a required source going unnamed is
+// exactly what this line exists to prevent, whichever phase it fails in.
+func TestModel7Review_BuildFailureIsCountedAndNamed(t *testing.T) {
+	t.Parallel()
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	failing := &fakeSource{name: "dev_health_teams_projects", err: fmt.Errorf("teams projects read: %w", contextfabric.ErrUnavailable)}
+	checkpoints := newFakeCheckpointStore()
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:           []string{"org-a"},
+		Sources:          []projectionrun.SourcePair{{Name: "dev_health_teams_projects", Source: failing}},
+		Backend:          newFakeBackend(),
+		Checkpoints:      checkpoints,
+		RebuildMarkers:   newFakeRebuildMarker(),
+		Lifecycle:        &buildFailingLifecycleStore{epoch: 1},
+		EpochCheckpoints: func(int64) contextfabric.ProjectionCheckpointStore { return checkpoints },
+		GraceWindow:      time.Hour,
+		Logger:           logger,
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	coordinator.Tick(context.Background())
+
+	if failing.calls.Load() == 0 {
+		t.Fatal("the source never ran -- the tick did not take the build path, so this arm would prove nothing")
+	}
+
+	summary := freshnessSummary(t, &buffer)
+	requireBucketIdentity(t, summary)
+	if got := summaryNumber(t, summary, "sources_failed"); got != 1 {
+		t.Errorf("sources_failed = %v, want 1 -- a required source failing during a build is still a required source that is down", got)
+	}
+	names, _ := summary["failed_sources"].([]any)
+	if len(names) != 1 || names[0] != "dev_health_teams_projects" {
+		t.Errorf("failed_sources = %v, want it NAMED -- an unnamed failing source is the defect this line exists to prevent", names)
+	}
+	if got := summaryNumber(t, summary, "build_sources_failed"); got != 1 {
+		t.Errorf("build_sources_failed = %v, want 1 -- the build phase's own share must stay distinguishable", got)
+	}
+	buildNames, ok := summary["build_failed_sources"].([]any)
+	if !ok || len(buildNames) != 1 || buildNames[0] != "dev_health_teams_projects" {
+		t.Errorf("build_failed_sources = %v, want [dev_health_teams_projects]", summary["build_failed_sources"])
+	}
+	if scope, _ := summary["summary_scope"].(string); scope != "steady_state_and_build" {
+		t.Errorf("summary_scope = %q, want steady_state_and_build -- the line must declare the scope it now actually covers", scope)
+	}
+}
+
+// TestASteadyStateTickReportsExplicitBuildZeros keeps the build counters
+// readable: present and zero when no build ran, so a reader never has to tell
+// "no build failures" from "this build does not report them".
+func TestASteadyStateTickReportsExplicitBuildZeros(t *testing.T) {
+	t.Parallel()
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:         []string{"org-a"},
+		Sources:        []projectionrun.SourcePair{{Name: "source-healthy", Source: &fakeSource{name: "source-healthy", pages: 1}}},
+		Backend:        newFakeBackend(),
+		Checkpoints:    newFakeCheckpointStore(),
+		RebuildMarkers: newFakeRebuildMarker(),
+		Logger:         logger,
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	coordinator.Tick(context.Background())
+
+	summary := freshnessSummary(t, &buffer)
+	if got := summaryNumber(t, summary, "build_sources_failed"); got != 0 {
+		t.Errorf("build_sources_failed = %v, want an explicit 0", got)
+	}
+	names, ok := summary["build_failed_sources"].([]any)
+	if !ok {
+		t.Fatalf("build_failed_sources absent on a steady-state tick -- it must be present and empty; line: %v", summary)
+	}
+	if len(names) != 0 {
+		t.Errorf("build_failed_sources = %v, want empty", names)
+	}
 }

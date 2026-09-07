@@ -787,6 +787,13 @@ type tickFreshnessStats struct {
 	// is a real answer and must never be reported as a gap.
 	sourcesWithheld int64
 	withheldSources []string
+	// buildSourcesFailed/buildFailedSources are the same disclosure for the
+	// BUILD phase, kept as their own counters beside the shared ones so a
+	// reader can tell a steady-state outage from one during a graph build --
+	// the operator response differs -- while the shared sources_failed still
+	// answers "is any required source down" in one number.
+	buildSourcesFailed int64
+	buildFailedSources []string
 	// orgsDivergenceRecovered (CHAOS-3882) counts organizations for which
 	// THIS tick detected checkpoint-vs-store divergence and drove an
 	// automatic recovery (successful or not) -- distinct from
@@ -911,7 +918,7 @@ const freshnessFailedSourceNameCap = 25
 // scope gets read as covering everything -- the exact way the line this
 // disclosure repairs was trusted as a readiness signal while a required
 // source failed on every tick behind it.
-const freshnessSummaryScope = "steady_state_pass"
+const freshnessSummaryScope = "steady_state_and_build"
 
 // recordPairOutcome folds one (org, source) pair's tick result into the
 // per-tick aggregate. evaluated is false when the pair was not due, which
@@ -922,6 +929,26 @@ const freshnessSummaryScope = "steady_state_pass"
 // disclosed: it ran (evaluated -- a success, including a successful empty
 // population), it ran and errored (failed), or it did not run because its
 // own failure backoff withheld it (withheld).
+// recordBuildPairOutcome folds a BUILD-phase pair into the same source
+// counters as the steady-state drain, and additionally into the build-only
+// pair, so neither question loses its answer: "is a required source down"
+// stays one number, and "was it down during a build" is still answerable.
+func (s *tickFreshnessStats) recordBuildPairOutcome(source string, evaluated, failed bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !evaluated {
+		return
+	}
+	s.sourcesEvaluated++
+	if !failed {
+		return
+	}
+	s.sourcesFailed++
+	s.failedSources = appendDistinctSourceName(s.failedSources, source)
+	s.buildSourcesFailed++
+	s.buildFailedSources = appendDistinctSourceName(s.buildFailedSources, source)
+}
+
 func (s *tickFreshnessStats) recordPairOutcome(source string, evaluated, failed, withheld bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -963,6 +990,14 @@ func appendDistinctSourceName(names []string, source string) []string {
 // names for the log line. Names are returned as a non-nil slice so a
 // healthy tick logs an empty array rather than a null -- "no source failed"
 // and "this build does not report failed sources" must never read alike.
+func (s *tickFreshnessStats) snapshotBuild() (failed int64, names []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	names = make([]string, len(s.buildFailedSources))
+	copy(names, s.buildFailedSources)
+	return s.buildSourcesFailed, names
+}
+
 func (s *tickFreshnessStats) snapshotSources() (evaluated, failed, withheld int64, failedNames, withheldNames []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1013,6 +1048,7 @@ func (c *Coordinator) Tick(ctx context.Context) {
 	// distinguishable -- the same reasoning SlogObserver's doc comment
 	// gives for logging successful ticks, not just failures.
 	sourcesEvaluated, sourcesFailed, sourcesWithheld, failedSources, withheldSources := stats.snapshotSources()
+	buildSourcesFailed, buildFailedSources := stats.snapshotBuild()
 	c.logger.InfoContext(ctx, "context_fabric: projection tick freshness summary",
 		"orgs_ok", atomic.LoadInt64(&stats.orgsOK),
 		"orgs_rebuild_required", atomic.LoadInt64(&stats.orgsRebuildRequired),
@@ -1026,11 +1062,15 @@ func (c *Coordinator) Tick(ctx context.Context) {
 		// SCOPE is stated ON THE LINE, not only in this comment: a summary
 		// that does not say what it covers invites being read as covering
 		// everything, which is how the line this one replaces came to be
-		// trusted as a readiness signal it never was. These counters cover
-		// the STEADY-STATE pass (runPair). An organization mid-build runs
-		// runBuildTick instead and is counted in orgs_backoff; extending
-		// the counters to that path needs the lifecycle fixtures and is
-		// deliberately not done here rather than shipped without a pin.
+		// trusted as a readiness signal it never was.
+		//
+		// The counters now cover BOTH the steady-state drain and the build
+		// phase. They covered only steady state until a reviewer drove a
+		// source failing during a live build and watched this line report
+		// sources_failed:0 with the failing source unnamed. The scope note
+		// was accurate and still wrong: declaring a gap does not excuse a
+		// required source going unnamed, which is the one thing this line
+		// exists to publish.
 		"summary_scope", freshnessSummaryScope,
 		// The bucket IDENTITY, stated on the line so a consumer can check it
 		// rather than trust it: orgs_configured == ok + rebuild_required +
@@ -1071,6 +1111,11 @@ func (c *Coordinator) Tick(ctx context.Context) {
 		// nothing is NOT here; that is a success.
 		"sources_in_failure_backoff", sourcesWithheld,
 		"failure_backoff_sources", withheldSources,
+		// The build phase's own share of the counts above, so steady-state
+		// and build outages are distinguishable without either disappearing.
+		// Explicit zeros every pass, like everything else on this line.
+		"build_sources_failed", buildSourcesFailed,
+		"build_failed_sources", buildFailedSources,
 		"pending_rebuild_orgs_total", atomic.LoadInt64(&stats.orgsRebuildRequired),
 		// CHAOS-3882: how many organizations this tick found in
 		// checkpoint-vs-store divergence and drove an automatic recovery
@@ -1404,10 +1449,12 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 			}
 			continue
 		}
+		var buildEvaluated, buildFailed bool
 		_ = scope.run(func(ctx context.Context) error {
-			c.runBuildPair(ctx, orgID, source, targetEpoch, checkpoints, &budget)
+			buildEvaluated, buildFailed = c.runBuildPair(ctx, orgID, source, targetEpoch, checkpoints, &budget)
 			return nil
 		})
+		scope.stats.recordBuildPairOutcome(source, buildEvaluated, buildFailed)
 	}
 	_ = scope.run(func(ctx context.Context) error {
 		c.recordCheckpointEpochState(ctx, orgID, targetEpoch, contextfabric.CheckpointEpochBuilding, checkpoints)
@@ -1477,7 +1524,7 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 // cf_build_source_progress's own last-successful (now stale) value, with
 // no way to recover the lost batches' rows once the checkpoint had already
 // advanced past them.
-func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, epoch int64, checkpoints contextfabric.ProjectionCheckpointStore, budget *int) {
+func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, epoch int64, checkpoints contextfabric.ProjectionCheckpointStore, budget *int) (evaluated, failed bool) {
 	key := orgID + "\x00build\x00" + source
 	started := c.now()
 	var total int64
@@ -1594,6 +1641,13 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 			Duration: c.now().Sub(started), At: c.now(),
 		})
 	}
+	// The build phase reports its pair outcome exactly as the steady-state
+	// drain does. It did not, until a reviewer drove a source failing during
+	// a live build and watched the summary print sources_failed:0 with the
+	// failing source unnamed. A required source that is down is the one fact
+	// this line exists to publish, and which PHASE it was down in does not
+	// make it less true.
+	return batches > 0, reason == DrainYieldError
 }
 
 // classifyBuildCompletion maps one build tick's ProjectionRun onto design
