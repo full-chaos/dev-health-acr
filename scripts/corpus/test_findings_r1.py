@@ -200,8 +200,15 @@ def test_f10_a_non_json_504_attempt_is_still_classified():
     with tempfile.TemporaryDirectory() as tmp:
         d = Path(tmp) / "replicate"
         d.mkdir(parents=True)
+        # The shape the harness ACTUALLY writes for a gateway timeout with a non-JSON
+        # body: response is a mapping carrying an error string, not null. The earlier
+        # fixture used `"response": None`, which no real artefact has -- 425 real attempts
+        # scanned, zero with a null or absent response -- and which the recursive
+        # validator now correctly rejects. Using the unreal shape would have made this pin
+        # assert on a case that cannot occur.
         (d / "q-rep1-t1-a1.json").write_text(json.dumps(
-            {"request": {}, "status": 504, "dt": 60.0, "response": None}))
+            {"request": {}, "status": 504, "dt": 60.0,
+             "response": {"error": "unparseable body"}}))
         recs = engine_failures.scan(tmp)
         kinds = {r["kind"] for r in recs}
         assert "UPSTREAM_504" in kinds, f"504 attempt dropped; got {kinds}"

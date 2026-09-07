@@ -141,8 +141,13 @@ def inspect(root, corpus_id, expectation, rep=1):
     # guessed sequence position.
     hits, unsequenced = order_attempts(hits, on_unparseable="skip")
     if not hits:
-        return {"corpus_id": corpus_id, "state": "no_artefact",
-                "subject_substitution": False, "committed": [], "match_mechanisms": []}
+        # r6 (d): if the ONLY files present could not be sequenced, that is not "no
+        # artefact" -- something wrote artefacts we do not understand, and saying so is
+        # the difference between a gap we know about and one we do not.
+        state = f"unsequenced:{len(unsequenced)}" if unsequenced else "no_artefact"
+        return {"corpus_id": corpus_id, "state": state,
+                "subject_substitution": False, "committed": [], "match_mechanisms": [],
+                "unsequenced_files": unsequenced}
     # r1 #6. Only the lexically LAST attempt was inspected, so a wrong subject committed
     # on an earlier turn vanished when a later turn ended without committing anything.
     # Every attempt is now examined; the terminal attempt still supplies the row's

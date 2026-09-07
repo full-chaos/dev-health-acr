@@ -8,7 +8,7 @@ attempt" was the wrong file in both cases. The fix lived in one module and the i
 defect stayed in the other, so it lives here now and both import it.
 """
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 # The directory a deadline replay is written under. A replay always sorts AFTER the
 # original attempt it supersedes, whatever its indices are.
@@ -25,7 +25,7 @@ def parse_attempt_name(path):
     cannot sequence is not something to guess a position for. The pattern is anchored at
     both ends, so a trailing suffix does not parse.
     """
-    m = _SEQ.match(Path(path).name)
+    m = _SEQ.match(PurePosixPath(str(path).replace("\\", "/")).name)
     if not m:
         return False, None
     return True, (int(m.group("rep")), int(m.group("turn")), int(m.group("att")))
@@ -39,7 +39,10 @@ def is_replay(path):
     ahead of the original it supersedes -- the defect the helper exists to prevent,
     reintroduced by an assumption about path shape.
     """
-    return REPLAY_DIRNAME in Path(path).parts
+    # both separators: a backslash-spelled path must behave identically, or replay
+    # detection depends on who wrote the string.
+    norm = str(path).replace("\\", "/")
+    return REPLAY_DIRNAME in PurePosixPath(norm).parts
 
 
 def attempt_sort_key(path):

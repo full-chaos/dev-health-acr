@@ -42,6 +42,9 @@ EXPECT_SERVE, EXPECT_REFUSE, EXPECT_DECLINE = SERVE, REFUSE, DECLINE
 CLARIFICATION_TERMINALS = {
     "clarification_required(max_turns_exhausted)",
 }
+# Everything that counts as "the engine asked for clarification", including the bare form
+# a turn chain can end on. The bucketer imports this so one vocabulary serves both.
+CLARIFICATION_VALUES = CLARIFICATION_TERMINALS | {"clarification_required"}
 ERROR_TERMINALS = {
     "http_502:acr_investigation_failed",
     "http_400:acr_rejected_request",

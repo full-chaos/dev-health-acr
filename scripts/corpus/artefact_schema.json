@@ -1,0 +1,47 @@
+{
+ "_authored": "the shape an attempt artefact must have, derived from every path the consumers under scripts/corpus actually dereference (AST sweep) and typed by hand",
+ "_why": "Five rounds closed this boundary one level at a time: first the envelope was unchecked, then the envelope was checked and its contents trusted. A malformed value nested one level below a valid mapping validated true and crashed the consumer that read it. The schema is total: every path a consumer dereferences is listed with its type, validation is recursive, and a mismatch makes the artefact unparseable rather than a crash three frames later.",
+ "_pin": "no consumer may dereference a path absent from this schema (AST pin, with a negative control that the pin sees an added path)",
+ "attempt": {
+  "status": {"type": "int", "required": false},
+  "dt": {"type": "number", "required": false},
+  "request": {"type": "object", "required": false},
+  "response": {"type": "object", "required": false}
+ },
+ "response": {
+  "result": {"type": "object", "required": false},
+  "failure": {"type": "object", "required": false},
+  "request_id": {"type": "string", "required": false}
+ },
+ "result": {
+  "request_id": {"type": "string", "required": false},
+  "result_id": {"type": "string", "required": false},
+  "status": {"type": "string", "required": false},
+  "claimed_facts": {"type": "array", "required": false},
+  "limitations": {"type": "array", "required": false},
+  "subject_resolution": {"type": "object", "required": false},
+  "coverage": {"type": "object", "required": false},
+  "completeness": {"type": "object", "required": false},
+  "versions": {"type": "object", "required": false}
+ },
+ "subject_resolution": {
+  "committed": {"type": "array", "required": false},
+  "candidates": {"type": "array", "required": false}
+ },
+ "failure": {
+  "code": {"type": "string", "required": false},
+  "message": {"type": "string", "required": false},
+  "httpStatus": {"type": "int", "required": false},
+  "upstreamCode": {"type": "string", "required": false},
+  "upstreamRequestId": {"type": "string", "required": false},
+  "retryable": {"type": "bool", "required": false},
+  "overrun": {"type": "string", "required": false},
+  "maxItems": {"type": "int", "required": false},
+  "measuredItems": {"type": "int", "required": false},
+  "narrowerContinuation": {"type": "object", "required": false},
+  "axis": {"type": "string", "required": false},
+  "details": {"type": "object", "required": false},
+  "title": {"type": "string", "required": false},
+  "error": {"type": "string", "required": false}
+ }
+}

@@ -14,6 +14,52 @@ reaches the scorer or the identity check in a half-trusted state.
 
 EXPECT_VALUES = {"serve", "refuse", "decline", "clarify"}
 
+_SCHEMA = None
+_TYPES = {"int": int, "number": (int, float), "string": str, "bool": bool,
+          "object": dict, "array": list}
+
+
+def schema():
+    """The artefact schema, loaded once from its data file."""
+    global _SCHEMA
+    if _SCHEMA is None:
+        import json
+        from pathlib import Path
+        _SCHEMA = json.loads((Path(__file__).parent / "artefact_schema.json").read_text())
+    return _SCHEMA
+
+
+def _check_node(node, node_name, path="attempt"):
+    """Recursive shape check against the schema. Returns a reason, or None if valid.
+
+    r6: validation used to stop at the first level -- `result` had to be a mapping, but a
+    string nested under `result.subject_resolution` validated fine and then crashed the
+    consumer that read it. Every path a consumer dereferences is typed here and checked
+    all the way down.
+    """
+    spec = schema().get(node_name)
+    if spec is None or not isinstance(node, dict):
+        return None
+    for key, rule in spec.items():
+        if key not in node:
+            if rule.get("required"):
+                return f"{path}.{key} is required and absent"
+            continue
+        val = node[key]
+        if val is None:
+            return f"{path}.{key} is explicitly null; omit it instead"
+        want = _TYPES[rule["type"]]
+        if rule["type"] == "int" and isinstance(val, bool):
+            return f"{path}.{key} must be an int, got bool"
+        if not isinstance(val, want):
+            return (f"{path}.{key} must be {rule['type']}, got "
+                    f"{type(val).__name__}")
+        if key in schema():                       # a node the schema describes: recurse
+            deeper = _check_node(val, key, f"{path}.{key}")
+            if deeper:
+                return deeper
+    return None
+
 
 def validate_corpus_row(row):
     """(ok, reason). Checks the DECLARED fields only; the rest of the row is the
@@ -59,29 +105,9 @@ def validate_attempt(attempt):
     if not isinstance(attempt, dict):
         return False, f"attempt is not a mapping, got {type(attempt).__name__}"
 
-    if "response" in attempt:
-        resp = attempt["response"]
-        if resp is not None and not isinstance(resp, dict):
-            return False, f"response must be a mapping or absent, got {type(resp).__name__}"
-        if isinstance(resp, dict):
-            for key in ("result", "failure"):
-                if key in resp:
-                    val = resp[key]
-                    if val is None:
-                        return False, f"response.{key} is explicitly null; omit it instead"
-                    if not isinstance(val, dict):
-                        return False, (f"response.{key} must be a mapping, got "
-                                       f"{type(val).__name__}")
-
-    if "status" in attempt:
-        status = attempt["status"]
-        if isinstance(status, bool):
-            return False, "status must be an int, got bool"
-        if status is not None and not isinstance(status, int):
-            return False, f"status must be an int or absent, got {type(status).__name__}"
-        if status is None:
-            return False, "status is explicitly null; omit it instead"
-
+    reason = _check_node(attempt, "attempt")
+    if reason:
+        return False, reason
     return True, None
 
 

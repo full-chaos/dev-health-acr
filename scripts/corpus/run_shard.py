@@ -42,13 +42,20 @@ from shard_plan import plan  # noqa: E402
 
 BY_ID = {row["id"]: row for row in CORPUS}
 
+# filenames the ordering helper could not sequence, per corpus id, surfaced in the shard
+# summary rather than dropped.
+UNSEQUENCED = {}
+
 
 def attempt_files(outdir, qid, rep):
     # r4: THE shared ordering helper. A bare sorted() here put `t10` before `t9`, so
     # last_attempt() -- and therefore the shard summary's terminal result -- named the
     # wrong file. The identical defect was fixed in subject_identity and left here.
-    ordered, _unsequenced = order_attempts(
+    ordered, unsequenced = order_attempts(
         glob.glob(str(outdir / f"{qid}-rep{rep}-t*-a*.json")), on_unparseable="skip")
+    # r6 (d): never discarded. A file we cannot sequence is evidence that something wrote
+    # an artefact we do not understand; dropping it silently is how it stays unnoticed.
+    UNSEQUENCED.setdefault(qid, []).extend(Path(p).name for p in unsequenced)
     return ordered
 
 
@@ -162,7 +169,10 @@ def main():
         r = harness.run_replicate(qid, row["text"], rep)
         dt = time.time() - t0
         print(f"  -> attempts={r['attempts']} dt={dt:.1f}s chain={r['chain']}", flush=True)
-        rows.append(detail_for(harness.OUTDIR, qid, row, r, dt, rep))
+        d = detail_for(harness.OUTDIR, qid, row, r, dt, rep)
+        if UNSEQUENCED.get(qid):
+            d["unsequenced_files"] = sorted(set(UNSEQUENCED[qid]))
+        rows.append(d)
 
     total = time.time() - t_start
     out = {

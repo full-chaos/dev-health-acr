@@ -3,7 +3,7 @@
  "_rulings": {
   "1": "incoherent (terminal,bucket) -> unscored:incoherent_row, per COHERENCE",
   "2": "refuse+named+no_match -> agree_weak (basis not stated); refuse+none+no_match -> agree",
-  "3": "http_* -> disagree for every expectation",
+  "3": "http_* terminals that are AUTHORED here -> disagree; an http terminal not authored here is unscored (instances, not a prefix rule)",
   "4": "serve+degraded+served_with_data -> agree (data presence defines the bucket)",
   "5": "agree_weak is SPLIT by reason in the summary and the table (04:24Z). THREE kinds exist, not two: the hollow serve was already an agree_weak before ruling 2 and is reported separately rather than folded into either of the other two."
  },
