@@ -1365,6 +1365,38 @@ type ResolutionTraceEvent struct {
 	// and a field present in only one of its two states cannot be told
 	// apart from a build that does not emit it.
 	OfferPoolEmptiedByExclusion bool
+	// AnchorPoolSummary marks the once-per-call `anchor_pool` event
+	// (CHAOS-5393) that reports which kind the SCOPE ANCHOR was allowed to
+	// resolve under, and where that kind came from. Emitted from the same
+	// statement that hands the value to the confirmed-kind filter, so the
+	// line reports the value the pool actually obeyed rather than a second
+	// derivation of it beside the pool.
+	AnchorPoolSummary bool
+	// DecisionAnchorPoolKindScope is the admitted anchor kind, or `none`.
+	// DecisionAnchorPoolKindScopeSource is `receipt`, `confirmed_anchor` or
+	// `none` -- carried separately because the two sources fail
+	// independently: a model that stopped emitting scope_anchor_kind and a
+	// caller that stopped redeeming anchor receipts produce the SAME
+	// admitted kind on the line and need entirely different fixes.
+	// DecisionMemberKindConfirmed is the confirmed MEMBER kind, or `none`;
+	// the scope means nothing without the kind it widened.
+	//
+	// ALL THREE ALWAYS SET, with explicit `none` tokens: a resolution that
+	// admitted no anchor kind must never read like a build that stopped
+	// deciding one.
+	DecisionAnchorPoolKindScope       string
+	DecisionAnchorPoolKindScopeSource string
+	DecisionMemberKindConfirmed       string
+	// DecisionReservedKinds and DecisionFilterKinds are the WIRING itself,
+	// on the line. Without them a consumer silently reverting to the
+	// receipt-only value -- the exact defect an adversarial round found
+	// twice here -- is invisible at Info: the scope and its source would
+	// still read correctly while retrieval, the reserve or the filter acted
+	// on a different set. These say what those consumers were actually
+	// given. Always a list, never null: an empty set and an absent field
+	// must not read alike.
+	DecisionReservedKinds []string
+	DecisionFilterKinds   []string
 	// ShadowOutcome/ShadowReason/ShadowDIdentityHash/ShadowPreconditionUnproven/
 	// ShadowUnscopedVisibility/ShadowNonCensusedSurvivor/
 	// ShadowHandleGrammarBound/ShadowAnchorUniqueClaimant/ShadowKindsCensused
@@ -1825,6 +1857,11 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 		decisionFold := &decisionSummaryBuffer{
 			real: deps.ResolutionTracer, requestID: request.RequestID,
 			frameGate: gate, refuseBasis: refuseBasis,
+			// Stamped at CONSTRUCTION, like frameGate above and for the
+			// same reason: it is an input to the call, so every exit path
+			// carries it -- including the ones that return before any
+			// anchor_pool event is emitted.
+			memberKindConfirmed: confirmedMemberKindToken(confirmedKind),
 		}
 		deps.ResolutionTracer = decisionFold
 		defer decisionFold.flush()
@@ -1920,6 +1957,19 @@ type decisionSummaryBuffer struct {
 	vectorOnlyExcluded int
 	vectorOnlyDemoted  int
 	emptiedByExclusion bool
+	// anchorPoolKindScope / anchorPoolKindScopeSource / memberKindConfirmed
+	// accumulate from the `anchor_pool` summary event rather than being
+	// stamped at construction like frameGate above. The distinction is
+	// deliberate: the gate is decided BEFORE this call and is an input to
+	// it, while the anchor scope is decided INSIDE it, and folding the
+	// emitted value is what makes the reported scope the same value the
+	// filter obeyed instead of a second call to the same helper that a
+	// regression could change on one side only.
+	anchorPoolKindScope       string
+	anchorPoolKindScopeSource string
+	memberKindConfirmed       string
+	reservedKinds             []string
+	filterKinds               []string
 }
 
 // appendDistinctCapped adds value to seen when it is non-empty and not
@@ -1956,6 +2006,22 @@ func (b *decisionSummaryBuffer) Trace(event ResolutionTraceEvent) {
 		if event.OfferPoolEmptiedByExclusion {
 			b.emptiedByExclusion = true
 		}
+		return
+	}
+	// The anchor-pool summary is decided once per call, so the LAST one
+	// wins rather than accumulating -- unlike the offer_pool counters, this
+	// is a single decision restated, not a quantity summed. A second event
+	// would mean a second filter pass, and the value the last pass obeyed
+	// is the one that produced the pool this line describes.
+	if event.Stage == "anchor_pool" && event.AnchorPoolSummary {
+		b.anchorPoolKindScope = event.DecisionAnchorPoolKindScope
+		b.anchorPoolKindScopeSource = event.DecisionAnchorPoolKindScopeSource
+		b.reservedKinds = event.DecisionReservedKinds
+		b.filterKinds = event.DecisionFilterKinds
+		// memberKindConfirmed is NOT taken from the event: both it and the
+		// event read the same call parameter, so folding the event's copy
+		// would make this buffer a second authority on a value it already
+		// holds, and would silently reintroduce the event's reachability.
 		return
 	}
 	if event.Stage != "decision" {
@@ -2001,7 +2067,42 @@ func (b *decisionSummaryBuffer) flush() {
 		OfferPoolVectorOnlyExcluded:    b.vectorOnlyExcluded,
 		OfferPoolVectorOnlyDemoted:     b.vectorOnlyDemoted,
 		OfferPoolEmptiedByExclusion:    b.emptiedByExclusion,
+		// orNone keeps the contract that these three are never empty on a
+		// line: a resolution that returned before the filter ran emits no
+		// anchor_pool event at all, and `none` is the honest reading of
+		// that -- no anchor kind was admitted, because no pool was built.
+		DecisionAnchorPoolKindScope:       orNone(b.anchorPoolKindScope),
+		DecisionAnchorPoolKindScopeSource: orNone(b.anchorPoolKindScopeSource),
+		DecisionMemberKindConfirmed:       orNone(b.memberKindConfirmed),
+		DecisionReservedKinds:             nonNil(b.reservedKinds),
+		DecisionFilterKinds:               nonNil(b.filterKinds),
 	})
+}
+
+// confirmedMemberKindToken renders the CONFIRMED member kind for the
+// observable. It reads the call's own parameter rather than any event,
+// because the confirmed kind is an INPUT to this resolution -- something the
+// caller already settled -- not something the resolution discovers. Anything
+// that learns it from an emitted event inherits that event's reachability,
+// and the exact-canonical-hint short-circuit returns before any such event
+// fires: a build that learned it that way printed `none` on turns that had
+// confirmed a kind, which is a confident wrong answer rather than a missing
+// one.
+func confirmedMemberKindToken(confirmedKind *contextfabric.ConfirmedExpectedKind) string {
+	if confirmedKind == nil {
+		return anchorPoolKindScopeNone
+	}
+	return string(confirmedKind.Kind)
+}
+
+// orNone renders an unset observable as the explicit `none` token. An empty
+// string on one of these keys would be indistinguishable from a JSON null
+// and from a build that stopped setting the field.
+func orNone(value string) string {
+	if value == "" {
+		return anchorPoolKindScopeNone
+	}
+	return value
 }
 
 // frameGateObservable renders, for the decision summary, the ordering
@@ -2063,6 +2164,30 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// (whose trace the harness reads) and every offer builder run exactly
 	// as on a decisive turn. See contextfabric/chaos4234_offers_only.go.
 	offersOnly := contextfabric.OffersOnlyResolution(ctx)
+	// CHAOS-5393: decided ONCE, HERE, above retrieval -- because three
+	// separate consumers need the same answer and they run at three
+	// different depths: kind-hinted RETRIEVAL decides what is ever searched
+	// for, phase-4 RESERVATION decides what survives the flat top-K, and the
+	// confirmed-kind FILTER decides what is admitted. An anchor kind known
+	// only to the filter is worthless: it cannot admit a candidate nothing
+	// retrieved, and it cannot save one truncation has already evicted.
+	// Deciding it late and threading it to the filter alone is exactly the
+	// defect an adversarial round found here, twice.
+	anchorScope := decideAnchorPoolKindScope(frame, scopeAnchorKind, confirmedAnchor, confirmedKind)
+	if deps.ResolutionTracer != nil {
+		scope, source := anchorScope.observable()
+		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+			RequestID: request.RequestID, Stage: "anchor_pool", AnchorPoolSummary: true,
+			DecisionAnchorPoolKindScope:       scope,
+			DecisionAnchorPoolKindScopeSource: source,
+			DecisionMemberKindConfirmed:       confirmedMemberKindToken(confirmedKind),
+			// Read off the SAME values the consumers are handed below, in
+			// the same statement, so the line reports the wiring rather
+			// than a second opinion about it.
+			DecisionReservedKinds: kindTokens(frameReservedKinds(frame, anchorScope.Kind)),
+			DecisionFilterKinds:   filterKindTokens(confirmedKind, anchorScope),
+		})
+	}
 	candidatesBySubject := make(map[string]contextfabric.SubjectCandidate)
 	// callerSourced marks which resolved subjects came from a
 	// caller-explicit hint -- any SubjectHint.Source other than
@@ -2483,7 +2608,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// exact-name) matters for retrievalSourceFor's own event-order read
 	// (chaos4234_regime_a_harness_test.go) -- see that function's doc
 	// comment for the precedence this ordering establishes.
-	if hinted := hintedPoolKinds(request, confirmedKind, frame, scopeAnchorKind); len(hinted) > 0 {
+	if hinted := hintedPoolKinds(request, confirmedKind, frame, anchorScope.Kind); len(hinted) > 0 {
 		hintedTraversalDegraded, hintedAuthzDropped, hintedTruncated, hintedDegraded, hintedErr := applyKindHintedPoolSearch(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms, hinted)
 		if hintedErr != nil {
 			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, hintedErr
@@ -2776,7 +2901,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// byte-identical to the pre-P1.D code path. See
 	// ConfirmedExpectedKind's own doc comment (ports.go) for why
 	// non-confirmed narrowing cannot reach this same call.
-	candidatesBySubject = filterCandidatesByConfirmedKind(candidatesBySubject, confirmedKind)
+	candidatesBySubject = filterCandidatesByConfirmedKind(candidatesBySubject, confirmedKind, anchorScope)
 	// CHAOS-4132: filterCandidatesByConfirmedKind can legitimately empty the
 	// pool -- see applyConfirmedKindRescue's own doc comment for exactly
 	// when and why (a confirmed kind whose only route into a PRIOR turn's
@@ -2858,7 +2983,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if offersOnly && firstPassTracer != nil {
 		firstPassTracer = offersOnlyDecisionTracer{real: firstPassTracer}
 	}
-	resolution, firstPassBases, firstPassDigests := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, scopeAnchorKind))
+	resolution, firstPassBases, firstPassDigests := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind))
 	commitBases.ResetTo(firstPassBases)
 	commitDigests.ResetTo(firstPassDigests)
 	// coverageFloorDegraded (CHAOS-4038, codex review round 2 finding 1) is
