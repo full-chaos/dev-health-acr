@@ -1000,3 +1000,148 @@ func countDirectBucketCallsIn(file *ast.File, buckets map[string]bool) int {
 	})
 	return direct
 }
+
+// gatedUnlockLocker hands back an unlock that cancels the tick when it runs.
+// The deferred unlock fires AFTER the organization's classification, so the
+// context is cancelled only once a real verdict has been established -- the
+// reviewer's shape for proving that "cancellation wins" erased real
+// information.
+type gatedUnlockLocker struct {
+	cancel context.CancelFunc
+	calls  atomic.Int32
+}
+
+func (l *gatedUnlockLocker) Lock(ctx context.Context, orgID string) (func() error, error) {
+	l.calls.Add(1)
+	return func() error { l.cancel(); return nil }, nil
+}
+
+// TestReviewCancellationAfterVerdict is the second confirmation pass's P1,
+// adopted as it was written. An organization whose sources fully ran and
+// whose classification returned a verdict keeps that verdict even if the
+// context is cancelled immediately afterwards.
+//
+// This is the arm that refuted "cancellation wins": both this shape and the
+// mid-drain shape have a cancelled context by the time finish() runs, and
+// they need opposite answers. Completion is the discriminator, not the
+// context — which is why finish() no longer reads ctx at all.
+func TestReviewCancellationAfterVerdict(t *testing.T) {
+	t.Parallel()
+	var buffer bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	source := &fakeSource{name: "source-a", pages: 1}
+	locker := &gatedUnlockLocker{cancel: cancel}
+	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:         []string{"org-a"},
+		Sources:        []projectionrun.SourcePair{{Name: "source-a", Source: source}},
+		Backend:        newFakeBackend(),
+		Checkpoints:    newFakeCheckpointStore(),
+		RebuildMarkers: newFakeRebuildMarker(),
+		Locker:         locker,
+		Logger:         logger,
+	})
+	if err != nil {
+		t.Fatalf("new coordinator: %v", err)
+	}
+	coordinator.Tick(ctx)
+
+	if source.calls.Load() == 0 || locker.calls.Load() == 0 {
+		t.Fatalf("the organization was not fully evaluated (source calls=%d, lock calls=%d) -- this arm asserts that a COMPLETED verdict survives a later cancellation, so it would prove nothing", source.calls.Load(), locker.calls.Load())
+	}
+
+	summary := freshnessSummary(t, &buffer)
+	requireBucketIdentity(t, summary)
+	if got := summaryNumber(t, summary, "orgs_ok"); got != 1 {
+		t.Errorf("orgs_ok = %v, want 1 -- the organization finished its work; cancelling afterwards must not erase the verdict it established", got)
+	}
+	if got := summaryNumber(t, summary, "orgs_unevaluated"); got != 0 {
+		t.Errorf("orgs_unevaluated = %v, want 0 -- this organization WAS evaluated", got)
+	}
+	if !summaryBool(t, summary, "tick_complete") {
+		t.Errorf("tick_complete = false although every configured organization reached a verdict")
+	}
+}
+
+// TestNoCounterIsWrittenOutsideTheFinalizer extends the structural pin to the
+// second confirmation pass's P2: Tick incremented orgsUnevaluated directly
+// for organizations it never dispatched, which made "the finalizer is the
+// only commit path" nearly true rather than true. No runtime identity break
+// came of it -- the point is that the pin did not enforce what its name
+// claimed.
+func TestNoCounterIsWrittenOutsideTheFinalizer(t *testing.T) {
+	t.Parallel()
+	if got := countUnevaluatedWritesOutsideFinish(t, "coordinator.go"); got != 0 {
+		t.Errorf("orgsUnevaluated is written %d time(s) outside finish() -- every commit must go through the finalizer, or a bypass can diverge from its semantics without any test noticing", got)
+	}
+
+	// Negative control: a direct write outside finish must be counted.
+	file, err := parser.ParseFile(token.NewFileSet(), "control.go", `package projectionrun
+
+func f(stats *tickFreshnessStats) {
+	atomic.AddInt64(&stats.orgsUnevaluated, 1)
+}
+`, 0)
+	if err != nil {
+		t.Fatalf("parse the negative control: %v", err)
+	}
+	if got := countUnevaluatedWritesIn(file); got != 1 {
+		t.Fatalf("negative control counted %d direct writes, want 1 -- the walk is not seeing the write it exists to catch", got)
+	}
+}
+
+// countUnevaluatedWritesOutsideFinish counts references to orgsUnevaluated in
+// any function OTHER than finish(), which is allowed to touch it.
+func countUnevaluatedWritesOutsideFinish(t *testing.T, filename string) int {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), filename, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", filename, err)
+	}
+	found := 0
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		// finish() commits it; recordUnevaluated is the accessor finish calls.
+		if fn.Name.Name == "finish" || fn.Name.Name == "recordUnevaluated" {
+			continue
+		}
+		found += countUnevaluatedWritesIn(fn)
+	}
+	return found
+}
+
+// countUnevaluatedWritesIn counts MUTATIONS of orgsUnevaluated, not
+// references to it. The summary line reads the counter with
+// atomic.LoadInt64, which is not a bypass of the finalizer and must not be
+// counted -- counting it made this pin report the log line itself as a
+// violation, which is the same "matched something adjacent to the question"
+// shape as the earlier receiver mix-up.
+func countUnevaluatedWritesIn(n ast.Node) int {
+	found := 0
+	ast.Inspect(n, func(m ast.Node) bool {
+		call, ok := m.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		fn, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || (fn.Sel.Name != "AddInt64" && fn.Sel.Name != "StoreInt64") {
+			return true
+		}
+		for _, arg := range call.Args {
+			unary, ok := arg.(*ast.UnaryExpr)
+			if !ok || unary.Op != token.AND {
+				continue
+			}
+			if sel, ok := unary.X.(*ast.SelectorExpr); ok && sel.Sel.Name == "orgsUnevaluated" {
+				found++
+			}
+		}
+		return true
+	})
+	return found
+}
