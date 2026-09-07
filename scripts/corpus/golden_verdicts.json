@@ -6132,12 +6132,14 @@
   "weak_never_terminated": "did not serve and never terminated either -- exhausted the turn budget instead of refusing or declining",
   "weak_hollow_serve": "served, but claimed zero facts"
  },
- "_resolved": [
+ "_known_inconsistencies": [
   {
-   "what": "merge_corpus.classify() used to bucket clarification by SUBSTRING while the scorer used authored instances",
-   "resolution": "classify() now reads the same authored vocabulary; sha af37f7364fa5b71c -> 5171dfe1c6091b7c",
-   "evidence": "per-row buckets identical across all four measured runs; both real spellings authored after scanning 425 artefacts",
-   "residual": "the bucketer is fail-closed, so an unauthored terminal lands in `unserved`; the scorer names it `unauthored_terminal:<status>` and the merge counts `unauthored_terminals` with an explicit zero so it cannot land silently"
+   "what": "merge_corpus.classify() buckets clarification by SUBSTRING while the scorer uses authored instances",
+   "frozen_function_sha256_prefix": "af37f7364fa5b71c",
+   "why_it_stays": "classify() is byte-frozen so a prior run re-merges byte-for-byte on every pre-existing field; that positive-control invariant outranks internal consistency within one change. A re-bucketing is its own change with its own baseline.",
+   "consequence": "a terminal such as clarification_required(future) would be bucketed clarification_needed by classify() while the scorer leaves it unscored",
+   "made_visible_by": "the scorer records reason `unauthored_terminal:<status>` and the merge summary counts `unauthored_terminals` with an explicit zero, so the divergence appears on the line rather than being absorbed",
+   "observed_in_the_four_measured_runs": 0
   }
  ]
 }
