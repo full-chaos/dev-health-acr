@@ -384,6 +384,19 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 	if len(cfg.Sources) == 0 {
 		return nil, errors.New("projectionrun: at least one source is required")
 	}
+	// A blank organization id is refused HERE rather than tolerated downstream.
+	// It reaches ProjectionWorker.RunOnce's argument validation, which is the
+	// one error RunOnce returns before it can attribute anything to a stage --
+	// so the freshness summary named a source that had never been called. The
+	// classification cannot be taught to handle it sensibly, because a pair
+	// that can never run is not a source outage and not a truncation either.
+	// Refusing the configuration is the honest answer; a projector that cannot
+	// name which organizations it serves should not start.
+	for i, orgID := range cfg.OrgIDs {
+		if strings.TrimSpace(orgID) == "" {
+			return nil, fmt.Errorf("projectionrun: OrgIDs[%d] is blank; every configured organization must have an id", i)
+		}
+	}
 	if cfg.Lifecycle != nil && cfg.EpochCheckpoints == nil {
 		return nil, errors.New("projectionrun: EpochCheckpoints is required when Lifecycle is set")
 	}

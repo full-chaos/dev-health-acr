@@ -137,7 +137,7 @@ func markWorkerIO(err error) error {
 
 func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string) (ProjectionRun, error) {
 	if strings.TrimSpace(orgID) == "" || strings.TrimSpace(sourceName) == "" {
-		return ProjectionRun{}, errors.New("projection worker requires organization and source")
+		return ProjectionRun{}, markWorkerIO(errors.New("projection worker requires organization and source"))
 	}
 	checkpoint, err := w.checkpoints.LoadProjectionCheckpoint(ctx, orgID, sourceName)
 	if err != nil {

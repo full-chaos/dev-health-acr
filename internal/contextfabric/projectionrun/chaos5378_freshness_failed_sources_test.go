@@ -2276,3 +2276,50 @@ func runDrainTelemetryAgreement(t *testing.T, buildPhase bool) {
 			drains[0].YieldReason)
 	}
 }
+
+// TestConfirm9_ABlankOrganizationIdIsRefusedAtConstruction is confirm9's P1.
+// A blank organization id reached ProjectionWorker.RunOnce's argument
+// validation -- the one error RunOnce returns before it can attribute anything
+// to a stage -- so it hit the unmarked fallback and the summary named a source
+// that had never been called.
+//
+// Marking that exit would not have helped: it is not a cancellation, so it
+// classifies as "the pair failed" and still names the source. A pair that can
+// never run is neither a source outage nor a truncation, and teaching the
+// classification to pretend otherwise would be inventing a fourth state to
+// paper over a configuration that should not exist. So it is refused where it
+// enters, and the unmarked fallback becomes reachable only from worker
+// construction.
+func TestConfirm9_ABlankOrganizationIdIsRefusedAtConstruction(t *testing.T) {
+	t.Parallel()
+	for _, orgID := range []string{"", "   ", "\t"} {
+		_, err := projectionrun.NewCoordinator(projectionrun.Config{
+			OrgIDs:         []string{"org-a", orgID},
+			Sources:        []projectionrun.SourcePair{{Name: "source-a", Source: &fakeSource{name: "source-a", pages: 1}}},
+			Backend:        newFakeBackend(),
+			Checkpoints:    newFakeCheckpointStore(),
+			RebuildMarkers: newFakeRebuildMarker(),
+			Logger:         discardLogger(),
+		})
+		if err == nil {
+			t.Errorf("NewCoordinator accepted a blank organization id %q -- it reaches RunOnce's argument validation and makes the summary name a source that was never called", orgID)
+			continue
+		}
+		if !strings.Contains(err.Error(), "OrgIDs[1]") {
+			t.Errorf("error = %v, want it to name WHICH entry is blank -- an operator has to find it in a list", err)
+		}
+	}
+
+	// A well-formed configuration must still be accepted, or the guard would
+	// be indistinguishable from refusing everything.
+	if _, err := projectionrun.NewCoordinator(projectionrun.Config{
+		OrgIDs:         []string{"org-a", "org-b"},
+		Sources:        []projectionrun.SourcePair{{Name: "source-a", Source: &fakeSource{name: "source-a", pages: 1}}},
+		Backend:        newFakeBackend(),
+		Checkpoints:    newFakeCheckpointStore(),
+		RebuildMarkers: newFakeRebuildMarker(),
+		Logger:         discardLogger(),
+	}); err != nil {
+		t.Fatalf("NewCoordinator rejected a valid configuration: %v", err)
+	}
+}
