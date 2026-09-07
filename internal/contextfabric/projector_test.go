@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -583,5 +584,66 @@ func TestProjectionWorkerRefusesProgressWithoutASourceVersion(t *testing.T) {
 	}
 	if len(store.saved) != 0 || store.checkpoint.Cursor != "cursor_start" {
 		t.Fatalf("progress without a named producer identity must not move the cursor; saved=%d cursor=%q", len(store.saved), store.checkpoint.Cursor)
+	}
+}
+
+// TestSourceReadErrorMarksOnlyTheBareSentinel pins the classification at the
+// ONE place that can make it. RunOnce wraps every source error, so by the time
+// the projector's caller sees one, a source that returned the bare context
+// sentinel and a source that wrapped a context error in its own description
+// are indistinguishable. The freshness summary lost an observed source outage
+// twice because of exactly that collapse.
+//
+// The distinction is a policy, stated where truncatedBy lives: a bare sentinel
+// under a done tick is the tick's cancellation passing through; anything else
+// is a failure the source owns, and the source is named.
+func TestSourceReadErrorMarksOnlyTheBareSentinel(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"bare Canceled is propagation", context.Canceled, true},
+		{"bare DeadlineExceeded is propagation", context.DeadlineExceeded, true},
+		{"a source-WRAPPED sentinel is the source's own failure", fmt.Errorf("teams projects read timed out: %w", context.DeadlineExceeded), false},
+		{"a source-WRAPPED cancellation is the source's own failure", fmt.Errorf("teams projects read: %w", context.Canceled), false},
+		{"an ordinary backend error is a failure", errors.New("dependency unavailable"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			checkpoints := &checkpointStoreStub{checkpoint: ProjectionCheckpoint{OrgID: "org_1", Source: "dev-health-ops", Cursor: "cursor_1"}}
+			worker, werr := NewProjectionWorker(
+				projectionSourceStub{err: tc.err},
+				&projectionBackendStub{},
+				checkpoints,
+				ProjectionWorkerOptions{Now: func() time.Time { return time.Unix(60, 0).UTC() }},
+			)
+			if werr != nil {
+				t.Fatalf("NewProjectionWorker() error = %v", werr)
+			}
+
+			_, err := worker.RunOnce(context.Background(), "org_1", "dev-health-ops")
+			if err == nil {
+				t.Fatal("RunOnce returned no error -- the stub was supposed to fail")
+			}
+
+			// The message must be byte-identical to the unmarked form: the
+			// marker wraps, it does not replace, so no consumer reading the
+			// text changes.
+			if want := "read projection batch: " + tc.err.Error(); err.Error() != want {
+				t.Errorf("message = %q, want %q -- the marker must not change what any consumer reads", err.Error(), want)
+			}
+			// errors.Is must still see through to the original.
+			if !errors.Is(err, tc.err) {
+				t.Errorf("errors.Is(err, original) = false -- Unwrap is broken, and %%w semantics with it")
+			}
+
+			var marked *SourceReadError
+			if !errors.As(err, &marked) {
+				t.Fatalf("errors.As found no SourceReadError -- the coordinator reads this marker and would fall back to guessing")
+			}
+			if marked.PropagatedCancellation != tc.want {
+				t.Errorf("PropagatedCancellation = %v, want %v -- classification is by IDENTITY; errors.Is is exactly what cannot tell these apart", marked.PropagatedCancellation, tc.want)
+			}
+		})
 	}
 }

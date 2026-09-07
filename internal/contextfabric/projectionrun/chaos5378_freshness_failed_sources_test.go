@@ -2012,6 +2012,88 @@ func TestConfirm6_ACancellationAfterAFailureDoesNotUnobserveIt(t *testing.T) {
 	}
 }
 
+// wrappedCancelSource fails with its OWN error that happens to wrap a context
+// sentinel, and cancels the tick at the same moment. This is the ambiguous
+// case: from the error alone nothing can say whether the source's internals
+// or the tick's cancellation produced it.
+type wrappedCancelSource struct {
+	name   string
+	cancel context.CancelFunc
+	calls  atomic.Int32
+}
+
+func (w *wrappedCancelSource) NextProjectionBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
+	w.calls.Add(1)
+	w.cancel()
+	// The source describes its OWN failure and wraps a context sentinel.
+	return contextfabric.ProjectionBatch{}, false, fmt.Errorf("teams projects read timed out: %w", context.DeadlineExceeded)
+}
+
+func (w *wrappedCancelSource) CurrentProjectionSourceVersion() string { return "test.v1" }
+
+// TestConfirm7_AWrappedSourceErrorCoincidingWithCancellationIsStillNamed pins
+// the INVARIANT for an irreducible ambiguity. When the tick is cancelled and
+// the source returns something wrapping a context sentinel, no inspection can
+// establish who owned the error. The question is only which way the ambiguity
+// falls, and it falls toward NAMING:
+//
+// a source that merely propagates cancellation returns the sentinel unchanged,
+// while a source that WRAPS it has added its own description -- and that
+// description is what an operator needs. A wrongly-named source is visible,
+// because tick_complete:false sits on the same line. An unnamed failing source
+// is invisible, and is the defect this whole line exists to prevent.
+func TestConfirm7_AWrappedSourceErrorCoincidingWithCancellationIsStillNamed(t *testing.T) {
+	t.Parallel()
+	for _, buildPhase := range []bool{false, true} {
+		name := "steady state"
+		if buildPhase {
+			name = "build phase"
+		}
+		t.Run(name, func(t *testing.T) {
+			var buffer bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&buffer, &slog.HandlerOptions{Level: slog.LevelInfo}))
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			source := &wrappedCancelSource{name: "dev_health_teams_projects", cancel: cancel}
+			checkpoints := newFakeCheckpointStore()
+			cfg := projectionrun.Config{
+				OrgIDs:         []string{"org-a"},
+				Sources:        []projectionrun.SourcePair{{Name: "dev_health_teams_projects", Source: source}},
+				Backend:        newFakeBackend(),
+				Checkpoints:    checkpoints,
+				RebuildMarkers: newFakeRebuildMarker(),
+				Logger:         logger,
+			}
+			if buildPhase {
+				cfg.Lifecycle = &buildFailingLifecycleStore{epoch: 1}
+				cfg.EpochCheckpoints = func(int64) contextfabric.ProjectionCheckpointStore { return checkpoints }
+				cfg.GraceWindow = time.Hour
+			}
+			coordinator, err := projectionrun.NewCoordinator(cfg)
+			if err != nil {
+				t.Fatalf("new coordinator: %v", err)
+			}
+			coordinator.Tick(ctx)
+
+			if source.calls.Load() == 0 {
+				t.Fatal("the source never ran -- the tick did not reach the drain")
+			}
+			summary := freshnessSummary(t, &buffer)
+			if got := summaryBool(t, summary, "tick_complete"); got {
+				t.Fatalf("tick_complete = true -- the fixture did not truncate, so this arm proves nothing")
+			}
+			if got := summaryNumber(t, summary, "sources_failed"); got != 1 {
+				t.Errorf("sources_failed = %v, want 1 -- the source WRAPPED the sentinel with its own description, so the ambiguity falls toward naming it", got)
+			}
+			names, _ := summary["failed_sources"].([]any)
+			if len(names) != 1 || names[0] != "dev_health_teams_projects" {
+				t.Errorf("failed_sources = %v, want it NAMED", summary["failed_sources"])
+			}
+		})
+	}
+}
+
 // TestConfirm7_ABarePropagatedCancellationIsStillTruncation is the other half,
 // and it is what stops the rule above from simply naming everything. A source
 // that returns the sentinel UNCHANGED added nothing of its own: that is the

@@ -77,6 +77,44 @@ func NewProjectionWorker(source ProjectionSource, backend ProjectionBackend, che
 // RunOnce processes at most one canonical projection batch. A checkpoint is
 // advanced only after the selected backend has durably accepted the batch and
 // only when the durable checkpoint still matches the cursor this worker read.
+// SourceReadError marks whether a projection source's error was the BARE
+// context sentinel -- the tick's own cancellation passing through a source
+// that added nothing of its own -- or a failure the source owns and described.
+//
+// THIS IS THE ONLY PLACE THE RAW SOURCE ERROR IS VISIBLE. Every layer above
+// receives it already wrapped by RunOnce, so `errors.Is(err, context.Canceled)`
+// upstream cannot tell the tick's cancellation from a source that wrapped a
+// context error in its own description. Three review rounds were spent trying,
+// and the freshness summary lost an observed source outage twice because the
+// two collapse together. Classification therefore happens HERE, by identity,
+// and travels as a typed marker.
+//
+// It wraps rather than replaces: Error() delegates and Unwrap() returns the
+// original, so `%w` semantics, errors.Is against context sentinels, and every
+// existing message stay byte-identical. No consumer that reads the text
+// changes.
+type SourceReadError struct {
+	Err error
+	// PropagatedCancellation is true only for the bare sentinel. A source
+	// that WRAPPED a context error added its own description of its own
+	// failure, and that description is what an operator needs -- so it is
+	// reported as a failure and the source is named.
+	PropagatedCancellation bool
+}
+
+func (e *SourceReadError) Error() string { return e.Err.Error() }
+func (e *SourceReadError) Unwrap() error { return e.Err }
+
+// markSourceRead classifies by IDENTITY, never errors.Is: errors.Is is exactly
+// what cannot distinguish the two cases, because a wrapped sentinel satisfies
+// it just as the bare one does.
+func markSourceRead(err error) error {
+	return &SourceReadError{
+		Err:                    err,
+		PropagatedCancellation: err == context.Canceled || err == context.DeadlineExceeded,
+	}
+}
+
 func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string) (ProjectionRun, error) {
 	if strings.TrimSpace(orgID) == "" || strings.TrimSpace(sourceName) == "" {
 		return ProjectionRun{}, errors.New("projection worker requires organization and source")
@@ -87,7 +125,7 @@ func (w *ProjectionWorker) RunOnce(ctx context.Context, orgID, sourceName string
 	}
 	batch, available, err := w.source.NextProjectionBatch(ctx, checkpoint)
 	if err != nil {
-		return ProjectionRun{}, fmt.Errorf("read projection batch: %w", err)
+		return ProjectionRun{}, fmt.Errorf("read projection batch: %w", markSourceRead(err))
 	}
 	if !available {
 		advanced, progressed, err := w.persistConsumedProgress(ctx, checkpoint)

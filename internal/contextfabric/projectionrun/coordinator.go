@@ -2396,23 +2396,41 @@ func (c *Coordinator) due(key string) bool {
 // truncatedBy reports whether err is the TICK's cancellation reaching this
 // pair rather than a failure the source owns.
 //
-// The context check is load bearing on its own: a source returning a context
-// error while the tick is LIVE owns that error, has failed, and is named.
+// INVARIANT OF RECORD, and it is a policy choice, not a detection:
 //
-// KNOWN LIMIT, recorded rather than papered over. When the tick is cancelled
-// AND the error is a context error, this cannot say who owned it, so it files
-// the pair as truncation and the source is not named. Resolving it by the
-// source's own choice of error -- bare sentinel means propagation, a wrapped
-// one means the source describing its own failure -- is not implementable
-// here, because ProjectionWorker.RunOnce (projector.go) wraps EVERY source
-// error unconditionally, so the source's own identity is already destroyed by
-// the time it arrives. Closing this needs that wrapping to change, which is
-// outside this ticket's blast radius and is tracked as a follow-up.
+//	truncation  <=>  the error is the BARE context sentinel (Canceled or
+//	                 DeadlineExceeded, unwrapped by the source) AND the
+//	                 tick's own context is done.
+//	everything else  =>  a named source failure.
+//
+// Ownership is NOT recoverable from a wrapped error, so the policy decides,
+// and the policy of this ticket is: IN DOUBT, NAME THE SOURCE. An unnamed
+// outage is the defect this line exists to prevent -- it is how the projector
+// reported orgs_ok:1 through an entire outage. A source over-named during a
+// cancelled tick is the acceptable error, because it is VISIBLE: tick_complete
+// reads false on the same line, so both facts sit side by side.
+//
+// The bare/wrapped distinction is only decidable at ProjectionWorker.RunOnce,
+// which is the one place the raw source error exists; it travels here as
+// contextfabric.SourceReadError. errors.Is cannot be used for this -- a
+// wrapped sentinel satisfies it exactly as the bare one does, and collapsing
+// them is what lost an observed source failure in two successive rounds.
+//
+// The context check stays first and is load bearing on its own: a source
+// returning a context error while the tick is LIVE owns it, has failed, and
+// is named regardless of the marker.
 func truncatedBy(ctx context.Context, err error) bool {
 	if ctx.Err() == nil {
 		return false
 	}
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+	var sourceRead *contextfabric.SourceReadError
+	if errors.As(err, &sourceRead) {
+		return sourceRead.PropagatedCancellation
+	}
+	// Errors that never came from a source read -- worker construction,
+	// checkpoint IO -- carry no marker, so they keep the conservative
+	// identity test rather than defaulting to "named".
+	return err == context.Canceled || err == context.DeadlineExceeded
 }
 
 func (c *Coordinator) dueState(key string) (due, withheldByBackoff bool) {
