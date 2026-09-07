@@ -434,7 +434,14 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 	sources := make(map[string]contextfabric.ProjectionSource, len(cfg.Sources))
 	sourceNames := make([]string, 0, len(cfg.Sources))
 	for _, pair := range cfg.Sources {
-		if pair.Name == "" || pair.Source == nil {
+		// TrimSpace, not == "", so this agrees with the check inside
+		// ProjectionWorker.RunOnce. They disagreed, and the gap between them
+		// was reachable: a whitespace-only name passed here, was refused
+		// there, and the summary then named a source called "  " for a pair
+		// that had never run. Two validations of one rule that do not agree
+		// are worse than one, because the difference is where the defect
+		// lives.
+		if strings.TrimSpace(pair.Name) == "" || pair.Source == nil {
 			return nil, fmt.Errorf("projectionrun: source pair %q is incomplete", pair.Name)
 		}
 		if _, exists := workers[pair.Name]; exists {

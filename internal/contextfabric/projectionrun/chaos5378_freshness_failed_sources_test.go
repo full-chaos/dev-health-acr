@@ -2323,3 +2323,30 @@ func TestConfirm9_ABlankOrganizationIdIsRefusedAtConstruction(t *testing.T) {
 		t.Fatalf("NewCoordinator rejected a valid configuration: %v", err)
 	}
 }
+
+// TestConfirm9_ABlankSourceNameIsRefusedTheSameWay is the SWEEP of the blank-id
+// class. A surviving mutant exposed it: unmarking RunOnce's validation exit
+// changed nothing, which meant that exit was unreachable via organization ids
+// -- but the SOURCE-name half of the same guard used `== ""` while RunOnce
+// used `strings.TrimSpace(...) == ""`.
+//
+// The gap between two disagreeing validations of one rule is exactly where the
+// defect lived: a whitespace-only name passed construction, was refused inside
+// RunOnce, and the summary named a source called "  " for a pair that had
+// never run.
+func TestConfirm9_ABlankSourceNameIsRefusedTheSameWay(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"", "   ", "\t"} {
+		_, err := projectionrun.NewCoordinator(projectionrun.Config{
+			OrgIDs:         []string{"org-a"},
+			Sources:        []projectionrun.SourcePair{{Name: name, Source: &fakeSource{name: name, pages: 1}}},
+			Backend:        newFakeBackend(),
+			Checkpoints:    newFakeCheckpointStore(),
+			RebuildMarkers: newFakeRebuildMarker(),
+			Logger:         discardLogger(),
+		})
+		if err == nil {
+			t.Errorf("NewCoordinator accepted a blank source name %q -- RunOnce refuses it, and the summary then names a source that never ran", name)
+		}
+	}
+}
