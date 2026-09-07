@@ -262,10 +262,16 @@ type ModelExecutionReceipt struct {
 	FrameGateOutcome FrameGateOutcome `json:"frame_gate_outcome,omitempty"`
 	// FrameGateRefuseBasis names the cohort discoverability reason when
 	// FrameGateOutcome is refused_basis, empty otherwise.
-	FrameGateRefuseBasis  CohortDiscoverability `json:"frame_gate_refuse_basis,omitempty"`
-	FrameGoalsDropped     int                   `json:"frame_goals_dropped,omitempty"`
-	FrameTermsTruncated   int                   `json:"frame_terms_truncated,omitempty"`
-	FrameKindUnrecognized bool                  `json:"frame_kind_unrecognized,omitempty"`
+	FrameGateRefuseBasis CohortDiscoverability `json:"frame_gate_refuse_basis,omitempty"`
+	// FrameGateDeclaredMemberKind is the member kind the refused frame
+	// named, empty unless FrameGateOutcome is refused_basis. It rides the
+	// receipt for the same reason the basis does: outcome.Gate is REBUILT
+	// from these fields, and a value the rebuild dropped would have to be
+	// re-derived downstream from a frame that is nil by then.
+	FrameGateDeclaredMemberKind SubjectKind `json:"frame_gate_declared_member_kind,omitempty"`
+	FrameGoalsDropped           int         `json:"frame_goals_dropped,omitempty"`
+	FrameTermsTruncated         int         `json:"frame_terms_truncated,omitempty"`
+	FrameKindUnrecognized       bool        `json:"frame_kind_unrecognized,omitempty"`
 	// FrameTemporalUnrecognized / FrameEmphasisDropped / FrameDimensionsDropped /
 	// FrameMemberKindUnrecognized / FrameGroupKindUnrecognized close the
 	// same countability gap the three fields above already closed for
@@ -1618,6 +1624,7 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 	gate := DecideFrameGate(result, true)
 	receipt.FrameGateOutcome = gate.Outcome
 	receipt.FrameGateRefuseBasis = gate.RefuseBasis
+	receipt.FrameGateDeclaredMemberKind = gate.DeclaredMemberKind
 
 	// The requirement rows are derived from the VALIDATED (and, for
 	// named_subject, now backfilled) frame, so this runs before the
@@ -1842,8 +1849,9 @@ func (r RuntimeQuestionInterpreter) recordFamilyResolution(ctx context.Context, 
 	// carrying the verdict separately is what lets the engine tell those
 	// two apart, which is the whole of this seam.
 	outcome.Gate = FrameGate{
-		Outcome:     receipt.FrameGateOutcome,
-		RefuseBasis: receipt.FrameGateRefuseBasis,
+		Outcome:            receipt.FrameGateOutcome,
+		RefuseBasis:        receipt.FrameGateRefuseBasis,
+		DeclaredMemberKind: receipt.FrameGateDeclaredMemberKind,
 	}
 	if receipt.FrameGateOutcome == FrameGateRejectedInvalid {
 		outcome.Gate.FailedInvariant = receipt.FrameFailedInvariant

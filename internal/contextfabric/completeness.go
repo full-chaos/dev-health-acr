@@ -39,8 +39,15 @@ func ComputeAnswerCompleteness(result InvestigationResult) contractsv1.ContextFa
 	// which is the one thing the append invariant forbids.
 	outcomes := accountForPublishedPlanRequirements(result)
 	return contractsv1.ContextFabricAnswerCompleteness{
-		TerminalStatus:    result.Status,
-		TerminalReason:    answerTerminalReason(result),
+		TerminalStatus: result.Status,
+		TerminalReason: answerTerminalReason(result),
+		// COPIED, never re-derived. The refusal was decided by the frame
+		// gate before retrieval ran; this function sees only a finished
+		// result and could not reach that decision again if it tried.
+		// Copying is also what makes the disclosure survive the
+		// recomputation this function is subjected to on every stored-result
+		// read.
+		RefusalBasis:      result.RefusalBasis,
 		ClaimedFactsCount: len(result.ClaimedFacts),
 		RowsCount:         rows,
 		State:             contractsv1.DeriveContextFabricAnswerCompletenessState(outcomes),

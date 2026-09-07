@@ -217,8 +217,20 @@ func (t SlogEngineTelemetry) RecordAnswerReuseContainment(ctx context.Context, p
 // (empty_pool/authz_filtered_to_empty/ambiguous) is diagnostic detail about
 // an already-ordinary outcome (no_match/clarification_required), never a
 // sign anything is broken.
-func (t SlogEngineTelemetry) RecordSubjectlessTerminal(ctx context.Context, principal storage.Principal, reason string) {
-	args := append([]any{"org_id", principal.OrgID, "reason", reason}, requestIDLogAttrs(ctx)...)
+func (t SlogEngineTelemetry) RecordSubjectlessTerminal(ctx context.Context, principal storage.Principal, reason string, refusalBasis string) {
+	// refusal_basis is emitted on EVERY subjectless terminal, carrying the
+	// explicit token "none" when the turn was not refused -- never omitted
+	// on the ordinary path. A key that appeared only on refusals would be
+	// indistinguishable, on the ordinary line, from a build that stopped
+	// emitting it, and the regression this key guards against is exactly a
+	// build that stopped disclosing.
+	//
+	// The token is composed by the CALLER (FrameGate.ObservableRefusalBasis)
+	// and written here verbatim. Substituting a default in this sink would
+	// make it the second authority on what an unrefused turn reports, and
+	// would keep this one line looking correct while every other recorder
+	// implementation emitted an empty value.
+	args := append([]any{"org_id", principal.OrgID, "reason", reason, "refusal_basis", refusalBasis}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric subjectless terminal", args...)
 }
 

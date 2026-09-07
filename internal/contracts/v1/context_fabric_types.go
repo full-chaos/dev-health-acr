@@ -1757,6 +1757,26 @@ type ContextFabricInvestigationResult struct {
 	// later stage can change Status/ClaimedFacts/Coverage/Limitations/
 	// Warnings out from under it.
 	Completeness ContextFabricAnswerCompleteness `json:"completeness"`
+	// RefusalBasis (CHAOS-5442) names WHY the server refused to act on
+	// this question's frame, over the closed ContextFabricRefusalBasis
+	// vocabulary; empty on every turn that was not refused.
+	//
+	// IT IS THE SOURCE, and Completeness.RefusalBasis is its mirror --
+	// exactly the Status/Completeness.TerminalStatus relationship, and
+	// stamped the same way, by ComputeAnswerCompleteness copying this
+	// field. The duplication is what makes the disclosure survive: the
+	// completeness block is recomputed from the stored result on every
+	// read (internal/api's result route) and copied verbatim onto the
+	// bounded answer projection, so a basis that lived ONLY in the block
+	// would be silently dropped by the first recomputation and would never
+	// reach a projected consumer at all.
+	//
+	// Additive and optional: a consumer that ignores it reads a
+	// byte-identical answer to the pre-5442 one, and every result written
+	// before this field existed reads back with it empty -- which is the
+	// correct value, because none of them was refused by a gate that did
+	// not yet exist.
+	RefusalBasis ContextFabricRefusalBasis `json:"refusal_basis,omitempty"`
 }
 
 // ContextFabricScalarValue is the only free-form value admitted by the public

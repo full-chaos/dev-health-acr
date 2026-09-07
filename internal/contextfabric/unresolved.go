@@ -243,6 +243,19 @@ func (e *Engine) terminalResult(
 	// where one exists.
 	ancestryParent string) (InvestigationResult, error) {
 	status, limitation := resolveTerminalStatus(request, &resolution)
+	// CHAOS-5442: a frame the gate refused gets its own disclosure, on
+	// both surfaces, decided from the ONE value that already holds the
+	// verdict.
+	//
+	// The status is deliberately unchanged. Whether a refusal should be
+	// its own terminal status rather than a no_match is a contract question
+	// about a value every consumer pins, and it is not this change's to
+	// take; what this change fixes is that the refusal was not SAYING
+	// anything, not which terminal it says it under.
+	refusalBasis := familyOutcome.Gate.RefusalBasis()
+	if familyOutcome.Gate.Refuses() {
+		limitation = refusalLimitation(familyOutcome.Gate, refusalBasis)
+	}
 	// CHAOS-4634 (subsumes CHAOS-4579/CHAOS-4531's §1.3 class-conditional
 	// gate): applied HERE, at the top, before ANY reader of
 	// structureMaterial below -- both the schemaVersion dispatch
@@ -260,7 +273,7 @@ func (e *Engine) terminalResult(
 	// subjectlessTerminalReason's own doc comment for the three-value
 	// vocabulary.
 	if e.telemetry != nil {
-		e.telemetry.RecordSubjectlessTerminal(ctx, principal, subjectlessTerminalReason(resolution, subjectCandidatesAuthzDropped))
+		e.telemetry.RecordSubjectlessTerminal(ctx, principal, subjectlessTerminalReason(familyOutcome.Gate, resolution, subjectCandidatesAuthzDropped), familyOutcome.Gate.ObservableRefusalBasis())
 	}
 	coverage := graphContext.Coverage
 	if coverage.Sources == nil {
@@ -381,6 +394,7 @@ func (e *Engine) terminalResult(
 		Conflicts:               []Finding{},
 		Limitations:             limitations,
 		LimitationsDisplaced:    degradedDisplaced + temporalDisplaced,
+		RefusalBasis:            refusalBasis,
 		EvidenceRefIDs:          []string{},
 		ClaimedFacts:            []ClaimedFact{},
 		Coverage:                coverage,
@@ -547,7 +561,21 @@ func (e *Engine) terminalResult(
 //     uncommitted candidates) -- the clarification_required / no_match
 //     "more than one matched, or one matched but did not clear the commit
 //     gate" branch, regardless of AllowClarification.
-func subjectlessTerminalReason(resolution SubjectResolution, subjectCandidatesAuthzDropped int) string {
+func subjectlessTerminalReason(gate FrameGate, resolution SubjectResolution, subjectCandidatesAuthzDropped int) string {
+	// CHECKED FIRST, ahead of every arm below, because it is the only one
+	// that describes a decision taken BEFORE retrieval. The four arms that
+	// follow all describe what retrieval found or declined to offer, and a
+	// refused frame never reached retrieval at all -- so any of them
+	// reporting on it would be describing a search that did not happen.
+	//
+	// Before this arm existed a refused frame reported `empty_pool`: the
+	// same token a genuinely empty graph produces, on a turn where the
+	// server had already decided it could not serve the question. That
+	// made the whole refusing class uncountable in the collected logs,
+	// which is the operator-side half of CHAOS-5442.
+	if gate.Refuses() {
+		return "frame_gate_refused"
+	}
 	if len(resolution.Candidates) > 0 {
 		return "ambiguous"
 	}
@@ -643,6 +671,29 @@ func noMatchLimitationForEmptyPool(resolution *SubjectResolution) string {
 		return noMatchLimitationGraphNotProjected
 	}
 	return noMatchLimitationUnproven
+}
+
+// refusalLimitation selects the caller-facing sentence for a REFUSED frame.
+//
+// TWO ARMS, because the two refusals owe the reader different things. A frame
+// that named an unservable population can say WHICH population, and that kind
+// is the one thing the asker can change; a frame that violated an invariant
+// has no kind to name -- the failure is in how the question combined its
+// parts -- so it gets a fixed sentence that says so and suggests the shape of
+// a question that would work.
+//
+// The unservable arm falls back to the invariant sentence when the gate
+// carries no declared kind. That is not defensive padding: a refusing gate
+// built as a literal (every unit caller in this repository builds one) can
+// legitimately carry a basis and no kind, and interpolating an EMPTY kind
+// would compose a sentence its own recogniser rejects -- which would make the
+// disclosure displaceable, the exact round-3 defect the registry's doc
+// comment records.
+func refusalLimitation(gate FrameGate, basis contractsv1.ContextFabricRefusalBasis) string {
+	if gate.DeclaredMemberKind != "" && contractsv1.ValidContextFabricRefusalBasis(basis) {
+		return contractsv1.ContextFabricRefusalBasisLimitation(gate.DeclaredMemberKind, basis)
+	}
+	return contractsv1.ContextFabricFrameInvariantRefusalLimitation
 }
 
 // terminalVersions builds the version set for a model-free terminal result:

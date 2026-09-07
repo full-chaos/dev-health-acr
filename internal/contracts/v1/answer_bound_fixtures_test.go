@@ -40,6 +40,21 @@ func answerBoundTable() []answerBound {
 		{Field: "Status", Why: "closed vocabulary; the shortest and longest members are the bounds, and a non-member is a different test's concern",
 			Min: func(r *ContextFabricInvestigationResult) { r.Status = ContextFabricInvestigationComplete },
 			Max: func(r *ContextFabricInvestigationResult) { r.Status = ContextFabricInvestigationComplete }},
+		{Field: "RefusalBasis", Why: "closed vocabulary, and on a SERVED fixture its only legal value is the empty one: validateCompleteness refuses a basis beside status=complete or any claimed fact, because a refusal happens above retrieval and has therefore read nothing. So min and max are both empty here, and that is a real constraint rather than an exemption -- PastMax steps past it by naming a basis on this served answer, which the validator must reject",
+			Min: func(r *ContextFabricInvestigationResult) {
+				r.RefusalBasis = ""
+				r.Completeness.RefusalBasis = ""
+			},
+			Max: func(r *ContextFabricInvestigationResult) {
+				r.RefusalBasis = ""
+				r.Completeness.RefusalBasis = ""
+			},
+			PastMax: func(r *ContextFabricInvestigationResult) {
+				// Set on BOTH surfaces, so the rejection is the
+				// served-answer clause and not the mirror check.
+				r.RefusalBasis = ContextFabricRefusalBasisMemberKindUnservable
+				r.Completeness.RefusalBasis = ContextFabricRefusalBasisMemberKindUnservable
+			}},
 		{Field: "Reused", Why: "bool; `true` encodes ONE BYTE SHORTER than `false`, so the byte-minimal value is true -- minimal means smallest serialized, not smallest-looking",
 			Min: func(r *ContextFabricInvestigationResult) { r.Reused = true },
 			Max: func(r *ContextFabricInvestigationResult) { r.Reused = false }},
@@ -666,28 +681,34 @@ func maximalOutcomeRows(n int) []ContextFabricPlanRequirementOutcomeRow {
 // whole group of fields), which is why the message check alone is not enough
 // and TestEveryBoundIsBreachable also runs an attribution check.
 var expectedRejection = map[string]string{
-	"ResultID":                "result identity or status violates v1 bounds",
-	"RequestID":               "result identity or status violates v1 bounds",
-	"Question":                "result identity or status violates v1 bounds",
-	"Interpretation":          "interpreted question violates v1 bounds",
-	"DirectJudgment":          "result answer fields violate v1 bounds",
-	"CurrentState":            "result answer fields violate v1 bounds",
-	"DeterministicAnswer":     "result answer fields violate v1 bounds",
-	"StrongestPressures":      "result answer fields violate v1 bounds",
-	"Limitations":             "result answer fields violate v1 bounds",
-	"Warnings":                "result answer fields violate v1 bounds",
-	"LimitationsDisplaced":    "result displaced-limitation count violates v1 bounds",
-	"Drivers":                 "result answer fields violate v1 bounds",
-	"RemainingWork":           "result answer fields violate v1 bounds",
-	"ReadinessGaps":           "result answer fields violate v1 bounds",
-	"Conflicts":               "result answer fields violate v1 bounds",
-	"ClaimedFacts":            "claimed facts violate v1 bounds",
-	"Paths":                   "result answer fields violate v1 bounds",
-	"EvidenceRefIDs":          "result answer fields violate v1 bounds",
-	"SubjectResolution":       "subject resolution arrays violate v1 bounds",
-	"Coverage":                "coverage violates v1 bounds",
-	"Versions":                "version metadata violates v1 bounds",
-	"AnswerPlan":              "narrowing steps",
+	"ResultID":             "result identity or status violates v1 bounds",
+	"RequestID":            "result identity or status violates v1 bounds",
+	"Question":             "result identity or status violates v1 bounds",
+	"Interpretation":       "interpreted question violates v1 bounds",
+	"DirectJudgment":       "result answer fields violate v1 bounds",
+	"CurrentState":         "result answer fields violate v1 bounds",
+	"DeterministicAnswer":  "result answer fields violate v1 bounds",
+	"StrongestPressures":   "result answer fields violate v1 bounds",
+	"Limitations":          "result answer fields violate v1 bounds",
+	"Warnings":             "result answer fields violate v1 bounds",
+	"LimitationsDisplaced": "result displaced-limitation count violates v1 bounds",
+	"Drivers":              "result answer fields violate v1 bounds",
+	"RemainingWork":        "result answer fields violate v1 bounds",
+	"ReadinessGaps":        "result answer fields violate v1 bounds",
+	"Conflicts":            "result answer fields violate v1 bounds",
+	"ClaimedFacts":         "claimed facts violate v1 bounds",
+	"Paths":                "result answer fields violate v1 bounds",
+	"EvidenceRefIDs":       "result answer fields violate v1 bounds",
+	"SubjectResolution":    "subject resolution arrays violate v1 bounds",
+	"Coverage":             "coverage violates v1 bounds",
+	"Versions":             "version metadata violates v1 bounds",
+	"AnswerPlan":           "narrowing steps",
+	// CHAOS-5442: the maximal fixture is a SERVED answer, so the clause that
+	// rejects a basis on it is the served-answer one -- not the mirror check
+	// (PastMax sets both surfaces, so they agree) and not membership (the
+	// value is a real member). Naming the phrase rather than accepting any
+	// error is what makes this prove THIS bound rejected.
+	"RefusalBasis":            "cannot accompany",
 	"Cohort":                  "cohort violates v1 bounds",
 	"Completeness":            "outcomes exceeds v1 bounds",
 	"EvidenceRefLabels":       "names no evidence ref on the result",

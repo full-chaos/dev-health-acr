@@ -1,0 +1,97 @@
+package v1
+
+// CHAOS-5442: the closed vocabulary naming WHY the server refused to act on
+// a question's frame.
+//
+// WHY THIS IS NOT ContextFabricTerminalReason. That vocabulary names the
+// CHANNEL a non-complete result explained itself through -- limitation,
+// degraded reason, warning, clarification, or undisclosed. It answers "where
+// did the engine put its explanation", never "what did the engine decide".
+// A frame refusal reported as `limitation_disclosed` is therefore correctly
+// classified and still says nothing: the reader learns that a sentence
+// exists, not that the question named a population no discovery arm can
+// build. The two vocabularies are orthogonal and a refusing terminal carries
+// both.
+//
+// WHY IT IS ON THE WIRE AT ALL. The refusal was already decided (the frame
+// gate, internal/contextfabric.DecideFrameGate) and already observable at
+// Info on the frame-validation line. What it was not was READABLE by anyone
+// consuming the answer: six corpus rows terminated `no_match` carrying the
+// ordinary empty-pool sentence, so a consumer -- and the corpus instrument --
+// could not tell "this kind has no discovery arm" from "this graph is
+// empty". MISSING IS NOT NONE: an absent RefusalBasis means the turn was not
+// refused; a present one names the refusal.
+type ContextFabricRefusalBasis string
+
+const (
+	// ContextFabricRefusalBasisMemberKindUnservable: the frame validated
+	// and then declared a member kind NO DISCOVERY ARM SERVES. No amount
+	// of retrieval can produce this answer, which is why the refusal
+	// happens above retrieval rather than as an empty result below it.
+	//
+	// The spelling is deliberately IDENTICAL to the internal
+	// CohortMemberKindUnservable / CohortKindMemberKindUnservable token
+	// the gate decides on and the Info line already prints. One name for
+	// one fact across the log line, the wire and the corpus declaration:
+	// a reader correlating a served refusal with its log line must not
+	// have to translate.
+	ContextFabricRefusalBasisMemberKindUnservable ContextFabricRefusalBasis = "member_kind_unservable"
+	// ContextFabricRefusalBasisFrameInvariantViolated: the frame failed a
+	// frame invariant and one bounded repair did not fix it. The design's
+	// §13.1 terminal for this state is "frame = refused, family =
+	// unclassified, refuse to guess".
+	//
+	// WHICH invariant failed is deliberately NOT a member here. The
+	// invariant vocabulary is a server-internal validation detail whose
+	// members are added and renamed on their own schedule; promoting it
+	// to the wire would make every future invariant a contract change,
+	// and the caller's question is "did the server refuse my frame", not
+	// "which of the server's internal checks fired". The invariant name
+	// stays on the receipt and the frame-validation log line, which is
+	// where an operator reads it.
+	ContextFabricRefusalBasisFrameInvariantViolated ContextFabricRefusalBasis = "frame_invariant_violated"
+	// ContextFabricRefusalBasisUnspecified: the gate refused and its
+	// outcome is not one this vocabulary names.
+	//
+	// A FAIL-CLOSED MEMBER, not a placeholder. FrameGate.Refuses() refuses
+	// on any outcome it does not recognise -- deliberately, so a future
+	// member cannot be admitted by default -- and a refusal that reached
+	// the wire with an EMPTY basis would be indistinguishable from a turn
+	// that was never refused, which is the exact collapse this whole field
+	// exists to end. So an unrecognised refusal says so, loudly, rather
+	// than disappearing. Reaching it in production means a gate member was
+	// added without a line here.
+	ContextFabricRefusalBasisUnspecified ContextFabricRefusalBasis = "unspecified"
+)
+
+var contextFabricRefusalBases = [...]ContextFabricRefusalBasis{
+	ContextFabricRefusalBasisMemberKindUnservable,
+	ContextFabricRefusalBasisFrameInvariantViolated,
+	ContextFabricRefusalBasisUnspecified,
+}
+
+// ContextFabricRefusalBasisCount is the closed vocabulary's size.
+const ContextFabricRefusalBasisCount = len(contextFabricRefusalBases)
+
+// ContextFabricRefusalBasisVocabulary returns the closed vocabulary in
+// declared order.
+func ContextFabricRefusalBasisVocabulary() [ContextFabricRefusalBasisCount]ContextFabricRefusalBasis {
+	return contextFabricRefusalBases
+}
+
+// ValidContextFabricRefusalBasis reports membership of the NON-EMPTY
+// members.
+//
+// The empty string is NOT a member and that is the whole point: it is the
+// absence of a refusal, checked by the caller against the rest of the
+// document rather than smuggled in here as a fourth quasi-member. An
+// allow-list, never a deny-list with an else -- a deny-list admits the next
+// member and the zero value by default.
+func ValidContextFabricRefusalBasis(value ContextFabricRefusalBasis) bool {
+	for _, member := range contextFabricRefusalBases {
+		if member == value {
+			return true
+		}
+	}
+	return false
+}

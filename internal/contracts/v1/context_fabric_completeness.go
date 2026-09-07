@@ -99,6 +99,27 @@ type ContextFabricAnswerCompleteness struct {
 	// RowsCount sums every claimed fact's own Rows table length across the
 	// whole result.
 	RowsCount int `json:"rows_count"`
+	// RefusalBasis (CHAOS-5442) names WHY the server refused to act on
+	// this question's frame, over the closed ContextFabricRefusalBasis
+	// vocabulary. EMPTY on every turn that was not refused, which is the
+	// overwhelming majority -- absence means "not refused", never "refused
+	// for a reason nobody wrote down" (that state has its own member,
+	// `unspecified`).
+	//
+	// IT IS ORTHOGONAL TO TerminalReason, not a refinement of it. That
+	// field names the CHANNEL the explanation travelled through; this one
+	// names the DECISION. A refused frame carries `limitation_disclosed`
+	// and `member_kind_unservable` together, and neither implies the
+	// other: an ordinary empty pool also discloses a limitation, and it
+	// carries no refusal basis at all.
+	//
+	// MIRRORED FROM THE RESULT, exactly as TerminalStatus mirrors Status
+	// and for the identical reason: this block is a self-contained
+	// disclosure group a bounded consumer reads without holding the rest
+	// of the document in scope, and the answer projection copies the block
+	// verbatim. A refusal a consumer could only learn by also reading a
+	// sibling top-level field would be invisible to the projection.
+	RefusalBasis ContextFabricRefusalBasis `json:"refusal_basis,omitempty"`
 	// State is what the outcome set below adds up to, DERIVED from it by
 	// DeriveContextFabricAnswerCompletenessState and never authored
 	// independently. The validator requires exact agreement, the same
@@ -143,5 +164,5 @@ type ContextFabricAnswerCompleteness struct {
 func (c ContextFabricAnswerCompleteness) IsZero() bool {
 	return c.TerminalStatus == "" && c.TerminalReason == "" &&
 		c.ClaimedFactsCount == 0 && c.RowsCount == 0 &&
-		c.State == "" && len(c.Outcomes) == 0
+		c.State == "" && len(c.Outcomes) == 0 && c.RefusalBasis == ""
 }

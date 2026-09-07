@@ -205,6 +205,15 @@
       },
       "maxProperties": 8192,
       "description": "CHAOS-4690: display label per evidence ref id reachable on this result; on a fresh write the key set equals the result's own evidence-ref closure exactly."
+    },
+    "refusal_basis": {
+      "type": "string",
+      "enum": [
+        "member_kind_unservable",
+        "frame_invariant_violated",
+        "unspecified"
+      ],
+      "description": "CHAOS-5442: names WHY the server refused to act on this question's frame, over a closed vocabulary. ABSENT on every turn that was not refused -- absence means \"not refused\", never \"refused for a reason nobody recorded\" (that state is the `unspecified` member). Orthogonal to terminal_reason, which names the CHANNEL an explanation travelled through rather than the decision taken: a refused frame carries both."
     }
   },
   "required": [

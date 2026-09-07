@@ -225,11 +225,19 @@ var modelExecutionReceiptAuthorities = map[string]versionAuthority{
 	// whose gate refused never produces an answer to reuse in the first
 	// place. Fencing on it would fence on a value already determined by the
 	// frame beside it, which is a second authority for one fact.
-	"FrameGateOutcome":      {reason: "per-call ordering verdict, derived deterministically from QuestionFrame by DecideFrameGate -- two calls with the same frame have the same gate, and a refusing gate produces no answer to reuse, so it fences nothing the frame does not already fence"},
-	"FrameGateRefuseBasis":  {reason: "the refusing gate's basis, carried beside FrameGateOutcome and derived from the same frame by the same function -- excluded for the identical reason"},
-	"FrameGoalsDropped":     {reason: "per-call sanitize-outcome count (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
-	"FrameTermsTruncated":   {reason: "per-call sanitize-outcome count (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
-	"FrameKindUnrecognized": {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
+	"FrameGateOutcome":     {reason: "per-call ordering verdict, derived deterministically from QuestionFrame by DecideFrameGate -- two calls with the same frame have the same gate, and a refusing gate produces no answer to reuse, so it fences nothing the frame does not already fence"},
+	"FrameGateRefuseBasis": {reason: "the refusing gate's basis, carried beside FrameGateOutcome and derived from the same frame by the same function -- excluded for the identical reason"},
+	// CHAOS-5442's declared kind, and it is excluded on the SAME reasoning
+	// its two siblings above are, one step further: it is not merely
+	// derived from the frame, it is a FIELD OF the frame's own subject
+	// expression, read out of the identical CohortMemberKindFor call that
+	// decided the basis. Two calls whose frames agree cannot disagree
+	// about it, and the turn it describes is a refusal, which produces no
+	// answer for a later call to reuse.
+	"FrameGateDeclaredMemberKind": {reason: "the refused frame's declared member kind, read from the same CohortMemberKindFor call that produced FrameGateRefuseBasis and already determined by the QuestionFrame beside it -- fencing on it would be a second authority for a value the frame fences already"},
+	"FrameGoalsDropped":           {reason: "per-call sanitize-outcome count (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
+	"FrameTermsTruncated":         {reason: "per-call sanitize-outcome count (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
+	"FrameKindUnrecognized":       {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as QuestionFamily"},
 	// The five entries below close the same countability gap the two
 	// above already closed for Goals/Terms/Kind -- found by merge-gate
 	// round 3: sanitizeFrameOutput discarded the unrecognized/dropped
