@@ -921,34 +921,12 @@ const freshnessFailedSourceNameCap = 25
 const freshnessSummaryScope = "steady_state_and_build"
 
 // recordPairOutcome folds one (org, source) pair's tick result into the
-// per-tick aggregate. evaluated is false when the pair was not due, which
-// is not a failure and not a success -- it is the pair having no reading
-// this tick, and it is deliberately not counted in either direction.
-// recordPairOutcome folds one (org, source) pair's tick result into the
 // per-tick aggregate. The three states are disjoint and all three are
 // disclosed: it ran (evaluated -- a success, including a successful empty
 // population), it ran and errored (failed), or it did not run because its
-// own failure backoff withheld it (withheld).
-// recordBuildPairOutcome folds a BUILD-phase pair into the same source
-// counters as the steady-state drain, and additionally into the build-only
-// pair, so neither question loses its answer: "is a required source down"
-// stays one number, and "was it down during a build" is still answerable.
-func (s *tickFreshnessStats) recordBuildPairOutcome(source string, evaluated, failed bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !evaluated {
-		return
-	}
-	s.sourcesEvaluated++
-	if !failed {
-		return
-	}
-	s.sourcesFailed++
-	s.failedSources = appendDistinctSourceName(s.failedSources, source)
-	s.buildSourcesFailed++
-	s.buildFailedSources = appendDistinctSourceName(s.buildFailedSources, source)
-}
-
+// own failure backoff withheld it (withheld). A pair that was simply not
+// due is none of those -- it is the pair having no reading this tick, and
+// it is deliberately counted in neither direction.
 func (s *tickFreshnessStats) recordPairOutcome(source string, evaluated, failed, withheld bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -971,6 +949,26 @@ func (s *tickFreshnessStats) recordPairOutcome(source string, evaluated, failed,
 	}
 }
 
+// recordBuildPairOutcome folds a BUILD-phase pair into the same source
+// counters as the steady-state drain, and additionally into the build-only
+// pair, so neither question loses its answer: "is a required source down"
+// stays one number, and "was it down during a build" is still answerable.
+func (s *tickFreshnessStats) recordBuildPairOutcome(source string, evaluated, failed bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !evaluated {
+		return
+	}
+	s.sourcesEvaluated++
+	if !failed {
+		return
+	}
+	s.sourcesFailed++
+	s.failedSources = appendDistinctSourceName(s.failedSources, source)
+	s.buildSourcesFailed++
+	s.buildFailedSources = appendDistinctSourceName(s.buildFailedSources, source)
+}
+
 // appendDistinctSourceName adds source to names once, up to the cap. The
 // true totals are always the counters beside these lists, never len(names),
 // so a truncated sample can never understate the size of the problem.
@@ -990,14 +988,6 @@ func appendDistinctSourceName(names []string, source string) []string {
 // names for the log line. Names are returned as a non-nil slice so a
 // healthy tick logs an empty array rather than a null -- "no source failed"
 // and "this build does not report failed sources" must never read alike.
-func (s *tickFreshnessStats) snapshotBuild() (failed int64, names []string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	names = make([]string, len(s.buildFailedSources))
-	copy(names, s.buildFailedSources)
-	return s.buildSourcesFailed, names
-}
-
 func (s *tickFreshnessStats) snapshotSources() (evaluated, failed, withheld int64, failedNames, withheldNames []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1006,6 +996,17 @@ func (s *tickFreshnessStats) snapshotSources() (evaluated, failed, withheld int6
 	withheldNames = make([]string, len(s.withheldSources))
 	copy(withheldNames, s.withheldSources)
 	return s.sourcesEvaluated, s.sourcesFailed, s.sourcesWithheld, failedNames, withheldNames
+}
+
+// snapshotBuild returns the BUILD-phase share of the failure counts for
+// the log line. Names are returned as a non-nil slice for the same reason
+// snapshotSources does it: an empty array and a null must never read alike.
+func (s *tickFreshnessStats) snapshotBuild() (failed int64, names []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	names = make([]string, len(s.buildFailedSources))
+	copy(names, s.buildFailedSources)
+	return s.buildSourcesFailed, names
 }
 func (s *tickFreshnessStats) recordDivergenceRecovered() {
 	atomic.AddInt64(&s.orgsDivergenceRecovered, 1)
