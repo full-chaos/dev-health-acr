@@ -1387,6 +1387,16 @@ type ResolutionTraceEvent struct {
 	DecisionAnchorPoolKindScope       string
 	DecisionAnchorPoolKindScopeSource string
 	DecisionMemberKindConfirmed       string
+	// DecisionReservedKinds and DecisionFilterKinds are the WIRING itself,
+	// on the line. Without them a consumer silently reverting to the
+	// receipt-only value -- the exact defect an adversarial round found
+	// twice here -- is invisible at Info: the scope and its source would
+	// still read correctly while retrieval, the reserve or the filter acted
+	// on a different set. These say what those consumers were actually
+	// given. Always a list, never null: an empty set and an absent field
+	// must not read alike.
+	DecisionReservedKinds []string
+	DecisionFilterKinds   []string
 	// ShadowOutcome/ShadowReason/ShadowDIdentityHash/ShadowPreconditionUnproven/
 	// ShadowUnscopedVisibility/ShadowNonCensusedSurvivor/
 	// ShadowHandleGrammarBound/ShadowAnchorUniqueClaimant/ShadowKindsCensused
@@ -1958,6 +1968,8 @@ type decisionSummaryBuffer struct {
 	anchorPoolKindScope       string
 	anchorPoolKindScopeSource string
 	memberKindConfirmed       string
+	reservedKinds             []string
+	filterKinds               []string
 }
 
 // appendDistinctCapped adds value to seen when it is non-empty and not
@@ -2004,6 +2016,8 @@ func (b *decisionSummaryBuffer) Trace(event ResolutionTraceEvent) {
 	if event.Stage == "anchor_pool" && event.AnchorPoolSummary {
 		b.anchorPoolKindScope = event.DecisionAnchorPoolKindScope
 		b.anchorPoolKindScopeSource = event.DecisionAnchorPoolKindScopeSource
+		b.reservedKinds = event.DecisionReservedKinds
+		b.filterKinds = event.DecisionFilterKinds
 		// memberKindConfirmed is NOT taken from the event: both it and the
 		// event read the same call parameter, so folding the event's copy
 		// would make this buffer a second authority on a value it already
@@ -2060,6 +2074,8 @@ func (b *decisionSummaryBuffer) flush() {
 		DecisionAnchorPoolKindScope:       orNone(b.anchorPoolKindScope),
 		DecisionAnchorPoolKindScopeSource: orNone(b.anchorPoolKindScopeSource),
 		DecisionMemberKindConfirmed:       orNone(b.memberKindConfirmed),
+		DecisionReservedKinds:             nonNil(b.reservedKinds),
+		DecisionFilterKinds:               nonNil(b.filterKinds),
 	})
 }
 
@@ -2165,6 +2181,11 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			DecisionAnchorPoolKindScope:       scope,
 			DecisionAnchorPoolKindScopeSource: source,
 			DecisionMemberKindConfirmed:       confirmedMemberKindToken(confirmedKind),
+			// Read off the SAME values the consumers are handed below, in
+			// the same statement, so the line reports the wiring rather
+			// than a second opinion about it.
+			DecisionReservedKinds: kindTokens(frameReservedKinds(frame, anchorScope.Kind)),
+			DecisionFilterKinds:   filterKindTokens(confirmedKind, anchorScope),
 		})
 	}
 	candidatesBySubject := make(map[string]contextfabric.SubjectCandidate)
@@ -2962,7 +2983,35 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if offersOnly && firstPassTracer != nil {
 		firstPassTracer = offersOnlyDecisionTracer{real: firstPassTracer}
 	}
-	resolution, firstPassBases, firstPassDigests := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind))
+	// CHAOS-5393: the SCOPE ANCHOR decides in its own contest, and the member
+	// gate runs over member-kind candidates only. See splitAnchorFromMembers
+	// for why a shared contest makes invariant I11 unsatisfiable on exactly
+	// the frames it governs. A zero-value scope splits nothing.
+	memberPool, anchorPool := splitAnchorFromMembers(candidatesBySubject, anchorScope)
+	// THE BUDGET IS SHARED, NOT DOUBLED. Phase 4's contract is that the
+	// reserve DISPLACES rather than grows the candidate budget, and running
+	// two contests must not quietly return one more subject than the caller
+	// asked for. The anchor takes ONE slot out of the same budget.
+	memberBudget := request.Options.MaxSubjectCandidates
+	if n := anchorBudgetFor(anchorPool, memberBudget); n > 0 {
+		memberBudget -= n
+	}
+	resolution, firstPassBases, firstPassDigests := ResolveFromMergedCandidatesWithGateAndBasis(memberPool, observationParentKey, observationBlocked, memberBudget, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind))
+	if len(anchorPool) > 0 {
+		// The anchor's own floor and ambiguity rule, over anchor-kind
+		// candidates only, in the ONE slot it holds in the shared budget.
+		// It keeps the real tracer: these stage lines are what make the
+		// scope axis visible on the rig, and suppressing them blinded
+		// reserved_kind_admitted and ranked_cut on scope-anchored turns.
+		anchorResolution, anchorBases, anchorDigests := ResolveFromMergedCandidatesWithGateAndBasis(anchorPool, observationParentKey, observationBlocked, anchorBudgetFor(anchorPool, request.Options.MaxSubjectCandidates), false, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, firstPassTracer, request.RequestID, "", false, false, nil)
+		resolution = mergeAnchorResolution(resolution, anchorResolution)
+		for id, basis := range anchorBases {
+			firstPassBases[id] = basis
+		}
+		for id, digest := range anchorDigests {
+			firstPassDigests[id] = digest
+		}
+	}
 	commitBases.ResetTo(firstPassBases)
 	commitDigests.ResetTo(firstPassDigests)
 	// coverageFloorDegraded (CHAOS-4038, codex review round 2 finding 1) is

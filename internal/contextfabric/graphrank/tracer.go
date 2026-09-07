@@ -219,7 +219,13 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// two ways the scope can go missing, which need different fixes.
 			"anchor_pool_kind_scope", event.DecisionAnchorPoolKindScope,
 			"anchor_pool_kind_scope_source", event.DecisionAnchorPoolKindScopeSource,
-			"member_kind_confirmed", event.DecisionMemberKindConfirmed)
+			"member_kind_confirmed", event.DecisionMemberKindConfirmed,
+			// THE WIRING ITSELF. A consumer reverting to the receipt-only
+			// value leaves the scope and source above reading correctly
+			// while retrieval, the reserve or the filter acts on a
+			// different set -- invisible at Info without these.
+			"reserved_kinds", event.DecisionReservedKinds,
+			"filter_kinds", event.DecisionFilterKinds)
 	case "anchor_pool":
 		// Once per resolution, Info: there is no per-candidate counterpart
 		// here, so no volume split is needed. Emitted from the same
@@ -228,7 +234,9 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"request_id", sanitizeLogString(event.RequestID), "stage", sanitizeLogString(event.Stage),
 			"anchor_pool_kind_scope", event.DecisionAnchorPoolKindScope,
 			"anchor_pool_kind_scope_source", event.DecisionAnchorPoolKindScopeSource,
-			"member_kind_confirmed", event.DecisionMemberKindConfirmed)
+			"member_kind_confirmed", event.DecisionMemberKindConfirmed,
+			"reserved_kinds", event.DecisionReservedKinds,
+			"filter_kinds", event.DecisionFilterKinds)
 	case "offer_pool":
 		// Same volume split as corroboration and identity_gate: the
 		// per-candidate line is retrieval-pool-sized (186 of 329 offered
