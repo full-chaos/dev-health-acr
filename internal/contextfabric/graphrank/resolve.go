@@ -655,7 +655,8 @@ type ResolutionTraceEvent struct {
 	// (CHAOS-4088), "kind_offer" (CHAOS-4012 v20), "kind_hint_search",
 	// "exact_name_search" (CHAOS-4348 -- see traceRetrievalSource,
 	// chaos4348_reachability.go; both reuse TermHash/Subject only, no new
-	// fields), "low_population_kind_scope" (CHAOS-4417).
+	// fields), "low_population_kind_scope" (CHAOS-4417),
+	// "decision_summary" (see DecisionEventCount's own doc comment).
 	Stage string
 	// TermHash (search stage only): SHA-256 hex of the search term, never
 	// the term itself -- lets a reader correlate repeat events for the
@@ -1239,6 +1240,85 @@ type ResolutionTraceEvent struct {
 	IdentityGateCandidateCount int
 	IdentityGateFiredCount     int
 	IdentityGateFiredIDs       []string
+	// DecisionEventCount/DecisionCommittedCount/DecisionAmbiguousCount/
+	// DecisionNoCommitCount/DecisionCommittedIDs/DecisionCommitGates/
+	// DecisionCommitBases (stage=="decision_summary" ONLY): the per-subject
+	// decision event above stays at Debug -- it fires once per COMMITTED
+	// subject, so a resolution committing a large set produces an unbounded
+	// number of them, the same volume class as identity_gate's own
+	// per-candidate line. This is a SECOND event folding every decision
+	// event of the WHOLE ResolveSubjectsWithCommitBasis call into one Info
+	// line.
+	//
+	// It carries its OWN stage token rather than reusing "decision" with a
+	// discriminator bool the way IdentityGateSummary/RankedCutSummary do,
+	// because "decision" has an invariant those stages do not: the LAST
+	// decision event describes the returned resolution (see
+	// discardableDecisionTracer). A summary appended to that stage would
+	// become the last one on every resolution, carrying no Subject and no
+	// Outcome, and would silently break every reader of that invariant --
+	// including this package's own tests, which counted the extra event and
+	// caught it.
+	//
+	// Why this fold and not just the per-subject line at Info: every other
+	// stage an operator reads at Info answers what the resolver LOOKED AT.
+	// This is the only one that answers what it DECIDED, and a resolution
+	// whose decision is invisible cannot be bisected from the log at all --
+	// a wrong answer, a refusal and a hold are indistinguishable without it.
+	//
+	// Counts are per DECISION EVENT, which is the only relationship this
+	// emission site can keep: a committing pass emits one event per
+	// committed subject, while an ambiguous or empty-pool pass emits exactly
+	// one, and a resolution may run more than one pass (see
+	// discardableDecisionTracer). DecisionEventCount is therefore the true
+	// number of decision events folded, never a pass count, and the three
+	// outcome counts sum to it.
+	//
+	// Emitted on EVERY call, including when DecisionEventCount is 0 --
+	// deliberately unlike IdentityGateSummary's absent-when-zero convention.
+	// A decision is the one thing a resolution always reaches on any
+	// non-erroring path, so a measured zero here means the resolver returned
+	// without ever deciding (a bug worth seeing), while ABSENCE of the line
+	// means the resolver was never entered at all. Collapsing those two into
+	// silence is exactly the ambiguity this fold exists to remove.
+	//
+	// DecisionCommittedIDs samples the committed subjects' canonical ids,
+	// capped at traceSummaryIDCap in the order encountered (this stage has
+	// no natural rank the way a cut does); DecisionCommittedCount is ALWAYS
+	// the true count, never truncated. DecisionCommitGates/
+	// DecisionCommitBases carry the DISTINCT closed-vocabulary gate and
+	// basis values seen, also capped -- an outcome alone cannot tell a
+	// caller-hint commit from a statistical one, which is the distinction
+	// the affirmation gate downstream acts on.
+	DecisionEventCount     int
+	DecisionCommittedCount int
+	DecisionAmbiguousCount int
+	DecisionNoCommitCount  int
+	DecisionCommittedIDs   []string
+	DecisionCommitGates    []string
+	DecisionCommitBases    []string
+	// DecisionOfferedUnderWindowGate (stage=="decision_summary" ONLY) is
+	// true when AT LEAST ONE decision folded into this summary was produced
+	// under the offers-only window gate -- a pass whose resolution the
+	// engine discards unconditionally, keeping only the StructureOfferMaterial
+	// (see offersOnlyDecisionTracer and contextfabric.OffersOnlyResolution).
+	//
+	// It exists because without it a discarded resolution and a served one
+	// print the SAME summary: same committed_count, same committed_ids, same
+	// gates. The per-subject decision line already carries this provenance,
+	// and carries it because an earlier review found exactly that defect
+	// there -- an "outcome=committed" line with no indication the resolution
+	// behind it was thrown away. Omitting it from the fold reintroduced that
+	// defect at the level an operator actually reads.
+	//
+	// Derived from the events this buffer already sees, which
+	// offersOnlyDecisionTracer has tagged before they arrive -- never
+	// re-read from the context, so there is ONE authority for the fact and a
+	// summary can never disagree with the per-subject lines beneath it. The
+	// claim is deliberately "at least one", not "this call was offers-only":
+	// the fold sees per-event tags, and that is the only guarantee this
+	// emission site can keep.
+	DecisionOfferedUnderWindowGate bool
 	// ShadowOutcome/ShadowReason/ShadowDIdentityHash/ShadowPreconditionUnproven/
 	// ShadowUnscopedVisibility/ShadowNonCensusedSurvivor/
 	// ShadowHandleGrammarBound/ShadowAnchorUniqueClaimant/ShadowKindsCensused
@@ -1687,6 +1767,18 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 		deps.ResolutionTracer = idGateFold
 		defer idGateFold.flush()
 	}
+	// decisionFold: the decision fold sits OUTSIDE idGateFold, so its own
+	// flushed summary passes through a wrapper that ignores every stage but
+	// identity_gate, and idGateFold's flushed summary (emitted to its own
+	// real tracer, not back through this one) can never be counted here.
+	// deferred like idGateFold's, so it fires on every return path
+	// including a panic -- silence must mean "never entered", never "left
+	// through an exit the fold did not cover".
+	if deps.ResolutionTracer != nil {
+		decisionFold := &decisionSummaryBuffer{real: deps.ResolutionTracer, requestID: request.RequestID}
+		deps.ResolutionTracer = decisionFold
+		defer decisionFold.flush()
+	}
 	resolution, offerMaterial, err := resolveSubjects(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor, bases, digests, frame, scopeAnchorKind)
 	if err != nil {
 		// An error path commits nothing, so a basis (or digest) some
@@ -1744,6 +1836,93 @@ func (b *identityGateSummaryBuffer) flush() {
 		IdentityGateCandidateCount: b.candidateCount, IdentityGateFiredCount: b.firedCount,
 		IdentityGateFiredIDs: b.firedIDs,
 	})
+}
+
+// decisionSummaryBuffer folds every decision-stage event of one
+// ResolveSubjectsWithCommitBasis call into a single Info-level summary,
+// exactly as identityGateSummaryBuffer does for identity_gate: each event
+// still passes through to the real tracer immediately and unchanged, only
+// the extra summary is new. See ResolutionTraceEvent.DecisionSummary's own
+// doc comment for what the counts mean and why this one flushes even when
+// it counted nothing.
+type decisionSummaryBuffer struct {
+	real                   ResolutionTracer
+	requestID              string
+	eventCount             int
+	committedCount         int
+	ambiguousCount         int
+	noCommitCount          int
+	committedIDs           []string
+	commitGates            []string
+	commitBases            []string
+	offeredUnderWindowGate bool
+}
+
+// appendDistinctCapped adds value to seen when it is non-empty and not
+// already present, up to traceSummaryIDCap entries. Distinct rather than
+// per-event because these are closed vocabularies: repeating one gate token
+// once per committed subject would spend the whole cap saying the same
+// thing.
+func appendDistinctCapped(seen []string, value string) []string {
+	if value == "" || len(seen) >= traceSummaryIDCap {
+		return seen
+	}
+	for _, existing := range seen {
+		if existing == value {
+			return seen
+		}
+	}
+	return append(seen, value)
+}
+
+func (b *decisionSummaryBuffer) Trace(event ResolutionTraceEvent) {
+	b.real.Trace(event)
+	if event.Stage != "decision" {
+		return
+	}
+	b.eventCount++
+	// OR across the call: see DecisionOfferedUnderWindowGate's own doc
+	// comment for why "at least one" is the claim rather than a whole-call
+	// mode.
+	if event.OfferedUnderWindowGate {
+		b.offeredUnderWindowGate = true
+	}
+	switch event.Outcome {
+	case "committed":
+		b.committedCount++
+		if len(b.committedIDs) < traceSummaryIDCap {
+			b.committedIDs = append(b.committedIDs, event.Subject.CanonicalID)
+		}
+		b.commitGates = appendDistinctCapped(b.commitGates, event.CommitGate)
+		b.commitBases = appendDistinctCapped(b.commitBases, event.CommitBasis)
+	case "ambiguous":
+		b.ambiguousCount++
+	case "no_commit":
+		b.noCommitCount++
+	}
+}
+
+func (b *decisionSummaryBuffer) flush() {
+	// No early return on a zero count, unlike identityGateSummaryBuffer:
+	// see DecisionSummary's own doc comment. Explicit zeros travel on the
+	// line, and the slices are normalized to empty (never nil) so a reader
+	// never has to tell a JSON null apart from a measured empty set.
+	b.real.Trace(ResolutionTraceEvent{
+		RequestID: b.requestID, Stage: "decision_summary",
+		DecisionEventCount: b.eventCount, DecisionCommittedCount: b.committedCount,
+		DecisionAmbiguousCount: b.ambiguousCount, DecisionNoCommitCount: b.noCommitCount,
+		DecisionCommittedIDs:           nonNil(b.committedIDs),
+		DecisionCommitGates:            nonNil(b.commitGates),
+		DecisionCommitBases:            nonNil(b.commitBases),
+		DecisionOfferedUnderWindowGate: b.offeredUnderWindowGate,
+	})
+}
+
+func nonNil(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
 }
 
 func resolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection, commitBases contextfabric.CommitBasisSet, commitDigests contextfabric.CommitDecisionDigestSet, frame *contextfabric.QuestionFrame, scopeAnchorKind contextfabric.SubjectKind) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, error) {

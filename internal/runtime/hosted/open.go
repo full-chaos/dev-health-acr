@@ -288,6 +288,36 @@ func defaultRawSignalObserver(override graphrank.RawSignalObserver, logger *slog
 	return graphrank.NewSlogRawSignalObserver(logger)
 }
 
+// defaultResolutionTracer is the deployed construction of
+// graphConfig.ResolutionTracer: override, when non-nil, wins unchanged --
+// the CHAOS-3742 acceptance-debt escape hatch (a test or in-process
+// harness capturing trace events directly rather than parsing slog
+// output), nil for every real caller per Options.ResolutionTracer's own
+// doc comment. A nil override falls through to
+// graphrank.NewSlogResolutionTracer, wired unconditionally since
+// CHAOS-3884 under the same "always on, gated by log level, no separate
+// config knob" convention Telemetry and defaultRawSignalObserver above
+// use.
+//
+// The stage lines this sink emits are NOT uniformly Debug: the rig
+// visibility work promoted the retrieval stages and every folded summary
+// to Info, and the per-candidate lines below them stayed Debug (see
+// graphrank.SlogResolutionTracer's own switch for which is which). A
+// deployment running at Info therefore gets the resolution's decisions
+// and folds, not silence.
+//
+// Factored out to a named, directly-testable function for the same reason
+// defaultRawSignalObserver above is, and for one more: this is the
+// construction a deployed-wiring proof must drive. A test that builds its
+// own sink proves formatting only -- it cannot fail when the runtime
+// stops installing one.
+func defaultResolutionTracer(override graphrank.ResolutionTracer, logger *slog.Logger) graphrank.ResolutionTracer {
+	if override != nil {
+		return override
+	}
+	return graphrank.NewSlogResolutionTracer(logger)
+}
+
 // contextFabricEngineTelemetry is CHAOS-4103's default for
 // EngineDependencies.Telemetry: options.EngineTelemetry, when non-nil, WINS
 // unchanged -- the CHAOS-3742 generative trial harness sets its own
@@ -408,22 +438,7 @@ func buildContextFabricGraphReader(request buildRequest, postgres postgresCompon
 	// override (the generative-trial harness) still takes priority
 	// unchanged.
 	graphConfig.RawSignalObserver = defaultRawSignalObserver(request.options.RawSignalObserver, request.options.Logger)
-	// CHAOS-3884 (team-lead ruling, 2026-08-17): wired unconditionally,
-	// the SAME "always on, gated by log level not by a boolean toggle"
-	// convention Telemetry above already uses -- SlogResolutionTracer logs
-	// at Debug, so it is silent for any deployment running at its usual
-	// Info/Warn level and available the moment an operator raises theirs,
-	// with no separate config knob to remember to flip.
-	// CHAOS-3742 acceptance debt follow-up: request.options.ResolutionTracer
-	// overrides this default when set (test-only hook, nil for every real
-	// caller -- see Options.ResolutionTracer's own doc comment) so an
-	// in-process caller can capture trace events directly instead of only
-	// reaching them by parsing Debug-level slog output.
-	if request.options.ResolutionTracer != nil {
-		graphConfig.ResolutionTracer = request.options.ResolutionTracer
-	} else {
-		graphConfig.ResolutionTracer = graphrank.NewSlogResolutionTracer(request.options.Logger)
-	}
+	graphConfig.ResolutionTracer = defaultResolutionTracer(request.options.ResolutionTracer, request.options.Logger)
 	// CHAOS-3972 P3: wired UNCONDITIONALLY, not gated alongside
 	// wireIdentityUniverse below -- graphrank.ValidateHandleGrammar/
 	// HandleSourceColumn are pure, no-I/O registry lookups (no ClickHouse

@@ -137,6 +137,16 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"base_confidence", event.BaseConfidence, "final_confidence", event.FinalConfidence,
 			"distinct_mechanisms", event.DistinctMechanisms)
 	case "decision":
+		// The per-subject line below STAYS Debug: it fires once per
+		// COMMITTED subject, so a resolution committing a large set is
+		// unbounded on one call, the same volume class as identity_gate's
+		// own per-candidate line. DecisionSummary (emitted by
+		// decisionSummaryBuffer, resolve.go, once per
+		// ResolveSubjectsWithCommitBasis call, INCLUDING when it counted
+		// nothing) is the folded Info line an operator actually gets --
+		// the only Info line that says what the resolver DECIDED rather
+		// than what it looked at. See
+		// ResolutionTraceEvent.DecisionSummary's own doc comment.
 		t.logger.DebugContext(ctx, "context fabric resolution trace: decision",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
@@ -168,6 +178,21 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// it was discarded unconditionally (see
 			// offersOnlyDecisionTracer's own doc comment, resolve.go).
 			"offered_under_window_gate", event.OfferedUnderWindowGate)
+	case "decision_summary":
+		t.logger.InfoContext(ctx, "context fabric resolution trace: decision summary",
+			"request_id", sanitizeLogString(event.RequestID), "stage", sanitizeLogString(event.Stage),
+			"decision_event_count", event.DecisionEventCount,
+			"committed_count", event.DecisionCommittedCount,
+			"ambiguous_count", event.DecisionAmbiguousCount,
+			"no_commit_count", event.DecisionNoCommitCount,
+			"committed_ids", event.DecisionCommittedIDs,
+			"commit_gates", event.DecisionCommitGates,
+			"commit_bases", event.DecisionCommitBases,
+			// Always emitted, true or false: a provenance field present in
+			// only one of its two states cannot be told apart from a build
+			// that does not emit it, which is the same explicit-zero rule
+			// every count on this line follows.
+			"offered_under_window_gate", event.DecisionOfferedUnderWindowGate)
 	case "kind_coverage_floor":
 		// CHAOS-4086: the operator-visible half of CHAOS-4038's floor. The
 		// harness reads the same event off an in-process tracer to put
