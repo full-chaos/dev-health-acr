@@ -41,10 +41,17 @@ EXPECT_SERVE, EXPECT_REFUSE, EXPECT_DECLINE = SERVE, REFUSE, DECLINE
 # someone authors it.
 CLARIFICATION_TERMINALS = {
     "clarification_required(max_turns_exhausted)",
+    # CHAOS-5430 (2). The BARE form is authored for the scorer too, not only the bucketer.
+    # It was authored in CLARIFICATION_VALUES and absent from CLARIFICATION_TERMINALS,
+    # COHERENCE and terminal_key(), so the two vocabularies disagreed about the same
+    # status: classify() bucketed it as clarification_needed while score() called it an
+    # UNAUTHORED terminal and returned unscored. The engine emits the bare spelling in
+    # every arm measured -- 54 / 50 / 89 / 100 occurrences across arm2 / 3A-read / 3B /
+    # 3B-par -- so this was latent only because the harness synthesises the parenthesised
+    # form for the terminal attempt. One vocabulary, or they drift again.
+    "clarification_required",
 }
-# Everything that counts as "the engine asked for clarification", including the bare form
-# a turn chain can end on. The bucketer imports this so one vocabulary serves both.
-CLARIFICATION_VALUES = CLARIFICATION_TERMINALS | {"clarification_required"}
+CLARIFICATION_VALUES = CLARIFICATION_TERMINALS
 ERROR_TERMINALS = {
     "http_502:acr_investigation_failed",
     "http_400:acr_rejected_request",
@@ -145,6 +152,18 @@ NAMED_BASIS_OVERRIDES = {
 }
 
 UNTRUSTED_IDENTITY_STATES = {"no_artefact", "unreadable_artefact"}
+
+
+def expectation_depends_on_identity(expectation):
+    """Does this row's declaration turn on WHICH subject was committed?
+
+    R1 (`nonexistent`) and R2 (`anchor=`) are the two declarations that do: one says any
+    commit at all is a substitution, the other names the subject that must be committed.
+    A row declaring neither can be scored from the bucket and the terminal alone, so an
+    unreadable identity caps it rather than voiding it.
+    """
+    e = expectation or {}
+    return bool(e.get("declares_nonexistent") or e.get("declared_anchor_name"))
 
 # agree_weak is REPORTED SPLIT: three distinct behaviours share the verdict and folding
 # them lost the finding the instrument exists to produce. Keyed off the reason the scorer
@@ -281,6 +300,21 @@ def score(expectation, bucket, subject_substitution=False,
                 "rather than assumed")
         verdict, why = hit
 
+    # CHAOS-5430 (3). A row whose declaration DEPENDS on identity -- it names an anchor the
+    # engine must commit to, or declares the entity nonexistent so any commit is a
+    # substitution -- cannot be scored at all when the identity is unreadable. Capping it at
+    # agree_weak was strictly worse than saying nothing: a row that earns `disagree` as a
+    # substitution came back as a weak AGREEMENT, so our own doubt improved a failed row.
+    # `unscored` is neither an agreement nor a judgement we cannot support.
+    if identity_state in UNTRUSTED_IDENTITY_STATES and expectation_depends_on_identity(
+            expectation):
+        return "unscored", (
+            f"unreadable_identity: the row's declaration depends on which subject was "
+            f"committed and the identity could not be read ({identity_state}); "
+            f"unscored rather than agreed or disagreed. Would otherwise have been "
+            f"{verdict}.")
+    # Every other row keeps the CAP: an agreement still needs a checkable identity, but a
+    # row that never named a subject is not made unscorable by one.
     if verdict == "agree" and identity_state in UNTRUSTED_IDENTITY_STATES:
         return "agree_weak", (
             f"{why}; but identity could not be checked ({identity_state}), so the "

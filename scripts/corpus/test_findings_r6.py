@@ -187,8 +187,12 @@ def test_that_no_derivation_pin_can_itself_see_the_trap():
 # an inline loop it could only ever be run against the real consumers, which pass -- so a
 # broken sweep and a clean codebase were indistinguishable, and that is what let the
 # aliased `prev_result` dereference through.
-_SEEDS = {"result": "result", "sr": "subject_resolution", "failure": "failure",
-          "fail": "failure", "resp": "response", "payload": "response",
+# CHAOS-5430: nodes are addressed by their full measured path now that the schema is
+# generated. The seeds move with them; the sweep's property is unchanged.
+_SEEDS = {"result": "attempt.response.result",
+          "sr": "attempt.response.result.subject_resolution",
+          "failure": "attempt.response.failure", "fail": "attempt.response.failure",
+          "resp": "attempt.response", "payload": "attempt.response",
           "a": "attempt", "attempt": "attempt", "last": "attempt"}
 
 
@@ -223,9 +227,18 @@ def _unschemad_paths(src, label, schema=None):
                 continue
             tgt = node.targets[0].id
             base, key = _base_key(node.value)
-            if base in roots and isinstance(key, str) and key in schema:
-                if roots.get(tgt) != key:
-                    roots[tgt] = key; grew = True
+            # CHAOS-5430: the child NODE is named by the schema rule (`node` for a mapping,
+            # `element_node` for array elements), not by the bare key. With generated
+            # full-path node names, matching `key in schema` resolves nothing and the alias
+            # chain stops at its first link -- the sweep goes quiet, which is the failure it
+            # exists to prevent.
+            child = None
+            if base in roots and isinstance(key, str):
+                rule = schema.get(roots[base], {}).get(key) or {}
+                child = rule.get("node") or rule.get("element_node")
+            if child and child in schema:
+                if roots.get(tgt) != child:
+                    roots[tgt] = child; grew = True
             elif isinstance(node.value, ast.Name) and node.value.id in roots:
                 if roots.get(tgt) != roots[node.value.id]:
                     roots[tgt] = roots[node.value.id]; grew = True
@@ -266,7 +279,7 @@ def test_the_consumer_sweep_catches_an_ALIASED_dereference():
         '    return q.get("invented_key")\n', "probe")
     assert aliased, "an aliased unschema'd dereference is invisible to the sweep"
     assert two_hop, "a two-hop alias is invisible to the sweep"
-    assert "result.invented_key" in aliased[0], aliased
+    assert "attempt.response.result.invented_key" in aliased[0], aliased
     # and it must not fire on a key the schema DOES type, or it is just noise
     assert not _unschemad_paths(
         'def f(payload):\n    r = payload["result"]\n    return r.get("limitations")\n',
@@ -285,8 +298,9 @@ def test_no_consumer_dereferences_a_path_absent_from_the_schema():
 def test_the_schema_pin_would_notice_a_new_path():
     """Negative control: the pin must fail on an added dereference, or it proves nothing."""
     schema = V.schema()
-    assert "subject_resolution" in schema["result"], "schema shape changed"
-    assert "invented_key" not in schema["result"]
+    R = "attempt.response.result"
+    assert "subject_resolution" in schema[R], "schema shape changed"
+    assert "invented_key" not in schema[R]
 
 
 def test_validation_is_recursive_not_shallow():
@@ -442,10 +456,13 @@ def test_the_element_pin_reflects_MEASURED_types_not_assumed_ones():
     which would have shipped as a scoring regression. So the types are asserted against
     what the artefacts contain, and the schema records that they were measured."""
     schema = V.schema()
-    assert schema["result"]["limitations"]["items"] == "string", schema["result"]["limitations"]
-    assert schema["result"]["structure_needs"]["type"] == "object", schema["result"]["structure_needs"]
-    assert schema["subject_resolution"]["committed"]["items"] == "object"
-    assert "_types_are_measured" in schema, "the schema no longer records its provenance"
+    R = "attempt.response.result"
+    assert schema[R]["limitations"]["items"] == "string", schema[R]["limitations"]
+    assert schema[R]["structure_needs"]["type"] == "object", schema[R]["structure_needs"]
+    assert schema[f"{R}.subject_resolution"]["committed"]["items"] == "object"
+    # CHAOS-5430: provenance is no longer a note asserting the types were measured -- every
+    # entry CARRIES its observation counts, which is the same claim backed by the data.
+    assert schema[R]["limitations"]["observed"], "types no longer carry their observations"
 
 
 def test_the_LIVE_body_goes_through_the_same_boundary_as_a_file():

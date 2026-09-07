@@ -117,13 +117,18 @@ def test_commit_bases_are_PER_CANDIDATE_not_a_flattened_union():
 def test_the_candidate_fields_the_derivation_reads_are_TYPED_in_the_schema():
     """The derivation dereferences candidate fields, so validation must reach them. Typing
     `candidates` as an array of objects stopped one level above -- the r9 #1 class."""
+    # CHAOS-5430: the schema is now GENERATED, so nodes carry their full measured path
+    # instead of a hand-chosen short name. The property is unchanged -- the fields the
+    # vector derivation dereferences must be typed -- only the address is.
     schema = V.schema()
-    assert "candidate" in schema, "candidate elements are not a described node"
-    assert schema["subject_resolution"]["candidates"]["element_node"] == "candidate"
-    assert schema["candidate"]["match_mechanisms"]["items"] == "string"
-    assert schema["candidate"]["state"]["type"] == "string"
-    # measured: 83 ints and 1118 floats across 1201 candidates, so `number`, not `int`
-    assert schema["candidate"]["confidence"]["type"] == "number"
+    SR = "attempt.response.result.subject_resolution"
+    CAND = f"{SR}.candidates[]"
+    assert CAND in schema, "candidate elements are not a described node"
+    assert schema[SR]["candidates"]["element_node"] == CAND
+    assert schema[CAND]["match_mechanisms"]["items"] == "string"
+    assert schema[CAND]["state"]["type"] == "string"
+    # measured across every candidate: ints and floats both occur, so `number`, not `int`
+    assert schema[CAND]["confidence"]["type"] == "number"
 
     bad = {"response": {"result": {"subject_resolution": {"candidates": [
         {"state": "committed", "match_mechanisms": [1]}]}}}}
@@ -158,10 +163,17 @@ def test_element_typing_never_UPGRADES_a_failed_row():
     r9 #1's `committed: [1]`) and stops there.
     """
     import tempfile
+    # CHAOS-5430 CHANGED THE MECHANISM AND KEPT THE PROPERTY. Committed elements ARE typed
+    # now -- with nullable string fields, which is what lets an explicit null reach the
+    # substitution rule instead of being rejected into the unreadable cap. The property
+    # this pin defends is the one below and it is unchanged: doubt must never turn a row
+    # that earns `disagree` into `agree_weak`.
     schema = V.schema()
-    assert "element_node" not in schema["subject_resolution"]["committed"], \
-        "committed elements are typed again; check the null-kind verdict before allowing it"
-    # r9 #1 is still caught without element typing
+    SR = "attempt.response.result.subject_resolution"
+    assert schema[SR]["committed"].get("element_node"), \
+        "committed elements are untyped again"
+    assert schema[f"{SR}.committed[]"]["kind"].get("nullable"), \
+        "committed kind is no longer nullable; a null-kind row will be capped, not scored"
     ok, reason = V.validate_attempt(
         {"response": {"result": {"subject_resolution": {"committed": [1]}}}})
     assert not ok and "committed[0]" in reason, reason
