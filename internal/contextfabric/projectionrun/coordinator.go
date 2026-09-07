@@ -751,6 +751,22 @@ type tickFreshnessStats struct {
 	// "evaluated, not stale", and one healthy sibling source was enough to
 	// carry the whole organization to ok.
 	orgsSourceFailed int64
+	// orgsUnevaluated counts organizations this tick did NOT reach a
+	// classification for: never dispatched because the tick was already
+	// cancelled, or dispatched and cut short mid-drain by cancellation.
+	//
+	// It exists because cancellation is deliberately NOT a source failure,
+	// and that correct decision produced an incorrect line: a mid-drain
+	// cancellation reached the ordinary switch and recorded orgs_ok:1 on a
+	// tick that had not finished, while the cancellation warning sat below
+	// Info. An organization the tick did not finish evaluating must never
+	// count as healthy.
+	orgsUnevaluated int64
+	// tickIncomplete marks that this tick returned early. Reported as
+	// tick_complete on the line (inverted, so the healthy state is the
+	// positive one) and always present, so "the tick finished" is an
+	// assertion rather than the absence of a warning.
+	tickIncomplete int64
 	// sourcesEvaluated/sourcesFailed count (org, source) PAIRS across the
 	// whole tick, and failedSources names the distinct sources behind
 	// sourcesFailed -- a count alone cannot tell an operator whether the
@@ -789,6 +805,8 @@ func (s *tickFreshnessStats) recordOK()              { atomic.AddInt64(&s.orgsOK
 func (s *tickFreshnessStats) recordRebuildRequired() { atomic.AddInt64(&s.orgsRebuildRequired, 1) }
 func (s *tickFreshnessStats) recordBackoff()         { atomic.AddInt64(&s.orgsBackoff, 1) }
 func (s *tickFreshnessStats) recordSourceFailedOrg() { atomic.AddInt64(&s.orgsSourceFailed, 1) }
+func (s *tickFreshnessStats) recordUnevaluated()     { atomic.AddInt64(&s.orgsUnevaluated, 1) }
+func (s *tickFreshnessStats) markIncomplete()        { atomic.StoreInt64(&s.tickIncomplete, 1) }
 
 // freshnessFailedSourceNameCap bounds the failed_sources array on one log
 // line independently of how many sources a deployment configures, the same
@@ -874,8 +892,14 @@ func (c *Coordinator) Tick(ctx context.Context) {
 	sem := make(chan struct{}, c.concurrency)
 	var wg sync.WaitGroup
 	stats := &tickFreshnessStats{}
-	for _, orgID := range c.orgIDs {
+	for i, orgID := range c.orgIDs {
 		if ctx.Err() != nil {
+			// Every remaining organization is unevaluated, and the tick is
+			// partial. Counting them is what keeps the bucket identity
+			// total: silence here made an organization simply disappear
+			// from the line.
+			stats.markIncomplete()
+			atomic.AddInt64(&stats.orgsUnevaluated, int64(len(c.orgIDs)-i))
 			break
 		}
 		wg.Add(1)
@@ -911,6 +935,21 @@ func (c *Coordinator) Tick(ctx context.Context) {
 		// the counters to that path needs the lifecycle fixtures and is
 		// deliberately not done here rather than shipped without a pin.
 		"summary_scope", freshnessSummaryScope,
+		// The bucket IDENTITY, stated on the line so a consumer can check it
+		// rather than trust it: orgs_configured == ok + rebuild_required +
+		// backoff + source_failed + divergence_recovered + unevaluated.
+		// It did NOT hold before this: divergence recovery returned after
+		// recording orgs_divergence_recovered and no bucket at all, so one
+		// configured organization summed to zero and simply vanished from
+		// the line. A reviewer executed that. orgs_divergence_recovered is
+		// now a full member of the identity, not a side note beside it.
+		"orgs_configured", int64(len(c.orgIDs)),
+		// tick_complete says the tick finished dispatching and evaluating.
+		// Present on every line so a finished tick is an assertion, not the
+		// absence of a warning -- a cancelled tick used to be visible only
+		// as a Warn below the operator's level.
+		"tick_complete", atomic.LoadInt64(&stats.tickIncomplete) == 0,
+		"orgs_unevaluated", atomic.LoadInt64(&stats.orgsUnevaluated),
 		"orgs_source_failed", atomic.LoadInt64(&stats.orgsSourceFailed),
 		"sources_evaluated", sourcesEvaluated,
 		"sources_failed", sourcesFailed,
@@ -1026,6 +1065,14 @@ func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, stats *tic
 	budget := c.drainBudget // CHAOS-3826: shared across every source this org drains this tick
 	for _, source := range c.sourceNames {
 		if ctx.Err() != nil {
+			// The reviewer's second clause, and the one the first cut of
+			// this fix missed: with more than one source the loop returns
+			// HERE, before the classification switch below, so the
+			// organization was recorded in no bucket at all and the
+			// identity summed to zero. Fixing the switch alone left this
+			// path exactly as broken as before.
+			stats.markIncomplete()
+			stats.recordUnevaluated()
 			return
 		}
 		pairEvaluated, pairStale, pairFailed, pairWithheld := c.runPair(ctx, orgID, source, c.checkpoints, &budget)
@@ -1045,6 +1092,13 @@ func (c *Coordinator) runOrgLegacy(ctx context.Context, orgID string, stats *tic
 	// but the per-source disclosure on the summary line reports the failure
 	// either way, so nothing depends on which bucket won.
 	switch {
+	// Cancellation first: a tick cut short did not finish evaluating this
+	// organization, so no verdict about it is available -- least of all a
+	// healthy one. This arm is above every other because the others all
+	// assert something the tick did not get to establish.
+	case ctx.Err() != nil:
+		stats.markIncomplete()
+		stats.recordUnevaluated()
 	case !evaluated:
 		stats.recordBackoff()
 	case stale:
@@ -1092,6 +1146,14 @@ func (c *Coordinator) runOrgLifecycle(ctx context.Context, orgID string, stats *
 	budget := c.drainBudget // CHAOS-3826: shared across every source this org drains this tick
 	for _, source := range c.sourceNames {
 		if ctx.Err() != nil {
+			// The reviewer's second clause, and the one the first cut of
+			// this fix missed: with more than one source the loop returns
+			// HERE, before the classification switch below, so the
+			// organization was recorded in no bucket at all and the
+			// identity summed to zero. Fixing the switch alone left this
+			// path exactly as broken as before.
+			stats.markIncomplete()
+			stats.recordUnevaluated()
 			return
 		}
 		pairEvaluated, pairStale, pairFailed, pairWithheld := c.runPair(ctx, orgID, source, checkpoints, &budget)
@@ -1109,6 +1171,13 @@ func (c *Coordinator) runOrgLifecycle(ctx context.Context, orgID string, stats *
 	// See runOrgLegacy's identical switch for why a failed source cannot
 	// land in ok and why it sits below stale.
 	switch {
+	// Cancellation first: a tick cut short did not finish evaluating this
+	// organization, so no verdict about it is available -- least of all a
+	// healthy one. This arm is above every other because the others all
+	// assert something the tick did not get to establish.
+	case ctx.Err() != nil:
+		stats.markIncomplete()
+		stats.recordUnevaluated()
 	case !evaluated:
 		stats.recordBackoff()
 	case stale:
@@ -1609,17 +1678,21 @@ func (c *Coordinator) recoverFromDivergenceLifecycle(ctx context.Context, orgID 
 // F2) can classify cancellation by inspecting THIS error's own identity
 // rather than the ambient ctx.Err(), which could coincidentally be set by
 // an unrelated cancellation and mislabel a genuine backend error.
-func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore) (evaluated, applied bool, err error, stale bool) {
+func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, checkpoints contextfabric.ProjectionCheckpointStore) (evaluated, applied bool, err error, stale, withheldByBackoff bool) {
 	key := orgID + "\x00" + source
-	if !c.due(key) {
-		return false, false, nil, false
+	// ONE clock read decides both "may it attempt" and "is it withheld by its
+	// own failure backoff" -- see dueState's own doc comment for the race two
+	// reads opened.
+	due, withheld := c.dueState(key)
+	if !due {
+		return false, false, nil, false, withheld
 	}
 	started := c.now()
 	worker, werr := c.workerFor(source, checkpoints)
 	if werr != nil {
 		c.recordBackoff(key, werr)
 		c.logger.WarnContext(ctx, "projection worker construction failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(werr))
-		return true, false, werr, false
+		return true, false, werr, false, false
 	}
 	run, runErr := worker.RunOnce(ctx, orgID, source)
 	outcome := Outcome{OrgID: orgID, Source: source, Run: run, Err: runErr, Duration: c.now().Sub(started), At: c.now()}
@@ -1627,7 +1700,7 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 	c.observer.ObserveProjectionOutcome(outcome)
 	if runErr != nil {
 		c.logger.WarnContext(ctx, "projection pair failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(runErr), "duration_ms", outcome.Duration.Milliseconds())
-		return true, false, runErr, false
+		return true, false, runErr, false, false
 	}
 	if run.Applied {
 		c.logger.InfoContext(ctx, "projection batch applied", "org_id", orgID, "source", source, "batch_id", run.BatchID, "backend_watermark", run.BackendWatermark, "duration_ms", outcome.Duration.Milliseconds())
@@ -1637,7 +1710,7 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 	// ever compared checkpoint SourceVersion against a batch's SourceVersion
 	// INSIDE the available==true branch, so a dormant organization (no new
 	// rows, available=false, no error) got no freshness signal at all.
-	return true, run.Applied, nil, c.emitProjectionFreshness(ctx, orgID, source)
+	return true, run.Applied, nil, c.emitProjectionFreshness(ctx, orgID, source), false
 }
 
 // runPair drains (org, source)'s pending batches within THIS tick
@@ -1664,16 +1737,16 @@ func (c *Coordinator) runPair(ctx context.Context, orgID, source string, checkpo
 	batches, applied := 0, 0
 	reason := DrainYieldExhausted
 	for {
-		pairEvaluated, pairApplied, pairErr, pairStale := c.runPairOnce(ctx, orgID, source, checkpoints)
+		pairEvaluated, pairApplied, pairErr, pairStale, pairWithheld := c.runPairOnce(ctx, orgID, source, checkpoints)
 		if !pairEvaluated {
 			if batches == 0 {
 				// Nothing ran at all. If the pair is serving its own
 				// failure backoff, that is not silence -- it is the
 				// previous failure still in force, and the summary has to
-				// keep saying so on every tick. Reporting it as merely
-				// "not due" is what let the outage go quiet after its
-				// first tick.
-				return false, false, false, c.inFailureBackoff(orgID + "\x00" + source)
+				// keep saying so on every tick. The withheld fact comes
+				// from the SAME clock read that refused the attempt, so
+				// the two can no longer disagree.
+				return false, false, false, pairWithheld
 			}
 			break
 		}
@@ -1998,31 +2071,33 @@ func orgIDHash(orgID string) string {
 }
 
 func (c *Coordinator) due(key string) bool {
-	c.backoffMu.Lock()
-	defer c.backoffMu.Unlock()
-	state, ok := c.backoff[key]
-	if !ok {
-		return true
-	}
-	return !c.now().Before(state.nextAttempt)
+	due, _ := c.dueState(key)
+	return due
 }
 
-// inFailureBackoff reports whether key is currently being withheld by its
-// OWN failure backoff, as opposed to simply having no entry. It is the
-// difference between "this pair did not run" and "this pair did not run
-// BECAUSE it is still failing", and only the second is a health signal.
+// dueState answers "may this pair attempt now" and "is it being withheld by
+// its own failure backoff" from ONE clock read, under ONE lock.
 //
-// recordBackoff below is what makes this total: nextAttempt is set only on
-// an error and cleared on success, so a pair due() refuses is always a pair
-// serving a failure backoff.
-func (c *Coordinator) inFailureBackoff(key string) bool {
+// They used to be two calls -- due() here and inFailureBackoff() in runPair --
+// each taking its own c.now(). A backoff expiring BETWEEN those two reads
+// made due() refuse the attempt while inFailureBackoff() answered false, so
+// the pair came out unevaluated, unfailed AND unwithheld: it appeared in no
+// counter at all, and a healthy sibling then carried the organization to
+// orgs_ok while the failing source was never retried that tick. A reviewer
+// reproduced it with a deterministic clock. Two reads deciding one question
+// is the defect; one read deciding both is the fix.
+func (c *Coordinator) dueState(key string) (due, withheldByBackoff bool) {
 	c.backoffMu.Lock()
 	defer c.backoffMu.Unlock()
 	state, ok := c.backoff[key]
 	if !ok {
-		return false
+		return true, false
 	}
-	return state.consecutiveFailures > 0 && c.now().Before(state.nextAttempt)
+	now := c.now()
+	if !now.Before(state.nextAttempt) {
+		return true, false
+	}
+	return false, state.consecutiveFailures > 0
 }
 
 func (c *Coordinator) recordBackoff(key string, err error) {
