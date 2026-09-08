@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -40,9 +41,13 @@ type checkpointStoreStub struct {
 	saved      []ProjectionCheckpoint
 	expected   []ProjectionCheckpoint
 	compareErr error
+	loadErr    error
 }
 
 func (s *checkpointStoreStub) LoadProjectionCheckpoint(context.Context, string, string) (ProjectionCheckpoint, error) {
+	if s.loadErr != nil {
+		return ProjectionCheckpoint{}, s.loadErr
+	}
 	return s.checkpoint, nil
 }
 
@@ -583,5 +588,109 @@ func TestProjectionWorkerRefusesProgressWithoutASourceVersion(t *testing.T) {
 	}
 	if len(store.saved) != 0 || store.checkpoint.Cursor != "cursor_start" {
 		t.Fatalf("progress without a named producer identity must not move the cursor; saved=%d cursor=%q", len(store.saved), store.checkpoint.Cursor)
+	}
+}
+
+// TestPairRunErrorMarksOnlyTheBareSentinel pins the classification at the
+// ONE place that can make it. RunOnce wraps every source error, so by the time
+// the projector's caller sees one, a source that returned the bare context
+// sentinel and a source that wrapped a context error in its own description
+// are indistinguishable. The freshness summary lost an observed source outage
+// twice because of exactly that collapse.
+//
+// The distinction is a policy, stated where truncatedBy lives: a bare sentinel
+// under a done tick is the tick's cancellation passing through; anything else
+// is a failure the source owns, and the source is named.
+func TestPairRunErrorMarksOnlyTheBareSentinel(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"bare Canceled is propagation", context.Canceled, true},
+		{"bare DeadlineExceeded is propagation", context.DeadlineExceeded, true},
+		{"a source-WRAPPED sentinel is the source's own failure", fmt.Errorf("teams projects read timed out: %w", context.DeadlineExceeded), false},
+		{"a source-WRAPPED cancellation is the source's own failure", fmt.Errorf("teams projects read: %w", context.Canceled), false},
+		{"an ordinary backend error is a failure", errors.New("dependency unavailable"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			checkpoints := &checkpointStoreStub{checkpoint: ProjectionCheckpoint{OrgID: "org_1", Source: "dev-health-ops", Cursor: "cursor_1"}}
+			worker, werr := NewProjectionWorker(
+				projectionSourceStub{err: tc.err},
+				&projectionBackendStub{},
+				checkpoints,
+				ProjectionWorkerOptions{Now: func() time.Time { return time.Unix(60, 0).UTC() }},
+			)
+			if werr != nil {
+				t.Fatalf("NewProjectionWorker() error = %v", werr)
+			}
+
+			_, err := worker.RunOnce(context.Background(), "org_1", "dev-health-ops")
+			if err == nil {
+				t.Fatal("RunOnce returned no error -- the stub was supposed to fail")
+			}
+
+			// The message must be byte-identical to the unmarked form: the
+			// marker wraps, it does not replace, so no consumer reading the
+			// text changes.
+			if want := "read projection batch: " + tc.err.Error(); err.Error() != want {
+				t.Errorf("message = %q, want %q -- the marker must not change what any consumer reads", err.Error(), want)
+			}
+			// errors.Is must still see through to the original.
+			if !errors.Is(err, tc.err) {
+				t.Errorf("errors.Is(err, original) = false -- Unwrap is broken, and %%w semantics with it")
+			}
+
+			var marked *PairRunError
+			if !errors.As(err, &marked) {
+				t.Fatalf("errors.As found no PairRunError -- the coordinator reads this marker and would fall back to guessing")
+			}
+			if !marked.FromSourceRead() {
+				t.Errorf("FromSourceRead = false for the SOURCE's own read -- only a source-read error may name a source")
+			}
+			if marked.PropagatedCancellation != tc.want {
+				t.Errorf("PropagatedCancellation = %v, want %v -- classification is by IDENTITY; errors.Is is exactly what cannot tell these apart", marked.PropagatedCancellation, tc.want)
+			}
+		})
+	}
+}
+
+// TestWorkerIOErrorsAreNotAttributedToTheSource is confirm8's first P1 at its
+// own level. RunOnce has thirteen error exits and only the source read was
+// marked, so a cancellation out of any of the other twelve reached the
+// coordinator unmarked and -- if wrapped -- was disclosed as a failed SOURCE.
+//
+// Only the source's own read may blame the source. Everything else RunOnce
+// returns is our io.
+func TestWorkerIOErrorsAreNotAttributedToTheSource(t *testing.T) {
+	t.Parallel()
+
+	checkpoints := &checkpointStoreStub{loadErr: fmt.Errorf("load checkpoint from postgres: %w", context.Canceled)}
+	worker, err := NewProjectionWorker(
+		projectionSourceStub{batch: validProjectionBatch(), available: true},
+		&projectionBackendStub{},
+		checkpoints,
+		ProjectionWorkerOptions{Now: func() time.Time { return time.Unix(60, 0).UTC() }},
+	)
+	if err != nil {
+		t.Fatalf("NewProjectionWorker() error = %v", err)
+	}
+
+	_, runErr := worker.RunOnce(context.Background(), "org_1", "dev-health-ops")
+	if runErr == nil {
+		t.Fatal("RunOnce returned no error -- the stub was supposed to fail")
+	}
+	var marked *PairRunError
+	if !errors.As(runErr, &marked) {
+		t.Fatalf("errors.As found no PairRunError on a checkpoint-load failure -- an unmarked exit falls back to guessing, which is the defect")
+	}
+	if marked.FromSourceRead() {
+		t.Errorf("FromSourceRead = true for a CHECKPOINT LOAD failure -- the source was never called and must not be blamed for our io")
+	}
+	if marked.Stage != PairStageCheckpointLoad {
+		t.Errorf("Stage = %q, want %q -- the stage is what the summary names, so a wrong one misattributes the failure", marked.Stage, PairStageCheckpointLoad)
+	}
+	if !errors.Is(runErr, context.Canceled) {
+		t.Errorf("errors.Is(err, context.Canceled) = false -- the marker broke unwrapping")
 	}
 }

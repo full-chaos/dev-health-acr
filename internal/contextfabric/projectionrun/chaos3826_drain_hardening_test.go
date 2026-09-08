@@ -569,8 +569,19 @@ func TestChaos3826_DrainPreservesStalenessFoundByAnEarlierAttemptDespiteALaterFa
 	if lastSummary == nil {
 		t.Fatalf("no freshness summary line logged: %s", buffer.String())
 	}
-	if got, ok := lastSummary["orgs_rebuild_required"].(float64); !ok || got != 1 {
-		t.Fatalf("expected orgs_rebuild_required=1 (the earlier attempt's real staleness must survive the later failure), got %v: %s", lastSummary["orgs_rebuild_required"], buffer.String())
+	// The claim this test was written for is that the STALENESS SIGNAL
+	// survives the later failing attempt. It is read here from orgs_stale /
+	// pending_rebuild_orgs_total rather than from the bucket, because the
+	// bucket ladder now puts an ESTABLISHED FAILURE above the stale reading:
+	// this organization both found drift AND had its drain fail, so it is
+	// bucketed for the failure. The rebuild it owes is counted regardless,
+	// which is what an operator reads -- reading it off the bucket would say
+	// the rebuild queue shrank the moment a source started failing.
+	if got, ok := lastSummary["orgs_stale"].(float64); !ok || got != 1 {
+		t.Fatalf("expected orgs_stale=1 (the earlier attempt's real staleness must survive the later failure), got %v: %s", lastSummary["orgs_stale"], buffer.String())
+	}
+	if got, ok := lastSummary["pending_rebuild_orgs_total"].(float64); !ok || got != 1 {
+		t.Fatalf("expected pending_rebuild_orgs_total=1 -- the operator-facing count of owed rebuilds must not be lost to the failure bucket, got %v: %s", lastSummary["pending_rebuild_orgs_total"], buffer.String())
 	}
 	if got, ok := lastSummary["orgs_ok"].(float64); !ok || got != 0 {
 		t.Fatalf("expected orgs_ok=0 (this organization is NOT fresh -- staleness was found), got %v: %s", lastSummary["orgs_ok"], buffer.String())

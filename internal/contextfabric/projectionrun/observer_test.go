@@ -350,3 +350,42 @@ func TestClassifierReachesEveryClassItDeclares(t *testing.T) {
 	// describes is caught here -- by this loop, with no second guard to keep
 	// in step.
 }
+
+// TestClassifyOutcomeErrorSeesThroughThePairRunMarker guards the blast radius
+// of marking every ProjectionWorker.RunOnce exit.
+//
+// markWorkerIO now wraps errors that operator-facing code inspects --
+// ErrProjectionConflict and ErrProjectionSourceVersionChanged among them. The
+// marker implements Unwrap, so errors.Is still matches; but that is a property
+// of the marker that a future edit could remove, and if it did, every one of
+// these would silently degrade to "unclassified" while the summary and every
+// Warn line kept printing a plausible-looking class. Nothing else in either
+// package would fail.
+//
+// failure_class is what an operator reads to decide whether an organization is
+// stalled and roughly why, so it is pinned through the marker explicitly.
+func TestClassifyOutcomeErrorSeesThroughThePairRunMarker(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		inner error
+		want  string
+	}{
+		{"conflict", fmt.Errorf("%w: batch scope", contextfabric.ErrProjectionConflict), failureClassConflict},
+		{"source version changed", fmt.Errorf("%w: version", contextfabric.ErrProjectionSourceVersionChanged), failureClassRebuildNeeded},
+		{"unavailable", fmt.Errorf("read: %w", contextfabric.ErrUnavailable), failureClassUnavailable},
+		{"rate limited", fmt.Errorf("read: %w", contextfabric.ErrRateLimited), failureClassRateLimited},
+		{"cancellation", context.Canceled, failureClassCanceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bare := classifyOutcomeError(tc.inner)
+			if bare != tc.want {
+				t.Fatalf("unmarked classify = %q, want %q -- the fixture is wrong, not the marker", bare, tc.want)
+			}
+			marked := classifyOutcomeError(&contextfabric.PairRunError{Err: tc.inner})
+			if marked != tc.want {
+				t.Errorf("classify(marked) = %q, want %q -- the marker hid the sentinel from the operator-facing class", marked, tc.want)
+			}
+		})
+	}
+}
