@@ -188,6 +188,24 @@ const (
 	OfferPoolEmptiedClarificationPrompt = "Retrieval matched one or more subjects only by " +
 		"semantic similarity, which is not enough to identify a subject. Name the subject you " +
 		"mean, or rephrase the question so it names one."
+	// OfferPoolAnchorKindWithheldClarificationPrompt is what a caller is
+	// told when retrieval found candidates and could offer NONE of them
+	// because every one was of the kind this question asks ABOUT rather
+	// than the kind it is scoped BY (CHAOS-5422, invariant I11).
+	//
+	// It is a SECOND constant rather than a widening of the one above
+	// because that one states a basis -- "matched only by semantic
+	// similarity" -- and this withholding has a different one. A prompt is
+	// the only account of itself a refusing turn gives a caller, and giving
+	// a true refusal a false reason is worse than giving none.
+	//
+	// It names no subject and no kind, and it interpolates nothing, for the
+	// same reason its sibling does not: every candidate it speaks about was
+	// withheld precisely because naming it hands back the choice the
+	// withholding exists to refuse.
+	OfferPoolAnchorKindWithheldClarificationPrompt = "Retrieval matched only subjects of the kind " +
+		"this question asks about, not the scope it asks about them within. Name the scope you " +
+		"mean, or rephrase the question so it names one."
 )
 
 // terminalResult composes the model-free result for an investigation that

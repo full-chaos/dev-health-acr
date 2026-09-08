@@ -399,6 +399,30 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 // this population is complete, and that claim is what gets recorded, not a
 // new commit path.
 func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string, confirmedKindScopedBasis bool, lowPopulationKindScopedBasis bool, reservedKinds []contextfabric.SubjectKind) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
+	// CHAOS-5422: the ZERO subjectOfferScope, which withholds nothing, and
+	// that is the honest reading of this entry point rather than a default
+	// chosen for convenience. Every caller that arrives here carries no
+	// frame -- the basis-discarding wrapper above and this package's own unit
+	// callers -- so no scope axis has been decided for them, exactly as
+	// FrameGateNotEvaluated treats a caller that never ran interpretation.
+	// The production path goes through resolveFromMergedCandidatesWithSubjectScope
+	// with the scope the frame actually decided.
+	//
+	// It is a separate entry rather than a 23rd positional parameter because
+	// this signature already has twenty-two and is pinned at more than twenty
+	// call sites: one more untyped tail argument there is a comma away from
+	// binding silently to the wrong slot, and the value it would carry is
+	// `nothing decided` for every one of them.
+	return resolveFromMergedCandidatesWithSubjectScope(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, tracer, requestID, evidenceCensusAttestedKey, confirmedKindScopedBasis, lowPopulationKindScopedBasis, reservedKinds, subjectOfferScope{})
+}
+
+// resolveFromMergedCandidatesWithSubjectScope is the real implementation.
+// subjectScope (CHAOS-5422) is the ONE thing it takes that the exported entry
+// above cannot supply: the kind this question's own grouping/scope axis says
+// can never be its subject. See subjectOfferScope's own doc comment
+// (chaos5422_mention_scope.go) for the measured substitution it closes and for
+// why only a children_of_scope frame ever produces a non-zero value.
+func resolveFromMergedCandidatesWithSubjectScope(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string, confirmedKindScopedBasis bool, lowPopulationKindScopedBasis bool, reservedKinds []contextfabric.SubjectKind, subjectScope subjectOfferScope) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
 	bases := make(contextfabric.CommitBasisSet)
 	// digests (CHAOS-4087) records IN LOCKSTEP with bases above, at every
 	// SAME bases.Record call site -- see CommitDecisionDigest's own doc
@@ -449,6 +473,20 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 					OfferPoolDisposition: "vector_only_demoted",
 				})
 			}
+		}
+		// CHAOS-5422, GUARD 1 OF 3. An arrival of a kind this question's
+		// scope axis says can never be its subject is demoted for the same
+		// reason a vector-only arrival is: pre_committed_exact_hint commits
+		// every Committed arrival as caller_canonical_id, and the caller
+		// named this one with an identifier the engine had offered it one
+		// turn earlier. Demoted, it can still clarify and can no longer
+		// launder an I11 violation into an identity-proven commit. Not
+		// counted into demotedKeys: that map keeps the two VECTOR counters
+		// disjoint, and this candidate is counted by its own withheld
+		// counter at the offer instead, so a reader adding the vector pair
+		// still gets the vector population.
+		if candidate.State == contextfabric.ResolutionCommitted && subjectScope.withholds(candidate.Subject.Kind) {
+			candidate.State = contextfabric.ResolutionProposed
 		}
 		candidates = append(candidates, candidate)
 	}
@@ -551,7 +589,7 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 			tracer.Trace(ResolutionTraceEvent{
 				RequestID: requestID, Stage: "offer_pool", OfferPoolSummary: true,
 				OfferPoolVectorOnlyExcluded: 0, OfferPoolVectorOnlyDemoted: 0,
-				OfferPoolEmptiedByExclusion: false,
+				OfferPoolEmptiedByExclusion: false, OfferPoolAnchorKindWithheld: 0,
 			})
 			// CHAOS-4154 (codex review finding, Low, confirmed): PopulationBasis
 			// is explicit "none" here too -- an earlier version left this
@@ -653,6 +691,30 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 		commitIndex := make([]int, 0, len(candidates))
 		for index, candidate := range candidates {
 			if IsObservationSubjectKind(candidate.Subject.Kind) && observationBlocked[SubjectKey(candidate.Subject)] {
+				continue
+			}
+			// CHAOS-5422, GUARD 2 OF 3, and it is the reason the other two
+			// are only two. Every strength tier below -- exact_index,
+			// identity_fast_path, lone_floor, top_of_two and the CHAOS-3829
+			// margin rescue -- selects out of commitIndex, so refusing a
+			// withheld kind ONCE here refuses it in all five, and a sixth
+			// tier added beside them inherits the refusal instead of needing
+			// its own conjunct. It sits beside the observation-kind skip
+			// because it is the same class of statement: a subject that
+			// cannot be what this question is asking about does not enter
+			// the contest for it.
+			//
+			// REMOVING IT FROM THE CONTEST IS DELIBERATE HERE, and it is the
+			// opposite of what CHAOS-5385 ruled for a vector-only candidate.
+			// That candidate was a real rival for the SAME role, so
+			// suppressing it manufactured confidence the pool did not have.
+			// This one is not a rival for any role: on a children_of_scope
+			// frame the subject is the anchor, whose kind I11 says is never
+			// the member's, so leaving it in only produces the top-two
+			// ambiguity CHAOS-5393 already measured as harm -- asking a
+			// caller to choose between a member and the scope containing it,
+			// a question I11 guarantees has no answer.
+			if subjectScope.withholds(candidate.Subject.Kind) {
 				continue
 			}
 			commitIndex = append(commitIndex, index)
@@ -1241,6 +1303,12 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 		// formula would double-apply it.
 		if ambiguous && gateValid && evidenceCensusAttestedKey != "" && len(exactIndex) < 2 {
 			if index, ok := indexBySubjectKey(candidates, evidenceCensusAttestedKey); ok &&
+				// CHAOS-5422, GUARD 3 OF 3. This is the one commit path that
+				// does NOT select out of commitIndex -- it looks its
+				// candidate up by attested key -- so guard 2 above cannot
+				// reach it and it needs the conjunct stated here, exactly as
+				// isVectorOnlyCandidate is stated here for the same reason.
+				!subjectScope.withholds(candidates[index].Subject.Kind) &&
 				!isVectorOnlyCandidate(candidates[index].MatchMechanisms) &&
 				!identityCollision(evidenceCensusAttestedKey, identity, identityTerms) &&
 				!identityCrossClassRivalClaimant(evidenceCensusAttestedKey, identity, identityTerms) &&
@@ -1464,6 +1532,13 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 	// embeddings-off run reaches.
 	offered := make([]contextfabric.SubjectCandidate, 0, len(ordered))
 	offerPoolVectorOnlyExcluded := 0
+	// offerPoolAnchorKindWithheld (CHAOS-5422) counts the candidates this
+	// question's scope axis refused the OFFER. Kept separate from the vector
+	// counters rather than folded into them: the two withhold for unrelated
+	// reasons, need unrelated fixes, and an operator who cannot tell them
+	// apart cannot tell a retrieval that guessed from a question whose
+	// subject was never in the pool.
+	offerPoolAnchorKindWithheld := 0
 	for _, candidate := range ordered {
 		if isVectorOnlyCandidate(candidate.MatchMechanisms) {
 			// A demoted arrival is withheld from the offer for the same
@@ -1478,6 +1553,22 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 						OfferPoolDisposition: "vector_only_excluded",
 					})
 				}
+			}
+			continue
+		}
+		// CHAOS-5422: withheld from the OFFER on the same ground guard 2
+		// refuses it the CONTEST -- an offer is a commit deferred by one
+		// turn, and the receipt this would mint is exactly what the measured
+		// row's next turn committed on. Checked AFTER the vector arm so the
+		// two counters stay disjoint over the same population, the way
+		// excluded and demoted already are.
+		if subjectScope.withholds(candidate.Subject.Kind) {
+			offerPoolAnchorKindWithheld++
+			if tracer != nil {
+				tracer.Trace(ResolutionTraceEvent{
+					RequestID: requestID, Stage: "offer_pool", Subject: candidate.Subject,
+					OfferPoolDisposition: offerPoolAnchorKindWithheldDisposition,
+				})
 			}
 			continue
 		}
@@ -1539,6 +1630,7 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 			OfferPoolVectorOnlyExcluded: offerPoolVectorOnlyExcluded,
 			OfferPoolVectorOnlyDemoted:  offerPoolVectorOnlyDemoted,
 			OfferPoolEmptiedByExclusion: offerPoolEmptiedByExclusion,
+			OfferPoolAnchorKindWithheld: offerPoolAnchorKindWithheld,
 		})
 	}
 	resolution.Candidates = offered
@@ -1566,6 +1658,19 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 	// a non-empty candidate list.
 	if offerPoolEmptiedByExclusion && allowClarification {
 		resolution.ClarificationPrompt = contextfabric.OfferPoolEmptiedClarificationPrompt
+		// AND THE PROMPT HAS TO BE TRUE. The constant above states that the
+		// withheld subjects matched by semantic similarity alone, which is
+		// the whole basis it offers the caller for rephrasing. CHAOS-5422's
+		// withholding has a different basis and its candidates matched
+		// lexically, so reusing that sentence would tell the caller
+		// something that did not happen. The scope prompt is chosen only
+		// when the scope axis is the SOLE reason nothing is offerable --
+		// with any vector withholding in the same pass the vector sentence
+		// is still true of part of it, and a prompt that names one of two
+		// causes is better than one that names the wrong one.
+		if offerPoolVectorOnlyExcluded == 0 && offerPoolVectorOnlyDemoted == 0 && offerPoolAnchorKindWithheld > 0 {
+			resolution.ClarificationPrompt = contextfabric.OfferPoolAnchorKindWithheldClarificationPrompt
+		}
 	}
 	if tracer != nil {
 		// ONE decision event PER COMMITTED SUBJECT (CHAOS-4096: cardinality

@@ -1365,6 +1365,29 @@ type ResolutionTraceEvent struct {
 	// and a field present in only one of its two states cannot be told
 	// apart from a build that does not emit it.
 	OfferPoolEmptiedByExclusion bool
+	// OfferPoolAnchorKindWithheld (CHAOS-5422) is how many candidates this
+	// question's grouping/scope axis refused the OFFER, on the folded
+	// summary and on the decision line. ALWAYS emitted, explicit zero
+	// included, for the reason the vector counters above are: a resolution
+	// that withheld nothing must not read like a build where the withholding
+	// never ran.
+	//
+	// A SEPARATE COUNTER from the vector pair, deliberately. The two act on
+	// the same population but for unrelated reasons and take unrelated
+	// fixes, and folding them would leave an operator unable to tell a
+	// retrieval that guessed from a question whose subject was never in the
+	// pool at all.
+	OfferPoolAnchorKindWithheld int
+	// OfferPoolAnchorKindWithheldScope is the kind that withholding refused,
+	// or `none`; OfferPoolAnchorKindWithheldReason names what decided it,
+	// from subjectOfferScope's own closed vocabulary, or `none`. The count
+	// alone cannot tell an operator WHICH kind was refused nor on whose
+	// authority, and a count with no reason beside it is the shape that
+	// makes a withholding look like a retrieval failure.
+	//
+	// BOTH ALWAYS SET on the decision line, with explicit `none` tokens.
+	OfferPoolAnchorKindWithheldScope  string
+	OfferPoolAnchorKindWithheldReason string
 	// AnchorPoolSummary marks the once-per-call `anchor_pool` event
 	// (CHAOS-5393) that reports which kind the SCOPE ANCHOR was allowed to
 	// resolve under, and where that kind came from. Emitted from the same
@@ -1863,6 +1886,11 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 			// anchor_pool event is emitted.
 			memberKindConfirmed: confirmedMemberKindToken(confirmedKind),
 		}
+		// CHAOS-5422: the scope this call's frame decided, stamped here for
+		// the same reason memberKindConfirmed is -- it is an INPUT to the
+		// call, settled before retrieval ran, so reading it off an emitted
+		// event would inherit that event's reachability.
+		decisionFold.anchorKindWithheldScope, decisionFold.anchorKindWithheldReason = decideSubjectOfferScope(frame, confirmedKind, decideAnchorPoolKindScope(frame, scopeAnchorKind, confirmedAnchor, confirmedKind)).observable()
 		deps.ResolutionTracer = decisionFold
 		defer decisionFold.flush()
 	}
@@ -1957,6 +1985,16 @@ type decisionSummaryBuffer struct {
 	vectorOnlyExcluded int
 	vectorOnlyDemoted  int
 	emptiedByExclusion bool
+	// anchorKindWithheld accumulates from the same offer_pool summary the
+	// vector counters do. Its scope and reason do NOT: they are stamped at
+	// construction from the frame's own decision, like frameGate and
+	// memberKindConfirmed, so every exit path carries them -- including the
+	// exact-canonical-hint short circuit, which returns before any
+	// offer_pool event is ever emitted and would otherwise report `none` on
+	// a turn that had decided a scope.
+	anchorKindWithheld       int
+	anchorKindWithheldScope  string
+	anchorKindWithheldReason string
 	// anchorPoolKindScope / anchorPoolKindScopeSource / memberKindConfirmed
 	// accumulate from the `anchor_pool` summary event rather than being
 	// stamped at construction like frameGate above. The distinction is
@@ -1999,6 +2037,7 @@ func (b *decisionSummaryBuffer) Trace(event ResolutionTraceEvent) {
 	if event.Stage == "offer_pool" && event.OfferPoolSummary {
 		b.vectorOnlyExcluded += event.OfferPoolVectorOnlyExcluded
 		b.vectorOnlyDemoted += event.OfferPoolVectorOnlyDemoted
+		b.anchorKindWithheld += event.OfferPoolAnchorKindWithheld
 		// OR across the call for the same reason DecisionOfferedUnderWindowGate
 		// is: the fold sees per-event facts, and "at least one pass of this
 		// resolution was emptied by the exclusion" is the only claim this
@@ -2067,6 +2106,12 @@ func (b *decisionSummaryBuffer) flush() {
 		OfferPoolVectorOnlyExcluded:    b.vectorOnlyExcluded,
 		OfferPoolVectorOnlyDemoted:     b.vectorOnlyDemoted,
 		OfferPoolEmptiedByExclusion:    b.emptiedByExclusion,
+		OfferPoolAnchorKindWithheld:    b.anchorKindWithheld,
+		// orNone for the same reason the anchor-pool trio below take it: a
+		// buffer built before the scope was decided (this package's own unit
+		// callers) must render a word, never an empty log value.
+		OfferPoolAnchorKindWithheldScope:  orNone(b.anchorKindWithheldScope),
+		OfferPoolAnchorKindWithheldReason: orNone(b.anchorKindWithheldReason),
 		// orNone keeps the contract that these three are never empty on a
 		// line: a resolution that returned before the filter ran emits no
 		// anchor_pool event at all, and `none` is the honest reading of
@@ -2174,6 +2219,14 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// Deciding it late and threading it to the filter alone is exactly the
 	// defect an adversarial round found here, twice.
 	anchorScope := decideAnchorPoolKindScope(frame, scopeAnchorKind, confirmedAnchor, confirmedKind)
+	// CHAOS-5422: decided ONCE here and read by all three commit-decision
+	// call sites below (the first pass, the confirmed-kind scoped
+	// re-decision, and the evidence-census re-entry), mirroring
+	// anchorScope's own "computed once, read at every consumer" shape. Three
+	// separate calls to the same helper is how two of them end up disagreeing
+	// after an edit touches one -- and the two re-entries are exactly the
+	// paths that would then commit the substitution the first pass refused.
+	subjectScope := decideSubjectOfferScope(frame, confirmedKind, anchorScope)
 	if deps.ResolutionTracer != nil {
 		scope, source := anchorScope.observable()
 		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
@@ -2983,7 +3036,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if offersOnly && firstPassTracer != nil {
 		firstPassTracer = offersOnlyDecisionTracer{real: firstPassTracer}
 	}
-	resolution, firstPassBases, firstPassDigests := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind))
+	resolution, firstPassBases, firstPassDigests := resolveFromMergedCandidatesWithSubjectScope(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), subjectScope)
 	commitBases.ResetTo(firstPassBases)
 	commitDigests.ResetTo(firstPassDigests)
 	// coverageFloorDegraded (CHAOS-4038, codex review round 2 finding 1) is
@@ -3140,11 +3193,17 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			// regardless of outcome, so nothing about the attempt itself
 			// becomes undiagnosable by holding back just the decision event.
 			scopedDecisionTracer := &discardableDecisionTracer{real: deps.ResolutionTracer}
-			scopedResolution, scopedBases, scopedDigests := ResolveFromMergedCandidatesWithGateAndBasis(
+			// CHAOS-5422: the SAME subject scope the first pass ran under.
+			// This re-decision is scoped to the CONFIRMED kind, which on a
+			// children_of_scope frame is the MEMBER kind -- so without it
+			// this pass decides over a population that is entirely withheld
+			// kinds and can commit exactly the substitution the first pass
+			// refused.
+			scopedResolution, scopedBases, scopedDigests := resolveFromMergedCandidatesWithSubjectScope(
 				scopedPool, scopedObservationParentKey, scopedObservationBlocked, request.Options.MaxSubjectCandidates,
 				request.Options.AllowClarification, false, nil, 0, false, effectiveSearchLimit, 0,
 				unscopedVisibility, gate, scopedIdentity, scopedIdentityTerms, aliasIdentityComplete,
-				scopedDecisionTracer, request.RequestID, "", true, false, nil,
+				scopedDecisionTracer, request.RequestID, "", true, false, nil, subjectScope,
 			)
 			if len(scopedResolution.Committed) > 0 {
 				resolution = scopedResolution
@@ -3238,7 +3297,10 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				// the failure mode this vocabulary exists to prevent.
 				var censusBases contextfabric.CommitBasisSet
 				var censusDigests contextfabric.CommitDecisionDigestSet
-				resolution, censusBases, censusDigests = ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey, false, false, nil)
+				// CHAOS-5422: the SAME subject scope the first pass ran
+				// under -- the census rescue is an alternate commit path for
+				// the same ambiguity, so it inherits the same refusal.
+				resolution, censusBases, censusDigests = resolveFromMergedCandidatesWithSubjectScope(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey, false, false, nil, subjectScope)
 				commitBases.ResetTo(censusBases)
 				commitDigests.ResetTo(censusDigests)
 				resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded
