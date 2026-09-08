@@ -150,3 +150,17 @@ func (s subjectOfferScope) observable() (kind string, source string) {
 	}
 	return string(s.MemberKind), s.Source
 }
+
+// subjectOfferScopeFor is the ONE expression both call sites evaluate, and it
+// exists so there is only one.
+//
+// The decision needs the anchor scope, which resolveSubjects computes for its
+// own consumers and the decision-summary fold cannot see. Spelling the pair out
+// at each site would have left two copies of the same derivation one edit apart
+// -- and the two sites are the resolution that acts on the scope and the line
+// that reports it, so a divergence there would make the observable disagree
+// with the behaviour it claims to describe. Both helpers are pure, so a second
+// evaluation costs nothing and cannot differ.
+func subjectOfferScopeFor(frame *contextfabric.QuestionFrame, scopeAnchorKind contextfabric.SubjectKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection, confirmedKind *contextfabric.ConfirmedExpectedKind) subjectOfferScope {
+	return decideSubjectOfferScope(frame, confirmedKind, decideAnchorPoolKindScope(frame, scopeAnchorKind, confirmedAnchor, confirmedKind))
+}

@@ -1890,7 +1890,7 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 		// the same reason memberKindConfirmed is -- it is an INPUT to the
 		// call, settled before retrieval ran, so reading it off an emitted
 		// event would inherit that event's reachability.
-		decisionFold.anchorKindWithheldScope, decisionFold.anchorKindWithheldReason = decideSubjectOfferScope(frame, confirmedKind, decideAnchorPoolKindScope(frame, scopeAnchorKind, confirmedAnchor, confirmedKind)).observable()
+		decisionFold.anchorKindWithheldScope, decisionFold.anchorKindWithheldReason = subjectOfferScopeFor(frame, scopeAnchorKind, confirmedAnchor, confirmedKind).observable()
 		deps.ResolutionTracer = decisionFold
 		defer decisionFold.flush()
 	}
@@ -2226,7 +2226,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// separate calls to the same helper is how two of them end up disagreeing
 	// after an edit touches one -- and the two re-entries are exactly the
 	// paths that would then commit the substitution the first pass refused.
-	subjectScope := decideSubjectOfferScope(frame, confirmedKind, anchorScope)
+	subjectScope := subjectOfferScopeFor(frame, scopeAnchorKind, confirmedAnchor, confirmedKind)
 	if deps.ResolutionTracer != nil {
 		scope, source := anchorScope.observable()
 		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
