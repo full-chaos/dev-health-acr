@@ -9,6 +9,7 @@ package contextfabric
 import (
 	"context"
 	"testing"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -153,53 +154,111 @@ func TestTheGateAndTheWireBasisAgree(t *testing.T) {
 	}
 }
 
-// THE DECLARED KIND IS ONE VALUE THAT CROSSES FOUR HOPS, and until the
-// battery said so nothing asserted it crossed any of them.
+// receiptPathInterpreter drives the two PRODUCTION functions that carry a
+// gate -- resolveFrame, which decides it and writes it onto the receipt, and
+// recordFamilyResolution, which rebuilds it off the receipt -- and hands the
+// engine the outcome they produce.
 //
-// Three arms survived the 34123455192 battery together -- the gate dropping
-// it at the decision, the receipt dropping it, and the rebuilt gate dropping
-// it -- and they are ONE gap rather than three: every pin in this file and in
-// frame_gate_test.go that touches a refusing gate BUILDS the FrameGate as a
-// literal and hands the literal to the engine, so the production chain that
+// It exists because refusingGateInterpreter hands over a FrameGate LITERAL,
+// which is how three battery arms survived: a literal carries whatever the
+// test typed, so no assertion downstream of it can observe a value the
+// production chain dropped. Nothing here is a stand-in for those two
+// functions; they are called.
+type receiptPathInterpreter struct {
+	frame *QuestionFrame
+}
+
+func (i receiptPathInterpreter) Interpret(ctx context.Context, principal storage.Principal, _ InvestigationRequest) (InterpretedQuestion, QuestionFamilyOutcome, error) {
+	interpreted := InterpretedQuestion{
+		Shape:             ShapeOpen,
+		RequestedJudgment: "status",
+		TimeContext:       TimeContext{Axis: TemporalCurrent},
+	}
+	receipt := ModelExecutionReceipt{QuestionFrame: i.frame}
+	runtime := RuntimeQuestionInterpreter{}
+	runtime.resolveFrame(ctx, principal, &receipt, "")
+	return interpreted, runtime.recordFamilyResolution(ctx, principal, interpreted, receipt), nil
+}
+
+// THE DECLARED KIND IS CONSUMED BY WHAT THE TURN SERVES, or it is not carried
+// at all.
+//
+// Three arms of the 34123455192 battery survived together -- the gate
+// dropping the kind at the decision, the receipt dropping it, the rebuilt
+// gate dropping it -- and they are ONE gap: every refusing-gate pin in this
+// repository builds the FrameGate as a literal, so the production chain that
 // derives the kind, persists it and restores it was never driven end to end.
-// Each hop is asserted separately here rather than only at the end, so a
-// regression names WHICH hop dropped the value instead of only that the
-// sentence went wrong.
 //
-// The last hop is the one that matters to a caller: an unrecognised
-// disclosure is displaceable, so a kind lost anywhere upstream ends as an
-// answer that says nothing about having been refused.
-func TestTheDeclaredMemberKindSurvivesEveryHopOntoTheServedSentence(t *testing.T) {
+// This asserts the two OBSERVABLES the kind exists to feed, not that the
+// three field copies are equal to each other. A copy that agrees with its
+// neighbour and reaches nothing is still a value nobody can read: what a
+// caller gets is the limitation sentence naming the population they asked
+// about, and what an operator gets is the subjectless-terminal Info line
+// carrying frame_gate_refused with its basis. Each of the three arms breaks
+// the sentence, because a kind lost at ANY hop falls the unservable arm back
+// to the invariant wording -- which is service-authored and recognised, so
+// nothing else in the served document goes wrong. That is exactly why the
+// suite stayed green.
+func TestTheDeclaredMemberKindReachesTheServedDisclosureThroughTheReceipt(t *testing.T) {
 	t.Parallel()
 	frame := unservableMemberKindFrame()
-
-	decided := DecideFrameGate(ValidateFrame(*frame, nil, ""), true)
-	if decided.Outcome != FrameGateRefusedBasis {
-		t.Fatalf("DecideFrameGate outcome = %q, want %q -- this pin is about the kind a REFUSING gate names, so any other verdict measures something else", decided.Outcome, FrameGateRefusedBasis)
-	}
-	if !contractsv1.ValidContextFabricSubjectKind(decided.DeclaredMemberKind) {
-		t.Fatalf("DecideFrameGate DeclaredMemberKind = %q, want a subject-kind registry member -- the kind is the one thing the asker can change about the question, and a kind the registry does not name composes a sentence the recogniser rejects", decided.DeclaredMemberKind)
+	_, declared, reason := CohortMemberKindFor(frame.SubjectExpression)
+	if reason != CohortMemberKindUnservable {
+		t.Fatalf("the fixture frame is discoverable as %q, want %q -- this pin is about the kind a REFUSING gate names, so any other reason measures something else", reason, CohortMemberKindUnservable)
 	}
 
-	receipt := ModelExecutionReceipt{QuestionFrame: frame}
-	interpreter := RuntimeQuestionInterpreter{}
-	interpreter.resolveFrame(context.Background(), storage.Principal{OrgID: "org_1"}, &receipt, "")
-	if receipt.FrameGateDeclaredMemberKind != decided.DeclaredMemberKind {
-		t.Fatalf("receipt FrameGateDeclaredMemberKind = %q, want %q -- the receipt is the only carrier between interpretation and the engine, so a kind dropped here is gone for the rest of the turn", receipt.FrameGateDeclaredMemberKind, decided.DeclaredMemberKind)
+	telemetry := &recordingTelemetry{}
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: receiptPathInterpreter{frame: frame},
+		Graph:       refusedFrameGraphReader{t: t},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			t.Fatal("ReadFacts must not be called on a refused frame")
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			t.Fatal("Synthesize must not be called on a refused frame")
+			return InvestigationResult{}, nil
+		}),
+		Telemetry: telemetry,
+	}, EngineOptions{ServiceVersion: "acr-test", Now: func() time.Time { return time.Unix(300, 0).UTC() }, NewResultID: func() string { return "result_receipt_path_01" }})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v, want a clean terminal -- a frame the server will not act on is a product outcome, never a 5xx", err)
 	}
 
-	outcome := interpreter.recordFamilyResolution(context.Background(), storage.Principal{OrgID: "org_1"}, InterpretedQuestion{}, receipt)
-	if outcome.Gate.DeclaredMemberKind != receipt.FrameGateDeclaredMemberKind {
-		t.Fatalf("carried gate DeclaredMemberKind = %q while the receipt recorded %q -- the engine reads the CARRIED gate, so a kind dropped on the rebuild never reaches the disclosure", outcome.Gate.DeclaredMemberKind, receipt.FrameGateDeclaredMemberKind)
+	// THE CALLER-FACING OBSERVABLE. The sentence must name the population
+	// the question declared; the invariant fallback names none, and a
+	// caller told that one learns nothing they can act on.
+	want := contractsv1.ContextFabricRefusalBasisLimitation(declared, contractsv1.ContextFabricRefusalBasisMemberKindUnservable)
+	served := false
+	for _, limitation := range result.Limitations {
+		if limitation == want {
+			served = true
+		}
 	}
-
-	sentence := refusalLimitation(outcome.Gate, outcome.Gate.RefusalBasis())
-	want := contractsv1.ContextFabricRefusalBasisLimitation(decided.DeclaredMemberKind, contractsv1.ContextFabricRefusalBasisMemberKindUnservable)
-	if sentence != want {
-		t.Fatalf("served sentence = %q, want %q -- a lost kind falls the unservable arm back to the invariant wording, which tells the asker nothing about the population they named", sentence, want)
+	if !served {
+		t.Fatalf("result.Limitations = %#v, want it to carry %q -- the declared kind %q was decided at interpretation and must survive the receipt onto the served answer, and a kind lost at any hop falls this back to the invariant wording that names no population", result.Limitations, want, declared)
 	}
-	if !contractsv1.IsContextFabricServiceAuthoredLimitation(sentence) {
+	if !contractsv1.IsContextFabricServiceAuthoredLimitation(want) {
 		t.Fatal("the composed sentence is not recognised as service-authored, so the next composer needing a limitation slot may displace it and the answer will state nothing about having been refused")
+	}
+
+	// THE OPERATOR-FACING OBSERVABLE, on the same turn and through the same
+	// receipt path: the class stays countable in the collected logs.
+	if got, want := telemetry.subjectlessTerminalReasons, []string{"frame_gate_refused"}; !stringSlicesEqual(got, want) {
+		t.Fatalf("subjectlessTerminalReasons = %#v, want %#v", got, want)
+	}
+	if got, want := telemetry.subjectlessTerminalRefusalBases, []string{string(contractsv1.ContextFabricRefusalBasisMemberKindUnservable)}; !stringSlicesEqual(got, want) {
+		t.Fatalf("subjectlessTerminalRefusalBases = %#v, want %#v", got, want)
+	}
+	if got := result.RefusalBasis; got != contractsv1.ContextFabricRefusalBasisMemberKindUnservable {
+		t.Fatalf("result.RefusalBasis = %q, want %q", got, contractsv1.ContextFabricRefusalBasisMemberKindUnservable)
+	}
+	if got := result.Completeness.RefusalBasis; got != contractsv1.ContextFabricRefusalBasisMemberKindUnservable {
+		t.Fatalf("result.Completeness.RefusalBasis = %q, want %q", got, contractsv1.ContextFabricRefusalBasisMemberKindUnservable)
 	}
 }
 
