@@ -412,6 +412,11 @@ type recordingTelemetry struct {
 	// modelRowsStripped (CHAOS-4355 follow-up) mirrors the SAME
 	// list-not-count discipline.
 	modelRowsStripped []int
+	// driverIdentityCollisions (CHAOS-5364) mirrors the SAME
+	// list-not-count discipline -- and here the LIST is load-bearing beyond
+	// the counts: the producer reports on every pass, zeros included, so the
+	// number of entries is itself the proof the resolver ran.
+	driverIdentityCollisions []DriverIdentityCollisions
 	// cohortRanked (CHAOS-4398) mirrors the SAME list-not-count discipline.
 	renderShapeSelections []RenderShapeSelectionEvent
 	serverStatusShadows   []ServerStatusShadow
@@ -714,6 +719,10 @@ func (r *recordingTelemetry) RecordDualTableFacts(_ context.Context, _ storage.P
 
 func (r *recordingTelemetry) RecordModelRowsStripped(_ context.Context, _ storage.Principal, claims int) {
 	r.modelRowsStripped = append(r.modelRowsStripped, claims)
+}
+
+func (r *recordingTelemetry) RecordDriverIdentityCollisions(_ context.Context, _ storage.Principal, collisions DriverIdentityCollisions) {
+	r.driverIdentityCollisions = append(r.driverIdentityCollisions, collisions)
 }
 
 func (r *recordingTelemetry) RecordRenderShapeSelection(_ context.Context, _ storage.Principal, event RenderShapeSelectionEvent) {

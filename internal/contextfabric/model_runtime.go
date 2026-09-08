@@ -1995,6 +1995,34 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 		if stripped > 0 && r.Telemetry != nil {
 			r.Telemetry.RecordModelRowsStripped(ctx, principal, stripped)
 		}
+		// CHAOS-5364: driver identity is resolved HERE, and at exactly ONE
+		// site, unlike the Rows strip above it.
+		//
+		// The strip needs two sites because the INNER ValidateAgainst (in
+		// genkitruntime.Runtime.SynthesizeAnswer) rejects on Rows, so a draft
+		// that reached it unstripped was already lost. Nothing rejects on
+		// driver identity at that inner call -- ValidateAgainst has no
+		// uniqueness rule and deliberately still does not gain one, since
+		// this function resolves the collision rather than refusing the
+		// answer for it. A second resolve there would therefore be
+		// unreachable by construction and unpinnable, and two authorities
+		// over one identity is the shape that produced this defect in the
+		// first place (narration deconflicted; nothing deconflicted the
+		// model's own drivers).
+		//
+		// This is the right single site because it is the ONE producer of
+		// result.Drivers: the line below copies these drivers into the
+		// result verbatim (`Drivers: cloneSlice(draft.Drivers)`), and
+		// validateDrivers judges exactly that array. Every fallback return
+		// inside SynthesizeAnswer also lands here, so no draft reaches
+		// result.Drivers around it.
+		var driverCollisions DriverIdentityCollisions
+		draft.Drivers, driverCollisions = ResolveDriverIdentityCollisions(draft.Drivers)
+		// UNCONDITIONAL, zeros included -- see RecordDriverIdentityCollisions'
+		// own doc comment on EngineTelemetry.
+		if r.Telemetry != nil {
+			r.Telemetry.RecordDriverIdentityCollisions(ctx, principal, driverCollisions)
+		}
 		if validateErr := draft.ValidateAgainst(input); validateErr != nil {
 			receipt.Outcome = "invalid_output"
 			err = ClassifySynthesisRejection(draft, input, validateErr)

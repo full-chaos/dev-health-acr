@@ -808,6 +808,25 @@ type EngineTelemetry interface {
 	// call and reporting a zero here on every single call would drown the
 	// signal in noise.
 	RecordModelRowsStripped(ctx context.Context, principal storage.Principal, claims int)
+	// RecordDriverIdentityCollisions (CHAOS-5364) reports what
+	// ResolveDriverIdentityCollisions found in the synthesis draft before
+	// draft.ValidateAgainst ran: how many entries were an exact restatement of
+	// a driver already carrying that driver_id, and how many were DISTINCT
+	// contributions kept under a deconflicted id.
+	//
+	// ZERO-INCLUDED ON EVERY CALL, unlike RecordModelRowsStripped directly
+	// above it, and the difference is deliberate. A stripped-rows count of
+	// zero says only that the model behaved on one axis; a collision count of
+	// zero says that driver identity was CHECKED on this pass. Those are not
+	// the same claim, and the regression this line exists to catch -- a
+	// producer wired past the resolver -- looks EXACTLY like an ordinary clean
+	// pass if the line is emitted only when something collided. The convention
+	// followed here is RecordProjectedRowsCount's and RecordDualTableFacts':
+	// a quiet run is as visible as a busy one.
+	//
+	// Content-safe by construction: an org id and two counts, never a
+	// driver_id, a title, or any other model text.
+	RecordDriverIdentityCollisions(ctx context.Context, principal storage.Principal, collisions DriverIdentityCollisions)
 	// RecordCohortRanked (CHAOS-4398) reports the outcome of ONE RankCohort
 	// pass: how many members were scored, the deterministic formula
 	// version (prompt-changes-are-behavior-changes discipline applied to
