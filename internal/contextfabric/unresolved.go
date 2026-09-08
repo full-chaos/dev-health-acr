@@ -682,15 +682,24 @@ func noMatchLimitationForEmptyPool(resolution *SubjectResolution) string {
 // parts -- so it gets a fixed sentence that says so and suggests the shape of
 // a question that would work.
 //
-// The unservable arm falls back to the invariant sentence when the gate
-// carries no declared kind. That is not defensive padding: a refusing gate
-// built as a literal (every unit caller in this repository builds one) can
-// legitimately carry a basis and no kind, and interpolating an EMPTY kind
-// would compose a sentence its own recogniser rejects -- which would make the
-// disclosure displaceable, the exact round-3 defect the registry's doc
-// comment records.
+// The unservable arm falls back to the invariant sentence unless BOTH
+// interpolated segments are vocabulary members, because both are what the
+// recogniser parses. That is not defensive padding: a refusing gate built as
+// a literal (every unit caller in this repository builds one) can legitimately
+// carry a basis and no kind, and interpolating a kind the registry does not
+// name -- empty or merely unrecognised -- composes a sentence its own
+// recogniser rejects, which makes the disclosure displaceable and the served
+// answer then states nothing about having been refused. That is the exact
+// round-3 defect the registry's doc comment records.
+//
+// MEMBERSHIP, not non-emptiness. The earlier non-empty test admitted every
+// unrecognised kind: measured on the tip, DeclaredMemberKind
+// "a_kind_no_vocabulary_names" composed a sentence for which
+// IsContextFabricServiceAuthoredLimitation returned false while the invariant
+// fallback returned true. The empty value is not a registry member either, so
+// this predicate subsumes the one it replaces rather than sitting beside it.
 func refusalLimitation(gate FrameGate, basis contractsv1.ContextFabricRefusalBasis) string {
-	if gate.DeclaredMemberKind != "" && contractsv1.ValidContextFabricRefusalBasis(basis) {
+	if contractsv1.ValidContextFabricSubjectKind(gate.DeclaredMemberKind) && contractsv1.ValidContextFabricRefusalBasis(basis) {
 		return contractsv1.ContextFabricRefusalBasisLimitation(gate.DeclaredMemberKind, basis)
 	}
 	return contractsv1.ContextFabricFrameInvariantRefusalLimitation

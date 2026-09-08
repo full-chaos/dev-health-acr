@@ -708,7 +708,13 @@ var expectedRejection = map[string]string{
 	// (PastMax sets both surfaces, so they agree) and not membership (the
 	// value is a real member). Naming the phrase rather than accepting any
 	// error is what makes this prove THIS bound rejected.
-	"RefusalBasis":            "cannot accompany",
+	//
+	// "cannot accompany status", not the bare "cannot accompany" this
+	// carried first: the claimed-facts clause immediately below the
+	// served-answer one opens with the SAME three words, so the shorter
+	// phrase was satisfied by either clause and a battery arm deleting the
+	// served-answer clause survived on its neighbour's message.
+	"RefusalBasis":            "cannot accompany status",
 	"Cohort":                  "cohort violates v1 bounds",
 	"Completeness":            "outcomes exceeds v1 bounds",
 	"EvidenceRefLabels":       "names no evidence ref on the result",
