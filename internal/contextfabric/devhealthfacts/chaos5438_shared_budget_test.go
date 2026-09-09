@@ -138,3 +138,99 @@ func TestChaos5438_TheSharedBudgetAndTheVerdictAgree(t *testing.T) {
 		}
 	}
 }
+
+// TestChaos5438_EverySingleBranchProviderUsesTheSameOwner is the package-wide
+// half of the same ruling.
+//
+// The five providers below read from ONE branch, so the guard and the verdict
+// could not drift apart in them the way they did in the two multi-branch ones.
+// They route through the same factBudget anyway, and this pins the OBSERVABLE
+// consequence rather than the routing: at the cap the answer is complete, and
+// one row past it the answer says so. A hand-rolled second copy that got
+// either cell wrong shows up here.
+//
+// Three cells per provider -- 0, cap, cap+1 -- asserting the fact count AND
+// the verdict together, for the same reason the shared-budget shape space
+// does: either can be right while the pair is wrong.
+func TestChaos5438_EverySingleBranchProviderUsesTheSameOwner(t *testing.T) {
+	t.Parallel()
+	for _, arm := range probeArms() {
+		if arm.name == "identity_repository" || arm.name == "membership_repository" {
+			// Covered by the shared-budget shape space above, which drives
+			// BOTH of their branches at once.
+			continue
+		}
+		arm := arm
+		for _, cell := range []struct {
+			rows          int
+			wantFacts     int
+			wantTruncated bool
+			why           string
+		}{
+			{0, 0, false, "nothing was read, so nothing was left behind"},
+			{factRowOutputBound, factRowOutputBound, false, "exactly the cap: complete, and every row of it served"},
+			{factRowProbeLimit, factRowOutputBound, true, "one row past the cap: the overflow row proves the shortfall and is never served"},
+		} {
+			cell := cell
+			t.Run(arm.name+"/"+strconv.Itoa(cell.rows), func(t *testing.T) {
+				t.Parallel()
+				_, result := readProbeArm(t, arm, cell.rows)
+				if len(result.Facts) != cell.wantFacts {
+					t.Fatalf("%s (%d rows): len(Facts) = %d, want %d -- %s", arm.name, cell.rows, len(result.Facts), cell.wantFacts, cell.why)
+				}
+				if result.Truncated != cell.wantTruncated {
+					t.Fatalf("%s (%d rows): Truncated = %v, want %v -- %s", arm.name, cell.rows, result.Truncated, cell.wantTruncated, cell.why)
+				}
+			})
+		}
+	}
+}
+
+// TestChaos5438_AnOverflowOfSKIPPEDRowsIsStillTruncation closes a hole this
+// lane found by running a mutation control that FAILED TO FIRE.
+//
+// The three-cell pin above drives rows that map one-to-one onto requested
+// subjects, so at 201 rows the shared guard refuses the 201st fact and the
+// verdict is true through `dropped`. Deleting `budget.observe` therefore did
+// not kill it -- the assertion was VACUOUS for the observe path, and a control
+// that does not fire is not a control.
+//
+// The path it missed is real: a provider can read a full probe page while most
+// rows SKIP (their subject is not in the requested set), so few facts are ever
+// built, the guard never refuses, and `observe` is the ONLY thing that knows
+// rows were left behind in the database. That is a truncated read reporting
+// itself complete -- this ticket's whole defect, on the branch nothing else
+// covers.
+func TestChaos5438_AnOverflowOfSKIPPEDRowsIsStillTruncation(t *testing.T) {
+	t.Parallel()
+	for _, arm := range probeArms() {
+		if arm.name == "blockers" || arm.name == "required_children" {
+			// These two attribute every row to ONE subject by design, so a
+			// "skipped row" is not a shape they can take.
+			continue
+		}
+		arm := arm
+		t.Run(arm.name, func(t *testing.T) {
+			t.Parallel()
+			// A full probe page of rows, but only ONE subject requested: 200
+			// of the 201 rows resolve to no requested subject and are skipped.
+			client := &fakeClient{tables: []fakeTable{{match: arm.match, rows: arm.rowsFor(factRowProbeLimit)}}}
+			provider := findProvider(t, devhealthfacts.NewProviders(client), arm.kind)
+			result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+				Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+				Kind:     arm.kind,
+				Subjects: arm.subjectsFor(1),
+			})
+			if err != nil {
+				t.Fatalf("%s: ReadFacts: %v", arm.name, err)
+			}
+			if len(result.Facts) > 1 {
+				t.Fatalf("%s: len(Facts) = %d, want at most 1 -- only one subject was requested", arm.name, len(result.Facts))
+			}
+			if !result.Truncated {
+				t.Fatalf("%s: Truncated = false after reading a full probe page of %d rows -- the guard never refused because the rows were SKIPPED, so only the probe observation knows anything was left behind",
+					arm.name, factRowProbeLimit)
+			}
+		})
+	}
+}

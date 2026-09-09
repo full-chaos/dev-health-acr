@@ -56,6 +56,9 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 		}
 	}()
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
+	// CHAOS-5438: ONE owner -- see factBudget, and WorkProvider's identical
+	// note on why a single-branch provider uses it too.
+	budget := newFactBudget()
 	// blockerRelationshipType is an internal Go constant, not a caller
 	// supplied value, so it is safe to inline as a SQL string literal here
 	// rather than a bound parameter.
@@ -86,9 +89,7 @@ WHERE d.org_id = {org_id:String} AND concat(toString(t.repo_id), ':', d.target_w
 		if !ok {
 			return nil
 		}
-		// CHAOS-5438: the output bound is SEPARATE from the probe bound.
-		// The overflow row proves truncation; it is never served.
-		if len(facts) >= maxFactRowsPerQuery {
+		if !budget.admit() {
 			return nil
 		}
 		facts = append(facts, contextfabric.CanonicalFact{
@@ -101,8 +102,9 @@ WHERE d.org_id = {org_id:String} AND concat(toString(t.repo_id), ':', d.target_w
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item blockers", scanErr)
 	}
+	budget.observe(rowCount)
 	state, emptyReason := currentAxisReadState(len(facts))
-	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: rowCount > maxFactRowsPerQuery}
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: budget.truncated()}
 	return result, nil
 }
 
@@ -140,6 +142,9 @@ func (p *RequiredChildrenProvider) ReadFacts(ctx context.Context, principal stor
 		}
 	}()
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
+	// CHAOS-5438: ONE owner -- see factBudget, and WorkProvider's identical
+	// note on why a single-branch provider uses it too.
+	budget := newFactBudget()
 	// See BlockersProvider's doc comment on the same JOIN: work_item_dependencies
 	// has no repo_id of its own, so the source's repo_id is resolved via
 	// work_items the same way devhealthsource's own producer does.
@@ -160,9 +165,7 @@ WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_w
 		if !ok {
 			return nil
 		}
-		// CHAOS-5438: see BlockersProvider's identical note -- the overflow
-		// row is evidence, never content.
-		if len(facts) >= maxFactRowsPerQuery {
+		if !budget.admit() {
 			return nil
 		}
 		fields := map[string]contextfabric.FactValue{"required_child_work_item_id": contextfabric.StringFactValue(targetID)}
@@ -178,7 +181,8 @@ WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_w
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item required children", scanErr)
 	}
+	budget.observe(rowCount)
 	state, emptyReason := currentAxisReadState(len(facts))
-	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: rowCount > maxFactRowsPerQuery}
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: budget.truncated()}
 	return result, nil
 }

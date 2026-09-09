@@ -42,7 +42,7 @@
 # coverage claim that overclaims is itself a defect.
 
 FactActualCompletion
-  reached_funcs      16
+  reached_funcs      20
   dynamic_key_sites  0
   leaked_call_sites  0
     leak interface_method     0
@@ -50,15 +50,15 @@ FactActualCompletion
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            17
+    calls followed            21
     calls accounted           13
     calls not_a_call          1
-    calls excluded_by_design  26
+    calls excluded_by_design  25
     calls leaked              0
   fields             completed completed_at
 
 FactBlockers
-  reached_funcs      17
+  reached_funcs      21
   dynamic_key_sites  0
   leaked_call_sites  6
     leak interface_method     5
@@ -66,10 +66,10 @@ FactBlockers
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            16
+    calls followed            20
     calls accounted           13
     calls not_a_call          1
-    calls excluded_by_design  21
+    calls excluded_by_design  20
     calls leaked              6
   fields             blocked_by_work_item_id
 
@@ -282,7 +282,7 @@ FactReadiness
   fields             backlog_size basis daily_readiness daily_readiness_omitted_count day estimate_coverage_ratio estimated_count provider rollup_basis team_breakdown team_count team_id team_name unestimated_count work_scope_id
 
 FactRequiredChildren
-  reached_funcs      17
+  reached_funcs      21
   dynamic_key_sites  0
   leaked_call_sites  6
     leak interface_method     5
@@ -290,10 +290,10 @@ FactRequiredChildren
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            16
+    calls followed            20
     calls accounted           13
     calls not_a_call          1
-    calls excluded_by_design  23
+    calls excluded_by_design  22
     calls leaked              6
   fields             relationship_type required_child_work_item_id
 
@@ -330,7 +330,7 @@ FactSourceHealth
   fields             duration_ms error_message items_synced last_synced_at provider status
 
 FactStatus
-  reached_funcs      16
+  reached_funcs      20
   dynamic_key_sites  0
   leaked_call_sites  0
     leak interface_method     0
@@ -338,15 +338,15 @@ FactStatus
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            15
+    calls followed            19
     calls accounted           13
     calls not_a_call          1
-    calls excluded_by_design  21
+    calls excluded_by_design  20
     calls leaked              0
   fields             status
 
 FactWork
-  reached_funcs      16
+  reached_funcs      20
   dynamic_key_sites  0
   leaked_call_sites  0
     leak interface_method     0
@@ -354,10 +354,10 @@ FactWork
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            15
+    calls followed            19
     calls accounted           13
     calls not_a_call          1
-    calls excluded_by_design  21
+    calls excluded_by_design  20
     calls leaked              0
   fields             title
 
