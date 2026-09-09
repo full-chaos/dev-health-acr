@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"sort"
 	"strconv"
+	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
@@ -1329,6 +1330,48 @@ func (t SlogEngineTelemetry) RecordPlanCarry(ctx context.Context, principal stor
 func (t SlogEngineTelemetry) RecordPlanCarryOutcome(ctx context.Context, principal storage.Principal, outcome PlanCarryOutcome, sourceResultID string, seedSource CarrySeedSource) {
 	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome), "source_result_id", sourceResultID, "seed_source", string(seedSource)}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric plan carry outcome", args...)
+}
+
+// RecordWindowContinuationDecision (CHAOS-5465) logs at Info, once per request
+// carrying a window receipt -- applied, withheld, ineligible and early-veto
+// alike.
+//
+// EVERY FIELD REACHES THIS LINE, per the CHAOS-4085 sink discipline: a field
+// populated on the decision and never logged is not telemetry, it is a field.
+//
+// EXPLICIT ZEROS, NOT OMITTED KEYS. `conflict_reason` is the literal "none"
+// rather than an absent key, `conflict_count` is 0 rather than absent, and the
+// three family keys and three context ids are the empty string rather than
+// absent when that context does not exist. An omitted key and a measured zero
+// are indistinguishable to every downstream query, and telling them apart is
+// the entire reason this line exists.
+//
+// `comparison_evaluated` and `agreement` are SEPARATE booleans on purpose. An
+// unevaluated comparison reports false for both; it is never counted as
+// disagreement and never as agreement.
+func (t SlogEngineTelemetry) RecordWindowContinuationDecision(ctx context.Context, principal storage.Principal, decision windowContinuationDecision) {
+	args := []any{
+		"org_id", principal.OrgID,
+		"source_result_id", decision.CarriedContextID(),
+		"seed_source", string(decision.SeedSource),
+		"family_carried", string(decision.FamilyCarried()),
+		"family_fresh", string(decision.FamilyFresh()),
+		"family_accepted", string(decision.FamilyAccepted()),
+		"family_source", string(decision.AcceptedFamilySource()),
+		"continuation_disposition", string(decision.Disposition),
+		"decision_reason", string(decision.Reason),
+		"comparison_evaluated", decision.ComparisonEvaluated,
+		"agreement", decision.Agreement,
+		"conflict_reason", string(decision.ConflictReason),
+		"conflict_count", decision.ConflictCount(),
+		"conflict_fields", strings.Join(decision.ConflictFieldTokens(), ","),
+		"applied_window", decision.AppliedWindowToken(),
+		"carried_context_id", decision.CarriedContextID(),
+		"fresh_context_id", decision.FreshContextID(),
+		"accepted_context_id", decision.AcceptedContextID(),
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric window continuation decision", args...)
 }
 
 // validBudgetOverrunOrUnclassified fails closed on a value outside the closed
