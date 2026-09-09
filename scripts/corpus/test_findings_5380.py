@@ -632,6 +632,49 @@ def test_a_non_2xx_exchange_with_an_undecodable_body_keeps_its_real_status_class
     assert AC.is_upstream_504(row) is True, "the frozen deadline counter must still catch it"
 
 
+def test_run_replicate_actually_writes_the_undecodable_flag_to_disk():
+    """r5 (astra) P1: every pin above drives `harness.post()` directly (or `_post_live`,
+    which wraps `post()`) and builds its OWN attempt envelope -- none of them go through
+    `run_replicate`'s `json.dump(...)` call, the ONE place that actually SERIALIZES
+    `body_undecodable` to the artefact a real run publishes. A mutant that hard-codes the
+    written field to `False` (`"body_undecodable": False` instead of
+    `"body_undecodable": body_undecodable`) passed all 50 pins and 11 pin files --
+    verified by running exactly that mutation before writing this pin.
+
+    This drives the REAL `run_replicate` against a REAL socket for a 200/undecodable-body
+    exchange, reads back the FILE IT WROTE (never a hand-built dict), and requires the
+    on-disk artefact -- and the classifier reading it -- to carry the real signal.
+    """
+    from corpus import CORPUS
+    qid = CORPUS[0]["id"]
+    question = CORPUS[0]["text"]
+    saved_base, saved_out = harness.BASE, harness.OUTDIR
+    with tempfile.TemporaryDirectory() as tmp, _ScriptedServer() as srv:
+        harness.BASE = f"http://127.0.0.1:{srv.port}/api/investigations"
+        harness.OUTDIR = Path(tmp)
+        srv.status, srv.raw = 200, True     # 200, body is not JSON
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                harness.run_replicate(qid, question, 424242, warn=lambda *_a, **_k: None)
+            RS.UNSEQUENCED.clear()
+            files = RS.attempt_files(harness.OUTDIR, qid, 424242)
+            assert files, "run_replicate wrote no artefact for the undecodable-200 exchange"
+            ok, written, reason = VAL.load_attempt(files[-1])
+        finally:
+            harness.BASE, harness.OUTDIR = saved_base, saved_out
+    assert ok, f"the written artefact is not loadable: {reason}"
+
+    assert "body_undecodable" in written, (
+        "the WRITTEN artefact carries no body_undecodable key at all -- run_replicate's "
+        f"json.dump call must be broken: {written}")
+    assert written["body_undecodable"] is True, (
+        "the artefact run_replicate actually WROTE says body_undecodable=False for a "
+        f"real undecodable-200 exchange: {written}")
+    assert written["status"] == 200, written
+    assert AC.classify(written) == "served_2xx_undecodable_body", AC.classify(written)
+    assert AC.failed(written) is True
+
+
 def test_sub_200_statuses_other_than_zero_are_transport_failures():
     """The rest of the sub-200 band. Nothing writes 1 or 199 today; the point of a closed
     total vocabulary is that a status nobody writes yet still lands somewhere visible."""
