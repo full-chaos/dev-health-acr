@@ -40,11 +40,9 @@ func TestEveryProductionHintSourceLiteralIsRegistered(t *testing.T) {
 		t.Fatal("the registry is empty; this test would pass vacuously")
 	}
 
-	found := map[string][]string{}
-	// unreadable collects Source: values this test CANNOT evaluate statically.
-	// They are findings, not omissions: see the non-literal branch below.
-	var unreadable []string
 	fset := token.NewFileSet()
+	found := map[string][]string{}
+	var unreadable []string
 	err := filepath.Walk(filepath.Join(root, "internal"), func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -56,50 +54,8 @@ func TestEveryProductionHintSourceLiteralIsRegistered(t *testing.T) {
 		if parseErr != nil {
 			return parseErr
 		}
-		ast.Inspect(file, func(node ast.Node) bool {
-			composite, ok := node.(*ast.CompositeLit)
-			if !ok || !isSubjectHintType(composite.Type) {
-				return true
-			}
-			for _, element := range composite.Elts {
-				kv, ok := element.(*ast.KeyValueExpr)
-				if !ok {
-					continue
-				}
-				key, ok := kv.Key.(*ast.Ident)
-				if !ok || key.Name != "Source" {
-					continue
-				}
-				rel, _ := filepath.Rel(root, path)
-				site := rel + ":" + strconv.Itoa(fset.Position(kv.Pos()).Line)
-				literal, ok := kv.Value.(*ast.BasicLit)
-				if !ok || literal.Kind != token.STRING {
-					// NOT a literal. r1 finding, reproduced: an earlier version
-					// of this test skipped these, and a producer that built its
-					// source from a variable — `Source: runtimeSource` — passed
-					// the whole enumeration while minting something unregistered.
-					// Skipping was the hole, not the safe case.
-					//
-					// The only acceptable non-literal is a reference INTO this
-					// package, which is what a registered producer looks like
-					// after this change. Anything else cannot be read
-					// statically, so this test cannot say whether it is
-					// registered, and a check that cannot answer must say so
-					// rather than pass.
-					if referencesThisPackage(kv.Value) {
-						continue
-					}
-					unreadable = append(unreadable, site)
-					continue
-				}
-				value, unquoteErr := strconv.Unquote(literal.Value)
-				if unquoteErr != nil {
-					return true
-				}
-				found[value] = append(found[value], site)
-			}
-			return true
-		})
+		rel, _ := filepath.Rel(root, path)
+		scanHintSources(fset, file, rel, found, &unreadable)
 		return nil
 	})
 	if err != nil {
@@ -122,6 +78,137 @@ func TestEveryProductionHintSourceLiteralIsRegistered(t *testing.T) {
 			"silently. Use a hintsource constant, or register the value and name it here.", site)
 	}
 	t.Logf("registered=%v raw production Source: literals=%v unreadable=%v", hintsource.All(), found, unreadable)
+}
+
+// scanHintSources is THE SCAN, separated from the corpus it runs over.
+//
+// r1 finding, and then the battery's own finding on top of it. The rule "an
+// expression I cannot read is a finding, not a skip" lived inline in the walk,
+// and the only corpus the walk ever saw was production — which contains exactly
+// two expression shapes, both package constants. A mutation restoring the old
+// skip therefore changed nothing observable and SURVIVED: the rule was real,
+// and no test exercised it. Pulling the scan out means the same code that reads
+// production can be run over a fixture containing every shape a producer could
+// write.
+func scanHintSources(fset *token.FileSet, file *ast.File, rel string, found map[string][]string, unreadable *[]string) {
+	ast.Inspect(file, func(node ast.Node) bool {
+		composite, ok := node.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		// A SLICE of hints elides the element type: `[]SubjectHint{{Source: x}}`
+		// gives the inner literals a nil Type, and an earlier version of this
+		// scan skipped every one of them. Production writes each hint
+		// explicitly today, so nothing was missed — but "nothing was missed
+		// today" is exactly the reasoning that let the previous hole through,
+		// and a producer is free to write the slice form tomorrow. Found by the
+		// fixture corpus below, which is the point of having one.
+		if array, ok := composite.Type.(*ast.ArrayType); ok && isSubjectHintType(array.Elt) {
+			for _, element := range composite.Elts {
+				if inner, ok := element.(*ast.CompositeLit); ok && inner.Type == nil {
+					scanHintLiteral(fset, inner, rel, found, unreadable)
+				}
+			}
+			return true
+		}
+		if !isSubjectHintType(composite.Type) {
+			return true
+		}
+		scanHintLiteral(fset, composite, rel, found, unreadable)
+		return true
+	})
+}
+
+// scanHintLiteral reads the Source: field of ONE subject-hint composite literal.
+func scanHintLiteral(fset *token.FileSet, composite *ast.CompositeLit, rel string, found map[string][]string, unreadable *[]string) {
+	for _, element := range composite.Elts {
+		kv, ok := element.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		key, ok := kv.Key.(*ast.Ident)
+		if !ok || key.Name != "Source" {
+			continue
+		}
+		site := rel + ":" + strconv.Itoa(fset.Position(kv.Pos()).Line)
+		literal, ok := kv.Value.(*ast.BasicLit)
+		if !ok || literal.Kind != token.STRING {
+			// The ONLY acceptable non-literal is a reference into this package,
+			// which is the shape a registered producer has. Anything else
+			// cannot be checked, and a check that cannot answer must say so
+			// rather than pass.
+			if referencesThisPackage(kv.Value) {
+				continue
+			}
+			*unreadable = append(*unreadable, site)
+			continue
+		}
+		value, unquoteErr := strconv.Unquote(literal.Value)
+		if unquoteErr != nil {
+			continue
+		}
+		found[value] = append(found[value], site)
+	}
+}
+
+// THE SCAN, RUN OVER A CORPUS THAT CONTAINS EVERY SHAPE — which production does
+// not and should not. Without this, the scan's unreadable branch is code no
+// test executes, and a mutation restoring the old skip survives the battery,
+// which is exactly what happened.
+func TestTheScanReportsEveryUnreadableSourceInAFixtureCorpus(t *testing.T) {
+	const fixture = `package fixture
+
+import "github.com/full-chaos/dev-health-acr/internal/contextfabric/hintsource"
+
+var runtimeSource = "built_at_runtime"
+
+func derive() string { return runtimeSource }
+
+type cfg struct{ Source string }
+
+func mint() []SubjectHint {
+	c := cfg{}
+	return []SubjectHint{
+		{Source: "prior_subject_receipt"},
+		{Source: "an_unregistered_literal"},
+		{Source: string(hintsource.PriorSubjectReceipt)},
+		{Source: hintsource.AnswerReuseAuthorizationRecheck},
+		{Source: runtimeSource},
+		{Source: derive()},
+		{Source: c.Source},
+		{Source: "prior" + "_subject_receipt"},
+	}
+}
+`
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "fixture.go", fixture, 0)
+	if err != nil {
+		t.Fatalf("the fixture does not parse: %v", err)
+	}
+	found := map[string][]string{}
+	var unreadable []string
+	scanHintSources(fset, file, "fixture.go", found, &unreadable)
+	t.Logf("found=%v unreadable=%v", found, unreadable)
+
+	for _, value := range []string{"prior_subject_receipt", "an_unregistered_literal"} {
+		if len(found[value]) != 1 {
+			t.Errorf("the scan did not read the literal %q; found=%v", value, found)
+		}
+	}
+	// FOUR shapes it cannot read: a variable, a call, a field, and a
+	// concatenation of literals. Every one is a way a producer could mint an
+	// unregistered source, and every one must be REPORTED rather than skipped.
+	if len(unreadable) != 4 {
+		t.Errorf("the scan reported %d unreadable sources, want 4 — a shape it silently skipped is a shape a "+
+			"producer can mint anything through. unreadable=%v", len(unreadable), unreadable)
+	}
+	// The two package-constant shapes are accepted silently, so the eight
+	// values split 2 read + 4 refused + 2 accepted.
+	if len(found)+len(unreadable) != 6 {
+		t.Errorf("the scan accounted for %d of the 8 Source: values; the two hintsource references should be "+
+			"accepted silently and the rest split between found and unreadable. found=%v unreadable=%v",
+			len(found)+len(unreadable), found, unreadable)
+	}
 }
 
 // referencesThisPackage reports whether an expression mentions the hintsource
