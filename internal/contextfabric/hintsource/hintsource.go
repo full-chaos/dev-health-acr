@@ -106,9 +106,6 @@ func Lookup(source string) Attributes {
 	return Attributes{EngineMinted: false, ContestExempt: true, ShortCircuitEligible: true}
 }
 
-// EngineMinted reports whether this engine wrote this source string.
-func EngineMinted(source string) bool { return Lookup(source).EngineMinted }
-
 // All returns every enumerated source, for the tests that must enumerate the
 // registry rather than restate it. Sorted is not required: callers that need
 // order sort it themselves; what matters is that this is the SAME map the

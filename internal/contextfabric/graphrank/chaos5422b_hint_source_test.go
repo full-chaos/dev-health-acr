@@ -105,9 +105,24 @@ func TestTheRecheckIsEngineMintedAndStillShortCircuitEligible(t *testing.T) {
 		t.Errorf("a prior-subject receipt is engine-minted and neither contest-exempt nor short-circuit "+
 			"eligible. got %+v", receipt)
 	}
-	if receipt.EngineMinted == recheck.ContestExempt && receipt.ContestExempt == recheck.ContestExempt {
-		t.Errorf("authorship and policy agree on every member, so this fixture cannot tell a collapsed boolean " +
-			"from the split one and measures nothing")
+	// THE CONTROL, and r2 found the previous one compared the wrong fields: it
+	// tested `receipt.EngineMinted == recheck.ContestExempt`, which relates two
+	// different members and can never express the thing the message claims.
+	//
+	// What has to be true is that SOME member's authorship differs from its own
+	// contest policy. That is the only reason the two fields cannot be one
+	// boolean, so if no member has it, this whole test measures nothing.
+	disagrees := false
+	for _, source := range hintsource.All() {
+		attributes := hintsource.Lookup(string(source))
+		if attributes.EngineMinted != !attributes.ContestExempt {
+			disagrees = true
+		}
+	}
+	if !disagrees {
+		t.Errorf("no enumerated member has authorship disagreeing with its own contest policy, so a single "+
+			"boolean would serve and this fixture cannot tell the collapsed design from the split one. "+
+			"members=%v", hintsource.All())
 	}
 	// THE FAILURE DIRECTION for the CONTEST, which is what an unclassified
 	// candidate source must fall to. An unenumerated hint STRING is caller
