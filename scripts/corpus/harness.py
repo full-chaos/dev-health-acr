@@ -112,17 +112,25 @@ def post(body):
     t0 = time.time()
     try:
         with urllib.request.urlopen(req, timeout=180) as resp:
-            status, payload = resp.status, json.loads(resp.read().decode("utf-8"))
+            status, raw = resp.status, resp.read()
     except urllib.error.HTTPError as e:
-        status = e.code
-        try:
-            payload = json.loads(e.read().decode("utf-8"))
-        except Exception:
-            # Built FROM the shared key set, so this body cannot carry a failure key
-            # the classifier does not know about.
-            payload = {contract.ERROR_BODY_KEY: "unparseable body"}
+        status, raw = e.code, e.read()
     except Exception as e:  # noqa: BLE001 -- a transport failure is a row, not a crash
+        # NO EXCHANGE HAPPENED AT ALL (connection refused, DNS, read timeout): the only
+        # arm that writes status 0.
         return 0, {contract.ERROR_BODY_KEY: str(e)}, time.time() - t0
+    # An exchange COMPLETED -- `status` is real, whether or not it was an HTTPError.
+    # Decoding happens OUTSIDE the transport try/except above (CHAOS-5380 r3 P1-1): a
+    # decode failure here is a fact about the BODY, not about whether the service was
+    # reached, so it must never fall into the same `except Exception` as a transport
+    # failure and get reported as status 0.
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception:
+        # Built FROM the shared key set, so this body cannot carry a failure key the
+        # classifier does not know about. Distinct key from the transport arm's: this
+        # exchange completed, that one never happened.
+        payload = {contract.UNDECODABLE_BODY_KEY: "unparseable body"}
     return status, validate_live_payload(status, payload), time.time() - t0
 
 

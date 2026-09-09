@@ -53,6 +53,12 @@ CLASSES = (
     # vocabulary is TOTAL -- an attempt that cannot be placed must land somewhere
     # visible, not in ok_200, which is the entire defect this module exists to stop.
     "failure_under_2xx",
+    # An exchange COMPLETED -- a real status came back -- but the body itself did not
+    # decode. CHAOS-5380 r3 P1-1: `harness.post` used to decode inside its transport
+    # try/except, so this shape was reported as status 0, indistinguishable from a
+    # refused connection. chris's ruling (iii): add the member, name it for the fact
+    # (a completed 2xx whose body would not decode), not for how it is used.
+    "served_2xx_undecodable_body",
     # No HTTP exchange happened at all: harness.post returns status 0 on any
     # transport exception (connection refused, DNS, read timeout), with no failure
     # envelope. Distinct from a 5xx: "never reached the service" and "the service
@@ -255,6 +261,13 @@ def classify(attempt):
     # service" and "the service answered 5xx" are different facts about a run.
     if not contract.reached_the_service(http):
         return "transport_failure"
+    # The exchange COMPLETED (reached_the_service above), but the body itself did not
+    # decode -- `harness.post`'s dedicated key for exactly that (never the generic
+    # ERROR_BODY_KEY, which a body that decoded fine and reported failure also carries).
+    # r3 P1-1 / chris's ruling (iii).
+    response = attempt.get("response")
+    if isinstance(response, dict) and contract.UNDECODABLE_BODY_KEY in response:
+        return "served_2xx_undecodable_body"
     # Keyed on the CODE, not on a status pair: the consumer's 502 and the upstream's 200
     # are both true, and neither one alone names what happened.
     if failure.get("code") == "acr_contract_violation":

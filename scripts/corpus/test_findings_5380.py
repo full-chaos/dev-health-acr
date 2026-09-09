@@ -480,6 +480,62 @@ def test_a_transport_failure_is_not_ok_200():
     assert AC.classify(_attempt(503)) == "upstream_503"
 
 
+def test_a_completed_2xx_with_an_undecodable_body_is_not_a_transport_failure():
+    """r3 P1-1, chris's ruling (iii) "add the member": a completed exchange whose body
+    will not decode is its own class, `served_2xx_undecodable_body` -- not
+    `transport_failure`, and not indistinguishable from a refused connection.
+
+    `harness.py:115` used to put the JSON decode INSIDE the transport `try`, so a real
+    200 exchange whose body failed to parse was caught by the same broad `except
+    Exception` as a connection refusal, and both wrote `status=0, {"error": ...}`. This
+    repro drives the REAL harness against a REAL socket for both shapes -- a server that
+    completes with 200 and a non-JSON body, and a closed port -- and requires the two
+    artefacts to be told apart.
+    """
+    saved_base, saved_out = harness.BASE, harness.OUTDIR
+    with tempfile.TemporaryDirectory() as tmp, _ScriptedServer() as srv:
+        harness.BASE = f"http://127.0.0.1:{srv.port}/api/investigations"
+        harness.OUTDIR = Path(tmp)
+        srv.status, srv.raw = 200, True          # 200, body is not JSON
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                status, response, _dt = harness.post({"question": "x"})
+        finally:
+            harness.BASE, harness.OUTDIR = saved_base, saved_out
+    bad_200 = {"request": {"question": "x"}, "status": status, "dt": 0.0,
+              "response": response}
+
+    import socket
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    dead_port = probe.getsockname()[1]
+    probe.close()
+    saved_base2 = harness.BASE
+    harness.BASE = f"http://127.0.0.1:{dead_port}/api/investigations"
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            c_status, c_response, _dt = harness.post({"question": "x"})
+    finally:
+        harness.BASE = saved_base2
+    closed_port = {"request": {"question": "x"}, "status": c_status, "dt": 0.0,
+                   "response": c_response}
+
+    assert VAL.validate_attempt(bad_200)[0], "the undecodable-200 artefact must be loadable"
+    assert VAL.validate_attempt(closed_port)[0], "the transport artefact must be loadable"
+
+    # THE DEFECT, named: today these two real artefacts are identical in shape.
+    assert bad_200["status"] != 0, (
+        "a completed 200 exchange with an undecodable body was reported as status 0, "
+        "indistinguishable from a refused connection")
+    assert AC.classify(closed_port) == "transport_failure", AC.classify(closed_port)
+    assert AC.classify(bad_200) == "served_2xx_undecodable_body", AC.classify(bad_200)
+    assert AC.classify(bad_200) != AC.classify(closed_port), \
+        "a completed exchange and a refused connection must not share a class"
+    assert AC.failed(bad_200) is True
+    # The real status travels with the row, not 0.
+    assert bad_200["status"] == 200, bad_200["status"]
+
+
 def test_sub_200_statuses_other_than_zero_are_transport_failures():
     """The rest of the sub-200 band. Nothing writes 1 or 199 today; the point of a closed
     total vocabulary is that a status nobody writes yet still lands somewhere visible."""
