@@ -568,6 +568,48 @@ def test_a_completed_2xx_with_an_undecodable_body_is_not_a_transport_failure():
     assert closed_port["body_undecodable"] is False, closed_port
 
 
+def test_a_malformed_body_undecodable_field_is_refused_not_silently_read():
+    """r7 (astra) P1: `body_undecodable` had no entry in `artefact_schema.json`, so
+    `validators.load_attempt` accepted ANY type for it, and both consumers
+    (`attempt_classes.failed`/`classify`) read it by TRUTHINESS rather than as a bool.
+    A corrupted on-disk artefact therefore produced a MEASURED result instead of being
+    refused: a string `"false"` (truthy) read as `body_undecodable=True`; a `[]`
+    (falsy) read as `body_undecodable=False` -- neither is a real signal, both are
+    silently accepted and CLASSIFIED.
+
+    Fixed: `body_undecodable` is declared `type: bool` in the schema (an explicit,
+    documented `unmeasured` entry -- this field is new, not yet observed in real
+    traffic, same convention as `request_id`'s existing unmeasured entry). A present
+    non-bool value now fails `validate_attempt`/`validate_response`, so a malformed
+    artefact is REFUSED, never measured.
+    """
+    for bad in ("false", "true", [], 1, 0, "", None):
+        a = {"request": {}, "status": 200, "dt": 0.0, "response": {},
+             "body_undecodable": bad}
+        ok, reason = VAL.validate_attempt(a)
+        if bad is None:
+            # None is explicitly null, which _type_ok admits only where nullable=True;
+            # this field is not declared nullable, so None is refused too.
+            assert not ok, f"a null body_undecodable is accepted: {a}"
+        else:
+            assert not ok, (
+                f"a malformed body_undecodable={bad!r} was ACCEPTED by the loader "
+                f"instead of refused: reason={reason!r}")
+
+    # NEGATIVE CONTROL: the two real values the producer actually writes are still fine.
+    for good in (True, False):
+        a = {"request": {}, "status": 200, "dt": 0.0, "response": {},
+             "body_undecodable": good}
+        ok, reason = VAL.validate_attempt(a)
+        assert ok, f"a real bool body_undecodable={good!r} was refused: {reason}"
+
+    # An OLDER artefact written before this field existed (key absent entirely) is
+    # still loadable -- the field is optional, not retroactively required.
+    old = {"request": {}, "status": 200, "dt": 0.0, "response": {}}
+    ok, reason = VAL.validate_attempt(old)
+    assert ok, f"an artefact predating body_undecodable was refused: {reason}"
+
+
 def test_a_body_read_failure_on_a_completed_exchange_does_not_crash_and_does_not_decode():
     """r4 (astra) finding 1: `e.read()` on the HTTPError arm sat OUTSIDE any try/except,
     so a body that starts a real HTTP exchange but is truncated mid-read

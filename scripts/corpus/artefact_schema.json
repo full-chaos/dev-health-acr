@@ -136,6 +136,12 @@
     "observed": {
      "int": 1063
     }
+   },
+   "body_undecodable": {
+    "type": "bool",
+    "unmeasured": true,
+    "consumer": "attempt_classes.classify/failed -- CHAOS-5380 r3 P1-1, r4/r5 fixes",
+    "observed": {}
    }
   },
   "attempt.request": {
