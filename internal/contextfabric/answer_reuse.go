@@ -9,6 +9,8 @@ import (
 	"unicode"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/hintsource"
 )
 
 // CanonicalizeQuestion reduces a caller's question text to the form
@@ -725,7 +727,7 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	if len(subjects) > 0 {
 		hints := make([]SubjectHint, 0, len(subjects))
 		for _, subject := range subjects {
-			hints = append(hints, SubjectHint{Kind: subject.Kind, ID: subject.CanonicalID, Label: subject.Label, Source: "answer_reuse_authorization_recheck"})
+			hints = append(hints, SubjectHint{Kind: subject.Kind, ID: subject.CanonicalID, Label: subject.Label, Source: string(hintsource.AnswerReuseAuthorizationRecheck)})
 		}
 		recheckRequest.RequestedScope.SubjectHints = hints
 	}

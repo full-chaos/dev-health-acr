@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/hintsource"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -2327,11 +2328,23 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		if subject.Label == "" {
 			subject.Label = subject.CanonicalID
 		}
-		// CHAOS-5422: ONE test of "who authored this hint", consulted both by
-		// the caller-sourced pool below and by the contest boundary's
-		// exemption at the insert -- see hintCandidateSource.
+		// CHAOS-5422: the hint's source is classified ONCE, by the closed
+		// enumeration the producers themselves write through, and the two
+		// decisions that follow read DIFFERENT ATTRIBUTES of that one answer.
+		//
+		// They are different questions and they have different answers. This
+		// one asks whether the hint may reach the caller-hint SHORT CIRCUIT
+		// below -- the exact-resolution exit that also stamps
+		// CommitBasisCallerCanonicalID. The contest boundary at the insert
+		// asks whether the hint is exempt from a kind refusal. The
+		// answer-reuse recheck is the case that separates them in practice:
+		// it is engine-minted, and it must still short-circuit, because that
+		// exit is where its subjects commit. Deriving both from one boolean
+		// either misnames its authorship or moves the reuse path onto hybrid
+		// search, which was measured before this split was written.
+		hintAttributes := hintsource.Lookup(hint.Source)
 		hintSource := hintCandidateSource(hint.Source)
-		if hintSource == sourceCallerHint {
+		if hintAttributes.ShortCircuitEligible {
 			callerSourced[SubjectKey(subject)] = true
 		}
 		node, ok, err := deps.ExactHint(ctx, subject)
