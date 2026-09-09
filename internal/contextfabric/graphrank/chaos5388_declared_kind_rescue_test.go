@@ -32,6 +32,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"log/slog"
 	"strings"
 	"testing"
@@ -347,5 +350,58 @@ func TestEverySummaryPassReportsTheSameDeclaredKinds(t *testing.T) {
 		if !strings.Contains(line, `"kind":"`+string(contextfabric.SubjectProject)+`"`) {
 			t.Errorf("summary %d of %d does not name the declared kind. line: %s", i+1, len(summaries), line)
 		}
+	}
+}
+
+// P9 -- EVERY PASS IS WIRED, asserted on the AST rather than on a fixture.
+//
+// The mutant that survived P8: the EVIDENCE-CENSUS re-decision can also drop
+// the ledger, and P8's fixture only reaches the confirmed-kind one. Rather
+// than claim the census path is unreachable — it is not, it is merely harder
+// to construct — this pin asserts the property directly where it lives: every
+// call in resolve.go into the internal cut entry passes the ledger, not nil.
+//
+// On the AST, never on the file's text: a grep-shaped check passes on a
+// commented-out call, and an unrecognised shape must be a FAILURE of the pin
+// rather than a silent skip.
+func TestEveryCutCallInResolveGoPassesTheRescueLedger(t *testing.T) {
+	t.Parallel()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "resolve.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse resolve.go: %v", err)
+	}
+	const target = "resolveFromMergedCandidatesWithAnchorSlot"
+	var seen int
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		ident, ok := call.Fun.(*ast.Ident)
+		if !ok || ident.Name != target {
+			return true
+		}
+		seen++
+		pos := fset.Position(call.Pos())
+		if len(call.Args) == 0 {
+			t.Errorf("%s at %s has no arguments; this pin cannot read its shape, which is a failure of the pin, not a skip", target, pos)
+			return true
+		}
+		last := call.Args[len(call.Args)-1]
+		arg, ok := last.(*ast.Ident)
+		if !ok {
+			t.Errorf("%s at %s passes an unrecognised final argument shape (%T); recorded rather than skipped", target, pos, last)
+			return true
+		}
+		if arg.Name != "kindRescue" {
+			t.Errorf("%s at %s passes %q as the rescue ledger, want kindRescue. A pass that drops it reports an EMPTY "+
+				"declared-kind list, and the last summary is the one an operator reads.", target, pos, arg.Name)
+		}
+		return true
+	})
+	if seen < 3 {
+		t.Fatalf("found %d call(s) to %s in resolve.go, want at least 3 (first pass, confirmed-kind re-decision, "+
+			"evidence-census re-decision); a pin that inspected fewer has not looked at the ones that matter", seen, target)
 	}
 }
