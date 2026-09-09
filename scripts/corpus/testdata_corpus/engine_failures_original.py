@@ -17,7 +17,6 @@ Usage: engine_failures.py <run-dir> [<run-dir> ...]
 import json, sys
 from pathlib import Path
 from collections import Counter
-import attempt_classes
 from validators import load_attempt
 
 def scan(root):
@@ -28,46 +27,45 @@ def scan(root):
         # shares one decoder with identity and the shard writer, so the three cannot
         # hold different opinions about the same file.
         ok, a, reason = load_attempt(f)
-        qid = f.stem.split("-rep")[0]
         if not ok:
-            out.append({"corpus_id": qid, "kind": "UNREADABLE_ARTEFACT",
+            out.append({"corpus_id": f.stem.split("-rep")[0], "kind": "UNREADABLE_ARTEFACT",
                         "detail": reason, "file": str(f)})
             continue
-        # CHAOS-5380: the kind ladder that used to live here is now
-        # attempt_classes.legacy_engine_failure_kind, shared with
-        # run_shard.attempt_diagnostics. Two modules counting attempts with two
-        # ladders agreed only by accident, and every instrument defect on this seam
-        # has been two counters disagreeing about one artefact. The STRINGS are
-        # unchanged on purpose -- they key post_hoc_attempt_classes in the merged
-        # verdict, which is an artefact of record -- and a pin holds every branch,
-        # including the old ladder's own 502/503 inconsistency.
-        #
-        # r1 #10 is preserved inside that helper: a gateway 504 often carries a
-        # non-JSON body, so there is no parsed `failure` object at all. Skipping on
-        # that dropped the attempt entirely -- run_shard counted it while this
-        # scanner reported nothing, so the two counters disagreed and the request
-        # evidence was lost.
-        kind = attempt_classes.legacy_engine_failure_kind(a)
-        if kind is None:
-            continue
-        resp = (a.get("response") or {})
-        fail = resp.get("failure") or {}
-        rec = {"corpus_id": qid, "kind": kind,
-               "attempt_http": a.get("status"),
-               "upstream_http": fail.get("httpStatus") if fail else a.get("status"),
-               "upstream_code": fail.get("upstreamCode"), "code": fail.get("code"),
-               "request_id": (fail.get("upstreamRequestId") if fail
-                              else (resp.get("request_id") if isinstance(resp, dict) else None)),
-               "dt": a.get("dt"), "file": str(f)}
+        fail = (a.get("response") or {}).get("failure") or {}
         if not fail:
-            rec["detail"] = "attempt carried no parsed failure object"
-        if kind == "RIG_CEILING_413":
+            # r1 #10. A gateway 504 often carries a non-JSON body, so there is no parsed
+            # `failure` object at all. Skipping on that dropped the attempt entirely --
+            # run_shard.attempt_diagnostics() counted it while this scanner reported
+            # nothing, so the two counters disagreed and the request evidence was lost.
+            # An attempt whose own HTTP status is a failure is classified from that.
+            st = a.get("status")
+            if isinstance(st, int) and st >= 400:
+                out.append({"corpus_id": f.stem.split("-rep")[0],
+                            "kind": f"UPSTREAM_{st}" if st in (504, 502, 503) else f"OTHER_{st}",
+                            "attempt_http": st, "upstream_http": st,
+                            "request_id": (a.get("response") or {}).get("request_id")
+                                          if isinstance(a.get("response"), dict) else None,
+                            "detail": "attempt carried no parsed failure object",
+                            "file": str(f)})
+            continue
+        qid = f.stem.split("-rep")[0]
+        up = fail.get("httpStatus")
+        rec = {"corpus_id": qid, "attempt_http": a.get("status"), "upstream_http": up,
+               "upstream_code": fail.get("upstreamCode"), "code": fail.get("code"),
+               "request_id": fail.get("upstreamRequestId"), "dt": a.get("dt"), "file": str(f)}
+        if up == 500:
+            rec["kind"] = "ENGINE_INVALID_RESULT"
+        elif up == 413:
+            rec["kind"] = "RIG_CEILING_413"
             rec["measured_items"] = fail.get("measuredItems")
             rec["max_items"] = fail.get("maxItems")
             rec["axis"] = (fail.get("narrowerContinuation") or {}).get("axis")
+        elif up == 504 or a.get("status") == 504:
+            rec["kind"] = "UPSTREAM_504"
+        else:
+            rec["kind"] = f"OTHER_{up}"
         out.append(rec)
     return out
-
 
 def main():
     if len(sys.argv) < 2:

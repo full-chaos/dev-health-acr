@@ -267,7 +267,21 @@ def test_validation_is_recursive_not_shallow():
 
 
 # ============================================================ (b) no substrings
-ACCEPTED_CLASSIFY_SHA = "5171dfe1c6091b7c"
+# MOVED for CHAOS-5380 (was 5171dfe1c6091b7c). `classify()` now asks
+# `attempt_classes.is_success_status(http)` instead of spelling `http != 200` itself, so
+# the row bucketer and the attempt classifier cannot hold different opinions about one
+# artefact -- a 201 classified `ok_200` at attempt level while its own row bucketed
+# `error`, and a pin asserted that WAS correct "as a positive control".
+#
+# THE RE-CHECK THIS PIN DEMANDS WAS DONE BEFORE THE DIGEST MOVED, and the digest written
+# here is the one THIS PIN PRINTED, never one re-derived with another extraction. All
+# seven archived arms were re-merged under both instruments (pristine
+# f4dfef13a1e86b8b759af81aa0503c6a4b931ff6 vs this branch) and compared PER ROW:
+# 252 rows, 0 moved bucket, 0 pre-existing row keys differ, and the seven
+# expectation_summary_split lines are identical arm for arm. The predicate is equivalent
+# for every status the archives contain; it differs only over 201-399, which no archive
+# holds and which the producer has never treated as served.
+ACCEPTED_CLASSIFY_SHA = "6b5fd8caa99267d1"
 
 
 def _classify_source():

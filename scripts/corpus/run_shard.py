@@ -35,7 +35,8 @@ HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 
 import harness  # noqa: E402
-from attempt_order import order_attempts  # noqa: E402
+import attempt_classes  # noqa: E402
+from attempt_order import order_attempts, parse_attempt_name  # noqa: E402
 from validators import load_attempt  # noqa: E402
 from corpus import CORPUS  # noqa: E402
 from shard_plan import plan  # noqa: E402
@@ -64,8 +65,8 @@ def last_attempt_file(outdir, qid, rep):
     return files[-1] if files else None
 
 
-def attempt_diagnostics(outdir, qid, rep):
-    """Per-ATTEMPT rig diagnostics, scanned across every attempt of the row.
+def attempt_diagnostics(outdir, qid, rep, harness_attempts=None):
+    """Per-ATTEMPT diagnostics, walked ONCE across every attempt of the row.
 
     NOT part of the field set compared against lane-corpus-sweep-1 — the 09-05
     baseline summary has no counterpart for these, so they are reported for the
@@ -74,24 +75,66 @@ def attempt_diagnostics(outdir, qid, rep):
     into a 200 leaves no trace in final_http, and the ramp smoke's reporter
     under-counted deadlines 2->0 and 3->0 for exactly that reason.
 
-    upstream_504_n   attempts whose upstream deadline'd (per the deadline ruling
-                     reclassification ruling reads this, not final_http)
-    overrun_413_n    attempts ACR rejected with an items/axis overrun; the
-                     baseline recorded ZERO 413s, so any non-zero value here is
-                     a real change and gets its own row in the deliverable
+    CHAOS-5380 widens this from two scalars to the SEQUENCE plus a total class
+    counter, because counting one class fixed one class. §6 of the
+    regression-diagnosis doc records eight sequential non-200 attempts comprising
+    four 422s, one 504, two 413s and one 400 — and until now a row said nothing
+    about the 422s or the 400 at all. The classification itself lives in
+    attempt_classes, shared with engine_failures, so the two counters that read
+    these artefacts cannot hold different opinions about one file.
+
+    attempt_outcomes  ordered per-attempt list: turn, attempt, class, http,
+                      upstream_http, code, dt_s. Ordered by RECORDED SEQUENCE via
+                      attempt_order, never by path.
+    attempts_total    len(attempt_outcomes)
+    attempts_retried  attempts beyond the first WITHIN EACH TURN, EXPLICIT zero when
+                      nothing was retried. NOT len-1: a row spans several TURNS and a new
+                      turn is a follow-up, not a retry. A live replicate caught the naive
+                      form calling 32 of 36 rows retried (69 reported against 6 real) --
+                      every pin fixture had put its attempts under t1, so the pins agreed
+                      with the bug
+    attempt_class_n   every member of the closed vocabulary, always present, so an
+                      absent measurement and a measured zero never look alike
+    upstream_504_n    unchanged name and meaning (the deadline reclassification
+                      selector and the merge diagnostics read it), now DERIVED from
+                      the same walk so it cannot drift from the class counter
+    overrun_413_n     likewise; overrun_detail keeps the LAST 413's continuation
     """
+    outcomes = []
+    counts = attempt_classes.zero_counts()
     n504 = n413 = 0
+    # attempts per TURN, so a retry can be told from a follow-up turn.
+    per_turn = {}
     overrun = None
     for f in attempt_files(outdir, qid, rep):
-        ok, a, _ = load_attempt(f)
+        parsed, seq = parse_attempt_name(f)
+        turn, index = (seq[1], seq[2]) if parsed else (None, len(outcomes) + 1)
+        per_turn[turn] = per_turn.get(turn, 0) + 1
+        ok, a, reason = load_attempt(f)
         if not ok:
+            # r6 (d), restated: an artefact we cannot read is REPORTED, never
+            # skipped. A scanner that drops what it cannot parse describes a
+            # smaller, cleaner run than the one that happened.
+            outcomes.append(attempt_classes.unreadable_outcome(turn, index, reason))
+            counts["unreadable"] += 1
             continue
-        failure = (a.get("response") or {}).get("failure") or {}
-        up = failure.get("httpStatus")
-        if a.get("status") == 504 or up == 504:
+        # classify() is read DIRECTLY rather than off the record outcome() returns.
+        # Both go through the one classifier, so they cannot disagree -- and the
+        # CHAOS-5430 consumer sweep, which correctly refuses to guess what a call it
+        # cannot follow returned, has no unresolved read to report. Subscripting the
+        # returned record here was exactly the shape it exists to catch.
+        cls = attempt_classes.classify(a)
+        outcomes.append(attempt_classes.outcome(a, turn, index))
+        counts[cls] += 1
+        # The two FROZEN counters are INDEPENDENT tests, not readings of the exclusive
+        # class (codex r4 P1). An attempt may count as both a 504 and a 413; deriving them
+        # from `cls` silently dropped the deadline on every 504 the engine answered with an
+        # inner 422 or 413, and the deadline-reclassification selector reads that counter.
+        if attempt_classes.is_upstream_504(a):
             n504 += 1
-        if up == 413:
+        if attempt_classes.is_overrun_413(a):
             n413 += 1
+            failure = (a.get("response") or {}).get("failure") or {}
             overrun = {
                 "axis": (failure.get("narrowerContinuation") or {}).get("axis"),
                 "family": (failure.get("narrowerContinuation") or {}).get("family"),
@@ -99,7 +142,33 @@ def attempt_diagnostics(outdir, qid, rep):
                 "measured_items": failure.get("measuredItems"),
                 "max_items": failure.get("maxItems"),
             }
-    return {"attempt_upstream_504_n": n504, "attempt_overrun_413_n": n413,
+    # RECONCILIATION. The harness counts its own attempts as it makes them; this walk
+    # counts the artefacts they left. Those two numbers are produced independently and
+    # must agree, and when they do not the row is NOT MEASURED -- it is a row we are
+    # missing evidence about, and it says so instead of publishing a smaller, cleaner
+    # run than the one that happened.
+    #
+    # Review round 2 found the shape: `attempt_files` silently drops a filename that
+    # matches the glob but cannot be sequenced (it lands in UNSEQUENCED, which nothing
+    # downstream read), so a row published attempts_total=1 against the harness's 2 and
+    # the 504 that second attempt carried simply vanished -- while the class table stayed
+    # structurally complete, so the merge's exact-key guard passed it. Every defect on
+    # this seam has been caught by two counters disagreeing; this makes them disagree
+    # OUT LOUD rather than quietly.
+    reconciled = harness_attempts is None or harness_attempts == len(outcomes)
+    unsequenced = sorted(set(UNSEQUENCED.get(qid) or []))
+    return {"attempt_outcomes": outcomes,
+            "attempts_total": len(outcomes),
+            "attempts_reconciled": reconciled,
+            "harness_attempts": harness_attempts,
+            "unsequenced_files": unsequenced,
+            # Per TURN. `sum(n - 1)` over the turns, never len(outcomes) - 1.
+            "attempts_retried": sum(n - 1 for n in per_turn.values()),
+            "attempt_class_n": counts,
+            # INDEPENDENT counts, same walk, ORIGINAL predicate shapes -- never
+            # counts["upstream_504"] / counts["overrun_413"], which are exclusive.
+            "attempt_upstream_504_n": n504,
+            "attempt_overrun_413_n": n413,
             "overrun_detail": overrun}
 
 
@@ -141,7 +210,9 @@ def detail_for(outdir, qid, row, r, dt, rep):
         detail["last_turn_dt_s"] = last.get("dt")
         detail["failure_code"] = failure.get("code")
         detail["last_http"] = last.get("status")
-    detail.update(attempt_diagnostics(outdir, qid, rep))
+    # r["attempts"] is the harness's OWN count, passed in so the walk can reconcile
+    # against it rather than be the only witness to what happened.
+    detail.update(attempt_diagnostics(outdir, qid, rep, harness_attempts=r.get("attempts")))
     return detail
 
 
