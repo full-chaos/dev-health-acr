@@ -1346,6 +1346,45 @@ def test_scan_still_reports_the_same_kinds_through_the_shared_classifier():
     assert kinds == ["ENGINE_INVALID_RESULT", "OTHER_422", "RIG_CEILING_413", "UPSTREAM_504"], kinds
 
 
+def test_scan_reports_the_full_record_not_only_the_kind():
+    """r7 (astra) P3: `test_scan_still_reports_the_same_kinds_through_the_shared_
+    classifier` above checks `kind` only -- `upstream_http`, `request_id`, `detail`
+    and the RIG_CEILING_413 extras (`measured_items`/`axis`) had no pin at all.
+    Named per-field, over a fixture where the "failure present" and "failure absent"
+    arms produce DIFFERENT values for each field, so a dropped or swapped source
+    cannot hide behind an accidental match.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        out, _ = _write_turns(tmp, {1: [
+            # failure PRESENT: upstream_http/request_id come FROM the failure object.
+            _attempt(200, failure={"httpStatus": 500, "upstreamRequestId": "up-req-1"}),
+            # failure ABSENT (bare 504): upstream_http falls back to the attempt's OWN
+            # status; request_id falls back to the response's own top-level field.
+            {"request": {}, "dt": 1.0, "status": 504, "response": {"request_id": "resp-req-2"}},
+            # RIG_CEILING_413, with the narrower-continuation extras.
+            _attempt(200, failure={"httpStatus": 413, "measuredItems": 33, "maxItems": 30,
+                                   "narrowerContinuation": {"axis": "team"}}),
+        ]})
+        by_kind = {r["kind"]: r for r in EF.scan(out.parent)}
+
+    engine = by_kind["ENGINE_INVALID_RESULT"]
+    assert engine["upstream_http"] == 500, engine
+    assert engine["request_id"] == "up-req-1", engine
+    assert engine.get("detail") is None, "a PRESENT failure object must not carry the no-fail detail"
+
+    bare504 = by_kind["UPSTREAM_504"]
+    assert bare504["upstream_http"] == 504, (
+        f"a bare 504 (no failure object) must fall back to the attempt's OWN status: {bare504}")
+    assert bare504["request_id"] == "resp-req-2", (
+        f"a bare 504 must fall back to the response's own request_id: {bare504}")
+    assert bare504.get("detail") == "attempt carried no parsed failure object", bare504
+
+    ceiling = by_kind["RIG_CEILING_413"]
+    assert ceiling["measured_items"] == 33, ceiling
+    assert ceiling["max_items"] == 30, ceiling
+    assert ceiling["axis"] == "team", ceiling
+
+
 def test_the_frozen_counters_are_INDEPENDENT_predicates():
     """DEFECT 7 (codex r4 P1-1). The two frozen counters were rebuilt off the EXCLUSIVE
     class -- one class per attempt -- but the originals are INDEPENDENT tests, and an
@@ -1672,8 +1711,12 @@ def test_detail_for_reconciles_against_the_harness_count():
     for three rounds. This one drives `detail_for` itself and requires the flag to FLIP
     with the harness's own count, so a decorative parameter cannot satisfy it.
     """
+    rich_last = _attempt(200, result={
+        "status": "complete", "request_id": "req-detail-1", "result_id": "res-1",
+        "claimed_facts": [{"a": 1}, {"a": 2}],
+        "completeness": {"state": "complete"}})
     with tempfile.TemporaryDirectory() as tmp:
-        out, _ = _write_turns(tmp, {1: [_attempt(504), _served()]})
+        out, _ = _write_turns(tmp, {1: [_attempt(504), rich_last]})
         base_r = {"final_http": 200, "final_payload_status": "complete",
                   "chain": ["t1=complete"], "wrong_kind_flag": False,
                   "wrong_subject_flag": False, "subject_kind_mismatch_flag": False}
@@ -1687,6 +1730,14 @@ def test_detail_for_reconciles_against_the_harness_count():
     assert disagreeing["attempts_reconciled"] is False, \
         "detail_for does not pass the harness's own count through to the walk"
     assert disagreeing["harness_attempts"] == 5, disagreeing
+
+    # r7 (astra) P3: `if f:` (a real last-attempt file was found) guards the block that
+    # adds `last_request_id`/`claimed_facts_n`/`completeness_state` -- negating it drops
+    # every one of those fields silently, and nothing checked they were ever added at all.
+    assert agreeing["last_request_id"] == "req-detail-1", agreeing
+    assert agreeing["last_result_id"] == "res-1", agreeing
+    assert agreeing["claimed_facts_n"] == 2, agreeing
+    assert agreeing["completeness_state"] == "complete", agreeing
 
 
 def test_the_unsequenced_register_is_scoped_to_the_row_it_reports():
