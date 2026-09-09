@@ -352,16 +352,49 @@ def test_an_attempt_with_no_status_is_not_silently_served():
     """A1=absent. The loader ACCEPTS a status-less attempt, so this cell is reachable.
     It must fail CLOSED: no status is not evidence of service.
 
-    Disclosed rather than hidden: `unreadable` currently names two different facts -- an
-    artefact that did not parse, and one that parsed but carried no status. Both fail
-    closed, which is the property that matters here; distinguishing them changes a
-    published vocabulary and is not this change's call to make.
+    `unreadable` names two different facts -- an artefact that did not parse, and one
+    that parsed but carried no status. Both fail closed, which is the property that
+    matters here, and the two are now told apart by `unreadable_reason` BESIDE the class
+    (team-lead ruling: keep the published vocabulary, add the reason). See
+    test_every_unreadable_outcome_says_WHY for both values and the None case.
     """
     a = _attempt(None)
     assert VAL.validate_attempt(a)[0], "a status-less attempt must be loadable"
     assert AC.failed(a) is True
     assert AC.classify(a) == "unreadable", AC.classify(a)
+    assert AC.unreadable_reason(a) == AC.UNREADABLE_STATUS_ABSENT, AC.unreadable_reason(a)
     assert AC.legacy_engine_failure_kind(a) is None, "the original yields no record here"
+
+
+def test_every_unreadable_outcome_says_WHY():
+    """q1, ruled by team-lead: the class vocabulary is UNCHANGED and the reason rides
+    beside it. `unreadable` covers two genuinely different instrument failures -- a file
+    the loader could not decode, and one it decoded that carried no `status` -- and a
+    reader must not have to guess which happened.
+
+    The key is present on EVERY outcome record, None included: a missing key and a
+    known-readable attempt must never look alike, the same rule the class table's
+    explicit zeros follow.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        out, _ = _write_turns(tmp, {1: [_attempt(None), _served(), _attempt(504)]})
+        (out / "q-a-rep1-t1-a4.json").write_text("{ not json")
+        diag = _diagnose(out)
+    seq = diag["attempt_outcomes"]
+    assert len(seq) == 4, seq
+    assert all("unreadable_reason" in o for o in seq), \
+        "the key must be present on EVERY record, not only the unreadable ones"
+    got = [(o["class"], o["unreadable_reason"]) for o in seq]
+    assert got == [("unreadable", AC.UNREADABLE_STATUS_ABSENT),
+                   ("ok_200", None),
+                   ("upstream_504", None),
+                   ("unreadable", AC.UNREADABLE_PARSE_FAILED)], got
+    # The two reasons must be DIFFERENT values, or the field carries no information.
+    assert AC.UNREADABLE_STATUS_ABSENT != AC.UNREADABLE_PARSE_FAILED
+    # NEGATIVE CONTROL: a readable, served attempt reports None -- so a non-None value
+    # is a measurement rather than a constant.
+    assert AC.unreadable_reason(_served()) is None
+    assert AC.unreadable_reason(_attempt(502)) is None
 
 
 def test_the_measured_shapes_of_the_live_run_all_classify_correctly():
@@ -710,7 +743,9 @@ def test_an_unreadable_attempt_is_recorded_never_skipped():
     classes = [a["class"] for a in diag["attempt_outcomes"]]
     assert classes == ["upstream_504", "unreadable"], classes
     assert diag["attempt_class_n"]["unreadable"] == 1, diag["attempt_class_n"]
-    assert diag["attempt_outcomes"][1].get("detail"), "the reason must travel with the record"
+    assert diag["attempt_outcomes"][1].get("detail"), "the loader's message must travel with the record"
+    assert diag["attempt_outcomes"][1]["unreadable_reason"] == AC.UNREADABLE_PARSE_FAILED, \
+        diag["attempt_outcomes"][1]
 
 
 def test_every_file_on_disk_is_accounted_for():
@@ -763,6 +798,37 @@ def test_a_dropped_artefact_makes_the_row_unmeasured():
     assert clean["attempts_reconciled"] is True, clean
     assert MC.attempt_class_totals([{"corpus_id": "q-a", **clean}])[
         "attempt_class_totals"]["upstream_504"] == 1
+
+
+def test_a_row_with_no_artefacts_at_all_is_unmeasured():
+    """B1's ZERO-FILES cell, on its own because it is the degenerate one and degenerate
+    cells are where a guard gets written as "or empty". A row whose walk found NOTHING
+    while the harness says it made attempts is the emptiest possible version of the
+    dropped-artefact defect, and it must refuse exactly like the others.
+
+    NOT RED-FIRST, and it is labelled rather than counted: this behaviour is already
+    correct in the first commit of this branch, so the pin PASSES there. It is a
+    coverage pin for a cell nothing exercised, and its power to discriminate is proven
+    by its mutant arm (the reconciliation guard widened with `or not outcomes`), never
+    by a red run it never had.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        out, _ = _write_turns(tmp, {})
+        empty = _diagnose(out, harness_attempts=2)
+        # ...and the same empty walk with NO harness count is reconciled: the check is
+        # about disagreement, not about emptiness.
+        silent = _diagnose(out, harness_attempts=None)
+    assert empty["attempts_total"] == 0 and empty["attempt_outcomes"] == [], empty
+    assert empty["attempts_retried"] == 0, empty
+    assert empty["attempts_reconciled"] is False, \
+        "a row with no artefacts against a harness that made 2 attempts is NOT measured"
+    assert set(empty["attempt_class_n"]) == set(AC.CLASSES), empty
+    assert silent["attempts_reconciled"] is True, silent
+    # ...and the merge refuses the unreconciled one rather than summing its zeros.
+    refused = MC.attempt_class_totals([{"corpus_id": "q-a", **empty}])
+    assert refused["attempt_classes_unavailable"] == 1, refused
+    assert refused["attempt_class_totals"] is None, \
+        "an all-zero class table from a walk that found nothing is not a measurement"
 
 
 def test_reconciliation_over_the_enumerated_harness_counts():
@@ -893,22 +959,34 @@ def test_the_merge_refusal_is_total_over_the_row_table_space():
     assert any(t for _n, _t, t in c1) and any(not t for _n, _t, t in c1)
 
 
-def test_every_refused_row_is_counted_and_the_named_subset_is_disclosed():
-    """C4. `attempt_classes_unavailable_ids` filters falsy corpus ids, so a row with no
-    id is COUNTED but never NAMED. The count is the load-bearing number and it is
-    complete; the id list is a strict subset of it, and that asymmetry is pinned here so
-    a reader cannot mistake a short list for a short count.
+def test_every_refused_row_is_counted_AND_named():
+    """C4, ruled by team-lead: a row with no corpus id is named `<no corpus_id>` rather
+    than dropped from the list.
+
+    An earlier version filtered falsy ids out, so an unnamed row appeared in the count
+    and in nothing else -- and a list shorter than the count beside it reads as a
+    reporting bug rather than as the unnamed row it actually is. There is now no shape
+    that is counted and unnamed, and the two lengths are asserted EQUAL.
     """
     rows = [{"corpus_id": "named", "attempts": 1},
             {"corpus_id": "", "attempts": 1},
             {"attempts": 1}]
     got = MC.attempt_class_totals(rows)
-    assert got["attempt_classes_unavailable"] == 3, \
-        "an unnamed row must still be COUNTED as unavailable"
+    assert got["attempt_classes_unavailable"] == 3, got
     assert got["attempt_class_totals"] is None, got
-    assert got["attempt_classes_unavailable_ids"] == ["named"], got
-    assert len(got["attempt_classes_unavailable_ids"]) < got["attempt_classes_unavailable"], \
-        "this pin exists to hold the count/name asymmetry visible; it has changed"
+    assert got["attempt_classes_unavailable_ids"] == [
+        MC.NO_CORPUS_ID, MC.NO_CORPUS_ID, "named"], got
+    assert len(got["attempt_classes_unavailable_ids"]) == got["attempt_classes_unavailable"], \
+        "every counted row must also be named"
+    # The unreconciled detail list names it the same way, so one run never spells the
+    # same missing id two ways.
+    unrec = MC.attempt_class_totals(
+        [{"attempts_reconciled": False, "attempt_class_n": AC.zero_counts(),
+          "harness_attempts": 2, "attempts_total": 1}])
+    assert unrec["attempt_classes_unreconciled"][0]["corpus_id"] == MC.NO_CORPUS_ID, unrec
+    # NEGATIVE CONTROL: a named row keeps its own id; the stand-in is not applied to all.
+    named = MC.attempt_class_totals([{"corpus_id": "q-a", "attempts": 1}])
+    assert named["attempt_classes_unavailable_ids"] == ["q-a"], named
 
 
 def test_merged_row_carries_the_sequence_beside_the_bucket():

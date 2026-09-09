@@ -241,7 +241,36 @@ def outcome(attempt, turn, index):
         "upstream_http": upstream,
         "code": (failure or {}).get("code") if isinstance(failure, dict) else None,
         "dt_s": attempt.get("dt"),
+        # ALWAYS PRESENT, None when the attempt is not unreadable. See
+        # unreadable_reason() for why the class alone is not enough.
+        "unreadable_reason": unreadable_reason(attempt),
     }
+
+
+# The two distinct facts `unreadable` names. They are different failures of the
+# instrument and a reader must not have to guess which one happened.
+UNREADABLE_PARSE_FAILED = "parse_failed"
+UNREADABLE_STATUS_ABSENT = "status_absent"
+
+
+def unreadable_reason(attempt):
+    """WHY this attempt is unreadable, or None if it is not.
+
+    `unreadable` covers two genuinely different facts: an artefact the loader could not
+    decode at all, and one it decoded perfectly that carried no `status` (the loader
+    ACCEPTS that -- measured, and pinned). Both fail CLOSED, which is the property that
+    matters, but they are different instrument failures: the first says the file is
+    damaged, the second says the harness wrote an attempt without recording what the
+    consumer answered. Collapsing them into one word is the same shape of loss this
+    module exists to stop, one level down, so the reason travels beside the class.
+
+    The key is present on EVERY outcome record, None included -- a missing key and a
+    known-not-unreadable attempt must never look alike, exactly as with the class table's
+    explicit zeros.
+    """
+    if classify(attempt) != "unreadable":
+        return None
+    return UNREADABLE_STATUS_ABSENT
 
 
 def unreadable_outcome(turn, index, reason):
@@ -253,7 +282,12 @@ def unreadable_outcome(turn, index, reason):
     """
     return {"turn": turn, "attempt": index, "class": "unreadable",
             "http": None, "upstream_http": None, "code": None, "dt_s": None,
-            "detail": reason}
+            # The loader's own message, kept verbatim for a human reading one row...
+            "detail": reason,
+            # ...and the CLOSED reason beside it, for anything counting rows. This is
+            # the artefact that did not decode; a decoded attempt with no `status` is
+            # the other value, and unreadable_reason() assigns it.
+            "unreadable_reason": UNREADABLE_PARSE_FAILED}
 
 
 def legacy_engine_failure_kind(attempt):

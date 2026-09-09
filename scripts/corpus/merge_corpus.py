@@ -164,6 +164,11 @@ def classification_by_row(records):
     return out
 
 
+# The stand-in name for a row that carries no corpus id. A literal rather than an
+# omission, so the id list and the unavailable count are always the same length.
+NO_CORPUS_ID = "<no corpus_id>"
+
+
 def attempt_class_totals(rows):
     """Run-level per-class attempt totals, or an explicit REFUSAL. CHAOS-5380.
 
@@ -202,18 +207,22 @@ def attempt_class_totals(rows):
         # from an instrument that predates the check -- also not something to sum.
         return row.get("attempts_reconciled") is not True
 
-    unavailable = [r.get("corpus_id") for r in rows if unmeasured(r)]
+    # A row with no corpus id is COUNTED and NAMED. An earlier version filtered falsy
+    # ids out of the list, so an unnamed row was in the count and in nothing else --
+    # a short list beside a longer count reads as a reporting bug rather than as the
+    # unnamed row it actually is. There is no shape here that is counted and unnamed.
+    unavailable = [r.get("corpus_id") or NO_CORPUS_ID for r in rows if unmeasured(r)]
     result = {"attempt_classes_unavailable": len(unavailable),
-              "attempt_classes_unavailable_ids": sorted(i for i in unavailable if i),
+              "attempt_classes_unavailable_ids": sorted(unavailable),
               # WHY each refused row was refused, so a reader never has to guess
               # between "no class table" and "the walk lost an artefact". Carries the
               # two disagreeing counts and the filenames that could not be sequenced.
               "attempt_classes_unreconciled": [
-                  {"corpus_id": r.get("corpus_id"),
+                  {"corpus_id": r.get("corpus_id") or NO_CORPUS_ID,
                    "harness_attempts": r.get("harness_attempts"),
                    "attempts_total": r.get("attempts_total"),
                    "unsequenced_files": r.get("unsequenced_files") or []}
-                  for r in sorted(rows, key=lambda x: x.get("corpus_id") or "")
+                  for r in sorted(rows, key=lambda x: x.get("corpus_id") or NO_CORPUS_ID)
                   if r.get("attempts_reconciled") is False]}
     if unavailable:
         # Withheld deliberately. A zeroed table beside a non-zero unavailable count
