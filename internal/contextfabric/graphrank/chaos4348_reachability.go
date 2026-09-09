@@ -186,7 +186,12 @@ func frameReservedKinds(frame *contextfabric.QuestionFrame, scopeAnchorKind cont
 // never stops early either -- mergeSearchResults' own SubjectKey dedup
 // (MergeCandidates) makes a redundant find of an already-present subject
 // a cheap no-op, not a correctness risk.
-func applyKindHintedPoolSearch(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, terms []string, pool map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, identity identityClaimants, identityTerms identityMatchTerms, hinted []contextfabric.SubjectKind, admission *contestAdmission) (traversalDegraded int, authzDropped int, truncated bool, degraded bool, err error) {
+func applyKindHintedPoolSearch(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, terms []string, pool map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, identity identityClaimants, identityTerms identityMatchTerms, hinted []contextfabric.SubjectKind, admission *contestAdmission, ledger *kindRescueLedger) (traversalDegraded int, authzDropped int, truncated bool, degraded bool, err error) {
+	// CHAOS-5388: the early return leaves the ledger UNTOUCHED on purpose --
+	// `ran` stays false, which is what renders `not_run`. An arm that never
+	// ran must leave a record saying so, or its silence reads exactly like an
+	// arm that ran and matched nothing, which is the equality this ticket
+	// exists to break.
 	if deps.SearchKind == nil || len(hinted) == 0 {
 		return 0, 0, false, false, nil
 	}
@@ -209,6 +214,10 @@ func applyKindHintedPoolSearch(ctx context.Context, principal storage.Principal,
 			for i := range results {
 				results[i].Mechanism = contextfabric.MatchLexical
 			}
+			// Recorded BEFORE merge, dedup, authorization and ranking:
+			// the question a retrieval fix needs is what the GRAPH returned,
+			// which the pool can no longer answer once those have run.
+			ledger.recordQuery(kind, len(results))
 			traceKindHintSearch(deps, request.RequestID, term, results)
 			termTraversalDegraded, termAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, results, pool, observationParentKey, observationBlocked, true, nil, identity, identityTerms, admission)
 			traversalDegraded += termTraversalDegraded

@@ -469,7 +469,10 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 				"anchor_slot_reserved", event.AnchorSlotReserved,
 				"anchor_slot_source", event.AnchorSlotSource,
 				"anchor_slot_displaced", event.AnchorSlotDisplaced,
-				"pool_truncated_n", event.PoolTruncatedN)
+				"pool_truncated_n", event.PoolTruncatedN,
+				// CHAOS-5388: what the kind-scoped rescue arm did per declared
+				// kind. Always present, empty list when nothing was declared.
+				"declared_kind_rescue", event.DeclaredKindRescue)
 			return
 		}
 		t.logger.DebugContext(ctx, "context fabric resolution trace: ranked cut",

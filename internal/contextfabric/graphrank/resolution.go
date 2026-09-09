@@ -403,14 +403,17 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 // the slot touches inert -- so every caller that is not resolve.go's own
 // first pass keeps a byte-identical cut, and no test call site had to move.
 func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string, confirmedKindScopedBasis bool, lowPopulationKindScopedBasis bool, reservedKinds []contextfabric.SubjectKind) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
-	return resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, tracer, requestID, evidenceCensusAttestedKey, confirmedKindScopedBasis, lowPopulationKindScopedBasis, reservedKinds, anchorReservedSlot{})
+	return resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, tracer, requestID, evidenceCensusAttestedKey, confirmedKindScopedBasis, lowPopulationKindScopedBasis, reservedKinds, anchorReservedSlot{}, nil)
 }
 
-// resolveFromMergedCandidatesWithAnchorSlot carries the ONE extra input the
+// resolveFromMergedCandidatesWithAnchorSlot carries the two extra inputs the
 // exported form does not: the scope anchor decided for this resolution
-// (chaos5434_anchor_slot.go). resolve.go's first pass is its only caller with
-// a non-empty slot.
-func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string, confirmedKindScopedBasis bool, lowPopulationKindScopedBasis bool, reservedKinds []contextfabric.SubjectKind, anchorSlot anchorReservedSlot) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
+// (chaos5434_anchor_slot.go), and what the kind-scoped rescue arm did for each
+// declared kind (chaos5388_declared_kind_rescue.go). resolve.go's first pass is
+// its only caller with either one non-empty; a nil ledger renders every
+// declared kind as `not_run`, which is the honest reading for a call that
+// never had a retrieval phase of its own.
+func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string, confirmedKindScopedBasis bool, lowPopulationKindScopedBasis bool, reservedKinds []contextfabric.SubjectKind, anchorSlot anchorReservedSlot, kindRescue *kindRescueLedger) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
 	bases := make(contextfabric.CommitBasisSet)
 	// digests (CHAOS-4087) records IN LOCKSTEP with bases above, at every
 	// SAME bases.Record call site -- see CommitDecisionDigest's own doc
@@ -1423,12 +1426,23 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		// explicit none/0 on every pass, so a build that stopped deciding
 		// a slot cannot read like a pass that reserved none.
 		slotReserved, slotSource := anchorSlot.observable()
+		// CHAOS-5388: survivors are counted from the SAME mask the cut is
+		// taken with, not from a second walk, so the number on the line can
+		// never disagree with the candidates returned beside it.
+		declaredSurvivors := make(map[contextfabric.SubjectKind]int, len(reservedKinds))
+		for i, candidate := range ordered {
+			if keptIndex[i] {
+				declaredSurvivors[candidate.Subject.Kind]++
+			}
+		}
+		rescueReport := declaredKindRescueReport(reservedKinds, kindRescue, declaredSurvivors)
 		tracer.Trace(ResolutionTraceEvent{
 			RequestID: requestID, Stage: "ranked_cut", RankedCutSummary: true,
 			RankedCutCandidateCount: len(ordered), RankedCutSurvivedCount: len(survivedIDs),
 			RankedCutSurvivedIDs: reportedIDs, RankedCutMax: max,
 			AnchorSlotReserved: slotReserved, AnchorSlotSource: slotSource,
 			AnchorSlotDisplaced: slotOutcome.Displaced, PoolTruncatedN: slotOutcome.PoolTruncatedN,
+			DeclaredKindRescue: rescueReport,
 		})
 		// The victim gets its OWN line, naming the candidate ranking had
 		// earned a place for. Without it the anchor's admission is visible

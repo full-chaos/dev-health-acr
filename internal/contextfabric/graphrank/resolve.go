@@ -1402,6 +1402,13 @@ type ResolutionTraceEvent struct {
 	// and a field present in only one of its two states cannot be told
 	// apart from a build that does not emit it.
 	OfferPoolEmptiedByExclusion bool
+	// CHAOS-5388. What the kind-scoped rescue arm did for each kind THIS
+	// QUESTION'S OWN FRAME OR RECEIPT declared, on the same once-per-pass
+	// line. ALWAYS a list, never nil: a frame that declared nothing renders
+	// an empty list, so "nothing was declared" and "this build stopped
+	// reporting" cannot read alike. See declaredKindRescue's own doc comment
+	// for why the three failure states take three different fixes.
+	DeclaredKindRescue []declaredKindRescue
 	// CHAOS-5434. The four keys the ranked-cut SUMMARY carries about the
 	// decided scope anchor's reserved slot, populated on EVERY pass through
 	// the cut -- including the passes that reserve nothing, which is the
@@ -2746,8 +2753,9 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// exact-name) matters for retrievalSourceFor's own event-order read
 	// (chaos4234_regime_a_harness_test.go) -- see that function's doc
 	// comment for the precedence this ordering establishes.
+	kindRescue := newKindRescueLedger()
 	if hinted := hintedPoolKinds(request, confirmedKind, frame, anchorScope.Kind); len(hinted) > 0 {
-		hintedTraversalDegraded, hintedAuthzDropped, hintedTruncated, hintedDegraded, hintedErr := applyKindHintedPoolSearch(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms, hinted, admission)
+		hintedTraversalDegraded, hintedAuthzDropped, hintedTruncated, hintedDegraded, hintedErr := applyKindHintedPoolSearch(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms, hinted, admission, kindRescue)
 		if hintedErr != nil {
 			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, hintedErr
 		}
@@ -3125,7 +3133,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// as well as to retrieval and the filter, so the slot the design
 	// promises the anchor is held by the SAME decision the other two
 	// consumers obeyed -- not a second derivation beside them.
-	resolution, firstPassBases, firstPassDigests := resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), anchorReservedSlot{Kind: anchorScope.Kind, Source: anchorScope.Source})
+	resolution, firstPassBases, firstPassDigests := resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), anchorReservedSlot{Kind: anchorScope.Kind, Source: anchorScope.Source}, kindRescue)
 	commitBases.ResetTo(firstPassBases)
 	commitDigests.ResetTo(firstPassDigests)
 	// coverageFloorDegraded (CHAOS-4038, codex review round 2 finding 1) is
