@@ -43,18 +43,70 @@ import (
 // reserved -- the shape that leaves the old victim rule with nothing to take.
 const saturatedCrowd = 90
 
+// resolveScopedWithCut is resolveScoped plus the CUT's own summary event.
+//
+// NON-VACUITY IS MEASURED AT THE CUT, NOT IN THE RETURNED OFFER, and that is
+// not a stylistic choice. Counting member-kind candidates in res.Candidates to
+// prove the crowd existed reads the OFFER, and a scope-anchored frame is
+// exactly the shape where a later seam withholds member-kind candidates from
+// the offer by design -- so such a guard reports "the fixture did not build
+// the crowd" on a fixture that built ninety of them and had them cut and then
+// withheld. The ranked-cut summary is where the crowd is still visible on
+// every tree: candidate_count is the pre-cut population and survived_count is
+// the budget.
+func resolveScopedWithCut(t *testing.T, backend *fakeGraphBackend, frame *contextfabric.QuestionFrame,
+	confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection,
+	receiptAnchorKind contextfabric.SubjectKind) (contextfabric.SubjectResolution, ResolutionTraceEvent) {
+	t.Helper()
+	req := testRequest()
+	req.Options.MaxSubjectCandidates = 20
+	deps := backend.deps()
+	tracer := &captureResolutionTracer{}
+	deps.ResolutionTracer = tracer
+	res, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+		storage.Principal{OrgID: "org_1"}, req, testInterpreted("chaos"),
+		deps, confirmedKind, confirmedAnchor, frame, receiptAnchorKind)
+	if err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+	var summary ResolutionTraceEvent
+	var found bool
+	for _, e := range tracer.eventsForStage("ranked_cut") {
+		if e.RankedCutSummary {
+			summary, found = e, true
+		}
+	}
+	if !found {
+		t.Fatal("no ranked_cut SUMMARY event: this resolution never reached phase 4, so a truncation pin on it would be vacuous")
+	}
+	return res, summary
+}
+
+// requireSaturatedCut is the shared non-vacuity guard: the crowd really was
+// built, really reached phase 4, and really exceeded the budget. Without all
+// three the survival assertions below assert nothing.
+func requireSaturatedCut(t *testing.T, cut ResolutionTraceEvent) {
+	t.Helper()
+	if cut.RankedCutCandidateCount <= cut.RankedCutMax {
+		t.Fatalf("cut saw %d candidates against budget %d: nothing was truncated, so this pin proves nothing",
+			cut.RankedCutCandidateCount, cut.RankedCutMax)
+	}
+	if cut.RankedCutCandidateCount < saturatedCrowd {
+		t.Fatalf("cut saw %d candidates, want at least the %d-member crowd: the fixture did not build it",
+			cut.RankedCutCandidateCount, saturatedCrowd)
+	}
+}
+
 // P1 -- SOURCE: RECEIPT. The classification receipt declared the anchor kind.
 func TestTheReceiptScopeAnchorSurvivesASaturatedMemberCrowd(t *testing.T) {
 	t.Parallel()
-	res := resolveScoped(t, anchorOnlyByKindBackend("chaos", saturatedCrowd),
+	res, cut := resolveScopedWithCut(t, anchorOnlyByKindBackend("chaos", saturatedCrowd),
 		scopedProjectsFrame("chaos"), confirmedProject(), nil, contextfabric.SubjectTeam)
+	requireSaturatedCut(t, cut)
 
-	kinds := candidateKinds(res)
-	if kinds[contextfabric.SubjectProject] == 0 {
-		t.Fatalf("member crowd = 0, want a saturated pool; kinds=%v -- the fixture did not build the crowd, so this pin proves nothing", kinds)
-	}
-	if kinds[contextfabric.SubjectTeam] == 0 {
-		t.Errorf("anchor candidates = 0, want >= 1; kinds=%v -- the decided scope anchor was truncated away by a crowd of reserved member kinds", kinds)
+	if kinds := candidateKinds(res); kinds[contextfabric.SubjectTeam] == 0 {
+		t.Errorf("anchor candidates = 0, want >= 1; kinds=%v, cut saw %d against budget %d -- the decided scope anchor was truncated away by a crowd of reserved member kinds",
+			kinds, cut.RankedCutCandidateCount, cut.RankedCutMax)
 	}
 }
 
@@ -63,16 +115,14 @@ func TestTheReceiptScopeAnchorSurvivesASaturatedMemberCrowd(t *testing.T) {
 // indistinguishable from the receipt source at truncation.
 func TestTheFallbackScopeAnchorSurvivesASaturatedMemberCrowd(t *testing.T) {
 	t.Parallel()
-	res := resolveScoped(t, anchorOnlyByKindBackend("chaos", saturatedCrowd),
+	res, cut := resolveScopedWithCut(t, anchorOnlyByKindBackend("chaos", saturatedCrowd),
 		scopedProjectsFrame("chaos"), confirmedProject(),
 		&contextfabric.ConfirmedAnchorSelection{Kind: contextfabric.SubjectTeam, CanonicalID: "team.v2:github:chaos"}, "")
+	requireSaturatedCut(t, cut)
 
-	kinds := candidateKinds(res)
-	if kinds[contextfabric.SubjectProject] == 0 {
-		t.Fatalf("member crowd = 0, want a saturated pool; kinds=%v -- the fixture did not build the crowd, so this pin proves nothing", kinds)
-	}
-	if kinds[contextfabric.SubjectTeam] == 0 {
-		t.Errorf("anchor candidates = 0, want >= 1; kinds=%v -- the FALLBACK-sourced anchor was truncated away while the receipt-sourced one survives; the two sources must be indistinguishable downstream", kinds)
+	if kinds := candidateKinds(res); kinds[contextfabric.SubjectTeam] == 0 {
+		t.Errorf("anchor candidates = 0, want >= 1; kinds=%v, cut saw %d against budget %d -- the FALLBACK-sourced anchor was truncated away while the receipt-sourced one survives; the two sources must be indistinguishable downstream",
+			kinds, cut.RankedCutCandidateCount, cut.RankedCutMax)
 	}
 }
 
@@ -83,13 +133,11 @@ func TestTheFallbackScopeAnchorSurvivesASaturatedMemberCrowd(t *testing.T) {
 // nothing declared is CHAOS-5445's contest to win, not this slot's.
 func TestWithNoDecidedAnchorTheSlotIsInertOnASaturatedCrowd(t *testing.T) {
 	t.Parallel()
-	res := resolveScoped(t, anchorOnlyByKindBackend("chaos", saturatedCrowd),
+	res, cut := resolveScopedWithCut(t, anchorOnlyByKindBackend("chaos", saturatedCrowd),
 		scopedProjectsFrame("chaos"), nil, nil, "")
+	requireSaturatedCut(t, cut)
 
 	kinds := candidateKinds(res)
-	if kinds[contextfabric.SubjectProject] == 0 {
-		t.Fatalf("member crowd = 0; kinds=%v -- fixture defect, the control is vacuous", kinds)
-	}
 	if kinds[contextfabric.SubjectTeam] != 0 {
 		t.Errorf("anchor candidates = %d, want 0; kinds=%v -- no anchor kind was decided, so the reserve must not go looking for one", kinds[contextfabric.SubjectTeam], kinds)
 	}
