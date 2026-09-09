@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -753,5 +754,137 @@ func TestCHAOS5421_TheRefusalIsPersistedUnderTheRequestsOwnTimeAxisKey(t *testin
 	// And explicitly NOT the refused span's key.
 	if refused := TimeAxisKeyFor(interpreted); store.savedKey == refused {
 		t.Fatalf("the refusal was keyed on the span it refused (%q); a span this service will not read must never become a lookup key", refused)
+	}
+}
+
+// CHAOS-5421 r2: four more mutants the reviewer predicted would survive, and
+// did. Each is a measured coverage gap in this same file, distinct from
+// r1's RV1-RV5 (all still killed, unmodified by these).
+
+// RV6. The step-1 loop refuses a NIL-OR-ZERO instant, but also -- on its own
+// clause -- an instant that is neither: one that is set, non-zero, and
+// still outside the representable epoch-nanosecond range. No test supplied
+// one, so the representability half of that clause was unpinned: delete it
+// and a far-future-but-representable... no, a genuinely UNREPRESENTABLE
+// as-of stops being refused here and instead falls into the ordinary
+// future-clamp arm below it, reporting future_end/clamp_applied=true on a
+// value this service cannot even round-trip.
+func TestCHAOS5421_ANonzeroButUnrepresentableInterpretedInstantIsRefused(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
+	unrepresentable := now.AddDate(1000, 0, 0)
+
+	// PREMISE: this instant must actually be outside the representable
+	// range, or this test would pin nothing -- it would pass on the
+	// ordinary future-clamp behavior instead of the representability guard.
+	if contractsv1.RepresentableInstant(unrepresentable) {
+		t.Fatalf("premise: %s must be unrepresentable for this pin to test the representability clause", unrepresentable)
+	}
+
+	decision := resolveInterpretedTimeContext(TimeContext{Axis: TemporalValidTime, AsOf: &unrepresentable}, now)
+	if decision.Outcome != InterpretedTimeBoundAbsentOrZero {
+		t.Fatalf("outcome = %q, want %q -- an unrepresentable instant must be refused here, not clamped as an ordinary future value", decision.Outcome, InterpretedTimeBoundAbsentOrZero)
+	}
+	if decision.ClampApplied {
+		t.Error("clamp_applied = true for an unrepresentable instant; nothing was clamped, it was refused")
+	}
+	if decision.Answerable() {
+		t.Error("an unrepresentable instant was reported answerable")
+	}
+}
+
+// RV7. The width bound is measured with a strict `>`, so a range of EXACTLY
+// maxHistoricalRangeDays is the maximum PERMITTED span, not an overage.
+// Nothing tested the boundary itself -- only ranges comfortably inside it
+// or, in RV1/the wide-range test, thousands of days past it -- so an
+// off-by-one here (`>=`) would refuse the one width this service documents
+// as answerable.
+func TestCHAOS5421_ARangeOfExactlyTheMaximumWidthIsServedNotRefused(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
+	end := now.Add(-10 * 24 * time.Hour)
+	start := end.Add(-maxHistoricalRangeDays * 24 * time.Hour)
+
+	decision := resolveInterpretedTimeContext(TimeContext{Axis: TemporalRange, Start: &start, End: &end}, now)
+	if decision.Outcome != InterpretedTimeBoundOK {
+		t.Fatalf("outcome = %q, want %q -- a range of exactly %d days is the maximum PERMITTED span, not an overage", decision.Outcome, InterpretedTimeBoundOK, maxHistoricalRangeDays)
+	}
+	if decision.ClampApplied {
+		t.Error("clamp_applied = true for a wholly historical range; nothing here is in the future")
+	}
+	if decision.RangeDays != maxHistoricalRangeDays {
+		t.Errorf("range_days = %d, want %d", decision.RangeDays, maxHistoricalRangeDays)
+	}
+}
+
+// RV8. The final result.Validate() guard, immediately before this refusal
+// terminal returns. Every existing refusal fixture builds a result the
+// contract already accepts, so nothing had ever driven this guard to
+// actually catch anything -- deleting it would be invisible until some
+// OTHER defect first produced a malformed result, at which point the
+// caller would receive that malformed result instead of an error.
+//
+// Faults the one input this function does not otherwise validate: the
+// caller-facing basis text a refusing member publishes, which flows
+// directly into DeterministicAnswer (interpretedTimeBoundResult) and which
+// the wire contract requires to be non-empty. Restored via t.Cleanup so no
+// other test in this package observes the mutated table.
+func TestCHAOS5421_AMalformedRefusalResultIsCaughtByTheFinalValidateGuard(t *testing.T) {
+	now := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
+
+	original, ok := interpretedTimeBoundLimitations[InterpretedTimeBoundAbsentOrZero]
+	if !ok || strings.TrimSpace(original) == "" {
+		t.Fatal("premise: the member under test must normally publish a non-empty basis, or blanking it tests nothing")
+	}
+	t.Cleanup(func() { interpretedTimeBoundLimitations[InterpretedTimeBoundAbsentOrZero] = original })
+	interpretedTimeBoundLimitations[InterpretedTimeBoundAbsentOrZero] = ""
+
+	// Any input reaching the absent_or_zero refusal arm exercises the fault;
+	// a range missing an endpoint is RV2's own shape.
+	engine, _ := mustHistoricalEngine(t, TimeContext{Axis: TemporalRange, End: &now}, now)
+	_, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
+	if err == nil {
+		t.Fatal("Investigate() returned no error for a refusal result with an empty DeterministicAnswer -- the final result.Validate() guard exists precisely to catch a malformed terminal before it reaches the caller")
+	}
+	if !errors.Is(err, ErrInvalidResult) {
+		t.Fatalf("Investigate() error = %v, want it to wrap ErrInvalidResult -- a result the contract itself rejects must be reported as this engine's own validation failure, not silently served", err)
+	}
+}
+
+// RV9. The refuse closure's carried Bound, for every refusing member OTHER
+// than range_too_wide (which sets its own bound separately, on the
+// clamped-and-width-measured value, and is already covered by
+// TestCHAOS5421_ARefusedButRepresentableInterpretedContextIsCarriedNotDropped).
+//
+// Nothing downstream currently tells a zero-valued Bound apart from the
+// timeContext actually rejected for these members: interpretedTimeBoundResult
+// falls back to the REQUEST's context whenever decision.Bound.Validate()
+// fails, and for absent/malformed/unknown-axis values it always fails,
+// zero-valued or not -- so deleting `, Bound: timeContext` from the refuse
+// closure is invisible to every existing assertion. The field is still part
+// of the decision this function publishes, so it is asserted directly.
+func TestCHAOS5421_TheRefuseClosureCarriesTheRejectedBoundForEveryOtherMember(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
+	invertedEnd := now.Add(-time.Hour)
+
+	for _, testCase := range []struct {
+		name string
+		time TimeContext
+	}{
+		{"absent as-of", TimeContext{Axis: TemporalValidTime}},
+		{"unknown axis", TimeContext{Axis: TemporalAxis("sideways")}},
+		{"malformed range", TimeContext{Axis: TemporalRange, Start: &now, End: &invertedEnd}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			decision := resolveInterpretedTimeContext(testCase.time, now)
+			if decision.Answerable() {
+				t.Fatalf("premise: %q must be a refusing member for this pin to test anything", decision.Outcome)
+			}
+			if decision.Bound.Axis != testCase.time.Axis {
+				t.Errorf("decision.Bound.Axis = %q, want the rejected context's own %q -- a zero-valued Bound would report the empty axis instead", decision.Bound.Axis, testCase.time.Axis)
+			}
+		})
 	}
 }
