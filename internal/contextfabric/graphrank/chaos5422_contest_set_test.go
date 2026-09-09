@@ -582,53 +582,75 @@ func TestTheZeroScopeRefusesNothingIncludingTheZeroKind(t *testing.T) {
 	}
 }
 
-// THE SECOND DOORWAY. The confirmed-kind re-decision resolves over a pool it
-// builds FRESH, so it must carry the same admission or the refused kind simply
-// walks back in through it.
+// THE SECOND DOORWAY, with the input shape that makes it a doorway at all.
 //
-// HONEST LIMIT, stated rather than papered over: this arm does NOT discriminate
-// a mutant that passes nil to that pass, and I could not make it. Measured with
-// an instrumented run rather than assumed — this package's fake serves
-// `searchKindResults` to BOTH the first pass's kind-hinted arm and the
-// re-decision, so any candidate reachable by the second doorway is already
-// reachable by the first and is refused there. The refusal is real (the
-// disclosure names it) but the SECOND pass is never the thing being tested.
-// Making it testable needs a fake that can feed the kind-scoped snapshot alone,
-// which does not exist here.
+// The confirmed-kind re-decision resolves over a pool it builds FRESH, so it is
+// a second way into the contest and must carry the same admission. Three
+// fixtures failed to test that, and an instrumented run said why: a shared
+// SearchKind table serves BOTH the first pass's kind-hinted arm and the
+// re-decision, so anything the second pass can see the first pass already
+// refused, and the second pass is never what the assertion measures.
 //
-// So the mutant M5422A-REDECISION-DROPS-THE-ADMISSION is a DISCLOSED SURVIVOR,
-// not an equivalent one: dropping that argument is a real widening, and it is
-// held today by reading the code rather than by this test.
+// THE MISSING CELL IS THAT THE TWO PASSES SEE DIFFERENT POPULATIONS — the same
+// fact that made a per-pass count wrong. This SearchKind returns the member only
+// from the re-decision's own query onward, which is exactly a graph that gained
+// a row between the two reads, and is a shape production can produce. Now the
+// second doorway is the only way in.
 func TestTheConfirmedKindRedecisionCarriesTheSameAdmission(t *testing.T) {
 	t.Parallel()
-	// TWO anchors, deliberately: the re-decision runs only when the FIRST pass
-	// committed nothing, so a fixture whose first pass commits skips the very
-	// pass under test and the arm passes for the wrong reason. An ambiguous pair
-	// is what keeps the first pass from committing.
-	anchor := candidateNode(contextfabric.SubjectRepository, "repository.v2:github:platform", "platform", 0.5, "*")
-	rival := candidateNode(contextfabric.SubjectRepository, "repository.v2:github:platform-two", "platform two", 0.5, "*")
-	// Present ONLY in the kind-scoped results: ordinary search never returns it,
-	// so the first pass cannot be what refuses it.
-	hidden := candidateNode(contextfabric.SubjectTeam, "team.v2:github:platform-hidden", "platform hidden", 0.95, "*")
+	// An ambiguous anchor pair, so the FIRST pass commits nothing and the
+	// re-decision actually runs.
+	// Neither label EQUALS the term, so the exact-label override cannot fire and
+	// the equal relevances stay genuinely ambiguous — otherwise the first pass
+	// commits and the re-decision, which only runs when it did not, never
+	// happens at all.
+	anchor := candidateNode(contextfabric.SubjectRepository, "repository.v2:github:plat-one", "plat one", 0.5, "*")
+	rival := candidateNode(contextfabric.SubjectRepository, "repository.v2:github:plat-two", "plat two", 0.5, "*")
+	late := candidateNode(contextfabric.SubjectTeam, "team.v2:github:platform-late", "platform late", 0.95, "*")
+
 	backend := &fakeGraphBackend{
 		enableSearchKind: true,
 		searchResults:    map[string][]CandidateNode{"platform": {anchor, rival}},
-		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
-			"platform": {
-				contextfabric.SubjectTeam:       {hidden},
-				contextfabric.SubjectRepository: {anchor, rival},
-			},
-		},
-		// what sends this call into the re-decision at all
-		searchTruncated: true,
+		searchTruncated:  true,
 	}
+	deps := backend.deps()
+	var teamQueries int
+	deps.SearchKind = func(_ context.Context, term string, kind contextfabric.SubjectKind, _ int) ([]CandidateNode, bool, bool, error) {
+		if kind == contextfabric.SubjectRepository {
+			return []CandidateNode{anchor, rival}, false, false, nil
+		}
+		if kind != contextfabric.SubjectTeam {
+			return nil, false, false, nil
+		}
+		teamQueries++
+		// The FIRST team query belongs to the first pass's kind-hinted arm and
+		// must come back empty; every later one is the re-decision reading a
+		// graph that has since gained the row.
+		if teamQueries == 1 {
+			return nil, false, false, nil
+		}
+		return []CandidateNode{late}, false, false, nil
+	}
+
 	capture := &contestCapture{}
-	res := resolveContest(t, backend, contestFrame("platform"), confirmedTeamKind(), capture, 20, contextfabric.SubjectRepository)
+	deps.ResolutionTracer = capture
+	req := testRequest()
+	req.Options.MaxSubjectCandidates = 20
+	res, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+		storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"*"}}, req, testInterpreted("platform"),
+		deps, confirmedTeamKind(), nil, contestFrame("platform"), contextfabric.SubjectRepository)
+	if err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+	if teamQueries < 2 {
+		t.Fatalf("the member-kind query ran %d time(s); the re-decision never read the graph a second time, so "+
+			"this fixture is not exercising the second doorway", teamQueries)
+	}
 	for _, candidate := range res.Candidates {
-		if candidate.Subject.CanonicalID == "team.v2:github:platform-hidden" {
-			t.Fatalf("the refused member entered the contest through the confirmed-kind re-decision's own "+
-				"pool; that pass builds a FRESH pool and is a second doorway, so it must carry the same "+
-				"admission the first pass ran under. candidates=%v", res.Candidates)
+		if candidate.Subject.CanonicalID == "team.v2:github:platform-late" {
+			t.Fatalf("the refused member entered the contest through the re-decision's own pool; that pass "+
+				"builds a FRESH pool over a population the first pass never saw, so it must carry the same "+
+				"admission. candidates=%v", res.Candidates)
 		}
 	}
 	for _, subject := range res.Committed {
@@ -636,22 +658,14 @@ func TestTheConfirmedKindRedecisionCarriesTheSameAdmission(t *testing.T) {
 			t.Fatalf("committed %v of the refused member kind through the re-decision", res.Committed)
 		}
 	}
-	// THE DISCRIMINATOR. Absence from the candidate set is not enough on its
-	// own: a second pass that admits this candidate may still be DISCARDED, and
-	// then nothing about the returned resolution differs. What always differs is
-	// the refusal itself — if the re-decision carried no admission the candidate
-	// was never refused there, so it cannot appear in the disclosure. This is
-	// the assertion that fails when the admission is dropped.
 	refused := false
 	for _, event := range capture.dispositions {
 		if event.OfferPoolDisposition == contestSetDisposition &&
-			event.Subject.CanonicalID == "team.v2:github:platform-hidden" {
+			event.Subject.CanonicalID == "team.v2:github:platform-late" {
 			refused = true
 		}
 	}
 	if !refused {
-		t.Fatalf("the member reachable ONLY through the confirmed-kind re-decision's own pool was never "+
-			"refused; the disclosure names %d refusal(s) and none of them is it, so that pass admitted it",
-			len(capture.dispositions))
+		t.Fatalf("the member visible ONLY to the re-decision was never refused; that pass admitted it")
 	}
 }
