@@ -1466,6 +1466,25 @@ def test_every_class_is_counted_with_explicit_zeros():
     assert diag["attempt_upstream_504_n"] == 1 and diag["attempt_overrun_413_n"] == 1, diag
 
 
+def test_every_outcome_carries_the_producers_own_failure_code():
+    """r7 (astra) P3: `outcome()`'s `code` field had no pin at all -- negating
+    `isinstance(failure, dict)` (so `code` is read only when failure is NOT a dict,
+    i.e. dropped to None on every real attempt) survived all 11 files. Named per-code,
+    over a fixture where every code is DIFFERENT, so a dropped or swapped code cannot
+    hide behind a repeated value.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        out, _ = _write_turns(tmp, {1: [
+            _attempt(200, failure={"httpStatus": 422, "code": "acr_answer_rejected"}),
+            _attempt(200, failure={"httpStatus": 400, "code": "acr_rejected_request"}),
+            _served(),
+            _attempt(504),
+        ]})
+        diag = _diagnose(out)
+    codes = [o["code"] for o in diag["attempt_outcomes"]]
+    assert codes == ["acr_answer_rejected", "acr_rejected_request", None, None], codes
+
+
 def test_a_follow_up_TURN_is_not_a_retry():
     """DEFECT 2, live: `attempts_retried = len(outcomes) - 1` over a walk that spans
     TURNS called 32 of 36 rows retried and reported 69 retries against 6 real ones. Every
@@ -1712,12 +1731,24 @@ def test_merge_refuses_to_report_an_absent_measurement_as_zero():
 
     # POSITIVE CONTROL: measured rows DO publish, and the unavailable count is an
     # EXPLICIT zero -- so the refusal above is a measurement, not a constant.
+    #
+    # r7 (astra) P3: a two-row fixture with exactly ONE row affected per class cannot
+    # tell `if n: rows_with[name] += 1` apart from its negation `if not n: ...` -- with
+    # one row affected and one not, BOTH predicates count exactly one row, just the
+    # OTHER one. THREE rows, asymmetric per class, so the true and negated counts
+    # differ (2 vs 1), never coincide.
     measured = [_measured_row("q-a", upstream_504=2, ok_200=1),
-                _measured_row("q-b", unprocessable_422=1, ok_200=1)]
+                _measured_row("q-b", unprocessable_422=1, ok_200=1),
+                _measured_row("q-c", upstream_504=1)]
     totals = MC.attempt_class_totals(measured)
     assert totals["attempt_classes_unavailable"] == 0, totals
-    assert totals["attempt_class_totals"]["upstream_504"] == 2, totals
-    assert totals["rows_with"]["upstream_504"] == 1, totals
+    assert totals["attempt_class_totals"]["upstream_504"] == 3, totals
+    assert totals["rows_with"]["upstream_504"] == 2, (
+        "affected-row count for a class 2 of 3 rows carry: " + str(totals))
+    assert totals["rows_with"]["ok_200"] == 2, (
+        "affected-row count for a class 2 of 3 rows carry: " + str(totals))
+    assert totals["rows_with"]["unprocessable_422"] == 1, (
+        "affected-row count for a class only 1 of 3 rows carries: " + str(totals))
     assert totals["attempt_class_totals"]["other_4xx"] == 0, "explicit zero expected"
 
     # MIXED: one measured, one not. A partial run must not silently under-report.
@@ -2030,7 +2061,13 @@ def test_the_contract_guard_is_exit_path_traced_over_the_executed_producer():
             harness.BASE = f"http://127.0.0.1:{srv.port}/api/investigations"
             harness.OUTDIR = Path(tmp)
             try:
-                for status in (200, 400, 500, 599):
+                # r7 (astra) P3: the old hand-picked (200, 400, 500, 599) status list is
+                # exactly the "author-selected" shape this whole change exists to retire
+                # -- an unknown key injected ONLY for HTTP 202 survived because 202 was
+                # never one of the four chosen statuses. Swept over the SAME total range
+                # (ii) uses (200-599 less the two RFC-bodyless statuses), so no status is
+                # absent from the key check either.
+                for status in (s for s in range(200, 600) if s not in BODYLESS_BY_SPEC):
                     for bname, body in (("bare", {}), ("result",
                                         {"result": {"status": "complete"}})):
                         srv.status, srv.body, srv.raw = status, body, False
