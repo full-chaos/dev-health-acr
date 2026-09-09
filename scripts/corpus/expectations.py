@@ -111,6 +111,16 @@ def terminal_key(terminal_status, bucket=None):
 
 # (expect, bucket-or-status) -> verdict. EXHAUSTIVE BY CONSTRUCTION: an agreement exists
 # only where this table names one.
+#
+# CHAOS-5452: (REFUSE, "refused") is REMOVED, not merely unused. The wire's
+# ContextFabricInvestigationStatus enum (complete/partial/degraded/
+# clarification_required/no_match -- internal/contracts/v1/context_fabric_types.go)
+# has no "refused" member, so this cell could never be reached by a real terminal
+# status; it was the only "agree" a declared-basis refusal could ever earn, which is
+# why weak_basis_unstated could never resolve to agreement no matter what the engine
+# actually disclosed. Pinned in test_findings_5452.py: the enum is scanned and
+# "refused" asserted absent, and E.score() on that combination is asserted unscored,
+# never agree.
 VERDICTS = {
     (SERVE, "served_with_data"): ("agree", "served with facts as declared"),
     (SERVE, "served_degraded"): ("agree_weak", "served, but with zero claimed facts "
@@ -119,7 +129,6 @@ VERDICTS = {
     (SERVE, "refused"): ("disagree", "expected a serve, was refused"),
     (SERVE, "clarification"): ("disagree", "expected a serve, exhausted turns instead"),
 
-    (REFUSE, "refused"): ("agree", "refused as declared"),
     (REFUSE, "no_match"): ("agree", "no_match: did not serve, as declared"),
     (REFUSE, "served_with_data"): ("disagree", "expected a refusal, served instead"),
     (REFUSE, "served_degraded"): ("disagree", "expected a refusal, served instead"),
@@ -140,16 +149,54 @@ VERDICTS = {
 }
 
 # A declared BASIS narrows one cell: a decline that must carry a named basis is satisfied
-# only by an explicit refusal, not by a bare no_match.
+# only by an explicit refusal, not by a bare no_match. This override is basis-PRESENCE
+# gated only -- it does not read what was disclosed, because a `decline` row's declared
+# basis (corpus spelling: "named_basis") is never a member of the wire's closed refusal
+# vocabulary in the first place (R1/nonexistent-entity rows use it as a marker, not a
+# token to match); a bare no_match on those rows stays disagree regardless of disclosure.
 NAMED_BASIS_OVERRIDES = {
     (DECLINE, "no_match"): ("disagree", "a named-basis decline is not satisfied by a bare "
                                         "no_match"),
-    # Ruling 2: a refusal that declares a basis must STATE it. A bare no_match did not
-    # fabricate anything, but it did not disclose the declared basis either -- reported as
-    # its own weak kind rather than folded into agreement.
-    (REFUSE, "no_match"): ("agree_weak", "nothing fabricated, but the declared basis was "
-                                         "not stated"),
 }
+
+# CHAOS-5442's closed wire vocabulary for completeness.refusal_basis
+# (internal/contracts/v1/context_fabric_refusal_basis.go,
+# ContextFabricRefusalBasisVocabulary()). Mirrored here for the identical reason that
+# file mirrors CohortMemberKindUnservable's spelling: one name for one fact across the
+# Go contract and the corpus declaration, so a reader correlating the two never
+# translates. test_findings_5452.py pins this set against the Go source so the two
+# cannot drift silently.
+REFUSAL_BASIS_VOCABULARY = {
+    "member_kind_unservable",
+    "frame_invariant_violated",
+    "unspecified",
+}
+
+
+def _refuse_no_match_verdict(declared_basis, disclosed_basis):
+    """CHAOS-5452: score a (REFUSE, no_match) row with a declared basis against what the
+    engine actually DISCLOSED (completeness.refusal_basis), never against declaration alone.
+
+    Ruling 2 (pre-5442, kept exactly): nothing disclosed -- MISSING, not empty -- is still
+    "nothing fabricated, but the declared basis was not stated". This is the yardstick of
+    record and must not move for a run where the field is absent.
+
+    New: a disclosed token that MATCHES the row's declaration is the agreement 5442 exists
+    to make scoreable. A disclosed token OUTSIDE the closed vocabulary is never agreement --
+    it is an instrument/contract gap named by its own reason, `unauthored_basis:<token>`,
+    the same convention `terminal_key()` uses for an unauthored terminal status: named,
+    not silently folded into a verdict already in the table.
+    """
+    if not disclosed_basis:
+        return "agree_weak", ("nothing fabricated, but the declared basis was "
+                               "not stated")
+    if disclosed_basis not in REFUSAL_BASIS_VOCABULARY:
+        return "unscored", f"unauthored_basis:{disclosed_basis}"
+    if disclosed_basis == declared_basis:
+        return "agree", "refused as declared; disclosed basis matches the declaration"
+    return "disagree", (f"declared basis {declared_basis!r}, disclosed basis "
+                         f"{disclosed_basis!r} -- refused for a different reason "
+                         "than the row named")
 
 UNTRUSTED_IDENTITY_STATES = {"no_artefact", "unreadable_artefact"}
 
@@ -227,12 +274,19 @@ def expectation_for(row):
 
 
 def score(expectation, bucket, subject_substitution=False,
-          identity_state="read", terminal_status=None):
+          identity_state="read", terminal_status=None, disclosed_basis=None):
     """Total function. Agreement is granted only where VERDICTS names it.
 
     `bucket` is accepted for callers that only have the classify() bucket; when
     `terminal_status` is supplied it is authoritative, because classify() collapses
     no_match and refused into one bucket and a declared basis needs them apart.
+
+    `disclosed_basis` (CHAOS-5442/5452) is the engine's OWN completeness.refusal_basis
+    for this row -- None/absent when the field was never disclosed, which is a fact
+    distinct from an empty string (missing is not none). Defaults to None so every
+    existing caller that does not pass it reproduces the pre-5452 behaviour exactly for
+    every cell this field does not touch, and reproduces the (unchanged)
+    weak_basis_unstated cell for the one cell it does.
     """
     # r9: naming an unauthored terminal comes FIRST, before any expectation early-return.
     # It used to sit after them, so a row with no declared expectation -- 16 of 36 in the
@@ -290,7 +344,15 @@ def score(expectation, bucket, subject_substitution=False,
     if key == "error":
         return "disagree", "engine error; the declared expectation was not reached"
 
-    if expectation.get("expectation_basis") and (cls, key) in NAMED_BASIS_OVERRIDES:
+    basis_declared = expectation.get("expectation_basis")
+    # CHAOS-5452: a declared-basis REFUSE that bare-no_matches is scored against what the
+    # engine DISCLOSED, not against declaration alone -- this is the cell the ticket names
+    # ("the scorer never reads a basis field"). Checked before NAMED_BASIS_OVERRIDES so the
+    # disclosure-aware branch owns this one cell outright; every other overridden cell
+    # (DECLINE's) is untouched.
+    if cls == REFUSE and key == "no_match" and basis_declared:
+        verdict, why = _refuse_no_match_verdict(basis_declared, disclosed_basis)
+    elif basis_declared and (cls, key) in NAMED_BASIS_OVERRIDES:
         verdict, why = NAMED_BASIS_OVERRIDES[(cls, key)]
     else:
         hit = VERDICTS.get((cls, key))
@@ -322,13 +384,15 @@ def score(expectation, bucket, subject_substitution=False,
     return verdict, why
 
 
-def table(rows_by_id, buckets_by_id, subs_by_id, states_by_id=None, terminals_by_id=None):
+def table(rows_by_id, buckets_by_id, subs_by_id, states_by_id=None, terminals_by_id=None,
+          disclosed_basis_by_id=None):
     out = []
     for cid in sorted(rows_by_id):
         e = expectation_for(rows_by_id[cid])
         verdict, why = score(e, buckets_by_id.get(cid), bool(subs_by_id.get(cid)),
                              identity_state=(states_by_id or {}).get(cid, "read"),
-                             terminal_status=(terminals_by_id or {}).get(cid))
+                             terminal_status=(terminals_by_id or {}).get(cid),
+                             disclosed_basis=(disclosed_basis_by_id or {}).get(cid))
         out.append({
             "corpus_id": cid,
             "family": rows_by_id[cid].get("family") or "_none",
@@ -338,6 +402,7 @@ def table(rows_by_id, buckets_by_id, subs_by_id, states_by_id=None, terminals_by
             "why": why,
             "subject_substitution": bool(subs_by_id.get(cid)),
             "identity_state": (states_by_id or {}).get(cid, "read"),
+            "disclosed_basis": (disclosed_basis_by_id or {}).get(cid),
             "weak_kind": weak_kind_for(verdict, why),
         })
     return out

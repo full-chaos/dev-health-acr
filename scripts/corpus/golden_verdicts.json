@@ -1928,8 +1928,8 @@
    "basis": "none",
    "terminal": "refused",
    "bucket": "unserved",
-   "verdict": "agree",
-   "reason": "refused as declared",
+   "verdict": "unscored",
+   "reason": "no verdict is declared for expect='refuse' against 'refused'; unscored rather than assumed",
    "weak_kind": null
   },
   {
@@ -2684,8 +2684,8 @@
    "basis": "named",
    "terminal": "refused",
    "bucket": "unserved",
-   "verdict": "agree",
-   "reason": "refused as declared",
+   "verdict": "unscored",
+   "reason": "no verdict is declared for expect='refuse' against 'refused'; unscored rather than assumed",
    "weak_kind": null
   },
   {
@@ -6138,6 +6138,11 @@
    "resolution": "classify() now reads the same authored vocabulary; sha af37f7364fa5b71c -> 5171dfe1c6091b7c",
    "evidence": "per-row buckets identical across all four measured runs; both real spellings authored after scanning 425 artefacts",
    "residual": "the bucketer is fail-closed, so an unauthored terminal lands in `unserved`; the scorer names it `unauthored_terminal:<status>` and the merge counts `unauthored_terminals` with an explicit zero so it cannot land silently"
+  },
+  {
+   "what": "CHAOS-5452: (REFUSE, \"refused\") was the only agree cell a declared-basis refusal could ever reach, and the wire's ContextFabricInvestigationStatus enum has no \"refused\" member -- weak_basis_unstated could never resolve to agreement no matter what the engine disclosed",
+   "resolution": "(REFUSE, \"refused\") removed from VERDICTS; the two `refuse`/`refused`/`unserved` cells here (basis none and named) move agree -> unscored. A new disclosure-aware branch scores (REFUSE, no_match) against completeness.refusal_basis: matches declared -> agree, valid-vocab mismatch -> disagree, unauthored token -> unscored, missing -> unchanged agree_weak/weak_basis_unstated",
+   "evidence": "test_findings_5452.py; the golden cross-product test still calls score() without disclosed_basis, so every other cell (including weak_basis_unstated at basis=named/no_match/unserved) is provably unchanged"
   }
  ]
 }

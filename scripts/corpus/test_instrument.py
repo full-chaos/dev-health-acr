@@ -36,7 +36,13 @@ def test_declared_anchor_and_nonexistent_are_read_from_the_structured_field():
 
 def test_serving_a_refuse_row_is_a_disagreement():
     e = expectations.expectation_for(BY_ID["example-refuse-unservable-kind"])
-    assert expectations.score(e, "unserved", terminal_status="refused")[0] == "agree"
+    # CHAOS-5452: (REFUSE, "refused") is REMOVED from VERDICTS -- the wire's
+    # ContextFabricInvestigationStatus enum has no "refused" member (test_findings_5452.py
+    # pins the enum itself), so this combination is unreachable and unscored, never agree.
+    assert expectations.score(e, "unserved", terminal_status="refused")[0] == "unscored"
+    # the real path: a named-basis refuse that DISCLOSES the matching basis is agree.
+    assert expectations.score(e, "unserved", terminal_status="no_match",
+                               disclosed_basis=e["expectation_basis"])[0] == "agree"
     # looping to MAX_TURNS is NOT agreement -- it never terminated
     assert expectations.score(
         e, "clarification_needed",
