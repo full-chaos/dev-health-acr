@@ -775,6 +775,66 @@ def test_the_real_harness_and_the_classifier_agree_over_the_executed_space():
         f"{ok200_without_clean[:5]}")
 
 
+# RFC 9110 6.4.1/15.3.5/15.4.5: a response to these MUST NOT carry a body. This sweep
+# discriminates the retry decision by the BODY's `retryable` flag, so it cannot exercise a
+# status the transport layer forbids from carrying one -- a protocol fact, not a curated
+# omission. Every OTHER status in the swept range is exercised, 404 included.
+BODYLESS_BY_SPEC = frozenset({204, 304})
+
+
+def test_the_producer_retry_decision_is_swept_over_the_full_status_range():
+    """THE PRODUCER SWEEP, from the full status space, not a hand list (kills r3 P1-4).
+
+    The classifier-agreement pin above drives a hand-picked `statuses` list -- 9 values --
+    and 404 is not one of them. A mutant `or status == 404` at harness.py:269, a
+    hard-coded terminal case bypassing the retry decision for exactly that status,
+    survived 44/44: nothing in the space ever asked the real producer what it does there.
+
+    P1-3 and P1-4 are the SAME shape of defect: an instrument that enumerates values ITS
+    AUTHOR CHOSE is bounded by his imagination and silent about the bound. Adding 404 to
+    the hand list would only move the same defect to 405. So this sweep is TOTAL over
+    every status the transport layer can hand back to the producer (200-599, less the two
+    RFC-bodyless statuses above) -- there is no status a status-specific special case
+    could hide behind, because none is absent from the space.
+
+    The retry decision is discriminated by exactly one thing among the A7_BODY shapes --
+    the RETRYABLE envelope's `retryable: True` flag, read from the body and independent of
+    the transport status (see that shape's comment above). Crossing every status against
+    that one fixed body proves the decision is driven by the body flag and
+    `contract.is_success_status`, and by nothing else a status literal could special-case.
+    """
+    from corpus import CORPUS
+    qid = CORPUS[0]["id"]
+    question = CORPUS[0]["text"]
+    retryable_body = {"failure": {"code": "acr_upstream_timeout", "message": "slow",
+                                  "httpStatus": 504, "retryable": True}}
+    swept = [s for s in range(200, 600) if s not in BODYLESS_BY_SPEC]
+    assert 404 in swept, "the space that is supposed to be total is missing 404"
+
+    saved_base, saved_out = harness.BASE, harness.OUTDIR
+    disagreements = []
+    with tempfile.TemporaryDirectory() as tmp, _ScriptedServer() as srv:
+        harness.BASE = f"http://127.0.0.1:{srv.port}/api/investigations"
+        harness.OUTDIR = Path(tmp)
+        try:
+            for status in swept:
+                srv.status, srv.body, srv.raw = status, retryable_body, False
+                with contextlib.redirect_stdout(io.StringIO()):
+                    row = harness.run_replicate(qid, question, 900_000 + status,
+                                                warn=lambda *_a, **_k: None)
+                want_retry = not contract.is_success_status(status)
+                did_retry = row["attempts"] > 1
+                if want_retry != did_retry:
+                    disagreements.append((status, row["attempts"], want_retry))
+        finally:
+            harness.BASE, harness.OUTDIR = saved_base, saved_out
+
+    assert srv.requests > 0, "an executing pin that made no requests measured nothing"
+    assert not disagreements, (
+        f"{len(disagreements)} of {len(swept)} statuses where the producer's OWN retry "
+        f"decision disagrees with the contract: {disagreements[:5]}")
+
+
 def test_the_measured_shapes_of_the_live_run_all_classify_correctly():
     """The exact distribution measured on a private pair, 2026-09-09: 91 served, 7
     contract violations, 6 rejected answers, 1 rejected request. Real shapes, not
