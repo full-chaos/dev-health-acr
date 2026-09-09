@@ -996,59 +996,6 @@ def test_the_real_harness_and_the_classifier_agree_over_the_executed_space():
 BODYLESS_BY_SPEC = frozenset({204, 304})
 
 
-def _retry_terminal_decision_lines():
-    """Every line of `run_replicate`'s retry/terminal decision (B4's axis): the inner
-    attempt-retry loop, and EVERY statement in the `for turn` loop's body between it and
-    where a served turn's result-parsing begins (the `result = payload.get(...)`
-    assignment).
-
-    r4 (astra) finding 4: a version of this that located only the ONE specific `if
-    is_success_status(...)` statement missed a branch a mutant inserted BEFORE it (a new
-    `if status == 204: ...` with no call to `is_success_status` at all) -- the locator's
-    signature-based search simply never looked at that statement, so it was never
-    required to be covered and the guard stayed green over an uncovered new terminal
-    branch. Located by SPAN, not by matching a specific statement's shape, so ANY
-    statement inserted between the attempt loop and the result-parsing boundary --
-    regardless of what it tests -- is included and must be traced as executed.
-    """
-    tree = _ast.parse((HERE / "harness.py").read_text())
-    fn = next(n for n in _ast.walk(tree)
-              if isinstance(n, _ast.FunctionDef) and n.name == "run_replicate")
-    turn_loop = next(n for n in _ast.walk(fn) if isinstance(n, _ast.For)
-                     and getattr(n.target, "id", None) == "turn")
-    attempt_loop = next(n for n in _ast.walk(turn_loop) if isinstance(n, _ast.For)
-                        and getattr(n.target, "id", None) == "attempt")
-    start_idx = turn_loop.body.index(attempt_loop)
-    end_idx = next((i for i, s in enumerate(turn_loop.body)
-                    if i > start_idx and isinstance(s, _ast.Assign) and len(s.targets) == 1
-                    and getattr(s.targets[0], "id", None) == "result"), None)
-    assert end_idx is not None, (
-        "run_replicate's shape changed: no `result = ...` assignment found after the "
-        "attempt-retry loop -- re-locate the result-parsing boundary")
-    region = turn_loop.body[start_idx:end_idx]
-    lines = set()
-    for stmt in region:
-        lines |= {n.lineno for n in _ast.walk(stmt) if hasattr(n, "lineno")}
-    return lines
-
-
-def _trace_run_replicate_lines(executed_lines):
-    """A `sys.settrace` hook scoped to `run_replicate`: records every LINE of the
-    function that actually executed (B4, same mechanism as i4's exit-line trace)."""
-    harness_file = str((HERE / "harness.py").resolve())
-
-    def global_trace(frame, event, _arg):
-        if (event == "call" and frame.f_code.co_name == "run_replicate"
-                and str(Path(frame.f_code.co_filename).resolve()) == harness_file):
-            def local_trace(frame, event, _arg):
-                if event == "line":
-                    executed_lines.add(frame.f_lineno)
-                return local_trace
-            return local_trace
-        return None
-    return global_trace
-
-
 def test_the_producer_retry_decision_is_swept_over_the_full_status_range():
     """THE PRODUCER SWEEP, from the full status space, not a hand list (kills r3 P1-4).
 
@@ -1069,6 +1016,22 @@ def test_the_producer_retry_decision_is_swept_over_the_full_status_range():
     the transport status (see that shape's comment above). Crossing every status against
     that one fixed body proves the decision is driven by the body flag and
     `contract.is_success_status`, and by nothing else a status literal could special-case.
+
+    RISK-NOTE (chris's ruling A, r6): this sweep's guarantee is EXHAUSTIVE STATUS INPUT,
+    not branch coverage of the retry/terminal decision. A line-level `sys.settrace`
+    branch-coverage guard was tried here (span-located, self-updating for a statement
+    inserted anywhere between the attempt loop and the result-parsing boundary) and was
+    itself found defective by r6 (astra): Python's line tracer fires a 'line' event for a
+    single-line compound statement (`if cond: consequent`) the moment the CONDITION is
+    evaluated, whether or not the same-line CONSEQUENT ever runs -- so a status-corrupting
+    mutation written as one line reads as "covered" even on every call where it never
+    fires. The equivalent multiline form WAS caught, which is exactly the trap: the guard's
+    real coverage depended on how a future regression happened to be formatted, not on
+    what it did. Removed rather than patched further (chris's ruling: line-identity
+    tracing is evadable by inline statements and by status shapes this sweep does not
+    produce; a real fix needs branch coverage, not statement/line coverage, which
+    `sys.settrace`'s line events cannot provide). Branch coverage of this decision is
+    NOT asserted anywhere in this file.
     """
     from corpus import CORPUS
     qid = CORPUS[0]["id"]
@@ -1080,41 +1043,26 @@ def test_the_producer_retry_decision_is_swept_over_the_full_status_range():
 
     saved_base, saved_out = harness.BASE, harness.OUTDIR
     disagreements = []
-    executed_lines = set()
-    sys.settrace(_trace_run_replicate_lines(executed_lines))
-    try:
-        with tempfile.TemporaryDirectory() as tmp, _ScriptedServer() as srv:
-            harness.BASE = f"http://127.0.0.1:{srv.port}/api/investigations"
-            harness.OUTDIR = Path(tmp)
-            try:
-                for status in swept:
-                    srv.status, srv.body, srv.raw = status, retryable_body, False
-                    with contextlib.redirect_stdout(io.StringIO()):
-                        row = harness.run_replicate(qid, question, 900_000 + status,
-                                                    warn=lambda *_a, **_k: None)
-                    want_retry = not contract.is_success_status(status)
-                    did_retry = row["attempts"] > 1
-                    if want_retry != did_retry:
-                        disagreements.append((status, row["attempts"], want_retry))
-            finally:
-                harness.BASE, harness.OUTDIR = saved_base, saved_out
-    finally:
-        sys.settrace(None)
+    with tempfile.TemporaryDirectory() as tmp, _ScriptedServer() as srv:
+        harness.BASE = f"http://127.0.0.1:{srv.port}/api/investigations"
+        harness.OUTDIR = Path(tmp)
+        try:
+            for status in swept:
+                srv.status, srv.body, srv.raw = status, retryable_body, False
+                with contextlib.redirect_stdout(io.StringIO()):
+                    row = harness.run_replicate(qid, question, 900_000 + status,
+                                                warn=lambda *_a, **_k: None)
+                want_retry = not contract.is_success_status(status)
+                did_retry = row["attempts"] > 1
+                if want_retry != did_retry:
+                    disagreements.append((status, row["attempts"], want_retry))
+        finally:
+            harness.BASE, harness.OUTDIR = saved_base, saved_out
 
     assert srv.requests > 0, "an executing pin that made no requests measured nothing"
     assert not disagreements, (
         f"{len(disagreements)} of {len(swept)} statuses where the producer's OWN retry "
         f"decision disagrees with the contract: {disagreements[:5]}")
-
-    # B4, load-bearing: every line of the retry/terminal decision the sweep drove must
-    # have actually EXECUTED. A branch a future change adds to either `if` and that this
-    # total-status sweep never reaches fails HERE instead of silently passing, same
-    # mechanism as (i)'s exit-line trace.
-    expected_lines = _retry_terminal_decision_lines()
-    missing = expected_lines - executed_lines
-    assert not missing, (
-        f"the retry/terminal decision has line(s) {sorted(missing)} the sweep never "
-        "executed -- an unvisited branch would otherwise pass silently")
 
 
 def test_the_measured_shapes_of_the_live_run_all_classify_correctly():
