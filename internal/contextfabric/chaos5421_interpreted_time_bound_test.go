@@ -831,17 +831,25 @@ func TestCHAOS5421_ARangeOfExactlyTheMaximumWidthIsServedNotRefused(t *testing.T
 // other test in this package observes the mutated table.
 func TestCHAOS5421_AMalformedRefusalResultIsCaughtByTheFinalValidateGuard(t *testing.T) {
 	now := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
+	ancient := now.Add(-3000 * 24 * time.Hour)
 
-	original, ok := interpretedTimeBoundLimitations[InterpretedTimeBoundAbsentOrZero]
+	original, ok := interpretedTimeBoundLimitations[InterpretedTimeBoundRangeTooWide]
 	if !ok || strings.TrimSpace(original) == "" {
 		t.Fatal("premise: the member under test must normally publish a non-empty basis, or blanking it tests nothing")
 	}
-	t.Cleanup(func() { interpretedTimeBoundLimitations[InterpretedTimeBoundAbsentOrZero] = original })
-	interpretedTimeBoundLimitations[InterpretedTimeBoundAbsentOrZero] = ""
+	t.Cleanup(func() { interpretedTimeBoundLimitations[InterpretedTimeBoundRangeTooWide] = original })
+	interpretedTimeBoundLimitations[InterpretedTimeBoundRangeTooWide] = ""
 
-	// Any input reaching the absent_or_zero refusal arm exercises the fault;
-	// a range missing an endpoint is RV2's own shape.
-	engine, _ := mustHistoricalEngine(t, TimeContext{Axis: TemporalRange, End: &now}, now)
+	// Any input reaching a refusal arm exercises the fault; this one is
+	// deliberately an ORDERED, REPRESENTABLE, fully-populated range (the
+	// same shape as
+	// TestCHAOS5421_ARefusedButRepresentableInterpretedContextIsCarriedNotDropped)
+	// rather than one relying on a nil Start/End -- a battery mutant
+	// removing an EARLIER guard (the range's missing-endpoint check, or the
+	// Answerable() branch itself) must not turn this fixture into a nil
+	// dereference in unrelated downstream code; range_too_wide's own guard
+	// is untouched by either of those.
+	engine, _ := mustHistoricalEngine(t, TimeContext{Axis: TemporalRange, Start: &ancient, End: &now}, now)
 	_, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
 	if err == nil {
 		t.Fatal("Investigate() returned no error for a refusal result with an empty DeterministicAnswer -- the final result.Validate() guard exists precisely to catch a malformed terminal before it reaches the caller")
