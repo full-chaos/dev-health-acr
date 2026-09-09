@@ -4138,14 +4138,19 @@ func mergeSearchResults(ctx context.Context, principal storage.Principal, reques
 		// so. A refused candidate whose similarity was recorded therefore still
 		// changes the rescue's arithmetic even though it can never commit:
 		// measured as commit=true without it and commit=false with it, on
-		// identical pools. Filtering the pool alone cannot fix that, so the
-		// refusal has to happen before the write, not after it.
-		if subject, ok := NodeSubject(node); ok && !admission.admits(subject, sourceRetrieval) {
-			admission.refuse(subject)
-			continue
-		}
+		// identical pools. Filtering the pool alone cannot fix that.
+		//
+		// THE GUARD IS ON THE WRITE, NOT ON THE ITERATION, and the difference is
+		// load-bearing. A first version skipped the whole node here, which
+		// silently reclassified an UNAUTHORIZED member-kind node from
+		// authz-dropped to scope-refused: NodeCandidate is what performs the
+		// authorization check, and skipping ahead of it took a
+		// security-relevant count away from its own counter. The refusal for the
+		// pool itself therefore stays below, after NodeCandidate, where it
+		// always was -- both readings come from the same NodeSubject, so nothing
+		// can be admitted here and refused there.
 		if vectorArmSimilarity != nil && node.Mechanism == contextfabric.MatchVector && node.VectorSimilarity != nil {
-			if subject, ok := NodeSubject(node); ok {
+			if subject, ok := NodeSubject(node); ok && admission.admits(subject, sourceRetrieval) {
 				key := SubjectKey(subject)
 				if existing, exists := vectorArmSimilarity[key]; !exists || *node.VectorSimilarity > existing {
 					vectorArmSimilarity[key] = *node.VectorSimilarity
