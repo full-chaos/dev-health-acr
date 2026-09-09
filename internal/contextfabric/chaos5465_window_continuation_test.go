@@ -1390,3 +1390,119 @@ func (g *frameRecordingGraphReader) ResolveSubjects(ctx context.Context, p stora
 // mustReuseTestEngine pins Now() to time.Unix(200,0).UTC(), so an answerable
 // as-of must be BEFORE that instant, not before the wall clock.
 var r2AsOf = time.Unix(100, 0).UTC()
+
+// ---------------------------------------------------------------------------
+// TWO MORE ARMS THE MUTANT BATTERY FOUND UNGUARDED. Both are findings, both are
+// pinned and killed here rather than explained away.
+// ---------------------------------------------------------------------------
+
+// SURVIVOR 1: deleting the typed-selection exclusion from the shape check
+// survived, because the only arm that exercised it used an UNRESOLVABLE kind
+// receipt -- which structure canonicalisation vetoes before admission ever
+// runs. The exclusion is only load-bearing when the typed receipt RESOLVES, so
+// the request reaches admission carrying a legitimate typed selection beside
+// its window receipt. That is this arm.
+func TestWindowContinuation_AResolvableTypedReceiptBesideAWindowReceiptIsNotAContinuation(t *testing.T) {
+	t.Parallel()
+
+	base := validInvestigationRequest().Question
+	prior := continuationPrior(continuationPriorID, base, QuestionFamilyDiscoveredCohortRanking, "")
+	// The SAME prior also OFFERED an expected kind. A kindr_ receipt resolves
+	// against StructureNeeds.KindOptions -- the offer it redeems -- not against
+	// ConfirmedStructure, which is what a previous turn already applied. Getting
+	// that wrong is what made the first version of this arm measure the veto.
+	prior.StructureNeeds = &StructureNeeds{
+		Missing: []StructureNeedKind{"expected_kind"},
+		KindOptions: []KindOption{{
+			ReceiptID: "kindr_5465resolvable0001", OptionID: "opt_team",
+			Label: "a team", Kind: SubjectTeam, OfferSource: "engine",
+		}},
+	}
+
+	request := continuationRequest(base)
+	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: prior.ResultID, ReceiptID: "kindr_5465resolvable0001"}}
+
+	harness := newContinuationHarness(t,
+		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		// Classifies NOTHING, so if the shape check let this through the carry
+		// would apply and the arm would be measuring the wrong thing.
+		interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}))
+
+	result := harness.investigate(t, request)
+	decision := harness.soleDecision(t)
+	servedSource := "<no plan>"
+	if result.AnswerPlan != nil {
+		servedSource = string(result.AnswerPlan.FamilySource)
+	}
+	t.Logf("resolvable typed receipt + window receipt -> disposition=%q reason=%q served_source=%s",
+		decision.Disposition, decision.Reason, servedSource)
+
+	if decision.Reason == ContinuationReasonStructureVeto {
+		t.Fatalf("fixture defect: the kind receipt did not resolve, so this arm is measuring the veto and not the shape check")
+	}
+	if decision.Disposition != ContinuationNotApplicable || decision.Reason != ContinuationReasonNotWindowOnly {
+		t.Errorf("disposition/reason = %q/%q, want not_applicable/not_window_only -- a caller that redeems a KIND offer alongside a window offer is having that selection's turn, not a window-only continuation",
+			decision.Disposition, decision.Reason)
+	}
+}
+
+// SURVIVOR 2: mutating the shared frame in place instead of copying it survived
+// -- nothing asserted that the interpreter's OWN frame object comes back
+// unchanged. It matters because that pointer is held by the interpretation
+// receipt and the family outcome: rewriting it in place would silently change
+// the record of what the model actually proposed, which is the one thing that
+// must stay true even when the server overrides it.
+func TestWindowContinuation_TheAcceptedFrameIsACopyAndLeavesTheProposedFrameIntact(t *testing.T) {
+	t.Parallel()
+
+	base := validInvestigationRequest().Question
+	prior := continuationPrior(continuationPriorID, base, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+	request := continuationRequest(base)
+
+	// The interpreter hands out ONE frame object and keeps the pointer, exactly
+	// as the production interpreter does through its receipt.
+	shared := &QuestionFrame{SubjectExpression: SubjectExpression{
+		Kind:    SubjectExpressionGroupedMembers,
+		Grouped: &GroupedSetExpression{GroupKind: contractsv1.ContextFabricSubjectProject},
+	}}
+	harness := newContinuationHarness(t,
+		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		sharedFrameInterpreter{family: QuestionFamilyGroupedCohortStatus, frame: shared})
+
+	result := harness.investigate(t, request)
+	decision := harness.soleDecision(t)
+	if decision.Disposition != ContinuationApplied {
+		t.Fatalf("fixture defect: wanted an applied continuation, got %q/%q", decision.Disposition, decision.Reason)
+	}
+	t.Logf("proposed frame group_kind after the turn = %q; served group_kind = %q",
+		shared.SubjectExpression.Grouped.GroupKind, result.AnswerPlan.GroupKind)
+
+	if shared.SubjectExpression.Grouped.GroupKind != contractsv1.ContextFabricSubjectProject {
+		t.Errorf("the interpreter's OWN frame was mutated to %q -- admission must copy the frame and substitute into the copy, never rewrite the object every other holder shares",
+			shared.SubjectExpression.Grouped.GroupKind)
+	}
+	if result.AnswerPlan.GroupKind != contractsv1.ContextFabricSubjectTeam {
+		t.Errorf("served group_kind = %q, want the carried %q", result.AnswerPlan.GroupKind, contractsv1.ContextFabricSubjectTeam)
+	}
+}
+
+// sharedFrameInterpreter hands back the SAME frame pointer every call, so a
+// mutation of it is observable from the test.
+type sharedFrameInterpreter struct {
+	family QuestionFamily
+	frame  *QuestionFrame
+}
+
+func (s sharedFrameInterpreter) Interpret(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, QuestionFamilyOutcome, error) {
+	return InterpretedQuestion{
+		Shape: ShapeOpen, RequestedJudgment: "status",
+		TimeContext: TimeContext{Axis: TemporalCurrent},
+	}, QuestionFamilyOutcome{
+		Family: s.family, Source: QuestionFamilySourceModel, Frame: s.frame,
+		WinningSampleIndex: 0,
+		WinningSample:      FamilySample{ModelFamily: s.family, GroupKind: contractsv1.ContextFabricSubjectProject},
+		Version:            QuestionFamilyTableVersion,
+	}, nil
+}
