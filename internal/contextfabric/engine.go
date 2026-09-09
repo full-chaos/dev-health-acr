@@ -2603,7 +2603,7 @@ func (e *Engine) resolvePriorSubjectHints(ctx context.Context, principal storage
 			e.captureClarificationSelection(ctx, principal, consumer, resultID, prior, candidate)
 			hint := SubjectHint{
 				Kind: candidate.Subject.Kind, ID: candidate.Subject.CanonicalID,
-				Label: candidate.Subject.Label, Source: "prior_subject_receipt",
+				Label: candidate.Subject.Label, Source: SubjectHintSourcePriorSubjectReceipt,
 			}
 			hints = append(hints, hint)
 			validated = append(validated, receipt)

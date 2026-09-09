@@ -2106,7 +2106,7 @@ func (b *decisionSummaryBuffer) Trace(event ResolutionTraceEvent) {
 		}
 		b.commitGates = appendDistinctCapped(b.commitGates, event.CommitGate)
 		b.commitBases = appendDistinctCapped(b.commitBases, event.CommitBasis)
-		if event.CommitSubjectProvenance == commitSubjectProvenanceEngineMinted {
+		if event.CommitSubjectProvenance == contextfabric.CommitSubjectProvenanceEngineMinted {
 			b.committedEngineMinted++
 		}
 	case "ambiguous":
@@ -2154,24 +2154,6 @@ func (b *decisionSummaryBuffer) flush() {
 		DecisionReservedKinds:             nonNil(b.reservedKinds),
 		DecisionFilterKinds:               nonNil(b.filterKinds),
 	})
-}
-
-const (
-	// commitSubjectProvenanceCallerNamed: the caller stated this canonical id
-	// in THIS request, with any hint source but prior_subject_receipt.
-	commitSubjectProvenanceCallerNamed = "caller_named"
-	// commitSubjectProvenanceEngineMinted: this engine offered the id in an
-	// earlier turn and the caller returned it as a prior_subject_receipt.
-	commitSubjectProvenanceEngineMinted = "engine_minted_receipt"
-)
-
-// commitSubjectProvenanceToken renders the pair above. Total over the bool so
-// there is no third, unlabelled state.
-func commitSubjectProvenanceToken(callerNamed bool) string {
-	if callerNamed {
-		return commitSubjectProvenanceCallerNamed
-	}
-	return commitSubjectProvenanceEngineMinted
 }
 
 // confirmedMemberKindToken renders the CONFIRMED member kind for the
@@ -2300,6 +2282,10 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// what a conversational reference bound to previously, and the current
 	// question may name a different subject entirely.
 	callerSourced := make(map[string]bool)
+	// hintProvenance is the other half of the same decision, kept beside it so
+	// the two can never be computed from different tests. It travels into the
+	// merged-candidate resolution inside subjectCommitPolicy.
+	hintProvenance := make(map[string]string)
 	// subjectCandidatesAuthzDropped (CHAOS-3888) aggregates every candidate
 	// node this call found -- via an explicit SubjectHint below, or via
 	// mergeSearchResults' per-term/question passes further down -- and
@@ -2316,7 +2302,18 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		if subject.Label == "" {
 			subject.Label = subject.CanonicalID
 		}
-		if strings.TrimSpace(hint.Source) != "prior_subject_receipt" {
+		// CHAOS-5422 (r2 finding 4). Classified ONCE, by the closed
+		// enumeration in the contextfabric package, and BOTH consumers read
+		// the result of that single call: callerSourced (which grants the
+		// withholding exemption) and hintProvenance (which the decision line
+		// reports). Before this they were two separate string tests, and the
+		// one here treated every engine-produced hint except a single named
+		// source as if the caller had named it -- so the answer-reuse
+		// authorization recheck's own hints took the caller's exemption AND
+		// were reported to operators as caller-named.
+		provenance := contextfabric.ClassifySubjectHintProvenance(strings.TrimSpace(hint.Source))
+		hintProvenance[SubjectKey(subject)] = provenance
+		if provenance != contextfabric.CommitSubjectProvenanceEngineMinted {
 			callerSourced[SubjectKey(subject)] = true
 		}
 		node, ok, err := deps.ExactHint(ctx, subject)
@@ -2398,6 +2395,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// there is no contest for it to keep competing in -- but it must
 		// still reach the caller as a Proposed candidate so the turn can
 		// clarify instead of collapsing to a bare no_match.
+		shortCircuitPolicy := subjectCommitPolicy{scope: subjectScope, hintProvenance: hintProvenance}
 		committable := candidatesBySubject
 		withheldOnShortCircuit := make([]contextfabric.SubjectCandidate, 0, len(candidatesBySubject))
 		if subjectScope.MemberKind != "" {
@@ -2419,10 +2417,29 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			})
 		}
 		exactResolution, exactBases, exactDigests := FinalizeExactResolutionWithBasis(committable, callerSourced, request.Options.MaxSubjectCandidates)
-		// Appended AFTER the truncation FinalizeExactResolution applies: a
-		// candidate that may never commit must not be able to displace one
-		// that may from the committed set's own bound.
-		exactResolution.Candidates = append(exactResolution.Candidates, withheldOnShortCircuit...)
+		// CHAOS-5422 (r2 finding 2). The withheld candidates go back into the
+		// caller's set, but INSIDE its bound, never appended past it.
+		//
+		// The first version of this appended them after
+		// FinalizeExactResolution had truncated, reasoning that a candidate
+		// which may never commit must not displace one that may. The first
+		// half of that reasoning is right and is preserved by filling only the
+		// room LEFT OVER, committable candidates first. The second half was
+		// wrong: it made the returned Candidates exceed
+		// Options.MaxSubjectCandidates, which is the caller's own contract and
+		// not ours to overrun for a candidate we are refusing anyway. Measured
+		// as max=1 candidates=2.
+		//
+		// A zero or negative max means "no bound" here, the same reading
+		// FinalizeExactResolution gives it.
+		if room := request.Options.MaxSubjectCandidates - len(exactResolution.Candidates); request.Options.MaxSubjectCandidates <= 0 {
+			exactResolution.Candidates = append(exactResolution.Candidates, withheldOnShortCircuit...)
+		} else if room > 0 {
+			if room > len(withheldOnShortCircuit) {
+				room = len(withheldOnShortCircuit)
+			}
+			exactResolution.Candidates = append(exactResolution.Candidates, withheldOnShortCircuit[:room]...)
+		}
 		commitBases.ResetTo(exactBases)
 		commitDigests.ResetTo(exactDigests)
 		// CHAOS-4096: this short circuit never reaches
@@ -2506,11 +2523,13 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 					Outcome: "committed", WinningMechanism: winningMechanism,
 					CommitGate:  CommitGateCallerHintShortCircuit,
 					CommitBasis: string(exactBases.For(subject)),
-					CommitSubjectProvenance: commitSubjectProvenanceToken(
-						callerSourced[SubjectKey(subject)]),
-					SearchCandidateLimit:   request.Options.MaxSubjectCandidates,
-					PopulationBasis:        "none",
-					OfferedUnderWindowGate: offersOnly,
+					// CHAOS-5422: the SAME policy value the merged path
+					// stamps from, so this exit and that one can never
+					// classify the same subject differently.
+					CommitSubjectProvenance: shortCircuitPolicy.provenanceFor(subject),
+					SearchCandidateLimit:    request.Options.MaxSubjectCandidates,
+					PopulationBasis:         "none",
+					OfferedUnderWindowGate:  offersOnly,
 				})
 			}
 		}
@@ -3175,7 +3194,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if offersOnly && firstPassTracer != nil {
 		firstPassTracer = offersOnlyDecisionTracer{real: firstPassTracer}
 	}
-	resolution, firstPassBases, firstPassDigests := resolveFromMergedCandidatesWithSubjectScope(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), subjectScope)
+	resolution, firstPassBases, firstPassDigests := resolveFromMergedCandidatesWithSubjectScope(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), subjectCommitPolicy{scope: subjectScope, hintProvenance: hintProvenance})
 	commitBases.ResetTo(firstPassBases)
 	commitDigests.ResetTo(firstPassDigests)
 	// coverageFloorDegraded (CHAOS-4038, codex review round 2 finding 1) is
@@ -3342,7 +3361,8 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				scopedPool, scopedObservationParentKey, scopedObservationBlocked, request.Options.MaxSubjectCandidates,
 				request.Options.AllowClarification, false, nil, 0, false, effectiveSearchLimit, 0,
 				unscopedVisibility, gate, scopedIdentity, scopedIdentityTerms, aliasIdentityComplete,
-				scopedDecisionTracer, request.RequestID, "", true, false, nil, subjectScope,
+				scopedDecisionTracer, request.RequestID, "", true, false, nil,
+				subjectCommitPolicy{scope: subjectScope, hintProvenance: hintProvenance},
 			)
 			if len(scopedResolution.Committed) > 0 {
 				resolution = scopedResolution
@@ -3439,7 +3459,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				// CHAOS-5422: the SAME subject scope the first pass ran
 				// under -- the census rescue is an alternate commit path for
 				// the same ambiguity, so it inherits the same refusal.
-				resolution, censusBases, censusDigests = resolveFromMergedCandidatesWithSubjectScope(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey, false, false, nil, subjectScope)
+				resolution, censusBases, censusDigests = resolveFromMergedCandidatesWithSubjectScope(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey, false, false, nil, subjectCommitPolicy{scope: subjectScope, hintProvenance: hintProvenance})
 				commitBases.ResetTo(censusBases)
 				commitDigests.ResetTo(censusDigests)
 				resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded

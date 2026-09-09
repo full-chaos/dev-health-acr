@@ -725,7 +725,7 @@ func (e *Engine) reuseAuthorizationStillHolds(ctx context.Context, principal sto
 	if len(subjects) > 0 {
 		hints := make([]SubjectHint, 0, len(subjects))
 		for _, subject := range subjects {
-			hints = append(hints, SubjectHint{Kind: subject.Kind, ID: subject.CanonicalID, Label: subject.Label, Source: "answer_reuse_authorization_recheck"})
+			hints = append(hints, SubjectHint{Kind: subject.Kind, ID: subject.CanonicalID, Label: subject.Label, Source: SubjectHintSourceAnswerReuseRecheck})
 		}
 		recheckRequest.RequestedScope.SubjectHints = hints
 	}

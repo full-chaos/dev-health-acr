@@ -413,7 +413,7 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 	// call sites: one more untyped tail argument there is a comma away from
 	// binding silently to the wrong slot, and the value it would carry is
 	// `nothing decided` for every one of them.
-	return resolveFromMergedCandidatesWithSubjectScope(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, tracer, requestID, evidenceCensusAttestedKey, confirmedKindScopedBasis, lowPopulationKindScopedBasis, reservedKinds, subjectOfferScope{})
+	return resolveFromMergedCandidatesWithSubjectScope(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, tracer, requestID, evidenceCensusAttestedKey, confirmedKindScopedBasis, lowPopulationKindScopedBasis, reservedKinds, subjectCommitPolicy{})
 }
 
 // resolveFromMergedCandidatesWithSubjectScope is the real implementation.
@@ -422,7 +422,11 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 // can never be its subject. See subjectOfferScope's own doc comment
 // (chaos5422_mention_scope.go) for the measured substitution it closes and for
 // why only a children_of_scope frame ever produces a non-zero value.
-func resolveFromMergedCandidatesWithSubjectScope(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string, confirmedKindScopedBasis bool, lowPopulationKindScopedBasis bool, reservedKinds []contextfabric.SubjectKind, subjectScope subjectOfferScope) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
+func resolveFromMergedCandidatesWithSubjectScope(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string, confirmedKindScopedBasis bool, lowPopulationKindScopedBasis bool, reservedKinds []contextfabric.SubjectKind, policy subjectCommitPolicy) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
+	// CHAOS-5422 (after r2): both invariants arrive as ONE value. subjectScope
+	// is read out of it once, here, so the guards below read the same field
+	// name they always did and there is still exactly one thing to pass.
+	subjectScope := policy.scope
 	bases := make(contextfabric.CommitBasisSet)
 	// digests (CHAOS-4087) records IN LOCKSTEP with bases above, at every
 	// SAME bases.Record call site -- see CommitDecisionDigest's own doc
@@ -1714,8 +1718,20 @@ func resolveFromMergedCandidatesWithSubjectScope(candidatesBySubject map[string]
 					// consumes, never re-derived here -- a trace that disagreed
 					// with the basis the gate actually used would be worse than
 					// no trace at all.
-					CommitBasis:        string(bases.For(subject)),
-					TiedStatisticalTop: tiedStatisticalTop,
+					CommitBasis: string(bases.For(subject)),
+					// CHAOS-5422, THE PROVENANCE CHOKE POINT (r2 finding 3).
+					// This loop is the single emission site every merged-path
+					// commit funnels through -- the pre-committed arrival, the
+					// exact index, the identity fast path, the lone floor, the
+					// top-of-two, the vector margin rescue and the census
+					// rescue all reach it through resolution.Committed. Stamped
+					// HERE rather than at each tier, because stamping per tier
+					// is what let the arrival path commit an engine-minted
+					// receipt while the folded count reported zero of them.
+					// Total by construction: policy.provenanceFor never returns
+					// an empty string.
+					CommitSubjectProvenance: policy.provenanceFor(subject),
+					TiedStatisticalTop:      tiedStatisticalTop,
 					// CHAOS-4117: SearchCandidateLimit's own doc comment.
 					SearchCandidateLimit: max,
 					// CHAOS-4154: populationBasis's own doc comment above.

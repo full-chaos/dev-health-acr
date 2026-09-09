@@ -560,7 +560,7 @@ func TestTheEvidenceCensusRescueRefusesAWithheldKind(t *testing.T) {
 	// a real refusal rather than a fixture that could never commit anyway.
 	admitted, _, _ := resolveFromMergedCandidatesWithSubjectScope(pool, map[string]string{}, map[string]bool{}, 10,
 		true, true, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, nil,
-		"request_census_pin_000", key, false, false, nil, subjectOfferScope{})
+		"request_census_pin_000", key, false, false, nil, subjectCommitPolicy{})
 	if len(admitted.Committed) != 1 {
 		t.Fatalf("the control arm committed %d subject(s), want 1; without a committing control this test "+
 			"cannot tell a refusal from a fixture that never reached the rescue", len(admitted.Committed))
@@ -568,7 +568,7 @@ func TestTheEvidenceCensusRescueRefusesAWithheldKind(t *testing.T) {
 
 	refused, _, _ := resolveFromMergedCandidatesWithSubjectScope(pool, map[string]string{}, map[string]bool{}, 10,
 		true, true, nil, 0, false, 10, 20, true, DefaultCommitGatePolicy(), nil, nil, false, nil,
-		"request_census_pin_001", key, false, false, nil, scope)
+		"request_census_pin_001", key, false, false, nil, subjectCommitPolicy{scope: scope})
 	if len(refused.Committed) != 0 {
 		t.Fatalf("evidence_census committed %v of the declared MEMBER kind; the funnel guard cannot reach this "+
 			"path, so it needs its own conjunct and no longer has one", refused.Committed)
@@ -779,7 +779,7 @@ func TestTheShortCircuitReportsWhatItWithheldAndWhoseIdentifierItCommitted(t *te
 					t.Errorf("committed decision event for %q carries no commit_subject_provenance -- this "+
 						"exit is the one place that provenance is known", event.Subject.CanonicalID)
 				}
-				if event.CommitSubjectProvenance == commitSubjectProvenanceEngineMinted {
+				if event.CommitSubjectProvenance == contextfabric.CommitSubjectProvenanceEngineMinted {
 					minted++
 				}
 			}
@@ -788,5 +788,212 @@ func TestTheShortCircuitReportsWhatItWithheldAndWhoseIdentifierItCommitted(t *te
 					"the token", got.DecisionCommittedEngineMinted, minted)
 			}
 		})
+	}
+}
+
+// ============================================================================
+// The three r2 repros, as permanent pins, plus the enumeration they rest on.
+// ============================================================================
+
+// r2 FINDING 2. The withheld candidates must come back INSIDE the caller's own
+// bound. The first version appended them after FinalizeExactResolution had
+// truncated, so the returned set exceeded Options.MaxSubjectCandidates —
+// measured as max=1 candidates=2. The bound is the caller's contract and is not
+// ours to overrun for a candidate we are refusing anyway.
+func TestTheShortCircuitRespectsMaxSubjectCandidatesWhileWithholding(t *testing.T) {
+	t.Parallel()
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository.v2:github:platform", Label: "platform"}
+	member := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team.v2:github:platform-owners", Label: "platform owners"}
+	backend := mentionScopeBackend("platform")
+	backend.exactHints = map[string]CandidateNode{
+		SubjectKey(anchor): candidateNode(anchor.Kind, anchor.CanonicalID, anchor.Label, 1, "*"),
+		SubjectKey(member): candidateNode(member.Kind, member.CanonicalID, member.Label, 1, "*"),
+	}
+	req := testRequest()
+	req.Options.MaxSubjectCandidates = 1
+	req.RequestedScope.SubjectHints = []contextfabric.SubjectHint{
+		{Kind: anchor.Kind, ID: anchor.CanonicalID, Label: anchor.Label, Source: "workbench"},
+		{Kind: member.Kind, ID: member.CanonicalID, Label: member.Label, Source: contextfabric.SubjectHintSourcePriorSubjectReceipt},
+	}
+	res, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+		storage.Principal{OrgID: "org_1"}, req, testInterpreted("platform"),
+		backend.deps(), confirmedTeam(), nil, mentionScopeFrame("platform"), "")
+	if err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+	if len(res.Candidates) > req.Options.MaxSubjectCandidates {
+		t.Fatalf("returned %d candidates for MaxSubjectCandidates=%d -- a candidate this resolution is "+
+			"REFUSING must not be the one that overruns the caller's own bound",
+			len(res.Candidates), req.Options.MaxSubjectCandidates)
+	}
+	// The committable candidate keeps the slot, which is the half of the
+	// original reasoning that was right.
+	if len(res.Committed) != 1 || res.Committed[0].CanonicalID != anchor.CanonicalID {
+		t.Fatalf("committed %v, want the caller's own named anchor to keep the one available slot", res.Committed)
+	}
+}
+
+// r2 FINDING 3. The ORDINARY arrival path commits engine-minted receipts, and
+// before the choke point it stamped no provenance at all — so
+// decision_committed_engine_minted read a confident ZERO on a turn where an
+// engine-minted receipt had committed. A measured zero that is false is worse
+// than an absent field, because nothing distinguishes it from a real one.
+//
+// The receipt here is of the ANCHOR kind, so nothing withholds it: it commits
+// through pre_committed_exact_hint exactly as it always has. Only the reporting
+// changes.
+func TestAnArrivalCommitCarriesItsProvenanceAndIsCounted(t *testing.T) {
+	t.Parallel()
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository.v2:github:platform", Label: "platform"}
+	backend := mentionScopeBackend("platform")
+	backend.exactHints = map[string]CandidateNode{
+		SubjectKey(anchor): candidateNode(anchor.Kind, anchor.CanonicalID, anchor.Label, 1, "*"),
+	}
+	capture := &mixedHintCapture{}
+	req := testRequest()
+	req.Options.MaxSubjectCandidates = 20
+	req.RequestedScope.SubjectHints = []contextfabric.SubjectHint{
+		{Kind: anchor.Kind, ID: anchor.CanonicalID, Label: anchor.Label, Source: contextfabric.SubjectHintSourcePriorSubjectReceipt},
+	}
+	deps := backend.deps()
+	deps.ResolutionTracer = capture
+	res, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+		storage.Principal{OrgID: "org_1"}, req, testInterpreted("platform"),
+		deps, nil, nil, nil, "")
+	if err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+	// No frame and no confirmed kind on purpose: this pin is about the
+	// ORDINARY arrival commit, the one every question can reach, so nothing
+	// about the scope axis is allowed to be load-bearing for it. (A
+	// scope-anchored frame with a confirmed member kind would narrow the
+	// subject pool and drop this arrival before it ever committed -- which is
+	// this ticket's own mechanism, and a different test.)
+	if len(res.Committed) != 1 || res.Committed[0].CanonicalID != anchor.CanonicalID {
+		t.Fatalf("committed %v, want the anchor-kind receipt to commit exactly as before -- this pin is about "+
+			"REPORTING, and a pin that changed the behaviour would be measuring the wrong thing", res.Committed)
+	}
+	committed := 0
+	for _, event := range capture.decisions {
+		if event.Outcome != "committed" {
+			continue
+		}
+		committed++
+		if event.CommitSubjectProvenance != contextfabric.CommitSubjectProvenanceEngineMinted {
+			t.Errorf("commit gate %q stamped commit_subject_provenance=%q, want %q -- this receipt was minted "+
+				"by the engine, and a path that does not say so makes the folded count read a false zero",
+				event.CommitGate, event.CommitSubjectProvenance, contextfabric.CommitSubjectProvenanceEngineMinted)
+		}
+	}
+	if committed != 1 {
+		t.Fatalf("captured %d committed decision events, want 1", committed)
+	}
+	if len(capture.summaries) != 1 {
+		t.Fatalf("captured %d decision_summary events, want 1", len(capture.summaries))
+	}
+	if got := capture.summaries[0].DecisionCommittedEngineMinted; got != 1 {
+		t.Fatalf("decision_committed_engine_minted = %d on a turn that committed an engine-minted receipt, "+
+			"want 1 -- reading 0 here is the false zero this pin exists for", got)
+	}
+}
+
+// r2 FINDING 4. An engine-produced hint never takes the caller's exemption, and
+// is never reported as caller-named. The answer-reuse authorization recheck
+// produces exactly such a hint; the old single-string test treated every source
+// but one as the caller's own.
+//
+// Driven with the WITHHELD kind, because the exemption is what is under test:
+// if this source is misclassified it both escapes the withholding and lies on
+// the line, which is why one pin can hold both halves.
+func TestAnAnswerReuseRecheckHintIsEngineMintedNotCallerNamed(t *testing.T) {
+	t.Parallel()
+	member := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team.v2:github:platform-owners", Label: "platform owners"}
+	backend := mentionScopeBackend("platform")
+	backend.exactHints = map[string]CandidateNode{
+		SubjectKey(member): candidateNode(member.Kind, member.CanonicalID, member.Label, 1, "*"),
+	}
+	req := testRequest()
+	req.Options.MaxSubjectCandidates = 20
+	req.RequestedScope.SubjectHints = []contextfabric.SubjectHint{
+		{Kind: member.Kind, ID: member.CanonicalID, Label: member.Label, Source: contextfabric.SubjectHintSourceAnswerReuseRecheck},
+	}
+	res, _, bases, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+		storage.Principal{OrgID: "org_1"}, req, testInterpreted("platform"),
+		backend.deps(), confirmedTeam(), nil, mentionScopeFrame("platform"), "")
+	if err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+	for _, subject := range res.Committed {
+		if subject.Kind == contextfabric.SubjectTeam {
+			t.Fatalf("committed %v -- an answer-reuse recheck hint took the CALLER'S exemption from the "+
+				"withholding; the caller never named this subject in this request; bases=%v", res.Committed, bases)
+		}
+	}
+}
+
+// THE ENUMERATION ITSELF, and the reason it is a pin rather than a comment: a
+// new internal hint producer that forgets to classify itself would otherwise
+// acquire the caller's exemption silently, which is exactly how the answer-reuse
+// source acquired it.
+func TestTheEngineMintedHintSourceSetIsClosedAndTotal(t *testing.T) {
+	t.Parallel()
+	want := []string{
+		contextfabric.SubjectHintSourceAnswerReuseRecheck,
+		contextfabric.SubjectHintSourcePriorSubjectReceipt,
+	}
+	got := contextfabric.EngineMintedSubjectHintSources()
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("engine-minted hint sources = %v, want %v -- a source added to the engine without being "+
+			"classified here silently gains the caller's exemption", got, want)
+	}
+	// The returned slice is a copy: a consumer must not be able to widen the
+	// enumeration it is asking about.
+	got[0] = "mutated"
+	if again := contextfabric.EngineMintedSubjectHintSources(); slices.Contains(again, "mutated") {
+		t.Fatalf("EngineMintedSubjectHintSources() handed out its own backing array")
+	}
+	// One assertion per enumerated source, so a deletion cannot hide inside a
+	// set comparison someone later loosens.
+	for _, source := range want {
+		if !contextfabric.SubjectHintIsEngineMinted(source) {
+			t.Errorf("SubjectHintIsEngineMinted(%q) = false, want true", source)
+		}
+		if got := contextfabric.ClassifySubjectHintProvenance(source); got != contextfabric.CommitSubjectProvenanceEngineMinted {
+			t.Errorf("ClassifySubjectHintProvenance(%q) = %q, want %q", source, got, contextfabric.CommitSubjectProvenanceEngineMinted)
+		}
+	}
+	// The DEFAULT side, which is what makes the enumeration meaningful: a wire
+	// request's own sources are not enumerable and are the caller's words.
+	for _, source := range []string{"workbench", "cli", "", "prior_subject_receipt_lookalike"} {
+		if contextfabric.SubjectHintIsEngineMinted(source) {
+			t.Errorf("SubjectHintIsEngineMinted(%q) = true, want false", source)
+		}
+		if got := contextfabric.ClassifySubjectHintProvenance(source); got != contextfabric.CommitSubjectProvenanceCallerNamed {
+			t.Errorf("ClassifySubjectHintProvenance(%q) = %q, want %q", source, got, contextfabric.CommitSubjectProvenanceCallerNamed)
+		}
+	}
+}
+
+// THE POLICY'S OWN TOTALITY. provenanceFor must never return an empty string,
+// and `resolved` and `unknown` must stay distinct -- collapsing them is how a
+// missing measurement became a measured value in the first place.
+func TestTheCommitPolicyProvenanceIsTotalAndDistinguishesUnknownFromResolved(t *testing.T) {
+	t.Parallel()
+	subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository.v2:github:platform"}
+	if got := (subjectCommitPolicy{}).provenanceFor(subject); got != contextfabric.CommitSubjectProvenanceUnknown {
+		t.Errorf("a policy with no hint set reports %q, want %q -- 'I was not told' is not 'retrieval found it'",
+			got, contextfabric.CommitSubjectProvenanceUnknown)
+	}
+	known := subjectCommitPolicy{hintProvenance: map[string]string{}}
+	if got := known.provenanceFor(subject); got != contextfabric.CommitSubjectProvenanceResolved {
+		t.Errorf("a policy that knows its (empty) hint set reports %q, want %q", got, contextfabric.CommitSubjectProvenanceResolved)
+	}
+	named := subjectCommitPolicy{hintProvenance: map[string]string{
+		SubjectKey(subject): contextfabric.CommitSubjectProvenanceEngineMinted,
+	}}
+	if got := named.provenanceFor(subject); got != contextfabric.CommitSubjectProvenanceEngineMinted {
+		t.Errorf("a hinted subject reports %q, want %q", got, contextfabric.CommitSubjectProvenanceEngineMinted)
 	}
 }

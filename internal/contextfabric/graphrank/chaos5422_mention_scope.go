@@ -164,3 +164,52 @@ func (s subjectOfferScope) observable() (kind string, source string) {
 func subjectOfferScopeFor(frame *contextfabric.QuestionFrame, scopeAnchorKind contextfabric.SubjectKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection, confirmedKind *contextfabric.ConfirmedExpectedKind) subjectOfferScope {
 	return decideSubjectOfferScope(frame, confirmedKind, decideAnchorPoolKindScope(frame, scopeAnchorKind, confirmedAnchor, confirmedKind))
 }
+
+// subjectCommitPolicy is the ONE value the resolution consults about a
+// candidate's eligibility to be committed as this question's subject, and
+// about whose identifier it was.
+//
+// CHAOS-5422, after counted round r2. Both invariants used to be spread across
+// the paths that needed them -- a withholding conjunct per commit tier, and a
+// provenance token stamped at the one exit that happened to know it. Two rounds
+// found the same class both times: a path that the per-path rule had not
+// reached. So both now travel together, as one parameter, into the single
+// function every commit path funnels through, and the emission of the decision
+// event reads them there rather than at each tier.
+//
+// The zero value withholds nothing and knows no hint provenance, which is the
+// honest reading for a caller that never ran interpretation.
+type subjectCommitPolicy struct {
+	scope subjectOfferScope
+	// hintProvenance maps SubjectKey -> the provenance vocabulary, for the
+	// subjects a hint named in THIS request. A subject absent from it was not
+	// named by any hint.
+	hintProvenance map[string]string
+}
+
+// withholds forwards to the scope, so a call site never has to know which half
+// of the policy answers this question.
+func (p subjectCommitPolicy) withholds(kind contextfabric.SubjectKind) bool {
+	return p.scope.withholds(kind)
+}
+
+// provenanceFor is TOTAL: every committed subject gets a word.
+//
+//   - a hint named it     -> that hint's classification
+//   - no hint named it, and this call knows its hint set -> `resolved`
+//   - this call has no hint set at all -> `unknown`
+//
+// The last two are deliberately different. "Retrieval found it" and "I was not
+// told" are different facts, and r2's finding 3 was exactly what happens when a
+// missing measurement is rendered as a measured value: the folded
+// engine-minted count read a confident zero on a turn where an engine-minted
+// receipt had committed.
+func (p subjectCommitPolicy) provenanceFor(subject contextfabric.SubjectRef) string {
+	if p.hintProvenance == nil {
+		return contextfabric.CommitSubjectProvenanceUnknown
+	}
+	if provenance, ok := p.hintProvenance[SubjectKey(subject)]; ok {
+		return provenance
+	}
+	return contextfabric.CommitSubjectProvenanceResolved
+}
