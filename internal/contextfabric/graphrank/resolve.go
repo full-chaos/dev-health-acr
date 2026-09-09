@@ -2212,7 +2212,7 @@ func (b *decisionSummaryBuffer) flush() {
 		// NEVER nil on the emitted line: an absent key and an empty list are
 		// different facts, and only one of them means "this call refused
 		// nothing".
-		OfferPoolAnchorKindWithheldIDs: orEmptyIDs(b.anchorKindWithheldIDs),
+		OfferPoolAnchorKindWithheldIDs: nonNil(b.anchorKindWithheldIDs),
 		OfferPoolAnchorKindExempted:    b.anchorKindExempted,
 		// orNone keeps the contract that these three are never empty on a
 		// line: a resolution that returned before the filter ran emits no
@@ -2240,17 +2240,6 @@ func confirmedMemberKindToken(confirmedKind *contextfabric.ConfirmedExpectedKind
 		return anchorPoolKindScopeNone
 	}
 	return string(confirmedKind.Kind)
-}
-
-// orEmptyIDs renders a nil id slice as an EMPTY, non-nil slice, so the emitted
-// line always carries the key. A JSON null for "nothing was refused" is
-// indistinguishable from a build that stopped populating the field, which is
-// the same failure the `none` tokens beside it exist to prevent.
-func orEmptyIDs(ids []string) []string {
-	if ids == nil {
-		return []string{}
-	}
-	return ids
 }
 
 // orNone renders an unset observable as the explicit `none` token. An empty

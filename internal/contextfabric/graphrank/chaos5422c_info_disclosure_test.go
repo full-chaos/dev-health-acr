@@ -200,3 +200,52 @@ func TestTheUnenumeratedFallbackAssertsAllThreeFacts(t *testing.T) {
 		}
 	}
 }
+
+// THE ERROR PATH STILL CARRIES THE KEY, and this is the case the normalisation
+// exists for.
+//
+// The disclosure that populates the id list runs only when the resolution
+// returned no error, but the decision summary is flushed by a DEFER and is
+// therefore emitted regardless. On an error path the buffer's id slice is
+// consequently nil, and without normalisation the line carries a JSON null —
+// which reads exactly like a build that stopped populating the field.
+//
+// A mutation removing the normalisation survived the battery until this pin
+// existed, because every other fixture here reaches the disclosure, where the
+// slice is already non-nil. The arm was right and the tests were incomplete.
+func TestAFailedResolutionStillEmitsTheIDListAsAnEmptyArray(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	backend := contestBackend("platform")
+	backend.searchErr = fmt.Errorf("graph unavailable")
+	deps := backend.deps()
+	deps.ResolutionTracer = NewSlogResolutionTracer(
+		slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	req := testRequest()
+	req.Options.MaxSubjectCandidates = 20
+	_, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+		storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"*"}}, req, testInterpreted("platform"),
+		deps, confirmedTeamKind(), nil, contestFrame("platform"), contextfabric.SubjectRepository)
+	if err == nil {
+		t.Fatal("the fixture must FAIL the resolution, or it measures the ordinary path and not this one")
+	}
+	var line map[string]any
+	for _, raw := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if raw == "" {
+			continue
+		}
+		var entry map[string]any
+		if jsonErr := json.Unmarshal([]byte(raw), &entry); jsonErr != nil {
+			t.Fatalf("emitted a line that is not JSON: %v", jsonErr)
+		}
+		if entry["stage"] == "decision_summary" {
+			line = entry
+		}
+	}
+	if line == nil {
+		t.Fatalf("no decision_summary line was emitted on the error path:\n%s", buf.String())
+	}
+	if ids := emittedWithheldIDs(t, line); len(ids) != 0 {
+		t.Errorf("the error path emitted ids %v, want an empty array", ids)
+	}
+}
