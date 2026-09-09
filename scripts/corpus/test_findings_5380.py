@@ -435,7 +435,10 @@ def test_the_upstream_refines_the_class_only_when_it_is_itself_an_error():
         if not AC.failed(a):
             continue
         got = AC.classify(a)
-        if status is None and (failure is None or "httpStatus" not in (failure or {})):
+        # r3 P1-2 / chris's ruling (iv): the attempt's OWN status decides unreadable,
+        # regardless of the upstream status -- never "only when the upstream is also
+        # absent".
+        if status is None:
             assert got == "unreadable", (status, failure, got)
             continue
         if isinstance(status, int) and status < 200:
@@ -559,6 +562,25 @@ def test_an_attempt_with_no_status_is_not_silently_served():
     assert AC.classify(a) == "unreadable", AC.classify(a)
     assert AC.unreadable_reason(a) == AC.UNREADABLE_STATUS_ABSENT, AC.unreadable_reason(a)
     assert AC.legacy_engine_failure_kind(a) is None, "the original yields no record here"
+
+
+def test_an_attempt_with_no_status_is_unreadable_even_when_the_upstream_status_is_present():
+    """r3 P1-2, chris's ruling (iv): the ATTEMPT'S OWN status decides whether it is
+    unreadable -- the upstream status is recorded BESIDE the class and never used to
+    classify a status-less attempt.
+
+    `classify()` used to require BOTH the attempt's own status and the upstream status to
+    be absent before returning "unreadable", so the reviewer's repro -- own status
+    absent, upstream 500 -- classified `engine_invalid_500` from the upstream with
+    `unreadable_reason` None, contradicting UNREADABLE_STATUS_ABSENT (which is documented
+    to fire on exactly this cell).
+    """
+    a = _attempt(None, failure={"code": "provider_error", "httpStatus": 500})
+    http, upstream = AC._statuses(a)
+    assert http is None and upstream == 500, (
+        "the repro's own axis is wrong if the upstream status is not present here")
+    assert AC.classify(a) == "unreadable", AC.classify(a)
+    assert AC.unreadable_reason(a) == AC.UNREADABLE_STATUS_ABSENT, AC.unreadable_reason(a)
 
 
 def test_every_unreadable_outcome_says_WHY():

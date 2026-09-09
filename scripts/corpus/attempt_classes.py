@@ -251,7 +251,14 @@ def classify(attempt):
                  400       400  acr_rejected_request          1
     """
     http, upstream = _statuses(attempt)
-    if http is None and upstream is None:
+    # THE ATTEMPT'S OWN STATUS DECIDES WHETHER IT IS UNREADABLE. r3 P1-2: this used to
+    # require BOTH the attempt's own status and the upstream status to be absent, so a
+    # status-less attempt with a present upstream status classified FROM the upstream
+    # (e.g. "engine_invalid_500") with no unreadable_reason -- contradicting
+    # UNREADABLE_STATUS_ABSENT, which documents this as exactly the cell it fires on. The
+    # upstream status is recorded BESIDE the class by outcome() regardless; it is never
+    # used to classify an attempt whose own status is absent.
+    if http is None:
         return "unreadable"
     if not failed(attempt):
         return "ok_200"
