@@ -457,6 +457,19 @@ func (t SlogEngineTelemetry) RecordModelRowsStripped(ctx context.Context, princi
 	t.logger.InfoContext(ctx, "context fabric model-authored claimed fact rows stripped before validation", args...)
 }
 
+// RecordDriverIdentityCollisions implements EngineTelemetry (CHAOS-5364).
+// See the interface's own doc comment for why every field is logged on every
+// call, zeros included. Content-safe: an org id and three counts.
+func (t SlogEngineTelemetry) RecordDriverIdentityCollisions(ctx context.Context, principal storage.Principal, collisions DriverIdentityCollisions) {
+	args := append([]any{
+		"org_id", principal.OrgID,
+		"cf_driver_identity_collisions", collisions.Total(),
+		"cf_driver_identity_restated", collisions.Restated,
+		"cf_driver_identity_reidentified", collisions.Reidentified,
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric driver identity collisions resolved before validation", args...)
+}
+
 // RecordFactScopeExpansion implements EngineTelemetry (CHAOS-4099) -- the
 // ONE operator-visible record of whether a fact family could be reached from
 // the subjects an investigation resolved.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"unicode/utf8"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -244,7 +245,7 @@ func narrateCohortDriverJudgments(cohort *Cohort, synthesisDrivers []DriverJudgm
 				standing = DriverPrincipal
 				principalAssigned = true
 			}
-			driverID := deconflictCohortDriverJudgmentID(cohortDriverJudgmentID(*member, position), takenDriverIDs)
+			driverID := deconflictDriverJudgmentID(cohortDriverJudgmentID(*member, position), takenDriverIDs)
 			takenDriverIDs[driverID] = struct{}{}
 			judgments = append(judgments, DriverJudgment{
 				DriverID:         driverID,
@@ -475,8 +476,8 @@ func cohortDriverJudgmentID(member CohortMember, index int) string {
 	return fmt.Sprintf("cohort-driver-%02d-%d", member.AttentionRank, index+1)
 }
 
-// deconflictCohortDriverJudgmentID returns base, or a deterministic
-// variant of it when base is already taken.
+// deconflictDriverJudgmentID returns base, or a deterministic variant of it
+// when base is already taken.
 //
 // Codex R3 (CHAOS-4448): cohortDriverJudgmentID derives its id from the
 // member's AttentionRank alone, and NOTHING forbids the synthesis model
@@ -487,6 +488,12 @@ func cohortDriverJudgmentID(member CohortMember, index int) string {
 // Dropping the narrated driver instead would be worse: a judgment the
 // cohort earned would vanish because the model picked a string.
 //
+// CHAOS-5364 made this the ONE deconfliction authority for driver identity
+// rather than a cohort-private helper: ResolveDriverIdentityCollisions
+// applies the same decided rule to the model's own drivers, and two
+// implementations of "what happens when two drivers want one id" is exactly
+// how the two producers came to disagree in the first place.
+//
 // The suffix is a sha256 digest of the base id, the same hashed,
 // replay-stable scheme cohortDriverClaimID uses -- two passes over
 // identical input always produce the same deconflicted id, so a stored
@@ -495,20 +502,45 @@ func cohortDriverJudgmentID(member CohortMember, index int) string {
 // makes every candidate distinct by construction: with a finite taken set
 // the loop is guaranteed to terminate rather than spin on an unlucky
 // digest, so this can never silently drop a driver.
-func deconflictCohortDriverJudgmentID(base string, taken map[string]struct{}) string {
+//
+// THE LENGTH BOUND. A DriverID must be at most
+// contractsv1.ContextFabricModelMintedIDMaxLength RUNES or the result
+// validator refuses the whole answer -- with a different error than the
+// collision this function exists to prevent, which would be a fix that swaps
+// one 500 for another. The cohort's own 18-rune bases never approach that
+// ceiling, but a model-authored id may sit exactly on it, so the base is
+// trimmed by runes to leave room for the suffix. The digest is still taken
+// over the FULL base, so two long ids sharing a trimmed prefix still produce
+// different variants.
+func deconflictDriverJudgmentID(base string, taken map[string]struct{}) string {
 	if _, clash := taken[base]; !clash {
 		return base
 	}
 	for attempt := 0; ; attempt++ {
 		digest := sha256.Sum256([]byte(base + "\x00" + strconv.Itoa(attempt)))
-		candidate := base + "-" + hex.EncodeToString(digest[:])[:8]
+		suffix := "-" + hex.EncodeToString(digest[:])[:8]
 		if attempt > 0 {
-			candidate += "-" + strconv.Itoa(attempt)
+			suffix += "-" + strconv.Itoa(attempt)
 		}
+		candidate := trimToRunes(base, contractsv1.ContextFabricModelMintedIDMaxLength-utf8.RuneCountInString(suffix)) + suffix
 		if _, clash := taken[candidate]; !clash {
 			return candidate
 		}
 	}
+}
+
+// trimToRunes returns value's first limit runes, never splitting one. A limit
+// at or below zero yields the empty string, which the caller can only reach
+// with a suffix longer than the whole id budget -- impossible for the
+// fixed-width suffixes above, and empty rather than a panic if that changes.
+func trimToRunes(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	if utf8.RuneCountInString(value) <= limit {
+		return value
+	}
+	return string([]rune(value)[:limit])
 }
 
 // cohortDriverJudgmentTitle/-Summary are the narration prose -- every

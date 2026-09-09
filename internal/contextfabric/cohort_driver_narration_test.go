@@ -468,23 +468,23 @@ func TestDeconflictCohortDriverJudgmentID_IsDeterministicAndNeverDrops(t *testin
 	t.Parallel()
 	base := "cohort-driver-01-1"
 
-	if got := deconflictCohortDriverJudgmentID(base, map[string]struct{}{}); got != base {
+	if got := deconflictDriverJudgmentID(base, map[string]struct{}{}); got != base {
 		t.Errorf("deconflict with nothing taken = %q, want the base id %q unchanged", got, base)
 	}
 
 	taken := map[string]struct{}{base: {}}
-	first := deconflictCohortDriverJudgmentID(base, taken)
+	first := deconflictDriverJudgmentID(base, taken)
 	if first == base {
 		t.Fatalf("deconflict returned the taken base id %q", base)
 	}
-	if again := deconflictCohortDriverJudgmentID(base, taken); again != first {
+	if again := deconflictDriverJudgmentID(base, taken); again != first {
 		t.Errorf("deconflict is not deterministic: %q then %q for identical inputs", first, again)
 	}
 
 	// Saturate: base and its first candidate both taken -- must still yield
 	// a fresh, distinct id rather than spinning or returning a duplicate.
 	taken[first] = struct{}{}
-	second := deconflictCohortDriverJudgmentID(base, taken)
+	second := deconflictDriverJudgmentID(base, taken)
 	if second == base || second == first {
 		t.Fatalf("deconflict returned an already-taken id %q (base=%q first=%q)", second, base, first)
 	}
