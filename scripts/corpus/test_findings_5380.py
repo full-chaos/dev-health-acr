@@ -714,14 +714,10 @@ def test_the_real_harness_and_the_classifier_agree_over_the_executed_space():
                     disagreements.append((status, bname, "producer-retry",
                                           row["attempts"], want_retry))
 
-                # 3. THE WRITTEN ARTEFACT'S OWN KEYS. Every response key must be one the
-                #    schema declares or one the shared failure set names. This is what
-                #    catches a producer that grows a NEW failure key, on any arm,
-                #    including arms this sweep does not think to script.
-                keys = set((written.get("response") or {}))
-                unknown = keys - SCHEMA_RESPONSE_KEYS - set(AC.FAILURE_BODY_KEYS)
-                if unknown:
-                    disagreements.append((status, bname, "unknown-body-key", sorted(unknown)))
+                # The written artefact's own keys are policed by
+                # test_the_contract_guard_is_exit_path_traced_over_the_executed_producer,
+                # which traces EVERY exit line of harness.post (this sweep's scripted loop
+                # AND the closed-port arm below) instead of only this loop's cells.
 
                 if AC.classify(written) == "ok_200":
                     body = written.get("response") or {}
@@ -1570,64 +1566,109 @@ def test_no_module_defines_the_same_name_twice():
     assert {n for n in names if names.count(n) > 1} == {"f"}, "the duplicate check is inert"
 
 
-def test_no_module_spells_the_contract_itself():
-    """THE LITERAL GUARD. A second spelling is how the two sides drift apart again.
+def _post_exit_lines():
+    """Every `return` inside `harness.post`, from the function's OWN AST at test time --
+    so a new exit arm shows up here without anyone editing this file (i1)."""
+    tree = _ast.parse((HERE / "harness.py").read_text())
+    post_fn = next(n for n in _ast.walk(tree)
+                   if isinstance(n, _ast.FunctionDef) and n.name == "post")
+    return {n.lineno for n in _ast.walk(post_fn) if isinstance(n, _ast.Return)}
 
-    `contract.py` owns the served status and the failure body keys. No other module in
-    this directory may write either as a literal -- not the producer, not the classifier,
-    not the merge. Asserted on the AST so a number inside a comment or a docstring cannot
-    satisfy or trip it, and with a NEGATIVE CONTROL that plants the literal and requires
-    the check to catch it.
+
+def _trace_post(executed_lines, captured_bodies):
+    """A `sys.settrace` hook scoped to `harness.post`: records the LINE every exit was
+    actually taken on (i4) and the BODY the producer actually returned there (i2, never a
+    constructed one). Global-trace-returns-local-trace is the documented settrace shape --
+    frames outside `post` are never traced at line granularity."""
+    harness_file = str((HERE / "harness.py").resolve())
+
+    def global_trace(frame, event, _arg):
+        if (event == "call" and frame.f_code.co_name == "post"
+                and str(Path(frame.f_code.co_filename).resolve()) == harness_file):
+            def local_trace(frame, event, arg):
+                if event == "return":
+                    executed_lines.add(frame.f_lineno)
+                    if isinstance(arg, tuple) and len(arg) == 3:
+                        captured_bodies.append((frame.f_lineno, arg[1]))
+                return local_trace
+            return local_trace
+        return None
+    return global_trace
+
+
+def test_the_contract_guard_is_exit_path_traced_over_the_executed_producer():
+    """THE CONTRACT GUARD, replacing the literal walk entirely.
+
+    r3: `test_no_module_spells_the_contract_itself` read `_ast.Constant` only, so a key
+    COMPUTED as `f"{chr(101)}rror"` walked straight past it (P1-3). And the unknown-key
+    check that lived inside `test_the_real_harness_and_the_classifier_agree_over_the_
+    executed_space` only ran over the SCRIPTED HTTP loop, never over the closed-port
+    transport arm -- so a `"fatal"` key planted on THAT arm (`harness.py:125`) was never
+    examined at all and the pin stayed green (P1-3).
+
+    There is no proxy here for either defect: this pin traces `harness.post` while it is
+    driven by BOTH the scripted sweep and the closed-port cell below, and asserts every
+    exit line the function's OWN AST finds was actually exercised (i4, load-bearing) --
+    so an arm the sweep never reaches FAILS instead of silently passing. Over every body
+    an executed exit really returned (i2), every key must be in the schema or the shared
+    failure set (i3) -- how a key is SPELLED never matters, because nothing here reads
+    source text; it reads what the producer put in a body it actually returned.
     """
-    served = sorted(contract.SERVED_STATUSES)
-    keys = set(contract.FAILURE_BODY_KEYS)
+    executed_lines, captured_bodies = set(), []
+    sys.settrace(_trace_post(executed_lines, captured_bodies))
+    try:
+        saved_base, saved_out = harness.BASE, harness.OUTDIR
+        with tempfile.TemporaryDirectory() as tmp, _ScriptedServer() as srv:
+            harness.BASE = f"http://127.0.0.1:{srv.port}/api/investigations"
+            harness.OUTDIR = Path(tmp)
+            try:
+                for status in (200, 400, 500, 599):
+                    for bname, body in (("bare", {}), ("result",
+                                        {"result": {"status": "complete"}})):
+                        srv.status, srv.body, srv.raw = status, body, False
+                        with contextlib.redirect_stdout(io.StringIO()):
+                            harness.post({"question": "x"})
+                srv.status, srv.body, srv.raw = 200, None, True   # undecodable 200 body
+                with contextlib.redirect_stdout(io.StringIO()):
+                    harness.post({"question": "x"})
+                srv.status, srv.body, srv.raw = 500, None, True   # undecodable HTTPError body
+                with contextlib.redirect_stdout(io.StringIO()):
+                    harness.post({"question": "x"})
+            finally:
+                harness.BASE, harness.OUTDIR = saved_base, saved_out
 
-    def literals(path):
-        tree = _ast.parse((HERE / path).read_text())
-        nums, strs = set(), set()
-        for n in _ast.walk(tree):
-            if isinstance(n, _ast.Constant):
-                if isinstance(n.value, int) and not isinstance(n.value, bool):
-                    nums.add(n.value)
-                elif isinstance(n.value, str):
-                    strs.add(n.value)
-        return nums, strs
+        import socket
+        probe = socket.socket()
+        probe.bind(("127.0.0.1", 0))
+        dead_port = probe.getsockname()[1]
+        probe.close()
+        saved_base2 = harness.BASE
+        harness.BASE = f"http://127.0.0.1:{dead_port}/api/investigations"
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                harness.post({"question": "x"})     # the closed-port / transport arm
+        finally:
+            harness.BASE = saved_base2
+    finally:
+        sys.settrace(None)
 
-    # ONE narrow, EXPLAINED exemption, tied to a fact rather than to convenience:
-    # `merge_corpus` publishes a row BUCKET literally named "error", a different closed
-    # vocabulary that happens to collide with the producer's body key. The exemption is
-    # asserted against that fact below, so it cannot quietly become a licence.
-    exempt = {("merge_corpus.py", contract.ERROR_BODY_KEY)}
-    assert contract.ERROR_BODY_KEY in MC.BUCKETS, (
-        "the merge_corpus exemption exists because the body key collides with a published "
-        f"BUCKET name; that is no longer true, so the exemption must go: {MC.BUCKETS}")
+    expected_lines = _post_exit_lines()
+    assert executed_lines == expected_lines, (
+        f"harness.post exit lines executed {sorted(executed_lines)} != the function's "
+        f"own AST {sorted(expected_lines)} -- an exit arm the sweep never reached would "
+        "otherwise pass silently, which is exactly how P1-3 survived")
+    assert captured_bodies, "the trace captured no returned body -- the pin ran nothing"
 
     offenders = []
-    for path in ("harness.py", "attempt_classes.py", "merge_corpus.py", "run_shard.py",
-                 "engine_failures.py"):
-        nums, strs = literals(path)
-        for st in served:
-            if st in nums:
-                offenders.append((path, "served status", st))
-        for k in keys & strs:
-            if (path, k) not in exempt:
-                offenders.append((path, "failure body key", k))
+    for lineno, body in captured_bodies:
+        if not isinstance(body, dict):
+            continue
+        unknown = set(body) - SCHEMA_RESPONSE_KEYS - set(AC.FAILURE_BODY_KEYS)
+        if unknown:
+            offenders.append((lineno, sorted(unknown)))
     assert not offenders, (
-        "the contract is spelled outside contract.py -- a second spelling is how the "
-        f"producer and the readers drift apart: {offenders}")
-
-    # NEGATIVE CONTROL: the check must actually catch a planted literal, or it is inert.
-    import tempfile as _t
-    with _t.TemporaryDirectory() as tmp:
-        planted = Path(tmp) / "planted.py"
-        planted.write_text(f"x = {served[0]}\ny = {sorted(keys)[0]!r}\n")
-        tree = _ast.parse(planted.read_text())
-        nums = {n.value for n in _ast.walk(tree)
-                if isinstance(n, _ast.Constant) and isinstance(n.value, int)}
-        strs = {n.value for n in _ast.walk(tree)
-                if isinstance(n, _ast.Constant) and isinstance(n.value, str)}
-        assert served[0] in nums and (keys & strs), \
-            "the literal check cannot see a planted literal; it proves nothing"
+        "harness.post returned a body with a key outside the schema and the shared "
+        f"failure set, at an EXECUTED exit line: {offenders[:5]}")
 
 
 def test_the_committed_shape_space_is_regenerable_and_shows_no_divergence():
