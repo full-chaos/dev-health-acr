@@ -138,7 +138,7 @@ FactHealth
   fields             compounding_risk computed_at daily_health daily_health_omitted_count day norm_value repo_count risk_breakdown risk_rules rollup_basis scope scope_id scope_name severity signal team_count weight weighted_contribution
 
 FactIdentity
-  reached_funcs      18
+  reached_funcs      22
   dynamic_key_sites  0
   leaked_call_sites  0
     leak interface_method     0
@@ -146,10 +146,10 @@ FactIdentity
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            21
+    calls followed            27
     calls accounted           13
     calls not_a_call          1
-    calls excluded_by_design  37
+    calls excluded_by_design  35
     calls leaked              0
   fields             id name provider title
 
@@ -202,7 +202,7 @@ FactLandscape
   fields             area_breakdown area_breakdown_omitted_count area_count as_of_day churn_loc_30d cycle_p50_30d_hours_avg delivery_units_30d identity_count map_name rollup_basis team_breakdown team_breakdown_omitted_count team_count team_id wip_max_30d
 
 FactMembership
-  reached_funcs      18
+  reached_funcs      22
   dynamic_key_sites  0
   leaked_call_sites  0
     leak interface_method     0
@@ -210,10 +210,10 @@ FactMembership
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            20
+    calls followed            26
     calls accounted           13
     calls not_a_call          1
-    calls excluded_by_design  36
+    calls excluded_by_design  34
     calls leaked              0
   fields             organization_id repository_id repository_name
 

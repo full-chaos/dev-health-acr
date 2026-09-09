@@ -37,7 +37,11 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 		return contextfabric.FactProviderResult{}, err
 	}
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
-	truncated := false
+	// CHAOS-5438 r2 P1: ONE owner for the shared output bound AND the
+	// truncation verdict across BOTH branches -- see factBudget. A local
+	// `truncated` flag beside a hand-written `len(facts) >=` guard is exactly
+	// how the two drifted apart.
+	budget := newFactBudget()
 	rejectedCount := 0
 	// CHAOS-5026: deferred so every return path passes through the
 	// disclosure -- see ci.go's identical note.
@@ -67,8 +71,7 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 			if !ok {
 				continue
 			}
-			// CHAOS-5474: output bound separate from the probe bound.
-			if len(facts) >= maxFactRowsPerQuery {
+			if !budget.admit() {
 				continue
 			}
 			fields := map[string]contextfabric.FactValue{
@@ -83,7 +86,7 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 				EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, row.ID)},
 			})
 		}
-		truncated = truncated || len(rows) > maxFactRowsPerQuery
+		budget.observe(len(rows))
 	}
 
 	workItemIDs, workItemBySubject, workItemRejected := v2Index(subjectsOfKind(query.Subjects, contextfabric.SubjectWorkItem), identity.KindWorkItem)
@@ -105,9 +108,7 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 			if !ok {
 				continue
 			}
-			// CHAOS-5438: the output bound is SEPARATE from the probe bound.
-			// The overflow row proves truncation; it is never served.
-			if len(facts) >= maxFactRowsPerQuery {
+			if !budget.admit() {
 				continue
 			}
 			facts = append(facts, contextfabric.CanonicalFact{
@@ -119,11 +120,11 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 				EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, row.RepoID+":"+row.ID)},
 			})
 		}
-		truncated = truncated || len(rows) > maxFactRowsPerQuery
+		budget.observe(len(rows))
 	}
 
 	state, emptyReason := currentAxisReadState(len(facts))
-	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: truncated}
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: budget.truncated()}
 	return result, nil
 }
 
@@ -157,7 +158,11 @@ func (p *MembershipProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		return contextfabric.FactProviderResult{}, err
 	}
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
-	truncated := false
+	// CHAOS-5438 r2 P1: ONE owner for the shared output bound AND the
+	// truncation verdict across BOTH branches -- see factBudget. A local
+	// `truncated` flag beside a hand-written `len(facts) >=` guard is exactly
+	// how the two drifted apart.
+	budget := newFactBudget()
 	rejectedCount := 0
 	// CHAOS-5026: deferred so every return path passes through the
 	// disclosure -- see ci.go's identical note.
@@ -183,8 +188,7 @@ func (p *MembershipProvider) ReadFacts(ctx context.Context, principal storage.Pr
 			if !ok {
 				continue
 			}
-			// CHAOS-5474: output bound separate from the probe bound.
-			if len(facts) >= maxFactRowsPerQuery {
+			if !budget.admit() {
 				continue
 			}
 			facts = append(facts, contextfabric.CanonicalFact{
@@ -193,7 +197,7 @@ func (p *MembershipProvider) ReadFacts(ctx context.Context, principal storage.Pr
 				EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, row.ID)},
 			})
 		}
-		truncated = truncated || len(rows) > maxFactRowsPerQuery
+		budget.observe(len(rows))
 	}
 
 	workItemIDs, workItemBySubject, workItemRejected := v2Index(subjectsOfKind(query.Subjects, contextfabric.SubjectWorkItem), identity.KindWorkItem)
@@ -215,9 +219,7 @@ func (p *MembershipProvider) ReadFacts(ctx context.Context, principal storage.Pr
 			if !ok {
 				continue
 			}
-			// CHAOS-5438: the output bound is SEPARATE from the probe bound.
-			// The overflow row proves truncation; it is never served.
-			if len(facts) >= maxFactRowsPerQuery {
+			if !budget.admit() {
 				continue
 			}
 			facts = append(facts, contextfabric.CanonicalFact{
@@ -229,10 +231,10 @@ func (p *MembershipProvider) ReadFacts(ctx context.Context, principal storage.Pr
 				EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, row.RepoID+":"+row.ID)},
 			})
 		}
-		truncated = truncated || len(rows) > maxFactRowsPerQuery
+		budget.observe(len(rows))
 	}
 
 	state, emptyReason := currentAxisReadState(len(facts))
-	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: truncated}
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: budget.truncated()}
 	return result, nil
 }
