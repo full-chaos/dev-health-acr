@@ -5,6 +5,17 @@ name: Promote main image aliases
   workflow_run:
     workflows: [Release]
     types: [completed]
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        # CHAOS-5377: proves the two docker steps below on demand -- in
+        # particular the source-manifest retry -- without waiting for the
+        # next main push and its ~50-minute Release. A sha whose Release
+        # has already published exercises the fixed race directly; leaving
+        # this blank defaults to the current main tip.
+        description: Commit SHA to promote (its Release must already be published); blank uses the current main tip
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -18,22 +29,24 @@ jobs:
   promote:
     if: >-
       github.repository == 'full-chaos/dev-health-acr' &&
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'main'
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main'))
     runs-on: ubuntu-24.04
     steps:
       - name: Resolve main publication aliases
         id: aliases
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+          SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.source_sha || github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          short_sha="${SOURCE_SHA:0:7}"
           current_main="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
           [[ "$current_main" =~ ^[0-9a-f]{40}$ ]]
+          SOURCE_SHA="${SOURCE_SHA:-$current_main}"
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          short_sha="${SOURCE_SHA:0:7}"
           {
             printf 'source_sha=%s\n' "$SOURCE_SHA"
             printf 'short_sha=%s\n' "$short_sha"
@@ -66,12 +79,40 @@ jobs:
             docker buildx imagetools inspect "$1" \
               | awk '$1 == "Digest:" { print $2; exit }'
           }
+          # CHAOS-5377: Release's own publish step (publish-ci-release.sh)
+          # already verifies this exact tag resolves before its job ends, but
+          # GHCR has shown a few seconds of read-after-write lag to a
+          # DIFFERENT client/session right at that boundary -- this
+          # workflow_run fires within seconds of Release completing and can
+          # lose that race. Retry with the same bounded backoff already used
+          # for the Releases API in publish-ci-release.sh's gh_release_retry
+          # (5 waits, ~4.5 minutes total) instead of failing on the first
+          # miss, and name the missing reference before giving up.
+          wait_for_source_digest() {
+            local ref="$1" attempt=1 max=6 digest=""
+            local -a delays=(5 15 45 90 180)
+            while :; do
+              if digest="$(manifest_digest "$ref" 2>/dev/null)" \
+                && [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                printf '%s\n' "$digest"
+                return 0
+              fi
+              if ((attempt >= max)); then
+                printf '::error::manifest never became visible for %s after %d attempts\n' \
+                  "$ref" "$max" >&2
+                return 1
+              fi
+              printf '::notice::manifest not yet visible for %s (attempt %d of %d); retrying in %ds\n' \
+                "$ref" "$attempt" "$max" "${delays[attempt-1]}" >&2
+              sleep "${delays[attempt-1]}"
+              ((attempt++))
+            done
+          }
           for product in acr-api acr-mcp; do
             image="ghcr.io/$GITHUB_REPOSITORY/$product"
             source_ref="$image:$SOURCE_SHA"
             sha_ref="$image:sha-$SHORT_SHA"
-            source_digest="$(manifest_digest "$source_ref")"
-            [[ "$source_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            source_digest="$(wait_for_source_digest "$source_ref")"
             docker buildx imagetools create --tag "$sha_ref" "$source_ref"
             test "$(manifest_digest "$sha_ref")" = "$source_digest"
           done
@@ -87,6 +128,28 @@ jobs:
             docker buildx imagetools inspect "$1" \
               | awk '$1 == "Digest:" { print $2; exit }'
           }
+          # CHAOS-5377: same GHCR read-after-write race as the short-SHA
+          # alias step above; see that step's comment.
+          wait_for_source_digest() {
+            local ref="$1" attempt=1 max=6 digest=""
+            local -a delays=(5 15 45 90 180)
+            while :; do
+              if digest="$(manifest_digest "$ref" 2>/dev/null)" \
+                && [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                printf '%s\n' "$digest"
+                return 0
+              fi
+              if ((attempt >= max)); then
+                printf '::error::manifest never became visible for %s after %d attempts\n' \
+                  "$ref" "$max" >&2
+                return 1
+              fi
+              printf '::notice::manifest not yet visible for %s (attempt %d of %d); retrying in %ds\n' \
+                "$ref" "$attempt" "$max" "${delays[attempt-1]}" >&2
+              sleep "${delays[attempt-1]}"
+              ((attempt++))
+            done
+          }
           current_main="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
           test "$current_main" = "$SOURCE_SHA"
           for product in acr-api acr-mcp; do
@@ -94,8 +157,7 @@ jobs:
             source_ref="$image:$SOURCE_SHA"
             main_ref="$image:main"
             latest_ref="$image:latest"
-            source_digest="$(manifest_digest "$source_ref")"
-            [[ "$source_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            source_digest="$(wait_for_source_digest "$source_ref")"
             docker buildx imagetools create \
               --tag "$main_ref" \
               --tag "$latest_ref" \
