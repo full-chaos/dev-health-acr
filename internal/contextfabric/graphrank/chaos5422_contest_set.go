@@ -2,9 +2,9 @@ package graphrank
 
 import (
 	"slices"
-	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/hintsource"
 )
 
 // THE CONTEST SET: which candidates this question is allowed to resolve over,
@@ -214,35 +214,41 @@ const (
 	// sourceCallerHint: the caller named this subject by canonical id in THIS
 	// request. Exempt.
 	sourceCallerHint candidateSource = "caller_hint"
-	// sourceEngineHint: a hint this ENGINE minted on an earlier turn and read
-	// back, not something the caller stated. Subject to the refusal, exactly as
-	// retrieval is, because it IS retrieval -- of this engine's own prior
-	// output. Admitting it would let a member kind the boundary refused on turn
-	// N re-enter the contest on turn N+1 through its own receipt, which is the
-	// substitution I11 forbids wearing a hint's clothes.
+	// sourceEngineHint: a hint this ENGINE minted and read back, which the
+	// hintsource enumeration marks as NOT contest-exempt. Subject to the
+	// refusal, exactly as retrieval is, because it IS retrieval -- of this
+	// engine's own prior output. Admitting it would let a member kind the
+	// boundary refused on turn N re-enter the contest on turn N+1 through its
+	// own receipt, which is the substitution I11 forbids wearing a hint's
+	// clothes.
+	//
+	// Engine-minted and contest-exempt are SEPARATE facts and hintsource keeps
+	// them apart: the answer-reuse recheck is engine-minted AND exempt, because
+	// its subjects commit through the caller-hint short circuit and moving it
+	// off that exit would change the reuse path's behaviour.
 	sourceEngineHint candidateSource = "engine_hint"
 )
 
-// priorSubjectReceiptSource is the ONE hint source this engine mints itself.
+// hintCandidateSource classifies ONE SubjectHint by WHO AUTHORED IT, from the
+// closed enumeration of the sources this engine mints.
 //
-// The string test is the one resolve.go already applies two lines above the
-// hint insert to decide callerSourced, reused here rather than restated: two
-// independent tests of the same fact drift, and a hint the pool calls
-// engine-sourced while the boundary calls it caller-sourced would be exactly
-// the disagreement this seam exists to remove.
+// It is a LOOKUP in the same module the producers write through, not a string
+// test written here. PR-A spelled the test as a literal comparison against
+// "prior_subject_receipt" -- correct for the behaviour it preserved, but it
+// was a second copy of a fact the producer owned, compiled separately from the
+// producer and able to drift from it silently. hintsource.Lookup is the
+// producers' own registry: a source they emit but never registered fails the
+// producer-enumeration test rather than being read here as caller-authored.
 //
-// It IS a string test, and that is a PR-A-shaped answer, not the final one.
-// PR-B replaces it with the closed enumeration of hint sources the producers
-// actually emit, asserted against those producers; until then this preserves
-// the classification already in force.
-const priorSubjectReceiptSource = "prior_subject_receipt"
-
-// hintCandidateSource classifies ONE SubjectHint by who authored it.
+// The unenumerated case is caller-authored, which is not a default reached for
+// convenience: SubjectHint.Source is a caller-supplied wire string the v1
+// contract validates only for bounds, so "not one the engine minted" IS the
+// definition of caller-authored. hintsource records the limit that follows.
 func hintCandidateSource(source string) candidateSource {
-	if strings.TrimSpace(source) == priorSubjectReceiptSource {
-		return sourceEngineHint
+	if hintsource.Lookup(source).ContestExempt {
+		return sourceCallerHint
 	}
-	return sourceCallerHint
+	return sourceEngineHint
 }
 
 // admits reports whether this candidate may enter the contest set, DECIDING BY
