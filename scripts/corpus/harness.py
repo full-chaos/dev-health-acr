@@ -107,31 +107,60 @@ def validate_live_payload(status, payload):
 
 
 def post(body):
+    """Returns (status, response, dt, body_undecodable).
+
+    r4 (astra) found two defects in the r3 P1-1 fix, both fixed here together because
+    they are the same shape of mistake: a failure inside the "we got a response" path
+    must never be allowed to look like something it is not.
+
+    1. `e.read()` on the HTTPError arm was UNPROTECTED: an exception raised reading a
+       truncated error body (IncompleteRead) is not caught by the `except` clause it is
+       raised inside -- a "sibling" except does not catch it -- so it propagated out of
+       `post` entirely and crashed the shard instead of producing a row. Reading the body
+       is now wrapped on BOTH arms (success and HTTPError); a read failure is treated
+       exactly like a decode failure -- the exchange completed, the BODY could not be
+       obtained -- never like a transport failure.
+    2. The "body did not decode" signal was a KEY INSIDE THE RESPONSE DICT
+       (`{UNDECODABLE_BODY_KEY: ...}`), the SAME namespace server-controlled JSON content
+       lives in -- so a real, validly-decoded response that happened to carry that exact
+       key was indistinguishable from a genuine decode failure. `body_undecodable` is now
+       a FOURTH RETURN VALUE, reported by `run_replicate` as an ARTEFACT-level sibling
+       field (next to `status`/`response`/`dt`), never inside `response` itself -- a
+       field the server's own JSON content can never touch, because the server only
+       controls what is INSIDE the response body, not the envelope the harness writes
+       around it.
+    """
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(BASE, data=data, headers={"Content-Type": "application/json"}, method="POST")
     t0 = time.time()
     try:
         with urllib.request.urlopen(req, timeout=180) as resp:
-            status, raw = resp.status, resp.read()
+            status = resp.status
+            try:
+                raw = resp.read()
+            except Exception:
+                raw = None
     except urllib.error.HTTPError as e:
-        status, raw = e.code, e.read()
+        status = e.code
+        try:
+            raw = e.read()
+        except Exception:
+            raw = None
     except Exception as e:  # noqa: BLE001 -- a transport failure is a row, not a crash
-        # NO EXCHANGE HAPPENED AT ALL (connection refused, DNS, read timeout): the only
-        # arm that writes status 0.
-        return 0, {contract.ERROR_BODY_KEY: str(e)}, time.time() - t0
-    # An exchange COMPLETED -- `status` is real, whether or not it was an HTTPError.
-    # Decoding happens OUTSIDE the transport try/except above (CHAOS-5380 r3 P1-1): a
-    # decode failure here is a fact about the BODY, not about whether the service was
-    # reached, so it must never fall into the same `except Exception` as a transport
-    # failure and get reported as status 0.
-    try:
-        payload = json.loads(raw.decode("utf-8"))
-    except Exception:
-        # Built FROM the shared key set, so this body cannot carry a failure key the
-        # classifier does not know about. Distinct key from the transport arm's: this
-        # exchange completed, that one never happened.
-        payload = {contract.UNDECODABLE_BODY_KEY: "unparseable body"}
-    return status, validate_live_payload(status, payload), time.time() - t0
+        # NO STATUS EVER CAME BACK (connection refused, DNS, read timeout before a
+        # response line was received): the only arm that writes status 0.
+        return 0, {contract.ERROR_BODY_KEY: str(e)}, time.time() - t0, False
+    # An exchange COMPLETED -- `status` is real. A body that could not be READ (raw is
+    # None) or could not be DECODED is the same fact from here: the exchange happened,
+    # the body did not. Neither ever falls back into the transport arm's status=0.
+    if raw is not None:
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except Exception:
+            raw = None
+    if raw is None:
+        return status, {}, time.time() - t0, True
+    return status, validate_live_payload(status, payload), time.time() - t0, False
 
 
 def is_retryable(status, payload):
@@ -268,11 +297,17 @@ def run_replicate(qid, question, rep, warn=print):
     for turn in range(1, MAX_TURNS + 1):
         status, payload, attempts_used = None, None, 0
         for attempt in range(1, MAX_ATTEMPTS_PER_TURN + 1):
-            status, payload, dt = post(body)
+            status, payload, dt, body_undecodable = post(body)
             attempts_used += 1
             fname = OUTDIR / f"{qid}-rep{rep}-t{turn}-a{attempt}.json"
             with open(fname, "w") as f:
-                json.dump({"request": body, "status": status, "response": payload, "dt": round(dt, 1)}, f, indent=2)
+                # `body_undecodable` is an ARTEFACT-level sibling of `response`, never a
+                # key inside it -- see post()'s docstring (r4 finding: a key inside
+                # `response` shares a namespace with server-controlled content and a
+                # validly-decoded response could impersonate it).
+                json.dump({"request": body, "status": status, "response": payload,
+                          "dt": round(dt, 1), "body_undecodable": body_undecodable},
+                         f, indent=2)
             print(f"  [{tag}] t{turn} a{attempt}: http={status} dt={dt:.1f}s", flush=True)
             if contract.is_success_status(status) or not is_retryable(status, payload):
                 break

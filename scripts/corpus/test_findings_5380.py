@@ -178,13 +178,27 @@ class _ScriptedServer:
                 outer.requests += 1
                 length = int(self.headers.get("Content-Length") or 0)
                 self.rfile.read(length)
-                payload = (b"<<not json>>" if getattr(outer, "raw", False)
-                           else json.dumps(outer.body).encode())
+                truncate = getattr(outer, "truncate_to", None)
+                if not getattr(outer, "raw", False):
+                    payload = json.dumps(outer.body).encode()
+                elif truncate is not None:
+                    # Padded well past the truncation point, so the gap between the
+                    # promised Content-Length and what is actually sent is always large
+                    # enough to make the real client's body READ itself fail
+                    # (http.client.IncompleteRead) reliably, not just the JSON decode
+                    # (r4/astra finding 1) -- a 1-byte gap was measured flaky.
+                    payload = b"<<not json>>" + b"x" * 200
+                else:
+                    payload = b"<<not json>>"
                 self.send_response(outer.status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
-                self.wfile.write(payload)
+                if truncate is not None:
+                    self.wfile.write(payload[:truncate])
+                    self.close_connection = True
+                else:
+                    self.wfile.write(payload)
 
             def log_message(self, *_a):    # keep the pin output readable
                 pass
@@ -193,6 +207,7 @@ class _ScriptedServer:
         self.status = 200
         self.body = {}
         self.raw = False
+        self.truncate_to = None
         self._srv = HTTPServer(("127.0.0.1", 0), Handler)
         self.port = self._srv.server_port
 
@@ -483,6 +498,43 @@ def test_a_transport_failure_is_not_ok_200():
     assert AC.classify(_attempt(503)) == "upstream_503"
 
 
+def _post_live(status=200, body=None, raw=False, truncate=None):
+    """Drive the REAL harness.post against a REAL local server, and wrap the result as a
+    loadable attempt artefact (the same envelope shape run_replicate writes -- request,
+    status, response, dt, body_undecodable)."""
+    saved_base, saved_out = harness.BASE, harness.OUTDIR
+    with tempfile.TemporaryDirectory() as tmp, _ScriptedServer() as srv:
+        harness.BASE = f"http://127.0.0.1:{srv.port}/api/investigations"
+        harness.OUTDIR = Path(tmp)
+        srv.status, srv.body, srv.raw = status, (body or {}), raw
+        if truncate is not None:
+            srv.truncate_to = truncate
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                got_status, response, _dt, body_undecodable = harness.post({"question": "x"})
+        finally:
+            harness.BASE, harness.OUTDIR = saved_base, saved_out
+    return {"request": {"question": "x"}, "status": got_status, "dt": 0.0,
+            "response": response, "body_undecodable": body_undecodable}
+
+
+def _post_live_closed_port():
+    import socket
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    dead_port = probe.getsockname()[1]
+    probe.close()
+    saved_base = harness.BASE
+    harness.BASE = f"http://127.0.0.1:{dead_port}/api/investigations"
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            status, response, _dt, body_undecodable = harness.post({"question": "x"})
+    finally:
+        harness.BASE = saved_base
+    return {"request": {"question": "x"}, "status": status, "dt": 0.0,
+           "response": response, "body_undecodable": body_undecodable}
+
+
 def test_a_completed_2xx_with_an_undecodable_body_is_not_a_transport_failure():
     """r3 P1-1, chris's ruling (iii) "add the member": a completed exchange whose body
     will not decode is its own class, `served_2xx_undecodable_body` -- not
@@ -495,33 +547,8 @@ def test_a_completed_2xx_with_an_undecodable_body_is_not_a_transport_failure():
     completes with 200 and a non-JSON body, and a closed port -- and requires the two
     artefacts to be told apart.
     """
-    saved_base, saved_out = harness.BASE, harness.OUTDIR
-    with tempfile.TemporaryDirectory() as tmp, _ScriptedServer() as srv:
-        harness.BASE = f"http://127.0.0.1:{srv.port}/api/investigations"
-        harness.OUTDIR = Path(tmp)
-        srv.status, srv.raw = 200, True          # 200, body is not JSON
-        try:
-            with contextlib.redirect_stdout(io.StringIO()):
-                status, response, _dt = harness.post({"question": "x"})
-        finally:
-            harness.BASE, harness.OUTDIR = saved_base, saved_out
-    bad_200 = {"request": {"question": "x"}, "status": status, "dt": 0.0,
-              "response": response}
-
-    import socket
-    probe = socket.socket()
-    probe.bind(("127.0.0.1", 0))
-    dead_port = probe.getsockname()[1]
-    probe.close()
-    saved_base2 = harness.BASE
-    harness.BASE = f"http://127.0.0.1:{dead_port}/api/investigations"
-    try:
-        with contextlib.redirect_stdout(io.StringIO()):
-            c_status, c_response, _dt = harness.post({"question": "x"})
-    finally:
-        harness.BASE = saved_base2
-    closed_port = {"request": {"question": "x"}, "status": c_status, "dt": 0.0,
-                   "response": c_response}
+    bad_200 = _post_live(status=200, raw=True)
+    closed_port = _post_live_closed_port()
 
     assert VAL.validate_attempt(bad_200)[0], "the undecodable-200 artefact must be loadable"
     assert VAL.validate_attempt(closed_port)[0], "the transport artefact must be loadable"
@@ -537,6 +564,72 @@ def test_a_completed_2xx_with_an_undecodable_body_is_not_a_transport_failure():
     assert AC.failed(bad_200) is True
     # The real status travels with the row, not 0.
     assert bad_200["status"] == 200, bad_200["status"]
+    assert bad_200["body_undecodable"] is True, bad_200
+    assert closed_port["body_undecodable"] is False, closed_port
+
+
+def test_a_body_read_failure_on_a_completed_exchange_does_not_crash_and_does_not_decode():
+    """r4 (astra) finding 1: `e.read()` on the HTTPError arm sat OUTSIDE any try/except,
+    so a body that starts a real HTTP exchange but is truncated mid-read
+    (`http.client.IncompleteRead`) propagated out of `post` uncaught and crashed the
+    caller instead of producing a row.
+
+    Repro: a real HTTPError exchange (status 504) whose Content-Length promises more
+    bytes than the server actually sends, so the client's read raises IncompleteRead.
+    Must not raise, must keep the real status, and must report the same
+    `body_undecodable` fact as a decode failure (a read failure IS a body-read failure --
+    the exchange completed, the body was never obtained).
+    """
+    row = _post_live(status=504, raw=True, truncate=1)   # promises a full body, sends 1 byte
+    assert row["status"] == 504, row
+    assert row["body_undecodable"] is True, row
+    assert AC.classify(row) == "upstream_504", (
+        "a non-2xx exchange with an unreadable body still classifies from its real "
+        f"status: {AC.classify(row)}")
+
+
+def test_a_decoded_response_cannot_impersonate_an_undecodable_one():
+    """r4 (astra) finding 2: the r3 P1-1 fix signalled "body did not decode" with a KEY
+    INSIDE the response dict (`{"undecodable": "unparseable body"}`), the SAME namespace
+    server-controlled JSON content lives in -- so a REAL, validly-decoded response that
+    happened to carry that exact key was indistinguishable from a genuine decode
+    failure.
+
+    Fix: `body_undecodable` is an ARTEFACT-level field (a sibling of `response`, written
+    by `run_replicate`/returned by `post` as its own tuple slot) -- never a key inside
+    `response` itself, which the server's own JSON content can never touch. This repro
+    sends a body that VALIDLY DECODES and happens to carry what used to be the marker
+    key, and requires it to classify as an ordinary decoded response, not as
+    `served_2xx_undecodable_body`.
+    """
+    decoded = _post_live(status=200, body={"undecodable": "unparseable body"}, raw=False)
+    assert decoded["body_undecodable"] is False, (
+        "a validly-decoded response was reported as undecodable -- the marker leaked "
+        f"into the response body's own namespace: {decoded}")
+    assert AC.classify(decoded) != "served_2xx_undecodable_body", AC.classify(decoded)
+    genuinely_undecodable = _post_live(status=200, raw=True)
+    assert AC.classify(genuinely_undecodable) == "served_2xx_undecodable_body"
+    assert AC.classify(decoded) != AC.classify(genuinely_undecodable), (
+        "a decoded response and a genuine decode failure must not share a class")
+
+
+def test_a_non_2xx_exchange_with_an_undecodable_body_keeps_its_real_status_class():
+    """r4 (astra) finding 3: `classify()` checked the undecodable marker before the
+    status-based ladder and without restricting the status, so a NON-2xx exchange (e.g.
+    a 504 gateway error with an unparseable body) was swept into
+    `served_2xx_undecodable_body` -- a class whose own name promises 2xx.
+
+    `served_2xx_undecodable_body` is gated on `contract.is_success_status(http)`: a
+    completed exchange with an undecodable body classifies specially ONLY when the
+    exchange was actually SERVED; every other status keeps classifying from its real
+    status, exactly as an undecodable body from a non-served status always has.
+    """
+    row = _post_live(status=504, raw=True)
+    assert row["status"] == 504, row
+    assert row["body_undecodable"] is True, row
+    assert AC.classify(row) == "upstream_504", (
+        f"a 504 with an undecodable body entered the 2xx-only class: {AC.classify(row)}")
+    assert AC.is_upstream_504(row) is True, "the frozen deadline counter must still catch it"
 
 
 def test_sub_200_statuses_other_than_zero_are_transport_failures():
@@ -862,12 +955,18 @@ BODYLESS_BY_SPEC = frozenset({204, 304})
 
 def _retry_terminal_decision_lines():
     """Every line of `run_replicate`'s retry/terminal decision (B4's axis): the inner
-    attempt-retry loop (the `is_success_status(...) or not is_retryable(...)` gate) and
-    the turn-terminal check right after it (`if not is_success_status(status): ...
-    break`). Located STRUCTURALLY -- the inner `for attempt` loop, and the statement that
-    follows it in the `for turn` loop's body -- from the function's OWN AST at test time,
-    so a branch a future change adds to EITHER decision appears here without anyone
-    editing this file.
+    attempt-retry loop, and EVERY statement in the `for turn` loop's body between it and
+    where a served turn's result-parsing begins (the `result = payload.get(...)`
+    assignment).
+
+    r4 (astra) finding 4: a version of this that located only the ONE specific `if
+    is_success_status(...)` statement missed a branch a mutant inserted BEFORE it (a new
+    `if status == 204: ...` with no call to `is_success_status` at all) -- the locator's
+    signature-based search simply never looked at that statement, so it was never
+    required to be covered and the guard stayed green over an uncovered new terminal
+    branch. Located by SPAN, not by matching a specific statement's shape, so ANY
+    statement inserted between the attempt loop and the result-parsing boundary --
+    regardless of what it tests -- is included and must be traced as executed.
     """
     tree = _ast.parse((HERE / "harness.py").read_text())
     fn = next(n for n in _ast.walk(tree)
@@ -876,16 +975,17 @@ def _retry_terminal_decision_lines():
                      and getattr(n.target, "id", None) == "turn")
     attempt_loop = next(n for n in _ast.walk(turn_loop) if isinstance(n, _ast.For)
                         and getattr(n.target, "id", None) == "attempt")
-    lines = {s.lineno for s in _ast.walk(attempt_loop) if hasattr(s, "lineno")}
-    idx = turn_loop.body.index(attempt_loop)
-    terminal_if = next((s for s in turn_loop.body[idx + 1:] if isinstance(s, _ast.If)
-                        and any(isinstance(c, _ast.Call) and isinstance(c.func, _ast.Attribute)
-                               and c.func.attr == "is_success_status"
-                               for c in _ast.walk(s.test))), None)
-    assert terminal_if is not None, (
-        "run_replicate's shape changed: no `if is_success_status(...)` statement found "
-        "after the attempt-retry loop -- re-locate the terminal decision")
-    lines |= {s.lineno for s in _ast.walk(terminal_if) if hasattr(s, "lineno")}
+    start_idx = turn_loop.body.index(attempt_loop)
+    end_idx = next((i for i, s in enumerate(turn_loop.body)
+                    if i > start_idx and isinstance(s, _ast.Assign) and len(s.targets) == 1
+                    and getattr(s.targets[0], "id", None) == "result"), None)
+    assert end_idx is not None, (
+        "run_replicate's shape changed: no `result = ...` assignment found after the "
+        "attempt-retry loop -- re-locate the result-parsing boundary")
+    region = turn_loop.body[start_idx:end_idx]
+    lines = set()
+    for stmt in region:
+        lines |= {n.lineno for n in _ast.walk(stmt) if hasattr(n, "lineno")}
     return lines
 
 
@@ -1787,7 +1887,7 @@ def _trace_post(executed_lines, captured_bodies):
             def local_trace(frame, event, arg):
                 if event == "return":
                     executed_lines.add(frame.f_lineno)
-                    if isinstance(arg, tuple) and len(arg) == 3:
+                    if isinstance(arg, tuple) and len(arg) == 4:
                         captured_bodies.append((frame.f_lineno, arg[1]))
                 return local_trace
             return local_trace

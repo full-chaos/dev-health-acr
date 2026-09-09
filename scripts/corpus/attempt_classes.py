@@ -220,6 +220,12 @@ def failed(attempt):
     classifier disagree with its own producer about the same artefact.
     """
     http, _ = _statuses(attempt)
+    # An exchange whose body could not be READ or DECODED at all is never success,
+    # regardless of status -- r4 (astra): this is an ARTEFACT-level field, not a body
+    # key, so it is checked directly rather than through _error()/_failure(). CHAOS-5380
+    # r3 P1-1.
+    if attempt.get("body_undecodable"):
+        return True
     if _failure(attempt) is not None:
         return True
     # The producer's OTHER failure key. See _error(): `failed()` is documented as
@@ -260,6 +266,17 @@ def classify(attempt):
     # used to classify an attempt whose own status is absent.
     if http is None:
         return "unreadable"
+    # A COMPLETED, SERVED exchange whose body could not be read or decoded (r3 P1-1,
+    # chris's ruling (iii): "add the member"). Gated on `is_success_status(http)`, not
+    # merely on "an exchange completed" -- r4 (astra) finding 3: a NON-2xx exchange with
+    # an undecodable body (e.g. a 504 gateway error with no parseable body) keeps
+    # classifying from its real status below, exactly as it always has; only a status
+    # the producer actually counts as SERVED gets this class. `body_undecodable` is an
+    # ARTEFACT-level field, never a body key (r4 finding 2: a key inside `response`
+    # shares a namespace with server-controlled content and a validly-decoded response
+    # could impersonate it).
+    if attempt.get("body_undecodable") and contract.is_success_status(http):
+        return "served_2xx_undecodable_body"
     if not failed(attempt):
         return "ok_200"
     failure = _failure(attempt) or {}
@@ -268,13 +285,6 @@ def classify(attempt):
     # service" and "the service answered 5xx" are different facts about a run.
     if not contract.reached_the_service(http):
         return "transport_failure"
-    # The exchange COMPLETED (reached_the_service above), but the body itself did not
-    # decode -- `harness.post`'s dedicated key for exactly that (never the generic
-    # ERROR_BODY_KEY, which a body that decoded fine and reported failure also carries).
-    # r3 P1-1 / chris's ruling (iii).
-    response = attempt.get("response")
-    if isinstance(response, dict) and contract.UNDECODABLE_BODY_KEY in response:
-        return "served_2xx_undecodable_body"
     # Keyed on the CODE, not on a status pair: the consumer's 502 and the upstream's 200
     # are both true, and neither one alone names what happened.
     if failure.get("code") == "acr_contract_violation":
