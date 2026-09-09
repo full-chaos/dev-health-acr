@@ -582,28 +582,41 @@ func TestTheZeroScopeRefusesNothingIncludingTheZeroKind(t *testing.T) {
 	}
 }
 
-// SURVIVOR-DRIVEN PIN 2. The confirmed-kind re-decision resolves over a pool it
-// builds FRESH, so it is a second doorway into the contest and must carry the
-// same admission — otherwise the refused kind simply walks back in through it.
+// THE SECOND DOORWAY. The confirmed-kind re-decision resolves over a pool it
+// builds FRESH, so it must carry the same admission or the refused kind simply
+// walks back in through it.
 //
-// A mutant passing nil there survived every other test in this file, because in
-// those fixtures the member was already visible to the FIRST pass and refused
-// there. This fixture makes the member reachable ONLY through the kind-scoped
-// snapshot, so the second doorway is the only way in and the arm cannot pass by
-// accident of the first pass having done the work.
+// HONEST LIMIT, stated rather than papered over: this arm does NOT discriminate
+// a mutant that passes nil to that pass, and I could not make it. Measured with
+// an instrumented run rather than assumed — this package's fake serves
+// `searchKindResults` to BOTH the first pass's kind-hinted arm and the
+// re-decision, so any candidate reachable by the second doorway is already
+// reachable by the first and is refused there. The refusal is real (the
+// disclosure names it) but the SECOND pass is never the thing being tested.
+// Making it testable needs a fake that can feed the kind-scoped snapshot alone,
+// which does not exist here.
+//
+// So the mutant M5422A-REDECISION-DROPS-THE-ADMISSION is a DISCLOSED SURVIVOR,
+// not an equivalent one: dropping that argument is a real widening, and it is
+// held today by reading the code rather than by this test.
 func TestTheConfirmedKindRedecisionCarriesTheSameAdmission(t *testing.T) {
 	t.Parallel()
-	anchor := candidateNode(contextfabric.SubjectRepository, "repository.v2:github:platform", "platform", 0.4, "*")
+	// TWO anchors, deliberately: the re-decision runs only when the FIRST pass
+	// committed nothing, so a fixture whose first pass commits skips the very
+	// pass under test and the arm passes for the wrong reason. An ambiguous pair
+	// is what keeps the first pass from committing.
+	anchor := candidateNode(contextfabric.SubjectRepository, "repository.v2:github:platform", "platform", 0.5, "*")
+	rival := candidateNode(contextfabric.SubjectRepository, "repository.v2:github:platform-two", "platform two", 0.5, "*")
 	// Present ONLY in the kind-scoped results: ordinary search never returns it,
 	// so the first pass cannot be what refuses it.
 	hidden := candidateNode(contextfabric.SubjectTeam, "team.v2:github:platform-hidden", "platform hidden", 0.95, "*")
 	backend := &fakeGraphBackend{
 		enableSearchKind: true,
-		searchResults:    map[string][]CandidateNode{"platform": {anchor}},
+		searchResults:    map[string][]CandidateNode{"platform": {anchor, rival}},
 		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
 			"platform": {
 				contextfabric.SubjectTeam:       {hidden},
-				contextfabric.SubjectRepository: {anchor},
+				contextfabric.SubjectRepository: {anchor, rival},
 			},
 		},
 		// what sends this call into the re-decision at all
