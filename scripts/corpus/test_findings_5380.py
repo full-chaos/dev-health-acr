@@ -40,9 +40,12 @@ Where a pin could pass for the wrong reason it ships with a negative control, an
 control that does not fail when it should is itself the finding.
 """
 import ast as _ast
+import contextlib
 import importlib.util
+import io
 import itertools
 import json
+import re
 import os
 import subprocess
 import sys
@@ -53,6 +56,7 @@ HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 
 import attempt_classes as AC     # noqa: E402
+import harness               # noqa: E402
 import engine_failures as EF     # noqa: E402
 import merge_corpus as MC        # noqa: E402
 import run_shard as RS           # noqa: E402
@@ -106,82 +110,100 @@ A7_BODY = [
 ]
 
 
-# ============ THE SERVED SPEC, DERIVED FROM SOURCES THAT ARE NOT `failed()` ============
-# The class-invariant pin below used to define "evidence of failure" as `status != 200 or a
-# failure object` -- which is EXACTLY the two signals `failed()` itself reads. The fixture
-# therefore agreed with the predicate by construction and could never catch a signal
-# neither of them looked at. That is the failure mode this whole change exists to end, and
-# it was living in the pin written to end it (codex r1 P1).
-#
-# So the spec is now DERIVED, at test time, from three sources none of which is the
-# predicate under test:
-#   1. the MEASURED artefact schema  -> which keys a response is known to carry;
-#   2. `harness.py`'s own failure writers, read from its AST -> which body keys the
-#      PRODUCER writes to mean "this did not work";
-#   3. `harness.py`'s own acceptance test, read from its AST -> which status it treats as
-#      served.
-# Each source is asserted non-empty, so a derivation that silently found nothing fails
-# instead of quietly widening the spec to "everything is served".
+# ==================== THE SERVED CONTRACT: SHARED, THEN EXECUTED ====================
+# Review round 2 RETIRED the previous arrangement here, and the reason is the whole lesson
+# of this change. Two "independent oracles" derived the producer's contract by walking
+# `harness.py`'s AST -- which failure-body keys it writes, and which status it accepts.
+# Both were measured hollow:
+#   * the body-key oracle scanned only dicts under `Return` nodes. The HTTP-error body is
+#     an ASSIGNMENT, so it never saw it -- and it returned the right answer ANYWAY, by
+#     accident, because the transport arm's returned dict carries the same key. A producer
+#     mutant adding `fatal` classified `ok_200` with the class-invariant pin PASSING.
+#   * the served-status oracle walked the AST, asserted 200 was in it, and then returned
+#     the literal 200. A producer mutant accepting 201 was undetectable; all pins passed.
+# A PROXY FOR A CONTRACT HOLLOWS OUT SILENTLY. So there is no proxy any more:
+#   (a) `attempt_classes` OWNS the two values and `harness` IMPORTS them and writes with
+#       them, so the producer and the consumer cannot disagree -- not because a test says
+#       they agree, but because there is one value;
+#   (b) the pin below EXECUTES the real harness against a real socket over the status x
+#       body-shape space and feeds the artefacts it actually WROTE into the classifier.
+#       An artefact produced by the real producer is not a model of the producer.
+
 
 def _schema_response_keys():
+    """The response keys the MEASURED artefact schema declares. Not an oracle for the
+    contract -- just the list of shapes the artefacts are known to contain, used to spot
+    a key that belongs to NEITHER the schema NOR the shared failure set."""
     doc = json.loads((HERE / "artefact_schema.json").read_text())
     keys = set(doc["nodes"]["attempt.response"])
-    assert keys, "the schema declares no response keys; the derivation is broken"
+    assert keys, "the schema declares no response keys"
     return keys
 
 
-def _harness_failure_body_keys():
-    """Keys of the dict literals `harness.post` RETURNS on its failure paths.
-
-    Read from the AST, never typed here: if the harness grows a third failure arm with a
-    new key, this spec widens on its own and the pin starts demanding that the classifier
-    account for it.
-    """
-    tree = _ast.parse((HERE / "harness.py").read_text())
-    post = next(n for n in _ast.walk(tree)
-                if isinstance(n, _ast.FunctionDef) and n.name == "post")
-    keys = set()
-    for node in _ast.walk(post):
-        for d in ([node.value] if isinstance(node, _ast.Return) and node.value else []):
-            for sub in _ast.walk(d):
-                if isinstance(sub, _ast.Dict):
-                    keys |= {k.value for k in sub.keys
-                             if isinstance(k, _ast.Constant) and isinstance(k.value, str)}
-    keys -= {"failure"}          # the envelope, already a first-class signal
-    assert keys, "no failure-body keys found in harness.post; the AST read is broken"
-    return keys
-
-
-def _producer_served_status():
-    """The status `harness.run_replicate` stops retrying on, read from its AST."""
-    tree = _ast.parse((HERE / "harness.py").read_text())
-    fn = next(n for n in _ast.walk(tree)
-              if isinstance(n, _ast.FunctionDef) and n.name == "run_replicate")
-    found = {c.comparators[0].value for c in _ast.walk(fn)
-             if isinstance(c, _ast.Compare)
-             and isinstance(c.ops[0], _ast.Eq)
-             and isinstance(c.comparators[0], _ast.Constant)
-             and isinstance(c.comparators[0].value, int)}
-    assert 200 in found, f"the producer's served status was not found in its AST: {found}"
-    return 200
-
-
-PRODUCER_FAILURE_BODY_KEYS = _harness_failure_body_keys()
-PRODUCER_SERVED_STATUS = _producer_served_status()
 SCHEMA_RESPONSE_KEYS = _schema_response_keys()
 
 
-def _served_by_spec(status, failure, body):
-    """Was this attempt SERVED? Decided WITHOUT consulting attempt_classes.
+def _served_by_contract(attempt):
+    """Was this WRITTEN artefact served, per the SHARED contract?
 
-    Served == the producer's own accepted status, AND no failure envelope, AND none of the
-    body keys the producer writes to report a failure.
+    Reads the same two exported values the producer writes with. There is nothing to
+    derive: `is_success_status` and `FAILURE_BODY_KEYS` are the contract, and the
+    producer imports them.
     """
-    if status != PRODUCER_SERVED_STATUS:
+    response = attempt.get("response")
+    response = response if isinstance(response, dict) else {}
+    if not AC.is_success_status(attempt.get("status")):
         return False
-    if failure is not None:
+    if isinstance(response.get("failure"), dict):
         return False
-    return not (set(body or {}) & PRODUCER_FAILURE_BODY_KEYS)
+    return not AC.body_failure_keys(response)
+
+
+class _ScriptedServer:
+    """A real HTTP server the real harness really talks to.
+
+    Bound to port 0 so it never collides with another lane's rig, and to 127.0.0.1 so it
+    is not reachable off-box. It counts the requests it served, because a pin that drives
+    a producer must prove the producer actually ran -- an executing pin that silently made
+    zero calls is the emptiness trap, and it would read as a clean sweep.
+    """
+
+    def __init__(self):
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                outer.requests += 1
+                length = int(self.headers.get("Content-Length") or 0)
+                self.rfile.read(length)
+                payload = (b"<<not json>>" if getattr(outer, "raw", False)
+                           else json.dumps(outer.body).encode())
+                self.send_response(outer.status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *_a):    # keep the pin output readable
+                pass
+
+        self.requests = 0
+        self.status = 200
+        self.body = {}
+        self.raw = False
+        self._srv = HTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self._srv.server_port
+
+    def __enter__(self):
+        import threading
+        self._t = threading.Thread(target=self._srv.serve_forever, daemon=True)
+        self._t.start()
+        return self
+
+    def __exit__(self, *_exc):
+        self._srv.shutdown()
+        self._srv.server_close()
 
 
 def _attempt(status, failure=None, dt=1.0, result=None):
@@ -315,15 +337,17 @@ def test_no_evidence_of_failure_is_ever_classified_ok_200():
     signal neither of them looked at. codex r1 P1 found the third signal (`error`) and
     this pin passed the whole time. Restating a predicate is not testing it.
 
-    The verdict now comes from `_served_by_spec`, DERIVED at test time from the measured
-    artefact schema, from `harness.post`'s own failure-body keys read out of its AST, and
-    from the status `run_replicate` accepts -- three sources, none of which is the
-    predicate under test. If the harness grows a fourth way of saying "this broke", this
-    pin starts demanding the classifier account for it without anyone editing this file.
+    Review round 2 then found that the DERIVED oracles which replaced it were hollow in
+    the same way (see the contract block above). The verdict now comes from
+    `_served_by_contract`, which reads the two values the PRODUCER ITSELF WRITES WITH --
+    there is nothing to derive and nothing to get accidentally right. The claim that the
+    producer really obeys them is not made here at all: it is made by
+    `test_the_real_harness_and_the_classifier_agree_over_the_executed_space`, which runs
+    the harness against a socket and reads back what it wrote.
     """
     served_cells, failed_cells = [], []
     for status, failure, body, _bname, a in _cells4():
-        served = _served_by_spec(status, failure, body)
+        served = _served_by_contract(a)
         got_failed, got_class = AC.failed(a), AC.classify(a)
         if served:
             served_cells.append((status, failure))
@@ -541,7 +565,7 @@ def test_a_2xx_whose_body_says_error_is_a_failure():
     ok = _attempt(200); ok["response"]["result"] = {"status": "complete"}
     assert AC.failed(ok) is False and AC.classify(ok) == "ok_200"
     # The key is derived, not typed: `error` must really be one of the producer's own.
-    assert "error" in PRODUCER_FAILURE_BODY_KEYS, PRODUCER_FAILURE_BODY_KEYS
+    assert AC.ERROR_BODY_KEY in AC.FAILURE_BODY_KEYS, AC.FAILURE_BODY_KEYS
     # ...and a NON-2xx carrying error keeps its status-derived class, not this one.
     t = {"request": {}, "status": 0, "dt": 0.0, "response": {"error": "refused"}}
     assert AC.classify(t) == "transport_failure", AC.classify(t)
@@ -595,6 +619,118 @@ def test_the_class_table_values_are_validated_over_the_whole_value_axis():
     assert crashed["attempt_class_totals"] is None, crashed
     # The axis must contain BOTH verdicts or the loop is one-sided.
     assert any(v for _n, _x, v in cases) and any(not v for _n, _x, v in cases)
+
+
+def test_the_real_harness_and_the_classifier_agree_over_the_executed_space():
+    """(b) NO MODEL OF THE PRODUCER -- THE PRODUCER.
+
+    Every defect in this change's history came from a pin built out of its author's model
+    of the code, and review round 2 killed the last two attempts to launder that model
+    through an AST walk. So this pin drives the REAL `harness.run_replicate` against a
+    REAL socket over the status x body-shape space, and feeds the artefacts the harness
+    actually WROTE into the real reader. Nothing here describes the producer; it runs it.
+
+    Two independent verdicts are crossed per cell:
+      1. the CONSUMER's -- `classify()` on the written artefact -- against the SHARED
+         contract the producer writes with;
+      2. the PRODUCER's own behaviour -- whether `run_replicate` treated the response as
+         served, visible in the row it returns -- against the same contract.
+    Two counters over one artefact is what has caught every defect on this seam.
+    """
+    from corpus import CORPUS
+    qid = CORPUS[0]["id"]
+    question = CORPUS[0]["text"]
+
+    statuses = [200, 201, 400, 413, 422, 500, 502, 504]
+    bodies = [
+        ("served", {"result": {"status": "complete", "claimed_facts": [{"a": 1}]}}),
+        ("error", {AC.ERROR_BODY_KEY: "upstream exploded"}),
+        ("error_and_result", {AC.ERROR_BODY_KEY: "boom",
+                              "result": {"status": "complete", "claimed_facts": [{"a": 1}]}}),
+        ("failure_envelope", {"failure": {"code": "acr_answer_rejected",
+                                          "message": "no", "httpStatus": 422}}),
+        # RETRYABLE: the only shape whose handling DISCRIMINATES what the producer
+        # considers served. On a non-served status the producer must retry; if it starts
+        # treating that status as served it stops at one attempt. Without this cell a
+        # widened served range is invisible, because a non-retryable body ends the turn
+        # either way -- measured, after the first version of this pin failed to catch
+        # exactly that mutant.
+        ("retryable", {"failure": {"code": "acr_upstream_timeout", "message": "slow",
+                                   "httpStatus": 504, "retryable": True}}),
+        # NOT JSON. Reaches `harness.post`'s HTTPError-with-undecodable-body arm, which
+        # is an ASSIGNMENT the previous AST oracle could not see and which no earlier
+        # version of this pin ever EXECUTED. A producer that invents a new failure key
+        # lives here.
+        ("unparseable", None),
+    ]
+
+    saved_base, saved_out = harness.BASE, harness.OUTDIR
+    served_seen = failed_seen = 0
+    disagreements = []
+    with tempfile.TemporaryDirectory() as tmp, _ScriptedServer() as srv:
+        harness.BASE = f"http://127.0.0.1:{srv.port}/api/investigations"
+        harness.OUTDIR = Path(tmp)
+        try:
+            for rep, (status, (bname, body)) in enumerate(
+                    itertools.product(statuses, bodies), start=1):
+                if bname == "unparseable" and status < 400:
+                    continue          # urllib only raises HTTPError on >= 400
+                srv.status, srv.body, srv.raw = status, body, (body is None)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    row = harness.run_replicate(qid, question, rep,
+                                                warn=lambda *_a, **_k: None)
+
+                RS.UNSEQUENCED.clear()
+                files = RS.attempt_files(harness.OUTDIR, qid, rep)
+                assert files, f"the harness wrote no artefact for {status}/{bname}"
+                ok, written, reason = VAL.load_attempt(files[-1])
+                assert ok, f"{status}/{bname}: the harness wrote an unloadable artefact: {reason}"
+
+                want_served = _served_by_contract(written)
+                consumer_served = not AC.failed(written)
+
+                # 1. THE CONSUMER, both directions. A one-directional check is half a
+                #    check, and the first version of this pin was one-directional.
+                if consumer_served != want_served:
+                    disagreements.append((status, bname, "consumer",
+                                          AC.classify(written), want_served))
+
+                # 2. THE PRODUCER'S OWN BEHAVIOUR, observed rather than re-derived.
+                #    `final_http` re-derived through the same predicate proves nothing;
+                #    whether the producer RETRIED is a decision it actually made. On a
+                #    retryable body it must retry exactly when the contract says the
+                #    status was not served.
+                retryable = harness.is_retryable(written.get("status"),
+                                                 written.get("response") or {})
+                want_retry = retryable and not AC.is_success_status(written.get("status"))
+                did_retry = row["attempts"] > 1
+                if want_retry != did_retry:
+                    disagreements.append((status, bname, "producer-retry",
+                                          row["attempts"], want_retry))
+
+                # 3. THE WRITTEN ARTEFACT'S OWN KEYS. Every response key must be one the
+                #    schema declares or one the shared failure set names. This is what
+                #    catches a producer that grows a NEW failure key, on any arm,
+                #    including arms this sweep does not think to script.
+                keys = set((written.get("response") or {}))
+                unknown = keys - SCHEMA_RESPONSE_KEYS - set(AC.FAILURE_BODY_KEYS)
+                if unknown:
+                    disagreements.append((status, bname, "unknown-body-key", sorted(unknown)))
+
+                served_seen += bool(want_served)
+                failed_seen += (not want_served)
+        finally:
+            harness.BASE, harness.OUTDIR = saved_base, saved_out
+
+    assert srv.requests >= len(statuses) * len(bodies), (
+        f"the harness made {srv.requests} requests over "
+        f"{len(statuses) * len(bodies)} cells -- an executing pin that did not execute "
+        "is the emptiness trap, and it would read as a clean sweep")
+    assert not disagreements, (
+        f"{len(disagreements)} executed cells where the producer and the consumer "
+        f"disagree about one artefact: {disagreements[:5]}")
+    # The sweep must contain BOTH verdicts, or half of the crossing is free.
+    assert served_seen and failed_seen, (served_seen, failed_seen)
 
 
 def test_the_measured_shapes_of_the_live_run_all_classify_correctly():
@@ -959,20 +1095,31 @@ def test_every_file_on_disk_is_accounted_for():
     glob matches appears either in the sequence or in `unsequenced_files`. Nothing may
     fall between the two.
     """
+    # 🛑 RANGED OVER `harness_attempts`, not run at one chosen value. Review round 2 found
+    # this pin passing on a tree where the defect was live, because it passed the count
+    # matching ALL the files -- the one value that made the check fire. The harness counts
+    # what IT made; a stray artefact from anywhere else leaves the counts agreeing while a
+    # file is visibly unaccounted for, and that is the shape that got through. An
+    # unsequenced file now makes the row unmeasured at EVERY count.
     for extra in ("q-a-rep1-t?-a2.json", "q-a-rep1-tX-a1.json",
                   "q-a-rep1-t1-a1-extra.json", "q-a-rep1-t1-a.json"):
-        with tempfile.TemporaryDirectory() as tmp:
-            out, written = _write_turns(tmp, {1: [_attempt(504)], 2: [_served()]})
-            (out / extra).write_text(json.dumps(_attempt(504)))
-            on_disk = sorted(p.name for p in out.glob("q-a-rep1-t*-a*.json"))
-            diag = _diagnose(out, harness_attempts=3)
-        seen = len(diag["attempt_outcomes"]) + len(diag["unsequenced_files"])
-        assert seen == len(on_disk), (
-            f"{extra}: {len(on_disk)} files on disk, {seen} accounted for "
-            f"({diag['attempts_total']} sequenced, {diag['unsequenced_files']})")
-        assert extra in diag["unsequenced_files"], (extra, diag["unsequenced_files"])
-        assert diag["attempts_reconciled"] is False, \
-            "a row that lost an artefact must not read as measured"
+        for harness_n in (None, 2, 3, 1, 0):
+            with tempfile.TemporaryDirectory() as tmp:
+                out, written = _write_turns(tmp, {1: [_attempt(504)], 2: [_served()]})
+                (out / extra).write_text(json.dumps(_attempt(504)))
+                on_disk = sorted(p.name for p in out.glob("q-a-rep1-t*-a*.json"))
+                diag = _diagnose(out, harness_attempts=harness_n)
+            seen = len(diag["attempt_outcomes"]) + len(diag["unsequenced_files"])
+            assert seen == len(on_disk), (
+                f"{extra}@{harness_n}: {len(on_disk)} files on disk, {seen} accounted for "
+                f"({diag['attempts_total']} sequenced, {diag['unsequenced_files']})")
+            assert extra in diag["unsequenced_files"], (extra, diag["unsequenced_files"])
+            assert diag["attempts_reconciled"] is False, (
+                f"{extra}@harness_attempts={harness_n}: a row that lost an artefact reads "
+                "as measured -- including when the harness's own count agrees with the "
+                "SEQUENCED files, which is the shape that got through review round 2")
+            refused = MC.attempt_class_totals([{"corpus_id": "q-a", **diag}])
+            assert refused["attempt_class_totals"] is None, (extra, harness_n, refused)
 
 
 def test_a_dropped_artefact_makes_the_row_unmeasured():
@@ -1280,6 +1427,63 @@ def test_one_classifier_serves_both_counters():
                     if isinstance(n, _ast.Constant) and isinstance(n.value, int)}
         assert not ({502, 503, 504, 413, 422} & literals), \
             f"{path} carries HTTP status literals -- a second ladder is growing back"
+
+
+def test_the_pin_runner_fails_when_a_declared_pin_file_is_missing():
+    """(d) A DECLARED LIST IS A CONTRACT, NOT A WISHLIST.
+
+    Review round 2, measured in the real worktree: with `test_findings_5380.py` removed --
+    the entire safety net for this change -- `run_pins.sh` printed ten PASS lines, exited
+    0, and never named the missing file, because it skipped what it could not find.
+
+    🛑 HERMETIC BY NECESSITY, and the first version was not. It ran the REAL runner as its
+    positive control -- from inside a pin file the runner itself invokes -- which recursed
+    until it was killed. A pin that executes its own runner is a pin that cannot terminate.
+    So the runner is exercised in a temp directory against STUB pin files named from its
+    own declared list, read out of the script rather than typed here.
+    """
+    runner = HERE / "run_pins.sh"
+    # Scoped to the `for f in … ; do` list, NOT the whole file. A whole-file regex found
+    # TWELVE names against the runner's eleven, because it matched a filename mentioned in
+    # a COMMENT -- a text search standing in for a structural one, caught by the count
+    # disagreeing with the runner's own `declared=` output. The two counters are kept and
+    # cross-checked below for exactly that reason.
+    text = runner.read_text()
+    for_list = text[text.index("for f in "):text.index("; do")]
+    declared = re.findall(r"(test_[A-Za-z0-9_]+\.py)", for_list)
+    assert len(declared) >= 5, f"could not read the declared list from the runner: {declared}"
+    assert len(declared) == len(set(declared)), f"duplicate names in the list: {declared}"
+
+    def run_with(names):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "run_pins.sh").write_bytes(runner.read_bytes())
+            (d / "testdata_corpus").mkdir()
+            for n in names:
+                (d / n).write_text("raise SystemExit(0)\n")
+            return subprocess.run(["bash", str(d / "run_pins.sh")],
+                                  capture_output=True, text=True, cwd=str(d))
+
+    # POSITIVE CONTROL: every declared file present and trivially passing -> exit 0, and
+    # the runner states the count it actually ran.
+    ok = run_with(declared)
+    assert ok.returncode == 0, ok.stdout + ok.stderr
+    ran = [l for l in ok.stdout.splitlines() if l.startswith("pin files:")][-1]
+    n_ran = int(ran.split("ran=")[1].split()[0])
+    n_dec = int(ran.split("of declared=")[1].split()[0])
+    assert n_ran == n_dec == len(declared), (ran, len(declared))
+
+    # ONE declared file missing -> refuses, and NAMES it.
+    victim = declared[-1]
+    gone = run_with([n for n in declared if n != victim])
+    assert gone.returncode != 0, (
+        f"a missing declared pin file exited 0:\n{gone.stdout}")
+    assert victim in gone.stdout and "MISSING" in gone.stdout, gone.stdout
+
+    # NOTHING present -> refuses out loud rather than exiting 0 having measured nothing.
+    empty = run_with([])
+    assert empty.returncode != 0, empty.stdout
+    assert "NO PIN FILES RAN" in empty.stdout, empty.stdout
 
 
 def test_the_committed_shape_space_is_regenerable_and_shows_no_divergence():

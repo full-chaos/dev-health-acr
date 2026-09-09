@@ -155,8 +155,14 @@ def attempt_diagnostics(outdir, qid, rep, harness_attempts=None):
     # structurally complete, so the merge's exact-key guard passed it. Every defect on
     # this seam has been caught by two counters disagreeing; this makes them disagree
     # OUT LOUD rather than quietly.
-    reconciled = harness_attempts is None or harness_attempts == len(outcomes)
     unsequenced = sorted(set(UNSEQUENCED.get(qid) or []))
+    # Review round 2: this compared the harness's count against the SEQUENCED outcomes
+    # only, so a row that visibly dropped an artefact still reconciled and the merge
+    # published its totals -- the dropped-artefact defect walking back in through the
+    # door built to stop it. An unsequenced file is a file we know we did not read: the
+    # row is missing evidence whatever the counts say.
+    reconciled = (not unsequenced) and (harness_attempts is None
+                                        or harness_attempts == len(outcomes))
     return {"attempt_outcomes": outcomes,
             "attempts_total": len(outcomes),
             "attempts_reconciled": reconciled,

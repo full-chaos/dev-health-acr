@@ -98,9 +98,8 @@ def _error(attempt):
     `error` that happens to be empty is still an attempt the producer called broken.
     """
     response = attempt.get("response")
-    if not isinstance(response, dict):
-        return None
-    return "error" if "error" in response else None
+    keys = body_failure_keys(response)
+    return sorted(keys)[0] if keys else None
 
 
 def is_valid_count(value):
@@ -149,8 +148,38 @@ SUCCESS_STATUS = 200
 
 
 def is_success_status(status):
-    """Is this HTTP status the one the PRODUCER treats as served? 200, and only 200."""
+    """Is this HTTP status the one the PRODUCER treats as served? 200, and only 200.
+
+    THE PRODUCER IMPORTS THIS. `harness.run_replicate` asks this function rather than
+    comparing to a literal of its own, so the producer and the consumer cannot hold
+    different opinions about what "served" means -- not because a test checks that they
+    agree, but because there is only one value. Review round 2 retired the previous
+    arrangement, where a pin DERIVED the producer's accepted status by walking its AST:
+    the walk was decoration and the function returned a hard-coded 200, so a producer that
+    widened its accepted range was undetectable and every pin still passed.
+    """
     return status == SUCCESS_STATUS
+
+
+# The body keys the PRODUCER writes to mean "this did not work", shared the same way and
+# for the same reason. `harness.post` builds its failure bodies FROM this set, and
+# `failed()` reads the same set, so a new failure key cannot exist on one side only.
+#
+# Review round 2 killed the alternative: a pin that scanned `harness.post`'s AST for dict
+# literals under `Return` nodes. The HTTP-error body is an ASSIGNMENT, not a return, so
+# the scan never saw it -- and it produced the right answer anyway, BY ACCIDENT, because
+# the transport arm's returned dict happens to carry the same key. A producer mutant
+# adding `fatal` there classified `ok_200` with the class-invariant pin passing. A proxy
+# for a contract hollows out silently; a shared value cannot.
+ERROR_BODY_KEY = "error"
+FAILURE_BODY_KEYS = frozenset({ERROR_BODY_KEY})
+
+
+def body_failure_keys(response):
+    """Which of the producer's failure keys this response body carries."""
+    if not isinstance(response, dict):
+        return frozenset()
+    return FAILURE_BODY_KEYS & set(response)
 
 
 def is_upstream_504(attempt):
