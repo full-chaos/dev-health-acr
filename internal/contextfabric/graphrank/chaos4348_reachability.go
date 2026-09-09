@@ -186,7 +186,7 @@ func frameReservedKinds(frame *contextfabric.QuestionFrame, scopeAnchorKind cont
 // never stops early either -- mergeSearchResults' own SubjectKey dedup
 // (MergeCandidates) makes a redundant find of an already-present subject
 // a cheap no-op, not a correctness risk.
-func applyKindHintedPoolSearch(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, terms []string, pool map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, identity identityClaimants, identityTerms identityMatchTerms, hinted []contextfabric.SubjectKind) (traversalDegraded int, authzDropped int, truncated bool, degraded bool, err error) {
+func applyKindHintedPoolSearch(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, terms []string, pool map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, identity identityClaimants, identityTerms identityMatchTerms, hinted []contextfabric.SubjectKind, admission *contestAdmission) (traversalDegraded int, authzDropped int, truncated bool, degraded bool, err error) {
 	if deps.SearchKind == nil || len(hinted) == 0 {
 		return 0, 0, false, false, nil
 	}
@@ -210,7 +210,7 @@ func applyKindHintedPoolSearch(ctx context.Context, principal storage.Principal,
 				results[i].Mechanism = contextfabric.MatchLexical
 			}
 			traceKindHintSearch(deps, request.RequestID, term, results)
-			termTraversalDegraded, termAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, results, pool, observationParentKey, observationBlocked, true, nil, identity, identityTerms)
+			termTraversalDegraded, termAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, results, pool, observationParentKey, observationBlocked, true, nil, identity, identityTerms, admission)
 			traversalDegraded += termTraversalDegraded
 			authzDropped += termAuthzDropped
 		}
@@ -228,7 +228,7 @@ func applyKindHintedPoolSearch(ctx context.Context, principal storage.Principal,
 // its verdict) and merges those into the real pool, always on, with real
 // identity/identityTerms tracking so identityCollision covers a same-term
 // multi-claimant exactly like every other exact-match path already does.
-func applyExactNameArm(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, terms []string, pool map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, identity identityClaimants, identityTerms identityMatchTerms) (traversalDegraded int, authzDropped int, truncated bool, err error) {
+func applyExactNameArm(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, terms []string, pool map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, identity identityClaimants, identityTerms identityMatchTerms, admission *contestAdmission) (traversalDegraded int, authzDropped int, truncated bool, err error) {
 	if deps.ExactNameCandidates == nil {
 		return 0, 0, false, nil
 	}
@@ -260,7 +260,7 @@ func applyExactNameArm(ctx context.Context, principal storage.Principal, request
 			matches[i].Mechanism = contextfabric.MatchLexical
 		}
 		traceExactNameSearch(deps, request.RequestID, term, matches)
-		termTraversalDegraded, termAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, matches, pool, observationParentKey, observationBlocked, true, nil, identity, identityTerms)
+		termTraversalDegraded, termAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, matches, pool, observationParentKey, observationBlocked, true, nil, identity, identityTerms, admission)
 		traversalDegraded += termTraversalDegraded
 		authzDropped += termAuthzDropped
 	}

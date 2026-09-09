@@ -261,7 +261,7 @@ func candidatesOfKind(pool map[string]contextfabric.SubjectCandidate, kind conte
 // exactly like Search/SearchQuestion/AliasLookup's own error handling
 // (resolve.go) -- a real backend fault is never silently downgraded to
 // "found nothing" here either.
-func applyKindCoverageFloor(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, terms []string, pool map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, identity identityClaimants, identityTerms identityMatchTerms) (added []contextfabric.SubjectCandidate, traversalDegraded int, authzDropped int, truncated bool, degraded bool, missingKinds int, missingKindsList []string, err error) {
+func applyKindCoverageFloor(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, terms []string, pool map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, identity identityClaimants, identityTerms identityMatchTerms, admission *contestAdmission) (added []contextfabric.SubjectCandidate, traversalDegraded int, authzDropped int, truncated bool, degraded bool, missingKinds int, missingKindsList []string, err error) {
 	if deps.SearchKind == nil {
 		return nil, 0, 0, false, false, 0, nil, nil
 	}
@@ -340,7 +340,7 @@ func applyKindCoverageFloor(ctx context.Context, principal storage.Principal, re
 			// floor, not a vector-arm competitor, so it must not
 			// participate in CHAOS-3829's commit-path carve-out, the same
 			// exclusion the question-level pass documents.
-			termTraversalDegraded, termAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, results, target, observationParentKey, observationBlocked, true, nil, mergeIdentity, mergeIdentityTerms)
+			termTraversalDegraded, termAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, results, target, observationParentKey, observationBlocked, true, nil, mergeIdentity, mergeIdentityTerms, admission)
 			traversalDegraded += termTraversalDegraded
 			authzDropped += termAuthzDropped
 			if poolHasKind(target, kind) {

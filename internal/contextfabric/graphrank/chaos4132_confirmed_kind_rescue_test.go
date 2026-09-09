@@ -19,7 +19,7 @@ func TestApplyConfirmedKindRescue_NilSearchKindIsNoOp(t *testing.T) {
 	added, traversalDegraded, authzDropped, truncated, degraded, err := applyConfirmedKindRescue(
 		context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), deps,
 		[]string{"alpha"}, map[string]contextfabric.SubjectCandidate{}, nil, nil, nil, nil,
-		contextfabric.SubjectWorkItem)
+		contextfabric.SubjectWorkItem, nil)
 	if err != nil {
 		t.Fatalf("applyConfirmedKindRescue() error = %v, want nil", err)
 	}
@@ -38,7 +38,7 @@ func TestApplyConfirmedKindRescue_PropagatesBackendError(t *testing.T) {
 	_, _, _, _, _, err := applyConfirmedKindRescue(
 		context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), backend.deps(),
 		[]string{"alpha"}, map[string]contextfabric.SubjectCandidate{}, nil, nil, nil, nil,
-		contextfabric.SubjectWorkItem)
+		contextfabric.SubjectWorkItem, nil)
 	if err == nil {
 		t.Fatal("applyConfirmedKindRescue() error = nil, want the backend failure propagated")
 	}

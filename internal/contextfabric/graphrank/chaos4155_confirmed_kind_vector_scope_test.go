@@ -105,7 +105,7 @@ func TestBuildConfirmedKindScopedSnapshot_VectorCensusNeverChangesReturnedScopeS
 	}
 	_, _, _, _, _, state, _, _, vectorCensus, err := buildConfirmedKindScopedSnapshot(
 		context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), backend.deps(),
-		[]string{term}, nil, false, kind, 10)
+		[]string{term}, nil, false, kind, 10, nil)
 	if err != nil {
 		t.Fatalf("error = %v, want nil", err)
 	}
@@ -159,7 +159,7 @@ func TestBuildConfirmedKindScopedSnapshot_VectorCensusOnlyInvokedWhenLexicalComp
 			backend := newBackend(tc.searchTruncated, tc.searchDegraded, tc.vectorConfigured)
 			_, _, _, _, _, state, _, _, vectorCensus, err := buildConfirmedKindScopedSnapshot(
 				context.Background(), storage.Principal{OrgID: "org_1"}, testRequest(), backend.deps(),
-				[]string{term}, nil, false, kind, 10)
+				[]string{term}, nil, false, kind, 10, nil)
 			if err != nil {
 				t.Fatalf("error = %v, want nil", err)
 			}

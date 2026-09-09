@@ -66,7 +66,7 @@ import (
 // gate-blind noise would let an incomplete read masquerade as a confident
 // commit. See resolve.go's own call site comment and
 // TestResolveSubjects_ConfirmedKindRescueTruncationBlocksALoneCandidateCommit.
-func applyConfirmedKindRescue(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, terms []string, pool map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, identity identityClaimants, identityTerms identityMatchTerms, kind contextfabric.SubjectKind) (added []contextfabric.SubjectCandidate, traversalDegraded int, authzDropped int, truncated bool, degraded bool, err error) {
+func applyConfirmedKindRescue(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, terms []string, pool map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, identity identityClaimants, identityTerms identityMatchTerms, kind contextfabric.SubjectKind, admission *contestAdmission) (added []contextfabric.SubjectCandidate, traversalDegraded int, authzDropped int, truncated bool, degraded bool, err error) {
 	if deps.SearchKind == nil {
 		return nil, 0, 0, false, false, nil
 	}
@@ -90,7 +90,7 @@ func applyConfirmedKindRescue(ctx context.Context, principal storage.Principal, 
 		// SAME genuine caller-derived subject terms every ordinary pass
 		// already used, and this is a lexical coverage rescue, never a
 		// vector-arm competitor.
-		termTraversalDegraded, termAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, results, pool, observationParentKey, observationBlocked, true, nil, identity, identityTerms)
+		termTraversalDegraded, termAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, results, pool, observationParentKey, observationBlocked, true, nil, identity, identityTerms, admission)
 		traversalDegraded += termTraversalDegraded
 		authzDropped += termAuthzDropped
 		if poolHasKind(pool, kind) {
