@@ -176,6 +176,13 @@ type contestAdmission struct {
 	// withheld is nil on the zero value; refuse() allocates on first use, so a
 	// caller that never refuses anything allocates nothing.
 	withheld map[string]contextfabric.SubjectRef
+	// exempted records the subjects this scope WOULD have refused and admitted
+	// anyway because the caller named them. Recorded rather than merely allowed,
+	// because that is the difference between an exemption and a door around the
+	// boundary: an operator reading the line can see that the engine considered
+	// this candidate, knew it was the member kind, and admitted it on the
+	// caller's authority. A silent pass leaves the same outcome unexplained.
+	exempted map[string]contextfabric.SubjectRef
 }
 
 // newContestAdmission builds the admission for one call.
@@ -183,13 +190,53 @@ func newContestAdmission(scope contestScope) *contestAdmission {
 	return &contestAdmission{scope: scope}
 }
 
-// admits reports whether this candidate may enter the contest set at all. A nil
-// admission admits everything, so every call site that has no scope to apply --
-// this package's own unit callers, and the arms that only ever run with no
-// confirmed kind -- passes nil and reads as "nothing was decided" rather than
+// WHERE A CANDIDATE CAME FROM, which is what the admission decides by.
+//
+// The boundary does not simply refuse a kind: it decides, per candidate, from
+// its SOURCE. A caller who names a subject by canonical id has not been offered
+// anything, so nothing about that is a substitution, and refusing it would break
+// "name the subject you mean" -- decided truth, pinned by
+// TestACallerExplicitHintOfTheMemberKindStillCommits. Retrieval proposing a
+// member-kind candidate on a scope-anchored frame is the opposite: an I11
+// violation by construction.
+//
+// The difference between the two is not a DOOR AROUND the boundary. It is a
+// decision the boundary makes and records, which is the whole point: an
+// exemption that lives inside the one admission function can be read, counted
+// and reasoned about, while an insert that never reaches the function cannot.
+type candidateSource string
+
+const (
+	// sourceRetrieval: any arm that searched, traversed or rescued its way to
+	// this candidate. Subject to the refusal.
+	sourceRetrieval candidateSource = "retrieval"
+	// sourceCallerHint: the caller named this subject by canonical id in THIS
+	// request. Exempt.
+	//
+	// PR-A classifies EVERY hint as caller-sourced. That is deliberately
+	// conservative and deliberately temporary: distinguishing a hint the caller
+	// stated from one this engine minted and read back is the NEXT change's
+	// subject, and pre-empting it here would be a second place deciding the same
+	// thing. Until then this preserves today's behaviour exactly.
+	sourceCallerHint candidateSource = "caller_hint"
+)
+
+// admits reports whether this candidate may enter the contest set, DECIDING BY
+// SOURCE. A nil admission admits everything, so every call site with no scope to
+// apply -- this package's own unit callers, and the arms that only ever run with
+// no confirmed kind -- passes nil and reads as "nothing was decided" rather than
 // as "everything was refused".
-func (a *contestAdmission) admits(subject contextfabric.SubjectRef) bool {
+func (a *contestAdmission) admits(subject contextfabric.SubjectRef, source candidateSource) bool {
 	if a == nil {
+		return true
+	}
+	if source == sourceCallerHint {
+		// Recorded ONLY when the scope would otherwise have refused it: an
+		// ordinary hint of an unrelated kind is not an exemption, it is just a
+		// hint, and counting it would make the number meaningless.
+		if a.scope.refuses(subject.Kind) {
+			a.exempt(subject)
+		}
 		return true
 	}
 	return !a.scope.refuses(subject.Kind)
@@ -204,6 +251,27 @@ func (a *contestAdmission) refuse(subject contextfabric.SubjectRef) {
 		a.withheld = make(map[string]contextfabric.SubjectRef, 1)
 	}
 	a.withheld[SubjectKey(subject)] = subject
+}
+
+// exempt records ONE subject admitted by the caller-hint exemption that this
+// scope would otherwise have refused. Idempotent per subject, same as refuse.
+func (a *contestAdmission) exempt(subject contextfabric.SubjectRef) {
+	if a == nil {
+		return
+	}
+	if a.exempted == nil {
+		a.exempted = make(map[string]contextfabric.SubjectRef, 1)
+	}
+	a.exempted[SubjectKey(subject)] = subject
+}
+
+// exemptedCount is the DISTINCT number of subjects admitted by the exemption.
+// Explicit zero on every path, including the nil admission.
+func (a *contestAdmission) exemptedCount() int {
+	if a == nil {
+		return 0
+	}
+	return len(a.exempted)
 }
 
 // withheldCount is the DISTINCT number of subjects this call refused. Explicit

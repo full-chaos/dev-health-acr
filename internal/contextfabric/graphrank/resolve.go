@@ -1369,6 +1369,17 @@ type ResolutionTraceEvent struct {
 	// retrieval failure. BOTH ALWAYS SET, with explicit `none` tokens.
 	OfferPoolAnchorKindWithheldScope  string
 	OfferPoolAnchorKindWithheldReason string
+	// OfferPoolAnchorKindExempted (CHAOS-5422) is how many DISTINCT subjects of
+	// the refused kind were admitted anyway because the CALLER named them by
+	// canonical id. ALWAYS emitted, explicit zero included.
+	//
+	// It exists because an exemption that is silent is indistinguishable from a
+	// boundary that was never applied. With this on the line, an operator
+	// reading a resolution that committed a member-kind subject can tell "the
+	// engine refused nothing here" from "the engine knew, and admitted it on the
+	// caller's authority" -- which are the same outcome and completely different
+	// facts.
+	OfferPoolAnchorKindExempted int
 	// OfferPoolSummary marks the once-per-call folded offer_pool event, the
 	// counterpart of DecisionSummary for this stage. Per-candidate
 	// offer_pool lines are retrieval-pool-sized and stay Debug; the summary
@@ -1923,6 +1934,7 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 			OfferPoolAnchorKindWithheld:       admission.withheldCount(),
 			OfferPoolAnchorKindWithheldScope:  withheldKind,
 			OfferPoolAnchorKindWithheldReason: withheldSource,
+			OfferPoolAnchorKindExempted:       admission.exemptedCount(),
 		})
 	}
 	if err != nil {
@@ -2022,6 +2034,7 @@ type decisionSummaryBuffer struct {
 	anchorKindWithheld       int
 	anchorKindWithheldScope  string
 	anchorKindWithheldReason string
+	anchorKindExempted       int
 	// anchorPoolKindScope / anchorPoolKindScopeSource / memberKindConfirmed
 	// accumulate from the `anchor_pool` summary event rather than being
 	// stamped at construction like frameGate above. The distinction is
@@ -2071,6 +2084,7 @@ func (b *decisionSummaryBuffer) Trace(event ResolutionTraceEvent) {
 			b.anchorKindWithheld = event.OfferPoolAnchorKindWithheld
 			b.anchorKindWithheldScope = event.OfferPoolAnchorKindWithheldScope
 			b.anchorKindWithheldReason = event.OfferPoolAnchorKindWithheldReason
+			b.anchorKindExempted = event.OfferPoolAnchorKindExempted
 		}
 		// OR across the call for the same reason DecisionOfferedUnderWindowGate
 		// is: the fold sees per-event facts, and "at least one pass of this
@@ -2146,6 +2160,7 @@ func (b *decisionSummaryBuffer) flush() {
 		// value.
 		OfferPoolAnchorKindWithheldScope:  orNone(b.anchorKindWithheldScope),
 		OfferPoolAnchorKindWithheldReason: orNone(b.anchorKindWithheldReason),
+		OfferPoolAnchorKindExempted:       b.anchorKindExempted,
 		// orNone keeps the contract that these three are never empty on a
 		// line: a resolution that returned before the filter ran emits no
 		// anchor_pool event at all, and `none` is the honest reading of
@@ -2327,7 +2342,21 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			candidate.MatchMechanisms,
 			[]contextfabric.MatchMechanism{contextfabric.MatchExact},
 		)
-		candidatesBySubject[SubjectKey(candidate.Subject)] = candidate
+		// CHAOS-5422, DOOR 1 of 4. A hint is inserted here directly, so it
+		// never reached the boundary and a member-kind hint committed on a
+		// scope-anchored frame with nothing recorded about it.
+		//
+		// It is routed through the SAME function, and that function ADMITS it:
+		// a caller naming a subject by canonical id has not been offered
+		// anything, so this is not a substitution, and refusing it would break
+		// "name the subject you mean" -- decided truth, pinned by
+		// TestACallerExplicitHintOfTheMemberKindStillCommits. The behaviour is
+		// therefore unchanged; what changes is that the exemption is now a
+		// decision the boundary MAKES AND RECORDS rather than a door around it,
+		// and an operator can see it on the line.
+		if admission.admits(candidate.Subject, sourceCallerHint) {
+			candidatesBySubject[SubjectKey(candidate.Subject)] = candidate
+		}
 	}
 	// A caller-explicit hint that resolved is authoritative and
 	// short-circuits here. A receipt-only resolution (candidatesBySubject
@@ -4103,6 +4132,18 @@ func mergeSearchResults(ctx context.Context, principal storage.Principal, reques
 	traversalErrored := 0
 	authzDropped := 0
 	for _, node := range results {
+		// CHAOS-5422, DOOR 3 of 4. The vector side map is written BEFORE the
+		// candidate is built, and vectorMarginCommit takes its COMPETITOR from
+		// the FULL side map rather than from commitIndex -- its own comment says
+		// so. A refused candidate whose similarity was recorded therefore still
+		// changes the rescue's arithmetic even though it can never commit:
+		// measured as commit=true without it and commit=false with it, on
+		// identical pools. Filtering the pool alone cannot fix that, so the
+		// refusal has to happen before the write, not after it.
+		if subject, ok := NodeSubject(node); ok && !admission.admits(subject, sourceRetrieval) {
+			admission.refuse(subject)
+			continue
+		}
 		if vectorArmSimilarity != nil && node.Mechanism == contextfabric.MatchVector && node.VectorSimilarity != nil {
 			if subject, ok := NodeSubject(node); ok {
 				key := SubjectKey(subject)
@@ -4138,7 +4179,7 @@ func mergeSearchResults(ctx context.Context, principal storage.Principal, reques
 		// and the arms that only ever run with no confirmed kind, have no scope
 		// to apply and must read as "nothing was decided", never as
 		// "everything was refused".
-		if !admission.admits(candidate.Subject) {
+		if !admission.admits(candidate.Subject, sourceRetrieval) {
 			admission.refuse(candidate.Subject)
 			continue
 		}
@@ -4180,6 +4221,15 @@ func mergeSearchResults(ctx context.Context, principal storage.Principal, reques
 				// so a DIRECTLY-found candidate colliding with it on the
 				// same term is correctly flagged (identityCollision does
 				// not care HOW the second claimant was found).
+				// CHAOS-5422, DOOR 2 of 4. A traversal proposes a parent this
+				// function never saw as a `results` node, so the check above
+				// cannot have covered it -- and it is inserted directly below.
+				// A member-kind parent reached the pool and COMMITTED through
+				// here while the boundary read as complete.
+				if !admission.admits(traversed.Subject, sourceRetrieval) {
+					admission.refuse(traversed.Subject)
+					break
+				}
 				recordIdentityClaim(traversed, identity, identityTerms)
 				// Same merge rule as the direct-hit path above: a parent
 				// that BOTH a direct search and a traversal proposed must

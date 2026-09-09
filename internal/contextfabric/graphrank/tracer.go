@@ -220,6 +220,10 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"offer_pool_anchor_kind_withheld", event.OfferPoolAnchorKindWithheld,
 			"offer_pool_anchor_kind_withheld_scope", event.OfferPoolAnchorKindWithheldScope,
 			"offer_pool_anchor_kind_withheld_reason", event.OfferPoolAnchorKindWithheldReason,
+			// The exemption's own number. A refusal count of zero beside an
+			// exemption count of one is a different fact from two zeros, and
+			// only one of them means "this question refused nothing".
+			"offer_pool_anchor_kind_exempted", event.OfferPoolAnchorKindExempted,
 			// CHAOS-5393. anchor_pool_kind_scope says which kind the SCOPE
 			// ANCHOR was allowed to resolve under; member_kind_confirmed
 			// says the kind that scoped MEMBER discovery. On a scope-

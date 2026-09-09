@@ -233,6 +233,14 @@ func TestTheRefusedCountIsDistinctSubjectsAcrossTheCall(t *testing.T) {
 	// re-decision -- without it there is only one pass and the defect this pins
 	// cannot appear at all.
 	backend.searchTruncated = true
+	// DIVERGENT POPULATIONS ACROSS THE PASSES, which is the whole point and
+	// which an earlier version of this fixture did not have: both of its
+	// searches returned the SAME subject, so it caught summing a duplicate but
+	// could not catch LOSING a subject that only one pass saw. This member
+	// appears only in the kind-scoped results.
+	lateMember := candidateNode(contextfabric.SubjectTeam, "team.v2:github:platform-late", "platform late", 0.7, "*")
+	backend.searchKindResults["platform"][contextfabric.SubjectTeam] = append(
+		backend.searchKindResults["platform"][contextfabric.SubjectTeam], lateMember)
 	capture := &contestCapture{}
 	resolveContest(t, backend, contestFrame("platform"), confirmedTeamKind(), capture, 20, contextfabric.SubjectRepository)
 
@@ -535,11 +543,19 @@ func TestTheBoundaryRefusesBeforeAnyIdentityClaimIsRecorded(t *testing.T) {
 			// and GREEN with it absent. What this arm adds is that the refusal
 			// happens at the boundary, before the claim could be recorded at
 			// all, for every arm that merges through it.
-			for _, claimants := range identity {
-				for key := range claimants {
-					if strings.Contains(key, "team.v2:github:platform-owners") && testCase.wantRefused > 0 {
-						t.Errorf("the refused member recorded an identity claim -- a candidate outside the " +
-							"contest that still claims an identity goes on vetoing anchors through a side channel")
+			// THREE levels: identityClaimants is
+			// map[identityKeyClass]map[term]map[subjectKey]bool. An earlier
+			// version of this loop stopped at the TERM level and compared a term
+			// against a subject key, so it could never match and never failed —
+			// a review round found it vacuous. It now reaches the subject keys.
+			for _, byTerm := range identity {
+				for _, subjects := range byTerm {
+					for subjectKey := range subjects {
+						if strings.Contains(subjectKey, "team.v2:github:platform-owners") && testCase.wantRefused > 0 {
+							t.Errorf("the refused member recorded an identity claim (%s) -- a candidate outside "+
+								"the contest that still claims an identity goes on vetoing anchors through a "+
+								"side channel", subjectKey)
+						}
 					}
 				}
 			}
@@ -667,5 +683,152 @@ func TestTheConfirmedKindRedecisionCarriesTheSameAdmission(t *testing.T) {
 	}
 	if !refused {
 		t.Fatalf("the member visible ONLY to the re-decision was never refused; that pass admitted it")
+	}
+}
+
+// ONE ARM PER DOOR, on committed IDENTITY rather than committed COUNT.
+//
+// A full-scope review found three separate paths by which a candidate reached
+// the contest without passing the admission function, after this seam had
+// claimed that function was the only way in. Each is pinned here, and each
+// asserts WHICH subject committed — an earlier arm of mine asserted only the
+// COUNT, which is exactly why a member-kind commit could hide inside a "1".
+func TestNoDoorLetsARefusedCandidateIntoTheContest(t *testing.T) {
+	t.Parallel()
+	anchorRef := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository.v2:github:platform", Label: "platform"}
+
+	t.Run("door: the traversal insert", func(t *testing.T) {
+		t.Parallel()
+		// The traversal fires only for an OBSERVATION kind (document or
+		// episode) — a work-item observation never reaches it, which is how a
+		// first attempt at this fixture reported green while measuring nothing.
+		observation := candidateNode(contextfabric.SubjectDocument, "doc_child", "child doc", 0.9, "*")
+		anchor := candidateNode(anchorRef.Kind, anchorRef.CanonicalID, anchorRef.Label, 0.95, "*")
+		backend := &fakeGraphBackend{
+			searchResults:    map[string][]CandidateNode{"platform": {anchor, observation}},
+			enableSearchKind: true,
+			searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
+				"platform": {contextfabric.SubjectRepository: {anchor}},
+			},
+			traverse: func(_ context.Context, term string, _ CandidateNode, _ bool) (contextfabric.SubjectCandidate, ObservationTraversal) {
+				return contextfabric.SubjectCandidate{
+						Subject:         contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team_parent", Label: "Platform Team"},
+						Confidence:      0.85,
+						MatchedTerms:    []string{term},
+						MatchMechanisms: []contextfabric.MatchMechanism{contextfabric.MatchTraversalParent},
+					},
+					ObservationParentFound
+			},
+		}
+		res := resolveContest(t, backend, contestFrame("platform"), confirmedTeamKind(), nil, 20, contextfabric.SubjectRepository)
+		assertNoMemberKindAnywhere(t, res, "the traversal insert proposes a parent this function never saw as a result node")
+	})
+
+	t.Run("door: the vector side map", func(t *testing.T) {
+		t.Parallel()
+		// DRIVEN AT THE BOUNDARY, not end to end, and that is deliberate: an
+		// end-to-end version of this arm PASSED on the tree it was meant to
+		// fail against, because the anchor committed at a stronger tier before
+		// the margin rescue ever ran. What actually has to be true is narrower
+		// and checkable directly — a refused candidate's similarity is never
+		// RECORDED. vectorMarginCommit takes its competitor from the FULL side
+		// map (its own comment says "not restricted to commitIndex"), so a
+		// recorded similarity is arithmetic in the rescue whether or not the
+		// candidate is eligible; filtering the pool cannot undo that.
+		member := candidateNode(contextfabric.SubjectTeam, "team_vec", "platform team", 0.78, "*")
+		member.Mechanism = contextfabric.MatchVector
+		similarity := 0.89
+		member.VectorSimilarity = &similarity
+		anchor := candidateNode(anchorRef.Kind, anchorRef.CanonicalID, anchorRef.Label, 0.9, "*")
+
+		pool := map[string]contextfabric.SubjectCandidate{}
+		vectorArmSimilarity := map[string]float64{}
+		admission := newContestAdmission(contestScope{
+			MemberKind: contextfabric.SubjectTeam, Source: contestScopeFrameMemberKind,
+		})
+		mergeSearchResults(context.Background(),
+			storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"*"}}, testRequest(),
+			(&fakeGraphBackend{}).deps(), "platform", []CandidateNode{anchor, member},
+			pool, map[string]string{}, map[string]bool{}, true, vectorArmSimilarity,
+			identityClaimants{}, identityMatchTerms{}, admission)
+
+		for key := range vectorArmSimilarity {
+			if strings.Contains(key, "team_vec") {
+				t.Fatalf("the refused candidate's vector similarity was recorded (%s=%v); the margin rescue "+
+					"reads the FULL side map, so a recorded similarity still changes the outcome of a contest "+
+					"this candidate can never win", key, vectorArmSimilarity[key])
+			}
+		}
+		if admission.withheldCount() != 1 {
+			t.Fatalf("withheldCount() = %d, want 1 -- the fixture did not reach the refusal", admission.withheldCount())
+		}
+	})
+}
+
+// assertNoMemberKindAnywhere checks IDENTITY, in both the committed set and the
+// candidate set. Asserting a count would let a member-kind commit hide inside a
+// number that happened to match.
+func assertNoMemberKindAnywhere(t *testing.T, res contextfabric.SubjectResolution, why string) {
+	t.Helper()
+	for _, subject := range res.Committed {
+		if subject.Kind == contextfabric.SubjectTeam {
+			t.Fatalf("committed %q of the refused member kind — %s. committed=%v",
+				subject.CanonicalID, why, res.Committed)
+		}
+	}
+	for _, candidate := range res.Candidates {
+		if candidate.Subject.Kind == contextfabric.SubjectTeam {
+			t.Fatalf("candidate %q of the refused member kind reached the contest — %s",
+				candidate.Subject.CanonicalID, why)
+		}
+	}
+}
+
+// THE EXEMPTION DOOR, which is a decision rather than a bypass — and the pin
+// asserts BOTH halves of that.
+//
+// A caller-explicit hint of the member kind is ADMITTED: a caller naming a
+// subject by canonical id has not been offered anything, so it is not a
+// substitution, and refusing it would break "name the subject you mean". What
+// changed is that the hint now goes THROUGH the admission function, which
+// records the exemption — because an exemption that is silent is
+// indistinguishable from a boundary that was never applied.
+func TestACallerHintOfTheRefusedKindIsAdmittedAndTheExemptionIsRecorded(t *testing.T) {
+	t.Parallel()
+	member := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team_1", Label: "Platform Team"}
+	backend := contestBackend("platform")
+	backend.exactHints = map[string]CandidateNode{
+		SubjectKey(member): candidateNode(member.Kind, member.CanonicalID, member.Label, 1, "*"),
+	}
+	capture := &contestCapture{}
+	req := testRequest()
+	req.Options.MaxSubjectCandidates = 20
+	req.RequestedScope.SubjectHints = []contextfabric.SubjectHint{
+		{Kind: member.Kind, ID: member.CanonicalID, Label: member.Label, Source: "workbench"},
+	}
+	deps := backend.deps()
+	deps.ResolutionTracer = capture
+	res, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+		storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"*"}}, req, testInterpreted("platform"),
+		deps, confirmedTeamKind(), nil, contestFrame("platform"), contextfabric.SubjectRepository)
+	if err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+	committed := false
+	for _, subject := range res.Committed {
+		if subject.CanonicalID == member.CanonicalID {
+			committed = true
+		}
+	}
+	if !committed {
+		t.Fatalf("committed %v — a caller who names a subject by canonical id must still get it; refusing "+
+			"this would break naming a subject, which is decided truth", res.Committed)
+	}
+	if len(capture.offerPool) != 1 {
+		t.Fatalf("captured %d offer_pool summaries, want exactly 1", len(capture.offerPool))
+	}
+	if got := capture.offerPool[0].OfferPoolAnchorKindExempted; got != 1 {
+		t.Fatalf("offer_pool_anchor_kind_exempted = %d, want 1 — the exemption fired and said nothing, which "+
+			"reads exactly like a boundary that was never applied", got)
 	}
 }
