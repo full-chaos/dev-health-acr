@@ -404,6 +404,7 @@ type recordingTelemetry struct {
 	// above.
 	windowGateOfferDisclosures []bool
 	windowExpandOfferRedeemed  int
+	interpretedTimeBounds      []InterpretedTimeBoundDecision
 	// windowCarries (CHAOS-4360) mirrors the SAME list-not-count discipline:
 	// a test asserts the exact outcome/chain-depth pair, never merely that
 	// something fired.
@@ -681,6 +682,13 @@ func (r *recordingTelemetry) RecordWindowGateOfferDisclosure(_ context.Context, 
 
 func (r *recordingTelemetry) RecordWindowExpandOfferRedeemed(_ context.Context, _ storage.Principal) {
 	r.windowExpandOfferRedeemed++
+}
+
+// Appended, never overwritten, so a test can assert the event fired EXACTLY
+// once per Investigate call -- a recorder keeping only the last decision
+// could not tell one call from three.
+func (r *recordingTelemetry) RecordInterpretedTimeBound(_ context.Context, _ storage.Principal, decision InterpretedTimeBoundDecision) {
+	r.interpretedTimeBounds = append(r.interpretedTimeBounds, decision)
 }
 
 func (r *recordingTelemetry) RecordStructureOfferCount(_ context.Context, _ storage.Principal, member contractsv1.ContextFabricStructureNeedKind, source contractsv1.ContextFabricStructureOfferSource, count int) {
@@ -1727,6 +1735,14 @@ type historicalEngineProbe struct {
 // time context, with `now` late enough that a 2026 as-of is in the past.
 func mustHistoricalEngine(t *testing.T, interpretedTime TimeContext, now time.Time) (*Engine, *historicalEngineProbe) {
 	t.Helper()
+	return mustHistoricalEngineWithTelemetry(t, interpretedTime, now, nil)
+}
+
+// mustHistoricalEngineWithTelemetry is the same fixture with a telemetry
+// sink attached, for the tests that read what the engine REPORTED about a
+// time context rather than only what it bound.
+func mustHistoricalEngineWithTelemetry(t *testing.T, interpretedTime TimeContext, now time.Time, telemetry EngineTelemetry) (*Engine, *historicalEngineProbe) {
+	t.Helper()
 	probe := &historicalEngineProbe{graph: &countingGraphReader{}}
 	engine, err := NewEngine(EngineDependencies{
 		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
@@ -1760,6 +1776,65 @@ func mustHistoricalEngine(t *testing.T, interpretedTime TimeContext, now time.Ti
 				},
 			}, nil
 		}),
+		Telemetry: telemetry,
+	}, EngineOptions{ServiceVersion: "acr-test", Now: func() time.Time { return now }, NewResultID: func() string { return "result_12345678" }})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+	return engine, probe
+}
+
+// mustHistoricalEngineWithStore is mustHistoricalEngine with a caller-supplied
+// result store, for the tests that assert what was PERSISTED rather than what
+// was returned.
+func mustHistoricalEngineWithStore(t *testing.T, interpretedTime TimeContext, now time.Time, results InvestigationResultStore) (*Engine, *historicalEngineProbe) {
+	t.Helper()
+	engine, probe := mustHistoricalEngineWithTelemetry(t, interpretedTime, now, nil)
+	engine.results = results
+	return engine, probe
+}
+
+// mustHistoricalEngineEchoingTheRequest is the fixture for the origin
+// invariant: its interpreter returns the REQUEST's own time context verbatim,
+// which is what genkitruntime's toDomain does when a model emits no axis --
+// the only route by which a caller's own instants re-enter the interpretation
+// and reach the post-Interpret evaluator.
+func mustHistoricalEngineEchoingTheRequest(t *testing.T, now time.Time, telemetry EngineTelemetry) (*Engine, *historicalEngineProbe) {
+	t.Helper()
+	probe := &historicalEngineProbe{graph: &countingGraphReader{}}
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: interpreterFunc(func(_ context.Context, _ storage.Principal, request InvestigationRequest) (InterpretedQuestion, error) {
+			probe.interpretedContext = request.TimeContext
+			return InterpretedQuestion{
+				Shape: ShapeSingleSubject, RequestedJudgment: "status", TimeContext: request.TimeContext,
+				FactRequirements: []FactRequirement{{Kind: FactStatus}},
+			}, nil
+		}),
+		Graph: probe.graph,
+		Facts: factReaderFunc(func(_ context.Context, _ storage.Principal, request CanonicalFactRequest) (CanonicalFactBundle, error) {
+			probe.factsRead = true
+			probe.factContext = request.Question.TimeContext
+			return CanonicalFactBundle{
+				Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{},
+			}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			probe.synthesized = true
+			return InvestigationResult{
+				Status: InvestigationComplete, DirectJudgment: "It was on track then.", CurrentState: "Nominal at that time.",
+				StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{},
+				Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{},
+				ClaimedFacts:        []ClaimedFact{},
+				Coverage:            Coverage{Sources: []SourceObservation{{Source: "test", State: SourceAvailable}}, DegradedReasons: []string{}},
+				DeterministicAnswer: "It was on track then, based on available context.", Warnings: []string{},
+				Versions: VersionSet{
+					Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",
+					InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1",
+				},
+			}, nil
+		}),
+		Telemetry: telemetry,
 	}, EngineOptions{ServiceVersion: "acr-test", Now: func() time.Time { return now }, NewResultID: func() string { return "result_12345678" }})
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)

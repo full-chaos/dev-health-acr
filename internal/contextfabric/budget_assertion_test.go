@@ -464,6 +464,32 @@ func TestEveryFreshResultExitAssertsTheBudget(t *testing.T) {
 		seen[BudgetAssertWindowConfirmationRequired] = true
 	})
 
+	// CHAOS-5421. The interpreted-time-bound exit refuses BEFORE resolution,
+	// facts and synthesis, so it is driven exactly the way the window gate
+	// above is: an interpreter that hands back an unanswerable bound, and a
+	// builder whose fact/synthesis doubles fail the test if they are ever
+	// reached. Wired through the ordinary current-axis request, because the
+	// whole point of this exit is that the CALLER asked for nothing wrong.
+	t.Run("interpreted_time_bound", func(t *testing.T) {
+		telemetry := &recordingTelemetry{}
+		ancient := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC).Add(-3000 * 24 * time.Hour)
+		end := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+		unanswerable := bootstrapInterpretation()
+		unanswerable.TimeContext = TimeContext{Axis: TemporalRange, Start: &ancient, End: &end}
+		interpreter := &countingInterpreter{interpretation: unanswerable}
+		graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext()}
+		engine := buildWindowGateEngineWithBudget(t, interpreter, graph, newMapResultStore(), maxItems, telemetry)
+		result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+		if err != nil {
+			t.Fatalf("Investigate() error = %v -- an interpreted bound refuses as a RESULT, never through the caller's error channel", err)
+		}
+		if result.Status != InvestigationNoMatch {
+			t.Fatalf("Status = %q, want no_match (sanity check: the intended exit was not taken, so this subtest proves nothing)", result.Status)
+		}
+		assertStageRecorded(t, telemetry, BudgetAssertInterpretedTimeBound)
+		seen[BudgetAssertInterpretedTimeBound] = true
+	})
+
 	t.Run("reuse", func(t *testing.T) {
 		telemetry := &recordingTelemetry{}
 		project, candidate := reusableCandidate()
@@ -479,8 +505,8 @@ func TestEveryFreshResultExitAssertsTheBudget(t *testing.T) {
 		seen[BudgetAssertReuse] = true
 	})
 
-	// Coverage over the VOCABULARY, not over a hand-written list: adding a
-	// sixth exit without a subtest here fails at this assertion rather than
+	// Coverage over the VOCABULARY, not over a hand-written list: adding an
+	// exit without a subtest here fails at this assertion rather than
 	// passing silently. BudgetAssertStageVocabulary is a sized array, so a new
 	// member also breaks the build of anything ranging over it with a fixed
 	// expectation.

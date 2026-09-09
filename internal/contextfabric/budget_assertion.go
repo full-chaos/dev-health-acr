@@ -84,12 +84,17 @@ const (
 	// (budget-keyed reuse, or re-investigation) is a separate open decision,
 	// floor paper C2, ticketed.
 	BudgetAssertReuse BudgetAssertStage = "reuse"
+	// BudgetAssertInterpretedTimeBound is chaos5421_interpreted_time_bound.go's
+	// interpretedTimeBoundResult: the terminal a time bound the INTERPRETER
+	// produced refuses through, once that refusal stopped travelling as an
+	// error through the caller's own 400 channel.
+	BudgetAssertInterpretedTimeBound BudgetAssertStage = "interpreted_time_bound"
 )
 
 // BudgetAssertStageCount is the vocabulary size, so a test that must cover
 // every member fails to compile rather than silently covering fewer when a
 // member is added.
-const BudgetAssertStageCount = 6
+const BudgetAssertStageCount = 7
 
 // BudgetAssertStageVocabulary returns every member. Returned as a sized array
 // rather than a slice for the same reason the count above is exported: a new
@@ -102,6 +107,7 @@ func BudgetAssertStageVocabulary() [BudgetAssertStageCount]BudgetAssertStage {
 		BudgetAssertWindowConfirmationRequired,
 		BudgetAssertStructureVeto,
 		BudgetAssertReuse,
+		BudgetAssertInterpretedTimeBound,
 	}
 }
 
