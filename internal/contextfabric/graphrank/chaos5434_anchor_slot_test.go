@@ -201,6 +201,50 @@ func TestTheFallbackSourcedAnchorHoldsTheSameSlotAsTheReceiptSourced(t *testing.
 	}
 }
 
+// P2b -- THE FALLBACK SOURCE REACHES THE CUT, AS THE FALLBACK SOURCE.
+//
+// r1 found the gap this closes, with an executed probe: the unit pin above
+// proves reservedPrefix does not care which source named the kind, but it
+// cannot see the WIRING. A mutant that handed the cut an EMPTY slot whenever
+// the source was the confirmed anchor left reservedPrefix untouched, so the
+// unit pin stayed green while the production path stopped reserving anything.
+//
+// SO THIS PIN ASSERTS THE WIRING, on every tree, from the ranked-cut summary
+// the production entry point actually emitted: the slot the cut was handed
+// reports the anchor's kind and the FALLBACK source token. That reading does
+// not depend on whether the crowd was starved, so it survives a tree where the
+// members are refused before the cut.
+//
+// The SURVIVAL half is asserted only where the cut is genuinely saturated,
+// because a pin cannot assert that an anchor beat a crowd that never reached
+// phase 4. Which arm ran is logged either way -- a test that quietly asserts
+// nothing is the defect this comment exists to prevent.
+func TestTheFallbackSourcedAnchorReachesTheCutAsTheFallbackSource(t *testing.T) {
+	t.Parallel()
+	res, cut := resolveScopedWithCut(t, anchorOnlyByKindBackend("chaos", saturatedCrowd),
+		scopedProjectsFrame("chaos"), confirmedProject(),
+		&contextfabric.ConfirmedAnchorSelection{Kind: contextfabric.SubjectTeam, CanonicalID: "team.v2:github:chaos"}, "")
+
+	if cut.AnchorSlotReserved != string(contextfabric.SubjectTeam) {
+		t.Errorf("cut was handed anchor_slot_reserved=%q, want %q -- the fallback-decided anchor kind did not reach the cut",
+			cut.AnchorSlotReserved, contextfabric.SubjectTeam)
+	}
+	if cut.AnchorSlotSource != anchorPoolKindScopeConfirmedAnchor {
+		t.Errorf("cut was handed anchor_slot_source=%q, want %q -- the wiring lost the fallback source, and an operator reading the line would be told a different consumer decided this",
+			cut.AnchorSlotSource, anchorPoolKindScopeConfirmedAnchor)
+	}
+
+	if cut.RankedCutCandidateCount > cut.RankedCutMax {
+		if kinds := candidateKinds(res); kinds[contextfabric.SubjectTeam] == 0 {
+			t.Errorf("anchor candidates = 0, want >= 1; kinds=%v, cut saw %d against budget %d -- the FALLBACK-sourced anchor was truncated away end to end",
+				kinds, cut.RankedCutCandidateCount, cut.RankedCutMax)
+		}
+		return
+	}
+	t.Logf("cut was not saturated (%d candidates against budget %d), so only the WIRING half of this pin ran; survival on a starved pool is asserted by the receipt pin, and this shape's own unreachability is explained on TestTheFallbackSourcedAnchorHoldsTheSameSlotAsTheReceiptSourced",
+		cut.RankedCutCandidateCount, cut.RankedCutMax)
+}
+
 // P3 -- NEGATIVE CONTROL, THE THIRD SOURCE. With no receipt kind, no
 // confirmed anchor and no confirmed member kind there is no DECIDED anchor,
 // so there is no slot to reserve and nothing about this resolution may
@@ -290,6 +334,28 @@ func TestTheAnchorSlotDecisionAndItsVictimAreVisibleAtProductionLogLevel(t *test
 	}
 	if !strings.Contains(log, `"anchor_slot_source":"receipt"`) {
 		t.Errorf("anchor_slot_source does not name the receipt source -- an operator cannot tell a model that stopped emitting scope_anchor_kind from a caller that stopped redeeming receipts; log: %s", log)
+	}
+	// THE VALUES, NOT JUST THE KEYS. Asserting presence alone let a mutant
+	// emit `none` for the reserved kind and stay green (r1 P3): a key whose
+	// value is wrong is worse than an absent key, because it reads as a
+	// measurement. pool_truncated_n is asserted at its exact figure for the
+	// same reason -- 92 candidates less the budget of 20.
+	if !strings.Contains(log, `"anchor_slot_reserved":"`+string(contextfabric.SubjectTeam)+`"`) {
+		t.Errorf("anchor_slot_reserved does not name the kind the slot was held for; log: %s", log)
+	}
+	if !strings.Contains(log, `"pool_truncated_n":72`) {
+		t.Errorf("pool_truncated_n is not the true dropped count (92 candidates - budget 20 = 72); a wrong count reads as a measurement; log: %s", log)
+	}
+	// THE ADMITTED ANCHOR IS NAMED, and it must agree with the displacement
+	// the summary claims. r1 asked what regression would be invisible at
+	// Info and answered "one that reports a displacement while dropping the
+	// anchor". It would NOT be invisible -- the pre-existing
+	// reserved_kind_admitted line names the admitted subject by canonical id
+	// -- but nothing pinned the two lines agreeing, so a build could have
+	// started reporting one without the other. This is that pin.
+	if !strings.Contains(log, `"stage":"reserved_kind_admitted"`) ||
+		!strings.Contains(log, `"subject_canonical_id":"team.v2:github:chaos"`) {
+		t.Errorf("no reserved_kind_admitted line naming the admitted anchor; a displacement claim with no admission beside it is the regression this pair exists to make visible; log: %s", log)
 	}
 	if !strings.Contains(log, `"stage":"anchor_slot_displaced"`) {
 		t.Errorf("no anchor_slot_displaced stage line naming the displaced member -- the reserved slot must never displace a ranked member silently; log: %s", log)
