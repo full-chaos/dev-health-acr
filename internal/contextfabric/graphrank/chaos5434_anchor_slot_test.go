@@ -389,3 +389,41 @@ func TestAnEmptyAnchorSlotLeavesTheCutUnchanged(t *testing.T) {
 		t.Errorf("outcome.PoolTruncatedN = %d, want 2 even with no slot -- the count describes the CUT, not the slot", outcome.PoolTruncatedN)
 	}
 }
+
+// P8c -- THE TIER GUARD IS LOAD-BEARING, and the earlier tier pin did not
+// prove it. In that fixture the lowest-ranked in-budget candidate was already
+// tier 2, so the tail-first walk reached an eligible victim before it ever
+// had to refuse a protected one -- a mutant deleting the tier check survived
+// it. The discriminating shape is a budget filled ENTIRELY by protected
+// tiers, with a surplus of that kind: only the tier guard stops the anchor
+// from evicting a committed subject or a canonical parent, and the correct
+// outcome is that the anchor is NOT seated, because phase 4's budget is a
+// maximum and the protected tiers outrank the slot.
+func TestTheAnchorSlotRefusesAProtectedOnlyBudgetEvenWithASurplus(t *testing.T) {
+	t.Parallel()
+	ordered := []contextfabric.SubjectCandidate{
+		{Subject: contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "committed_member"}},
+		{Subject: contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "parent_member"}},
+		{Subject: contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team_anchor"}},
+	}
+	// Two projects in budget, so present[project] == 2 > kindReserveSlotsPerKind:
+	// the SURPLUS test passes and only the TIER test can refuse.
+	tiers := []int{0, 1, 2}
+	reserved := []contextfabric.SubjectKind{contextfabric.SubjectProject, contextfabric.SubjectTeam}
+
+	kept, outcome := reservedPrefix(ordered, tiers, 2, reserved,
+		anchorReservedSlot{Kind: contextfabric.SubjectTeam, Source: anchorPoolKindScopeReceipt})
+
+	if !kept[0] {
+		t.Error("the COMMITTED subject (tier 0) was evicted for the anchor slot; the phase list promises truncation can never drop it")
+	}
+	if !kept[1] {
+		t.Error("the canonical PARENT (tier 1) was evicted for the anchor slot; that tier exists so an answer-bearing parent is not crowded out")
+	}
+	if kept[2] {
+		t.Error("the anchor was seated out of a budget holding only protected tiers; the reserve must admit nothing rather than exceed the budget or evict a protected candidate")
+	}
+	if outcome.Displaced != 0 || outcome.DisplacedSubject != nil {
+		t.Errorf("outcome reports a displacement that must not have happened: %+v", outcome)
+	}
+}
