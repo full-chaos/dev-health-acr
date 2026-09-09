@@ -609,7 +609,8 @@ func TestTheConfirmedKindRedecisionCarriesTheSameAdmission(t *testing.T) {
 		// what sends this call into the re-decision at all
 		searchTruncated: true,
 	}
-	res := resolveContest(t, backend, contestFrame("platform"), confirmedTeamKind(), nil, 20, contextfabric.SubjectRepository)
+	capture := &contestCapture{}
+	res := resolveContest(t, backend, contestFrame("platform"), confirmedTeamKind(), capture, 20, contextfabric.SubjectRepository)
 	for _, candidate := range res.Candidates {
 		if candidate.Subject.CanonicalID == "team.v2:github:platform-hidden" {
 			t.Fatalf("the refused member entered the contest through the confirmed-kind re-decision's own "+
@@ -621,5 +622,23 @@ func TestTheConfirmedKindRedecisionCarriesTheSameAdmission(t *testing.T) {
 		if subject.Kind == contextfabric.SubjectTeam {
 			t.Fatalf("committed %v of the refused member kind through the re-decision", res.Committed)
 		}
+	}
+	// THE DISCRIMINATOR. Absence from the candidate set is not enough on its
+	// own: a second pass that admits this candidate may still be DISCARDED, and
+	// then nothing about the returned resolution differs. What always differs is
+	// the refusal itself — if the re-decision carried no admission the candidate
+	// was never refused there, so it cannot appear in the disclosure. This is
+	// the assertion that fails when the admission is dropped.
+	refused := false
+	for _, event := range capture.dispositions {
+		if event.OfferPoolDisposition == contestSetDisposition &&
+			event.Subject.CanonicalID == "team.v2:github:platform-hidden" {
+			refused = true
+		}
+	}
+	if !refused {
+		t.Fatalf("the member reachable ONLY through the confirmed-kind re-decision's own pool was never "+
+			"refused; the disclosure names %d refusal(s) and none of them is it, so that pass admitted it",
+			len(capture.dispositions))
 	}
 }
