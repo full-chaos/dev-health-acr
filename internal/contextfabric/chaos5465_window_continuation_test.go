@@ -1708,17 +1708,24 @@ func TestWindowContinuation_R3_TheInterpretedTimeBoundErrorCarriesItsOwnReason(t
 		Results:     &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
 		Telemetry:   telemetry,
 	})
-	_, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
-	if err == nil {
-		t.Fatalf("fixture defect: wanted an unanswerable time-bound error")
+	// CHAOS-5421 turned this exit from a bare error into a SERVED TERMINAL, so
+	// the pin asserts the terminal rather than an error -- the property under
+	// test is that the exit names its own reason, not how it reports itself.
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+	if err != nil {
+		t.Fatalf("wanted a served interpreted-time-bound terminal, got error %v", err)
+	}
+	if result.Status == "" {
+		t.Fatalf("fixture defect: no terminal served")
 	}
 	if len(telemetry.windowContinuationDecisions) != 1 {
 		t.Fatalf("want exactly 1 decision, got %d", len(telemetry.windowContinuationDecisions))
 	}
 	d := telemetry.windowContinuationDecisions[0]
 	t.Logf("F1: error=%v decision_reason=%q disposition=%q", err, d.Reason, d.Disposition)
-	if d.Reason == ContinuationReasonUnspecified {
-		t.Fatalf("F1 REGRESSION: decision_reason=%q on the interpreted time-bound error path -- `unspecified` is the fail-closed member and must never describe a real path", d.Reason)
+	if d.Reason != ContinuationReasonAsOfUnresolvable {
+		t.Fatalf("F1 REGRESSION: decision_reason=%q on the interpreted time-bound refusal, want %q. Asserting only 'not unspecified' let this pass while carrying a DIFFERENT member -- a pin must name the value it is protecting, not merely reject one wrong answer",
+			d.Reason, ContinuationReasonAsOfUnresolvable)
 	}
 }
 
@@ -1809,10 +1816,17 @@ func TestWindowContinuation_R3_TheRemovedReasonsAreGenuinelyUnreachable(t *testi
 type futureAsOfInterpreter struct{ family QuestionFamily }
 
 func (f futureAsOfInterpreter) Interpret(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, QuestionFamilyOutcome, error) {
-	future := time.Unix(9_000_000, 0).UTC()
+	// RE-DERIVED AGAINST CHAOS-5421, which landed while this branch was in
+	// review. A FUTURE as-of is no longer unanswerable -- it is CLAMPED and
+	// answered -- so a driver built on one sails past the refusal exit and is
+	// caught later by the interpreted-axis disqualifier, reaching a DIFFERENT
+	// member. The genuinely unanswerable shape on this axis is an ABSENT as-of
+	// (InterpretedTimeBoundAbsentOrZero). The enumeration pin caught this,
+	// because it asserts the driver still reaches the member it is written for
+	// -- which a presence-only assertion never would.
 	return InterpretedQuestion{
 		Shape: ShapeOpen, RequestedJudgment: "status",
-		TimeContext: TimeContext{Axis: TemporalValidTime, AsOf: &future},
+		TimeContext: TimeContext{Axis: TemporalValidTime},
 	}, QuestionFamilyOutcome{
 		Family: f.family, Source: QuestionFamilySourceModel,
 		WinningSampleIndex: 0,
@@ -1854,5 +1868,139 @@ func TestWindowContinuation_WithReasonNarrowsAndNeverWidensToUnspecified(t *test
 	renarrowed := widened.withReason(ContinuationReasonAsOfUnresolvable)
 	if renarrowed.Reason != ContinuationReasonAsOfUnresolvable {
 		t.Fatalf("withReason stopped narrowing after the guard fired: got %q", renarrowed.Reason)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// POST-REBASE PINS. CHAOS-5421 (#476) landed on main while this branch was in
+// review and replaced the exact statement one of these reasons hung off, so the
+// two changes now describe overlapping ground. These hold the seam between them.
+// ---------------------------------------------------------------------------
+
+// The two events describe THE SAME TURN, joined by one request id.
+//
+// CHAOS-5421 emits an interpreted-time-bound decision unconditionally; this
+// change emits a continuation decision on every window-receipt request. On a
+// turn that is both, an operator must be able to put them side by side -- and
+// the join has to be a fact, not an assumption, because the two were written by
+// different changes with no shared test until this one.
+func TestWindowContinuation_JoinsTheInterpretedTimeBoundEventOnOneTurn(t *testing.T) {
+	t.Parallel()
+
+	request := continuationRequest(validInvestigationRequest().Question)
+	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
+	harness := newContinuationHarness(t,
+		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam})
+
+	result := harness.investigate(t, request)
+	decision := harness.soleDecision(t)
+
+	// EXACTLY ONE of each on this turn: the continuation event's census is
+	// "every window-receipt request", and CHAOS-5421's is "every turn reaching
+	// the post-Interpret verdict". A turn that is both must produce one of each,
+	// never two of either.
+	if got := len(harness.telemetry.interpretedTimeBounds); got != 1 {
+		t.Fatalf("interpreted-time-bound events = %d, want exactly 1 on a turn that reached the verdict", got)
+	}
+	if decision.Disposition != ContinuationApplied {
+		t.Fatalf("fixture defect: wanted an applied continuation, got %q/%q", decision.Disposition, decision.Reason)
+	}
+	bound := harness.telemetry.interpretedTimeBounds[0]
+	t.Logf("same turn: continuation disposition=%q reason=%q | interpreted bound axis=%q outcome=%q clamped=%v | served status=%q",
+		decision.Disposition, decision.Reason, bound.Axis, bound.Outcome, bound.ClampApplied, result.Status)
+
+	// The two agree about the turn they describe: the continuation was admitted,
+	// which requires an ANSWERABLE bound, so the bound event must say so. A
+	// build where a continuation could be applied on an unanswerable bound would
+	// fail here -- which is the ordering CHAOS-5465's own disqualifier asserts,
+	// checked from the OTHER change's event rather than from its own.
+	if !bound.Answerable() {
+		t.Errorf("a continuation was APPLIED on a turn whose interpreted bound was not answerable (outcome=%q) -- the two events disagree about the same turn", bound.Outcome)
+	}
+	if bound.Axis != TemporalCurrent {
+		t.Errorf("bound axis = %q, want %q on an admitted continuation -- the interpreted-axis disqualifier should have refused anything else", bound.Axis, TemporalCurrent)
+	}
+}
+
+// MEASURED VALUES ARE PINNED BY VALUE, NOT BY PRESENCE (#482's lesson).
+//
+// applied_window is the one field on this event that carries measured content
+// rather than a closed token, and an earlier round already caught it declared,
+// logged and permanently empty. Asserting only that the key exists would not
+// have caught that, and would not catch a build that emitted a window with the
+// right shape and the wrong bounds.
+func TestWindowContinuation_TheAppliedWindowCarriesItsActualFrozenBounds(t *testing.T) {
+	t.Parallel()
+
+	request := continuationRequest(validInvestigationRequest().Question)
+	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
+	harness := newContinuationHarness(t,
+		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam})
+
+	result := harness.investigate(t, request)
+	decision := harness.soleDecision(t)
+	if decision.Disposition != ContinuationApplied {
+		t.Fatalf("fixture defect: wanted an applied continuation, got %q/%q", decision.Disposition, decision.Reason)
+	}
+
+	// The fixture's offer freezes 2026-05-01 -> 2026-08-01 as a 90-day window
+	// confirmed by clarification. Every one of those four components is
+	// asserted, because each is separately gettable-wrong: a build could carry
+	// the relative id and drop the bounds, or carry bounds from a different
+	// offer, or report the wrong provenance for a redeemed receipt.
+	const want = "trailing_90d|2026-05-01T00:00:00Z|2026-08-01T00:00:00Z|clarification_confirmed"
+	got := decision.AppliedWindowToken()
+	t.Logf("applied_window = %q", got)
+	if got != want {
+		t.Fatalf("applied_window = %q, want %q -- this field is MEASURED content, so it is pinned by value; presence alone would pass on the empty string this field shipped as once already", got, want)
+	}
+
+	// And it describes the window the turn actually served, not a value the
+	// event carries in isolation.
+	if result.EffectiveEvidenceWindow == nil {
+		t.Fatalf("served result carries no effective window while the event reports one applied")
+	}
+	if string(result.EffectiveEvidenceWindow.RelativeID) != "trailing_90d" {
+		t.Errorf("served window relative_id = %q, want trailing_90d -- the logged window must be the served one",
+			result.EffectiveEvidenceWindow.RelativeID)
+	}
+	if result.EffectiveEvidenceWindow.Start == nil || result.EffectiveEvidenceWindow.End == nil {
+		t.Fatalf("served window has no frozen bounds while the event reports them")
+	}
+	if result.EffectiveEvidenceWindow.Start.UTC().Format("2006-01-02") != "2026-05-01" ||
+		result.EffectiveEvidenceWindow.End.UTC().Format("2006-01-02") != "2026-08-01" {
+		t.Errorf("served window bounds = %s..%s, want 2026-05-01..2026-08-01",
+			result.EffectiveEvidenceWindow.Start.UTC().Format("2006-01-02"),
+			result.EffectiveEvidenceWindow.End.UTC().Format("2006-01-02"))
+	}
+}
+
+// Conflict counts are measured too: a build reporting a non-empty
+// conflict_fields with a zero count, or vice versa, is internally inconsistent.
+func TestWindowContinuation_TheConflictCountEqualsTheFieldsItNames(t *testing.T) {
+	t.Parallel()
+
+	request := continuationRequest(validInvestigationRequest().Question)
+	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
+	harness := newContinuationHarness(t,
+		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam})
+
+	harness.investigate(t, request)
+	d := harness.soleDecision(t)
+	t.Logf("conflict_reason=%q conflict_count=%d conflict_fields=%v", d.ConflictReason, d.ConflictCount(), d.ConflictFieldTokens())
+
+	if d.ConflictCount() != len(d.ConflictFieldTokens()) {
+		t.Errorf("conflict_count=%d but conflict_fields names %d components -- the number and the list must be the same measurement",
+			d.ConflictCount(), len(d.ConflictFieldTokens()))
+	}
+	if (d.ConflictCount() > 0) != (d.ConflictReason == ContinuationConflictNonWindowContext) {
+		t.Errorf("conflict_count=%d beside conflict_reason=%q -- a non-zero count with `none`, or a conflict token with zero components, is a line that contradicts itself",
+			d.ConflictCount(), d.ConflictReason)
+	}
+	if d.ConflictCount() == 0 {
+		t.Errorf("fixture defect: this arm forces a family AND subject-expression conflict, so a zero count means the comparison did not run")
 	}
 }
