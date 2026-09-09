@@ -1080,10 +1080,32 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 }
 
 func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, request InvestigationRequest) (InvestigationResult, error) {
+	// CHAOS-5465 D-c: the continuation decision is OBSERVABLE on EVERY request
+	// carrying a window receipt.
+	//
+	// DECLARED FIRST, ABOVE EVERY EARLY RETURN, and emitted from ONE deferred
+	// site. r3 found the previous placement short in both directions: an
+	// unanswerable caller time bound and an already-cancelled context both
+	// returned above it, so one published `unspecified` on a live line and the
+	// other published nothing at all. There is no ordering argument left to get
+	// wrong here -- the declaration precedes every `return` in this function.
+	//
+	// Built by CONSTRUCTOR, never a struct literal, so a field cannot default
+	// its way into the event; each exit below narrows the reason with
+	// withReason as it learns why the turn is ending.
+	continuation := newWindowContinuationDecision(request)
+	defer func() {
+		if e.telemetry == nil || !continuation.Observed {
+			return
+		}
+		e.telemetry.RecordWindowContinuationDecision(ctx, principal, continuation)
+	}()
 	if err := request.Validate(); err != nil {
+		continuation = continuation.withReason(ContinuationReasonRequestInvalid)
 		return InvestigationResult{}, fmt.Errorf("investigation request: %w", err)
 	}
 	if strings.TrimSpace(principal.OrgID) == "" {
+		continuation = continuation.withReason(ContinuationReasonPrincipalUnauthenticated)
 		return InvestigationResult{}, errors.New("authenticated organization is required")
 	}
 	// CHAOS-3781: historical questions are ANSWERED now, not refused --
@@ -1103,10 +1125,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// the request every layer below sees.
 	clampedRequestTime, err := resolveTimeContext(request.TimeContext, e.now())
 	if err != nil {
+		continuation = continuation.withReason(ContinuationReasonRequestTimeUnresolvable)
 		return InvestigationResult{}, err
 	}
 	request.TimeContext = clampedRequestTime
 	if err := ctx.Err(); err != nil {
+		continuation = continuation.withReason(ContinuationReasonRequestCancelled)
 		return InvestigationResult{}, err
 	}
 
@@ -1121,53 +1145,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// an optional reuse-only signal), this is REQUIRED infrastructure: no
 	// graph call can run without a key to read from, so a resolution
 	// failure here fails the whole investigation.
-	// CHAOS-5465 D-c: the continuation decision is OBSERVABLE on EVERY request
-	// carrying a window receipt -- including the ones that never reach the
-	// decision at all because a window veto or an ineligible shape ends the
-	// turn first, and including the ones where nothing was continued.
-	//
-	// DECLARED HERE, EMITTED FROM ONE DEFERRED SITE. Every early return
-	// between here and the decision below is a place a per-site emit would
-	// eventually be forgotten -- this function has more than a dozen of them
-	// and gains more -- and a forgotten emit is silent: the rate simply reads
-	// lower. With one deferred emitter a missing line has exactly one meaning,
-	// which is that the request carried no window receipt.
-	//
-	// THE INITIAL VALUE IS ALREADY HONEST. The window-only SHAPE is a pure
-	// function of the request, so it is decided here with no I/O; a path that
-	// returns before admission runs therefore reports `not_window_only` when
-	// that is true, and `unspecified` only when a decision site genuinely
-	// failed to record one. `unspecified` never means admission succeeded.
-	continuation := windowContinuationDecision{
-		Observed:       requestCarriesWindowReceipts(request),
-		Disposition:    ContinuationNotApplicable,
-		Reason:         ContinuationReasonUnspecified,
-		SeedSource:     CarrySeedNone,
-		ConflictReason: ContinuationConflictNone,
-		ConflictFields: []ContinuationConflictField{},
-	}
-	if continuation.Observed {
-		continuation.SeedSource = CarrySeedReceipt
-		if _, windowOnly := windowOnlyReferencedResultID(request); !windowOnly {
-			continuation.Reason = ContinuationReasonNotWindowOnly
-		}
-	}
-	defer func() {
-		if e.telemetry == nil || !continuation.Observed {
-			return
-		}
-		e.telemetry.RecordWindowContinuationDecision(ctx, principal, continuation)
-	}()
-
 	binding, err := e.graph.ResolveInvestigationBinding(ctx, principal)
 	if err != nil {
+		// CHAOS-5465 (r2 R2-2): a path the admission function never reached is
+		// not a decision site that forgot to record a reason.
+		continuation = continuation.withReason(ContinuationReasonBindingUnavailable)
 		// CHAOS-4088: StageGraphBinding, not StageResolution -- a binding
 		// outage never got as far as a subject/commit-gate query, and
 		// conflating the two populations is exactly what this split fixes.
-		// CHAOS-5465 (r2 R2-2): a path the admission function never reached is
-		// not a decision site that forgot to record a reason. `unspecified` is
-		// the fail-closed member and must never survive to the emitter.
-		continuation.Reason = ContinuationReasonBindingUnavailable
 		return InvestigationResult{}, stageError(StageGraphBinding, fmt.Errorf("resolve graph binding: %w", err))
 	}
 
@@ -1223,7 +1208,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// "unavailable"; the tier-ordering fact composeWindowExpandOption
 		// needs (pickWindowExpandTarget) is available from windowCanon.Effective
 		// alone, unlike gate 2's own offers-only read.
-		continuation.Reason = ContinuationReasonWindowConfirmationRequired
+		// r3 F4: no reason assigned -- this gate is unreachable for a request
+		// carrying a window receipt (see the member's absence in
+		// chaos5465_window_continuation.go for the evidence).
 		return e.windowConfirmationRequiredResult(ctx, principal, request, nil, *windowCanon.Effective, nil, WindowCanonicalizationGatedExplicitUnconfirmed, binding, StructureOfferMaterial{}, false, nil, nil, nil, ancestryRoot(request, receiptsNotYetValidated()))
 	}
 
@@ -1406,7 +1393,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			if reuseBudgetErr != nil {
 				return InvestigationResult{}, reuseBudgetErr
 			}
-			continuation.Reason = ContinuationReasonAnswerReused
+			// r3 F4: NO reason is assigned here, and that is deliberate. This
+			// return is unreachable for a request carrying a window receipt --
+			// reuseBypassReason refuses the reuse lookup for exactly that
+			// population (CHAOS-4998) -- so a reason assigned here would be a
+			// member nothing can produce, which reads as coverage and measures
+			// nothing. The production-driven enumeration pin asserts the
+			// unreachability rather than this site asserting a value.
 			return reused, nil
 		}
 	}
@@ -1595,6 +1588,16 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		e.telemetry.RecordInterpretedTimeBound(ctx, principal, interpretedTimeBound)
 	}
 	if !interpretedTimeBound.Answerable() {
+		// CHAOS-5465 (r3 F1), RE-SITED ONTO CHAOS-5421's OWN REFUSAL EXIT.
+		//
+		// The reason used to hang off a bare `resolveTimeContext` error return
+		// that no longer exists: CHAOS-5421 replaced it with a clamp-or-refuse
+		// verdict, so an unanswerable INTERPRETED bound now leaves through this
+		// branch and an answerable one is clamped and carries on. The
+		// continuation is therefore admitted only on the clamped path, and the
+		// refusal path is the one that names why -- which is the same shape as
+		// before, attached to the exit that actually exists.
+		continuation = continuation.withReason(ContinuationReasonAsOfUnresolvable)
 		// Returns before ResolveSubjects, DiscoverContext, ReadFacts and
 		// Synthesize ever run -- the same "no capability call pays for a
 		// question this engine will not answer" guarantee the refusal it

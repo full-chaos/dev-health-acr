@@ -155,14 +155,114 @@ func TestWindowContinuation_D0Probe_RedAtParentGreenAtTip(t *testing.T) {
 	}
 }
 
-// D-0 PROBE 1, NEGATIVE CONTROL. Same fixture, same window-only receipt, same
-// carrier -- but this turn resolves NOTHING of its own. applyCarriedPlan's
-// documented condition is then satisfied and the carry MUST apply.
+// D-0 PROBE 1, NEGATIVE CONTROLS. TWO of them, and r3 is why there are two.
 //
-// Without this arm the probe above is vacuous: "family_source was never
-// carried" would be indistinguishable from "the fixture's carrier was not
-// carriable at all" or "this harness cannot observe an applied carry".
-func TestWindowContinuation_D0ProbeControl_TheSameCarrierAppliesWhenThisTurnClassifiesNothing(t *testing.T) {
+// THE ORIGINAL CONTROL STOPPED DISCRIMINATING WHEN THE FIX LANDED. It asserted
+// `planCarries == 1` to prove the LEGACY applyCarriedPlan path still applies a
+// carrier -- which is what makes the probe's red at the parent meaningful. But
+// the r1 fix added a RecordPlanCarry emit inside applyAndRecordContinuation, so
+// at the tip that same count of 1 is satisfied by the NEW emitter, and the
+// control passed while proving nothing about the path it names. A control that
+// cannot fail for the reason it exists is not a control.
+//
+// The two are separated by ATTRIBUTION, using the signal that already
+// distinguishes them: an applied-carry emit is the CONTINUATION's when the
+// decision for that turn says `applied`, and the LEGACY path's when it does
+// not. Each control asserts one, and asserts the other is absent.
+
+// legacyAppliedCarries counts applied-carry emits ATTRIBUTABLE TO THE LEGACY
+// path -- i.e. emits on a turn where no continuation was applied. It returns 0
+// when the continuation applied, because then the emit is the new one.
+func legacyAppliedCarries(telemetry *recordingTelemetry) int {
+	for _, d := range telemetry.windowContinuationDecisions {
+		if d.Disposition == ContinuationApplied {
+			return 0
+		}
+	}
+	return len(telemetry.planCarries)
+}
+
+// continuationAppliedCarries is its twin: emits attributable to the NEW path.
+func continuationAppliedCarries(telemetry *recordingTelemetry) int {
+	for _, d := range telemetry.windowContinuationDecisions {
+		if d.Disposition == ContinuationApplied {
+			return len(telemetry.planCarries)
+		}
+	}
+	return 0
+}
+
+// CONTROL A -- THE LEGACY PATH. A request that is NOT a window-only
+// continuation (it also names a parent), whose turn classifies nothing, and
+// whose carrier is valid. The continuation cannot apply here, so an applied
+// carry can only have come from applyCarriedPlan.
+func TestWindowContinuation_D0ControlA_TheLegacyCarryStillApplies(t *testing.T) {
+	frozenStart := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	frozenEnd := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+
+	prior := validInvestigationResult()
+	prior.ResultID = "result_d0_probe1_turn1"
+	prior.ConfirmedStructure = nil
+	prior.AnswerPlan = &contractsv1.ContextFabricAnswerPlan{Family: QuestionFamilyDiscoveredCohortRanking}
+	prior.WindowClarification = &WindowClarification{Options: []WindowOption{{
+		ReceiptID: "winr_d0probe1aaaaaaaaaaaa", OptionID: "opt_90d", Label: "the last 90 days",
+		RelativeID: RelativeWindowTrailing90D, Start: &frozenStart, End: &frozenEnd,
+	}}}
+
+	request := validInvestigationRequest()
+	request.Question = prior.Question
+	request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: prior.ResultID, ReceiptID: "winr_d0probe1aaaaaaaaaaaa"}}
+	// The parent makes the shape NOT window-only, so admission refuses and the
+	// legacy carry is the only route left.
+	request.ParentResultID = prior.ResultID
+
+	store := &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}
+	telemetry := &recordingTelemetry{}
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	fresh := validInvestigationResult()
+
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+			bases:      provenCommitBases(project),
+		},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return fresh, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results:   store,
+		Telemetry: telemetry,
+	})
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	t.Logf("CONTROL A: served family=%q source=%q legacy_carries=%d continuation_carries=%d",
+		result.AnswerPlan.Family, result.AnswerPlan.FamilySource,
+		legacyAppliedCarries(telemetry), continuationAppliedCarries(telemetry))
+
+	if result.AnswerPlan.FamilySource != QuestionFamilySourceCarried {
+		t.Fatalf("CONTROL A FAILED: served family_source=%q, want carried -- the legacy carry must still apply, or the probe's red at the parent proves nothing",
+			result.AnswerPlan.FamilySource)
+	}
+	if legacyAppliedCarries(telemetry) != 1 {
+		t.Fatalf("CONTROL A FAILED: legacy-attributed applied-carry emits = %d, want 1", legacyAppliedCarries(telemetry))
+	}
+	if continuationAppliedCarries(telemetry) != 0 {
+		t.Fatalf("CONTROL A FAILED: %d emits attributed to the CONTINUATION on a turn it cannot have applied to", continuationAppliedCarries(telemetry))
+	}
+}
+
+// CONTROL B -- THE NEW PATH, AND THE PROOF THAT IT CANNOT SATISFY CONTROL A.
+// The window-only continuation shape, admitted. Its emit must attribute to the
+// continuation and NOT to the legacy path, so a build that routed the new emit
+// through the legacy attribution would fail here.
+func TestWindowContinuation_D0ControlB_TheContinuationEmitCannotPassAsLegacy(t *testing.T) {
 	frozenStart := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
 	frozenEnd := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 
@@ -195,29 +295,25 @@ func TestWindowContinuation_D0ProbeControl_TheSameCarrierAppliesWhenThisTurnClas
 		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
 			return fresh, nil
 		}),
-		// interpreterFunc's adapter reports unclassified/none -- the ONE
-		// condition under which applyCarriedPlan applies today.
 		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
 			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
 		}),
 		Results:   store,
 		Telemetry: telemetry,
 	})
-
 	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
 	if err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
-	if result.AnswerPlan == nil {
-		t.Fatalf("control served no answer plan")
+	t.Logf("CONTROL B: served family=%q source=%q legacy_carries=%d continuation_carries=%d",
+		result.AnswerPlan.Family, result.AnswerPlan.FamilySource,
+		legacyAppliedCarries(telemetry), continuationAppliedCarries(telemetry))
+
+	if continuationAppliedCarries(telemetry) != 1 {
+		t.Fatalf("CONTROL B FAILED: continuation-attributed emits = %d, want 1", continuationAppliedCarries(telemetry))
 	}
-	t.Logf("CONTROL: served family=%q family_source=%q applied-carry emits=%d carry-outcomes=%d",
-		result.AnswerPlan.Family, result.AnswerPlan.FamilySource, len(telemetry.planCarries), len(telemetry.planCarryOutcomes))
-	if result.AnswerPlan.Family != QuestionFamilyDiscoveredCohortRanking || result.AnswerPlan.FamilySource != QuestionFamilySourceCarried {
-		t.Fatalf("CONTROL FAILED (probe above is vacuous): want family=%q source=%q, got family=%q source=%q",
-			QuestionFamilyDiscoveredCohortRanking, QuestionFamilySourceCarried, result.AnswerPlan.Family, result.AnswerPlan.FamilySource)
-	}
-	if len(telemetry.planCarries) != 1 {
-		t.Fatalf("CONTROL FAILED: want exactly 1 applied-carry emit, got %d", len(telemetry.planCarries))
+	if legacyAppliedCarries(telemetry) != 0 {
+		t.Fatalf("CONTROL B FAILED: the NEW emitter satisfied the LEGACY attribution (%d) -- control A would then pass on a build where applyCarriedPlan never ran",
+			legacyAppliedCarries(telemetry))
 	}
 }

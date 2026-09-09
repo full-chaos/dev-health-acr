@@ -155,11 +155,24 @@ const (
 	ContinuationReasonBindingUnavailable ContinuationDecisionReason = "binding_unavailable"
 	// ContinuationReasonStructureVeto: structure canonicalisation vetoed.
 	ContinuationReasonStructureVeto ContinuationDecisionReason = "structure_veto"
-	// ContinuationReasonWindowConfirmationRequired: the turn stopped at the
-	// window-confirmation gate.
-	ContinuationReasonWindowConfirmationRequired ContinuationDecisionReason = "window_confirmation_required"
-	// ContinuationReasonAnswerReused: a stored answer served this turn.
-	ContinuationReasonAnswerReused ContinuationDecisionReason = "answer_reused"
+	// NOTE (r3 F4, second instance): there is deliberately NO
+	// `window_confirmation_required` member either. That gate fires only on
+	// windowCanon.ExplicitUnconfirmed, which window.go documents as true ONLY
+	// when the effective window came from the MCP bare-explicit field with
+	// Provenance==WindowInferredDefault -- "never question_stated or
+	// clarification_confirmed". A redeemed window receipt resolves to
+	// clarification_confirmed, so a request in this event's own population can
+	// never reach that gate. Found by giving the member a driver and watching
+	// the driver fail to reach it, which is the whole reason the enumeration
+	// now drives production instead of comparing two lists.
+	// NOTE (r3 F4): there is deliberately NO `answer_reused` member. A request
+	// carrying a window receipt BYPASSES answer reuse by construction --
+	// reuseBypassReason keys the bypass on the same receipt population
+	// carryReferencedResultIDs collects (CHAOS-4998), so it returns
+	// `prior_result_reference` for exactly the requests this event describes.
+	// A member no request in this event's own population can reach is a member
+	// that reads as coverage and measures nothing; it was removed rather than
+	// given a driver that could not exist.
 	// ContinuationReasonExplicitStructureHint: this request states an explicit
 	// expected kind or subject handle. That is a semantic change the caller
 	// made THIS turn, so the turn is not "changed only the window" -- it is
@@ -171,6 +184,23 @@ const (
 	// will end this turn. Evaluated INSIDE admission: a continuation must never
 	// be published as `applied` when a later step can undo it.
 	ContinuationReasonInterpretedAxisVeto ContinuationDecisionReason = "interpreted_axis_veto"
+	// ContinuationReasonRequestInvalid: the request failed validation, so the
+	// turn ended before anything about a continuation could be decided.
+	ContinuationReasonRequestInvalid ContinuationDecisionReason = "request_invalid"
+	// ContinuationReasonPrincipalUnauthenticated: no authenticated org.
+	ContinuationReasonPrincipalUnauthenticated ContinuationDecisionReason = "principal_unauthenticated"
+	// ContinuationReasonRequestTimeUnresolvable: the CALLER's own time bounds
+	// were unanswerable (the wire-side clamp).
+	ContinuationReasonRequestTimeUnresolvable ContinuationDecisionReason = "request_time_unresolvable"
+	// ContinuationReasonRequestCancelled: the caller's context was already
+	// cancelled. Its own member (r3 F2): a cancelled turn is not a decision
+	// site that forgot to record a reason.
+	ContinuationReasonRequestCancelled ContinuationDecisionReason = "request_cancelled"
+	// ContinuationReasonAsOfUnresolvable: the INTERPRETED time bounds were
+	// unanswerable (r3 F1). Distinct from the wire-side member above because
+	// the two name different actors -- the caller and the interpreter -- and
+	// collapsing them would hide which one produced the unanswerable bound.
+	ContinuationReasonAsOfUnresolvable ContinuationDecisionReason = "as_of_unresolvable"
 	// ContinuationReasonUnspecified: a decision site reached a return without
 	// recording a reason. Loud by construction, and NEVER expected to reach the
 	// emitter -- TestWindowContinuation_EveryReasonIsAssignedBySomePath
@@ -312,6 +342,49 @@ type windowContinuationDecision struct {
 // Applies reports whether the carried context is authoritative for this turn.
 func (d windowContinuationDecision) Applies() bool {
 	return d.Disposition == ContinuationApplied && d.Accepted != nil
+}
+
+// newWindowContinuationDecision is the ONLY way this package builds a decision.
+//
+// A CONSTRUCTOR RATHER THAN A STRUCT LITERAL, and r3 is why. Two exits above the
+// old literal -- an unanswerable caller time bound and an already-cancelled
+// context -- returned without assigning a reason, and one of them published
+// `unspecified` on a live line while the other published nothing at all. A
+// literal lets a new field default; a constructor makes every field a decision
+// someone had to make. Callers then narrow the reason with withReason as they
+// learn more.
+//
+// The initial reason is the strongest thing knowable with no I/O: the
+// window-only SHAPE is a pure function of the request, so a turn that ends
+// before admission still reports `not_window_only` when that is true rather
+// than the fail-closed member.
+func newWindowContinuationDecision(request InvestigationRequest) windowContinuationDecision {
+	decision := windowContinuationDecision{
+		Observed:       requestCarriesWindowReceipts(request),
+		Disposition:    ContinuationNotApplicable,
+		Reason:         ContinuationReasonUnspecified,
+		SeedSource:     CarrySeedNone,
+		ConflictReason: ContinuationConflictNone,
+		ConflictFields: []ContinuationConflictField{},
+	}
+	if decision.Observed {
+		decision.SeedSource = CarrySeedReceipt
+		if _, windowOnly := windowOnlyReferencedResultID(request); !windowOnly {
+			decision.Reason = ContinuationReasonNotWindowOnly
+		}
+	}
+	return decision
+}
+
+// withReason narrows the reason on a path that is about to end the turn. It
+// never widens back to `unspecified`: a site that already knows something more
+// specific keeps it.
+func (d windowContinuationDecision) withReason(reason ContinuationDecisionReason) windowContinuationDecision {
+	if reason == ContinuationReasonUnspecified {
+		return d
+	}
+	d.Reason = reason
+	return d
 }
 
 // requestCarriesWindowReceipts is the event's denominator.

@@ -999,8 +999,8 @@ func (*bindingReproError) Error() string { return "graph binding unavailable (re
 // the served provenance or the frame wrong cannot pass.
 // ---------------------------------------------------------------------------
 
-// everyContinuationReason is the closed vocabulary, listed ONCE. A member added
-// without a path, or a path added without a member, fails the enumeration pin.
+// everyContinuationReason is the closed vocabulary, listed ONCE. Every member
+// must have a DRIVER below that reaches it through the real engine entry point.
 func everyContinuationReason() []ContinuationDecisionReason {
 	return []ContinuationDecisionReason{
 		ContinuationReasonNone,
@@ -1014,50 +1014,213 @@ func everyContinuationReason() []ContinuationDecisionReason {
 		ContinuationReasonFreshContextUnavailable,
 		ContinuationReasonBindingUnavailable,
 		ContinuationReasonStructureVeto,
-		ContinuationReasonWindowConfirmationRequired,
-		ContinuationReasonAnswerReused,
 		ContinuationReasonExplicitStructureHint,
 		ContinuationReasonInterpretedAxisVeto,
+		ContinuationReasonRequestInvalid,
+		ContinuationReasonPrincipalUnauthenticated,
+		ContinuationReasonRequestTimeUnresolvable,
+		ContinuationReasonRequestCancelled,
+		ContinuationReasonAsOfUnresolvable,
 		ContinuationReasonUnspecified,
 	}
 }
 
-func TestWindowContinuation_EveryReasonIsAssignedBySomePath(t *testing.T) {
+// reasonDriver is a request shape that reaches ONE reason through
+// Engine.Investigate.
+type reasonDriver struct {
+	reason      ContinuationDecisionReason
+	mutate      func(*InvestigationRequest)
+	prior       func(InvestigationResult) InvestigationResult
+	interpreter QuestionInterpreter
+	bindingErr  bool
+	cancel      bool
+	storeEpoch  *int64
+	principal   *storage.Principal
+}
+
+// TestWindowContinuation_EveryReasonIsReachedThroughTheEngine is the r3 F4
+// rewrite, and the difference is the whole point.
+//
+// THE OLD PIN COMPARED TWO HAND-WRITTEN LISTS. It read no production code, so a
+// production path that assigned no reason could not fail it -- and that is
+// precisely how two such paths (an unanswerable caller bound, a cancelled
+// context) shipped and published `unspecified` on a live line. A pin that
+// cannot fail is worse than no pin, because it is counted as coverage.
+//
+// This one DRIVES every member through the public entry point and reads the
+// reason off the EMITTED event. A member with no driver fails here; a driver
+// that stops reaching its member fails here; and `unspecified` has no driver by
+// construction, which is the assertion that no real path produces it.
+func TestWindowContinuation_EveryReasonIsReachedThroughTheEngine(t *testing.T) {
 	t.Parallel()
 
-	// The reasons this package's own arms drive, each named by the pin that
-	// drives it. `unspecified` is deliberately ABSENT: it is the fail-closed
-	// member and no path may produce it, which is the assertion.
-	driven := map[ContinuationDecisionReason]string{
-		ContinuationReasonNone:                       "ForcedFamilyConflict / AnAgreeingProposal",
-		ContinuationReasonNotWindowOnly:              "Containment: plural receipts, parent alongside a receipt",
-		ContinuationReasonWindowVeto:                 "Containment: plural window receipts, unresolvable window receipt",
-		ContinuationReasonChangedQuestion:            "Containment: a changed question",
-		ContinuationReasonIndeterminateIdentity:      "Containment: indeterminate identity",
-		ContinuationReasonMissingContext:             "a carrier that loaded and carried no reading",
-		ContinuationReasonInvalidContext:             "Containment: a carrier from another graph epoch",
-		ContinuationReasonContextVersionMismatch:     "AVersionMismatchedCarrierIsWithheld",
-		ContinuationReasonFreshContextUnavailable:    "the interpreter returned an error",
-		ContinuationReasonBindingUnavailable:         "R1/R2: graph binding failed",
-		ContinuationReasonStructureVeto:              "Containment: an unresolvable typed receipt",
-		ContinuationReasonWindowConfirmationRequired: "the window-confirmation gate",
-		ContinuationReasonAnswerReused:               "a stored answer served the turn",
-		ContinuationReasonExplicitStructureHint:      "R2-1: explicit expected kinds / subject handles",
-		ContinuationReasonInterpretedAxisVeto:        "R2-4: the interpreted axis moved off current",
+	base := validInvestigationRequest().Question
+	futureAsOf := time.Unix(9_000_000, 0).UTC()
+	staleEpoch := int64(97)
+	unauthenticated := storage.Principal{}
+
+	drivers := []reasonDriver{
+		{reason: ContinuationReasonNone},
+		{
+			reason: ContinuationReasonNotWindowOnly,
+			mutate: func(r *InvestigationRequest) { r.ParentResultID = continuationOlderID },
+		},
+		{
+			reason: ContinuationReasonWindowVeto,
+			mutate: func(r *InvestigationRequest) {
+				r.PriorWindowReceipts = append(r.PriorWindowReceipts,
+					BoundSubjectReceipt{ResultID: continuationOlderID, ReceiptID: "winr_5465secondaaaaaaaa"})
+			},
+		},
+		{
+			reason: ContinuationReasonChangedQuestion,
+			prior:  func(p InvestigationResult) InvestigationResult { p.Question = driftQuestion; return p },
+		},
+		{
+			reason: ContinuationReasonIndeterminateIdentity,
+			mutate: func(r *InvestigationRequest) { r.Question = "?" },
+			prior:  func(p InvestigationResult) InvestigationResult { p.Question = "!!"; return p },
+		},
+		{
+			reason: ContinuationReasonMissingContext,
+			prior:  func(p InvestigationResult) InvestigationResult { p.AnswerPlan = nil; return p },
+		},
+		{reason: ContinuationReasonInvalidContext, storeEpoch: &staleEpoch},
+		{
+			reason: ContinuationReasonContextVersionMismatch,
+			prior: func(p InvestigationResult) InvestigationResult {
+				p.AnswerPlan.FamilyVersion = "question-family.v0-not-in-force"
+				return p
+			},
+		},
+		{
+			reason:      ContinuationReasonFreshContextUnavailable,
+			interpreter: forcedFamilyInterpreter{err: errBindingUnavailableForRepro},
+		},
+		{reason: ContinuationReasonBindingUnavailable, bindingErr: true},
+		{
+			reason: ContinuationReasonStructureVeto,
+			mutate: func(r *InvestigationRequest) {
+				r.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: continuationPriorID, ReceiptID: "kindr_5465unresolvable01"}}
+			},
+		},
+		{
+			reason: ContinuationReasonExplicitStructureHint,
+			mutate: func(r *InvestigationRequest) {
+				r.ExpectedKinds = []SubjectKind{contractsv1.ContextFabricSubjectProject}
+			},
+		},
+		{
+			reason:      ContinuationReasonInterpretedAxisVeto,
+			interpreter: axisMovingInterpreter{family: QuestionFamilyGroupedCohortStatus},
+		},
+		{
+			reason: ContinuationReasonRequestInvalid,
+			mutate: func(r *InvestigationRequest) { r.SchemaVersion = "not-a-schema-version" },
+		},
+		{reason: ContinuationReasonPrincipalUnauthenticated, principal: &unauthenticated},
+		{
+			reason: ContinuationReasonRequestTimeUnresolvable,
+			mutate: func(r *InvestigationRequest) {
+				r.TimeContext = TimeContext{Axis: TemporalValidTime, AsOf: &futureAsOf}
+			},
+		},
+		{reason: ContinuationReasonRequestCancelled, cancel: true},
+		{
+			reason:      ContinuationReasonAsOfUnresolvable,
+			interpreter: futureAsOfInterpreter{family: QuestionFamilyGroupedCohortStatus},
+		},
+	}
+
+	// EVERY MEMBER HAS A DRIVER, and `unspecified` deliberately has none.
+	driven := map[ContinuationDecisionReason]bool{}
+	for _, d := range drivers {
+		if driven[d.reason] {
+			t.Fatalf("duplicate driver for %q", d.reason)
+		}
+		driven[d.reason] = true
 	}
 	for _, reason := range everyContinuationReason() {
 		if reason == ContinuationReasonUnspecified {
+			if driven[reason] {
+				t.Errorf("`unspecified` has a driver -- it is the fail-closed member and no real path may produce it")
+			}
 			continue
 		}
-		if _, ok := driven[reason]; !ok {
-			t.Errorf("closed reason %q has no path that produces it -- either the member is dead and should go, or a decision site was added without a pin, which is how `unspecified` reaches a live line", reason)
-		}
-		if reason == "" {
-			t.Errorf("a reason member is the empty string; the vocabulary has no zero value by contract")
+		if !driven[reason] {
+			t.Errorf("closed reason %q has NO driver through the engine -- either the member is dead, or a decision site was added without one, which is how `unspecified` reaches a live line", reason)
 		}
 	}
-	if len(driven) != len(everyContinuationReason())-1 {
-		t.Errorf("the driven map has %d entries and the vocabulary has %d members (minus unspecified) -- they must move together", len(driven), len(everyContinuationReason())-1)
+
+	for _, d := range drivers {
+		t.Run(string(d.reason), func(t *testing.T) {
+			t.Parallel()
+
+			request := continuationRequest(base)
+			if d.mutate != nil {
+				d.mutate(&request)
+			}
+			prior := continuationPrior(continuationPriorID, base, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+			older := continuationPrior(continuationOlderID, base, QuestionFamilyDiscoveredCohortRanking, "")
+			if d.prior != nil {
+				prior = d.prior(prior)
+			}
+			project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+			telemetry := &recordingTelemetry{}
+			fresh := validInvestigationResult()
+
+			var interpreter QuestionInterpreter = forcedFamilyInterpreter{
+				family: QuestionFamilyDiscoveredCohortRanking,
+			}
+			if d.interpreter != nil {
+				interpreter = d.interpreter
+			}
+			deps := EngineDependencies{
+				Graph: graphReaderStub{
+					resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+					bases:      provenCommitBases(project),
+				},
+				Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+					return CanonicalFactBundle{}, nil
+				}),
+				Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+					return fresh, nil
+				}),
+				Interpreter: interpreter,
+				Results: &staticResultStore{
+					results:    map[string]InvestigationResult{prior.ResultID: prior, older.ResultID: older},
+					graphEpoch: d.storeEpoch,
+				},
+				Telemetry: telemetry,
+			}
+			if d.bindingErr {
+				deps.Graph = bindingFailingGraphReader{err: errBindingUnavailableForRepro}
+			}
+			principal := acceptancePrincipal()
+			if d.principal != nil {
+				principal = *d.principal
+			}
+			ctx := context.Background()
+			if d.cancel {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			//nolint:errcheck // several drivers END the turn with an error on purpose.
+			_, _ = mustReuseTestEngine(t, deps).Investigate(ctx, principal, request)
+
+			if len(telemetry.windowContinuationDecisions) != 1 {
+				t.Fatalf("got %d decisions, want exactly 1 -- this driver must reach the emitter", len(telemetry.windowContinuationDecisions))
+			}
+			got := telemetry.windowContinuationDecisions[0].Reason
+			t.Logf("driver for %q -> emitted reason %q", d.reason, got)
+			if got != d.reason {
+				t.Errorf("emitted reason = %q, want %q -- the driver no longer reaches the member it is written for", got, d.reason)
+			}
+			if got == ContinuationReasonUnspecified {
+				t.Errorf("`unspecified` reached the emitter on a real path")
+			}
+		})
 	}
 }
 
@@ -1503,6 +1666,157 @@ func (s sharedFrameInterpreter) Interpret(context.Context, storage.Principal, In
 		Family: s.family, Source: QuestionFamilySourceModel, Frame: s.frame,
 		WinningSampleIndex: 0,
 		WinningSample:      FamilySample{ModelFamily: s.family, GroupKind: contractsv1.ContextFabricSubjectProject},
+		Version:            QuestionFamilyTableVersion,
+	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// REGRESSION PINS FROM THE COUNTED r3 REVIEW (REQUEST CHANGES; two P1, one P2,
+// one P3 -- all four real, all four reproduced before any fix).
+//
+// The two P1s were the SAME class the r2 ruling was meant to close, at two exits
+// the ruling's own list did not reach: an error return, and a guard sitting
+// above where the decision was declared. That is why the decision is now built
+// by a CONSTRUCTOR at the very top of Investigate, above every `return` in the
+// function -- there is no ordering argument left to get wrong -- and why the
+// enumeration below DRIVES production instead of comparing two hand-written
+// lists, which is what let both slip through in the first place.
+// ---------------------------------------------------------------------------
+
+// F1 (P1): the interpreted time-bound error returns AFTER the deferred emitter
+// is installed and WITHOUT assigning a reason, so the line publishes
+// `unspecified` -- the fail-closed member -- on a real path.
+func TestWindowContinuation_R3_TheInterpretedTimeBoundErrorCarriesItsOwnReason(t *testing.T) {
+	request := continuationRequest(validInvestigationRequest().Question)
+	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
+	telemetry := &recordingTelemetry{}
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	fresh := validInvestigationResult()
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+			bases:      provenCommitBases(project),
+		},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return fresh, nil
+		}),
+		// An as-of AFTER the pinned test clock -> resolveTimeContext errors.
+		Interpreter: futureAsOfInterpreter{family: QuestionFamilyGroupedCohortStatus},
+		Results:     &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		Telemetry:   telemetry,
+	})
+	_, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+	if err == nil {
+		t.Fatalf("fixture defect: wanted an unanswerable time-bound error")
+	}
+	if len(telemetry.windowContinuationDecisions) != 1 {
+		t.Fatalf("want exactly 1 decision, got %d", len(telemetry.windowContinuationDecisions))
+	}
+	d := telemetry.windowContinuationDecisions[0]
+	t.Logf("F1: error=%v decision_reason=%q disposition=%q", err, d.Reason, d.Disposition)
+	if d.Reason == ContinuationReasonUnspecified {
+		t.Fatalf("F1 REGRESSION: decision_reason=%q on the interpreted time-bound error path -- `unspecified` is the fail-closed member and must never describe a real path", d.Reason)
+	}
+}
+
+// F2 (P1): a cancelled context returns BEFORE the decision and its deferred
+// emitter are created, so a request carrying a window receipt emits nothing --
+// contradicting the census this event's own contract states.
+func TestWindowContinuation_R3_ACancelledWindowRequestStillEmitsADecision(t *testing.T) {
+	request := continuationRequest(validInvestigationRequest().Question)
+	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
+	telemetry := &recordingTelemetry{}
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	fresh := validInvestigationResult()
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+			bases:      provenCommitBases(project),
+		},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return fresh, nil
+		}),
+		Interpreter: forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam},
+		Results:     &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		Telemetry:   telemetry,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := engine.Investigate(ctx, acceptancePrincipal(), request)
+	t.Logf("F2: error=%v decisions=%d", err, len(telemetry.windowContinuationDecisions))
+	if err == nil {
+		t.Fatalf("fixture defect: wanted a cancellation error")
+	}
+	if len(telemetry.windowContinuationDecisions) != 1 {
+		t.Fatalf("F2 REGRESSION: %d decision lines for a cancelled window-receipt request -- the event's contract says a missing line means only `no window receipt`", len(telemetry.windowContinuationDecisions))
+	}
+}
+
+// F3 (P2) IS PINNED ELSEWHERE, AND DELIBERATELY NOT HERE. The finding was that
+// the D-0 negative control had stopped discriminating the legacy
+// applyCarriedPlan path from the new continuation emitter. Its regression pins
+// are TestWindowContinuation_D0ControlA_TheLegacyCarryStillApplies and
+// TestWindowContinuation_D0ControlB_TheContinuationEmitCannotPassAsLegacy in
+// chaos5465_d0_probe_test.go, which assert the two attributions separately and
+// assert that neither path can satisfy the other's counter. A repro asserting
+// the OLD control's weakness cannot be kept green, because the old control no
+// longer exists.
+
+// F4 (P3): the two members the production-driven enumeration proved unreachable
+// stay removed, and this is what stops either being re-added on the belief that
+// a closed vocabulary should name every branch.
+//
+// Both were reachable-looking and neither is reachable for THIS event's
+// population, which is the only population it describes.
+func TestWindowContinuation_R3_TheRemovedReasonsAreGenuinelyUnreachable(t *testing.T) {
+	t.Parallel()
+
+	request := continuationRequest(validInvestigationRequest().Question)
+	if !requestCarriesWindowReceipts(request) {
+		t.Fatalf("fixture defect: this population is requests carrying a window receipt")
+	}
+
+	// `answer_reused`: reuse is BYPASSED for exactly this population --
+	// reuseBypassReason keys the bypass on the same receipt set
+	// carryReferencedResultIDs collects (CHAOS-4998).
+	bypass := reuseBypassReason(request, requestStructureCanonicalization{})
+	if bypass == "" {
+		t.Errorf("a window-receipt request no longer bypasses answer reuse -- if that is intended, `answer_reused` becomes reachable and needs a member AND a driver")
+	}
+	t.Logf("answer reuse bypassed for this population: %q", bypass)
+
+	// `window_confirmation_required`: that gate fires only on
+	// ExplicitUnconfirmed, which window.go documents as true ONLY for the
+	// MCP bare-explicit field at inferred_default -- "never question_stated or
+	// clarification_confirmed". A redeemed window receipt is
+	// clarification_confirmed.
+	for _, reason := range everyContinuationReason() {
+		switch string(reason) {
+		case "answer_reused", "window_confirmation_required":
+			t.Errorf("reason %q is back in the vocabulary; the enumeration proved it has no driver in this event's population, so it reads as coverage and measures nothing", reason)
+		}
+	}
+}
+
+// futureAsOfInterpreter classifies and returns an as-of AFTER the pinned test
+// clock, which resolveTimeContext refuses.
+type futureAsOfInterpreter struct{ family QuestionFamily }
+
+func (f futureAsOfInterpreter) Interpret(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, QuestionFamilyOutcome, error) {
+	future := time.Unix(9_000_000, 0).UTC()
+	return InterpretedQuestion{
+		Shape: ShapeOpen, RequestedJudgment: "status",
+		TimeContext: TimeContext{Axis: TemporalValidTime, AsOf: &future},
+	}, QuestionFamilyOutcome{
+		Family: f.family, Source: QuestionFamilySourceModel,
+		WinningSampleIndex: 0,
+		WinningSample:      FamilySample{ModelFamily: f.family},
 		Version:            QuestionFamilyTableVersion,
 	}, nil
 }
