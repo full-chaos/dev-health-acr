@@ -1979,6 +1979,26 @@ def test_the_pin_runner_fails_when_a_declared_pin_file_is_missing():
     assert empty.returncode != 0, empty.stdout
     assert "NO PIN FILES RAN" in empty.stdout, empty.stdout
 
+    # r7 (astra) P3: the pin file above only checks a MISSING file; nothing exercised a
+    # PRESENT child that genuinely FAILS, so `s=$?` (the runner's own exit-code capture)
+    # had no pin proving it is read rather than discarded (mutant: `s=0`). One real
+    # failing child, present and running, must be reported FAIL and must fail the whole
+    # runner.
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        (d / "run_pins.sh").write_bytes(runner.read_bytes())
+        (d / "testdata_corpus").mkdir()
+        failing = declared[0]
+        for n in declared:
+            (d / n).write_text("raise SystemExit(1)\n" if n == failing
+                               else "raise SystemExit(0)\n")
+        one_fails = subprocess.run(["bash", str(d / "run_pins.sh")],
+                                   capture_output=True, text=True, cwd=str(d))
+    assert one_fails.returncode != 0, (
+        f"a genuinely failing declared pin file did not fail the runner:\n"
+        f"{one_fails.stdout}")
+    assert f"FAIL  {failing}" in one_fails.stdout, one_fails.stdout
+
 
 def test_no_module_defines_the_same_name_twice():
     """A duplicate top-level definition is SILENT in Python -- the later one simply wins.
@@ -2142,6 +2162,15 @@ def test_the_committed_shape_space_is_regenerable_and_shows_no_divergence():
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":
+    # r7 (astra) P3: an EMPTY `TESTS` (a discovery break -- a rename, an indentation
+    # slip that de-dents every test out of module scope, a bug in the `startswith`
+    # filter) printed "0/0 pins pass" and exited 0 -- a runner that measured NOTHING
+    # read as a clean pass, the same emptiness trap `run_pins.sh`'s own declared-list
+    # guard exists to catch one level up.
+    if not TESTS:
+        print("NO TESTS DISCOVERED -- this file measured nothing; that is a failure, "
+              "not a pass")
+        raise SystemExit(1)
     failures = []
     for fn in TESTS:
         try:
