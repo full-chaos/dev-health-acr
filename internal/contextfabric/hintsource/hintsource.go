@@ -21,8 +21,6 @@
 // to one of these -- is recorded on the type below rather than left implied.
 package hintsource
 
-import "strings"
-
 // Source is one hint source this engine mints.
 type Source string
 
@@ -96,7 +94,13 @@ var registry = map[Source]Attributes{
 // carries and this system cannot forge, which is a contract change, not an
 // enumeration. This package narrows who can be misread; it does not close it.
 func Lookup(source string) Attributes {
-	if attributes, ok := registry[Source(strings.TrimSpace(source))]; ok {
+	// NOT trimmed here. An earlier draft called strings.TrimSpace on the way
+	// in, and no mutation arm could kill its removal, because the population it
+	// defended against does not exist: ContextFabricSubjectHint.Validate
+	// rejects an untrimmed source at the contract, before any of this runs, and
+	// that rejection is pinned. A guard nothing can observe is not defence in
+	// depth, it is a second answer to a question already answered elsewhere.
+	if attributes, ok := registry[Source(source)]; ok {
 		return attributes
 	}
 	return Attributes{EngineMinted: false, ContestExempt: true, ShortCircuitEligible: true}

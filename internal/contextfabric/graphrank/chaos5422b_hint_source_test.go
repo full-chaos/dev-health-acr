@@ -122,6 +122,33 @@ func TestTheRecheckIsEngineMintedAndStillShortCircuitEligible(t *testing.T) {
 	}
 }
 
+// THE CLASSIFIER'S OWN CONTRACT, pinned directly rather than through a
+// resolution — because for one member it CANNOT be pinned through a resolution.
+//
+// A mutation arm that made the contest read AUTHORSHIP instead of the contest
+// policy survived the whole end-to-end battery. It is a real difference for
+// exactly one member: the answer-reuse recheck is engine-minted AND
+// contest-exempt, so authorship and policy disagree there — but that member
+// cannot reach a refusing scope (its call site passes no frame and no confirmed
+// kind), so no end-to-end fixture can observe the difference. Rather than
+// disclose that arm as an allowed survivor, the property it tests is asserted
+// where it IS observable: on the function that makes the decision.
+func TestTheClassifierDecidesByContestPolicyNotByAuthorship(t *testing.T) {
+	t.Parallel()
+	for source, want := range map[string]candidateSource{
+		string(hintsource.PriorSubjectReceipt):             sourceEngineHint,
+		string(hintsource.AnswerReuseAuthorizationRecheck): sourceCallerHint,
+		"workbench":                  sourceCallerHint,
+		"a_source_no_producer_emits": sourceCallerHint,
+	} {
+		if got := hintCandidateSource(source); got != want {
+			t.Errorf("hintCandidateSource(%q) = %q, want %q — the classifier must read the CONTEST policy of "+
+				"the source, not its authorship. The reuse recheck is engine-minted and still exempt, and "+
+				"reading authorship here silently refuses it", source, got, want)
+		}
+	}
+}
+
 // ROW 4 OF THE AXES TABLE: the reuse recheck cannot reach a refusing contest
 // scope, and the pin asserts the REASON rather than the outcome — it drives the
 // recheck's own call shape and requires the scope to be `none`. If a future
