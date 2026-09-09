@@ -626,10 +626,24 @@ func TestAMixedHintListDoesNotCarryAReceiptOfTheWithheldKindThroughTheShortCircu
 		t.Fatalf("committed %v, want exactly the caller's own explicitly named anchor -- refusing it "+
 			"would break naming a subject by canonical id, which is not a substitution", res.Committed)
 	}
+	// DEMOTED, NOT DROPPED. The withheld subject must still reach the caller
+	// as a Proposed candidate: this exit returns immediately, so if it were
+	// dropped here the turn would collapse to a bare answer with no account of
+	// the subject it refused, and the caller would have nothing to clarify
+	// against.
+	proposed := 0
 	for _, candidate := range res.Candidates {
-		if candidate.Subject.Kind == contextfabric.SubjectTeam && candidate.State == contextfabric.ResolutionCommitted {
+		if candidate.Subject.Kind != contextfabric.SubjectTeam {
+			continue
+		}
+		if candidate.State == contextfabric.ResolutionCommitted {
 			t.Fatalf("candidate %q is still Committed after the short circuit", candidate.Subject.CanonicalID)
 		}
+		proposed++
+	}
+	if proposed != 1 {
+		t.Fatalf("the withheld subject appears %d times among the returned candidates, want exactly 1 -- "+
+			"withholding demotes it, it does not delete the caller's only account of what was refused", proposed)
 	}
 }
 
