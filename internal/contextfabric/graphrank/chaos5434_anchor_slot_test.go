@@ -27,11 +27,14 @@ package graphrank
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -425,5 +428,108 @@ func TestTheAnchorSlotRefusesAProtectedOnlyBudgetEvenWithASurplus(t *testing.T) 
 	}
 	if outcome.Displaced != 0 || outcome.DisplacedSubject != nil {
 		t.Errorf("outcome reports a displacement that must not have happened: %+v", outcome)
+	}
+}
+
+// P9 -- THE SLOT CHANGES WHAT IS OFFERED, NEVER WHAT WAS DECIDED.
+//
+// This is the property the rig proof would otherwise have had to establish,
+// pinned instead at the seam it actually lives on (team-lead ruling,
+// 2026-09-09): phase 3 takes the commit decision over the FULL untruncated
+// candidate set BEFORE phase 4 runs (resolution.go's own phase list --
+// "commit decision, over the FULL untruncated candidate set" then "truncation
+// LAST"), so a slot admitted at the cut can only change which already-decided
+// candidates come BACK. Asserted on the saturated crowd, over the whole
+// phase-3 output: the committed set, the commit BASES and the decision
+// DIGESTS must be identical with and without the slot.
+//
+// The prompt is EXCLUDED from the equality on purpose and asserted to change
+// instead. It is built from the RETAINED set by design, and naming the anchor
+// in it is the entire user-visible point of the reserve -- the same
+// distinction TestReservedKinds_DoNotChangeCommitDecisions draws, and its
+// author's first and wrong property.
+func TestTheAnchorSlotChangesTheOfferedListAndNotTheDecision(t *testing.T) {
+	t.Parallel()
+	build := func() map[string]contextfabric.SubjectCandidate {
+		pool := make(map[string]contextfabric.SubjectCandidate)
+		// A SATURATED CROWD OF THE RESERVED MEMBER KIND, which is the shape
+		// that leaves the ordinary victim rule with nothing to take. A crowd
+		// of some non-reserved kind would be displaced by the OLD rule and
+		// this pin would never reach the code it exists for.
+		for i := 0; i < 6; i++ {
+			c := contextfabric.SubjectCandidate{
+				Subject:    contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: fmt.Sprintf("project_%d", i), Label: fmt.Sprintf("chaos project %d", i)},
+				State:      contractsv1.ContextFabricResolutionAmbiguous,
+				Confidence: 0.9,
+			}
+			pool[SubjectKey(c.Subject)] = c
+		}
+		team := contextfabric.SubjectCandidate{
+			Subject:    contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team_1", Label: "CHAOS Team"},
+			State:      contractsv1.ContextFabricResolutionAmbiguous,
+			Confidence: 0.4,
+		}
+		pool[SubjectKey(team.Subject)] = team
+		return pool
+	}
+	reserved := []contextfabric.SubjectKind{contextfabric.SubjectProject, contextfabric.SubjectTeam}
+
+	call := func(slot anchorReservedSlot) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
+		return resolveFromMergedCandidatesWithAnchorSlot(
+			build(), map[string]string{}, map[string]bool{}, 3, true, false,
+			nil, 0, false, 10, 20, true,
+			DefaultCommitGatePolicy(), nil, nil, false, nil, "", "", false, false, reserved, slot)
+	}
+
+	without, withoutBases, withoutDigests := call(anchorReservedSlot{})
+	with, withBases, withDigests := call(anchorReservedSlot{Kind: contextfabric.SubjectTeam, Source: anchorPoolKindScopeReceipt})
+
+	anchorIn := func(res contextfabric.SubjectResolution) bool {
+		for _, c := range res.Candidates {
+			if c.Subject.Kind == contextfabric.SubjectTeam {
+				return true
+			}
+		}
+		return false
+	}
+	// NON-VACUITY, both directions. Without these the equality below is
+	// "nothing happened equals nothing happened".
+	if anchorIn(without) {
+		t.Fatal("setup is vacuous: the anchor survived truncation WITHOUT the slot, so this is not the starved shape")
+	}
+	if !anchorIn(with) {
+		t.Fatal("setup is vacuous: the slot admitted nothing, so 'the decision is unchanged' proves nothing")
+	}
+
+	// THE PHASE-3 OUTPUT, whole.
+	if len(without.Committed) != len(with.Committed) {
+		t.Fatalf("committed COUNT changed: without=%v with=%v -- the slot moved a commit decision", without.Committed, with.Committed)
+	}
+	for i := range without.Committed {
+		if without.Committed[i] != with.Committed[i] {
+			t.Errorf("committed[%d] changed: %v -> %v", i, without.Committed[i], with.Committed[i])
+		}
+	}
+	if !reflect.DeepEqual(withoutBases, withBases) {
+		t.Errorf("commit BASES changed: %v -> %v -- the standing of a commit is part of the decision, not of the offer", withoutBases, withBases)
+	}
+	if !reflect.DeepEqual(withoutDigests, withDigests) {
+		t.Errorf("commit decision DIGESTS changed: %v -> %v", withoutDigests, withDigests)
+	}
+	if without.RetrievalDegraded != with.RetrievalDegraded {
+		t.Errorf("RetrievalDegraded changed: %v -> %v", without.RetrievalDegraded, with.RetrievalDegraded)
+	}
+
+	// WHAT IS ALLOWED TO CHANGE, asserted positively so a build that stopped
+	// offering the anchor cannot pass this test by changing nothing at all.
+	if len(without.Candidates) != len(with.Candidates) {
+		t.Errorf("candidate COUNT changed: %d -> %d; the slot must displace, never grow the budget",
+			len(without.Candidates), len(with.Candidates))
+	}
+	if with.ClarificationPrompt == without.ClarificationPrompt {
+		t.Errorf("clarification prompt unchanged (%q); offering the anchor to the caller is the point of the slot", with.ClarificationPrompt)
+	}
+	if !strings.Contains(with.ClarificationPrompt, "CHAOS Team") {
+		t.Errorf("clarification prompt = %q, want it to name the anchor the slot admitted", with.ClarificationPrompt)
 	}
 }
