@@ -56,6 +56,7 @@ HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 
 import attempt_classes as AC     # noqa: E402
+import contract              # noqa: E402
 import harness               # noqa: E402
 import engine_failures as EF     # noqa: E402
 import merge_corpus as MC        # noqa: E402
@@ -641,7 +642,11 @@ def test_the_real_harness_and_the_classifier_agree_over_the_executed_space():
     qid = CORPUS[0]["id"]
     question = CORPUS[0]["text"]
 
-    statuses = [200, 201, 400, 413, 422, 500, 502, 504]
+    # The ruled space. 0 is not a status a server can send -- it is what `harness.post`
+    # writes when no exchange happened at all -- so that cell is driven by pointing the
+    # producer at a CLOSED port, which is the real transport failure rather than a
+    # simulation of one.
+    statuses = [200, 201, 302, 399, 400, 413, 422, 500, 504]
     bodies = [
         ("served", {"result": {"status": "complete", "claimed_facts": [{"a": 1}]}}),
         ("error", {AC.ERROR_BODY_KEY: "upstream exploded"}),
@@ -667,6 +672,7 @@ def test_the_real_harness_and_the_classifier_agree_over_the_executed_space():
     saved_base, saved_out = harness.BASE, harness.OUTDIR
     served_seen = failed_seen = 0
     disagreements = []
+    ok200_without_clean = []
     with tempfile.TemporaryDirectory() as tmp, _ScriptedServer() as srv:
         harness.BASE = f"http://127.0.0.1:{srv.port}/api/investigations"
         harness.OUTDIR = Path(tmp)
@@ -717,10 +723,45 @@ def test_the_real_harness_and_the_classifier_agree_over_the_executed_space():
                 if unknown:
                     disagreements.append((status, bname, "unknown-body-key", sorted(unknown)))
 
+                if AC.classify(written) == "ok_200":
+                    body = written.get("response") or {}
+                    clean = (contract.is_success_status(written.get("status"))
+                             and not contract.body_failure_keys(body)
+                             and not isinstance(body.get("failure"), dict))
+                    if not clean:
+                        ok200_without_clean.append((status, bname, written.get("status")))
                 served_seen += bool(want_served)
                 failed_seen += (not want_served)
         finally:
             harness.BASE, harness.OUTDIR = saved_base, saved_out
+
+    # THE TRANSPORT CELL: a closed port, so `harness.post` takes its own transport arm.
+    with tempfile.TemporaryDirectory() as tmp:
+        import socket
+        probe = socket.socket()
+        probe.bind(("127.0.0.1", 0))
+        dead_port = probe.getsockname()[1]
+        probe.close()                       # nothing is listening there now
+        saved_base2, saved_out2 = harness.BASE, harness.OUTDIR
+        harness.BASE = f"http://127.0.0.1:{dead_port}/api/investigations"
+        harness.OUTDIR = Path(tmp)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                harness.run_replicate(qid, question, 999, warn=lambda *_a, **_k: None)
+            RS.UNSEQUENCED.clear()
+            files = RS.attempt_files(harness.OUTDIR, qid, 999)
+            assert files, "the producer wrote no artefact for a refused connection"
+            ok, written, _r = VAL.load_attempt(files[-1])
+        finally:
+            harness.BASE, harness.OUTDIR = saved_base2, saved_out2
+    assert ok, "the transport artefact the producer wrote is not loadable"
+    assert not contract.reached_the_service(written.get("status")), written.get("status")
+    assert AC.classify(written) == "transport_failure", AC.classify(written)
+    assert AC.failed(written) is True
+    assert contract.body_failure_keys(written.get("response") or {}), (
+        "the producer's transport body carries no key from the shared failure set")
+    served_seen += 0
+    failed_seen += 1
 
     assert srv.requests >= len(statuses) * len(bodies), (
         f"the harness made {srv.requests} requests over "
@@ -731,6 +772,11 @@ def test_the_real_harness_and_the_classifier_agree_over_the_executed_space():
         f"disagree about one artefact: {disagreements[:5]}")
     # The sweep must contain BOTH verdicts, or half of the crossing is free.
     assert served_seen and failed_seen, (served_seen, failed_seen)
+    # THE RULED INVARIANT, stated once over the executed space: nothing reads ok_200
+    # without the producer's served status AND a body carrying neither failure signal.
+    assert not ok200_without_clean, (
+        "cells classified ok_200 without a served status and a clean body: "
+        f"{ok200_without_clean[:5]}")
 
 
 def test_the_measured_shapes_of_the_live_run_all_classify_correctly():
@@ -1103,7 +1149,10 @@ def test_every_file_on_disk_is_accounted_for():
     # unsequenced file now makes the row unmeasured at EVERY count.
     for extra in ("q-a-rep1-t?-a2.json", "q-a-rep1-tX-a1.json",
                   "q-a-rep1-t1-a1-extra.json", "q-a-rep1-t1-a.json"):
-        for harness_n in (None, 2, 3, 1, 0):
+        # As ruled: sequenced, files-on-disk, files+1 -- the three counts that matter,
+        # rather than one chosen value. `sequenced` is the count that let review round 2's
+        # defect through, so it leads.
+        for harness_n in (2, 3, 4, None, 0):
             with tempfile.TemporaryDirectory() as tmp:
                 out, written = _write_turns(tmp, {1: [_attempt(504)], 2: [_served()]})
                 (out / extra).write_text(json.dumps(_attempt(504)))
@@ -1162,15 +1211,18 @@ def test_a_row_with_no_artefacts_at_all_is_unmeasured():
     with tempfile.TemporaryDirectory() as tmp:
         out, _ = _write_turns(tmp, {})
         empty = _diagnose(out, harness_attempts=2)
-        # ...and the same empty walk with NO harness count is reconciled: the check is
-        # about disagreement, not about emptiness.
+        # ...and the same empty walk with NO harness count is ALSO unmeasured. A row
+        # nobody can reconcile has not been reconciled; calling it measured because the
+        # count is absent is the false-zero move one level up.
         silent = _diagnose(out, harness_attempts=None)
     assert empty["attempts_total"] == 0 and empty["attempt_outcomes"] == [], empty
     assert empty["attempts_retried"] == 0, empty
     assert empty["attempts_reconciled"] is False, \
         "a row with no artefacts against a harness that made 2 attempts is NOT measured"
     assert set(empty["attempt_class_n"]) == set(AC.CLASSES), empty
-    assert silent["attempts_reconciled"] is True, silent
+    assert silent["attempts_reconciled"] is False, (
+        "a row with no harness count is not reconciled -- absence of the check is not a "
+        "pass, the same rule the merge already applies to a missing flag")
     # ...and the merge refuses the unreconciled one rather than summing its zeros.
     refused = MC.attempt_class_totals([{"corpus_id": "q-a", **empty}])
     assert refused["attempt_classes_unavailable"] == 1, refused
@@ -1184,7 +1236,7 @@ def test_reconciliation_over_the_enumerated_harness_counts():
     and it must hold in both directions of inequality."""
     with tempfile.TemporaryDirectory() as tmp:
         out, _ = _write_turns(tmp, {1: [_attempt(504), _served()]})
-        for harness_n, want in [(None, True), (2, True), (1, False), (3, False), (0, False)]:
+        for harness_n, want in [(None, False), (2, True), (1, False), (3, False), (0, False)]:
             diag = _diagnose(out, harness_attempts=harness_n)
             assert diag["attempts_total"] == 2, diag
             assert diag["attempts_reconciled"] is want, (harness_n, diag["attempts_reconciled"])
@@ -1415,8 +1467,15 @@ def test_one_classifier_serves_both_counters():
         f"run_shard does not CALL the shared frozen predicates: {shard}"
     assert "legacy_engine_failure_kind" in calls_into("engine_failures.py", "attempt_classes"), \
         "engine_failures does not CALL the shared ladder"
-    assert "is_success_status" in calls_into("merge_corpus.py", "attempt_classes"), \
-        "merge_corpus does not CALL the shared success predicate"
+    assert "is_success_status" in calls_into("merge_corpus.py", "contract"), \
+        "merge_corpus does not CALL the SHARED CONTRACT's success predicate"
+    assert "is_success_status" in calls_into("harness.py", "contract"), \
+        "the PRODUCER does not CALL the shared contract's success predicate"
+    # ...and the producer must NOT import the classifier: the direction of that dependency
+    # would assert that the consumer defines the contract. Both import `contract`, which
+    # imports nothing.
+    assert calls_into("harness.py", "attempt_classes") == set(), \
+        "the producer imports the classifier -- the contract must flow from `contract.py`"
     # NEGATIVE CONTROL: the same walk over a module that genuinely does not use it must
     # come back empty, so the assertion is not satisfied by the walk itself.
     assert calls_into("attempt_order.py", "attempt_classes") == set()
@@ -1484,6 +1543,66 @@ def test_the_pin_runner_fails_when_a_declared_pin_file_is_missing():
     empty = run_with([])
     assert empty.returncode != 0, empty.stdout
     assert "NO PIN FILES RAN" in empty.stdout, empty.stdout
+
+
+def test_no_module_spells_the_contract_itself():
+    """THE LITERAL GUARD. A second spelling is how the two sides drift apart again.
+
+    `contract.py` owns the served status and the failure body keys. No other module in
+    this directory may write either as a literal -- not the producer, not the classifier,
+    not the merge. Asserted on the AST so a number inside a comment or a docstring cannot
+    satisfy or trip it, and with a NEGATIVE CONTROL that plants the literal and requires
+    the check to catch it.
+    """
+    served = sorted(contract.SERVED_STATUSES)
+    keys = set(contract.FAILURE_BODY_KEYS)
+
+    def literals(path):
+        tree = _ast.parse((HERE / path).read_text())
+        nums, strs = set(), set()
+        for n in _ast.walk(tree):
+            if isinstance(n, _ast.Constant):
+                if isinstance(n.value, int) and not isinstance(n.value, bool):
+                    nums.add(n.value)
+                elif isinstance(n.value, str):
+                    strs.add(n.value)
+        return nums, strs
+
+    # ONE narrow, EXPLAINED exemption, tied to a fact rather than to convenience:
+    # `merge_corpus` publishes a row BUCKET literally named "error", a different closed
+    # vocabulary that happens to collide with the producer's body key. The exemption is
+    # asserted against that fact below, so it cannot quietly become a licence.
+    exempt = {("merge_corpus.py", contract.ERROR_BODY_KEY)}
+    assert contract.ERROR_BODY_KEY in MC.BUCKETS, (
+        "the merge_corpus exemption exists because the body key collides with a published "
+        f"BUCKET name; that is no longer true, so the exemption must go: {MC.BUCKETS}")
+
+    offenders = []
+    for path in ("harness.py", "attempt_classes.py", "merge_corpus.py", "run_shard.py",
+                 "engine_failures.py"):
+        nums, strs = literals(path)
+        for st in served:
+            if st in nums:
+                offenders.append((path, "served status", st))
+        for k in keys & strs:
+            if (path, k) not in exempt:
+                offenders.append((path, "failure body key", k))
+    assert not offenders, (
+        "the contract is spelled outside contract.py -- a second spelling is how the "
+        f"producer and the readers drift apart: {offenders}")
+
+    # NEGATIVE CONTROL: the check must actually catch a planted literal, or it is inert.
+    import tempfile as _t
+    with _t.TemporaryDirectory() as tmp:
+        planted = Path(tmp) / "planted.py"
+        planted.write_text(f"x = {served[0]}\ny = {sorted(keys)[0]!r}\n")
+        tree = _ast.parse(planted.read_text())
+        nums = {n.value for n in _ast.walk(tree)
+                if isinstance(n, _ast.Constant) and isinstance(n.value, int)}
+        strs = {n.value for n in _ast.walk(tree)
+                if isinstance(n, _ast.Constant) and isinstance(n.value, str)}
+        assert served[0] in nums and (keys & strs), \
+            "the literal check cannot see a planted literal; it proves nothing"
 
 
 def test_the_committed_shape_space_is_regenerable_and_shows_no_divergence():

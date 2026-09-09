@@ -29,6 +29,8 @@ function and its pin. An earlier hand-reconstruction agreed with the original ev
 except one column and was believed for three review rounds.
 """
 
+import contract
+
 # The closed, total vocabulary. Ordered as a reader reads a run: the served case, the
 # deadline family, the two ACR-side rejections, the engine defect, then the catch-alls.
 CLASSES = (
@@ -134,52 +136,36 @@ def _statuses(attempt):
             upstream if isinstance(upstream, int) else None)
 
 
-# THE success status, named once. codex r4 P1: `failed()` accepted all of [200, 400) while
-# the harness accepts ONLY 200 (`harness.py`: `if status == 200 or not is_retryable(...)`)
-# and `merge_corpus.classify` buckets `http != 200` as `error`. A 201 therefore classified
-# `ok_200` at attempt level while its ROW bucketed `error` -- one artefact, two verdicts,
-# which is the disagreement this module exists to make impossible. Worse, a pin of mine
-# asserted 201/204/302/399 were `ok_200` as a "positive control", so the fixture certified
-# the disagreement rather than testing for it.
-#
-# There is now ONE definition of served, here, and `merge_corpus` imports it rather than
-# spelling `!= 200` again.
-SUCCESS_STATUS = 200
+# THE contract lives in `contract.py` and NOTHING here spells it. codex r4 P1 (this cut's
+# ancestor) found `failed()` accepting all of [200,400) while the producer accepts only
+# 200, so a 201 classified `ok_200` while its own row bucketed `error` -- one artefact,
+# two verdicts. Review round 2 then found the pin that was supposed to police that had
+# been DERIVING the producer's contract by AST and getting it right by accident. Both
+# sides now import one value; a literal spelled anywhere else fails a pin.
+is_success_status = contract.is_success_status
+body_failure_keys = contract.body_failure_keys
+ERROR_BODY_KEY = contract.ERROR_BODY_KEY
+FAILURE_BODY_KEYS = contract.FAILURE_BODY_KEYS
 
 
-def is_success_status(status):
-    """Is this HTTP status the one the PRODUCER treats as served? 200, and only 200.
+def is_valid_count(value):
+    """Is this a value a class counter may legitimately hold?
 
-    THE PRODUCER IMPORTS THIS. `harness.run_replicate` asks this function rather than
-    comparing to a literal of its own, so the producer and the consumer cannot hold
-    different opinions about what "served" means -- not because a test checks that they
-    agree, but because there is only one value. Review round 2 retired the previous
-    arrangement, where a pin DERIVED the producer's accepted status by walking its AST:
-    the walk was decoration and the function returned a hard-coded 200, so a producer that
-    widened its accepted range was undetectable and every pin still passed.
+    codex r1 P1: `attempt_class_totals` validated the class table's KEY SET and nothing
+    about its VALUES, and `counts[name] or 0` turned a `None` into a PUBLISHED MEASURED
+    ZERO -- the exact guarantee that function exists to make, defeated through the one
+    axis nobody had enumerated. Measured: `None` published zeros, a negative published a
+    negative total, a float published 1.5, `True` published 1, and a string crashed.
+
+    A count is a non-negative int. `bool` is EXCLUDED explicitly because it is an int
+    subclass in Python, so `True` would otherwise pass as the count 1 -- the same trap
+    `validators.py` already guards on `attempt.status`.
+
+    No UPPER bound is imposed: a large count is not evidence of corruption, and inventing
+    a ceiling here would be a policy nobody decided. The huge case is pinned as ACCEPTED
+    so the omission is deliberate rather than forgotten.
     """
-    return status == SUCCESS_STATUS
-
-
-# The body keys the PRODUCER writes to mean "this did not work", shared the same way and
-# for the same reason. `harness.post` builds its failure bodies FROM this set, and
-# `failed()` reads the same set, so a new failure key cannot exist on one side only.
-#
-# Review round 2 killed the alternative: a pin that scanned `harness.post`'s AST for dict
-# literals under `Return` nodes. The HTTP-error body is an ASSIGNMENT, not a return, so
-# the scan never saw it -- and it produced the right answer anyway, BY ACCIDENT, because
-# the transport arm's returned dict happens to carry the same key. A producer mutant
-# adding `fatal` there classified `ok_200` with the class-invariant pin passing. A proxy
-# for a contract hollows out silently; a shared value cannot.
-ERROR_BODY_KEY = "error"
-FAILURE_BODY_KEYS = frozenset({ERROR_BODY_KEY})
-
-
-def body_failure_keys(response):
-    """Which of the producer's failure keys this response body carries."""
-    if not isinstance(response, dict):
-        return frozenset()
-    return FAILURE_BODY_KEYS & set(response)
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 def is_upstream_504(attempt):
@@ -287,7 +273,7 @@ def classify(attempt):
     # A transport failure has no status at all to classify from: harness.post writes 0.
     # It is its own class rather than an "other_5xx", because "we never reached the
     # service" and "the service answered 5xx" are different facts about a run.
-    if http is not None and http < 200:
+    if not contract.reached_the_service(http):
         return "transport_failure"
     # Keyed on the CODE, not on a status pair: the consumer's 502 and the upstream's 200
     # are both true, and neither one alone names what happened.

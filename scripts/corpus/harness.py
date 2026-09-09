@@ -57,11 +57,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from corpus import CORPUS, REQUESTED_KIND, ANCHOR_KIND  # noqa: E402
 from validators import validate_attempt, validate_response  # noqa: E402
-# CHAOS-5380 review round 2: the producer and the consumer SHARE these two values rather
-# than a pin deriving one from the other. A derived oracle was measured hollowing out
-# silently -- it read the source shape its author thought of and got the right answer by
-# accident. There is nothing to derive when there is one value.
-import attempt_classes  # noqa: E402
+# CHAOS-5380 review round 2: the producer and every reader SHARE these values rather than
+# a pin deriving one from the other -- a derived oracle was measured hollowing out
+# silently, reading the source shape its author thought of and getting the right answer by
+# accident. They live in `contract`, which imports nothing: the PRODUCER MUST NOT IMPORT
+# THE CLASSIFIER, or the direction of the dependency starts asserting something about who
+# defines the contract.
+import contract  # noqa: E402
 
 # ONE env var, default
 # byte-identical to the frozen value, so an unset environment reproduces the rig
@@ -118,9 +120,9 @@ def post(body):
         except Exception:
             # Built FROM the shared key set, so this body cannot carry a failure key
             # the classifier does not know about.
-            payload = {attempt_classes.ERROR_BODY_KEY: "unparseable body"}
+            payload = {contract.ERROR_BODY_KEY: "unparseable body"}
     except Exception as e:  # noqa: BLE001 -- a transport failure is a row, not a crash
-        return 0, {attempt_classes.ERROR_BODY_KEY: str(e)}, time.time() - t0
+        return 0, {contract.ERROR_BODY_KEY: str(e)}, time.time() - t0
     return status, validate_live_payload(status, payload), time.time() - t0
 
 
@@ -264,13 +266,13 @@ def run_replicate(qid, question, rep, warn=print):
             with open(fname, "w") as f:
                 json.dump({"request": body, "status": status, "response": payload, "dt": round(dt, 1)}, f, indent=2)
             print(f"  [{tag}] t{turn} a{attempt}: http={status} dt={dt:.1f}s", flush=True)
-            if attempt_classes.is_success_status(status) or not is_retryable(status, payload):
+            if contract.is_success_status(status) or not is_retryable(status, payload):
                 break
             print(f"    retryable failure ({(payload.get('failure') or {}).get('code')}), retrying...", flush=True)
         total_attempts += attempts_used
         last_status, last_payload = status, payload
 
-        if not attempt_classes.is_success_status(status):
+        if not contract.is_success_status(status):
             chain.append(f"t{turn}=http{status}")
             break
 
@@ -315,7 +317,7 @@ def run_replicate(qid, question, rep, warn=print):
     # never in place of it (continuing measures what the engine
     # does with an unresolved kind need, which requires seeing its real
     # terminal, not a harness-synthesized one).
-    if attempt_classes.is_success_status(last_status):
+    if contract.is_success_status(last_status):
         final_status = (last_payload or {}).get("result", {}).get("status")
         if final_status == "clarification_required" and turn >= MAX_TURNS:
             final_status = "clarification_required(max_turns_exhausted)"

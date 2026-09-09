@@ -101,12 +101,15 @@ def attempt_diagnostics(outdir, qid, rep, harness_attempts=None):
     overrun_413_n     likewise; overrun_detail keeps the LAST 413's continuation
     """
     outcomes = []
+    files_seen = 0
     counts = attempt_classes.zero_counts()
     n504 = n413 = 0
     # attempts per TURN, so a retry can be told from a follow-up turn.
     per_turn = {}
     overrun = None
-    for f in attempt_files(outdir, qid, rep):
+    sequenced_files = attempt_files(outdir, qid, rep)
+    files_seen = len(sequenced_files) + len(sorted(set(UNSEQUENCED.get(qid) or [])))
+    for f in sequenced_files:
         parsed, seq = parse_attempt_name(f)
         turn, index = (seq[1], seq[2]) if parsed else (None, len(outcomes) + 1)
         per_turn[turn] = per_turn.get(turn, 0) + 1
@@ -156,13 +159,20 @@ def attempt_diagnostics(outdir, qid, rep, harness_attempts=None):
     # this seam has been caught by two counters disagreeing; this makes them disagree
     # OUT LOUD rather than quietly.
     unsequenced = sorted(set(UNSEQUENCED.get(qid) or []))
-    # Review round 2: this compared the harness's count against the SEQUENCED outcomes
-    # only, so a row that visibly dropped an artefact still reconciled and the merge
-    # published its totals -- the dropped-artefact defect walking back in through the
-    # door built to stop it. An unsequenced file is a file we know we did not read: the
-    # row is missing evidence whatever the counts say.
-    reconciled = (not unsequenced) and (harness_attempts is None
-                                        or harness_attempts == len(outcomes))
+    # THREE conditions, all required (review round 2's ruling). This compared the
+    # harness's count against the SEQUENCED outcomes ONLY, so a row that visibly dropped
+    # an artefact still reconciled and the merge published its totals -- the
+    # dropped-artefact defect walking back in through the door built to stop it.
+    #   1. the harness's own count equals what the walk sequenced;
+    #   2. nothing was left unsequenced -- a file we know we did not read is missing
+    #      evidence whatever the counts say;
+    #   3. every file the glob matched is accounted for in one of those two piles.
+    # A MISSING harness count is NOT reconciled either: a row nobody can reconcile has not
+    # been reconciled, and calling it measured is the same false-zero move one level up.
+    accounted = len(outcomes) + len(unsequenced)
+    reconciled = (harness_attempts == len(outcomes)
+                  and not unsequenced
+                  and accounted == files_seen)
     return {"attempt_outcomes": outcomes,
             "attempts_total": len(outcomes),
             "attempts_reconciled": reconciled,

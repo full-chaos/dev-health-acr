@@ -30,6 +30,7 @@ HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 from corpus import CORPUS  # noqa: E402
 import attempt_classes
+import contract  # the shared producer contract; nothing here spells it
 import engine_failures  # noqa: E402  — post-hoc attempt reader, deliberately OFF the measurement path
 # Both are ADDITIVE: classify() and the five
 # buckets below are untouched, so re-merging arm 2's raw files still reproduces
@@ -63,7 +64,7 @@ def classify(row):
     status = row.get("final_payload_status")
     # ONE definition of served, shared with the attempt classifier (codex r4 P1). Spelled
     # `!= 200` here and `[200,400)` there, the two disagreed about the same artefact.
-    if not attempt_classes.is_success_status(http):
+    if not contract.is_success_status(http):
         return "error"
     if status in SERVED_STATUSES:
         return "served_with_data" if (row.get("claimed_facts_n") or 0) > 0 else "served_degraded"
