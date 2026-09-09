@@ -2307,7 +2307,11 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		if subject.Label == "" {
 			subject.Label = subject.CanonicalID
 		}
-		if strings.TrimSpace(hint.Source) != "prior_subject_receipt" {
+		// CHAOS-5422: ONE test of "who authored this hint", consulted both by
+		// the caller-sourced pool below and by the contest boundary's
+		// exemption at the insert -- see hintCandidateSource.
+		hintSource := hintCandidateSource(hint.Source)
+		if hintSource == sourceCallerHint {
 			callerSourced[SubjectKey(subject)] = true
 		}
 		node, ok, err := deps.ExactHint(ctx, subject)
@@ -2346,17 +2350,23 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// never reached the boundary and a member-kind hint committed on a
 		// scope-anchored frame with nothing recorded about it.
 		//
-		// It is routed through the SAME function, and that function ADMITS it:
-		// a caller naming a subject by canonical id has not been offered
-		// anything, so this is not a substitution, and refusing it would break
-		// "name the subject you mean" -- decided truth, pinned by
-		// TestACallerExplicitHintOfTheMemberKindStillCommits. The behaviour is
-		// therefore unchanged; what changes is that the exemption is now a
-		// decision the boundary MAKES AND RECORDS rather than a door around it,
-		// and an operator can see it on the line.
-		if admission.admits(candidate.Subject, sourceCallerHint) {
-			candidatesBySubject[SubjectKey(candidate.Subject)] = candidate
+		// It is routed through the SAME function, WITH ITS SOURCE, and what
+		// that function decides depends on who authored the hint:
+		//
+		//   - A caller who named a subject by canonical id has not been offered
+		//     anything, so this is not a substitution, and refusing it would
+		//     break "name the subject you mean" -- decided truth, pinned by
+		//     TestACallerExplicitHintOfTheMemberKindStillCommits. Admitted, and
+		//     RECORDED as an exemption rather than passed silently.
+		//   - A receipt this engine minted on an earlier turn is this engine's
+		//     own prior output read back. Refused, and counted in the refused
+		//     set, because otherwise a member kind withheld on turn N walks
+		//     back into the contest on turn N+1 through its own receipt.
+		if !admission.admits(candidate.Subject, hintSource) {
+			admission.refuse(candidate.Subject)
+			continue
 		}
+		candidatesBySubject[SubjectKey(candidate.Subject)] = candidate
 	}
 	// A caller-explicit hint that resolved is authoritative and
 	// short-circuits here. A receipt-only resolution (candidatesBySubject
@@ -3833,6 +3843,22 @@ func mergeCensusAttestedSatisfier(ctx context.Context, principal storage.Princip
 	// See capMatchedTermsAfterMerge's own doc comment for the full account.
 	capMatchedTermsAfterMerge(candidatesBySubject, censusProvenanceMarker)
 	key := SubjectKey(subject)
+	// CHAOS-5422: mergeSearchResults is the admission boundary, so it may have
+	// REFUSED this candidate -- and this function's whole contract is to report
+	// whether the census witness actually committed. Read the boundary's own
+	// record of that decision (not the pool's contents, which the `accepted`
+	// comment above already explains cannot answer this question), and report
+	// the refusal rather than a merge that did not happen. Without this the
+	// caller is handed a key naming a subject the pool does not contain.
+	if admission.refused(subject) {
+		if deps.ResolutionTracer != nil {
+			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+				RequestID: request.RequestID, Stage: "evidence_census_commit",
+				Subject: subject, Outcome: contestSetDisposition, GraphExistenceOK: true,
+			})
+		}
+		return "", false
+	}
 	if deps.ResolutionTracer != nil {
 		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 			RequestID: request.RequestID, Stage: "evidence_census_commit",

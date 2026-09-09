@@ -863,3 +863,206 @@ func TestACallerHintOfTheRefusedKindIsAdmittedAndTheExemptionIsRecorded(t *testi
 			"conflating the two counts is what makes the exemption unreadable", got)
 	}
 }
+
+// r2 FINDING 1, PERMANENT PIN. THE EXEMPTION IS DECIDED BY WHO AUTHORED THE
+// HINT, not by the fact that a hint exists.
+//
+// The first version of the exemption classified EVERY SubjectHint as
+// caller-sourced. That is wrong, and resolve.go's own pre-existing test two
+// lines above the hint insert already said so: a hint whose source is
+// prior_subject_receipt is one THIS ENGINE minted on an earlier turn and read
+// back, and it is deliberately excluded from callerSourced for exactly that
+// reason. Exempting it would let a member kind the boundary refused on turn N
+// walk back into the contest on turn N+1 wearing its own receipt — the
+// substitution I11 forbids, laundered through the engine's own output.
+//
+// Both arms drive the SAME subject through the SAME production entry point and
+// differ only in the hint's Source, so nothing but authorship can explain the
+// difference in outcome.
+func TestAnEngineMintedReceiptOfTheRefusedKindIsRefusedNotExempted(t *testing.T) {
+	t.Parallel()
+	member := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team_1", Label: "Platform Team"}
+
+	resolveWithHintSource := func(t *testing.T, source string) (contextfabric.SubjectResolution, map[string]any) {
+		t.Helper()
+		// RETRIEVAL FINDS NO MEMBER KIND HERE, deliberately: the hint is then
+		// the ONLY member-kind candidate in the call, so each disclosed count
+		// is attributable to it and to nothing else. contestBackend's own team
+		// would be refused on its own account and make both numbers ambiguous.
+		anchor := candidateNode(contextfabric.SubjectRepository,
+			"repository.v2:github:platform", "platform", 0.95, "*")
+		backend := &fakeGraphBackend{
+			searchResults:    map[string][]CandidateNode{"platform": {anchor}},
+			enableSearchKind: true,
+			searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
+				"platform": {contextfabric.SubjectRepository: {anchor}},
+			},
+			exactHints: map[string]CandidateNode{
+				SubjectKey(member): candidateNode(member.Kind, member.CanonicalID, member.Label, 1, "*"),
+			},
+		}
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+		req := testRequest()
+		req.Options.MaxSubjectCandidates = 20
+		req.RequestedScope.SubjectHints = []contextfabric.SubjectHint{
+			{Kind: member.Kind, ID: member.CanonicalID, Label: member.Label, Source: source},
+		}
+		deps := backend.deps()
+		deps.ResolutionTracer = NewSlogResolutionTracer(logger)
+		res, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+			storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"*"}}, req, testInterpreted("platform"),
+			deps, confirmedTeamKind(), nil, contestFrame("platform"), contextfabric.SubjectRepository)
+		if err != nil {
+			t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+		}
+		var line map[string]any
+		for _, raw := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+			if raw == "" {
+				continue
+			}
+			var entry map[string]any
+			if err := json.Unmarshal([]byte(raw), &entry); err != nil {
+				t.Fatalf("emitted a line that is not JSON: %v", err)
+			}
+			if entry["stage"] == "decision_summary" {
+				line = entry
+			}
+		}
+		if line == nil {
+			t.Fatalf("no decision_summary line was EMITTED at Info:\n%s", buf.String())
+		}
+		return res, line
+	}
+
+	t.Run("an engine-minted receipt is refused and COUNTED AS REFUSED", func(t *testing.T) {
+		t.Parallel()
+		res, line := resolveWithHintSource(t, "prior_subject_receipt")
+		assertNoMemberKindAnywhere(t, res, "a prior_subject_receipt hint is this engine's own earlier output, "+
+			"not a subject the caller named")
+		if got := line["offer_pool_anchor_kind_withheld"]; got != float64(1) {
+			t.Fatalf("emitted offer_pool_anchor_kind_withheld = %v, want 1 — the receipt was kept out of the "+
+				"pool but the refusal was never recorded, so the line an operator reads cannot explain the "+
+				"missing subject", got)
+		}
+		// THE HALF THAT MATTERS MOST: refused and exempted are different
+		// dispositions, and a fix that merely stopped it committing while
+		// still filing it under "exempted" would report that the caller
+		// authorised something the caller never sent.
+		if got, present := line["offer_pool_anchor_kind_exempted"]; present && got != float64(0) {
+			t.Fatalf("emitted offer_pool_anchor_kind_exempted = %v, want 0 — an engine-minted receipt recorded "+
+				"as a CALLER exemption attributes this engine's own output to the caller", got)
+		}
+	})
+
+	t.Run("a caller-authored hint of the same subject still commits", func(t *testing.T) {
+		t.Parallel()
+		res, line := resolveWithHintSource(t, "workbench")
+		committed := false
+		for _, subject := range res.Committed {
+			if subject.CanonicalID == member.CanonicalID {
+				committed = true
+			}
+		}
+		if !committed {
+			t.Fatalf("committed %v — the SAME subject with a caller-authored source must still commit; without "+
+				"this arm the refusal above would be satisfied by a fixture that simply refuses every hint",
+				res.Committed)
+		}
+		if got := line["offer_pool_anchor_kind_exempted"]; got != float64(1) {
+			t.Fatalf("emitted offer_pool_anchor_kind_exempted = %v, want 1", got)
+		}
+		if got := line["offer_pool_anchor_kind_withheld"]; got != float64(0) {
+			t.Fatalf("emitted offer_pool_anchor_kind_withheld = %v, want 0", got)
+		}
+	})
+}
+
+// r2 FINDING 2, PERMANENT PIN. THE EVIDENCE-CENSUS RESCUE MUST HONOUR THE
+// BOUNDARY'S ANSWER, not assume it.
+//
+// mergeCensusAttestedSatisfier returns (key, true) to tell its caller "the
+// census witness committed". It computed that answer by mirroring
+// NodeCandidate's own gating — deliberately, because inferring success from
+// candidatesBySubject's contents is wrong (see its own comment). The admission
+// boundary is a SECOND reason mergeSearchResults can decline the same node, and
+// nothing was mirroring it: a refused member-kind satisfier was reported as
+// merged, with a key naming a subject that is not in the pool.
+//
+// The assertion is on the boundary's own record of the refusal, and on the
+// emitted census outcome — a rescue that quietly returns false while still
+// tracing "merged" leaves the operator with the same unexplained gap.
+func TestTheCensusRescueReportsARefusalRatherThanAMerge(t *testing.T) {
+	t.Parallel()
+	member := contextfabric.SubjectRef{
+		Kind: contextfabric.SubjectTeam, CanonicalID: "team.v2:github:platform-owners", Label: "platform owners",
+	}
+	backend := &fakeGraphBackend{
+		exactHints: map[string]CandidateNode{
+			SubjectKey(member): candidateNode(member.Kind, member.CanonicalID, member.Label, 0.9, "*"),
+		},
+	}
+	capture := &contestCapture{}
+	census := &censusOutcomeCapture{}
+	deps := backend.deps()
+	deps.ResolutionTracer = multiTracer{capture, census}
+	attestation := Attestation{
+		Outcome: ShadowWouldCommit, UnscopedVisibility: true,
+		Kinds: []KindAttestation{{
+			Kind: contextfabric.SubjectTeam, Complete: true, Count: 1,
+			SatisfierCanonicalID: member.CanonicalID,
+		}},
+	}
+	pool := map[string]contextfabric.SubjectCandidate{}
+	admission := newContestAdmission(contestScope{
+		MemberKind: contextfabric.SubjectTeam, Source: contestScopeFrameMemberKind,
+	})
+	key, ok := mergeCensusAttestedSatisfier(context.Background(),
+		storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"*"}}, testRequest(), deps,
+		attestation, pool, map[string]string{}, map[string]bool{},
+		identityClaimants{}, identityMatchTerms{}, admission)
+	if admission.withheldCount() != 1 {
+		t.Fatalf("withheldCount() = %d, want 1 — the fixture never reached the refusal, so it measures nothing",
+			admission.withheldCount())
+	}
+	if ok {
+		t.Fatalf("mergeCensusAttestedSatisfier() = (%q, true) with a pool of %d — it reported a commit for a "+
+			"candidate the admission boundary refused, handing its caller a key naming a subject the pool does "+
+			"not contain", key, len(pool))
+	}
+	if key != "" {
+		t.Fatalf("mergeCensusAttestedSatisfier() key = %q, want \"\"", key)
+	}
+	if got := census.outcomes(); len(got) != 1 || got[0] != contestSetDisposition {
+		t.Fatalf("evidence_census_commit outcomes = %v, want exactly [%q] — tracing \"merged\" for a refused "+
+			"candidate is the same defect written to the log", got, contestSetDisposition)
+	}
+}
+
+// censusOutcomeCapture keeps the census stage's own outcome tokens, which the
+// contest capture deliberately ignores (it filters to offer_pool stages).
+type censusOutcomeCapture struct{ events []ResolutionTraceEvent }
+
+func (c *censusOutcomeCapture) Trace(event ResolutionTraceEvent) {
+	if event.Stage == "evidence_census_commit" {
+		c.events = append(c.events, event)
+	}
+}
+
+func (c *censusOutcomeCapture) outcomes() []string {
+	out := make([]string, 0, len(c.events))
+	for _, event := range c.events {
+		out = append(out, event.Outcome)
+	}
+	return out
+}
+
+// multiTracer fans one event out to several tracers, so a single call can be
+// observed at two stages without either capture filtering the other's events.
+type multiTracer []ResolutionTracer
+
+func (m multiTracer) Trace(event ResolutionTraceEvent) {
+	for _, tracer := range m {
+		tracer.Trace(event)
+	}
+}

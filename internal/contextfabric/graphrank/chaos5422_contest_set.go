@@ -2,6 +2,7 @@ package graphrank
 
 import (
 	"slices"
+	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
@@ -212,20 +213,48 @@ const (
 	sourceRetrieval candidateSource = "retrieval"
 	// sourceCallerHint: the caller named this subject by canonical id in THIS
 	// request. Exempt.
-	//
-	// PR-A classifies EVERY hint as caller-sourced. That is deliberately
-	// conservative and deliberately temporary: distinguishing a hint the caller
-	// stated from one this engine minted and read back is the NEXT change's
-	// subject, and pre-empting it here would be a second place deciding the same
-	// thing. Until then this preserves today's behaviour exactly.
 	sourceCallerHint candidateSource = "caller_hint"
+	// sourceEngineHint: a hint this ENGINE minted on an earlier turn and read
+	// back, not something the caller stated. Subject to the refusal, exactly as
+	// retrieval is, because it IS retrieval -- of this engine's own prior
+	// output. Admitting it would let a member kind the boundary refused on turn
+	// N re-enter the contest on turn N+1 through its own receipt, which is the
+	// substitution I11 forbids wearing a hint's clothes.
+	sourceEngineHint candidateSource = "engine_hint"
 )
+
+// priorSubjectReceiptSource is the ONE hint source this engine mints itself.
+//
+// The string test is the one resolve.go already applies two lines above the
+// hint insert to decide callerSourced, reused here rather than restated: two
+// independent tests of the same fact drift, and a hint the pool calls
+// engine-sourced while the boundary calls it caller-sourced would be exactly
+// the disagreement this seam exists to remove.
+//
+// It IS a string test, and that is a PR-A-shaped answer, not the final one.
+// PR-B replaces it with the closed enumeration of hint sources the producers
+// actually emit, asserted against those producers; until then this preserves
+// the classification already in force.
+const priorSubjectReceiptSource = "prior_subject_receipt"
+
+// hintCandidateSource classifies ONE SubjectHint by who authored it.
+func hintCandidateSource(source string) candidateSource {
+	if strings.TrimSpace(source) == priorSubjectReceiptSource {
+		return sourceEngineHint
+	}
+	return sourceCallerHint
+}
 
 // admits reports whether this candidate may enter the contest set, DECIDING BY
 // SOURCE. A nil admission admits everything, so every call site with no scope to
 // apply -- this package's own unit callers, and the arms that only ever run with
 // no confirmed kind -- passes nil and reads as "nothing was decided" rather than
 // as "everything was refused".
+//
+// ONLY sourceCallerHint is exempt. Every other source -- retrieval today,
+// this engine's own prior receipts, and anything a later change adds -- falls
+// through to the refusal, so the failure direction of a source nobody
+// classified is "refused", never "silently exempt".
 func (a *contestAdmission) admits(subject contextfabric.SubjectRef, source candidateSource) bool {
 	if a == nil {
 		return true
@@ -251,6 +280,19 @@ func (a *contestAdmission) refuse(subject contextfabric.SubjectRef) {
 		a.withheld = make(map[string]contextfabric.SubjectRef, 1)
 	}
 	a.withheld[SubjectKey(subject)] = subject
+}
+
+// refused reports whether THIS call already refused this exact subject. It reads
+// the boundary's own record, which is what makes it different from asking
+// whether the subject is absent from the candidate pool: absence has many
+// causes (unauthorized, invalid, internal, never retrieved) and only one of
+// them is this decision.
+func (a *contestAdmission) refused(subject contextfabric.SubjectRef) bool {
+	if a == nil || a.withheld == nil {
+		return false
+	}
+	_, ok := a.withheld[SubjectKey(subject)]
+	return ok
 }
 
 // exempt records ONE subject admitted by the caller-hint exemption that this
