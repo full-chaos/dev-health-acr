@@ -403,12 +403,18 @@ func TestWindowContinuation_ContainmentRefusesEverythingThatIsNotTheTransition(t
 			wantReason:      ContinuationReasonInvalidContext,
 		},
 		{
-			name: "a window receipt riding with a typed selection is not a continuation",
+			// MEASURED, not assumed. An unresolvable typed receipt is vetoed by
+			// structure canonicalisation BEFORE admission runs, so the honest
+			// reason is `structure_veto`. Pinned in that shape because it is the
+			// evidence that admission did not run early and pre-empt an existing
+			// veto -- the r2 ruling's whole point. The receipt-field branch of
+			// the shape check has its own arm below, on a receipt that resolves.
+			name: "a window receipt riding with an unresolvable typed receipt is vetoed before admission",
 			mutate: func(r *InvestigationRequest) {
 				r.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: continuationPriorID, ReceiptID: "kindr_5465aaaaaaaaaaaa"}}
 			},
 			wantDisposition: ContinuationNotApplicable,
-			wantReason:      ContinuationReasonNotWindowOnly,
+			wantReason:      ContinuationReasonStructureVeto,
 		},
 		{
 			// FOUND BY THE MUTANT BATTERY, not by review: deleting the
@@ -980,3 +986,407 @@ var errBindingUnavailableForRepro = &bindingReproError{}
 type bindingReproError struct{}
 
 func (*bindingReproError) Error() string { return "graph binding unavailable (repro)" }
+
+// ---------------------------------------------------------------------------
+// THE RULED SHAPE (r2): ONE ADMISSION FUNCTION, and the pins that hold it.
+//
+// The r2 class was "admission has no single owner". These two pins are what
+// stop it coming back: the first enumerates the closed reason vocabulary
+// against the paths that can produce it, so a reason with no path (or a path
+// with no reason) fails here rather than surfacing as `unspecified` on a live
+// line; the second walks the INPUT SHAPE SPACE and asserts all four observable
+// consequences at once, so a fix that gets the disposition right while getting
+// the served provenance or the frame wrong cannot pass.
+// ---------------------------------------------------------------------------
+
+// everyContinuationReason is the closed vocabulary, listed ONCE. A member added
+// without a path, or a path added without a member, fails the enumeration pin.
+func everyContinuationReason() []ContinuationDecisionReason {
+	return []ContinuationDecisionReason{
+		ContinuationReasonNone,
+		ContinuationReasonNotWindowOnly,
+		ContinuationReasonWindowVeto,
+		ContinuationReasonChangedQuestion,
+		ContinuationReasonIndeterminateIdentity,
+		ContinuationReasonMissingContext,
+		ContinuationReasonInvalidContext,
+		ContinuationReasonContextVersionMismatch,
+		ContinuationReasonFreshContextUnavailable,
+		ContinuationReasonBindingUnavailable,
+		ContinuationReasonStructureVeto,
+		ContinuationReasonWindowConfirmationRequired,
+		ContinuationReasonAnswerReused,
+		ContinuationReasonExplicitStructureHint,
+		ContinuationReasonInterpretedAxisVeto,
+		ContinuationReasonUnspecified,
+	}
+}
+
+func TestWindowContinuation_EveryReasonIsAssignedBySomePath(t *testing.T) {
+	t.Parallel()
+
+	// The reasons this package's own arms drive, each named by the pin that
+	// drives it. `unspecified` is deliberately ABSENT: it is the fail-closed
+	// member and no path may produce it, which is the assertion.
+	driven := map[ContinuationDecisionReason]string{
+		ContinuationReasonNone:                       "ForcedFamilyConflict / AnAgreeingProposal",
+		ContinuationReasonNotWindowOnly:              "Containment: plural receipts, parent alongside a receipt",
+		ContinuationReasonWindowVeto:                 "Containment: plural window receipts, unresolvable window receipt",
+		ContinuationReasonChangedQuestion:            "Containment: a changed question",
+		ContinuationReasonIndeterminateIdentity:      "Containment: indeterminate identity",
+		ContinuationReasonMissingContext:             "a carrier that loaded and carried no reading",
+		ContinuationReasonInvalidContext:             "Containment: a carrier from another graph epoch",
+		ContinuationReasonContextVersionMismatch:     "AVersionMismatchedCarrierIsWithheld",
+		ContinuationReasonFreshContextUnavailable:    "the interpreter returned an error",
+		ContinuationReasonBindingUnavailable:         "R1/R2: graph binding failed",
+		ContinuationReasonStructureVeto:              "Containment: an unresolvable typed receipt",
+		ContinuationReasonWindowConfirmationRequired: "the window-confirmation gate",
+		ContinuationReasonAnswerReused:               "a stored answer served the turn",
+		ContinuationReasonExplicitStructureHint:      "R2-1: explicit expected kinds / subject handles",
+		ContinuationReasonInterpretedAxisVeto:        "R2-4: the interpreted axis moved off current",
+	}
+	for _, reason := range everyContinuationReason() {
+		if reason == ContinuationReasonUnspecified {
+			continue
+		}
+		if _, ok := driven[reason]; !ok {
+			t.Errorf("closed reason %q has no path that produces it -- either the member is dead and should go, or a decision site was added without a pin, which is how `unspecified` reaches a live line", reason)
+		}
+		if reason == "" {
+			t.Errorf("a reason member is the empty string; the vocabulary has no zero value by contract")
+		}
+	}
+	if len(driven) != len(everyContinuationReason())-1 {
+		t.Errorf("the driven map has %d entries and the vocabulary has %d members (minus unspecified) -- they must move together", len(driven), len(everyContinuationReason())-1)
+	}
+}
+
+// TestWindowContinuation_TheInputShapeSpace walks the shapes the r2 ruling names
+// and asserts ALL FOUR observable consequences on each, because a fix that gets
+// the disposition right while getting the served provenance or the frame wrong
+// passes any one of them alone.
+func TestWindowContinuation_TheInputShapeSpace(t *testing.T) {
+	t.Parallel()
+
+	base := validInvestigationRequest().Question
+
+	for _, tc := range []struct {
+		name            string
+		mutate          func(*InvestigationRequest)
+		bindingFails    bool
+		axisMoves       bool
+		wantDisposition ContinuationDisposition
+		wantReason      ContinuationDecisionReason
+		wantCarried     bool // served family_source == carried
+		wantFrameSeen   bool // ResolveSubjects saw a NON-nil frame
+	}{
+		{
+			name:            "admitted",
+			wantDisposition: ContinuationApplied,
+			wantReason:      ContinuationReasonNone,
+			wantCarried:     true,
+			wantFrameSeen:   true,
+		},
+		{
+			name: "explicit expected kinds",
+			mutate: func(r *InvestigationRequest) {
+				r.ExpectedKinds = []SubjectKind{contractsv1.ContextFabricSubjectProject}
+			},
+			wantDisposition: ContinuationNotApplicable,
+			wantReason:      ContinuationReasonExplicitStructureHint,
+			wantCarried:     false,
+			wantFrameSeen:   true,
+		},
+		{
+			name: "explicit subject handles",
+			mutate: func(r *InvestigationRequest) {
+				r.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: SubjectPullRequest, PatternID: "pull_request_number", Value: "532"}}
+			},
+			wantDisposition: ContinuationNotApplicable,
+			wantReason:      ContinuationReasonExplicitStructureHint,
+			wantCarried:     false,
+			wantFrameSeen:   true,
+		},
+		{
+			name:            "interpreted axis veto",
+			axisMoves:       true,
+			wantDisposition: ContinuationNotApplicable,
+			wantReason:      ContinuationReasonInterpretedAxisVeto,
+			wantCarried:     false,
+			// the turn ends at the axis-conflict veto before ResolveSubjects
+			wantFrameSeen: false,
+		},
+		{
+			name:            "binding failure",
+			bindingFails:    true,
+			wantDisposition: ContinuationNotApplicable,
+			wantReason:      ContinuationReasonBindingUnavailable,
+			wantCarried:     false,
+			wantFrameSeen:   false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			request := continuationRequest(base)
+			if tc.mutate != nil {
+				tc.mutate(&request)
+			}
+			prior := continuationPrior(continuationPriorID, base, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+			project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+			graph := &frameRecordingGraphReader{graphReaderStub: graphReaderStub{
+				resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+				bases:      provenCommitBases(project),
+			}}
+			telemetry := &recordingTelemetry{}
+			fresh := validInvestigationResult()
+
+			var interpreter QuestionInterpreter = frameBearingInterpreter{
+				family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectProject,
+				frameGroup: contractsv1.ContextFabricSubjectProject,
+			}
+			if tc.axisMoves {
+				interpreter = axisMovingInterpreter{family: QuestionFamilyGroupedCohortStatus}
+			}
+			deps := EngineDependencies{
+				Graph: graph,
+				Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+					return CanonicalFactBundle{}, nil
+				}),
+				Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+					return fresh, nil
+				}),
+				Interpreter: interpreter,
+				Results:     &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+				Telemetry:   telemetry,
+			}
+			if tc.bindingFails {
+				deps.Graph = bindingFailingGraphReader{err: errBindingUnavailableForRepro}
+			}
+			result, err := mustReuseTestEngine(t, deps).Investigate(context.Background(), acceptancePrincipal(), request)
+			if tc.bindingFails {
+				if err == nil {
+					t.Fatalf("wanted a binding failure")
+				}
+			} else if err != nil {
+				t.Fatalf("Investigate() error = %v", err)
+			}
+
+			if len(telemetry.windowContinuationDecisions) != 1 {
+				t.Fatalf("got %d decisions, want exactly 1 on every shape in this space", len(telemetry.windowContinuationDecisions))
+			}
+			d := telemetry.windowContinuationDecisions[0]
+			t.Logf("%s -> disposition=%q reason=%q served_source=%q frame_seen=%v",
+				tc.name, d.Disposition, d.Reason,
+				func() string {
+					if result.AnswerPlan == nil {
+						return "<none>"
+					}
+					return string(result.AnswerPlan.FamilySource)
+				}(), graph.lastFrameNonNil)
+
+			if d.Disposition != tc.wantDisposition {
+				t.Errorf("disposition = %q, want %q", d.Disposition, tc.wantDisposition)
+			}
+			if d.Reason != tc.wantReason {
+				t.Errorf("decision_reason = %q, want %q", d.Reason, tc.wantReason)
+			}
+			if d.Reason == ContinuationReasonUnspecified {
+				t.Errorf("decision_reason reached the emitter as `unspecified` -- the fail-closed member must never describe a real path")
+			}
+			gotCarried := result.AnswerPlan != nil && result.AnswerPlan.FamilySource == QuestionFamilySourceCarried
+			if gotCarried != tc.wantCarried {
+				t.Errorf("served family_source carried = %v, want %v", gotCarried, tc.wantCarried)
+			}
+			if !tc.bindingFails && !tc.axisMoves {
+				// THE FRAME IS NEVER NIL FOR THE GRAPH CONSUMERS (r2 R2-3).
+				if graph.calls == 0 {
+					t.Errorf("ResolveSubjects was never reached; this arm cannot say anything about the frame")
+				} else if graph.lastFrameNonNil != tc.wantFrameSeen {
+					t.Errorf("ResolveSubjects saw non-nil frame = %v, want %v -- an admitted continuation substitutes ONE component into the proposed frame, it never hands retrieval a nil",
+						graph.lastFrameNonNil, tc.wantFrameSeen)
+				}
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// REGRESSION PINS FROM THE COUNTED r2 REVIEW (BLOCK, four P1s).
+//
+// Each was reproduced against the pre-ruling tree before anything changed, and
+// each is kept as the regression test for the ruled fix. The class was
+// "admission has no single owner": a disqualifier that ran too late, a reason
+// initialised too early, a mutation applied too widely, and a publication that
+// happened before a veto that could undo it. The shape-space pin above is what
+// holds the ruled ordering; these four hold the individual defects.
+// ---------------------------------------------------------------------------
+
+// R2-1: an EXPLICIT ExpectedKinds/SubjectHandles hint is a semantic change this
+// turn made, but windowOnlyReferencedResultID only rejects RECEIPT fields and a
+// parent, so the request still admits as a window-only continuation.
+func TestWindowContinuation_R2_AnExplicitStructureHintDisqualifiesTheContinuation(t *testing.T) {
+	request := continuationRequest(validInvestigationRequest().Question)
+	request.ExpectedKinds = []SubjectKind{contractsv1.ContextFabricSubjectProject}
+	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
+	harness := newContinuationHarness(t,
+		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam})
+
+	result := harness.investigate(t, request)
+	decision := harness.soleDecision(t)
+	t.Logf("R2-1: explicit ExpectedKinds=%v -> disposition=%q reason=%q served_family_source=%q",
+		request.ExpectedKinds, decision.Disposition, decision.Reason, result.AnswerPlan.FamilySource)
+	if decision.Disposition == ContinuationApplied {
+		t.Fatalf("R2-1 REGRESSION: a request that ALSO states an explicit expected kind admitted as a window-only continuation (%q/%q) -- the shape check enumerates receipt fields and parent_result_id only, so an explicit structure hint walks past it",
+			decision.Disposition, decision.Reason)
+	}
+}
+
+// R2-2: a graph-binding failure emits decision_reason="unspecified" even though
+// the shape is knowable -- the emitter was moved above binding (R1-3) but the
+// initial value is only refined for the NOT-window-only case.
+func TestWindowContinuation_R2_ABindingFailureCarriesItsOwnReasonNotUnspecified(t *testing.T) {
+	request := continuationRequest(validInvestigationRequest().Question)
+	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
+	telemetry := &recordingTelemetry{}
+	fresh := validInvestigationResult()
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: bindingFailingGraphReader{err: errBindingUnavailableForRepro},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return fresh, nil
+		}),
+		Interpreter: forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam},
+		Results:     &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		Telemetry:   telemetry,
+	})
+	if _, err := engine.Investigate(context.Background(), acceptancePrincipal(), request); err == nil {
+		t.Fatalf("fixture defect: wanted a graph-binding failure")
+	}
+	if len(telemetry.windowContinuationDecisions) != 1 {
+		t.Fatalf("fixture defect: want exactly 1 decision, got %d", len(telemetry.windowContinuationDecisions))
+	}
+	d := telemetry.windowContinuationDecisions[0]
+	t.Logf("R2-2: binding failure -> disposition=%q reason=%q", d.Disposition, d.Reason)
+	if d.Reason == ContinuationReasonUnspecified {
+		t.Fatalf("R2-2 REGRESSION: decision_reason=%q on a binding failure -- unspecified is the fail-closed member meaning a decision site recorded nothing, so it reads as a defect on a path that is simply not reached",
+			d.Reason)
+	}
+}
+
+// R2-3: clearing the fresh frame (the R1-1 fix) sends nil to the CURRENT-request
+// graph consumers, which read the frame for this turn's retrieval.
+func TestWindowContinuation_R2_TheGraphConsumersNeverSeeANilFrame(t *testing.T) {
+	request := continuationRequest(validInvestigationRequest().Question)
+	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	graph := &frameRecordingGraphReader{graphReaderStub: graphReaderStub{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+		bases:      provenCommitBases(project),
+	}}
+	telemetry := &recordingTelemetry{}
+	fresh := validInvestigationResult()
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graph,
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return fresh, nil
+		}),
+		Interpreter: frameBearingInterpreter{
+			family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam,
+			frameGroup: contractsv1.ContextFabricSubjectTeam,
+		},
+		Results:   &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		Telemetry: telemetry,
+	})
+	if _, err := engine.Investigate(context.Background(), acceptancePrincipal(), request); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	t.Logf("R2-3: ResolveSubjects saw frame=%v (calls=%d); the interpreter PROPOSED a non-nil frame",
+		graph.lastFrameNonNil, graph.calls)
+	if graph.calls > 0 && !graph.lastFrameNonNil {
+		t.Fatalf("R2-3 REGRESSION: the fresh frame was cleared for the PLANNER and the nil then reached ResolveSubjects, a CURRENT-request consumer that reads the frame for this turn's retrieval -- the fix for R1-1 is scoped wider than the defect it closed")
+	}
+}
+
+// R2-4: a continuation is logged `applied` before the interpreted-axis veto, so
+// the served terminal can carry no effective window while the line says one was
+// applied.
+func TestWindowContinuation_R2_AppliedIsNeverPublishedForATurnTheAxisVetoUndoes(t *testing.T) {
+	request := continuationRequest(validInvestigationRequest().Question)
+	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	telemetry := &recordingTelemetry{}
+	fresh := validInvestigationResult()
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+			bases:      provenCommitBases(project),
+		},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return fresh, nil
+		}),
+		// The interpreter moves the axis AWAY from current, which is the
+		// documented shape that drops a confirmed window.
+		Interpreter: axisMovingInterpreter{family: QuestionFamilyGroupedCohortStatus},
+		Results:     &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		Telemetry:   telemetry,
+	})
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(telemetry.windowContinuationDecisions) != 1 {
+		t.Fatalf("fixture defect: want exactly 1 decision, got %d", len(telemetry.windowContinuationDecisions))
+	}
+	d := telemetry.windowContinuationDecisions[0]
+	t.Logf("R2-4: disposition=%q applied_window=%q served_effective_window_present=%v served_status=%q",
+		d.Disposition, d.AppliedWindowToken(), result.EffectiveEvidenceWindow != nil, result.Status)
+	if d.Disposition == ContinuationApplied && d.AppliedWindowToken() != "" && result.EffectiveEvidenceWindow == nil {
+		t.Fatalf("R2-4 REGRESSION: the line says a continuation APPLIED with applied_window=%q, and the served result carries NO effective window -- the decision is taken and published before the interpreted-axis step that can drop it",
+			d.AppliedWindowToken())
+	}
+}
+
+// axisMovingInterpreter classifies AND moves the interpreted axis off current.
+type axisMovingInterpreter struct{ family QuestionFamily }
+
+func (a axisMovingInterpreter) Interpret(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, QuestionFamilyOutcome, error) {
+	return InterpretedQuestion{
+		Shape: ShapeOpen, RequestedJudgment: "status",
+		TimeContext: TimeContext{Axis: TemporalValidTime, AsOf: &r2AsOf},
+	}, QuestionFamilyOutcome{
+		Family: a.family, Source: QuestionFamilySourceModel,
+		WinningSampleIndex: 0,
+		WinningSample:      FamilySample{ModelFamily: a.family},
+		Version:            QuestionFamilyTableVersion,
+	}, nil
+}
+
+// frameRecordingGraphReader records whether ResolveSubjects saw a frame.
+type frameRecordingGraphReader struct {
+	graphReaderStub
+	calls           int
+	lastFrameNonNil bool
+}
+
+func (g *frameRecordingGraphReader) ResolveSubjects(ctx context.Context, p storage.Principal, r InvestigationRequest, q InterpretedQuestion, b ResolvedGraphBinding, k *ConfirmedExpectedKind, a *ConfirmedAnchorSelection, frame *QuestionFrame, mk SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+	g.calls++
+	g.lastFrameNonNil = frame != nil
+	return g.graphReaderStub.ResolveSubjects(ctx, p, r, q, b, k, a, frame, mk)
+}
+
+// A PAST as-of, so the axis move is answerable and the veto under test is the
+// WINDOW-drop one (composeEffectiveWindow's interpreted-axis gate), not the
+// unanswerable-bounds refusal.
+// mustReuseTestEngine pins Now() to time.Unix(200,0).UTC(), so an answerable
+// as-of must be BEFORE that instant, not before the wall clock.
+var r2AsOf = time.Unix(100, 0).UTC()

@@ -1164,6 +1164,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// CHAOS-4088: StageGraphBinding, not StageResolution -- a binding
 		// outage never got as far as a subject/commit-gate query, and
 		// conflating the two populations is exactly what this split fixes.
+		// CHAOS-5465 (r2 R2-2): a path the admission function never reached is
+		// not a decision site that forgot to record a reason. `unspecified` is
+		// the fail-closed member and must never survive to the emitter.
+		continuation.Reason = ContinuationReasonBindingUnavailable
 		return InvestigationResult{}, stageError(StageGraphBinding, fmt.Errorf("resolve graph binding: %w", err))
 	}
 
@@ -1219,6 +1223,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// "unavailable"; the tier-ordering fact composeWindowExpandOption
 		// needs (pickWindowExpandTarget) is available from windowCanon.Effective
 		// alone, unlike gate 2's own offers-only read.
+		continuation.Reason = ContinuationReasonWindowConfirmationRequired
 		return e.windowConfirmationRequiredResult(ctx, principal, request, nil, *windowCanon.Effective, nil, WindowCanonicalizationGatedExplicitUnconfirmed, binding, StructureOfferMaterial{}, false, nil, nil, nil, ancestryRoot(request, receiptsNotYetValidated()))
 	}
 
@@ -1273,6 +1278,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// refuses the receipt its own veto DISPROVED and this path did not.
 		// Same shape, one member over -- recording a disproved receipt as
 		// ancestry guarantees the next turn's walk stops at miss_unloadable.
+		continuation.Reason = ContinuationReasonStructureVeto
 		return e.structureVetoResult(ctx, principal, request, structureCanon.Veto, echoEntries, binding, nil, nil, ancestryRoot(request, receiptsNotYetValidated(), vetoingStructureReceiptID(request, structureCanon.Veto)))
 	}
 
@@ -1400,6 +1406,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			if reuseBudgetErr != nil {
 				return InvestigationResult{}, reuseBudgetErr
 			}
+			continuation.Reason = ContinuationReasonAnswerReused
 			return reused, nil
 		}
 	}
@@ -1523,10 +1530,6 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// It reads through carryCtx's per-request memo, so on the common path --
 	// the referenced result is the one the hint resolution already fetched --
 	// it costs no extra store round trip.
-	if continuation.Observed {
-		continuation = e.admitWindowContinuation(carryCtx, principal, request, binding, priorLoadedResults, windowCanon.Effective)
-	}
-
 	interpretRequest := request
 	interpretRequest.PriorSubjectReceipts = priorValidatedReceipts
 	interpretation, familyOutcome, err := e.interpreter.Interpret(ctx, principal, interpretRequest)
@@ -1540,25 +1543,6 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// that CHAOS-5465 M2 is held for.
 		continuation.Reason = ContinuationReasonFreshContextUnavailable
 		return InvestigationResult{}, stageError(StageInterpretation, fmt.Errorf("interpret question: %w", err))
-	}
-	// CHAOS-5465 D-b: the fresh return is a PROPOSAL, retained as a
-	// NON-AUTHORITATIVE comparison, and the accepted context is selected NOW
-	// -- before the interpreted-time validation immediately below,
-	// deriveTurnRequirements, PlanAnswer and every FrameGate consumer can act
-	// on a fresh semantic value.
-	//
-	// ONE VALUE DRIVES BOTH. applyWindowContinuation writes the same decision
-	// the event publishes; there is no second copy for the two to disagree
-	// about, which is the "log the carried selection while passing fresh
-	// values downstream" defect stated as a shape rather than trusted to
-	// discipline.
-	if continuation.Observed {
-		continuation = compareContinuationProposal(continuation, continuationFreshProposal{
-			Available: true,
-			Family:    familyOutcome.Family,
-			GroupKind: familyOutcome.WinningSample.GroupKind,
-		})
-		familyOutcome = e.applyAndRecordContinuation(ctx, principal, familyOutcome, continuation)
 	}
 	// Bound the INTERPRETED question too, not just the wire request
 	// (CHAOS-3755 codex delta review, P2).
@@ -1637,6 +1621,49 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	}
 	clampedInterpretedTime := interpretedTimeBound.Bound
 	interpretation.TimeContext = clampedInterpretedTime
+	// CHAOS-5465 D-c, RULED SHAPE (r2): ONE ADMISSION FUNCTION, placed after
+	// every disqualifier and before every consumer.
+	//
+	// It runs HERE, and not earlier, because two of its disqualifiers are only
+	// knowable now: the interpreted axis (the window-conflict veto below acts
+	// on it, and a continuation published as `applied` that that veto then
+	// undoes is a line that lies), and the fresh frame it substitutes one
+	// component into. Everything upstream that can end the turn records its own
+	// closed reason on `continuation` instead, so the single deferred emitter
+	// never publishes `unspecified`.
+	//
+	// Nothing between here and the emitter mutates the fresh frame; the carried
+	// frame is a COPY built inside admission.
+	if continuation.Observed {
+		continuation = e.admitWindowContinuation(
+			carryCtx, principal, request, binding, priorLoadedResults,
+			windowCanon.Effective, clampedInterpretedTime.Axis, familyOutcome.Frame,
+		)
+	}
+	// CHAOS-5465 D-b: the fresh return is a PROPOSAL, retained as a
+	// NON-AUTHORITATIVE comparison, folded in immediately AFTER admission and
+	// before deriveTurnRequirements, PlanAnswer and every FrameGate consumer
+	// can act on a fresh semantic value.
+	//
+	// IT CANNOT PRECEDE ADMISSION, and the r2 review is why: applying before
+	// the disqualifiers had run served a carried context on turns admission
+	// would go on to refuse. Admission decides; this only compares and applies
+	// what it decided.
+	//
+	// ONE VALUE DRIVES BOTH. applyWindowContinuation writes the same decision
+	// the event publishes; there is no second copy for the two to disagree
+	// about, which is the "log the carried selection while passing fresh
+	// values downstream" defect stated as a shape rather than trusted to
+	// discipline.
+	if continuation.Observed {
+		continuation = compareContinuationProposal(continuation, continuationFreshProposal{
+			Available: true,
+			Family:    familyOutcome.Family,
+			GroupKind: familyOutcome.WinningSample.GroupKind,
+		})
+		familyOutcome = e.applyAndRecordContinuation(ctx, principal, familyOutcome, continuation)
+	}
+
 	// CHAOS-4636 -- the PLANNING STAGE (design §6.1). Deterministic, no
 	// model call, no I/O, placed between interpretation and discovery
 	// because that is the first point where the family is known and the

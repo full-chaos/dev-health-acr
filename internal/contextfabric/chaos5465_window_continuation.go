@@ -149,8 +149,32 @@ const (
 	// was not produced. It does NOT invalidate an independently admitted
 	// carrier -- see admitWindowContinuation.
 	ContinuationReasonFreshContextUnavailable ContinuationDecisionReason = "fresh_context_unavailable"
+	// ContinuationReasonBindingUnavailable: the graph binding failed, so the
+	// turn ended before admission could run. Its OWN member: a path that was
+	// never reached is not a decision site that forgot to record one.
+	ContinuationReasonBindingUnavailable ContinuationDecisionReason = "binding_unavailable"
+	// ContinuationReasonStructureVeto: structure canonicalisation vetoed.
+	ContinuationReasonStructureVeto ContinuationDecisionReason = "structure_veto"
+	// ContinuationReasonWindowConfirmationRequired: the turn stopped at the
+	// window-confirmation gate.
+	ContinuationReasonWindowConfirmationRequired ContinuationDecisionReason = "window_confirmation_required"
+	// ContinuationReasonAnswerReused: a stored answer served this turn.
+	ContinuationReasonAnswerReused ContinuationDecisionReason = "answer_reused"
+	// ContinuationReasonExplicitStructureHint: this request states an explicit
+	// expected kind or subject handle. That is a semantic change the caller
+	// made THIS turn, so the turn is not "changed only the window" -- it is
+	// that hint's turn. A DISQUALIFIER, evaluated inside admission before any
+	// effect.
+	ContinuationReasonExplicitStructureHint ContinuationDecisionReason = "explicit_structure_hint"
+	// ContinuationReasonInterpretedAxisVeto: interpretation moved the axis off
+	// current while a window commitment was resolved, so the window veto below
+	// will end this turn. Evaluated INSIDE admission: a continuation must never
+	// be published as `applied` when a later step can undo it.
+	ContinuationReasonInterpretedAxisVeto ContinuationDecisionReason = "interpreted_axis_veto"
 	// ContinuationReasonUnspecified: a decision site reached a return without
-	// recording a reason. Loud by construction.
+	// recording a reason. Loud by construction, and NEVER expected to reach the
+	// emitter -- TestWindowContinuation_EveryReasonIsAssignedBySomePath
+	// enumerates the vocabulary against the paths that produce it.
 	ContinuationReasonUnspecified ContinuationDecisionReason = "unspecified"
 )
 
@@ -270,6 +294,10 @@ type windowContinuationDecision struct {
 	Carried  *continuationCarriedContext
 	Fresh    continuationFreshProposal
 	Accepted *continuationCarriedContext
+	// CarriedFrame is the frame the admitted continuation executes under: the
+	// interpreter's own proposed frame with the carried group axis substituted.
+	// Nil only when the interpreter proposed no frame.
+	CarriedFrame *QuestionFrame
 
 	SeedSource CarrySeedSource
 
@@ -373,6 +401,8 @@ func (e *Engine) admitWindowContinuation(
 	binding ResolvedGraphBinding,
 	preloaded map[string]InvestigationResult,
 	appliedWindow *contractsv1.ContextFabricEffectiveEvidenceWindow,
+	interpretedAxis contractsv1.ContextFabricTemporalAxis,
+	freshFrame *QuestionFrame,
 ) windowContinuationDecision {
 	decision := windowContinuationDecision{
 		Observed:       requestCarriesWindowReceipts(request),
@@ -396,6 +426,22 @@ func (e *Engine) admitWindowContinuation(
 	referenced, windowOnly := windowOnlyReferencedResultID(request)
 	if !windowOnly {
 		decision.Reason = ContinuationReasonNotWindowOnly
+		return decision
+	}
+	// DISQUALIFIER (R2-1). An explicit expected kind or subject handle is the
+	// caller stating structure on THIS turn. It is not a receipt, so the
+	// receipt-field scan above cannot see it, and it is exactly the semantic
+	// change that makes this NOT a window-only continuation.
+	if len(request.ExpectedKinds) > 0 || len(request.SubjectHandles) > 0 {
+		decision.Reason = ContinuationReasonExplicitStructureHint
+		return decision
+	}
+	// DISQUALIFIER (R2-4). A resolved window commitment plus an interpreted
+	// axis that is no longer `current` is the shape the axis-conflict veto ends
+	// the turn on. Evaluated HERE, before any effect, so `applied` can never be
+	// published for a turn a later step undoes.
+	if appliedWindow != nil && interpretedAxis != contractsv1.ContextFabricTemporalCurrent {
+		decision.Reason = ContinuationReasonInterpretedAxisVeto
 		return decision
 	}
 	decision.WindowOnlyShape = true
@@ -459,9 +505,41 @@ func (e *Engine) admitWindowContinuation(
 		SourceResultID: prior.ResultID,
 	}
 	decision.Accepted = decision.Carried
+	// THE CARRIED FRAME (R2-3). The fresh frame is NOT discarded and NOT
+	// nil-ed: it is COPIED with only the component the accepted context owns
+	// substituted -- the group axis PlanAnswer was overriding.
+	//
+	// Nil-ing it was the r1 fix's over-reach. The frame is read by CURRENT-turn
+	// consumers (ResolveSubjects among them) that need this turn's proposed
+	// topology to retrieve at all; handing them nil narrowed retrieval on every
+	// admitted continuation. Substituting one component leaves every other
+	// reader with exactly what the interpreter proposed, and leaves the planner
+	// reading a group axis that agrees with the decision instead of contradicting
+	// it.
+	decision.CarriedFrame = carriedContinuationFrame(freshFrame, plan.GroupKind)
 	decision.Disposition = ContinuationApplied
 	decision.Reason = ContinuationReasonNone
 	return decision
+}
+
+// carriedContinuationFrame returns the fresh frame with the carried group axis
+// substituted, or nil when there was no fresh frame to begin with.
+//
+// A COPY, never a mutation: the frame pointer is shared with the interpretation
+// receipt and the family outcome, and rewriting it in place would change what
+// every other holder sees -- including the record of what the model actually
+// proposed, which is the one thing that must stay true.
+func carriedContinuationFrame(fresh *QuestionFrame, groupKind SubjectKind) *QuestionFrame {
+	if fresh == nil {
+		return nil
+	}
+	carried := *fresh
+	if carried.SubjectExpression.Kind == SubjectExpressionGroupedMembers && carried.SubjectExpression.Grouped != nil {
+		grouped := *carried.SubjectExpression.Grouped
+		grouped.GroupKind = groupKind
+		carried.SubjectExpression.Grouped = &grouped
+	}
+	return &carried
 }
 
 // compareContinuationProposal folds the fresh interpreter return in as a
@@ -553,8 +631,16 @@ func applyWindowContinuation(outcome QuestionFamilyOutcome, decision windowConti
 	// it is this turn's verdict about whether the turn may proceed at all, and
 	// a refused fresh frame must still refuse. Dropping it would turn
 	// FrameGateRefuses into the zero value, which ALLOWS.
-	outcome.Frame = nil
-	outcome.FrameObligations = nil
+	//
+	// The frame is REPLACED, not cleared (R2-3): admission already built the
+	// carried frame by substituting one component into the fresh one, so every
+	// current-turn consumer still sees a real frame and the planner's own
+	// override now agrees with the decision instead of contradicting it.
+	// FrameObligations are the fresh frame's derived set and are left as they
+	// are: they belong to the same frame object every other reader holds.
+	if decision.CarriedFrame != nil {
+		outcome.Frame = decision.CarriedFrame
+	}
 	outcome.Route = FamilyRouteDecision{
 		Family: accepted.Family,
 		Source: FamilyRouteSourceCarried,
