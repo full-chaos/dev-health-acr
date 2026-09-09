@@ -101,14 +101,12 @@ def attempt_diagnostics(outdir, qid, rep, harness_attempts=None):
     overrun_413_n     likewise; overrun_detail keeps the LAST 413's continuation
     """
     outcomes = []
-    files_seen = 0
     counts = attempt_classes.zero_counts()
     n504 = n413 = 0
     # attempts per TURN, so a retry can be told from a follow-up turn.
     per_turn = {}
     overrun = None
     sequenced_files = attempt_files(outdir, qid, rep)
-    files_seen = len(sequenced_files) + len(sorted(set(UNSEQUENCED.get(qid) or [])))
     for f in sequenced_files:
         parsed, seq = parse_attempt_name(f)
         turn, index = (seq[1], seq[2]) if parsed else (None, len(outcomes) + 1)
@@ -159,20 +157,29 @@ def attempt_diagnostics(outdir, qid, rep, harness_attempts=None):
     # this seam has been caught by two counters disagreeing; this makes them disagree
     # OUT LOUD rather than quietly.
     unsequenced = sorted(set(UNSEQUENCED.get(qid) or []))
-    # THREE conditions, all required (review round 2's ruling). This compared the
-    # harness's count against the SEQUENCED outcomes ONLY, so a row that visibly dropped
-    # an artefact still reconciled and the merge published its totals -- the
+    # TWO conditions (r7/astra: a claimed third was removed -- see below). This compares
+    # the harness's count against the SEQUENCED outcomes ONLY, so a row that visibly
+    # dropped an artefact still reconciled and the merge published its totals -- the
     # dropped-artefact defect walking back in through the door built to stop it.
     #   1. the harness's own count equals what the walk sequenced;
     #   2. nothing was left unsequenced -- a file we know we did not read is missing
-    #      evidence whatever the counts say;
-    #   3. every file the glob matched is accounted for in one of those two piles.
+    #      evidence whatever the counts say.
     # A MISSING harness count is NOT reconciled either: a row nobody can reconcile has not
     # been reconciled, and calling it measured is the same false-zero move one level up.
-    accounted = len(outcomes) + len(unsequenced)
-    reconciled = (harness_attempts == len(outcomes)
-                  and not unsequenced
-                  and accounted == files_seen)
+    #
+    # r7 (astra) P3: a THIRD condition used to read `accounted == files_seen` where
+    # `accounted = len(outcomes) + len(unsequenced)` and `files_seen` is computed, above,
+    # from the SAME two inputs (`len(sequenced_files) + len(unsequenced)`), and `outcomes`
+    # has exactly one entry per `sequenced_files` element by construction (the loop above
+    # appends unconditionally, readable or not) -- so `accounted == files_seen` reduces to
+    # `len(sequenced_files) == len(sequenced_files)`, a TAUTOLOGY that cannot be false and
+    # was proven not to protect anything (a patched orderer dropping a matched file passed
+    # it regardless). Removed rather than kept as decorative protection. The gap it was
+    # trying to close -- an INDEPENDENT raw count of every file the glob matches, checked
+    # against what the orderer actually returned -- is real and unfixed here: it needs a
+    # change to `attempt_files`'/`order_attempts`'s own contract (to expose or accept a
+    # raw match count), which is out of this fix's scope. Filed as a gap, not absorbed.
+    reconciled = harness_attempts == len(outcomes) and not unsequenced
     return {"attempt_outcomes": outcomes,
             "attempts_total": len(outcomes),
             "attempts_reconciled": reconciled,
