@@ -53,7 +53,7 @@ FactActualCompletion
     calls followed            17
     calls accounted           13
     calls not_a_call          1
-    calls excluded_by_design  25
+    calls excluded_by_design  26
     calls leaked              0
   fields             completed completed_at
 
@@ -69,7 +69,7 @@ FactBlockers
     calls followed            16
     calls accounted           13
     calls not_a_call          1
-    calls excluded_by_design  20
+    calls excluded_by_design  21
     calls leaked              6
   fields             blocked_by_work_item_id
 
@@ -149,7 +149,7 @@ FactIdentity
     calls followed            21
     calls accounted           13
     calls not_a_call          1
-    calls excluded_by_design  35
+    calls excluded_by_design  36
     calls leaked              0
   fields             id name provider title
 
@@ -213,7 +213,7 @@ FactMembership
     calls followed            20
     calls accounted           13
     calls not_a_call          1
-    calls excluded_by_design  34
+    calls excluded_by_design  35
     calls leaked              0
   fields             organization_id repository_id repository_name
 
@@ -293,7 +293,7 @@ FactRequiredChildren
     calls followed            16
     calls accounted           13
     calls not_a_call          1
-    calls excluded_by_design  22
+    calls excluded_by_design  23
     calls leaked              6
   fields             relationship_type required_child_work_item_id
 
@@ -341,7 +341,7 @@ FactStatus
     calls followed            15
     calls accounted           13
     calls not_a_call          1
-    calls excluded_by_design  20
+    calls excluded_by_design  21
     calls leaked              0
   fields             status
 
@@ -357,7 +357,7 @@ FactWork
     calls followed            15
     calls accounted           13
     calls not_a_call          1
-    calls excluded_by_design  20
+    calls excluded_by_design  21
     calls leaked              0
   fields             title
 

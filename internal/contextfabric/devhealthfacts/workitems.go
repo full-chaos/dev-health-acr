@@ -44,13 +44,20 @@ func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Princi
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
 	// CHAOS-4377: the SQL build + scan half moved to
 	// github.com/full-chaos/dev-health-go/readers.ReadWorkItemStatus.
-	rows, scanErr := readers.ReadWorkItemStatus(ctx, p.facts.client, orgID, ids)
+	// CHAOS-5438: PROBE one row past the output bound so a full page and a
+	// truncated one are distinguishable -- see shared.go's maxFactRowsProbe.
+	rows, scanErr := readers.ReadWorkItemStatusWithRowLimit(ctx, p.facts.client, orgID, ids, maxFactRowsProbe)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item status", scanErr)
 	}
 	for _, row := range rows {
 		subject, ok := bySubject[row.RepoID+":"+row.ID]
 		if !ok {
+			continue
+		}
+		// CHAOS-5438: the output bound is SEPARATE from the probe bound.
+		// The overflow row proves truncation; it is never served.
+		if len(facts) >= maxFactRowsPerQuery {
 			continue
 		}
 		facts = append(facts, contextfabric.CanonicalFact{
@@ -60,7 +67,7 @@ func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Princi
 		})
 	}
 	state, emptyReason := currentAxisReadState(len(facts))
-	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: len(rows) >= maxFactRowsPerQuery}
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: len(rows) > maxFactRowsPerQuery}
 	return result, nil
 }
 
@@ -96,13 +103,20 @@ func (p *WorkProvider) ReadFacts(ctx context.Context, principal storage.Principa
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
 	// CHAOS-4377: the SQL build + scan half moved to
 	// github.com/full-chaos/dev-health-go/readers.ReadWorkItemTitle.
-	rows, scanErr := readers.ReadWorkItemTitle(ctx, p.facts.client, orgID, ids)
+	// CHAOS-5438: PROBE one row past the output bound so a full page and a
+	// truncated one are distinguishable -- see shared.go's maxFactRowsProbe.
+	rows, scanErr := readers.ReadWorkItemTitleWithRowLimit(ctx, p.facts.client, orgID, ids, maxFactRowsProbe)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item work descriptors", scanErr)
 	}
 	for _, row := range rows {
 		subject, ok := bySubject[row.RepoID+":"+row.ID]
 		if !ok {
+			continue
+		}
+		// CHAOS-5438: the output bound is SEPARATE from the probe bound.
+		// The overflow row proves truncation; it is never served.
+		if len(facts) >= maxFactRowsPerQuery {
 			continue
 		}
 		facts = append(facts, contextfabric.CanonicalFact{
@@ -112,7 +126,7 @@ func (p *WorkProvider) ReadFacts(ctx context.Context, principal storage.Principa
 		})
 	}
 	state, emptyReason := currentAxisReadState(len(facts))
-	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: len(rows) >= maxFactRowsPerQuery}
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: len(rows) > maxFactRowsPerQuery}
 	return result, nil
 }
 
@@ -162,13 +176,20 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 	// coalescing, the Tier B "was it done at T" derivation) moved to
 	// github.com/full-chaos/dev-health-go/readers.ReadWorkItemCompletion;
 	// its doc comment carries that reasoning now.
-	rows, scanErr := readers.ReadWorkItemCompletion(ctx, p.facts.client, orgID, ids, timeBound.neutral())
+	// CHAOS-5438: PROBE one row past the output bound so a full page and a
+	// truncated one are distinguishable -- see shared.go's maxFactRowsProbe.
+	rows, scanErr := readers.ReadWorkItemCompletionWithRowLimit(ctx, p.facts.client, orgID, ids, timeBound.neutral(), maxFactRowsProbe)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item actual completion", scanErr)
 	}
 	for _, row := range rows {
 		subject, ok := bySubject[row.RepoID+":"+row.ID]
 		if !ok {
+			continue
+		}
+		// CHAOS-5438: the output bound is SEPARATE from the probe bound.
+		// The overflow row proves truncation; it is never served.
+		if len(facts) >= maxFactRowsPerQuery {
 			continue
 		}
 		fields := map[string]contextfabric.FactValue{"completed": contextfabric.BooleanFactValue(row.IsCompleted != 0)}
@@ -181,6 +202,6 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 		})
 	}
 	state, retentionReason := timeBound.retentionState(len(rows))
-	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery}
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) > maxFactRowsPerQuery}
 	return result, nil
 }

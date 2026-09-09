@@ -66,7 +66,12 @@ func (p *BlockersProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	// component v2Index decoded out of the subject's own canonical id --
 	// letting the WHERE clause scope on the composite key rather than the
 	// bare (cross-repo-collidable) target_work_item_id alone.
-	statement := withRowLimit(`SELECT d.source_work_item_id, d.target_work_item_id, toString(t.repo_id)
+	// CHAOS-5438: the probe limit, not the output limit -- see
+	// maxFactRowsProbe. Dependency cardinality can exceed subject
+	// cardinality (one work item can have thousands of blockers), so this
+	// provider is exactly the shape the row bound was introduced for, and
+	// exactly the shape where reporting a full page as truncated is wrong.
+	statement := withRowProbeLimit(`SELECT d.source_work_item_id, d.target_work_item_id, toString(t.repo_id)
 FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS t FINAL ON t.org_id = d.org_id AND t.work_item_id = d.target_work_item_id
 WHERE d.org_id = {org_id:String} AND concat(toString(t.repo_id), ':', d.target_work_item_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) = '` + blockerRelationshipType + `'`)
@@ -81,6 +86,11 @@ WHERE d.org_id = {org_id:String} AND concat(toString(t.repo_id), ':', d.target_w
 		if !ok {
 			return nil
 		}
+		// CHAOS-5438: the output bound is SEPARATE from the probe bound.
+		// The overflow row proves truncation; it is never served.
+		if len(facts) >= maxFactRowsPerQuery {
+			return nil
+		}
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactBlockers, Subject: subject,
 			Fields:         map[string]contextfabric.FactValue{"blocked_by_work_item_id": contextfabric.StringFactValue(sourceID)},
@@ -92,7 +102,7 @@ WHERE d.org_id = {org_id:String} AND concat(toString(t.repo_id), ':', d.target_w
 		return contextfabric.FactProviderResult{}, readFailure("query work item blockers", scanErr)
 	}
 	state, emptyReason := currentAxisReadState(len(facts))
-	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: rowCount >= maxFactRowsPerQuery}
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: rowCount > maxFactRowsPerQuery}
 	return result, nil
 }
 
@@ -133,7 +143,9 @@ func (p *RequiredChildrenProvider) ReadFacts(ctx context.Context, principal stor
 	// See BlockersProvider's doc comment on the same JOIN: work_item_dependencies
 	// has no repo_id of its own, so the source's repo_id is resolved via
 	// work_items the same way devhealthsource's own producer does.
-	statement := withRowLimit(`SELECT d.source_work_item_id, d.target_work_item_id, ifNull(d.relationship_type, ''), toString(s.repo_id)
+	// CHAOS-5438: probe limit, output bound separate -- see the same note
+	// on BlockersProvider above.
+	statement := withRowProbeLimit(`SELECT d.source_work_item_id, d.target_work_item_id, ifNull(d.relationship_type, ''), toString(s.repo_id)
 FROM work_item_dependencies AS d FINAL
 INNER JOIN work_items AS s FINAL ON s.org_id = d.org_id AND s.work_item_id = d.source_work_item_id
 WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_work_item_id) IN {ids:Array(String)} AND lower(ifNull(d.relationship_type, '')) != '` + blockerRelationshipType + `'`)
@@ -146,6 +158,11 @@ WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_w
 		}
 		subject, ok := bySubject[sourceRepoID+":"+sourceID]
 		if !ok {
+			return nil
+		}
+		// CHAOS-5438: see BlockersProvider's identical note -- the overflow
+		// row is evidence, never content.
+		if len(facts) >= maxFactRowsPerQuery {
 			return nil
 		}
 		fields := map[string]contextfabric.FactValue{"required_child_work_item_id": contextfabric.StringFactValue(targetID)}
@@ -162,6 +179,6 @@ WHERE d.org_id = {org_id:String} AND concat(toString(s.repo_id), ':', d.source_w
 		return contextfabric.FactProviderResult{}, readFailure("query work item required children", scanErr)
 	}
 	state, emptyReason := currentAxisReadState(len(facts))
-	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: rowCount >= maxFactRowsPerQuery}
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: rowCount > maxFactRowsPerQuery}
 	return result, nil
 }

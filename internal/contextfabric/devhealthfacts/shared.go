@@ -95,6 +95,34 @@ func withRowLimit(statement string) string {
 	return statement + "\nLIMIT " + strconv.Itoa(maxFactRowsPerQuery)
 }
 
+// maxFactRowsProbe is maxFactRowsPerQuery PLUS ONE, and it exists because
+// reading exactly N rows under `LIMIT N` cannot distinguish "there were
+// exactly N" from "there were more and we stopped" (CHAOS-5438).
+//
+// Every provider here reported `Truncated: len(rows) >= maxFactRowsPerQuery`
+// against a statement bounded at that same 200, so a COMPLETE population of
+// exactly 200 was served as a degraded, truncated answer -- the precise
+// "a full page is indistinguishable from a truncated one" ambiguity
+// fact_scope.go's own ruling invariant 8 forbids, and that the limit+1
+// discipline exists to prevent. The scope expander one layer up already
+// works this way: FactScopeExpansionRequest.Limit's doc comment requires it
+// to "read up to Limit+1 rows and return ALL of them" so the resolver can
+// confirm truncation from the overflow row rather than trusting a flag.
+//
+// The 201st row is EVIDENCE, never content: a provider reading this many
+// rows still serves at most maxFactRowsPerQuery facts. The two bounds are
+// deliberately separate -- see withRowProbeLimit.
+const maxFactRowsProbe = maxFactRowsPerQuery + 1
+
+// withRowProbeLimit is withRowLimit's limit+1 twin: it bounds a provider's
+// SELECT to maxFactRowsProbe so the caller can tell a full page from a
+// truncated one. A provider using it MUST also bound its own output at
+// maxFactRowsPerQuery -- reading the overflow row and then serving it would
+// break the fact budget this cap exists to protect.
+func withRowProbeLimit(statement string) string {
+	return statement + "\nLIMIT " + strconv.Itoa(maxFactRowsProbe)
+}
+
 // clickhouseFacts is the shared ClickHouse query boundary every provider in
 // this package embeds. It reuses internal/contextpacket.ClickHouseQueryClient
 // -- the same query boundary internal/contextfabric/devhealthsource uses --
