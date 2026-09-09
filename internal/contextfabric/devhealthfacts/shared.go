@@ -95,6 +95,34 @@ func withRowLimit(statement string) string {
 	return statement + "\nLIMIT " + strconv.Itoa(maxFactRowsPerQuery)
 }
 
+// maxFactRowsProbe is maxFactRowsPerQuery PLUS ONE, and it exists because
+// reading exactly N rows under `LIMIT N` cannot distinguish "there were
+// exactly N" from "there were more and we stopped" (CHAOS-5438).
+//
+// Every provider here reported `Truncated: len(rows) >= maxFactRowsPerQuery`
+// against a statement bounded at that same 200, so a COMPLETE population of
+// exactly 200 was served as a degraded, truncated answer -- the precise
+// "a full page is indistinguishable from a truncated one" ambiguity
+// fact_scope.go's own ruling invariant 8 forbids, and that the limit+1
+// discipline exists to prevent. The scope expander one layer up already
+// works this way: FactScopeExpansionRequest.Limit's doc comment requires it
+// to "read up to Limit+1 rows and return ALL of them" so the resolver can
+// confirm truncation from the overflow row rather than trusting a flag.
+//
+// The 201st row is EVIDENCE, never content: a provider reading this many
+// rows still serves at most maxFactRowsPerQuery facts. The two bounds are
+// deliberately separate -- see withRowProbeLimit.
+const maxFactRowsProbe = maxFactRowsPerQuery + 1
+
+// withRowProbeLimit is withRowLimit's limit+1 twin: it bounds a provider's
+// SELECT to maxFactRowsProbe so the caller can tell a full page from a
+// truncated one. A provider using it MUST also bound its own output at
+// maxFactRowsPerQuery -- reading the overflow row and then serving it would
+// break the fact budget this cap exists to protect.
+func withRowProbeLimit(statement string) string {
+	return statement + "\nLIMIT " + strconv.Itoa(maxFactRowsProbe)
+}
+
 // clickhouseFacts is the shared ClickHouse query boundary every provider in
 // this package embeds. It reuses internal/contextpacket.ClickHouseQueryClient
 // -- the same query boundary internal/contextfabric/devhealthsource uses --
@@ -1005,4 +1033,68 @@ func teamIDOrNull(hasTeam uint8, teamID string) contextfabric.FactValue {
 		return contextfabric.NullFactValue()
 	}
 	return contextfabric.StringFactValue(teamID)
+}
+
+// factBudget owns BOTH the shared output bound and the truncation verdict for
+// a provider that reads from more than one branch (CHAOS-5438 round r2, P1).
+//
+// WHY ONE OWNER. IdentityProvider and MembershipProvider each append into ONE
+// facts slice across a repository branch and a work-item branch. Before this,
+// the output guard was written against that shared slice while truncation was
+// computed PER BRANCH from each branch's own 201-row probe. The two disagreed
+// exactly where it mattered: 150 repository rows + 150 work-item rows meant
+// neither branch reached its own probe limit, so both honestly reported "not
+// truncated" while the shared cap silently dropped 100 facts -- a served
+// answer claiming a completeness it did not have.
+//
+// That is the SAME shared-observable defect as this ticket's earlier one, a
+// level down: that was a shared truncation FLAG, this was a shared output
+// BUDGET. A fix that merely re-split the cap would leave the two computations
+// separate and invite a third instance, so the budget and the verdict now have
+// a single owner and cannot drift apart.
+//
+// THE VERDICT (team-lead ruling): Truncated means "at least one authorized
+// candidate fact was not served", regardless of which branch it came from --
+// which is what the fact-scope ruling's own bundle-level accounting already
+// says. So it is true when EITHER a branch probe overflowed its limit+1 read
+// OR the shared guard refused at least one fact. The cap stays 200 SHARED;
+// single-branch capacity is unchanged.
+type factBudget struct {
+	limit    int
+	admitted int
+	dropped  int
+	overflow bool
+}
+
+// newFactBudget returns a budget bounded at maxFactRowsPerQuery.
+func newFactBudget() *factBudget {
+	return &factBudget{limit: maxFactRowsPerQuery}
+}
+
+// admit reports whether one more fact fits, and COUNTS the refusal when it
+// does not. Counting is the whole point: a silently refused fact is exactly
+// the shortfall the truncation flag exists to disclose.
+func (b *factBudget) admit() bool {
+	if b.admitted >= b.limit {
+		b.dropped++
+		return false
+	}
+	b.admitted++
+	return true
+}
+
+// observe records one branch's probe outcome. rowsRead is what the statement
+// actually returned under its limit+1 probe, so strictly more than
+// maxFactRowsPerQuery means the overflow row was present and rows were left
+// behind in the DATABASE -- a different shortfall from one this budget caused,
+// and both are truncation.
+func (b *factBudget) observe(rowsRead int) {
+	if rowsRead > maxFactRowsPerQuery {
+		b.overflow = true
+	}
+}
+
+// truncated is the ONE verdict, over both causes.
+func (b *factBudget) truncated() bool {
+	return b.overflow || b.dropped > 0
 }

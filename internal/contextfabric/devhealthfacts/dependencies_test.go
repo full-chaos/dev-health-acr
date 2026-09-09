@@ -158,7 +158,53 @@ func blockerRows(n int) [][]any {
 	return rows
 }
 
-func TestBlockersProviderTruncatesWhenRowCountReachesLimit(t *testing.T) {
+// TestBlockersProviderTruncatesWhenTheProbeRowIsPresent is the RE-AIMED form
+// of this file's original truncation pin (CHAOS-5438).
+//
+// It used to seed EXACTLY maxFactRowsPerQueryForTest rows and require
+// Truncated -- which pinned the DEFECT, not the contract: under a statement
+// bounded at that same number, a full page and a truncated one are
+// indistinguishable, so "the row count reached the limit" was never evidence
+// that anything was left behind. The provider now PROBES one row further
+// (withRowProbeLimit), so the honest signal is the presence of the
+// (limit+1)-th row, and that is what this asserts. Its twin immediately
+// below pins the other half: an exactly-full page is COMPLETE.
+//
+// Not deleted, because the count it pins is a signal rather than a number to
+// bump -- see TestBlockersProviderNotTruncatedOnAnExactlyFullPage for the
+// discriminating control that the guard still fires.
+func TestBlockersProviderTruncatesWhenTheProbeRowIsPresent(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{
+		{match: "FROM work_item_dependencies", rows: blockerRows(maxFactRowsPerQueryForTest + 1)},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactBlockers)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactBlockers, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	// The output bound is SEPARATE from the probe bound: the extra row is
+	// evidence, and must never be served.
+	if len(result.Facts) != maxFactRowsPerQueryForTest {
+		t.Fatalf("len(result.Facts) = %d, want exactly %d -- the probe row is evidence, never content", len(result.Facts), maxFactRowsPerQueryForTest)
+	}
+	if !result.Truncated {
+		t.Fatalf("result.Truncated = false, want true when a %dth row exists", maxFactRowsPerQueryForTest+1)
+	}
+	if len(client.queries) == 0 || !strings.Contains(client.queries[len(client.queries)-1].statement, "LIMIT "+strconv.Itoa(maxFactRowsPerQueryForTest+1)) {
+		t.Fatalf("query statement = %#v, want a LIMIT %d clause", client.queries, maxFactRowsPerQueryForTest+1)
+	}
+}
+
+// TestBlockersProviderNotTruncatedOnAnExactlyFullPage is the half the old
+// pin got backwards, and the discriminating control for the one above: a
+// population of EXACTLY the output bound is complete, every row of it is
+// served, and degrading the answer would assert a shortfall that did not
+// happen.
+func TestBlockersProviderNotTruncatedOnAnExactlyFullPage(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
 		{match: "FROM work_item_dependencies", rows: blockerRows(maxFactRowsPerQueryForTest)},
@@ -171,14 +217,11 @@ func TestBlockersProviderTruncatesWhenRowCountReachesLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
-	if len(result.Facts) > maxFactRowsPerQueryForTest {
-		t.Fatalf("len(result.Facts) = %d, want <= %d", len(result.Facts), maxFactRowsPerQueryForTest)
+	if result.Truncated {
+		t.Fatalf("result.Truncated = true on an exactly-full page of %d rows -- a complete population read as a shortfall", maxFactRowsPerQueryForTest)
 	}
-	if !result.Truncated {
-		t.Fatalf("result.Truncated = false, want true when the row count reaches the limit")
-	}
-	if len(client.queries) == 0 || !strings.Contains(strings.ToUpper(client.queries[len(client.queries)-1].statement), "LIMIT") {
-		t.Fatalf("query statement = %#v, want a LIMIT clause", client.queries)
+	if len(result.Facts) != maxFactRowsPerQueryForTest {
+		t.Fatalf("len(result.Facts) = %d, want %d -- every row of a complete page is servable", len(result.Facts), maxFactRowsPerQueryForTest)
 	}
 }
 

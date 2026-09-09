@@ -42,9 +42,17 @@ func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Princi
 		}
 	}()
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
+	// CHAOS-5438: ONE owner for the output bound and the truncation verdict --
+	// see factBudget. This provider reads a single branch, so the two could
+	// not drift here the way they did in the two multi-branch providers; it
+	// uses the same helper anyway, because leaving a hand-rolled copy beside
+	// the owner is how a second mechanism becomes a second defect.
+	budget := newFactBudget()
 	// CHAOS-4377: the SQL build + scan half moved to
 	// github.com/full-chaos/dev-health-go/readers.ReadWorkItemStatus.
-	rows, scanErr := readers.ReadWorkItemStatus(ctx, p.facts.client, orgID, ids)
+	// CHAOS-5438: PROBE one row past the output bound so a full page and a
+	// truncated one are distinguishable -- see shared.go's maxFactRowsProbe.
+	rows, scanErr := readers.ReadWorkItemStatusWithRowLimit(ctx, p.facts.client, orgID, ids, maxFactRowsProbe)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item status", scanErr)
 	}
@@ -53,14 +61,18 @@ func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Princi
 		if !ok {
 			continue
 		}
+		if !budget.admit() {
+			continue
+		}
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactStatus, Subject: subject,
 			Fields:         map[string]contextfabric.FactValue{"status": stringOrNull(row.Status)},
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, row.RepoID+":"+row.ID)},
 		})
 	}
+	budget.observe(len(rows))
 	state, emptyReason := currentAxisReadState(len(facts))
-	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: len(rows) >= maxFactRowsPerQuery}
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: budget.truncated()}
 	return result, nil
 }
 
@@ -94,9 +106,17 @@ func (p *WorkProvider) ReadFacts(ctx context.Context, principal storage.Principa
 		}
 	}()
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
+	// CHAOS-5438: ONE owner for the output bound and the truncation verdict --
+	// see factBudget. This provider reads a single branch, so the two could
+	// not drift here the way they did in the two multi-branch providers; it
+	// uses the same helper anyway, because leaving a hand-rolled copy beside
+	// the owner is how a second mechanism becomes a second defect.
+	budget := newFactBudget()
 	// CHAOS-4377: the SQL build + scan half moved to
 	// github.com/full-chaos/dev-health-go/readers.ReadWorkItemTitle.
-	rows, scanErr := readers.ReadWorkItemTitle(ctx, p.facts.client, orgID, ids)
+	// CHAOS-5438: PROBE one row past the output bound so a full page and a
+	// truncated one are distinguishable -- see shared.go's maxFactRowsProbe.
+	rows, scanErr := readers.ReadWorkItemTitleWithRowLimit(ctx, p.facts.client, orgID, ids, maxFactRowsProbe)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item work descriptors", scanErr)
 	}
@@ -105,14 +125,18 @@ func (p *WorkProvider) ReadFacts(ctx context.Context, principal storage.Principa
 		if !ok {
 			continue
 		}
+		if !budget.admit() {
+			continue
+		}
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactWork, Subject: subject,
 			Fields:         map[string]contextfabric.FactValue{"title": stringOrNull(row.Title)},
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, row.RepoID+":"+row.ID)},
 		})
 	}
+	budget.observe(len(rows))
 	state, emptyReason := currentAxisReadState(len(facts))
-	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: len(rows) >= maxFactRowsPerQuery}
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: emptyReason, Version: QueryVersion, Truncated: budget.truncated()}
 	return result, nil
 }
 
@@ -158,17 +182,28 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 		}
 	}()
 	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
+	// CHAOS-5438: ONE owner for the output bound and the truncation verdict --
+	// see factBudget. This provider reads a single branch, so the two could
+	// not drift here the way they did in the two multi-branch providers; it
+	// uses the same helper anyway, because leaving a hand-rolled copy beside
+	// the owner is how a second mechanism becomes a second defect.
+	budget := newFactBudget()
 	// CHAOS-4377: the SQL build + scan half (the isNotNull/ifNull
 	// coalescing, the Tier B "was it done at T" derivation) moved to
 	// github.com/full-chaos/dev-health-go/readers.ReadWorkItemCompletion;
 	// its doc comment carries that reasoning now.
-	rows, scanErr := readers.ReadWorkItemCompletion(ctx, p.facts.client, orgID, ids, timeBound.neutral())
+	// CHAOS-5438: PROBE one row past the output bound so a full page and a
+	// truncated one are distinguishable -- see shared.go's maxFactRowsProbe.
+	rows, scanErr := readers.ReadWorkItemCompletionWithRowLimit(ctx, p.facts.client, orgID, ids, timeBound.neutral(), maxFactRowsProbe)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item actual completion", scanErr)
 	}
 	for _, row := range rows {
 		subject, ok := bySubject[row.RepoID+":"+row.ID]
 		if !ok {
+			continue
+		}
+		if !budget.admit() {
 			continue
 		}
 		fields := map[string]contextfabric.FactValue{"completed": contextfabric.BooleanFactValue(row.IsCompleted != 0)}
@@ -180,7 +215,8 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, row.RepoID+":"+row.ID)},
 		})
 	}
+	budget.observe(len(rows))
 	state, retentionReason := timeBound.retentionState(len(rows))
-	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: len(rows) >= maxFactRowsPerQuery}
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: budget.truncated()}
 	return result, nil
 }
