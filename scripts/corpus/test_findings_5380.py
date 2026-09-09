@@ -1233,6 +1233,12 @@ def test_the_producer_retry_decision_is_swept_over_the_full_status_range():
                                   "httpStatus": 504, "retryable": True}}
     swept = [s for s in range(200, 600) if s not in BODYLESS_BY_SPEC]
     assert 404 in swept, "the space that is supposed to be total is missing 404"
+    # r7 (astra) P3: `404 in swept` alone does not prove the sweep is TOTAL -- a mutant
+    # narrowing `swept` to `[200, 404]` still contains 404 and passed 11/11. The exact
+    # size is the total range's own arithmetic (200-599 inclusive, less the 2 RFC-bodyless
+    # statuses), spelled independently of `swept`'s own construction.
+    assert len(swept) == 400 - len(BODYLESS_BY_SPEC), (
+        f"the swept range narrowed to {len(swept)} statuses, not the full space: {swept[:10]}")
 
     saved_base, saved_out = harness.BASE, harness.OUTDIR
     disagreements = []
