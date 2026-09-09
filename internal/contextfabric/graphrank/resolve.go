@@ -2062,7 +2062,18 @@ func (b *decisionSummaryBuffer) Trace(event ResolutionTraceEvent) {
 	if event.Stage == "offer_pool" && event.OfferPoolSummary {
 		b.vectorOnlyExcluded += event.OfferPoolVectorOnlyExcluded
 		b.vectorOnlyDemoted += event.OfferPoolVectorOnlyDemoted
-		b.anchorKindWithheld += event.OfferPoolAnchorKindWithheld
+		// PER CALL, not accumulated -- unlike the vector pair above, and the
+		// difference is a real one rather than an inconsistency (r3 finding
+		// 1). The subject-offer scope is decided ONCE per call and every
+		// resolver pass withholds the SAME population from it, so a second
+		// pass restates one decision instead of adding a second quantity.
+		// The confirmed-kind re-decision runs the whole resolution again and
+		// its offer_pool summary is not held back by discardableDecisionTracer
+		// (that wrapper holds decision/ranked_cut/corroboration only), so
+		// summing reported one withheld candidate as two on a live path. The
+		// LAST pass's value wins, the same rule the anchor-pool summary below
+		// already uses for the same reason.
+		b.anchorKindWithheld = event.OfferPoolAnchorKindWithheld
 		// OR across the call for the same reason DecisionOfferedUnderWindowGate
 		// is: the fold sees per-event facts, and "at least one pass of this
 		// resolution was emptied by the exclusion" is the only claim this
@@ -2311,11 +2322,18 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// source as if the caller had named it -- so the answer-reuse
 		// authorization recheck's own hints took the caller's exemption AND
 		// were reported to operators as caller-named.
-		provenance := contextfabric.ClassifySubjectHintProvenance(strings.TrimSpace(hint.Source))
-		hintProvenance[SubjectKey(subject)] = provenance
-		if provenance != contextfabric.CommitSubjectProvenanceEngineMinted {
-			callerSourced[SubjectKey(subject)] = true
-		}
+		// AGGREGATED, not last-write-wins (r3 finding 2). Subject hints are
+		// not deduplicated by the request validator and the engine appends
+		// its own prior-receipt hints after the caller's, so one subject can
+		// legitimately appear twice with different sources. callerSourced is
+		// no longer written here at all -- it is DERIVED from this record
+		// after the loop, so the exemption and the reported provenance cannot
+		// aggregate the same duplicate differently.
+		key := SubjectKey(subject)
+		hintProvenance[key] = contextfabric.MergeSubjectHintProvenance(
+			hintProvenance[key],
+			contextfabric.ClassifySubjectHintProvenance(strings.TrimSpace(hint.Source)),
+		)
 		node, ok, err := deps.ExactHint(ctx, subject)
 		if err != nil {
 			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
@@ -2349,6 +2367,15 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			[]contextfabric.MatchMechanism{contextfabric.MatchExact},
 		)
 		candidatesBySubject[SubjectKey(candidate.Subject)] = candidate
+	}
+	// THE EXEMPTION, DERIVED FROM THE ONE RECORD (r3 finding 2). Nothing else
+	// writes callerSourced, so "is this subject exempt" and "whose identifier
+	// does the line say it was" are two readings of a single aggregated fact
+	// rather than two policies that can drift apart on a duplicate key.
+	for key, provenance := range hintProvenance {
+		if provenance != contextfabric.CommitSubjectProvenanceEngineMinted {
+			callerSourced[key] = true
+		}
 	}
 	// A caller-explicit hint that resolved is authoritative and
 	// short-circuits here. A receipt-only resolution (candidatesBySubject

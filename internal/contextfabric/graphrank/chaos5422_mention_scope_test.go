@@ -997,3 +997,239 @@ func TestTheCommitPolicyProvenanceIsTotalAndDistinguishesUnknownFromResolved(t *
 		t.Errorf("a hinted subject reports %q, want %q", got, contextfabric.CommitSubjectProvenanceEngineMinted)
 	}
 }
+
+// r3 FINDING 1. The withheld COUNT is a property of the CALL, not of a pass.
+//
+// The confirmed-kind re-decision runs the whole resolution a second time over an
+// isolated scoped population. Its `offer_pool` summary is NOT held back by
+// discardableDecisionTracer (that wrapper holds decision/ranked_cut/
+// corroboration only), so both passes' summaries reach the fold — and the fold
+// SUMMED them, reporting one withheld candidate as two on a live path.
+//
+// The scope is decided once per call and each pass withholds the SAME
+// population, so summing counts one decision twice. This pin asserts the count
+// and the DISTINCT withheld subjects agree, which is what the number claims to
+// mean.
+func TestTheWithheldCountIsPerCallNotPerResolverPass(t *testing.T) {
+	t.Parallel()
+	term := "platform"
+	repo := candidateNode(contextfabric.SubjectRepository, "repository.v2:github:"+term, term, 0.95, "*")
+	team := candidateNode(contextfabric.SubjectTeam, "team.v2:github:"+term+"-owners", term+" owners", 0.4, "*")
+	// searchTruncated on the unscoped stage is what sends this call into the
+	// confirmed-kind scoped re-decision -- the same shape the CHAOS-4154
+	// fixtures use. Without it there is only one pass and the defect cannot
+	// appear at all, which is why this fixture is not the ordinary one.
+	backend := &fakeGraphBackend{
+		enableSearchKind: true,
+		searchResults:    map[string][]CandidateNode{term: {repo, team}},
+		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
+			term: {contextfabric.SubjectTeam: {team}, contextfabric.SubjectRepository: {repo}},
+		},
+		searchTruncated: true,
+	}
+	capture := &mixedHintCapture{}
+	req := testRequest()
+	req.Options.MaxSubjectCandidates = 20
+	deps := backend.deps()
+	deps.ResolutionTracer = capture
+	if _, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+		storage.Principal{OrgID: "org_1"}, req, testInterpreted(term),
+		deps, confirmedTeam(), nil, mentionScopeFrame(term), ""); err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+	if len(capture.summaries) != 1 {
+		t.Fatalf("captured %d decision_summary events, want exactly 1", len(capture.summaries))
+	}
+	// DISTINCT subjects, not raw event count: a second resolver pass re-emits
+	// the same candidate's disposition, and "how many candidates were withheld"
+	// is the question the number answers.
+	withheld := map[string]bool{}
+	for _, event := range capture.dispositions {
+		if event.OfferPoolDisposition == offerPoolAnchorKindWithheldDisposition {
+			withheld[SubjectKey(event.Subject)] = true
+		}
+	}
+	if len(withheld) != 1 {
+		t.Fatalf("the run withheld %d DISTINCT subjects, want exactly 1 -- the fixture is wrong, not the counter", len(withheld))
+	}
+	if got := capture.summaries[0].OfferPoolAnchorKindWithheld; got != len(withheld) {
+		t.Fatalf("offer_pool_anchor_kind_withheld on the FOLDED line = %d, want %d -- one withheld candidate "+
+			"counted once per RESOLVER PASS is a false number at Info, and the pass count is invisible to "+
+			"anyone reading it", got, len(withheld))
+	}
+}
+
+// r3 FINDING 2. The exemption and the provenance must not be able to disagree
+// about ONE subject — which is the entire reason the classification was
+// consolidated in the first place.
+//
+// The v1 request validator enforces uniqueness on repository slugs, project ids
+// and team ids, and NOT on subject hints; and engine.go appends the engine's own
+// prior-receipt hints AFTER the caller's. So a caller who names a subject and
+// then has a receipt for the SAME subject produces a duplicate key in the
+// production ordering — caller-explicit first, engine-minted second. The
+// exemption was sticky (set once, never cleared) while the provenance was
+// last-write-wins, so the candidate stayed exempt and committed while the line
+// reported it as engine-minted.
+//
+// The rule: caller-explicit WINS for a key. One aggregated record, read by both.
+func TestDuplicateHintsForOneSubjectCannotMakeTheExemptionAndTheLineDisagree(t *testing.T) {
+	t.Parallel()
+	member := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team.v2:github:platform-owners", Label: "platform owners"}
+	for _, testCase := range []struct {
+		name           string
+		sources        []string
+		wantCommitted  bool
+		wantProvenance string
+	}{
+		{
+			// THE PRODUCTION ORDERING: the caller's own hint first, the
+			// engine's prior-receipt hint appended after it.
+			name:          "caller hint first, engine receipt appended after",
+			sources:       []string{"workbench", contextfabric.SubjectHintSourcePriorSubjectReceipt},
+			wantCommitted: true, wantProvenance: contextfabric.CommitSubjectProvenanceCallerNamed,
+		},
+		{
+			// The same pair the other way round, so the rule is an
+			// AGGREGATION and not an accident of arrival order.
+			name:          "engine receipt first, caller hint after",
+			sources:       []string{contextfabric.SubjectHintSourcePriorSubjectReceipt, "workbench"},
+			wantCommitted: true, wantProvenance: contextfabric.CommitSubjectProvenanceCallerNamed,
+		},
+		{
+			// The control: with NO caller hint for the key, nothing is
+			// exempt and nothing commits. Without this arm the rule above
+			// could be "always caller_named" and pass.
+			name:          "engine receipts only",
+			sources:       []string{contextfabric.SubjectHintSourcePriorSubjectReceipt, contextfabric.SubjectHintSourceAnswerReuseRecheck},
+			wantCommitted: false, wantProvenance: "",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			backend := mentionScopeBackend("platform")
+			backend.exactHints = map[string]CandidateNode{
+				SubjectKey(member): candidateNode(member.Kind, member.CanonicalID, member.Label, 1, "*"),
+			}
+			hints := make([]contextfabric.SubjectHint, 0, len(testCase.sources))
+			for _, source := range testCase.sources {
+				hints = append(hints, contextfabric.SubjectHint{
+					Kind: member.Kind, ID: member.CanonicalID, Label: member.Label, Source: source,
+				})
+			}
+			capture := &mixedHintCapture{}
+			req := testRequest()
+			req.Options.MaxSubjectCandidates = 20
+			req.RequestedScope.SubjectHints = hints
+			deps := backend.deps()
+			deps.ResolutionTracer = capture
+			res, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+				storage.Principal{OrgID: "org_1"}, req, testInterpreted("platform"),
+				deps, confirmedTeam(), nil, mentionScopeFrame("platform"), "")
+			if err != nil {
+				t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+			}
+			committed := false
+			for _, subject := range res.Committed {
+				if subject.CanonicalID == member.CanonicalID {
+					committed = true
+				}
+			}
+			if committed != testCase.wantCommitted {
+				t.Fatalf("committed=%v (%v), want %v -- the EXEMPTION's answer", committed, res.Committed, testCase.wantCommitted)
+			}
+			if !testCase.wantCommitted {
+				return
+			}
+			// THE DISAGREEMENT ITSELF: the line must say the same thing the
+			// exemption acted on. A subject exempt as caller-named and
+			// reported as engine-minted is the shape this whole seam exists
+			// to make impossible.
+			for _, event := range capture.decisions {
+				if event.Outcome != "committed" || event.Subject.CanonicalID != member.CanonicalID {
+					continue
+				}
+				if event.CommitSubjectProvenance != testCase.wantProvenance {
+					t.Fatalf("the subject was exempt from withholding as CALLER-named and committed, but the "+
+						"decision line reports commit_subject_provenance=%q (want %q) -- the exemption and "+
+						"the observable disagree about one subject",
+						event.CommitSubjectProvenance, testCase.wantProvenance)
+				}
+			}
+			if len(capture.summaries) == 1 && capture.summaries[0].DecisionCommittedEngineMinted != 0 {
+				t.Fatalf("decision_committed_engine_minted = %d for a caller-named commit, want 0",
+					capture.summaries[0].DecisionCommittedEngineMinted)
+			}
+		})
+	}
+}
+
+// THE 5385 QUESTION, asked as a repro rather than asserted as a claim.
+//
+// r3's finding 1 was that the fold SUMMED the withheld count across resolver
+// passes. The same fold sums CHAOS-5385's vector-only counters out of the same
+// summary event, so the identical shape would apply to them — which would be
+// PRE-EXISTING behaviour, not something this change introduced. That deserved a
+// measurement, not an assertion in a PR body.
+//
+// This test drives the same two-pass path with a VECTOR-ONLY candidate present
+// and reports what the vector counters do. It is written to FAIL if they
+// double-count, so the answer is recorded by the suite rather than by a claim in
+// a handoff. If it fails, that is a separate pre-existing ticket and NOT this
+// change's business; it is left here either way so the question cannot go quiet.
+func TestWhetherTheVectorOnlyCountersDoubleCountAcrossResolverPasses(t *testing.T) {
+	t.Parallel()
+	term := "platform"
+	repo := candidateNode(contextfabric.SubjectRepository, "repository.v2:github:"+term, term, 0.95, "*")
+	team := candidateNode(contextfabric.SubjectTeam, "team.v2:github:"+term+"-owners", term+" owners", 0.4, "*")
+	vectorOnly := candidateNode(contextfabric.SubjectTeam, "team.v2:github:"+term+"-vector", term+" vector", 0.3, "*")
+	vectorOnly.Mechanism = contextfabric.MatchVector
+	backend := &fakeGraphBackend{
+		enableSearchKind: true,
+		searchResults:    map[string][]CandidateNode{term: {repo, team, vectorOnly}},
+		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
+			term: {contextfabric.SubjectTeam: {team, vectorOnly}, contextfabric.SubjectRepository: {repo}},
+		},
+		searchTruncated: true,
+	}
+	capture := &mixedHintCapture{}
+	req := testRequest()
+	req.Options.MaxSubjectCandidates = 20
+	deps := backend.deps()
+	deps.ResolutionTracer = capture
+	if _, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+		storage.Principal{OrgID: "org_1"}, req, testInterpreted(term),
+		deps, confirmedTeam(), nil, mentionScopeFrame(term), ""); err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+	if len(capture.summaries) != 1 {
+		t.Fatalf("captured %d decision_summary events, want exactly 1", len(capture.summaries))
+	}
+	got := capture.summaries[0]
+	distinct := map[string]int{}
+	for _, event := range capture.dispositions {
+		switch event.OfferPoolDisposition {
+		case "vector_only_excluded", "vector_only_demoted":
+			distinct[event.OfferPoolDisposition+"|"+SubjectKey(event.Subject)]++
+		}
+	}
+	excluded, demoted := 0, 0
+	for key := range distinct {
+		if strings.HasPrefix(key, "vector_only_excluded|") {
+			excluded++
+		} else {
+			demoted++
+		}
+	}
+	t.Logf("MEASURED: folded excluded=%d demoted=%d; DISTINCT per-candidate excluded=%d demoted=%d; passes visible=%d",
+		got.OfferPoolVectorOnlyExcluded, got.OfferPoolVectorOnlyDemoted, excluded, demoted, len(capture.dispositions))
+	if excluded == 0 && demoted == 0 {
+		t.Skip("no vector-only candidate reached the offer pool in this fixture -- the question is UNANSWERED " +
+			"by this run, and an unanswered question must not read as a clean answer")
+	}
+	if got.OfferPoolVectorOnlyExcluded != excluded || got.OfferPoolVectorOnlyDemoted != demoted {
+		t.Fatalf("the vector-only counters double-count across resolver passes: folded excluded=%d demoted=%d "+
+			"but %d/%d distinct candidates were dispositioned -- PRE-EXISTING, a separate ticket, not this "+
+			"change's fix", got.OfferPoolVectorOnlyExcluded, got.OfferPoolVectorOnlyDemoted, excluded, demoted)
+	}
+}

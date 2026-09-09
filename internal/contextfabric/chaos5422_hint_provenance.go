@@ -86,3 +86,33 @@ func ClassifySubjectHintProvenance(source string) string {
 	}
 	return CommitSubjectProvenanceCallerNamed
 }
+
+// MergeSubjectHintProvenance aggregates the classifications of SEVERAL hints
+// that name the SAME subject, and caller-explicit WINS.
+//
+// CHAOS-5422, counted round r3. The v1 request validator enforces uniqueness on
+// repository slugs, project ids and team ids and NOT on subject hints, and
+// engine.go appends the engine's own prior-receipt hints AFTER the caller's --
+// so a caller who names a subject that also has a receipt produces a duplicate
+// key, in that order, on the ordinary production path.
+//
+// Before this, the two consumers aggregated that duplicate DIFFERENTLY: the
+// exemption was sticky (set once caller-named, never cleared) and the reported
+// provenance was last-write-wins. The subject stayed exempt and committed while
+// the line called it engine-minted -- the exact disagreement consolidating the
+// classification was supposed to make impossible. Consolidating the TEST was not
+// enough while two WRITE POLICIES remained.
+//
+// Caller-explicit wins because the caller naming a subject by canonical id in
+// THIS request is an authoritative direct ask, and it does not stop being one
+// because the engine also happens to hold a receipt for the same subject. The
+// asymmetry runs the same way as the exemption it feeds.
+func MergeSubjectHintProvenance(existing, incoming string) string {
+	if existing == "" {
+		return incoming
+	}
+	if existing == CommitSubjectProvenanceCallerNamed || incoming == CommitSubjectProvenanceCallerNamed {
+		return CommitSubjectProvenanceCallerNamed
+	}
+	return incoming
+}
