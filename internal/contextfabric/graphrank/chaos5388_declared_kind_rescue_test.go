@@ -124,6 +124,29 @@ func namedRowInfoWithConfirmedKind(t *testing.T, backend *fakeGraphBackend, fram
 	return res, buf.String()
 }
 
+// namedRowInfoDroppingBeforeRanking is namedRowInfo with one subject marked as
+// an internal node, which NodeCandidate rejects BEFORE the candidate ever
+// reaches the ranked list. That is one of the pre-ranking removals the report
+// must not call "cut".
+func namedRowInfoDroppingBeforeRanking(t *testing.T, backend *fakeGraphBackend, frame *contextfabric.QuestionFrame,
+	internalID string) (contextfabric.SubjectResolution, string) {
+	t.Helper()
+	req := testRequest()
+	req.Options.MaxSubjectCandidates = 10
+	var buf bytes.Buffer
+	deps := backend.deps()
+	deps.IsInternal = func(s contextfabric.SubjectRef) bool { return s.CanonicalID == internalID }
+	deps.ResolutionTracer = NewSlogResolutionTracer(
+		slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	res, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+		storage.Principal{OrgID: "org_1"}, req, testInterpreted("ask-dev"),
+		deps, nil, nil, frame, "")
+	if err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+	return res, buf.String()
+}
+
 // rankedCutLine returns the ONE ranked-cut summary line. Locating the line is
 // the point: several stages carry overlapping keys, and an assertion made
 // over the whole log passes on whichever line happens to be right.
@@ -403,5 +426,70 @@ func TestEveryCutCallInResolveGoPassesTheRescueLedger(t *testing.T) {
 	if seen < 3 {
 		t.Fatalf("found %d call(s) to %s in resolve.go, want at least 3 (first pass, confirmed-kind re-decision, "+
 			"evidence-census re-decision); a pin that inspected fewer has not looked at the ones that matter", seen, target)
+	}
+}
+
+// P11 -- "THEN CUT" MUST MEAN CUT, not "lost to some other rule".
+//
+// Round 2's P1, reproduced. `matched` is recorded before authorization, and
+// the earlier version counted survivors by KIND over the whole ranked list.
+// So a rescue row removed BEFORE ranking — by authorization, the admission
+// boundary, an internal-node rejection or dedup — reported
+// `ran_matched_then_cut`: a confident wrong answer about which rule lost the
+// subject, in the one line whose entire purpose is to name that rule.
+//
+// The row is authorized to a repository the principal does not hold, so it is
+// dropped before ranking while the graph genuinely returned it.
+func TestARescueMatchLostBeforeRankingIsNotCalledCut(t *testing.T) {
+	t.Parallel()
+	const dropped = "project.v2:linear:13e65c04-40ec-4a95-8216-f7c2ce233244"
+	rows := []CandidateNode{candidateNode(contextfabric.SubjectProject, dropped, "Ask Dev", 0.85, "*")}
+	_, log := namedRowInfoDroppingBeforeRanking(t, declaredKindCrowd("ask-dev", 70, true, rows),
+		namedProjectFrame("ask-dev"), dropped)
+	line := rankedCutLine(t, log)
+
+	if !strings.Contains(line, `"matched":1`) {
+		t.Fatalf("the graph did not return the rescue row, so this pin is not the shape it claims. line: %s", line)
+	}
+	if strings.Contains(line, `"`+declaredKindRescueMatchedThenCut+`"`) {
+		t.Errorf("a row removed BEFORE ranking is reported as %q; truncation did not lose it and a different fix is "+
+			"needed, which is exactly what this line exists to say. line: %s", declaredKindRescueMatchedThenCut, line)
+	}
+	for _, want := range []string{`"` + declaredKindRescueMatchedThenDropped + `"`, `"reached":0`, `"survived":0`} {
+		if !strings.Contains(line, want) {
+			t.Errorf("line missing %s -- removed-before-ranking must be its own state with its own counts. line: %s", want, line)
+		}
+	}
+}
+
+// P12 -- SURVIVED MEANS THIS ARM'S OWN ROW SURVIVED.
+//
+// Round 2's second repro. Counting survivors by KIND let an unrelated
+// ordinary-search row of the same kind report the rescue as having survived
+// when its own row had not — the field an operator would use to decide the
+// arm worked, answering about a different row.
+func TestASameKindRowFromAnotherArmDoesNotCountAsTheRescueSurviving(t *testing.T) {
+	t.Parallel()
+	// Ordinary search returns an AUTHORIZED project; the rescue arm returns a
+	// DIFFERENT project the principal may not see.
+	const dropped = "project.v2:linear:13e65c04-40ec-4a95-8216-f7c2ce233244"
+	other := candidateNode(contextfabric.SubjectProject, "project.v2:linear:other-one", "Other Project", 0.95, "*")
+	rows := []CandidateNode{candidateNode(contextfabric.SubjectProject, dropped, "Ask Dev", 0.85, "*")}
+	backend := declaredKindCrowd("ask-dev", 70, true, rows)
+	backend.searchResults["ask-dev"] = append(backend.searchResults["ask-dev"], other)
+
+	res, log := namedRowInfoDroppingBeforeRanking(t, backend, namedProjectFrame("ask-dev"), dropped)
+	// NON-VACUITY: the other arm's project must really have survived, or the
+	// pin is asserting on a pool where nothing of that kind came back.
+	if candidateKinds(res)[contextfabric.SubjectProject] == 0 {
+		t.Fatalf("no project survived at all; kinds=%v -- this pin cannot tell the two rows apart here", candidateKinds(res))
+	}
+	line := rankedCutLine(t, log)
+	if strings.Contains(line, `"`+declaredKindRescueMatchedSurvived+`"`) {
+		t.Errorf("the rescue is reported as %q because ANOTHER arm's row of the same kind survived; its own row did not. "+
+			"line: %s", declaredKindRescueMatchedSurvived, line)
+	}
+	if !strings.Contains(line, `"survived":0`) {
+		t.Errorf("survived is not 0 for an arm whose own row never came back. line: %s", line)
 	}
 }

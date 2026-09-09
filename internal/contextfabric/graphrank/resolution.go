@@ -1429,13 +1429,31 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		// CHAOS-5388: survivors are counted from the SAME mask the cut is
 		// taken with, not from a second walk, so the number on the line can
 		// never disagree with the candidates returned beside it.
+		// r2 P1: counted over THIS ARM'S OWN rows, by subject key, not by
+		// kind. Counting by kind let an unrelated ordinary-search row of the
+		// same kind report the rescue as having survived when its own row had
+		// not. `reached` separates "removed before ranking" (authorization,
+		// the admission boundary, an internal-node rejection, dedup) from
+		// "cut" -- different rules, different fixes, and this line exists to
+		// name which one.
+		declaredReached := make(map[contextfabric.SubjectKind]int, len(kindRescue.declaredKinds()))
 		declaredSurvivors := make(map[contextfabric.SubjectKind]int, len(kindRescue.declaredKinds()))
-		for i, candidate := range ordered {
-			if keptIndex[i] {
-				declaredSurvivors[candidate.Subject.Kind]++
+		for _, kind := range kindRescue.declaredKinds() {
+			keys := kindRescue.proposedKeys(kind)
+			if len(keys) == 0 {
+				continue
+			}
+			for i, candidate := range ordered {
+				if !keys[SubjectKey(candidate.Subject)] {
+					continue
+				}
+				declaredReached[kind]++
+				if keptIndex[i] {
+					declaredSurvivors[kind]++
+				}
 			}
 		}
-		rescueReport := declaredKindRescueReport(kindRescue, declaredSurvivors)
+		rescueReport := declaredKindRescueReport(kindRescue, declaredReached, declaredSurvivors)
 		tracer.Trace(ResolutionTraceEvent{
 			RequestID: requestID, Stage: "ranked_cut", RankedCutSummary: true,
 			RankedCutCandidateCount: len(ordered), RankedCutSurvivedCount: len(survivedIDs),

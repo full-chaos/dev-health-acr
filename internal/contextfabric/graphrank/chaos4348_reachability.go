@@ -217,7 +217,7 @@ func applyKindHintedPoolSearch(ctx context.Context, principal storage.Principal,
 			// Recorded BEFORE merge, dedup, authorization and ranking:
 			// the question a retrieval fix needs is what the GRAPH returned,
 			// which the pool can no longer answer once those have run.
-			ledger.recordQuery(kind, len(results))
+			ledger.recordQuery(kind, results)
 			traceKindHintSearch(deps, request.RequestID, term, results)
 			termTraversalDegraded, termAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, results, pool, observationParentKey, observationBlocked, true, nil, identity, identityTerms, admission)
 			traversalDegraded += termTraversalDegraded

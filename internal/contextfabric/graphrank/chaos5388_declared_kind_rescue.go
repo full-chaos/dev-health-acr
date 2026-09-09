@@ -43,10 +43,17 @@ type declaredKindRescue struct {
 	// this kind for these terms", which is the question a retrieval fix needs
 	// and the pool alone cannot answer.
 	Matched int `json:"matched"`
-	// Survived is how many candidates of this kind came back out of phase 4.
-	// Matched > 0 with Survived == 0 is the third cause and takes a third
-	// fix: the subject was retrieved and truncation dropped it.
+	// Survived is how many of THIS ARM'S OWN rows came back out of phase 4 --
+	// not how many candidates of this kind did. Round 2 found the difference
+	// with an executed repro: counting by kind let an unrelated
+	// ordinary-search row of the same kind report the rescue as having
+	// survived when its own row had not, which is a confident wrong answer in
+	// the one field an operator would use to decide the arm worked.
 	Survived int `json:"survived"`
+	// Reached is how many of this arm's own rows reached the ranked list at
+	// all. Matched > Reached means something removed them BEFORE ranking, and
+	// that is a different rule and a different fix from truncation.
+	Reached int `json:"reached"`
 }
 
 const (
@@ -57,8 +64,15 @@ const (
 	// declaredKindRescueMatchedZero: the arm ran and the graph returned
 	// nothing under this kind for these terms. A MEASURED zero.
 	declaredKindRescueMatchedZero = "ran_matched_zero"
-	// declaredKindRescueMatchedThenCut: the arm ran, the graph returned rows,
-	// and none survived phase 4.
+	// declaredKindRescueMatchedThenDropped: the arm ran, the graph returned
+	// rows, and none of THOSE ROWS ever reached the ranked list at all --
+	// authorization, the admission boundary, an internal-node rejection or
+	// dedup removed them before ranking. Round 2 found this: calling that
+	// case "cut" was a LIE about which rule lost the subject, in a line whose
+	// whole purpose is to say which rule lost the subject.
+	declaredKindRescueMatchedThenDropped = "ran_matched_then_dropped"
+	// declaredKindRescueMatchedThenCut: the arm ran, its rows DID reach the
+	// ranked list, and phase 4 cut them.
 	declaredKindRescueMatchedThenCut = "ran_matched_then_cut"
 	// declaredKindRescueMatchedSurvived: the healthy path, stated explicitly
 	// so a pass where nothing went wrong cannot be mistaken for a build that
@@ -90,6 +104,11 @@ type kindRescueLedger struct {
 	ran          bool
 	termsQueried map[contextfabric.SubjectKind]int
 	matched      map[contextfabric.SubjectKind]int
+	// proposed is the SUBJECT KEY of every row this arm returned, per kind.
+	// Keeping the keys rather than a count is what lets the report say
+	// whether THIS ARM'S row survived, instead of whether some row of the
+	// same kind did.
+	proposed map[contextfabric.SubjectKind]map[string]bool
 }
 
 func newKindRescueLedger(declared []contextfabric.SubjectKind) *kindRescueLedger {
@@ -97,6 +116,7 @@ func newKindRescueLedger(declared []contextfabric.SubjectKind) *kindRescueLedger
 		declared:     declared,
 		termsQueried: map[contextfabric.SubjectKind]int{},
 		matched:      map[contextfabric.SubjectKind]int{},
+		proposed:     map[contextfabric.SubjectKind]map[string]bool{},
 	}
 }
 
@@ -109,21 +129,39 @@ func (l *kindRescueLedger) declaredKinds() []contextfabric.SubjectKind {
 	return l.declared
 }
 
-func (l *kindRescueLedger) recordQuery(kind contextfabric.SubjectKind, matched int) {
+func (l *kindRescueLedger) recordQuery(kind contextfabric.SubjectKind, results []CandidateNode) {
 	if l == nil {
 		return
 	}
 	l.ran = true
 	l.termsQueried[kind]++
-	l.matched[kind] += matched
+	l.matched[kind] += len(results)
+	for _, node := range results {
+		subject, ok := NodeSubject(node)
+		if !ok {
+			continue
+		}
+		if l.proposed[kind] == nil {
+			l.proposed[kind] = map[string]bool{}
+		}
+		l.proposed[kind][SubjectKey(subject)] = true
+	}
+}
+
+// proposedKeys is nil-safe and returns this arm's own rows for one kind.
+func (l *kindRescueLedger) proposedKeys(kind contextfabric.SubjectKind) map[string]bool {
+	if l == nil {
+		return nil
+	}
+	return l.proposed[kind]
 }
 
 // declaredKindRescueReport renders the line's value for the DECLARED kinds.
 //
-// It returns a non-nil, possibly EMPTY slice on every pass, so a frame that
-// declared nothing renders `[]` and can never be confused with a build that
-// stopped emitting the key. survivors is the per-kind count out of phase 4.
-func declaredKindRescueReport(ledger *kindRescueLedger, survivors map[contextfabric.SubjectKind]int) []declaredKindRescue {
+// reached and survived are counted over THIS ARM'S OWN proposed keys, which is
+// what makes the four states name four different rules rather than three rules
+// and a guess.
+func declaredKindRescueReport(ledger *kindRescueLedger, reached map[contextfabric.SubjectKind]int, survivors map[contextfabric.SubjectKind]int) []declaredKindRescue {
 	declared := ledger.declaredKinds()
 	out := make([]declaredKindRescue, 0, len(declared))
 	seen := make(map[contextfabric.SubjectKind]bool, len(declared))
@@ -132,7 +170,7 @@ func declaredKindRescueReport(ledger *kindRescueLedger, survivors map[contextfab
 			continue
 		}
 		seen[kind] = true
-		row := declaredKindRescue{Kind: string(kind), Survived: survivors[kind]}
+		row := declaredKindRescue{Kind: string(kind), Survived: survivors[kind], Reached: reached[kind]}
 		if ledger != nil {
 			row.TermsQueried = ledger.termsQueried[kind]
 			row.Matched = ledger.matched[kind]
@@ -142,6 +180,8 @@ func declaredKindRescueReport(ledger *kindRescueLedger, survivors map[contextfab
 			row.State = declaredKindRescueNotRun
 		case row.Matched == 0:
 			row.State = declaredKindRescueMatchedZero
+		case row.Reached == 0:
+			row.State = declaredKindRescueMatchedThenDropped
 		case row.Survived == 0:
 			row.State = declaredKindRescueMatchedThenCut
 		default:
