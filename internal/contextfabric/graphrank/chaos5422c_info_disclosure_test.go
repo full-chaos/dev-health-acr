@@ -165,12 +165,16 @@ func TestTheIDListIsCappedWhileTheCountStaysTrue(t *testing.T) {
 	if len(ids) != traceSummaryIDCap {
 		t.Errorf("emitted %d ids, want exactly %d regardless of the crowd", len(ids), traceSummaryIDCap)
 	}
-	// Deterministic and prefix-stable: the cap takes the FIRST ids in the
-	// sorted order, so two runs of the same resolution log the same sample.
-	sorted := append([]string(nil), ids...)
-	for i := 1; i < len(sorted); i++ {
-		if sorted[i-1] >= sorted[i] {
-			t.Fatalf("ids are not in ascending order at %d: %v", i, ids)
+	// WHICH ids, not merely how many. The cap takes the FIRST of the sorted
+	// order, so the sample is deterministic and two runs of the same
+	// resolution log the same one. Asserting only "ascending" would accept a
+	// build that logged the LAST 25 — also ascending, and a different sample
+	// every time the population shifts.
+	for i, id := range ids {
+		want := fmt.Sprintf("team.v2:github:platform-%03d", i)
+		if id != want {
+			t.Fatalf("ids[%d] = %q, want %q — the cap must take the first ids of the deterministic order, "+
+				"so the sample does not move under an operator. ids=%v", i, id, want, ids)
 		}
 	}
 }
