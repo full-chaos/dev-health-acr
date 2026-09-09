@@ -241,6 +241,15 @@
               "items": {
                 "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/PlanRequirementOutcomeRow"
               }
+            },
+            "refusal_basis": {
+              "type": "string",
+              "enum": [
+                "member_kind_unservable",
+                "frame_invariant_violated",
+                "unspecified"
+              ],
+              "description": "CHAOS-5442: names WHY the server refused to act on this question's frame, over a closed vocabulary. ABSENT on every turn that was not refused -- absence means \"not refused\", never \"refused for a reason nobody recorded\" (that state is the `unspecified` member). Orthogonal to terminal_reason, which names the CHANNEL an explanation travelled through rather than the decision taken: a refused frame carries both."
             }
           },
           "required": [
@@ -459,7 +468,7 @@
                 "answer_terminated_before_attempt",
                 "population_truncated",
                 "requirement_read_not_planned",
-            "read_population_unverified"
+                "read_population_unverified"
               ],
               "type": "string"
             },
@@ -3032,6 +3041,15 @@
         },
         "window_clarification": {
           "$ref": "#/$defs/context_fabric_common.v1/$defs/WindowClarification"
+        },
+        "refusal_basis": {
+          "type": "string",
+          "enum": [
+            "member_kind_unservable",
+            "frame_invariant_violated",
+            "unspecified"
+          ],
+          "description": "CHAOS-5442: names WHY the server refused to act on this question's frame, over a closed vocabulary. ABSENT on every turn that was not refused -- absence means \"not refused\", never \"refused for a reason nobody recorded\" (that state is the `unspecified` member). Orthogonal to terminal_reason, which names the CHANNEL an explanation travelled through rather than the decision taken: a refused frame carries both."
         }
       },
       "required": [
@@ -3314,6 +3332,15 @@
               "items": {
                 "$ref": "#/$defs/context_fabric_common.v1/$defs/PlanRequirementOutcomeRow"
               }
+            },
+            "refusal_basis": {
+              "type": "string",
+              "enum": [
+                "member_kind_unservable",
+                "frame_invariant_violated",
+                "unspecified"
+              ],
+              "description": "CHAOS-5442: names WHY the server refused to act on this question's frame, over a closed vocabulary. ABSENT on every turn that was not refused -- absence means \"not refused\", never \"refused for a reason nobody recorded\" (that state is the `unspecified` member). Orthogonal to terminal_reason, which names the CHANNEL an explanation travelled through rather than the decision taken: a refused frame carries both."
             }
           },
           "required": [
@@ -5077,7 +5104,7 @@
                 "answer_terminated_before_attempt",
                 "population_truncated",
                 "requirement_read_not_planned",
-            "read_population_unverified"
+                "read_population_unverified"
               ],
               "type": "string"
             },

@@ -1147,6 +1147,33 @@ func (r ContextFabricInvestigationResult) validateCompleteness(bounds contextFab
 	if c.RowsCount != rows {
 		return fmt.Errorf("rows_count %d must equal the summed claimed-fact row counts %d", c.RowsCount, rows)
 	}
+	// CHAOS-5442: the block's refusal basis MIRRORS the result's, exactly
+	// as terminal_status mirrors status, and is checked the same way. Two
+	// surfaces carrying one fact must not be able to disagree about it --
+	// a consumer reading only the self-contained disclosure block would
+	// otherwise be told a different story than one reading the result.
+	if c.RefusalBasis != r.RefusalBasis {
+		return fmt.Errorf("completeness refusal_basis %q must equal the result's refusal_basis %q", c.RefusalBasis, r.RefusalBasis)
+	}
+	// Membership is checked on the NON-EMPTY value only: empty is the
+	// ordinary case (the turn was not refused) and is deliberately not a
+	// vocabulary member, so an allow-list membership test on it would
+	// refuse every unrefused answer ever produced.
+	if r.RefusalBasis != "" && !ValidContextFabricRefusalBasis(r.RefusalBasis) {
+		return fmt.Errorf("refusal_basis %q is not a vocabulary member", r.RefusalBasis)
+	}
+	// A REFUSAL CANNOT CLAIM TO HAVE ANSWERED. The gate refuses above
+	// retrieval, so a refused turn has read no canonical fact and reached
+	// no complete answer; a document carrying both a basis and a served
+	// terminal is self-contradictory, and admitting it would let the field
+	// become decoration on an ordinary answer rather than a statement
+	// about the turn.
+	if r.RefusalBasis != "" && r.Status == ContextFabricInvestigationComplete {
+		return fmt.Errorf("refusal_basis %q cannot accompany status %q", r.RefusalBasis, r.Status)
+	}
+	if r.RefusalBasis != "" && len(r.ClaimedFacts) > 0 {
+		return fmt.Errorf("refusal_basis %q cannot accompany %d claimed fact(s)", r.RefusalBasis, len(r.ClaimedFacts))
+	}
 	return validateAnswerOutcomes(c, bounds)
 }
 

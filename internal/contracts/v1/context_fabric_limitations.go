@@ -335,6 +335,99 @@ func IsContextFabricGroupingUnplaceableLimitation(limitation string) bool {
 	return ValidContextFabricSubjectKind(ContextFabricSubjectKind(plannedKind))
 }
 
+// contextFabricRefusalBasisLimitationPrefix/-Middle/-Suffix are the three
+// FIXED segments of CHAOS-5442's frame-refusal disclosure, and
+// contextFabricFrameInvariantRefusalLimitation is the whole sentence for the
+// refusal that has no kind to name.
+//
+// INTERPOLATED, under the same ruling the grouping-refusal disclosure above
+// records: both interpolated values are members of CLOSED vocabularies the
+// model never writes into (a subject kind and a refusal basis), so the
+// sentence still carries no model text and no corpus content -- the property
+// the "fixed and non-interpolated" discipline exists to guarantee, reached by
+// the same different route.
+//
+// WHY IT NAMES THE BASIS TOKEN and not only the kind. The reader of a
+// refusal has to be able to join the sentence to the machine field beside it
+// (Completeness.RefusalBasis) and to the Info line the server logged, and the
+// only thing all three can share is the token. A sentence that described the
+// refusal in prose alone would leave the operator correlating an English
+// phrase against a snake_case field, which is exactly the translation step
+// that makes a disclosure go unread.
+//
+// WHY THE KIND IS IN THE SENTENCE AND NOT IN THE FIELD. The declared kind is
+// what makes the refusal ACTIONABLE -- it is the one thing the asker can
+// change about their question. Putting it in the closed field would have
+// meant either a cross-product vocabulary (one member per basis-and-kind
+// pair) or a second field, and the sentence is the honest home for a value
+// that varies per question rather than per decision.
+const (
+	contextFabricRefusalBasisLimitationPrefix = "This question asked about a population of "
+	contextFabricRefusalBasisLimitationMiddle = ", which this service has no way to enumerate, so it was not searched and no canonical facts were read. The server refused this question's frame on the basis "
+	contextFabricRefusalBasisLimitationSuffix = "."
+)
+
+// ContextFabricFrameInvariantRefusalLimitation is the fixed disclosure for a
+// frame refused because it VIOLATED AN INVARIANT rather than because it named
+// an unservable population.
+//
+// FIXED, not interpolated, because there is nothing safe to interpolate: the
+// only value that would distinguish one instance from another is the failed
+// invariant's name, and that vocabulary is a server-internal validation
+// detail -- see ContextFabricRefusalBasisFrameInvariantViolated for why it is
+// deliberately not promoted to the wire. The operator reads which invariant
+// failed on the frame-validation log line.
+const ContextFabricFrameInvariantRefusalLimitation = "The server could not act on this question as stated, because the way it combines its subject and its grouping is not answerable as asked, so no canonical facts were read. Rephrasing the question so it asks for one thing at a time may answer it."
+
+// ContextFabricRefusalBasisLimitation composes the disclosure that a
+// question was refused because its declared member kind has no discovery arm.
+//
+// THE SOLE COMPOSER, for the reason its grouping-refusal sibling states at
+// length: an interpolated string cannot be recognised by the equality check
+// the fixed disclosures use, so recognition is a PARSE over exactly the
+// segments this function writes, and a second hand-rolled Sprintf at a call
+// site would produce a string the parser might not accept. An unrecognised
+// service disclosure is silently displaceable.
+func ContextFabricRefusalBasisLimitation(declaredKind ContextFabricSubjectKind, basis ContextFabricRefusalBasis) string {
+	return contextFabricRefusalBasisLimitationPrefix + string(declaredKind) +
+		contextFabricRefusalBasisLimitationMiddle + string(basis) +
+		contextFabricRefusalBasisLimitationSuffix
+}
+
+// IsContextFabricRefusalBasisLimitation reports whether a limitation is one
+// ContextFabricRefusalBasisLimitation could have composed.
+//
+// A PARSE, AND BOTH INTERPOLATED SEGMENTS ARE CHECKED FOR MEMBERSHIP, for the
+// reason the grouping recogniser states: everything that consults the
+// service-authored registry is deciding whether a string may be DISPLACED,
+// and a loose or prefix match would let a model-authored caveat that merely
+// opens with this wording become undisplaceable and take a real caveat's
+// place. The empty kind and the empty basis are not members, so a
+// half-composed sentence is not recognised either.
+func IsContextFabricRefusalBasisLimitation(limitation string) bool {
+	body, ok := strings.CutPrefix(limitation, contextFabricRefusalBasisLimitationPrefix)
+	if !ok {
+		return false
+	}
+	body, ok = strings.CutSuffix(body, contextFabricRefusalBasisLimitationSuffix)
+	if !ok {
+		return false
+	}
+	declaredKind, basis, ok := strings.Cut(body, contextFabricRefusalBasisLimitationMiddle)
+	if !ok {
+		return false
+	}
+	// Exactly one separator, the same refusal the grouping parse makes:
+	// a second occurrence means the two values are not what Cut returned,
+	// and guessing which split was intended is precisely the ambiguity a
+	// closed vocabulary lets us decline instead.
+	if strings.Contains(basis, contextFabricRefusalBasisLimitationMiddle) {
+		return false
+	}
+	return ValidContextFabricSubjectKind(ContextFabricSubjectKind(declaredKind)) &&
+		ValidContextFabricRefusalBasis(ContextFabricRefusalBasis(basis))
+}
+
 // ContextFabricServiceAuthoredLimitations returns every disclosure this
 // service composes for itself, in no significant order.
 //
@@ -363,6 +456,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricFactScopeUnexpandedLimitation,
 		ContextFabricFactScopeActivityProxyLimitation,
 		ContextFabricFactScopeAttributedPrimaryTeamLimitation,
+		ContextFabricFrameInvariantRefusalLimitation,
 	}
 }
 
@@ -390,7 +484,8 @@ func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
 	// on a different axis than the one asked for. That is the shipped round-3
 	// defect, and it is invisible to any test that drives the composer.
 	return IsContextFabricGroupingRefusalLimitation(limitation) ||
-		IsContextFabricGroupingUnplaceableLimitation(limitation)
+		IsContextFabricGroupingUnplaceableLimitation(limitation) ||
+		IsContextFabricRefusalBasisLimitation(limitation)
 }
 
 // HasContextFabricServiceAuthoredLimitation reports whether any entry is

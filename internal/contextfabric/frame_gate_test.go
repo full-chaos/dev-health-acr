@@ -551,11 +551,11 @@ func TestTheWithheldPoolHasItsOwnTerminalReason(t *testing.T) {
 		Candidates: []SubjectCandidate{}, Committed: []SubjectRef{},
 		ClarificationPrompt: OfferPoolEmptiedClarificationPrompt,
 	}
-	if got := subjectlessTerminalReason(withheld, 0); got != "offer_pool_emptied_by_exclusion" {
+	if got := subjectlessTerminalReason(FrameGate{}, withheld, 0); got != "offer_pool_emptied_by_exclusion" {
 		t.Errorf("terminal reason = %q, want %q", got, "offer_pool_emptied_by_exclusion")
 	}
 	empty := SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}
-	if got := subjectlessTerminalReason(empty, 0); got != "empty_pool" {
+	if got := subjectlessTerminalReason(FrameGate{}, empty, 0); got != "empty_pool" {
 		t.Errorf("terminal reason for a genuinely empty pool = %q, want %q -- the control", got, "empty_pool")
 	}
 }

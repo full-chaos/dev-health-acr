@@ -1,6 +1,10 @@
 package contextfabric
 
-import "fmt"
+import (
+	"fmt"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+)
 
 // FrameGate is the ORDERING SEAM the design's §13.5.2 flow states:
 //
@@ -53,6 +57,19 @@ type FrameGate struct {
 	// CohortMemberKindUnservable -- see DecideFrameGate for why the other
 	// two non-discoverable reasons deliberately do NOT refuse.
 	RefuseBasis CohortDiscoverability
+	// DeclaredMemberKind is the member kind the refused frame named, empty
+	// unless Outcome is FrameGateRefusedBasis.
+	//
+	// CARRIED, NOT RE-DERIVED, and that is the whole reason it is a field
+	// rather than something the terminal recomputes. DecideFrameGate
+	// already asks CohortMemberKindFor for the reason it refuses on; the
+	// declared kind falls out of the SAME call. A consumer that re-ran the
+	// predicate to learn the kind would be a second reading of it taken at
+	// a later moment against a frame that may by then be nil -- the exact
+	// two-readings-of-one-decision drift this seam exists to remove, and
+	// the terminal path is downstream of the point where a refused frame
+	// stops riding along.
+	DeclaredMemberKind SubjectKind
 }
 
 // FrameGateOutcome is the closed vocabulary. Every member is a DECISION;
@@ -155,8 +172,13 @@ func DecideFrameGate(result FrameValidationResult, hasProposal bool) FrameGate {
 	if result.Outcome != FrameValidationOutcomeValid {
 		return FrameGate{Outcome: FrameGateRejectedInvalid, FailedInvariant: result.Failure.Invariant}
 	}
-	if _, _, reason := CohortMemberKindFor(result.Frame.SubjectExpression); reason == CohortMemberKindUnservable {
-		return FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: reason}
+	if _, declaredKind, reason := CohortMemberKindFor(result.Frame.SubjectExpression); reason == CohortMemberKindUnservable {
+		// declaredKind rides out of the same call that decided the
+		// refusal. It is what makes the served disclosure actionable --
+		// the kind is the one thing the asker can change about the
+		// question -- and reading it here rather than downstream is what
+		// keeps one decision one reading.
+		return FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: reason, DeclaredMemberKind: declaredKind}
 	}
 	return FrameGate{Outcome: FrameGatePassed}
 }
@@ -218,4 +240,58 @@ func nonEmptyGateDetail(value string) string {
 		return "unspecified"
 	}
 	return value
+}
+
+// RefusalBasis maps this gate to the CLOSED WIRE vocabulary a refused turn
+// discloses (CHAOS-5442), or to the empty value when the gate did not refuse.
+//
+// AN ALLOW-LIST, NAMING EVERY MEMBER'S CLASS, never a deny-list with an else.
+// The three allowing members are named explicitly and return "not refused";
+// the two refusing members are named explicitly and return their token; and
+// the default arm returns `unspecified` rather than "not refused", because
+// Refuses() itself refuses on an unrecognised outcome. The two must agree in
+// BOTH directions or a future gate member would refuse a turn while the
+// served document said the turn was never refused -- a silent collapse of
+// exactly the distinction this field adds. TestTheGateAndTheWireBasisAgree
+// asserts the biconditional over the whole vocabulary.
+func (g FrameGate) RefusalBasis() contractsv1.ContextFabricRefusalBasis {
+	switch g.Outcome {
+	case FrameGateNotEvaluated, FrameGateNotProposed, FrameGatePassed:
+		return ""
+	case FrameGateRefusedBasis:
+		// The gate's own basis is the wire's basis, one token for one
+		// fact. It is validated rather than cast blindly: a
+		// CohortDiscoverability member that is not a wire member is a
+		// vocabulary drift, and disclosing `unspecified` is how that
+		// drift becomes visible instead of shipping an unrecognised
+		// string to every consumer.
+		if basis := contractsv1.ContextFabricRefusalBasis(g.RefuseBasis); contractsv1.ValidContextFabricRefusalBasis(basis) {
+			return basis
+		}
+		return contractsv1.ContextFabricRefusalBasisUnspecified
+	case FrameGateRejectedInvalid:
+		return contractsv1.ContextFabricRefusalBasisFrameInvariantViolated
+	default:
+		return contractsv1.ContextFabricRefusalBasisUnspecified
+	}
+}
+
+// ObservableRefusalBasis renders the WIRE refusal basis for a log line,
+// "none" when the gate did not refuse.
+//
+// Distinct from ObservableRefuseBasis above, which renders the gate's own
+// CohortDiscoverability basis and is therefore "none" for a frame refused on
+// an INVARIANT -- correct for the line it serves (the frame-validation line,
+// which carries the failed invariant beside it) and wrong for a line that
+// claims to say whether the turn was refused at all.
+//
+// The explicit token lives HERE, at the one place the value is decided,
+// rather than inside a sink: a sink-local substitution is a second authority
+// that keeps the ordinary line looking right while every other implementation
+// of the recorder emits an empty value.
+func (g FrameGate) ObservableRefusalBasis() string {
+	if basis := g.RefusalBasis(); basis != "" {
+		return string(basis)
+	}
+	return "none"
 }

@@ -44,7 +44,7 @@ func TestSubjectlessTerminalReason(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := subjectlessTerminalReason(tc.resolution, tc.subjectCandidatesAuthzDropped); got != tc.want {
+			if got := subjectlessTerminalReason(FrameGate{}, tc.resolution, tc.subjectCandidatesAuthzDropped); got != tc.want {
 				t.Fatalf("subjectlessTerminalReason() = %q, want %q", got, tc.want)
 			}
 		})

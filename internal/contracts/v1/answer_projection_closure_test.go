@@ -316,7 +316,14 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// answer plan, so it gains none of the requirement-row leaves.
 		// S7c: 215 -> 224 -- completeness.state plus the eight string
 		// leaves of a requirement outcome row.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 228},
+		// CHAOS-5442: 228 -> 229 -- completeness.refusal_basis, the closed
+		// vocabulary naming why the server refused to act on a frame.
+		// Trusted-because-closed for the same reason the plan's "basis" leaf
+		// is: the value is selected by deterministic server code from a
+		// closed vocabulary, never authored by a model. ONE new leaf, not
+		// two: the projection copies the completeness block and carries no
+		// top-level refusal_basis of its own, mirroring its Go type.
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 229},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -371,7 +378,13 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// and none belongs in the untrusted set.
 		// S7c: 313 -> 322 -- the same nine new completeness leaves as the
 		// answer_projection surface above.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 339},
+		// CHAOS-5442: 339 -> 341 -- refusal_basis on BOTH surfaces of the
+		// canonical result: the top-level field and its mirror inside the
+		// completeness block. TWO here against the projection's one, and the
+		// difference is the point: the projection copies only the block, so
+		// a basis that lived solely at the result root would never reach a
+		// bounded consumer. Both leaves are trusted-because-closed.
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 341},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -549,6 +562,14 @@ func trustedBecauseClosed(path string) bool {
 		// their own registries before a result is stored, never model
 		// prose.
 		"terminal_status", "terminal_reason",
+		// CHAOS-5442: "refusal_basis" is ContextFabricRefusalBasis, a
+		// three-value closed vocabulary produced by deterministic server
+		// code (FrameGate.RefusalBasis) and rejected by the result
+		// validator when it is not a member -- never model prose. It
+		// appears on two paths of the canonical result (the top-level
+		// field and its completeness mirror) and one of the projection,
+		// and the single leaf name covers all three.
+		"refusal_basis",
 		// CHAOS-4636: every string the answer plan carries is either a
 		// closed vocabulary or a service-issued token, because the PLAN IS
 		// COMPOSED BY A DETERMINISTIC STAGE, NEVER BY A MODEL -- that is
