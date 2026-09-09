@@ -337,6 +337,14 @@ func TestTheRefusalIsOnTheEmittedInfoLine(t *testing.T) {
 				"offer_pool_anchor_kind_withheld":        testCase.wantWithheld,
 				"offer_pool_anchor_kind_withheld_scope":  testCase.wantScope,
 				"offer_pool_anchor_kind_withheld_reason": testCase.wantReason,
+				// The exemption count belongs on the SAME line for the same
+				// reason: a refusal count of zero beside an exemption count of
+				// one is a different fact from two zeros, and only one of them
+				// means "this question refused nothing". A mutation arm that
+				// deleted this field from the emitter survived the capture-based
+				// test, because a recording tracer proves a field was SET and
+				// only the handler proves it is EMITTED.
+				"offer_pool_anchor_kind_exempted": float64(0),
 			} {
 				got, present := line[key]
 				if !present {
@@ -800,14 +808,19 @@ func TestACallerHintOfTheRefusedKindIsAdmittedAndTheExemptionIsRecorded(t *testi
 	backend.exactHints = map[string]CandidateNode{
 		SubjectKey(member): candidateNode(member.Kind, member.CanonicalID, member.Label, 1, "*"),
 	}
-	capture := &contestCapture{}
+	// THE REAL HANDLER, at the production level — not a recording tracer. A
+	// capture proves the field was SET; only the handler proves it is EMITTED,
+	// and a mutation arm that deleted this field from the emitter survived a
+	// capture-based version of this very test.
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	req := testRequest()
 	req.Options.MaxSubjectCandidates = 20
 	req.RequestedScope.SubjectHints = []contextfabric.SubjectHint{
 		{Kind: member.Kind, ID: member.CanonicalID, Label: member.Label, Source: "workbench"},
 	}
 	deps := backend.deps()
-	deps.ResolutionTracer = capture
+	deps.ResolutionTracer = NewSlogResolutionTracer(logger)
 	res, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
 		storage.Principal{OrgID: "org_1", RepositoryScopes: []string{"*"}}, req, testInterpreted("platform"),
 		deps, confirmedTeamKind(), nil, contestFrame("platform"), contextfabric.SubjectRepository)
@@ -824,11 +837,29 @@ func TestACallerHintOfTheRefusedKindIsAdmittedAndTheExemptionIsRecorded(t *testi
 		t.Fatalf("committed %v — a caller who names a subject by canonical id must still get it; refusing "+
 			"this would break naming a subject, which is decided truth", res.Committed)
 	}
-	if len(capture.offerPool) != 1 {
-		t.Fatalf("captured %d offer_pool summaries, want exactly 1", len(capture.offerPool))
+	var line map[string]any
+	for _, raw := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if raw == "" {
+			continue
+		}
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(raw), &entry); err != nil {
+			t.Fatalf("emitted a line that is not JSON: %v", err)
+		}
+		if entry["stage"] == "decision_summary" {
+			line = entry
+		}
 	}
-	if got := capture.offerPool[0].OfferPoolAnchorKindExempted; got != 1 {
-		t.Fatalf("offer_pool_anchor_kind_exempted = %d, want 1 — the exemption fired and said nothing, which "+
-			"reads exactly like a boundary that was never applied", got)
+	if line == nil {
+		t.Fatalf("no decision_summary line was EMITTED at Info:\n%s", buf.String())
+	}
+	if got, present := line["offer_pool_anchor_kind_exempted"]; !present || got != float64(1) {
+		t.Fatalf("emitted offer_pool_anchor_kind_exempted = %v (present=%v), want 1 — the exemption fired and "+
+			"said nothing on the line an operator reads, which is indistinguishable from a boundary that was "+
+			"never applied", got, present)
+	}
+	if got := line["offer_pool_anchor_kind_withheld"]; got != float64(0) {
+		t.Fatalf("emitted offer_pool_anchor_kind_withheld = %v, want 0 — nothing was REFUSED on this turn, and "+
+			"conflating the two counts is what makes the exemption unreadable", got)
 	}
 }
