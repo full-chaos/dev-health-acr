@@ -549,3 +549,77 @@ func TestTheBoundaryRefusesBeforeAnyIdentityClaimIsRecorded(t *testing.T) {
 		})
 	}
 }
+
+// SURVIVOR-DRIVEN PIN 1. A candidate whose KIND FAILED TO RESOLVE carries the
+// zero value, and so does a scope that decided nothing — so a bare
+// `kind == s.MemberKind` would refuse that whole class for every question in the
+// product, through a comparison nobody wrote deliberately.
+//
+// The code refuses the empty kind explicitly and says why; nothing pinned it,
+// and a mutant that deleted the explicit refusal survived the suite. This is
+// that mutant's pin.
+func TestTheZeroScopeRefusesNothingIncludingTheZeroKind(t *testing.T) {
+	t.Parallel()
+	var zero contestScope
+	if zero.refuses("") {
+		t.Error("the zero scope refuses the zero kind: a candidate whose kind failed to resolve would " +
+			"vanish from every question in the product")
+	}
+	if zero.refuses(contextfabric.SubjectTeam) {
+		t.Error("the zero scope refuses a real kind")
+	}
+	// And a DECIDED scope still must not refuse the zero kind, which is the
+	// half the deleted guard actually protected.
+	decided := contestScope{MemberKind: contextfabric.SubjectTeam, Source: contestScopeFrameMemberKind}
+	if decided.refuses("") {
+		t.Error("a decided scope refuses the zero kind -- an unresolved candidate is not a member-kind candidate")
+	}
+	if !decided.refuses(contextfabric.SubjectTeam) {
+		t.Error("a decided scope does not refuse its own member kind")
+	}
+	if decided.refuses(contextfabric.SubjectRepository) {
+		t.Error("a decided scope refuses a kind that is not its member kind")
+	}
+}
+
+// SURVIVOR-DRIVEN PIN 2. The confirmed-kind re-decision resolves over a pool it
+// builds FRESH, so it is a second doorway into the contest and must carry the
+// same admission — otherwise the refused kind simply walks back in through it.
+//
+// A mutant passing nil there survived every other test in this file, because in
+// those fixtures the member was already visible to the FIRST pass and refused
+// there. This fixture makes the member reachable ONLY through the kind-scoped
+// snapshot, so the second doorway is the only way in and the arm cannot pass by
+// accident of the first pass having done the work.
+func TestTheConfirmedKindRedecisionCarriesTheSameAdmission(t *testing.T) {
+	t.Parallel()
+	anchor := candidateNode(contextfabric.SubjectRepository, "repository.v2:github:platform", "platform", 0.4, "*")
+	// Present ONLY in the kind-scoped results: ordinary search never returns it,
+	// so the first pass cannot be what refuses it.
+	hidden := candidateNode(contextfabric.SubjectTeam, "team.v2:github:platform-hidden", "platform hidden", 0.95, "*")
+	backend := &fakeGraphBackend{
+		enableSearchKind: true,
+		searchResults:    map[string][]CandidateNode{"platform": {anchor}},
+		searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
+			"platform": {
+				contextfabric.SubjectTeam:       {hidden},
+				contextfabric.SubjectRepository: {anchor},
+			},
+		},
+		// what sends this call into the re-decision at all
+		searchTruncated: true,
+	}
+	res := resolveContest(t, backend, contestFrame("platform"), confirmedTeamKind(), nil, 20, contextfabric.SubjectRepository)
+	for _, candidate := range res.Candidates {
+		if candidate.Subject.CanonicalID == "team.v2:github:platform-hidden" {
+			t.Fatalf("the refused member entered the contest through the confirmed-kind re-decision's own "+
+				"pool; that pass builds a FRESH pool and is a second doorway, so it must carry the same "+
+				"admission the first pass ran under. candidates=%v", res.Candidates)
+		}
+	}
+	for _, subject := range res.Committed {
+		if subject.Kind == contextfabric.SubjectTeam {
+			t.Fatalf("committed %v of the refused member kind through the re-decision", res.Committed)
+		}
+	}
+}
