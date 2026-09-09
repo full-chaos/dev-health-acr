@@ -97,6 +97,24 @@ func requireSaturatedCut(t *testing.T, cut ResolutionTraceEvent) {
 	}
 }
 
+// logLineWithMsg returns the ONE JSON log line carrying this msg, and fails if
+// there is not exactly one. Locating the line is the point: these four keys are
+// emitted on two different lines, so an assertion made over the whole log
+// passes on whichever line happens to be right.
+func logLineWithMsg(t *testing.T, log, msg string) string {
+	t.Helper()
+	var found []string
+	for _, line := range strings.Split(log, "\n") {
+		if strings.Contains(line, `"msg":"`+msg+`"`) {
+			found = append(found, line)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("found %d log lines with msg %q, want exactly 1 -- the assertions below name a line and cannot be made against zero or several", len(found), msg)
+	}
+	return found[0]
+}
+
 // P1 -- SOURCE: RECEIPT, and the acceptance case.
 //
 // The receipt path is UNCONDITIONAL: a receipt-declared scope-anchor kind
@@ -335,16 +353,39 @@ func TestTheAnchorSlotDecisionAndItsVictimAreVisibleAtProductionLogLevel(t *test
 	if !strings.Contains(log, `"anchor_slot_source":"receipt"`) {
 		t.Errorf("anchor_slot_source does not name the receipt source -- an operator cannot tell a model that stopped emitting scope_anchor_kind from a caller that stopped redeeming receipts; log: %s", log)
 	}
-	// THE VALUES, NOT JUST THE KEYS. Asserting presence alone let a mutant
-	// emit `none` for the reserved kind and stay green (r1 P3): a key whose
-	// value is wrong is worse than an absent key, because it reads as a
-	// measurement. pool_truncated_n is asserted at its exact figure for the
-	// same reason -- 92 candidates less the budget of 20.
-	if !strings.Contains(log, `"anchor_slot_reserved":"`+string(contextfabric.SubjectTeam)+`"`) {
-		t.Errorf("anchor_slot_reserved does not name the kind the slot was held for; log: %s", log)
+	// THE VALUES, NOT JUST THE KEYS, AND PER LINE.
+	//
+	// Asserting presence alone let a mutant emit `none` for the reserved kind
+	// and stay green (r1 P3): a key whose value is wrong is worse than an
+	// absent key, because it reads as a measurement.
+	//
+	// AND THE ASSERTION MUST NAME ITS LINE. The first version of this fix
+	// searched the whole log, and it did NOT kill that mutant either: the
+	// same four keys are emitted on TWO lines -- the ranked-cut summary and
+	// the displacement line -- so a substring search over the log passes on
+	// the UNGUARDED one while the guarded one is wrong. That is the standing
+	// two-line trap, and it is why each line is now located by its own `msg`
+	// and asserted on its own.
+	summaryLine := logLineWithMsg(t, log, "context fabric resolution trace: ranked cut summary")
+	for _, want := range []string{
+		`"anchor_slot_reserved":"` + string(contextfabric.SubjectTeam) + `"`,
+		`"anchor_slot_source":"` + anchorPoolKindScopeReceipt + `"`,
+		`"anchor_slot_displaced":1`,
+		`"pool_truncated_n":72`,
+	} {
+		if !strings.Contains(summaryLine, want) {
+			t.Errorf("ranked-cut SUMMARY line missing %s; a wrong value here reads as a measurement. line: %s", want, summaryLine)
+		}
 	}
-	if !strings.Contains(log, `"pool_truncated_n":72`) {
-		t.Errorf("pool_truncated_n is not the true dropped count (92 candidates - budget 20 = 72); a wrong count reads as a measurement; log: %s", log)
+	displacedLine := logLineWithMsg(t, log, "context fabric resolution trace: anchor slot displaced")
+	for _, want := range []string{
+		`"anchor_slot_reserved":"` + string(contextfabric.SubjectTeam) + `"`,
+		`"anchor_slot_source":"` + anchorPoolKindScopeReceipt + `"`,
+		`"subject_kind":"` + string(contextfabric.SubjectProject) + `"`,
+	} {
+		if !strings.Contains(displacedLine, want) {
+			t.Errorf("anchor_slot_displaced line missing %s; the victim line must name what was displaced and under whose slot. line: %s", want, displacedLine)
+		}
 	}
 	// THE ADMITTED ANCHOR IS NAMED, and it must agree with the displacement
 	// the summary claims. r1 asked what regression would be invisible at
