@@ -439,18 +439,47 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// full rule and why this is a second event on this SAME token
 		// rather than promoting this one.
 		if event.RankedCutSummary {
+			// CHAOS-5434: the decided scope anchor's slot rides this same
+			// once-per-pass line. All four keys are written on EVERY
+			// summary, with `none`/0 when nothing was reserved, so an
+			// operator can never confuse "this build stopped deciding a
+			// slot" with "this pass reserved none" -- and pool_truncated_n
+			// is what says whether a slot could have mattered here at all.
 			t.logger.InfoContext(ctx, "context fabric resolution trace: ranked cut summary",
 				"request_id", event.RequestID, "stage", event.Stage,
 				"candidate_count", event.RankedCutCandidateCount,
 				"survived_count", event.RankedCutSurvivedCount,
 				"survived_ids", event.RankedCutSurvivedIDs,
-				"max", event.RankedCutMax)
+				"max", event.RankedCutMax,
+				"anchor_slot_reserved", event.AnchorSlotReserved,
+				"anchor_slot_source", event.AnchorSlotSource,
+				"anchor_slot_displaced", event.AnchorSlotDisplaced,
+				"pool_truncated_n", event.PoolTruncatedN)
 			return
 		}
 		t.logger.DebugContext(ctx, "context fabric resolution trace: ranked cut",
 			"request_id", event.RequestID, "stage", event.Stage,
 			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
 			"rank", event.Rank, "survived", event.Survived, "coverage_bypass", event.CoverageBypass)
+	case "anchor_slot_displaced":
+		// CHAOS-5434. The scope anchor's reserved slot is the ONE admission
+		// that can take a place from a candidate ranking had earned -- and
+		// only when every in-budget tier-2 candidate is of a reserved kind,
+		// which on a scope-anchored frame means a saturated member crowd.
+		// It is at Info, and it names the evicted subject, because a
+		// displacement an operator cannot see is exactly the regression
+		// this ticket's acceptance forbids: "the reserved slot never
+		// displaces a higher-ranked member SILENTLY". Absence of this line
+		// on a pass whose summary reports anchor_slot_displaced=0 is a
+		// measured zero, not a missing measurement -- the two are
+		// distinguishable because the summary always carries the count.
+		t.logger.InfoContext(ctx, "context fabric resolution trace: anchor slot displaced",
+			"request_id", event.RequestID, "stage", event.Stage,
+			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
+			"anchor_slot_reserved", event.AnchorSlotReserved,
+			"anchor_slot_source", event.AnchorSlotSource,
+			"anchor_slot_displaced", event.AnchorSlotDisplaced,
+			"pool_truncated_n", event.PoolTruncatedN)
 	case "reserved_kind_admitted":
 		// One event per candidate that phase 4's kind reserve kept past the
 		// flat cut (resolution.go, reservedPrefix). It is the operator-visible

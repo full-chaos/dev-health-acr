@@ -398,7 +398,19 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 // (see below): a caller passing true is making an affirmative claim that
 // this population is complete, and that claim is what gets recorded, not a
 // new commit path.
+// CHAOS-5434: this exported entry point is the pre-ticket one, unchanged.
+// It delegates with an EMPTY anchorReservedSlot, which makes every function
+// the slot touches inert -- so every caller that is not resolve.go's own
+// first pass keeps a byte-identical cut, and no test call site had to move.
 func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string, confirmedKindScopedBasis bool, lowPopulationKindScopedBasis bool, reservedKinds []contextfabric.SubjectKind) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
+	return resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, tracer, requestID, evidenceCensusAttestedKey, confirmedKindScopedBasis, lowPopulationKindScopedBasis, reservedKinds, anchorReservedSlot{})
+}
+
+// resolveFromMergedCandidatesWithAnchorSlot carries the ONE extra input the
+// exported form does not: the scope anchor decided for this resolution
+// (chaos5434_anchor_slot.go). resolve.go's first pass is its only caller with
+// a non-empty slot.
+func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string, confirmedKindScopedBasis bool, lowPopulationKindScopedBasis bool, reservedKinds []contextfabric.SubjectKind, anchorSlot anchorReservedSlot) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
 	bases := make(contextfabric.CommitBasisSet)
 	// digests (CHAOS-4087) records IN LOCKSTEP with bases above, at every
 	// SAME bases.Record call site -- see CommitDecisionDigest's own doc
@@ -1347,7 +1359,7 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 	// keptIndex is the plain prefix whenever no kind is reserved, so a
 	// caller passing no reservedKinds gets byte-identical behaviour and a
 	// byte-identical trace to the pre-ticket version.
-	keptIndex := reservedPrefix(ordered, orderedTier, max, reservedKinds)
+	keptIndex, slotOutcome := reservedPrefix(ordered, orderedTier, max, reservedKinds, anchorSlot)
 	// CHAOS-4234 "ranked_cut": one event per candidate, in the exact
 	// order the cut below is taken over, BEFORE it is taken -- the only
 	// place a candidate's pre-cut rank still exists. See
@@ -1405,11 +1417,31 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 		if len(reportedIDs) > traceSummaryIDCap {
 			reportedIDs = reportedIDs[:traceSummaryIDCap]
 		}
+		// CHAOS-5434: the slot decision rides the SAME once-per-pass Info
+		// line rather than a new one, so an operator reading a cut reads
+		// its slot in the same record -- and every key is present with an
+		// explicit none/0 on every pass, so a build that stopped deciding
+		// a slot cannot read like a pass that reserved none.
+		slotReserved, slotSource := anchorSlot.observable()
 		tracer.Trace(ResolutionTraceEvent{
 			RequestID: requestID, Stage: "ranked_cut", RankedCutSummary: true,
 			RankedCutCandidateCount: len(ordered), RankedCutSurvivedCount: len(survivedIDs),
 			RankedCutSurvivedIDs: reportedIDs, RankedCutMax: max,
+			AnchorSlotReserved: slotReserved, AnchorSlotSource: slotSource,
+			AnchorSlotDisplaced: slotOutcome.Displaced, PoolTruncatedN: slotOutcome.PoolTruncatedN,
 		})
+		// The victim gets its OWN line, naming the candidate ranking had
+		// earned a place for. Without it the anchor's admission is visible
+		// and the price paid for it is not, which is the "never displaces
+		// a higher-ranked member SILENTLY" half of this ticket.
+		if slotOutcome.DisplacedSubject != nil {
+			tracer.Trace(ResolutionTraceEvent{
+				RequestID: requestID, Stage: "anchor_slot_displaced",
+				Subject: *slotOutcome.DisplacedSubject, Survived: false,
+				AnchorSlotReserved: slotReserved, AnchorSlotSource: slotSource,
+				AnchorSlotDisplaced: slotOutcome.Displaced, PoolTruncatedN: slotOutcome.PoolTruncatedN,
+			})
+		}
 	}
 	if max > 0 && len(ordered) > max {
 		retained := make([]contextfabric.SubjectCandidate, 0, max)
@@ -2029,14 +2061,23 @@ const kindReserveSlotsPerKind = 1
 //   - If no eligible victim exists it admits NOTHING and returns the plain
 //     prefix. The budget is a caller-declared maximum and is never exceeded:
 //     the retained count is identical with and without a reserve.
-func reservedPrefix(ordered []contextfabric.SubjectCandidate, orderedTier []int, max int, reservedKinds []contextfabric.SubjectKind) []bool {
+func reservedPrefix(ordered []contextfabric.SubjectCandidate, orderedTier []int, max int, reservedKinds []contextfabric.SubjectKind, anchorSlot anchorReservedSlot) ([]bool, anchorSlotOutcome) {
+	outcome := anchorSlotOutcome{}
+	outcome.Reserved, outcome.Source = anchorSlot.observable()
 	kept := make([]bool, len(ordered))
 	if max <= 0 || len(ordered) <= max {
 		for i := range kept {
 			kept[i] = true
 		}
-		return kept
+		return kept, outcome
 	}
+	// PoolTruncatedN is set from the plain prefix and never revised,
+	// because the reserve DISPLACES rather than grows: the retained count,
+	// and therefore the dropped count, is identical with and without every
+	// admission below. Stated here rather than derived at the end so a
+	// future edit that broke that property would contradict this line
+	// instead of silently reporting a different number.
+	outcome.PoolTruncatedN = len(ordered) - max
 	for i := 0; i < max; i++ {
 		kept[i] = true
 	}
@@ -2047,7 +2088,7 @@ func reservedPrefix(ordered []contextfabric.SubjectCandidate, orderedTier []int,
 		}
 	}
 	if len(reserved) == 0 {
-		return kept
+		return kept, outcome
 	}
 	present := make(map[contextfabric.SubjectKind]int, len(reserved))
 	for i := 0; i < max; i++ {
@@ -2079,5 +2120,48 @@ func reservedPrefix(ordered []contextfabric.SubjectCandidate, orderedTier []int,
 			present[kind]++
 		}
 	}
-	return kept
+	// CHAOS-5434: THE DECIDED SCOPE ANCHOR'S SLOT, second and last.
+	//
+	// Reached only when the loop above could not seat the anchor, which on
+	// a scope-anchored frame means one thing: every in-budget tier-2
+	// candidate was itself of a reserved kind, so the ordinary victim rule
+	// found nobody. That is the saturated-member-crowd shape this ticket
+	// exists for, and it is where the design's promised slot was silently
+	// not delivered for all three anchor sources alike.
+	//
+	// Ordering is deliberate. Running this SECOND means the ordinary rule
+	// keeps its exact meaning -- every cut the old rule could already take,
+	// it still takes, unchanged, and only a cut it REFUSED can now differ.
+	// Running it only for anchorSlot.Kind means a caller cannot buy this
+	// widened eligibility by asserting a kind: frameReservedKinds already
+	// excludes request.ExpectedKinds for that reason, and the anchor is the
+	// single claimant invariant I11 names as the subject to commit.
+	if anchorSlot.Kind == "" || !reserved[anchorSlot.Kind] || present[anchorSlot.Kind] >= kindReserveSlotsPerKind {
+		return kept, outcome
+	}
+	for i := max; i < len(ordered) && present[anchorSlot.Kind] < kindReserveSlotsPerKind; i++ {
+		if kept[i] || ordered[i].Subject.Kind != anchorSlot.Kind {
+			continue
+		}
+		victim := anchorSlotVictim(ordered, orderedTier, kept, max, reserved, present, anchorSlot.Kind)
+		if victim < 0 {
+			break
+		}
+		victimKind := ordered[victim].Subject.Kind
+		kept[victim] = false
+		kept[i] = true
+		present[anchorSlot.Kind]++
+		// present is decremented for the VICTIM's kind too, which the
+		// ordinary loop never had to do because it only ever took
+		// non-reserved candidates. Without it a second admission would
+		// read a stale surplus and could take a reserved kind's last
+		// in-budget member after all.
+		if reserved[victimKind] {
+			present[victimKind]--
+		}
+		outcome.Displaced++
+		displaced := ordered[victim].Subject
+		outcome.DisplacedSubject = &displaced
+	}
+	return kept, outcome
 }
