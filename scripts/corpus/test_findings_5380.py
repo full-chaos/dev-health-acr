@@ -1545,6 +1545,31 @@ def test_the_pin_runner_fails_when_a_declared_pin_file_is_missing():
     assert "NO PIN FILES RAN" in empty.stdout, empty.stdout
 
 
+def test_no_module_defines_the_same_name_twice():
+    """A duplicate top-level definition is SILENT in Python -- the later one simply wins.
+
+    Found by the MUTANT TABLE GENERATOR, not by any pin: a refactor left
+    `is_valid_count` defined TWICE in attempt_classes.py, and because both copies were
+    identical no behaviour changed and all 43 pins passed. The generator refused with
+    "needle occurs 2 times", which is the only reason it was noticed. A second copy that
+    drifts is a defect nothing else here would catch, so it is a pin now.
+    """
+    offenders = {}
+    for path in ("contract.py", "attempt_classes.py", "harness.py", "merge_corpus.py",
+                 "run_shard.py", "engine_failures.py"):
+        tree = _ast.parse((HERE / path).read_text())
+        names = [n.name for n in tree.body
+                 if isinstance(n, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.ClassDef))]
+        dupes = {n for n in names if names.count(n) > 1}
+        if dupes:
+            offenders[path] = sorted(dupes)
+    assert not offenders, f"top-level names defined more than once: {offenders}"
+    # NEGATIVE CONTROL: the check must catch a planted duplicate.
+    planted = _ast.parse("def f():\n    pass\n\n\ndef f():\n    pass\n")
+    names = [n.name for n in planted.body if isinstance(n, _ast.FunctionDef)]
+    assert {n for n in names if names.count(n) > 1} == {"f"}, "the duplicate check is inert"
+
+
 def test_no_module_spells_the_contract_itself():
     """THE LITERAL GUARD. A second spelling is how the two sides drift apart again.
 

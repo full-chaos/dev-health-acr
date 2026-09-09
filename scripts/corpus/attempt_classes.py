@@ -148,26 +148,6 @@ ERROR_BODY_KEY = contract.ERROR_BODY_KEY
 FAILURE_BODY_KEYS = contract.FAILURE_BODY_KEYS
 
 
-def is_valid_count(value):
-    """Is this a value a class counter may legitimately hold?
-
-    codex r1 P1: `attempt_class_totals` validated the class table's KEY SET and nothing
-    about its VALUES, and `counts[name] or 0` turned a `None` into a PUBLISHED MEASURED
-    ZERO -- the exact guarantee that function exists to make, defeated through the one
-    axis nobody had enumerated. Measured: `None` published zeros, a negative published a
-    negative total, a float published 1.5, `True` published 1, and a string crashed.
-
-    A count is a non-negative int. `bool` is EXCLUDED explicitly because it is an int
-    subclass in Python, so `True` would otherwise pass as the count 1 -- the same trap
-    `validators.py` already guards on `attempt.status`.
-
-    No UPPER bound is imposed: a large count is not evidence of corruption, and inventing
-    a ceiling here would be a policy nobody decided. The huge case is pinned as ACCEPTED
-    so the omission is deliberate rather than forgotten.
-    """
-    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
-
-
 def is_upstream_504(attempt):
     """The frozen deadline predicate, in the ORIGINAL's shape: INDEPENDENT of every other.
 
