@@ -104,9 +104,12 @@ func (p ContestPolicy) Exempt() bool { return p.exempt }
 // short circuit.
 func (p ShortCircuitPolicy) Eligible() bool { return p.eligible }
 
-// Contest and ShortCircuit build the policies. Constructors rather than
-// composite literals so the unexported field stays unexported outside this
-// package, which is what keeps the accessor the only way to read one.
+// Contest and ShortCircuit build the policies, and the registry below uses them
+// rather than composite literals. Two reasons, both about keeping the types
+// meaningful: the field stays unexported, so the accessor is the only way to
+// read a policy outside this package; and a constructor with a named parameter
+// makes `Contest(false)` say which fact is false, where a bare literal beside
+// another bare literal invites the transposition these types exist to stop.
 func Contest(exempt bool) ContestPolicy             { return ContestPolicy{exempt: exempt} }
 func ShortCircuit(eligible bool) ShortCircuitPolicy { return ShortCircuitPolicy{eligible: eligible} }
 
@@ -116,13 +119,13 @@ func ShortCircuit(eligible bool) ShortCircuitPolicy { return ShortCircuitPolicy{
 var registry = map[Source]Attributes{
 	PriorSubjectReceipt: {
 		EngineMinted:         true,
-		ContestExempt:        ContestPolicy{exempt: false},
-		ShortCircuitEligible: ShortCircuitPolicy{eligible: false},
+		ContestExempt:        Contest(false),
+		ShortCircuitEligible: ShortCircuit(false),
 	},
 	AnswerReuseAuthorizationRecheck: {
 		EngineMinted:         true,
-		ContestExempt:        ContestPolicy{exempt: true},
-		ShortCircuitEligible: ShortCircuitPolicy{eligible: true},
+		ContestExempt:        Contest(true),
+		ShortCircuitEligible: ShortCircuit(true),
 	},
 }
 
@@ -148,7 +151,7 @@ func Lookup(source string) Attributes {
 	if attributes, ok := registry[Source(source)]; ok {
 		return attributes
 	}
-	return Attributes{EngineMinted: false, ContestExempt: ContestPolicy{exempt: true}, ShortCircuitEligible: ShortCircuitPolicy{eligible: true}}
+	return Attributes{EngineMinted: false, ContestExempt: Contest(true), ShortCircuitEligible: ShortCircuit(true)}
 }
 
 // All returns every enumerated source, for the tests that must enumerate the
