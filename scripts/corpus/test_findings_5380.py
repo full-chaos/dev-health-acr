@@ -435,6 +435,28 @@ def test_a_2xx_that_is_not_200_is_a_failure_not_a_positive_control():
         assert AC.classify(a) == "failure_under_2xx", AC.classify(a)
 
 
+def test_only_200_is_served_never_the_whole_2xx_range():
+    """r7 (astra) P3: widening `contract.SERVED_STATUSES` to `{200, 205}` passed all 11
+    pin files. Every other pin in this suite DERIVES its expected answer from
+    `contract.is_success_status`/`SERVED_STATUSES` itself (the exhaustive retry sweep,
+    the exit-path guard, `test_a_2xx_that_is_not_200_is_a_failure_not_a_positive_control`
+    above), so a widened contract is internally self-consistent with all of them and
+    none can catch it -- the SAME shape of defect the literal-derivation oracles in
+    round 2 were retired for, one level up: a predicate cannot certify its own contract.
+
+    This pin is the INDEPENDENT hard-coded value: the producer's served-status set is
+    documented to be exactly `{200}` (contract.py's own SERVED_STATUSES comment), spelled
+    here as a literal so a widening -- deliberate or not -- must touch a review-visible
+    line, not just a predicate every other pin already trusts.
+    """
+    assert contract.SERVED_STATUSES == frozenset({200}), (
+        "the producer's served-status set changed; this is an INDEPENDENT literal "
+        f"control, updated deliberately or not at all: {contract.SERVED_STATUSES}")
+    for status in (199, 201, 204, 205, 226, 299, 300, 0, 400, 500):
+        assert not contract.is_success_status(status), status
+    assert contract.is_success_status(200) is True
+
+
 def test_the_upstream_refines_the_class_only_when_it_is_itself_an_error():
     """Defect 1's axis: the attempt's OWN status decides whether it failed, the upstream
     only refines WHY. An earlier version let the upstream win whenever present, and on a
@@ -1095,16 +1117,70 @@ def test_the_producer_retry_decision_is_swept_over_the_full_status_range():
                     row = harness.run_replicate(qid, question, 900_000 + status,
                                                 warn=lambda *_a, **_k: None)
                 want_retry = not contract.is_success_status(status)
-                did_retry = row["attempts"] > 1
-                if want_retry != did_retry:
-                    disagreements.append((status, row["attempts"], want_retry))
+                # r7 (astra) P3: `row["attempts"] > 1` only proves AT LEAST one retry
+                # happened, not that the FULL configured budget was exhausted -- a
+                # mutant capping retries at 2 (instead of MAX_ATTEMPTS_PER_TURN=5)
+                # still satisfies `> 1` and survived 11/11. The retryable body never
+                # stops offering a retry, so the producer must use its WHOLE budget;
+                # a served status must stop at exactly one attempt.
+                want_attempts = harness.MAX_ATTEMPTS_PER_TURN if want_retry else 1
+                if row["attempts"] != want_attempts:
+                    disagreements.append((status, row["attempts"], want_attempts))
         finally:
             harness.BASE, harness.OUTDIR = saved_base, saved_out
 
     assert srv.requests > 0, "an executing pin that made no requests measured nothing"
     assert not disagreements, (
-        f"{len(disagreements)} of {len(swept)} statuses where the producer's OWN retry "
-        f"decision disagrees with the contract: {disagreements[:5]}")
+        f"{len(disagreements)} of {len(swept)} statuses where the producer's attempt "
+        f"count disagrees with the contract (status, got_attempts, want_attempts): "
+        f"{disagreements[:5]}")
+
+
+def test_the_producer_recovers_when_a_retry_stops_being_offered_mid_turn():
+    """r7 (astra) P3, the other half: the full-status sweep's fixed retryable body never
+    stops offering a retry, so it cannot tell a producer that correctly gives up after
+    its budget from one that gives up too early OR keeps retrying past a status that
+    stopped being retryable. This pin scripts a server that answers retryable for the
+    first two attempts, then serves 200 -- the producer must stop AS SOON AS it is
+    served, not ride out the rest of a budget it no longer needs, and must have used
+    exactly the attempts it took to get there (3), never fewer.
+    """
+    from corpus import CORPUS
+    qid = CORPUS[0]["id"]
+    question = CORPUS[0]["text"]
+    retryable_body = {"failure": {"code": "acr_upstream_timeout", "message": "slow",
+                                  "httpStatus": 504, "retryable": True}}
+    served_body = {"result": {"status": "complete"}}
+    calls = []
+
+    saved_base, saved_out = harness.BASE, harness.OUTDIR
+    orig_post = harness.post
+
+    def _tracking_post(body):
+        # _ScriptedServer answers whatever srv.status/.body are set to AT REQUEST TIME.
+        # Flip them here, BEFORE each call the real harness makes, so the third attempt
+        # (and every one after, if the producer over-retries) is served: retry twice,
+        # then serve.
+        srv.status, srv.body, srv.raw = (
+            (504, retryable_body, False) if len(calls) < 2 else (200, served_body, False))
+        calls.append(srv.status)
+        return orig_post(body)
+
+    with tempfile.TemporaryDirectory() as tmp, _ScriptedServer() as srv:
+        harness.BASE = f"http://127.0.0.1:{srv.port}/api/investigations"
+        harness.OUTDIR = Path(tmp)
+        harness.post = _tracking_post
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                row = harness.run_replicate(qid, question, 777_001,
+                                            warn=lambda *_a, **_k: None)
+        finally:
+            harness.post = orig_post
+            harness.BASE, harness.OUTDIR = saved_base, saved_out
+
+    assert row["attempts"] == 3, (
+        f"expected exactly 3 attempts (retry, retry, served): got {row['attempts']}, "
+        f"statuses served in order: {calls}")
 
 
 def test_the_measured_shapes_of_the_live_run_all_classify_correctly():
