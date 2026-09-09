@@ -71,6 +71,19 @@ func oneWorkItemSubject(int) []contextfabric.SubjectRef {
 	return []contextfabric.SubjectRef{workItemSubject("repo-1", "WIDGET-101")}
 }
 
+// repositorySubjects is CHAOS-5474's addition. The repository-subject
+// branches of IdentityProvider and MembershipProvider OR into the SAME
+// result-level Truncated flag as their work-item branches, so a full
+// repository page marked the whole result truncated however honest the
+// work-item side became -- reproduced live at 10d5405f before the fix.
+func repositorySubjects(n int) []contextfabric.SubjectRef {
+	subjects := make([]contextfabric.SubjectRef, n)
+	for i := 0; i < n; i++ {
+		subjects[i] = repoSubject("repo-" + strconv.Itoa(i))
+	}
+	return subjects
+}
+
 func probeArms() []probeArm {
 	perSubject := func(build func(i int) []any) func(n int) [][]any {
 		return func(n int) [][]any {
@@ -124,6 +137,23 @@ func probeArms() []probeArm {
 			subjectsFor: oneWorkItemSubject,
 			rowsFor: perSubject(func(i int) []any {
 				return []any{"BLOCKER-" + strconv.Itoa(i), "WIDGET-101", "repo-1"}
+			}),
+		},
+		{
+			// CHAOS-5474: the repository-subject half of the SAME two
+			// providers, whose shared truncation flag is what made the
+			// original scope boundary unusable.
+			name: "identity_repository", kind: contextfabric.FactIdentity, match: "FROM repos",
+			subjectsFor: repositorySubjects,
+			rowsFor: perSubject(func(i int) []any {
+				return []any{"repo-" + strconv.Itoa(i), "acme/r" + strconv.Itoa(i), "github"}
+			}),
+		},
+		{
+			name: "membership_repository", kind: contextfabric.FactMembership, match: "FROM repos",
+			subjectsFor: repositorySubjects,
+			rowsFor: perSubject(func(i int) []any {
+				return []any{"repo-" + strconv.Itoa(i)}
 			}),
 		},
 		{
@@ -231,6 +261,32 @@ func TestChaos5438_BelowTheBoundIsStillNotTruncated(t *testing.T) {
 			}
 			if len(result.Facts) != factRowOutputBound-1 {
 				t.Fatalf("%s: len(Facts) = %d, want %d", arm.name, len(result.Facts), factRowOutputBound-1)
+			}
+		})
+	}
+}
+
+// TestChaos5438_ZeroRowsIsNeverTruncated is round-483-r1's P3(b): the matrix
+// covered 199/200/201 but no provider had a dedicated ZERO-row case, so
+// "nothing there" rested on inspection rather than on a run.
+//
+// It matters more than it looks. Zero is the one population where a
+// truncation flag has no honest reading at all -- there is nothing to have
+// been cut -- and it is also the value every counter takes when a query
+// silently matched nothing, which is exactly when a wrong flag would be
+// least likely to be noticed.
+func TestChaos5438_ZeroRowsIsNeverTruncated(t *testing.T) {
+	t.Parallel()
+	for _, arm := range probeArms() {
+		arm := arm
+		t.Run(arm.name, func(t *testing.T) {
+			t.Parallel()
+			_, result := readProbeArm(t, arm, 0)
+			if result.Truncated {
+				t.Fatalf("%s: Truncated = true on an EMPTY population -- there was nothing to cut", arm.name)
+			}
+			if len(result.Facts) != 0 {
+				t.Fatalf("%s: len(Facts) = %d on zero rows", arm.name, len(result.Facts))
 			}
 		})
 	}

@@ -52,13 +52,23 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	if len(repoIDs) > 0 {
 		// CHAOS-4377: the SQL build + scan half moved to
 		// github.com/full-chaos/dev-health-go/readers.ReadRepositoryIdentity.
-		rows, scanErr := readers.ReadRepositoryIdentity(ctx, p.facts.client, orgID, repoIDs)
+		// CHAOS-5474: the repository branch probes too, and it MUST -- this
+		// provider ORs both branches into ONE result-level `truncated`, so
+		// leaving this side on `>=` kept an exactly-full repository page
+		// marking the whole result truncated no matter how honest the
+		// work-item branch became. Reproduced live before the fix: 200
+		// repository rows returned Truncated=true on a complete page.
+		rows, scanErr := readers.ReadRepositoryIdentityWithRowLimit(ctx, p.facts.client, orgID, repoIDs, maxFactRowsProbe)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query repository identity", scanErr)
 		}
 		for _, row := range rows {
 			subject, ok := repoBySubject[row.ID]
 			if !ok {
+				continue
+			}
+			// CHAOS-5474: output bound separate from the probe bound.
+			if len(facts) >= maxFactRowsPerQuery {
 				continue
 			}
 			fields := map[string]contextfabric.FactValue{
@@ -73,7 +83,7 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 				EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, row.ID)},
 			})
 		}
-		truncated = truncated || len(rows) >= maxFactRowsPerQuery
+		truncated = truncated || len(rows) > maxFactRowsPerQuery
 	}
 
 	workItemIDs, workItemBySubject, workItemRejected := v2Index(subjectsOfKind(query.Subjects, contextfabric.SubjectWorkItem), identity.KindWorkItem)
@@ -83,12 +93,9 @@ func (p *IdentityProvider) ReadFacts(ctx context.Context, principal storage.Prin
 		// github.com/full-chaos/dev-health-go/readers.ReadWorkItemIdentity.
 		// CHAOS-5438: PROBE one row past the output bound so a full page and
 		// a truncated one are distinguishable -- see shared.go's
-		// maxFactRowsProbe. Scope note: the REPOSITORY branch above keeps
-		// its `>=` for now. The ratified CHAOS-5405 scope is the seven
-		// WORK-ITEM-target requirement kinds, and PR-0 added probe variants
-		// for those readers only; the repository-subject readers carry the
-		// same defect class on a different subject kind and are tracked
-		// separately rather than widened here without a ruling.
+		// maxFactRowsProbe. CHAOS-5474 folded the REPOSITORY branch in
+		// alongside it: this provider ORs both branches into one
+		// result-level flag, so the two were never separable.
 		rows, scanErr := readers.ReadWorkItemIdentityWithRowLimit(ctx, p.facts.client, orgID, workItemIDs, maxFactRowsProbe)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query work item identity", scanErr)
@@ -165,7 +172,9 @@ func (p *MembershipProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	if len(repoIDs) > 0 {
 		// CHAOS-4377: the SQL build + scan half moved to
 		// github.com/full-chaos/dev-health-go/readers.ReadRepositoryIDs.
-		rows, scanErr := readers.ReadRepositoryIDs(ctx, p.facts.client, orgID, repoIDs)
+		// CHAOS-5474: see IdentityProvider's identical note -- one shared
+		// truncation flag makes the two branches inseparable.
+		rows, scanErr := readers.ReadRepositoryIDsWithRowLimit(ctx, p.facts.client, orgID, repoIDs, maxFactRowsProbe)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query repository membership", scanErr)
 		}
@@ -174,13 +183,17 @@ func (p *MembershipProvider) ReadFacts(ctx context.Context, principal storage.Pr
 			if !ok {
 				continue
 			}
+			// CHAOS-5474: output bound separate from the probe bound.
+			if len(facts) >= maxFactRowsPerQuery {
+				continue
+			}
 			facts = append(facts, contextfabric.CanonicalFact{
 				Kind: contextfabric.FactMembership, Subject: subject,
 				Fields:         map[string]contextfabric.FactValue{"organization_id": contextfabric.StringFactValue(orgID)},
 				EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, row.ID)},
 			})
 		}
-		truncated = truncated || len(rows) >= maxFactRowsPerQuery
+		truncated = truncated || len(rows) > maxFactRowsPerQuery
 	}
 
 	workItemIDs, workItemBySubject, workItemRejected := v2Index(subjectsOfKind(query.Subjects, contextfabric.SubjectWorkItem), identity.KindWorkItem)
@@ -190,12 +203,9 @@ func (p *MembershipProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		// github.com/full-chaos/dev-health-go/readers.ReadWorkItemRepository.
 		// CHAOS-5438: PROBE one row past the output bound so a full page and
 		// a truncated one are distinguishable -- see shared.go's
-		// maxFactRowsProbe. Scope note: the REPOSITORY branch above keeps
-		// its `>=` for now. The ratified CHAOS-5405 scope is the seven
-		// WORK-ITEM-target requirement kinds, and PR-0 added probe variants
-		// for those readers only; the repository-subject readers carry the
-		// same defect class on a different subject kind and are tracked
-		// separately rather than widened here without a ruling.
+		// maxFactRowsProbe. CHAOS-5474 folded the REPOSITORY branch in
+		// alongside it: this provider ORs both branches into one
+		// result-level flag, so the two were never separable.
 		rows, scanErr := readers.ReadWorkItemRepositoryWithRowLimit(ctx, p.facts.client, orgID, workItemIDs, maxFactRowsProbe)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query work item membership", scanErr)
