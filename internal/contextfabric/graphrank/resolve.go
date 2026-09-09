@@ -2753,7 +2753,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// exact-name) matters for retrievalSourceFor's own event-order read
 	// (chaos4234_regime_a_harness_test.go) -- see that function's doc
 	// comment for the precedence this ordering establishes.
-	kindRescue := newKindRescueLedger()
+	kindRescue := newKindRescueLedger(frameReservedKinds(frame, anchorScope.Kind))
 	if hinted := hintedPoolKinds(request, confirmedKind, frame, anchorScope.Kind); len(hinted) > 0 {
 		hintedTraversalDegraded, hintedAuthzDropped, hintedTruncated, hintedDegraded, hintedErr := applyKindHintedPoolSearch(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms, hinted, admission, kindRescue)
 		if hintedErr != nil {
@@ -3297,11 +3297,16 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			// regardless of outcome, so nothing about the attempt itself
 			// becomes undiagnosable by holding back just the decision event.
 			scopedDecisionTracer := &discardableDecisionTracer{real: deps.ResolutionTracer}
-			scopedResolution, scopedBases, scopedDigests := ResolveFromMergedCandidatesWithGateAndBasis(
+			// r1 P1: the RESERVE stays off for this pass (nil reservedKinds,
+			// unchanged), but the rescue ledger is carried so its summary
+			// reports the same declared-kind truth the first pass did.
+			// Without it this pass emitted an empty list, and the LAST
+			// summary is the one an operator reads.
+			scopedResolution, scopedBases, scopedDigests := resolveFromMergedCandidatesWithAnchorSlot(
 				scopedPool, scopedObservationParentKey, scopedObservationBlocked, request.Options.MaxSubjectCandidates,
 				request.Options.AllowClarification, false, nil, 0, false, effectiveSearchLimit, 0,
 				unscopedVisibility, gate, scopedIdentity, scopedIdentityTerms, aliasIdentityComplete,
-				scopedDecisionTracer, request.RequestID, "", true, false, nil,
+				scopedDecisionTracer, request.RequestID, "", true, false, nil, anchorReservedSlot{}, kindRescue,
 			)
 			if len(scopedResolution.Committed) > 0 {
 				resolution = scopedResolution
@@ -3395,7 +3400,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				// the failure mode this vocabulary exists to prevent.
 				var censusBases contextfabric.CommitBasisSet
 				var censusDigests contextfabric.CommitDecisionDigestSet
-				resolution, censusBases, censusDigests = ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey, false, false, nil)
+				resolution, censusBases, censusDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey, false, false, nil, anchorReservedSlot{}, kindRescue)
 				commitBases.ResetTo(censusBases)
 				commitDigests.ResetTo(censusDigests)
 				resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded

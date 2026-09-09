@@ -101,6 +101,26 @@ func namedRowInfo(t *testing.T, backend *fakeGraphBackend, frame *contextfabric.
 	return res, buf.String()
 }
 
+// namedRowInfoWithConfirmedKind is namedRowInfo plus a confirmed kind, which is
+// what lets a resolution take more than one pass through the cut.
+func namedRowInfoWithConfirmedKind(t *testing.T, backend *fakeGraphBackend, frame *contextfabric.QuestionFrame,
+	confirmed *contextfabric.ConfirmedExpectedKind) (contextfabric.SubjectResolution, string) {
+	t.Helper()
+	req := testRequest()
+	req.Options.MaxSubjectCandidates = 10
+	var buf bytes.Buffer
+	deps := backend.deps()
+	deps.ResolutionTracer = NewSlogResolutionTracer(
+		slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	res, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+		storage.Principal{OrgID: "org_1"}, req, testInterpreted("ask-dev"),
+		deps, confirmed, nil, frame, "")
+	if err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+	return res, buf.String()
+}
+
 // rankedCutLine returns the ONE ranked-cut summary line. Locating the line is
 // the point: several stages carry overlapping keys, and an assertion made
 // over the whole log passes on whichever line happens to be right.
@@ -276,4 +296,56 @@ func stripTimestamp(line string) string {
 		return line
 	}
 	return line[i:]
+}
+
+// P8 -- EVERY PASS REPORTS THE SAME DECLARED-KIND TRUTH, and the LAST one
+// most of all.
+//
+// r1 P1, found with an executed probe. A resolution can run more than one
+// pass through the cut: the confirmed-kind re-decision and the evidence-census
+// rescue both go round again. Those passes deliberately run with the RESERVE
+// OFF, and the declared set used to be read from the cut's reservedKinds
+// parameter — so their summary emitted an EMPTY list. Since the last summary
+// reaching the tracer is the one describing the pass whose resolution was
+// returned, an operator read `declared_kind_rescue: []` and would conclude the
+// question had declared nothing, on a request that declared a kind and had it
+// rescued. That is exactly the two-states-read-alike defect this file exists
+// to remove, reintroduced one pass later.
+//
+// The fix put the declared set on the LEDGER, where it belongs: it is a fact
+// about the REQUEST, not about whether a given pass happens to reserve slots.
+// This pin asserts it on EVERY summary the resolution emits, not just the
+// first, because asserting the first is what let the defect through.
+func TestEverySummaryPassReportsTheSameDeclaredKinds(t *testing.T) {
+	t.Parallel()
+	// A MULTI-PASS FIXTURE, and the pin fails below unless it really is one.
+	// The first version of this test used the single-pass fixture and could
+	// not have seen the defect it exists for -- the same "control that cannot
+	// fail" mistake the finding itself was about. The confirmed-kind scoped
+	// re-decision fires on a truncated search with a confirmed kind and
+	// nothing committed, which is what produces the SECOND cut.
+	backend := declaredKindCrowd("ask-dev", 70, true, theAskDevProject())
+	backend.searchTruncated = true
+	_, log := namedRowInfoWithConfirmedKind(t, backend, namedProjectFrame("ask-dev"), confirmedProject())
+
+	var summaries []string
+	for _, line := range strings.Split(log, "\n") {
+		if strings.Contains(line, `"msg":"context fabric resolution trace: ranked cut summary"`) {
+			summaries = append(summaries, line)
+		}
+	}
+	if len(summaries) < 2 {
+		t.Fatalf("this fixture produced %d ranked-cut summary line(s); the defect this pin exists for lives in the SECOND "+
+			"and later passes, so a single-pass fixture asserts nothing about it", len(summaries))
+	}
+	for i, line := range summaries {
+		if strings.Contains(line, `"declared_kind_rescue":[]`) {
+			t.Errorf("summary %d of %d reports an EMPTY declared_kind_rescue on a request that DID declare a kind. "+
+				"The last summary is the one an operator reads, so a pass that forgets the declared set makes a "+
+				"rescued kind look like a question that declared nothing. line: %s", i+1, len(summaries), line)
+		}
+		if !strings.Contains(line, `"kind":"`+string(contextfabric.SubjectProject)+`"`) {
+			t.Errorf("summary %d of %d does not name the declared kind. line: %s", i+1, len(summaries), line)
+		}
+	}
 }

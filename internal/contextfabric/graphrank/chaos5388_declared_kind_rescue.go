@@ -72,16 +72,41 @@ const (
 // saying so, or its silence is indistinguishable from an arm that found
 // nothing.
 type kindRescueLedger struct {
+	// declared is what THIS QUESTION'S frame or receipt declared, carried on
+	// the ledger rather than read from the cut's reservedKinds parameter.
+	//
+	// r1 P1, executed: the retained confirmed-kind re-decision and the
+	// evidence-census pass both call the exported entry point, which supplies
+	// no reserved kinds -- deliberately, because the RESERVE is off for those
+	// passes. Reading the declared set from that parameter therefore made
+	// their later summary emit an EMPTY list, and since the last summary
+	// reaching the tracer describes the pass whose resolution was returned, an
+	// operator read `[]` and would conclude nothing was ever declared. That is
+	// the exact "two states read alike" defect this file exists to remove,
+	// reintroduced one pass later. The declared set is a fact about the
+	// REQUEST, so it lives with the retrieval facts and survives every pass
+	// that is handed the ledger.
+	declared     []contextfabric.SubjectKind
 	ran          bool
 	termsQueried map[contextfabric.SubjectKind]int
 	matched      map[contextfabric.SubjectKind]int
 }
 
-func newKindRescueLedger() *kindRescueLedger {
+func newKindRescueLedger(declared []contextfabric.SubjectKind) *kindRescueLedger {
 	return &kindRescueLedger{
+		declared:     declared,
 		termsQueried: map[contextfabric.SubjectKind]int{},
 		matched:      map[contextfabric.SubjectKind]int{},
 	}
+}
+
+// declaredKinds is nil-safe: a call with no ledger has no frame and therefore
+// declared nothing, which renders an empty list rather than a missing key.
+func (l *kindRescueLedger) declaredKinds() []contextfabric.SubjectKind {
+	if l == nil {
+		return nil
+	}
+	return l.declared
 }
 
 func (l *kindRescueLedger) recordQuery(kind contextfabric.SubjectKind, matched int) {
@@ -98,7 +123,8 @@ func (l *kindRescueLedger) recordQuery(kind contextfabric.SubjectKind, matched i
 // It returns a non-nil, possibly EMPTY slice on every pass, so a frame that
 // declared nothing renders `[]` and can never be confused with a build that
 // stopped emitting the key. survivors is the per-kind count out of phase 4.
-func declaredKindRescueReport(declared []contextfabric.SubjectKind, ledger *kindRescueLedger, survivors map[contextfabric.SubjectKind]int) []declaredKindRescue {
+func declaredKindRescueReport(ledger *kindRescueLedger, survivors map[contextfabric.SubjectKind]int) []declaredKindRescue {
+	declared := ledger.declaredKinds()
 	out := make([]declaredKindRescue, 0, len(declared))
 	seen := make(map[contextfabric.SubjectKind]bool, len(declared))
 	for _, kind := range declared {

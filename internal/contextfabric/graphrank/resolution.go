@@ -1429,13 +1429,13 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		// CHAOS-5388: survivors are counted from the SAME mask the cut is
 		// taken with, not from a second walk, so the number on the line can
 		// never disagree with the candidates returned beside it.
-		declaredSurvivors := make(map[contextfabric.SubjectKind]int, len(reservedKinds))
+		declaredSurvivors := make(map[contextfabric.SubjectKind]int, len(kindRescue.declaredKinds()))
 		for i, candidate := range ordered {
 			if keptIndex[i] {
 				declaredSurvivors[candidate.Subject.Kind]++
 			}
 		}
-		rescueReport := declaredKindRescueReport(reservedKinds, kindRescue, declaredSurvivors)
+		rescueReport := declaredKindRescueReport(kindRescue, declaredSurvivors)
 		tracer.Trace(ResolutionTraceEvent{
 			RequestID: requestID, Stage: "ranked_cut", RankedCutSummary: true,
 			RankedCutCandidateCount: len(ordered), RankedCutSurvivedCount: len(survivedIDs),
