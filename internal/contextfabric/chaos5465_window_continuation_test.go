@@ -411,6 +411,21 @@ func TestWindowContinuation_ContainmentRefusesEverythingThatIsNotTheTransition(t
 			wantReason:      ContinuationReasonNotWindowOnly,
 		},
 		{
+			// FOUND BY THE MUTANT BATTERY, not by review: deleting the
+			// parent_result_id exclusion SURVIVED the first table, because
+			// every arm that named a parent had removed the window receipt,
+			// so the exclusion was never reached. A request carrying BOTH is
+			// the shape that makes it load-bearing -- the caller named a
+			// parent AND redeemed a window offer, which is not the turn that
+			// changed only the window.
+			name: "a window receipt riding with a parent_result_id is not a continuation",
+			mutate: func(r *InvestigationRequest) {
+				r.ParentResultID = continuationOlderID
+			},
+			wantDisposition: ContinuationNotApplicable,
+			wantReason:      ContinuationReasonNotWindowOnly,
+		},
+		{
 			name: "a parent-only reference cannot establish the transition",
 			mutate: func(r *InvestigationRequest) {
 				r.PriorWindowReceipts = nil
