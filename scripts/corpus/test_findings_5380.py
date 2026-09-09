@@ -739,6 +739,135 @@ def test_run_replicate_actually_writes_the_undecodable_flag_to_disk():
     assert AC.failed(written) is True
 
 
+def test_run_replicate_reports_wrong_kind_wrong_subject_and_the_real_terminal():
+    """r7 (astra) P3: `run_replicate`'s per-turn flags (`wrong_kind_flag`,
+    `wrong_subject_flag`, `subject_kind_mismatch_flag`), its turn-terminal transport
+    break, its no-receipts-resend path, and its final `http_<status>` vs
+    `clarification_required` distinction had NO pin driving them through the real
+    function at all -- seven mutations (each negating one `if`) survived together.
+
+    Scripts a real multi-turn conversation against a real socket:
+      t1: kind_options offers a kind that does NOT match REQUESTED_KIND, AND
+          subject_resolution offers two candidates, NEITHER matching ANCHOR_KIND --
+          both flags must fire.
+      t2: the offers are WITHDRAWN (no kind_options, no candidates) -> no receipts to
+          send, turn > 1 -> the bare question is resent (kills the not-receipts branch).
+      t3: a SINGLE subject candidate whose kind does NOT match ANCHOR_KIND -> committed
+          anyway (a single candidate is not a choice), `subject_kind_mismatch_flag` set.
+      t4: a genuine HTTP 500 -> the turn-terminal transport break fires, and the final
+          status must be the `http_500:...` form, never a `result.status` read off a
+          payload that has no `result` key at all.
+    """
+    from corpus import CORPUS, REQUESTED_KIND, ANCHOR_KIND
+    qid = CORPUS[0]["id"]
+    question = CORPUS[0]["text"]
+    want_kind = REQUESTED_KIND[qid]
+    anchor_kind = ANCHOR_KIND[qid]
+    assert want_kind and anchor_kind, "the corpus row must declare both kinds for this repro"
+    wrong_kind_for_offer = "widget"  # anything != want_kind
+    assert wrong_kind_for_offer != want_kind
+
+    turns = [
+        {"result": {"status": "clarification_required",
+                    "structure_needs": {"kind_options": [
+                        {"kind": wrong_kind_for_offer, "receipt_id": "kr1"}],
+                                        "missing": ["expected_kind", "subject"]},
+                    "subject_resolution": {"candidates": [
+                        {"receipt_id": "sr1", "subject": {"kind": "x"}},
+                        {"receipt_id": "sr2", "subject": {"kind": "y"}}]}}},
+        {"result": {"status": "clarification_required"}},   # offers withdrawn
+        {"result": {"status": "clarification_required",
+                    "subject_resolution": {"candidates": [
+                        {"receipt_id": "sr3", "subject": {"kind": "z"}}]}}},
+    ]
+    calls = []
+    saved_base, saved_out = harness.BASE, harness.OUTDIR
+    orig_post = harness.post
+
+    def _tracking_post(body):
+        i = len(calls)
+        calls.append(body)
+        if i < len(turns):
+            srv.status, srv.body, srv.raw = 200, turns[i], False
+        else:
+            srv.status, srv.body, srv.raw = 500, {"failure": {"code": "boom"}}, False
+        return orig_post(body)
+
+    with tempfile.TemporaryDirectory() as tmp, _ScriptedServer() as srv:
+        harness.BASE = f"http://127.0.0.1:{srv.port}/api/investigations"
+        harness.OUTDIR = Path(tmp)
+        harness.post = _tracking_post
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                row = harness.run_replicate(qid, question, 888_001,
+                                            warn=lambda *_a, **_k: None)
+        finally:
+            harness.post = orig_post
+            harness.BASE, harness.OUTDIR = saved_base, saved_out
+
+    assert len(calls) == 4, f"expected exactly 4 turns (3 clarify + 1 terminal 500): {len(calls)}"
+    assert row["wrong_kind_flag"] is True, "an unmatched kind_options offer must set the flag"
+    assert row["wrong_subject_flag"] is True, (
+        "two subject candidates, neither matching anchor_kind, must set the flag")
+    assert row["subject_kind_mismatch_flag"] is True, (
+        "a single mismatched subject candidate must still commit AND flag the mismatch")
+    # t2's bare-question resend: no priorKindReceipts/priorSubjectReceipts in that call.
+    assert "priorKindReceipts" not in calls[1] and "priorSubjectReceipts" not in calls[1], (
+        "withdrawn offers must not carry stale receipts forward")
+    # t3 committed a real receipt (the single mismatched-but-committed subject
+    # candidate) -- the NEXT request (calls[3]) must carry it forward, never drop it
+    # back to a bare resend (`if not receipts and turn > 1` double-negated would drop a
+    # real receipt on the very turn it exists, which t2's empty-receipts case above
+    # cannot distinguish from the correct bare-resend behaviour).
+    assert "priorSubjectReceipts" in calls[3], (
+        f"a real receipt from t3 was dropped instead of carried into the next request: "
+        f"{calls[3]}")
+    assert row["final_http"] == 500, row
+    assert row["final_payload_status"] == "http_500:boom", (
+        "a genuine transport-level 500 must report the http_<status>:<code> form, never "
+        f"a result.status read off a payload with no result key: {row}")
+
+
+def test_run_replicate_reports_max_turns_exhausted_not_bare_clarification_required():
+    """r7 (astra) P3, the other half: a row that never resolves and never gets a
+    receipt to send must stop naming its terminal `clarification_required` once it
+    ran out of turns -- `final_status == "clarification_required" and turn >=
+    MAX_TURNS` had no pin of its own.
+    """
+    from corpus import CORPUS
+    qid = CORPUS[0]["id"]
+    question = CORPUS[0]["text"]
+    saved_base, saved_out = harness.BASE, harness.OUTDIR
+    with tempfile.TemporaryDirectory() as tmp, _ScriptedServer() as srv:
+        harness.BASE = f"http://127.0.0.1:{srv.port}/api/investigations"
+        harness.OUTDIR = Path(tmp)
+        srv.status, srv.body, srv.raw = 200, {"result": {"status": "clarification_required"}}, False
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                row = harness.run_replicate(qid, question, 888_002,
+                                            warn=lambda *_a, **_k: None)
+        finally:
+            harness.BASE, harness.OUTDIR = saved_base, saved_out
+    assert srv.requests == harness.MAX_TURNS * 1, (
+        f"expected exactly {harness.MAX_TURNS} turns of one attempt each: {srv.requests}")
+    assert row["final_payload_status"] == "clarification_required(max_turns_exhausted)", row
+
+    # NEGATIVE CONTROL for the wrong-kind/wrong-subject/mismatch flags (r7 astra P3): a
+    # server that never offers a kind_options or subject_resolution at all means
+    # `this_turn_wrong_kind`/`this_turn_wrong_subject`/`this_turn_mismatch` are FALSE on
+    # every one of the 5 turns -- an `if this_turn_X:` negated to `if not (this_turn_X):`
+    # would then set the flag on every turn where the real condition is false, and the
+    # POSITIVE-control pin above (where the real condition fires on turn 1) cannot tell
+    # that apart, since both the correct code and the inverted-condition mutant end up
+    # with the flag True by the end of the run. Only a run where the condition is NEVER
+    # true can prove the flag was never (wrongly) set either.
+    assert row["wrong_kind_flag"] is False, (
+        "no kind_options was ever offered; the flag must stay false, not flip on the "
+        f"turns where there was nothing to be wrong about: {row}")
+    assert row["wrong_subject_flag"] is False, row
+    assert row["subject_kind_mismatch_flag"] is False, row
+
+
 def test_sub_200_statuses_other_than_zero_are_transport_failures():
     """The rest of the sub-200 band. Nothing writes 1 or 199 today; the point of a closed
     total vocabulary is that a status nobody writes yet still lands somewhere visible."""
