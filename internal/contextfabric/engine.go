@@ -1121,14 +1121,6 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// an optional reuse-only signal), this is REQUIRED infrastructure: no
 	// graph call can run without a key to read from, so a resolution
 	// failure here fails the whole investigation.
-	binding, err := e.graph.ResolveInvestigationBinding(ctx, principal)
-	if err != nil {
-		// CHAOS-4088: StageGraphBinding, not StageResolution -- a binding
-		// outage never got as far as a subject/commit-gate query, and
-		// conflating the two populations is exactly what this split fixes.
-		return InvestigationResult{}, stageError(StageGraphBinding, fmt.Errorf("resolve graph binding: %w", err))
-	}
-
 	// CHAOS-5465 D-c: the continuation decision is OBSERVABLE on EVERY request
 	// carrying a window receipt -- including the ones that never reach the
 	// decision at all because a window veto or an ineligible shape ends the
@@ -1166,6 +1158,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 		e.telemetry.RecordWindowContinuationDecision(ctx, principal, continuation)
 	}()
+
+	binding, err := e.graph.ResolveInvestigationBinding(ctx, principal)
+	if err != nil {
+		// CHAOS-4088: StageGraphBinding, not StageResolution -- a binding
+		// outage never got as far as a subject/commit-gate query, and
+		// conflating the two populations is exactly what this split fixes.
+		return InvestigationResult{}, stageError(StageGraphBinding, fmt.Errorf("resolve graph binding: %w", err))
+	}
 
 	// CHAOS-3900 W1: canonicalize the REQUEST-side evidence window --
 	// receipt resolution and validation -- BEFORE tryReuse, so a resolved
@@ -1524,7 +1524,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// the referenced result is the one the hint resolution already fetched --
 	// it costs no extra store round trip.
 	if continuation.Observed {
-		continuation = e.admitWindowContinuation(carryCtx, principal, request, binding, priorLoadedResults)
+		continuation = e.admitWindowContinuation(carryCtx, principal, request, binding, priorLoadedResults, windowCanon.Effective)
 	}
 
 	interpretRequest := request

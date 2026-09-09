@@ -830,3 +830,153 @@ func TestWindowContinuation_TheDecisionReachesTheRealSink(t *testing.T) {
 		t.Errorf("the emitted line contains the question text; this line carries ids and closed vocabularies only")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// REGRESSION PINS FROM THE COUNTED r1 REVIEW.
+//
+// Four P1s, each reported with an executed repro, each REPRODUCED HERE against
+// the unfixed tree before anything was changed, and each kept as the regression
+// test for its own fix. The reviewer's own arms were self-cleaned with its
+// worktree, so these reconstruct the SHAPE rather than a similar one.
+//
+// What every one of them has in common is worth stating once: the lane's
+// original fixtures could not see any of these, and in three of the four cases
+// the reason was that the DOUBLE was too weak -- an interpreter returning a nil
+// frame, an interpreter that classified when the hole needed one that did not,
+// a graph reader that always bound. A test double that cannot express the
+// failing state is a test that measures nothing about it.
+// ---------------------------------------------------------------------------
+
+// frameBearingInterpreter is forcedFamilyInterpreter plus a real validated
+// FRAME carrying a group axis -- which the lane's own fixtures never had, and
+// which is the whole of R1-1.
+type frameBearingInterpreter struct {
+	family     QuestionFamily
+	groupKind  SubjectKind
+	frameGroup SubjectKind
+}
+
+func (f frameBearingInterpreter) Interpret(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, QuestionFamilyOutcome, error) {
+	frame := &QuestionFrame{
+		SubjectExpression: SubjectExpression{
+			Kind:    SubjectExpressionGroupedMembers,
+			Grouped: &GroupedSetExpression{GroupKind: f.frameGroup},
+		},
+	}
+	return InterpretedQuestion{
+		Shape: ShapeOpen, RequestedJudgment: "status",
+		TimeContext: TimeContext{Axis: TemporalCurrent},
+	}, QuestionFamilyOutcome{
+		Family:             f.family,
+		Source:             QuestionFamilySourceModel,
+		Frame:              frame,
+		WinningSampleIndex: 0,
+		WinningSample:      FamilySample{ModelFamily: f.family, GroupKind: f.groupKind},
+		Version:            QuestionFamilyTableVersion,
+	}, nil
+}
+
+// R1-1: the executed plan takes its group axis from the FRESH frame, so what is
+// served differs from the logged accepted context.
+func TestWindowContinuation_R1_TheServedGroupAxisIsTheAcceptedOneNotTheFreshFrames(t *testing.T) {
+	request := continuationRequest(validInvestigationRequest().Question)
+	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+	harness := newContinuationHarness(t,
+		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		frameBearingInterpreter{
+			family:     QuestionFamilyGroupedCohortStatus,
+			groupKind:  contractsv1.ContextFabricSubjectProject,
+			frameGroup: contractsv1.ContextFabricSubjectProject,
+		})
+
+	result := harness.investigate(t, request)
+	decision := harness.soleDecision(t)
+	t.Logf("R1-1: decision=%q accepted_group_kind=%q served_group_kind=%q",
+		decision.Disposition, decision.Accepted.GroupKind, result.AnswerPlan.GroupKind)
+	if result.AnswerPlan.GroupKind != decision.Accepted.GroupKind {
+		t.Fatalf("R1-1 REGRESSION: served group_kind=%q but the logged accepted context says %q -- the decision was logged and a different value executed",
+			result.AnswerPlan.GroupKind, decision.Accepted.GroupKind)
+	}
+}
+
+// R1-2: a withheld continuation still lets the OLD family-only carry serve the
+// stale reading, because the containment covers only the two identity reasons.
+func TestWindowContinuation_R1_AWithheldCarrierCannotBeServedByTheLegacyCarry(t *testing.T) {
+	request := continuationRequest(validInvestigationRequest().Question)
+	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+	prior.AnswerPlan.FamilyVersion = "question-family.v0-not-in-force"
+	harness := newContinuationHarness(t,
+		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		// THIS TURN CLASSIFIES NOTHING -- the one condition under which the old
+		// carry applies. The lane's own version-mismatch pin used a CLASSIFYING
+		// interpreter, so applyCarriedPlan refused for an unrelated reason and
+		// the hole stayed invisible.
+		interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}))
+
+	result := harness.investigate(t, request)
+	decision := harness.soleDecision(t)
+	outcome := ""
+	if len(harness.telemetry.planCarryOutcomes) > 0 {
+		outcome = string(harness.telemetry.planCarryOutcomes[0].outcome)
+	}
+	t.Logf("R1-2: decision=%q/%q plan_carry_outcome=%q served_family=%q served_family_source=%q",
+		decision.Disposition, decision.Reason, outcome, result.AnswerPlan.Family, result.AnswerPlan.FamilySource)
+	if result.AnswerPlan.FamilySource == QuestionFamilySourceCarried {
+		t.Fatalf("R1-2 REGRESSION: the continuation was %q for %q, yet the legacy carry served family=%q with family_source=carried from the SAME refused carrier",
+			decision.Disposition, decision.Reason, result.AnswerPlan.Family)
+	}
+}
+
+// R1-3: a window-receipt request that fails graph binding emits no decision
+// line, so the event's denominator is not "requests carrying window receipts".
+func TestWindowContinuation_R1_AWindowReceiptRequestEmitsADecisionEvenWhenGraphBindingFails(t *testing.T) {
+	request := continuationRequest(validInvestigationRequest().Question)
+	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
+	telemetry := &recordingTelemetry{}
+	fresh := validInvestigationResult()
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: bindingFailingGraphReader{err: errBindingUnavailableForRepro},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return fresh, nil
+		}),
+		Interpreter: forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam},
+		Results:     &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		Telemetry:   telemetry,
+	})
+	if _, err := engine.Investigate(context.Background(), acceptancePrincipal(), request); err == nil {
+		t.Fatalf("fixture defect: wanted a graph-binding failure")
+	}
+	t.Logf("R1-3: window_decisions=%d on a request that carries a window receipt", len(telemetry.windowContinuationDecisions))
+	if len(telemetry.windowContinuationDecisions) != 1 {
+		t.Fatalf("R1-3 REGRESSION: %d decision lines for a window-receipt request, want exactly 1 -- a missing line is supposed to mean only 'no window receipt'",
+			len(telemetry.windowContinuationDecisions))
+	}
+}
+
+// R1-4: applied_window is declared, logged, and never populated.
+func TestWindowContinuation_R1_AnAppliedContinuationLogsTheWindowItApplied(t *testing.T) {
+	request := continuationRequest(validInvestigationRequest().Question)
+	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
+	harness := newContinuationHarness(t,
+		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam})
+
+	result := harness.investigate(t, request)
+	decision := harness.soleDecision(t)
+	t.Logf("R1-4: disposition=%q applied_window_token=%q served_effective_window=%v",
+		decision.Disposition, decision.AppliedWindowToken(), result.EffectiveEvidenceWindow != nil)
+	if decision.Disposition == ContinuationApplied && decision.AppliedWindowToken() == "" {
+		t.Fatalf("R1-4 REGRESSION: an APPLIED continuation logs applied_window=\"\" -- the field is declared and logged but never populated, so the line cannot say which window was actually applied")
+	}
+}
+
+var errBindingUnavailableForRepro = &bindingReproError{}
+
+type bindingReproError struct{}
+
+func (*bindingReproError) Error() string { return "graph binding unavailable (repro)" }

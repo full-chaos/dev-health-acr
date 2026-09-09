@@ -253,6 +253,16 @@ type windowContinuationDecision struct {
 	// "requests carrying window receipts", and widening it to every request
 	// would make the rate meaningless.
 	Observed bool
+	// WindowOnlyShape is windowOnlyReferencedResultID's verdict: this request
+	// IS the window-only continuation shape, whatever admission then decided.
+	//
+	// SEPARATE FROM Disposition BECAUSE THE CONTAINMENT NEEDS THE SHAPE, NOT
+	// THE OUTCOME (r1 finding R1-2, reproduced). "The caller changed only the
+	// window and we refused the carrier" and "the caller did something else"
+	// are different facts: the first must stop the old family-only carry from
+	// serving the very carrier this gate just refused, the second must NOT,
+	// because there the family-only carry is the correct mechanism.
+	WindowOnlyShape bool
 
 	Disposition ContinuationDisposition
 	Reason      ContinuationDecisionReason
@@ -362,6 +372,7 @@ func (e *Engine) admitWindowContinuation(
 	request InvestigationRequest,
 	binding ResolvedGraphBinding,
 	preloaded map[string]InvestigationResult,
+	appliedWindow *contractsv1.ContextFabricEffectiveEvidenceWindow,
 ) windowContinuationDecision {
 	decision := windowContinuationDecision{
 		Observed:       requestCarriesWindowReceipts(request),
@@ -370,6 +381,11 @@ func (e *Engine) admitWindowContinuation(
 		SeedSource:     CarrySeedNone,
 		ConflictReason: ContinuationConflictNone,
 		ConflictFields: []ContinuationConflictField{},
+		// R1-4: the window that this turn actually resolved, passed in from
+		// the canonicalisation that decided it rather than re-derived here.
+		// Declared and logged is not the same as populated -- a field that is
+		// always empty is a field the line cannot answer with.
+		AppliedWindow: appliedWindow,
 	}
 	if !decision.Observed {
 		decision.Reason = ContinuationReasonNotWindowOnly
@@ -382,6 +398,7 @@ func (e *Engine) admitWindowContinuation(
 		decision.Reason = ContinuationReasonNotWindowOnly
 		return decision
 	}
+	decision.WindowOnlyShape = true
 	if e.results == nil {
 		decision.Disposition = ContinuationWithheld
 		decision.Reason = ContinuationReasonInvalidContext
@@ -513,6 +530,31 @@ func applyWindowContinuation(outcome QuestionFamilyOutcome, decision windowConti
 	outcome.Family = accepted.Family
 	outcome.Source = QuestionFamilySourceCarried
 	outcome.WinningSample.GroupKind = accepted.GroupKind
+	// DO NOT COMBINE A CARRIED FAMILY WITH A FRESH FRAME, and this is the line
+	// that enforces it (r1 finding R1-1, reproduced: served group_kind="project"
+	// beside a logged accepted group_kind="team").
+	//
+	// Setting WinningSample.GroupKind is NOT sufficient. PlanAnswer reads the
+	// sample first and then OVERRIDES it from Frame.SubjectExpression.GroupKind()
+	// whenever the frame carries a grouped expression -- so a fresh frame
+	// silently reinstated the discarded reading's group axis, and the served
+	// document disagreed with the decision the engine had just logged and
+	// published. The lane's own fixtures never saw it because their interpreter
+	// double returned a nil frame.
+	//
+	// The frame belongs to the reading this turn PROPOSED and did not accept.
+	// Its obligations are that same frame's derived set, so they go with it,
+	// and deriveTurnRequirements below therefore derives no rows for a
+	// continuation -- the honest state while no stored result carries a frame
+	// to preserve, and exactly the "no fresh requirement rows" half of the
+	// same rule.
+	//
+	// Gate is DELIBERATELY KEPT. It is not a semantic component being carried:
+	// it is this turn's verdict about whether the turn may proceed at all, and
+	// a refused fresh frame must still refuse. Dropping it would turn
+	// FrameGateRefuses into the zero value, which ALLOWS.
+	outcome.Frame = nil
+	outcome.FrameObligations = nil
 	outcome.Route = FamilyRouteDecision{
 		Family: accepted.Family,
 		Source: FamilyRouteSourceCarried,
@@ -640,38 +682,51 @@ func (d windowContinuationDecision) AppliedWindowToken() string {
 // PriorWindowReceipts FIRST and the receipt walk is deliberately UNGATED for
 // question identity -- a receipt is a redeemed server offer, so the ungated
 // treatment is correct for the window it redeems. But it means a window
-// receipt pointing at a result that answered a DIFFERENT question can seed the
-// plan carry, and if this turn then classifies nothing, applyCarriedPlan
-// installs that unrelated reading. The continuation gate is the first thing in
-// this package that actually compares the two questions on a receipt-rooted
-// path, so it is where the refusal has to be spent.
+// receipt can seed the plan carry from a carrier this gate refused, and if
+// this turn then classifies nothing, applyCarriedPlan installs that reading
+// anyway.
 //
-// Reachability is UNCHANGED by this: carryReferencedResultIDs still returns
-// exactly what it returned, so the answer-reuse bypass keyed on the same
-// population (CHAOS-4998) is untouched. What is narrowed is what a
-// receipt-rooted hit is allowed to MEAN.
+// KEYED ON THE SHAPE AND THE OUTCOME, NOT ON A LIST OF REASONS. The first
+// version of this predicate named two reasons (changed question, indeterminate
+// identity) and the counted review found the gap by executing it: a carrier
+// refused for a VERSION MISMATCH was withheld by this gate and then served by
+// the legacy carry, `family_source=carried`, from the same refused carrier.
+// Enumerating reasons is the same open-set mistake carryOriginSameQuestionVerdict's
+// own doc comment describes -- every reason added later has to be remembered
+// here. So the rule is the closed one: if this request IS the window-only
+// continuation shape and the continuation did NOT apply, no other route may
+// serve that carrier's reading this turn.
+//
+// It deliberately does NOT fire when the shape is not window-only. There the
+// family-only carry is the correct mechanism and blocking it would break the
+// clarification loop the carry exists to serve.
+//
+// Reachability is UNCHANGED by this: carryReferencedResultIDs returns exactly
+// what it returned, so the answer-reuse bypass keyed on the same population
+// (CHAOS-4998) is untouched. What is narrowed is what a receipt-rooted hit is
+// allowed to MEAN.
 func (d windowContinuationDecision) BlocksLegacyCarry() bool {
-	if !d.Observed {
-		return false
-	}
-	switch d.Reason {
-	case ContinuationReasonChangedQuestion, ContinuationReasonIndeterminateIdentity:
-		return true
-	default:
-		return false
-	}
+	return d.Observed && d.WindowOnlyShape && d.Disposition != ContinuationApplied
 }
 
-// blockedLegacyCarryOutcome is the miss this containment reports, chosen from
-// the EXISTING closed vocabulary with its existing meanings rather than by
-// minting a member: the two conditions are precisely question drift and
-// indeterminate question identity, which PlanCarryOutcome already names, and
-// which carryOriginVerdict already refuses to collapse into one another.
+// blockedLegacyCarryOutcome is the miss this containment reports.
+//
+// The two identity reasons map to the EXISTING members with their existing
+// meanings -- carryOriginVerdict already refuses to collapse drift into
+// indeterminacy and that distinction is preserved here. Everything else is
+// reported as its own member rather than being forced into one of those two,
+// for the same reason: a false basis in the telemetry is worse than a new
+// member, and "the continuation gate refused this carrier" is not "the origin
+// answered a different question".
 func (d windowContinuationDecision) blockedLegacyCarryOutcome() PlanCarryOutcome {
-	if d.Reason == ContinuationReasonIndeterminateIdentity {
+	switch d.Reason {
+	case ContinuationReasonIndeterminateIdentity:
 		return PlanCarryMissQuestionIndeterminate
+	case ContinuationReasonChangedQuestion:
+		return PlanCarryMissQuestionDrift
+	default:
+		return PlanCarryMissContinuationWithheld
 	}
-	return PlanCarryMissQuestionDrift
 }
 
 // applyAndRecordContinuation applies the accepted context and emits the ONE
