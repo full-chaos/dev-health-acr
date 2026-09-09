@@ -58,12 +58,57 @@ type Attributes struct {
 	// ContestExempt is POLICY at the contest boundary: may a candidate
 	// carrying this source enter the contest set even when the question's
 	// scope refuses its kind.
-	ContestExempt bool
+	ContestExempt ContestPolicy
 	// ShortCircuitEligible is POLICY at the caller-hint exit: may a
 	// candidate carrying this source reach the exact-resolution short
 	// circuit instead of falling through to hybrid search.
-	ShortCircuitEligible bool
+	ShortCircuitEligible ShortCircuitPolicy
 }
+
+// THE TWO POLICIES ARE DIFFERENT TYPES WITH DIFFERENT ACCESSORS, and both
+// halves of that are load-bearing.
+//
+// They answer different questions at different call sites, and today every
+// enumerated member happens to carry the SAME value for both. A read site that
+// consulted the wrong one would therefore behave identically, and adversarial
+// review demonstrated exactly that: a mutation swapping them at the resolver's
+// read survived every test, because no fixture could tell them apart.
+//
+// A test cannot close that. Discriminating needs a member whose two values
+// differ, which is a decision about what the registry CONTAINS, not about how
+// it is tested. So the type system closes it instead.
+//
+// NAMED BOOLEANS WERE NOT ENOUGH, and this is measured rather than assumed: a
+// `type ContestPolicy bool` is still boolean-kinded, so `if attrs.ContestExempt`
+// compiles wherever `if attrs.ShortCircuitEligible` did and the swap survives.
+// That was the first attempt here and it was verified NOT to work before this
+// one was written. Each policy is therefore a STRUCT with its own single,
+// differently-named accessor: a struct is not usable in a boolean context, and
+// `attrs.ContestExempt.Eligible()` names a method ContestPolicy does not have.
+// Swapping the two reads is a compile error, not a surviving mutant.
+type (
+	// ContestPolicy answers: may this source's candidate enter the contest
+	// set even when the question's scope refuses its kind.
+	ContestPolicy struct{ exempt bool }
+	// ShortCircuitPolicy answers: may this source's candidate reach the
+	// exact-resolution caller-hint exit rather than falling through to
+	// hybrid search.
+	ShortCircuitPolicy struct{ eligible bool }
+)
+
+// Exempt reports whether the contest boundary admits this source's candidate
+// despite a kind refusal.
+func (p ContestPolicy) Exempt() bool { return p.exempt }
+
+// Eligible reports whether this source's candidate may reach the caller-hint
+// short circuit.
+func (p ShortCircuitPolicy) Eligible() bool { return p.eligible }
+
+// Contest and ShortCircuit build the policies. Constructors rather than
+// composite literals so the unexported field stays unexported outside this
+// package, which is what keeps the accessor the only way to read one.
+func Contest(exempt bool) ContestPolicy             { return ContestPolicy{exempt: exempt} }
+func ShortCircuit(eligible bool) ShortCircuitPolicy { return ShortCircuitPolicy{eligible: eligible} }
 
 // registry is the enumeration. Adding a member here is the ONLY way to add an
 // engine-minted source, and the producer-enumeration test fails the build when
@@ -71,13 +116,13 @@ type Attributes struct {
 var registry = map[Source]Attributes{
 	PriorSubjectReceipt: {
 		EngineMinted:         true,
-		ContestExempt:        false,
-		ShortCircuitEligible: false,
+		ContestExempt:        ContestPolicy{exempt: false},
+		ShortCircuitEligible: ShortCircuitPolicy{eligible: false},
 	},
 	AnswerReuseAuthorizationRecheck: {
 		EngineMinted:         true,
-		ContestExempt:        true,
-		ShortCircuitEligible: true,
+		ContestExempt:        ContestPolicy{exempt: true},
+		ShortCircuitEligible: ShortCircuitPolicy{eligible: true},
 	},
 }
 
@@ -103,7 +148,7 @@ func Lookup(source string) Attributes {
 	if attributes, ok := registry[Source(source)]; ok {
 		return attributes
 	}
-	return Attributes{EngineMinted: false, ContestExempt: true, ShortCircuitEligible: true}
+	return Attributes{EngineMinted: false, ContestExempt: ContestPolicy{exempt: true}, ShortCircuitEligible: ShortCircuitPolicy{eligible: true}}
 }
 
 // All returns every enumerated source, for the tests that must enumerate the
