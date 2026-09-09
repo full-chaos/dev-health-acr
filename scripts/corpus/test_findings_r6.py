@@ -281,7 +281,16 @@ def test_validation_is_recursive_not_shallow():
 # expectation_summary_split lines are identical arm for arm. The predicate is equivalent
 # for every status the archives contain; it differs only over 201-399, which no archive
 # holds and which the producer has never treated as served.
-ACCEPTED_CLASSIFY_SHA = "6b5fd8caa99267d1"
+# MOVED AGAIN for CHAOS-5380 (was 6b5fd8caa99267d1, and 5171dfe1c6091b7c before that).
+# `classify()` now asks `contract.is_success_status` rather than reaching through the
+# classifier for the same function: the producer's contract lives in one module that both
+# the producer and every reader import. The FUNCTION IS THE SAME OBJECT -- only the name
+# the call site spells changed -- so no behaviour moved, and the re-check this pin demands
+# was done anyway, before the digest: all seven archived arms re-merged under both the
+# merge-base instrument and this branch and compared PER ROW -- 252 rows, 0 moved bucket,
+# 0 pre-existing row keys differ, seven expectation_summary_split lines identical arm for
+# arm. The digest written here is the one THIS PIN PRINTED.
+ACCEPTED_CLASSIFY_SHA = "2fa5c1c6ee36ed88"
 
 
 def _classify_source():
