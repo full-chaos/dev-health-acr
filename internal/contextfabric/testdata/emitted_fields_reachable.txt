@@ -149,7 +149,7 @@ FactIdentity
     calls followed            21
     calls accounted           13
     calls not_a_call          1
-    calls excluded_by_design  36
+    calls excluded_by_design  37
     calls leaked              0
   fields             id name provider title
 
@@ -213,7 +213,7 @@ FactMembership
     calls followed            20
     calls accounted           13
     calls not_a_call          1
-    calls excluded_by_design  35
+    calls excluded_by_design  36
     calls leaked              0
   fields             organization_id repository_id repository_name
 
