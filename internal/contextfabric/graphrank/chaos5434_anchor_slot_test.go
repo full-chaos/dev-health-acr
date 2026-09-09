@@ -97,11 +97,26 @@ func requireSaturatedCut(t *testing.T, cut ResolutionTraceEvent) {
 	}
 }
 
-// P1 -- SOURCE: RECEIPT. The classification receipt declared the anchor kind.
+// P1 -- SOURCE: RECEIPT, and the acceptance case.
+//
+// The receipt path is UNCONDITIONAL: a receipt-declared scope-anchor kind
+// reaches kind-hinted retrieval with or without a confirmed member kind. That
+// is what keeps this shape starved -- the members are in the pool, they are a
+// reserved kind, and they fill the budget.
+//
+// NO CONFIRMED KIND, DELIBERATELY, and the reason is measured rather than
+// stylistic. The contest set (chaos5422_contest_set.go) refuses member-kind
+// candidates at the ADMISSION boundary, but only when a confirmed kind EQUALS
+// the frame's member kind. Written with a confirmed member kind this fixture
+// stops being starved at all -- the crowd never reaches phase 4 and the cut
+// sees ONE candidate, so the pin would assert survival of an anchor nothing
+// threatened. Written without one, the crowd is admitted and the cut sees
+// ninety-two against a budget of twenty, on a tree with the contest set and
+// on a tree without it alike.
 func TestTheReceiptScopeAnchorSurvivesASaturatedMemberCrowd(t *testing.T) {
 	t.Parallel()
 	res, cut := resolveScopedWithCut(t, anchorOnlyByKindBackend("chaos", saturatedCrowd),
-		scopedProjectsFrame("chaos"), confirmedProject(), nil, contextfabric.SubjectTeam)
+		scopedProjectsFrame("chaos"), nil, nil, contextfabric.SubjectTeam)
 	requireSaturatedCut(t, cut)
 
 	if kinds := candidateKinds(res); kinds[contextfabric.SubjectTeam] == 0 {
@@ -110,19 +125,79 @@ func TestTheReceiptScopeAnchorSurvivesASaturatedMemberCrowd(t *testing.T) {
 	}
 }
 
-// P2 -- SOURCE: CONFIRMED-ANCHOR FALLBACK. The receipt carried no kind; the
-// caller's own redeemed anchor selection supplied it. It must be
-// indistinguishable from the receipt source at truncation.
-func TestTheFallbackScopeAnchorSurvivesASaturatedMemberCrowd(t *testing.T) {
+// P2 -- SOURCE: CONFIRMED-ANCHOR FALLBACK, pinned WHERE IT IS DECIDABLE.
+//
+// The ticket asks for the guarantee on both anchor sources. The receipt source
+// is pinned end to end above. The fallback source is pinned here, at the cut,
+// and NOT end to end -- because the end-to-end starved shape does not exist
+// once the contest set ships, and a fixture that pretended otherwise would be
+// asserting a property on a population no request can produce.
+//
+// WHY IT CANNOT EXIST, measured on a tree carrying the contest set. The
+// fallback only arises when a confirmed kind is present: decideAnchorPoolKindScope
+// returns none without one. So either that confirmed kind EQUALS the frame's
+// member kind, and the contest set refuses every member candidate at
+// admission -- the cut then sees ONE candidate against a budget of twenty --
+// or it does not, and the pre-existing confirmed-kind filter removes them
+// instead, with the same reading. Either way no saturated crowd of a RESERVED
+// kind survives to starve the anchor. (The only kind in both the surviving set
+// and the reserved set is then the anchor's own, and an anchor cannot starve
+// itself.)
+//
+// SO THE GUARANTEE IS PINNED ON THE DECISION, NOT ON A FABRICATED POOL: a
+// fallback-sourced scope must reserve exactly the kind a receipt-sourced one
+// does, and must hold exactly the same slot at the cut. The source-conditional
+// mutant (an arm that gates the slot on the receipt source alone) is killed by
+// this pin together with TestTheAnchorSlotTakesTheLowestRankedSurplusMember,
+// which drives a confirmed_anchor-sourced slot through reservedPrefix itself.
+func TestTheFallbackSourcedAnchorHoldsTheSameSlotAsTheReceiptSourced(t *testing.T) {
 	t.Parallel()
-	res, cut := resolveScopedWithCut(t, anchorOnlyByKindBackend("chaos", saturatedCrowd),
-		scopedProjectsFrame("chaos"), confirmedProject(),
-		&contextfabric.ConfirmedAnchorSelection{Kind: contextfabric.SubjectTeam, CanonicalID: "team.v2:github:chaos"}, "")
-	requireSaturatedCut(t, cut)
+	frame := scopedProjectsFrame("chaos")
+	fallback := decideAnchorPoolKindScope(frame, "",
+		&contextfabric.ConfirmedAnchorSelection{Kind: contextfabric.SubjectTeam, CanonicalID: "team.v2:github:chaos"},
+		confirmedProject())
+	receipt := decideAnchorPoolKindScope(frame, contextfabric.SubjectTeam, nil, confirmedProject())
 
-	if kinds := candidateKinds(res); kinds[contextfabric.SubjectTeam] == 0 {
-		t.Errorf("anchor candidates = 0, want >= 1; kinds=%v, cut saw %d against budget %d -- the FALLBACK-sourced anchor was truncated away while the receipt-sourced one survives; the two sources must be indistinguishable downstream",
-			kinds, cut.RankedCutCandidateCount, cut.RankedCutMax)
+	if fallback.Kind == "" {
+		t.Fatal("the fallback decided no anchor kind, so everything below is vacuous")
+	}
+	if fallback.Kind != receipt.Kind {
+		t.Fatalf("fallback reserved %q, receipt reserved %q -- the two sources must be indistinguishable downstream",
+			fallback.Kind, receipt.Kind)
+	}
+	if fallback.Source == receipt.Source {
+		t.Fatalf("both sources report %q; this pin cannot tell them apart, so it cannot prove the slot ignores the difference", fallback.Source)
+	}
+
+	// The same saturated shape reservedPrefix sees on the receipt path, driven
+	// with the FALLBACK-sourced slot: three members of the reserved member kind
+	// in a two-slot budget, the anchor outside it.
+	ordered := []contextfabric.SubjectCandidate{
+		{Subject: contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_top"}},
+		{Subject: contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_tail"}},
+		{Subject: contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_out"}},
+		{Subject: contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team_anchor"}},
+	}
+	tiers := []int{2, 2, 2, 2}
+	reserved := frameReservedKinds(frame, fallback.Kind)
+
+	keptFallback, outFallback := reservedPrefix(ordered, tiers, 2, reserved,
+		anchorReservedSlot{Kind: fallback.Kind, Source: fallback.Source})
+	keptReceipt, outReceipt := reservedPrefix(ordered, tiers, 2, reserved,
+		anchorReservedSlot{Kind: receipt.Kind, Source: receipt.Source})
+
+	if !keptFallback[3] {
+		t.Errorf("kept=%v: the FALLBACK-sourced anchor was not seated from a saturated reserved crowd", keptFallback)
+	}
+	if !reflect.DeepEqual(keptFallback, keptReceipt) {
+		t.Errorf("fallback kept %v but receipt kept %v -- the slot must not depend on which source named the kind",
+			keptFallback, keptReceipt)
+	}
+	if outFallback.Displaced != outReceipt.Displaced || outFallback.PoolTruncatedN != outReceipt.PoolTruncatedN {
+		t.Errorf("fallback outcome %+v differs from receipt outcome %+v beyond the source token", outFallback, outReceipt)
+	}
+	if outFallback.Source != anchorPoolKindScopeConfirmedAnchor {
+		t.Errorf("outcome.Source = %q, want the fallback token -- an operator must be able to tell the two sources apart on the line", outFallback.Source)
 	}
 }
 
@@ -168,8 +243,9 @@ func TestANonScopeAnchoredFrameGetsNoAnchorSlot(t *testing.T) {
 // reserve takes a slot from a survivor rather than adding one.
 func TestTheAnchorSlotDisplacesRatherThanGrowingTheBudget(t *testing.T) {
 	t.Parallel()
-	res := resolveScoped(t, anchorOnlyByKindBackend("chaos", saturatedCrowd),
-		scopedProjectsFrame("chaos"), confirmedProject(), nil, contextfabric.SubjectTeam)
+	res, cut := resolveScopedWithCut(t, anchorOnlyByKindBackend("chaos", saturatedCrowd),
+		scopedProjectsFrame("chaos"), nil, nil, contextfabric.SubjectTeam)
+	requireSaturatedCut(t, cut)
 
 	if got := len(res.Candidates); got > 20 {
 		t.Errorf("returned %d candidates, want <= the MaxSubjectCandidates budget 20 -- the reserve grew the budget instead of displacing", got)
@@ -196,7 +272,7 @@ func TestTheAnchorSlotDecisionAndItsVictimAreVisibleAtProductionLogLevel(t *test
 
 	if _, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
 		storage.Principal{OrgID: "org_1"}, req, testInterpreted("chaos"), deps,
-		confirmedProject(), nil, scopedProjectsFrame("chaos"), contextfabric.SubjectTeam); err != nil {
+		nil, nil, scopedProjectsFrame("chaos"), contextfabric.SubjectTeam); err != nil {
 		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
 	}
 
