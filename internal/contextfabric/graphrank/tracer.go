@@ -159,6 +159,12 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// value, never an identifier -- so they carry no more than the
 			// fields beside them already do.
 			"commit_basis", event.CommitBasis, "tied_statistical_top", event.TiedStatisticalTop,
+			// CHAOS-5422 (counted r1). commit_basis says how strong the
+			// proof was; this says WHOSE identifier it was -- the caller's
+			// own, or one this engine minted and handed back a turn later.
+			// The two are independent: an engine-minted id can arrive with
+			// a perfectly good basis and still be a substitution.
+			"commit_subject_provenance", orNone(event.CommitSubjectProvenance),
 			// CHAOS-4117: the nominal MaxSubjectCandidates this resolution
 			// ran with -- a plain int, no more sensitive than the counts
 			// already on this line -- so a reader can tell a
@@ -220,6 +226,12 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"offer_pool_anchor_kind_withheld", event.OfferPoolAnchorKindWithheld,
 			"offer_pool_anchor_kind_withheld_scope", event.OfferPoolAnchorKindWithheldScope,
 			"offer_pool_anchor_kind_withheld_reason", event.OfferPoolAnchorKindWithheldReason,
+			// CHAOS-5422 (counted r1). The committed ids and the SET of
+			// bases were already on this line; neither says which id the
+			// CALLER named and which one this ENGINE minted, so a
+			// substitution regression moved no number here. Explicit zero
+			// on every line.
+			"decision_committed_engine_minted", event.DecisionCommittedEngineMinted,
 			// CHAOS-5393. anchor_pool_kind_scope says which kind the SCOPE
 			// ANCHOR was allowed to resolve under; member_kind_confirmed
 			// says the kind that scoped MEMBER discovery. On a scope-

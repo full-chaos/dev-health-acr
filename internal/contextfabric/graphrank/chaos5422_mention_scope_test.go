@@ -37,6 +37,7 @@ package graphrank
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -571,5 +572,207 @@ func TestTheEvidenceCensusRescueRefusesAWithheldKind(t *testing.T) {
 	if len(refused.Committed) != 0 {
 		t.Fatalf("evidence_census committed %v of the declared MEMBER kind; the funnel guard cannot reach this "+
 			"path, so it needs its own conjunct and no longer has one", refused.Committed)
+	}
+}
+
+// THE ESCAPE THE COUNTED r1 FOUND, and it is the one path the three guards
+// cannot see. The caller-hint short circuit is entered when ANY hint is
+// caller-sourced -- but FinalizeExactResolutionWithBasis then commits EVERY
+// retained hint in candidatesBySubject, caller-sourced or receipt-derived
+// alike, and returns before the merged-candidate resolution (and therefore
+// before all three guards) ever runs.
+//
+// So the boundary the positive control above draws is real for a hint list of
+// ONE, and false for a MIXED list: one caller-explicit hint of any kind is
+// enough to carry an engine-minted prior_subject_receipt of the withheld
+// member kind out through the same exit, committed. That is exactly the
+// laundering this ticket exists to stop -- the engine crediting the caller
+// with an identifier the engine itself minted -- only reached one turn
+// earlier and by a different door.
+//
+// The caller-explicit half must still commit: refusing it would break "name
+// the subject you mean", which is the whole reason that exemption exists.
+func TestAMixedHintListDoesNotCarryAReceiptOfTheWithheldKindThroughTheShortCircuit(t *testing.T) {
+	t.Parallel()
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository.v2:github:platform", Label: "platform"}
+	member := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team.v2:github:platform-owners", Label: "platform owners"}
+	backend := mentionScopeBackend("platform")
+	backend.exactHints = map[string]CandidateNode{
+		SubjectKey(anchor): candidateNode(anchor.Kind, anchor.CanonicalID, anchor.Label, 1, "*"),
+		SubjectKey(member): candidateNode(member.Kind, member.CanonicalID, member.Label, 1, "*"),
+	}
+	req := testRequest()
+	req.Options.MaxSubjectCandidates = 20
+	req.RequestedScope.SubjectHints = []contextfabric.SubjectHint{
+		// caller-explicit: authoritative, must keep committing
+		{Kind: anchor.Kind, ID: anchor.CanonicalID, Label: anchor.Label, Source: "workbench"},
+		// engine-minted: must NOT commit, on this path as on every other
+		{Kind: member.Kind, ID: member.CanonicalID, Label: member.Label, Source: "prior_subject_receipt"},
+	}
+	res, _, bases, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+		storage.Principal{OrgID: "org_1"}, req, testInterpreted("platform"),
+		backend.deps(), confirmedTeam(), nil, mentionScopeFrame("platform"), "")
+	if err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+	for _, subject := range res.Committed {
+		if subject.Kind == contextfabric.SubjectTeam {
+			t.Fatalf("committed %v -- the withheld member kind rode out through the caller-hint short "+
+				"circuit on a mixed hint list, which is the same laundering the three guards refuse "+
+				"one turn later; bases=%v", res.Committed, bases)
+		}
+	}
+	if len(res.Committed) != 1 || res.Committed[0].CanonicalID != anchor.CanonicalID {
+		t.Fatalf("committed %v, want exactly the caller's own explicitly named anchor -- refusing it "+
+			"would break naming a subject by canonical id, which is not a substitution", res.Committed)
+	}
+	for _, candidate := range res.Candidates {
+		if candidate.Subject.Kind == contextfabric.SubjectTeam && candidate.State == contextfabric.ResolutionCommitted {
+			t.Fatalf("candidate %q is still Committed after the short circuit", candidate.Subject.CanonicalID)
+		}
+	}
+}
+
+// mixedHintCapture keeps the folded line, the per-candidate offer_pool
+// dispositions, AND the per-subject decision events, because the short
+// circuit's provenance token lives on the decision events and the count it
+// feeds lives on the folded line -- checking one against the other is the
+// whole point.
+type mixedHintCapture struct {
+	summaries    []ResolutionTraceEvent
+	dispositions []ResolutionTraceEvent
+	decisions    []ResolutionTraceEvent
+}
+
+func (c *mixedHintCapture) Trace(event ResolutionTraceEvent) {
+	switch {
+	case event.Stage == "decision_summary":
+		c.summaries = append(c.summaries, event)
+	case event.Stage == "offer_pool" && event.OfferPoolDisposition != "":
+		c.dispositions = append(c.dispositions, event)
+	case event.Stage == "decision":
+		c.decisions = append(c.decisions, event)
+	}
+}
+
+// THE OBSERVABLE FOR THE SHORT-CIRCUIT EXIT, and it needs BOTH arms.
+//
+// This exit returns before any offer-pool event is emitted on the ordinary
+// path, so before this fix a withholding that happened HERE moved no number on
+// the very line that reports withholding, and a committed subject's PROVENANCE
+// -- caller-named or engine-minted -- appeared nowhere at Info at all. Those
+// are the two regressions r1 named as invisible.
+//
+// The withheld arm alone would pass with the counter hardcoded to 1 and the
+// provenance count hardcoded to 0; the passthrough arm alone would pass with
+// both hardcoded the other way. Together neither literal survives.
+func TestTheShortCircuitReportsWhatItWithheldAndWhoseIdentifierItCommitted(t *testing.T) {
+	t.Parallel()
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository.v2:github:platform", Label: "platform"}
+	member := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team.v2:github:platform-owners", Label: "platform owners"}
+	for _, testCase := range []struct {
+		name              string
+		frame             *contextfabric.QuestionFrame
+		wantWithheld      int
+		wantEngineMinted  int
+		wantCommittedKind []contextfabric.SubjectKind
+	}{
+		{
+			// The scope-anchored frame: the engine-minted receipt of the
+			// member kind is refused the commit and SAID SO on the line.
+			name:  "the receipt of the withheld kind is refused and counted",
+			frame: mentionScopeFrame("platform"), wantWithheld: 1, wantEngineMinted: 0,
+			wantCommittedKind: []contextfabric.SubjectKind{contextfabric.SubjectRepository},
+		},
+		{
+			// NO scope axis, SAME hint list. The receipt commits exactly as
+			// it always did -- this fix takes nothing away from a question
+			// with no scope to withhold on -- and the provenance counter is
+			// what makes that commit visible rather than silent. This is the
+			// non-zero that proves the counter is not stuck at 0.
+			name:  "with no scope axis the engine-minted receipt still commits, and is counted as such",
+			frame: nil, wantWithheld: 0, wantEngineMinted: 1,
+			wantCommittedKind: []contextfabric.SubjectKind{contextfabric.SubjectRepository, contextfabric.SubjectTeam},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			backend := mentionScopeBackend("platform")
+			backend.exactHints = map[string]CandidateNode{
+				SubjectKey(anchor): candidateNode(anchor.Kind, anchor.CanonicalID, anchor.Label, 1, "*"),
+				SubjectKey(member): candidateNode(member.Kind, member.CanonicalID, member.Label, 1, "*"),
+			}
+			capture := &mixedHintCapture{}
+			req := testRequest()
+			req.Options.MaxSubjectCandidates = 20
+			req.RequestedScope.SubjectHints = []contextfabric.SubjectHint{
+				{Kind: anchor.Kind, ID: anchor.CanonicalID, Label: anchor.Label, Source: "workbench"},
+				{Kind: member.Kind, ID: member.CanonicalID, Label: member.Label, Source: "prior_subject_receipt"},
+			}
+			deps := backend.deps()
+			deps.ResolutionTracer = capture
+			res, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+				storage.Principal{OrgID: "org_1"}, req, testInterpreted("platform"),
+				deps, confirmedTeam(), nil, testCase.frame, "")
+			if err != nil {
+				t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+			}
+
+			gotKinds := make([]contextfabric.SubjectKind, 0, len(res.Committed))
+			for _, subject := range res.Committed {
+				gotKinds = append(gotKinds, subject.Kind)
+			}
+			slices.Sort(gotKinds)
+			want := slices.Clone(testCase.wantCommittedKind)
+			slices.Sort(want)
+			if !slices.Equal(gotKinds, want) {
+				t.Fatalf("committed kinds = %v, want %v", gotKinds, want)
+			}
+
+			if len(capture.summaries) != 1 {
+				t.Fatalf("captured %d decision_summary events, want exactly 1", len(capture.summaries))
+			}
+			got := capture.summaries[0]
+			if got.OfferPoolAnchorKindWithheld != testCase.wantWithheld {
+				t.Errorf("offer_pool_anchor_kind_withheld on the FOLDED line = %d, want %d -- the short "+
+					"circuit contributed nothing to this counter before r1",
+					got.OfferPoolAnchorKindWithheld, testCase.wantWithheld)
+			}
+			if got.DecisionCommittedEngineMinted != testCase.wantEngineMinted {
+				t.Errorf("decision_committed_engine_minted = %d, want %d -- without it the line carries "+
+					"committed ids and a SET of bases but never says whose identifier each id was",
+					got.DecisionCommittedEngineMinted, testCase.wantEngineMinted)
+			}
+
+			// THE IDENTITY, both ways: the folded counters must equal the
+			// events they folded, never a second tally computed beside them.
+			withheld := 0
+			for _, event := range capture.dispositions {
+				if event.OfferPoolDisposition == offerPoolAnchorKindWithheldDisposition {
+					withheld++
+				}
+			}
+			if withheld != got.OfferPoolAnchorKindWithheld {
+				t.Errorf("the folded line reports %d withheld but %d per-candidate dispositions were emitted",
+					got.OfferPoolAnchorKindWithheld, withheld)
+			}
+			minted := 0
+			for _, event := range capture.decisions {
+				if event.Outcome != "committed" {
+					continue
+				}
+				if event.CommitSubjectProvenance == "" {
+					t.Errorf("committed decision event for %q carries no commit_subject_provenance -- this "+
+						"exit is the one place that provenance is known", event.Subject.CanonicalID)
+				}
+				if event.CommitSubjectProvenance == commitSubjectProvenanceEngineMinted {
+					minted++
+				}
+			}
+			if minted != got.DecisionCommittedEngineMinted {
+				t.Errorf("the folded line reports %d engine-minted commits but %d decision events carried "+
+					"the token", got.DecisionCommittedEngineMinted, minted)
+			}
+		})
 	}
 }

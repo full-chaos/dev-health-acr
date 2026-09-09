@@ -1295,8 +1295,13 @@ type ResolutionTraceEvent struct {
 	DecisionAmbiguousCount int
 	DecisionNoCommitCount  int
 	DecisionCommittedIDs   []string
-	DecisionCommitGates    []string
-	DecisionCommitBases    []string
+	// DecisionCommittedEngineMinted (stage=="decision_summary") counts how
+	// many of those committed subjects were credited to an id this ENGINE
+	// minted and the caller handed back, rather than one the caller named --
+	// see CommitSubjectProvenance. ALWAYS emitted, explicit zero included.
+	DecisionCommittedEngineMinted int
+	DecisionCommitGates           []string
+	DecisionCommitBases           []string
 	// DecisionOfferedUnderWindowGate (stage=="decision_summary" ONLY) is
 	// true when AT LEAST ONE decision folded into this summary was produced
 	// under the offers-only window gate -- a pass whose resolution the
@@ -1388,6 +1393,21 @@ type ResolutionTraceEvent struct {
 	// BOTH ALWAYS SET on the decision line, with explicit `none` tokens.
 	OfferPoolAnchorKindWithheldScope  string
 	OfferPoolAnchorKindWithheldReason string
+	// CommitSubjectProvenance (CHAOS-5422, counted r1's second finding) says
+	// where a COMMITTED subject's identity came from, from the closed
+	// vocabulary below: the caller named it by canonical id in this request,
+	// or this engine minted it as a receipt in an earlier turn and the caller
+	// handed it back. The folded line already carried committed ids and the
+	// SET of bases; neither says which id was which, and that distinction is
+	// the axis this ticket exists on -- so a regression in it moved no
+	// number at Info.
+	//
+	// EMITTED ONLY WHERE IT IS KNOWN, which is the caller-hint short circuit:
+	// hint provenance lives in that path's own callerSourced map and is not
+	// carried into the merged-candidate resolution. Everywhere else it is the
+	// empty string and the fold renders `none` -- an honest "this path cannot
+	// say", never a guess.
+	CommitSubjectProvenance string
 	// AnchorPoolSummary marks the once-per-call `anchor_pool` event
 	// (CHAOS-5393) that reports which kind the SCOPE ANCHOR was allowed to
 	// resolve under, and where that kind came from. Emitted from the same
@@ -1995,6 +2015,11 @@ type decisionSummaryBuffer struct {
 	anchorKindWithheld       int
 	anchorKindWithheldScope  string
 	anchorKindWithheldReason string
+	// committedEngineMinted counts the committed subjects this call credited
+	// to an identifier the ENGINE minted rather than one the caller named.
+	// Counted, not just listed, so the regression it exists to catch moves a
+	// number rather than adding one more id to a capped list.
+	committedEngineMinted int
 	// anchorPoolKindScope / anchorPoolKindScopeSource / memberKindConfirmed
 	// accumulate from the `anchor_pool` summary event rather than being
 	// stamped at construction like frameGate above. The distinction is
@@ -2081,6 +2106,9 @@ func (b *decisionSummaryBuffer) Trace(event ResolutionTraceEvent) {
 		}
 		b.commitGates = appendDistinctCapped(b.commitGates, event.CommitGate)
 		b.commitBases = appendDistinctCapped(b.commitBases, event.CommitBasis)
+		if event.CommitSubjectProvenance == commitSubjectProvenanceEngineMinted {
+			b.committedEngineMinted++
+		}
 	case "ambiguous":
 		b.ambiguousCount++
 	case "no_commit":
@@ -2107,6 +2135,10 @@ func (b *decisionSummaryBuffer) flush() {
 		OfferPoolVectorOnlyDemoted:     b.vectorOnlyDemoted,
 		OfferPoolEmptiedByExclusion:    b.emptiedByExclusion,
 		OfferPoolAnchorKindWithheld:    b.anchorKindWithheld,
+		// Explicit zero on every line, like the withheld counter above: a
+		// resolution that committed nothing engine-minted must not read like
+		// a build that stopped counting.
+		DecisionCommittedEngineMinted: b.committedEngineMinted,
 		// orNone for the same reason the anchor-pool trio below take it: a
 		// buffer built before the scope was decided (this package's own unit
 		// callers) must render a word, never an empty log value.
@@ -2122,6 +2154,24 @@ func (b *decisionSummaryBuffer) flush() {
 		DecisionReservedKinds:             nonNil(b.reservedKinds),
 		DecisionFilterKinds:               nonNil(b.filterKinds),
 	})
+}
+
+const (
+	// commitSubjectProvenanceCallerNamed: the caller stated this canonical id
+	// in THIS request, with any hint source but prior_subject_receipt.
+	commitSubjectProvenanceCallerNamed = "caller_named"
+	// commitSubjectProvenanceEngineMinted: this engine offered the id in an
+	// earlier turn and the caller returned it as a prior_subject_receipt.
+	commitSubjectProvenanceEngineMinted = "engine_minted_receipt"
+)
+
+// commitSubjectProvenanceToken renders the pair above. Total over the bool so
+// there is no third, unlabelled state.
+func commitSubjectProvenanceToken(callerNamed bool) string {
+	if callerNamed {
+		return commitSubjectProvenanceCallerNamed
+	}
+	return commitSubjectProvenanceEngineMinted
 }
 
 // confirmedMemberKindToken renders the CONFIRMED member kind for the
@@ -2315,7 +2365,64 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// circuit. Everything this exit commits was named by canonical id,
 		// re-read from the graph by keyed lookup and re-authorized in the
 		// hint loop above -- CommitBasisCallerCanonicalID for all of it.
-		exactResolution, exactBases, exactDigests := FinalizeExactResolutionWithBasis(candidatesBySubject, callerSourced, request.Options.MaxSubjectCandidates)
+		// CHAOS-5422, GUARD 4 OF 4 -- the escape the counted r1 found, and the
+		// reason the other three could not see it.
+		//
+		// This branch is entered when ANY hint is caller-sourced, and
+		// FinalizeExactResolutionWithBasis then commits EVERY retained entry
+		// in the map -- caller-sourced and receipt-derived alike, as its own
+		// doc comment says. It returns before the merged-candidate resolution
+		// runs, so guards 1-3 (the arrival demotion, the commitIndex funnel
+		// and the census conjunct) are all downstream of it and none of them
+		// is reachable from here.
+		//
+		// So a MIXED hint list carried the withheld kind out committed: one
+		// caller-explicit hint of any kind is enough to enter this exit, and
+		// an engine-minted prior_subject_receipt of the member kind rode out
+		// beside it. That is the same laundering this ticket exists to stop
+		// -- the engine crediting a caller with an identifier the engine
+		// itself minted -- reached one turn earlier and through a different
+		// door. The positive control this seam already carries
+		// (TestACallerExplicitHintOfTheMemberKindStillCommits) was true for a
+		// hint list of ONE and blind to a mixed one.
+		//
+		// THE CALLER-EXPLICIT EXEMPTION IS UNTOUCHED, and the partition below
+		// is exactly it: !callerSourced is what separates "the caller named
+		// this by canonical id" -- an authoritative direct ask, never an
+		// offer this engine minted -- from a receipt the engine handed out
+		// and read back as consent. Refusing the first would break "name the
+		// subject you mean".
+		//
+		// DEMOTED, NOT DROPPED, matching guard 1 rather than guard 2: what is
+		// withheld here arrived as an exact hint, not out of a contest, so
+		// there is no contest for it to keep competing in -- but it must
+		// still reach the caller as a Proposed candidate so the turn can
+		// clarify instead of collapsing to a bare no_match.
+		committable := candidatesBySubject
+		withheldOnShortCircuit := make([]contextfabric.SubjectCandidate, 0, len(candidatesBySubject))
+		if subjectScope.MemberKind != "" {
+			committable = make(map[string]contextfabric.SubjectCandidate, len(candidatesBySubject))
+			for key, candidate := range candidatesBySubject {
+				if !callerSourced[key] && subjectScope.withholds(candidate.Subject.Kind) {
+					candidate.State = contextfabric.ResolutionProposed
+					withheldOnShortCircuit = append(withheldOnShortCircuit, candidate)
+					continue
+				}
+				committable[key] = candidate
+			}
+			// Map iteration is unordered and these candidates reach the
+			// caller, so the order is settled here rather than left to
+			// whatever range produced -- the same determinism
+			// FinalizeExactResolution gives the committed set.
+			slices.SortFunc(withheldOnShortCircuit, func(a, b contextfabric.SubjectCandidate) int {
+				return strings.Compare(SubjectKey(a.Subject), SubjectKey(b.Subject))
+			})
+		}
+		exactResolution, exactBases, exactDigests := FinalizeExactResolutionWithBasis(committable, callerSourced, request.Options.MaxSubjectCandidates)
+		// Appended AFTER the truncation FinalizeExactResolution applies: a
+		// candidate that may never commit must not be able to displace one
+		// that may from the committed set's own bound.
+		exactResolution.Candidates = append(exactResolution.Candidates, withheldOnShortCircuit...)
 		commitBases.ResetTo(exactBases)
 		commitDigests.ResetTo(exactDigests)
 		// CHAOS-4096: this short circuit never reaches
@@ -2359,16 +2466,48 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// the load-bearing safety property regardless; this tag is the
 		// trace-side twin of it.
 		if deps.ResolutionTracer != nil {
+			// CHAOS-5422 (counted r1, the observability half of the fixed
+			// question). This exit used to contribute NOTHING to the folded
+			// withheld counter -- it returns before any offer_pool event is
+			// emitted -- so a withholding that happened here was invisible at
+			// Info on the very line that reports withholding. The summary is
+			// emitted on EVERY pass through this exit, explicit zero
+			// included, so a pass that withheld nothing and a build where
+			// this guard is gone can never read alike; the per-candidate
+			// events name WHICH subjects, under the same disposition token
+			// the offer-pool seam already uses.
+			for _, candidate := range withheldOnShortCircuit {
+				deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+					RequestID: request.RequestID, Stage: "offer_pool", Subject: candidate.Subject,
+					OfferPoolDisposition: offerPoolAnchorKindWithheldDisposition,
+				})
+			}
+			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+				RequestID: request.RequestID, Stage: "offer_pool", OfferPoolSummary: true,
+				OfferPoolAnchorKindWithheld: len(withheldOnShortCircuit),
+			})
 			for _, subject := range exactResolution.Committed {
 				winningMechanism := ""
 				if candidate, ok := candidatesBySubject[SubjectKey(subject)]; ok && len(candidate.MatchMechanisms) > 0 {
 					winningMechanism = string(candidate.MatchMechanisms[0])
 				}
+				// CommitSubjectProvenance: the reviewer's second finding was
+				// that the folded line carries committed ids and aggregate
+				// bases but never says whether an id was NAMED BY THE CALLER
+				// or MINTED BY THIS ENGINE and handed back as a receipt --
+				// which is precisely the axis this whole ticket is about, so
+				// a regression in it was invisible at Info. This exit is
+				// where that provenance is actually known (callerSourced is
+				// built from the hint sources two loops up); nowhere else in
+				// the resolution can see it, and the token is therefore
+				// emitted here and only here rather than guessed elsewhere.
 				deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 					RequestID: request.RequestID, Stage: "decision", Subject: subject,
 					Outcome: "committed", WinningMechanism: winningMechanism,
-					CommitGate:             CommitGateCallerHintShortCircuit,
-					CommitBasis:            string(exactBases.For(subject)),
+					CommitGate:  CommitGateCallerHintShortCircuit,
+					CommitBasis: string(exactBases.For(subject)),
+					CommitSubjectProvenance: commitSubjectProvenanceToken(
+						callerSourced[SubjectKey(subject)]),
 					SearchCandidateLimit:   request.Options.MaxSubjectCandidates,
 					PopulationBasis:        "none",
 					OfferedUnderWindowGate: offersOnly,
