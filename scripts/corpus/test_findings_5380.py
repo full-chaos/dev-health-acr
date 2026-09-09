@@ -860,6 +860,52 @@ def test_the_real_harness_and_the_classifier_agree_over_the_executed_space():
 BODYLESS_BY_SPEC = frozenset({204, 304})
 
 
+def _retry_terminal_decision_lines():
+    """Every line of `run_replicate`'s retry/terminal decision (B4's axis): the inner
+    attempt-retry loop (the `is_success_status(...) or not is_retryable(...)` gate) and
+    the turn-terminal check right after it (`if not is_success_status(status): ...
+    break`). Located STRUCTURALLY -- the inner `for attempt` loop, and the statement that
+    follows it in the `for turn` loop's body -- from the function's OWN AST at test time,
+    so a branch a future change adds to EITHER decision appears here without anyone
+    editing this file.
+    """
+    tree = _ast.parse((HERE / "harness.py").read_text())
+    fn = next(n for n in _ast.walk(tree)
+              if isinstance(n, _ast.FunctionDef) and n.name == "run_replicate")
+    turn_loop = next(n for n in _ast.walk(fn) if isinstance(n, _ast.For)
+                     and getattr(n.target, "id", None) == "turn")
+    attempt_loop = next(n for n in _ast.walk(turn_loop) if isinstance(n, _ast.For)
+                        and getattr(n.target, "id", None) == "attempt")
+    lines = {s.lineno for s in _ast.walk(attempt_loop) if hasattr(s, "lineno")}
+    idx = turn_loop.body.index(attempt_loop)
+    terminal_if = next((s for s in turn_loop.body[idx + 1:] if isinstance(s, _ast.If)
+                        and any(isinstance(c, _ast.Call) and isinstance(c.func, _ast.Attribute)
+                               and c.func.attr == "is_success_status"
+                               for c in _ast.walk(s.test))), None)
+    assert terminal_if is not None, (
+        "run_replicate's shape changed: no `if is_success_status(...)` statement found "
+        "after the attempt-retry loop -- re-locate the terminal decision")
+    lines |= {s.lineno for s in _ast.walk(terminal_if) if hasattr(s, "lineno")}
+    return lines
+
+
+def _trace_run_replicate_lines(executed_lines):
+    """A `sys.settrace` hook scoped to `run_replicate`: records every LINE of the
+    function that actually executed (B4, same mechanism as i4's exit-line trace)."""
+    harness_file = str((HERE / "harness.py").resolve())
+
+    def global_trace(frame, event, _arg):
+        if (event == "call" and frame.f_code.co_name == "run_replicate"
+                and str(Path(frame.f_code.co_filename).resolve()) == harness_file):
+            def local_trace(frame, event, _arg):
+                if event == "line":
+                    executed_lines.add(frame.f_lineno)
+                return local_trace
+            return local_trace
+        return None
+    return global_trace
+
+
 def test_the_producer_retry_decision_is_swept_over_the_full_status_range():
     """THE PRODUCER SWEEP, from the full status space, not a hand list (kills r3 P1-4).
 
@@ -891,26 +937,41 @@ def test_the_producer_retry_decision_is_swept_over_the_full_status_range():
 
     saved_base, saved_out = harness.BASE, harness.OUTDIR
     disagreements = []
-    with tempfile.TemporaryDirectory() as tmp, _ScriptedServer() as srv:
-        harness.BASE = f"http://127.0.0.1:{srv.port}/api/investigations"
-        harness.OUTDIR = Path(tmp)
-        try:
-            for status in swept:
-                srv.status, srv.body, srv.raw = status, retryable_body, False
-                with contextlib.redirect_stdout(io.StringIO()):
-                    row = harness.run_replicate(qid, question, 900_000 + status,
-                                                warn=lambda *_a, **_k: None)
-                want_retry = not contract.is_success_status(status)
-                did_retry = row["attempts"] > 1
-                if want_retry != did_retry:
-                    disagreements.append((status, row["attempts"], want_retry))
-        finally:
-            harness.BASE, harness.OUTDIR = saved_base, saved_out
+    executed_lines = set()
+    sys.settrace(_trace_run_replicate_lines(executed_lines))
+    try:
+        with tempfile.TemporaryDirectory() as tmp, _ScriptedServer() as srv:
+            harness.BASE = f"http://127.0.0.1:{srv.port}/api/investigations"
+            harness.OUTDIR = Path(tmp)
+            try:
+                for status in swept:
+                    srv.status, srv.body, srv.raw = status, retryable_body, False
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        row = harness.run_replicate(qid, question, 900_000 + status,
+                                                    warn=lambda *_a, **_k: None)
+                    want_retry = not contract.is_success_status(status)
+                    did_retry = row["attempts"] > 1
+                    if want_retry != did_retry:
+                        disagreements.append((status, row["attempts"], want_retry))
+            finally:
+                harness.BASE, harness.OUTDIR = saved_base, saved_out
+    finally:
+        sys.settrace(None)
 
     assert srv.requests > 0, "an executing pin that made no requests measured nothing"
     assert not disagreements, (
         f"{len(disagreements)} of {len(swept)} statuses where the producer's OWN retry "
         f"decision disagrees with the contract: {disagreements[:5]}")
+
+    # B4, load-bearing: every line of the retry/terminal decision the sweep drove must
+    # have actually EXECUTED. A branch a future change adds to either `if` and that this
+    # total-status sweep never reaches fails HERE instead of silently passing, same
+    # mechanism as (i)'s exit-line trace.
+    expected_lines = _retry_terminal_decision_lines()
+    missing = expected_lines - executed_lines
+    assert not missing, (
+        f"the retry/terminal decision has line(s) {sorted(missing)} the sweep never "
+        "executed -- an unvisited branch would otherwise pass silently")
 
 
 def test_the_measured_shapes_of_the_live_run_all_classify_correctly():
