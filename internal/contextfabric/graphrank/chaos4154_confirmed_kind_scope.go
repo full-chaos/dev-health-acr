@@ -221,7 +221,7 @@ const (
 // its zero value, which callers read as ConfirmedKindVectorScopeNotAttempted
 // via the SAME "empty state string" convention this file's other fields
 // already use. NEVER influences state/pool/scopedIdentity in this change.
-func buildConfirmedKindScopedSnapshot(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, terms []string, aliasClaimantsByTerm map[string][]CandidateNode, aliasIdentityComplete bool, kind contextfabric.SubjectKind, searchLimit int) (pool map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, scopedIdentity identityClaimants, scopedIdentityTerms identityMatchTerms, state string, traversalDegraded int, authzDropped int, vectorCensus ConfirmedKindVectorCensusOutcome, err error) {
+func buildConfirmedKindScopedSnapshot(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, terms []string, aliasClaimantsByTerm map[string][]CandidateNode, aliasIdentityComplete bool, kind contextfabric.SubjectKind, searchLimit int, admission *contestAdmission) (pool map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, scopedIdentity identityClaimants, scopedIdentityTerms identityMatchTerms, state string, traversalDegraded int, authzDropped int, vectorCensus ConfirmedKindVectorCensusOutcome, err error) {
 	if deps.SearchKind == nil {
 		return nil, nil, nil, nil, nil, confirmedKindScopeNotAttempted, 0, 0, ConfirmedKindVectorCensusOutcome{}, nil
 	}
@@ -256,7 +256,7 @@ func buildConfirmedKindScopedSnapshot(ctx context.Context, principal storage.Pri
 	// own AliasLookup-then-Search ordering already produces for the same
 	// node.
 	if isAliasLookupScopedKind(kind) && aliasIdentityComplete {
-		identityTraversalDegraded, identityAuthzDropped := mergeIdentityCensusCandidates(ctx, principal, request, deps, aliasClaimantsByTerm, kind, pool, observationParentKey, observationBlocked, scopedIdentity, scopedIdentityTerms)
+		identityTraversalDegraded, identityAuthzDropped := mergeIdentityCensusCandidates(ctx, principal, request, deps, aliasClaimantsByTerm, kind, pool, observationParentKey, observationBlocked, scopedIdentity, scopedIdentityTerms, admission)
 		traversalDegraded += identityTraversalDegraded
 		authzDropped += identityAuthzDropped
 	}
@@ -281,7 +281,7 @@ func buildConfirmedKindScopedSnapshot(ctx context.Context, principal storage.Pri
 		// nothing for this pass to contribute to CHAOS-3829's carve-out,
 		// which this mechanism disables for its own gate call regardless
 		// (resolve.go's call site).
-		termTraversalDegraded, termAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, results, pool, observationParentKey, observationBlocked, true, nil, scopedIdentity, scopedIdentityTerms)
+		termTraversalDegraded, termAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, results, pool, observationParentKey, observationBlocked, true, nil, scopedIdentity, scopedIdentityTerms, admission)
 		traversalDegraded += termTraversalDegraded
 		authzDropped += termAuthzDropped
 	}
@@ -319,7 +319,7 @@ func buildConfirmedKindScopedSnapshot(ctx context.Context, principal storage.Pri
 // Zero additional I/O: filtering an already-fetched map is pure Go. A
 // nil/empty aliasClaimantsByTerm (nothing matched any term) is simply a
 // no-op here.
-func mergeIdentityCensusCandidates(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, aliasClaimantsByTerm map[string][]CandidateNode, kind contextfabric.SubjectKind, pool map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, identity identityClaimants, identityTerms identityMatchTerms) (traversalDegraded int, authzDropped int) {
+func mergeIdentityCensusCandidates(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, aliasClaimantsByTerm map[string][]CandidateNode, kind contextfabric.SubjectKind, pool map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, identity identityClaimants, identityTerms identityMatchTerms, admission *contestAdmission) (traversalDegraded int, authzDropped int) {
 	for term, nodes := range aliasClaimantsByTerm {
 		var sameKind []CandidateNode
 		for _, node := range nodes {
@@ -335,7 +335,7 @@ func mergeIdentityCensusCandidates(ctx context.Context, principal storage.Princi
 		// allowExactMatch=true, vectorArmSimilarity=nil: the SAME call
 		// shape resolve.go's own (unscoped) AliasLookup merge already uses
 		// for these exact nodes -- see that call site's own comment.
-		termTraversalDegraded, termAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, sameKind, pool, observationParentKey, observationBlocked, true, nil, identity, identityTerms)
+		termTraversalDegraded, termAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, sameKind, pool, observationParentKey, observationBlocked, true, nil, identity, identityTerms, admission)
 		traversalDegraded += termTraversalDegraded
 		authzDropped += termAuthzDropped
 	}

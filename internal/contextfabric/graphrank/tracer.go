@@ -209,6 +209,17 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// a graph that held candidates this resolution may not offer.
 			// Always emitted, true or false.
 			"offer_pool_emptied_by_exclusion", event.OfferPoolEmptiedByExclusion,
+			// CHAOS-5422. The vector counters above say what this resolution
+			// was refused for GUESSING; these say what it was refused for
+			// being the wrong ROLE — a candidate of the kind the question asks
+			// about, offered as the scope it asks about them within. Count,
+			// kind and reason together, because a count with no kind sends an
+			// operator looking for a retrieval failure that did not happen.
+			// All three always present, with an explicit zero and explicit
+			// `none` tokens.
+			"offer_pool_anchor_kind_withheld", event.OfferPoolAnchorKindWithheld,
+			"offer_pool_anchor_kind_withheld_scope", event.OfferPoolAnchorKindWithheldScope,
+			"offer_pool_anchor_kind_withheld_reason", event.OfferPoolAnchorKindWithheldReason,
 			// CHAOS-5393. anchor_pool_kind_scope says which kind the SCOPE
 			// ANCHOR was allowed to resolve under; member_kind_confirmed
 			// says the kind that scoped MEMBER discovery. On a scope-

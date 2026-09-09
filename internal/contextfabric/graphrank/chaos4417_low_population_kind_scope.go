@@ -145,7 +145,15 @@ func applyLowPopulationKindOffers(
 	}
 	for _, kind := range chaos4417LowPopulationScopedKinds {
 		scopedPool, _, _, _, _, scopeState, scopeTraversalDegraded, scopeAuthzDropped, _, scopeErr :=
-			buildConfirmedKindScopedSnapshot(ctx, principal, request, deps, terms, aliasClaimantsByTerm, aliasIdentityComplete, kind, effectiveSearchLimit)
+			buildConfirmedKindScopedSnapshot(ctx, principal, request, deps, terms, aliasClaimantsByTerm, aliasIdentityComplete, kind, effectiveSearchLimit,
+				// CHAOS-5422: a nil admission, and it is PROVABLE rather than
+				// convenient. This rescue runs only when confirmedKind == nil
+				// (its own call-site guard), while the contest scope is decided
+				// only when a confirmed kind IS present and equals the frame's
+				// declared member kind. The two conditions are mutually
+				// exclusive, so there is no scope to apply here and "nothing was
+				// decided" is the honest value, not a skipped filter.
+				nil)
 		if scopeErr != nil {
 			outcome = lowPopulationKindScopeOutcomeError
 			return nil, scopeErr

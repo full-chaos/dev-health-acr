@@ -249,7 +249,7 @@ func TestMergeCensusAttestedSatisfier_DeclinedNodeNeverReportsSuccessEvenWhenThe
 	}
 	request := testRequest()
 
-	gotKey, ok := mergeCensusAttestedSatisfier(context.Background(), storage.Principal{OrgID: "org_1"}, request, deps, attestation, candidatesBySubject, map[string]string{}, map[string]bool{}, nil, nil)
+	gotKey, ok := mergeCensusAttestedSatisfier(context.Background(), storage.Principal{OrgID: "org_1"}, request, deps, attestation, candidatesBySubject, map[string]string{}, map[string]bool{}, nil, nil, nil)
 	if ok || gotKey != "" {
 		t.Fatalf("mergeCensusAttestedSatisfier() = (%q, %v), want (\"\", false) for a declined node", gotKey, ok)
 	}
@@ -286,7 +286,7 @@ func TestMergeCensusAttestedSatisfier_DistinguishesBackendErrorFromConfirmedAbse
 		deps := backend.deps()
 		tracer := &captureResolutionTracer{}
 		deps.ResolutionTracer = tracer
-		_, ok := mergeCensusAttestedSatisfier(context.Background(), storage.Principal{OrgID: "org_1"}, request, deps, attestation, map[string]contextfabric.SubjectCandidate{}, map[string]string{}, map[string]bool{}, nil, nil)
+		_, ok := mergeCensusAttestedSatisfier(context.Background(), storage.Principal{OrgID: "org_1"}, request, deps, attestation, map[string]contextfabric.SubjectCandidate{}, map[string]string{}, map[string]bool{}, nil, nil, nil)
 		if ok {
 			t.Fatal("mergeCensusAttestedSatisfier() ok = true, want false")
 		}
@@ -305,7 +305,7 @@ func TestMergeCensusAttestedSatisfier_DistinguishesBackendErrorFromConfirmedAbse
 		}
 		tracer := &captureResolutionTracer{}
 		deps.ResolutionTracer = tracer
-		_, ok := mergeCensusAttestedSatisfier(context.Background(), storage.Principal{OrgID: "org_1"}, request, deps, attestation, map[string]contextfabric.SubjectCandidate{}, map[string]string{}, map[string]bool{}, nil, nil)
+		_, ok := mergeCensusAttestedSatisfier(context.Background(), storage.Principal{OrgID: "org_1"}, request, deps, attestation, map[string]contextfabric.SubjectCandidate{}, map[string]string{}, map[string]bool{}, nil, nil, nil)
 		if ok {
 			t.Fatal("mergeCensusAttestedSatisfier() ok = true, want false")
 		}
@@ -360,7 +360,7 @@ func TestMergeCensusAttestedSatisfier_CapsMatchedTermsAtTheExact32Boundary(t *te
 	}
 	request := testRequest()
 
-	_, ok := mergeCensusAttestedSatisfier(context.Background(), storage.Principal{OrgID: "org_1"}, request, deps, attestation, candidatesBySubject, map[string]string{}, map[string]bool{}, nil, nil)
+	_, ok := mergeCensusAttestedSatisfier(context.Background(), storage.Principal{OrgID: "org_1"}, request, deps, attestation, candidatesBySubject, map[string]string{}, map[string]bool{}, nil, nil, nil)
 	if !ok {
 		t.Fatal("mergeCensusAttestedSatisfier() ok = false, want true")
 	}

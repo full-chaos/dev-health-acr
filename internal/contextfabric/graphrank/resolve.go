@@ -1343,6 +1343,32 @@ type ResolutionTraceEvent struct {
 	// pre-committed arrival stripped back to Proposed so it can clarify but
 	// not commit). Closed vocabulary; no term, no confidence.
 	OfferPoolDisposition string
+	// OfferPoolAnchorKindWithheld (CHAOS-5422) is how many DISTINCT subjects
+	// this question's grouping/scope axis refused the contest, on the folded
+	// summary and on the decision line. ALWAYS emitted, explicit zero included:
+	// a question that refused nothing must not read like a build where the
+	// refusal stopped happening.
+	//
+	// DISTINCT, and per CALL rather than per resolver pass. The confirmed-kind
+	// re-decision resolves over a freshly built pool, so the passes can refuse
+	// overlapping-but-different populations; summing double-counts a subject
+	// refused twice and taking the last pass's value drops one refused only by
+	// the first. The value comes from len() of a set keyed by subject, so
+	// neither arithmetic error is expressible.
+	//
+	// A SEPARATE COUNTER from the vector pair, deliberately: the two act on the
+	// same population for unrelated reasons and take unrelated fixes, and
+	// folding them would leave an operator unable to tell a retrieval that
+	// guessed from a question whose subject was never admissible at all.
+	OfferPoolAnchorKindWithheld int
+	// OfferPoolAnchorKindWithheldScope is the kind that refusal excluded, or
+	// `none`; OfferPoolAnchorKindWithheldReason names what decided it, from
+	// contestScope's own closed vocabulary, or `none`. A count alone cannot tell
+	// an operator WHICH kind was refused nor on whose authority, and a count
+	// with no reason beside it is the shape that makes a refusal look like a
+	// retrieval failure. BOTH ALWAYS SET, with explicit `none` tokens.
+	OfferPoolAnchorKindWithheldScope  string
+	OfferPoolAnchorKindWithheldReason string
 	// OfferPoolSummary marks the once-per-call folded offer_pool event, the
 	// counterpart of DecisionSummary for this stage. Per-candidate
 	// offer_pool lines are retrieval-pool-sized and stay Debug; the summary
@@ -1866,7 +1892,39 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 		deps.ResolutionTracer = decisionFold
 		defer decisionFold.flush()
 	}
-	resolution, offerMaterial, err := resolveSubjects(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor, bases, digests, frame, scopeAnchorKind)
+	// CHAOS-5422: the contest set's admission, decided ONCE for the whole call
+	// — before any retrieval arm runs, before any identity claim is recorded,
+	// and therefore before ranking, reservation and truncation can ever see a
+	// candidate this question may not resolve over. Built HERE rather than
+	// inside resolveSubjects so the disclosure below is emitted exactly once per
+	// call, after every pass has finished, rather than once per pass.
+	admission := newContestAdmission(decideContestScope(frame, confirmedKind,
+		decideAnchorPoolKindScope(frame, scopeAnchorKind, confirmedAnchor, confirmedKind)))
+	resolution, offerMaterial, err := resolveSubjects(ctx, principal, request, interpreted, deps, confirmedKind, confirmedAnchor, bases, digests, frame, scopeAnchorKind, admission)
+	// THE DISCLOSURE, emitted on EVERY successful pass through this call,
+	// explicit zero included, so a question that refused nothing and a build
+	// where the refusal stopped happening can never read alike. Deliberately
+	// AFTER resolveSubjects returns: the confirmed-kind re-decision resolves
+	// over a freshly built pool, so a per-pass emission would describe one pass
+	// rather than the call, and the two passes genuinely refuse different
+	// populations. The count is len() of a set keyed by subject, so "distinct
+	// across the call" is true by construction rather than by a counter someone
+	// has to keep correct.
+	if err == nil && deps.ResolutionTracer != nil {
+		for _, subject := range admission.withheldSubjects() {
+			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+				RequestID: request.RequestID, Stage: "offer_pool", Subject: subject,
+				OfferPoolDisposition: contestSetDisposition,
+			})
+		}
+		withheldKind, withheldSource := admission.observable()
+		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+			RequestID: request.RequestID, Stage: "offer_pool", OfferPoolSummary: true,
+			OfferPoolAnchorKindWithheld:       admission.withheldCount(),
+			OfferPoolAnchorKindWithheldScope:  withheldKind,
+			OfferPoolAnchorKindWithheldReason: withheldSource,
+		})
+	}
 	if err != nil {
 		// An error path commits nothing, so a basis (or digest) some
 		// partial pass happened to record describes a resolution no
@@ -1957,6 +2015,13 @@ type decisionSummaryBuffer struct {
 	vectorOnlyExcluded int
 	vectorOnlyDemoted  int
 	emptiedByExclusion bool
+	// anchorKindWithheld/Scope/Reason (CHAOS-5422) come from the ONE offer_pool
+	// summary this call emits after every pass has finished, so the folded line
+	// restates a per-call fact rather than accumulating per-pass ones. Assigned,
+	// not summed, for exactly that reason.
+	anchorKindWithheld       int
+	anchorKindWithheldScope  string
+	anchorKindWithheldReason string
 	// anchorPoolKindScope / anchorPoolKindScopeSource / memberKindConfirmed
 	// accumulate from the `anchor_pool` summary event rather than being
 	// stamped at construction like frameGate above. The distinction is
@@ -1999,6 +2064,14 @@ func (b *decisionSummaryBuffer) Trace(event ResolutionTraceEvent) {
 	if event.Stage == "offer_pool" && event.OfferPoolSummary {
 		b.vectorOnlyExcluded += event.OfferPoolVectorOnlyExcluded
 		b.vectorOnlyDemoted += event.OfferPoolVectorOnlyDemoted
+		// Assigned rather than accumulated: this call emits exactly one
+		// offer_pool summary carrying these, after all passes, and the value is
+		// already the distinct per-call count.
+		if event.OfferPoolAnchorKindWithheldScope != "" {
+			b.anchorKindWithheld = event.OfferPoolAnchorKindWithheld
+			b.anchorKindWithheldScope = event.OfferPoolAnchorKindWithheldScope
+			b.anchorKindWithheldReason = event.OfferPoolAnchorKindWithheldReason
+		}
 		// OR across the call for the same reason DecisionOfferedUnderWindowGate
 		// is: the fold sees per-event facts, and "at least one pass of this
 		// resolution was emptied by the exclusion" is the only claim this
@@ -2067,6 +2140,12 @@ func (b *decisionSummaryBuffer) flush() {
 		OfferPoolVectorOnlyExcluded:    b.vectorOnlyExcluded,
 		OfferPoolVectorOnlyDemoted:     b.vectorOnlyDemoted,
 		OfferPoolEmptiedByExclusion:    b.emptiedByExclusion,
+		OfferPoolAnchorKindWithheld:    b.anchorKindWithheld,
+		// orNone so a buffer built before any offer_pool summary reached it
+		// (this package's own unit callers) renders a word, never an empty log
+		// value.
+		OfferPoolAnchorKindWithheldScope:  orNone(b.anchorKindWithheldScope),
+		OfferPoolAnchorKindWithheldReason: orNone(b.anchorKindWithheldReason),
 		// orNone keeps the contract that these three are never empty on a
 		// line: a resolution that returned before the filter ran emits no
 		// anchor_pool event at all, and `none` is the honest reading of
@@ -2147,7 +2226,7 @@ func nonNil(values []string) []string {
 	return values
 }
 
-func resolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection, commitBases contextfabric.CommitBasisSet, commitDigests contextfabric.CommitDecisionDigestSet, frame *contextfabric.QuestionFrame, scopeAnchorKind contextfabric.SubjectKind) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, error) {
+func resolveSubjects(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion, deps ResolveDeps, confirmedKind *contextfabric.ConfirmedExpectedKind, confirmedAnchor *contextfabric.ConfirmedAnchorSelection, commitBases contextfabric.CommitBasisSet, commitDigests contextfabric.CommitDecisionDigestSet, frame *contextfabric.QuestionFrame, scopeAnchorKind contextfabric.SubjectKind, admission *contestAdmission) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, error) {
 	if strings.TrimSpace(principal.OrgID) == "" {
 		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, errors.New("authenticated organization is required")
 	}
@@ -2537,7 +2616,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// input (an interpreted subject term, or a requested-scope hint
 		// label -- see SubjectTerms), legitimately eligible to exact-match
 		// a subject's own label.
-		termTraversalDegraded, termAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, results, candidatesBySubject, observationParentKey, observationBlocked, true, vectorArmSimilarity, identity, identityTerms)
+		termTraversalDegraded, termAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, results, candidatesBySubject, observationParentKey, observationBlocked, true, vectorArmSimilarity, identity, identityTerms, admission)
 		traversalDegraded += termTraversalDegraded
 		subjectCandidatesAuthzDropped += termAuthzDropped
 	}
@@ -2587,7 +2666,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			// vector evidence only (F3), the same exclusion the question
 			// pass already documents -- a keyed identity read is not a
 			// vector search and has nothing to contribute there.
-			claimantTraversalDegraded, claimantAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, nodes, candidatesBySubject, observationParentKey, observationBlocked, true, nil, identity, identityTerms)
+			claimantTraversalDegraded, claimantAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, nodes, candidatesBySubject, observationParentKey, observationBlocked, true, nil, identity, identityTerms, admission)
 			traversalDegraded += claimantTraversalDegraded
 			subjectCandidatesAuthzDropped += claimantAuthzDropped
 		}
@@ -2609,7 +2688,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// (chaos4234_regime_a_harness_test.go) -- see that function's doc
 	// comment for the precedence this ordering establishes.
 	if hinted := hintedPoolKinds(request, confirmedKind, frame, anchorScope.Kind); len(hinted) > 0 {
-		hintedTraversalDegraded, hintedAuthzDropped, hintedTruncated, hintedDegraded, hintedErr := applyKindHintedPoolSearch(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms, hinted)
+		hintedTraversalDegraded, hintedAuthzDropped, hintedTruncated, hintedDegraded, hintedErr := applyKindHintedPoolSearch(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms, hinted, admission)
 		if hintedErr != nil {
 			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, hintedErr
 		}
@@ -2622,7 +2701,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			retrievalDegraded = true
 		}
 	}
-	exactNameTraversalDegraded, exactNameAuthzDropped, exactNameTruncated, exactNameErr := applyExactNameArm(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms)
+	exactNameTraversalDegraded, exactNameAuthzDropped, exactNameTruncated, exactNameErr := applyExactNameArm(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms, admission)
 	if exactNameErr != nil {
 		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, exactNameErr
 	}
@@ -2695,7 +2774,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			// nil mirrors vectorArmSimilarity's own "the question pass
 			// never contributes" convention rather than relying on that
 			// downstream guarantee alone.
-			questionTraversalDegraded, questionAuthzDropped := mergeSearchResults(ctx, principal, request, deps, questionProvenanceMarker, results, candidatesBySubject, observationParentKey, observationBlocked, false, nil, nil, nil)
+			questionTraversalDegraded, questionAuthzDropped := mergeSearchResults(ctx, principal, request, deps, questionProvenanceMarker, results, candidatesBySubject, observationParentKey, observationBlocked, false, nil, nil, nil, admission)
 			traversalDegraded += questionTraversalDegraded
 			subjectCandidatesAuthzDropped += questionAuthzDropped
 			// codex round-1 P1, second half: a candidate already at the
@@ -2772,7 +2851,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// -- only `added` (unioned into the offer below) sees them. The four
 		// census kinds are untouched: they still merge straight into
 		// candidatesBySubject, exactly as before this ticket.
-		added, coverageTraversalDegraded, coverageAuthzDropped, coverageTruncated, coverageDegraded, coverageMissingKinds, coverageMissingKindsList, coverageErr := applyKindCoverageFloor(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms)
+		added, coverageTraversalDegraded, coverageAuthzDropped, coverageTruncated, coverageDegraded, coverageMissingKinds, coverageMissingKindsList, coverageErr := applyKindCoverageFloor(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms, admission)
 		if coverageErr != nil {
 			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, coverageErr
 		}
@@ -2919,7 +2998,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	var confirmedKindRescueTruncated bool
 	if confirmedKind != nil && len(candidatesBySubject) == 0 && deps.SearchKind != nil {
 		confirmedKindRescueAttempted = true
-		rescued, rescueTraversalDegraded, rescueAuthzDropped, rescueTruncated, rescueDegraded, rescueErr := applyConfirmedKindRescue(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms, confirmedKind.Kind)
+		rescued, rescueTraversalDegraded, rescueAuthzDropped, rescueTruncated, rescueDegraded, rescueErr := applyConfirmedKindRescue(ctx, principal, request, deps, terms, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms, confirmedKind.Kind, admission)
 		if rescueErr != nil {
 			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, rescueErr
 		}
@@ -3002,7 +3081,14 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// above -- if either had fired, resolution.Committed would be non-empty
 	// and this block would not run.
 	if !offersOnly && confirmedKind != nil && searchTruncated && len(resolution.Committed) == 0 {
-		scopedPool, scopedObservationParentKey, scopedObservationBlocked, scopedIdentity, scopedIdentityTerms, scopeState, scopeTraversalDegraded, scopeAuthzDropped, scopeVectorCensus, scopeErr := buildConfirmedKindScopedSnapshot(ctx, principal, request, deps, terms, aliasClaimantsByTerm, aliasIdentityComplete, confirmedKind.Kind, effectiveSearchLimit)
+		scopedPool, scopedObservationParentKey, scopedObservationBlocked, scopedIdentity, scopedIdentityTerms, scopeState, scopeTraversalDegraded, scopeAuthzDropped, scopeVectorCensus, scopeErr := buildConfirmedKindScopedSnapshot(ctx, principal, request, deps, terms, aliasClaimantsByTerm, aliasIdentityComplete, confirmedKind.Kind, effectiveSearchLimit,
+			// CHAOS-5422: the SAME admission the first pass ran under. This
+			// re-decision builds a FRESH pool over an isolated population, so
+			// without it the refused kind would walk straight back in through a
+			// second retrieval — and, because the withheld set is keyed by
+			// subject, passing it here is also what makes the disclosed count
+			// "distinct across the call" rather than per pass.
+			admission)
 		if scopeErr != nil {
 			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, scopeErr
 		}
@@ -3227,7 +3313,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// better than paying for a read whose result the gate would refuse
 		// to use regardless.
 		if gateValid {
-			if attestedKey, merged := mergeCensusAttestedSatisfier(ctx, principal, request, deps, attestation, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms); merged {
+			if attestedKey, merged := mergeCensusAttestedSatisfier(ctx, principal, request, deps, attestation, candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms, admission); merged {
 				// CHAOS-4085 commit-basis write site 3 of 3: the
 				// evidence-census RE-DECISION. This call re-runs the entire
 				// commit decision and returns a wholly fresh resolution, so
@@ -3617,7 +3703,7 @@ const censusCommitErrorReason = "census_commit_error"
 //     dedicated reason token exists for this case (§4's vocabulary has
 //     none), so CensusCommitReason stays empty; GraphExistenceOK=true
 //     alone distinguishes it from the two absence/error cases above.
-func mergeCensusAttestedSatisfier(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, attestation Attestation, candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, identity identityClaimants, identityTerms identityMatchTerms) (string, bool) {
+func mergeCensusAttestedSatisfier(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, attestation Attestation, candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, identity identityClaimants, identityTerms identityMatchTerms, admission *contestAdmission) (string, bool) {
 	kind, canonicalID, found := attestedSatisfier(attestation)
 	if !found {
 		return "", false
@@ -3708,7 +3794,7 @@ func mergeCensusAttestedSatisfier(ctx context.Context, principal storage.Princip
 	// same accept decision on the SAME node/principal/scope inputs, so this
 	// call is never a second, independent authorization gate -- merely
 	// where the actual merge/insert into candidatesBySubject happens.
-	mergeSearchResults(ctx, principal, request, deps, censusProvenanceMarker, []CandidateNode{node}, candidatesBySubject, observationParentKey, observationBlocked, false, nil, identity, identityTerms)
+	mergeSearchResults(ctx, principal, request, deps, censusProvenanceMarker, []CandidateNode{node}, candidatesBySubject, observationParentKey, observationBlocked, false, nil, identity, identityTerms, admission)
 	// codex xhigh review finding (HIGH, confirmed and fixed): a candidate
 	// already sitting at exactly matchedTermsCap real terms overflows to
 	// matchedTermsCap+1 once censusProvenanceMarker unions in above --
@@ -4013,7 +4099,7 @@ func unscopedVisibilityFor(principal storage.Principal, request contextfabric.In
 // internal-bookkeeping node, neither an authorization event. Folds into
 // ResolveSubjects' own subjectCandidatesAuthzDropped aggregate exactly like
 // traversalErrored folds into its traversalDegraded aggregate.
-func mergeSearchResults(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, term string, results []CandidateNode, candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, allowExactMatch bool, vectorArmSimilarity map[string]float64, identity identityClaimants, identityTerms identityMatchTerms) (int, int) {
+func mergeSearchResults(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, term string, results []CandidateNode, candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, allowExactMatch bool, vectorArmSimilarity map[string]float64, identity identityClaimants, identityTerms identityMatchTerms, admission *contestAdmission) (int, int) {
 	traversalErrored := 0
 	authzDropped := 0
 	for _, node := range results {
@@ -4031,6 +4117,29 @@ func mergeSearchResults(ctx context.Context, principal storage.Principal, reques
 			if !nodeAuthorized {
 				authzDropped++
 			}
+			continue
+		}
+		// CHAOS-5422, THE CANDIDATE-SET BOUNDARY. This is the one place a
+		// retrieved candidate becomes part of this question's contest, and it
+		// is therefore the one place the scope axis can refuse it ONCE and have
+		// that refusal be true everywhere afterwards.
+		//
+		// BEFORE recordIdentityClaim, which is the half a per-gate rule could
+		// not reach: a refused candidate that still recorded an identity claim
+		// went on vetoing an anchor through identityCrossClassRivalClaimant
+		// while the commit index it had been removed from read as correct. And
+		// before the candidate enters candidatesBySubject at all, which is what
+		// stops it consuming an offer slot ahead of an admissible anchor --
+		// removal after ranking and truncation could displace the very subject
+		// the question was asking about, and then tell the caller retrieval had
+		// matched only member-kind subjects, which was not true.
+		//
+		// A nil admission admits everything: this package's own unit callers,
+		// and the arms that only ever run with no confirmed kind, have no scope
+		// to apply and must read as "nothing was decided", never as
+		// "everything was refused".
+		if !admission.admits(candidate.Subject) {
+			admission.refuse(candidate.Subject)
 			continue
 		}
 		recordIdentityClaim(candidate, identity, identityTerms)
