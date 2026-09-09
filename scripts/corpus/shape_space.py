@@ -17,11 +17,14 @@ WHAT THIS FILE DOES AND DOES NOT MEASURE.
     defect class this whole change is about, so the guess is not shipped. Coverage is a
     question for an execution-traced run, not for a static scan.
 
-THE TWO ENUMERATIONS ARE DIFFERENT SIZES, and conflating them was an error in an earlier
-review packet. This sweep enumerates 364 cells (13 status bands x 28 failure/code
-combinations). The executable equivalence pin in test_findings_5380.py enumerates its own
-247 (19 status bands x 13 failure shapes) and compares against the ORIGINAL scan read out
-of git. Neither number describes the other.
+THE ENUMERATIONS ARE DIFFERENT SIZES, and conflating them was an error in an earlier
+review packet -- so each is stated with the enumeration it belongs to, and none of them is
+a coverage figure. This sweep enumerates 364 cells (13 status bands x 28 failure/code
+combinations). The executable equivalence pin in test_findings_5380.py enumerates its OWN
+space over its own axes and asserts the cell count it actually walked; read the number
+from that file, never from this comment. (This paragraph said "247" while the pin walked
+300 -- a stale count in a doc contradicting the tests, found by review round 1. The fix is
+to stop restating the other file's number here at all.)
 """
 import itertools
 import json

@@ -78,6 +78,52 @@ def _failure(attempt):
     return failure if isinstance(failure, dict) else None
 
 
+def _error(attempt):
+    """The producer's OTHER way of saying "this did not work".
+
+    codex r1 P1: `failed()` looked at exactly two signals -- the status, and the presence
+    of a `failure` object -- so a body key that MEANS failure but is not spelled `failure`
+    was invisible to it, and `harness.validate_live_payload` PRESERVES unknown keys. A 200
+    carrying `{"error": ...}` therefore classified `ok_200`.
+
+    `error` is not a guess at what a body might contain: it is the key `harness.post`
+    itself writes, in both of its failure arms -- `{"error": "unparseable body"}` when an
+    HTTPError's body will not decode, and `{"error": str(e)}` on any transport exception.
+    Today neither arm can pair it with a 200 (the first implies status >= 400, the second
+    writes status 0), so this is not a live defect being fixed. It is a CLAIM being made
+    true: `failed()` is documented as enumerating SUCCESS, and a predicate that ignores
+    the producer's own failure key does not do that.
+
+    PRESENCE, not truthiness. The producer writes this key only to report a failure, so an
+    `error` that happens to be empty is still an attempt the producer called broken.
+    """
+    response = attempt.get("response")
+    if not isinstance(response, dict):
+        return None
+    return "error" if "error" in response else None
+
+
+def is_valid_count(value):
+    """Is this a value a class counter may legitimately hold?
+
+    codex r1 P1: `attempt_class_totals` validated the class table's KEY SET and nothing
+    about its VALUES, and `counts[name] or 0` turned a `None` into a PUBLISHED MEASURED
+    ZERO -- the exact guarantee that function exists to make, defeated through the one
+    axis nobody had enumerated. Measured: `None` published zeros, a negative published a
+    negative total, a float published 1.5, `True` published 1, and a string crashed the
+    merge.
+
+    A count is a non-negative int. `bool` is EXCLUDED explicitly because it is an int
+    subclass in Python, so `True` would otherwise pass as the count 1 -- the same trap
+    `validators.py` already guards on `attempt.status`.
+
+    No UPPER bound is imposed. A large count is not evidence of corruption, and inventing
+    a ceiling here would be a policy nobody decided; a huge value is accepted and is
+    pinned as accepted so the omission is deliberate rather than forgotten.
+    """
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 def _statuses(attempt):
     """(attempt_http, upstream_http). The attempt's own HTTP status -- what the consumer
     returned to the harness -- and, when the body parsed, the upstream status ACR reported
@@ -157,6 +203,13 @@ def failed(attempt):
     `http >= 400 or a failure object` fired on NEITHER and a refused connection classified
     as `ok_200`.
 
+    codex r1 P1 closed the last hole in that inversion: the rule still listed only TWO
+    signals (the status, and a `failure` object), so the third thing a body can say --
+    `{"error": ...}`, which `harness.post` writes in both of its own failure arms -- was
+    not on the list either. An attempt is served only when its status is 200 AND it
+    carries neither a failure object NOR an error. Nothing about the body is "irrelevant"
+    to a predicate that claims to enumerate success.
+
     The set of statuses that mean "this attempt was served" is small and closed -- and
     codex r4 showed it is smaller than a first reading suggests. The PRODUCER accepts only
     200: `harness.post` retries or terminates on anything else, and `merge_corpus.classify`
@@ -167,6 +220,11 @@ def failed(attempt):
     """
     http, _ = _statuses(attempt)
     if _failure(attempt) is not None:
+        return True
+    # The producer's OTHER failure key. See _error(): `failed()` is documented as
+    # enumerating SUCCESS, and a predicate that ignores `error` -- which `harness.post`
+    # writes in both of its failure arms -- enumerates "no failure OBJECT" instead.
+    if _error(attempt) is not None:
         return True
     return not is_success_status(http)
 

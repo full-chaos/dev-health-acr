@@ -94,6 +94,96 @@ B1_TURNS = [
 ]
 
 
+# A7. What else the RESPONSE BODY carries. codex r1 P1: the A axes enumerated the status
+# and the failure object and nothing else about the body, so `{"error": ...}` -- the key
+# `harness.post` writes in BOTH of its own failure arms -- was in no cell at all.
+A7_BODY = [
+    ("bare", {}),
+    ("error", {"error": "upstream exploded"}),
+    ("result", {"result": {"status": "complete"}}),
+    ("error_and_result", {"error": "upstream exploded",
+                          "result": {"status": "complete", "claimed_facts": [{"a": 1}]}}),
+]
+
+
+# ============ THE SERVED SPEC, DERIVED FROM SOURCES THAT ARE NOT `failed()` ============
+# The class-invariant pin below used to define "evidence of failure" as `status != 200 or a
+# failure object` -- which is EXACTLY the two signals `failed()` itself reads. The fixture
+# therefore agreed with the predicate by construction and could never catch a signal
+# neither of them looked at. That is the failure mode this whole change exists to end, and
+# it was living in the pin written to end it (codex r1 P1).
+#
+# So the spec is now DERIVED, at test time, from three sources none of which is the
+# predicate under test:
+#   1. the MEASURED artefact schema  -> which keys a response is known to carry;
+#   2. `harness.py`'s own failure writers, read from its AST -> which body keys the
+#      PRODUCER writes to mean "this did not work";
+#   3. `harness.py`'s own acceptance test, read from its AST -> which status it treats as
+#      served.
+# Each source is asserted non-empty, so a derivation that silently found nothing fails
+# instead of quietly widening the spec to "everything is served".
+
+def _schema_response_keys():
+    doc = json.loads((HERE / "artefact_schema.json").read_text())
+    keys = set(doc["nodes"]["attempt.response"])
+    assert keys, "the schema declares no response keys; the derivation is broken"
+    return keys
+
+
+def _harness_failure_body_keys():
+    """Keys of the dict literals `harness.post` RETURNS on its failure paths.
+
+    Read from the AST, never typed here: if the harness grows a third failure arm with a
+    new key, this spec widens on its own and the pin starts demanding that the classifier
+    account for it.
+    """
+    tree = _ast.parse((HERE / "harness.py").read_text())
+    post = next(n for n in _ast.walk(tree)
+                if isinstance(n, _ast.FunctionDef) and n.name == "post")
+    keys = set()
+    for node in _ast.walk(post):
+        for d in ([node.value] if isinstance(node, _ast.Return) and node.value else []):
+            for sub in _ast.walk(d):
+                if isinstance(sub, _ast.Dict):
+                    keys |= {k.value for k in sub.keys
+                             if isinstance(k, _ast.Constant) and isinstance(k.value, str)}
+    keys -= {"failure"}          # the envelope, already a first-class signal
+    assert keys, "no failure-body keys found in harness.post; the AST read is broken"
+    return keys
+
+
+def _producer_served_status():
+    """The status `harness.run_replicate` stops retrying on, read from its AST."""
+    tree = _ast.parse((HERE / "harness.py").read_text())
+    fn = next(n for n in _ast.walk(tree)
+              if isinstance(n, _ast.FunctionDef) and n.name == "run_replicate")
+    found = {c.comparators[0].value for c in _ast.walk(fn)
+             if isinstance(c, _ast.Compare)
+             and isinstance(c.ops[0], _ast.Eq)
+             and isinstance(c.comparators[0], _ast.Constant)
+             and isinstance(c.comparators[0].value, int)}
+    assert 200 in found, f"the producer's served status was not found in its AST: {found}"
+    return 200
+
+
+PRODUCER_FAILURE_BODY_KEYS = _harness_failure_body_keys()
+PRODUCER_SERVED_STATUS = _producer_served_status()
+SCHEMA_RESPONSE_KEYS = _schema_response_keys()
+
+
+def _served_by_spec(status, failure, body):
+    """Was this attempt SERVED? Decided WITHOUT consulting attempt_classes.
+
+    Served == the producer's own accepted status, AND no failure envelope, AND none of the
+    body keys the producer writes to report a failure.
+    """
+    if status != PRODUCER_SERVED_STATUS:
+        return False
+    if failure is not None:
+        return False
+    return not (set(body or {}) & PRODUCER_FAILURE_BODY_KEYS)
+
+
 def _attempt(status, failure=None, dt=1.0, result=None):
     response = {}
     if failure is not None:
@@ -111,9 +201,21 @@ def _served():
 
 
 def _cells():
-    """Every (status, failure) cell of the A axes, as loadable attempt artefacts."""
-    for status, failure in itertools.product(A1_STATUS, A345_FAILURE):
-        yield status, failure, _attempt(status, failure=failure)
+    """Every (status, failure, body) cell of the A axes, as loadable attempt artefacts."""
+    for status, failure, (_bname, body) in itertools.product(
+            A1_STATUS, A345_FAILURE, A7_BODY):
+        a = _attempt(status, failure=failure)
+        a["response"].update(body)
+        yield status, failure, a
+
+
+def _cells4():
+    """As _cells, but also yielding the BODY, for properties that need all three axes."""
+    for status, failure, (bname, body) in itertools.product(
+            A1_STATUS, A345_FAILURE, A7_BODY):
+        a = _attempt(status, failure=failure)
+        a["response"].update(body)
+        yield status, failure, body, bname, a
 
 
 def _write_turns(tmp, turns, qid="q-a", rep=1, attempt_for=None):
@@ -207,32 +309,44 @@ def test_classify_is_total_over_the_enumerated_attempt_space():
 def test_no_evidence_of_failure_is_ever_classified_ok_200():
     """THE CLASS INVARIANT, and the one property all nine defects violated.
 
-    Stated independently of how `failed()` is written, so it cannot be satisfied by the
-    same reasoning that produced the predicate: an attempt is SERVED only when its own
-    status is present AND is exactly 200 AND it carries no failure object. Everything
-    else -- a 502 whose upstream said 200, a transport 0, a bare 413, a 201, an attempt
-    with no status at all -- is a failure. Enumerating SUCCESS is the whole inversion;
-    every previous version listed the shapes that count as broken and was bitten by a
-    shape that was not on the list.
+    🛑 THIS PIN WAS ITSELF THE DEFECT ONCE. Its first version defined "served" as
+    `status == 200 and failure is None` -- exactly the two signals `failed()` reads -- so
+    the fixture agreed with the predicate BY CONSTRUCTION and could not catch a third
+    signal neither of them looked at. codex r1 P1 found the third signal (`error`) and
+    this pin passed the whole time. Restating a predicate is not testing it.
+
+    The verdict now comes from `_served_by_spec`, DERIVED at test time from the measured
+    artefact schema, from `harness.post`'s own failure-body keys read out of its AST, and
+    from the status `run_replicate` accepts -- three sources, none of which is the
+    predicate under test. If the harness grows a fourth way of saying "this broke", this
+    pin starts demanding the classifier account for it without anyone editing this file.
     """
     served_cells, failed_cells = [], []
-    for status, failure, a in _cells():
-        served = (status == 200) and (failure is None)
+    for status, failure, body, _bname, a in _cells4():
+        served = _served_by_spec(status, failure, body)
         got_failed, got_class = AC.failed(a), AC.classify(a)
         if served:
             served_cells.append((status, failure))
             assert got_failed is False, f"a served attempt reads as failed: {status}/{failure}"
             assert got_class == "ok_200", f"a served attempt is not ok_200: {got_class}"
         else:
-            failed_cells.append((status, failure))
-            assert got_failed is True, \
-                f"NO EVIDENCE OF SERVICE, yet failed()=False: status={status} failure={failure}"
-            assert got_class != "ok_200", \
-                f"a failure classified ok_200 -- the whole defect class: {status}/{failure}"
+            failed_cells.append((status, failure, _bname))
+            assert got_failed is True, (
+                f"NO EVIDENCE OF SERVICE by the derived spec, yet failed()=False: "
+                f"status={status} failure={failure} body={_bname}")
+            assert got_class != "ok_200", (
+                f"a failure classified ok_200 -- the whole defect class: "
+                f"{status}/{failure}/{_bname}")
     # The partition must be non-trivial in BOTH directions, or the loop above proves
     # nothing: a predicate that is constantly True satisfies half of it for free.
     assert served_cells, "the enumeration contains no served cell"
     assert len(failed_cells) > len(served_cells), "the enumeration barely exercises failure"
+    # ...and the spec must actually USE its third source, or it has silently collapsed
+    # back into the two signals the predicate reads. At least one cell must be a failure
+    # ONLY because of a producer failure-body key.
+    third = [c for c in failed_cells
+             if c[0] == 200 and c[1] is None and c[2] in ("error", "error_and_result")]
+    assert third, "no cell fails on a body key alone; the derived spec has collapsed"
 
 
 def test_ok_200_is_exactly_the_not_failed_class():
@@ -397,6 +511,92 @@ def test_every_unreadable_outcome_says_WHY():
     assert AC.unreadable_reason(_attempt(502)) is None
 
 
+def test_a_2xx_whose_body_says_error_is_a_failure():
+    """codex r1 P1, NAMED, with the exact repro that found it.
+
+        loader accepts the artefact: (True, None)
+        failed(): False   classify(): ok_200   row bucket: served_with_data
+
+    `harness.post` writes `{"error": ...}` in BOTH of its failure arms, and
+    `validate_live_payload` PRESERVES unknown body keys, so an `error` under a 200 read as
+    served. Today neither harness arm can pair `error` with a 200 -- one implies status
+    >= 400, the other writes status 0 -- so this was not a live defect. It is a CLAIM made
+    true: `failed()` is documented as enumerating SUCCESS and could not do that while
+    ignoring the producer's own failure key. "Has not happened yet" is not "cannot happen".
+    """
+    a = _attempt(200)
+    a["response"].update({"error": "upstream exploded",
+                          "result": {"status": "complete", "claimed_facts": [{"a": 1}]}})
+    assert VAL.validate_attempt(a)[0], "the loader must still accept it -- that is the point"
+    assert AC.failed(a) is True, "a 200 carrying the producer's error key is not served"
+    assert AC.classify(a) == "failure_under_2xx", AC.classify(a)
+    # No new vocabulary member: failure_under_2xx already exists for exactly this --
+    # "a failed attempt whose statuses are BOTH in the served range".
+    assert "failure_under_2xx" in AC.CLASSES
+    # PRESENCE, not truthiness: the producer writes the key only to report a failure.
+    empty = _attempt(200); empty["response"]["error"] = ""
+    assert AC.failed(empty) is True, "an empty error is still the producer calling it broken"
+    # NEGATIVE CONTROL: the same 200 WITHOUT the key is served, so the pin is not simply
+    # asserting that every 200 fails.
+    ok = _attempt(200); ok["response"]["result"] = {"status": "complete"}
+    assert AC.failed(ok) is False and AC.classify(ok) == "ok_200"
+    # The key is derived, not typed: `error` must really be one of the producer's own.
+    assert "error" in PRODUCER_FAILURE_BODY_KEYS, PRODUCER_FAILURE_BODY_KEYS
+    # ...and a NON-2xx carrying error keeps its status-derived class, not this one.
+    t = {"request": {}, "status": 0, "dt": 0.0, "response": {"error": "refused"}}
+    assert AC.classify(t) == "transport_failure", AC.classify(t)
+    e500 = _attempt(500); e500["response"]["error"] = "boom"
+    assert AC.classify(e500) == "engine_invalid_500", AC.classify(e500)
+
+
+def test_the_class_table_values_are_validated_over_the_whole_value_axis():
+    """C1b, codex r1 P1. The key set was checked and the VALUES were not, so
+    `counts[name] or 0` published a MEASURED ZERO for a `None` -- the false zero this
+    function exists to refuse, through the one axis nobody had enumerated.
+
+    Measured before the fix, and every one of these is a cell of the axis rather than the
+    three the review happened to name:
+        all None   -> unavailable=0  total=0     (FALSE ZERO)
+        negative   -> unavailable=0  total=-1
+        string     -> CRASH TypeError
+        float      -> unavailable=0  total=1.5
+        bool       -> unavailable=0  total=1     (bool is an int subclass)
+        huge       -> accepted, deliberately: no ceiling is invented here
+    """
+    cases = [
+        ("None", None, False), ("negative", -1, False), ("string", "3", False),
+        ("float", 1.5, False), ("bool_true", True, False), ("bool_false", False, False),
+        ("list", [1], False), ("zero", 0, True), ("positive", 7, True),
+        ("huge", 10 ** 18, True),
+    ]
+    for name, value, valid in cases:
+        assert AC.is_valid_count(value) is valid, f"is_valid_count({name}={value!r})"
+        row = {"corpus_id": name, "attempts_reconciled": True,
+               "attempt_class_n": dict(AC.zero_counts(), upstream_504=value)}
+        got = MC.attempt_class_totals([row])
+        if valid:
+            assert got["attempt_classes_unavailable"] == 0, (name, got)
+            assert got["attempt_class_totals"]["upstream_504"] == value, (name, got)
+        else:
+            assert got["attempt_classes_unavailable"] == 1, (name, got)
+            assert got["attempt_class_totals"] is None, \
+                f"{name}: a table whose values are not counts published totals"
+            assert got["attempt_classes_unavailable_ids"] == [name], (name, got)
+    # The whole table None -- the shape that published a clean zeroed report.
+    allnone = MC.attempt_class_totals([{"corpus_id": "allnone", "attempts_reconciled": True,
+                                        "attempt_class_n": {k: None for k in AC.CLASSES}}])
+    assert allnone["attempt_classes_unavailable"] == 1, allnone
+    assert allnone["attempt_class_totals"] is None, \
+        "an all-None table published a zeroed report -- the false zero, one axis down"
+    # ...and a string no longer CRASHES the merge; it refuses.
+    crashed = MC.attempt_class_totals([{"corpus_id": "s", "attempts_reconciled": True,
+                                        "attempt_class_n": dict(AC.zero_counts(),
+                                                                upstream_504="3")}])
+    assert crashed["attempt_class_totals"] is None, crashed
+    # The axis must contain BOTH verdicts or the loop is one-sided.
+    assert any(v for _n, _x, v in cases) and any(not v for _n, _x, v in cases)
+
+
 def test_the_measured_shapes_of_the_live_run_all_classify_correctly():
     """The exact distribution measured on a private pair, 2026-09-09: 91 served, 7
     contract violations, 6 rejected answers, 1 rejected request. Real shapes, not
@@ -498,7 +698,7 @@ def test_legacy_ladder_is_equivalent_over_the_whole_shape_space():
         want, got = original(attempt), AC.legacy_engine_failure_kind(attempt)
         if want != got:
             differences.append((status, failure, want, got))
-    assert cells == len(A1_STATUS) * len(A345_FAILURE), cells
+    assert cells == len(A1_STATUS) * len(A345_FAILURE) * len(A7_BODY), cells
     assert not differences, (
         f"{len(differences)} of {cells} cells differ from the ORIGINAL ladder; "
         f"first five: {differences[:5]}")
@@ -619,7 +819,7 @@ def test_the_frozen_counters_match_the_original_over_the_whole_walk():
         if tuple(want[k] for k in pair) != tuple(got[k] for k in pair):
             mismatches.append((status, failure,
                                tuple(want[k] for k in pair), tuple(got[k] for k in pair)))
-    assert cells == len(A1_STATUS) * len(A345_FAILURE), cells
+    assert cells == len(A1_STATUS) * len(A345_FAILURE) * len(A7_BODY), cells
     assert not mismatches, (
         f"{len(mismatches)} of {cells} cells move a FROZEN counter; first five: "
         f"{mismatches[:5]}")

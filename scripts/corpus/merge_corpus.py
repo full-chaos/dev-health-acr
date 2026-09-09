@@ -200,6 +200,15 @@ def attempt_class_totals(rows):
         counts = row.get("attempt_class_n")
         if not isinstance(counts, dict) or set(counts) != expected:
             return True
+        # codex r1 P1: the KEY SET was checked and the VALUES were not, and `counts[name]
+        # or 0` turned a None into a published MEASURED ZERO -- the false zero this
+        # function exists to refuse, arriving through the one axis nobody had enumerated.
+        # Measured before the fix: None published zeros, a negative published -1, a float
+        # published 1.5, True published 1, and a string crashed the merge. A table whose
+        # values are not counts is not a table this vocabulary can sum, and it is REFUSED
+        # exactly like a wrong key set.
+        if not all(attempt_classes.is_valid_count(v) for v in counts.values()):
+            return True
         # codex r2 P1: a structurally complete class table is NOT proof the row was
         # fully walked. run_shard reconciles its walk against the harness's own attempt
         # count; a row that did not reconcile is missing evidence and is refused here
