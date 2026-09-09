@@ -1386,11 +1386,41 @@ func TestDecisionEventNeverCarriesCorpusText(t *testing.T) {
 		"model_id":       true,
 		"model_version":  true,
 		"prompt_version": true,
+		// CHAOS-5380: the attempt sequence beside the terminal outcome.
+		// attempts_total/attempts_retried/fallback_attempts_total are
+		// counts; attempt_outcomes and attempt_elapsed_ms are
+		// index-prefixed lists whose every component is a digit or a
+		// member of receiptOutcomeForError's closed vocabulary, bounded by
+		// MaxAttempts (1..3). No provider text can reach them --
+		// attemptOutcomeClass takes the CLASS from classifyModelError,
+		// which deliberately drops the original error.
+		"attempts_total":          true,
+		"attempts_retried":        true,
+		"attempt_outcomes":        true,
+		"attempt_elapsed_ms":      true,
+		"fallback_attempts_total": true,
 	}
 	synthesizeFields := map[string]bool{
 		"request_id": true, "org_id_hash": true, "operation": true, "outcome": true,
 		"attempts": true, "fallback_used": true, "primary_failure_classification": true,
 		"drivers": true, "findings": true, "claims": true, "evidence_refs": true,
+		// codex r1: synthesize now carries the model/prompt identity too, so an
+		// Info-only reader can see a synthesis-model regression, not only an
+		// interpretation one. Closed config/version identifiers, never content.
+		"model_id": true, "model_version": true, "prompt_version": true,
+		// CHAOS-5380: the attempt sequence beside the terminal outcome.
+		// attempts_total/attempts_retried/fallback_attempts_total are
+		// counts; attempt_outcomes and attempt_elapsed_ms are
+		// index-prefixed lists whose every component is a digit or a
+		// member of receiptOutcomeForError's closed vocabulary, bounded by
+		// MaxAttempts (1..3). No provider text can reach them --
+		// attemptOutcomeClass takes the CLASS from classifyModelError,
+		// which deliberately drops the original error.
+		"attempts_total":          true,
+		"attempts_retried":        true,
+		"attempt_outcomes":        true,
+		"attempt_elapsed_ms":      true,
+		"fallback_attempts_total": true,
 	}
 
 	for _, event := range events {

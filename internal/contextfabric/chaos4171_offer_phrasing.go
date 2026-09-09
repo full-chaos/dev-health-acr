@@ -152,8 +152,52 @@ type RuntimeOfferPhraser struct {
 	Logger *slog.Logger
 }
 
+// logGuardDecision emits the offer-phrasing GUARD verdict at Info, once per Phrase
+// call, on every path including the no-runtime one.
+//
+// CHAOS-5380, review round 2: the model-call decision line one layer down records
+// `outcome=success` as soon as the provider answers, and the guard that decides whether
+// the answer is USABLE runs up here afterwards. So a guard that started rejecting every
+// generated phrase was invisible at Info -- the collected logs went on showing successful
+// model calls while every caller silently fell back to structural. The model call
+// succeeding and the phrasing being applied are two different facts, and only one of them
+// was observable.
+//
+// This line is the second fact, joined to the first by request_id. It fires on EVERY pass,
+// carrying explicit values rather than being omitted on the uninteresting arm, so a
+// missing line has exactly one meaning: the site was never reached.
+//
+// Content-safe by construction, exactly like the sink-failure WARN below it: closed
+// vocabularies (OfferPhrasingOutcome, the receipt's own Operation/Outcome), sanitized
+// correlation ids, and COUNTS -- never a phrasing, never a structural Label.
+func (r RuntimeOfferPhraser) logGuardDecision(ctx context.Context, principal storage.Principal, input StructureOfferPhrasingInput, receipt ModelExecutionReceipt, guardOutcome OfferPhrasingOutcome, applied int) {
+	logger := r.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.InfoContext(ctx, "context fabric offer phrasing guard decision",
+		"request_id", sanitizeLogString(input.RequestID),
+		"org_id", sanitizeLogString(principal.OrgID),
+		"operation", string(receipt.Operation),
+		// The MODEL CALL's own outcome, so one line says both things: an empty or
+		// "success" model outcome beside a rejecting guard is precisely the shape
+		// that used to be invisible.
+		"model_outcome", receipt.Outcome,
+		"guard_outcome", string(guardOutcome),
+		// How many offers actually received a generated phrasing. Explicit zero on
+		// every rejecting arm: zero applied against a successful model call is the
+		// regression signal.
+		"phrasings_applied", applied,
+		"offers_in", len(input.Options),
+	)
+}
+
 func (r RuntimeOfferPhraser) Phrase(ctx context.Context, principal storage.Principal, input StructureOfferPhrasingInput) StructureOfferPhrasingResult {
 	if r.Runtime == nil {
+		// No runtime configured is still a pass through this site, and it still ends
+		// in a structural fallback -- so it still emits, with an empty operation and
+		// zero applied.
+		r.logGuardDecision(ctx, principal, input, ModelExecutionReceipt{}, OfferPhrasingFellBackStructural, 0)
 		return StructureOfferPhrasingResult{Outcome: OfferPhrasingFellBackStructural}
 	}
 	draft, receipt, err := r.Runtime.PhraseStructureOffers(ctx, principal, input)
@@ -195,10 +239,15 @@ func (r RuntimeOfferPhraser) Phrase(ctx context.Context, principal storage.Princ
 		// this process could not durably record is the one case that
 		// actually needs the sink's own success to be trustworthy.
 		if outcome == OfferPhrasingGenerated {
+			// The sink loss DOWNGRADES the outcome, so the logged guard outcome is
+			// the downgraded one -- the line must describe what the caller got.
+			r.logGuardDecision(ctx, principal, input, receipt, OfferPhrasingFellBackStructural, 0)
 			return StructureOfferPhrasingResult{Outcome: OfferPhrasingFellBackStructural}
 		}
+		r.logGuardDecision(ctx, principal, input, receipt, outcome, 0)
 		return StructureOfferPhrasingResult{Outcome: outcome}
 	}
+	r.logGuardDecision(ctx, principal, input, receipt, outcome, len(phrasings))
 	return StructureOfferPhrasingResult{Outcome: outcome, Phrasings: phrasings}
 }
 

@@ -45,6 +45,30 @@ import (
 // that was set anyway, so an operator who set only a tuning knob still
 // finds out it had no effect (CHAOS-4986; see modelprovider.Configured's
 // doc comment).
+// contextFabricModelConfigFromEnv assembles the deployment-default model
+// configuration: the environment-derived knobs, plus the two dependencies
+// open() already resolved and shares across every model runtime it builds.
+//
+// Split out as its own pure function (the pattern
+// modelruntimeresolver.orgModelProviderConfig documents for the same reason)
+// so the field mapping is directly unit-testable without constructing a real
+// genkit.Genkit instance -- which is the only way to pin, ahead of a live
+// provider, that a dependency actually crosses this hop.
+//
+// CHAOS-5380: `logger` was already a parameter of the caller and was already
+// the service's own request.options.Logger -- it was used for one startup
+// WARN and then dropped, so genkitruntime fell back to slog.Default() and
+// the decision event (with its attempt fields) missed the collected sink.
+func contextFabricModelConfigFromEnv(lookup func(string) (string, bool), telemetry contextfabric.EngineTelemetry, logger *slog.Logger) (modelprovider.Config, error) {
+	modelConfig, err := modelprovider.ConfigFromEnv(lookup)
+	if err != nil {
+		return modelprovider.Config{}, fmt.Errorf("load context fabric model configuration: %w", err)
+	}
+	modelConfig.Telemetry = telemetry
+	modelConfig.Logger = logger
+	return modelConfig, nil
+}
+
 func newContextFabricModelRuntime(ctx context.Context, lookup func(string) (string, bool), telemetry contextfabric.EngineTelemetry, logger *slog.Logger) (contextfabric.ModelRuntime, error) {
 	if !modelprovider.Configured(lookup) {
 		if ignored := modelprovider.IgnoredTuningVariables(lookup); len(ignored) > 0 {
@@ -53,11 +77,10 @@ func newContextFabricModelRuntime(ctx context.Context, lookup func(string) (stri
 		}
 		return nil, nil
 	}
-	modelConfig, err := modelprovider.ConfigFromEnv(lookup)
+	modelConfig, err := contextFabricModelConfigFromEnv(lookup, telemetry, logger)
 	if err != nil {
-		return nil, fmt.Errorf("load context fabric model configuration: %w", err)
+		return nil, err
 	}
-	modelConfig.Telemetry = telemetry
 	runtime, err := modelprovider.New(ctx, modelConfig)
 	if err != nil {
 		return nil, fmt.Errorf("initialize context fabric model runtime: %w", err)

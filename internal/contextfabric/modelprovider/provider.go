@@ -113,6 +113,11 @@ func runtimeConfig(instance *genkit.Genkit, cfg Config, model string, fallback c
 		MaxAttempts: cfg.MaxAttempts,
 		Fallback:    fallback,
 		Telemetry:   cfg.Telemetry,
+		// CHAOS-5380: copied straight through, unconditionally, exactly
+		// like Telemetry above it -- a nil here keeps genkitruntime's own
+		// documented slog.Default() fallback rather than a
+		// package-internal default substituted at this layer.
+		Logger: cfg.Logger,
 	}
 }
 
