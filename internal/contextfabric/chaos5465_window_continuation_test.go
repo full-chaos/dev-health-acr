@@ -1820,3 +1820,39 @@ func (f futureAsOfInterpreter) Interpret(context.Context, storage.Principal, Inv
 		Version:            QuestionFamilyTableVersion,
 	}, nil
 }
+
+// The battery found withReason's widening guard unpinned: deleting it survived,
+// because no production caller passes `unspecified` today. That makes it a
+// defensive branch nothing covers -- which is the shape this whole change keeps
+// being told off for, so it is pinned rather than left to read as coverage.
+//
+// It is KEPT rather than deleted as equivalent because the property is real: a
+// future exit that computes its reason (rather than naming a literal) and gets
+// the fail-closed member back must not thereby erase a better reason an earlier
+// site already recorded. Deleting it would make that silent.
+func TestWindowContinuation_WithReasonNarrowsAndNeverWidensToUnspecified(t *testing.T) {
+	t.Parallel()
+
+	base := newWindowContinuationDecision(continuationRequest(validInvestigationRequest().Question))
+	if base.Reason != ContinuationReasonUnspecified {
+		t.Fatalf("fixture defect: a window-only shape should start at the fail-closed member, got %q", base.Reason)
+	}
+
+	narrowed := base.withReason(ContinuationReasonRequestCancelled)
+	if narrowed.Reason != ContinuationReasonRequestCancelled {
+		t.Fatalf("withReason did not narrow: got %q, want %q", narrowed.Reason, ContinuationReasonRequestCancelled)
+	}
+
+	// THE GUARD. A later site handing back the fail-closed member must not
+	// erase what an earlier one already knew.
+	widened := narrowed.withReason(ContinuationReasonUnspecified)
+	if widened.Reason != ContinuationReasonRequestCancelled {
+		t.Fatalf("withReason widened a known reason back to %q -- an exit that computes its reason could then erase a better one recorded upstream, and the emitter would publish the fail-closed member for a path that was fully understood", widened.Reason)
+	}
+
+	// And it still narrows AGAIN afterwards, so the guard is not a freeze.
+	renarrowed := widened.withReason(ContinuationReasonAsOfUnresolvable)
+	if renarrowed.Reason != ContinuationReasonAsOfUnresolvable {
+		t.Fatalf("withReason stopped narrowing after the guard fired: got %q", renarrowed.Reason)
+	}
+}
