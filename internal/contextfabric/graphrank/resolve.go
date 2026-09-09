@@ -1365,6 +1365,26 @@ type ResolutionTraceEvent struct {
 	// and a field present in only one of its two states cannot be told
 	// apart from a build that does not emit it.
 	OfferPoolEmptiedByExclusion bool
+	// CHAOS-5434. The four keys the ranked-cut SUMMARY carries about the
+	// decided scope anchor's reserved slot, populated on EVERY pass through
+	// the cut -- including the passes that reserve nothing, which is the
+	// point: a missing measurement and a measured zero must never read
+	// alike, so `none`/0 are written rather than omitted.
+	//
+	// AnchorSlotReserved is the kind a slot was held for, or `none`. It
+	// reports the DECISION, not whether the slot had to fire.
+	// AnchorSlotSource is `receipt`, `confirmed_anchor` or `none`, carried
+	// separately for the same reason DecisionAnchorPoolKindScopeSource is:
+	// the two sources fail independently and render the same kind.
+	// AnchorSlotDisplaced is the number of in-budget candidates the slot
+	// evicted (0 or, today, at most 1) -- an int rather than a bool because
+	// kindReserveSlotsPerKind is a bound the design may raise.
+	// PoolTruncatedN is how many candidates this cut dropped, which is what
+	// says whether a slot could have mattered on this pass at all.
+	AnchorSlotReserved  string
+	AnchorSlotSource    string
+	AnchorSlotDisplaced int
+	PoolTruncatedN      int
 	// AnchorPoolSummary marks the once-per-call `anchor_pool` event
 	// (CHAOS-5393) that reports which kind the SCOPE ANCHOR was allowed to
 	// resolve under, and where that kind came from. Emitted from the same
@@ -2983,7 +3003,11 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if offersOnly && firstPassTracer != nil {
 		firstPassTracer = offersOnlyDecisionTracer{real: firstPassTracer}
 	}
-	resolution, firstPassBases, firstPassDigests := ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind))
+	// CHAOS-5434: the anchor scope decided once above is handed to the cut
+	// as well as to retrieval and the filter, so the slot the design
+	// promises the anchor is held by the SAME decision the other two
+	// consumers obeyed -- not a second derivation beside them.
+	resolution, firstPassBases, firstPassDigests := resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), anchorReservedSlot{Kind: anchorScope.Kind, Source: anchorScope.Source})
 	commitBases.ResetTo(firstPassBases)
 	commitDigests.ResetTo(firstPassDigests)
 	// coverageFloorDegraded (CHAOS-4038, codex review round 2 finding 1) is

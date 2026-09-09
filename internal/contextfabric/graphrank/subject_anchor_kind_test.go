@@ -172,15 +172,15 @@ func TestReservedPrefix_OnlyReservesTheKindsItWasGiven(t *testing.T) {
 	}
 	tiers := []int{2, 2, 2}
 
-	none := reservedPrefix(ordered, tiers, 2, nil)
+	none, _ := reservedPrefix(ordered, tiers, 2, nil, anchorReservedSlot{})
 	if none[2] {
 		t.Error("nil reservedKinds admitted index 2; want the plain prefix")
 	}
-	other := reservedPrefix(ordered, tiers, 2, []contextfabric.SubjectKind{contextfabric.SubjectProject})
+	other, _ := reservedPrefix(ordered, tiers, 2, []contextfabric.SubjectKind{contextfabric.SubjectProject}, anchorReservedSlot{})
 	if other[2] {
 		t.Error("reserving PROJECT admitted a TEAM candidate")
 	}
-	team := reservedPrefix(ordered, tiers, 2, []contextfabric.SubjectKind{contextfabric.SubjectTeam})
+	team, _ := reservedPrefix(ordered, tiers, 2, []contextfabric.SubjectKind{contextfabric.SubjectTeam}, anchorReservedSlot{})
 	if !team[2] {
 		t.Error("reserving TEAM did not admit the team candidate")
 	}
@@ -215,7 +215,7 @@ func TestReservedPrefix_NeverDisplacesCommittedOrParentTiers(t *testing.T) {
 	}
 	tiers := []int{2, 0, 1, 2} // ordinary, committed, parent, (past the cut)
 
-	kept := reservedPrefix(ordered, tiers, 3, []contextfabric.SubjectKind{contextfabric.SubjectTeam})
+	kept, _ := reservedPrefix(ordered, tiers, 3, []contextfabric.SubjectKind{contextfabric.SubjectTeam}, anchorReservedSlot{})
 	if !kept[1] {
 		t.Error("displaced the COMMITTED subject")
 	}
@@ -241,7 +241,7 @@ func TestReservedPrefix_AdmitsNothingWhenNoVictimIsEligible(t *testing.T) {
 	}
 	tiers := []int{0, 1, 2}
 
-	kept := reservedPrefix(ordered, tiers, 2, []contextfabric.SubjectKind{contextfabric.SubjectTeam})
+	kept, _ := reservedPrefix(ordered, tiers, 2, []contextfabric.SubjectKind{contextfabric.SubjectTeam}, anchorReservedSlot{})
 	if kept[2] {
 		t.Error("admitted a reserved candidate with no eligible victim; the budget must not grow")
 	}
@@ -490,7 +490,7 @@ func TestReservedPrefix_OneReservedKindNeverEvictsAnother(t *testing.T) {
 	}
 	tiers := []int{2, 2, 2}
 
-	kept := reservedPrefix(ordered, tiers, 2, []contextfabric.SubjectKind{contextfabric.SubjectTeam, contextfabric.SubjectProject})
+	kept, _ := reservedPrefix(ordered, tiers, 2, []contextfabric.SubjectKind{contextfabric.SubjectTeam, contextfabric.SubjectProject}, anchorReservedSlot{})
 	if !kept[1] {
 		t.Error("admitting the reserved TEAM evicted the reserved PROJECT already inside the budget")
 	}
