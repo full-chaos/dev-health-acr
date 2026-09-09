@@ -130,3 +130,111 @@ func capturedHintSources(t *testing.T, graph *capturingGraphReader) []string {
 	}
 	return sources
 }
+
+// callShapeCapturingReader records the SCOPE ARGUMENTS of every ResolveSubjects
+// call — the confirmed kind, the frame and the anchor kind — which is what
+// decides whether a contest scope can refuse anything at all.
+type callShapeCapturingReader struct {
+	resolution      SubjectResolution
+	context         GraphContext
+	confirmedKinds  []*ConfirmedExpectedKind
+	frames          []*QuestionFrame
+	anchorKinds     []SubjectKind
+	requestedHints  [][]SubjectHint
+	resolveCallSeen bool
+}
+
+func (r *callShapeCapturingReader) ResolveInvestigationBinding(context.Context, storage.Principal) (ResolvedGraphBinding, error) {
+	return ResolvedGraphBinding{GraphKey: "call-shape-key", Epoch: 0}, nil
+}
+
+func (r *callShapeCapturingReader) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding, confirmedKind *ConfirmedExpectedKind, _ *ConfirmedAnchorSelection, frame *QuestionFrame, anchorKind SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+	r.resolveCallSeen = true
+	r.confirmedKinds = append(r.confirmedKinds, confirmedKind)
+	r.frames = append(r.frames, frame)
+	r.anchorKinds = append(r.anchorKinds, anchorKind)
+	r.requestedHints = append(r.requestedHints, request.RequestedScope.SubjectHints)
+	return r.resolution, StructureOfferMaterial{}, nil, nil, nil
+}
+
+func (r *callShapeCapturingReader) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {
+	return r.context, nil
+}
+
+// r1 FINDING 2, PERMANENT PIN, and the pin it REPLACES was vacuous.
+//
+// The answer-reuse recheck's hint is contest-exempt, and that exemption was
+// argued from the recheck being unable to reach a refusing scope: its call site
+// passes no confirmed kind and no frame. The first version of this pin asserted
+// that by calling decideContestScope directly with nils — which proves a
+// property of decideContestScope and NOTHING about the call site. Reproduced:
+// with the production call at answer_reuse.go mutated to pass a refusing frame
+// AND a matching confirmed kind, every PR-B pin still passed, including that
+// one.
+//
+// This asserts the ARGUMENTS THE PRODUCTION CALL ACTUALLY PASSES, captured at
+// the graph reader. If that call ever starts supplying a frame or a confirmed
+// kind, the exemption starts deciding something real and this fails loudly.
+func TestTheReuseRecheckPassesNoScopeToResolution(t *testing.T) {
+	t.Parallel()
+	_, candidate := reusableCandidate()
+	reader := &callShapeCapturingReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+		context: GraphContext{
+			Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{}, FactRequirements: []FactRequirement{},
+			EvidenceRefIDs: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		},
+	}
+	freshResult := validInvestigationResult()
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: reader,
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return freshResult, nil
+		}),
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Results:   &resultStoreStub{},
+		Telemetry: &recordingTelemetry{},
+		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+			return candidate, true, nil
+		}),
+	})
+	if _, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest()); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if !reader.resolveCallSeen {
+		t.Fatal("ResolveSubjects was never called; this fixture never reached the recheck and measures nothing")
+	}
+	// THE CONTROL that makes the assertion mean something: the call being
+	// examined must be the recheck's, identified by the source IT mints.
+	recheckCall := -1
+	for index, hints := range reader.requestedHints {
+		for _, hint := range hints {
+			if hint.Source == string(hintsource.AnswerReuseAuthorizationRecheck) {
+				recheckCall = index
+			}
+		}
+	}
+	if recheckCall < 0 {
+		t.Fatalf("no ResolveSubjects call carried the recheck's own hint source; hints seen = %v",
+			reader.requestedHints)
+	}
+	t.Logf("recheck call #%d: confirmedKind=%v frame=%v anchorKind=%q",
+		recheckCall, reader.confirmedKinds[recheckCall], reader.frames[recheckCall], reader.anchorKinds[recheckCall])
+	if reader.confirmedKinds[recheckCall] != nil {
+		t.Errorf("the reuse recheck passed a confirmed kind (%+v) to resolution. The recheck's hint is exempt "+
+			"from the contest, and that exemption was argued from this call being unable to reach a refusing "+
+			"scope. It now can", reader.confirmedKinds[recheckCall])
+	}
+	if reader.frames[recheckCall] != nil {
+		t.Errorf("the reuse recheck passed a frame (%+v) to resolution, for the same reason as above",
+			reader.frames[recheckCall])
+	}
+	if reader.anchorKinds[recheckCall] != "" {
+		t.Errorf("the reuse recheck passed a scope anchor kind (%q) to resolution", reader.anchorKinds[recheckCall])
+	}
+}

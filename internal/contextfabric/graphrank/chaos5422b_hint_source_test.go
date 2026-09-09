@@ -149,12 +149,18 @@ func TestTheClassifierDecidesByContestPolicyNotByAuthorship(t *testing.T) {
 	}
 }
 
-// ROW 4 OF THE AXES TABLE: the reuse recheck cannot reach a refusing contest
-// scope, and the pin asserts the REASON rather than the outcome — it drives the
-// recheck's own call shape and requires the scope to be `none`. If a future
-// change starts passing a confirmed kind or a frame there, this fails loudly
-// instead of the exemption quietly deciding something new.
-func TestTheReuseRecheckCallShapeCannotReachARefusingScope(t *testing.T) {
+// THE DECISION FUNCTION'S OWN BEHAVIOUR on the argument shapes the reuse
+// recheck passes: no frame, no confirmed kind, either alone.
+//
+// NOTE WHAT THIS DOES NOT DO, because an earlier version of it claimed to. It
+// says nothing about what the recheck's CALL SITE actually passes — r1 found
+// that out by mutating the production call to supply a refusing frame and
+// confirmed kind, after which this test still passed. The call site is pinned
+// where the call happens, in the engine package's
+// TestTheReuseRecheckPassesNoScopeToResolution, which captures the arguments at
+// the graph reader. This one holds up the other half: that those arguments, if
+// they stay as they are, cannot produce a refusing scope.
+func TestNoFrameAndNoConfirmedKindProduceNoRefusingScope(t *testing.T) {
 	t.Parallel()
 	frame := contestFrame("platform")
 	confirmed := confirmedTeamKind()
@@ -169,8 +175,8 @@ func TestTheReuseRecheckCallShapeCannotReachARefusingScope(t *testing.T) {
 		"nil frame alone":                                              decideContestScope(nil, confirmed, anchorPoolKindScope{}),
 	} {
 		if scope.MemberKind != "" || scope.Source != contestScopeNone {
-			t.Errorf("%s produced a REFUSING scope %+v; the answer-reuse recheck's exemption was argued from "+
-				"this being unreachable, and it is now reachable", name, scope)
+			t.Errorf("%s produced a REFUSING scope %+v; half of the recheck's exemption argument is that these "+
+				"argument shapes decide nothing, and they now decide something", name, scope)
 		}
 	}
 }

@@ -41,6 +41,9 @@ func TestEveryProductionHintSourceLiteralIsRegistered(t *testing.T) {
 	}
 
 	found := map[string][]string{}
+	// unreadable collects Source: values this test CANNOT evaluate statically.
+	// They are findings, not omissions: see the non-literal branch below.
+	var unreadable []string
 	fset := token.NewFileSet()
 	err := filepath.Walk(filepath.Join(root, "internal"), func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -67,18 +70,33 @@ func TestEveryProductionHintSourceLiteralIsRegistered(t *testing.T) {
 				if !ok || key.Name != "Source" {
 					continue
 				}
+				rel, _ := filepath.Rel(root, path)
+				site := rel + ":" + strconv.Itoa(fset.Position(kv.Pos()).Line)
 				literal, ok := kv.Value.(*ast.BasicLit)
 				if !ok || literal.Kind != token.STRING {
-					// A non-literal value is a constant reference — which is
-					// what a registered producer looks like after this change.
+					// NOT a literal. r1 finding, reproduced: an earlier version
+					// of this test skipped these, and a producer that built its
+					// source from a variable — `Source: runtimeSource` — passed
+					// the whole enumeration while minting something unregistered.
+					// Skipping was the hole, not the safe case.
+					//
+					// The only acceptable non-literal is a reference INTO this
+					// package, which is what a registered producer looks like
+					// after this change. Anything else cannot be read
+					// statically, so this test cannot say whether it is
+					// registered, and a check that cannot answer must say so
+					// rather than pass.
+					if referencesThisPackage(kv.Value) {
+						continue
+					}
+					unreadable = append(unreadable, site)
 					continue
 				}
 				value, unquoteErr := strconv.Unquote(literal.Value)
 				if unquoteErr != nil {
 					return true
 				}
-				rel, _ := filepath.Rel(root, path)
-				found[value] = append(found[value], rel+":"+strconv.Itoa(fset.Position(literal.Pos()).Line))
+				found[value] = append(found[value], site)
 			}
 			return true
 		})
@@ -97,7 +115,33 @@ func TestEveryProductionHintSourceLiteralIsRegistered(t *testing.T) {
 				value, sites)
 		}
 	}
-	t.Logf("registered=%v raw production Source: literals=%v", hintsource.All(), found)
+	for _, site := range unreadable {
+		t.Errorf("production code sets a subject-hint Source at %s from an expression this test cannot read "+
+			"statically, and which does not reference the hintsource package. The enumeration's whole claim is "+
+			"that every engine-minted source is registered; a source built at runtime defeats that claim "+
+			"silently. Use a hintsource constant, or register the value and name it here.", site)
+	}
+	t.Logf("registered=%v raw production Source: literals=%v unreadable=%v", hintsource.All(), found, unreadable)
+}
+
+// referencesThisPackage reports whether an expression mentions the hintsource
+// package anywhere inside it — `hintsource.PriorSubjectReceipt`,
+// `string(hintsource.X)`, or a concatenation containing one. That is the shape
+// a registered producer has, and it is the ONLY non-literal shape this test
+// accepts.
+func referencesThisPackage(expr ast.Expr) bool {
+	found := false
+	ast.Inspect(expr, func(node ast.Node) bool {
+		selector, ok := node.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if ident, ok := selector.X.(*ast.Ident); ok && ident.Name == "hintsource" {
+			found = true
+		}
+		return true
+	})
+	return found
 }
 
 // AND THE CONTROL, because the test above passes trivially when the walk finds
@@ -210,6 +254,50 @@ func TestTheContractRejectsSourceStringsTheEnumerationNeverSees(t *testing.T) {
 		if err := hint.Validate(); err == nil {
 			t.Errorf("%s source %q VALIDATED; the enumeration's caller-authored default would then have to "+
 				"describe a population the contract was supposed to have refused", name, source)
+		}
+	}
+}
+
+// THE WALK'S OWN CLASSIFIER, tested directly, because the walk over production
+// sources can only ever see the shapes production currently contains — today,
+// two constant references and nothing else. A rule that is never exercised by
+// the corpus it runs on is a rule nobody has checked.
+//
+// This is the r1 finding stated as a property: for each expression shape a
+// producer could write, the walk must either read the value or REFUSE to
+// classify it. Silently skipping is what let a runtime-built unregistered
+// source through.
+func TestTheWalkRefusesEverySourceShapeItCannotRead(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		expr           string
+		wantReadable   bool
+		wantThisModule bool
+	}{
+		"a registered literal":          {expr: `"prior_subject_receipt"`, wantReadable: true},
+		"an unregistered literal":       {expr: `"something_else"`, wantReadable: true},
+		"a package constant":            {expr: `hintsource.PriorSubjectReceipt`, wantThisModule: true},
+		"a converted package constant":  {expr: `string(hintsource.PriorSubjectReceipt)`, wantThisModule: true},
+		"a concatenation including one": {expr: `string(hintsource.PriorSubjectReceipt) + "_v2"`, wantThisModule: true},
+		"a bare variable":               {expr: `runtimeSource`},
+		"a function call":               {expr: `deriveSource()`},
+		"a struct field":                {expr: `cfg.Source`},
+		"a concatenation of literals":   {expr: `"prior" + "_subject_receipt"`},
+	} {
+		expr, err := parser.ParseExpr(testCase.expr)
+		if err != nil {
+			t.Fatalf("%s: the fixture does not parse: %v", name, err)
+		}
+		literal, isLiteral := expr.(*ast.BasicLit)
+		readable := isLiteral && literal.Kind == token.STRING
+		if readable != testCase.wantReadable {
+			t.Errorf("%s (%s): readable as a literal = %v, want %v", name, testCase.expr, readable, testCase.wantReadable)
+		}
+		if got := referencesThisPackage(expr); got != testCase.wantThisModule {
+			t.Errorf("%s (%s): referencesThisPackage = %v, want %v — a shape that neither reads as a literal "+
+				"nor references this package must be REFUSED, not skipped", name, testCase.expr, got, testCase.wantThisModule)
+		}
+		if !readable && !testCase.wantThisModule && referencesThisPackage(expr) {
+			t.Errorf("%s (%s): would be accepted with no way to check its value", name, testCase.expr)
 		}
 	}
 }
