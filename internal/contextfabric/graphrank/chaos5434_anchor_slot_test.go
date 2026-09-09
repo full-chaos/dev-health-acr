@@ -709,7 +709,7 @@ func TestTheAnchorSlotChangesTheOfferedListAndNotTheDecision(t *testing.T) {
 		return resolveFromMergedCandidatesWithAnchorSlot(
 			build(), map[string]string{}, map[string]bool{}, 3, true, false,
 			nil, 0, false, 10, 20, true,
-			DefaultCommitGatePolicy(), nil, nil, false, nil, "", "", false, false, reserved, slot)
+			DefaultCommitGatePolicy(), nil, nil, false, nil, "", "", false, false, reserved, slot, nil)
 	}
 
 	without, withoutBases, withoutDigests := call(anchorReservedSlot{})
