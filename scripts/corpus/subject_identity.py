@@ -207,6 +207,14 @@ def inspect(root, corpus_id, expectation, rep=1):
         "request_id": result.get("request_id"),
         "result_id": result.get("result_id"),
         "status": result.get("status"),
+        # CHAOS-5452: read from the SAME terminal `result` this function already parsed
+        # for identity, never re-opened. MIRRORED FROM THE RESULT means the root and the
+        # completeness block agree by construction (validated server-side); reading
+        # either is equivalent, and completeness is the field CHAOS-5442 promoted for a
+        # bounded consumer to read without the rest of the document. `or None`, not
+        # `or ""`: an absent field is MISSING, never an empty-string basis.
+        "disclosed_refusal_basis": (result.get("completeness") or {}).get(
+            "refusal_basis") or None,
         "claimed_facts_n": len(result.get("claimed_facts") or []),
         "committed": [{"kind": c.get("kind"), "canonical_id": c.get("canonical_id"),
                        "label": c.get("label")} for c in committed],

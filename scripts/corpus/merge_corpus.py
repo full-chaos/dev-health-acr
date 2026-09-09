@@ -284,9 +284,14 @@ def main():
     # satisfied by a bare no_match. Built once and reused, rather than twice as before.
     _states = {k: (v or {}).get("state", "read") for k, v in identity.items()}
     _terminals = {r["corpus_id"]: r.get("final_payload_status") for r in rows}
+    # CHAOS-5452: read off the SAME identity scan above (subject_identity reads the raw
+    # attempt files retroactively, so archived runs re-score with no re-run), never a
+    # second file walk.
+    _disclosed_basis = {k: (v or {}).get("disclosed_refusal_basis") for k, v in identity.items()}
     _exp_table = expectations.table(
         BY_ID, {r["corpus_id"]: classify(r) for r in rows}, subs_by_id,
-        states_by_id=_states, terminals_by_id=_terminals)
+        states_by_id=_states, terminals_by_id=_terminals,
+        disclosed_basis_by_id=_disclosed_basis)
 
     counts = Counter(classify(r) for r in rows)
     verdict = {
