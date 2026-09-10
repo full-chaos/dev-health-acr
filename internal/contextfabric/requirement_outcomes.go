@@ -556,6 +556,13 @@ func (e *Engine) planCandidateNarrowing(
 	// would couple the evaluator's evidence to the allocator's lifetime. Each
 	// of this function's TWO call sites passes the bundle matching ITS pass.
 	facts CanonicalFactBundle,
+	// pending and pass thread straight through to finalizeResult -- this
+	// re-finalize is itself a pass (the narrowed document is a different
+	// answer from the one `result` described), so its cover events belong on
+	// the SAME pending telemetry as the pass it narrowed, tagged with the
+	// caller's own pass number. See finalizeResult's doc comment.
+	pending *assemblyTelemetry,
+	pass int,
 ) (outcomeNarrowingAttempt, error) {
 	narrowedResult, narrowing, declined := narrowCandidatesToBudget(result, budget, measured.Allocation, measured.Measurement, measured.Overrun)
 	if !narrowing.Narrowed {
@@ -569,7 +576,7 @@ func (e *Engine) planCandidateNarrowing(
 	requirement, obligation := subjectScopeRequirement(narrowedResult.Completeness.Outcomes)
 	row := candidateNarrowingOutcomeRow(narrowing, measured.Overrun, requirement, obligation)
 	narrowedResult.Completeness.Outcomes = appendOutcomeRows(narrowedResult.Completeness.Outcomes, row)
-	narrowedResult = e.finalizeResult(ctx, principal, narrowedResult, *plan, frame, facts)
+	narrowedResult = e.finalizeResult(ctx, principal, narrowedResult, *plan, frame, facts, pending, pass)
 
 	// Measure what will actually be served. If the reduction did not
 	// deliver a fitting document the refusal stands -- serving an answer

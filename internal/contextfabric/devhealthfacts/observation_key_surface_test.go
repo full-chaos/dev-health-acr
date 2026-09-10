@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"testing"
 
@@ -104,52 +105,80 @@ func TestEveryDeclaredObservationKeyCollapsesItsOwnCellsAndNothingElse(t *testin
 	t.Parallel()
 	providers := devhealthfacts.NewProviders(nil)
 
-	bySubjectAndKey := map[string][]contextfabric.FactKind{}
-	kindsBySubject := map[contextfabric.SubjectKind][]contextfabric.FactKind{}
+	// THIS TEST PREVIOUSLY DID NOT CALL THE COVER AT ALL. It grouped the
+	// declarations, logged them, and asserted only that groups existed --
+	// so mutating observationCover to return a constant 1 left it green while
+	// its name promised the collapse was exercised against the real registry.
+	// A test that cannot fail on the property it names is worse than no test,
+	// because its name is cited as coverage. It now calls the real counter, via
+	// the exported ObservationCoverForTest seam, on cells taken from the
+	// registry rather than from a fixture.
+	type group struct {
+		subject contextfabric.SubjectKind
+		key     contextfabric.ObservationKey
+		kinds   []contextfabric.FactKind
+	}
+	groups := map[string]*group{}
+	assignment := map[contextfabric.FactKind]map[contextfabric.SubjectKind][]contextfabric.ObservationKey{}
 	for _, provider := range providers {
 		capability := provider.Capability()
+		assignment[capability.Kind] = capability.ObservationKey
 		for _, subject := range capability.SupportedSubjectKinds {
-			kindsBySubject[subject] = append(kindsBySubject[subject], capability.Kind)
 			for _, key := range capability.ObservationKey[subject] {
 				id := fmt.Sprintf("%s|%s", subject, key)
-				bySubjectAndKey[id] = append(bySubjectAndKey[id], capability.Kind)
+				if groups[id] == nil {
+					groups[id] = &group{subject: subject, key: key}
+				}
+				groups[id].kinds = append(groups[id].kinds, capability.Kind)
 			}
 		}
 	}
-	if len(bySubjectAndKey) == 0 {
+	if len(groups) == 0 {
 		t.Fatal("no (subject, key) group found; nothing is exercised")
 	}
 
-	ids := make([]string, 0, len(bySubjectAndKey))
-	for id := range bySubjectAndKey {
+	ids := make([]string, 0, len(groups))
+	for id := range groups {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 
 	exercised := 0
 	for _, id := range ids {
-		kinds := bySubjectAndKey[id]
-		if len(kinds) < 2 {
-			// Reported by the surface test above; not re-reported here.
-			continue
+		g := groups[id]
+		if len(g.kinds) < 2 {
+			continue // reported by the surface test above
 		}
-		var subject contextfabric.SubjectKind
-		for _, provider := range providers {
-			capability := provider.Capability()
-			for _, candidate := range capability.SupportedSubjectKinds {
-				if fmt.Sprintf("%s|", candidate) == id[:len(fmt.Sprintf("%s|", candidate))] {
-					subject = candidate
-				}
-			}
+		// THE COLLAPSE, EXECUTED: every kind declaring one key is ONE
+		// observation, so the cover over exactly those kinds must be 1.
+		if got := contextfabric.ObservationCoverForTest(g.kinds, g.subject, assignment); got != 1 {
+			t.Errorf("%s: cover over %v = %d, want 1 -- they all declare this one key", id, g.kinds, got)
 		}
-		t.Logf("GROUP %s kinds=%v", id, kinds)
 		exercised++
-		_ = subject
+
+		// THE DISCRIMINATING CONTROL: adding a kind from the SAME subject kind
+		// that does NOT declare this key must raise the cover. Without it the
+		// assertion above passes against a counter that always returns 1 --
+		// which is exactly the mutation this test used to survive.
+		for _, provider := range providers {
+			other := provider.Capability()
+			if len(other.ObservationKey[g.subject]) != 0 {
+				continue // keyed at this subject kind; may legitimately collapse
+			}
+			if !slices.Contains(other.SupportedSubjectKinds, g.subject) {
+				continue
+			}
+			widened := append(append([]contextfabric.FactKind{}, g.kinds...), other.Kind)
+			if got := contextfabric.ObservationCoverForTest(widened, g.subject, assignment); got != 2 {
+				t.Errorf("%s: adding unkeyed %s gave cover %d, want 2 -- an unkeyed kind is its own observation", id, other.Kind, got)
+			}
+			break
+		}
 	}
 	if exercised == 0 {
 		t.Fatal("no (subject, key) group had two or more cells; the collapse is never exercised against the real registry")
 	}
-	t.Logf("EXERCISED %d shared-observation groups from the registry", exercised)
+	t.Logf("EXERCISED %d shared-observation groups from the registry, cover executed on each", exercised)
 }
 
 // TestNoTwoKindsPairThroughSharedAncestryAlone is the pin for the defect the

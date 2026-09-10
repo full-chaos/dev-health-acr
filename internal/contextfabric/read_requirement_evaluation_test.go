@@ -781,7 +781,7 @@ func TestFinalizingAServedTurnEvaluatesItsReadRequirements(t *testing.T) {
 		Coverage: factCoverage(
 			contractsv1.ContextFabricFactHealth, SourceAvailable,
 			contractsv1.ContextFabricFactWorkload, SourceAvailable),
-	}, AnswerPlan{Requirements: published}, &frame, CanonicalFactBundle{})
+	}, AnswerPlan{Requirements: published}, &frame, CanonicalFactBundle{}, &assemblyTelemetry{}, answerPassFirst)
 
 	evaluated, seeded := 0, 0
 	for _, row := range served.Completeness.Outcomes {

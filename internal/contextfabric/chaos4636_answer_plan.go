@@ -442,9 +442,31 @@ func stampAnswerPlan(result InvestigationResult, plan AnswerPlan) InvestigationR
 // from later (see ReadRequirementObservationCoverEvent's own doc comment):
 // it is a pure diagnostic of HOW the row was computed, not part of the wire
 // document, so there is nothing to defer to and nothing to recompute at a
-// later point. It is therefore emitted HERE, through e.telemetry, at the same
-// call frequency the evaluator's own diagnostic line always had -- ctx and
-// principal are threaded in for exactly this one emission.
+// later point. It USED to be emitted directly here, through e.telemetry, at
+// the same call frequency the evaluator's own diagnostic line always had --
+// but this function runs once per PASS (first synthesis, the one bounded
+// budget retry, a candidate-narrowing re-finalize) and emitting inline meant
+// a served investigation logged one set of cover lines per pass, the
+// discarded ones included, with nothing to tell a reader which pass had
+// actually been served (P1, adversarial review). It now APPENDS its events
+// onto the pending assemblyTelemetry instead, tagged with `pass`, for
+// (*Engine).emit to publish exactly once, marking the served pass -- see
+// assemblyTelemetry.ObservationCover.
+const (
+	// answerPassFirst is the first synthesis attempt for an investigation.
+	answerPassFirst = 0
+	// answerPassSecond is whichever second attempt actually ran: the one
+	// bounded budget retry, OR -- when the cohort lever declined and no
+	// retry ran at all -- the candidate-narrowing re-finalize of the FIRST
+	// pass's result. The two are mutually exclusive within one investigation
+	// (fitAssembledResult only reaches one of them), so sharing the index is
+	// not ambiguous: it names the position in the sequence, not the mechanism.
+	answerPassSecond = 1
+	// answerPassThird is the candidate-narrowing re-finalize that runs after
+	// a retry (answerPassSecond) still did not fit.
+	answerPassThird = 2
+)
+
 func (e *Engine) finalizeResult(
 	ctx context.Context,
 	principal storage.Principal,
@@ -461,6 +483,16 @@ func (e *Engine) finalizeResult(
 	// evaluated against stale facts reports coverage for a document nobody
 	// served.
 	facts CanonicalFactBundle,
+	// pending is the investigation's held telemetry. This function only ever
+	// APPENDS its cover events onto pending.ObservationCover -- never emits,
+	// never replaces -- so a caller that has no pending telemetry to thread
+	// (a direct unit-test call, say) may pass nil and simply lose the
+	// diagnostic, exactly as it would have if e.telemetry were nil before
+	// this change.
+	pending *assemblyTelemetry,
+	// pass is which attempt this call is, for the events this call produces
+	// -- see the answerPass* constants above.
+	pass int,
 ) InvestigationResult {
 	stamped := plan
 	result.AnswerPlan = &stamped
@@ -560,14 +592,16 @@ func (e *Engine) finalizeResult(
 		result.Completeness.Outcomes, stamped.Requirements, result.Coverage,
 		readPopulationEvidenceFrom(frame, result, stamped, facts, observationKeys))
 	result.Completeness.Outcomes = rows
-	// THE ONE EXCEPTION this function's own doc comment names: emitted HERE,
-	// nil-safe like every other e.telemetry emitter, because the diagnostic
-	// has no field on the row to be read back from at a later, once-per-
-	// served-result point.
-	if e.telemetry != nil {
-		for _, event := range coverEvents {
-			e.telemetry.RecordReadRequirementObservationCover(ctx, principal, event)
+	// THE ONE EXCEPTION this function's own doc comment names: APPENDED here
+	// onto the pending telemetry, tagged with this call's pass, for
+	// (*Engine).emit to publish exactly once per event -- nil-safe like every
+	// other deferred emitter, because a caller with nothing to thread (a
+	// direct unit-test call) simply gets no diagnostic, same as before.
+	if pending != nil && len(coverEvents) > 0 {
+		for i := range coverEvents {
+			coverEvents[i].Pass = pass
 		}
+		pending.ObservationCover = append(pending.ObservationCover, coverEvents...)
 	}
 	result.Completeness = ComputeAnswerCompleteness(result)
 	return result

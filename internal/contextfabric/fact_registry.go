@@ -427,6 +427,39 @@ type FactCapabilityRegistry struct {
 	logger         *slog.Logger
 }
 
+// ValidateObservationCoverBound refuses a registry whose declared observation
+// keys would push the exact cover solve past its bound at any subject kind.
+//
+// THE BOUND IS ON KEYED KINDS PER SUBJECT KIND, not on the registry's size: the
+// solve is a bitmask DP over the keyed kinds that share a subject kind, so that
+// is the number that must stay inside observationCoverKindGuard.
+//
+// It refuses at CONSTRUCTION because the alternative is worse than a hard
+// failure. Past the bound the counter must fall back, every approximation to
+// minimum set cover is an upper bound, and an over-count reports more distinct
+// sources than exist -- silently, in the direction this whole mechanism was
+// built to remove. A registry that grows past the bound is a design decision
+// someone must take deliberately, not a runtime condition to degrade through.
+func ValidateObservationCoverBound(capabilities []FactCapability) error {
+	keyedPerSubject := map[SubjectKind]int{}
+	for _, capability := range capabilities {
+		for subjectKind, keys := range capability.ObservationKey {
+			if len(dedupeObservationKeys(keys)) == 0 {
+				continue
+			}
+			keyedPerSubject[subjectKind]++
+		}
+	}
+	for subjectKind, keyed := range keyedPerSubject {
+		if keyed > observationCoverKindGuard {
+			return fmt.Errorf(
+				"fact registry declares %d observation-keyed fact kinds at subject kind %q, above the exact cover solve's bound of %d: raise the bound deliberately or split the subject kind, never let the counter fall back to an over-count",
+				keyed, subjectKind, observationCoverKindGuard)
+		}
+	}
+	return nil
+}
+
 func NewFactCapabilityRegistry(providers []FactProvider, options FactRegistryOptions) (*FactCapabilityRegistry, error) {
 	if options.DefaultTimeout <= 0 {
 		options.DefaultTimeout = 5 * time.Second
@@ -470,6 +503,16 @@ func NewFactCapabilityRegistry(providers []FactProvider, options FactRegistryOpt
 		capability.Tables = copyTableDeclarations(capability.Tables)
 		capability.Obligations = copyObligationDeclarations(capability.Obligations)
 		registry.providers[capability.Kind] = registeredFactProvider{capability: capability, provider: provider}
+	}
+	// The exact-cover bound is a property of the WHOLE declaration set, so it
+	// is checked once here rather than per capability: no single capability can
+	// know how many others key the same subject kind.
+	accepted := make([]FactCapability, 0, len(registry.providers))
+	for _, registered := range registry.providers {
+		accepted = append(accepted, registered.capability)
+	}
+	if err := ValidateObservationCoverBound(accepted); err != nil {
+		return nil, err
 	}
 	return registry, nil
 }

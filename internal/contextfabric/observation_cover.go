@@ -56,15 +56,23 @@ import "sort"
 // observationCoverKindGuard bounds the exact solve. The DP is O(2^k * o) over
 // k KEYED served kinds, so the bound is on k, not on the registry's size.
 //
-// IT IS NOT A RUNTIME FALLBACK, and that is deliberate. The number of keyed
-// kinds is a property of a STATIC REGISTRY DECLARATION, known when the
-// registry is built, so a registry that outgrows this guard is a design event
-// that must fail loudly at construction -- see the totality assertion beside
-// the declaration. A cheap runtime fallback would have to over-count (every
-// approximation to minimum set cover is an upper bound), and an over-count
-// reports MORE distinct sources than exist, which is the exact defect this
-// whole mechanism was built to remove. There is no safe silent degradation
-// here, so there is none.
+// IT IS NOT A RUNTIME FALLBACK, and that is enforced rather than asserted. The
+// number of keyed kinds at one subject kind is a property of a STATIC REGISTRY
+// DECLARATION, known when the registry is built, so a registry that outgrows
+// this guard is a design event: ValidateObservationCoverBound refuses it at
+// construction (fact_registry.go), and NewFactCapabilityRegistry calls it.
+//
+// An earlier version of this comment claimed that refusal existed when it did
+// not, and the fallback below was reachable: 21 kinds sharing ONE observation
+// returned 21 -- an over-count of exactly the kind this mechanism removes,
+// reported by the code whose comment said it was impossible. Every
+// approximation to minimum set cover is an UPPER bound, so there is no safe
+// silent degradation here; the only safe answer is to refuse the registry.
+//
+// The fallback survives as a belt-and-braces return for a caller that somehow
+// assembles an assignment outside the validated registry, and it returns
+// len(keyed) -- the value the true cover can never exceed -- so even that path
+// cannot claim MORE corroboration than the declaration supports.
 const observationCoverKindGuard = 20
 
 // observationKeyAssignment is a SNAPSHOT of the registry's observation-key
@@ -181,4 +189,17 @@ func minimumObservationCover(keyed [][]ObservationKey) int {
 		}
 	}
 	return cost[full]
+}
+
+// ObservationCoverForTest exposes the cover to tests in OTHER packages --
+// specifically devhealthfacts, whose declaration surface is the real input this
+// counter has to be correct against.
+//
+// It exists because the alternative was worse: that package's surface test
+// asserted the collapse WITHOUT calling the counter, and a mutation making the
+// counter return a constant left it green. Re-deriving the arithmetic there
+// would have been a second authority for the same fact; this is the one
+// authority, reachable from the one place that holds the real declarations.
+func ObservationCoverForTest(served []FactKind, subject SubjectKind, assignment map[FactKind]map[SubjectKind][]ObservationKey) int {
+	return observationCover(served, subject, observationKeyAssignment(assignment))
 }

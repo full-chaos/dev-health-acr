@@ -1240,6 +1240,14 @@ func (t SlogEngineTelemetry) RecordReadRequirementObservationCover(ctx context.C
 		"declared", event.Declared,
 		"declared_raised_to_standard", event.DeclaredRaisedToStandard,
 		"meets_threshold", event.MeetsThreshold,
+		// pass/served: WHICH finalization produced this row and whether it is
+		// the one actually served. Cover events are kept for every pass, not
+		// just the last -- see assemblyTelemetry.ObservationCover -- so a
+		// reader filtering on served=true gets the served document's own
+		// numbers, and a reader who wants the discarded pass's has pass to
+		// group on.
+		"pass", event.Pass,
+		"served", event.Served,
 	}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric observation cover", args...)
 }

@@ -48,13 +48,13 @@ func TestTheRetryEvaluatesReadsOverTheBundleItSynthesizedFrom(t *testing.T) {
 	}{
 		{
 			name: "the retry finalization",
-			want: "retried = e.finalizeResult(ctx, principal, retried, *plan, params.Frame, retryParams.Facts)",
-			bad:  "retried = e.finalizeResult(ctx, principal, retried, *plan, params.Frame, params.Facts)",
+			want: "retried = e.finalizeResult(ctx, principal, retried, *plan, params.Frame, retryParams.Facts, &retryPending, answerPassSecond)",
+			bad:  "retried = e.finalizeResult(ctx, principal, retried, *plan, params.Frame, params.Facts, &retryPending, answerPassSecond)",
 		},
 		{
 			name: "the SECOND planCandidateNarrowing, on the retried result",
-			want: "e.planCandidateNarrowing(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts)",
-			bad:  "e.planCandidateNarrowing(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, params.Facts)",
+			want: "e.planCandidateNarrowing(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts, &retryPending, answerPassThird)",
+			bad:  "e.planCandidateNarrowing(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, params.Facts, &retryPending, answerPassThird)",
 		},
 	} {
 		if strings.Count(source, call.want) != 1 {
@@ -137,7 +137,7 @@ func TestTheRetryEvaluatesReadsOverTheBundleItSynthesizedFrom(t *testing.T) {
 	// The FIRST planCandidateNarrowing runs on the first-pass result and must
 	// take the first-pass bundle -- the mirror image, asserted so a lane
 	// "fixing" the above does not make both sites pass the retry bundle.
-	first := "e.planCandidateNarrowing(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts)"
+	first := "e.planCandidateNarrowing(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts, &firstPass, answerPassSecond)"
 	if strings.Count(source, first) != 1 {
 		t.Errorf("the FIRST planCandidateNarrowing must take the first-pass bundle; it runs on the "+
 			"first-pass result:\n  %s", first)

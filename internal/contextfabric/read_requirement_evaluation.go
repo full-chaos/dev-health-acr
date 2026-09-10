@@ -650,6 +650,12 @@ func readRequirementOutcomeRow(
 	}
 
 	if evidence.Observed == 0 {
+		// THIS ROW EMITS ITS COVER LINE TOO, and the reason is the rule this
+		// branch previously broke. The row IS published -- a consumer sees
+		// `unavailable 0/N` in the answer -- so a trace with nothing in it
+		// leaves an operator unable to tell an EVALUATED ZERO from a decision
+		// that never ran. Missing is not zero; a cover of 0 over 0 observed
+		// kinds is a real measurement and it says so.
 		return RequirementOutcomeRow{
 			Stage:         contractsv1.ContextFabricOutcomeStageAssembledResult,
 			Requirement:   requirement.Requirement,
@@ -660,7 +666,8 @@ func readRequirementOutcomeRow(
 			CauseObserved: false,
 			Served:        0,
 			Declared:      threshold,
-		}, true, nil
+		}, true, readRequirementObservationCoverEvent(
+			requirement, threshold, 0, threshold, evidence, populations.assignment)
 	}
 
 	// AN UNDECLARED CAUSE CODE EMITS NO ROW.
@@ -889,10 +896,13 @@ func readRequirementOutcomeRow(
 // registry, and the numbers already answer the question the bar asks.
 //
 // It is built by the PURE evaluator (readRequirementObservationCoverEvent,
-// called from readRequirementOutcomeRow) and emitted through e.telemetry by
-// finalizeResult, which holds the engine's configured logger -- never through
-// slog.Default(), which is Go's process-wide fallback and not this service's
-// own JSON stream (see PlanTelemetry.RecordReadRequirementObservationCover).
+// called from readRequirementOutcomeRow), held on assemblyTelemetry by
+// finalizeResult (one pass may run more than once per investigation -- the
+// budget retry, the candidate-narrowing re-finalize -- and every pass's
+// events are kept, never just the last), and published by (*Engine).emit,
+// which holds the engine's configured logger -- never through slog.Default(),
+// which is Go's process-wide fallback and not this service's own JSON stream
+// (see PlanTelemetry.RecordReadRequirementObservationCover).
 type ReadRequirementObservationCoverEvent struct {
 	// Requirement and Obligation and Subject are the row's own identity,
 	// copied from the requirement rather than re-derived, for the same
@@ -930,6 +940,22 @@ type ReadRequirementObservationCoverEvent struct {
 	DeclaredRaisedToStandard bool
 	// MeetsThreshold is the row's own pass/fail: ServedCover >= Threshold.
 	MeetsThreshold bool
+	// Pass is which finalization this event came from, in the order they ran
+	// for this investigation (0 for the first synthesis, 1 for the one
+	// bounded budget retry or a candidate-narrowing re-finalize that ran
+	// without a retry, 2 for a candidate-narrowing re-finalize after a
+	// retry). It is set by finalizeResult, never by the pure evaluator above,
+	// because the evaluator has no notion of which attempt it is running
+	// inside.
+	Pass int
+	// Served is whether THIS pass's result is the one the investigation
+	// actually served. (*Engine).emit sets it true on the events from the
+	// FINAL pass only -- the pass whose result is returned -- and false on
+	// every earlier pass's, once it can see the whole set and knows which
+	// pass that was. A row with Served=false still describes a real
+	// decision: the answer that pass would have served, and why a later
+	// pass replaced it.
+	Served bool
 }
 
 // readRequirementObservationCoverEvent builds the observation-cover
@@ -964,13 +990,30 @@ func readRequirementObservationCoverEvent(
 }
 
 // taintedObservationCount is how many distinct observations the mixed-state
-// rule excluded: observations backing a kind that was observed but not served.
-// It is the diagnostic half of servedObservationCover -- without it a reader
-// cannot tell a cover reduced by the DECLARATION from one reduced by a LOSS.
+// rule actually excluded FROM THE SERVED COVER. It is the diagnostic half of
+// servedObservationCover -- without it a reader cannot tell a cover reduced by
+// the DECLARATION from one reduced by a LOSS.
+//
+// IT COUNTS ONLY KEYS THAT A SERVED KIND ALSO DECLARES, and the first version
+// did not. Counting every lost kind's keys reports taint that changed nothing:
+// with health served and flow lost, flow's `throughput` is not a key of any
+// served kind, so excluding it removes nothing from the cover -- yet the field
+// read 1. A diagnostic that reports an effect which did not occur is worse than
+// no diagnostic, because a reader uses it to explain a shortfall it did not
+// cause. The intersection with the served kinds' own keys is what makes the
+// number mean what its name says.
 func taintedObservationCount(evidence readEvidence, subject SubjectKind, assignment observationKeyAssignment) int {
 	served := make(map[FactKind]bool, len(evidence.ServedKinds))
 	for _, kind := range evidence.ServedKinds {
 		served[kind] = true
+	}
+	// The keys the SERVED kinds actually stand on. A tainted key outside this
+	// set excluded nothing, because there was nothing of it in the cover.
+	servedKeys := map[ObservationKey]bool{}
+	for _, kind := range evidence.ServedKinds {
+		for _, key := range dedupeObservationKeys(assignment[kind][subject]) {
+			servedKeys[key] = true
+		}
 	}
 	tainted := map[ObservationKey]bool{}
 	for _, kind := range evidence.ObservedKinds {
@@ -978,7 +1021,9 @@ func taintedObservationCount(evidence readEvidence, subject SubjectKind, assignm
 			continue
 		}
 		for _, key := range dedupeObservationKeys(assignment[kind][subject]) {
-			tainted[key] = true
+			if servedKeys[key] {
+				tainted[key] = true
+			}
 		}
 	}
 	return len(tainted)

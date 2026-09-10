@@ -183,7 +183,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// single-subject investigation has no cohort, so `declined` is
 		// always nothing_to_narrow here and the refusal was reached
 		// without any content reduction ever being attempted.
-		attempt, accountingErr := e.planCandidateNarrowing(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts)
+		attempt, accountingErr := e.planCandidateNarrowing(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts, &firstPass, answerPassSecond)
 		if accountingErr != nil {
 			return InvestigationResult{}, assemblyTelemetry{}, accountingErr
 		}
@@ -296,6 +296,18 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// first call's.
 		return InvestigationResult{}, assemblyTelemetry{}, withSynthesisNarrowingSnapshot(retryErr, *plan)
 	}
+	// CARRY THE FIRST PASS'S COVER EVENTS FORWARD, into the retry's OWN
+	// assemblyTelemetry, before this pass appends its own. `retryPending` is a
+	// FRESH struct from this second synthesizeAndAssemble call -- it does not
+	// inherit `firstPass`'s fields -- and every return below this point
+	// returns some form of `retryPending`, never `firstPass`, so without this
+	// merge the first pass's discarded-answer cover events would simply be
+	// lost rather than published as the deliberate exception they are. See
+	// assemblyTelemetry.ObservationCover.
+	merged := make([]ReadRequirementObservationCoverEvent, 0, len(firstPass.ObservationCover)+len(retryPending.ObservationCover))
+	merged = append(merged, firstPass.ObservationCover...)
+	merged = append(merged, retryPending.ObservationCover...)
+	retryPending.ObservationCover = merged
 	// Finalize the retry too, or the second pass repeats round 1 finding 1's
 	// defect: measuring a pre-final shape and serving a larger one.
 	// TWO BINDINGS AT ONE SITE, and they are not alternatives.
@@ -311,7 +323,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// They are the same "stale document at the retry" class on different
 	// axes, found independently by two lanes. Taking one without the other
 	// re-opens the half it did not fix.
-	retried = e.finalizeResult(ctx, principal, retried, *plan, params.Frame, retryParams.Facts)
+	retried = e.finalizeResult(ctx, principal, retried, *plan, params.Frame, retryParams.Facts, &retryPending, answerPassSecond)
 	// READ BACK FROM THE PRODUCER, not from the params and not from the local
 	// `retryAllocation`, and the difference is the entire lesson of this class.
 	//
@@ -347,7 +359,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	outcomeAttempt := outcomeNarrowingAttempt{Measured: retryMeasured}
 	if retryOverrun != contractsv1.ContextFabricBudgetFits {
 		var accountingErr error
-		outcomeAttempt, accountingErr = e.planCandidateNarrowing(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts)
+		outcomeAttempt, accountingErr = e.planCandidateNarrowing(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts, &retryPending, answerPassThird)
 		if accountingErr != nil {
 			return InvestigationResult{}, assemblyTelemetry{}, accountingErr
 		}

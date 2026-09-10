@@ -203,8 +203,18 @@ func TestTheEmittedServedCoverIsNotTheObservedCover(t *testing.T) {
 		if observed == served {
 			t.Fatal("observed_cover == served_cover on a fixture built to separate them; an emitter publishing one under the other's key would be invisible")
 		}
-		if line["tainted_observations"] != float64(2) {
-			t.Fatalf("tainted_observations = %v, want 2 -- flow's and metrics' observations were lost", line["tainted_observations"])
+		// ZERO, not two -- and the earlier expectation of 2 was this test
+		// pinning a defect. tainted_observations counts observations the
+		// mixed-state rule actually EXCLUDED FROM THE SERVED COVER. health
+		// stands on `risk`; the lost flow and metrics stand on
+		// `capacity_from_throughput` and `sustainability`, neither of which is
+		// `risk`, so excluding them removed nothing and the honest count is 0.
+		// The old value came from counting every lost key regardless of whether
+		// it intersected anything served -- an adversarial round named it, and
+		// this assertion had frozen it in place, which is the failure mode where
+		// a green test makes a gap look covered.
+		if line["tainted_observations"] != float64(0) {
+			t.Fatalf("tainted_observations = %v, want 0 -- neither lost observation was one the served cover stood on", line["tainted_observations"])
 		}
 		return
 	}
@@ -215,14 +225,17 @@ func TestTheEmittedServedCoverIsNotTheObservedCover(t *testing.T) {
 // is the regression test for the defect itself, not for the event's fields.
 //
 // It deliberately leaves slog.Default() pointing at a logger of its own that
-// is NOT the engine's, drives the real production path (Engine.finalizeResult,
-// with a telemetry sink built around a SECOND logger this test also owns),
-// and asserts the line lands in the ENGINE's sink and never in the process
-// default. Before this fix, recordObservationCoverDecision called
-// slog.Default() directly -- the exact call this test would have caught,
-// because the engine's own sink would have stayed empty while the process
-// default (proven live on the rig to be a text handler on stderr, not this
-// service's JSON stream) received it instead.
+// is NOT the engine's, drives the real production path (Engine.finalizeResult
+// followed by Engine.emit -- finalizeResult only APPENDS the event onto the
+// pending telemetry now, so emit is the call that actually publishes it, same
+// as every other deferred event on assemblyTelemetry), with a telemetry sink
+// built around a SECOND logger this test also owns, and asserts the line
+// lands in the ENGINE's sink and never in the process default. Before this
+// fix, recordObservationCoverDecision called slog.Default() directly -- the
+// exact call this test would have caught, because the engine's own sink would
+// have stayed empty while the process default (proven live on the rig to be a
+// text handler on stderr, not this service's JSON stream) received it
+// instead.
 func TestTheObservationCoverLineReachesTheEnginesConfiguredLoggerNotTheProcessDefault(t *testing.T) {
 	var defaultBuf, engineBuf bytes.Buffer
 	previousDefault := slog.Default()
@@ -238,11 +251,14 @@ func TestTheObservationCoverLineReachesTheEnginesConfiguredLoggerNotTheProcessDe
 	requirement := readRequirement(CompletionQuantifierAtLeastOne)
 	coverage := factCoverage(contractsv1.ContextFabricFactHealth, SourceAvailable)
 
-	engine.finalizeResult(context.Background(), storage.Principal{OrgID: "org_cover_sink"}, InvestigationResult{
+	principal := storage.Principal{OrgID: "org_cover_sink"}
+	pending := &assemblyTelemetry{}
+	engine.finalizeResult(context.Background(), principal, InvestigationResult{
 		Status:   InvestigationComplete,
 		ResultID: "result_cover_engine_sink",
 		Coverage: coverage,
-	}, AnswerPlan{Requirements: []contractsv1.ContextFabricPlanRequirement{requirement}}, &frame, CanonicalFactBundle{})
+	}, AnswerPlan{Requirements: []contractsv1.ContextFabricPlanRequirement{requirement}}, &frame, CanonicalFactBundle{}, pending, answerPassFirst)
+	engine.emit(context.Background(), principal, *pending)
 
 	const msg = "context fabric observation cover"
 	if !bytes.Contains(engineBuf.Bytes(), []byte(msg)) {
@@ -259,4 +275,60 @@ func keysOf(m map[string]any) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// TestTaintedObservationsIsNonZeroWhenTheTaintActuallyBites is the companion
+// the zero-assertion above cannot be trusted without.
+//
+// A field asserted only at its zero value pins nothing: an emitter that hard-
+// coded 0, or dropped the field entirely, would satisfy every other test in
+// this file. This drives the case where the mixed-state rule genuinely excludes
+// an observation -- a lost kind standing on a key a SERVED kind also stands on
+// -- and requires the count to be 1.
+func TestTaintedObservationsIsNonZeroWhenTheTaintActuallyBites(t *testing.T) {
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	sink := &recordingTelemetry{}
+	requirement := contractsv1.ContextFabricPlanRequirement{
+		Requirement: "principal_drivers",
+		Obligation:  "drivers",
+		Subject:     contractsv1.ContextFabricSubjectKind(SubjectTeam),
+	}
+	// deficiencies is SERVED and stands on {risk, recommendations, sustainability};
+	// health is LOST and stands on {risk} -- which deficiencies also stands on.
+	// So `risk` IS excluded from the served cover: the taint bites, and the
+	// count must say so.
+	evidence := readEvidence{
+		Observed: 2, Served: 1, Narrowed: 1,
+		ObservedKinds: []FactKind{FactOperationalDeficiencies, FactHealth},
+		ServedKinds:   []FactKind{FactOperationalDeficiencies},
+	}
+	event := readRequirementObservationCoverEvent(
+		requirement, 2,
+		servedObservationCover(evidence, SubjectTeam, teamAssignment()),
+		2, evidence, teamAssignment())
+	if event == nil {
+		t.Fatal("no cover event was built")
+	}
+	if event.TaintedObservations != 1 {
+		t.Fatalf("TaintedObservations = %d, want 1 -- `risk` backs a lost kind AND a served one, so it is excluded from the served cover",
+			event.TaintedObservations)
+	}
+	// The control: with nothing lost, the same pair taints nothing.
+	clean := readEvidence{
+		Observed: 2, Served: 2,
+		ObservedKinds: []FactKind{FactOperationalDeficiencies, FactHealth},
+		ServedKinds:   []FactKind{FactOperationalDeficiencies, FactHealth},
+	}
+	cleanEvent := readRequirementObservationCoverEvent(
+		requirement, 2,
+		servedObservationCover(clean, SubjectTeam, teamAssignment()),
+		2, clean, teamAssignment())
+	if cleanEvent.TaintedObservations != 0 {
+		t.Fatalf("control: TaintedObservations = %d with nothing lost, want 0", cleanEvent.TaintedObservations)
+	}
+	_ = sink
 }

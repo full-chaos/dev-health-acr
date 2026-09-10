@@ -2532,7 +2532,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// stage 3 measures that. The retry re-runs assembly AND finalization, so
 	// the shape measured on the second pass is the shape that would be
 	// served on the second pass.
-	result = e.finalizeResult(ctx, principal, result, plan, familyOutcome.Frame, facts)
+	result = e.finalizeResult(ctx, principal, result, plan, familyOutcome.Frame, facts, &pendingTelemetry, answerPassFirst)
 	result, pendingTelemetry, err = e.fitAssembledResult(ctx, principal, &plan, result, consumedAllocation, pendingTelemetry, retryBase)
 	if err != nil {
 		return InvestigationResult{}, err
