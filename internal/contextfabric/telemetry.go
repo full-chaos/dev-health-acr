@@ -1717,6 +1717,7 @@ func (t SlogEngineTelemetry) RecordCohortGroupRead(ctx context.Context, principa
 		"group_read_refused", event.Refused,
 		"group_read_refusal", string(refusal),
 		"group_facts_returned", event.FactsReturned,
+		"group_facts_unadmitted_dropped", event.UnadmittedFactsDropped,
 	)
 }
 

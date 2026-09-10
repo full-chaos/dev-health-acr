@@ -2429,7 +2429,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// refusal is carried instead, and disclosed.
 			groupBundle, groupOutcome, groupErr := e.readAdmittedGroupFacts(ctx, principal, request, interpretation, binding, plan, &cohort, effectiveWindow)
 			if groupErr != nil {
-				groupOutcome.Refused = true
+				// NAMED, not merely flagged. A read that was issued and
+				// failed is a different operational fact from one that was
+				// never issued -- a provider to look at rather than a policy
+				// -- and `Read` stays true because the request really did go
+				// out. Leaving the reason at its absence-of-refusal member
+				// published `refused=true` with nothing saying why.
+				groupOutcome.Refused, groupOutcome.Reason = true, GroupReadRefusalReadFailed
 			}
 			if groupOutcome.Refused && groupOutcome.Reason == GroupReadRefusalOverContractBound {
 				// REFUSED, NOT SLICED. Taking the first 250 of 251 groups
@@ -2467,16 +2473,17 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				}
 			}
 			e.recordCohortGroupRead(ctx, principal, CohortGroupReadEvent{
-				Family:        plan.Family,
-				GroupKind:     plan.GroupKind,
-				Proposed:      groupOutcome.Proposed,
-				Admitted:      len(groupOutcome.Admitted),
-				Denied:        groupOutcome.Denied,
-				Read:          groupOutcome.Read,
-				Refused:       groupOutcome.Refused,
-				Refusal:       groupOutcome.Reason,
-				FactsReturned: len(groupBundle.Facts),
-				ContractBound: contractsv1.ContextFabricCohortGroupsMaxCount,
+				Family:                 plan.Family,
+				GroupKind:              plan.GroupKind,
+				Proposed:               groupOutcome.Proposed,
+				Admitted:               len(groupOutcome.Admitted),
+				Denied:                 groupOutcome.Denied,
+				Read:                   groupOutcome.Read,
+				Refused:                groupOutcome.Refused,
+				Refusal:                groupOutcome.Reason,
+				FactsReturned:          len(groupBundle.Facts),
+				UnadmittedFactsDropped: groupOutcome.UnadmittedFactsDropped,
+				ContractBound:          contractsv1.ContextFabricCohortGroupsMaxCount,
 			})
 		} else if groupingOutcome.Refusal != CohortGroupingRefusalNone {
 			// ONE arm for EVERY refusal, and the reason there is only one is

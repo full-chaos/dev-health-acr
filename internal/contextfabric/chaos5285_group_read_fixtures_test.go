@@ -257,6 +257,12 @@ func groupReadEngineFixtureFull(t *testing.T, telemetry EngineTelemetry, facts C
 			if synthesisCalls != nil {
 				*synthesisCalls++
 			}
+			// The facts SYNTHESIS actually received. A probe asserting on the
+			// served claims alone cannot see these: this double builds its
+			// claims from the cohort, so a fact that reached synthesis and
+			// was never cited is invisible in the answer -- and "reached
+			// synthesis" is the property the authorization clause is about.
+			groupReadSynthesisFacts = append(groupReadSynthesisFacts, input.Facts.Facts...)
 			// One claim per SURVIVING cohort member, so the answer's measured
 			// size actually shrinks when narrowing drops a member. A
 			// synthesizer returning a fixed-size answer cannot be retried
@@ -328,3 +334,8 @@ func groupReadEngineOptions(override *EngineOptions) EngineOptions {
 // one. A test that changes it restores it, and no test that changes it may be
 // parallel.
 var groupReadClaimsPerMember = 1
+
+// groupReadSynthesisFacts accumulates every fact handed to the fixture's
+// synthesizer. Reset by the test that reads it; no test that reads it may be
+// parallel.
+var groupReadSynthesisFacts []CanonicalFact

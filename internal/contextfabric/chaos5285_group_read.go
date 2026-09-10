@@ -44,6 +44,12 @@ type groupReadOutcome struct {
 	// see must still be COUNTED, or "2 of 3 teams" quietly becomes a
 	// complete-looking "2 of 2".
 	Denied int
+	// UnadmittedFactsDropped is how many returned facts named a subject this
+	// turn never admitted. Non-zero means a provider answered outside the
+	// scope it was asked about, which is a provider to look at rather than a
+	// policy -- and absorbing it silently every turn is how that goes
+	// unnoticed.
+	UnadmittedFactsDropped int
 	// Read reports that a group-rooted fact request was actually issued.
 	// Distinguishes "the read happened and returned nothing" from "no read
 	// happened", which no count downstream can tell apart.
@@ -84,6 +90,17 @@ const (
 	// and the member evidence, which is complete and internally consistent,
 	// is what the turn serves.
 	GroupReadRefusalMetadataConflict GroupReadRefusal = "metadata_conflict"
+	// GroupReadRefusalReadFailed is a group-rooted request that WAS issued
+	// and came back an error.
+	//
+	// Distinct from every member above, and the distinction is the point: the
+	// others describe a read that never happened, this one a read that
+	// happened and failed. They call for different operator action -- a
+	// provider to look at versus a policy to look at -- and collapsing them
+	// into the absence-of-refusal member left an errored read reporting
+	// `refused=true` with no reason at all, which no consumer can group on or
+	// count.
+	GroupReadRefusalReadFailed GroupReadRefusal = "read_failed"
 )
 
 // canonicalGroupReadRefusals is the emitter's own membership table, so a
@@ -96,6 +113,7 @@ var canonicalGroupReadRefusals = map[GroupReadRefusal]GroupReadRefusal{
 	GroupReadRefusalAuthorizationUnavailable: GroupReadRefusalAuthorizationUnavailable,
 	GroupReadRefusalNoReadRequirement:        GroupReadRefusalNoReadRequirement,
 	GroupReadRefusalMetadataConflict:         GroupReadRefusalMetadataConflict,
+	GroupReadRefusalReadFailed:               GroupReadRefusalReadFailed,
 }
 
 // ValidGroupReadRefusal reports membership in the closed vocabulary.
@@ -253,6 +271,33 @@ func (e *Engine) readAdmittedGroupFacts(ctx context.Context, principal storage.P
 	if err != nil {
 		return bundle, outcome, err
 	}
+	// WHAT CAME BACK IS FILTERED TOO, not just what was asked for.
+	//
+	// Authorization decided which groups may be QUERIED. Nothing constrains
+	// what a provider ANSWERS: a widened query, a shared cache, or a rollup
+	// that resolves one id to several can each return a subject this turn
+	// never admitted, and that fact would then reach synthesis as evidence
+	// this principal was never cleared to see. The admission list built above
+	// is the only authority that can say so, and it is checked here rather
+	// than downstream because this is the last point where "admitted" is
+	// still in scope.
+	//
+	// Dropped silently on the FACTS and loudly on the LINE: the count is
+	// reported, so a provider that keeps answering out of scope is visible
+	// rather than being quietly absorbed every turn.
+	admittedIDs := make(map[string]struct{}, len(admitted))
+	for _, subject := range admitted {
+		admittedIDs[SubjectMapKey(subject)] = struct{}{}
+	}
+	kept := make([]CanonicalFact, 0, len(bundle.Facts))
+	for _, fact := range bundle.Facts {
+		if _, ok := admittedIDs[SubjectMapKey(fact.Subject)]; !ok {
+			outcome.UnadmittedFactsDropped++
+			continue
+		}
+		kept = append(kept, fact)
+	}
+	bundle.Facts = kept
 	return bundle, outcome, nil
 }
 
@@ -281,6 +326,9 @@ type CohortGroupReadEvent struct {
 	Refusal       GroupReadRefusal
 	FactsReturned int
 	ContractBound int
+	// UnadmittedFactsDropped is how many returned facts named a subject the
+	// turn never admitted and were discarded before synthesis.
+	UnadmittedFactsDropped int
 }
 
 // recordCohortGroupRead emits the group stage's decision, on EVERY grouped
