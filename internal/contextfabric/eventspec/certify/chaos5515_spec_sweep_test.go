@@ -417,6 +417,113 @@ func TestCertifyInputDomainTable(t *testing.T) {
 		rows = append(rows, domainRow{event: ev.ID, field: "(event-level)", dimension: "duplicate", applicable: true, wantAccept: false, gotAccept: err == nil})
 	}
 
+	// CHAOS-5516: the pass-keyed multiplicity rows. CertifyExactlyOnePerPass
+	// now keys duplicate detection on (request_id, pass) for an event that
+	// DECLARES a pass field (a same-pass second line is always a defect
+	// regardless of content; a distinct-pass second line is always
+	// legitimate regardless of content), and refuses ANY second line
+	// unconditionally for an event with NO pass field (decision_summary has
+	// no legitimate multi-line shape to distinguish from a duplicate). Three
+	// cells per applicable event, generated from eventspec.All rather than
+	// hand-picked, so a future ExactlyOnePerPass event is swept the day it
+	// lands, not the day a review round finds the gap (exactly how this gap
+	// was first caught, before any round, per the handoff).
+	passMultiplicityRows := 0
+	for _, ev := range eventspec.All {
+		if ev.Multiplicity != eventspec.MultiplicityExactlyOnePerPass {
+			continue
+		}
+		hasPassField := false
+		for _, f := range ev.Fields {
+			if f.Key == "pass" {
+				hasPassField = true
+				break
+			}
+		}
+		base := canonicalLineFor(ev)
+		attribution := map[string]any{}
+		for _, k := range ev.Attribution {
+			attribution[k] = base[k]
+		}
+		// distinctContentLine deep-copies base and perturbs the first
+		// declared int field that is neither an attribution field nor
+		// "pass" itself -- every event in this spec has at least one such
+		// field today (RankedCutSummary: candidate_count;
+		// DecisionSummary: decision_event_count), so this never silently
+		// no-ops into an identical-content line.
+		distinctContentLine := func() map[string]any {
+			m := deepCopyLine(t, base)
+			perturbed := false
+			for _, f := range ev.Fields {
+				if f.Key == "pass" || f.Type != eventspec.FieldInt {
+					continue
+				}
+				isAttr := false
+				for _, ak := range ev.Attribution {
+					if ak == f.Key {
+						isAttr = true
+					}
+				}
+				if isAttr {
+					continue
+				}
+				m[f.Key] = 999
+				perturbed = true
+				break
+			}
+			if !perturbed {
+				t.Fatalf("distinctContentLine: %s declares no non-attribution, non-pass int field to perturb -- fixture needs a new strategy", ev.ID)
+			}
+			return m
+		}
+
+		if hasPassField {
+			// same pass, distinct content: refused (a same-pass duplicate
+			// is a defect regardless of whether the lines' other fields
+			// agree -- the whole point of keying on pass rather than
+			// byte-identity).
+			line2 := distinctContentLine()
+			b1, _ := json.Marshal(deepCopyLine(t, base))
+			b2, _ := json.Marshal(line2)
+			log, err := Parse([]byte(string(b1) + "\n" + string(b2)))
+			if err != nil {
+				t.Fatalf("Parse() same-pass-distinct-content fixture for %s: %v", ev.ID, err)
+			}
+			_, err = certifyRecovered(t, log, Assertion{Event: ev, Want: attribution})
+			rows = append(rows, domainRow{event: ev.ID, field: "(event-level)", dimension: "same_pass_distinct_content", applicable: true, wantAccept: false, gotAccept: err == nil})
+			passMultiplicityRows++
+
+			// distinct pass, distinct content: accepted (a genuine second
+			// pass is legitimate regardless of whether its own field
+			// values happen to differ from the first).
+			line3 := distinctContentLine()
+			line3["pass"] = 8 // base's own canonical pass value is 7 (canonicalValueFor)
+			b3, _ := json.Marshal(line3)
+			log2, err := Parse([]byte(string(b1) + "\n" + string(b3)))
+			if err != nil {
+				t.Fatalf("Parse() distinct-pass-distinct-content fixture for %s: %v", ev.ID, err)
+			}
+			_, err = certifyRecovered(t, log2, Assertion{Event: ev, Want: attribution})
+			rows = append(rows, domainRow{event: ev.ID, field: "(event-level)", dimension: "distinct_pass_distinct_content", applicable: true, wantAccept: true, gotAccept: err == nil})
+			passMultiplicityRows++
+		} else {
+			// no pass field declared: ANY second line in scope is refused,
+			// even with distinct content -- there is no legitimate
+			// multi-line shape for this event to distinguish from a
+			// duplicate.
+			line2 := distinctContentLine()
+			b1, _ := json.Marshal(deepCopyLine(t, base))
+			b2, _ := json.Marshal(line2)
+			log, err := Parse([]byte(string(b1) + "\n" + string(b2)))
+			if err != nil {
+				t.Fatalf("Parse() no-pass-field-distinct-content fixture for %s: %v", ev.ID, err)
+			}
+			_, err = certifyRecovered(t, log, Assertion{Event: ev, Want: attribution})
+			rows = append(rows, domainRow{event: ev.ID, field: "(event-level)", dimension: "no_pass_field_multi_line_distinct_content", applicable: true, wantAccept: false, gotAccept: err == nil})
+			passMultiplicityRows++
+		}
+	}
+
 	failed := 0
 	for _, r := range rows {
 		if !r.ok() {
@@ -432,16 +539,18 @@ func TestCertifyInputDomainTable(t *testing.T) {
 			naN++
 		}
 	}
-	t.Logf("input-domain table: %d rows (%d applicable, %d N/A), %d failed, %d events, %d fields (recursive)",
-		len(rows), applicableN, naN, failed, len(eventspec.All), totalFieldCount)
+	t.Logf("input-domain table: %d rows (%d applicable, %d N/A), %d failed, %d events, %d fields (recursive), %d pass-multiplicity rows",
+		len(rows), applicableN, naN, failed, len(eventspec.All), totalFieldCount, passMultiplicityRows)
 
 	// Census: the table's own row count must equal fields*dimensions plus
-	// one duplicate row per event -- proving the walk reached every
-	// declared field and every dimension, not a silently-truncated subset.
-	wantRows := totalFieldCount*len(domainDimensions) + len(eventspec.All)
+	// one duplicate row per event plus the pass-multiplicity rows above --
+	// proving the walk reached every declared field, every dimension, and
+	// every ExactlyOnePerPass event's own pass-keying guard, not a
+	// silently-truncated subset.
+	wantRows := totalFieldCount*len(domainDimensions) + len(eventspec.All) + passMultiplicityRows
 	if len(rows) != wantRows {
-		t.Errorf("census: table has %d rows, want %d (%d fields x %d dimensions + %d duplicate rows)",
-			len(rows), wantRows, totalFieldCount, len(domainDimensions), len(eventspec.All))
+		t.Errorf("census: table has %d rows, want %d (%d fields x %d dimensions + %d duplicate rows + %d pass-multiplicity rows)",
+			len(rows), wantRows, totalFieldCount, len(domainDimensions), len(eventspec.All), passMultiplicityRows)
 	}
 }
 

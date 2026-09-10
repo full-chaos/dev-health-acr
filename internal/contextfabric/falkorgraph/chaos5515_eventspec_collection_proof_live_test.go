@@ -287,6 +287,66 @@ func TestLiveEventspecCertifiesTheAnchorSlotPilotThroughARealFalkorDBAdapter(t *
 		}
 	}
 
+	// CHAOS-5516 B7 -- the collection-proof leg for the decision_summary
+	// pilot scope (typed construction, clauses 2+4), per the ticket's own
+	// "Acceptance = certificate + collection proof in the same PR. PR 6
+	// cannot serve as deferred acceptance for this PR." This is the SAME
+	// real production entry point (adapter.ResolveSubjects), the SAME real
+	// containerized FalkorDB, and the SAME collected slog output A5 above
+	// already drove and captured -- decision_summary is emitted on this
+	// exact call (it flushes unconditionally, once per resolveSubjects
+	// call), so this leg reads it from the SAME log rather than a second
+	// resolution.
+	t.Logf("decision_summary raw line (collection proof): %v", log.LinesWithMsg(eventspec.DecisionSummary.Msg))
+	decisionSummaryResult, err := certify.Certify(log, certify.Assertion{
+		Event: eventspec.DecisionSummary,
+		Want: map[string]any{
+			"request_id": req.RequestID,
+			"stage":      "decision_summary",
+			// This call passed confirmedKind=nil to adapter.ResolveSubjects
+			// (line 179 below) -- the same construction-time stamp
+			// TestAFailedResolutionStillCarriesExplicitNoneTokens proves.
+			// "none" is graphrank's own unexported anchorPoolKindScopeNone
+			// token value -- this file is package falkorgraph_test (an
+			// external test package), so it is cited by value, not by name.
+			"member_kind_confirmed": "none",
+			// The frame built above (line 168) passes ValidateFramePhaseA1
+			// and cohortKindFromFrame cleanly -- the same real, executed
+			// verdict frameGateObservable produces for every other frame in
+			// this package's tests that reaches a decision at all.
+			"frame_gate":   "passed",
+			"refuse_basis": "none",
+			// The anchor-pool scope this call decided is TEAM (the same
+			// scope RankedCutSummary/AnchorSlotDisplaced above certify
+			// against real collected data) -- decision_summary's own copy
+			// of the wiring it handed to the same three consumers.
+			"anchor_pool_kind_scope":        string(contextfabric.SubjectTeam),
+			"anchor_pool_kind_scope_source": "receipt",
+			// reserved_kinds is BOTH kinds this call's frame reserved
+			// (project, the frame's own MemberKind; team, the scope
+			// anchor's kind) -- the real, executed value observed from this
+			// same collected log (t.Log above), not assumed from the
+			// scope-anchor value alone.
+			"reserved_kinds": []string{string(contextfabric.SubjectProject), string(contextfabric.SubjectTeam)},
+			// This question runs one real commit decision over the crowd
+			// (decision_event_count=1) that resolves AMBIGUOUS, not
+			// committed -- the real, executed outcome for this fixture's
+			// own terms/corroboration shape, observed from this same
+			// collected log rather than assumed.
+			"decision_event_count": 1,
+			"committed_count":      0,
+			"ambiguous_count":      1,
+			"no_commit_count":      0,
+			"committed_ids":        []string{},
+			"commit_gates":         []string{},
+			"commit_bases":         []string{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("certify DecisionSummary (collection proof, real containerized FalkorDB production output): %v", err)
+	}
+	t.Logf("DecisionSummary line: %v", decisionSummaryResult.Line)
+
 	// GRAPH REBUILD (chris, 2026-09-10, cf-lane-rules): "If we can't build a
 	// graph from the trace we didn't add the right / enough observability."
 	// This reconstructs the pilot's own decision graph -- requested ->
