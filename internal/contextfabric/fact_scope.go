@@ -949,8 +949,11 @@ var factScopeEligibility = []factScopeEligibilityRow{
 }
 
 // factScopePolicies is factScopeEligibility folded into the lookup shape.
-// Package-level var rather than a function call per lookup, and reassignable
-// so a test can install a narrow table for one case.
+// Package-level var rather than a function call per lookup. Written exactly
+// once, here, at package init -- never reassigned (a test that wants a
+// narrow or altered table injects it via NewFactReadScopeResolverWithPolicies
+// or FactRegistryOptions.ScopePolicies instead; see lookupFactScopePolicy's
+// fallback), so a concurrent reader can never observe it mid-mutation.
 var factScopePolicies = factScopePoliciesFrom(factScopeEligibility)
 
 func factScopePoliciesFrom(rows []factScopeEligibilityRow) map[FactKind]map[SubjectKind]factScopePolicyRule {
@@ -1482,12 +1485,36 @@ func NewFactReadScopeResolver(expander FactScopeExpander) *FactReadScopeResolver
 func NewFactReadScopeResolverWithPolicies(expander FactScopeExpander, policies map[FactKind]map[SubjectKind]factScopePolicyRule) *FactReadScopeResolver {
 	return &FactReadScopeResolver{
 		expander: expander,
-		policies: policies,
+		// Copied, not aliased (codex r2 review round 2, confirmed real, P1):
+		// a caller that goes on to mutate the map it passed in must never
+		// change a resolver that has already been built from it -- the
+		// resolver's own table is otherwise supposed to be immutable for
+		// exactly the concurrent-read reasons this PR exists for.
+		policies: copyFactScopePolicies(policies),
 		// Buffered to the bound: a receive slot is an admission, and the
 		// channel IS the counter -- there is no separate number that could
 		// disagree with how many are actually running.
 		workItemSlots: make(chan struct{}, maxWorkItemScopeInFlight),
 	}
+}
+
+// copyFactScopePolicies returns an independent copy of policies (both the
+// outer and inner maps), so a resolver's table can never change out from
+// under it after construction -- nil stays nil, so the caller's own nil
+// still reaches lookupFactScopePolicy's fallback unchanged.
+func copyFactScopePolicies(policies map[FactKind]map[SubjectKind]factScopePolicyRule) map[FactKind]map[SubjectKind]factScopePolicyRule {
+	if policies == nil {
+		return nil
+	}
+	copied := make(map[FactKind]map[SubjectKind]factScopePolicyRule, len(policies))
+	for kind, byOrigin := range policies {
+		copiedByOrigin := make(map[SubjectKind]factScopePolicyRule, len(byOrigin))
+		for origin, rule := range byOrigin {
+			copiedByOrigin[origin] = rule
+		}
+		copied[kind] = copiedByOrigin
+	}
+	return copied
 }
 
 // factScopeResolveInput is everything Resolve may read. Narrow by

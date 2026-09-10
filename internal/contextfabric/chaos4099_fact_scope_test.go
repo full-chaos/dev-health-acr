@@ -1594,6 +1594,40 @@ func TestChaos4099_AnEnabledPolicyReachesTheProviderAndDisclosesTheProxy(t *test
 	}
 }
 
+// TestChaos5547_FactRegistryOptionsScopePoliciesReachesTheResolver pins codex
+// r2's confirmed P3 (PR #495): TestChaos4099_AnEnabledPolicyReachesTheProviderAndDisclosesTheProxy's
+// injected metricsProjectPolicyTable(0) is byte-identical, rule for rule, to
+// the ambient production entry for (metrics, project) -- reproduced by hand:
+// passing nil for ScopePolicies there (silently ignoring it, falling back to
+// production) still passed every one of that test's assertions. It stays as
+// the full-stack proof (proxy disclosure, subject identity, coverage); this
+// test isolates ONLY the wiring question, with a Limit production does NOT
+// share (0, uncapped), against two candidate targets -- a silently-ignored
+// ScopePolicies would admit both, an honoured one admits exactly one.
+func TestChaos5547_FactRegistryOptionsScopePoliciesReachesTheResolver(t *testing.T) {
+	t.Parallel()
+	metrics := &factProviderStub{
+		capability: planCapability(FactMetrics, "metrics", SubjectRepository),
+		result:     FactProviderResult{State: SourceAvailable},
+	}
+	overflowRepo := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:chaos5547-overflow"}
+	registry, err := NewFactCapabilityRegistry([]FactProvider{metrics}, FactRegistryOptions{
+		ScopeExpander: &recordingScopeExpander{targets: []SubjectRef{scopeRepo, overflowRepo}},
+		ScopePolicies: metricsProjectPolicyTable(1),
+	})
+	if err != nil {
+		t.Fatalf("NewFactCapabilityRegistry: %v", err)
+	}
+	bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"},
+		scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent))
+	if err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+	if got := len(bundle.Scope.Derivations); got != 1 {
+		t.Fatalf("derivations = %d, want exactly 1 -- ScopePolicies' Limit:1 was silently ignored (the ambient production entry has no cap, which would admit both candidates)", got)
+	}
+}
+
 // metricsTeamPolicyTable is metricsProjectPolicyTable's twin for
 // CHAOS-4101's team-origin metrics policy.
 func metricsTeamPolicyTable(limit int) map[FactKind]map[SubjectKind]factScopePolicyRule {
@@ -3421,4 +3455,29 @@ func TestChaos5547_PolicyLookupInputDomain_ConcurrentReaders(t *testing.T) {
 		}
 	}
 	wg.Wait()
+}
+
+// TestChaos5547_PolicyTableIsCopiedNotAliasedAtConstruction pins codex r2's
+// confirmed P1 (PR #495): NewFactReadScopeResolverWithPolicies used to store
+// the caller's map by reference, so a caller that mutated its own table
+// after construction silently changed an already-built resolver's behavior
+// -- contradicting the resolver-owned/immutable framing the rest of this
+// PR's fix depends on. The constructor now copies both the outer and inner
+// maps.
+func TestChaos5547_PolicyTableIsCopiedNotAliasedAtConstruction(t *testing.T) {
+	t.Parallel()
+	table := map[FactKind]map[SubjectKind]factScopePolicyRule{
+		FactMetrics: {SubjectProject: {
+			Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
+			Basis: FactScopeBasisActivityProxy, Enabled: true,
+		}},
+	}
+	resolver := NewFactReadScopeResolverWithPolicies(nil, table)
+	// Mutate the caller's OWN copy after construction -- the resolver must
+	// not see this.
+	table[FactMetrics][SubjectProject] = factScopePolicyRule{Enabled: false}
+	policy, eligible := resolver.lookupFactScopePolicy(FactMetrics, SubjectProject)
+	if !eligible || !policy.Enabled {
+		t.Fatalf("resolver changed after the caller mutated its own input map: policy = %+v, eligible = %v, want the ORIGINAL Enabled:true rule unaffected", policy, eligible)
+	}
 }
