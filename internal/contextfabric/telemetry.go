@@ -526,6 +526,20 @@ func (t SlogEngineTelemetry) RecordDriverIdentityCollisions(ctx context.Context,
 // signal that a policy is still dark, a cap is being hit, or the traversal
 // backend is sick -- Warn, alongside the commit-gate retraction and the
 // synthesis-status override.
+// factScopeDecisionReasonUnrecognized is what the sink writes in place of a
+// decision reason outside the closed vocabulary. It is a VALUE, not a dropped
+// field: silently omitting the key would make an invalid reason and a
+// producer that never set one indistinguishable, and silently forwarding it
+// would let the allow-list be widened from a caller.
+const factScopeDecisionReasonUnrecognized FactScopeDecisionReason = "unrecognized"
+
+func loggableFactScopeDecisionReason(reason FactScopeDecisionReason) FactScopeDecisionReason {
+	if validFactScopeDecisionReason(reason) {
+		return reason
+	}
+	return factScopeDecisionReasonUnrecognized
+}
+
 func (t SlogEngineTelemetry) RecordFactScopeExpansion(ctx context.Context, principal storage.Principal, event FactScopeExpansionEvent) {
 	args := append([]any{
 		"org_id", principal.OrgID,
@@ -566,6 +580,29 @@ func (t SlogEngineTelemetry) RecordFactScopeExpansion(ctx context.Context, princ
 		// "nobody ever counted" must stay distinguishable in a log
 		// aggregator.
 		"attribution_source_counts", event.AttributionSourceCounts,
+		// CHAOS-5405 (D-e). Emitted unconditionally, zero/false included,
+		// for the same reason every count above is: a field that vanishes
+		// when it is zero makes "the filter dropped nothing" and "nobody
+		// ever counted" the same line in an aggregator.
+		//
+		// decision_reason is VALIDATED here rather than passed through. The
+		// sink is the last point before an operator's alert rule sees it, and
+		// a free-text reason is one a regression can silently rename; an
+		// unrecognised value is reported AS unrecognised rather than
+		// forwarded verbatim, so the allow-list cannot be widened by
+		// accident from a producer.
+		"target_limit", event.TargetLimit,
+		"census_complete", event.CensusComplete,
+		"authorized_count", event.AuthorizedCount,
+		"repo_less_candidate_count", event.RepoLessCandidateCount,
+		"repo_less_admitted_count", event.RepoLessAdmittedCount,
+		"repo_less_authorization_dropped_count", event.RepoLessAuthorizationDroppedCount,
+		"orphaned_repository_count", event.OrphanedRepositoryCount,
+		"ambiguous_origin_count", event.AmbiguousOriginCount,
+		"unknown_attribution_source_count", event.UnknownAttributionSourceCount,
+		"scope_query_count", event.ScopeQueryCount,
+		"scope_rows_returned", event.ScopeRowsReturned,
+		"decision_reason", string(loggableFactScopeDecisionReason(event.DecisionReason)),
 	}, requestIDLogAttrs(ctx)...)
 	if factScopeGapDegrades(event.Outcome) {
 		t.logger.WarnContext(ctx, "context fabric fact scope expansion left a gap", args...)

@@ -742,6 +742,100 @@ func deriveEvidenceRefLabels(r *ContextFabricInvestigationResult, label string) 
 	r.EvidenceRefLabels = labels
 }
 
+// maximalFactScopeCensus carries ONE record per policy in the fact-scope
+// vocabulary, which is the bound: ContextFabricFactScopeCensusMaxCount is
+// derived from that vocabulary's own size, because the resolver emits at most
+// one decision per requirement/origin cell and each named policy identifies
+// exactly one cell.
+//
+// Every string field carries the LONGEST MEMBER of its own closed vocabulary.
+//
+// It used to carry ContextFabricFactScopeCensusTokenMaxLength runes of filler,
+// on the reasoning that a maximal fixture measures the widest document the
+// contract ADMITS. That reasoning was right and the fixture was wrong about
+// what the contract admits: these six fields are closed vocabularies, and the
+// validator now enforces that (codex r2 F3). Filler is not a wider legal
+// document, it is an ILLEGAL one -- and a "maximal" fixture that no producer
+// and no validator would accept measures nothing.
+//
+// The length ceiling is still breachable, and is still what
+// TestEveryBoundIsBreachable exercises: it is checked BEFORE membership, so a
+// value of ceiling+1 runes is rejected on length whatever it says.
+//
+// Every numeric field is at its maximum and the population is PRESENT: a
+// maximal fixture must exercise the nullable count's populated arm, since the
+// null arm is strictly smaller and is what the irreducible fixture holds.
+func maximalFactScopeCensus() []ContextFabricFactScopeCensusRecord {
+	population := ContextFabricMaxCohortMembersLimit
+	requirementKind := longestVocabularyMember(factKindStrings())
+	originKind := longestVocabularyMember(subjectKindStrings())
+	basis := longestVocabularyMember(contextFabricFactScopeBases[:])
+	axis := longestVocabularyMember(temporalAxisStrings())
+	outcome := longestVocabularyMember(contextFabricFactScopeOutcomes[:])
+	out := make([]ContextFabricFactScopeCensusRecord, 0, ContextFabricFactScopeCensusMaxCount)
+	// ONE RECORD PER POLICY, and each carries its OWN policy rather than the
+	// longest one repeated: the count bound IS the policy vocabulary's size,
+	// so a fixture that repeats a single policy would be maximal by length
+	// while saying something the producer never can.
+	for _, policy := range contextFabricFactScopePolicies {
+		out = append(out, ContextFabricFactScopeCensusRecord{
+			RequirementKind:           requirementKind,
+			OriginKind:                originKind,
+			Policy:                    policy,
+			Basis:                     basis,
+			Axis:                      axis,
+			Outcome:                   outcome,
+			TargetLimit:               population,
+			PopulationMeasured:        true,
+			AuthorizedPopulationCount: &population,
+			AdmittedCount:             population,
+			Truncated:                 true,
+		})
+	}
+	return out
+}
+
+// longestVocabularyMember returns the widest member of a closed vocabulary,
+// measured in RUNES because that is the unit the bound is declared in.
+//
+// Ties break on the first member, which is stable because every vocabulary
+// here is a fixed-order array.
+func longestVocabularyMember(vocabulary []string) string {
+	longest := ""
+	for _, member := range vocabulary {
+		if len([]rune(member)) > len([]rune(longest)) {
+			longest = member
+		}
+	}
+	return longest
+}
+
+// The three typed vocabularies rendered as plain strings, so
+// longestVocabularyMember has one signature rather than three.
+func factKindStrings() []string {
+	out := make([]string, 0, len(contextFabricFactKinds))
+	for _, kind := range contextFabricFactKinds {
+		out = append(out, string(kind))
+	}
+	return out
+}
+
+func subjectKindStrings() []string {
+	out := make([]string, 0, len(contextFabricSubjectKinds))
+	for _, kind := range contextFabricSubjectKinds {
+		out = append(out, string(kind))
+	}
+	return out
+}
+
+func temporalAxisStrings() []string {
+	out := make([]string, 0, len(contextFabricTemporalAxes))
+	for _, axis := range contextFabricTemporalAxes {
+		out = append(out, string(axis))
+	}
+	return out
+}
+
 // maximalConfirmedStructure carries ONE entry per structure need kind, which
 // is the bound: the validator rejects a duplicate member, so the vocabulary's
 // own size caps this list rather than a separate count.

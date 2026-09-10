@@ -302,6 +302,13 @@ func answerBoundTable() []answerBound {
 				entries := maximalConfirmedStructure()
 				r.ConfirmedStructure = append(entries, entries[0])
 			}},
+		{Field: "FactScopeCensus", Why: "0..ContextFabricFactScopeCensusMaxCount, one record per fact-scope policy -- the closed policy vocabulary caps this list, because each named policy identifies exactly one requirement/origin cell and the resolver emits at most one decision per cell. The maximal record carries the POPULATED arm of the nullable authorized_population_count: null is strictly smaller and belongs to the irreducible fixture, so a maximum that left it nil would measure the wrong document",
+			Min: func(r *ContextFabricInvestigationResult) { r.FactScopeCensus = nil },
+			Max: func(r *ContextFabricInvestigationResult) { r.FactScopeCensus = maximalFactScopeCensus() },
+			PastMax: func(r *ContextFabricInvestigationResult) {
+				records := maximalFactScopeCensus()
+				r.FactScopeCensus = append(records, records[0])
+			}},
 		{Field: "StructureOfferSnapshot", Why: "bounded PER MEMBER rather than by a flat cap: ContextFabricStructureNeedKindCount times each member's own mint-time offer cap (contextFabricStructureNeedsMaxOptions)",
 			Min: func(r *ContextFabricInvestigationResult) { r.StructureOfferSnapshot = nil },
 			Max: func(r *ContextFabricInvestigationResult) { r.StructureOfferSnapshot = maximalOfferSnapshot() },
@@ -442,7 +449,23 @@ const irreducibleAnswerBytes = 1023
 // arrays on this document, so the maximum grew by construction rather than by
 // a bound drifting -- and the irreducible floor above did NOT move, because
 // both arrays are omitempty and the smallest answer has neither.
-const maximalAnswerBytes = 521151843
+// 521151843 -> 521252938 (+101095): CHAOS-5405 D-d added fact_scope_census to
+// the served result. The addition is 21 records -- one per fact-scope policy,
+// which is what ContextFabricFactScopeCensusMaxCount derives from -- each with
+// its six closed-token strings padded to ContextFabricFactScopeCensusTokenMaxLength
+// and its three counts at ContextFabricMaxCohortMembersLimit. Deliberate, and
+// stated here rather than left to look like a drift: the field is new, so its
+// whole cost is new.
+//
+// 521252938 -> 521159035 (-93903): the same 21 records, with their six token
+// fields carrying the LONGEST MEMBER of each closed vocabulary instead of
+// 128 runes of filler. The validator now closes those vocabularies (codex r2
+// F3), so the padded fixture was not a wider LEGAL document -- it was an
+// invalid one, and this pin was measuring a shape the contract rejects. The
+// number went DOWN because the maximum was overstated, not because a bound
+// shrank: ContextFabricFactScopeCensusTokenMaxLength is unchanged and still
+// breachable on length. Deliberate, in the same commit as the validator.
+const maximalAnswerBytes = 521159035
 
 func TestIrreducibleAndMaximalFixturesAreValid(t *testing.T) {
 	for _, tc := range []struct {
@@ -722,6 +745,7 @@ var expectedRejection = map[string]string{
 	"EffectiveEvidenceWindow": "all_time must not carry explicit bounds",
 	"WindowClarification":     "window clarification options violate v1 bounds",
 	"StructureNeeds":          "structure needs offer lists violate v1 bounds",
+	"FactScopeCensus":         "fact_scope_census exceeds v1 bounds",
 	"ConfirmedStructure":      "confirmed_structure exceeds v1 bounds",
 	"StructureOfferSnapshot":  "structure_offer_snapshot exceeds v1 bounds",
 }
@@ -1108,6 +1132,8 @@ var unsaturatedByDesign = map[string]string{
 	"result.AnswerPlan.Narrowing[0].Before":                             "int with no upper bound in the contract",
 	"result.AnswerPlan.Narrowing[0].After":                              "int with no upper bound in the contract",
 	"result.StructureOfferSnapshot[0].Rank":                             "int bounded only from below (>= 0)",
+	"result.FactScopeCensus[0].TargetLimit":                             "int bounded only from below (>= 0)",
+	"result.FactScopeCensus[0].AdmittedCount":                           "int bounded only from below (>= 0)",
 	"result.ClaimedFacts[0].Subject.CanonicalID":                        "subject-ref width: distinctSubject is shared by every subject in the document, including ~187,500 inside findings; widening it to 256 runes adds roughly a gigabyte and cannot be marshaled here",
 	"result.ClaimedFacts[0].Subject.Label":                              "subject-ref width, same shared builder",
 	"result.SubjectResolution.Committed[0].CanonicalID":                 "subject-ref width, same shared builder",

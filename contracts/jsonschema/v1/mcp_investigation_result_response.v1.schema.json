@@ -170,6 +170,14 @@
           "type": "array",
           "uniqueItems": true
         },
+        "fact_scope_census": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/context_fabric_common.v1/$defs/FactScopeCensusRecord"
+          },
+          "maxItems": 21,
+          "description": "CHAOS-5405 D-d: one record per attempted requirement/origin scope decision. Optional-first: absent on every result written before this field existed, and on any path that resolved no scope at all -- absent and empty are different documents."
+        },
         "evidence_ref_labels": {
           "additionalProperties": {
             "maxLength": 160,
@@ -1997,6 +2005,72 @@
             "subject"
           ],
           "type": "object"
+        },
+        "FactScopeCensusRecord": {
+          "description": "CHAOS-5405 D-d: one attempted requirement/origin scope decision, as served -- what population was measured, how much of it the caller was authorized to see, how much was admitted, and whether the answer was cut short. It is SERVED rather than only logged because two distinctions the answer depends on cannot be recovered from anything else on the result: a measured zero versus an unmeasured population, and which policy a successful expansion ran on. Counts from overlapping origin groups are NOT additive, and authorized_population_count always means the CALLER-VISIBLE population, never the organization's unrestricted one.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "requirement_kind": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "origin_kind": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "policy": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "basis": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "axis": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "outcome": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "target_limit": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "population_measured": {
+              "type": "boolean"
+            },
+            "authorized_population_count": {
+              "description": "NULLABLE on purpose: null means the census did not complete, 0 means it completed and the caller-visible authorized population is genuinely none. A non-nullable integer would make those two answers the same document, which is the ambiguity this record exists to remove.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "admitted_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "requirement_kind",
+            "origin_kind",
+            "policy",
+            "basis",
+            "axis",
+            "outcome",
+            "target_limit",
+            "population_measured",
+            "authorized_population_count",
+            "admitted_count",
+            "truncated"
+          ]
         },
         "ConfirmedStructureEntry": {
           "additionalProperties": false,

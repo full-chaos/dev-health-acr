@@ -1398,6 +1398,14 @@ func TestChaos4099_ExpansionTelemetryLeaksNoIdentityAndSplitsLevelByDegradation(
 		"authorization_dropped_count", "temporal_dropped_count", "unbounded_validity_count", "malformed_touch_count", "duplicate_add_count", "missing_next_hop_count",
 		"target_kind_mismatch_count", "truncated", "failure_class",
 		"attribution_source_counts",
+		// CHAOS-5405 (D-e): every one is a COUNT, a BOOL or a closed enum
+		// value, so the "leaks no identity" property this test is named for
+		// holds by construction for the new fields too.
+		"target_limit", "census_complete", "authorized_count",
+		"repo_less_candidate_count", "repo_less_admitted_count",
+		"repo_less_authorization_dropped_count", "orphaned_repository_count",
+		"ambiguous_origin_count", "unknown_attribution_source_count",
+		"scope_query_count", "scope_rows_returned", "decision_reason",
 	} { // "axis"/"unbounded_validity_count"/"malformed_touch_count"/"duplicate_add_count": CHAOS-4109
 		allowed[key] = struct{}{}
 	}
@@ -1456,6 +1464,21 @@ func TestChaos4099_EveryEventFieldReachesTheSink(t *testing.T) {
 		"TargetKindMismatchCount":   "target_kind_mismatch_count",
 		"Truncated":                 "truncated", "FailureClass": "failure_class",
 		"AttributionSourceCounts": "attribution_source_counts",
+		// CHAOS-5405 (D-e). The NumField equality check below is what makes
+		// this list load-bearing: adding a field without a log key fails
+		// here rather than shipping unread.
+		"TargetLimit":                       "target_limit",
+		"CensusComplete":                    "census_complete",
+		"AuthorizedCount":                   "authorized_count",
+		"RepoLessCandidateCount":            "repo_less_candidate_count",
+		"RepoLessAdmittedCount":             "repo_less_admitted_count",
+		"RepoLessAuthorizationDroppedCount": "repo_less_authorization_dropped_count",
+		"OrphanedRepositoryCount":           "orphaned_repository_count",
+		"AmbiguousOriginCount":              "ambiguous_origin_count",
+		"UnknownAttributionSourceCount":     "unknown_attribution_source_count",
+		"ScopeQueryCount":                   "scope_query_count",
+		"ScopeRowsReturned":                 "scope_rows_returned",
+		"DecisionReason":                    "decision_reason",
 	}
 	eventType := reflect.TypeOf(FactScopeExpansionEvent{})
 	if eventType.NumField() != len(fieldToKey) {
@@ -2993,7 +3016,7 @@ func parseChainCitations(t *testing.T, chain string) []chainCitation {
 	return citations
 }
 
-// TestChaos4099_OnlyTheSixRuledPoliciesAreEverActivatable is the stage
+// TestChaos4099_OnlyTheRuledPoliciesAreEverActivatable is the stage
 // boundary, and the disclosure/activation split the ruling drew.
 //
 // Widening DISCLOSURE is honesty: SourcePruned asserts "proven nothing
@@ -3009,9 +3032,17 @@ func parseChainCitations(t *testing.T, chain string) []chainCitation {
 // silently laundered. Everything else in the table -- every
 // FactScopePolicyNone row, and any future row this test does not already
 // know about -- must stay disabled; a policy silently going live outside
-// these six would widen ACTIVATION scope with no product ruling behind it,
-// exactly the failure this test exists to catch.
-func TestChaos4099_OnlyTheSixRuledPoliciesAreEverActivatable(t *testing.T) {
+// the RULED set would widen ACTIVATION scope with no product ruling behind
+// it, exactly the failure this test exists to catch.
+//
+// CHAOS-5405 (ratified 2026-09-09) widened that set from six to TWENTY: the
+// fourteen work-item-target policies, one per (requirement x origin) pair.
+// The count in this test's NAME was deliberately dropped rather than bumped
+// to "Twenty" -- a number in a test name is a thing to edit on every ruling,
+// and the guard's real content is the closed MAP below, which is checked in
+// both directions (an unratified policy fails, and a ratified one that never
+// appears as an enabled row fails too).
+func TestChaos4099_OnlyTheRuledPoliciesAreEverActivatable(t *testing.T) {
 	t.Parallel()
 
 	wantOrigin := map[FactScopePolicy]SubjectKind{
@@ -3021,6 +3052,29 @@ func TestChaos4099_OnlyTheSixRuledPoliciesAreEverActivatable(t *testing.T) {
 		FactScopePolicyTeamPrimaryAttributionRepository:        SubjectTeam,
 		FactScopePolicyTeamPrimaryAttributionPullRequest:       SubjectTeam,
 		FactScopePolicyTeamPrimaryAttributionPullRequestReview: SubjectTeam,
+
+		// CHAOS-5405's fourteen.
+		FactScopePolicyProjectWorkItemStatus:           SubjectProject,
+		FactScopePolicyProjectWorkItemWork:             SubjectProject,
+		FactScopePolicyProjectWorkItemActualCompletion: SubjectProject,
+		FactScopePolicyProjectWorkItemBlockers:         SubjectProject,
+		FactScopePolicyProjectWorkItemRequiredChildren: SubjectProject,
+		FactScopePolicyProjectWorkItemIdentity:         SubjectProject,
+		FactScopePolicyProjectWorkItemMembership:       SubjectProject,
+
+		FactScopePolicyTeamPrimaryAttributionWorkItemStatus:           SubjectTeam,
+		FactScopePolicyTeamPrimaryAttributionWorkItemWork:             SubjectTeam,
+		FactScopePolicyTeamPrimaryAttributionWorkItemActualCompletion: SubjectTeam,
+		FactScopePolicyTeamPrimaryAttributionWorkItemBlockers:         SubjectTeam,
+		FactScopePolicyTeamPrimaryAttributionWorkItemRequiredChildren: SubjectTeam,
+		FactScopePolicyTeamPrimaryAttributionWorkItemIdentity:         SubjectTeam,
+		FactScopePolicyTeamPrimaryAttributionWorkItemMembership:       SubjectTeam,
+	}
+	// CARDINALITY, in the guard itself: a one-way membership check certifies
+	// nothing about a present-and-unexpected member, and this map is the
+	// only place the ruled set is written down.
+	if len(wantOrigin) != 20 {
+		t.Fatalf("ruled activation set = %d policies, want 20 (6 CHAOS-4099/4101 + 14 CHAOS-5405)", len(wantOrigin))
 	}
 	seen := make(map[FactScopePolicy]bool, len(wantOrigin))
 	for _, row := range factScopeEligibility {
@@ -3065,11 +3119,32 @@ func TestChaos4099_OnlyTheRatifiedPoliciesAppearForEachOrigin(t *testing.T) {
 			FactScopePolicyProjectWorkItemRepository:        true,
 			FactScopePolicyProjectWorkItemPullRequest:       true,
 			FactScopePolicyProjectWorkItemPullRequestReview: true,
+
+			// CHAOS-5405's project half. A project-origin policy leaking
+			// onto a team row (or vice versa) is exactly the silent
+			// widening this test exists to catch, and fourteen new names
+			// across two origins is where that becomes easy to do.
+			FactScopePolicyProjectWorkItemStatus:           true,
+			FactScopePolicyProjectWorkItemWork:             true,
+			FactScopePolicyProjectWorkItemActualCompletion: true,
+			FactScopePolicyProjectWorkItemBlockers:         true,
+			FactScopePolicyProjectWorkItemRequiredChildren: true,
+			FactScopePolicyProjectWorkItemIdentity:         true,
+			FactScopePolicyProjectWorkItemMembership:       true,
 		},
 		SubjectTeam: {
 			FactScopePolicyTeamPrimaryAttributionRepository:        true,
 			FactScopePolicyTeamPrimaryAttributionPullRequest:       true,
 			FactScopePolicyTeamPrimaryAttributionPullRequestReview: true,
+
+			// CHAOS-5405's team half.
+			FactScopePolicyTeamPrimaryAttributionWorkItemStatus:           true,
+			FactScopePolicyTeamPrimaryAttributionWorkItemWork:             true,
+			FactScopePolicyTeamPrimaryAttributionWorkItemActualCompletion: true,
+			FactScopePolicyTeamPrimaryAttributionWorkItemBlockers:         true,
+			FactScopePolicyTeamPrimaryAttributionWorkItemRequiredChildren: true,
+			FactScopePolicyTeamPrimaryAttributionWorkItemIdentity:         true,
+			FactScopePolicyTeamPrimaryAttributionWorkItemMembership:       true,
 		},
 	}
 	for _, row := range factScopeEligibility {

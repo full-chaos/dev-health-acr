@@ -177,6 +177,9 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 		KeyFacts:          facts,
 		CoverageSummary:   coverage,
 		CoverageDetails:   coverageDetails,
+		// CHAOS-5405 (D-d): carried through verbatim. See the field's own
+		// doc comment for why it is not clamped like its neighbours.
+		FactScopeCensus:   result.FactScopeCensus,
 		EvidenceRefLabels: evidenceRefLabels,
 		Temporal:          projectTemporal(result),
 		CoveragePartial:   result.Coverage.Partial,

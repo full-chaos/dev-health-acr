@@ -118,6 +118,49 @@ const (
 	// FactScopePolicyTeamPrimaryAttributionPullRequestReview continues one
 	// hop further, to the reviews on those pull requests.
 	FactScopePolicyTeamPrimaryAttributionPullRequestReview FactScopePolicy = "team_primary_attribution_pull_request_review_v1"
+
+	// CHAOS-5405: the FOURTEEN work-item-target policies, ruled 2026-09-07
+	// and ratified 2026-09-09 (design-of-record vol. 2, "Bounded work-item
+	// fact scope with an authorized census").
+	//
+	// FOURTEEN NAMES, NOT ONE, and not seven. A policy is defined by this
+	// file's own FactScopePolicy doc comment as ONE typed path from ONE
+	// origin kind to ONE target kind FOR ONE REQUIREMENT -- so a shared name
+	// across two requirements, or across the project and team origins, would
+	// make a per-requirement product commitment unauditable and would let a
+	// single deletion silently disable two claims at once. They share one
+	// traversal implementation and keep separate product identities, exactly
+	// as the six policies above already do for their three target kinds.
+	//
+	// WHY THEY ARE `direct` AND THE SIX ABOVE ARE NOT. Those six continue
+	// THROUGH a work item to a repository, and reaching a repository via a
+	// work item asserts ACTIVITY, not ownership. These fourteen STOP at the
+	// work item itself, whose project membership (`work_items.project_id`)
+	// and primary team attribution are asserted edges about that very item --
+	// the case FactScopeBasisDirect was declared for and, until now, had no
+	// user. See FactScopeBasisDirect's own doc comment, corrected by this
+	// ticket.
+	//
+	// CURRENT AXIS ONLY. Every one of these is `_v1` and supports
+	// TemporalCurrent alone; historical and observed-time requests keep
+	// policy_unavailable until membership history, attribution history and
+	// an independent historical oracle exist. A historical successor gets a
+	// NEW version rather than widening these.
+	FactScopePolicyProjectWorkItemStatus           FactScopePolicy = "project_work_item_status_v1"
+	FactScopePolicyProjectWorkItemWork             FactScopePolicy = "project_work_item_work_v1"
+	FactScopePolicyProjectWorkItemActualCompletion FactScopePolicy = "project_work_item_actual_completion_v1"
+	FactScopePolicyProjectWorkItemBlockers         FactScopePolicy = "project_work_item_blockers_v1"
+	FactScopePolicyProjectWorkItemRequiredChildren FactScopePolicy = "project_work_item_required_children_v1"
+	FactScopePolicyProjectWorkItemIdentity         FactScopePolicy = "project_work_item_identity_v1"
+	FactScopePolicyProjectWorkItemMembership       FactScopePolicy = "project_work_item_membership_v1"
+
+	FactScopePolicyTeamPrimaryAttributionWorkItemStatus           FactScopePolicy = "team_primary_attribution_work_item_status_v1"
+	FactScopePolicyTeamPrimaryAttributionWorkItemWork             FactScopePolicy = "team_primary_attribution_work_item_work_v1"
+	FactScopePolicyTeamPrimaryAttributionWorkItemActualCompletion FactScopePolicy = "team_primary_attribution_work_item_actual_completion_v1"
+	FactScopePolicyTeamPrimaryAttributionWorkItemBlockers         FactScopePolicy = "team_primary_attribution_work_item_blockers_v1"
+	FactScopePolicyTeamPrimaryAttributionWorkItemRequiredChildren FactScopePolicy = "team_primary_attribution_work_item_required_children_v1"
+	FactScopePolicyTeamPrimaryAttributionWorkItemIdentity         FactScopePolicy = "team_primary_attribution_work_item_identity_v1"
+	FactScopePolicyTeamPrimaryAttributionWorkItemMembership       FactScopePolicy = "team_primary_attribution_work_item_membership_v1"
 )
 
 // FactScopeBasis names the EPISTEMIC standing of an expansion path -- what
@@ -312,6 +355,10 @@ const (
 	// (distinct from a subject being authorization-DROPPED, which is a
 	// normal, telemetry-only outcome -- see AuthorizationDroppedCount).
 	FactScopeFailureAuthorization FactScopeFailureClass = "authorization_error"
+	// FactScopeFailureAxisUnsupported: the expander refused the requested
+	// temporal axis. Reachable only when the resolver's own axis gate did not
+	// hold, which is why it is a failure rather than a gate outcome.
+	FactScopeFailureAxisUnsupported FactScopeFailureClass = "axis_unsupported"
 )
 
 // ---------------------------------------------------------------------------
@@ -458,6 +505,129 @@ type FactScopeExpansionEvent struct {
 	// (attributed_primary_team fires if EVEN ONE admitted target came from a
 	// heuristic source) rather than the per-target detail this map carries.
 	AttributionSourceCounts map[string]int
+
+	// ---- CHAOS-5405 (D-e). The decision record for the work-item class. ----
+	//
+	// WHY THESE EXIST AS FIELDS AND NOT AS PROSE. Without them a regression
+	// that restored PolicyNone, dropped the zero-UUID population, admitted it
+	// under repository-restricted credentials, or changed LIMIT 201 to
+	// LIMIT 200 would produce a hollow or silently NARROWED answer with no
+	// Info-visible decision basis to tell it apart from an honest one. Each
+	// is emitted unconditionally, zero and false included -- "the filter
+	// dropped nothing" and "nobody ever counted" must stay distinguishable in
+	// an aggregator, the same discipline every count above already follows.
+
+	// TargetLimit is the bound this traversal was actually run under, rather
+	// than the constant a reader would otherwise have to assume.
+	TargetLimit int
+	// CensusComplete reports whether the scoped population was MEASURED. It
+	// is what separates a proved-empty population from a default zero:
+	// CandidateCount and the authorization counts describe the complete
+	// census only when this is true, and describe observations completed
+	// before a failure otherwise.
+	CensusComplete bool
+	// AuthorizedCount is the authorized population BEFORE the target cap --
+	// the number a 200-item page is a sample of.
+	AuthorizedCount int
+	// RepoLessCandidateCount, RepoLessAdmittedCount and
+	// RepoLessAuthorizationDroppedCount split the zero-UUID (repo-less by
+	// design) population three ways: seen, retained, denied. Kept separate
+	// from the general counts because this population is the one an
+	// organization-wide principal may read and a repository-restricted one
+	// may not, so a change in that split is a change in what was disclosed.
+	RepoLessCandidateCount            int
+	RepoLessAdmittedCount             int
+	RepoLessAuthorizationDroppedCount int
+	// OrphanedRepositoryCount is nonzero unresolved repository references --
+	// a data-quality signal, and deliberately NOT merged with the repo-less
+	// counts: "never had a repository" and "named one that did not resolve"
+	// are different facts about the source.
+	OrphanedRepositoryCount int
+	// AmbiguousOriginCount is how many origins could not be resolved to a
+	// unique membership identity and were therefore EXCLUDED rather than
+	// guessed.
+	AmbiguousOriginCount int
+	// UnknownAttributionSourceCount counts rows whose attribution source is
+	// outside the closed vocabulary. A nonzero value is a contract violation
+	// upstream, never an `else => computed` admission here.
+	UnknownAttributionSourceCount int
+	// ScopeQueryCount and ScopeRowsReturned are the traversal reporting its
+	// OWN cost: statements executed, and metadata rows crossing into Go. A
+	// per-item query loop shows up here as a count that scales with the
+	// population instead of staying at one.
+	ScopeQueryCount   int
+	ScopeRowsReturned int
+	// DecisionReason names the gate or execution basis on a validated
+	// allow-list (see FactScopeDecisionReason). Without it every rung of the
+	// fail-closed ladder is indistinguishable in telemetry -- they all land
+	// on policy_unavailable by design.
+	DecisionReason FactScopeDecisionReason
+}
+
+// FactScopeDecisionReason names WHY a requirement/origin decision came out the
+// way it did -- a closed, validated vocabulary rather than free text, because
+// an operator alerts on it and a regression can silently rename anything that
+// is not checked.
+//
+// It is orthogonal to Outcome, and that is the point: the fail-closed ladder
+// in resolveRequirement maps FIVE distinct causes onto the SAME
+// policy_unavailable outcome, deliberately, so that "the system did not look"
+// is one story rather than five. This field recovers the cause without
+// reopening that outcome vocabulary.
+type FactScopeDecisionReason string
+
+const (
+	// FactScopeDecisionExecuted is the only reason a traversal actually ran.
+	FactScopeDecisionExecuted FactScopeDecisionReason = "executed"
+	// The fail-closed ladder's five rungs, in the order resolveRequirement
+	// checks them.
+	FactScopeDecisionPolicyNone        FactScopeDecisionReason = "policy_none"
+	FactScopeDecisionPolicyDisabled    FactScopeDecisionReason = "policy_disabled"
+	FactScopeDecisionAxisUnsupported   FactScopeDecisionReason = "axis_unsupported"
+	FactScopeDecisionTimeBoundsInvalid FactScopeDecisionReason = "time_bounds_invalid"
+	FactScopeDecisionExpanderUnwired   FactScopeDecisionReason = "expander_unwired"
+	// Execution failures, mirroring the failure classes without merging with
+	// them: a failure CLASS says what broke, a reason says what the resolver
+	// decided as a result.
+	FactScopeDecisionAuthorizationError FactScopeDecisionReason = "authorization_error"
+	FactScopeDecisionBackendError       FactScopeDecisionReason = "backend_error"
+	FactScopeDecisionTimeout            FactScopeDecisionReason = "timeout"
+	// FactScopeDecisionCapacityTimeout is the bounded admission queue
+	// expiring (maxWorkItemScopeInFlight), which is a DIFFERENT operational
+	// story from a slow query hitting the request deadline even though both
+	// surface as failed/timeout.
+	FactScopeDecisionCapacityTimeout FactScopeDecisionReason = "capacity_timeout"
+	// Traversal-level refusals that are neither a gate nor a backend fault.
+	FactScopeDecisionOriginUnresolved              FactScopeDecisionReason = "origin_unresolved"
+	FactScopeDecisionAttributionSourceUnrecognized FactScopeDecisionReason = "attribution_source_unrecognized"
+)
+
+// factScopeDecisionReasons is the closed set, in the order above.
+var factScopeDecisionReasons = []FactScopeDecisionReason{
+	FactScopeDecisionExecuted,
+	FactScopeDecisionPolicyNone,
+	FactScopeDecisionPolicyDisabled,
+	FactScopeDecisionAxisUnsupported,
+	FactScopeDecisionTimeBoundsInvalid,
+	FactScopeDecisionExpanderUnwired,
+	FactScopeDecisionAuthorizationError,
+	FactScopeDecisionBackendError,
+	FactScopeDecisionTimeout,
+	FactScopeDecisionCapacityTimeout,
+	FactScopeDecisionOriginUnresolved,
+	FactScopeDecisionAttributionSourceUnrecognized,
+}
+
+// validFactScopeDecisionReason reports whether reason is on the allow-list.
+// An empty reason is NOT valid: every reached decision names one, so a blank
+// is a producer that forgot rather than a decision without a cause.
+func validFactScopeDecisionReason(reason FactScopeDecisionReason) bool {
+	for _, candidate := range factScopeDecisionReasons {
+		if candidate == reason {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------
@@ -667,53 +837,113 @@ var factScopeEligibility = []factScopeEligibilityRow{
 	},
 	// The work-item families: ONE typed hop, the shortest chain in this
 	// table and the clearest case that the old prune asserted a false proof.
+	//
+	// CHAOS-5405 SPLITS EACH OF THESE IN TWO. Until this ticket each
+	// requirement was ONE row declaring `Origins: {SubjectProject,
+	// SubjectTeam}` and sharing a single Rule -- which was correct while the
+	// rule was FactScopePolicyNone, because "no policy" is the same
+	// statement from either origin. It stops being correct the moment a
+	// policy NAME is attached: a factScopeEligibilityRow carries one Rule for
+	// ALL its Origins (see factScopePoliciesFrom), so a shared row would give
+	// the project and team origins the SAME policy identity, and the ruling
+	// requires fourteen distinct ones. Seven requirements x two origins =
+	// fourteen rows, each naming its own policy.
 	{
-		Requirement: FactStatus, Origins: []SubjectKind{SubjectProject, SubjectTeam},
+		Requirement: FactStatus, Origins: []SubjectKind{SubjectProject},
 		Rule: factScopePolicyRule{
-			Policy: FactScopePolicyNone, TargetKind: SubjectWorkItem,
-			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainWorkItem,
+			Policy: FactScopePolicyProjectWorkItemStatus, TargetKind: SubjectWorkItem,
+			Basis: FactScopeBasisDirect, Enabled: true, Chain: factScopeChainWorkItem,
 		},
 	},
 	{
-		Requirement: FactWork, Origins: []SubjectKind{SubjectProject, SubjectTeam},
+		Requirement: FactStatus, Origins: []SubjectKind{SubjectTeam},
 		Rule: factScopePolicyRule{
-			Policy: FactScopePolicyNone, TargetKind: SubjectWorkItem,
-			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainWorkItem,
+			Policy: FactScopePolicyTeamPrimaryAttributionWorkItemStatus, TargetKind: SubjectWorkItem,
+			Basis: FactScopeBasisDirect, Enabled: true, Chain: factScopeChainWorkItem,
 		},
 	},
 	{
-		Requirement: FactActualCompletion, Origins: []SubjectKind{SubjectProject, SubjectTeam},
+		Requirement: FactWork, Origins: []SubjectKind{SubjectProject},
 		Rule: factScopePolicyRule{
-			Policy: FactScopePolicyNone, TargetKind: SubjectWorkItem,
-			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainWorkItem,
+			Policy: FactScopePolicyProjectWorkItemWork, TargetKind: SubjectWorkItem,
+			Basis: FactScopeBasisDirect, Enabled: true, Chain: factScopeChainWorkItem,
 		},
 	},
 	{
-		Requirement: FactBlockers, Origins: []SubjectKind{SubjectProject, SubjectTeam},
+		Requirement: FactWork, Origins: []SubjectKind{SubjectTeam},
 		Rule: factScopePolicyRule{
-			Policy: FactScopePolicyNone, TargetKind: SubjectWorkItem,
-			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainWorkItem,
+			Policy: FactScopePolicyTeamPrimaryAttributionWorkItemWork, TargetKind: SubjectWorkItem,
+			Basis: FactScopeBasisDirect, Enabled: true, Chain: factScopeChainWorkItem,
 		},
 	},
 	{
-		Requirement: FactRequiredChildren, Origins: []SubjectKind{SubjectProject, SubjectTeam},
+		Requirement: FactActualCompletion, Origins: []SubjectKind{SubjectProject},
 		Rule: factScopePolicyRule{
-			Policy: FactScopePolicyNone, TargetKind: SubjectWorkItem,
-			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainWorkItem,
+			Policy: FactScopePolicyProjectWorkItemActualCompletion, TargetKind: SubjectWorkItem,
+			Basis: FactScopeBasisDirect, Enabled: true, Chain: factScopeChainWorkItem,
 		},
 	},
 	{
-		Requirement: FactIdentity, Origins: []SubjectKind{SubjectProject, SubjectTeam},
+		Requirement: FactActualCompletion, Origins: []SubjectKind{SubjectTeam},
 		Rule: factScopePolicyRule{
-			Policy: FactScopePolicyNone, TargetKind: SubjectWorkItem,
-			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainWorkItem,
+			Policy: FactScopePolicyTeamPrimaryAttributionWorkItemActualCompletion, TargetKind: SubjectWorkItem,
+			Basis: FactScopeBasisDirect, Enabled: true, Chain: factScopeChainWorkItem,
 		},
 	},
 	{
-		Requirement: FactMembership, Origins: []SubjectKind{SubjectProject, SubjectTeam},
+		Requirement: FactBlockers, Origins: []SubjectKind{SubjectProject},
 		Rule: factScopePolicyRule{
-			Policy: FactScopePolicyNone, TargetKind: SubjectWorkItem,
-			Basis: FactScopeBasisActivityProxy, Chain: factScopeChainWorkItem,
+			Policy: FactScopePolicyProjectWorkItemBlockers, TargetKind: SubjectWorkItem,
+			Basis: FactScopeBasisDirect, Enabled: true, Chain: factScopeChainWorkItem,
+		},
+	},
+	{
+		Requirement: FactBlockers, Origins: []SubjectKind{SubjectTeam},
+		Rule: factScopePolicyRule{
+			Policy: FactScopePolicyTeamPrimaryAttributionWorkItemBlockers, TargetKind: SubjectWorkItem,
+			Basis: FactScopeBasisDirect, Enabled: true, Chain: factScopeChainWorkItem,
+		},
+	},
+	{
+		Requirement: FactRequiredChildren, Origins: []SubjectKind{SubjectProject},
+		Rule: factScopePolicyRule{
+			Policy: FactScopePolicyProjectWorkItemRequiredChildren, TargetKind: SubjectWorkItem,
+			Basis: FactScopeBasisDirect, Enabled: true, Chain: factScopeChainWorkItem,
+		},
+	},
+	{
+		Requirement: FactRequiredChildren, Origins: []SubjectKind{SubjectTeam},
+		Rule: factScopePolicyRule{
+			Policy: FactScopePolicyTeamPrimaryAttributionWorkItemRequiredChildren, TargetKind: SubjectWorkItem,
+			Basis: FactScopeBasisDirect, Enabled: true, Chain: factScopeChainWorkItem,
+		},
+	},
+	{
+		Requirement: FactIdentity, Origins: []SubjectKind{SubjectProject},
+		Rule: factScopePolicyRule{
+			Policy: FactScopePolicyProjectWorkItemIdentity, TargetKind: SubjectWorkItem,
+			Basis: FactScopeBasisDirect, Enabled: true, Chain: factScopeChainWorkItem,
+		},
+	},
+	{
+		Requirement: FactIdentity, Origins: []SubjectKind{SubjectTeam},
+		Rule: factScopePolicyRule{
+			Policy: FactScopePolicyTeamPrimaryAttributionWorkItemIdentity, TargetKind: SubjectWorkItem,
+			Basis: FactScopeBasisDirect, Enabled: true, Chain: factScopeChainWorkItem,
+		},
+	},
+	{
+		Requirement: FactMembership, Origins: []SubjectKind{SubjectProject},
+		Rule: factScopePolicyRule{
+			Policy: FactScopePolicyProjectWorkItemMembership, TargetKind: SubjectWorkItem,
+			Basis: FactScopeBasisDirect, Enabled: true, Chain: factScopeChainWorkItem,
+		},
+	},
+	{
+		Requirement: FactMembership, Origins: []SubjectKind{SubjectTeam},
+		Rule: factScopePolicyRule{
+			Policy: FactScopePolicyTeamPrimaryAttributionWorkItemMembership, TargetKind: SubjectWorkItem,
+			Basis: FactScopeBasisDirect, Enabled: true, Chain: factScopeChainWorkItem,
 		},
 	},
 }
@@ -1124,6 +1354,47 @@ type FactScopeExpansionCounts struct {
 	MalformedTouchCount int
 	DuplicateAddCount   int
 	Truncated           bool
+
+	// ---- CHAOS-5405 (D-a/D-e). Counts only the work-item traversal sets. ----
+	//
+	// These live on the COUNTS rather than only on the event because they are
+	// facts the EXPANDER measured and the resolver cannot re-derive: the
+	// resolver sees admitted targets, not the population they were drawn
+	// from, nor which of them were repo-less, nor how many statements ran.
+
+	// AuthorizedCount is the caller-visible authorized population measured by
+	// the same relation the page came from, BEFORE the target cap. Meaningful
+	// only when CensusComplete.
+	AuthorizedCount int
+	// CensusComplete says the population was actually MEASURED. Without it a
+	// zero here is indistinguishable from "the traversal stopped early", and
+	// D-d's whole measured-zero-versus-unmeasured distinction collapses.
+	CensusComplete bool
+	// RepoLessCandidateCount, RepoLessAdmittedCount and
+	// RepoLessAuthorizationDroppedCount split the zero-UUID population seen /
+	// retained / denied. Separate from the general counts because this is the
+	// population whose visibility DEPENDS on the principal being
+	// organization-wide, so a change in the split is a change in disclosure.
+	RepoLessCandidateCount            int
+	RepoLessAdmittedCount             int
+	RepoLessAuthorizationDroppedCount int
+	// OrphanedRepositoryCount is nonzero-but-unresolved repository
+	// references. Deliberately NOT merged with the repo-less counts: "never
+	// had a repository" and "named one that did not resolve" are different
+	// facts about the source, and only the second is a data-quality signal.
+	OrphanedRepositoryCount int
+	// AmbiguousOriginCount is origins that could not be resolved to a unique
+	// membership identity and were EXCLUDED rather than guessed.
+	AmbiguousOriginCount int
+	// UnknownAttributionSourceCount is rows refused for carrying a source
+	// outside the closed vocabulary -- never admitted under a default label.
+	UnknownAttributionSourceCount int
+	// ScopeQueryCount and ScopeRowsReturned are the traversal's own cost. A
+	// per-item query loop shows up here as a count that scales with the
+	// population instead of staying at one, which is the regression D-a's
+	// bound exists to make visible.
+	ScopeQueryCount   int
+	ScopeRowsReturned int
 }
 
 // maxFactScopeTargets bounds how many derived subjects one requirement may
@@ -1131,6 +1402,23 @@ type FactScopeExpansionCounts struct {
 // target is a subject a provider is then queried about, so the cost is a
 // query per target, not a fact per target.
 const maxFactScopeTargets = 200
+
+// maxWorkItemScopeInFlight bounds how many WORK-ITEM scope expansions one
+// process runs at a time (CHAOS-5405 D-a).
+//
+// WHY A SECOND BOUND AT ALL. maxFactScopeTargets bounds ONE traversal. It says
+// nothing about how many traversals are resident together, and residency is
+// the thing that actually scales with tenant count -- which is the question
+// "how does this behave at 100 or 1,000 organizations" is really asking. At
+// roughly 1,003 logical records per requirement and seven requirements, 32
+// concurrent expansions bound this class at ~224,672 records per process
+// INDEPENDENTLY of how many organizations exist. No per-traversal cap can
+// provide that, however small it is.
+//
+// It lives HERE, not in the expander package, because the resolver is what
+// admits work: an expander cannot refuse what it was already called for, and
+// a bound enforced after the call has already paid the memory.
+const maxWorkItemScopeInFlight = 32
 
 // FactReadScopeResolver decides, after resolution and before planFactReads,
 // which subjects each fact requirement may be READ for.
@@ -1146,12 +1434,28 @@ const maxFactScopeTargets = 200
 type FactReadScopeResolver struct {
 	// expander performs the traversal. nil in stage 1.
 	expander FactScopeExpander
+	// workItemSlots is the admission gate for work-item-target expansions
+	// (CHAOS-5405 D-a), buffered to maxWorkItemScopeInFlight. A held slot is
+	// one resident expansion, so the channel's own length IS the count --
+	// there is no second number that could disagree with reality.
+	//
+	// A nil channel means "no gate", which is what a zero-value resolver built
+	// by a test literal gets. That is deliberate: an unbounded test is a
+	// weaker test, never a broken one, whereas a nil-channel send would block
+	// forever and turn a missing constructor into a hang.
+	workItemSlots chan struct{}
 }
 
 // NewFactReadScopeResolver builds the resolver. A nil expander yields the
 // stage-1 resolver: every policy resolves to policy_unavailable, disclosed.
 func NewFactReadScopeResolver(expander FactScopeExpander) *FactReadScopeResolver {
-	return &FactReadScopeResolver{expander: expander}
+	return &FactReadScopeResolver{
+		expander: expander,
+		// Buffered to the bound: a receive slot is an admission, and the
+		// channel IS the counter -- there is no separate number that could
+		// disagree with how many are actually running.
+		workItemSlots: make(chan struct{}, maxWorkItemScopeInFlight),
+	}
 }
 
 // factScopeResolveInput is everything Resolve may read. Narrow by
@@ -1287,26 +1591,59 @@ func (r *FactReadScopeResolver) resolveRequirement(
 		// Axis field, which telemetry now carries on every event.
 		switch {
 		case rule.Policy == FactScopePolicyNone:
-			// No policy defined for this pair. Team origins, today.
+			// No policy defined for this pair.
 			event.Outcome = FactScopePolicyUnavailable
+			event.DecisionReason = FactScopeDecisionPolicyNone
 		case !rule.Enabled:
 			// Stage 1, and any future policy shipped dark.
 			event.Outcome = FactScopePolicyUnavailable
+			event.DecisionReason = FactScopeDecisionPolicyDisabled
+		case rule.TargetKind == SubjectWorkItem && timeContext.Axis != "" && timeContext.Axis != contractsv1.ContextFabricTemporalCurrent:
+			// CHAOS-5405: the fourteen work-item `_v1` policies support the
+			// CURRENT axis only, so ANY non-current axis is refused here --
+			// not just observed_time, and not only when its bounds are
+			// missing.
+			//
+			// This rung exists because a WELL-FORMED historical request used
+			// to pass every rung below, reach the expander, and be refused
+			// there by its own boundary check -- which came back as a plain
+			// error and classified as backend_unavailable. An axis refusal
+			// then read as a graph-backend fault: an operator alerting on
+			// backend errors would page because a caller asked a historical
+			// question, and `axis_unsupported` never fired on the one path
+			// where it mattered.
+			//
+			// Refusing at the gate makes the outcome policy_unavailable,
+			// which is what "the system did not look" means, and matches the
+			// other historical cells rather than standing apart from them.
+			// The expander keeps its own boundary check as a defensive second
+			// gate; see ErrFactScopeAxisUnsupported.
+			event.Outcome = FactScopePolicyUnavailable
+			event.DecisionReason = FactScopeDecisionAxisUnsupported
 		case timeContext.Axis == contractsv1.ContextFabricTemporalObservedTime:
-			// OBSERVED TIME STAYS GATED (CHAOS-4109 scope boundary), even
-			// though ValidTime/Range open below. project_membership_transitions
-			// gives a sound VALID-time history (occurred_at is when the
-			// membership itself changed), but no independent OBSERVATION
-			// log -- there is no record of when THIS SYSTEM first learned
-			// of a reassignment separately from when it happened. The
-			// generic graph read (falkorgraph/temporal.go) accepts that gap
-			// and approximates observed-time with the valid-time window,
-			// but it can also attach TemporalLabel's own degradation
-			// disclosure to the answer; this resolver has no equivalent
-			// label to attach the substitution to, so it stays
+			// OBSERVED TIME STAYS GATED (CHAOS-4109 scope boundary) for the SIX
+			// repository-target policies, even though ValidTime/Range open
+			// below. project_membership_transitions gives a sound VALID-time
+			// history (occurred_at is when the membership itself changed), but
+			// no independent OBSERVATION log -- there is no record of when THIS
+			// SYSTEM first learned of a reassignment separately from when it
+			// happened. The generic graph read (falkorgraph/temporal.go)
+			// accepts that gap and approximates observed-time with the
+			// valid-time window, but it can also attach TemporalLabel's own
+			// degradation disclosure to the answer; this resolver has no
+			// equivalent label to attach the substitution to, so it stays
 			// conservative and refuses rather than silently reusing the
 			// valid-time answer under the wrong axis's name.
+			//
+			// The fourteen work-item policies never reach this rung -- the
+			// rung above refuses EVERY non-current axis for them first -- but
+			// the reason is the same one, so it is named the same one: the
+			// policy does not support the requested axis. A rung that refuses
+			// without naming a reason is exactly the "non-execution
+			// indistinguishable from an evaluated zero" shape D-e exists to
+			// remove, so this arm sets BOTH fields, never only the outcome.
 			event.Outcome = FactScopePolicyUnavailable
+			event.DecisionReason = FactScopeDecisionAxisUnsupported
 		case timeContext.Axis == contractsv1.ContextFabricTemporalValidTime && timeContext.AsOf == nil,
 			timeContext.Axis == contractsv1.ContextFabricTemporalRange && (timeContext.Start == nil || timeContext.End == nil):
 			// Axis validation upstream (temporal.go's resolveTimeContext)
@@ -1315,10 +1652,12 @@ func (r *FactReadScopeResolver) resolveRequirement(
 			// primary enforcement point -- a scope resolver must never
 			// trust that an upstream invariant held.
 			event.Outcome = FactScopePolicyUnavailable
+			event.DecisionReason = FactScopeDecisionTimeBoundsInvalid
 		case r.expander == nil:
 			// An enabled policy with nothing to execute it. Fails closed for
 			// the same reason as every rung above.
 			event.Outcome = FactScopePolicyUnavailable
+			event.DecisionReason = FactScopeDecisionExpanderUnwired
 		default:
 			// CHAOS-4109: TemporalCurrent, TemporalValidTime and
 			// TemporalRange all reach here now. The work_item/pull_request
@@ -1329,6 +1668,13 @@ func (r *FactReadScopeResolver) resolveRequirement(
 			// TimeContext on a historical axis rather than reading the
 			// plain current-value column unconditionally -- see that
 			// function's own doc comment for the interval rule.
+			// EXECUTED is set BEFORE the traversal, not after: expand() may
+			// overwrite it with a failure reason, and a reason that is only
+			// assigned on the success path leaves the failure paths blank --
+			// which is the "nobody ever counted" ambiguity D-e exists to
+			// remove, one field over.
+			event.DecisionReason = FactScopeDecisionExecuted
+			event.TargetLimit = rule.limitOrDefault()
 			r.expand(ctx, principal, scope, &event, origins, rule, timeContext, derivationIndex)
 		}
 
@@ -1391,6 +1737,28 @@ func (r *FactReadScopeResolver) expand(
 	timeContext TimeContext,
 	derivationIndex map[string]int,
 ) {
+	// ADMISSION GATE (CHAOS-5405 D-a), work-item targets only. The repository
+	// and pull-request chains are unchanged and ungated: their fan-out is
+	// bounded by a small repository set, while this class is bounded only by
+	// how many work items a project has.
+	//
+	// Waiting is bounded by the REQUEST's own deadline -- there is no separate
+	// queue timeout to tune or to disagree with it. A caller that gives up
+	// while queued is reported as a capacity timeout rather than a generic
+	// one, because "we never started" and "the query was slow" are different
+	// operational stories that would otherwise look identical.
+	if rule.TargetKind == SubjectWorkItem && r.workItemSlots != nil {
+		select {
+		case r.workItemSlots <- struct{}{}:
+			defer func() { <-r.workItemSlots }()
+		case <-ctx.Done():
+			event.Outcome = FactScopeFailed
+			event.FailureClass = FactScopeFailureTimeout
+			event.DecisionReason = FactScopeDecisionCapacityTimeout
+			event.AdmittedCount = 0
+			return
+		}
+	}
 	result, err := r.expander.ExpandFactScope(ctx, FactScopeExpansionRequest{
 		Principal:       principal,
 		RequirementKind: event.RequirementKind,
@@ -1409,6 +1777,32 @@ func (r *FactReadScopeResolver) expand(
 	event.MalformedTouchCount = result.Counts.MalformedTouchCount
 	event.DuplicateAddCount = result.Counts.DuplicateAddCount
 	event.Truncated = result.Counts.Truncated
+	// CHAOS-5405 (D-e): the traversal's own measurements. Copied here rather
+	// than recomputed, because the resolver cannot see the population these
+	// targets were drawn from -- only the expander measured it.
+	event.CensusComplete = result.Counts.CensusComplete
+	event.AuthorizedCount = result.Counts.AuthorizedCount
+	event.RepoLessCandidateCount = result.Counts.RepoLessCandidateCount
+	event.RepoLessAdmittedCount = result.Counts.RepoLessAdmittedCount
+	event.RepoLessAuthorizationDroppedCount = result.Counts.RepoLessAuthorizationDroppedCount
+	event.OrphanedRepositoryCount = result.Counts.OrphanedRepositoryCount
+	event.AmbiguousOriginCount = result.Counts.AmbiguousOriginCount
+	event.UnknownAttributionSourceCount = result.Counts.UnknownAttributionSourceCount
+	event.ScopeQueryCount = result.Counts.ScopeQueryCount
+	event.ScopeRowsReturned = result.Counts.ScopeRowsReturned
+	// REFINE the reason when the traversal RAN but was structurally unable to
+	// produce anything. `executed` is true of these, and useless: it says the
+	// query fired, when what an operator needs to know is that every origin
+	// failed to resolve, or that a closed vocabulary was violated upstream.
+	//
+	// Ordered: an unresolved origin means nothing was queried FOR, so it wins
+	// over a source-vocabulary violation among what was.
+	switch {
+	case result.Counts.AmbiguousOriginCount > 0 && result.Counts.CandidateCount == 0:
+		event.DecisionReason = FactScopeDecisionOriginUnresolved
+	case result.Counts.UnknownAttributionSourceCount > 0 && len(result.Targets) == 0:
+		event.DecisionReason = FactScopeDecisionAttributionSourceUnrecognized
+	}
 	// AttributionSourceCounts and any Basis mix are NOT copied here (codex
 	// xhigh review round 1, confirmed real, MEDIUM x2): both are derived
 	// below from `kept`, the set that survives the target-kind-mismatch
@@ -1424,6 +1818,11 @@ func (r *FactReadScopeResolver) expand(
 		// read facts for.
 		event.Outcome = FactScopeFailed
 		event.FailureClass = classifyFactScopeFailure(err)
+		// The failure CLASS says what broke; the decision REASON says what
+		// this resolver decided as a result. They are derived from the same
+		// error precisely so an operator alerting on one never sees the other
+		// drift away from it.
+		event.DecisionReason = factScopeDecisionReasonForFailure(event.FailureClass)
 		event.AdmittedCount = 0
 		return
 	}
@@ -1487,6 +1886,36 @@ func (r *FactReadScopeResolver) expand(
 		// there is nothing there -- and attempted_empty says exactly that,
 		// non-degrading, logged at INFO. It is the least-evidence case of
 		// all, so it must be the loudest, not the quietest.
+		event.Outcome = FactScopeExpandedPartial
+		if len(admitted) == 0 {
+			return
+		}
+	case event.UnknownAttributionSourceCount > 0:
+		// A ROW WAS SEEN AND REFUSED, so this is a GAP and never a proof of
+		// absence (codex r3 P1, reproduced before this rung existed:
+		// outcome="attempted_empty" reason="attribution_source_unrecognized"
+		// candidate_count=1 has_disclosable_gap=false -- the answer claimed a
+		// completeness it never earned).
+		//
+		// expanded_partial IS the withheld class in this vocabulary: it is
+		// the member factScopeGapDegrades already counts as "the answer is
+		// missing evidence it could have had", and it is what the Truncated
+		// rung directly above uses for the identical reason. No new outcome
+		// is minted -- the wire vocabulary is fixed at eight, and a ninth
+		// would be a contract change to carry a distinction the eighth
+		// already carries.
+		//
+		// The DECISION REASON is what separates this from truncation, and it
+		// is set above and left alone: attribution_source_unrecognized says a
+		// closed vocabulary was violated upstream, which is the operator's
+		// actionable half. Outcome says the answer is short; reason says why.
+		//
+		// ABOVE the empty check, like Truncated, AND WITHOUT the
+		// len(admitted)==0 condition -- a traversal that admitted some rows
+		// and threw others away is equally not whole, and reporting it as a
+		// clean `expanded` is the same defect one line further down. That
+		// case is not in the reviewer's finding; it is the same bug and is
+		// fixed with it.
 		event.Outcome = FactScopeExpandedPartial
 		if len(admitted) == 0 {
 			return
@@ -1681,12 +2110,50 @@ func (r *FactReadScopeResolver) expand(
 // which is why authorization_error has no case yet: nothing returns a typed
 // error for it, and matching on message text is how a vocabulary silently
 // stops being closed.
+// ErrFactScopeAuthorization is the typed sentinel an expander wraps when the
+// AUTHORIZATION CHECK ITSELF failed -- not when a subject was
+// authorization-dropped, which is an ordinary outcome the counts already
+// describe (CHAOS-5405 D-c).
+//
+// It exists because the two are indistinguishable at this boundary otherwise.
+// FactScopeFailureAuthorization has been a declared member of the failure
+// vocabulary since CHAOS-4099, but nothing could ever produce it: the
+// classifier below recognised a deadline and treated EVERYTHING else as a
+// backend fault, so an authorization subsystem that was down reported itself
+// as "the graph backend returned an error" -- an operator alerting on the
+// wrong thing, and a vocabulary member that was decoration rather than a
+// signal.
+var ErrFactScopeAuthorization = errors.New("contextfabric: fact scope authorization check failed")
+
+// ErrFactScopeAxisUnsupported is the typed sentinel an expander wraps when it
+// refuses a temporal axis its policy does not support (CHAOS-5405).
+//
+// The resolver already refuses any non-current axis for a work-item policy, so
+// on the normal path this never reaches the classifier. It exists so the
+// defensive second gate CANNOT LIE: before it, an expander's own axis refusal
+// came back as an untyped error and classified as backend_unavailable, which
+// reported a caller-shaped refusal as an infrastructure fault. A second gate
+// that misreports what it caught is worse than no second gate, because it
+// sends the operator somewhere real and wrong.
+var ErrFactScopeAxisUnsupported = errors.New("contextfabric: fact scope policy does not support this temporal axis")
+
 func classifyFactScopeFailure(err error) FactScopeFailureClass {
 	switch {
 	case err == nil:
 		return FactScopeFailureNone
 	case errors.Is(err, context.DeadlineExceeded):
 		return FactScopeFailureTimeout
+	// CHAOS-5405 D-c: checked BEFORE the default, and by errors.Is rather
+	// than by string matching, so an expander can wrap it with its own
+	// context without losing the classification.
+	case errors.Is(err, ErrFactScopeAuthorization):
+		return FactScopeFailureAuthorization
+	case errors.Is(err, ErrFactScopeAxisUnsupported):
+		// Not a backend fault: the caller asked for an axis this policy does
+		// not serve. It keeps the `failed` OUTCOME -- an expander that had to
+		// refuse means the resolver's own gate did not hold -- while the
+		// REASON names what actually happened.
+		return FactScopeFailureAxisUnsupported
 	default:
 		return FactScopeFailureBackendUnavailable
 	}
@@ -1863,4 +2330,89 @@ func factScopeMatchedUnauthorizedWarning(count int) string {
 		noun = "matches"
 	}
 	return fmt.Sprintf("%d repository %s within this organization could not be read due to authorization while gathering evidence for this question, so that content is not included in this answer.", count, noun)
+}
+
+// factScopeDecisionReasonForFailure maps a failure class onto the decision
+// reason that names it, so the two can never tell different stories about the
+// same error.
+//
+// A class this function does not recognise becomes backend_error rather than
+// an empty reason: "something failed and we did not classify it" is still a
+// backend failure from the caller's side, and a blank reason would be
+// indistinguishable from a producer that forgot to set one.
+func factScopeDecisionReasonForFailure(class FactScopeFailureClass) FactScopeDecisionReason {
+	switch class {
+	case FactScopeFailureTimeout:
+		return FactScopeDecisionTimeout
+	case FactScopeFailureAuthorization:
+		return FactScopeDecisionAuthorizationError
+	case FactScopeFailureAxisUnsupported:
+		return FactScopeDecisionAxisUnsupported
+	default:
+		return FactScopeDecisionBackendError
+	}
+}
+
+// applyFactScopeCensus is D-d's PRODUCER: it turns the decisions the resolver
+// actually made into the served census.
+//
+// WHY THIS EXISTS AT ALL. Every field it writes was already computed and
+// already logged. What it adds is the SERVED half of D-d's requirement -- "the
+// served document, not just the log, must distinguish a measured zero from an
+// unmeasured population." A record type on the contract with nothing
+// populating it is, operationally, the same as no census: a reader looking for
+// the distinction finds an absent field either way, and cannot tell "this
+// answer resolved no scope" from "the producer was never wired". That is the
+// same shape as CHAOS-4085's plumbed-but-never-installed sink, one layer up.
+//
+// ONE RECORD PER EVENT, with no filter. scope.Events already holds exactly one
+// entry per requirement/origin decision the resolver reached, so the census is
+// a pure projection of that slice and its length is a deterministic function
+// of the request -- there is no predicate here that could quietly drop a row.
+//
+// The rows for pairs that never ran (policy_none, policy_disabled) are kept on
+// purpose rather than filtered as "not really attempted": those rows ARE the
+// activated-policy-set discriminator D-f gate 8 needs. Two yardstick arms are
+// only comparable if both are proven to have run the same policy set, and an
+// arm where a policy was dark is distinguishable from one where it was live
+// only if the dark decision is on the document. Filtering them would leave the
+// two arms looking identical in exactly the case the ruling exists to catch.
+//
+// THE POINTER IS THE POINT. AuthorizedPopulationCount is set ONLY when the
+// event says the census completed. An unmeasured population serializes as
+// null; a measured empty one serializes as 0. Writing the count
+// unconditionally would collapse the two into the same wire value and undo the
+// entire reason the field is a pointer.
+func applyFactScopeCensus(result *InvestigationResult, scope *FactReadScope) {
+	if result == nil || scope == nil || len(scope.Events) == 0 {
+		// Optional-first: a path that resolved no scope leaves the field nil
+		// rather than serving an empty array, so "no scope was resolved" and
+		// "scope was resolved and found nothing" stay different documents.
+		return
+	}
+	records := make([]contractsv1.ContextFabricFactScopeCensusRecord, 0, len(scope.Events))
+	for _, event := range scope.Events {
+		record := contractsv1.ContextFabricFactScopeCensusRecord{
+			RequirementKind:    string(event.RequirementKind),
+			OriginKind:         string(event.OriginKind),
+			Policy:             string(event.Policy),
+			Basis:              string(event.Basis),
+			Axis:               string(event.Axis),
+			Outcome:            string(event.Outcome),
+			TargetLimit:        event.TargetLimit,
+			PopulationMeasured: event.CensusComplete,
+			AdmittedCount:      event.AdmittedCount,
+			Truncated:          event.Truncated,
+		}
+		if event.CensusComplete {
+			// Copied into a local before its address is taken. Sharing one
+			// address across the loop would give every record the last
+			// event's population -- a silent, uniform wrong answer rather
+			// than a visible failure.
+			authorized := event.AuthorizedCount
+			record.AuthorizedPopulationCount = &authorized
+		}
+		records = append(records, record)
+	}
+	result.FactScopeCensus = records
 }

@@ -40,7 +40,7 @@ func TestScopeMatchAcceptsPrincipalSideWildcards(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := ScopeMatch(entries, tc.value); got != tc.want {
+			if got := ScopeMatch(entries, tc.value, ScopeValueRepositoryName); got != tc.want {
 				t.Fatalf("ScopeMatch(%#v, %q) = %v, want %v", entries, tc.value, got, tc.want)
 			}
 		})
@@ -56,11 +56,11 @@ func TestScopeMatchAcceptsPrincipalSideWildcards(t *testing.T) {
 func TestScopeMatchEmptyEntriesOnlyMatchesTheGlobalWildcard(t *testing.T) {
 	t.Parallel()
 	for _, entries := range [][]string{nil, {}} {
-		if !ScopeMatch(entries, "*") {
+		if !ScopeMatch(entries, "*", ScopeValueRepositoryName) {
 			t.Fatalf("ScopeMatch(%#v, \"*\") = false, want true: a caller-side global wildcard authorizes unconditionally", entries)
 		}
 		for _, value := range []string{"acme/*", "acme/repo-x"} {
-			if ScopeMatch(entries, value) {
+			if ScopeMatch(entries, value, ScopeValueRepositoryName) {
 				t.Fatalf("ScopeMatch(%#v, %q) = true, want false: an empty entries list has no entry to match a non-wildcard value against", entries, value)
 			}
 		}
@@ -99,7 +99,7 @@ func TestAuthorizedAttributesDeniesMissingAuthorizationAttribute(t *testing.T) {
 func TestScopeMatchOwnerWildcardRejectsMalformedSlugEntries(t *testing.T) {
 	t.Parallel()
 	entries := []string{"acme/", "acme/not/real"}
-	if ScopeMatch(entries, "acme/*") {
+	if ScopeMatch(entries, "acme/*", ScopeValueRepositoryName) {
 		t.Fatalf("ScopeMatch(%#v, \"acme/*\") = true, want false: malformed entries must not satisfy an owner wildcard", entries)
 	}
 }
@@ -117,10 +117,10 @@ func TestScopeMatchOwnerWildcardRejectsMalformedSlugEntries(t *testing.T) {
 func TestScopeMatchOwnerWildcardDoesNotWidenPastWhatIsEncoded(t *testing.T) {
 	t.Parallel()
 	onlyOtherOwner := []string{"other/repo-y"}
-	if ScopeMatch(onlyOtherOwner, "acme/*") {
+	if ScopeMatch(onlyOtherOwner, "acme/*", ScopeValueRepositoryName) {
 		t.Fatal("owner wildcard matched an entries list with no repository under that owner")
 	}
-	if ScopeMatch(onlyOtherOwner, "/*") {
+	if ScopeMatch(onlyOtherOwner, "/*", ScopeValueRepositoryName) {
 		t.Fatal("empty-owner wildcard must not match")
 	}
 }
@@ -133,10 +133,105 @@ func TestScopeMatchOwnerWildcardDoesNotWidenPastWhatIsEncoded(t *testing.T) {
 func TestAnyScopeMatchMatchesIfAnyValueMatches(t *testing.T) {
 	t.Parallel()
 	entries := []string{"acme/repo-x"}
-	if !AnyScopeMatch(entries, []string{"other/repo-z", "acme/repo-x"}) {
+	if !AnyScopeMatch(entries, []string{"other/repo-z", "acme/repo-x"}, ScopeValueRepositoryName) {
 		t.Fatal("AnyScopeMatch() = false, want true when at least one value matches")
 	}
-	if AnyScopeMatch(entries, []string{"other/repo-z", "other/*"}) {
+	if AnyScopeMatch(entries, []string{"other/repo-z", "other/*"}, ScopeValueRepositoryName) {
 		t.Fatal("AnyScopeMatch() = true, want false when no value matches")
 	}
+}
+
+// TestChaos5405_NamesMatchCaseInsensitivelyAndIdsDoNot pins the ruled rule,
+// both halves of it.
+//
+// chris, 2026-09-09, verbatim: "ids need to be case-sensitive specifically but
+// named aliases shouldn't e.g project_id vs name I suppose."
+//
+// A repository slug is a NAME, so it matches case-insensitively; a project or
+// team id is an ID, so it does not. Both halves are asserted here because
+// ScopeMatch is the one function where they meet — scopeContainsAttr reaches
+// it for authorization_repositories AND for authorization_projects /
+// authorization_teams.
+//
+// The second half is not a scope guard around someone else's change; it is the
+// RULED behaviour. Two ids differing only in case are two different ids, and
+// collapsing them would let a principal scoped for one hold the authority of
+// another on every graph traversal.
+func TestChaos5405_NamesMatchCaseInsensitivelyAndIdsDoNot(t *testing.T) {
+	t.Parallel()
+
+	t.Run("repository slugs match case-insensitively", func(t *testing.T) {
+		t.Parallel()
+		for _, tc := range []struct {
+			entry string
+			scope string
+		}{
+			{"example-org/widget-service", "EXAMPLE-ORG/WIDGET-SERVICE"},
+			{"Example-Org/Widget-Service", "example-org/widget-service"},
+			{"EXAMPLE-ORG/WIDGET-SERVICE", "example-org/widget-service"},
+			{"example-org/widget-service", "  example-org/widget-service  "},
+		} {
+			if !ScopeMatch([]string{tc.entry}, tc.scope, ScopeValueRepositoryName) {
+				t.Errorf("ScopeMatch(%q, %q) = false, want true -- a repository slug differing only in case is the same repository", tc.entry, tc.scope)
+			}
+		}
+	})
+
+	t.Run("a different repository still does not match", func(t *testing.T) {
+		t.Parallel()
+		if ScopeMatch([]string{"example-org/widget-service"}, "example-org/other-service", ScopeValueRepositoryName) {
+			t.Fatal("two different repositories matched -- normalising must not collapse distinct slugs")
+		}
+		if ScopeMatch([]string{"example-org/widget-service"}, "another-org/widget-service", ScopeValueRepositoryName) {
+			t.Fatal("two different owners matched")
+		}
+	})
+
+	// THE ID HALF OF THE RULE. Project and team ids reach this same function
+	// and are not names, so they compare exactly. If this ever starts passing,
+	// two ids differing only in case have been collapsed into one authority.
+	t.Run("ids: a case-differing team or project id does NOT match", func(t *testing.T) {
+		t.Parallel()
+		for _, tc := range []struct {
+			name  string
+			entry string
+			scope string
+		}{
+			{"team key", "CHAOS", "chaos"},
+			{"project id", "PROJ-1", "proj-1"},
+			{"linear team key artefact", "org:linear:CHAOS", "org:linear:chaos"},
+			// THE CASES THE FIRST VERSION OF THIS PIN MISSED (codex r2
+			// F1). Every row above is unmistakably not a slug, so the
+			// then-shape-inferring implementation passed them by
+			// accident: it compared exactly because parsing FAILED, not
+			// because it knew these were ids. An id that happens to be
+			// shaped like "owner/repo" was folded. A pin whose inputs are
+			// all drawn from the easy side of the boundary asserts
+			// nothing about the boundary.
+			{"project id shaped like a repository slug", "ACME/TEAM", "acme/team"},
+			{"team id shaped like a repository slug", "Acme/Platform", "acme/platform"},
+			{"project id shaped like a slug, mixed", "acme/Team", "ACME/team"},
+		} {
+			if ScopeMatch([]string{tc.entry}, tc.scope, ScopeValueIdentifier) {
+				t.Errorf("%s: ScopeMatch(%q, %q) = true -- an ID was matched case-insensitively; ids are case-sensitive by ruling, and collapsing two of them gives a principal scoped for one the authority of the other", tc.name, tc.entry, tc.scope)
+			}
+			// ...and the exact form still matches, so the denial above is
+			// about CASE and not about the value being unmatchable.
+			if !ScopeMatch([]string{tc.entry}, tc.entry, ScopeValueIdentifier) {
+				t.Errorf("%s: ScopeMatch(%q, %q) = false -- the control is broken, not the rule", tc.name, tc.entry, tc.entry)
+			}
+		}
+	})
+
+	// A malformed entry beside a good one must not poison the good one, and a
+	// malformed pair still compares exactly rather than erroring into a match.
+	t.Run("malformed entries fall back to an exact comparison", func(t *testing.T) {
+		t.Parallel()
+		if !ScopeMatch([]string{"acme/", "example-org/widget-service"}, "EXAMPLE-ORG/WIDGET-SERVICE", ScopeValueRepositoryName) {
+			t.Fatal("a malformed entry beside a valid one blocked the valid match")
+		}
+		if ScopeMatch([]string{"acme/"}, "ACME/", ScopeValueRepositoryName) {
+			t.Fatal("two malformed values matched case-insensitively -- the fallback must be an exact comparison")
+		}
+	})
 }

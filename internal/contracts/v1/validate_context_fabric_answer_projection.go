@@ -152,6 +152,25 @@ func (p ContextFabricAnswerProjection) Validate() error {
 	if err := p.validateCompleteness(); err != nil {
 		return fmt.Errorf("completeness: %w", err)
 	}
+	// THE SAME CENSUS RULE THE CANONICAL RESULT RUNS, through the same
+	// function (codex r3 P2, reproduced before this fix: this validator
+	// accepted a census with unknown tokens, negative bounds and a
+	// population_measured that contradicted its own count).
+	//
+	// This is not the "do not re-check what the result already proved"
+	// exemption in this file's header. That exemption is for semantics a
+	// projection INHERITS from a validated result -- evidence closure,
+	// category rules, driver ordering. The census is a projected ARRAY that
+	// a caller of this boundary can supply directly: the API and MCP paths
+	// call this validator, not the canonical one, so nothing upstream had
+	// necessarily proved anything about it.
+	//
+	// validateFactScopeCensus, never a second copy of the rule here: two
+	// lists of one vocabulary is how two boundaries end up disagreeing about
+	// the same document.
+	if err := validateFactScopeCensus(p.FactScopeCensus); err != nil {
+		return fmt.Errorf("answer projection %w", err)
+	}
 	return nil
 }
 

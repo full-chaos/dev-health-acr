@@ -323,7 +323,14 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// closed vocabulary, never authored by a model. ONE new leaf, not
 		// two: the projection copies the completeness block and carries no
 		// top-level refusal_basis of its own, mirroring its Go type.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 229},
+		// CHAOS-5405 D-d: 229 -> 235 and 341 -> 347, +6 on BOTH surfaces and
+		// the same six leaves each time -- fact_scope_census[] carries
+		// requirement_kind, origin_kind, policy, basis, axis and outcome.
+		// Equal on the two surfaces because the projection copies the census
+		// verbatim rather than narrowing it. All six are SERVER-DERIVED
+		// closed tokens the resolver mints from its own vocabularies; none is
+		// model-authorable, so none joins the untrusted set.
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 235},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -384,7 +391,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// difference is the point: the projection copies only the block, so
 		// a basis that lived solely at the result root would never reach a
 		// bounded consumer. Both leaves are trusted-because-closed.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 341},
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 347},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -603,6 +610,19 @@ func trustedBecauseClosed(path string) bool {
 		// NOT here — declared untrusted in both lists.
 		"code", "fact_kind", "scope_outcome", "policy", "origin_kind",
 		"supported_kinds", "skipped_kinds",
+		// CHAOS-5405 D-d: the fact-scope census row's own leaves. Five of
+		// its six -- origin_kind, policy, basis, axis, outcome -- are
+		// ALREADY trusted above, drawn from the very same closed
+		// vocabularies the coverage detail draws from; only
+		// "requirement_kind" needed naming, and it is the SAME
+		// ContextFabricFactKind enum as "fact_kind" one line up.
+		//
+		// The two names are not a drift: a coverage detail is keyed by the
+		// FACT it describes, a census row by the REQUIREMENT the resolver
+		// decided for. Same vocabulary, different question, so the census
+		// keeps the name its own record was ratified with rather than
+		// borrowing one that would read as a different thing.
+		"requirement_kind",
 		// CHAOS-4809: "cohort_member_selection_basis" is
 		// ContextFabricProjectionBudget's disclosure of the order the
 		// group-aware clamp chose surviving members by. It is the SAME
@@ -732,35 +752,67 @@ func stringPathsIn(t *testing.T, documents map[string]map[string]any, root, pref
 				walk(document, branch, path, depth+1)
 			}
 		}
-		if kind, ok := object["type"].(string); ok {
-			switch kind {
-			case "string":
-				if !seen[path] {
-					seen[path] = true
-					paths = append(paths, path)
-				}
-				return
-			case "array":
-				items, ok := object["items"]
+		// `type` may be a single name OR a UNION (["integer", "null"]), which
+		// is how a nullable scalar is spelled. Both forms are read here.
+		//
+		// The union arm was added because a nullable integer -- the first one
+		// on either document -- read as unclassifiable: the assertion to
+		// string failed, the node fell through to the properties check, and
+		// the guard reported a field it simply could not see. Widening the
+		// READER is the fix rather than re-spelling the schema as a
+		// combinator to suit it: the combinator would satisfy this walker for
+		// one field and leave the NEXT type union silently skipped, which is
+		// the failure this guard exists to prevent. A union carrying a string
+		// member is still recorded as a string leaf.
+		var kinds []string
+		switch declared := object["type"].(type) {
+		case string:
+			kinds = []string{declared}
+		case []any:
+			for _, member := range declared {
+				name, ok := member.(string)
 				if !ok {
-					t.Fatalf("%s: array has no items schema; classification would silently skip its members", path)
+					t.Fatalf("%s: type union carries a non-string member %v", path, member)
 				}
-				walk(document, items, path+"[]", depth+1)
-				return
-			case "object":
-				// A map-shaped object carries its value schema in
-				// additionalProperties. Its VALUES are as much a string
-				// field as any named property, and the strict walker
-				// caught them going unclassified.
-				if valueSchema, ok := object["additionalProperties"].(map[string]any); ok {
-					walk(document, valueSchema, path+"{}", depth+1)
-					if _, named := object["properties"]; !named {
-						return
+				kinds = append(kinds, name)
+			}
+			if len(kinds) == 0 {
+				t.Fatalf("%s: type union is empty; classification would silently skip it", path)
+			}
+		}
+		if len(kinds) > 0 {
+			fallThroughToProperties := false
+			for _, kind := range kinds {
+				switch kind {
+				case "string":
+					if !seen[path] {
+						seen[path] = true
+						paths = append(paths, path)
 					}
+				case "array":
+					items, ok := object["items"]
+					if !ok {
+						t.Fatalf("%s: array has no items schema; classification would silently skip its members", path)
+					}
+					walk(document, items, path+"[]", depth+1)
+				case "object":
+					// A map-shaped object carries its value schema in
+					// additionalProperties. Its VALUES are as much a string
+					// field as any named property, and the strict walker
+					// caught them going unclassified.
+					if valueSchema, ok := object["additionalProperties"].(map[string]any); ok {
+						walk(document, valueSchema, path+"{}", depth+1)
+						if _, named := object["properties"]; !named {
+							continue
+						}
+					}
+					fallThroughToProperties = true
+				default:
+					// number, integer, boolean, null: no string leaf.
 				}
-				// falls through to properties below
-			default:
-				return // number, integer, boolean: no string leaf
+			}
+			if !fallThroughToProperties {
+				return
 			}
 		}
 		properties, ok := object["properties"].(map[string]any)
