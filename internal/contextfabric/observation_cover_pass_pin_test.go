@@ -1,7 +1,10 @@
 package contextfabric
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -33,6 +36,146 @@ import (
 // the production path's, not a fixture-only value.
 func TestObservationCoverKeepsTheDiscardedPassAndMarksTheServedOne(t *testing.T) {
 	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	result, calls := investigateWithForcedRetry(t, telemetry)
+	if calls != 2 {
+		t.Fatalf("synthesizer called %d times, want exactly 2 -- this pin requires a forced retry", calls)
+	}
+
+	covers := telemetry.readRequirementObservationCovers
+	if len(covers) != 2 {
+		t.Fatalf("recorded %d observation-cover lines for one served investigation, want exactly 2 (one "+
+			"per pass) -- got %+v", len(covers), covers)
+	}
+
+	var served, discarded *ReadRequirementObservationCoverEvent
+	servedCount := 0
+	for i := range covers {
+		if covers[i].Served {
+			servedCount++
+			served = &covers[i]
+		} else {
+			discarded = &covers[i]
+		}
+	}
+	if servedCount != 1 {
+		t.Fatalf("%d of the 2 cover lines have served=true, want exactly 1: %+v", servedCount, covers)
+	}
+	if served == nil || discarded == nil {
+		t.Fatalf("did not find both a served and a discarded cover line: %+v", covers)
+	}
+	if discarded.Pass >= served.Pass {
+		t.Fatalf("discarded line's pass (%d) is not EARLIER than the served line's pass (%d)",
+			discarded.Pass, served.Pass)
+	}
+
+	// The served=true line's numbers must match the row the RETURNED result
+	// actually carries -- that is the whole point of "served": it describes
+	// the document the caller received, not a discarded alternative.
+	var row *RequirementOutcomeRow
+	for i := range result.Completeness.Outcomes {
+		candidate := result.Completeness.Outcomes[i]
+		if candidate.Requirement == served.Requirement && candidate.Stage == contractsv1.ContextFabricOutcomeStageAssembledResult {
+			row = &result.Completeness.Outcomes[i]
+			break
+		}
+	}
+	if row == nil {
+		t.Fatalf("no assembled-result row on the served document for requirement %q; the served cover line "+
+			"names a row the caller never received", served.Requirement)
+	}
+	if row.Served != served.ServedCover {
+		t.Fatalf("served cover line's ServedCover=%d, but the served document's own row reads Served=%d",
+			served.ServedCover, row.Served)
+	}
+	if row.Declared != served.Declared {
+		t.Fatalf("served cover line's Declared=%d, but the served document's own row reads Declared=%d",
+			served.Declared, row.Declared)
+	}
+}
+
+// TestTheEmittedCoverLinesCarryEachPassesOwnPassAndServedValues is the pin for
+// a SURVIVOR the hosted battery found: dropping `"pass"` from the emitter
+// changed no test result, because the per-pass pin above reads the telemetry
+// DOUBLE, never the emitted line.
+//
+// It drives the SAME forced retry through Engine.Investigate, but the engine's
+// telemetry is the production sink -- NewSlogEngineTelemetry around a JSON
+// handler at Info, the shape cmd/acr-api/main.go builds under the default
+// ACR_LOG_LEVEL=info -- and every assertion reads the bytes that handler wrote.
+//
+// NON-TRIVIAL VALUES, and no coincidence. A single-pass fixture emits pass=0,
+// the zero value: an emitter that hard-coded 0, or published any other field
+// reading 0 there under the `pass` key, would pass it. Two passes make `pass`
+// take TWO values and `served` take both booleans, so a field swapped in for
+// either must track it on BOTH lines to survive -- and the test asserts that
+// no other field on the line does.
+func TestTheEmittedCoverLinesCarryEachPassesOwnPassAndServedValues(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	telemetry := NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	if _, calls := investigateWithForcedRetry(t, telemetry); calls != 2 {
+		t.Fatalf("synthesizer called %d times, want exactly 2 -- this pin requires a forced retry", calls)
+	}
+
+	var servedLine, discardedLine map[string]any
+	emitted := 0
+	for _, raw := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+		var line map[string]any
+		if json.Unmarshal(raw, &line) != nil || line["msg"] != "context fabric observation cover" {
+			continue
+		}
+		emitted++
+		if got := line["level"]; got != "INFO" {
+			t.Fatalf("level = %v, want INFO", got)
+		}
+		if _, ok := line["pass"].(float64); !ok {
+			t.Fatalf("the emitted line carries no numeric `pass` (present: %v)", keysOf(line))
+		}
+		served, ok := line["served"].(bool)
+		if !ok {
+			t.Fatalf("the emitted line carries no boolean `served` (present: %v)", keysOf(line))
+		}
+		if served {
+			servedLine = line
+		} else {
+			discardedLine = line
+		}
+	}
+	if emitted != 2 || servedLine == nil || discardedLine == nil {
+		t.Fatalf("the production handler received %d cover lines, want exactly one served and one discarded:\n%s",
+			emitted, buf.String())
+	}
+	// The VALUES, read from the handler's bytes: the discarded first pass is
+	// pass 0, the served retry is pass 1.
+	if got := discardedLine["pass"]; got != float64(answerPassFirst) {
+		t.Fatalf("discarded line pass = %v, want %d", got, answerPassFirst)
+	}
+	if got := servedLine["pass"]; got != float64(answerPassSecond) {
+		t.Fatalf("served line pass = %v, want %d -- the served document is the retry's", got, answerPassSecond)
+	}
+
+	// THE DIFFERENCE IS THE ASSERTION. No other field may track `pass` or
+	// `served` across the two lines; if one did, an emitter publishing it
+	// under that key would pass every assertion above.
+	for field := range servedLine {
+		if field == "pass" || field == "served" {
+			continue
+		}
+		for _, key := range []string{"pass", "served"} {
+			if servedLine[field] == servedLine[key] && discardedLine[field] == discardedLine[key] {
+				t.Fatalf("field %q equals %q on BOTH lines (%v, %v); the fixture cannot tell them apart",
+					field, key, discardedLine[field], servedLine[field])
+			}
+		}
+	}
+}
+
+// investigateWithForcedRetry runs one served investigation forced through
+// exactly one budget retry, reporting to telemetry, and returns the served
+// result and the synthesizer call count.
+func investigateWithForcedRetry(t *testing.T, telemetry EngineTelemetry) (InvestigationResult, int) {
+	t.Helper()
 	frame := teamStateFrame(t)
 	deriver := registryDeriver{capabilities: []FactCapability{
 		stateCapability("health", FactHealth),
@@ -40,7 +183,6 @@ func TestObservationCoverKeepsTheDiscardedPassAndMarksTheServedOne(t *testing.T)
 
 	calls := 0
 	cohort := budgetStageCohort(6)
-	telemetry := &recordingTelemetry{}
 	engine, err := NewEngine(EngineDependencies{
 		Interpreter: familyInterpreter{
 			interpreted: InterpretedQuestion{
@@ -111,58 +253,5 @@ func TestObservationCoverKeepsTheDiscardedPassAndMarksTheServedOne(t *testing.T)
 	if err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
-	if calls != 2 {
-		t.Fatalf("synthesizer called %d times, want exactly 2 -- this pin requires a forced retry", calls)
-	}
-
-	covers := telemetry.readRequirementObservationCovers
-	if len(covers) != 2 {
-		t.Fatalf("recorded %d observation-cover lines for one served investigation, want exactly 2 (one "+
-			"per pass) -- got %+v", len(covers), covers)
-	}
-
-	var served, discarded *ReadRequirementObservationCoverEvent
-	servedCount := 0
-	for i := range covers {
-		if covers[i].Served {
-			servedCount++
-			served = &covers[i]
-		} else {
-			discarded = &covers[i]
-		}
-	}
-	if servedCount != 1 {
-		t.Fatalf("%d of the 2 cover lines have served=true, want exactly 1: %+v", servedCount, covers)
-	}
-	if served == nil || discarded == nil {
-		t.Fatalf("did not find both a served and a discarded cover line: %+v", covers)
-	}
-	if discarded.Pass >= served.Pass {
-		t.Fatalf("discarded line's pass (%d) is not EARLIER than the served line's pass (%d)",
-			discarded.Pass, served.Pass)
-	}
-
-	// The served=true line's numbers must match the row the RETURNED result
-	// actually carries -- that is the whole point of "served": it describes
-	// the document the caller received, not a discarded alternative.
-	var row *RequirementOutcomeRow
-	for i := range result.Completeness.Outcomes {
-		candidate := result.Completeness.Outcomes[i]
-		if candidate.Requirement == served.Requirement && candidate.Stage == contractsv1.ContextFabricOutcomeStageAssembledResult {
-			row = &result.Completeness.Outcomes[i]
-			break
-		}
-	}
-	if row == nil {
-		t.Fatalf("no assembled-result row on the served document for requirement %q; the served cover line "+
-			"names a row the caller never received", served.Requirement)
-	}
-	if row.Served != served.ServedCover {
-		t.Fatalf("served cover line's ServedCover=%d, but the served document's own row reads Served=%d",
-			served.ServedCover, row.Served)
-	}
-	if row.Declared != served.Declared {
-		t.Fatalf("served cover line's Declared=%d, but the served document's own row reads Declared=%d",
-			served.Declared, row.Declared)
-	}
+	return result, calls
 }

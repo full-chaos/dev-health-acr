@@ -81,7 +81,19 @@ func TestTheObservationCoverDecisionIsEmittedAtInfoWithValues(t *testing.T) {
 	// THE DELTA IS THE ASSERTION. served_kinds=2 with served_cover=1 is the
 	// whole finding this line exists to make visible; asserting either alone
 	// would pass against a line that reported only one of them.
+	// `pass` and `served` are asserted on the EMITTED LINE, not only on the
+	// recorded event. The hosted battery dropped `"pass"` from the emitter and
+	// NOTHING failed: the per-pass pin reads the telemetry double, so the field
+	// could vanish from the log while every test stayed green. An emitted line
+	// is the artefact an operator reads; the event is not.
+	if _, ok := line["pass"]; !ok {
+		t.Fatalf("the emitted line carries no `pass` field (present: %v) -- the pin on the recorded event cannot see a field dropped from the emitter", keysOf(line))
+	}
+	if _, ok := line["served"]; !ok {
+		t.Fatalf("the emitted line carries no `served` field (present: %v)", keysOf(line))
+	}
 	for field, want := range map[string]float64{
+		"pass":                   0,
 		"threshold":              2,
 		"observed_kinds":         2,
 		"served_kinds":           2,
