@@ -89,6 +89,18 @@ const (
 	// nothing was shown to DIFFER, the comparison simply has no identity to
 	// work with.
 	PlanCarryMissQuestionIndeterminate PlanCarryOutcome = "miss_question_indeterminate"
+	// PlanCarryMissContinuationWithheld (CHAOS-5465): this request was a
+	// verified window-only continuation and the continuation gate refused its
+	// carrier -- an unreadable context, a graph epoch that moved, a context
+	// stamped by a family definition version not in force, or a carried reading
+	// that could not be composed into a valid frame. The family-only carry may
+	// not serve that same carrier's reading by another route.
+	//
+	// ITS OWN MEMBER RATHER THAN ONE OF THE TWO ABOVE. "The origin answered a
+	// different question" and "we could not use the origin's context" are
+	// different facts, and the three-state carryOriginVerdict one file over
+	// exists precisely so they never share a label.
+	PlanCarryMissContinuationWithheld PlanCarryOutcome = "miss_continuation_withheld"
 )
 
 // planCarryResult is resolveCarriedPlan's return shape.

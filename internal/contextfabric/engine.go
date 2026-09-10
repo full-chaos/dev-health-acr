@@ -814,6 +814,30 @@ type EngineTelemetry interface {
 	// Content-safe by construction: a closed outcome vocabulary, a closed
 	// seed-source vocabulary, one result id.
 	RecordPlanCarryOutcome(ctx context.Context, principal storage.Principal, outcome PlanCarryOutcome, sourceResultID string, seedSource CarrySeedSource)
+	// RecordWindowContinuationDecision (CHAOS-5465) reports the ONE decision
+	// about whether a verified window-only confirmation continued the prior
+	// turn's validated reading -- on EVERY request carrying a window receipt,
+	// including the ineligible shapes and the early window vetoes, with
+	// explicit zeros on those paths.
+	//
+	// WHY EVERY SUCH REQUEST AND NOT ONLY THE APPLIED ONES. That is exactly
+	// the numerator-without-a-denominator defect RecordPlanCarryOutcome was
+	// added to fix one axis over, and this axis would have shipped with it
+	// again: a continuation that was WITHHELD, one whose carrier was never
+	// eligible, and a turn that simply never had a continuation to make are
+	// three different facts, and none of them can be told apart from the
+	// applied-carry line. A missing line therefore has exactly one meaning --
+	// the site was never reached.
+	//
+	// It is a SECOND line beside the plan-carry pair, never a replacement:
+	// RecordPlanCarryOutcome keeps reporting LOOKUP and RecordPlanCarry keeps
+	// reporting APPLICATION, and folding any of the three together would
+	// destroy a rate that already has a consumer.
+	//
+	// Content-safe by construction: closed vocabularies, result ids, digests
+	// of closed values, and equality results. Never question text, subject
+	// labels or model output.
+	RecordWindowContinuationDecision(ctx context.Context, principal storage.Principal, decision windowContinuationDecision)
 	// RecordModelRowsStripped (CHAOS-4355 follow-up, cf_model_rows_stripped)
 	// reports the count of ClaimedFacts entries whose model-authored Rows
 	// was cleared before draft.ValidateAgainst ran, so an operator can tell
@@ -1056,11 +1080,40 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 	}, nil
 }
 
-func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, request InvestigationRequest) (InvestigationResult, error) {
+func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, request InvestigationRequest) (served InvestigationResult, servedErr error) {
+	// CHAOS-5465: the continuation decision is OBSERVABLE on every request
+	// carrying a window receipt, and it is DECLARED ABOVE EVERY RETURN in this
+	// function so a path that ends the turn early cannot publish the
+	// fail-closed reason for want of a site to record its own.
+	//
+	// Built by CONSTRUCTOR, never a struct literal: a literal lets a field
+	// default its way into the event.
+	continuation := newWindowContinuationDecision(request)
+	defer func() {
+		if e.telemetry == nil || !continuation.Observed {
+			return
+		}
+		// THE DECISION IS NOT FINAL UNTIL THE RESULT IS (r4 R4-3). A save-time
+		// window supersession veto discards the result the continuation was
+		// applied to, and it is handled at THREE separate sites -- here, in
+		// window.go and in unresolved.go -- none of which can see this local
+		// decision. Patching each is the enumerate-every-route mistake this
+		// package keeps paying for, so the reversal is decided ONCE, here,
+		// from what was actually SERVED: a continuation cannot be `applied`
+		// with a window when the served answer carries none.
+		if continuation.Applies() && continuation.AppliedWindow != nil && served.EffectiveEvidenceWindow == nil {
+			continuation.Disposition = ContinuationWithheld
+			continuation = continuation.withReason(ContinuationReasonWindowSuperseded)
+			continuation.AppliedWindow = nil
+		}
+		e.telemetry.RecordWindowContinuationDecision(ctx, principal, continuation)
+	}()
 	if err := request.Validate(); err != nil {
+		continuation = continuation.withReason(ContinuationReasonRequestInvalid)
 		return InvestigationResult{}, fmt.Errorf("investigation request: %w", err)
 	}
 	if strings.TrimSpace(principal.OrgID) == "" {
+		continuation = continuation.withReason(ContinuationReasonPrincipalUnauthenticated)
 		return InvestigationResult{}, errors.New("authenticated organization is required")
 	}
 	// CHAOS-3781: historical questions are ANSWERED now, not refused --
@@ -1080,10 +1133,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// the request every layer below sees.
 	clampedRequestTime, err := resolveTimeContext(request.TimeContext, e.now())
 	if err != nil {
+		continuation = continuation.withReason(ContinuationReasonRequestTimeUnresolvable)
 		return InvestigationResult{}, err
 	}
 	request.TimeContext = clampedRequestTime
 	if err := ctx.Err(); err != nil {
+		continuation = continuation.withReason(ContinuationReasonRequestCancelled)
 		return InvestigationResult{}, err
 	}
 
@@ -1100,6 +1155,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// failure here fails the whole investigation.
 	binding, err := e.graph.ResolveInvestigationBinding(ctx, principal)
 	if err != nil {
+		continuation = continuation.withReason(ContinuationReasonBindingUnavailable)
 		// CHAOS-4088: StageGraphBinding, not StageResolution -- a binding
 		// outage never got as far as a subject/commit-gate query, and
 		// conflating the two populations is exactly what this split fixes.
@@ -1116,6 +1172,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// and persists the no_match terminal directly.
 	windowCanon := e.canonicalizeEvidenceWindow(ctx, principal, request)
 	if windowCanon.Veto != windowVetoNone {
+		// D-e: a window veto is CHAOS-5271's mechanism, not this one.
+		continuation = continuation.withReason(ContinuationReasonWindowVeto)
 		// CHAOS-3478: nil -- resolvePriorSubjectHints has not run yet at
 		// this call site (see engine.go's ordering comment at its own call
 		// site below), the same "nothing attempted yet" convention every
@@ -1164,6 +1222,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// cached answer generated under unconfirmed inference instead.
 	structureCanon := e.canonicalizeStructure(ctx, principal, request, binding)
 	if structureCanon.Veto != structureVetoNone {
+		continuation = continuation.withReason(ContinuationReasonStructureVeto)
 		// CHAOS-3900 P1.F: a PRE-FLIGHT veto is FINAL the instant
 		// canonicalizeStructure returns it -- nothing downstream can still
 		// change this outcome, so telemetry records it immediately here,
@@ -1499,6 +1558,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		e.telemetry.RecordInterpretedTimeBound(ctx, principal, interpretedTimeBound)
 	}
 	if !interpretedTimeBound.Answerable() {
+		// The INTERPRETER produced an unanswerable bound; its own member,
+		// distinct from the caller-side one above.
+		continuation = continuation.withReason(ContinuationReasonAsOfUnresolvable)
 		// Returns before ResolveSubjects, DiscoverContext, ReadFacts and
 		// Synthesize ever run -- the same "no capability call pays for a
 		// question this engine will not answer" guarantee the refusal it
@@ -1525,6 +1587,55 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	}
 	clampedInterpretedTime := interpretedTimeBound.Bound
 	interpretation.TimeContext = clampedInterpretedTime
+	// CHAOS-5465: ONE admission function, after every disqualifier and before
+	// every consumer; then ONE composition boundary that validates the frame
+	// consumers receive and decides its gate on that composition.
+	//
+	// The order is the ruling. Admission decides WHETHER and WHAT; composition
+	// decides whether the accepted reading can be a valid frame at all; only
+	// then does anything downstream read a semantic value.
+	// THE FRESH EFFECTIVE GROUP, computed through the SAME accessor, BEFORE any
+	// continuation touches the outcome (r4 R4-2).
+	//
+	// The comparison's fresh side must be the axis the planner WOULD have used
+	// without the continuation. Reading it off the accepted context is how the
+	// previous build reported `agreement=true` against itself while the axis
+	// had in fact been replaced; reading it off the winning sample is how it
+	// disagreed with the planner, which prefers the frame. One accessor, one
+	// context, captured here while the context is still the fresh one.
+	freshContext := freshAcceptedContext(familyOutcome.Frame, familyOutcome.Gate, familyOutcome.WinningSample.GroupKind)
+	freshEffectiveGroup := freshContext.EffectiveGroupKind()
+	accepted := freshContext
+	if continuation.Observed {
+		continuation = e.admitWindowContinuation(
+			carryCtx, principal, request, binding, priorLoadedResults,
+			windowCanon.Effective, clampedInterpretedTime.Axis,
+		)
+		if continuation.Applies() {
+			composed := composeAcceptedContext(
+				familyOutcome.Frame, familyOutcome.Gate, continuation.Accepted.GroupKind,
+				familyOutcome.FrameObligations, interpretation.Shape,
+			)
+			if composed.Usable() {
+				accepted = composed
+			} else {
+				// The carried reading cannot be expressed as a valid frame, so
+				// there is no continuation to serve. Withheld with the
+				// composition's own reason -- never served under the fresh
+				// frame's gate, which certified a different object.
+				continuation.Disposition = ContinuationWithheld
+				continuation = continuation.withReason(ContinuationReasonCompositionInvalid)
+				continuation.CompositionOutcome = composed.Outcome
+				continuation.CompositionFailedInvariant = composed.FailedInvariant
+			}
+		}
+		continuation = compareContinuationProposal(continuation, continuationFreshProposal{
+			Available: true,
+			Family:    familyOutcome.Family,
+			GroupKind: freshEffectiveGroup,
+		})
+		familyOutcome = e.applyAndRecordContinuation(ctx, principal, familyOutcome, continuation, accepted)
+	}
 	// CHAOS-4636 -- the PLANNING STAGE (design §6.1). Deterministic, no
 	// model call, no I/O, placed between interpretation and discovery
 	// because that is the first point where the family is known and the
@@ -1540,6 +1651,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// taint-gated, conflict-fails-closed -- and never the member list, which
 	// would carry an authorization decision (North Star check 18).
 	planCarry := e.resolveCarriedPlan(ctx, principal, request, priorValidatedReceipts, binding, priorLoadedResults)
+	// D-d: a carrier the continuation gate refused may not be served through
+	// the old family-only carry either. Spent on the RESULT so every consumer
+	// of planCarry is covered, not just the two obvious call sites.
+	if continuation.BlocksLegacyCarry() {
+		planCarry = planCarryResult{Outcome: continuation.blockedLegacyCarryOutcome()}
+	}
 	// CHAOS-5003: the plan axis reports its own carry OUTCOME, not only the
 	// applied-carry event. Before this it reported nothing on a miss, so the
 	// axis that turned out to have no containment at all was also the axis an

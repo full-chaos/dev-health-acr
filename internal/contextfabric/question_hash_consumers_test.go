@@ -49,6 +49,8 @@ func TestQuestionHashConsumers_EveryCallSiteHasADeclaredDisposition(t *testing.T
 		// --- ASKS THE QUESTION AND FAILS CLOSED ---
 		"Engine.carryOriginSameQuestionVerdict": {"guards",
 			"refuses a carry when EITHER the request's or the origin's question has no identity (chaos4360_carry.go)"},
+		"continuationQuestionIdentity": {"guards",
+			"refuses a window-only continuation when EITHER the request's or the referenced turn's question has no identity, reporting indeterminate_identity rather than folding it into changed_question; it then requires RAW BYTE equality, which is strictly stronger than hash equality (chaos5465_window_continuation.go)"},
 		"Engine.recordStructureConfirmationOutcome": {"guards",
 			"the sole emitter of structure-selection events; drops any built under the identityless hash before the sink sees it (structure.go)"},
 		"Engine.fetchPriorEntries": {"guards",
