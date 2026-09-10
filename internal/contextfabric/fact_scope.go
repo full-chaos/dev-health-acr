@@ -977,7 +977,16 @@ func factScopePoliciesFrom(rows []factScopeEligibilityRow) map[FactKind]map[Subj
 // discloses -- including one whose policy is FactScopePolicyNone, which is
 // the team case in full.
 func (r *FactReadScopeResolver) lookupFactScopePolicy(kind FactKind, origin SubjectKind) (factScopePolicyRule, bool) {
-	rule, ok := r.policies[kind][origin]
+	policies := r.policies
+	if policies == nil {
+		// A zero-value FactReadScopeResolver{} (built by a test literal,
+		// same deliberate shape as the nil workItemSlots channel above) has
+		// never been through either constructor, so it falls back to the
+		// production table exactly as NewFactReadScopeResolverWithPolicies
+		// would for an explicit nil policies argument.
+		policies = factScopePolicies
+	}
+	rule, ok := policies[kind][origin]
 	return rule, ok
 }
 
@@ -1435,8 +1444,10 @@ type FactReadScopeResolver struct {
 	// expander performs the traversal. nil in stage 1.
 	expander FactScopeExpander
 	// policies is this resolver's own copy of the requirement/origin ->
-	// rule table, resolved once at construction. A resolver never reads the
-	// package-level factScopePolicies var after it is built, so a test that
+	// rule table. nil (an unconstructed zero value, or an explicit nil to
+	// NewFactReadScopeResolverWithPolicies) falls back to the production
+	// table at lookup time -- see lookupFactScopePolicy, the only place
+	// that reads the package-level factScopePolicies var. A test that
 	// wants a narrow table injects it here (NewFactReadScopeResolverWithPolicies)
 	// instead of mutating shared package state a concurrent t.Parallel
 	// reader could observe mid-test (the CHAOS-5405 race).
@@ -1461,15 +1472,14 @@ func NewFactReadScopeResolver(expander FactScopeExpander) *FactReadScopeResolver
 }
 
 // NewFactReadScopeResolverWithPolicies builds the resolver against an
-// explicit policy table. A nil table falls back to the production table
-// (factScopePolicies) -- the only supported way for a test to exercise a
-// narrow or altered table is to pass it here, never to reassign the package
-// global, which a parallel reader elsewhere in the package could observe
-// mid-mutation.
+// explicit policy table. A nil table (including the zero value's, since a
+// FactReadScopeResolver{} test literal never runs this constructor at all)
+// falls back to the production table (factScopePolicies) at lookup time --
+// see lookupFactScopePolicy, the single place that fallback lives. The only
+// supported way for a test to exercise a narrow or altered table is to pass
+// it here, never to reassign the package global, which a parallel reader
+// elsewhere in the package could observe mid-mutation.
 func NewFactReadScopeResolverWithPolicies(expander FactScopeExpander, policies map[FactKind]map[SubjectKind]factScopePolicyRule) *FactReadScopeResolver {
-	if policies == nil {
-		policies = factScopePolicies
-	}
 	return &FactReadScopeResolver{
 		expander: expander,
 		policies: policies,

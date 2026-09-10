@@ -20,6 +20,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -3257,4 +3258,167 @@ func TestChaos4099_TheProxyDisclosureReachesTheAnswerThroughTheEngine(t *testing
 	if telemetry.factScopeExpansions[0].Basis != FactScopeBasisActivityProxy {
 		t.Fatalf("basis = %q, want activity_proxy", telemetry.factScopeExpansions[0].Basis)
 	}
+}
+
+// TestChaos5547_ZeroValueResolverUsesProductionPolicies pins the fallback a
+// zero-value FactReadScopeResolver{} depends on. The type's own doc comment
+// on workItemSlots states a test literal built this way is a deliberately
+// supported shape -- before this pin, lookupFactScopePolicy read only
+// r.policies, so a zero-value literal's nil map made every pair ineligible,
+// silently (codex r1, PR #495, P3).
+func TestChaos5547_ZeroValueResolverUsesProductionPolicies(t *testing.T) {
+	t.Parallel()
+	var zeroValue FactReadScopeResolver
+	rule, eligible := zeroValue.lookupFactScopePolicy(FactMetrics, SubjectProject)
+	if !eligible {
+		t.Fatal("a zero-value resolver treated (metrics, project) as ineligible -- it must fall back to the production table")
+	}
+	// Cross-checked against the constructor's own resolution of the same
+	// pair, so this pin does not have to hardcode (and drift against) the
+	// production table's exact contents.
+	constructed := NewFactReadScopeResolver(nil)
+	wantRule, wantEligible := constructed.lookupFactScopePolicy(FactMetrics, SubjectProject)
+	if !wantEligible || rule != wantRule {
+		t.Fatalf("zero-value lookup = %+v (eligible=%v), want the constructed resolver's own production rule %+v (eligible=%v)", rule, eligible, wantRule, wantEligible)
+	}
+}
+
+// TestChaos5547_ExplicitEmptyPolicyTableIsNotReplacedByTheFallback is the
+// discriminating control for the pin above: the fallback triggers ONLY on a
+// nil policies map (the zero-value/unconstructed shape), never on an
+// explicit, deliberately empty table a test injected on purpose. A fallback
+// keyed on emptiness rather than nilness would silently erase every test in
+// this package that installs a narrow or empty table -- the exact class of
+// bug the CHAOS-5547 fix replaced the shared-global write with.
+func TestChaos5547_ExplicitEmptyPolicyTableIsNotReplacedByTheFallback(t *testing.T) {
+	t.Parallel()
+	resolver := NewFactReadScopeResolverWithPolicies(nil, map[FactKind]map[SubjectKind]factScopePolicyRule{})
+	if _, eligible := resolver.lookupFactScopePolicy(FactMetrics, SubjectProject); eligible {
+		t.Fatal("an explicitly empty (non-nil) policy table was replaced by the production fallback -- only a nil map may fall back")
+	}
+}
+
+// TestChaos5547_PolicyLookupInputDomain is the input-domain table for
+// lookupFactScopePolicy (codex r1's merge record, PR #495): every shape the
+// resolver's own policies field can be in, crossed with every shape a
+// (kind, origin) query can take, executed and asserted per cell.
+//
+// "Eligible" here means the pair is PRESENT in the table (lookupFactScopePolicy's
+// own `ok` return) -- independent of the rule's Enabled bit, which is a
+// separate, later concern (resolveRequirement reads Enabled only after
+// eligibility has already been decided).
+func TestChaos5547_PolicyLookupInputDomain(t *testing.T) {
+	t.Parallel()
+
+	const (
+		eligibleKind     = FactMetrics    // present + enabled in the production table
+		eligibleOrigin   = SubjectProject //
+		ineligibleKind   = FactMetrics    // no established path from a repository origin
+		ineligibleOrigin = SubjectRepository
+	)
+	unknownKind := FactKind("chaos5547_unknown_kind_" + string(FactMetrics))
+	unknownOrigin := SubjectKind("chaos5547_unknown_origin_" + string(SubjectProject))
+
+	narrowUnrelated := map[FactKind]map[SubjectKind]factScopePolicyRule{
+		FactPullRequests: {SubjectTeam: {
+			Policy: FactScopePolicyTeamPrimaryAttributionPullRequest, TargetKind: SubjectPullRequest,
+			Basis: FactScopeBasisActivityProxy, Enabled: true,
+		}},
+	}
+	pairDisabled := map[FactKind]map[SubjectKind]factScopePolicyRule{
+		eligibleKind: {eligibleOrigin: {
+			Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
+			Basis: FactScopeBasisActivityProxy, Enabled: false,
+		}},
+	}
+
+	rows := []struct {
+		name     string
+		resolver func() *FactReadScopeResolver
+	}{
+		{"nil_policies_zero_value_literal", func() *FactReadScopeResolver { return &FactReadScopeResolver{} }},
+		{"explicit_nil_arg", func() *FactReadScopeResolver { return NewFactReadScopeResolverWithPolicies(nil, nil) }},
+		{"explicit_empty_table", func() *FactReadScopeResolver {
+			return NewFactReadScopeResolverWithPolicies(nil, map[FactKind]map[SubjectKind]factScopePolicyRule{})
+		}},
+		{"narrow_table_missing_the_pair", func() *FactReadScopeResolver {
+			return NewFactReadScopeResolverWithPolicies(nil, narrowUnrelated)
+		}},
+		{"table_with_the_pair_disabled", func() *FactReadScopeResolver {
+			return NewFactReadScopeResolverWithPolicies(nil, pairDisabled)
+		}},
+		{"production_table", func() *FactReadScopeResolver { return NewFactReadScopeResolver(nil) }},
+	}
+	columns := []struct {
+		name   string
+		kind   FactKind
+		origin SubjectKind
+	}{
+		{"eligible_pair", eligibleKind, eligibleOrigin},
+		{"ineligible_pair", ineligibleKind, ineligibleOrigin},
+		{"unknown_kind", unknownKind, eligibleOrigin},
+		{"unknown_origin", eligibleKind, unknownOrigin},
+	}
+	// want[row][column] -- derived, not asserted from the code under test:
+	// only "table_with_the_pair_disabled" x "eligible_pair" disagrees with
+	// its row's other columns, because eligibility is presence, not Enabled.
+	want := map[string]map[string]bool{
+		"nil_policies_zero_value_literal": {"eligible_pair": true, "ineligible_pair": false, "unknown_kind": false, "unknown_origin": false},
+		"explicit_nil_arg":                {"eligible_pair": true, "ineligible_pair": false, "unknown_kind": false, "unknown_origin": false},
+		"explicit_empty_table":            {"eligible_pair": false, "ineligible_pair": false, "unknown_kind": false, "unknown_origin": false},
+		"narrow_table_missing_the_pair":   {"eligible_pair": false, "ineligible_pair": false, "unknown_kind": false, "unknown_origin": false},
+		"table_with_the_pair_disabled":    {"eligible_pair": true, "ineligible_pair": false, "unknown_kind": false, "unknown_origin": false},
+		"production_table":                {"eligible_pair": true, "ineligible_pair": false, "unknown_kind": false, "unknown_origin": false},
+	}
+
+	for _, row := range rows {
+		row := row
+		for _, col := range columns {
+			col := col
+			t.Run(row.name+"/"+col.name, func(t *testing.T) {
+				t.Parallel()
+				resolver := row.resolver()
+				_, eligible := resolver.lookupFactScopePolicy(col.kind, col.origin)
+				if want := want[row.name][col.name]; eligible != want {
+					t.Fatalf("(%s, %s) eligible = %v, want %v", row.name, col.name, eligible, want)
+				}
+			})
+		}
+	}
+}
+
+// TestChaos5547_PolicyLookupInputDomain_ConcurrentReaders is the input-domain
+// table's 7th row: many goroutines resolving every query shape concurrently
+// against ONE shared resolver, proving the lookup is race-free under -race
+// (not merely correct single-threaded) -- the resolver-local field this PR
+// replaced the shared-global read with.
+func TestChaos5547_PolicyLookupInputDomain_ConcurrentReaders(t *testing.T) {
+	t.Parallel()
+	resolver := NewFactReadScopeResolver(nil)
+	unknownKind := FactKind("chaos5547_unknown_kind_" + string(FactMetrics))
+	unknownOrigin := SubjectKind("chaos5547_unknown_origin_" + string(SubjectProject))
+	queries := []struct {
+		kind         FactKind
+		origin       SubjectKind
+		wantEligible bool
+	}{
+		{FactMetrics, SubjectProject, true},
+		{FactMetrics, SubjectRepository, false},
+		{unknownKind, SubjectProject, false},
+		{FactMetrics, unknownOrigin, false},
+	}
+	var wg sync.WaitGroup
+	for range 50 {
+		for _, q := range queries {
+			q := q
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if _, eligible := resolver.lookupFactScopePolicy(q.kind, q.origin); eligible != q.wantEligible {
+					t.Errorf("(%s, %s) eligible = %v, want %v", q.kind, q.origin, eligible, q.wantEligible)
+				}
+			}()
+		}
+	}
+	wg.Wait()
 }
