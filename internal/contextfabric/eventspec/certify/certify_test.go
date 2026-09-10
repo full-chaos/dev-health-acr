@@ -1,11 +1,31 @@
 package certify
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 )
+
+// certifyRecovered calls Certify but recovers a panic into a normal returned
+// error -- so a mutant that reintroduces an out-of-bounds index (e.g.
+// disabling the "found 0 lines" guard, which would otherwise index the last
+// element of an empty slice) fails every call site below as a clean, named
+// test failure instead of crashing the whole package's test binary and
+// aborting every test that runs after it. An unrecovered panic is Go's own
+// testing semantics, not a harness defect, but it makes a real mutant kill
+// unreadable to a battery's floor/RUN-count check -- this converts the kill
+// signal back into something mechanical.
+func certifyRecovered(t *testing.T, log *Log, a Assertion) (result Result, err error) {
+	t.Helper()
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("Certify() panicked: %v", r)
+		}
+	}()
+	return Certify(log, a)
+}
 
 // wantForRankedCutSummary is one internally-consistent, independently
 // constructed fixture value set for eventspec.RankedCutSummary -- used by
@@ -38,7 +58,7 @@ func TestCertifyAcceptsRealProductionLikeOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if _, err := Certify(log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()}); err != nil {
+	if _, err := certifyRecovered(t, log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()}); err != nil {
 		t.Fatalf("Certify() on a valid line error = %v, want nil", err)
 	}
 }
@@ -81,7 +101,7 @@ func TestCertifyRefusesATwinLineWithTheSameMsgAndDifferentValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	_, err = Certify(log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()})
+	_, err = certifyRecovered(t, log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()})
 	if err == nil {
 		t.Fatal("Certify() accepted a log whose LAST summary line disagrees with Want -- want a refusal naming the value mismatch")
 	}
@@ -103,7 +123,7 @@ func TestCertifyAcceptsAGenuineMultiPassTwin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if _, err := Certify(log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()}); err != nil {
+	if _, err := certifyRecovered(t, log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()}); err != nil {
 		t.Fatalf("Certify() refused a genuine multi-pass log (first pass candidate_count=2, kept pass candidate_count=92, same request_id) -- want it to certify the LAST line: %v", err)
 	}
 }
@@ -118,7 +138,7 @@ func TestCertifyRefusesTheRightLineAtTheWrongLevel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	_, err = Certify(log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()})
+	_, err = certifyRecovered(t, log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()})
 	if err == nil {
 		t.Fatal("Certify() accepted a value-correct line demoted to Debug -- want a refusal: a Debug demotion that survives the pin is a finding against the pin")
 	}
@@ -137,7 +157,7 @@ func TestCertifyRefusesAWrongValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	_, err = Certify(log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()})
+	_, err = certifyRecovered(t, log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()})
 	if err == nil {
 		t.Fatal("Certify() accepted pool_truncated_n=0 when the fixture expects 72 -- an expectation that cannot fail pins nothing")
 	}
@@ -156,7 +176,7 @@ func TestCertifyRefusesAValueOutsideTheClosedVocabulary(t *testing.T) {
 	}
 	want := wantForRankedCutSummary()
 	want["anchor_slot_source"] = "not_a_declared_source"
-	_, err = Certify(log, Assertion{Event: eventspec.RankedCutSummary, Want: want})
+	_, err = certifyRecovered(t, log, Assertion{Event: eventspec.RankedCutSummary, Want: want})
 	if err == nil {
 		t.Fatal("Certify() accepted anchor_slot_source=\"not_a_declared_source\", which is outside the event's declared closed vocabulary {receipt,confirmed_anchor,none} -- want a refusal")
 	}
@@ -174,7 +194,7 @@ func TestCertifyRefusesAWantKeyMissingFromTheLine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	_, err = Certify(log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()})
+	_, err = certifyRecovered(t, log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()})
 	if err == nil {
 		t.Fatal("Certify() accepted a line with no pool_truncated_n key at all, even though Want asserts it -- want a refusal naming the missing key")
 	}
@@ -211,7 +231,7 @@ func TestCertifyRefusesALineMissingARequiredFieldNotNamedInWant(t *testing.T) {
 			if _, present := want[tc.field]; present {
 				t.Fatalf("fixture bug: the dropped field must NOT be named in Want, or this test would pass for the wrong (already-existing) reason")
 			}
-			_, err = Certify(log, Assertion{Event: eventspec.RankedCutSummary, Want: want})
+			_, err = certifyRecovered(t, log, Assertion{Event: eventspec.RankedCutSummary, Want: want})
 			if err == nil {
 				t.Fatalf("Certify() accepted a line missing %s, a declared-required field Want never named -- a silently dropped field must never pass unnoticed", tc.field)
 			}
@@ -249,7 +269,7 @@ func TestCertifyRefusesWantMissingAnAttributionField(t *testing.T) {
 	}
 	want := wantForRankedCutSummary()
 	delete(want, "request_id")
-	_, err = Certify(log, Assertion{Event: eventspec.RankedCutSummary, Want: want})
+	_, err = certifyRecovered(t, log, Assertion{Event: eventspec.RankedCutSummary, Want: want})
 	if err == nil {
 		t.Fatal("Certify() accepted a Want with no \"request_id\" (RankedCutSummary's own declared Attribution field) -- want a refusal naming it")
 	}
@@ -268,7 +288,7 @@ func TestCertifyRefusesZeroLinesForAnExactlyOnePerPassEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	_, err = Certify(log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()})
+	_, err = certifyRecovered(t, log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()})
 	if err == nil {
 		t.Fatal("Certify() accepted zero RankedCutSummary lines for this attempt -- want a refusal naming the count")
 	}
@@ -288,7 +308,7 @@ func TestCertifyRefusesTwoLinesForAZeroOrOnePerPassEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	_, err = Certify(log, Assertion{
+	_, err = certifyRecovered(t, log, Assertion{
 		Event: eventspec.AnchorSlotDisplaced,
 		Want: map[string]any{
 			"request_id":           "req_1",
@@ -320,7 +340,7 @@ func TestCertifyRefusesANestedObjectMissingARequiredChildField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	_, err = Certify(log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()})
+	_, err = certifyRecovered(t, log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()})
 	if err == nil {
 		t.Fatal("Certify() accepted a declared_kind_rescue row missing \"kind\" -- want a refusal naming the nested field")
 	}
@@ -339,7 +359,7 @@ func TestCertifyRefusesAWrongTypeNotNamedInWant(t *testing.T) {
 	}
 	want := wantForRankedCutSummary()
 	delete(want, "pool_truncated_n")
-	_, err = Certify(log, Assertion{Event: eventspec.RankedCutSummary, Want: want})
+	_, err = certifyRecovered(t, log, Assertion{Event: eventspec.RankedCutSummary, Want: want})
 	if err == nil {
 		t.Fatal("Certify() accepted pool_truncated_n as a string (declared int), not named in Want -- want a refusal naming the type mismatch")
 	}
@@ -359,7 +379,7 @@ func TestCertifyRefusesTwoIdenticalLinesForAnExactlyOnePerPassEvent(t *testing.T
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	_, err = Certify(log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()})
+	_, err = certifyRecovered(t, log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()})
 	if err == nil {
 		t.Fatal("Certify() accepted two lines identical apart from time -- want a refusal naming the duplicate")
 	}
@@ -433,7 +453,7 @@ func TestCertifyRefusesABadVocabNotNamedInWant(t *testing.T) {
 	}
 	want := wantForRankedCutSummary()
 	delete(want, "anchor_slot_source")
-	_, err = Certify(log, Assertion{Event: eventspec.RankedCutSummary, Want: want})
+	_, err = certifyRecovered(t, log, Assertion{Event: eventspec.RankedCutSummary, Want: want})
 	if err == nil {
 		t.Fatal("Certify() accepted anchor_slot_source=\"made_up_source\" (not named in Want) -- want a refusal naming the closed vocabulary")
 	}

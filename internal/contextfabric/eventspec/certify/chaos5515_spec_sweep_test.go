@@ -148,7 +148,7 @@ func TestCertifySpecSweepCoversEveryDeclaredFieldOfEveryEvent(t *testing.T) {
 				attribution[k] = base[k]
 			}
 
-			if _, err := Certify(logFromLine(t, deepCopyLine(t, base)), Assertion{Event: ev, Want: attribution}); err != nil {
+			if _, err := certifyRecovered(t, logFromLine(t, deepCopyLine(t, base)), Assertion{Event: ev, Want: attribution}); err != nil {
 				t.Fatalf("control: the sweep's own canonical line for %s was refused (fixture bug, not a finding): %v", ev.ID, err)
 			}
 
@@ -164,7 +164,7 @@ func TestCertifySpecSweepCoversEveryDeclaredFieldOfEveryEvent(t *testing.T) {
 						t.Run(censusKey+"/missing", func(t *testing.T) {
 							mutated := deepCopyLine(t, base)
 							delete(locate(t, mutated, path), f.Key)
-							if _, err := Certify(logFromLine(t, mutated), Assertion{Event: ev, Want: attribution}); err == nil {
+							if _, err := certifyRecovered(t, logFromLine(t, mutated), Assertion{Event: ev, Want: attribution}); err == nil {
 								t.Errorf("Certify() accepted %s missing on %s", censusKey, ev.ID)
 							}
 						})
@@ -173,7 +173,7 @@ func TestCertifySpecSweepCoversEveryDeclaredFieldOfEveryEvent(t *testing.T) {
 					t.Run(censusKey+"/wrong_type", func(t *testing.T) {
 						mutated := deepCopyLine(t, base)
 						locate(t, mutated, path)[f.Key] = wrongTypeValueFor(f)
-						if _, err := Certify(logFromLine(t, mutated), Assertion{Event: ev, Want: attribution}); err == nil {
+						if _, err := certifyRecovered(t, logFromLine(t, mutated), Assertion{Event: ev, Want: attribution}); err == nil {
 							t.Errorf("Certify() accepted %s wrong-typed on %s", censusKey, ev.ID)
 						}
 					})
@@ -182,7 +182,7 @@ func TestCertifySpecSweepCoversEveryDeclaredFieldOfEveryEvent(t *testing.T) {
 						t.Run(censusKey+"/bad_vocab", func(t *testing.T) {
 							mutated := deepCopyLine(t, base)
 							locate(t, mutated, path)[f.Key] = "sweep_undeclared_vocab_value"
-							if _, err := Certify(logFromLine(t, mutated), Assertion{Event: ev, Want: attribution}); err == nil {
+							if _, err := certifyRecovered(t, logFromLine(t, mutated), Assertion{Event: ev, Want: attribution}); err == nil {
 								t.Errorf("Certify() accepted %s out-of-vocabulary on %s", censusKey, ev.ID)
 							}
 						})
