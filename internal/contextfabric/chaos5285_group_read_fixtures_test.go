@@ -211,6 +211,15 @@ func groupReadEngineFixtureWith(t *testing.T, telemetry EngineTelemetry, facts C
 
 func groupReadEngineFixtureWithKinds(t *testing.T, telemetry EngineTelemetry, facts CanonicalFactReader, members []CohortMember, denied map[string]struct{}, cohortKind SubjectKind) (*Engine, InvestigationRequest) {
 	t.Helper()
+	return groupReadEngineFixtureFull(t, telemetry, facts, members, denied, cohortKind, nil, nil)
+}
+
+// groupReadEngineFixtureFull is the same fixture parameterised on the engine
+// OPTIONS and on a synthesis counter, so a test can drive the bounded retry and
+// count fact-service calls across it. The retry is the case the two-read
+// guarantee is actually about: a turn that re-synthesizes must not re-read.
+func groupReadEngineFixtureFull(t *testing.T, telemetry EngineTelemetry, facts CanonicalFactReader, members []CohortMember, denied map[string]struct{}, cohortKind SubjectKind, options *EngineOptions, synthesisCalls *int) (*Engine, InvestigationRequest) {
+	t.Helper()
 	cohort := &Cohort{
 		Kind: cohortKind, Rationale: "kind census match", Complete: true,
 		Members: members,
@@ -244,8 +253,27 @@ func groupReadEngineFixtureWithKinds(t *testing.T, telemetry EngineTelemetry, fa
 		Graph:        graph,
 		Facts:        facts,
 		Requirements: groupReadRequirementDeriver{},
-		Synthesizer: synthesizerFunc(func(_ context.Context, _ storage.Principal, _ SynthesisInput) (InvestigationResult, error) {
+		Synthesizer: synthesizerFunc(func(_ context.Context, _ storage.Principal, input SynthesisInput) (InvestigationResult, error) {
+			if synthesisCalls != nil {
+				*synthesisCalls++
+			}
+			// One claim per SURVIVING cohort member, so the answer's measured
+			// size actually shrinks when narrowing drops a member. A
+			// synthesizer returning a fixed-size answer cannot be retried
+			// into a fit -- the engine refuses instead -- and a retry pin
+			// built on one would never see a second synthesis at all.
+			claims := []ClaimedFact{}
+			if input.Graph.Cohort != nil {
+				for _, member := range input.Graph.Cohort.Members {
+					claims = append(claims, ClaimedFact{
+						ClaimID: "claim_" + member.Subject.CanonicalID,
+						Kind:    FactMetrics, Subject: member.Subject, Field: "status",
+						Value: ScalarValue{String: ptrString("green")},
+					})
+				}
+			}
 			return InvestigationResult{
+				ClaimedFacts:        claims,
 				Status:              InvestigationPartial,
 				DirectJudgment:      "The available evidence does not separate these projects.",
 				CurrentState:        "Projects were discovered.",
@@ -254,7 +282,7 @@ func groupReadEngineFixtureWithKinds(t *testing.T, telemetry EngineTelemetry, fa
 				Drivers:             []DriverJudgment{},
 				RemainingWork:       []Finding{}, ReadinessGaps: []Finding{}, Paths: []RelationshipPath{},
 				Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{},
-				ClaimedFacts: []ClaimedFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 				Warnings: []string{},
 				Versions: VersionSet{
 					Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",
@@ -264,11 +292,7 @@ func groupReadEngineFixtureWithKinds(t *testing.T, telemetry EngineTelemetry, fa
 		}),
 		Results:   &resultStoreStub{},
 		Telemetry: telemetry,
-	}, EngineOptions{
-		ServiceVersion: "acr-test",
-		Now:            func() time.Time { return time.Unix(300, 0).UTC() },
-		NewResultID:    func() string { return "result_52850001" },
-	})
+	}, groupReadEngineOptions(options))
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
 	}
@@ -276,4 +300,19 @@ func groupReadEngineFixtureWithKinds(t *testing.T, telemetry EngineTelemetry, fa
 	request.RequestID = "request_52850001"
 	request.Question = "how are the projects doing for each team?"
 	return engine, request
+}
+
+// groupReadEngineOptions returns the fixture's default options, or the
+// caller's with the deterministic clock and id filled in -- a test that varies
+// only the budget should not have to restate the rest and risk drifting from
+// every other fixture in this file.
+func groupReadEngineOptions(override *EngineOptions) EngineOptions {
+	options := EngineOptions{ServiceVersion: "acr-test"}
+	if override != nil {
+		options = *override
+		options.ServiceVersion = "acr-test"
+	}
+	options.Now = func() time.Time { return time.Unix(300, 0).UTC() }
+	options.NewResultID = func() string { return "result_52850001" }
+	return options
 }
