@@ -1,0 +1,175 @@
+[
+  {
+    "id": "graphrank.anchor_slot_displaced",
+    "msg": "context fabric resolution trace: anchor slot displaced",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_pass",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "present iff this pass's RankedCutSummary line reports anchor_slot_displaced \u003e 0 -- the two lines' counts must agree; today at most one candidate can be displaced per pass (kindReserveSlotsPerKind), so at most one line.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "anchor_slot_displaced"
+        ]
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_canonical_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "anchor_slot_reserved",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "anchor_slot_source",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "receipt",
+          "confirmed_anchor",
+          "none"
+        ]
+      },
+      {
+        "key": "anchor_slot_displaced",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "pool_truncated_n",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.ranked_cut_summary",
+    "msg": "context fabric resolution trace: ranked cut summary",
+    "level": "info",
+    "multiplicity": "exactly_one_per_pass",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "exactly one line per ranked-cut pass -- the per-candidate detail this summary aggregates stays at Debug (case \"ranked_cut\", RankedCutSummary==false).",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "ranked_cut"
+        ]
+      },
+      {
+        "key": "candidate_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "survived_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "survived_ids",
+        "type": "string_slice",
+        "presence": "required"
+      },
+      {
+        "key": "max",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "anchor_slot_reserved",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "anchor_slot_source",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "receipt",
+          "confirmed_anchor",
+          "none"
+        ]
+      },
+      {
+        "key": "anchor_slot_displaced",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "pool_truncated_n",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "declared_kind_rescue",
+        "type": "object_slice",
+        "presence": "required",
+        "fields": [
+          {
+            "key": "kind",
+            "type": "string",
+            "presence": "required"
+          },
+          {
+            "key": "state",
+            "type": "string",
+            "presence": "required",
+            "closed_vocabulary": [
+              "not_run",
+              "ran_matched_zero",
+              "ran_matched_then_dropped",
+              "ran_matched_then_cut"
+            ]
+          },
+          {
+            "key": "terms_queried",
+            "type": "int",
+            "presence": "required"
+          },
+          {
+            "key": "matched",
+            "type": "int",
+            "presence": "required"
+          },
+          {
+            "key": "survived",
+            "type": "int",
+            "presence": "required"
+          },
+          {
+            "key": "reached",
+            "type": "int",
+            "presence": "required"
+          }
+        ]
+      }
+    ]
+  }
+]

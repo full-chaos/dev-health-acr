@@ -111,7 +111,7 @@ dimensions. `context-query.v1` and `ranker.v2` are aliases of the canonical
 context-packet constants, not copyable telemetry literals. Query timeout and store
 backend dimensions expose database/query behavior without statement text or IDs.
 
-CHAOS-2907 HTTP metric export is intentionally deferred. This package supplies
+HTTP metric export is intentionally deferred. This package supplies
 bounded snapshots and a standard-library `SlogSink`; an HTTP/Prometheus/OpenTelemetry
 exporter must be introduced through the owning service integration with its own
 availability, tenancy, and cardinality review.
@@ -126,5 +126,41 @@ real episode create/redact terminals report episode outcomes; and actual episode
 store calls independently report their own backend latency, outcome, and timeout.
 Compatibility is derived from the client sidecar and assembled packet schema
 versions rather than supplied as a telemetry-only value.
-A deployed seeded HTTP packet route remains blocked on CHAOS-2907 and is not
-claimed by this change.
+A deployed seeded HTTP packet route remains blocked pending that owning
+integration decision and is not claimed by this change.
+
+## Decision-event certificate contract
+
+`internal/contextfabric/eventspec` is the one declaration authority for a
+production **decision-event** log line -- a structured `slog` line a resolver,
+engine, or model-runtime decision scope emits at a terminal or measurement
+point, as distinct from this file's request/store/ranking/evidence/episode
+support snapshots above. One `eventspec.Event` value declares, for one
+variant: its stable `ID`, the exact `Msg` a producer emits it under, its
+required `Level`, how many lines one scoped pass may produce (`Multiplicity`),
+which fields jointly attribute a line to its owning scope and attempt
+(`Attribution`), what keeps its own volume bounded (`BoundedAggregation`), and
+every field's JSON type, presence rule (`required`, with an explicit zero
+value, or `conditional` on a stated, testable applicability), and closed
+vocabulary where the field has one.
+
+`internal/contextfabric/eventspec/certify` is the reusable JSON assertion
+runner. It parses real `slog.JSONHandler` output only -- a recorder or capture
+struct's rendering is refused, not silently accepted -- locates the line(s)
+matching an event's `Msg`, enforces the declared `Multiplicity`, asserts the
+declared `Level`, and asserts every field a caller names against the event's
+declaration (closed-vocabulary membership included). A producer's test drives
+its real production entry point through the service's configured tracer
+wrapping a real `slog.NewJSONHandler`, exactly as an operator's own log
+pipeline would see it, and hands the captured bytes to `certify.Parse` /
+`certify.Certify`.
+
+To add a new event: declare it as an `eventspec.Event` value in `spec.go`, add
+it to `eventspec.All`, extend the generated-lookup mapping in
+`generate.go`'s `goVarName`, and run
+`go generate ./internal/contextfabric/eventspec/...` to refresh
+`zz_generated.go` and `schema.json`. `regen_test.go` fails if the checked-in
+generated files and the spec ever diverge -- there is no second, hand-typed
+list of an event's fields anywhere else in the tree. A producer's own test
+then drives its real entry point through a real JSON handler and certifies
+the resulting line(s) against the declaration with `certify.Certify`.
