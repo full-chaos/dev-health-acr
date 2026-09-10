@@ -569,7 +569,7 @@ func (e *Engine) planCandidateNarrowing(
 	requirement, obligation := subjectScopeRequirement(narrowedResult.Completeness.Outcomes)
 	row := candidateNarrowingOutcomeRow(narrowing, measured.Overrun, requirement, obligation)
 	narrowedResult.Completeness.Outcomes = appendOutcomeRows(narrowedResult.Completeness.Outcomes, row)
-	narrowedResult = e.finalizeResult(narrowedResult, *plan, frame, facts)
+	narrowedResult = e.finalizeResult(ctx, principal, narrowedResult, *plan, frame, facts)
 
 	// Measure what will actually be served. If the reduction did not
 	// deliver a fitting document the refusal stands -- serving an answer

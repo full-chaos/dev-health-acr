@@ -1,7 +1,10 @@
 package contextfabric
 
 import (
+	"context"
+
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // CHAOS-4636 (S5 of the CHAOS-4452 intent-engine design, §6): the AnswerPlan
@@ -429,10 +432,22 @@ func stampAnswerPlan(result InvestigationResult, plan AnswerPlan) InvestigationR
 // route, and gate agreement -- the whole reason the measurement moved to
 // internal/contracts/v1 -- did not hold on the byte axis.
 //
-// Pure, and deliberately telemetry-free: it runs once per synthesis pass, and
-// a retry must not double-count a render-selection decision. The engine emits
-// that event once, for the result it actually serves.
+// Deliberately telemetry-free FOR EVERY DECISION EXCEPT ONE: it runs once per
+// synthesis pass, and a retry must not double-count a render-selection
+// decision or a membership-cardinality count, so those events are emitted
+// once, by the caller, for the result it actually serves -- never from here.
+//
+// THE ONE EXCEPTION is the read-requirement observation-cover decision.
+// Unlike the events above, it has no field on the served row to be read back
+// from later (see ReadRequirementObservationCoverEvent's own doc comment):
+// it is a pure diagnostic of HOW the row was computed, not part of the wire
+// document, so there is nothing to defer to and nothing to recompute at a
+// later point. It is therefore emitted HERE, through e.telemetry, at the same
+// call frequency the evaluator's own diagnostic line always had -- ctx and
+// principal are threaded in for exactly this one emission.
 func (e *Engine) finalizeResult(
+	ctx context.Context,
+	principal storage.Principal,
 	result InvestigationResult, plan AnswerPlan, frame *QuestionFrame,
 	// facts is BY VALUE: the bundle is already copied per attempt, and the
 	// population is derived INSIDE this function rather than threaded as a
@@ -541,9 +556,19 @@ func (e *Engine) finalizeResult(
 	if e.observationKeys != nil {
 		observationKeys = e.observationKeys.ObservationKeyAssignment()
 	}
-	result.Completeness.Outcomes = appendReadRequirementEvaluations(
+	rows, coverEvents := appendReadRequirementEvaluationsWithCover(
 		result.Completeness.Outcomes, stamped.Requirements, result.Coverage,
 		readPopulationEvidenceFrom(frame, result, stamped, facts, observationKeys))
+	result.Completeness.Outcomes = rows
+	// THE ONE EXCEPTION this function's own doc comment names: emitted HERE,
+	// nil-safe like every other e.telemetry emitter, because the diagnostic
+	// has no field on the row to be read back from at a later, once-per-
+	// served-result point.
+	if e.telemetry != nil {
+		for _, event := range coverEvents {
+			e.telemetry.RecordReadRequirementObservationCover(ctx, principal, event)
+		}
+	}
 	result.Completeness = ComputeAnswerCompleteness(result)
 	return result
 }

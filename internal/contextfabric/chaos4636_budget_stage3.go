@@ -311,7 +311,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// They are the same "stale document at the retry" class on different
 	// axes, found independently by two lanes. Taking one without the other
 	// re-opens the half it did not fix.
-	retried = e.finalizeResult(retried, *plan, params.Frame, retryParams.Facts)
+	retried = e.finalizeResult(ctx, principal, retried, *plan, params.Frame, retryParams.Facts)
 	// READ BACK FROM THE PRODUCER, not from the params and not from the local
 	// `retryAllocation`, and the difference is the entire lesson of this class.
 	//

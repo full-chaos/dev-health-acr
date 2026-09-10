@@ -416,16 +416,39 @@ func hasEvaluatedReadOutcome(rows []RequirementOutcomeRow, identity string) bool
 // appendMembershipCardinality, and `ranking` has no evaluator yet -- a gap that
 // is disclosed rather than covered here, because inventing an evidence reading
 // for a step this function cannot observe would be worse than saying nothing.
+//
+// A thin wrapper over appendReadRequirementEvaluationsWithCover for the many
+// callers that only want the rows -- see that function for the observation-cover
+// diagnostic this one discards.
 func appendReadRequirementEvaluations(
 	rows []RequirementOutcomeRow,
 	published []contractsv1.ContextFabricPlanRequirement,
 	coverage Coverage,
 	populations readPopulationEvidence,
 ) []RequirementOutcomeRow {
+	rows, _ = appendReadRequirementEvaluationsWithCover(rows, published, coverage, populations)
+	return rows
+}
+
+// appendReadRequirementEvaluationsWithCover is appendReadRequirementEvaluations's
+// full form: it ALSO returns one ReadRequirementObservationCoverEvent per row it
+// appends, in the same order, for finalizeResult to emit through e.telemetry.
+//
+// It stays a PURE FUNCTION -- no ctx, no principal, no I/O -- exactly like its
+// sibling: readRequirementOutcomeRow already computes the cover diagnostic as
+// a side-effect-free value (see that function's own third return), and this
+// loop only COLLECTS what it returns rather than deciding anything new.
+func appendReadRequirementEvaluationsWithCover(
+	rows []RequirementOutcomeRow,
+	published []contractsv1.ContextFabricPlanRequirement,
+	coverage Coverage,
+	populations readPopulationEvidence,
+) ([]RequirementOutcomeRow, []ReadRequirementObservationCoverEvent) {
 	if len(published) == 0 {
-		return rows
+		return rows, nil
 	}
 	var added []RequirementOutcomeRow
+	var events []ReadRequirementObservationCoverEvent
 	for _, requirement := range published {
 		if requirement.Kind != string(ObligationKindRead) || !requirement.Served() {
 			continue
@@ -437,13 +460,16 @@ func appendReadRequirementEvaluations(
 		if !known {
 			continue
 		}
-		row, ok := readRequirementOutcomeRow(requirement, threshold, evaluateReadRequirement(requirement, coverage), populations)
+		row, ok, cover := readRequirementOutcomeRow(requirement, threshold, evaluateReadRequirement(requirement, coverage), populations)
 		if !ok {
 			continue
 		}
 		added = append(added, row)
+		if cover != nil {
+			events = append(events, *cover)
+		}
 	}
-	return appendOutcomeRows(rows, added...)
+	return appendOutcomeRows(rows, added...), events
 }
 
 // servedObservationCover is the SERVED half of a read requirement's two
@@ -565,12 +591,20 @@ func servedObservationCover(evidence readEvidence, subject SubjectKind, assignme
 // threshold)) reports `1/2`: the standard's own demand, the way the shortfall
 // arm below already reports it when fewer kinds were observed than the
 // standard needs.
+//
+// readRequirementOutcomeRow's third return is the observation-cover
+// diagnostic for the row it built, or nil when no row-building reached the
+// point that computes one (every early return above the cover computation,
+// and the guard branches that emit no row at all). It is a PURE VALUE, never
+// logged here -- see ReadRequirementObservationCoverEvent's own doc comment
+// for why the decision has to be reconstructible from a trace at all, and
+// finalizeResult for where it is actually emitted through e.telemetry.
 func readRequirementOutcomeRow(
 	requirement contractsv1.ContextFabricPlanRequirement,
 	threshold int,
 	evidence readEvidence,
 	populations readPopulationEvidence,
-) (RequirementOutcomeRow, bool) {
+) (RequirementOutcomeRow, bool, *ReadRequirementObservationCoverEvent) {
 	// NOTHING WAS READ FOR THIS REQUIREMENT, and it now says so.
 	//
 	// This arm was the one hole in the change: a requirement none of whose
@@ -612,7 +646,7 @@ func readRequirementOutcomeRow(
 	// This arm is BEFORE the not-planned row for that reason: reaching the
 	// row first is how the defect happened.
 	if evidence.Observed == 0 && evidence.Pruned > 0 {
-		return RequirementOutcomeRow{}, false
+		return RequirementOutcomeRow{}, false, nil
 	}
 
 	if evidence.Observed == 0 {
@@ -626,7 +660,7 @@ func readRequirementOutcomeRow(
 			CauseObserved: false,
 			Served:        0,
 			Declared:      threshold,
-		}, true
+		}, true, nil
 	}
 
 	// AN UNDECLARED CAUSE CODE EMITS NO ROW.
@@ -660,7 +694,7 @@ func readRequirementOutcomeRow(
 			"obligation", SanitizeLogAttr(requirement.Obligation),
 			"undeclared_code", SanitizeLogAttr(string(evidence.UndeclaredCode)),
 			"observed_kinds", evidence.Observed)
-		return RequirementOutcomeRow{}, false
+		return RequirementOutcomeRow{}, false, nil
 	}
 
 	// THE SNAPSHOT, read off `populations` -- the SAME snapshot the caller
@@ -676,7 +710,7 @@ func readRequirementOutcomeRow(
 	if threshold > declared {
 		declared = threshold
 	}
-	recordObservationCoverDecision(requirement, threshold, servedCover, declared, evidence, populations.assignment)
+	cover := readRequirementObservationCoverEvent(requirement, threshold, servedCover, declared, evidence, populations.assignment)
 	row := RequirementOutcomeRow{
 		Stage:       contractsv1.ContextFabricOutcomeStageAssembledResult,
 		Requirement: requirement.Requirement,
@@ -719,7 +753,7 @@ func readRequirementOutcomeRow(
 					"requirement", SanitizeLogAttr(requirement.Requirement),
 					"obligation", SanitizeLogAttr(requirement.Obligation),
 					"scope", SanitizeLogAttr(requirement.Scope))
-				return RequirementOutcomeRow{}, false
+				return RequirementOutcomeRow{}, false, nil
 			}
 			population, owned := populations.populationFor(requirement)
 			if !owned {
@@ -727,9 +761,9 @@ func readRequirementOutcomeRow(
 					"requirement", SanitizeLogAttr(requirement.Requirement),
 					"obligation", SanitizeLogAttr(requirement.Obligation),
 					"scope", SanitizeLogAttr(requirement.Scope))
-				return RequirementOutcomeRow{}, false
+				return RequirementOutcomeRow{}, false, nil
 			}
-			return readPopulationOutcomeRow(row, population, populations, evidence.ServedKinds, threshold, requirement.Subject), true
+			return readPopulationOutcomeRow(row, population, populations, evidence.ServedKinds, threshold, requirement.Subject), true, cover
 		}
 		// Served in full at the declared standard. The counts are the
 		// OBSERVATIONS THAT SERVED, not the catalogue: a satisfied row
@@ -744,7 +778,7 @@ func readRequirementOutcomeRow(
 		// Declared to the catalogue would describe a loss that did not
 		// happen, per the comment above.
 		row.Declared = row.Served
-		return row, true
+		return row, true, cover
 	}
 
 	row.CauseCoverage = evidence.Cause
@@ -787,7 +821,7 @@ func readRequirementOutcomeRow(
 		// less detail about the things that remain -- none of it.
 		row.Outcome = contractsv1.ContextFabricRequirementUnavailable
 		row.Impact = contractsv1.ContextFabricAnswerImpactDimension
-		return row, true
+		return row, true, cover
 	}
 	// Served, over less than the standard asked for. Depth rather than scope:
 	// the subjects the answer covers are unchanged, and what stands behind
@@ -818,70 +852,115 @@ func readRequirementOutcomeRow(
 		// standard of 2 is exactly the shortfall, and the row's cause names
 		// it. What is withheld is the claim that a reduction STEP occurred,
 		// because none did.
-		return row, true
+		return row, true, cover
 	}
 	// The reduction step, derived from the row's own counts and cause so the
 	// step and the row cannot state different things about one narrowing.
 	// Reached only where the evidence itself reported the cause, so there is
 	// a real before-and-after to record.
-	return contractsv1.ContextFabricWithReductionRefinement(row), true
+	return contractsv1.ContextFabricWithReductionRefinement(row), true, cover
 }
 
-// recordObservationCoverDecision emits the observation-cover decision so it can
-// be rebuilt FROM THE TRACE ALONE, per the observability bar: pre-entry (what
-// was requested), pre-decision (what was measured), the decision and its
-// reason, and post-decision (what was served).
+// ReadRequirementObservationCoverEvent is the observation-cover decision for
+// ONE read requirement's row, so it can be rebuilt FROM THE TRACE ALONE, per
+// the observability bar: pre-entry (what was requested), pre-decision (what
+// was measured), the decision and its reason, and post-decision (what was
+// served).
 //
-// WHY THIS LINE EXISTS AT ALL, stated plainly because it is the argument for
+// WHY THIS EVENT EXISTS AT ALL, stated plainly because it is the argument for
 // the bar. The cover replaced a fact-KIND count with a MINIMUM COVER, and
 // nothing about that substitution was observable: a row reading `narrowed 0/2`
 // looked identical whether two kinds honestly collapsed onto one observation
 // or the evaluator had a bug. One did -- the mixed-state rule tainted whole
 // producers instead of observations and silenced a full read -- and it was
 // findable only by reading the code, because the count that changed reached no
-// log line. That is the defect class this line closes.
+// log line. That is the defect class this event closes.
 //
-// THE DELTA IS THE POINT. Both the kind COUNT and the COVER are emitted for
+// THE DELTA IS THE POINT. Both the kind COUNT and the COVER are carried for
 // each of served and observed, because the cover alone cannot say whether it
 // collapsed anything: cover 2 of 2 kinds and cover 2 of 5 kinds are the same
 // number describing completely different reads. The pair makes the collapse
-// itself visible, and `tainted_observations` says how much of any gap came
-// from the mixed-state rule rather than from the declaration.
+// itself visible, and TaintedObservations says how much of any gap came from
+// the mixed-state rule rather than from the declaration.
 //
 // EVERY DIMENSION IS A COUNT OR A CLOSED TOKEN. Requirement, obligation and
 // subject kind are closed vocabularies; the rest are integers and one bool.
-// No key VALUES and no kind lists are logged -- those would grow with the
+// No key VALUES and no kind lists ride here -- those would grow with the
 // registry, and the numbers already answer the question the bar asks.
 //
-// slog.Default() matches this file's existing convention for the same reason
-// its undeclared-code warning gives: the evaluator is a pure function on the
-// finalization path with no engine handle to take a logger from.
-func recordObservationCoverDecision(
+// It is built by the PURE evaluator (readRequirementObservationCoverEvent,
+// called from readRequirementOutcomeRow) and emitted through e.telemetry by
+// finalizeResult, which holds the engine's configured logger -- never through
+// slog.Default(), which is Go's process-wide fallback and not this service's
+// own JSON stream (see PlanTelemetry.RecordReadRequirementObservationCover).
+type ReadRequirementObservationCoverEvent struct {
+	// Requirement and Obligation and Subject are the row's own identity,
+	// copied from the requirement rather than re-derived, for the same
+	// reason every sibling event on this interface copies them.
+	Requirement string
+	Obligation  string
+	Subject     SubjectKind
+	// Threshold is the completion quantifier's own demand.
+	Threshold int
+	// ObservedKinds and ServedKinds are the KIND counts -- the catalogue
+	// size on each side of the decision, before any cover is taken.
+	ObservedKinds int
+	ServedKinds   int
+	// ObservedCover and ServedCover are the MINIMUM COVER on each side: the
+	// number of independent observations in play, worst-state-wins per
+	// observation. See servedObservationCover's own doc comment for the
+	// mixed-state alias rule this number depends on.
+	ObservedCover int
+	ServedCover   int
+	// CollapsedObservations is ServedKinds minus ServedCover: how many served
+	// KINDS shared an observation with another served kind, so the cover
+	// counted them once. Zero whenever every served kind is independent.
+	CollapsedObservations int
+	// TaintedObservations is how many observations the mixed-state rule
+	// excluded from ServedCover because they also backed a kind this turn
+	// lost. It is the diagnostic half of servedObservationCover, and it is
+	// what tells a reader a cover reduced by the DECLARATION apart from one
+	// reduced by a LOSS.
+	TaintedObservations int
+	// Declared is the row's own published standard: the cover of everything
+	// observed, raised to Threshold. DeclaredRaisedToStandard says whether
+	// that raise actually happened -- true when the observed cover fell
+	// short of the quantifier's demand.
+	Declared                 int
+	DeclaredRaisedToStandard bool
+	// MeetsThreshold is the row's own pass/fail: ServedCover >= Threshold.
+	MeetsThreshold bool
+}
+
+// readRequirementObservationCoverEvent builds the observation-cover
+// diagnostic for one row. A PURE FUNCTION, deliberately: it is called from
+// readRequirementOutcomeRow, which has no engine handle and must stay a pure
+// function on the finalization path, so the VALUE is built here and the I/O
+// happens one layer up, in finalizeResult.
+func readRequirementObservationCoverEvent(
 	requirement contractsv1.ContextFabricPlanRequirement,
 	threshold, servedCover, declared int,
 	evidence readEvidence,
 	assignment observationKeyAssignment,
-) {
+) *ReadRequirementObservationCoverEvent {
 	servedKinds := len(evidence.ServedKinds)
 	observedKinds := len(evidence.ObservedKinds)
-	slog.Default().Info("context fabric observation cover",
-		// PRE-ENTRY: what this requirement asked for.
-		"requirement", requirement.Requirement,
-		"obligation", requirement.Obligation,
-		"subject_kind", string(requirement.Subject),
-		"threshold", threshold,
-		"observed_kinds", observedKinds,
-		"served_kinds", servedKinds,
-		// PRE-DECISION: what the declaration measured those kinds to be.
-		"observed_cover", observationCover(evidence.ObservedKinds, requirement.Subject, assignment),
-		"served_cover", servedCover,
-		"collapsed_observations", servedKinds-servedCover,
-		"tainted_observations", taintedObservationCount(evidence, requirement.Subject, assignment),
-		// DECISION + REASON, and POST-DECISION: the numbers the row publishes.
-		"declared", declared,
-		"declared_raised_to_standard", declared > observationCover(evidence.ObservedKinds, requirement.Subject, assignment),
-		"meets_threshold", servedCover >= threshold,
-	)
+	observedCover := observationCover(evidence.ObservedKinds, requirement.Subject, assignment)
+	return &ReadRequirementObservationCoverEvent{
+		Requirement:              requirement.Requirement,
+		Obligation:               requirement.Obligation,
+		Subject:                  requirement.Subject,
+		Threshold:                threshold,
+		ObservedKinds:            observedKinds,
+		ServedKinds:              servedKinds,
+		ObservedCover:            observedCover,
+		ServedCover:              servedCover,
+		CollapsedObservations:    servedKinds - servedCover,
+		TaintedObservations:      taintedObservationCount(evidence, requirement.Subject, assignment),
+		Declared:                 declared,
+		DeclaredRaisedToStandard: declared > observedCover,
+		MeetsThreshold:           servedCover >= threshold,
+	}
 }
 
 // taintedObservationCount is how many distinct observations the mixed-state

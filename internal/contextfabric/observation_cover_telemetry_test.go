@@ -2,29 +2,37 @@ package contextfabric
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // The observability bar: from the trace alone a reader must be able to rebuild
 // the decision graph -- pre-entry, pre-decision, decision + reason,
 // post-decision -- at Info, with values.
 //
-// This asserts the EMITTED LINE through the REAL slog handler at PRODUCTION
-// LEVEL, driven by the production function, not a hand-called formatter. Every
-// value asserted is non-trivial: a field checked at its zero value would pin
-// nothing, and the whole point of this line is the DELTA between a kind count
-// and a cover.
+// THESE TESTS DRIVE THROUGH THE PORT, not through slog.SetDefault(). The
+// production line used to reach ONLY slog.Default() -- Go's process-wide
+// fallback logger, which is a TEXT handler on stderr at a fixed level in this
+// service and never the JSON stream cmd/acr-api/main.go actually builds and
+// injects as the engine's telemetry logger. A test that installed its own
+// default handler proved the line was EMITTABLE, never that it reached the
+// service's own configured stream -- which is exactly the defect. So every
+// test here builds a SlogEngineTelemetry around a logger it owns and asserts
+// the emitted line from that, the same convention this package's other
+// telemetry tests already use.
 //
-// Not parallel: it installs a process-wide default logger and restores it.
+// The pure evaluator, readRequirementOutcomeRow, no longer does any I/O at
+// all: its third return is the ReadRequirementObservationCoverEvent value,
+// and these tests hand that value to the production sink themselves.
+
 func TestTheObservationCoverDecisionIsEmittedAtInfoWithValues(t *testing.T) {
 	var buf bytes.Buffer
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
-	t.Cleanup(func() { slog.SetDefault(previous) })
+	telemetry := NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	// The collapse case, at real declared values: deficiencies and health at
 	// team are ONE observation, so two served kinds cover one -- and a
@@ -42,7 +50,11 @@ func TestTheObservationCoverDecisionIsEmittedAtInfoWithValues(t *testing.T) {
 	}
 	populations := readPopulationEvidence{assignment: teamAssignment()}
 
-	readRequirementOutcomeRow(requirement, 2, evidence, populations)
+	_, ok, cover := readRequirementOutcomeRow(requirement, 2, evidence, populations)
+	if !ok || cover == nil {
+		t.Fatalf("readRequirementOutcomeRow returned ok=%v cover=%v; the fixture built a row that must both serve and carry a cover diagnostic", ok, cover)
+	}
+	telemetry.RecordReadRequirementObservationCover(context.Background(), storage.Principal{}, *cover)
 
 	var line map[string]any
 	found := false
@@ -96,6 +108,14 @@ func TestTheObservationCoverDecisionIsEmittedAtInfoWithValues(t *testing.T) {
 	if line["subject_kind"] != string(SubjectTeam) {
 		t.Fatalf("subject_kind = %v, want %q", line["subject_kind"], SubjectTeam)
 	}
+	// requirement/obligation: the row's own identity, so a reader can tell
+	// WHICH cell this decision is about without joining against another line.
+	if line["requirement"] != requirement.Requirement {
+		t.Fatalf("requirement = %v, want %q", line["requirement"], requirement.Requirement)
+	}
+	if line["obligation"] != requirement.Obligation {
+		t.Fatalf("obligation = %v, want %q", line["obligation"], requirement.Obligation)
+	}
 
 	// THE DISCRIMINATING CONTROL. Without it every assertion above would also
 	// pass against a line that hard-coded these numbers. Two INDEPENDENT
@@ -106,7 +126,11 @@ func TestTheObservationCoverDecisionIsEmittedAtInfoWithValues(t *testing.T) {
 		ObservedKinds: []FactKind{FactHealth, FactFlow},
 		ServedKinds:   []FactKind{FactHealth, FactFlow},
 	}
-	readRequirementOutcomeRow(requirement, 2, independent, populations)
+	_, ok, independentCover := readRequirementOutcomeRow(requirement, 2, independent, populations)
+	if !ok || independentCover == nil {
+		t.Fatalf("readRequirementOutcomeRow returned ok=%v cover=%v for the control fixture", ok, independentCover)
+	}
+	telemetry.RecordReadRequirementObservationCover(context.Background(), storage.Principal{}, *independentCover)
 	for _, raw := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
 		var candidate map[string]any
 		if json.Unmarshal(raw, &candidate) != nil || candidate["msg"] != "context fabric observation cover" {
@@ -141,9 +165,7 @@ func TestTheObservationCoverDecisionIsEmittedAtInfoWithValues(t *testing.T) {
 // observed, one served.
 func TestTheEmittedServedCoverIsNotTheObservedCover(t *testing.T) {
 	var buf bytes.Buffer
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
-	t.Cleanup(func() { slog.SetDefault(previous) })
+	telemetry := NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	requirement := contractsv1.ContextFabricPlanRequirement{
 		Requirement: "principal_drivers",
@@ -160,7 +182,11 @@ func TestTheEmittedServedCoverIsNotTheObservedCover(t *testing.T) {
 		ObservedKinds: []FactKind{FactHealth, FactFlow, FactMetrics},
 		ServedKinds:   []FactKind{FactHealth},
 	}
-	readRequirementOutcomeRow(requirement, 2, evidence, readPopulationEvidence{assignment: teamAssignment()})
+	_, ok, cover := readRequirementOutcomeRow(requirement, 2, evidence, readPopulationEvidence{assignment: teamAssignment()})
+	if !ok || cover == nil {
+		t.Fatalf("readRequirementOutcomeRow returned ok=%v cover=%v", ok, cover)
+	}
+	telemetry.RecordReadRequirementObservationCover(context.Background(), storage.Principal{}, *cover)
 
 	for _, raw := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
 		var line map[string]any
@@ -183,6 +209,48 @@ func TestTheEmittedServedCoverIsNotTheObservedCover(t *testing.T) {
 		return
 	}
 	t.Fatal("no cover line reached the handler")
+}
+
+// TestTheObservationCoverLineReachesTheEnginesConfiguredLoggerNotTheProcessDefault
+// is the regression test for the defect itself, not for the event's fields.
+//
+// It deliberately leaves slog.Default() pointing at a logger of its own that
+// is NOT the engine's, drives the real production path (Engine.finalizeResult,
+// with a telemetry sink built around a SECOND logger this test also owns),
+// and asserts the line lands in the ENGINE's sink and never in the process
+// default. Before this fix, recordObservationCoverDecision called
+// slog.Default() directly -- the exact call this test would have caught,
+// because the engine's own sink would have stayed empty while the process
+// default (proven live on the rig to be a text handler on stderr, not this
+// service's JSON stream) received it instead.
+func TestTheObservationCoverLineReachesTheEnginesConfiguredLoggerNotTheProcessDefault(t *testing.T) {
+	var defaultBuf, engineBuf bytes.Buffer
+	previousDefault := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&defaultBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(previousDefault) })
+
+	engine := &Engine{
+		requirements: registryDeriver{},
+		telemetry:    NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&engineBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))),
+	}
+
+	frame := teamStateFrame(t)
+	requirement := readRequirement(CompletionQuantifierAtLeastOne)
+	coverage := factCoverage(contractsv1.ContextFabricFactHealth, SourceAvailable)
+
+	engine.finalizeResult(context.Background(), storage.Principal{OrgID: "org_cover_sink"}, InvestigationResult{
+		Status:   InvestigationComplete,
+		ResultID: "result_cover_engine_sink",
+		Coverage: coverage,
+	}, AnswerPlan{Requirements: []contractsv1.ContextFabricPlanRequirement{requirement}}, &frame, CanonicalFactBundle{})
+
+	const msg = "context fabric observation cover"
+	if !bytes.Contains(engineBuf.Bytes(), []byte(msg)) {
+		t.Fatalf("the observation-cover line did not reach the engine's own configured logger:\n%s", engineBuf.String())
+	}
+	if bytes.Contains(defaultBuf.Bytes(), []byte(msg)) {
+		t.Fatalf("the observation-cover line reached the PROCESS DEFAULT logger -- exactly the defect this fix removes:\n%s", defaultBuf.String())
+	}
 }
 
 func keysOf(m map[string]any) []string {

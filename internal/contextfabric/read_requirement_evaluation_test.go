@@ -1,11 +1,13 @@
 package contextfabric
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // The read-requirement evaluator, held to the acceptance the design states:
@@ -773,7 +775,7 @@ func TestFinalizingAServedTurnEvaluatesItsReadRequirements(t *testing.T) {
 			"the row assertions below have nothing to scope to", servable)
 	}
 
-	served := engine.finalizeResult(InvestigationResult{
+	served := engine.finalizeResult(context.Background(), storage.Principal{}, InvestigationResult{
 		Status:   InvestigationComplete,
 		ResultID: "result_51050001",
 		Coverage: factCoverage(

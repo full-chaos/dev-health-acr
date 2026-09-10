@@ -48,8 +48,8 @@ func TestTheRetryEvaluatesReadsOverTheBundleItSynthesizedFrom(t *testing.T) {
 	}{
 		{
 			name: "the retry finalization",
-			want: "retried = e.finalizeResult(retried, *plan, params.Frame, retryParams.Facts)",
-			bad:  "retried = e.finalizeResult(retried, *plan, params.Frame, params.Facts)",
+			want: "retried = e.finalizeResult(ctx, principal, retried, *plan, params.Frame, retryParams.Facts)",
+			bad:  "retried = e.finalizeResult(ctx, principal, retried, *plan, params.Frame, params.Facts)",
 		},
 		{
 			name: "the SECOND planCandidateNarrowing, on the retried result",
