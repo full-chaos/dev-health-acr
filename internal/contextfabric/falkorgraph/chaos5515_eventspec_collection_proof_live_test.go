@@ -197,6 +197,7 @@ func TestLiveEventspecCertifiesTheAnchorSlotPilotThroughARealFalkorDBAdapter(t *
 		Event: eventspec.RankedCutSummary,
 		Want: map[string]any{
 			"request_id":            req.RequestID,
+			"stage":                 "ranked_cut",
 			"max":                   20,
 			"candidate_count":       crowd,
 			"survived_count":        20,
@@ -211,6 +212,37 @@ func TestLiveEventspecCertifiesTheAnchorSlotPilotThroughARealFalkorDBAdapter(t *
 	}
 	t.Logf("RankedCutSummary line: %v", summaryResult.Line)
 
+	// Surface enumeration: every RankedCutSummary field Certify's Want
+	// mechanism cannot express a nested value for (survived_ids' own
+	// length, declared_kind_rescue's nested per-kind rows) is still
+	// asserted here, directly against the real collected line -- the
+	// full declared field set is exercised, not the flat subset Want
+	// alone can reach.
+	survivedIDs, _ := summaryResult.Line["survived_ids"].([]any)
+	if len(survivedIDs) != 20 {
+		t.Errorf("survived_ids has %d entries, want 20 (== survived_count)", len(survivedIDs))
+	}
+	rescueRows, _ := summaryResult.Line["declared_kind_rescue"].([]any)
+	if len(rescueRows) != 2 {
+		t.Fatalf("declared_kind_rescue has %d rows, want 2 (project + team)", len(rescueRows))
+	}
+	rescueByKind := map[string]map[string]any{}
+	for _, raw := range rescueRows {
+		row, _ := raw.(map[string]any)
+		kind, _ := row["kind"].(string)
+		rescueByKind[kind] = row
+	}
+	if got := rescueByKind["project"]["state"]; got != "ran_matched_survived" {
+		t.Errorf("declared_kind_rescue[project].state = %v, want ran_matched_survived", got)
+	}
+	if got := rescueByKind["team"]["state"]; got != "ran_matched_survived" {
+		t.Errorf("declared_kind_rescue[team].state = %v, want ran_matched_survived", got)
+	}
+	teamMatched, _ := rescueByKind["team"]["matched"].(float64)
+	if teamMatched != 1 {
+		t.Errorf("declared_kind_rescue[team].matched = %v, want 1 (the one seeded team candidate)", rescueByKind["team"]["matched"])
+	}
+
 	// The displacement line: the real widened victim rule evicted a real
 	// PROJECT candidate to admit the real TEAM candidate that ranking alone
 	// left outside the budget -- the CHAOS-5434 mechanism this pilot
@@ -219,10 +251,13 @@ func TestLiveEventspecCertifiesTheAnchorSlotPilotThroughARealFalkorDBAdapter(t *
 	displacedResult, err := certify.Certify(log, certify.Assertion{
 		Event: eventspec.AnchorSlotDisplaced,
 		Want: map[string]any{
-			"request_id":           req.RequestID,
-			"anchor_slot_reserved": string(contextfabric.SubjectTeam),
-			"anchor_slot_source":   "receipt",
-			"subject_kind":         string(contextfabric.SubjectProject),
+			"request_id":            req.RequestID,
+			"stage":                 "anchor_slot_displaced",
+			"anchor_slot_reserved":  string(contextfabric.SubjectTeam),
+			"anchor_slot_source":    "receipt",
+			"anchor_slot_displaced": 1,
+			"pool_truncated_n":      crowd - 20,
+			"subject_kind":          string(contextfabric.SubjectProject),
 		},
 	})
 	if err != nil {
