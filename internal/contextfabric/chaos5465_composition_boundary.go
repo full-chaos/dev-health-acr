@@ -64,7 +64,30 @@ const (
 	// there is no validated frame to compose into and the fresh refusal stands.
 	// Composition never rescues a frame the server already refused.
 	CompositionFreshRefused CompositionOutcome = "fresh_refused"
+	// CompositionNotEvaluated: no composition ran on this turn, because the
+	// request was not a continuation at all.
+	//
+	// IT IS THE CONSTRUCTOR'S VALUE, not the zero value, and that is the whole
+	// point of it. The first build left the field empty on every turn where no
+	// composition ran, so `composition_outcome=""` meant BOTH "nothing was
+	// composed" and "something was composed and nobody recorded what" -- and it
+	// meant the second one on every applied continuation, which is how a
+	// vocabulary with a membership check and a log key still reached the line
+	// as an empty string. Non-execution has to be distinguishable from an
+	// evaluated verdict, or the field cannot be counted.
+	CompositionNotEvaluated CompositionOutcome = "not_evaluated"
 )
+
+// CompositionInvariantCarriedAxisUnexpressible is the composition's OWN
+// invariant, and it is deliberately not one of the frame invariants i1..i18.
+//
+// Those describe a frame that is internally wrong. This describes a frame that
+// is entirely valid and simply CANNOT SAY the thing the carried reading needs
+// said: a fresh reading with no grouped expression has nowhere to put a carried
+// group axis. Validation will never object, because there is nothing wrong with
+// the frame -- the mismatch is between the frame and the carrier, which is a
+// question only this boundary is in a position to ask.
+const CompositionInvariantCarriedAxisUnexpressible = "carried_axis_unexpressible"
 
 // AcceptedContext is what composeAcceptedContext returns, and it is the ONLY
 // thing downstream may read.
@@ -123,78 +146,102 @@ func (a AcceptedContext) Usable() bool {
 	}
 }
 
+// compositionInput is everything the boundary needs to decide, in one value.
+//
+// THE FAMILY IS AN INPUT NOW, and it was the omission that produced the worst
+// defect this file has had. Composition used to be told only about the group
+// axis, so it could not tell "the fresh reading already says this" from "the
+// fresh reading cannot say this at all" -- and for a grouped family landing on
+// a non-grouped frame it reported `unchanged`, served the carried family, and
+// dropped the axis that family groups by. The answer was grouped-family data
+// with no groups. A carried family and its axis move together or neither does,
+// and a boundary that cannot see the family cannot enforce that.
+type compositionInput struct {
+	// Fresh is the interpreter's frame, nil when none was proposed.
+	Fresh *QuestionFrame
+	// FreshGate is the gate already decided on Fresh.
+	FreshGate FrameGate
+	// FreshFamily is the family the fresh reading resolved to.
+	FreshFamily QuestionFamily
+	// CarriedFamily and CarriedGroupKind are the admitted prior reading.
+	CarriedFamily    QuestionFamily
+	CarriedGroupKind SubjectKind
+	// ModelObligations and EmittedShape are ValidateFrame's own inputs, passed
+	// through unchanged so the composition is validated by exactly the sequence
+	// the fresh frame was. A second, laxer validator here would reintroduce the
+	// two-authorities defect in a new place.
+	ModelObligations []AnswerObligation
+	EmittedShape     InvestigationShape
+}
+
 // composeAcceptedContext produces the frame consumers receive, validates THAT
 // frame, and decides the gate on it.
-//
-// The fresh frame and its gate come from interpretation. carriedGroupKind is
-// the group axis of the admitted prior reading, empty when the prior reading
-// had none. modelObligations and emittedShape are ValidateFrame's own inputs
-// and are passed through unchanged so the composition is validated by exactly
-// the same sequence the fresh frame was -- a second, laxer validator here would
-// reintroduce the two-authorities defect in a new place.
-func composeAcceptedContext(
-	fresh *QuestionFrame,
-	freshGate FrameGate,
-	carriedGroupKind SubjectKind,
-	modelObligations []AnswerObligation,
-	emittedShape InvestigationShape,
-) AcceptedContext {
-	if fresh == nil {
+func composeAcceptedContext(in compositionInput) AcceptedContext {
+	if in.Fresh == nil {
 		// Nothing to compose into. The gate travels through unchanged: a turn
 		// with no proposed frame has already been described by its own gate
 		// (not_proposed, or a refusal), and inventing a composition verdict for
 		// it would overwrite a decision someone else made correctly.
 		//
-		// The carried group axis still rides out, because the accessor must
-		// answer for every turn: with no frame, the carried reading IS the
-		// effective axis and the planner has always read it from the sample.
-		return AcceptedContext{Gate: freshGate, Outcome: CompositionNoFreshFrame, GroupKind: carriedGroupKind}
+		// The carried group axis still rides out, and here it IS expressible:
+		// with no frame the planner reads the axis off the winning sample, which
+		// is exactly where applyWindowContinuation writes it.
+		return AcceptedContext{Gate: in.FreshGate, Outcome: CompositionNoFreshFrame, GroupKind: in.CarriedGroupKind}
 	}
-	if freshGate.Refuses() {
+	if in.FreshGate.Refuses() {
 		// The server already refused this frame. Composition does not get to
 		// launder that: there is no validated frame to substitute into, and a
 		// composition built on a refused frame would be a frame the gate never
 		// certified -- the defect, inverted.
-		return AcceptedContext{Gate: freshGate, Outcome: CompositionFreshRefused}
+		return AcceptedContext{Gate: in.FreshGate, Outcome: CompositionFreshRefused}
 	}
 
-	// NOTHING TO SUBSTITUTE INTO IS NOT A REFUSAL. A frame whose subject
-	// expression is not grouped has no group axis for the carried reading to
-	// replace, so the composition IS the fresh frame and its existing gate
-	// already describes it. Refusing here would reject every legitimate
-	// continuation of a non-grouped reading -- a regression this boundary
-	// introduced and a review control caught ("agreeing receipt must apply").
-	// Refusal is reserved for a SUBSTITUTION that produces an invalid frame.
-	freshGroup, grouped := fresh.SubjectExpression.GroupKind()
+	freshGroup, grouped := in.Fresh.SubjectExpression.GroupKind()
 	if !grouped {
-		return AcceptedContext{
-			Frame: fresh, Gate: freshGate,
-			Outcome: CompositionUnchanged, GroupKind: freshGroup,
+		if in.CarriedGroupKind != "" {
+			// THE FRAME CANNOT SAY IT. A reading with no grouped expression has
+			// nowhere to put the carried axis, so carrying the family here would
+			// serve a grouped family whose groups do not exist. Refused, and
+			// named: this is not a frame invariant, it is a mismatch between an
+			// entirely valid frame and the carrier.
+			return AcceptedContext{
+				Gate: in.FreshGate, Outcome: CompositionInvalid,
+				FailedInvariant: CompositionInvariantCarriedAxisUnexpressible,
+			}
 		}
+		if in.CarriedFamily == in.FreshFamily {
+			// Nothing was carried that was not already there.
+			return AcceptedContext{Frame: in.Fresh, Gate: in.FreshGate, Outcome: CompositionUnchanged, GroupKind: freshGroup}
+		}
+		// A family IS carried; the frame needs no substitution to express it,
+		// but the composition is a real one and says so.
+		return AcceptedContext{Frame: in.Fresh, Gate: in.FreshGate, Outcome: CompositionAccepted, GroupKind: freshGroup}
 	}
-	if carriedGroupKind == freshGroup {
-		// No substitution: the accepted context IS the fresh one, and its gate
-		// is already the gate for this exact frame.
-		return AcceptedContext{
-			Frame: fresh, Gate: freshGate,
-			Outcome: CompositionUnchanged, GroupKind: freshGroup,
+	if in.CarriedGroupKind == freshGroup {
+		if in.CarriedFamily == in.FreshFamily {
+			// UNCHANGED MEANS THE FRESH READING ALREADY MATCHES, on BOTH axes of
+			// the carry. Reporting it for a turn that carried a different family
+			// made "we carried something" and "there was nothing to carry"
+			// indistinguishable in the data.
+			return AcceptedContext{Frame: in.Fresh, Gate: in.FreshGate, Outcome: CompositionUnchanged, GroupKind: freshGroup}
 		}
+		return AcceptedContext{Frame: in.Fresh, Gate: in.FreshGate, Outcome: CompositionAccepted, GroupKind: freshGroup}
 	}
 
 	// THE SUBSTITUTION, ON A COPY. The pointer is shared with the interpretation
 	// receipt and the family outcome; rewriting it in place would change the
 	// record of what the model actually proposed, which must stay true even
 	// where the server overrides it.
-	composed := *fresh
+	composed := *in.Fresh
 	if composed.SubjectExpression.Kind == SubjectExpressionGroupedMembers && composed.SubjectExpression.Grouped != nil {
 		grouped := *composed.SubjectExpression.Grouped
-		grouped.GroupKind = carriedGroupKind
+		grouped.GroupKind = in.CarriedGroupKind
 		composed.SubjectExpression.Grouped = &grouped
 	}
 
 	// VALIDATE THE COMPOSITION, not the input. This is the whole point of the
 	// file: what follows is decided about the object consumers receive.
-	result := ValidateFrame(composed, modelObligations, emittedShape)
+	result := ValidateFrame(composed, in.ModelObligations, in.EmittedShape)
 	gate := DecideFrameGate(result, true)
 	if result.Outcome != FrameValidationOutcomeValid {
 		return AcceptedContext{
@@ -247,6 +294,7 @@ func compositionOutcomeVocabulary() []CompositionOutcome {
 		CompositionInvalid,
 		CompositionNoFreshFrame,
 		CompositionFreshRefused,
+		CompositionNotEvaluated,
 	}
 }
 

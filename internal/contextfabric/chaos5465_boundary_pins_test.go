@@ -1,9 +1,15 @@
 package contextfabric
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // NAMED PINS FOR THE BOUNDARY'S OWN GUARDS.
@@ -51,7 +57,11 @@ func TestBoundary_RefusedFreshGateIsNeverComposedOn(t *testing.T) {
 		DeclaredMemberKind: contractsv1.ContextFabricSubjectRepository,
 	}
 
-	got := composeAcceptedContext(&fresh, refusing, contractsv1.ContextFabricSubjectTeam, nil, ShapeOpen)
+	got := composeAcceptedContext(compositionInput{
+		Fresh: &fresh, FreshGate: refusing, FreshFamily: QuestionFamilyGroupedCohortStatus,
+		CarriedFamily: QuestionFamilyGroupedCohortStatus, CarriedGroupKind: contractsv1.ContextFabricSubjectTeam,
+		EmittedShape: ShapeOpen,
+	})
 	t.Logf("fresh_valid=true fresh_gate=%q refuses=%v -> outcome=%q usable=%v frame_nil=%v gate=%q",
 		refusing.Outcome, refusing.Refuses(), got.Outcome, got.Usable(), got.Frame == nil, got.Gate.Outcome)
 
@@ -74,36 +84,27 @@ func TestBoundary_RefusedFreshGateIsNeverComposedOn(t *testing.T) {
 // KILLS ARM `apply_reads_sample_not_accessor`
 // (`outcome.WinningSample.GroupKind = accepted.EffectiveGroupKind()` -> `= carried.GroupKind`).
 //
-// A NON-GROUPED fresh reading is the discriminating case, and the only one:
-// wherever the fresh frame IS grouped and the composition succeeded, the
-// accessor and the carried value agree by construction, so a suite built only
-// on grouped shapes cannot tell the two sources apart. Here the fresh frame has
-// no group axis at all, the carried reading has one, and the accessor answers
-// with the frame's -- because that is the axis the planner and discovery will
-// execute under. Reading the carried value instead republishes an axis nothing
-// executed, which is the false-agreement defect in its original form.
+// THE CONTEXT IS CONSTRUCTED, ON PURPOSE, and that is worth defending because
+// an engine-driven version of this pin is now impossible. Since a carried family
+// and its axis move together, every composition that comes back USABLE has an
+// accepted axis equal to the carried one -- so no reachable turn makes the two
+// sources disagree, and a pin built on one would be measuring nothing while
+// looking thorough. The property here is not "these two values differ in
+// production", it is "apply reads the accessor and not some other field", and
+// that is exactly what a divergent constructed value can hold it to. If a later
+// composition ever does normalise the axis, this pin already says which source
+// wins.
 func TestBoundary_ApplyReadsOnlyTheAccessor(t *testing.T) {
 	t.Parallel()
 
-	ungrouped := QuestionFrame{
-		Goals:             []InvestigationGoal{GoalAssessState},
-		SubjectExpression: SubjectExpression{Kind: SubjectExpressionOrganizationScope, Org: &OrganizationScopeExpression{}},
-		Temporal:          TemporalIntentCurrent,
-	}
-	result := ValidateFrame(ungrouped, nil, ShapeOpen)
-	if result.Outcome != FrameValidationOutcomeValid {
-		t.Fatalf("fixture defect: ungrouped frame invalid (%v)", result.Failure.Invariant)
-	}
-	gate := DecideFrameGate(result, true)
-
+	fresh, gate := boundaryGroupedFrame(t, contractsv1.ContextFabricSubjectProject, contractsv1.ContextFabricSubjectRepository)
+	const acceptedGroup = contractsv1.ContextFabricSubjectProject
 	const carriedGroup = contractsv1.ContextFabricSubjectTeam
-	accepted := composeAcceptedContext(&result.Frame, gate, carriedGroup, nil, ShapeOpen)
-	if accepted.Outcome != CompositionUnchanged || !accepted.Usable() {
-		t.Fatalf("fixture defect: an ungrouped fresh frame must compose as %q and stay usable; got %q usable=%v",
-			CompositionUnchanged, accepted.Outcome, accepted.Usable())
+	accepted := AcceptedContext{
+		Frame: &fresh, Gate: gate, Outcome: CompositionAccepted, GroupKind: acceptedGroup,
 	}
 	if accepted.EffectiveGroupKind() == carriedGroup {
-		t.Fatalf("fixture defect: the accessor and the carried value must DIFFER to discriminate; both are %q", carriedGroup)
+		t.Fatalf("fixture defect: the accessor and the carried value must DIFFER to discriminate")
 	}
 
 	decision := windowContinuationDecision{
@@ -115,12 +116,12 @@ func TestBoundary_ApplyReadsOnlyTheAccessor(t *testing.T) {
 	}
 	before := QuestionFamilyOutcome{
 		Family: QuestionFamilyDiscoveredCohortRanking, Source: QuestionFamilySourceModel,
-		WinningSample: FamilySample{GroupKind: contractsv1.ContextFabricSubjectProject},
+		WinningSample: FamilySample{GroupKind: contractsv1.ContextFabricSubjectRepository},
 	}
 
 	after, applied := applyWindowContinuation(before, decision, accepted)
-	t.Logf("carried_group=%q accessor=%q -> applied=%v served_sample_group=%q",
-		carriedGroup, accepted.EffectiveGroupKind(), applied, after.WinningSample.GroupKind)
+	t.Logf("accessor=%q carried=%q -> applied=%v served_sample_group=%q",
+		accepted.EffectiveGroupKind(), carriedGroup, applied, after.WinningSample.GroupKind)
 
 	if !applied {
 		t.Fatalf("fixture defect: a usable context with an applying decision must apply")
@@ -130,7 +131,7 @@ func TestBoundary_ApplyReadsOnlyTheAccessor(t *testing.T) {
 			after.WinningSample.GroupKind, accepted.EffectiveGroupKind())
 	}
 	if after.WinningSample.GroupKind == carriedGroup {
-		t.Errorf("served sample group=%q is the CARRIED value, and no grouped expression in the executed frame carries it", carriedGroup)
+		t.Errorf("served sample group=%q is the CARRIED field, not the accessor", carriedGroup)
 	}
 }
 
@@ -149,7 +150,11 @@ func TestBoundary_ApplyInstallsNothingWhenUnusable(t *testing.T) {
 	// group=project member=team; carrying `team` makes group == member, which
 	// invariant I6 forbids.
 	fresh, gate := boundaryGroupedFrame(t, contractsv1.ContextFabricSubjectProject, contractsv1.ContextFabricSubjectTeam)
-	accepted := composeAcceptedContext(&fresh, gate, contractsv1.ContextFabricSubjectTeam, nil, ShapeOpen)
+	accepted := composeAcceptedContext(compositionInput{
+		Fresh: &fresh, FreshGate: gate, FreshFamily: QuestionFamilyGroupedCohortStatus,
+		CarriedFamily: QuestionFamilyGroupedCohortStatus, CarriedGroupKind: contractsv1.ContextFabricSubjectTeam,
+		EmittedShape: ShapeOpen,
+	})
 	if accepted.Outcome != CompositionInvalid || accepted.Usable() {
 		t.Fatalf("fixture defect: this composition must be %q and unusable; got %q usable=%v",
 			CompositionInvalid, accepted.Outcome, accepted.Usable())
@@ -222,5 +227,286 @@ func TestBoundary_IdentityRefusesWhenCanonicalFormIsEmpty(t *testing.T) {
 	}
 	if got != ContinuationReasonIndeterminateIdentity {
 		t.Fatalf("identity reason = %q, want %q", got, ContinuationReasonIndeterminateIdentity)
+	}
+}
+
+// ===========================================================================
+// r1 (#492) FINDINGS. Five pins, each red before its fix.
+// ===========================================================================
+
+type r1UngroupedInterpreter struct{ family QuestionFamily }
+
+func (i r1UngroupedInterpreter) Interpret(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, QuestionFamilyOutcome, error) {
+	frame := QuestionFrame{
+		Goals:             []InvestigationGoal{GoalAssessState},
+		SubjectExpression: SubjectExpression{Kind: SubjectExpressionOrganizationScope, Org: &OrganizationScopeExpression{}},
+		Temporal:          TemporalIntentCurrent,
+	}
+	v := ValidateFrame(frame, nil, ShapeOpen)
+	if v.Outcome != FrameValidationOutcomeValid {
+		panic("fixture defect: ungrouped frame invalid " + string(v.Failure.Invariant))
+	}
+	return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}},
+		QuestionFamilyOutcome{
+			Family: i.family, Source: QuestionFamilySourceModel, Frame: &v.Frame, Gate: DecideFrameGate(v, true),
+			WinningSampleIndex: 0, WinningSample: FamilySample{ModelFamily: i.family},
+			Version: QuestionFamilyTableVersion,
+		}, nil
+}
+
+// r1 F1 — A CARRIED FAMILY AND ITS AXIS MOVE TOGETHER, OR NEITHER DOES.
+//
+// The previous build composed a grouped carrier onto a valid NON-grouped fresh
+// frame, called the result `unchanged`, and served it: the grouped family was
+// carried while the axis it groups by was silently dropped, so the answer was
+// grouped-family data with no groups. The pin that existed asserted the empty
+// axis as CORRECT, which is worse than no pin -- it froze the defect.
+//
+// A frame that cannot express the carried axis is a composition that cannot be
+// honoured. It refuses, and names why.
+func TestBoundary_AGroupedFamilyIsNeverServedWithoutItsAxis(t *testing.T) {
+	req := continuationRequest(validInvestigationRequest().Question)
+	prior := r4CheckedPrior(t, continuationPriorID, req.Question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+	h := newContinuationHarness(t,
+		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		r1UngroupedInterpreter{family: QuestionFamilyDiscoveredCohortRanking})
+
+	result := h.investigate(t, req)
+	d := h.soleDecision(t)
+	t.Logf("disposition=%q reason=%q composition=%q invariant=%q accepted_group=%q plan_family=%q plan_group=%q",
+		d.Disposition, d.Reason, d.CompositionOutcome, d.CompositionFailedInvariant,
+		d.AcceptedGroupKind(), result.AnswerPlan.Family, result.AnswerPlan.GroupKind)
+
+	if result.AnswerPlan.Family == QuestionFamilyGroupedCohortStatus && result.AnswerPlan.GroupKind == "" {
+		t.Fatalf("a grouped family was served with NO grouping axis -- the carried family moved and its axis did not")
+	}
+	if d.Disposition != ContinuationWithheld {
+		t.Errorf("disposition=%q, want %q: the carried axis cannot be expressed by a non-grouped frame",
+			d.Disposition, ContinuationWithheld)
+	}
+	if d.Reason != ContinuationReasonCompositionInvalid {
+		t.Errorf("reason=%q, want %q", d.Reason, ContinuationReasonCompositionInvalid)
+	}
+	if d.CompositionOutcome != CompositionInvalid {
+		t.Errorf("composition_outcome=%q, want %q", d.CompositionOutcome, CompositionInvalid)
+	}
+	if d.CompositionFailedInvariant != CompositionInvariantCarriedAxisUnexpressible {
+		t.Errorf("invariant=%q, want %q -- a refusal with no named cause is not actionable",
+			d.CompositionFailedInvariant, CompositionInvariantCarriedAxisUnexpressible)
+	}
+}
+
+// r1 F1, at the boundary itself: `unchanged` means the fresh reading ALREADY
+// carries this family and this axis. Anything else either composes or refuses.
+func TestBoundary_UnchangedMeansTheFreshReadingAlreadyMatches(t *testing.T) {
+	t.Parallel()
+	ungrouped := QuestionFrame{
+		Goals:             []InvestigationGoal{GoalAssessState},
+		SubjectExpression: SubjectExpression{Kind: SubjectExpressionOrganizationScope, Org: &OrganizationScopeExpression{}},
+		Temporal:          TemporalIntentCurrent,
+	}
+	v := ValidateFrame(ungrouped, nil, ShapeOpen)
+	if v.Outcome != FrameValidationOutcomeValid {
+		t.Fatalf("fixture defect: %v", v.Failure.Invariant)
+	}
+	gate := DecideFrameGate(v, true)
+
+	got := composeAcceptedContext(compositionInput{
+		Fresh: &v.Frame, FreshGate: gate, FreshFamily: QuestionFamilyDiscoveredCohortRanking,
+		CarriedFamily: QuestionFamilyGroupedCohortStatus, CarriedGroupKind: contractsv1.ContextFabricSubjectTeam,
+		EmittedShape: ShapeOpen,
+	})
+	t.Logf("non-grouped frame + carried team axis -> outcome=%q invariant=%q usable=%v",
+		got.Outcome, got.FailedInvariant, got.Usable())
+	if got.Outcome != CompositionInvalid || got.Usable() {
+		t.Fatalf("outcome=%q usable=%v, want %q and unusable", got.Outcome, got.Usable(), CompositionInvalid)
+	}
+
+	// The axis-free carrier on the same frame IS unchanged only when the
+	// family matches too.
+	same := composeAcceptedContext(compositionInput{
+		Fresh: &v.Frame, FreshGate: gate, FreshFamily: QuestionFamilyDiscoveredCohortRanking,
+		CarriedFamily: QuestionFamilyDiscoveredCohortRanking, CarriedGroupKind: "",
+		EmittedShape: ShapeOpen,
+	})
+	if same.Outcome != CompositionUnchanged {
+		t.Errorf("same family and axis -> outcome=%q, want %q", same.Outcome, CompositionUnchanged)
+	}
+	diff := composeAcceptedContext(compositionInput{
+		Fresh: &v.Frame, FreshGate: gate, FreshFamily: QuestionFamilyGroupedCohortStatus,
+		CarriedFamily: QuestionFamilyDiscoveredCohortRanking, CarriedGroupKind: "",
+		EmittedShape: ShapeOpen,
+	})
+	if diff.Outcome == CompositionUnchanged {
+		t.Errorf("a DIFFERENT carried family reported %q -- `unchanged` must mean nothing was carried that was not already there",
+			CompositionUnchanged)
+	}
+}
+
+// r1 F2 — AN ERROR RETURN KEEPS ITS OWN REASON.
+//
+// The save-time reversal read only "the served answer carries no window", which
+// is trivially true of the zero result every error return produces. Every
+// downstream failure in the engine was therefore published as a save-time
+// window supersession, a save race that never happened.
+func TestBoundary_AnErrorReturnIsNotAWindowSupersession(t *testing.T) {
+	req := continuationRequest(validInvestigationRequest().Question)
+	prior := r4CheckedPrior(t, continuationPriorID, req.Question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+	h := newContinuationHarness(t,
+		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam})
+	h.engine.graph = r1FailingGraph{graphReaderStub: h.engine.graph.(graphReaderStub)}
+
+	_, err := h.engine.Investigate(context.Background(), acceptancePrincipal(), req)
+	if err == nil {
+		t.Fatalf("fixture defect: the injected resolution failure must make Investigate return an error")
+	}
+	d := h.soleDecision(t)
+	t.Logf("error=%v disposition=%q reason=%q applied_window=%q", err, d.Disposition, d.Reason, d.AppliedWindowToken())
+	if d.Reason == ContinuationReasonWindowSuperseded {
+		t.Fatalf("an ordinary downstream failure was published as %q -- no save-time veto occurred, and an operator counting supersessions would be counting resolution errors",
+			ContinuationReasonWindowSuperseded)
+	}
+}
+
+type r1FailingGraph struct{ graphReaderStub }
+
+func (g r1FailingGraph) ResolveSubjects(context.Context, storage.Principal, InvestigationRequest, InterpretedQuestion, ResolvedGraphBinding, *ConfirmedExpectedKind, *ConfirmedAnchorSelection, *QuestionFrame, SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+	return SubjectResolution{}, StructureOfferMaterial{}, nil, nil, errR1InjectedResolution
+}
+
+var errR1InjectedResolution = errors.New("injected resolution failure")
+
+// r1 F3 — THE COMPOSITION OUTCOME REACHES THE LINE, WITH A VALUE.
+//
+// The vocabulary, its membership check and the log key all existed; the only
+// thing missing was a production writer on the successful path, so every
+// applied continuation published the empty string and the two vocabulary
+// functions had no caller at all (0.0% coverage). A field expected at its zero
+// value pins nothing -- this asserts a NAMED member on an applied turn, and the
+// distinct `not_evaluated` member on a turn where no composition ran.
+func TestBoundary_TheCompositionOutcomeReachesTheLineWithAValue(t *testing.T) {
+	emit := func(t *testing.T, d windowContinuationDecision) string {
+		t.Helper()
+		var buf bytes.Buffer
+		SlogEngineTelemetry{logger: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))}.
+			RecordWindowContinuationDecision(context.Background(), acceptancePrincipal(), d)
+		return buf.String()
+	}
+
+	t.Run("applied", func(t *testing.T) {
+		req := continuationRequest(validInvestigationRequest().Question)
+		prior := r4CheckedPrior(t, continuationPriorID, req.Question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+		h := newContinuationHarness(t,
+			&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+			frameBearingInterpreter{
+				family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectProject,
+				frameGroup: contractsv1.ContextFabricSubjectProject,
+			})
+		h.investigate(t, req)
+		d := h.soleDecision(t)
+		line := emit(t, d)
+		t.Logf("disposition=%q composition_outcome=%q", d.Disposition, d.CompositionOutcome)
+		t.Logf("EMITTED %s", strings.TrimSpace(line))
+		if d.Disposition != ContinuationApplied {
+			t.Fatalf("fixture defect: wanted an applied continuation, got %q/%q", d.Disposition, d.Reason)
+		}
+		if d.CompositionOutcome == "" {
+			t.Fatalf("an APPLIED continuation published composition_outcome=\"\"")
+		}
+		if !ValidCompositionOutcome(d.CompositionOutcome) {
+			t.Fatalf("composition_outcome=%q is outside the closed vocabulary", d.CompositionOutcome)
+		}
+		if d.CompositionOutcome == CompositionNotEvaluated {
+			t.Fatalf("an applied continuation reported %q -- a composition ran", CompositionNotEvaluated)
+		}
+		if !strings.Contains(line, "composition_outcome="+string(d.CompositionOutcome)) {
+			t.Fatalf("the line does not carry the decision's own value %q", d.CompositionOutcome)
+		}
+	})
+
+	t.Run("no composition ran", func(t *testing.T) {
+		// A window receipt that is NOT a continuation: the decision is emitted,
+		// and its composition outcome must say "not evaluated" rather than sit
+		// at a zero value indistinguishable from a member.
+		d := newWindowContinuationDecision(continuationRequest(validInvestigationRequest().Question))
+		line := emit(t, d)
+		t.Logf("constructor composition_outcome=%q", d.CompositionOutcome)
+		if d.CompositionOutcome != CompositionNotEvaluated {
+			t.Fatalf("constructor composition_outcome=%q, want %q -- non-execution must be distinguishable from an evaluated verdict",
+				d.CompositionOutcome, CompositionNotEvaluated)
+		}
+		if !strings.Contains(line, "composition_outcome="+string(CompositionNotEvaluated)) {
+			t.Fatalf("the line does not carry %q", CompositionNotEvaluated)
+		}
+	})
+}
+
+// r1 F5 — THE CONTAINMENT'S SHAPE GUARD IS PINNED.
+//
+// BlocksLegacyCarry stops the old family-only carry serving the very carrier
+// this gate refused, but ONLY for the window-only shape: a request that did
+// something else must keep the legacy mechanism, which is correct there. The
+// two containment pins that existed passed with the shape term deleted, because
+// their arms were rejected by the old carry path for independent reasons.
+func TestBoundary_ContainmentRequiresTheWindowOnlyShape(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		shape bool
+		want  bool
+	}{
+		{"window-only shape blocks", true, true},
+		{"another shape does not block", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := windowContinuationDecision{
+				Observed: true, WindowOnlyShape: tc.shape,
+				Disposition: ContinuationWithheld, Reason: ContinuationReasonContextVersionMismatch,
+			}
+			got := d.BlocksLegacyCarry()
+			t.Logf("observed=true window_only_shape=%v disposition=%q -> blocks=%v", tc.shape, d.Disposition, got)
+			if got != tc.want {
+				t.Errorf("BlocksLegacyCarry()=%v, want %v -- containment is scoped to the window-only transition, and a build that blocked every shape would silently disable the family-only carry everywhere else",
+					got, tc.want)
+			}
+		})
+	}
+}
+
+// r1 F3, the other half: the membership checks have a PRODUCTION caller.
+//
+// Both vocabularies shipped with a `Valid…` function, a doc comment saying the
+// emitter uses it so an unrecognised value cannot reach a log line, and no
+// caller at all -- coverage measured them at 0.0%. This drives an out-of-
+// vocabulary value through the real emitter and asserts what the line carries.
+func TestBoundary_AnUnrecognisedClosedValueCannotReachTheLine(t *testing.T) {
+	t.Parallel()
+
+	d := newWindowContinuationDecision(continuationRequest(validInvestigationRequest().Question))
+	d.Reason = ContinuationDecisionReason("a-site-invented-this")
+	d.CompositionOutcome = CompositionOutcome("and-this")
+
+	var buf bytes.Buffer
+	SlogEngineTelemetry{logger: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))}.
+		RecordWindowContinuationDecision(context.Background(), acceptancePrincipal(), d)
+	line := buf.String()
+	t.Logf("EMITTED %s", strings.TrimSpace(line))
+
+	for _, leaked := range []string{"a-site-invented-this", "and-this"} {
+		if strings.Contains(line, leaked) {
+			t.Errorf("free text %q reached a CLOSED telemetry field -- no consumer can group on it", leaked)
+		}
+	}
+	if strings.Count(line, "decision_reason="+continuationTelemetryUnrecognised) != 1 {
+		t.Errorf("decision_reason does not report %q", continuationTelemetryUnrecognised)
+	}
+	if strings.Count(line, "composition_outcome="+continuationTelemetryUnrecognised) != 1 {
+		t.Errorf("composition_outcome does not report %q", continuationTelemetryUnrecognised)
+	}
+	// The sentinel must not be mistakable for a member of either vocabulary.
+	if ValidContinuationDecisionReason(ContinuationDecisionReason(continuationTelemetryUnrecognised)) ||
+		ValidCompositionOutcome(CompositionOutcome(continuationTelemetryUnrecognised)) {
+		t.Errorf("the unrecognised sentinel is itself a vocabulary member -- a bug would be counted as a legitimate bucket")
 	}
 }

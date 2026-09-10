@@ -354,6 +354,56 @@ type windowContinuationDecision struct {
 }
 
 // Applies reports whether the carried context is authoritative for this turn.
+// continuationDecisionReasons is the closed reason vocabulary, IN PRODUCTION.
+//
+// IT LIVES HERE, BESIDE THE MEMBERS, AND NOT IN A TEST. The r3 rewrite moved
+// the enumeration pin onto real engine drivers but left the member list itself
+// hand-written in the test file, and the r1 review of the re-cut found the
+// consequence immediately: two reasons were added to production, neither was
+// added to the list, and the pin that exists to catch exactly that could not
+// see them. A vocabulary a test maintains is a vocabulary that agrees with
+// whoever edited the test last.
+//
+// Every consumer -- the emitter's membership check and the enumeration pin
+// alike -- reads THIS list, so a member added below is a member both of them
+// must account for.
+func continuationDecisionReasons() []ContinuationDecisionReason {
+	return []ContinuationDecisionReason{
+		ContinuationReasonNone,
+		ContinuationReasonNotWindowOnly,
+		ContinuationReasonWindowVeto,
+		ContinuationReasonChangedQuestion,
+		ContinuationReasonIndeterminateIdentity,
+		ContinuationReasonMissingContext,
+		ContinuationReasonInvalidContext,
+		ContinuationReasonContextVersionMismatch,
+		ContinuationReasonFreshContextUnavailable,
+		ContinuationReasonBindingUnavailable,
+		ContinuationReasonStructureVeto,
+		ContinuationReasonExplicitStructureHint,
+		ContinuationReasonInterpretedAxisVeto,
+		ContinuationReasonRequestInvalid,
+		ContinuationReasonPrincipalUnauthenticated,
+		ContinuationReasonRequestTimeUnresolvable,
+		ContinuationReasonRequestCancelled,
+		ContinuationReasonAsOfUnresolvable,
+		ContinuationReasonCompositionInvalid,
+		ContinuationReasonWindowSuperseded,
+		ContinuationReasonUnspecified,
+	}
+}
+
+// ValidContinuationDecisionReason reports membership, so an unrecognised value
+// cannot reach a log line.
+func ValidContinuationDecisionReason(reason ContinuationDecisionReason) bool {
+	for _, member := range continuationDecisionReasons() {
+		if member == reason {
+			return true
+		}
+	}
+	return false
+}
+
 func (d windowContinuationDecision) Applies() bool {
 	return d.Disposition == ContinuationApplied && d.Accepted != nil
 }
@@ -380,6 +430,14 @@ func newWindowContinuationDecision(request InvestigationRequest) windowContinuat
 		SeedSource:     CarrySeedNone,
 		ConflictReason: ContinuationConflictNone,
 		ConflictFields: []ContinuationConflictField{},
+		// SET IN THE CONSTRUCTOR, ABOVE EVERY RETURN. The composition outcome
+		// is a field on this event, so it reaches the line on every turn the
+		// event is emitted -- including the turns where no composition ran at
+		// all, which is what this member says. Assigning it only where a
+		// composition FAILED left the successful path publishing the empty
+		// string, and left the vocabulary's own membership check with no
+		// production caller at all.
+		CompositionOutcome: CompositionNotEvaluated,
 	}
 	if decision.Observed {
 		decision.SeedSource = CarrySeedReceipt

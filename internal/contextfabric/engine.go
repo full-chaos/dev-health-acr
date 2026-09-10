@@ -1101,7 +1101,15 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// package keeps paying for, so the reversal is decided ONCE, here,
 		// from what was actually SERVED: a continuation cannot be `applied`
 		// with a window when the served answer carries none.
-		if continuation.Applies() && continuation.AppliedWindow != nil && served.EffectiveEvidenceWindow == nil {
+		// servedErr == nil IS PART OF THE CONDITION, and leaving it out turned
+		// this into a catch-all. Every error return produces the zero
+		// InvestigationResult, whose EffectiveEvidenceWindow is nil, so a
+		// resolution failure, a synthesis failure and a genuine save-time veto
+		// all satisfied the other two terms alike -- and every one of them was
+		// published as `window_superseded`. A supersession is something that
+		// happened at save time to an answer that WAS produced; an error return
+		// produced no answer and keeps whatever reason its own exit assigned.
+		if servedErr == nil && continuation.Applies() && continuation.AppliedWindow != nil && served.EffectiveEvidenceWindow == nil {
 			continuation.Disposition = ContinuationWithheld
 			continuation = continuation.withReason(ContinuationReasonWindowSuperseded)
 			continuation.AppliedWindow = nil
@@ -1626,10 +1634,21 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			windowCanon.Effective, clampedInterpretedTime.Axis,
 		)
 		if continuation.Applies() {
-			composed := composeAcceptedContext(
-				familyOutcome.Frame, familyOutcome.Gate, continuation.Accepted.GroupKind,
-				familyOutcome.FrameObligations, interpretation.Shape,
-			)
+			composed := composeAcceptedContext(compositionInput{
+				Fresh: familyOutcome.Frame, FreshGate: familyOutcome.Gate,
+				FreshFamily:      familyOutcome.Family,
+				CarriedFamily:    continuation.Accepted.Family,
+				CarriedGroupKind: continuation.Accepted.GroupKind,
+				ModelObligations: familyOutcome.FrameObligations,
+				EmittedShape:     interpretation.Shape,
+			})
+			// THE OUTCOME IS RECORDED BEFORE THE BRANCH, so the successful
+			// path publishes it too. Recording it only in the else-arm is how
+			// every applied continuation reached the line with an empty
+			// composition_outcome while the field, its vocabulary and its
+			// membership check all existed and looked wired.
+			continuation.CompositionOutcome = composed.Outcome
+			continuation.CompositionFailedInvariant = composed.FailedInvariant
 			if composed.Usable() {
 				accepted = composed
 			} else {
@@ -1639,8 +1658,6 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// frame's gate, which certified a different object.
 				continuation.Disposition = ContinuationWithheld
 				continuation = continuation.withReason(ContinuationReasonCompositionInvalid)
-				continuation.CompositionOutcome = composed.Outcome
-				continuation.CompositionFailedInvariant = composed.FailedInvariant
 				// AND THE ACCEPTED CONTEXT IS CLEARED, which is the half a
 				// reviewer catches later if it is left out. `Accepted` means
 				// "this is the context the turn executed under"; leaving the

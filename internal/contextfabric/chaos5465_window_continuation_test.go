@@ -884,30 +884,16 @@ func (*bindingReproError) Error() string { return "graph binding unavailable (re
 // the served provenance or the frame wrong cannot pass.
 // ---------------------------------------------------------------------------
 
-// everyContinuationReason is the closed vocabulary, listed ONCE. Every member
-// must have a DRIVER below that reaches it through the real engine entry point.
+// everyContinuationReason DELEGATES to the producer's own vocabulary.
+//
+// r1 (#492) found the previous version: a hand-written list in this file, whose
+// comment called listing it once a virtue. Two reasons were added to production
+// and neither reached the list, so the pin below -- the one whose entire job is
+// to catch a reason with no driver -- could not see them at all. A test that
+// owns its own copy of a production vocabulary is an oracle that agrees with
+// itself.
 func everyContinuationReason() []ContinuationDecisionReason {
-	return []ContinuationDecisionReason{
-		ContinuationReasonNone,
-		ContinuationReasonNotWindowOnly,
-		ContinuationReasonWindowVeto,
-		ContinuationReasonChangedQuestion,
-		ContinuationReasonIndeterminateIdentity,
-		ContinuationReasonMissingContext,
-		ContinuationReasonInvalidContext,
-		ContinuationReasonContextVersionMismatch,
-		ContinuationReasonFreshContextUnavailable,
-		ContinuationReasonBindingUnavailable,
-		ContinuationReasonStructureVeto,
-		ContinuationReasonExplicitStructureHint,
-		ContinuationReasonInterpretedAxisVeto,
-		ContinuationReasonRequestInvalid,
-		ContinuationReasonPrincipalUnauthenticated,
-		ContinuationReasonRequestTimeUnresolvable,
-		ContinuationReasonRequestCancelled,
-		ContinuationReasonAsOfUnresolvable,
-		ContinuationReasonUnspecified,
-	}
+	return continuationDecisionReasons()
 }
 
 // reasonDriver is a request shape that reaches ONE reason through
@@ -921,6 +907,9 @@ type reasonDriver struct {
 	cancel      bool
 	storeEpoch  *int64
 	principal   *storage.Principal
+	// resultsWrap replaces the store the engine saves through, for the one
+	// reason that is decided at SAVE time rather than at admission.
+	resultsWrap func(*staticResultStore) InvestigationResultStore
 }
 
 // TestWindowContinuation_EveryReasonIsReachedThroughTheEngine is the r3 F4
@@ -1015,6 +1004,24 @@ func TestWindowContinuation_EveryReasonIsReachedThroughTheEngine(t *testing.T) {
 			reason:      ContinuationReasonAsOfUnresolvable,
 			interpreter: futureAsOfInterpreter{family: QuestionFamilyGroupedCohortStatus},
 		},
+		{
+			// The carried reading is grouped and the fresh frame has no
+			// grouped expression to put the axis in, so the composition is
+			// refused rather than served without its axis.
+			reason:      ContinuationReasonCompositionInvalid,
+			interpreter: r1UngroupedInterpreter{family: QuestionFamilyDiscoveredCohortRanking},
+		},
+		{
+			// Decided at SAVE time, not at admission: the continuation was
+			// applied and the window did not survive the save.
+			reason: ContinuationReasonWindowSuperseded,
+			resultsWrap: func(store *staticResultStore) InvestigationResultStore {
+				return &supersessionRacingResultStore{
+					staticResultStore: store,
+					conflictMembers:   []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedWindow},
+				}
+			},
+		},
 	}
 
 	// EVERY MEMBER HAS A DRIVER, and `unspecified` deliberately has none.
@@ -1050,6 +1057,14 @@ func TestWindowContinuation_EveryReasonIsReachedThroughTheEngine(t *testing.T) {
 			if d.prior != nil {
 				prior = d.prior(prior)
 			}
+			baseStore := &staticResultStore{
+				results:    map[string]InvestigationResult{prior.ResultID: prior, older.ResultID: older},
+				graphEpoch: d.storeEpoch,
+			}
+			var store InvestigationResultStore = baseStore
+			if d.resultsWrap != nil {
+				store = d.resultsWrap(baseStore)
+			}
 			project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 			telemetry := &recordingTelemetry{}
 			fresh := validInvestigationResult()
@@ -1072,11 +1087,8 @@ func TestWindowContinuation_EveryReasonIsReachedThroughTheEngine(t *testing.T) {
 					return fresh, nil
 				}),
 				Interpreter: interpreter,
-				Results: &staticResultStore{
-					results:    map[string]InvestigationResult{prior.ResultID: prior, older.ResultID: older},
-					graphEpoch: d.storeEpoch,
-				},
-				Telemetry: telemetry,
+				Results:     store,
+				Telemetry:   telemetry,
 			}
 			if d.bindingErr {
 				deps.Graph = bindingFailingGraphReader{err: errBindingUnavailableForRepro}
@@ -1104,6 +1116,14 @@ func TestWindowContinuation_EveryReasonIsReachedThroughTheEngine(t *testing.T) {
 			}
 			if got == ContinuationReasonUnspecified {
 				t.Errorf("`unspecified` reached the emitter on a real path")
+			}
+			// AND THE OTHER DIRECTION. The check above asks whether every member
+			// has a path; this asks whether every emitted value is a member. A
+			// decision site that invents a reason string reaches the line as free
+			// text in a closed telemetry field, and nothing else in the package
+			// would object.
+			if !ValidContinuationDecisionReason(got) {
+				t.Errorf("emitted reason %q is OUTSIDE the closed vocabulary -- a value no consumer can group on", got)
 			}
 		})
 	}

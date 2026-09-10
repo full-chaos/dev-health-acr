@@ -45,7 +45,13 @@ func TestCells_CompositionBoundary(t *testing.T) {
 			if freshResult.Outcome != FrameValidationOutcomeValid {
 				t.Fatalf("fixture defect: fresh frame invalid (%v)", freshResult.Failure.Invariant)
 			}
-			got := composeAcceptedContext(&freshResult.Frame, freshGate, tc.carried, nil, ShapeOpen)
+			got := composeAcceptedContext(compositionInput{
+				Fresh: &freshResult.Frame, FreshGate: freshGate,
+				FreshFamily:      QuestionFamilyGroupedCohortStatus,
+				CarriedFamily:    QuestionFamilyGroupedCohortStatus,
+				CarriedGroupKind: tc.carried,
+				EmittedShape:     ShapeOpen,
+			})
 			t.Logf("%s -> outcome=%q gate=%q invariant=%q effective_group=%q",
 				tc.name, got.Outcome, got.Gate.Outcome, got.FailedInvariant, got.EffectiveGroupKind())
 			if got.Outcome != tc.wantOutcome {

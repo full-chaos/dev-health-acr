@@ -1349,6 +1349,31 @@ func (t SlogEngineTelemetry) RecordPlanCarryOutcome(ctx context.Context, princip
 // `comparison_evaluated` and `agreement` are SEPARATE booleans on purpose. An
 // unevaluated comparison reports false for both; it is never counted as
 // disagreement and never as agreement.
+// continuationTelemetryUnrecognised is what a closed field carries when the
+// value handed to the emitter is not a member of its vocabulary.
+//
+// IT IS DELIBERATELY NOT A MEMBER OF EITHER VOCABULARY. Mapping an unrecognised
+// value onto a real member (`unspecified`, `not_evaluated`) would fold a bug
+// into a legitimate bucket and make it uncountable; dropping the field would
+// make the line's shape vary with its content. This token says "a decision site
+// produced something this vocabulary does not define", which is the only honest
+// thing to publish and is greppable on sight.
+const continuationTelemetryUnrecognised = "unrecognised"
+
+func continuationReasonToken(reason ContinuationDecisionReason) string {
+	if !ValidContinuationDecisionReason(reason) {
+		return continuationTelemetryUnrecognised
+	}
+	return string(reason)
+}
+
+func compositionOutcomeToken(outcome CompositionOutcome) string {
+	if !ValidCompositionOutcome(outcome) {
+		return continuationTelemetryUnrecognised
+	}
+	return string(outcome)
+}
+
 func (t SlogEngineTelemetry) RecordWindowContinuationDecision(ctx context.Context, principal storage.Principal, decision windowContinuationDecision) {
 	args := []any{
 		"org_id", principal.OrgID,
@@ -1359,7 +1384,7 @@ func (t SlogEngineTelemetry) RecordWindowContinuationDecision(ctx context.Contex
 		"family_accepted", string(decision.FamilyAccepted()),
 		"family_source", string(decision.AcceptedFamilySource()),
 		"continuation_disposition", string(decision.Disposition),
-		"decision_reason", string(decision.Reason),
+		"decision_reason", continuationReasonToken(decision.Reason),
 		"comparison_evaluated", decision.ComparisonEvaluated,
 		"agreement", decision.Agreement,
 		"conflict_reason", string(decision.ConflictReason),
@@ -1369,7 +1394,7 @@ func (t SlogEngineTelemetry) RecordWindowContinuationDecision(ctx context.Contex
 		"carried_context_id", decision.CarriedContextID(),
 		"fresh_context_id", decision.FreshContextID(),
 		"accepted_context_id", decision.AcceptedContextID(),
-		"composition_outcome", string(decision.CompositionOutcome),
+		"composition_outcome", compositionOutcomeToken(decision.CompositionOutcome),
 		"composition_failed_invariant", decision.CompositionFailedInvariant,
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
