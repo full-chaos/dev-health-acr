@@ -4,7 +4,7 @@ import "testing"
 
 func r4CheckedPrior(t *testing.T, id, question string, family QuestionFamily, group SubjectKind) InvestigationResult {
 	t.Helper()
-	prior := continuationPrior(id, question, family, group)
+	prior := continuationPrior(t, id, question, family, group)
 	plan := PlanAnswer(PlanAnswerInput{Family: QuestionFamilyOutcome{Family: family, Source: QuestionFamilySourceModel, WinningSample: FamilySample{GroupKind: group}}, Budget: ResponseBudget{MaxItems: 50, MaxSerializedBytes: 262144}, MaxCohortMembers: 20})
 	prior.AnswerPlan = &plan
 	if err := prior.Validate(); err != nil {
@@ -19,7 +19,7 @@ func TestReviewR4_CarrierValidity(t *testing.T) {
 		if family == QuestionFamilyGroupedCohortStatus {
 			group = SubjectTeam
 		}
-		prior := continuationPrior(continuationPriorID, validInvestigationRequest().Question, family, group)
+		prior := continuationPrior(t, continuationPriorID, validInvestigationRequest().Question, family, group)
 		plan := PlanAnswer(PlanAnswerInput{Family: QuestionFamilyOutcome{Family: family, Source: QuestionFamilySourceModel, WinningSample: FamilySample{GroupKind: group}}, Budget: ResponseBudget{MaxItems: 50, MaxSerializedBytes: 262144}, MaxCohortMembers: 20})
 		prior.AnswerPlan = &plan
 		if err := prior.Validate(); err != nil {

@@ -63,7 +63,7 @@ func TestWindowContinuation_ForcedFamilyConflictServesTheCarriedContext(t *testi
 			t.Parallel()
 
 			request := continuationRequest(validInvestigationRequest().Question)
-			prior := continuationPrior(continuationPriorID, request.Question, tc.carriedFamily, tc.carriedGroup)
+			prior := continuationPrior(t, continuationPriorID, request.Question, tc.carriedFamily, tc.carriedGroup)
 			harness := newContinuationHarness(t,
 				&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
 				forcedFamilyInterpreter{family: tc.freshFamily, groupKind: tc.freshGroup})
@@ -135,7 +135,7 @@ func TestWindowContinuation_SameFamilySubjectExpressionConflictStillServesTheCar
 	t.Parallel()
 
 	request := continuationRequest(validInvestigationRequest().Question)
-	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+	prior := continuationPrior(t, continuationPriorID, request.Question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
 	harness := newContinuationHarness(t,
 		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
 		// SAME family, DIFFERENT group axis.
@@ -171,7 +171,7 @@ func TestWindowContinuation_AnAgreeingProposalStillReportsCarried(t *testing.T) 
 	t.Parallel()
 
 	request := continuationRequest(validInvestigationRequest().Question)
-	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+	prior := continuationPrior(t, continuationPriorID, request.Question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
 	harness := newContinuationHarness(t,
 		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
 		forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam})
@@ -201,7 +201,7 @@ func TestWindowContinuation_AVersionMismatchedCarrierIsWithheldNotReinterpreted(
 	t.Parallel()
 
 	request := continuationRequest(validInvestigationRequest().Question)
-	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
+	prior := continuationPrior(t, continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
 	prior.AnswerPlan.FamilyVersion = "question-family.v0-not-in-force"
 	harness := newContinuationHarness(t,
 		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
@@ -356,11 +356,11 @@ func TestWindowContinuation_ContainmentRefusesEverythingThatIsNotTheTransition(t
 			t.Parallel()
 
 			request := continuationRequest(baseQuestion)
-			prior := continuationPrior(continuationPriorID, baseQuestion, QuestionFamilyDiscoveredCohortRanking, "")
+			prior := continuationPrior(t, continuationPriorID, baseQuestion, QuestionFamilyDiscoveredCohortRanking, "")
 			// An OLDER ancestor that WOULD be usable. immediate_carrier_only:
 			// a rescue from it must never happen -- the axis is one hop, and
 			// the hop is the result the caller named.
-			older := continuationPrior(continuationOlderID, baseQuestion, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+			older := continuationPrior(t, continuationOlderID, baseQuestion, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
 			if tc.prior != nil {
 				prior = tc.prior(prior)
 			}
@@ -472,8 +472,8 @@ func TestWindowContinuation_EveryWindowReceiptRequestEmitsExactlyOneDecision(t *
 			if tc.mutate != nil {
 				tc.mutate(&request)
 			}
-			prior := continuationPrior(continuationPriorID, baseQuestion, QuestionFamilyDiscoveredCohortRanking, "")
-			older := continuationPrior(continuationOlderID, baseQuestion, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+			prior := continuationPrior(t, continuationPriorID, baseQuestion, QuestionFamilyDiscoveredCohortRanking, "")
+			older := continuationPrior(t, continuationOlderID, baseQuestion, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
 			harness := newContinuationHarness(t,
 				&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior, older.ResultID: older}},
 				forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam})
@@ -535,7 +535,7 @@ func TestWindowContinuation_TheDecisionJoinsToTheServedDocument(t *testing.T) {
 	t.Parallel()
 
 	request := continuationRequest(validInvestigationRequest().Question)
-	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
+	prior := continuationPrior(t, continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
 	harness := newContinuationHarness(t,
 		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
 		forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam})
@@ -579,7 +579,7 @@ func TestWindowContinuation_CarriesNoMembershipAndNoAuthorizationVerdict(t *test
 	t.Parallel()
 
 	request := continuationRequest(validInvestigationRequest().Question)
-	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
+	prior := continuationPrior(t, continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
 	// Turn one committed a subject. The continuation must not inherit it.
 	prior.SubjectResolution = SubjectResolution{
 		Candidates: []SubjectCandidate{},
@@ -654,7 +654,7 @@ func TestWindowContinuation_TheDecisionReachesTheRealSink(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	request := continuationRequest(validInvestigationRequest().Question)
-	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
+	prior := continuationPrior(t, continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	fresh := validInvestigationResult()
 
@@ -771,7 +771,7 @@ func (f frameBearingInterpreter) Interpret(context.Context, storage.Principal, I
 // served differs from the logged accepted context.
 func TestWindowContinuation_R1_TheServedGroupAxisIsTheAcceptedOneNotTheFreshFrames(t *testing.T) {
 	request := continuationRequest(validInvestigationRequest().Question)
-	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+	prior := continuationPrior(t, continuationPriorID, request.Question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
 	harness := newContinuationHarness(t,
 		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
 		frameBearingInterpreter{
@@ -794,7 +794,7 @@ func TestWindowContinuation_R1_TheServedGroupAxisIsTheAcceptedOneNotTheFreshFram
 // stale reading, because the containment covers only the two identity reasons.
 func TestWindowContinuation_R1_AWithheldCarrierCannotBeServedByTheLegacyCarry(t *testing.T) {
 	request := continuationRequest(validInvestigationRequest().Question)
-	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+	prior := continuationPrior(t, continuationPriorID, request.Question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
 	prior.AnswerPlan.FamilyVersion = "question-family.v0-not-in-force"
 	harness := newContinuationHarness(t,
 		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
@@ -824,7 +824,7 @@ func TestWindowContinuation_R1_AWithheldCarrierCannotBeServedByTheLegacyCarry(t 
 // line, so the event's denominator is not "requests carrying window receipts".
 func TestWindowContinuation_R1_AWindowReceiptRequestEmitsADecisionEvenWhenGraphBindingFails(t *testing.T) {
 	request := continuationRequest(validInvestigationRequest().Question)
-	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
+	prior := continuationPrior(t, continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
 	telemetry := &recordingTelemetry{}
 	fresh := validInvestigationResult()
 	engine := mustReuseTestEngine(t, EngineDependencies{
@@ -852,7 +852,7 @@ func TestWindowContinuation_R1_AWindowReceiptRequestEmitsADecisionEvenWhenGraphB
 // R1-4: applied_window is declared, logged, and never populated.
 func TestWindowContinuation_R1_AnAppliedContinuationLogsTheWindowItApplied(t *testing.T) {
 	request := continuationRequest(validInvestigationRequest().Question)
-	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
+	prior := continuationPrior(t, continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
 	harness := newContinuationHarness(t,
 		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
 		forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam})
@@ -1045,8 +1045,8 @@ func TestWindowContinuation_EveryReasonIsReachedThroughTheEngine(t *testing.T) {
 			if d.mutate != nil {
 				d.mutate(&request)
 			}
-			prior := continuationPrior(continuationPriorID, base, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
-			older := continuationPrior(continuationOlderID, base, QuestionFamilyDiscoveredCohortRanking, "")
+			prior := continuationPrior(t, continuationPriorID, base, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+			older := continuationPrior(t, continuationOlderID, base, QuestionFamilyDiscoveredCohortRanking, "")
 			if d.prior != nil {
 				prior = d.prior(prior)
 			}
@@ -1180,7 +1180,7 @@ func TestWindowContinuation_TheInputShapeSpace(t *testing.T) {
 			if tc.mutate != nil {
 				tc.mutate(&request)
 			}
-			prior := continuationPrior(continuationPriorID, base, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+			prior := continuationPrior(t, continuationPriorID, base, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
 			project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 			graph := &frameRecordingGraphReader{graphReaderStub: graphReaderStub{
 				resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
@@ -1276,7 +1276,7 @@ func TestWindowContinuation_TheInputShapeSpace(t *testing.T) {
 func TestWindowContinuation_R2_AnExplicitStructureHintDisqualifiesTheContinuation(t *testing.T) {
 	request := continuationRequest(validInvestigationRequest().Question)
 	request.ExpectedKinds = []SubjectKind{contractsv1.ContextFabricSubjectProject}
-	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
+	prior := continuationPrior(t, continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
 	harness := newContinuationHarness(t,
 		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
 		forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam})
@@ -1296,7 +1296,7 @@ func TestWindowContinuation_R2_AnExplicitStructureHintDisqualifiesTheContinuatio
 // initial value is only refined for the NOT-window-only case.
 func TestWindowContinuation_R2_ABindingFailureCarriesItsOwnReasonNotUnspecified(t *testing.T) {
 	request := continuationRequest(validInvestigationRequest().Question)
-	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
+	prior := continuationPrior(t, continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
 	telemetry := &recordingTelemetry{}
 	fresh := validInvestigationResult()
 	engine := mustReuseTestEngine(t, EngineDependencies{
@@ -1329,7 +1329,7 @@ func TestWindowContinuation_R2_ABindingFailureCarriesItsOwnReasonNotUnspecified(
 // graph consumers, which read the frame for this turn's retrieval.
 func TestWindowContinuation_R2_TheGraphConsumersNeverSeeANilFrame(t *testing.T) {
 	request := continuationRequest(validInvestigationRequest().Question)
-	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+	prior := continuationPrior(t, continuationPriorID, request.Question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	graph := &frameRecordingGraphReader{graphReaderStub: graphReaderStub{
 		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
@@ -1367,7 +1367,7 @@ func TestWindowContinuation_R2_TheGraphConsumersNeverSeeANilFrame(t *testing.T) 
 // applied.
 func TestWindowContinuation_R2_AppliedIsNeverPublishedForATurnTheAxisVetoUndoes(t *testing.T) {
 	request := continuationRequest(validInvestigationRequest().Question)
-	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
+	prior := continuationPrior(t, continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	telemetry := &recordingTelemetry{}
 	fresh := validInvestigationResult()
@@ -1454,7 +1454,7 @@ func TestWindowContinuation_AResolvableTypedReceiptBesideAWindowReceiptIsNotACon
 	t.Parallel()
 
 	base := validInvestigationRequest().Question
-	prior := continuationPrior(continuationPriorID, base, QuestionFamilyDiscoveredCohortRanking, "")
+	prior := continuationPrior(t, continuationPriorID, base, QuestionFamilyDiscoveredCohortRanking, "")
 	// The SAME prior also OFFERED an expected kind. A kindr_ receipt resolves
 	// against StructureNeeds.KindOptions -- the offer it redeems -- not against
 	// ConfirmedStructure, which is what a previous turn already applied. Getting
@@ -1506,7 +1506,7 @@ func TestWindowContinuation_TheAcceptedFrameIsACopyAndLeavesTheProposedFrameInta
 	t.Parallel()
 
 	base := validInvestigationRequest().Question
-	prior := continuationPrior(continuationPriorID, base, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+	prior := continuationPrior(t, continuationPriorID, base, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
 	request := continuationRequest(base)
 
 	// The interpreter hands out ONE frame object and keeps the pointer, exactly
@@ -1589,7 +1589,7 @@ func (s sharedFrameInterpreter) Interpret(context.Context, storage.Principal, In
 // `unspecified` -- the fail-closed member -- on a real path.
 func TestWindowContinuation_R3_TheInterpretedTimeBoundErrorCarriesItsOwnReason(t *testing.T) {
 	request := continuationRequest(validInvestigationRequest().Question)
-	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
+	prior := continuationPrior(t, continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
 	telemetry := &recordingTelemetry{}
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	fresh := validInvestigationResult()
@@ -1635,7 +1635,7 @@ func TestWindowContinuation_R3_TheInterpretedTimeBoundErrorCarriesItsOwnReason(t
 // contradicting the census this event's own contract states.
 func TestWindowContinuation_R3_ACancelledWindowRequestStillEmitsADecision(t *testing.T) {
 	request := continuationRequest(validInvestigationRequest().Question)
-	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
+	prior := continuationPrior(t, continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
 	telemetry := &recordingTelemetry{}
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	fresh := validInvestigationResult()
@@ -1789,7 +1789,7 @@ func TestWindowContinuation_JoinsTheInterpretedTimeBoundEventOnOneTurn(t *testin
 	t.Parallel()
 
 	request := continuationRequest(validInvestigationRequest().Question)
-	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
+	prior := continuationPrior(t, continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
 	harness := newContinuationHarness(t,
 		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
 		forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam})
@@ -1835,7 +1835,7 @@ func TestWindowContinuation_TheAppliedWindowCarriesItsActualFrozenBounds(t *test
 	t.Parallel()
 
 	request := continuationRequest(validInvestigationRequest().Question)
-	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
+	prior := continuationPrior(t, continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
 	harness := newContinuationHarness(t,
 		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
 		forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam})
@@ -1884,7 +1884,7 @@ func TestWindowContinuation_TheConflictCountEqualsTheFieldsItNames(t *testing.T)
 	t.Parallel()
 
 	request := continuationRequest(validInvestigationRequest().Question)
-	prior := continuationPrior(continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
+	prior := continuationPrior(t, continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
 	harness := newContinuationHarness(t,
 		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
 		forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam})

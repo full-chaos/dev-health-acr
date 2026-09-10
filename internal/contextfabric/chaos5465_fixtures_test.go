@@ -55,7 +55,8 @@ func (f forcedFamilyInterpreter) Interpret(context.Context, storage.Principal, I
 
 // continuationPrior builds a turn one that classified `family` and offers a
 // real window receipt for turn two to redeem.
-func continuationPrior(resultID, question string, family QuestionFamily, groupKind SubjectKind) InvestigationResult {
+func continuationPrior(t testing.TB, resultID, question string, family QuestionFamily, groupKind SubjectKind) InvestigationResult {
+	t.Helper()
 	frozenStart := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
 	frozenEnd := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	prior := validInvestigationResult()
@@ -80,8 +81,16 @@ func continuationPrior(resultID, question string, family QuestionFamily, groupKi
 	// R4-5: THE FIXTURE VALIDATES ITSELF. A carrier a pin calls "valid" must
 	// be one the product would accept; the previous version was not, and five
 	// pins rested on it without noticing.
+	//
+	// IT FAILS THE TEST, IT DOES NOT PANIC, and the difference is not style.
+	// A panic here aborts the whole package binary, so a build that produced an
+	// invalid carrier reported a crash with no named failing test -- the tests
+	// after it never ran and nothing attributed the loss. A hosted mutation arm
+	// measured exactly that: 659 of 1554 tests executed and the arm came back
+	// as a harness error rather than a kill. `testing.TB` costs one parameter
+	// and turns the same guard into a failure with a name on it.
 	if err := prior.Validate(); err != nil {
-		panic("continuationPrior built an invalid carrier: " + err.Error())
+		t.Fatalf("continuationPrior built an invalid carrier: %v", err)
 	}
 	return prior
 }
