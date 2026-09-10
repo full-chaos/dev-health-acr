@@ -2428,6 +2428,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// regression against the very rows this is meant to move. The
 			// refusal is carried instead, and disclosed.
 			groupBundle, groupOutcome, groupErr := e.readAdmittedGroupFacts(ctx, principal, request, interpretation, binding, plan, &cohort, effectiveWindow)
+			// Returned, cap-omitted and merged are captured separately because
+			// the cap and a metadata conflict can each make them differ.
+			var groupFactsReturned, groupFactsCapOmitted, groupFactsMerged int
 			if groupErr != nil {
 				// NAMED, not merely flagged. A read that was issued and
 				// failed is a different operational fact from one that was
@@ -2460,6 +2463,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// anywhere, which is the state this stage was in when it
 				// was first written.
 				e.recordFactScopeExpansion(ctx, principal, groupBundle.Scope)
+				// THE TURN'S ONE FACT BUDGET, before anything else sees the
+				// group bundle, so the pre-fold coverage line below and the
+				// merge both describe what the turn will actually carry.
+				groupFactsReturned = len(groupBundle.Facts)
+				groupFactsCapOmitted = boundGroupFactsToRemainingCapacity(&groupBundle, len(facts.Facts))
 				// BEFORE THE FOLD. MergeCoverage keeps the worst state per
 				// source name and both reads report under the same
 				// `canonical_fact:<kind>` names, so a group gap erases the
@@ -2470,7 +2478,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				if mergeGroupBundle(&facts, groupBundle, principal.OrgID) {
 					groupOutcome.Refused, groupOutcome.Reason = true, GroupReadRefusalMetadataConflict
 					groupOutcome.Read = false
+				} else {
+					groupFactsMerged = len(groupBundle.Facts)
 				}
+			} else {
+				groupFactsReturned = len(groupBundle.Facts)
 			}
 			e.recordCohortGroupRead(ctx, principal, CohortGroupReadEvent{
 				Family:                 plan.Family,
@@ -2481,9 +2493,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				Read:                   groupOutcome.Read,
 				Refused:                groupOutcome.Refused,
 				Refusal:                groupOutcome.Reason,
-				FactsReturned:          len(groupBundle.Facts),
+				FactsReturned:          groupFactsReturned,
 				UnadmittedFactsDropped: groupOutcome.UnadmittedFactsDropped,
 				ContractBound:          contractsv1.ContextFabricCohortGroupsMaxCount,
+				FactsCapOmitted:        groupFactsCapOmitted,
+				FactsMerged:            groupFactsMerged,
+				FactBundleCap:          maxCanonicalFactsPerBundle,
 			})
 		} else if groupingOutcome.Refusal != CohortGroupingRefusalNone {
 			// ONE arm for EVERY refusal, and the reason there is only one is

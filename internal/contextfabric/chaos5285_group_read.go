@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/hintsource"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -329,6 +330,16 @@ type CohortGroupReadEvent struct {
 	// UnadmittedFactsDropped is how many returned facts named a subject the
 	// turn never admitted and were discarded before synthesis.
 	UnadmittedFactsDropped int
+	// FactsCapOmitted is how many of the returned facts the turn's combined
+	// per-bundle cap left out, FactsMerged how many actually entered the
+	// turn's bundle, and FactBundleCap the cap itself. Returned, omitted and
+	// merged are three different numbers on purpose: "the provider sent
+	// seven, the budget took four, four reached synthesis" and "the provider
+	// sent four" are different turns, and a metadata conflict merges none of
+	// what was admitted.
+	FactsCapOmitted int
+	FactsMerged     int
+	FactBundleCap   int
 }
 
 // recordCohortGroupRead emits the group stage's decision, on EVERY grouped
@@ -394,6 +405,67 @@ func mergeGroupBundle(into *CanonicalFactBundle, group CanonicalFactBundle, orgI
 	// coarsen an instant-grain member read, never the other way round.
 	into.TemporalGrain = coarsestGrain(into.TemporalGrain, group.TemporalGrain)
 	return false
+}
+
+// groupFactsCapReason is the coverage reason a kind carries when the combined
+// per-bundle cap trimmed the group read's contribution to it.
+const groupFactsCapReason = "canonical fact bundle cap reached before the group read's facts"
+
+// boundGroupFactsToRemainingCapacity admits the group read's facts into
+// whatever capacity the turn's per-bundle cap has LEFT after the member read,
+// and discloses every kind it trimmed. It returns how many facts it omitted.
+//
+// ONE CAP FOR THE TURN, NOT ONE PER READ. The registry bounds each ReadFacts
+// call at maxCanonicalFactsPerBundle, at the merge point every provider result
+// passes through. A second read is a second call with its own full allowance,
+// so without this the turn's synthesis input could reach twice the ceiling --
+// and the bundle is model input, which is exactly what that ceiling exists
+// to hold.
+//
+// THE FIRST READ IS NEVER TRIMMED. The member evidence was gathered first and
+// the answer is built around it; the group read is the addition, so the group
+// read is what yields. A member bundle already at the cap leaves no room, and
+// then no group fact is admitted at all.
+//
+// DETERMINISTIC. The group facts are put in the registry's own canonical order
+// (sortCanonicalFacts: fact kind, then subject) before the prefix is taken --
+// the same rule the registry's own cap applies -- so which facts survive
+// never depends on the order a provider happened to list them in.
+//
+// DISCLOSED THROUGH THE EXISTING TRUNCATION MACHINERY, not a new state or a
+// new code: each trimmed kind gets a `truncated` observation through
+// appendFactCoverage, exactly as the registry records its own cap trimming
+// a provider. MergeCoverage then keeps `truncated` over `available` for that
+// source, so the served coverage and the requirement it cost both say so.
+func boundGroupFactsToRemainingCapacity(group *CanonicalFactBundle, turnFacts int) int {
+	remaining := maxCanonicalFactsPerBundle - turnFacts
+	if remaining < 0 {
+		remaining = 0
+	}
+	if len(group.Facts) <= remaining {
+		return 0
+	}
+	ordered := append([]CanonicalFact(nil), group.Facts...)
+	sortCanonicalFacts(ordered)
+	omitted := ordered[remaining:]
+	group.Facts = ordered[:remaining]
+
+	// One observation per trimmed KIND, in the canonical order, so the
+	// coverage the turn serves is the same whatever order the omitted facts
+	// came in.
+	trimmed := make(map[FactKind]int, len(omitted))
+	kinds := make([]FactKind, 0, len(omitted))
+	for _, fact := range omitted {
+		if _, seen := trimmed[fact.Kind]; !seen {
+			kinds = append(kinds, fact.Kind)
+		}
+		trimmed[fact.Kind]++
+	}
+	for _, kind := range kinds {
+		appendFactCoverage(group, kind, SourceTruncated, nil, group.Watermarks[kind],
+			fmt.Sprintf("%s (omitted %d)", groupFactsCapReason, trimmed[kind]), coverageDetailSpec{})
+	}
+	return len(omitted)
 }
 
 // GroupReadCoverageStateEvent is ONE read's observation of ONE source, emitted

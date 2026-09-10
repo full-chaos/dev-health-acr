@@ -163,6 +163,17 @@ func TestTheSecondReadSharesTheTurnsFactBudget(t *testing.T) {
 		if row.Outcome == contractsv1.ContextFabricRequirementSatisfied {
 			t.Errorf("each_group row is satisfied with two of its kinds trimmed by the cap -- the omission must reach the requirement it cost")
 		}
+		// Four kinds observed, two served whole, two truncated: a DEPTH loss
+		// (the same groups, thinner evidence), attributed to the code the
+		// truncation machinery mints for a merge-induced truncation.
+		if row.Outcome != contractsv1.ContextFabricRequirementNarrowed || row.Impact != contractsv1.ContextFabricAnswerImpactDepth ||
+			row.Served != 2 || row.Declared != 4 || row.CauseCoverage != contractsv1.ContextFabricCoverageDetailFactProviderReported {
+			t.Errorf("each_group row = %q/%q %d/%d cause=%q, want narrowed/depth 2/4 cause=%q",
+				row.Outcome, row.Impact, row.Served, row.Declared, row.CauseCoverage, contractsv1.ContextFabricCoverageDetailFactProviderReported)
+		}
+	}
+	if len(rows) != 1 {
+		t.Errorf("assembled-result each_group rows = %d, want 1", len(rows))
 	}
 
 	// DISCLOSED ON THE TRACE, on the engine's configured logger, with values.
