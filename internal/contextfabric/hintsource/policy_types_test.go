@@ -23,12 +23,11 @@ import (
 // the swapped expression in process asserts exactly the property, and asserts it
 // FAILS, which is the direction that matters.
 //
-// AND THE BOUNDARY IS PINNED TOO, in the same test. Swapping the field alone is
-// rejected. Swapping the field AND the accessor together is NOT — it is a valid
-// expression of a valid type, and no type system catches it. That case is a
-// stated limit rather than a covered one, and the test records it by asserting
-// that it type-checks, so a future change that accidentally closes it will fail
-// here and force the limit's wording to be corrected rather than left stale.
+// The boundary of that property — swapping the field AND the accessor together
+// is well-typed and therefore uncovered — is explained above policyTypeCases,
+// where it says why it cannot be written as a case at all, and is recorded in
+// the pull request's risk notes.
+
 // policyTypeCase is one expression and what the type checker must say about it.
 type policyTypeCase struct {
 	expr        string
