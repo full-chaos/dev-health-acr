@@ -77,6 +77,13 @@ const (
 	// rows are all computed or given, so no fact kind can serve them and no
 	// read is owed.
 	GroupReadRefusalNoReadRequirement GroupReadRefusal = "no_read_requirement"
+	// GroupReadRefusalMetadataConflict is two reads that disagree about one
+	// fact kind's version or watermark. Neither read is the authority on the
+	// other's opaque metadata, and choosing between them would invent an
+	// ordering no producer declared -- so the group contribution is dropped
+	// and the member evidence, which is complete and internally consistent,
+	// is what the turn serves.
+	GroupReadRefusalMetadataConflict GroupReadRefusal = "metadata_conflict"
 )
 
 // canonicalGroupReadRefusals is the emitter's own membership table, so a
@@ -88,6 +95,7 @@ var canonicalGroupReadRefusals = map[GroupReadRefusal]GroupReadRefusal{
 	GroupReadRefusalNoGroupAdmitted:          GroupReadRefusalNoGroupAdmitted,
 	GroupReadRefusalAuthorizationUnavailable: GroupReadRefusalAuthorizationUnavailable,
 	GroupReadRefusalNoReadRequirement:        GroupReadRefusalNoReadRequirement,
+	GroupReadRefusalMetadataConflict:         GroupReadRefusalMetadataConflict,
 }
 
 // ValidGroupReadRefusal reports membership in the closed vocabulary.
@@ -287,4 +295,55 @@ func (e *Engine) recordCohortGroupRead(ctx context.Context, principal storage.Pr
 		return
 	}
 	e.telemetry.RecordCohortGroupRead(ctx, principal, event)
+}
+
+// mergeGroupBundle folds the group read's bundle into the turn's, and reports
+// whether the two can be composed at all.
+//
+// EVERY carrier the bundle has must survive composition, not just the facts.
+// A group fact whose provider version never reached the turn's version map is
+// evidence with no provenance -- and the failure would be silent, because the
+// facts themselves look complete. The three carriers below are exactly the
+// ones a second read can contribute that the first also has an opinion about.
+//
+// Conflicting opaque metadata is REFUSED rather than resolved. Neither read is
+// the authority on the other's version string, and picking one -- newest, last
+// writer, the group read because it ran second -- would be inventing an
+// ordering that no producer declared. The turn keeps the member evidence,
+// which is complete and internally consistent, and discloses that the group
+// read could not be composed.
+func mergeGroupBundle(into *CanonicalFactBundle, group CanonicalFactBundle, orgID string) (conflicted bool) {
+	// Checked BEFORE anything is written, so a refusal leaves the turn's
+	// bundle exactly as it was rather than half-merged.
+	for kind, version := range group.Versions {
+		if existing, known := into.Versions[kind]; known && existing != version {
+			return true
+		}
+	}
+	for kind, watermark := range group.Watermarks {
+		if existing, known := into.Watermarks[kind]; known && existing != watermark {
+			return true
+		}
+	}
+
+	into.Facts = append(into.Facts, group.Facts...)
+	into.Coverage = MergeCoverage(orgID, into.Coverage, group.Coverage)
+	if into.Versions == nil {
+		into.Versions = make(map[FactKind]string, len(group.Versions))
+	}
+	for kind, version := range group.Versions {
+		into.Versions[kind] = version
+	}
+	if into.Watermarks == nil {
+		into.Watermarks = make(map[FactKind]string, len(group.Watermarks))
+	}
+	for kind, watermark := range group.Watermarks {
+		into.Watermarks[kind] = watermark
+	}
+	// COARSEST, not the group read's own. An answer is only as precise as
+	// its least precise source, and the group read is now one of the
+	// sources this answer is built from -- so a day-grain group read must
+	// coarsen an instant-grain member read, never the other way round.
+	into.TemporalGrain = coarsestGrain(into.TemporalGrain, group.TemporalGrain)
+	return false
 }

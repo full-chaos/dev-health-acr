@@ -2444,8 +2444,20 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			}
 			graphContext.Cohort = &cohort
 			if groupOutcome.Read && groupErr == nil {
-				facts.Facts = append(facts.Facts, groupBundle.Facts...)
-				facts.Coverage = MergeCoverage(principal.OrgID, facts.Coverage, groupBundle.Coverage)
+				// The group read's OWN expansion decisions, reported here
+				// and not folded into the first read's. Every scope-
+				// expansion decision a read made is owed to the operator
+				// immediately, whether it expanded, declined or failed --
+				// and the group read makes its own, over a different root
+				// population. Emitting only the member read's would leave
+				// the second read's decisions with no representation
+				// anywhere, which is the state this stage was in when it
+				// was first written.
+				e.recordFactScopeExpansion(ctx, principal, groupBundle.Scope)
+				if mergeGroupBundle(&facts, groupBundle, principal.OrgID) {
+					groupOutcome.Refused, groupOutcome.Reason = true, GroupReadRefusalMetadataConflict
+					groupOutcome.Read = false
+				}
 			}
 			e.recordCohortGroupRead(ctx, principal, CohortGroupReadEvent{
 				Family:        plan.Family,
