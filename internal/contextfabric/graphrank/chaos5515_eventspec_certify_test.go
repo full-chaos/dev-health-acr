@@ -105,6 +105,7 @@ func TestEventspecCertifiesExplicitZerosWhenNoSlotIsReserved(t *testing.T) {
 	if _, err := certify.Certify(log, certify.Assertion{
 		Event: eventspec.RankedCutSummary,
 		Want: map[string]any{
+			"request_id":            req.RequestID,
 			"anchor_slot_reserved":  anchorSlotNone,
 			"anchor_slot_source":    anchorSlotNone,
 			"anchor_slot_displaced": 0,

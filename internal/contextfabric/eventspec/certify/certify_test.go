@@ -68,9 +68,13 @@ func TestCertifyRefusesACaptureStructInPlaceOfTheRealHandler(t *testing.T) {
 	}
 }
 
-// A2 control (b): a wrong record -- a twin line carrying the SAME msg with
-// DIFFERENT values. Certify must refuse on multiplicity, not silently pick
-// one of the two and pass.
+// A2 control (b): a wrong record -- a twin line carrying the SAME msg AND
+// the SAME attribution (request_id) with a DIFFERENT value on the field
+// under test. Certify certifies the LAST such line (production's own
+// documented multi-pass rule -- see TestCertifyAcceptsAGenuineMultiPassTwin
+// below for the positive side of this same behaviour) and must still
+// refuse when that last line disagrees with Want -- silently picking a
+// value-wrong line and passing is exactly what this control kills.
 func TestCertifyRefusesATwinLineWithTheSameMsgAndDifferentValues(t *testing.T) {
 	twin := strings.Replace(validRankedCutSummaryLine(), `"anchor_slot_reserved":"team"`, `"anchor_slot_reserved":"repo"`, 1)
 	log, err := Parse([]byte(validRankedCutSummaryLine() + "\n" + twin))
@@ -79,10 +83,28 @@ func TestCertifyRefusesATwinLineWithTheSameMsgAndDifferentValues(t *testing.T) {
 	}
 	_, err = Certify(log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()})
 	if err == nil {
-		t.Fatal("Certify() accepted a log with two lines sharing the summary msg but disagreeing values -- want a refusal naming the ambiguity")
+		t.Fatal("Certify() accepted a log whose LAST summary line disagrees with Want -- want a refusal naming the value mismatch")
 	}
-	if !strings.Contains(err.Error(), "found 2 lines") {
-		t.Errorf("refusal text = %q, want it to name the count", err.Error())
+	if !strings.Contains(err.Error(), `"anchor_slot_reserved" = repo, want team`) {
+		t.Errorf("refusal text = %q, want it to name the value mismatch on the LAST line", err.Error())
+	}
+}
+
+// Positive control for the SAME behaviour the twin-line refusal above
+// exercises: production genuinely emits more than one RankedCutSummary line
+// for one request_id when a resolution re-decides across passes
+// (TestRankedCutSummary_LastSummaryDescribesTheKeptPassAcrossReDecisionPasses,
+// graphrank's own pre-existing, already-shipped proof) -- Certify must
+// accept that shape and certify the LAST (kept) pass, never reject it as an
+// ambiguous duplicate by raw count alone (round r1's P2).
+func TestCertifyAcceptsAGenuineMultiPassTwin(t *testing.T) {
+	firstPass := strings.Replace(validRankedCutSummaryLine(), `"candidate_count":92`, `"candidate_count":2`, 1)
+	log, err := Parse([]byte(firstPass + "\n" + validRankedCutSummaryLine()))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if _, err := Certify(log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()}); err != nil {
+		t.Fatalf("Certify() refused a genuine multi-pass log (first pass candidate_count=2, kept pass candidate_count=92, same request_id) -- want it to certify the LAST line: %v", err)
 	}
 }
 
@@ -158,5 +180,59 @@ func TestCertifyRefusesAWantKeyMissingFromTheLine(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "has no") {
 		t.Errorf("refusal text = %q, want it to name the missing key", err.Error())
+	}
+}
+
+// Round r1's P1, executed repro reproduced here as a permanent regression
+// test: a REQUIRED field the event declares, but that the caller's Want
+// never happens to name, must still be checked for PRESENCE -- a field
+// silently dropped from production output must never pass just because no
+// fixture pinned its exact value. "survived_ids" and "declared_kind_rescue"
+// are both declared PresenceRequired on RankedCutSummary and both absent
+// from wantForRankedCutSummary()'s own Want map, by construction -- exactly
+// the shape the reviewer's repro (deleting anchor_slot_displaced from the
+// real tracer emission with every existing test still PASSING) proved was a
+// gap.
+func TestCertifyRefusesALineMissingARequiredFieldNotNamedInWant(t *testing.T) {
+	for _, tc := range []struct{ field, drop string }{
+		{"survived_ids", `"survived_ids":["a","b"],`},
+		{"declared_kind_rescue", `,"declared_kind_rescue":[]`},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			missing := strings.Replace(validRankedCutSummaryLine(), tc.drop, "", 1)
+			if missing == validRankedCutSummaryLine() {
+				t.Fatalf("fixture bug: needle %q not found in the base line", tc.drop)
+			}
+			log, err := Parse([]byte(missing))
+			if err != nil {
+				t.Fatalf("Parse() error = %v", err)
+			}
+			want := wantForRankedCutSummary()
+			if _, present := want[tc.field]; present {
+				t.Fatalf("fixture bug: the dropped field must NOT be named in Want, or this test would pass for the wrong (already-existing) reason")
+			}
+			_, err = Certify(log, Assertion{Event: eventspec.RankedCutSummary, Want: want})
+			if err == nil {
+				t.Fatalf("Certify() accepted a line missing %s, a declared-required field Want never named -- a silently dropped field must never pass unnoticed", tc.field)
+			}
+		})
+	}
+}
+
+// Round r1's P2 (CertifyAbsent side): an exactly-one-per-pass event is
+// required on EVERY pass by its own declaration, so asserting it absent is
+// never a legitimate expectation -- CertifyAbsent must refuse rather than
+// silently accepting "0 lines found" as if it proved something.
+func TestCertifyAbsentRefusesAnExactlyOnePerPassEvent(t *testing.T) {
+	log, err := Parse([]byte(`{"time":"2026-09-10T00:00:00Z","level":"INFO","msg":"an unrelated line"}`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	err = CertifyAbsent(log, eventspec.RankedCutSummary)
+	if err == nil {
+		t.Fatal("CertifyAbsent() accepted asserting absence for RankedCutSummary, an exactly_one_per_pass event -- want a refusal naming the multiplicity")
+	}
+	if !strings.Contains(err.Error(), "exactly_one_per_pass") {
+		t.Errorf("refusal text = %q, want it to name the multiplicity", err.Error())
 	}
 }

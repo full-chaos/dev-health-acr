@@ -86,9 +86,13 @@ func (l *Log) linesWithMsg(msg string) []Line {
 func (l *Log) LinesWithMsg(msg string) []Line { return l.linesWithMsg(msg) }
 
 // Assertion is one certified expectation: an event variant, and the field
-// values an independently controlled fixture expects that variant's ONE
-// matching line to carry. Fields the event declares but the caller omits
-// from Want are not checked -- name every field the fixture pins.
+// VALUES an independently controlled fixture expects that variant's
+// matching line to carry. Want MUST include every field named in
+// Event.Attribution (used to scope which attempt is being certified).
+// Every other PresenceRequired field is checked for PRESENCE regardless of
+// whether it appears in Want; a field appearing in Want is additionally
+// checked for exact VALUE equality -- name a field in Want whenever the
+// fixture pins a specific value, not just to make it exist.
 type Assertion struct {
 	Event eventspec.Event
 	Want  map[string]any
@@ -100,43 +104,96 @@ type Result struct {
 	Line Line
 }
 
-// Certify locates the line(s) matching a.Event.Msg, enforces multiplicity,
-// asserts production level, and asserts every key in a.Want against the
-// decoded line with exact value equality (JSON-normalized: int/float
-// distinctions collapse the same way encoding/json already collapses them,
-// so a caller writes plain Go literals in Want).
+// Certify locates the line(s) matching a.Event.Msg AND matching every one of
+// the event's declared Attribution fields against a.Want (round r1's P2:
+// production genuinely emits more than one line with the same msg for one
+// REQUEST when a resolution re-decides across passes --
+// TestRankedCutSummary_LastSummaryDescribesTheKeptPassAcrossReDecisionPasses
+// is the pre-existing, already-shipped proof -- so multiplicity is scoped to
+// the attempt Want identifies via Attribution, never to the whole supplied
+// log), enforces multiplicity within that scope, asserts production level,
+// asserts PRESENCE of every field the event declares PresenceRequired
+// (round r1's P1: a field's value is only checked when the caller names it
+// in Want, but a field silently DROPPED from production output must never
+// pass unnoticed just because no test happened to pin its value), and
+// asserts exact value equality (JSON-normalized) for every key in a.Want.
+//
+// For MultiplicityExactlyOnePerPass, more than one line in scope is not an
+// error: the LAST one is certified, matching production's own documented
+// rule (tracer.go's RankedCutSummary doc comment: "the LAST summary
+// reaching the tracer for a request_id always describes the pass whose
+// resolution was actually returned"). This does trade away detecting a
+// genuine duplicate-emission defect within one pass via count alone; there
+// is no pass-sequence field in the current spec to distinguish "two
+// legitimate passes" from "one pass, emitted twice" -- callers that need
+// that distinction must pin it via a producer-specific field in Want.
 //
 // It returns an error rather than calling testing.T directly so a caller
 // can assert on the error text in a red-first control proof; production
 // call sites wrap the error with t.Fatal/t.Error themselves.
 func Certify(log *Log, a Assertion) (Result, error) {
-	matches := log.linesWithMsg(a.Event.Msg)
+	for _, attrKey := range a.Event.Attribution {
+		if _, ok := a.Want[attrKey]; !ok {
+			return Result{}, fmt.Errorf("certify: %s: Want must include %q (one of this event's declared Attribution fields) to scope which attempt is being certified -- multiplicity is asserted per attempt, never over the whole supplied log", a.Event.ID, attrKey)
+		}
+	}
 
+	var scoped []Line
+	for _, line := range log.linesWithMsg(a.Event.Msg) {
+		match := true
+		for _, attrKey := range a.Event.Attribution {
+			if !jsonEqual(a.Want[attrKey], line[attrKey]) {
+				match = false
+				break
+			}
+		}
+		if match {
+			scoped = append(scoped, line)
+		}
+	}
+
+	var line Line
 	switch a.Event.Multiplicity {
 	case eventspec.MultiplicityExactlyOnePerPass:
-		if len(matches) != 1 {
-			return Result{}, fmt.Errorf("certify: %s: found %d lines with msg %q, want exactly 1 (multiplicity=%s)",
-				a.Event.ID, len(matches), a.Event.Msg, a.Event.Multiplicity)
+		if len(scoped) == 0 {
+			return Result{}, fmt.Errorf("certify: %s: found 0 lines with msg %q for this attempt, want at least 1 (multiplicity=%s)",
+				a.Event.ID, a.Event.Msg, a.Event.Multiplicity)
 		}
+		line = scoped[len(scoped)-1]
 	case eventspec.MultiplicityZeroOrOnePerPass:
-		if len(matches) > 1 {
-			return Result{}, fmt.Errorf("certify: %s: found %d lines with msg %q, want at most 1 (multiplicity=%s)",
-				a.Event.ID, len(matches), a.Event.Msg, a.Event.Multiplicity)
+		if len(scoped) > 1 {
+			return Result{}, fmt.Errorf("certify: %s: found %d lines with msg %q for this attempt, want at most 1 (multiplicity=%s)",
+				a.Event.ID, len(scoped), a.Event.Msg, a.Event.Multiplicity)
 		}
-		if len(matches) == 0 {
-			return Result{}, fmt.Errorf("certify: %s: no line with msg %q -- call CertifyAbsent when absence is the expectation being asserted", a.Event.ID, a.Event.Msg)
+		if len(scoped) == 0 {
+			return Result{}, fmt.Errorf("certify: %s: no line with msg %q for this attempt -- call CertifyAbsent when absence is the expectation being asserted", a.Event.ID, a.Event.Msg)
 		}
+		line = scoped[0]
 	default:
 		return Result{}, fmt.Errorf("certify: %s: unhandled multiplicity %q", a.Event.ID, a.Event.Multiplicity)
 	}
-
-	line := matches[0]
 
 	wantLevel := strings.ToUpper(string(a.Event.Level))
 	gotLevel, _ := line["level"].(string)
 	if strings.ToUpper(gotLevel) != wantLevel {
 		return Result{}, fmt.Errorf("certify: %s: line at level %q, want %q (production visibility: a line declared Info that ships at Debug is a regression invisible in production, not a passing certificate)",
 			a.Event.ID, gotLevel, wantLevel)
+	}
+
+	// PRESENCE of every declared PresenceRequired field is asserted
+	// regardless of whether the caller named it in Want -- a field the
+	// producer silently stops emitting must never pass because no fixture
+	// happened to pin its value (round r1 P1: proven with an executed
+	// repro that deleting "anchor_slot_displaced" from the real emission
+	// left every existing test PASSING).
+	for _, field := range a.Event.Fields {
+		if field.Presence != eventspec.PresenceRequired {
+			continue
+		}
+		if _, present := line[field.Key]; !present {
+			return Result{}, fmt.Errorf("certify: %s: line has no %q key (declared presence=%s) -- a required field must never be omitted, and missing is never equivalent to a measured zero",
+				a.Event.ID, field.Key, field.Presence)
+		}
 	}
 
 	declared := make(map[string]eventspec.Field, len(a.Event.Fields))
@@ -178,7 +235,15 @@ func Certify(log *Log, a Assertion) (Result, error) {
 // CertifyAbsent asserts the event's variant produced NO line -- the explicit
 // zero-multiplicity case for a MultiplicityZeroOrOnePerPass event, so an
 // absence a caller expects is asserted as loudly as a presence it expects.
+//
+// It refuses (round r1's P2) an event declared MultiplicityExactlyOnePerPass:
+// such an event is required on every pass by its own declaration, so
+// "absent" can never be a legitimate expectation to assert -- a caller
+// hitting this refusal has the wrong event, not a genuine absence to prove.
 func CertifyAbsent(log *Log, ev eventspec.Event) error {
+	if ev.Multiplicity == eventspec.MultiplicityExactlyOnePerPass {
+		return fmt.Errorf("certify: %s: declared multiplicity=%s requires this event on every pass -- absence is never a valid expectation for it (CertifyAbsent only applies to a zero_or_one_per_pass event)", ev.ID, ev.Multiplicity)
+	}
 	matches := log.linesWithMsg(ev.Msg)
 	if len(matches) != 0 {
 		return fmt.Errorf("certify: %s: found %d lines with msg %q, want 0 (asserted absent)", ev.ID, len(matches), ev.Msg)
