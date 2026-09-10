@@ -30,6 +30,12 @@
    "key": "request_id",
    "type": "string",
    "consumer": "run_shard -- request evidence on a failed attempt"
+  },
+  {
+   "node": "attempt",
+   "key": "body_undecodable",
+   "type": "bool",
+   "consumer": "attempt_classes.classify/failed -- CHAOS-5380 r3 P1-1, r4/r5 fixes"
   }
  ],
  "_why_required": "NO required-ness is declared here any more, deliberately.\n\nRound 1 found `candidates[].receipt_id` unrequired; I declared that one path, and round 2 found eleven siblings -- the pin narrower than the finding, on the finding that named the class. The fix is not a longer list. The sweep now follows the shapes that made the path underivable: a comprehension result, a local stash dict, and tuple unpacking, which is how the candidate list travels from `prev_result` into `memory` and back out several turns later. With those resolved, required-ness is DERIVED for every one of them and this section is empty. If it ever needs an entry again, that is evidence the sweep cannot see a shape, and the sweep is what should change."

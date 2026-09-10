@@ -50,6 +50,7 @@
   "/home/ubuntu/.cache/acr-kiac-askdev/proofs/2026-09-07-basis-5442/basis-rep3/seq"
  ],
  "_declared_unmeasured": [
+  "attempt.body_undecodable",
   "attempt.response.failure.maxItems",
   "attempt.response.failure.measuredItems",
   "attempt.response.failure.narrowerContinuation",
@@ -107,6 +108,12 @@
  "_null_policy_unused": [],
  "nodes": {
   "attempt": {
+   "body_undecodable": {
+    "type": "bool",
+    "unmeasured": true,
+    "consumer": "attempt_classes.classify/failed -- CHAOS-5380 r3 P1-1, r4/r5 fixes",
+    "observed": {}
+   },
    "dt": {
     "type": "number",
     "node_visits": 1063,
@@ -136,12 +143,6 @@
     "observed": {
      "int": 1063
     }
-   },
-   "body_undecodable": {
-    "type": "bool",
-    "unmeasured": true,
-    "consumer": "attempt_classes.classify/failed -- CHAOS-5380 r3 P1-1, r4/r5 fixes",
-    "observed": {}
    }
   },
   "attempt.request": {
