@@ -1671,7 +1671,12 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 	}
 
 	if r.FrameTelemetry != nil {
-		r.FrameTelemetry.RecordFrameValidation(ctx, principal, FrameValidationEventFrom(proposed, result, emittedShape, requirements))
+		event := FrameValidationEventFrom(proposed, result, emittedShape, requirements)
+		// The requested-versus-proposed half, from THIS receipt and THIS
+		// proposal, judged by the gate this event already carries -- one
+		// verdict, read once.
+		event.Boundary = InterpretationBoundaryFrom(*receipt, proposed, event.Gate)
+		r.FrameTelemetry.RecordFrameValidation(ctx, principal, event)
 	}
 }
 

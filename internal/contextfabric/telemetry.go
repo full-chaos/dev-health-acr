@@ -942,6 +942,15 @@ func (t SlogEngineTelemetry) RecordFrameValidation(ctx context.Context, principa
 		// the emitter predates this seam -- never that the gate passed.
 		"frame_gate", SanitizeLogAttr(event.Gate.Observable()),
 		"refuse_basis", SanitizeLogAttr(event.Gate.ObservableRefuseBasis()),
+		// THE INTERPRETATION BOUNDARY (see chaos5390_interpretation_boundary.go):
+		// what the hints requested beside what the frame proposed, and what
+		// became of the group axis. Every value is a closed token or an
+		// explicit absence token, never an empty string.
+		"requested_group_hint", event.Boundary.RequestedGroupHint,
+		"requested_member_hint", event.Boundary.RequestedMemberHint,
+		"proposed_group_kind", event.Boundary.ProposedGroupKind,
+		"proposed_member_kind", event.Boundary.ProposedMemberKind,
+		"group_axis", observableGroupAxis(event.Boundary.GroupAxis),
 	}
 	args = append(args, requirementDerivationLogAttrs(event.RequirementDerivation)...)
 	args = append(args, requestIDLogAttrs(ctx)...)
@@ -1823,4 +1832,18 @@ func (t SlogEngineTelemetry) RecordFactRetention(ctx context.Context, principal 
 		"retained_groups", event.Decision.RetainedGroups,
 		"group_rule_applied", event.Decision.GroupRuleApplied,
 	)
+}
+
+// observableGroupAxis routes the group-axis decision through its own
+// membership check. The zero value -- an event built without a boundary --
+// reads `unset`, never a member, so a line from an emitter that did not fill
+// the boundary cannot pass for a real decision.
+func observableGroupAxis(value GroupAxisDecision) string {
+	if value == "" {
+		return "unset"
+	}
+	if !ValidGroupAxisDecision(value) {
+		return "unclassified"
+	}
+	return string(value)
 }
