@@ -1798,6 +1798,19 @@ func attemptsRetried(outcomes []attemptOutcome) int {
 	return len(outcomes) - 1
 }
 
+// attemptLogFieldKeys is the shared renderer's own vocabulary, in emission
+// order -- the SINGLE declaration attemptLogFields is built from (see below),
+// not a second copy of it. r1 (codex) P3: a pin that read its expected key
+// set off attemptLogFields's own return value was an expectation computed
+// from the thing under test, so a mutation dropping a field from the
+// renderer dropped it from the pin's expectation too and survived. Pins now
+// reference THIS var directly, never a hand-typed literal and never a call
+// to attemptLogFields -- and because attemptLogFields's own wiring below
+// consumes it, a mutation that shrinks the wiring's range or the value slice
+// without also touching this var creates exactly the field/key-count
+// mismatch a pin can catch.
+var attemptLogFieldKeys = []string{"attempts_total", "attempts_retried", "attempt_outcomes", "attempt_elapsed_ms"}
+
 // attemptLogFields renders the attempt sequence onto a decision line. ONE
 // renderer for all three emitters (CHAOS-5380): the same four keys, in the same
 // order, with the same spelling, so a reader or an alert written against one
@@ -1809,20 +1822,22 @@ func attemptsRetried(outcomes []attemptOutcome) int {
 // once (TestDecisionEventNeverCarriesCorpusText and its phrase_offers
 // counterpart assert the exact field set).
 func attemptLogFields(outcomes []attemptOutcome) []any {
-	return []any{
-		// attempts_total duplicates the pre-existing `attempts` deliberately:
-		// the pair (attempts_total, attempts_retried) is what a reader filters
-		// on, and requiring them to subtract one field from another to learn
-		// whether anything was retried is how the terminal-only read happened.
-		"attempts_total", len(outcomes),
-		// Emitted even when ZERO. §5 of the regression-diagnosis doc forbids
-		// reporting an absent measurement as a measured zero; the corollary is
-		// that a present zero must be spelled out, so a MISSING field has
-		// exactly one meaning -- the site was never reached.
-		"attempts_retried", attemptsRetried(outcomes),
-		"attempt_outcomes", formatAttemptOutcomes(outcomes),
-		"attempt_elapsed_ms", formatAttemptElapsed(outcomes),
+	// attempts_total duplicates the pre-existing `attempts` deliberately: the
+	// pair (attempts_total, attempts_retried) is what a reader filters on, and
+	// requiring them to subtract one field from another to learn whether
+	// anything was retried is how the terminal-only read happened.
+	//
+	// attempts_retried is emitted even when ZERO. §5 of the
+	// regression-diagnosis doc forbids reporting an absent measurement as a
+	// measured zero; the corollary is that a present zero must be spelled
+	// out, so a MISSING field has exactly one meaning -- the site was never
+	// reached.
+	values := []any{len(outcomes), attemptsRetried(outcomes), formatAttemptOutcomes(outcomes), formatAttemptElapsed(outcomes)}
+	fields := make([]any, 0, len(attemptLogFieldKeys)*2)
+	for i, key := range attemptLogFieldKeys {
+		fields = append(fields, key, values[i])
 	}
+	return fields
 }
 
 func (r *Runtime) withRetry(ctx context.Context, fn func(context.Context) error) ([]attemptOutcome, error) {

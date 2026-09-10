@@ -271,15 +271,26 @@ func TestSynthesizeAttemptSequenceIsCollectedAtInfoAndLostAboveIt(t *testing.T) 
 // renderer's own four keys -- attempts_total, attempts_retried,
 // attempt_outcomes, attempt_elapsed_ms -- appear, same spelling, on all three
 // decision lines. A fourth emitter that hand-rolled its own field list
-// instead of calling attemptLogFields would drift silently; this pin reads
-// the keys straight off attemptLogFields's OWN output, never a hand list, so
-// a renamed field updates the pin along with the renderer.
+// instead of calling attemptLogFields would drift silently.
+//
+// r1 (codex) P3, fixed TWICE. First fix (rejected on r2 grant): a
+// hand-authored literal in the pin -- catches a dropped field, but is a
+// second copy of the vocabulary, exactly what "never a hand list" rules out.
+// Fixed properly: `attemptLogFieldKeys` (runtime.go) is the ONE declaration
+// attemptLogFields itself is now built from (see its own doc comment), so
+// this pin references THAT var directly -- never a hand-typed set, never a
+// call to attemptLogFields. The count (4) is pinned as a bare literal
+// alongside it for one reason only: a mutation that shrinks
+// attemptLogFieldKeys ITSELF would move the "expected" set and the emitted
+// line together, and nothing else here would notice.
 func TestAttemptLogFieldsKeySetIsIdenticalAcrossEveryEmitter(t *testing.T) {
 	t.Parallel()
-	want := attemptLogFields([]attemptOutcome{{Index: 1, Class: "success", ElapsedMS: 1}})
+	if len(attemptLogFieldKeys) != 4 {
+		t.Fatalf("attemptLogFieldKeys = %v, want exactly 4 declared keys", attemptLogFieldKeys)
+	}
 	wantKeys := map[string]bool{}
-	for i := 0; i < len(want); i += 2 {
-		wantKeys[want[i].(string)] = true
+	for _, key := range attemptLogFieldKeys {
+		wantKeys[key] = true
 	}
 
 	interpretInner, interpretLogger := newCaptureLogger()
