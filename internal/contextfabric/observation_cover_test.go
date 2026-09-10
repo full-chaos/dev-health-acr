@@ -213,3 +213,100 @@ func TestATaintedObservationDoesNotSilenceAProducersOTHERObservations(t *testing
 		t.Fatalf("served cover = %d, want 0 -- health's only observation (`risk`) is tainted by the lost deficiencies read", got)
 	}
 }
+
+// THE COMPLETE TAINT STATE SPACE of servedObservationCover, enumerated rather
+// than sampled -- the prompt of record's ENUMERATE-THE-SURFACE clause applied
+// to this function's own input surface.
+//
+// A served kind reaches the mixed-state rule in exactly one of five states,
+// and every one is exercised below. The test FAILS if any state goes
+// unexercised, so the enumeration cannot rot into a sample when someone adds a
+// sixth: `states` is derived from the cases, and the expected set is written
+// out, so adding a case without naming it fails and naming a state without a
+// case fails.
+func TestEveryTaintStateIsExercised(t *testing.T) {
+	t.Parallel()
+	assignment := teamAssignment()
+
+	const (
+		stateCleanKeyed       = "keyed, no tainted key"
+		statePartiallyTainted = "keyed, some keys tainted, some survive"
+		stateFullyTainted     = "keyed, every key tainted"
+		stateUnkeyedServed    = "unkeyed served kind, untaintable singleton"
+		stateUnkeyedLost      = "unkeyed lost kind, taints nothing"
+	)
+	wantStates := map[string]bool{
+		stateCleanKeyed: true, statePartiallyTainted: true, stateFullyTainted: true,
+		stateUnkeyedServed: true, stateUnkeyedLost: true,
+	}
+
+	seen := map[string]bool{}
+	for _, testCase := range []struct {
+		state    string
+		observed []FactKind
+		served   []FactKind
+		want     int
+		why      string
+	}{
+		{
+			state:    stateCleanKeyed,
+			observed: []FactKind{FactHealth, FactFlow},
+			served:   []FactKind{FactHealth, FactFlow},
+			want:     2,
+			why:      "nothing lost, two independent observations both served",
+		},
+		{
+			state:    statePartiallyTainted,
+			observed: []FactKind{FactOperationalDeficiencies, FactHealth},
+			served:   []FactKind{FactOperationalDeficiencies},
+			want:     1,
+			why:      "health lost taints `risk`; deficiencies keeps throughput/sustainability and still covers 1",
+		},
+		{
+			state:    stateFullyTainted,
+			observed: []FactKind{FactHealth, FactOperationalDeficiencies},
+			served:   []FactKind{FactHealth},
+			want:     0,
+			why:      "health's ONLY key is `risk`, tainted by the lost deficiencies read, so nothing is served",
+		},
+		{
+			state:    stateUnkeyedServed,
+			observed: []FactKind{FactStatus, FactHealth},
+			served:   []FactKind{FactStatus},
+			want:     1,
+			why:      "status declares no key at team; a lost health read cannot taint a singleton",
+		},
+		{
+			state:    stateUnkeyedLost,
+			observed: []FactKind{FactHealth, FactStatus},
+			served:   []FactKind{FactHealth},
+			want:     1,
+			why:      "the LOST kind is unkeyed, so it taints nothing and health's own observation still counts",
+		},
+	} {
+		testCase := testCase
+		if !wantStates[testCase.state] {
+			t.Fatalf("case names state %q which is not in the enumerated state space; add it to wantStates deliberately or fix the name", testCase.state)
+		}
+		seen[testCase.state] = true
+		t.Run(testCase.state, func(t *testing.T) {
+			t.Parallel()
+			evidence := readEvidence{ObservedKinds: testCase.observed, ServedKinds: testCase.served}
+			got := servedObservationCover(evidence, SubjectTeam, assignment)
+			if got != testCase.want {
+				t.Fatalf("served cover = %d, want %d -- %s", got, testCase.want, testCase.why)
+			}
+		})
+	}
+
+	for state := range wantStates {
+		if !seen[state] {
+			t.Errorf("taint state %q has no case; the surface is sampled, not enumerated", state)
+		}
+	}
+	// The values must not all be equal, or the table proves nothing about
+	// discrimination between states.
+	if len(seen) != len(wantStates) {
+		t.Fatalf("exercised %d of %d states", len(seen), len(wantStates))
+	}
+}
