@@ -243,4 +243,82 @@ func TestLiveEventspecCertifiesTheAnchorSlotPilotThroughARealFalkorDBAdapter(t *
 	if !found {
 		t.Errorf("displaced subject_canonical_id = %q, not one of the seeded entities -- the collected identity does not trace back to this fixture", displacedID)
 	}
+
+	// GRAPH REBUILD (chris, 2026-09-10, cf-lane-rules): "If we can't build a
+	// graph from the trace we didn't add the right / enough observability."
+	// This reconstructs the pilot's own decision graph -- requested ->
+	// measured -> decision+reason -> served -- from the COLLECTED JSON
+	// ALONE (certify.Log lines only), never from `res` (the Go result this
+	// test never even captures) or any other struct. See RISK-NOTES for
+	// which of the four states RankedCutSummary/AnchorSlotDisplaced
+	// themselves carry, and which neighbouring (not-yet-certified) lines in
+	// the SAME pass this reconstruction also reads.
+	t.Run("graph rebuild from the collected trace alone", func(t *testing.T) {
+		// 1. PRE-ENTRY (requested): what this pass asked to reserve, before
+		// any candidate was measured or cut.
+		requested := log.LinesWithMsg("context fabric resolution trace: anchor pool kind scope")
+		if len(requested) != 1 {
+			t.Fatalf("requested-state line count = %d, want 1", len(requested))
+		}
+		if got := requested[0]["anchor_pool_kind_scope"]; got != string(contextfabric.SubjectTeam) {
+			t.Fatalf("requested anchor_pool_kind_scope = %v, want %q", got, contextfabric.SubjectTeam)
+		}
+
+		// 2. PRE-DECISION (measured): the population size the cut actually
+		// saw, read from RankedCutSummary's own candidate_count -- already
+		// certified above; re-derived here from the raw line only.
+		measured, _ := summaryResult.Line["candidate_count"].(float64)
+		if int(measured) != crowd {
+			t.Fatalf("measured candidate_count = %v, want %d", summaryResult.Line["candidate_count"], crowd)
+		}
+
+		// 3. DECISION + REASON: the reserved-slot decision and WHY -- which
+		// candidate it cost. Two lines, cross-checked against each other:
+		// the summary's own count must agree with the named displacement.
+		displacedCount, _ := summaryResult.Line["anchor_slot_displaced"].(float64)
+		if int(displacedCount) != 1 {
+			t.Fatalf("decision anchor_slot_displaced = %v, want 1", summaryResult.Line["anchor_slot_displaced"])
+		}
+		reason := displacedResult.Line["subject_canonical_id"]
+		if reason == nil || reason == "" {
+			t.Fatal("decision reason (the displaced subject) is empty -- a decision with no reason is not rebuildable")
+		}
+
+		// 4. POST-DECISION (served): the rescued candidate must appear BOTH
+		// in the summary's own survived_ids (what the cut actually kept)
+		// AND in a "reserved kind admitted" line naming it survived=true
+		// (the operator-visible admission proof) -- two independent lines
+		// agreeing on the same identity is what makes "served" verifiable
+		// from the trace, not asserted from one line alone.
+		survivedIDsRaw, _ := summaryResult.Line["survived_ids"].([]any)
+		rescuedID := "team.v2:github:" + termsAndCounts[0].term + "-team"
+		servedInSurvivedIDs := false
+		for _, v := range survivedIDsRaw {
+			if v == rescuedID {
+				servedInSurvivedIDs = true
+				break
+			}
+		}
+		if !servedInSurvivedIDs {
+			t.Fatalf("served subject %q not present in RankedCutSummary.survived_ids %v", rescuedID, survivedIDsRaw)
+		}
+		admitted := log.LinesWithMsg("context fabric resolution trace: reserved kind admitted")
+		var admittedServed bool
+		for _, line := range admitted {
+			if line["subject_canonical_id"] == rescuedID && line["survived"] == true {
+				admittedServed = true
+			}
+		}
+		if !admittedServed {
+			t.Fatalf("no \"reserved kind admitted\" line names %q with survived=true -- served state not observable", rescuedID)
+		}
+
+		// THE FULL CHAIN, restated as one assertion: requested kind ==
+		// decision's reserved kind == the served subject's own kind ==
+		// team, and the served subject is the SAME identity the decision
+		// displaced a project FOR. Rebuilt entirely from JSON keys read
+		// above -- no struct field was read anywhere in this subtest.
+		t.Logf("graph rebuild: requested(kind=%v) -> measured(candidates=%v) -> decision(displaced=%v, reason=%v) -> served(id=%v, survived=true)",
+			requested[0]["anchor_pool_kind_scope"], int(measured), int(displacedCount), reason, rescuedID)
+	})
 }

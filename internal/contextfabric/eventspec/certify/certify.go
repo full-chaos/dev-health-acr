@@ -75,6 +75,16 @@ func (l *Log) linesWithMsg(msg string) []Line {
 	return out
 }
 
+// LinesWithMsg is linesWithMsg, exported for a caller that needs to read a
+// line this package has not (yet) declared as an eventspec.Event -- a
+// decision-graph reconstruction that walks pre-entry/pre-decision/
+// decision/post-decision lines spanning a pass necessarily reads lines
+// beyond whatever subset is certified so far (clause 6 migrates the rest of
+// the emission population PR by PR; the graph as a whole is observable at
+// every pass from day one, certified line by certified line as each seam
+// migrates).
+func (l *Log) LinesWithMsg(msg string) []Line { return l.linesWithMsg(msg) }
+
 // Assertion is one certified expectation: an event variant, and the field
 // values an independently controlled fixture expects that variant's ONE
 // matching line to carry. Fields the event declares but the caller omits
