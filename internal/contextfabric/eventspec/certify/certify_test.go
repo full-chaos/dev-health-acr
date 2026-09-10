@@ -27,6 +27,20 @@ func certifyRecovered(t *testing.T, log *Log, a Assertion) (result Result, err e
 	return Certify(log, a)
 }
 
+// certifyAbsentRecovered is certifyRecovered's counterpart for CertifyAbsent
+// -- same reason: a mutant that reintroduces a nil-log dereference (or any
+// other panic-inducing weakening) must fail as a clean, named test failure,
+// never crash the whole package's test binary.
+func certifyAbsentRecovered(t *testing.T, log *Log, ev eventspec.Event, attribution map[string]any) (err error) {
+	t.Helper()
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("CertifyAbsent() panicked: %v", r)
+		}
+	}()
+	return CertifyAbsent(log, ev, attribution)
+}
+
 // wantForRankedCutSummary is one internally-consistent, independently
 // constructed fixture value set for eventspec.RankedCutSummary -- used by
 // every test below so the controls differ from the passing case by exactly
@@ -248,7 +262,7 @@ func TestCertifyAbsentRefusesAnExactlyOnePerPassEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	err = CertifyAbsent(log, eventspec.RankedCutSummary, map[string]any{"request_id": "req_1"})
+	err = certifyAbsentRecovered(t, log, eventspec.RankedCutSummary, map[string]any{"request_id": "req_1"})
 	if err == nil {
 		t.Fatal("CertifyAbsent() accepted asserting absence for RankedCutSummary, an exactly_one_per_pass event -- want a refusal naming the multiplicity")
 	}
@@ -399,10 +413,10 @@ func TestCertifyAbsentIsAttributionScoped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if err := CertifyAbsent(log, eventspec.AnchorSlotDisplaced, map[string]any{"request_id": "req_1"}); err != nil {
+	if err := certifyAbsentRecovered(t, log, eventspec.AnchorSlotDisplaced, map[string]any{"request_id": "req_1"}); err != nil {
 		t.Errorf("CertifyAbsent() refused req_1 absence solely because req_2 has a line -- want it to certify absence for req_1: %v", err)
 	}
-	if err := CertifyAbsent(log, eventspec.AnchorSlotDisplaced, map[string]any{"request_id": "req_2"}); err == nil {
+	if err := certifyAbsentRecovered(t, log, eventspec.AnchorSlotDisplaced, map[string]any{"request_id": "req_2"}); err == nil {
 		t.Error("CertifyAbsent() accepted asserting absence for req_2, which DOES have a line -- want a refusal")
 	}
 }
@@ -416,7 +430,7 @@ func TestCertifyAbsentRefusesAnUnrecognisedMultiplicity(t *testing.T) {
 		t.Fatalf("Parse() error = %v", err)
 	}
 	bogus := eventspec.Event{ID: "test.bogus", Msg: "an unrelated line", Multiplicity: eventspec.Multiplicity("made_up"), Attribution: nil}
-	if err := CertifyAbsent(log, bogus, map[string]any{}); err == nil {
+	if err := certifyAbsentRecovered(t, log, bogus, map[string]any{}); err == nil {
 		t.Error("CertifyAbsent() accepted an unrecognised Multiplicity value -- want a refusal")
 	}
 }
@@ -431,7 +445,7 @@ func TestCertifyAbsentRefusesAnAttributionMapMissingAnAttributionField(t *testin
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if err := CertifyAbsent(log, eventspec.AnchorSlotDisplaced, map[string]any{}); err == nil {
+	if err := certifyAbsentRecovered(t, log, eventspec.AnchorSlotDisplaced, map[string]any{}); err == nil {
 		t.Fatal("CertifyAbsent() accepted an attribution map missing \"request_id\" -- want a refusal naming the missing attribution field")
 	} else if !strings.Contains(err.Error(), "request_id") {
 		t.Errorf("refusal text = %q, want it to name the missing attribution field", err.Error())
@@ -460,4 +474,112 @@ func TestCertifyRefusesABadVocabNotNamedInWant(t *testing.T) {
 	if !strings.Contains(err.Error(), "closed vocabulary") {
 		t.Errorf("refusal text = %q, want it to name the closed vocabulary", err.Error())
 	}
+}
+
+// Round r3's P1: JSON has no integer type, so a genuinely fractional value
+// decodes to the same float64 Go shape as a legitimate integer -- only
+// checking `_, ok := got.(float64)` let a real slog line with
+// candidate_count=92.5 certify as declared type=int. Reproduced against a
+// real slog.JSONHandler-shaped line (not a hand-typed struct).
+func TestCertifyRefusesAFractionalValueForADeclaredIntField(t *testing.T) {
+	fractional := strings.Replace(validRankedCutSummaryLine(), `"candidate_count":92`, `"candidate_count":92.5`, 1)
+	if fractional == validRankedCutSummaryLine() {
+		t.Fatal("fixture bug: candidate_count needle not found")
+	}
+	log, err := Parse([]byte(fractional))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	want := wantForRankedCutSummary()
+	delete(want, "candidate_count")
+	_, err = certifyRecovered(t, log, Assertion{Event: eventspec.RankedCutSummary, Want: want})
+	if err == nil {
+		t.Fatal("Certify() accepted candidate_count=92.5 (fractional) for a declared int field -- want a refusal")
+	}
+	if !strings.Contains(err.Error(), "not a whole number") {
+		t.Errorf("refusal text = %q, want it to say the value is not a whole number", err.Error())
+	}
+}
+
+// Round r3's P2: Certify/CertifyAbsent must refuse a caller-supplied Event
+// that is not byte-equal to its canonical eventspec.All declaration -- Go
+// exports the Event type and every field, so nothing previously stopped a
+// caller from constructing a degenerate copy (Attribution and Fields both
+// stripped) that certifies ANY line matching just the msg string, with zero
+// validation performed. Reproduced with an empty Want against a
+// canonical-shaped Event with both slices nilled out.
+func TestCertifyRefusesAnEventNotByteEqualToItsCanonicalDeclaration(t *testing.T) {
+	weakened := eventspec.Event{
+		ID:           eventspec.RankedCutSummary.ID,
+		Msg:          eventspec.RankedCutSummary.Msg,
+		Level:        eventspec.RankedCutSummary.Level,
+		Multiplicity: eventspec.RankedCutSummary.Multiplicity,
+		Attribution:  nil,
+		Fields:       nil,
+	}
+	log, err := Parse([]byte(`{"time":"2026-09-10T00:00:00Z","level":"INFO","msg":"context fabric resolution trace: ranked cut summary","garbage":"anything"}`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if _, err := certifyRecovered(t, log, Assertion{Event: weakened, Want: map[string]any{}}); err == nil {
+		t.Fatal("Certify() accepted a caller-supplied Event with Attribution+Fields stripped -- want a refusal naming the canonical mismatch")
+	} else if !strings.Contains(err.Error(), "canonical") {
+		t.Errorf("refusal text = %q, want it to name the canonical-declaration mismatch", err.Error())
+	}
+}
+
+// Round r3's P2: an Event ID with no entry in eventspec.All at all (not just
+// a mismatched one) must be refused by name, not silently certify against
+// whatever the caller supplied.
+func TestCertifyRefusesAnUnknownEventID(t *testing.T) {
+	invented := eventspec.Event{
+		ID:           "not.a.real.event",
+		Msg:          "this message does not exist in production",
+		Level:        eventspec.LevelInfo,
+		Multiplicity: eventspec.MultiplicityZeroOrOnePerPass,
+	}
+	log, err := Parse([]byte(`{"time":"2026-09-10T00:00:00Z","level":"INFO","msg":"this message does not exist in production"}`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if _, err := certifyRecovered(t, log, Assertion{Event: invented, Want: map[string]any{}}); err == nil {
+		t.Fatal("Certify() accepted an Event ID with no entry in eventspec.All -- want a refusal")
+	} else if !strings.Contains(err.Error(), "not a declared event ID") {
+		t.Errorf("refusal text = %q, want it to name the unknown event ID", err.Error())
+	}
+}
+
+// Round r3's P2 (second part): Certify(nil, ...) and certifyAbsentRecovered(t, nil, ...)
+// must return an error, never panic -- a nil *Log is a caller mistake this
+// package should name, not crash on.
+func TestCertifyAndCertifyAbsentRefuseANilLog(t *testing.T) {
+	// Deliberately NOT certifyRecovered/certifyAbsentRecovered here: those
+	// helpers convert a panic into a returned error, which would make THIS
+	// specific pin blind to its own guard being removed -- if the explicit
+	// "log == nil" check is mutated away, execution falls through to a real
+	// nil-pointer panic, and a recovering helper would silently relabel
+	// that panic as "the function returned an error", passing regardless
+	// of whether the graceful check ever ran. Each call gets its own local
+	// recover that FAILS the test on a panic, so "returned an error" and
+	// "panicked" are kept as two different, distinguishable outcomes.
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("Certify(nil, ...) panicked instead of returning an error: %v", r)
+			}
+		}()
+		if _, err := Certify(nil, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()}); err == nil {
+			t.Error("Certify(nil, ...) returned no error -- want a refusal naming the nil log")
+		}
+	}()
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("CertifyAbsent(nil, ...) panicked instead of returning an error: %v", r)
+			}
+		}()
+		if err := CertifyAbsent(nil, eventspec.AnchorSlotDisplaced, map[string]any{"request_id": "req_1"}); err == nil {
+			t.Error("CertifyAbsent(nil, ...) returned no error -- want a refusal naming the nil log")
+		}
+	}()
 }

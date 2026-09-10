@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"reflect"
 	"sort"
 	"strings"
@@ -132,6 +133,13 @@ type Result struct {
 // can assert on the error text in a red-first control proof; production
 // call sites wrap the error with t.Fatal/t.Error themselves.
 func Certify(log *Log, a Assertion) (Result, error) {
+	if log == nil {
+		return Result{}, fmt.Errorf("certify: %s: log is nil -- Certify judges a real Parse()d log, never a nil placeholder", a.Event.ID)
+	}
+	if err := requireCanonicalEvent(a.Event); err != nil {
+		return Result{}, err
+	}
+
 	for _, attrKey := range a.Event.Attribution {
 		if _, ok := a.Want[attrKey]; !ok {
 			return Result{}, fmt.Errorf("certify: %s: Want must include %q (one of this event's declared Attribution fields) to scope which attempt is being certified -- multiplicity is asserted per attempt, never over the whole supplied log", a.Event.ID, attrKey)
@@ -257,6 +265,12 @@ func Certify(log *Log, a Assertion) (Result, error) {
 // requiring the ONE multiplicity that legitimately allows absence,
 // explicitly, rather than excluding only the one that doesn't).
 func CertifyAbsent(log *Log, ev eventspec.Event, attribution map[string]any) error {
+	if log == nil {
+		return fmt.Errorf("certify: %s: log is nil -- CertifyAbsent judges a real Parse()d log, never a nil placeholder", ev.ID)
+	}
+	if err := requireCanonicalEvent(ev); err != nil {
+		return err
+	}
 	if ev.Multiplicity != eventspec.MultiplicityZeroOrOnePerPass {
 		return fmt.Errorf("certify: %s: declared multiplicity=%q is not zero_or_one_per_pass -- CertifyAbsent only applies to a zero_or_one_per_pass event", ev.ID, ev.Multiplicity)
 	}
@@ -308,8 +322,18 @@ func validateFields(fields []eventspec.Field, obj map[string]any, eventID string
 				return fmt.Errorf("certify: %s: %q = %v is not in the declared closed vocabulary %v", eventID, field.Key, got, field.ClosedVocabulary)
 			}
 		case eventspec.FieldInt:
-			if _, ok := got.(float64); !ok {
+			gotFloat, ok := got.(float64)
+			if !ok {
 				return fmt.Errorf("certify: %s: %q = %v (%T), declared type=int", eventID, field.Key, got, got)
+			}
+			// round r3's P1: JSON has no separate integer type, so a real
+			// slog.JSONHandler line carrying a genuinely fractional number
+			// (e.g. a producer bug computing candidate_count as a ratio)
+			// decodes to the SAME float64 shape as a legitimate integer --
+			// only checking the Go type let candidate_count=92.5 certify as
+			// declared type=int. Refuse anything that is not a whole number.
+			if gotFloat != math.Trunc(gotFloat) {
+				return fmt.Errorf("certify: %s: %q = %v, declared type=int but is not a whole number", eventID, field.Key, got)
 			}
 		case eventspec.FieldStringSlice:
 			arr, ok := got.([]any)
@@ -336,6 +360,41 @@ func validateFields(fields []eventspec.Field, obj map[string]any, eventID string
 				}
 			}
 		}
+	}
+	return nil
+}
+
+// canonicalEventsByID indexes eventspec.All -- the ONE declaration authority
+// -- by ID, built once at package init. Certify/CertifyAbsent resolve every
+// caller-supplied Event against this index rather than trusting the struct
+// value handed to them: round r3 found a caller can construct any
+// eventspec.Event value (Go exports the type and every field), including one
+// with its Attribution/Fields stripped, and Certify had no way to tell that
+// apart from the real eventspec.RankedCutSummary -- a degenerate Event with
+// empty Fields and empty Attribution certified ANY line carrying its msg
+// against an empty Want, with zero validation performed.
+var canonicalEventsByID = func() map[string]eventspec.Event {
+	m := make(map[string]eventspec.Event, len(eventspec.All))
+	for _, e := range eventspec.All {
+		m[e.ID] = e
+	}
+	return m
+}()
+
+// requireCanonicalEvent refuses unless ev is byte-for-byte the eventspec.All
+// entry for its own ID -- a caller must pass eventspec.RankedCutSummary (or
+// eventspec.AnchorSlotDisplaced) directly, never a copy, subset, or
+// hand-built value with the same ID. Every legitimate call site already
+// does this (the two production Assertion/CertifyAbsent call sites in
+// graphrank/falkorgraph reference the exported eventspec vars directly), so
+// this refuses nothing real -- only a weakened or invented Event value.
+func requireCanonicalEvent(ev eventspec.Event) error {
+	canon, ok := canonicalEventsByID[ev.ID]
+	if !ok {
+		return fmt.Errorf("certify: %q is not a declared event ID -- eventspec.All is the one declaration authority; pass eventspec.RankedCutSummary/eventspec.AnchorSlotDisplaced (or a future registered event) directly, never a hand-built Event", ev.ID)
+	}
+	if !reflect.DeepEqual(canon, ev) {
+		return fmt.Errorf("certify: %s: the supplied Event does not match its canonical declaration in eventspec.All -- pass the exported eventspec value directly (e.g. eventspec.RankedCutSummary), never a caller-modified or hand-built copy with the same ID", ev.ID)
 	}
 	return nil
 }
