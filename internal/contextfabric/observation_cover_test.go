@@ -167,3 +167,49 @@ func TestTheCoverIsTheMINIMUMNotTheSetCount(t *testing.T) {
 		t.Fatalf("cover = %d, want 1", got)
 	}
 }
+
+// TestATaintedObservationDoesNotSilenceAProducersOTHERObservations pins the
+// mixed-state alias rule at the boundary it was originally wrong at.
+//
+// `operational_deficiencies` at team declares {risk, throughput,
+// sustainability}; `health` declares {risk} alone. When health is lost and
+// deficiencies served IN FULL, `risk` is tainted -- but throughput and
+// sustainability were not lost by anyone, and deficiencies read them
+// completely. Tainting the PRODUCER rather than the OBSERVATION returned 0
+// here, which publishes "nothing was served" over a full read.
+func TestATaintedObservationDoesNotSilenceAProducersOTHERObservations(t *testing.T) {
+	t.Parallel()
+	assignment := teamAssignment()
+	evidence := readEvidence{
+		ObservedKinds: []FactKind{FactOperationalDeficiencies, FactHealth},
+		ServedKinds:   []FactKind{FactOperationalDeficiencies},
+	}
+	got := servedObservationCover(evidence, SubjectTeam, assignment)
+	if got == 0 {
+		t.Fatal("served cover = 0: the whole PRODUCER was tainted by one shared key, so a kind that read two untainted observations in full counted for nothing")
+	}
+	if got != 1 {
+		t.Fatalf("served cover = %d, want 1 -- deficiencies still covers throughput/sustainability with risk tainted", got)
+	}
+
+	// Control 1: nothing lost, so nothing tainted, and the two kinds collapse
+	// onto `risk` as one observation. Without this the assertion above also
+	// passes against a function that ignores taint entirely.
+	both := readEvidence{
+		ObservedKinds: []FactKind{FactOperationalDeficiencies, FactHealth},
+		ServedKinds:   []FactKind{FactOperationalDeficiencies, FactHealth},
+	}
+	if got := servedObservationCover(both, SubjectTeam, assignment); got != 1 {
+		t.Fatalf("both served = %d, want 1 -- they share `risk`", got)
+	}
+
+	// Control 2: a served kind whose ONLY key is tainted must still drop out,
+	// or the fix has simply disabled the rule.
+	onlyKeyTainted := readEvidence{
+		ObservedKinds: []FactKind{FactHealth, FactOperationalDeficiencies},
+		ServedKinds:   []FactKind{FactHealth},
+	}
+	if got := servedObservationCover(onlyKeyTainted, SubjectTeam, assignment); got != 0 {
+		t.Fatalf("served cover = %d, want 0 -- health's only observation (`risk`) is tainted by the lost deficiencies read", got)
+	}
+}

@@ -470,12 +470,28 @@ func appendReadRequirementEvaluations(
 // evaluateReadRequirement already applies PER KIND ("WORST STATE WINS when
 // one kind is observed more than once"). An observation that backs any lost
 // kind (narrowed, truncated or failed -- i.e. any kind in ObservedKinds that
-// is not also in ServedKinds) is not credited as served, even where it ALSO
-// backs a kind this evaluator called served: that served kind's key is
-// EXCLUDED from the cover, and the cover is recomputed over what remains.
+// is not also in ServedKinds) is not credited as served.
+//
+// IT TAINTS THE OBSERVATION, NOT THE PRODUCER, and the difference is not
+// hypothetical. A kind declares a LIST of keys, so a served kind can back
+// several independent observations at once and share only ONE of them with
+// something that was lost. `operational_deficiencies` at team is the measured
+// case: it declares {risk, throughput, sustainability}, and `health` declares
+// {risk} alone. If health is lost and deficiencies served IN FULL, tainting
+// the whole PRODUCER drops deficiencies from the cover entirely and returns
+// 0 -- publishing a row that says nothing was served when a producer read
+// two untainted observations completely. Executed, before this rule was
+// corrected: served cover = 0 where the truth is 1.
+//
+// So the tainted KEY is removed from every served kind's label set and the
+// cover is recomputed over what remains. A served kind whose labels are ALL
+// tainted contributes nothing -- every observation it stands for was lost
+// somewhere. A served kind with any untainted label still covers those.
 // An unkeyed lost kind taints nothing -- it declares no key to exclude by,
 // exactly as observationCover's own "an unkeyed kind is its own observation"
-// rule already keeps it from being folded into anything else.
+// rule already keeps it from being folded into anything else; and an unkeyed
+// SERVED kind is untaintable for the same reason, staying the singleton it
+// always was.
 func servedObservationCover(evidence readEvidence, subject SubjectKind, assignment observationKeyAssignment) int {
 	servedSet := make(map[FactKind]bool, len(evidence.ServedKinds))
 	for _, kind := range evidence.ServedKinds {
@@ -493,20 +509,33 @@ func servedObservationCover(evidence readEvidence, subject SubjectKind, assignme
 	if len(taintedKeys) == 0 {
 		return observationCover(evidence.ServedKinds, subject, assignment)
 	}
+	// Rebuild the assignment with every tainted key removed, then cover the
+	// served kinds against THAT. A served kind whose labels all vanish is
+	// dropped; one that keeps any label still covers the observations that
+	// label stands for.
+	untainted := make(observationKeyAssignment, len(evidence.ServedKinds))
 	clean := make([]FactKind, 0, len(evidence.ServedKinds))
 	for _, kind := range evidence.ServedKinds {
-		tainted := false
-		for _, key := range dedupeObservationKeys(assignment[kind][subject]) {
-			if taintedKeys[key] {
-				tainted = true
-				break
+		declared := dedupeObservationKeys(assignment[kind][subject])
+		if len(declared) == 0 {
+			// Unkeyed: a singleton, untaintable, always counted.
+			clean = append(clean, kind)
+			continue
+		}
+		kept := make([]ObservationKey, 0, len(declared))
+		for _, key := range declared {
+			if !taintedKeys[key] {
+				kept = append(kept, key)
 			}
 		}
-		if !tainted {
-			clean = append(clean, kind)
+		if len(kept) == 0 {
+			// Every observation this kind stands for was lost somewhere.
+			continue
 		}
+		untainted[kind] = map[SubjectKind][]ObservationKey{subject: kept}
+		clean = append(clean, kind)
 	}
-	return observationCover(clean, subject, assignment)
+	return observationCover(clean, subject, untainted)
 }
 
 // readRequirementOutcomeRow turns one requirement's counted evidence into its
