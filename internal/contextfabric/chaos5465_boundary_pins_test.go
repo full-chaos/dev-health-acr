@@ -744,3 +744,68 @@ func (unclassifiedAxisMovingInterpreter) Interpret(context.Context, storage.Prin
 		Version: QuestionFamilyTableVersion,
 	}, nil
 }
+
+// EVERY REQUEST-DERIVED VALUE ON THIS LINE IS STRIPPED OF CONTROL BYTES.
+//
+// The context ids on this event come from the caller: a window receipt names a
+// prior result id, and that id is echoed back as `source_result_id`,
+// `carried_context_id` and `accepted_context_id`. The closed fields are safe by
+// construction -- they can only be a vocabulary member or the unrecognised
+// sentinel -- so it is the free-text ones that need this.
+//
+// WHAT THIS PIN DOES NOT ASSERT, and the first version of it got this wrong:
+// "the record is one line". slog's handlers already escape control characters
+// inside a structured attribute value, so that property holds with or without
+// any sanitisation here, and a pin resting on it passes on a build that strips
+// nothing. It could not fail for the defect it was written for.
+//
+// What it asserts instead is that the control byte is GONE, not escaped: no
+// `\n` or `\r` sequence survives inside a request-derived value. That is our
+// behaviour, not the handler's, and it is what a static analyser can follow --
+// which is the actual reason the strip exists, the runtime vector being already
+// closed by the handler.
+func TestBoundary_NoRequestDerivedValueCanForgeALogLine(t *testing.T) {
+	t.Parallel()
+
+	const forged = "result_5465\nlevel=ERROR msg=\"fabricated by the caller\""
+	const carriage = "result_5465\rmsg=also-fabricated"
+
+	d := newWindowContinuationDecision(continuationRequest(validInvestigationRequest().Question))
+	d.Disposition = ContinuationApplied
+	d.Carried = &continuationCarriedContext{
+		Family: QuestionFamilyGroupedCohortStatus, GroupKind: contractsv1.ContextFabricSubjectTeam,
+		SourceResultID: forged,
+	}
+	d.Accepted = &continuationCarriedContext{
+		Family: QuestionFamilyGroupedCohortStatus, GroupKind: contractsv1.ContextFabricSubjectTeam,
+		SourceResultID: carriage,
+	}
+
+	principal := acceptancePrincipal()
+	principal.OrgID = "org\nlevel=ERROR msg=\"forged org line\""
+
+	var buf bytes.Buffer
+	SlogEngineTelemetry{logger: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))}.
+		RecordWindowContinuationDecision(context.Background(), principal, d)
+	line := buf.String()
+	t.Logf("EMITTED %s", strings.TrimSpace(line))
+
+	// THE LOAD-BEARING ASSERTION: the control byte is removed, not merely
+	// escaped by the handler. `\\n` here is the two-character escape slog
+	// writes for a real newline -- its presence means the value still contained
+	// one when it reached the sink.
+	for _, escape := range []string{`\n`, `\r`} {
+		if strings.Contains(line, escape) {
+			t.Errorf("a request-derived value still carried a control byte (%s survived as an escape) -- it reached the sink unstripped: %s",
+				escape, strings.TrimSpace(line))
+		}
+	}
+	// And the value stays USEFUL: the id survives, minus the control bytes.
+	if strings.Count(line, "result_5465") < 2 {
+		t.Errorf("the sanitised ids no longer carry the caller's value: %s", strings.TrimSpace(line))
+	}
+	// Secondary, and true either way: the record is still one line.
+	if got := strings.Count(strings.TrimRight(line, "\n"), "\n"); got != 0 {
+		t.Errorf("the emitted record spans %d extra line(s)", got)
+	}
+}
