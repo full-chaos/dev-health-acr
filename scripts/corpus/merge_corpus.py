@@ -178,6 +178,21 @@ def reconcile_attempt_totals(rows, indir):
         if file_counts is None:
             continue
         original = row.get("original_attempt_evidence") or {}
+        # codex r1 P1: summing the frozen counters is not enough when the
+        # ORIGINAL run's own walk never reconciled -- an unsequenced (dropped)
+        # attempt on the original leaves attempts_reconciled=False there even
+        # when the 504/413 SUMS happen to still agree with the file scan (the
+        # dropped attempt need not have been a 504 or a 413 to be missing
+        # evidence). Preserving original_attempt_evidence was the fix for
+        # LOSING the original's counters; this is the fix for TRUSTING them
+        # when the original said outright it could not vouch for its own walk.
+        # `original` is only present at all on a reclassified row (see
+        # build_reclassified_row); an ordinary row has no such claim to check.
+        if original and original.get("attempts_reconciled") is not True:
+            problems.append(
+                f"{qid}: the ORIGINAL run's own walk never reconciled "
+                f"(attempts_reconciled={original.get('attempts_reconciled')!r}) -- "
+                f"its attempt-level evidence cannot be trusted for this row's total")
         expected_504 = (original.get("attempt_upstream_504_n") or 0) + (row.get("attempt_upstream_504_n") or 0)
         expected_413 = (original.get("attempt_overrun_413_n") or 0) + (row.get("attempt_overrun_413_n") or 0)
         if expected_504 != file_counts["upstream_504_n"]:

@@ -2536,6 +2536,71 @@ def test_reconcile_attempt_totals_sums_the_original_AND_the_replays_own_count():
             "expected total must be original(1) + replay(1) = 2, matching the files")
 
 
+def test_reconcile_attempt_totals_refuses_when_the_original_never_reconciled():
+    """r1 (codex) P1, REPRODUCED. Summing the frozen 504/413 counters is not enough:
+    the ORIGINAL run's own walk can fail to reconcile (an unsequenced/dropped attempt)
+    while the counter SUMS still happen to agree with the file scanner, because the
+    dropped attempt need not itself have been a 504 or a 413. A row whose original
+    evidence says `attempts_reconciled=False` cannot be trusted for reconciliation
+    just because the numbers it does carry add up -- the numbers it is MISSING are
+    exactly the point.
+
+    Fixture: the original run has a real 504 (sequenced) plus a SERVED attempt that
+    the orderer could not sequence (present on disk, dropped from the walk) --
+    `attempts_reconciled=False` on the original for that reason alone, even though
+    the frozen upstream-504 count (1) already agrees with the file scanner (the
+    dropped attempt was never a 504). The replay is a clean, fully reconciled single
+    serve. Before the fix, `reconcile_attempt_totals` never looked at the original's
+    own reconciliation flag, so this row published as measured. """
+    with tempfile.TemporaryDirectory() as tmp:
+        original_out, _ = _write_turns(tmp, {1: [_attempt(504)]}, qid="q-a", rep=1)
+        # The stray file's name does not match the sequencer's pattern, so it is
+        # UNSEQUENCED -- present on disk, dropped from the walk -- same technique as
+        # test_a_dropped_artefact_makes_the_row_unmeasured above.
+        (original_out / "q-a-rep1-t?-a2.json").write_text(json.dumps(_served()))
+        row = {"note": "", "family": "f"}
+        base_r = {"final_http": 200, "final_payload_status": "complete",
+                  "chain": ["t1=complete"], "wrong_kind_flag": False,
+                  "wrong_subject_flag": False, "subject_kind_mismatch_flag": False}
+        RS.UNSEQUENCED.clear()
+        before = RS.detail_for(original_out, "q-a", row, {**base_r, "attempts": 2}, 1.0, 1)
+        assert before["attempts_reconciled"] is False, before
+        assert before["unsequenced_files"] == ["q-a-rep1-t?-a2.json"], before
+        assert before["attempt_upstream_504_n"] == 1, before  # already agrees with the files
+
+        replay_dir = Path(tmp) / RD.REPLAY_DIRNAME / "q-a" / "replicate"
+        replay_dir.mkdir(parents=True)
+        (replay_dir / "q-a-rep1-t1-a1.json").write_text(json.dumps(_served()))
+        RS.UNSEQUENCED.clear()
+        after = RS.detail_for(replay_dir, "q-a", row, {**base_r, "attempts": 1}, 1.0, 1)
+        assert after["attempts_reconciled"] is True, after
+
+        fixed_row = RD.build_reclassified_row(before, after)
+        assert fixed_row["original_attempt_evidence"]["attempts_reconciled"] is False, fixed_row
+        problems = MC.reconcile_attempt_totals([fixed_row], tmp)
+        assert problems, (
+            "a row whose ORIGINAL evidence never reconciled was accepted -- the "
+            "frozen-counter sums agreeing is not proof the original's own walk did")
+        assert "q-a" in problems[0] and "never reconciled" in problems[0], problems
+
+        # POSITIVE CONTROL: the identical shape, but the original's dropped attempt
+        # never existed -- a clean original reconciles and this row is NOT refused
+        # for the reason above (the OTHER reconciliation checks still apply on top).
+    with tempfile.TemporaryDirectory() as tmp2:
+        clean_original_out, _ = _write_turns(tmp2, {1: [_attempt(504)]}, qid="q-a", rep=1)
+        RS.UNSEQUENCED.clear()
+        clean_before = RS.detail_for(clean_original_out, "q-a", row, {**base_r, "attempts": 1}, 1.0, 1)
+        assert clean_before["attempts_reconciled"] is True, clean_before
+        replay_dir2 = Path(tmp2) / RD.REPLAY_DIRNAME / "q-a" / "replicate"
+        replay_dir2.mkdir(parents=True)
+        (replay_dir2 / "q-a-rep1-t1-a1.json").write_text(json.dumps(_served()))
+        RS.UNSEQUENCED.clear()
+        clean_after = RS.detail_for(replay_dir2, "q-a", row, {**base_r, "attempts": 1}, 1.0, 1)
+        clean_fixed = RD.build_reclassified_row(clean_before, clean_after)
+        assert MC.reconcile_attempt_totals([clean_fixed], tmp2) == [], (
+            "a genuinely reconciled original must not be refused")
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 
 if __name__ == "__main__":
