@@ -421,6 +421,7 @@ func newCapability(kind contextfabric.FactKind, name string, subjectKinds []cont
 		Timeout:               defaultTimeout,
 		Dimension:             factKindDimension(kind),
 		Obligations:           factKindObligations(kind),
+		ObservationKey:        factKindObservationKey(kind),
 		SubjectRoles:          []contextfabric.FactRole{contextfabric.FactRoleSubject},
 	}
 }
@@ -726,6 +727,149 @@ func factKindObligations(kind contextfabric.FactKind) map[contextfabric.SubjectK
 				contextfabric.ObligationPeriodDelta,
 			},
 		}
+	default:
+		return nil
+	}
+}
+
+// The four observation-key VALUES the five declared pairings
+// (factKindObservationKey) share. Each is a hand-authored mnemonic, not the
+// ops-side table's own name -- devhealthschema owns the one declared list
+// of physical table names in this repository (see its own closure tests),
+// and a second file naming several of those same names as literals reads
+// as a rival declaration of the physical schema, which this is not: an
+// ObservationKey carries no column, no DDL, and no row shape, only an
+// equality-comparable label. The literal ops-side table each mnemonic
+// stands for is named in ITS OWN doc comment below and in
+// factKindObservationKey's, in prose, for the reviewer -- never as a
+// second machine-readable copy of the name.
+//
+// Typed constants rather than inline string literals so the SAME
+// identifier is used on both sides of every pairing -- a typo in one arm
+// of a pair would otherwise silently produce an orphan key nothing else
+// matches, rather than a compile error.
+const (
+	// observationKeyRepositoryMetricsRollup backs health@repository and
+	// metrics@repository: health.go's repository-scope backing table is
+	// built from the same table metrics.go's repository read is itself
+	// sourced from (ops internal/jobs/metrics/daily/compoundingrisk/
+	// clickhouse.go:114's repoMetricsQuery, reading FROM that table inside
+	// LoadRepoMetrics).
+	observationKeyRepositoryMetricsRollup contextfabric.ObservationKey = "repository_metrics_rollup"
+	// observationKeyTeamRiskRollup backs health@team and
+	// operational_deficiencies@team: ops
+	// internal/jobs/metrics/remaining/recommendations_loader.go:531's
+	// loadCompoundingRiskPersisted reads FROM health.go's own team-scope
+	// backing table.
+	observationKeyTeamRiskRollup contextfabric.ObservationKey = "team_risk_rollup"
+	// observationKeyTeamProjectThroughputRollup backs flow@team,
+	// flow@project, workload@team, workload@project, and
+	// operational_deficiencies@team: ops
+	// internal/jobs/metrics/remaining/capacity_native_clickhouse.go:72's
+	// loadThroughput reads FROM the same table flow.go is itself sourced
+	// from to build the workload writer's own backing table, and
+	// recommendations_loader.go:142's loadWIPThroughput reads FROM it
+	// again for the operational-deficiencies writer.
+	observationKeyTeamProjectThroughputRollup contextfabric.ObservationKey = "team_project_throughput_rollup"
+	// observationKeyTeamSustainabilityRollup backs metrics@team and
+	// operational_deficiencies@team: ops
+	// recommendations_loader.go:356's loadSustainabilitySignals reads FROM
+	// metrics.go's own team-scope backing table (readTeamMetrics).
+	observationKeyTeamSustainabilityRollup contextfabric.ObservationKey = "team_sustainability_rollup"
+)
+
+// factKindObservationKey is the third per-kind declaration table, resolved
+// by newCapability the same way factKindDimension and factKindObligations
+// already are. It implements the ruling's declarable definition exactly:
+// two fact kinds are one observation when one provider's backing table is
+// BUILT FROM the other's, at one hop -- so this table exists ONLY where
+// that one-hop relation was found and verified against the ops repository
+// (re-verified at ops HEAD 2035be2b, packet §A), never from "shares an
+// input", which is not usable (design doc's own known-limit section: it is
+// not transitive).
+//
+// EXACTLY FIVE PAIRINGS ARE DECLARED, deliberately:
+//   - health + metrics @ repository (repo_metrics_daily)
+//   - health + operational_deficiencies @ team (compounding_risk_daily)
+//   - flow + workload @ team, project (work_item_metrics_daily)
+//   - flow + operational_deficiencies @ team (work_item_metrics_daily)
+//   - metrics + operational_deficiencies @ team (team_metrics_daily)
+//
+// THREE OF THE FIVE WERE STATED FLAT (no subject kind named): health+
+// operational_deficiencies, flow+operational_deficiencies, and metrics+
+// operational_deficiencies. Every declaration here is still keyed per
+// subject kind, because the field is. The cell each flat pairing occupies
+// is derived, not guessed: operational_deficiencies.go declares
+// SupportedSubjectKinds = {team} ONLY (the sole subject kind its provider
+// answers for at all), so the observation-key relation -- which can only
+// hold where BOTH kinds in a pairing actually read a subject at that kind
+// -- can only ever apply at team for any pairing involving it. flow (team,
+// project, repository) and health/metrics (repository, team, project) both
+// include team, so team is the intersection for all three flat pairings and
+// there is no other candidate cell to choose between.
+//
+// operational_deficiencies@team CARRIES THREE KEYS AT ONCE, not one. Its
+// backing table, recommendations_daily, is independently one-hop built from
+// THREE unrelated tables -- compounding_risk_daily (health),
+// work_item_metrics_daily (flow), and team_metrics_daily (metrics) -- and
+// none of those three is itself built from either of the others. A single
+// scalar key could express agreement with only one of the three without
+// falsely implying the other two are the same observation as each other,
+// which they measurably are not. See ObservationKey's own doc comment for
+// why the field's value type is a list for exactly this reason.
+//
+// DELIBERATELY NOT A PAIR: landscape + operational_deficiencies. Both
+// providers read user_metrics_daily, but recommendations_daily is not
+// built from ic_landscape_rolling_30d, nor is ic_landscape_rolling_30d
+// built from recommendations_daily (icfinalize/executor.go's
+// computeForDay writes user_metrics_daily, then loader.go:57-63 reads FROM
+// user_metrics_daily to compute the landscape rolling table -- a path that
+// never touches recommendations_daily at all). That is shared ancestry
+// through a common upstream table, which §1's directed one-hop rule
+// excludes on purpose -- see the design doc's known-limit section for why
+// "shares an input" cannot be declared safely. Root entity tables
+// (work_items, git_commits, git_pull_requests) never make a pair for the
+// identical reason: every daily rollup ultimately reads one of them, and
+// treating that as "one observation" would collapse nearly the whole
+// registry.
+func factKindObservationKey(kind contextfabric.FactKind) map[contextfabric.SubjectKind][]contextfabric.ObservationKey {
+	switch kind {
+	case contextfabric.FactHealth:
+		return map[contextfabric.SubjectKind][]contextfabric.ObservationKey{
+			contextfabric.SubjectRepository: {observationKeyRepositoryMetricsRollup},
+			contextfabric.SubjectTeam:       {observationKeyTeamRiskRollup},
+		}
+	case contextfabric.FactMetrics:
+		return map[contextfabric.SubjectKind][]contextfabric.ObservationKey{
+			contextfabric.SubjectRepository: {observationKeyRepositoryMetricsRollup},
+			contextfabric.SubjectTeam:       {observationKeyTeamSustainabilityRollup},
+		}
+	case contextfabric.FactFlow:
+		return map[contextfabric.SubjectKind][]contextfabric.ObservationKey{
+			contextfabric.SubjectTeam:    {observationKeyTeamProjectThroughputRollup},
+			contextfabric.SubjectProject: {observationKeyTeamProjectThroughputRollup},
+		}
+	case contextfabric.FactWorkload:
+		return map[contextfabric.SubjectKind][]contextfabric.ObservationKey{
+			contextfabric.SubjectTeam:    {observationKeyTeamProjectThroughputRollup},
+			contextfabric.SubjectProject: {observationKeyTeamProjectThroughputRollup},
+		}
+	case contextfabric.FactOperationalDeficiencies:
+		return map[contextfabric.SubjectKind][]contextfabric.ObservationKey{
+			contextfabric.SubjectTeam: {
+				observationKeyTeamRiskRollup,
+				observationKeyTeamProjectThroughputRollup,
+				observationKeyTeamSustainabilityRollup,
+			},
+		}
+	// Every other registered kind declares no observation-key pairing
+	// today: none of the five verified pairings names it. Falling through
+	// here (rather than an explicit nil arm per kind) is deliberate --
+	// unlike Obligations, where a nil return is ambiguous between "no
+	// provider decided" and "substrate, decided on purpose", a missing
+	// observation-key pairing has exactly one meaning: nobody has found a
+	// one-hop built-from relation to another registered kind's table. There
+	// is no second meaning for the totality test to distinguish.
 	default:
 		return nil
 	}

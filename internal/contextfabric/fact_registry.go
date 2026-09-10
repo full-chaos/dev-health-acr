@@ -54,6 +54,22 @@ const maxCanonicalFactsPerBundle = 2000
 // FactCapability.SubjectRoles below is the CHAOS-4633 consumer S2 already
 // anticipated.
 
+// ObservationKey identifies the observation a fact kind's read is a PROXY
+// for, at one subject kind -- the ruling's own vocabulary ("two fact kinds
+// backed by one observation are one source; the registry declares the
+// observation key so the evaluator can tell"). It is a plain hand-authored
+// string, not a closed vocabulary Validate checks membership against the
+// way AnswerObligation or FactTableShape are: the only property a
+// comparison needs from it is equality, so its value is a MNEMONIC chosen
+// for review legibility, deliberately NOT the ops-side table's own name --
+// devhealthfacts already owns one declared list of physical table names
+// (devhealthschema.ProductionColumns), and a second file naming several of
+// those same names as literals would read as a rival declaration of the
+// physical schema. The table each mnemonic actually stands for is named in
+// prose, at the declaration site (devhealthfacts' factKindObservationKey),
+// never repeated here as a second machine-readable copy.
+type ObservationKey string
+
 type FactCapability struct {
 	Kind                  FactKind
 	Name                  string
@@ -132,6 +148,51 @@ type FactCapability struct {
 	// carry an entry, so a new provider cannot reach the registry without
 	// someone deciding this.
 	Obligations map[SubjectKind][]AnswerObligation
+	// ObservationKey declares which observation(s) this capability's facts
+	// are a PROXY for, PER SUBJECT KIND -- never flat. It sits beside
+	// Dimension, Tables and Obligations for the same reason: a property of
+	// the producer, declared by the producer, never inferred from outside.
+	// The ruling it implements: "two fact kinds backed by one observation
+	// are one source; the registry declares the observation key so the
+	// evaluator can tell." Declaring this is commit 1's whole job -- USING
+	// it to deduplicate a fact-kind count is the evaluator's, and nothing
+	// outside this registry reads the field yet.
+	//
+	// WHY PER SUBJECT KIND, AND THIS WAS MEASURED RATHER THAN CHOSEN, THE
+	// SAME WAY Obligations' OWN KEYING WAS. `health` and `metrics` share one
+	// backing table (repo_metrics_daily) at subject kind repository --
+	// health's compounding_risk_daily is built from it there -- but at team
+	// and project they are genuinely independent: health's team/project
+	// reading comes from compounding_risk_daily itself, metrics' from
+	// team_metrics_daily, and neither is built from the other at those
+	// subject kinds. A flat per-kind key would collapse health and metrics
+	// at team and project exactly as falsely as Obligations' own flattening
+	// collapsed `state` onto subject kinds a producer never emits a table
+	// for (see that field's doc comment).
+	//
+	// WHY THE VALUE IS A LIST, NOT A SINGLE KEY, AND THIS TOO WAS MEASURED.
+	// `operational_deficiencies` (team only) is one-hop built from THREE
+	// separate, mutually-independent tables at once: health's
+	// compounding_risk_daily, flow's work_item_metrics_daily, and metrics'
+	// team_metrics_daily. A scalar key could tie operational_deficiencies to
+	// only one of those three without falsely implying the other two are
+	// also the same observation as EACH OTHER (they are not -- none of
+	// health, flow or metrics is built from another). A list lets
+	// operational_deficiencies@team carry all three keys as three
+	// independent partnerships; "same observation at a subject kind" is
+	// then "the two capabilities' key lists intersect there", which does
+	// NOT imply transitivity across the whole set -- the exact shape the
+	// design doc's own known-limit section requires (a scalar equivalence
+	// class cannot represent partial overlap; a shared list can, because
+	// intersecting is not transitive the way equality is).
+	//
+	// A subject kind with no entry -- or an empty/nil list -- means this
+	// capability's read at that subject kind shares no declared observation
+	// with any other registered capability. That is the overwhelmingly
+	// common, correct answer: only five pairings are declared today (see
+	// factKindObservationKey), against every other (kind, subject kind)
+	// cell any registered provider serves.
+	ObservationKey map[SubjectKind][]ObservationKey
 	// EstimatedItems is a plan-time budget input (design doc §6.3): a
 	// rough per-subject row/item count this capability's read is expected
 	// to return, so a plan can size a read BEFORE running it. Zero means
@@ -231,6 +292,16 @@ func (c FactCapability) Validate() error {
 			if !known || kind != ObligationKindRead {
 				return fmt.Errorf("fact capability %q declares obligation %q for subject kind %q, which is %q rather than a read obligation: only read obligations are served by a producer", c.Kind, obligation, subjectKind, kind)
 			}
+		}
+	}
+	for subjectKind := range c.ObservationKey {
+		// Same rule Tables and Obligations already enforce: a capability may
+		// not declare an observation key for a subject kind it does not
+		// serve. Without it, a declaration could describe a subject-kind
+		// pairing no read can ever produce, and the evaluator (commit 2)
+		// would have no way to tell that apart from a real one.
+		if !supported[subjectKind] {
+			return fmt.Errorf("fact capability %q declares an observation key for unsupported subject kind %q", c.Kind, subjectKind)
 		}
 	}
 	if c.EstimatedItems < 0 {
@@ -429,6 +500,22 @@ func copyObligationDeclarations(obligations map[SubjectKind][]AnswerObligation) 
 	return out
 }
 
+// copyObservationKeyDeclarations is copyObligationDeclarations' twin for the
+// third map-valued declaration field, kept for the identical reason: a
+// struct copy shares the backing map, so a caller writing through
+// capability.ObservationKey would otherwise mutate the registry's own
+// declaration for every later caller.
+func copyObservationKeyDeclarations(keys map[SubjectKind][]ObservationKey) map[SubjectKind][]ObservationKey {
+	if keys == nil {
+		return nil
+	}
+	out := make(map[SubjectKind][]ObservationKey, len(keys))
+	for subject, declared := range keys {
+		out[subject] = append([]ObservationKey(nil), declared...)
+	}
+	return out
+}
+
 func (r *FactCapabilityRegistry) Capabilities() []FactCapability {
 	if r == nil {
 		return nil
@@ -460,6 +547,7 @@ func (r *FactCapabilityRegistry) Capabilities() []FactCapability {
 		// read the asymmetry as intent.
 		capability.Tables = copyTableDeclarations(capability.Tables)
 		capability.Obligations = copyObligationDeclarations(capability.Obligations)
+		capability.ObservationKey = copyObservationKeyDeclarations(capability.ObservationKey)
 		capabilities = append(capabilities, capability)
 	}
 	sort.Slice(capabilities, func(i, j int) bool { return factKindOrder(capabilities[i].Kind) < factKindOrder(capabilities[j].Kind) })
