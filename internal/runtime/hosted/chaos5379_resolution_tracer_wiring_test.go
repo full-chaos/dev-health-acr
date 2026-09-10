@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 )
 
@@ -65,16 +66,28 @@ func TestDefaultResolutionTracer_ExplicitOverrideStillWins(t *testing.T) {
 // it stays green when the runtime stops installing one. This one goes
 // through defaultResolutionTracer, the exact call open.go makes, so the
 // wiring and the level are both under the assertion.
+//
+// CHAOS-5516: decision_summary's emission now reads ONLY
+// event.DecisionSummaryFields (tracer.go's own "decision_summary" case is
+// event.DecisionSummaryFields.SlogArgs()... and nothing else) -- the OLD
+// individual Decision* fields this test used to set directly on the shared
+// ResolutionTraceEvent are no longer read for this stage at all, so this
+// fixture is built through the generated typed constructor, the same
+// contract every real caller now goes through, never a second, independently
+// hand-typed construction of the same event.
 func TestTheDeployedTracerEmitsTheDecisionAtTheProductionLogLevel(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	defaultResolutionTracer(nil, logger).Trace(graphrank.ResolutionTraceEvent{
 		RequestID: "request_5379_wiring", Stage: "decision_summary",
-		DecisionEventCount: 2, DecisionCommittedCount: 1, DecisionNoCommitCount: 1,
-		DecisionCommittedIDs: []string{"team.v2:github:platform"},
-		DecisionCommitGates:  []string{"exact_index"},
-		DecisionCommitBases:  []string{"statistical"},
+		DecisionSummaryFields: eventspec.NewDecisionSummaryFields(
+			"request_5379_wiring", 2, 1, 0, 1,
+			[]string{"team.v2:github:platform"}, []string{"exact_index"}, []string{"statistical"},
+			false, "none", "none",
+			0, 0, false, 0, "none", "none", []string{}, 0,
+			"none", "none", "none", []string{}, []string{},
+		),
 	})
 
 	if buf.Len() == 0 {
