@@ -136,8 +136,8 @@ var registry = map[Source]Attributes{
 	},
 	CohortGroupAuthorization: {
 		EngineMinted:         true,
-		ContestExempt:        true,
-		ShortCircuitEligible: true,
+		ContestExempt:        Contest(true),
+		ShortCircuitEligible: ShortCircuit(true),
 	},
 }
 
