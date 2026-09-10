@@ -400,3 +400,44 @@ func TestCertifyAbsentRefusesAnUnrecognisedMultiplicity(t *testing.T) {
 		t.Error("CertifyAbsent() accepted an unrecognised Multiplicity value -- want a refusal")
 	}
 }
+
+// Round r2's battery (H5): CertifyAbsent must refuse when the caller's own
+// attribution map omits a key the event declares in Attribution -- the same
+// contract Certify's Want enforces (TestCertifyRefusesWantMissingAnAttributionField).
+// Without this, an incomplete attribution map would scope against zero
+// fields and silently certify absence over the WHOLE log, not one attempt.
+func TestCertifyAbsentRefusesAnAttributionMapMissingAnAttributionField(t *testing.T) {
+	log, err := Parse([]byte(`{"time":"2026-09-10T00:00:00Z","level":"INFO","msg":"context fabric resolution trace: anchor slot displaced","request_id":"req_1"}`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if err := CertifyAbsent(log, eventspec.AnchorSlotDisplaced, map[string]any{}); err == nil {
+		t.Fatal("CertifyAbsent() accepted an attribution map missing \"request_id\" -- want a refusal naming the missing attribution field")
+	} else if !strings.Contains(err.Error(), "request_id") {
+		t.Errorf("refusal text = %q, want it to name the missing attribution field", err.Error())
+	}
+}
+
+// Round r2's battery (G6): a closed-vocabulary field NOT named in Want must
+// still be checked against its declared vocabulary -- the same "unconditional,
+// not just for Want fields" contract TestCertifyRefusesAWrongTypeNotNamedInWant
+// pins for Field.Type.
+func TestCertifyRefusesABadVocabNotNamedInWant(t *testing.T) {
+	badVocab := strings.Replace(validRankedCutSummaryLine(), `"anchor_slot_source":"receipt"`, `"anchor_slot_source":"made_up_source"`, 1)
+	if badVocab == validRankedCutSummaryLine() {
+		t.Fatal("fixture bug: anchor_slot_source needle not found")
+	}
+	log, err := Parse([]byte(badVocab))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	want := wantForRankedCutSummary()
+	delete(want, "anchor_slot_source")
+	_, err = Certify(log, Assertion{Event: eventspec.RankedCutSummary, Want: want})
+	if err == nil {
+		t.Fatal("Certify() accepted anchor_slot_source=\"made_up_source\" (not named in Want) -- want a refusal naming the closed vocabulary")
+	}
+	if !strings.Contains(err.Error(), "closed vocabulary") {
+		t.Errorf("refusal text = %q, want it to name the closed vocabulary", err.Error())
+	}
+}

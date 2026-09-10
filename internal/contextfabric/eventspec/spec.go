@@ -115,20 +115,33 @@ type Event struct {
 	BoundedAggregation string
 }
 
-// declaredKindRescueState is the CLOSED vocabulary chaos5388_declared_kind_rescue.go
-// already ships (unchanged by this ticket -- "no schema field names or
-// additional outcome tokens are minted by this amendment"). All FIVE
-// states (round r2's P1: "ran_matched_survived" was omitted from this
-// list -- the real resolver path emits it, so it certified successfully
-// against an incomplete vocabulary once nested validation was added; fixed
-// by completing the list against chaos5388_declared_kind_rescue.go's own
-// five constants, not by inventing anything new).
+// DeclaredKindRescue* are the FIVE values chaos5388_declared_kind_rescue.go's
+// "state" field ships (unchanged by this ticket -- "no schema field names or
+// additional outcome tokens are minted by this amendment"). These are the
+// ONE declaration of that vocabulary's string values; graphrank's own
+// declaredKindRescue* constants reference these rather than retyping the
+// literals a second time (round r2's P1: "ran_matched_survived" was
+// omitted from a hand-typed second copy of this list -- the real resolver
+// path emits it, so it certified successfully against an incomplete
+// vocabulary once nested validation was added; a second, independently
+// typed list is exactly how the two drifted. Centralizing removes the
+// class of bug, not just this one instance of it).
+const (
+	DeclaredKindRescueNotRun             = "not_run"
+	DeclaredKindRescueMatchedZero        = "ran_matched_zero"
+	DeclaredKindRescueMatchedThenDropped = "ran_matched_then_dropped"
+	DeclaredKindRescueMatchedThenCut     = "ran_matched_then_cut"
+	DeclaredKindRescueMatchedSurvived    = "ran_matched_survived"
+)
+
+// declaredKindRescueState is the CLOSED vocabulary for the five constants
+// above, in the same order chaos5388_declared_kind_rescue.go declares them.
 var declaredKindRescueState = []string{
-	"not_run",
-	"ran_matched_zero",
-	"ran_matched_then_dropped",
-	"ran_matched_then_cut",
-	"ran_matched_survived",
+	DeclaredKindRescueNotRun,
+	DeclaredKindRescueMatchedZero,
+	DeclaredKindRescueMatchedThenDropped,
+	DeclaredKindRescueMatchedThenCut,
+	DeclaredKindRescueMatchedSurvived,
 }
 
 // RankedCutSummary is the once-per-pass Info line

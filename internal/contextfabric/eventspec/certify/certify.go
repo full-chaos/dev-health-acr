@@ -225,12 +225,12 @@ func Certify(log *Log, a Assertion) (Result, error) {
 			return Result{}, fmt.Errorf("certify: %s: line has no %q key (declared presence=%s) -- a required field must never be omitted, and missing is never equivalent to a measured zero",
 				a.Event.ID, key, field.Presence)
 		}
-		if len(field.ClosedVocabulary) > 0 {
-			gotStr, ok := got.(string)
-			if !ok || !contains(field.ClosedVocabulary, gotStr) {
-				return Result{}, fmt.Errorf("certify: %s: %q = %v is not in the declared closed vocabulary %v", a.Event.ID, key, got, field.ClosedVocabulary)
-			}
-		}
+		// Type and closed-vocabulary membership for this field were already
+		// asserted, unconditionally, by validateFields above (every key
+		// reaching this loop is a declared field, by the isDeclared check
+		// above -- validateFields already ran over that same declared set).
+		// A second check here would be dead code: it can never fire on a
+		// value validateFields would not already have refused.
 		if !jsonEqual(want, got) {
 			return Result{}, fmt.Errorf("certify: %s: %q = %v, want %v", a.Event.ID, key, got, want)
 		}
