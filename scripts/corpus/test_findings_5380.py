@@ -2721,13 +2721,21 @@ def test_attempt_class_totals_refuses_when_the_original_class_table_never_reconc
 def test_attempt_class_totals_refuses_when_the_original_class_table_is_malformed():
     """The other half of the same gate: the original's `attempt_class_n` table itself
     must be structurally valid (right key set, valid values) -- a reconciled original
-    with a malformed table is still unmeasured, not silently summed as its own zeros."""
+    with a malformed table is still unmeasured, not silently summed as its own zeros.
+
+    The CONTAINER (`original_attempt_evidence` itself) is a fully-keyed, otherwise
+    valid `ORIGINAL_EVIDENCE_KEYS` dict here -- isolating THIS test from the
+    container-level check (`_original_evidence`/`MALFORMED_ORIGINAL_EVIDENCE`,
+    its own dedicated test) so the failure exercised is specifically the nested
+    `attempt_class_n` table's own key set, not the outer container's."""
     row = {
         "corpus_id": "q-a",
         "attempt_class_n": AC.zero_counts(),
         "attempts_reconciled": True,
         "original_attempt_evidence": {
-            "attempt_class_n": {"upstream_504": 1},  # wrong key set
+            "attempts": 1, "attempt_outcomes": [],
+            "attempt_class_n": {"upstream_504": 1},  # wrong key set (the nested table)
+            "attempt_upstream_504_n": 1, "attempt_overrun_413_n": 0,
             "attempts_reconciled": True,
         },
     }
@@ -2735,12 +2743,15 @@ def test_attempt_class_totals_refuses_when_the_original_class_table_is_malformed
     assert totals["attempt_classes_unavailable"] == 1, totals
     assert totals["attempt_class_totals"] is None, totals
 
-    # POSITIVE CONTROL: a genuinely complete, reconciled original is summed in.
+    # POSITIVE CONTROL: a genuinely complete, reconciled original -- the FULL
+    # declared shape (`MC.ORIGINAL_EVIDENCE_KEYS`), not just the two fields this
+    # function itself reads -- is summed in.
     good = dict(row["attempt_class_n"])
     good["upstream_504"] = 1
     control_row = dict(row)
     control_row["original_attempt_evidence"] = {
-        "attempt_class_n": good,
+        "attempts": 1, "attempt_outcomes": [], "attempt_class_n": good,
+        "attempt_upstream_504_n": 1, "attempt_overrun_413_n": 0,
         "attempts_reconciled": True,
     }
     control_totals = MC.attempt_class_totals([control_row])
@@ -2930,16 +2941,23 @@ def test_validate_attempt_counters_refuses_a_string_and_accepts_a_null():
     assert problems, "a string counter must be refused at ingestion"
     assert "q-a" in problems[0] and "row.attempt_upstream_504_n" in problems[0], problems
 
+    # The original_attempt_evidence container itself must be the COMPLETE declared
+    # shape (see test_original_evidence_accessor_covers_every_shape_of_the_axis for
+    # the container-level axis) so this fixture isolates the COUNTER-level check.
+    complete_original = {"attempts": 1, "attempt_outcomes": [], "attempt_class_n": AC.zero_counts(),
+                          "attempt_upstream_504_n": 0, "attempt_overrun_413_n": "also-bad",
+                          "attempts_reconciled": True}
     bad_original = {"corpus_id": "q-b", "attempt_upstream_504_n": 0, "attempt_overrun_413_n": 0,
-                     "original_attempt_evidence": {"attempt_overrun_413_n": "also-bad"}}
+                     "original_attempt_evidence": complete_original}
     problems2 = MC.validate_attempt_counters([bad_original])
     assert problems2, "a string counter on original_attempt_evidence must be refused too"
     assert "q-b" in problems2[0] and "original_attempt_evidence.attempt_overrun_413_n" in problems2[0], problems2
 
     # POSITIVE CONTROL: null (absent) is legitimate on both sides -- nothing counted
     # there is not the same claim as "malformed".
+    null_original = {**complete_original, "attempt_upstream_504_n": None, "attempt_overrun_413_n": None}
     null_row = {"corpus_id": "q-c", "attempt_upstream_504_n": None, "attempt_overrun_413_n": None,
-                "original_attempt_evidence": {"attempt_upstream_504_n": None, "attempt_overrun_413_n": None}}
+                "original_attempt_evidence": null_original}
     assert MC.validate_attempt_counters([null_row]) == []
 
 
@@ -2995,6 +3013,263 @@ def test_a_malformed_frozen_counter_is_a_controlled_merge_abort_through_the_real
     assert "Traceback" not in proc.stderr, ("a malformed counter must be a named refusal, "
                                              "never a raw crash: " + proc.stderr)
     assert not outfile.exists(), "an aborted merge must not write a verdict file"
+
+
+def test_original_evidence_accessor_covers_every_shape_of_the_axis():
+    """r3 (codex) P1, REPRODUCED (round 1): `original_attempt_evidence` was read with
+    `row.get(...) or {}` (or a bare truthiness check) and then `.get()`-ed
+    unconditionally by all four readers (`_effective_attempt_count`,
+    `_effective_attempt_class_n`, `validate_attempt_counters`,
+    `reconcile_attempt_totals`) -- a PRESENT but non-dict value (a string, in the
+    reviewer's repro) crashed every one of them with a raw
+    `AttributeError: 'str' object has no attribute 'get'`.
+
+    r3 verdict, second finding: an EMPTY dict was silently read as legitimate
+    absence -- but `build_reclassified_row` never writes one, so that shape is
+    exactly as malformed as a wrong type and is refused too, alongside a dict
+    with the WRONG key set (missing or extra keys). Enumerated over the FULL
+    axis of shapes a JSON value can take, through `_original_evidence` (the ONE
+    accessor every reader now calls) and each of its four callers:
+      malformed: "corrupt" (str), [] (list), 0 (int), {} (empty dict),
+                 a dict missing a declared key, a dict with an extra key
+      legitimate: absent (key missing entirely), None, a complete correctly-keyed dict
+    """
+    complete = {"attempts": 1, "attempt_outcomes": [], "attempt_class_n": AC.zero_counts(),
+                "attempt_upstream_504_n": 0, "attempt_overrun_413_n": 0, "attempts_reconciled": True}
+    malformed_shapes = [
+        ("string", "corrupt"), ("list", []), ("int", 0), ("empty dict", {}),
+        ("missing a key", {k: v for k, v in complete.items() if k != "attempts_reconciled"}),
+        ("extra key", {**complete, "unexpected": True}),
+    ]
+    legitimate_shapes = [("absent", "OMIT"), ("null", None), ("complete", dict(complete))]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp, "shard-00", "replicate")
+        d.mkdir(parents=True)
+        d.joinpath("q-a-rep1-t1-a1.json").write_text(json.dumps(_served()))
+
+        for name, value in malformed_shapes:
+            row = {"corpus_id": "q-a", "attempt_upstream_504_n": 0, "attempt_overrun_413_n": 0,
+                   "attempts_reconciled": True, "attempt_class_n": AC.zero_counts(),
+                   "original_attempt_evidence": value}
+            assert MC._original_evidence(row) is MC.MALFORMED_ORIGINAL_EVIDENCE, name
+            problems = MC.validate_attempt_counters([row])
+            assert problems, f"{name}: must be refused at ingestion"
+            assert "q-a" in problems[0], (name, problems)
+            assert MC._effective_attempt_count(row, "attempt_upstream_504_n") is None, name
+            assert MC._effective_attempt_class_n(row) is None, name
+            problems2 = MC.reconcile_attempt_totals([row], tmp)
+            assert problems2, f"{name}: reconcile_attempt_totals must refuse too, not crash"
+
+        for name, value in legitimate_shapes:
+            row = {"corpus_id": "q-a", "attempt_upstream_504_n": 0, "attempt_overrun_413_n": 0,
+                   "attempts_reconciled": True, "attempt_class_n": AC.zero_counts()}
+            if value != "OMIT":
+                row["original_attempt_evidence"] = value
+            assert MC._original_evidence(row) is not MC.MALFORMED_ORIGINAL_EVIDENCE, name
+            assert MC.validate_attempt_counters([row]) == [], (name, "must not be refused")
+            assert MC._effective_attempt_count(row, "attempt_upstream_504_n") == 0, name
+            assert MC._effective_attempt_class_n(row) == AC.zero_counts(), name
+            assert MC.reconcile_attempt_totals([row], tmp) == [], name
+
+
+def test_every_malformed_original_evidence_shape_is_a_controlled_merge_abort_through_the_real_cli():
+    """Same axis as the pin above, executed end to end through the REAL merge_corpus.py
+    CLI for each malformed shape: exit 1, stderr names the row, no raw traceback, no
+    verdict file written. Then the positive control (absent) through the same CLI:
+    exit 0, a verdict IS written. This is the r3 P1 repro itself, both of its named
+    findings, over the full shape axis team-lead's ruling required."""
+    from corpus import CORPUS
+    bad_id = CORPUS[0]["id"]
+
+    def run_with_original(value, omit=False):
+        with tempfile.TemporaryDirectory() as tmp:
+            rows = []
+            shard = Path(tmp) / "shard-00"
+            (shard / "replicate").mkdir(parents=True)
+            for entry in CORPUS:
+                cid = entry["id"]
+                base = {"corpus_id": cid, "family": entry.get("family"), "section_note": "",
+                        "final_http": 200, "final_payload_status": "complete",
+                        "chain": ["t1=complete"], "wrong_kind_flag": False,
+                        "wrong_subject_flag": False, "subject_kind_mismatch_flag": False,
+                        "wall_seconds": 1.0, "claimed_facts_n": 1, "failure_code": None}
+                (shard / "replicate" / f"{cid}-rep1-t1-a1.json").write_text(json.dumps(_served()))
+                RS.UNSEQUENCED.clear()
+                row = {**base, "attempts": 1}
+                row.update(RS.attempt_diagnostics(shard / "replicate", cid, 1, harness_attempts=1))
+                if cid == bad_id and not omit:
+                    row["original_attempt_evidence"] = value
+                rows.append(row)
+            (shard / "shard-summary.json").write_text(json.dumps(
+                {"shard": 0, "planned_ids": [r["corpus_id"] for r in rows], "rows": rows,
+                 "total_wall_seconds": 1.0, "started_unix": 1, "finished_unix": 2}))
+            outfile = Path(tmp) / "verdict.json"
+            proc = subprocess.run(
+                [sys.executable, str(HERE / "merge_corpus.py"), "--shape", "sequential",
+                 "--in", str(shard.parent), "--out", str(outfile)],
+                capture_output=True, text=True, cwd=str(HERE),
+                env={**os.environ, "PYTHONPATH": str(HERE / "testdata_corpus")})
+            return proc, outfile.exists()
+
+    for name, value in [("string", "corrupt"), ("list", []), ("int", 0), ("empty dict", {})]:
+        proc, out_exists = run_with_original(value)
+        assert proc.returncode == 1, (name, proc.stdout + proc.stderr)
+        assert "MERGE ABORT" in proc.stderr, (name, proc.stderr)
+        assert bad_id in proc.stderr, (name, proc.stderr)
+        assert "Traceback" not in proc.stderr, (
+            name, "a malformed container must be a named refusal, never a raw crash: " + proc.stderr)
+        assert not out_exists, (name, "an aborted merge must not write a verdict file")
+
+    # POSITIVE CONTROL: absent (never reclassified) merges clean through the same CLI.
+    proc, out_exists = run_with_original(None, omit=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert out_exists, "a clean run must write a verdict file"
+
+
+def test_the_full_ingestion_input_domain_is_a_controlled_abort_or_a_correct_publish():
+    """Chris's ruling (via team-lead), r3 tabled: the fix is the WHOLE input domain
+    of merge_corpus.py's row ingestion. Every field the merge reads off a row and
+    off `original_attempt_evidence` -- CENSUS-ASSERTED below from the typed
+    accessors' own key lists (`_original_evidence`'s `ORIGINAL_EVIDENCE_KEYS`, the
+    two `_effective_attempt_count` keys, `_effective_attempt_class_n`'s
+    `attempt_class_n`/`attempts_reconciled`) -- crossed with the requested shape
+    axis (absent, null, zero, empty container, wrong container type, wrong scalar
+    type, negative, fractional, boundary values, out-of-vocabulary key sets),
+    GENERATED programmatically (never hand-picked per cell), each cell executed
+    through the REAL CLI over an otherwise-valid 4-row corpus.
+
+    Two contracts, both already established and pinned in earlier rounds, hold
+    over the WHOLE domain without exception:
+      ABORT contract  (the two frozen counters, at both the row level and the
+                       original level, and the `original_attempt_evidence`
+                       container itself): a malformed value is a NAMED MERGE
+                       ABORT -- exit 1, stderr names the row, no verdict written.
+      WITHHOLD contract (`attempt_class_n`, at both levels): a malformed value
+                       never aborts the merge -- exit 0, a verdict IS written,
+                       and the row is named in `attempt_classes_unavailable_ids`
+                       with the aggregate withheld (`attempt_class_totals: null`).
+    The ONE invariant that holds over EVERY cell of both contracts, valid or
+    malformed: no raw traceback, ever.
+    """
+    from corpus import CORPUS
+    bad_id = CORPUS[0]["id"]
+    OMIT = object()
+
+    def complete_original(**overrides):
+        d = {"attempts": 1, "attempt_outcomes": [], "attempt_class_n": AC.zero_counts(),
+             "attempt_upstream_504_n": 0, "attempt_overrun_413_n": 0, "attempts_reconciled": True}
+        d.update(overrides)
+        return d
+
+    def run_with_overrides(overrides):
+        with tempfile.TemporaryDirectory() as tmp:
+            rows = []
+            shard = Path(tmp) / "shard-00"
+            (shard / "replicate").mkdir(parents=True)
+            for entry in CORPUS:
+                cid = entry["id"]
+                base = {"corpus_id": cid, "family": entry.get("family"), "section_note": "",
+                        "final_http": 200, "final_payload_status": "complete",
+                        "chain": ["t1=complete"], "wrong_kind_flag": False,
+                        "wrong_subject_flag": False, "subject_kind_mismatch_flag": False,
+                        "wall_seconds": 1.0, "claimed_facts_n": 1, "failure_code": None}
+                (shard / "replicate" / f"{cid}-rep1-t1-a1.json").write_text(json.dumps(_served()))
+                RS.UNSEQUENCED.clear()
+                row = {**base, "attempts": 1}
+                row.update(RS.attempt_diagnostics(shard / "replicate", cid, 1, harness_attempts=1))
+                if cid == bad_id:
+                    for k, v in overrides.items():
+                        if v is OMIT:
+                            row.pop(k, None)
+                        else:
+                            row[k] = v
+                rows.append(row)
+            (shard / "shard-summary.json").write_text(json.dumps(
+                {"shard": 0, "planned_ids": [r["corpus_id"] for r in rows], "rows": rows,
+                 "total_wall_seconds": 1.0, "started_unix": 1, "finished_unix": 2}))
+            outfile = Path(tmp) / "verdict.json"
+            proc = subprocess.run(
+                [sys.executable, str(HERE / "merge_corpus.py"), "--shape", "sequential",
+                 "--in", str(shard.parent), "--out", str(outfile)],
+                capture_output=True, text=True, cwd=str(HERE),
+                env={**os.environ, "PYTHONPATH": str(HERE / "testdata_corpus")})
+            verdict = json.loads(outfile.read_text()) if outfile.exists() else None
+            return proc.returncode, proc.stdout, proc.stderr, verdict
+
+    def assert_never_a_traceback(cell, stderr):
+        assert "Traceback" not in stderr, (cell, "no cell of the input domain may raise a raw exception", stderr)
+
+    def assert_abort(cell, overrides):
+        rc, out, err, verdict = run_with_overrides(overrides)
+        assert_never_a_traceback(cell, err)
+        assert rc == 1, (cell, "must be a MERGE ABORT", out + err)
+        assert "MERGE ABORT" in err and bad_id in err, (cell, err)
+        assert verdict is None, (cell, "an aborted merge must not write a verdict file")
+
+    def assert_valid_publish(cell, overrides):
+        rc, out, err, verdict = run_with_overrides(overrides)
+        assert_never_a_traceback(cell, err)
+        assert rc == 0, (cell, "a legitimate shape must merge clean", out + err)
+        assert verdict is not None, (cell, "a clean run must write a verdict file")
+        return verdict
+
+    def assert_withheld(cell, overrides):
+        verdict = assert_valid_publish(cell, overrides)
+        rig = verdict["rig_diagnostics"]
+        assert bad_id in rig["attempt_classes_unavailable_ids"], (cell, rig)
+        assert rig["attempt_class_totals"] is None, (cell, rig)
+
+    # ---- ABORT contract: the two frozen counters, GENERATED over both keys and
+    # both levels (row / nested inside a fully-keyed original_attempt_evidence).
+    # LEGIT values here are restricted to {absent, null, zero} -- the only values
+    # that also reconcile against this fixture's real physical attempt file (a
+    # single plain served 200, no 504/413). A genuine positive boundary value
+    # (one, a large count) reconciling against REAL matching attempt files is a
+    # DIFFERENT, already-covered concern
+    # (test_reconcile_attempt_totals_sums_the_original_AND_the_replays_own_count,
+    # test_every_published_attempt_derived_rig_diagnostics_key_moves_on_a_real_divergence)
+    # -- conflating it here would test reconciliation arithmetic, not ingestion
+    # type-validation, through a fixture not built to support it. The boundary
+    # value 0 vs 1 as a TYPE (both valid non-negative ints) is exercised directly
+    # via `attempt_classes.is_valid_count` in test_the_class_table_values_are_
+    # validated_over_the_whole_value_axis.
+    COUNTER_KEYS = ["attempt_upstream_504_n", "attempt_overrun_413_n"]
+    LEGIT_COUNTS = [("null", None), ("zero", 0)]
+    MALFORMED_COUNTS = [("negative", -1), ("fractional", 1.5), ("boolean", True),
+                         ("string", "3"), ("list", [1]), ("dict", {"n": 1})]
+    for key in COUNTER_KEYS:
+        for name, value in LEGIT_COUNTS + [("absent", OMIT)]:
+            assert_valid_publish(f"row.{key}={name}", {key: value})
+        for name, value in LEGIT_COUNTS:  # "absent" is inexpressible inside a fixed-key-set container
+            assert_valid_publish(f"original.{key}={name}", {"original_attempt_evidence": complete_original(**{key: value})})
+        for name, value in MALFORMED_COUNTS:
+            assert_abort(f"row.{key}={name}", {key: value})
+            assert_abort(f"original.{key}={name}", {"original_attempt_evidence": complete_original(**{key: value})})
+
+    # ---- ABORT contract: the `original_attempt_evidence` container itself.
+    for name, value in [("absent", OMIT), ("null", None), ("complete_valid", complete_original())]:
+        assert_valid_publish(f"original_attempt_evidence={name}", {"original_attempt_evidence": value})
+    for name, value in [
+        ("empty_dict", {}), ("string", "corrupt"), ("list", []), ("int", 0),
+        ("missing_a_key", {k: v for k, v in complete_original().items() if k != "attempts_reconciled"}),
+        ("extra_key", {**complete_original(), "unexpected": True}),
+    ]:
+        assert_abort(f"original_attempt_evidence={name}", {"original_attempt_evidence": value})
+
+    # ---- WITHHOLD contract: `attempt_class_n`, at the row level and (nested,
+    # inside a fully-keyed original) the original level -- out-of-vocabulary key
+    # sets and wrong container types never abort the whole merge, only withhold
+    # that row's aggregate contribution.
+    assert_valid_publish("row.attempt_class_n=complete_valid", {"attempt_class_n": AC.zero_counts()})
+    for name, value in [("absent", OMIT), ("empty_dict", {}),
+                         ("wrong_key_set", {"upstream_504": 1}), ("string", "x")]:
+        assert_withheld(f"row.attempt_class_n={name}", {"attempt_class_n": value})
+    assert_valid_publish("original.attempt_class_n=complete_valid",
+                          {"original_attempt_evidence": complete_original()})
+    for name, value in [("empty_dict", {}), ("wrong_key_set", {"upstream_504": 1}), ("string", "x")]:
+        assert_withheld(f"original.attempt_class_n={name}",
+                         {"original_attempt_evidence": complete_original(attempt_class_n=value)})
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

@@ -147,6 +147,52 @@ def check_coverage(rows):
     return problems
 
 
+# The declared shape of `original_attempt_evidence`, spelled ONCE -- exactly the
+# six keys `reclassify_deadlines.build_reclassified_row` writes (see its own
+# doc comment). Read by `_original_evidence` below, the ONE accessor; nothing
+# else in this file names these keys as a set.
+ORIGINAL_EVIDENCE_KEYS = frozenset({
+    "attempts", "attempt_outcomes", "attempt_class_n",
+    "attempt_upstream_504_n", "attempt_overrun_413_n", "attempts_reconciled",
+})
+
+# Sentinel, never a valid return value from `_original_evidence` (which returns
+# either `{}` or a dict with exactly `ORIGINAL_EVIDENCE_KEYS`) -- a caller
+# compares with `is`, never truthiness, so this can never be mistaken for a
+# real (if empty) evidence dict.
+MALFORMED_ORIGINAL_EVIDENCE = object()
+
+
+def _original_evidence(row):
+    """A row's `original_attempt_evidence` -- the ONE accessor in this file for
+    that key; every reader (`_effective_attempt_count`, `_effective_attempt_class_n`,
+    `validate_attempt_counters`, `reconcile_attempt_totals`) calls this and
+    nothing else, and checks its result with `is MALFORMED_ORIGINAL_EVIDENCE`,
+    never by re-deriving a validity test of its own.
+
+    Returns `{}` when the field is absent or `None` (legitimate: an ordinary
+    row was never reclassified -- see build_reclassified_row) or a dict
+    carrying EXACTLY `ORIGINAL_EVIDENCE_KEYS`.
+
+    Returns `MALFORMED_ORIGINAL_EVIDENCE` for every other shape: codex r3 P1
+    (round 1) reproduced a PRESENT-but-not-a-dict value (a string, a list, an
+    int) crashing every reader with a raw `AttributeError`; the SAME round's
+    verdict named a second gap -- an EMPTY dict silently read as legitimate
+    absence, though `build_reclassified_row` never writes one, so a real
+    artefact never has this shape and it is refused exactly like the others.
+    A dict with the WRONG key set (missing or extra keys) is refused for the
+    identical reason `_effective_attempt_class_n`'s `attempt_class_n` table
+    refuses a partial key set: a syntactically valid dict is not proof it is
+    the shape this vocabulary means.
+    """
+    v = row.get("original_attempt_evidence")
+    if v is None:
+        return {}
+    if isinstance(v, dict) and set(v) == ORIGINAL_EVIDENCE_KEYS:
+        return v
+    return MALFORMED_ORIGINAL_EVIDENCE
+
+
 def _effective_attempt_count(row, key):
     """The frozen counter `key` (attempt_upstream_504_n | attempt_overrun_413_n),
     summed across the ORIGINAL run's evidence (`original_attempt_evidence`, only
@@ -167,8 +213,14 @@ def _effective_attempt_count(row, key):
     type"). Each side is validated with `attempt_classes.is_valid_count` before
     any arithmetic; an absent value counts as 0, an invalid one makes the whole
     result None -- a named refusal, never a crash and never a silent zero.
+
+    codex r3 P1: a malformed `original_attempt_evidence` container is the same
+    class of malformed value -- read through `_original_evidence`, refused
+    here exactly like an invalid counter (never a raw `AttributeError`).
     """
-    original = row.get("original_attempt_evidence") or {}
+    original = _original_evidence(row)
+    if original is MALFORMED_ORIGINAL_EVIDENCE:
+        return None
     total = 0
     for source in (original, row):
         v = source.get(key)
@@ -228,7 +280,9 @@ def _effective_attempt_class_n(row):
         return None
     if row.get("attempts_reconciled") is not True:
         return None
-    original = row.get("original_attempt_evidence")
+    original = _original_evidence(row)
+    if original is MALFORMED_ORIGINAL_EVIDENCE:
+        return None
     if original:
         if original.get("attempts_reconciled") is not True:
             return None
@@ -266,12 +320,28 @@ def validate_attempt_counters(rows):
     A value that is PRESENT but not a valid non-negative int (a string, a
     float, a bool, a negative) is refused, named by corpus_id, source
     (`row` or `original_attempt_evidence`), and field.
+
+    codex r3 P1: `original_attempt_evidence` ITSELF is validated first, via
+    `_original_evidence` -- the same function every other reader in this file
+    routes through -- before any field is read off it. Every malformed shape
+    (present-but-not-a-dict, an empty dict, a dict with the wrong key set) is
+    refused by NAME here rather than crashing this function (or any of the
+    others) with a raw `AttributeError`, or -- the r3 verdict's second
+    finding -- silently reading as legitimate absence.
     """
     problems = []
     for row in rows:
         qid = row.get("corpus_id") or NO_CORPUS_ID
+        raw_original = row.get("original_attempt_evidence")
+        original = _original_evidence(row)
+        if original is MALFORMED_ORIGINAL_EVIDENCE:
+            problems.append(
+                f"{qid}: original_attempt_evidence={raw_original!r} "
+                f"(type {type(raw_original).__name__}) is not absent/null or a dict with "
+                f"exactly {sorted(ORIGINAL_EVIDENCE_KEYS)} -- refusing at ingestion rather "
+                f"than reading attempt fields off a container that is not one")
+            continue
         sources = [("row", row)]
-        original = row.get("original_attempt_evidence")
         if original:
             sources.append(("original_attempt_evidence", original))
         for label, source in sources:
@@ -307,7 +377,9 @@ def reconcile_attempt_totals(rows, indir):
     files found for this row" with "the counts disagree" would make this
     function refuse for a reason it does not name. A row whose raw counters are
     not valid non-negative integers is named and refused rather than raising
-    (codex r2 P1).
+    (codex r2 P1). A row whose `original_attempt_evidence` fails
+    `_original_evidence`'s validation (not a dict, an empty dict, or the wrong
+    key set) is likewise named and refused, never raised (codex r3 P1).
     """
     scanned = engine_failures.scan_frozen_counts(indir)
     problems = []
@@ -316,7 +388,15 @@ def reconcile_attempt_totals(rows, indir):
         file_counts = scanned.get(qid)
         if file_counts is None:
             continue
-        original = row.get("original_attempt_evidence") or {}
+        raw_original = row.get("original_attempt_evidence")
+        original = _original_evidence(row)
+        if original is MALFORMED_ORIGINAL_EVIDENCE:
+            problems.append(
+                f"{qid}: original_attempt_evidence={raw_original!r} "
+                f"(type {type(raw_original).__name__}) is not absent/null or a dict with "
+                f"exactly {sorted(ORIGINAL_EVIDENCE_KEYS)} -- refusing rather than "
+                f"reconciling against a container that is not one")
+            continue
         # codex r1 P1: summing the frozen counters is not enough when the
         # ORIGINAL run's own walk never reconciled -- an unsequenced (dropped)
         # attempt on the original leaves attempts_reconciled=False there even
