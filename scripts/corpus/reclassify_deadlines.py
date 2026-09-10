@@ -60,6 +60,73 @@ def is_deadline(row):
             or (row.get("attempt_upstream_504_n") or 0) > 0)
 
 
+def build_reclassified_row(before, after):
+    """The ORIGINAL row (`before`) and the sequential replay's own row (`after`),
+    merged into the row `main()` publishes in place of `before`. Pure and
+    I/O-free so it is testable without a real run_replicate call.
+
+    r5 P1-2 (reproduced red, this lane): the caller used to publish `after`
+    verbatim, which REPLACES the original row wholesale -- the replay's own
+    (possibly smaller) attempt count, its own attempt_upstream_504_n, its own
+    attempt_outcomes. A row whose ORIGINAL parallel run genuinely hit an
+    upstream 504 (that is why is_deadline() selected it in the first place)
+    could read attempt_upstream_504_n=0 after reclassification simply because
+    the quiet single-attempt re-run never repeated it -- the original deadline
+    evidence was not wrong, it was erased, and nothing downstream could tell
+    "recovered" from "we forgot".
+
+    `original_attempt_evidence` is the fix: the ORIGINAL row's attempt-level
+    fields, carried BESIDE the replay's under their own key, never folded into
+    or overwriting the replay's own counters. `parallel_outcome_before_
+    reclassification` (four terminal scalars) is kept alongside it, unchanged,
+    for anything already reading it.
+    """
+    after = dict(after)
+    after["reclassified-after-load"] = True
+    after["parallel_outcome_before_reclassification"] = {
+        "final_http": before.get("final_http"),
+        "final_payload_status": before.get("final_payload_status"),
+        "failure_code": before.get("failure_code"),
+        "wall_seconds": before.get("wall_seconds"),
+    }
+    # The raw attempt files from the ORIGINAL run are never deleted (they sit
+    # under the shard's own replicate/ dir; the replay writes to a SEPARATE
+    # reclassify/<qid>/replicate/ dir -- see REPLAY_DIRNAME above), so a
+    # file-level scanner will still find them. merge_corpus.reconcile_attempt_
+    # totals reads exactly this field to know a reclassified row's expected
+    # file-scan total is the ORIGINAL's evidence plus the replay's own, never
+    # the replay's alone.
+    after["original_attempt_evidence"] = {
+        "attempts": before.get("attempts"),
+        "attempt_outcomes": before.get("attempt_outcomes"),
+        "attempt_class_n": before.get("attempt_class_n"),
+        "attempt_upstream_504_n": before.get("attempt_upstream_504_n"),
+        "attempt_overrun_413_n": before.get("attempt_overrun_413_n"),
+        "attempts_reconciled": before.get("attempts_reconciled"),
+    }
+    # SELECTION and RECOVERY are deliberately DIFFERENT predicates, and
+    # conflating them is a real bug this file had:
+    #   selection  = "did the row read a deadline during the PARALLEL run"
+    #                -> attempt-level, because a retried 504 leaves no terminal trace;
+    #   recovery   = "did the quiet re-run end in a SERVED state"
+    #                -> terminal-only, because a re-run that hit a 504 on one
+    #                   attempt and then served DID recover.
+    # Using is_deadline() for both labelled qa-grouped-clean
+    # "still_deadline_sequentially" when its re-run in fact reached `degraded`
+    # — i.e. it reported instrument load as a persistent failure, the exact
+    # thing the 03:23Z ruling forbids. Recovery is judged by the SAME bucket
+    # authority the verdict uses, so the label can never disagree with the
+    # number beside it.
+    recovered = merge_corpus.classify(after) in ("served_with_data", "served_degraded")
+    after["reclassification_verdict"] = (
+        "served_when_not_under_load" if recovered else "still_failing_sequentially"
+    )
+    after["reclassification_recovery_basis"] = (
+        f"terminal bucket {merge_corpus.classify(after)}; "
+        f"re-run attempt-level 504s = {after.get('attempt_upstream_504_n')}")
+    return after
+
+
 def main():
     shards_dir = Path(sys.argv[1])
     rep = int(sys.argv[2]) if len(sys.argv) > 2 else 1
@@ -97,33 +164,7 @@ def main():
         t0 = time.time()
         r = harness.run_replicate(qid, BY_ID[qid]["text"], rep)
         after = detail_for(harness.OUTDIR, qid, BY_ID[qid], r, time.time() - t0, rep)
-        after["reclassified-after-load"] = True
-        after["parallel_outcome_before_reclassification"] = {
-            "final_http": before.get("final_http"),
-            "final_payload_status": before.get("final_payload_status"),
-            "failure_code": before.get("failure_code"),
-            "wall_seconds": before.get("wall_seconds"),
-        }
-        # SELECTION and RECOVERY are deliberately DIFFERENT predicates, and
-        # conflating them is a real bug this file had:
-        #   selection  = "did the row read a deadline during the PARALLEL run"
-        #                -> attempt-level, because a retried 504 leaves no terminal trace;
-        #   recovery   = "did the quiet re-run end in a SERVED state"
-        #                -> terminal-only, because a re-run that hit a 504 on one
-        #                   attempt and then served DID recover.
-        # Using is_deadline() for both labelled qa-grouped-clean
-        # "still_deadline_sequentially" when its re-run in fact reached `degraded`
-        # — i.e. it reported instrument load as a persistent failure, the exact
-        # thing the 03:23Z ruling forbids. Recovery is judged by the SAME bucket
-        # authority the verdict uses, so the label can never disagree with the
-        # number beside it.
-        recovered = merge_corpus.classify(after) in ("served_with_data", "served_degraded")
-        after["reclassification_verdict"] = (
-            "served_when_not_under_load" if recovered else "still_failing_sequentially"
-        )
-        after["reclassification_recovery_basis"] = (
-            f"terminal bucket {merge_corpus.classify(after)}; "
-            f"re-run attempt-level 504s = {after.get('attempt_upstream_504_n')}")
+        after = build_reclassified_row(before, after)
         data["rows"] = [after if x["corpus_id"] == qid else x for x in data["rows"]]
         data.setdefault("reclassified_ids", []).append(qid)
         summary_path.write_text(json.dumps(data, indent=2))

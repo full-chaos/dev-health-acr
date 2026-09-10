@@ -60,6 +60,7 @@ import contract              # noqa: E402
 import harness               # noqa: E402
 import engine_failures as EF     # noqa: E402
 import merge_corpus as MC        # noqa: E402
+import reclassify_deadlines as RD  # noqa: E402
 import run_shard as RS           # noqa: E402
 import validators as VAL         # noqa: E402
 
@@ -2376,6 +2377,163 @@ def test_the_committed_shape_space_is_regenerable_and_shows_no_divergence():
     assert non_2xx_undecodable and \
         all(r["class"] != "served_2xx_undecodable_body" for r in non_2xx_undecodable), \
         "an undecodable body outside the 2xx band still classified as served"
+
+
+# ============================================================ PR-C: reclassify/merge reconciliation
+def test_build_reclassified_row_preserves_original_attempt_evidence():
+    """r5 P1-2, REPRODUCED red-first (see below) then pinned green. Target shape named in
+    the ticket: attempts 2->1, attempt_upstream_504_n 1->0 between the parallel run and its
+    sequential replay, while the file-level scanner still finds the original's 504.
+
+    RED (what the pre-fix code published, reconstructed here rather than re-run from
+    history): `after` alone, with no original_attempt_evidence. Fed into the SAME
+    reconciliation this lane's fix introduced, it must NOT reconcile -- proving the old
+    shape really was silently wrong, not merely differently worded.
+
+    GREEN: RD.build_reclassified_row(before, after) must carry `before`'s attempt-level
+    fields beside `after`'s, unmodified, and reconcile.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        # The ORIGINAL parallel run: 2 attempts, one an upstream 504.
+        original_out, _ = _write_turns(tmp, {1: [_attempt(504), _served()]}, qid="q-a", rep=1)
+        row = {"note": "", "family": "f"}
+        base_r = {"final_http": 200, "final_payload_status": "complete",
+                  "chain": ["t1=complete"], "wrong_kind_flag": False,
+                  "wrong_subject_flag": False, "subject_kind_mismatch_flag": False}
+        RS.UNSEQUENCED.clear()
+        before = RS.detail_for(original_out, "q-a", row, {**base_r, "attempts": 2}, 1.0, 1)
+        assert before["attempt_upstream_504_n"] == 1, before  # the row IS the deadline hit
+
+        # The REPLAY, under reclassify_deadlines.py's own REPLAY_DIRNAME convention: ONE
+        # attempt, served -- the quiet re-run never repeated the 504.
+        replay_dir = Path(tmp) / RD.REPLAY_DIRNAME / "q-a" / "replicate"
+        replay_dir.mkdir(parents=True)
+        (replay_dir / "q-a-rep1-t1-a1.json").write_text(json.dumps(_served()))
+        RS.UNSEQUENCED.clear()
+        after = RS.detail_for(replay_dir, "q-a", row, {**base_r, "attempts": 1}, 1.0, 1)
+        assert after["attempt_upstream_504_n"] == 0, after  # the replay did NOT repeat it
+
+        # RED: the pre-fix shape (published `after` verbatim) disagrees with the files on
+        # disk -- the file scanner still finds the original's 504, under `tmp` (both the
+        # shard's own replicate/ and the reclassify/ replay dir are under it).
+        red_row = dict(after)
+        red_row["reclassified-after-load"] = True
+        red_problems = MC.reconcile_attempt_totals([red_row], tmp)
+        assert red_problems, (
+            "the pre-fix row shape (no original_attempt_evidence) was expected to "
+            "disagree with the file scanner and did not -- this pin is not measuring "
+            "the defect it claims to")
+        assert "q-a" in red_problems[0] and "attempt_upstream_504_n" in red_problems[0], red_problems
+
+        # GREEN: the fixed builder. Every preserved field checked individually -- a
+        # partial preservation (e.g. the count but not the reconciliation flag) is not
+        # what "carries the original's attempts beside the replay's" means.
+        fixed_row = RD.build_reclassified_row(before, after)
+        evidence = fixed_row["original_attempt_evidence"]
+        assert evidence["attempt_upstream_504_n"] == 1, evidence
+        assert evidence["attempt_overrun_413_n"] == before["attempt_overrun_413_n"], evidence
+        assert evidence["attempts"] == 2, evidence
+        assert evidence["attempt_outcomes"] == before["attempt_outcomes"], evidence
+        assert evidence["attempt_class_n"] == before["attempt_class_n"], evidence
+        assert evidence["attempts_reconciled"] == before["attempts_reconciled"], evidence
+        # The row's OWN top-level fields still describe the REPLAY -- original evidence
+        # rides BESIDE it, never overwriting it.
+        assert fixed_row["attempt_upstream_504_n"] == 0, fixed_row
+        assert fixed_row["attempts"] == 1, fixed_row
+        green_problems = MC.reconcile_attempt_totals([fixed_row], tmp)
+        assert green_problems == [], green_problems
+
+
+def test_build_reclassified_row_preserves_original_overrun_413_evidence():
+    """The 413 sibling of the pin above -- a separate fixture because the two frozen
+    counters are INDEPENDENT (codex r4 P1) and a fix that only carried 504 evidence
+    forward would pass every 504-shaped pin while still losing 413 evidence."""
+    with tempfile.TemporaryDirectory() as tmp:
+        original_out, _ = _write_turns(
+            tmp, {1: [_attempt(200, failure={"httpStatus": 413}), _served()]}, qid="q-a", rep=1)
+        row = {"note": "", "family": "f"}
+        base_r = {"final_http": 200, "final_payload_status": "complete",
+                  "chain": ["t1=complete"], "wrong_kind_flag": False,
+                  "wrong_subject_flag": False, "subject_kind_mismatch_flag": False}
+        RS.UNSEQUENCED.clear()
+        before = RS.detail_for(original_out, "q-a", row, {**base_r, "attempts": 2}, 1.0, 1)
+        assert before["attempt_overrun_413_n"] == 1, before
+
+        replay_dir = Path(tmp) / RD.REPLAY_DIRNAME / "q-a" / "replicate"
+        replay_dir.mkdir(parents=True)
+        (replay_dir / "q-a-rep1-t1-a1.json").write_text(json.dumps(_served()))
+        RS.UNSEQUENCED.clear()
+        after = RS.detail_for(replay_dir, "q-a", row, {**base_r, "attempts": 1}, 1.0, 1)
+        assert after["attempt_overrun_413_n"] == 0, after
+
+        red_row = dict(after)
+        red_row["reclassified-after-load"] = True
+        red_problems = MC.reconcile_attempt_totals([red_row], tmp)
+        assert red_problems and any("attempt_overrun_413_n" in p for p in red_problems), red_problems
+
+        fixed_row = RD.build_reclassified_row(before, after)
+        assert fixed_row["original_attempt_evidence"]["attempt_overrun_413_n"] == 1, fixed_row
+        assert MC.reconcile_attempt_totals([fixed_row], tmp) == []
+
+
+def test_reconcile_attempt_totals_control_a_reconciling_run_publishes():
+    """POSITIVE CONTROL: an ordinary (never reclassified) row whose row-derived counters
+    genuinely match the files on disk must NOT be refused -- the refusal fires on
+    disagreement, not on every row that happens to carry attempt evidence."""
+    with tempfile.TemporaryDirectory() as tmp:
+        out, _ = _write_turns(tmp, {1: [_attempt(200, failure={"httpStatus": 413}), _served()]})
+        row = {"note": "", "family": "f"}
+        base_r = {"final_http": 200, "final_payload_status": "complete",
+                  "chain": ["t1=complete"], "wrong_kind_flag": False,
+                  "wrong_subject_flag": False, "subject_kind_mismatch_flag": False}
+        RS.UNSEQUENCED.clear()
+        detail = RS.detail_for(out, "q-a", row, {**base_r, "attempts": 2}, 1.0, 1)
+        assert detail["attempt_overrun_413_n"] == 1, detail
+        problems = MC.reconcile_attempt_totals([detail], tmp)
+    assert problems == [], problems
+
+
+def test_reconcile_attempt_totals_ignores_a_row_with_no_files_on_disk():
+    """A row present in the summary but with NO attempt files under the scanned root (a
+    synthetic fixture, or a row from a different run root) must not be compared -- that
+    silence belongs to `attempts_reconciled`, not to this function, and conflating the two
+    would refuse for a reason this function does not name."""
+    with tempfile.TemporaryDirectory() as tmp:
+        Path(tmp, "shard-00", "replicate").mkdir(parents=True)
+        row = {"corpus_id": "q-nonexistent", "attempt_upstream_504_n": 99, "attempt_overrun_413_n": 99}
+        problems = MC.reconcile_attempt_totals([row], tmp)
+    assert problems == [], problems
+
+
+def test_reconcile_attempt_totals_sums_the_original_AND_the_replays_own_count():
+    """A reclassified row's expected total is `original_attempt_evidence` PLUS the row's
+    OWN current count, never one alone. A fix that dropped either term would still pass
+    the red/green pins above (both use a replay whose own count is zero) but would fail
+    here, where the REPLAY itself also hits a 504 -- so the file scan sees TWO 504s
+    (one from the original's files, one from the replay's) and only the sum accounts
+    for both."""
+    with tempfile.TemporaryDirectory() as tmp:
+        original_out, _ = _write_turns(tmp, {1: [_attempt(504), _served()]}, qid="q-a", rep=1)
+        row = {"note": "", "family": "f"}
+        base_r = {"final_http": 200, "final_payload_status": "complete",
+                  "chain": ["t1=complete"], "wrong_kind_flag": False,
+                  "wrong_subject_flag": False, "subject_kind_mismatch_flag": False}
+        RS.UNSEQUENCED.clear()
+        before = RS.detail_for(original_out, "q-a", row, {**base_r, "attempts": 2}, 1.0, 1)
+        assert before["attempt_upstream_504_n"] == 1, before
+
+        # The REPLAY itself ALSO hits a 504 this time -- an unlucky re-run, not a bug.
+        replay_dir = Path(tmp) / RD.REPLAY_DIRNAME / "q-a" / "replicate"
+        replay_dir.mkdir(parents=True)
+        (replay_dir / "q-a-rep1-t1-a1.json").write_text(json.dumps(_attempt(504)))
+        RS.UNSEQUENCED.clear()
+        after = RS.detail_for(replay_dir, "q-a", row, {**base_r, "attempts": 1}, 1.0, 1)
+        assert after["attempt_upstream_504_n"] == 1, after
+
+        fixed_row = RD.build_reclassified_row(before, after)
+        # TWO 504s on disk in total (original + replay); the row must expect both.
+        assert MC.reconcile_attempt_totals([fixed_row], tmp) == [], (
+            "expected total must be original(1) + replay(1) = 2, matching the files")
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

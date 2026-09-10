@@ -147,6 +147,50 @@ def check_coverage(rows):
     return problems
 
 
+def reconcile_attempt_totals(rows, indir):
+    """CHAOS-5380 PR-C. The row-derived frozen counters (attempt_upstream_504_n /
+    attempt_overrun_413_n, summed per row by run_shard.attempt_diagnostics) and an
+    INDEPENDENT re-scan of the same raw attempt files on disk
+    (engine_failures.scan_frozen_counts) must agree, row for row -- or the merge
+    REFUSES rather than publishing a total either one alone cannot back up.
+
+    This is the reconciliation reclassify_deadlines.py's row rewrite made
+    necessary: it replaces a reclassified row's summary with the REPLAY's own
+    attempt-level evidence, but the ORIGINAL run's raw attempt files are never
+    deleted, so a file-level scan still finds them. A reclassified row's expected
+    total is therefore the ORIGINAL's evidence (preserved in
+    `original_attempt_evidence`, never erased) PLUS the replay's own -- summed
+    here, never re-derived from the row's post-reclassification scalars alone,
+    which is precisely the shape that silently zeroed a real deadline before this
+    existed (r5 P1-2).
+
+    Returns a list of problem strings, empty when every row reconciles. A row
+    with NO attempt files at all under `indir` (report absent from the scan) is
+    not compared -- that is `attempts_reconciled`'s job, and conflating "no
+    files found for this row" with "the counts disagree" would make this
+    function refuse for a reason it does not name.
+    """
+    scanned = engine_failures.scan_frozen_counts(indir)
+    problems = []
+    for row in rows:
+        qid = row.get("corpus_id") or NO_CORPUS_ID
+        file_counts = scanned.get(qid)
+        if file_counts is None:
+            continue
+        original = row.get("original_attempt_evidence") or {}
+        expected_504 = (original.get("attempt_upstream_504_n") or 0) + (row.get("attempt_upstream_504_n") or 0)
+        expected_413 = (original.get("attempt_overrun_413_n") or 0) + (row.get("attempt_overrun_413_n") or 0)
+        if expected_504 != file_counts["upstream_504_n"]:
+            problems.append(
+                f"{qid}: row-derived attempt_upstream_504_n={expected_504} "
+                f"disagrees with the post-hoc file scanner's {file_counts['upstream_504_n']}")
+        if expected_413 != file_counts["overrun_413_n"]:
+            problems.append(
+                f"{qid}: row-derived attempt_overrun_413_n={expected_413} "
+                f"disagrees with the post-hoc file scanner's {file_counts['overrun_413_n']}")
+    return problems
+
+
 def classification_by_row(records):
     """The engine's failure classification per row, from the post-hoc attempt records.
 
@@ -339,6 +383,11 @@ def main():
     bad_shards = [s for s in shards if s["n_rows"] != s["n_planned"]]
     if bad_shards:
         problems.append(f"{len(bad_shards)} shard(s) produced fewer rows than planned")
+    # CHAOS-5380 PR-C: the row-derived frozen attempt counters must reconcile
+    # with an independent re-scan of the raw attempt files -- see
+    # reconcile_attempt_totals's own doc comment for why this is the reclassify
+    # rewrite's reconciliation, not a generic sanity check.
+    problems += reconcile_attempt_totals(rows, args.indir)
     if problems:
         print("MERGE ABORT — the run is not admissible evidence:", file=sys.stderr)
         for p in problems:
