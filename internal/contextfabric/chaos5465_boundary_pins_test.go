@@ -584,41 +584,66 @@ func TestBoundary_EveryClosedFieldOnTheLineIsMembershipChecked(t *testing.T) {
 	})
 }
 
-// r2 F1 — A REFUSED WINDOW-ONLY CARRIER IS SERVED BY NOTHING.
+// r2 F1 — A REFUSED WINDOW-ONLY CARRIER IS SERVED BY NOTHING, AT EVERY
+// DISQUALIFIER EXIT.
 //
-// The containment has lost this three times now, at a different exit each time.
-// The discriminating fixture is the one the review had to build: an interpreter
-// that leaves the family UNCLASSIFIED. Every earlier pin used an interpreter
-// that classifies one, which independently disables the old family-only carry
-// -- so the guard was wide open and no arm walked through it.
+// The containment has lost this three times, at a different exit each time, so
+// this pin walks the exits rather than naming one. The discriminating fixture
+// is the one the review had to build: an interpreter that leaves the family
+// UNCLASSIFIED. Every earlier pin used an interpreter that classifies one,
+// which independently disables the old family-only carry -- so the guard was
+// wide open and no arm walked through it.
+//
+// A disqualifier says this turn may not CONTINUE. It does not say the request
+// arrived in some other shape, and the containment keys on the shape.
 func TestBoundary_ARefusedWindowOnlyCarrierIsServedByNothing(t *testing.T) {
-	req := continuationRequest(validInvestigationRequest().Question)
-	prior := r4CheckedPrior(t, continuationPriorID, req.Question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
-	h := newContinuationHarness(t,
-		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
-		unclassifiedAxisMovingInterpreter{})
+	for _, tc := range []struct {
+		name   string
+		mutate func(*InvestigationRequest)
+		reason ContinuationDecisionReason
+	}{
+		{"interpreted axis veto", nil, ContinuationReasonInterpretedAxisVeto},
+		{
+			"explicit structure hint",
+			func(r *InvestigationRequest) {
+				r.ExpectedKinds = []SubjectKind{contractsv1.ContextFabricSubjectProject}
+			},
+			ContinuationReasonExplicitStructureHint,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := continuationRequest(validInvestigationRequest().Question)
+			if tc.mutate != nil {
+				tc.mutate(&req)
+			}
+			prior := r4CheckedPrior(t, continuationPriorID, req.Question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+			h := newContinuationHarness(t,
+				&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+				unclassifiedAxisMovingInterpreter{})
 
-	result := h.investigate(t, req)
-	d := h.soleDecision(t)
-	t.Logf("disposition=%q reason=%q window_only=%v blocks_legacy=%v | SERVED family=%q family_source=%q group=%q",
-		d.Disposition, d.Reason, d.WindowOnlyShape, d.BlocksLegacyCarry(),
-		result.AnswerPlan.Family, result.AnswerPlan.FamilySource, result.AnswerPlan.GroupKind)
-	for _, o := range h.telemetry.planCarryOutcomes {
-		t.Logf("plan carry: outcome=%q source=%q seed=%q", o.outcome, o.sourceResultID, o.seedSource)
-	}
+			result := h.investigate(t, req)
+			d := h.soleDecision(t)
+			t.Logf("disposition=%q reason=%q window_only=%v blocks_legacy=%v | SERVED family=%q family_source=%q group=%q",
+				d.Disposition, d.Reason, d.WindowOnlyShape, d.BlocksLegacyCarry(),
+				result.AnswerPlan.Family, result.AnswerPlan.FamilySource, result.AnswerPlan.GroupKind)
+			for _, o := range h.telemetry.planCarryOutcomes {
+				t.Logf("plan carry: outcome=%q source=%q seed=%q", o.outcome, o.sourceResultID, o.seedSource)
+			}
 
-	if d.Reason != ContinuationReasonInterpretedAxisVeto {
-		t.Fatalf("fixture defect: wanted the axis veto, got %q/%q", d.Disposition, d.Reason)
-	}
-	if !d.WindowOnlyShape {
-		t.Errorf("window_only_shape=false at the axis veto -- the request IS the window-only shape; a disqualifier does not change the shape it arrived in")
-	}
-	if !d.BlocksLegacyCarry() {
-		t.Errorf("blocks_legacy=false on a refused window-only carrier")
-	}
-	if result.AnswerPlan.FamilySource == QuestionFamilySourceCarried {
-		t.Errorf("the continuation was REFUSED and the legacy carry served the same carrier anyway (family=%q group=%q)",
-			result.AnswerPlan.Family, result.AnswerPlan.GroupKind)
+			if d.Reason != tc.reason {
+				t.Fatalf("fixture defect: wanted %q, got %q/%q", tc.reason, d.Disposition, d.Reason)
+			}
+			if !d.WindowOnlyShape {
+				t.Errorf("window_only_shape=false at the %q exit -- the request IS the window-only shape; a disqualifier does not change the shape it arrived in", tc.reason)
+			}
+			if !d.BlocksLegacyCarry() {
+				t.Errorf("blocks_legacy=false on a refused window-only carrier")
+			}
+			if result.AnswerPlan.FamilySource == QuestionFamilySourceCarried {
+				t.Errorf("the continuation was REFUSED and the legacy carry served the same carrier anyway (family=%q group=%q)",
+					result.AnswerPlan.Family, result.AnswerPlan.GroupKind)
+			}
+		})
 	}
 }
 
