@@ -147,6 +147,143 @@ def check_coverage(rows):
     return problems
 
 
+def _effective_attempt_count(row, key):
+    """The frozen counter `key` (attempt_upstream_504_n | attempt_overrun_413_n),
+    summed across the ORIGINAL run's evidence (`original_attempt_evidence`, only
+    present on a reclassified row) and the REPLAY row's own -- the ONE formula
+    both `reconcile_attempt_totals` and the published `rig_diagnostics` totals
+    use, so a publish path and the check that reconciles it against the file
+    scan cannot disagree by construction.
+
+    codex r2 P1: the publish path (`rig_diagnostics.attempt_upstream_504_n` /
+    `attempt_overrun_413_n`) summed `row.get(key)` alone and silently dropped a
+    reclassified row's preserved original evidence, even on a row this very
+    reconciliation had just accepted as agreeing with the file scan -- the
+    reconciliation checked the right total, and something else got published.
+
+    codex r2 P1 (second finding): `(original.get(key) or 0) + (row.get(key) or
+    0)` crashes with a raw TypeError the moment either side's raw value is
+    present but not an int (`or 0` only catches falsy/absent, not "wrong
+    type"). Each side is validated with `attempt_classes.is_valid_count` before
+    any arithmetic; an absent value counts as 0, an invalid one makes the whole
+    result None -- a named refusal, never a crash and never a silent zero.
+    """
+    original = row.get("original_attempt_evidence") or {}
+    total = 0
+    for source in (original, row):
+        v = source.get(key)
+        if v is None:
+            continue
+        if not attempt_classes.is_valid_count(v):
+            return None
+        total += v
+    return total
+
+
+def _effective_attempt_counts_by_row(rows, key):
+    """`_effective_attempt_count(row, key)` for every row, keyed by corpus_id.
+    Returns (values, malformed_ids): a row whose raw counters could not be
+    validated is named in `malformed_ids` and left out of `values` -- excluded
+    from the sum, never coerced to zero, and never silently missing without a
+    trace (the same shape `attempt_class_totals` uses for unmeasured rows)."""
+    values, malformed = {}, []
+    for row in rows:
+        qid = row.get("corpus_id") or NO_CORPUS_ID
+        v = _effective_attempt_count(row, key)
+        if v is None:
+            malformed.append(qid)
+        else:
+            values[qid] = v
+    return values, sorted(malformed)
+
+
+def _effective_attempt_class_n(row):
+    """The row's `attempt_class_n` closed-vocabulary table, merged with a
+    reclassified row's preserved `original_attempt_evidence.attempt_class_n`
+    (see build_reclassified_row) -- the ONLY place either is read anywhere in
+    this file. `attempt_class_totals` is a thin caller over this batched via
+    `_effective_attempt_class_n_ids`, so its per-row refusal reason and its
+    per-run WITHHOLD can never diverge from what is actually summed, and the
+    per-row/per-run publication cannot drift from a class table nobody
+    actually validated the same way twice (codex r2 P1, this round: the
+    publish path summed the replay's table alone and dropped a reclassified
+    row's original evidence).
+
+    Returns None when the row is not measurable to this vocabulary's
+    standard: a missing or structurally invalid table on the row itself, the
+    row's own walk never reconciled, or -- when the row is reclassified --
+    the original's table or its own reconciliation flag fails the same
+    tests. Otherwise returns the merged {class: count} dict (a copy, on an
+    ordinary row the original's evidence is absent so the row's own table is
+    returned unmodified).
+    """
+    expected = set(attempt_classes.CLASSES)
+
+    def valid_table(counts):
+        return isinstance(counts, dict) and set(counts) == expected and \
+            all(attempt_classes.is_valid_count(v) for v in counts.values())
+
+    counts = row.get("attempt_class_n")
+    if not valid_table(counts):
+        return None
+    if row.get("attempts_reconciled") is not True:
+        return None
+    original = row.get("original_attempt_evidence")
+    if original:
+        if original.get("attempts_reconciled") is not True:
+            return None
+        ocounts = original.get("attempt_class_n")
+        if not valid_table(ocounts):
+            return None
+        return {name: counts[name] + ocounts[name] for name in attempt_classes.CLASSES}
+    return dict(counts)
+
+
+def _effective_attempt_class_n_ids(rows):
+    """The corpus_id of every row `_effective_attempt_class_n` refuses to measure,
+    in ROW order (never collapsed by id -- two rows sharing one id, however that
+    arose, must each be counted and named; `check_coverage` refuses a run with a
+    duplicate id before this is ever reached, but this function makes no
+    assumption of that on its own). The caller sorts where it publishes."""
+    return [row.get("corpus_id") or NO_CORPUS_ID
+            for row in rows if _effective_attempt_class_n(row) is None]
+
+
+def validate_attempt_counters(rows):
+    """CHAOS-5380 PR-C, r3 ruling: every frozen attempt counter
+    (`attempt_upstream_504_n`, `attempt_overrun_413_n`) is TYPE-VALIDATED AT
+    INGESTION -- on every row, and, on a reclassified row, on its preserved
+    `original_attempt_evidence` too -- before the merge does anything else
+    with it. This runs BEFORE `reconcile_attempt_totals` and unconditionally
+    (not only on a row that happens to have a file-scan match under `indir`),
+    so a malformed counter is a NAMED MERGE ABORT at the front door, never a
+    raw `TypeError` discovered downstream in whichever aggregate happens to
+    touch it first (codex r2 P1: `(x or 0) + (y or 0)` on a string).
+
+    A value that is ABSENT (None, or the field missing entirely) is
+    legitimate -- nothing was counted there, and `_effective_attempt_count` /
+    `_effective_attempt_class_n` both treat absence as 0, never as a refusal.
+    A value that is PRESENT but not a valid non-negative int (a string, a
+    float, a bool, a negative) is refused, named by corpus_id, source
+    (`row` or `original_attempt_evidence`), and field.
+    """
+    problems = []
+    for row in rows:
+        qid = row.get("corpus_id") or NO_CORPUS_ID
+        sources = [("row", row)]
+        original = row.get("original_attempt_evidence")
+        if original:
+            sources.append(("original_attempt_evidence", original))
+        for label, source in sources:
+            for key in ("attempt_upstream_504_n", "attempt_overrun_413_n"):
+                v = source.get(key)
+                if v is not None and not attempt_classes.is_valid_count(v):
+                    problems.append(
+                        f"{qid}: {label}.{key}={v!r} is not a valid non-negative integer "
+                        f"counter -- refusing at ingestion rather than merging a malformed value")
+    return problems
+
+
 def reconcile_attempt_totals(rows, indir):
     """CHAOS-5380 PR-C. The row-derived frozen counters (attempt_upstream_504_n /
     attempt_overrun_413_n, summed per row by run_shard.attempt_diagnostics) and an
@@ -160,15 +297,17 @@ def reconcile_attempt_totals(rows, indir):
     deleted, so a file-level scan still finds them. A reclassified row's expected
     total is therefore the ORIGINAL's evidence (preserved in
     `original_attempt_evidence`, never erased) PLUS the replay's own -- summed
-    here, never re-derived from the row's post-reclassification scalars alone,
-    which is precisely the shape that silently zeroed a real deadline before this
-    existed (r5 P1-2).
+    here via `_effective_attempt_count`, never re-derived from the row's
+    post-reclassification scalars alone, which is precisely the shape that
+    silently zeroed a real deadline before this existed (r5 P1-2).
 
     Returns a list of problem strings, empty when every row reconciles. A row
     with NO attempt files at all under `indir` (report absent from the scan) is
     not compared -- that is `attempts_reconciled`'s job, and conflating "no
     files found for this row" with "the counts disagree" would make this
-    function refuse for a reason it does not name.
+    function refuse for a reason it does not name. A row whose raw counters are
+    not valid non-negative integers is named and refused rather than raising
+    (codex r2 P1).
     """
     scanned = engine_failures.scan_frozen_counts(indir)
     problems = []
@@ -193,13 +332,21 @@ def reconcile_attempt_totals(rows, indir):
                 f"{qid}: the ORIGINAL run's own walk never reconciled "
                 f"(attempts_reconciled={original.get('attempts_reconciled')!r}) -- "
                 f"its attempt-level evidence cannot be trusted for this row's total")
-        expected_504 = (original.get("attempt_upstream_504_n") or 0) + (row.get("attempt_upstream_504_n") or 0)
-        expected_413 = (original.get("attempt_overrun_413_n") or 0) + (row.get("attempt_overrun_413_n") or 0)
-        if expected_504 != file_counts["upstream_504_n"]:
+        expected_504 = _effective_attempt_count(row, "attempt_upstream_504_n")
+        if expected_504 is None:
+            problems.append(
+                f"{qid}: attempt_upstream_504_n counter(s) (original and/or replay) "
+                f"are not valid non-negative integers -- refusing rather than summing a malformed value")
+        elif expected_504 != file_counts["upstream_504_n"]:
             problems.append(
                 f"{qid}: row-derived attempt_upstream_504_n={expected_504} "
                 f"disagrees with the post-hoc file scanner's {file_counts['upstream_504_n']}")
-        if expected_413 != file_counts["overrun_413_n"]:
+        expected_413 = _effective_attempt_count(row, "attempt_overrun_413_n")
+        if expected_413 is None:
+            problems.append(
+                f"{qid}: attempt_overrun_413_n counter(s) (original and/or replay) "
+                f"are not valid non-negative integers -- refusing rather than summing a malformed value")
+        elif expected_413 != file_counts["overrun_413_n"]:
             problems.append(
                 f"{qid}: row-derived attempt_overrun_413_n={expected_413} "
                 f"disagrees with the post-hoc file scanner's {file_counts['overrun_413_n']}")
@@ -245,42 +392,18 @@ def attempt_class_totals(rows):
 
     `rows_with` is the honest second denominator: one row can carry several attempts of
     the same class, so a total alone cannot say how many rows were affected.
+
+    All measurement and merging (key set, value validity, reconciliation, and a
+    reclassified row's original-vs-replay merge) happens in
+    `_effective_attempt_class_n` -- see it for the full history of what this
+    guards against (codex r1 P1, r2 P1 x2). This function is a thin publisher
+    over that single source, never a second implementation of it.
     """
-    # The key set must be EXACTLY the closed vocabulary, not merely "a dict". codex r1 P1,
-    # reproduced live: a syntactically valid PARTIAL dict was accepted and every class it
-    # omitted was published as a zero --
-    #   attempt_class_totals([{"corpus_id":"partial","attempt_class_n":{"upstream_504":1}}])
-    #   -> unavailable=0, ok_200=0
-    # which is the false zero this function exists to refuse, arriving through the one
-    # shape the check did not cover. An unrecognised or missing key is a row that was not
-    # measured the way this vocabulary means, and it is REPORTED, never partially summed.
-    expected = set(attempt_classes.CLASSES)
-
-    def unmeasured(row):
-        counts = row.get("attempt_class_n")
-        if not isinstance(counts, dict) or set(counts) != expected:
-            return True
-        # codex r1 P1: the KEY SET was checked and the VALUES were not, and `counts[name]
-        # or 0` turned a None into a published MEASURED ZERO -- the false zero this
-        # function exists to refuse, arriving through the one axis nobody had enumerated.
-        # Measured before the fix: None published zeros, a negative published -1, a float
-        # published 1.5, True published 1, and a string crashed the merge. A table whose
-        # values are not counts is not a table this vocabulary can sum, and it is REFUSED
-        # exactly like a wrong key set.
-        if not all(attempt_classes.is_valid_count(v) for v in counts.values()):
-            return True
-        # codex r2 P1: a structurally complete class table is NOT proof the row was
-        # fully walked. run_shard reconciles its walk against the harness's own attempt
-        # count; a row that did not reconcile is missing evidence and is refused here
-        # exactly like a missing table. `attempts_reconciled` absent means the row came
-        # from an instrument that predates the check -- also not something to sum.
-        return row.get("attempts_reconciled") is not True
-
+    unavailable = _effective_attempt_class_n_ids(rows)
     # A row with no corpus id is COUNTED and NAMED. An earlier version filtered falsy
     # ids out of the list, so an unnamed row was in the count and in nothing else --
     # a short list beside a longer count reads as a reporting bug rather than as the
     # unnamed row it actually is. There is no shape here that is counted and unnamed.
-    unavailable = [r.get("corpus_id") or NO_CORPUS_ID for r in rows if unmeasured(r)]
     result = {"attempt_classes_unavailable": len(unavailable),
               "attempt_classes_unavailable_ids": sorted(unavailable),
               # WHY each refused row was refused, so a reader never has to guess
@@ -301,11 +424,13 @@ def attempt_class_totals(rows):
         return result
     totals = attempt_classes.zero_counts()
     rows_with = attempt_classes.zero_counts()
+    # Over ROWS, not over `values` (keyed by corpus_id) -- two rows sharing an id would
+    # silently collapse to one contribution through a dict. `unavailable` was already
+    # empty above, so every row's own re-merge here is guaranteed non-None.
     for row in rows:
-        counts = row["attempt_class_n"]
+        merged = _effective_attempt_class_n(row)
         for name in attempt_classes.CLASSES:
-            # Every key is present by the guard above, so this is a read, not a default.
-            n = counts[name] or 0
+            n = merged[name]
             totals[name] += n
             if n:
                 rows_with[name] += 1
@@ -398,6 +523,10 @@ def main():
     bad_shards = [s for s in shards if s["n_rows"] != s["n_planned"]]
     if bad_shards:
         problems.append(f"{len(bad_shards)} shard(s) produced fewer rows than planned")
+    # CHAOS-5380 PR-C, r3: every frozen counter is type-validated AT INGESTION,
+    # unconditionally -- before reconciliation, which only runs per-row where a
+    # file-scan match exists (see reconcile_attempt_totals's own doc comment).
+    problems += validate_attempt_counters(rows)
     # CHAOS-5380 PR-C: the row-derived frozen attempt counters must reconcile
     # with an independent re-scan of the raw attempt files -- see
     # reconcile_attempt_totals's own doc comment for why this is the reclassify
@@ -451,6 +580,18 @@ def main():
         states_by_id=_states, terminals_by_id=_terminals,
         disclosed_basis_by_id=_disclosed_basis)
 
+    # codex r2 P1: `rig_diagnostics.attempt_upstream_504_n` / `attempt_overrun_413_n`
+    # used to sum `r.get(key) or 0` directly, which is the REPLAY's own field only --
+    # a reclassified row's ORIGINAL evidence (preserved in `original_attempt_evidence`,
+    # see build_reclassified_row) never reached the published total, even on a row
+    # `reconcile_attempt_totals` had just accepted as agreeing with the file scan.
+    # `_effective_attempt_counts_by_row` is the ONE formula both this publish step and
+    # that reconciliation use, so they cannot disagree by construction. A row whose raw
+    # counters are not valid non-negative integers is named below rather than crashed
+    # on or silently coerced to zero.
+    _eff_504, _bad_504 = _effective_attempt_counts_by_row(rows, "attempt_upstream_504_n")
+    _eff_413, _bad_413 = _effective_attempt_counts_by_row(rows, "attempt_overrun_413_n")
+
     counts = Counter(classify(r) for r in rows)
     verdict = {
         "ticket": os.environ.get("CORPUS_TICKET", ""),
@@ -460,12 +601,16 @@ def main():
         # Per-ATTEMPT rig diagnostics, summed over rows. NOT compared against the
         # 09-05 baseline (it recorded no counterpart) — they are disclosure, not a
         # bucket. rows_with_* is the honest denominator: one row can carry several.
+        # _eff_504 / _eff_413 (built above) already fold in a reclassified row's
+        # preserved original evidence -- see the comment there.
         "rig_diagnostics": {
-            "attempt_upstream_504_n": sum(r.get("attempt_upstream_504_n") or 0 for r in rows),
-            "rows_with_upstream_504": sum(1 for r in rows if (r.get("attempt_upstream_504_n") or 0) > 0),
-            "attempt_overrun_413_n": sum(r.get("attempt_overrun_413_n") or 0 for r in rows),
-            "rows_with_overrun_413": sum(1 for r in rows if (r.get("attempt_overrun_413_n") or 0) > 0),
-            "overrun_413_ids": sorted(r["corpus_id"] for r in rows if (r.get("attempt_overrun_413_n") or 0) > 0),
+            "attempt_upstream_504_n": sum(_eff_504.values()),
+            "attempt_upstream_504_malformed_ids": _bad_504,
+            "rows_with_upstream_504": sum(1 for v in _eff_504.values() if v > 0),
+            "attempt_overrun_413_n": sum(_eff_413.values()),
+            "attempt_overrun_413_malformed_ids": _bad_413,
+            "rows_with_overrun_413": sum(1 for v in _eff_413.values() if v > 0),
+            "overrun_413_ids": sorted(qid for qid, v in _eff_413.items() if v > 0),
             # The 422s and the non-ceiling 400 ride in the
             # diagnostics block so their tickets get COUNTS after arm 2. Scanned
             # post-hoc from the attempt JSONs both arms already write, NOT from
@@ -490,10 +635,15 @@ def main():
         # The same buckets with ceiling-rejected rows removed. NOT the headline
         # number — the headline stays the full 36 so it compares like-for-like with
         # the 09-05 baseline — this is the "what would prod at 45 have seen" read.
+        # Reads `_eff_413` (built above from `_effective_attempt_count`), never the
+        # raw row field -- a reclassified row whose overrun evidence lives in
+        # `original_attempt_evidence` must be excluded here exactly as it is from
+        # `rig_diagnostics.overrun_413_ids`, and a row with a MALFORMED counter is
+        # excluded too (an unverified row is not "confirmed zero overruns").
         "totals_excluding_ceiling_overruns": (
             lambda kept: {b: Counter(classify(r) for r in kept).get(b, 0) for b in BUCKETS}
                          | {"total": len(kept)}
-        )([r for r in rows if (r.get("attempt_overrun_413_n") or 0) == 0]),
+        )([r for r in rows if _eff_413.get(r.get("corpus_id") or NO_CORPUS_ID) == 0]),
         # ---- INSTRUMENT V2, additive ----------------------------------------
         "subject_identity": {
             "rule_R1": "a row whose note declares the named entity NONEXISTENT has nothing correct to commit to; any committed subject is a substitution",
@@ -580,7 +730,15 @@ def main():
               # with and without rows the RIG's 30-item ceiling rejected (prod = 45).
               # Derived here, not in run_shard — run_shard stays frozen between the
               # sequential control and the parallel run so only the SHAPE differs.
-              "overrun_at_rig_ceiling": (r.get("attempt_overrun_413_n") or 0) > 0}
+              # Reads `_eff_413`/`_bad_413`, never the raw row field, for the same
+              # reason as `totals_excluding_ceiling_overruns` above: a reclassified
+              # row's overrun evidence can live in `original_attempt_evidence`. A
+              # MALFORMED counter flags True (unverified, never silently "clean") --
+              # the opposite default from the exclusion filter above, because a
+              # boolean has no third "unknown" state and "flagged" is the safe side.
+              "overrun_at_rig_ceiling": (
+                  True if (r.get("corpus_id") or NO_CORPUS_ID) in _bad_413
+                  else _eff_413.get(r.get("corpus_id") or NO_CORPUS_ID, 0) > 0)}
              for r in rows],
             key=lambda r: (FAMILY_ORDER.index(r.get("family") or "_none") if (r.get("family") or "_none") in FAMILY_ORDER else 99, r["corpus_id"]),
         ),
@@ -622,10 +780,21 @@ def main():
     print(f"  413 overruns: {d['attempt_overrun_413_n']} attempts over {d['rows_with_overrun_413']} rows"
           f"  (baseline recorded 0)  ids={d['overrun_413_ids']}")
     if d["rows_with_overrun_413"]:
-        od = d["overrun_413_detail"][0]
-        print(f"  DISCLOSURE: {d['rows_with_overrun_413']} rows 413'd at the rig's "
-              f"{od.get('max_items')}-item ceiling (prod 45): measuredItems={od.get('measured_items')} "
-              f"axis={od.get('axis')}")
+        # `rows_with_overrun_413` now counts a reclassified row whose overrun lives
+        # in `original_attempt_evidence` (r3 fix) -- `overrun_413_detail` is keyed
+        # off the REPLAY's own `overrun_detail` field alone (no original-evidence
+        # counterpart exists to merge; see attempt_class_totals's docstring on
+        # the fields this file DOES and does not merge), so it can be empty even
+        # when rows_with_overrun_413 is not. Print what evidence there is; never
+        # index blind into a list the count no longer guarantees is non-empty.
+        if d["overrun_413_detail"]:
+            od = d["overrun_413_detail"][0]
+            print(f"  DISCLOSURE: {d['rows_with_overrun_413']} rows 413'd at the rig's "
+                  f"{od.get('max_items')}-item ceiling (prod 45): measuredItems={od.get('measured_items')} "
+                  f"axis={od.get('axis')}")
+        else:
+            print(f"  DISCLOSURE: {d['rows_with_overrun_413']} rows 413'd (evidence carried via "
+                  f"original_attempt_evidence on a reclassified row; no replay-side overrun_413_detail)")
         e = verdict["totals_excluding_ceiling_overruns"]
         print("  excluding those rows: " + "  ".join(f"{b}={e[b]}" for b in BUCKETS) + f"  total={e['total']}")
     if d.get("attempt_classes_unavailable"):
