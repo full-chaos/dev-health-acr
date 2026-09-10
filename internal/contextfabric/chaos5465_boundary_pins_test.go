@@ -338,8 +338,34 @@ func TestBoundary_UnchangedMeansTheFreshReadingAlreadyMatches(t *testing.T) {
 		EmittedShape: ShapeOpen,
 	})
 	if diff.Outcome == CompositionUnchanged {
-		t.Errorf("a DIFFERENT carried family reported %q -- `unchanged` must mean nothing was carried that was not already there",
+		t.Errorf("a DIFFERENT carried family on a non-grouped frame reported %q -- `unchanged` must mean nothing was carried that was not already there",
 			CompositionUnchanged)
+	}
+
+	// AND THE SAME RULE ON THE GROUPED BRANCH. The two branches decide
+	// `unchanged` independently, so a pin that exercises one of them leaves the
+	// other free to call a real family carry "nothing changed" -- which a
+	// mutation arm demonstrated it would.
+	grouped, groupedGate := boundaryGroupedFrame(t, contractsv1.ContextFabricSubjectTeam, contractsv1.ContextFabricSubjectRepository)
+	sameAxis := compositionInput{
+		Fresh: &grouped, FreshGate: groupedGate,
+		CarriedGroupKind: contractsv1.ContextFabricSubjectTeam,
+		EmittedShape:     ShapeOpen,
+	}
+	sameAxis.FreshFamily, sameAxis.CarriedFamily = QuestionFamilyGroupedCohortStatus, QuestionFamilyGroupedCohortStatus
+	if got := composeAcceptedContext(sameAxis); got.Outcome != CompositionUnchanged {
+		t.Errorf("grouped frame, same family AND axis -> %q, want %q", got.Outcome, CompositionUnchanged)
+	}
+	sameAxis.FreshFamily, sameAxis.CarriedFamily = QuestionFamilyGroupedCohortStatus, QuestionFamilyDiscoveredCohortRanking
+	carriedFamily := composeAcceptedContext(sameAxis)
+	t.Logf("grouped frame, matching axis, DIFFERENT family -> outcome=%q group=%q", carriedFamily.Outcome, carriedFamily.EffectiveGroupKind())
+	if carriedFamily.Outcome == CompositionUnchanged {
+		t.Errorf("grouped frame with a DIFFERENT carried family reported %q -- a family WAS carried, so the composition is not `unchanged`",
+			CompositionUnchanged)
+	}
+	if !carriedFamily.Usable() || carriedFamily.EffectiveGroupKind() != contractsv1.ContextFabricSubjectTeam {
+		t.Errorf("outcome=%q group=%q -- carrying a family on a matching axis must stay usable and keep the axis",
+			carriedFamily.Outcome, carriedFamily.EffectiveGroupKind())
 	}
 }
 
