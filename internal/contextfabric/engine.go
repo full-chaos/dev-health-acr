@@ -2271,10 +2271,43 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		plan.MemberKind = graphContext.Cohort.Kind
 		if plan.GroupKind == plan.MemberKind {
 			// A group axis that collapsed onto the member kind partitions a
-			// set by itself, which no grouping can mean. Drop the axis
-			// rather than emit a plan the contract refuses -- the answer is
-			// then the flat one it would have been before this slice.
+			// set by itself, which no grouping can mean -- invariant I6, at
+			// a seam the frame gate cannot reach.
+			//
+			// THE FRAME GATE COULD NOT HAVE CAUGHT THIS, and that is why the
+			// check lives here at all. The plan's group axis comes from the
+			// model's family hint; its member kind is stamped from the
+			// cohort THE GRAPH ACTUALLY RETURNED, and that is not known when
+			// the frame is validated. A frame that is entirely legal --
+			// projects grouped by team -- still arrives here with both kinds
+			// equal when discovery comes back with teams.
+			//
+			// This used to set the axis to the empty string and answer flat.
+			// That is laundering: the question asked for a partition, the
+			// server could not provide one, and the served document said
+			// nothing about either fact. `GroupKind = ""` in the persisted
+			// plan is indistinguishable from a plan that never had an axis,
+			// so no reader -- operator or caller -- could tell this answer
+			// from an answer to a different question.
+			//
+			// Refused through the SAME gate object the frame path refuses
+			// with, not through a second mechanism: one invariant, one
+			// refusal vocabulary, one basis. The resolution is emptied for
+			// the same reason the frame-gate terminal empties it -- a
+			// refused turn commits nothing and reads nothing.
+			collapsed := FrameValidationResult{
+				Outcome: FrameValidationOutcomeRefusedInvalid,
+				Failure: FrameValidationFailure{
+					Invariant: FrameInvariantI6,
+					Phase:     FrameValidationPhaseA1,
+					Detail:    FrameFailureGroupEqualsMember,
+				},
+			}
+			familyOutcome.Gate = DecideFrameGate(collapsed, true)
 			plan.GroupKind = ""
+			collapsedResolution := SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}
+			terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, collapsedResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarry.Outcome == WindowCarryHit, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent))
+			return terminal, terminalErr
 		}
 	}
 	factRequest := CanonicalFactRequest{

@@ -185,6 +185,20 @@ func groupReadEngineFixtureDenying(t *testing.T, telemetry EngineTelemetry, fact
 	}, denied)
 }
 
+// groupReadEngineFixtureSelfGroup builds a turn whose cohort comes back as
+// TEAMS while the plan's group axis is also `team`, so the axis collapses onto
+// the members at the plan seam -- with a perfectly legal frame, which is the
+// point. The frame gate cannot catch this: the plan's member kind is stamped
+// from the cohort the graph actually returned, and that is not known when the
+// frame is validated.
+func groupReadEngineFixtureSelfGroup(t *testing.T, telemetry EngineTelemetry, facts CanonicalFactReader) (*Engine, InvestigationRequest) {
+	t.Helper()
+	return groupReadEngineFixtureWithKinds(t, telemetry, facts, []CohortMember{
+		{Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: TeamCanonicalID("team_security"), Label: "Security"}, Rank: 1, InclusionReasons: []string{"matched"}},
+		{Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: TeamCanonicalID("team_platform"), Label: "Platform"}, Rank: 2, InclusionReasons: []string{"matched"}},
+	}, nil, SubjectTeam)
+}
+
 func groupReadEngineFixtureOverBound(t *testing.T, telemetry EngineTelemetry, facts CanonicalFactReader) (*Engine, InvestigationRequest) {
 	t.Helper()
 	return groupReadEngineFixtureWith(t, telemetry, facts, groupReadCohortMembers(251), nil)
@@ -192,8 +206,13 @@ func groupReadEngineFixtureOverBound(t *testing.T, telemetry EngineTelemetry, fa
 
 func groupReadEngineFixtureWith(t *testing.T, telemetry EngineTelemetry, facts CanonicalFactReader, members []CohortMember, denied map[string]struct{}) (*Engine, InvestigationRequest) {
 	t.Helper()
+	return groupReadEngineFixtureWithKinds(t, telemetry, facts, members, denied, SubjectProject)
+}
+
+func groupReadEngineFixtureWithKinds(t *testing.T, telemetry EngineTelemetry, facts CanonicalFactReader, members []CohortMember, denied map[string]struct{}, cohortKind SubjectKind) (*Engine, InvestigationRequest) {
+	t.Helper()
 	cohort := &Cohort{
-		Kind: SubjectProject, Rationale: "kind census match", Complete: true,
+		Kind: cohortKind, Rationale: "kind census match", Complete: true,
 		Members: members,
 	}
 	interpretation := InterpretedQuestion{
@@ -213,7 +232,15 @@ func groupReadEngineFixtureWith(t *testing.T, telemetry EngineTelemetry, facts C
 		denied: denied,
 	}
 	engine, err := NewEngine(EngineDependencies{
-		Interpreter:  groupReadFramedInterpreter{interpretation: interpretation, groupKind: SubjectTeam, memberKind: SubjectProject},
+		Interpreter: groupReadFramedInterpreter{interpretation: interpretation, groupKind: SubjectTeam, memberKind: SubjectProject},
+		// The FRAME stays legal -- projects grouped by team -- on purpose,
+		// even when the cohort comes back as teams. That is the whole point
+		// of the plan-seam pin: the collapse the plan sees is invisible to
+		// frame validation, because the plan's member kind is stamped from
+		// the cohort the graph actually returned and the frame was validated
+		// long before that was known. A fixture that made the frame illegal
+		// too would be re-testing the frame gate and would never reach the
+		// seam under test.
 		Graph:        graph,
 		Facts:        facts,
 		Requirements: groupReadRequirementDeriver{},
