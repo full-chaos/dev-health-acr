@@ -3382,6 +3382,29 @@ func TestChaos5547_PolicyLookupInputDomain(t *testing.T) {
 			return NewFactReadScopeResolverWithPolicies(nil, pairDisabled)
 		}},
 		{"production_table", func() *FactReadScopeResolver { return NewFactReadScopeResolver(nil) }},
+		{"table_mutated_after_construction", func() *FactReadScopeResolver {
+			// codex r2, confirmed real, P1: the caller's map used to be
+			// stored by reference. Build with the eligible pair present,
+			// then -- AFTER construction -- delete it and add the
+			// ineligible pair instead (same Requirement, the columns'
+			// ineligibleKind == eligibleKind, different Origin). An
+			// aliasing constructor would show both edits; a copying one
+			// must show neither, so this row's want vector is the
+			// ORIGINAL table's answers, not the mutated one's.
+			table := map[FactKind]map[SubjectKind]factScopePolicyRule{
+				eligibleKind: {eligibleOrigin: {
+					Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
+					Basis: FactScopeBasisActivityProxy, Enabled: true,
+				}},
+			}
+			resolver := NewFactReadScopeResolverWithPolicies(nil, table)
+			delete(table[eligibleKind], eligibleOrigin)
+			table[eligibleKind][ineligibleOrigin] = factScopePolicyRule{
+				Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
+				Basis: FactScopeBasisActivityProxy, Enabled: true,
+			}
+			return resolver
+		}},
 	}
 	columns := []struct {
 		name   string
@@ -3397,12 +3420,13 @@ func TestChaos5547_PolicyLookupInputDomain(t *testing.T) {
 	// only "table_with_the_pair_disabled" x "eligible_pair" disagrees with
 	// its row's other columns, because eligibility is presence, not Enabled.
 	want := map[string]map[string]bool{
-		"nil_policies_zero_value_literal": {"eligible_pair": true, "ineligible_pair": false, "unknown_kind": false, "unknown_origin": false},
-		"explicit_nil_arg":                {"eligible_pair": true, "ineligible_pair": false, "unknown_kind": false, "unknown_origin": false},
-		"explicit_empty_table":            {"eligible_pair": false, "ineligible_pair": false, "unknown_kind": false, "unknown_origin": false},
-		"narrow_table_missing_the_pair":   {"eligible_pair": false, "ineligible_pair": false, "unknown_kind": false, "unknown_origin": false},
-		"table_with_the_pair_disabled":    {"eligible_pair": true, "ineligible_pair": false, "unknown_kind": false, "unknown_origin": false},
-		"production_table":                {"eligible_pair": true, "ineligible_pair": false, "unknown_kind": false, "unknown_origin": false},
+		"nil_policies_zero_value_literal":  {"eligible_pair": true, "ineligible_pair": false, "unknown_kind": false, "unknown_origin": false},
+		"explicit_nil_arg":                 {"eligible_pair": true, "ineligible_pair": false, "unknown_kind": false, "unknown_origin": false},
+		"explicit_empty_table":             {"eligible_pair": false, "ineligible_pair": false, "unknown_kind": false, "unknown_origin": false},
+		"narrow_table_missing_the_pair":    {"eligible_pair": false, "ineligible_pair": false, "unknown_kind": false, "unknown_origin": false},
+		"table_with_the_pair_disabled":     {"eligible_pair": true, "ineligible_pair": false, "unknown_kind": false, "unknown_origin": false},
+		"production_table":                 {"eligible_pair": true, "ineligible_pair": false, "unknown_kind": false, "unknown_origin": false},
+		"table_mutated_after_construction": {"eligible_pair": true, "ineligible_pair": false, "unknown_kind": false, "unknown_origin": false},
 	}
 
 	for _, row := range rows {
