@@ -976,8 +976,8 @@ func factScopePoliciesFrom(rows []factScopeEligibilityRow) map[FactKind]map[Subj
 // missing" remains a statement the system can make. An eligible pair ALWAYS
 // discloses -- including one whose policy is FactScopePolicyNone, which is
 // the team case in full.
-func lookupFactScopePolicy(kind FactKind, origin SubjectKind) (factScopePolicyRule, bool) {
-	rule, ok := factScopePolicies[kind][origin]
+func (r *FactReadScopeResolver) lookupFactScopePolicy(kind FactKind, origin SubjectKind) (factScopePolicyRule, bool) {
+	rule, ok := r.policies[kind][origin]
 	return rule, ok
 }
 
@@ -1434,6 +1434,13 @@ const maxWorkItemScopeInFlight = 32
 type FactReadScopeResolver struct {
 	// expander performs the traversal. nil in stage 1.
 	expander FactScopeExpander
+	// policies is this resolver's own copy of the requirement/origin ->
+	// rule table, resolved once at construction. A resolver never reads the
+	// package-level factScopePolicies var after it is built, so a test that
+	// wants a narrow table injects it here (NewFactReadScopeResolverWithPolicies)
+	// instead of mutating shared package state a concurrent t.Parallel
+	// reader could observe mid-test (the CHAOS-5405 race).
+	policies map[FactKind]map[SubjectKind]factScopePolicyRule
 	// workItemSlots is the admission gate for work-item-target expansions
 	// (CHAOS-5405 D-a), buffered to maxWorkItemScopeInFlight. A held slot is
 	// one resident expansion, so the channel's own length IS the count --
@@ -1446,11 +1453,26 @@ type FactReadScopeResolver struct {
 	workItemSlots chan struct{}
 }
 
-// NewFactReadScopeResolver builds the resolver. A nil expander yields the
-// stage-1 resolver: every policy resolves to policy_unavailable, disclosed.
+// NewFactReadScopeResolver builds the resolver against the production policy
+// table. A nil expander yields the stage-1 resolver: every policy resolves
+// to policy_unavailable, disclosed.
 func NewFactReadScopeResolver(expander FactScopeExpander) *FactReadScopeResolver {
+	return NewFactReadScopeResolverWithPolicies(expander, nil)
+}
+
+// NewFactReadScopeResolverWithPolicies builds the resolver against an
+// explicit policy table. A nil table falls back to the production table
+// (factScopePolicies) -- the only supported way for a test to exercise a
+// narrow or altered table is to pass it here, never to reassign the package
+// global, which a parallel reader elsewhere in the package could observe
+// mid-mutation.
+func NewFactReadScopeResolverWithPolicies(expander FactScopeExpander, policies map[FactKind]map[SubjectKind]factScopePolicyRule) *FactReadScopeResolver {
+	if policies == nil {
+		policies = factScopePolicies
+	}
 	return &FactReadScopeResolver{
 		expander: expander,
+		policies: policies,
 		// Buffered to the bound: a receive slot is an admission, and the
 		// channel IS the counter -- there is no separate number that could
 		// disagree with how many are actually running.
@@ -1565,7 +1587,7 @@ func (r *FactReadScopeResolver) resolveRequirement(
 	// see expand's own use of it below).
 	derivationIndex := map[string]int{}
 	for _, originKind := range originKinds {
-		rule, eligible := lookupFactScopePolicy(kind, originKind)
+		rule, eligible := r.lookupFactScopePolicy(kind, originKind)
 		if !eligible {
 			// CHAOS-3783's prune is correct and stays correct for this kind:
 			// there is no known path from it, so "nothing is missing" is a

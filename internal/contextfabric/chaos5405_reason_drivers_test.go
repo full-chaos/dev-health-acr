@@ -118,16 +118,11 @@ func TestChaos5405_EveryDecisionReasonHasAnExecutedDriver(t *testing.T) {
 	for _, d := range drivers {
 		d := d
 		t.Run(string(d.reason), func(t *testing.T) {
-			if d.narrowTable != nil {
-				restore := factScopePolicies
-				t.Cleanup(func() { factScopePolicies = restore })
-				factScopePolicies = d.narrowTable
-			}
 			var expander FactScopeExpander
 			if !d.nilExpander {
 				expander = d.expander
 			}
-			resolver := NewFactReadScopeResolver(expander)
+			resolver := NewFactReadScopeResolverWithPolicies(expander, d.narrowTable)
 			if d.fillSlots {
 				for i := 0; i < maxWorkItemScopeInFlight; i++ {
 					resolver.workItemSlots <- struct{}{}

@@ -312,6 +312,13 @@ type FactRegistryOptions struct {
 	// which is a strict improvement on the silent false prune it replaces
 	// but reads no new facts. See FactScopeExpander.
 	ScopeExpander FactScopeExpander
+	// ScopePolicies overrides the scope resolver's requirement/origin ->
+	// rule table. nil (every production caller) means the resolver uses the
+	// package's production table (factScopePolicies in fact_scope.go). A
+	// test that needs a narrow or altered table passes it here rather than
+	// reassigning the package global, which a t.Parallel reader elsewhere in
+	// the package could observe mid-mutation (the CHAOS-5405 race).
+	ScopePolicies map[FactKind]map[SubjectKind]factScopePolicyRule
 	// Logger (CHAOS-4521) receives one closed-vocabulary decision-basis
 	// record per PLANNED capability -- see FactCapabilityRegistry.recordFactRead.
 	//
@@ -356,7 +363,7 @@ func NewFactCapabilityRegistry(providers []FactProvider, options FactRegistryOpt
 		// and the check that gets forgotten is the one that reintroduces the
 		// silent prune. A resolver with no expander is a complete, correct
 		// resolver -- it answers policy_unavailable.
-		scopeResolver: NewFactReadScopeResolver(options.ScopeExpander),
+		scopeResolver: NewFactReadScopeResolverWithPolicies(options.ScopeExpander, options.ScopePolicies),
 	}
 	for _, provider := range providers {
 		if provider == nil {

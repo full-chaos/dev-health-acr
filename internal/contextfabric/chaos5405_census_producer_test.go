@@ -45,7 +45,6 @@ import (
 // can be correct in memory and wrong on the wire.
 func chaos5405ServedCensus(t *testing.T, counts FactScopeExpansionCounts) ([]map[string]any, []FactScopeExpansionEvent) {
 	t.Helper()
-	enableMetricsProjectPolicy(t, 0)
 
 	observed := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
 	metrics := &factProviderStub{
@@ -56,6 +55,7 @@ func chaos5405ServedCensus(t *testing.T, counts FactScopeExpansionCounts) ([]map
 	}
 	registry, err := NewFactCapabilityRegistry([]FactProvider{metrics}, FactRegistryOptions{
 		ScopeExpander: &recordingScopeExpander{counts: counts},
+		ScopePolicies: metricsProjectPolicyTable(0),
 	})
 	if err != nil {
 		t.Fatalf("NewFactCapabilityRegistry: %v", err)
@@ -412,8 +412,6 @@ func TestChaos5405_TheCensusIsNotChargedAgainstTheItemBudget(t *testing.T) {
 // nothing, which is why this drives a traversal that actually admits a target
 // and asserts the served number is the one that was measured.
 func TestChaos5405_TheServedRowCarriesTheAdmittedCountItMeasured(t *testing.T) {
-	enableMetricsProjectPolicy(t, 0)
-
 	observed := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
 	metrics := &factProviderStub{
 		capability: planCapability(FactMetrics, "metrics", SubjectRepository),
@@ -428,6 +426,7 @@ func TestChaos5405_TheServedRowCarriesTheAdmittedCountItMeasured(t *testing.T) {
 			targets: []SubjectRef{scopeRepo},
 			counts:  FactScopeExpansionCounts{CensusComplete: true, AuthorizedCount: 1},
 		},
+		ScopePolicies: metricsProjectPolicyTable(0),
 	})
 	if err != nil {
 		t.Fatalf("NewFactCapabilityRegistry: %v", err)
