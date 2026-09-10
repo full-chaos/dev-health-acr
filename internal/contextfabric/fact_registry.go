@@ -303,6 +303,19 @@ func (c FactCapability) Validate() error {
 		if !supported[subjectKind] {
 			return fmt.Errorf("fact capability %q declares an observation key for unsupported subject kind %q", c.Kind, subjectKind)
 		}
+		// AN EMPTY KEY IS NOT A KEY, and it must be refused HERE rather than
+		// absorbed downstream. dedupeObservationKeys drops the empty string, so
+		// a cell declaring one behaves exactly as an UNKEYED cell while reading,
+		// to whoever edits this registry, like a declared pairing -- the worst
+		// combination: it looks like coverage and provides none. The
+		// enumerated-surface test in devhealthfacts already fails CI on it, but
+		// a guard that only CI enforces is not a guard on the registry; this
+		// makes the two authorities agree.
+		for _, key := range c.ObservationKey[subjectKind] {
+			if strings.TrimSpace(string(key)) == "" {
+				return fmt.Errorf("fact capability %q declares an empty observation key for subject kind %q", c.Kind, subjectKind)
+			}
+		}
 	}
 	if c.EstimatedItems < 0 {
 		return fmt.Errorf("fact capability %q estimated items must not be negative", c.Kind)
