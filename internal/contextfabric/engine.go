@@ -263,6 +263,23 @@ type EngineDependencies struct {
 	// *FactCapabilityRegistry implements it, and hosted/open.go wires the
 	// registry it already builds.
 	Requirements RequirementDeriver
+	// ObservationKeys (the observation-cover change) hands finalizeResult a
+	// SNAPSHOT of the registry's ObservationKey declarations, captured once
+	// per finalization and threaded to every threshold comparison the read
+	// evaluator and the read-population layer make -- see
+	// observationKeyAssignment's own doc comment for why a snapshot rather
+	// than a live handle.
+	//
+	// AN EXPLICITLY-WIRED FIELD, optional, the same discipline Requirements
+	// beside it follows. Left nil, every comparison falls back to counting
+	// fact KINDS -- an unkeyed lookup on a nil map returns no labels, which
+	// observationCover already treats as "no declared observation", so this
+	// is not a silent behaviour change for a caller that never wires it, only
+	// for one that does and whose declarations say two kinds are one source.
+	// *FactCapabilityRegistry implements it too, and hosted/open.go wires the
+	// SAME registry instance again, exactly as it already does for
+	// Requirements and Facts.
+	ObservationKeys ObservationKeyDeclarer
 }
 
 // EngineTelemetry receives content-safe operational counters from Engine.
@@ -1030,6 +1047,7 @@ type Engine struct {
 	priorHandleGrammarChecker  HandleGrammarChecker
 	offerPhraser               OfferPhraser
 	requirements               RequirementDeriver
+	observationKeys            ObservationKeyDeclarer
 	regimeAOffersDisabled      bool
 	maxItems                   int
 	maxSerializedBytes         int64
@@ -1068,6 +1086,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		priorHandleGrammarChecker:  dependencies.PriorHandleGrammarChecker,
 		offerPhraser:               dependencies.OfferPhraser,
 		requirements:               dependencies.Requirements,
+		observationKeys:            dependencies.ObservationKeys,
 		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
 		reuseRetrievalIdentity:   options.ReuseRetrievalIdentity,
 		reusePromptVersions:      options.ReusePromptVersions,

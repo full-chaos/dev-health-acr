@@ -45,6 +45,17 @@ type readEvidence struct {
 	// Observed is how many of the requirement's declared kinds produced a
 	// coverage observation at all.
 	Observed int
+	// ObservedKinds are WHICH kinds counted Observed above, in the
+	// requirement's own declared order -- ServedKinds' twin, one level up.
+	//
+	// It exists so the DECLARED half of the observation-cover count
+	// (servedObservationCover's "what was in play at all" denominator) can be
+	// covered from the same identity list the numerator's ServedKinds is
+	// drawn from, rather than re-derived from a bare integer that has
+	// already lost which kinds it counted. A kind this file called pruned
+	// never appears here, for the same reason it never increments Observed:
+	// see the prune handling below.
+	ObservedKinds []FactKind
 	// Served is how many produced usable evidence IN FULL: available or
 	// stale, AND not recorded as narrowed by the planner.
 	//
@@ -224,6 +235,7 @@ func evaluateReadRequirement(requirement contractsv1.ContextFabricPlanRequiremen
 			continue
 		}
 		evidence.Observed++
+		evidence.ObservedKinds = append(evidence.ObservedKinds, kind)
 		switch {
 		case state == SourceAvailable || state == SourceStale:
 			if narrowedKinds[kind] {
@@ -434,20 +446,96 @@ func appendReadRequirementEvaluations(
 	return appendOutcomeRows(rows, added...)
 }
 
+// servedObservationCover is the SERVED half of a read requirement's two
+// threshold-comparison counts: the minimum observation cover of the kinds
+// this evaluator called served, at the requirement's own subject kind --
+// WITH ONE EXPLICIT REFINEMENT for a mixed-state alias.
+//
+// THE MIXED-STATE ALIAS RULE, PINNED. Two declared kinds can share an
+// observation key and still reach this evaluator in DIFFERENT states: one
+// served in full, the other narrowed, truncated or failed -- the fact
+// registry mints one coverage observation per kind, so nothing stops a
+// proxy pair from disagreeing about the SAME underlying observation.
+// Covering ServedKinds alone would then let the served kind's key stand in
+// for the whole observation and credit it as fully served, even though the
+// SAME observation also backs a kind this evaluator counted as a loss --
+// observationCover's own "already covered" behaviour
+// (TestADuplicateAdapterCannotCreateCorroboration) is exactly what bites
+// here: covering [served, lost] together is no larger than covering
+// [served] alone when they share a key, so the loss disappears from the
+// count and a `narrowed` row can read Served == Declared, which the outcome
+// validator refuses as "not a reduction".
+//
+// THE RULE: WORST STATE WINS PER OBSERVATION, the same rule
+// evaluateReadRequirement already applies PER KIND ("WORST STATE WINS when
+// one kind is observed more than once"). An observation that backs any lost
+// kind (narrowed, truncated or failed -- i.e. any kind in ObservedKinds that
+// is not also in ServedKinds) is not credited as served, even where it ALSO
+// backs a kind this evaluator called served: that served kind's key is
+// EXCLUDED from the cover, and the cover is recomputed over what remains.
+// An unkeyed lost kind taints nothing -- it declares no key to exclude by,
+// exactly as observationCover's own "an unkeyed kind is its own observation"
+// rule already keeps it from being folded into anything else.
+func servedObservationCover(evidence readEvidence, subject SubjectKind, assignment observationKeyAssignment) int {
+	servedSet := make(map[FactKind]bool, len(evidence.ServedKinds))
+	for _, kind := range evidence.ServedKinds {
+		servedSet[kind] = true
+	}
+	taintedKeys := map[ObservationKey]bool{}
+	for _, kind := range evidence.ObservedKinds {
+		if servedSet[kind] {
+			continue
+		}
+		for _, key := range dedupeObservationKeys(assignment[kind][subject]) {
+			taintedKeys[key] = true
+		}
+	}
+	if len(taintedKeys) == 0 {
+		return observationCover(evidence.ServedKinds, subject, assignment)
+	}
+	clean := make([]FactKind, 0, len(evidence.ServedKinds))
+	for _, kind := range evidence.ServedKinds {
+		tainted := false
+		for _, key := range dedupeObservationKeys(assignment[kind][subject]) {
+			if taintedKeys[key] {
+				tainted = true
+				break
+			}
+		}
+		if !tainted {
+			clean = append(clean, kind)
+		}
+	}
+	return observationCover(clean, subject, assignment)
+}
+
 // readRequirementOutcomeRow turns one requirement's counted evidence into its
 // outcome row. The second return is false where no row is emitted.
 //
-// THE COUNTS. Declared is max(observed, threshold) and Served is the number of
-// declared kinds that came back available or stale. Two things have to be true
-// at once and neither counting rule alone gives both: counting the whole
-// declared catalogue would report a loss on every turn that planned fewer kinds
-// than a requirement declares (the ordinary case), while counting only what was
-// observed could not express a source SHORTFALL -- a `corroborated` requirement
-// that planned one kind and got it would read 1/1, and the only outcome legal
-// at 1/1 is `satisfied`, which is the standard silently lowered. Raising
-// Declared to the standard's own demand makes `narrowed 1/2` both legal and
-// true, and every arm below keeps Served < Declared wherever it claims
-// `narrowed`, which the row validator requires.
+// THE COUNTS ARE OBSERVATION-COVER COUNTS, NOT KIND COUNTS. Declared is
+// max(the cover of everything OBSERVED, threshold) and Served is
+// servedObservationCover -- the cover of everything served, worst-state-wins
+// per observation. Two things have to be true at once and neither counting
+// rule alone gives both: counting the whole observed catalogue would report
+// a loss on every turn that planned fewer kinds than a requirement declares
+// (the ordinary case), while counting only what was observed could not
+// express a source SHORTFALL -- a `corroborated` requirement that planned
+// one kind and got it would read 1/1, and the only outcome legal at 1/1 is
+// `satisfied`, which is the standard silently lowered. Raising Declared to
+// the standard's own demand makes `narrowed 1/2` both legal and true, and
+// every arm below keeps Served < Declared wherever it claims `narrowed`,
+// which the row validator requires.
+//
+// THIS IS THE STANDARD'S DEMAND, NOT A KIND COUNT, and that distinction is
+// exactly what closes the collapse this change exists to close: three kinds
+// declaring one observation and all coming back served would, counted by
+// KIND, publish Declared=3 against a corroborated threshold of 2 and Served=1
+// (the cover) -- an honest-looking `1/3` that actually understates how close
+// the row came, because the "3" never existed as three independent sources.
+// Covering the observed side too (declared = max(cover(ObservedKinds),
+// threshold)) reports `1/2`: the standard's own demand, the way the shortfall
+// arm below already reports it when fewer kinds were observed than the
+// standard needs.
 func readRequirementOutcomeRow(
 	requirement contractsv1.ContextFabricPlanRequirement,
 	threshold int,
@@ -546,7 +634,16 @@ func readRequirementOutcomeRow(
 		return RequirementOutcomeRow{}, false
 	}
 
-	declared := evidence.Observed
+	// THE SNAPSHOT, read off `populations` -- the SAME snapshot the caller
+	// captured once for this whole finalization (see finalizeResult and
+	// readPopulationEvidence.assignment's own doc comment). A nil
+	// `populations` (the zero value, e.g. every `single_subject`-only test
+	// fixture in this package) carries a nil assignment, and observationCover
+	// already treats a nil/unkeyed lookup as "no declared observation" -- so
+	// every kind is its own singleton and the cover equals the kind count,
+	// reproducing this function's pre-cover behaviour exactly.
+	servedCover := servedObservationCover(evidence, requirement.Subject, populations.assignment)
+	declared := observationCover(evidence.ObservedKinds, requirement.Subject, populations.assignment)
 	if threshold > declared {
 		declared = threshold
 	}
@@ -554,7 +651,7 @@ func readRequirementOutcomeRow(
 		Stage:       contractsv1.ContextFabricOutcomeStageAssembledResult,
 		Requirement: requirement.Requirement,
 		Obligation:  requirement.Obligation,
-		Served:      evidence.Served,
+		Served:      servedCover,
 		Declared:    declared,
 	}
 
@@ -562,7 +659,7 @@ func readRequirementOutcomeRow(
 	// now, but ONLY to tell an unplanned requirement from an all-pruned one;
 	// adding it here would make a prune a loss, which is the thing the fact
 	// layer refuses to do and this evaluator twice re-did by accident.
-	lossless := evidence.Served >= threshold &&
+	lossless := servedCover >= threshold &&
 		evidence.Truncated == 0 && evidence.Failed == 0 && evidence.Narrowed == 0
 	if lossless {
 		// THE KIND STANDARD IS MET. For a `single_subject` requirement that
@@ -602,16 +699,21 @@ func readRequirementOutcomeRow(
 					"scope", SanitizeLogAttr(requirement.Scope))
 				return RequirementOutcomeRow{}, false
 			}
-			return readPopulationOutcomeRow(row, population, populations, evidence.ServedKinds, threshold), true
+			return readPopulationOutcomeRow(row, population, populations, evidence.ServedKinds, threshold, requirement.Subject), true
 		}
 		// Served in full at the declared standard. The counts are the
-		// SOURCES THAT SERVED, not the catalogue: a satisfied row reading
-		// "1 of 6" would describe a loss that did not happen, and the six
-		// declared kinds are already published on the plan's own
+		// OBSERVATIONS THAT SERVED, not the catalogue: a satisfied row
+		// reading "1 of 6" would describe a loss that did not happen, and
+		// the six declared kinds are already published on the plan's own
 		// requirement row for a reader who wants them.
 		row.Outcome = contractsv1.ContextFabricRequirementSatisfied
 		row.Impact = contractsv1.ContextFabricAnswerImpactNone
-		row.Declared = evidence.Served
+		// row.Served is already servedCover; Declared matches it exactly --
+		// lossless means nothing was lost, so ObservedKinds == ServedKinds
+		// (no kind is tainted) and the two covers already agree. Padding
+		// Declared to the catalogue would describe a loss that did not
+		// happen, per the comment above.
+		row.Declared = row.Served
 		return row, true
 	}
 

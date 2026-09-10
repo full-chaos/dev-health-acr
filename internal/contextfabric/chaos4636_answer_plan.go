@@ -527,9 +527,23 @@ func (e *Engine) finalizeResult(
 	// served document publishes. Reading the `plan` parameter instead would
 	// be the same value today and a second source the first time a caller
 	// stamps something else.
+	//
+	// THE OBSERVATION-KEY SNAPSHOT IS CAPTURED ONCE, HERE, and threaded into
+	// the ONE readPopulationEvidence this whole finalization builds --
+	// never re-read per requirement. That is the snapshot discipline
+	// observationKeyAssignment's own doc comment states: an operand
+	// evaluated against one registry state and compared against another
+	// would produce a row no single registry state ever justified. A nil
+	// e.observationKeys (no dependency wired) yields a nil assignment, which
+	// every comparison already treats as "nothing declared" -- see
+	// ObservationKeys' own doc comment on EngineDependencies.
+	var observationKeys observationKeyAssignment
+	if e.observationKeys != nil {
+		observationKeys = e.observationKeys.ObservationKeyAssignment()
+	}
 	result.Completeness.Outcomes = appendReadRequirementEvaluations(
 		result.Completeness.Outcomes, stamped.Requirements, result.Coverage,
-		readPopulationEvidenceFrom(frame, result, stamped, facts))
+		readPopulationEvidenceFrom(frame, result, stamped, facts, observationKeys))
 	result.Completeness = ComputeAnswerCompleteness(result)
 	return result
 }

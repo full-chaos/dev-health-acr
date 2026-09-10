@@ -554,6 +554,49 @@ func (r *FactCapabilityRegistry) Capabilities() []FactCapability {
 	return capabilities
 }
 
+// ObservationKeyDeclarer exposes a SNAPSHOT of the registry's per-capability
+// ObservationKey declarations, captured once per evaluation -- see
+// observationKeyAssignment's own doc comment (observation_cover.go) for why a
+// snapshot rather than a live handle.
+//
+// AN EXPLICITLY-WIRED FIELD, never a type assertion -- the same discipline
+// RequirementDeriver documents (requirement_telemetry.go): an optional
+// dependency reached by type assertion failed every assertion once already
+// and the whole signal disappeared with tests passing throughout.
+// *FactCapabilityRegistry implements it, and hosted/open.go wires the SAME
+// registry instance it already wires as Requirements and Facts.
+type ObservationKeyDeclarer interface {
+	// ObservationKeyAssignment returns the current declarations, keyed by
+	// fact kind then subject kind. The caller holds the returned value for
+	// one whole evaluation or holds nothing -- reading it again mid-evaluation
+	// would let an operand judged against one registry state be compared
+	// against another, which is exactly what a snapshot exists to forbid.
+	ObservationKeyAssignment() observationKeyAssignment
+}
+
+// ObservationKeyAssignment implements ObservationKeyDeclarer against the
+// registry's own declarations.
+//
+// Built from Capabilities(), never from r.providers directly, because
+// Capabilities() already deep-copies every map-valued field (including
+// ObservationKey itself, via copyObservationKeyDeclarations) -- so the
+// returned assignment shares no backing map with the registry's own state
+// and a caller mutating it can never corrupt a later read.
+func (r *FactCapabilityRegistry) ObservationKeyAssignment() observationKeyAssignment {
+	if r == nil {
+		return nil
+	}
+	capabilities := r.Capabilities()
+	assignment := make(observationKeyAssignment, len(capabilities))
+	for _, capability := range capabilities {
+		if len(capability.ObservationKey) == 0 {
+			continue
+		}
+		assignment[capability.Kind] = capability.ObservationKey
+	}
+	return assignment
+}
+
 // capabilityIndex exposes the registered capabilities to the fact planner
 // keyed by kind. It returns the declared FactCapability values directly
 // rather than the registeredFactProvider wrappers, so the planner can only

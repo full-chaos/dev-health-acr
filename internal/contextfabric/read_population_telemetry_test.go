@@ -127,7 +127,7 @@ func TestTheTelemetryUnitsAndCensusCannotLie(t *testing.T) {
 		}
 		plan := AnswerPlan{Requirements: published}
 		result.Completeness.Outcomes = appendReadRequirementEvaluations(nil, published, coverage,
-			readPopulationEvidenceFrom(frame, result, plan, facts))
+			readPopulationEvidenceFrom(frame, result, plan, facts, nil))
 		stamped := plan
 		result.AnswerPlan = &stamped
 
@@ -177,7 +177,7 @@ func TestTheTelemetryUnitsAndCensusCannotLie(t *testing.T) {
 		result := InvestigationResult{Cohort: cohort, Coverage: coverage}
 		plan := AnswerPlan{Requirements: published}
 		result.Completeness.Outcomes = appendReadRequirementEvaluations(nil, published, coverage,
-			readPopulationEvidenceFrom(nil, result, plan, facts))
+			readPopulationEvidenceFrom(nil, result, plan, facts, nil))
 		stamped := plan
 		result.AnswerPlan = &stamped
 
@@ -323,7 +323,7 @@ func TestTheEventBuilderCarriesTheCohortFlagsFromTheDocument(t *testing.T) {
 	result := InvestigationResult{Cohort: cohort, Coverage: coverage}
 	plan := AnswerPlan{Requirements: published}
 	result.Completeness.Outcomes = appendReadRequirementEvaluations(nil, published, coverage,
-		readPopulationEvidenceFrom(nil, result, plan, facts))
+		readPopulationEvidenceFrom(nil, result, plan, facts, nil))
 	stamped := plan
 	result.AnswerPlan = &stamped
 

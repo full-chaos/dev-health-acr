@@ -84,7 +84,10 @@ func factsFor(pairs ...any) CanonicalFactBundle {
 
 func kindList(kinds ...FactKind) []FactKind { return kinds }
 
-// evaluateOperands runs the production path for an explicit-set frame.
+// evaluateOperands runs the production path for an explicit-set frame, with
+// no observation-key declarations -- every arm below stays kind-keyed, the
+// same as a nil ObservationKeys dependency in production. See
+// evaluateOperandsWithAssignment for the observation-cover sibling.
 func evaluateOperands(
 	published []contractsv1.ContextFabricPlanRequirement,
 	frame *QuestionFrame,
@@ -92,11 +95,25 @@ func evaluateOperands(
 	coverage Coverage,
 	facts CanonicalFactBundle,
 ) []RequirementOutcomeRow {
+	return evaluateOperandsWithAssignment(published, frame, committed, coverage, facts, nil)
+}
+
+// evaluateOperandsWithAssignment is evaluateOperands with an explicit
+// observation-key snapshot, for the tests that pin the cover-based counting
+// sites in the read-population layer.
+func evaluateOperandsWithAssignment(
+	published []contractsv1.ContextFabricPlanRequirement,
+	frame *QuestionFrame,
+	committed []SubjectRef,
+	coverage Coverage,
+	facts CanonicalFactBundle,
+	assignment observationKeyAssignment,
+) []RequirementOutcomeRow {
 	result := InvestigationResult{
 		SubjectResolution: contractsv1.ContextFabricSubjectResolution{Committed: committed},
 		Coverage:          coverage,
 	}
-	evidence := readPopulationEvidenceFrom(frame, result, AnswerPlan{Requirements: published}, facts)
+	evidence := readPopulationEvidenceFrom(frame, result, AnswerPlan{Requirements: published}, facts, assignment)
 	return appendReadRequirementEvaluations(nil, published, coverage, evidence)
 }
 
@@ -241,7 +258,7 @@ func TestASingleSubjectReadStaysKindKeyed(t *testing.T) {
 				namedOperandFrame(SubjectTeam, SubjectTeam),
 				InvestigationResult{SubjectResolution: contractsv1.ContextFabricSubjectResolution{
 					Committed: []SubjectRef{teamRef("team_alpha")}}},
-				AnswerPlan{}, factsFor(teamRef("team_alpha"), kindList(health))),
+				AnswerPlan{}, factsFor(teamRef("team_alpha"), kindList(health)), nil),
 		},
 	} {
 		testCase := testCase
@@ -571,7 +588,7 @@ func evaluateCohort(
 	cohort *Cohort, coverage Coverage, facts CanonicalFactBundle,
 ) []RequirementOutcomeRow {
 	result := InvestigationResult{Cohort: cohort, Coverage: coverage}
-	evidence := readPopulationEvidenceFrom(nil, result, AnswerPlan{Requirements: published}, facts)
+	evidence := readPopulationEvidenceFrom(nil, result, AnswerPlan{Requirements: published}, facts, nil)
 	return appendReadRequirementEvaluations(nil, published, coverage, evidence)
 }
 
@@ -724,7 +741,7 @@ func TestEveryPopulationCensusMemberIsHandled(t *testing.T) {
 				coverage: map[string]map[FactKind]SourceState{
 					SubjectMapKey(teamRef("team_alpha")): {health: SourceAvailable},
 				}},
-			[]FactKind{health}, 1)
+			[]FactKind{health}, 1, SubjectTeam)
 		if row.Outcome == "" {
 			t.Fatalf("census %q reached no arm: the row carries no outcome", census)
 		}
@@ -1356,7 +1373,7 @@ func TestAnIncompleteCensusOutranksTheSamenessArm(t *testing.T) {
 		SubjectResolution: contractsv1.ContextFabricSubjectResolution{Committed: []SubjectRef{alpha, beta}},
 	}
 	frame := namedOperandFrame(SubjectTeam, contractsv1.ContextFabricSubjectProject)
-	evidence := readPopulationEvidenceFrom(frame, result, AnswerPlan{Requirements: published}, facts)
+	evidence := readPopulationEvidenceFrom(frame, result, AnswerPlan{Requirements: published}, facts, nil)
 	rows := appendReadRequirementEvaluations(nil, published, coverage, evidence)
 
 	// The OWNER's truncation, observed, over its own counts -- not a depth loss
@@ -1417,6 +1434,205 @@ func TestAnOperandKindWithNoPublishedStandardIsNotReady(t *testing.T) {
 	// The team read its own standard in full and no sameness claim is
 	// available, because one operand of the comparison cannot be judged at all.
 	// With the guard deleted this reads narrowed/depth 0/2.
+	assertRow(t, rowFor(t, rows, teamReq.Requirement),
+		contractsv1.ContextFabricRequirementSatisfied,
+		contractsv1.ContextFabricAnswerImpactNone,
+		contractsv1.ContextFabricCoverageDetailCode(""),
+		false, 1, 1)
+}
+
+// sharedKeyAssignment declares one ObservationKey for every kind given, at
+// one subject kind -- the fixture shape the four mutant pins below share, so
+// each states only which kinds collapse and at which subject kind.
+func sharedKeyAssignment(key ObservationKey, subject SubjectKind, kinds ...FactKind) observationKeyAssignment {
+	assignment := make(observationKeyAssignment, len(kinds))
+	for _, kind := range kinds {
+		assignment[kind] = map[SubjectKind][]ObservationKey{subject: {key}}
+	}
+	return assignment
+}
+
+// The four tests below are the MUTANT PINS for the four read-population-layer
+// count sites (readSubjectCount, unreadSubjectCause, the commonServedKinds
+// caller in readPopulationOutcomeRow, and comparisonFullyRead) -- the site-1
+// pin (readRequirementOutcomeRow's own lossless test) is
+// TestTwoServedKindsSharingOneObservationDoNotCorroborate in
+// read_requirement_evaluation_test.go.
+//
+// EACH FIXTURE DECLARES A THREE-OR-FOUR-KIND CATALOG so the ROW-LEVEL kind
+// standard (site 1, never mutated here) stays met regardless of which single
+// site below is reverted to a kind count -- see each test's own comment for
+// why its catalog is shaped the way it is. That is what makes each test a
+// SINGLE-mutant discriminator rather than a bundle: reverting any one of the
+// other four sites to a kind count leaves these assertions unchanged.
+
+// TestPartiallyReadPopulationCoversNotCounts kills the mutant that reverts
+// readSubjectCount's threshold test from an observation cover back to
+// len(servedKindsForSubject(...)).
+//
+// health and workload declare the SAME key at team; flow is independent. The
+// catalog's cover is 2 (the shared pair plus flow), so the ROW's own kind
+// standard (threshold 2) is met in aggregate and the distributive branch is
+// reached regardless of this site.
+//
+// Alpha holds health+workload (both available) and nothing else: two SERVED
+// kinds, one covered observation -- 1 < 2, correctly UNREAD. Beta holds
+// nothing. The population's two named slots are therefore both unread and
+// `read` must be 0.
+//
+// THE KILL. Reverted to a kind count, alpha's two served kinds score 2 >= 2
+// and are wrongly counted read, so `read` becomes 1 and the row reads
+// `scope 1/2` instead of `scope 0/2`.
+func TestPartiallyReadPopulationCoversNotCounts(t *testing.T) {
+	t.Parallel()
+	alpha, beta := teamRef("team_alpha"), teamRef("team_beta")
+	health, workload, flow := FactHealth, FactWorkload, FactFlow
+	requirement := operandRequirement(SubjectTeam, CompletionQuantifierCorroborated, health, workload, flow)
+	assignment := sharedKeyAssignment("mutant_site2_key", SubjectTeam, health, workload)
+
+	rows := evaluateOperandsWithAssignment(
+		[]contractsv1.ContextFabricPlanRequirement{requirement},
+		namedOperandFrame(SubjectTeam, SubjectTeam),
+		[]SubjectRef{alpha, beta},
+		factCoverage(health, SourceAvailable, workload, SourceAvailable, flow, SourceAvailable),
+		factsFor(alpha, kindList(health, workload)),
+		assignment,
+	)
+	assertRow(t, rowFor(t, rows, requirement.Requirement),
+		contractsv1.ContextFabricRequirementNarrowed,
+		contractsv1.ContextFabricAnswerImpactScope,
+		contractsv1.ContextFabricCoverageDetailFactNarrowed,
+		false, 0, 2)
+}
+
+// TestUnreadSubjectCauseCoversNotCounts kills the mutant that reverts
+// unreadSubjectCause's threshold test from an observation cover back to
+// len(servedKindsForSubject(...)).
+//
+// Same catalog and key as the test above (health+workload share a key, flow
+// independent, row-level standard met in aggregate). Alpha holds health and
+// workload available (two served kinds, one covered observation, correctly
+// UNREAD) AND flow REPORTED unavailable -- a real cause to find, but only if
+// alpha is actually inspected. Beta holds nothing and reports nothing, so it
+// can never contribute a cause either way.
+//
+// THE KILL. Reverted to a kind count, alpha's two served kinds score 2 >= 2,
+// so unreadSubjectCause's own guard skips alpha as "already read" and never
+// looks at its reported flow failure -- beta contributes nothing, so the
+// cause is lost and the row defaults to fact_narrowed/CauseObserved=false
+// instead of naming the reported failure.
+func TestUnreadSubjectCauseCoversNotCounts(t *testing.T) {
+	t.Parallel()
+	alpha, beta := teamRef("team_alpha"), teamRef("team_beta")
+	health, workload, flow := FactHealth, FactWorkload, FactFlow
+	requirement := operandRequirement(SubjectTeam, CompletionQuantifierCorroborated, health, workload, flow)
+	assignment := sharedKeyAssignment("mutant_site3_key", SubjectTeam, health, workload)
+
+	facts := factsFor(alpha, kindList(health, workload))
+	facts.Facts = append(facts.Facts, CanonicalFact{Kind: flow, Subject: alpha, SourceState: SourceUnavailable})
+
+	rows := evaluateOperandsWithAssignment(
+		[]contractsv1.ContextFabricPlanRequirement{requirement},
+		namedOperandFrame(SubjectTeam, SubjectTeam),
+		[]SubjectRef{alpha, beta},
+		factCoverage(health, SourceAvailable, workload, SourceAvailable, flow, SourceAvailable),
+		facts,
+		assignment,
+	)
+	assertRow(t, rowFor(t, rows, requirement.Requirement),
+		contractsv1.ContextFabricRequirementNarrowed,
+		contractsv1.ContextFabricAnswerImpactScope,
+		contractsv1.ContextFabricCoverageDetailFactProviderReported,
+		true, 0, 2)
+}
+
+// TestSamenessArmCoversNotCounts kills the mutant that reverts the
+// commonServedKinds caller in readPopulationOutcomeRow from
+// observationCover(common, ...) back to len(common).
+//
+// health and workload share a key at team; investment and metrics are each
+// independent, one per operand, so EACH operand clears its own corroborated
+// threshold of 2 through an INDEPENDENT kind beside the shared pair --
+// comparisonFullyRead (site 5, not mutated here) is genuinely satisfied for
+// both, so the sameness arm is reached regardless of this site.
+//
+// Alpha holds health+workload+investment; beta holds health+workload+metrics.
+// The two operands' COMMON served kinds are exactly {health, workload} -- two
+// kinds, one covered observation, 1 < 2. The row must read the shortfall.
+//
+// THE KILL. Reverted to a kind count, len(common) = 2 >= 2 passes the gate,
+// the sameness arm's own narrowing never fires, and the row falls through to
+// the read-everywhere arm and reads `satisfied` instead of
+// `narrowed depth 1/2`.
+func TestSamenessArmCoversNotCounts(t *testing.T) {
+	t.Parallel()
+	alpha, beta := teamRef("team_alpha"), teamRef("team_beta")
+	health, workload, investment, metrics := FactHealth, FactWorkload, FactInvestment, FactMetrics
+	requirement := operandRequirement(SubjectTeam, CompletionQuantifierCorroborated, health, workload, investment, metrics)
+	assignment := sharedKeyAssignment("mutant_site4_key", SubjectTeam, health, workload)
+
+	rows := evaluateOperandsWithAssignment(
+		[]contractsv1.ContextFabricPlanRequirement{requirement},
+		namedOperandFrame(SubjectTeam, SubjectTeam),
+		[]SubjectRef{alpha, beta},
+		factCoverage(health, SourceAvailable, workload, SourceAvailable,
+			investment, SourceAvailable, metrics, SourceAvailable),
+		factsFor(alpha, kindList(health, workload, investment), beta, kindList(health, workload, metrics)),
+		assignment,
+	)
+	row := rowFor(t, rows, requirement.Requirement)
+	assertRow(t, row,
+		contractsv1.ContextFabricRequirementNarrowed,
+		contractsv1.ContextFabricAnswerImpactDepth,
+		contractsv1.ContextFabricCoverageDetailFactNarrowed,
+		false, 1, 2)
+	if len(row.Refinements) != 0 {
+		t.Fatalf("no reduction step ran, want no refinement, got %+v", row.Refinements)
+	}
+}
+
+// TestComparisonReadinessCoversNotCounts kills the mutant that reverts
+// comparisonFullyRead's own threshold test from an observation cover back to
+// len(servedKindsForSubject(...)).
+//
+// A MIXED-KIND comparison, so the discriminator lands on a DIFFERENT row than
+// the operand it is about -- see the file header on the four tests above:
+// readSubjectCount already resolves a same-kind operand's own row before
+// comparisonFullyRead is ever consulted, so isolating this site needs an
+// operand whose readiness affects the OTHER kind's row instead of its own.
+//
+// The team operand (alpha) is declared over flow+readiness, two UNKEYED
+// (independent) kinds, and reads both in full: 2 >= 2, genuinely ready either
+// way -- a control that cannot itself flip. The project operand (beta) is
+// declared over health+workload, which share a key: beta reads both
+// available, 2 served kinds but ONE covered observation, 1 < 2 --
+// legitimately NOT ready.
+//
+// THE KILL. Reverted to a kind count, beta's two served kinds score 2 >= 2
+// and comparisonFullyRead wrongly certifies the WHOLE comparison ready, so
+// the TEAM row (alpha's own row, otherwise satisfied 1/1) is pulled into the
+// sameness arm too -- common kinds between alpha (flow, readiness) and beta
+// (health, workload) are empty, so it reads `narrowed depth 0/2` instead of
+// `satisfied none 1/1`.
+func TestComparisonReadinessCoversNotCounts(t *testing.T) {
+	t.Parallel()
+	alpha, beta := teamRef("team_alpha"), projectRef("project_beta")
+	flow, readiness := FactFlow, FactReadiness
+	health, workload := FactHealth, FactWorkload
+
+	teamReq := operandRequirement(SubjectTeam, CompletionQuantifierCorroborated, flow, readiness)
+	projectReq := operandRequirement(contractsv1.ContextFabricSubjectProject, CompletionQuantifierCorroborated, health, workload)
+	published := []contractsv1.ContextFabricPlanRequirement{teamReq, projectReq}
+	assignment := sharedKeyAssignment("mutant_site5_key", contractsv1.ContextFabricSubjectProject, health, workload)
+
+	rows := evaluateOperandsWithAssignment(published,
+		namedOperandFrame(SubjectTeam, contractsv1.ContextFabricSubjectProject),
+		[]SubjectRef{alpha, beta},
+		factCoverage(flow, SourceAvailable, readiness, SourceAvailable,
+			health, SourceAvailable, workload, SourceAvailable),
+		factsFor(alpha, kindList(flow, readiness), beta, kindList(health, workload)),
+		assignment,
+	)
 	assertRow(t, rowFor(t, rows, teamReq.Requirement),
 		contractsv1.ContextFabricRequirementSatisfied,
 		contractsv1.ContextFabricAnswerImpactNone,
