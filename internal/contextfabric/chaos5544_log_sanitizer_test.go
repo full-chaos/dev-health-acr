@@ -3,6 +3,8 @@ package contextfabric
 import (
 	"context"
 	"log/slog"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/observability"
@@ -55,5 +57,36 @@ func TestSanitizeLogAttrIsTheOnlyImplementationLeft(t *testing.T) {
 	}
 	if got := attrs[1].(string); got != SanitizeLogAttr(validID) {
 		t.Fatalf("requestIDLogAttrs value = %q, want SanitizeLogAttr's own output %q -- a second implementation has drifted", got, SanitizeLogAttr(validID))
+	}
+}
+
+// TestSanitizeLogAttrUsesTheRecognizedReplacerShape is a SOURCE-SHAPE pin,
+// not a behavioural one, and deliberately so: CHAOS-5544's whole reason for
+// existing is that the OLD sanitizer (a rune-remap loop only) was already
+// behaviourally complete -- it neutralized every dangerous byte at
+// runtime -- and CodeQL's go/log-injection query still flagged it, because
+// a hand-rolled loop is not a shape its dataflow model recognizes as a
+// barrier. The rune allowlist in SanitizeLogAttr is, by itself, ALSO
+// behaviourally complete (it independently catches \n and \r, since both
+// are < 0x20) -- so a mutation that neuters ONLY the strings.NewReplacer
+// pass is an EQUIVALENT MUTANT from a pure input/output standpoint: no
+// runtime table can distinguish "the recognized shape is present" from
+// "it is absent but the allowlist still catches everything," because both
+// produce byte-identical output. Recognition is a property of the SOURCE,
+// not of any output, so this pin reads the source directly -- the same
+// justification the codebase's own AST-shaped pins elsewhere in this repo
+// use when a property is structural rather than behavioural.
+func TestSanitizeLogAttrUsesTheRecognizedReplacerShape(t *testing.T) {
+	t.Parallel()
+	src, err := os.ReadFile("chaos5544_log_sanitizer.go")
+	if err != nil {
+		t.Fatalf("could not read chaos5544_log_sanitizer.go: %v", err)
+	}
+	text := string(src)
+	if !strings.Contains(text, "strings.NewReplacer(") {
+		t.Fatal("SanitizeLogAttr must route \\n/\\r through strings.NewReplacer -- the go/log-injection query's own documented recognized barrier shape")
+	}
+	if !strings.Contains(text, `"\n"`) || !strings.Contains(text, `"\r"`) {
+		t.Fatal("the NewReplacer call must name both \\n and \\r explicitly -- CWE-117's own two forgery characters")
 	}
 }
