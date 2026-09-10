@@ -28,12 +28,34 @@ import (
 // stated limit rather than a covered one, and the test records it by asserting
 // that it type-checks, so a future change that accidentally closes it will fail
 // here and force the limit's wording to be corrected rather than left stale.
-func TestSwappingOnePolicyFieldDoesNotTypeCheck(t *testing.T) {
-	for name, testCase := range map[string]struct {
-		expr        string
-		wantError   bool
-		wantMessage string
-	}{
+// policyTypeCase is one expression and what the type checker must say about it.
+type policyTypeCase struct {
+	expr        string
+	wantError   bool
+	wantMessage string
+}
+
+// policyTypeCases is the ONE table both tests below read. Two copies of it —
+// one to check and one to audit — would be the second-expected-list shape this
+// package exists to remove.
+//
+// THERE IS NO CASE FOR THE FIELD-AND-ACCESSOR SWAP, and the reason is the limit
+// itself rather than an omission.
+//
+// A case was written for it and it was WRONG: its expression was
+// `_ = a.ContestExempt.Exempt()`, character for character the same as "the
+// contest read, correct". It duplicated a passing case and asserted nothing,
+// which review caught.
+//
+// It could not have been written correctly. Swapping both the field and its
+// accessor produces an expression IDENTICAL to the correct read of the other
+// fact — that is exactly what makes it a well-typed mistake. The difference
+// lives in WHICH CALL SITE the expression appears at, and a type check over an
+// expression in isolation has no call site to look at. No case here can express
+// it, so the limit is recorded in the pull request's risk notes and carried in
+// the follow-up rather than papered over with a green subtest.
+func policyTypeCases() map[string]policyTypeCase {
+	return map[string]policyTypeCase{
 		"the contest read, correct": {
 			expr: `_ = a.ContestExempt.Exempt()`,
 		},
@@ -52,13 +74,15 @@ func TestSwappingOnePolicyFieldDoesNotTypeCheck(t *testing.T) {
 			expr: `if a.ContestExempt { _ = 1 }`, wantError: true,
 			wantMessage: "non-boolean condition",
 		},
-		// THE STATED LIMIT, asserted as it actually is: swapping BOTH the
-		// field and the accessor is a well-typed expression. It reads the
-		// wrong fact and nothing rejects it.
-		"BOTH field and accessor swapped — a known limit, and it type-checks": {
-			expr: `_ = a.ContestExempt.Exempt()`,
-		},
-	} {
+	}
+}
+
+func TestSwappingOnePolicyFieldDoesNotTypeCheck(t *testing.T) {
+	rejections := 0
+	for name, testCase := range policyTypeCases() {
+		if testCase.wantError {
+			rejections++
+		}
 		t.Run(name, func(t *testing.T) {
 			err := typeCheckAgainstHintsource(t, testCase.expr)
 			switch {
@@ -72,6 +96,28 @@ func TestSwappingOnePolicyFieldDoesNotTypeCheck(t *testing.T) {
 				t.Errorf("%q must type-check and did not: %v", testCase.expr, err)
 			}
 		})
+	}
+	// A table of only-accepted cases would pass while the types did nothing.
+	if rejections == 0 {
+		t.Error("no case in this table expects a rejection, so it cannot tell the separate types from two bools")
+	}
+}
+
+// NO TWO CASES MAY SHARE AN EXPRESSION. A duplicated expression is how the
+// previous version of this table pretended to cover something it did not: one
+// case restated a passing case under a name claiming it measured a limit.
+// Asserting uniqueness turns that from a thing a reader has to notice into a
+// thing the suite refuses.
+func TestNoTwoPolicyTypeCasesShareAnExpression(t *testing.T) {
+	seen := map[string]string{}
+	for name, testCase := range policyTypeCases() {
+		expr := testCase.expr
+		if previous, duplicate := seen[expr]; duplicate {
+			t.Errorf("cases %q and %q use the SAME expression %s — one of them measures nothing, and a case "+
+				"that restates another under a different name reads as coverage it does not have",
+				previous, name, expr)
+		}
+		seen[expr] = name
 	}
 }
 
