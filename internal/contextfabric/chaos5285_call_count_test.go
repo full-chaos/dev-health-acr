@@ -8,7 +8,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-// TestTheAdmittedGroupedPathMakesExactlyTwoFactServiceCalls is
+// TestTheAdmittedGroupedSingleSynthesisPathMakesExactlyTwoFactServiceCalls is
 // CHAOS-5285 test-table row 7.
 //
 // The bounded retry is the case this guarantee is actually about. Re-synthesis
@@ -20,13 +20,13 @@ import (
 // SCOPE, STATED HONESTLY. This pin covers the SINGLE-SYNTHESIS path. The
 // synthesizer's call count is logged, and in this fixture it is 1: every
 // budget that leaves the first answer over the cap also leaves the narrowed
-// one over it, so the turn takes the planned refusal instead of retrying and
-// no fixture here has yet driven a real second synthesis through the grouped
-// path. The retry arm of row 7 is therefore NOT covered by this test and is
-// recorded as owed rather than implied -- naming it in the test name while the
-// count stayed at 1 would have been a pin asserting something it never
-// exercised.
-func TestTheAdmittedGroupedPathMakesExactlyTwoFactServiceCallsAcrossARetry(t *testing.T) {
+// one over it, so the turn takes the planned refusal instead of retrying. The
+// retry arm of row 7 is NOT covered by this test; it is covered by
+// TestTheGroupedRetryDoesNotReReadItsProviders, whose fixture sits above the
+// grouped headroom so a real second synthesis runs. This name used to
+// end in `AcrossARetry` while the synthesis count stayed at 1 -- a pin naming a
+// path it never exercised -- and is now named for the path it does.
+func TestTheAdmittedGroupedSingleSynthesisPathMakesExactlyTwoFactServiceCalls(t *testing.T) {
 	t.Parallel()
 
 	recorder := &groupReadRecorder{facts: func(CanonicalFactRequest) CanonicalFactBundle {
