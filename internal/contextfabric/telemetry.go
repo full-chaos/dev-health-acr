@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"sort"
 	"strconv"
+	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
@@ -1366,6 +1367,239 @@ func (t SlogEngineTelemetry) RecordPlanCarry(ctx context.Context, principal stor
 func (t SlogEngineTelemetry) RecordPlanCarryOutcome(ctx context.Context, principal storage.Principal, outcome PlanCarryOutcome, sourceResultID string, seedSource CarrySeedSource) {
 	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome), "source_result_id", sourceResultID, "seed_source", string(seedSource)}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric plan carry outcome", args...)
+}
+
+// RecordWindowContinuationDecision (CHAOS-5465) logs at Info, once per request
+// carrying a window receipt -- applied, withheld, ineligible and early-veto
+// alike.
+//
+// EVERY FIELD REACHES THIS LINE, per the CHAOS-4085 sink discipline: a field
+// populated on the decision and never logged is not telemetry, it is a field.
+//
+// EXPLICIT ZEROS, NOT OMITTED KEYS. `conflict_reason` is the literal "none"
+// rather than an absent key, `conflict_count` is 0 rather than absent, and the
+// three family keys and three context ids are the empty string rather than
+// absent when that context does not exist. An omitted key and a measured zero
+// are indistinguishable to every downstream query, and telling them apart is
+// the entire reason this line exists.
+//
+// `comparison_evaluated` and `agreement` are SEPARATE booleans on purpose. An
+// unevaluated comparison reports false for both; it is never counted as
+// disagreement and never as agreement.
+// continuationTelemetryUnrecognised is what a closed field carries when the
+// value handed to the emitter is not a member of its vocabulary.
+//
+// IT IS DELIBERATELY NOT A MEMBER OF EITHER VOCABULARY. Mapping an unrecognised
+// value onto a real member (`unspecified`, `not_evaluated`) would fold a bug
+// into a legitimate bucket and make it uncountable; dropping the field would
+// make the line's shape vary with its content. This token says "a decision site
+// produced something this vocabulary does not define", which is the only honest
+// thing to publish and is greppable on sight.
+const continuationTelemetryUnrecognised = "unrecognised"
+
+// closedDecisionField is one CLOSED field on the continuation event: a field
+// whose values come from a fixed vocabulary and which consumers group on.
+//
+// THE REGISTRY IS THE PRODUCER, and that is the point of it. The first attempt
+// at this membership check guarded the two fields its author happened to be
+// thinking about, and the pin written beside it asserted those same two -- an
+// instrument that enumerates only the inputs its author chose. Five other
+// closed fields were reaching the line as free text. Both the emitter and the
+// pin now walk THIS list, so a field added here is a field both of them must
+// account for, and a field the emitter forgets to route through the registry
+// fails the pin by leaking its invented value.
+type closedDecisionField struct {
+	// Key is the log key, byte-for-byte as it appears on the line.
+	Key string
+	// Token returns what the line should carry: the value when it is a member
+	// of its vocabulary, the unrecognised sentinel when it is not.
+	Token func(windowContinuationDecision) string
+	// Invent installs an out-of-vocabulary value, so the pin can prove this
+	// field rejects one. It lives beside the reader for the same reason the
+	// vocabulary lives beside the members: a driver kept somewhere else drifts.
+	//
+	// NIL MEANS DERIVED, and the pin treats that as a claim to check rather
+	// than a field to skip: a nil Invent asserts there is no input that can put
+	// a non-member in this field, which is only true of values the decision
+	// computes rather than stores.
+	Invent func(*windowContinuationDecision)
+}
+
+func closedDecisionFields() []closedDecisionField {
+	guard := func(valid bool, value string) string {
+		if !valid {
+			return continuationTelemetryUnrecognised
+		}
+		return value
+	}
+	return []closedDecisionField{
+		{
+			Key: "seed_source",
+			Token: func(d windowContinuationDecision) string {
+				return guard(ValidCarrySeedSource(d.SeedSource), string(d.SeedSource))
+			},
+			Invent: func(d *windowContinuationDecision) { d.SeedSource = CarrySeedSource("invented-seed") },
+		},
+		{
+			Key: "family_carried",
+			Token: func(d windowContinuationDecision) string {
+				return guard(d.FamilyCarried() == "" || ValidQuestionFamily(d.FamilyCarried()), string(d.FamilyCarried()))
+			},
+			Invent: func(d *windowContinuationDecision) {
+				d.Carried = &continuationCarriedContext{Family: QuestionFamily("invented-carried")}
+			},
+		},
+		{
+			Key: "family_fresh",
+			Token: func(d windowContinuationDecision) string {
+				return guard(d.FamilyFresh() == "" || ValidQuestionFamily(d.FamilyFresh()), string(d.FamilyFresh()))
+			},
+			Invent: func(d *windowContinuationDecision) {
+				d.Fresh = continuationFreshProposal{Available: true, Family: QuestionFamily("invented-fresh")}
+			},
+		},
+		{
+			Key: "family_accepted",
+			Token: func(d windowContinuationDecision) string {
+				return guard(d.FamilyAccepted() == "" || ValidQuestionFamily(d.FamilyAccepted()), string(d.FamilyAccepted()))
+			},
+			Invent: func(d *windowContinuationDecision) {
+				d.Accepted = &continuationCarriedContext{Family: QuestionFamily("invented-accepted")}
+			},
+		},
+		{
+			Key: "family_source",
+			Token: func(d windowContinuationDecision) string {
+				source := d.AcceptedFamilySource()
+				return guard(source == "" || contractsv1.ValidContextFabricQuestionFamilySource(source), string(source))
+			},
+			// DERIVED: AcceptedFamilySource returns "" or `carried` from a
+			// pointer test, so no caller can seat a non-member here. The guard
+			// stays because the field is closed and the derivation could change;
+			// the nil driver states, checkably, that it has no free-text path.
+			Invent: nil,
+		},
+		{
+			Key: "continuation_disposition",
+			Token: func(d windowContinuationDecision) string {
+				return guard(ValidContinuationDisposition(d.Disposition), string(d.Disposition))
+			},
+			Invent: func(d *windowContinuationDecision) { d.Disposition = ContinuationDisposition("invented-disposition") },
+		},
+		{
+			Key: "decision_reason",
+			Token: func(d windowContinuationDecision) string {
+				return guard(ValidContinuationDecisionReason(d.Reason), string(d.Reason))
+			},
+			Invent: func(d *windowContinuationDecision) { d.Reason = ContinuationDecisionReason("invented-reason") },
+		},
+		{
+			Key: "conflict_reason",
+			Token: func(d windowContinuationDecision) string {
+				return guard(ValidContinuationConflictReason(d.ConflictReason), string(d.ConflictReason))
+			},
+			Invent: func(d *windowContinuationDecision) {
+				d.ConflictReason = ContinuationConflictReason("invented-conflict")
+			},
+		},
+		{
+			Key: "conflict_fields",
+			// EVERY MEMBER IS CHECKED, not the joined string. A list field with
+			// one invented entry is still a line consumers cannot group on.
+			Token: func(d windowContinuationDecision) string {
+				tokens := make([]string, 0, len(d.ConflictFields))
+				for _, field := range d.ConflictFields {
+					tokens = append(tokens, guard(ValidContinuationConflictField(field), string(field)))
+				}
+				return strings.Join(tokens, ",")
+			},
+			Invent: func(d *windowContinuationDecision) {
+				d.ConflictFields = []ContinuationConflictField{ContinuationConflictField("invented-field")}
+			},
+		},
+		{
+			Key: "composition_outcome",
+			Token: func(d windowContinuationDecision) string {
+				return guard(ValidCompositionOutcome(d.CompositionOutcome), string(d.CompositionOutcome))
+			},
+			Invent: func(d *windowContinuationDecision) { d.CompositionOutcome = CompositionOutcome("invented-outcome") },
+		},
+		{
+			Key: "composition_failed_invariant",
+			// Two vocabularies meet in one field: the frame invariants, and the
+			// composition's own. Empty is legitimate -- most turns fail nothing.
+			Token: func(d windowContinuationDecision) string {
+				value := d.CompositionFailedInvariant
+				valid := value == "" ||
+					value == CompositionInvariantCarriedAxisUnexpressible ||
+					ValidFrameInvariant(FrameInvariant(value))
+				return guard(valid, value)
+			},
+			Invent: func(d *windowContinuationDecision) { d.CompositionFailedInvariant = "invented-invariant" },
+		},
+	}
+}
+
+// closedDecisionToken reads ONE closed field through the registry.
+//
+// An unknown key is itself the unrecognised sentinel rather than a panic or an
+// empty string: a mistyped key in the emitter must be visible on the line, not
+// silently blank.
+func closedDecisionToken(key string, decision windowContinuationDecision) string {
+	for _, field := range closedDecisionFields() {
+		if field.Key == key {
+			return field.Token(decision)
+		}
+	}
+	return continuationTelemetryUnrecognised
+}
+
+func (t SlogEngineTelemetry) RecordWindowContinuationDecision(ctx context.Context, principal storage.Principal, decision windowContinuationDecision) {
+	args := []any{
+		// REQUEST-DERIVED VALUES GO THROUGH THE PACKAGE'S EXISTING STRIP.
+		//
+		// The context ids are the caller's: a window receipt names a prior
+		// result id and the event echoes it back. sanitizeLogString is this
+		// package's answer to go/log-injection already (chaos4171_offer_phrasing.go,
+		// CHAOS-3918 before it) and its doc comment carries the reasoning,
+		// including why the ReplaceAll shape rather than a Map filter: CodeQL's
+		// dataflow model recognises the former as breaking taint and is opaque
+		// to the latter. The closed fields above and below need none of this --
+		// they can only be a vocabulary member or the unrecognised sentinel.
+		"org_id", sanitizeLogString(principal.OrgID),
+		"source_result_id", sanitizeLogString(decision.CarriedContextID()),
+		"seed_source", closedDecisionToken("seed_source", decision),
+		"family_carried", closedDecisionToken("family_carried", decision),
+		"family_fresh", closedDecisionToken("family_fresh", decision),
+		"family_accepted", closedDecisionToken("family_accepted", decision),
+		"family_source", closedDecisionToken("family_source", decision),
+		"continuation_disposition", closedDecisionToken("continuation_disposition", decision),
+		"decision_reason", closedDecisionToken("decision_reason", decision),
+		"comparison_evaluated", decision.ComparisonEvaluated,
+		"agreement", decision.Agreement,
+		"conflict_reason", closedDecisionToken("conflict_reason", decision),
+		"conflict_count", decision.ConflictCount(),
+		"conflict_fields", closedDecisionToken("conflict_fields", decision),
+		"applied_window", sanitizeLogString(decision.AppliedWindowToken()),
+		"carried_context_id", sanitizeLogString(decision.CarriedContextID()),
+		"fresh_context_id", sanitizeLogString(decision.FreshContextID()),
+		"accepted_context_id", sanitizeLogString(decision.AcceptedContextID()),
+		"composition_outcome", closedDecisionToken("composition_outcome", decision),
+		"composition_failed_invariant", closedDecisionToken("composition_failed_invariant", decision),
+	}
+	// The request id rides in from the context and is caller-supplied too. The
+	// shared helper is left alone -- it serves emitters across this package and
+	// widening it is not this change's to make -- so the strip is applied to
+	// what THIS line publishes.
+	for i, attr := range requestIDLogAttrs(ctx) {
+		if i%2 == 1 {
+			if value, ok := attr.(string); ok {
+				attr = sanitizeLogString(value)
+			}
+		}
+		args = append(args, attr)
+	}
+	t.logger.InfoContext(ctx, "context fabric window continuation decision", args...)
 }
 
 // validBudgetOverrunOrUnclassified fails closed on a value outside the closed

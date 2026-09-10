@@ -280,6 +280,22 @@ func captureDefaultLogger(t *testing.T) *syncBuffer {
 	return buf
 }
 
+// captureDefaultJSONLogger is captureDefaultLogger's JSON sibling.
+//
+// SAME RULE, DIFFERENT FORMAT. Tests that assert the SHAPE of a disclosure --
+// attribute by attribute, as `"key":"value"` -- need the JSON handler, and a
+// text-format capture silently turns every such assertion into a miss. The
+// synchronisation and the sequential-test rule are identical: the default
+// logger is process-global, so a t.Parallel() test must not install one.
+func captureDefaultJSONLogger(t *testing.T) *syncBuffer {
+	t.Helper()
+	buf := &syncBuffer{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return buf
+}
+
 type syncBuffer struct {
 	mu  sync.Mutex
 	buf strings.Builder

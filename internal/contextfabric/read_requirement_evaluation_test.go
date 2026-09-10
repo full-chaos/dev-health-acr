@@ -1,9 +1,7 @@
 package contextfabric
 
 import (
-	"bytes"
 	"fmt"
-	"log/slog"
 	"strings"
 	"testing"
 
@@ -590,7 +588,21 @@ func TestAnUnrecognisedQuantifierEmitsNoRow(t *testing.T) {
 // on an evaluator that had stopped emitting rows altogether, which is the
 // failure mode a "no row" assertion invites.
 func TestAnUndeclaredCauseCodeEmitsNoRow(t *testing.T) {
-	t.Parallel()
+	// NOT PARALLEL, and that is the assertion this test needs rather than a
+	// convenience it gives up.
+	//
+	// The disclosure under test is written through `slog.Default()`, which is
+	// PROCESS-GLOBAL state. Installing a default logger from a parallel test
+	// races every other test in the package that logs -- and it did: under the
+	// fixed shuffle seed the race detector caught this test reading its buffer
+	// while a concurrent fact-read disclosure was writing to it. The buffer was
+	// only the visible half; the deeper problem is that two parallel tests
+	// cannot each own the default logger, so whichever ran second silently
+	// asserted against the other's output.
+	//
+	// captureDefaultLogger (chaos4690_coverage_merge_test.go) is the package's
+	// existing answer, and its own comment states the rule: tests that reach
+	// global disclosure are sequential tests.
 	requirement := readRequirement(CompletionQuantifierAtLeastOne)
 	health := contractsv1.ContextFabricFactHealth
 
@@ -609,10 +621,7 @@ func TestAnUndeclaredCauseCodeEmitsNoRow(t *testing.T) {
 	// the only thing that would notice is this test, which does not run in
 	// production. So the drop is required to SAY SO, and the assertion is on
 	// the emitted text rather than on a counter.
-	logs := &bytes.Buffer{}
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(previous) })
+	logs := captureDefaultJSONLogger(t)
 
 	rows := appendReadRequirementEvaluations(nil,
 		[]contractsv1.ContextFabricPlanRequirement{requirement},
@@ -1344,10 +1353,14 @@ func TestAPartialCoverageDetailDoesNotSuppressTheRow(t *testing.T) {
 	health := contractsv1.ContextFabricFactHealth
 	requirement := readRequirement(CompletionQuantifierAtLeastOne)
 
-	logs := &bytes.Buffer{}
-	previous := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() { slog.SetDefault(previous) })
+	// REDIRECTION, NOT ASSERTION: this test never reads the buffer, it only
+	// keeps its own disclosures out of whatever handler happens to be
+	// installed. Through the same helper as every other global-disclosure test
+	// all the same -- a raw bytes.Buffer behind a process-global handler is
+	// unsynchronised by construction, which is safe only for as long as nothing
+	// else in the package logs concurrently, and that is not a property a test
+	// can assert about its neighbours.
+	_ = captureDefaultJSONLogger(t)
 
 	// The premise, asserted rather than assumed, exactly as the stop-path test
 	// asserts it: if this token were ever declared, every fixture below would

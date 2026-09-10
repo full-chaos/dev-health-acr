@@ -313,7 +313,11 @@ type recordingTelemetry struct {
 	// planCarries records every applied carry verbatim -- the ONLY event
 	// that can carry family_source=carried, since the family-resolution
 	// line is sent before the carry runs.
-	planCarries                 []PlanCarryEvent
+	planCarries []PlanCarryEvent
+	// windowContinuationDecisions (CHAOS-5465) records every continuation
+	// decision verbatim, so a test asserts the WHOLE decision rather than the
+	// one field it expects to have moved.
+	windowContinuationDecisions []windowContinuationDecision
 	priorSubjectReceiptsSkipped []int
 	answerReuseOutcomes         []AnswerReuseOutcome
 	answerReuseContainment      []AnswerReuseContainmentEvent
@@ -749,6 +753,10 @@ func (r *recordingTelemetry) RecordPlanCarry(_ context.Context, _ storage.Princi
 
 func (r *recordingTelemetry) RecordPlanCarryOutcome(_ context.Context, _ storage.Principal, outcome PlanCarryOutcome, sourceResultID string, seedSource CarrySeedSource) {
 	r.planCarryOutcomes = append(r.planCarryOutcomes, planCarryOutcomeRecord{outcome, sourceResultID, seedSource})
+}
+
+func (r *recordingTelemetry) RecordWindowContinuationDecision(_ context.Context, _ storage.Principal, decision windowContinuationDecision) {
+	r.windowContinuationDecisions = append(r.windowContinuationDecisions, decision)
 }
 
 func (r *recordingTelemetry) RecordCohortRanked(_ context.Context, _ storage.Principal, event CohortRankedEvent) {
