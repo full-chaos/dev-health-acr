@@ -30,6 +30,9 @@ type groupAuthorizingGraph struct {
 	// hinted records, in order, the subject hints of every resolution this
 	// double was asked to perform.
 	hinted [][]SubjectHint
+	// authorizationErr, when set, is returned by every HINTED resolution --
+	// an authorizer that could not answer, as distinct from one that said no.
+	authorizationErr error
 }
 
 func (g *groupAuthorizingGraph) ResolveSubjects(ctx context.Context, principal storage.Principal, request InvestigationRequest, interpreted InterpretedQuestion, binding ResolvedGraphBinding, confirmedKind *ConfirmedExpectedKind, confirmedAnchor *ConfirmedAnchorSelection, frame *QuestionFrame, scopeAnchorKind SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
@@ -37,6 +40,9 @@ func (g *groupAuthorizingGraph) ResolveSubjects(ctx context.Context, principal s
 	g.hinted = append(g.hinted, hints)
 	if len(hints) == 0 {
 		return g.graphReaderStub.ResolveSubjects(ctx, principal, request, interpreted, binding, confirmedKind, confirmedAnchor, frame, scopeAnchorKind)
+	}
+	if g.authorizationErr != nil {
+		return SubjectResolution{}, StructureOfferMaterial{}, nil, nil, g.authorizationErr
 	}
 	// A hinted resolution is the authorization question: return the hinted
 	// subjects that are admitted, and nothing for the ones that are not.
@@ -220,6 +226,13 @@ func groupReadEngineFixtureWithKinds(t *testing.T, telemetry EngineTelemetry, fa
 // guarantee is actually about: a turn that re-synthesizes must not re-read.
 func groupReadEngineFixtureFull(t *testing.T, telemetry EngineTelemetry, facts CanonicalFactReader, members []CohortMember, denied map[string]struct{}, cohortKind SubjectKind, options *EngineOptions, synthesisCalls *int) (*Engine, InvestigationRequest) {
 	t.Helper()
+	return groupReadEngineFixtureConfigured(t, telemetry, facts, members, denied, cohortKind, options, synthesisCalls, nil)
+}
+
+// groupReadEngineFixtureConfigured is the same fixture with a hook onto the
+// graph double, for the pins that need the authorizer itself to misbehave.
+func groupReadEngineFixtureConfigured(t *testing.T, telemetry EngineTelemetry, facts CanonicalFactReader, members []CohortMember, denied map[string]struct{}, cohortKind SubjectKind, options *EngineOptions, synthesisCalls *int, configure func(*groupAuthorizingGraph)) (*Engine, InvestigationRequest) {
+	t.Helper()
 	cohort := &Cohort{
 		Kind: cohortKind, Rationale: "kind census match", Complete: true,
 		Members: members,
@@ -239,6 +252,9 @@ func groupReadEngineFixtureFull(t *testing.T, telemetry EngineTelemetry, facts C
 			},
 		},
 		denied: denied,
+	}
+	if configure != nil {
+		configure(graph)
 	}
 	engine, err := NewEngine(EngineDependencies{
 		Interpreter: groupReadFramedInterpreter{interpretation: interpretation, groupKind: SubjectTeam, memberKind: SubjectProject},
