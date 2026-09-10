@@ -762,15 +762,46 @@ const (
 	// loadCompoundingRiskPersisted reads FROM health.go's own team-scope
 	// backing table.
 	observationKeyTeamRiskRollup contextfabric.ObservationKey = "team_risk_rollup"
-	// observationKeyTeamProjectThroughputRollup backs flow@team,
-	// flow@project, workload@team, workload@project, and
-	// operational_deficiencies@team: ops
+	// TWO KEYS, NOT ONE, over work_item_metrics_daily -- and the reason is a
+	// defect the single key it replaces actually had.
+	//
+	// Two DIFFERENT derived tables are built from work_item_metrics_daily, by
+	// two different writers: capacity_forecasts (workload) and
+	// recommendations_daily (operational_deficiencies). flow is sourced from
+	// work_item_metrics_daily itself, so flow pairs with EACH of them at one
+	// hop -- but workload and operational_deficiencies do NOT pair with each
+	// other. Neither table is built from the other's; they share an ANCESTOR.
+	// That is the shared-ancestry case the ruling's rule excludes by name, and
+	// it is why landscape + operational_deficiencies is deliberately absent
+	// from this table.
+	//
+	// One key naming all three cells made the exclusion unenforceable: a
+	// single key is an equivalence class, so declaring flow~workload and
+	// flow~deficiencies through the SAME key necessarily declared
+	// workload~deficiencies too. Measured, before the split:
+	// workload + operational_deficiencies @ team covered to 1 where the
+	// truth is 2 -- a sixth pairing nobody declared, produced by transitivity
+	// through a shared key name. Exactly the partition problem the
+	// list-valued shape exists to avoid, reintroduced one level down in the
+	// KEY VOCABULARY rather than in the field's type.
+	//
+	// So each one-hop relation gets its OWN key, and flow declares both.
+	// A key names a RELATION, never a source table.
+
+	// observationKeyTeamProjectCapacityFromThroughput backs flow and workload
+	// at team and project: ops
 	// internal/jobs/metrics/remaining/capacity_native_clickhouse.go:72's
-	// loadThroughput reads FROM the same table flow.go is itself sourced
-	// from to build the workload writer's own backing table, and
-	// recommendations_loader.go:142's loadWIPThroughput reads FROM it
-	// again for the operational-deficiencies writer.
-	observationKeyTeamProjectThroughputRollup contextfabric.ObservationKey = "team_project_throughput_rollup"
+	// loadThroughput reads FROM work_item_metrics_daily to build
+	// capacity_forecasts, which is workload's own backing table.
+	observationKeyTeamProjectCapacityFromThroughput contextfabric.ObservationKey = "team_project_capacity_from_throughput"
+	// observationKeyTeamRecommendationsFromThroughput backs flow and
+	// operational_deficiencies at team: ops
+	// internal/jobs/metrics/remaining/recommendations_loader.go:142's
+	// loadWIPThroughput reads FROM work_item_metrics_daily to build
+	// recommendations_daily, which is operational_deficiencies' own backing
+	// table. A DIFFERENT derived table from the same ancestor, so a
+	// DIFFERENT observation.
+	observationKeyTeamRecommendationsFromThroughput contextfabric.ObservationKey = "team_recommendations_from_throughput"
 	// observationKeyTeamSustainabilityRollup backs metrics@team and
 	// operational_deficiencies@team: ops
 	// recommendations_loader.go:356's loadSustainabilitySignals reads FROM
@@ -845,20 +876,31 @@ func factKindObservationKey(kind contextfabric.FactKind) map[contextfabric.Subje
 			contextfabric.SubjectTeam:       {observationKeyTeamSustainabilityRollup},
 		}
 	case contextfabric.FactFlow:
+		// flow is sourced from work_item_metrics_daily itself, so it pairs
+		// with BOTH tables built from it -- capacity_forecasts (workload) and
+		// recommendations_daily (operational_deficiencies). At project only
+		// the capacity relation exists, because operational_deficiencies
+		// serves team alone.
 		return map[contextfabric.SubjectKind][]contextfabric.ObservationKey{
-			contextfabric.SubjectTeam:    {observationKeyTeamProjectThroughputRollup},
-			contextfabric.SubjectProject: {observationKeyTeamProjectThroughputRollup},
+			contextfabric.SubjectTeam: {
+				observationKeyTeamProjectCapacityFromThroughput,
+				observationKeyTeamRecommendationsFromThroughput,
+			},
+			contextfabric.SubjectProject: {observationKeyTeamProjectCapacityFromThroughput},
 		}
 	case contextfabric.FactWorkload:
+		// capacity_forecasts only. Workload does NOT pair with
+		// operational_deficiencies: both descend from
+		// work_item_metrics_daily, neither is built from the other.
 		return map[contextfabric.SubjectKind][]contextfabric.ObservationKey{
-			contextfabric.SubjectTeam:    {observationKeyTeamProjectThroughputRollup},
-			contextfabric.SubjectProject: {observationKeyTeamProjectThroughputRollup},
+			contextfabric.SubjectTeam:    {observationKeyTeamProjectCapacityFromThroughput},
+			contextfabric.SubjectProject: {observationKeyTeamProjectCapacityFromThroughput},
 		}
 	case contextfabric.FactOperationalDeficiencies:
 		return map[contextfabric.SubjectKind][]contextfabric.ObservationKey{
 			contextfabric.SubjectTeam: {
 				observationKeyTeamRiskRollup,
-				observationKeyTeamProjectThroughputRollup,
+				observationKeyTeamRecommendationsFromThroughput,
 				observationKeyTeamSustainabilityRollup,
 			},
 		}
