@@ -120,3 +120,43 @@ func TestCertifyRefusesAWrongValue(t *testing.T) {
 		t.Fatal("Certify() accepted pool_truncated_n=0 when the fixture expects 72 -- an expectation that cannot fail pins nothing")
 	}
 }
+
+// Certify's closed-vocabulary guard: a value outside the event's declared
+// closed vocabulary is refused even when the caller's own Want never named
+// that value (the guard checks the LINE against the declaration, not just
+// against Want) -- kills a mutant that weakens the vocabulary membership
+// check.
+func TestCertifyRefusesAValueOutsideTheClosedVocabulary(t *testing.T) {
+	badVocab := strings.Replace(validRankedCutSummaryLine(), `"anchor_slot_source":"receipt"`, `"anchor_slot_source":"not_a_declared_source"`, 1)
+	log, err := Parse([]byte(badVocab))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	want := wantForRankedCutSummary()
+	want["anchor_slot_source"] = "not_a_declared_source"
+	_, err = Certify(log, Assertion{Event: eventspec.RankedCutSummary, Want: want})
+	if err == nil {
+		t.Fatal("Certify() accepted anchor_slot_source=\"not_a_declared_source\", which is outside the event's declared closed vocabulary {receipt,confirmed_anchor,none} -- want a refusal")
+	}
+	if !strings.Contains(err.Error(), "closed vocabulary") {
+		t.Errorf("refusal text = %q, want it to name the closed-vocabulary violation", err.Error())
+	}
+}
+
+// Certify's field-presence guard: a Want key the event declares but the
+// line omits entirely is refused, never silently skipped -- kills a mutant
+// that weakens the presence check (missing must never read as a pass).
+func TestCertifyRefusesAWantKeyMissingFromTheLine(t *testing.T) {
+	missingKey := strings.Replace(validRankedCutSummaryLine(), `"pool_truncated_n":72,`, ``, 1)
+	log, err := Parse([]byte(missingKey))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	_, err = Certify(log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()})
+	if err == nil {
+		t.Fatal("Certify() accepted a line with no pool_truncated_n key at all, even though Want asserts it -- want a refusal naming the missing key")
+	}
+	if !strings.Contains(err.Error(), "has no") {
+		t.Errorf("refusal text = %q, want it to name the missing key", err.Error())
+	}
+}
