@@ -25,6 +25,7 @@ package modelprovider
 
 import (
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strconv"
 	"strings"
@@ -167,6 +168,16 @@ type Config struct {
 	// one caller-supplied sink, never a package-internal default. Not
 	// validated: an interface field has no bound to enforce.
 	Telemetry contextfabric.EngineTelemetry
+	// Logger is OPTIONAL (nil-safe) -- CHAOS-5380. It reaches
+	// genkitruntime.Config.Logger unchanged (see runtimeConfig), which is
+	// what makes the CHAOS-3889 decision event -- and the per-attempt
+	// fields CHAOS-5380 adds to it -- land in the service's own configured,
+	// collected sink. Left nil, genkitruntime.New substitutes
+	// slog.Default(); this repository never calls slog.SetDefault, so that
+	// default is Go's own stderr text handler and the line misses the
+	// collected sink entirely. Exactly the shape CHAOS-4355 found for
+	// Telemetry one field above.
+	Logger *slog.Logger
 }
 
 // validate enforces the bounds this package owns. genkitruntime.New
