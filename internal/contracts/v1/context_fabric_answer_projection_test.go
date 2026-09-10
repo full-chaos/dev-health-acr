@@ -449,7 +449,23 @@ func TestAnswerProjectionReusedShapesMatchTheCanonicalOnes(t *testing.T) {
 		// carries the SAME structured coverage detail the canonical result
 		// does (settled design §7.2), not a narrowed copy.
 		"CoverageDetail",
-		"EffectiveEvidenceWindow", "HandleOption", "KindOption",
+		"EffectiveEvidenceWindow",
+		// CHAOS-5405 D-d: FactScopeCensusRecord joins deliberately. The
+		// projection carries the SAME census rows the canonical result does,
+		// verbatim -- a narrowed copy would be a second authority for what a
+		// traversal measured, and the whole point of the record is that there
+		// is exactly one.
+		//
+		// It is a projection-LOCAL $def rather than a cross-file $ref for a
+		// mechanical reason worth keeping written down: this document has no
+		// external refs at all, and the validator resolves a relative ref
+		// against the document's own $id -- an https identifier that does not
+		// resolve -- so the first cross-file ref added here turns schema
+		// validation into a DNS lookup. The subtest below is what keeps the
+		// copy honest: it asserts the projected def is byte-equal to the
+		// canonical one.
+		"FactScopeCensusRecord",
+		"HandleOption", "KindOption",
 		// S7c: PlanRequirementOutcomeRow joins deliberately. The
 		// projection carries the SAME outcome rows the canonical result
 		// does and appends its own cuts to them -- it does not hold a

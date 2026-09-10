@@ -427,6 +427,19 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// so the disclosure, its Coverage.Partial flag and the answer are one
 	// object throughout.
 	applyFactScopeDisclosure(&result, facts.Scope)
+	// CHAOS-5405 D-d: the SERVED census of what the scope resolver actually
+	// decided. Placed immediately beside the disclosure it complements and on
+	// the same object, for the same reason stated above -- the census, the
+	// disclosure, the Coverage.Partial flag and the answer are validated,
+	// returned and persisted together or they can disagree.
+	//
+	// Beside applyFactScopeDisclosure rather than anywhere else because the two
+	// then have IDENTICAL reachability: any path that would serve a gap
+	// disclosure serves a census, and any path that resolves no scope serves
+	// neither. A census reachable on a different set of paths from the
+	// disclosure would make "no census" ambiguous between "no scope" and "this
+	// path forgot", which is the ambiguity D-d exists to remove.
+	applyFactScopeCensus(&result, facts.Scope)
 	// CHAOS-4962: a grouped question answered ungrouped says so on the wire,
 	// not only in telemetry. Placed with the other disclosure composers and
 	// before the commit-affirmation gate, Validate and Save, so the sentence,

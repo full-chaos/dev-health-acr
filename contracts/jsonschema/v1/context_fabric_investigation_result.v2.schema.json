@@ -196,6 +196,14 @@
     "completeness": {
       "$ref": "context_fabric_common.v1.schema.json#/$defs/AnswerCompleteness"
     },
+    "fact_scope_census": {
+      "type": "array",
+      "items": {
+        "$ref": "context_fabric_common.v1.schema.json#/$defs/FactScopeCensusRecord"
+      },
+      "maxItems": 21,
+      "description": "CHAOS-5405 D-d: one record per attempted requirement/origin scope decision. Optional-first: absent on every result written before this field existed, and on any path that resolved no scope at all -- absent and empty are different documents."
+    },
     "evidence_ref_labels": {
       "type": "object",
       "additionalProperties": {

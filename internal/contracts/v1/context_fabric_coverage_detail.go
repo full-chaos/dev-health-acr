@@ -252,7 +252,50 @@ var contextFabricFactScopePolicies = [...]string{
 	"team_primary_attribution_repository_v1",
 	"team_primary_attribution_pull_request_v1",
 	"team_primary_attribution_pull_request_review_v1",
+	// CHAOS-5405: the fourteen work-item-target policies. A policy the
+	// domain can emit but this vocabulary rejects fails
+	// ContextFabricCoverageDetail.Validate at SERVE time, turning a fixed
+	// hollow answer into a 500 -- so the mirror lands with the domain
+	// declarations, never after them.
+	"project_work_item_status_v1",
+	"project_work_item_work_v1",
+	"project_work_item_actual_completion_v1",
+	"project_work_item_blockers_v1",
+	"project_work_item_required_children_v1",
+	"project_work_item_identity_v1",
+	"project_work_item_membership_v1",
+	"team_primary_attribution_work_item_status_v1",
+	"team_primary_attribution_work_item_work_v1",
+	"team_primary_attribution_work_item_actual_completion_v1",
+	"team_primary_attribution_work_item_blockers_v1",
+	"team_primary_attribution_work_item_required_children_v1",
+	"team_primary_attribution_work_item_identity_v1",
+	"team_primary_attribution_work_item_membership_v1",
 }
+
+// ContextFabricFactScopeCensusMaxCount bounds
+// ContextFabricInvestigationResult.FactScopeCensus (CHAOS-5405, D-d).
+//
+// DERIVED from the policy vocabulary rather than chosen, because the two are
+// the same quantity: the resolver emits at most one census record per
+// requirement/origin decision, and each named policy identifies exactly one
+// requirement/origin cell -- an invariant internal/contextfabric pins
+// directly (its per-origin activation guard asserts each ruled policy appears
+// once for one origin). So "one row per policy" is the ceiling, and adding a
+// policy moves this bound with it instead of leaving a literal behind.
+//
+// A number chosen independently would be the shape this file keeps removing:
+// a relation between two literals is not checkable, a relation between a
+// constant and its vocabulary is.
+const ContextFabricFactScopeCensusMaxCount = len(contextFabricFactScopePolicies)
+
+// ContextFabricFactScopeCensusTokenMaxLength bounds every string field on a
+// census record. The values are closed tokens the domain mints -- the longest
+// real one today is 55 runes -- so this is a CEILING that keeps the wire from
+// declaring an unbounded string on a persisted document, not a shape check.
+// The vocabulary membership itself is enforced where the tokens are minted;
+// duplicating it here would be a second authority to keep in sync.
+const ContextFabricFactScopeCensusTokenMaxLength = 128
 
 var contextFabricFactScopeBases = [...]string{
 	"direct", "activity_proxy", "attributed_primary_team",

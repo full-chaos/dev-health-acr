@@ -1641,6 +1641,9 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 			return fmt.Errorf("structure_needs: %w", err)
 		}
 	}
+	if err := validateFactScopeCensus(r.FactScopeCensus); err != nil {
+		return err
+	}
 	// One entry per CARRIED member (design brief §2.1) -- bounded by the
 	// closed frame-member vocabulary's own size, not an offer-list cap.
 	if len(r.ConfirmedStructure) > ContextFabricStructureNeedKindCount {
@@ -1858,6 +1861,110 @@ func validateRequirementJoin(r ContextFabricInvestigationResult) error {
 			return fmt.Errorf(
 				"answer plan describes requirement %q, which no outcome row accounts for",
 				requirement.Requirement)
+		}
+	}
+	return nil
+}
+
+// validateFactScopeCensus is the ONE rule for the served fact-scope census
+// (CHAOS-5405 D-d), called by BOTH the canonical result validator and the
+// answer-projection validator.
+//
+// It exists as a function because it was inline in the result validator and
+// the projection validator checked nothing at all (codex r3 P2, reproduced
+// before this fix: a projection carrying unknown tokens, negative bounds and a
+// contradictory measurement validated clean). The API and MCP paths call the
+// PROJECTION validator, so the stricter boundary was the one nobody crossed.
+//
+// One function rather than a second copy: two lists of the same vocabulary is
+// how the two boundaries end up disagreeing about the same document, which is
+// the shape this file keeps removing.
+func validateFactScopeCensus(records []ContextFabricFactScopeCensusRecord) error {
+	// CHAOS-5405 D-d: the served fact-scope census. Bounded and range-checked
+	// here because the published schema declares these bounds, and a schema
+	// that promises what the write path does not enforce lets the service
+	// emit a document violating its own contract -- the exact gap
+	// TestSchemaAndGoBoundsAgree exists to close.
+	//
+	// authorized_population_count is checked only when PRESENT: nil is its
+	// ruled value for a census that did not complete, and a nil-is-invalid
+	// rule here would forbid the very state the field was made nullable for.
+	if len(records) > ContextFabricFactScopeCensusMaxCount {
+		return fmt.Errorf("fact_scope_census exceeds v1 bounds")
+	}
+	for i, record := range records {
+		if record.TargetLimit < 0 {
+			return fmt.Errorf("fact_scope_census[%d]: target_limit must be non-negative", i)
+		}
+		if record.AdmittedCount < 0 {
+			return fmt.Errorf("fact_scope_census[%d]: admitted_count must be non-negative", i)
+		}
+		if record.AuthorizedPopulationCount != nil && *record.AuthorizedPopulationCount < 0 {
+			return fmt.Errorf("fact_scope_census[%d]: authorized_population_count must be non-negative", i)
+		}
+		// POPULATION_MEASURED AND THE COUNT MUST AGREE (codex r2 F3).
+		// nil means the census did not complete and 0 means it completed
+		// and found none -- the ONE distinction this record exists to
+		// carry. A document asserting `population_measured: false` beside
+		// a non-null count, or `true` beside a null one, contradicts
+		// itself about exactly that, and both were accepted before this
+		// check. Neither is a shape a producer can reach; both are shapes
+		// a WRITER can reach, which is what a validator is for.
+		if record.PopulationMeasured != (record.AuthorizedPopulationCount != nil) {
+			return fmt.Errorf("fact_scope_census[%d]: population_measured=%t disagrees with authorized_population_count -- a measured population carries a count and an unmeasured one carries null",
+				i, record.PopulationMeasured)
+		}
+		// Every string here is a CLOSED TOKEN the domain mints, and this
+		// is where that is enforced (codex r2 F3: only the length was
+		// checked, so arbitrary values passed). The vocabularies are the
+		// ones this package already owns and ContextFabricCoverageDetail
+		// already validates against -- no second authority is introduced
+		// here, and none may be: a list restated in this file is a list
+		// that will drift.
+		//
+		// THE RUNTIME LENGTH CHECK IS GONE, and its absence is the point.
+		// A non-empty value must be a MEMBER, and every member is far shorter
+		// than the ceiling, so a length guard beside a membership guard can
+		// never be the thing that rejects anything: the battery deleted it and
+		// all 5266 tests still passed. A guard no test can kill is not
+		// defence in depth, it is code that reads like a check and is not one.
+		// ContextFabricFactScopeCensusTokenMaxLength remains as the WIRE
+		// declaration, which is what the published schemas carry and what
+		// TestSchemaAndGoBoundsAgree binds; membership is the stronger
+		// enforcement and is the one that runs.
+		//
+		// EMPTY IS LEGAL for every field, and deliberately so: basis and
+		// axis are genuinely empty on a rung that refused before either
+		// was resolved, and rejecting them would reject the very rows D-e
+		// added to make a refusal legible. Same `!= ""` guard
+		// ContextFabricCoverageDetail.Validate uses on its own tokens.
+		for _, field := range []struct {
+			name  string
+			value string
+			valid func(string) bool
+		}{
+			{"requirement_kind", record.RequirementKind, func(v string) bool {
+				return validFactKind(ContextFabricFactKind(v))
+			}},
+			{"origin_kind", record.OriginKind, func(v string) bool {
+				return ValidContextFabricSubjectKind(ContextFabricSubjectKind(v))
+			}},
+			{"policy", record.Policy, func(v string) bool {
+				return stringInVocabulary(v, contextFabricFactScopePolicies[:])
+			}},
+			{"basis", record.Basis, func(v string) bool {
+				return stringInVocabulary(v, contextFabricFactScopeBases[:])
+			}},
+			{"axis", record.Axis, func(v string) bool {
+				return ValidContextFabricTemporalAxis(ContextFabricTemporalAxis(v))
+			}},
+			{"outcome", record.Outcome, func(v string) bool {
+				return stringInVocabulary(v, contextFabricFactScopeOutcomes[:])
+			}},
+		} {
+			if field.value != "" && !field.valid(field.value) {
+				return fmt.Errorf("fact_scope_census[%d]: %s %q is not a member of its closed vocabulary", i, field.name, field.value)
+			}
 		}
 	}
 	return nil

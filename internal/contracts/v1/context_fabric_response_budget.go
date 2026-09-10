@@ -45,6 +45,29 @@ type ContextFabricResultItemCounts struct {
 	Conflicts     int `json:"conflicts"`
 	ClaimedFacts  int `json:"claimed_facts"`
 	CohortMembers int `json:"cohort_members"`
+	// NOT CHARGED, decided rather than defaulted (CHAOS-5405, D-d):
+	// ContextFabricInvestigationResult.FactScopeCensus.
+	//
+	// This struct's own contract is that a new result collection is a
+	// DECISION to charge or not, made here, so the decision is written here
+	// even though the outcome is "no field". Two reasons, and the second is
+	// the load-bearing one:
+	//
+	//   - The census is not evidence. Every collection above is content the
+	//     caller reads AS the answer; the census is a statement ABOUT the
+	//     answer's completeness. Charging it would let the diagnostics that
+	//     explain a truncation evict the very rows they are explaining --
+	//     the same inversion that keeps relationship Paths out of Budgeted().
+	//   - It is not tradeable. The item budget exists so a caller can spend
+	//     a bounded allowance across collections it influences. The census's
+	//     cardinality is a function of the eligibility table, not of the
+	//     request, so there is nothing for a caller to trade it against and
+	//     a charge would only shrink the answer for a reason the caller
+	//     cannot act on.
+	//
+	// It is still bounded, on the axis that actually governs this surface:
+	// ContextFabricFactScopeCensusMaxCount caps the row count, and the
+	// serialized body is measured against MaxSerializedBytes below.
 }
 
 // Total is every charged item, Paths included. It is what a caller's usage

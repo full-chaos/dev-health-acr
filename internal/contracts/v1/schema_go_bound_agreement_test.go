@@ -144,12 +144,26 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		// count.minimum is Go's own "must be non-negative" clause;
 		// source shares SourceObservation's 1..128 name bound; the two
 		// kind arrays share the 32-entry cap the validator enforces.
-		"common#$defs.CoverageDetail.properties.count.minimum":            0,
-		"common#$defs.CoverageDetail.properties.raw.maxLength":            ContextFabricCoverageDetailRawMaxLength,
-		"common#$defs.CoverageDetail.properties.source.minLength":         1,
-		"common#$defs.CoverageDetail.properties.source.maxLength":         128,
-		"common#$defs.CoverageDetail.properties.supported_kinds.maxItems": contextFabricCoverageDetailKindsMaxCount,
-		"common#$defs.CoverageDetail.properties.skipped_kinds.maxItems":   contextFabricCoverageDetailKindsMaxCount,
+		"common#$defs.CoverageDetail.properties.count.minimum": 0,
+		// CHAOS-5405 D-d: the census record's own non-negative clauses, all
+		// three enforced by ContextFabricInvestigationResult.Validate's
+		// fact_scope_census loop. authorized_population_count is checked only
+		// when present -- nil is its ruled value for an incomplete census, so
+		// the bound constrains the number it carries, never its absence.
+		"common#$defs.FactScopeCensusRecord.properties.target_limit.minimum":                0,
+		"common#$defs.FactScopeCensusRecord.properties.admitted_count.minimum":              0,
+		"common#$defs.FactScopeCensusRecord.properties.authorized_population_count.minimum": 0,
+		"common#$defs.FactScopeCensusRecord.properties.requirement_kind.maxLength":          ContextFabricFactScopeCensusTokenMaxLength,
+		"common#$defs.FactScopeCensusRecord.properties.origin_kind.maxLength":               ContextFabricFactScopeCensusTokenMaxLength,
+		"common#$defs.FactScopeCensusRecord.properties.policy.maxLength":                    ContextFabricFactScopeCensusTokenMaxLength,
+		"common#$defs.FactScopeCensusRecord.properties.basis.maxLength":                     ContextFabricFactScopeCensusTokenMaxLength,
+		"common#$defs.FactScopeCensusRecord.properties.axis.maxLength":                      ContextFabricFactScopeCensusTokenMaxLength,
+		"common#$defs.FactScopeCensusRecord.properties.outcome.maxLength":                   ContextFabricFactScopeCensusTokenMaxLength,
+		"common#$defs.CoverageDetail.properties.raw.maxLength":                              ContextFabricCoverageDetailRawMaxLength,
+		"common#$defs.CoverageDetail.properties.source.minLength":                           1,
+		"common#$defs.CoverageDetail.properties.source.maxLength":                           128,
+		"common#$defs.CoverageDetail.properties.supported_kinds.maxItems":                   contextFabricCoverageDetailKindsMaxCount,
+		"common#$defs.CoverageDetail.properties.skipped_kinds.maxItems":                     contextFabricCoverageDetailKindsMaxCount,
 		// Result-level answer text and collections.
 		"result#properties.direct_judgment.maxLength":      contextFabricWriteBounds.judgmentLength,
 		"result#properties.current_state.maxLength":        contextFabricWriteBounds.judgmentLength,

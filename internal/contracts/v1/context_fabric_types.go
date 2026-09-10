@@ -161,6 +161,39 @@ const (
 	ContextFabricTemporalRange        ContextFabricTemporalAxis = "range"
 )
 
+// contextFabricTemporalAxes is the ContextFabricTemporalAxis closed
+// vocabulary as a list, so a validator can derive membership instead of
+// restating the four members in a second switch.
+//
+// The published schemas declare the same four as a JSON Schema `enum` on
+// TimeContext.axis; a test asserts the two agree in BOTH directions, which is
+// what makes this a mirror rather than a duplicate.
+var contextFabricTemporalAxes = [...]ContextFabricTemporalAxis{
+	ContextFabricTemporalCurrent,
+	ContextFabricTemporalValidTime,
+	ContextFabricTemporalObservedTime,
+	ContextFabricTemporalRange,
+}
+
+// ContextFabricTemporalAxisVocabulary returns a copy of the closed axis
+// vocabulary, for the schema-parity test.
+func ContextFabricTemporalAxisVocabulary() [len(contextFabricTemporalAxes)]ContextFabricTemporalAxis {
+	return contextFabricTemporalAxes
+}
+
+// ValidContextFabricTemporalAxis reports whether value is a member of the
+// closed axis vocabulary. The EMPTY value is NOT a member; a caller for which
+// "unset" is legal says so explicitly, exactly as ValidContextFabricSubjectKind
+// requires.
+func ValidContextFabricTemporalAxis(value ContextFabricTemporalAxis) bool {
+	for _, member := range contextFabricTemporalAxes {
+		if member == value {
+			return true
+		}
+	}
+	return false
+}
+
 type ContextFabricDriverStanding string
 
 const (
@@ -1675,10 +1708,31 @@ type ContextFabricInvestigationResult struct {
 	// before this field existed; when non-nil the write path enforces EXACT
 	// key equality with the result's own closure — an unlabeled ref is
 	// unrepresentable on a fresh write.
-	EvidenceRefLabels   map[string]string       `json:"evidence_ref_labels,omitempty"`
-	Versions            ContextFabricVersionSet `json:"versions"`
-	DeterministicAnswer string                  `json:"deterministic_answer"`
-	Warnings            []string                `json:"warnings"`
+	// FactScopeCensus (CHAOS-5405, D-d) is one record per ATTEMPTED
+	// requirement/origin-policy decision: what population was measured, how
+	// much of it the caller was authorized to see, how much was admitted, and
+	// whether the answer was cut short.
+	//
+	// IT IS SERVED, not merely logged, because two distinctions the answer
+	// depends on cannot be recovered from anything else on this result. A
+	// MEASURED ZERO and an UNMEASURED population are both "no facts" to a
+	// reader -- admitted_count = 0 alone never proves emptiness. And a
+	// coverage detail names a policy only when a GAP was recorded
+	// (fact_registry.go), so a SUCCESSFUL expansion names no policy anywhere,
+	// which makes two yardstick arms impossible to prove same-policy after
+	// the fact.
+	//
+	// Counts from overlapping origin groups are NOT additive, and
+	// authorized_population_count always means the CALLER-VISIBLE population,
+	// never the organization's unrestricted one.
+	//
+	// Optional-first: nil on every result written before this field existed,
+	// and on any path that resolved no scope at all.
+	FactScopeCensus     []ContextFabricFactScopeCensusRecord `json:"fact_scope_census,omitempty"`
+	EvidenceRefLabels   map[string]string                    `json:"evidence_ref_labels,omitempty"`
+	Versions            ContextFabricVersionSet              `json:"versions"`
+	DeterministicAnswer string                               `json:"deterministic_answer"`
+	Warnings            []string                             `json:"warnings"`
 	// Reused marks whether this result was served from the immutable
 	// result store instead of a fresh investigation (CHAOS-3782, TRD
 	// §19.7, AC-3782-2). When true, ResultID and GeneratedAt above are NOT
@@ -2017,4 +2071,35 @@ func ValidContextFabricSubjectKind(value ContextFabricSubjectKind) bool {
 		}
 	}
 	return false
+}
+
+// ContextFabricFactScopeCensusRecord is one attempted requirement/origin
+// scope decision, as served (CHAOS-5405, D-d).
+//
+// AuthorizedPopulationCount is a POINTER on purpose. A measured population of
+// zero and a population that was never measured are DIFFERENT facts about the
+// answer, and a plain int makes them the same wire value -- which is the exact
+// ambiguity this record exists to remove. PopulationMeasured carries no
+// omitempty for the same reason: a `false` that vanishes from the document
+// reads as an absent field rather than as "the census did not complete".
+type ContextFabricFactScopeCensusRecord struct {
+	RequirementKind string `json:"requirement_kind"`
+	OriginKind      string `json:"origin_kind"`
+	Policy          string `json:"policy"`
+	Basis           string `json:"basis"`
+	Axis            string `json:"axis"`
+	Outcome         string `json:"outcome"`
+	// TargetLimit is the bound actually applied, so a reader never has to
+	// assume the constant.
+	TargetLimit int `json:"target_limit"`
+	// PopulationMeasured is false whenever the census did not complete; then
+	// AuthorizedPopulationCount is null and the counts below describe only
+	// what was observed before the traversal stopped.
+	PopulationMeasured bool `json:"population_measured"`
+	// AuthorizedPopulationCount is the caller-visible authorized population,
+	// null when unmeasured. A proved-empty population is measured=true with
+	// a count of 0.
+	AuthorizedPopulationCount *int `json:"authorized_population_count"`
+	AdmittedCount             int  `json:"admitted_count"`
+	Truncated                 bool `json:"truncated"`
 }

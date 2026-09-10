@@ -104,6 +104,21 @@ type ContextFabricAnswerProjection struct {
 	// entry cap as CoverageSummary; overflow is counted in
 	// ProjectionBudget.CoverageOmitted.
 	CoverageDetails []ContextFabricCoverageDetail `json:"coverage_details,omitempty"`
+	// FactScopeCensus (CHAOS-5405, D-d) carries the canonical result's
+	// per-decision scope census through to the consumer UNCHANGED and
+	// UNCLAMPED.
+	//
+	// Not budget-bearing, deliberately. Every other array here is clamped
+	// because a consumer can still read the answer with a shorter list; this
+	// one is what tells the consumer whether the answer is a WHOLE-population
+	// statement or a bounded sample of one, so dropping its tail would
+	// silently restore the exact ambiguity it exists to remove. Its own size
+	// is already bounded by the fourteen work-item pairs plus the six earlier
+	// policies, not by anything a caller controls.
+	//
+	// D-d, verbatim: "Preserve these records through answerprojection;
+	// consumers must not reconstruct them from prose."
+	FactScopeCensus []ContextFabricFactScopeCensusRecord `json:"fact_scope_census,omitempty"`
 	// EvidenceRefLabels (CHAOS-4690) maps exactly the refs this projection
 	// retains in EvidenceRefIDs to their display labels — filtered from the
 	// canonical result's own map, 1:1 with already-budgeted refs.

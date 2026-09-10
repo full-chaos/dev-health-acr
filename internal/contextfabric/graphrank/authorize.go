@@ -37,8 +37,31 @@ func scopeContainsAttr(attributes map[string]interface{}, key string, value stri
 	if !isList {
 		return false
 	}
-	return ScopeMatch(entries, value)
+	return ScopeMatch(entries, value, scopeValueKindForAttr(key))
 }
+
+// scopeValueKindForAttr maps an authorization_* attribute key to what the
+// values under it ARE, so ScopeMatch never has to infer a kind from a value's
+// shape (codex r2 F1: a project id shaped like "owner/repo" was folded
+// case-insensitively because the shape, not the key, decided).
+//
+// The DEFAULT IS THE IDENTIFIER, and that is the whole point of doing it here
+// rather than at each call: a key added later, or misspelled, gets the
+// case-SENSITIVE comparison. An unrecognised key is not a licence to fold.
+func scopeValueKindForAttr(key string) ScopeValueKind {
+	if key == authorizationRepositoriesAttr {
+		return ScopeValueRepositoryName
+	}
+	return ScopeValueIdentifier
+}
+
+// The three authorization_* attribute keys, named once so the kind mapping
+// above and the call sites below cannot drift on a string literal.
+const (
+	authorizationRepositoriesAttr = "authorization_repositories"
+	authorizationProjectsAttr     = "authorization_projects"
+	authorizationTeamsAttr        = "authorization_teams"
+)
 
 // AuthorizedAttributes reports whether a node/edge's attribute map is
 // visible to principal under the requested scope. Ported unchanged from
@@ -49,7 +72,7 @@ func AuthorizedAttributes(principal storage.Principal, requested contextfabric.R
 	if len(principal.RepositoryScopes) > 0 {
 		allowed := false
 		for _, repository := range principal.RepositoryScopes {
-			if scopeContainsAttr(attributes, "authorization_repositories", repository) {
+			if scopeContainsAttr(attributes, authorizationRepositoriesAttr, repository) {
 				allowed = true
 				break
 			}
@@ -58,13 +81,13 @@ func AuthorizedAttributes(principal storage.Principal, requested contextfabric.R
 			return false
 		}
 	}
-	if len(requested.RepositorySlugs) > 0 && !anyContainsAttr(attributes, "authorization_repositories", requested.RepositorySlugs) {
+	if len(requested.RepositorySlugs) > 0 && !anyContainsAttr(attributes, authorizationRepositoriesAttr, requested.RepositorySlugs) {
 		return false
 	}
-	if len(requested.ProjectIDs) > 0 && !anyContainsAttr(attributes, "authorization_projects", requested.ProjectIDs) {
+	if len(requested.ProjectIDs) > 0 && !anyContainsAttr(attributes, authorizationProjectsAttr, requested.ProjectIDs) {
 		return false
 	}
-	if len(requested.TeamIDs) > 0 && !anyContainsAttr(attributes, "authorization_teams", requested.TeamIDs) {
+	if len(requested.TeamIDs) > 0 && !anyContainsAttr(attributes, authorizationTeamsAttr, requested.TeamIDs) {
 		return false
 	}
 	return true

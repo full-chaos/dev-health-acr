@@ -137,15 +137,19 @@ var contextFabricCommonDefsRewrites = map[string]string{
 // context_fabric_investigation_result.v1 makes into
 // context_fabric_common.v1.
 var contextFabricResultDefsRewrites = map[string]string{
-	"context_fabric_common.v1.schema.json#/$defs/ClaimedFact":         "#/$defs/context_fabric_common.v1/$defs/ClaimedFact",
-	"context_fabric_common.v1.schema.json#/$defs/Cohort":              "#/$defs/context_fabric_common.v1/$defs/Cohort",
-	"context_fabric_common.v1.schema.json#/$defs/Coverage":            "#/$defs/context_fabric_common.v1/$defs/Coverage",
-	"context_fabric_common.v1.schema.json#/$defs/DriverJudgment":      "#/$defs/context_fabric_common.v1/$defs/DriverJudgment",
-	"context_fabric_common.v1.schema.json#/$defs/Finding":             "#/$defs/context_fabric_common.v1/$defs/Finding",
-	"context_fabric_common.v1.schema.json#/$defs/InterpretedQuestion": "#/$defs/context_fabric_common.v1/$defs/InterpretedQuestion",
-	"context_fabric_common.v1.schema.json#/$defs/RelationshipPath":    "#/$defs/context_fabric_common.v1/$defs/RelationshipPath",
-	"context_fabric_common.v1.schema.json#/$defs/SubjectResolution":   "#/$defs/context_fabric_common.v1/$defs/SubjectResolution",
-	"context_fabric_common.v1.schema.json#/$defs/VersionSet":          "#/$defs/context_fabric_common.v1/$defs/VersionSet",
+	"context_fabric_common.v1.schema.json#/$defs/ClaimedFact":    "#/$defs/context_fabric_common.v1/$defs/ClaimedFact",
+	"context_fabric_common.v1.schema.json#/$defs/Cohort":         "#/$defs/context_fabric_common.v1/$defs/Cohort",
+	"context_fabric_common.v1.schema.json#/$defs/Coverage":       "#/$defs/context_fabric_common.v1/$defs/Coverage",
+	"context_fabric_common.v1.schema.json#/$defs/DriverJudgment": "#/$defs/context_fabric_common.v1/$defs/DriverJudgment",
+	"context_fabric_common.v1.schema.json#/$defs/Finding":        "#/$defs/context_fabric_common.v1/$defs/Finding",
+	// CHAOS-5405 D-d: the served fact-scope census row. Relocated the same
+	// way as every other common $def so the offline response schema stays
+	// self-contained.
+	"context_fabric_common.v1.schema.json#/$defs/FactScopeCensusRecord": "#/$defs/context_fabric_common.v1/$defs/FactScopeCensusRecord",
+	"context_fabric_common.v1.schema.json#/$defs/InterpretedQuestion":   "#/$defs/context_fabric_common.v1/$defs/InterpretedQuestion",
+	"context_fabric_common.v1.schema.json#/$defs/RelationshipPath":      "#/$defs/context_fabric_common.v1/$defs/RelationshipPath",
+	"context_fabric_common.v1.schema.json#/$defs/SubjectResolution":     "#/$defs/context_fabric_common.v1/$defs/SubjectResolution",
+	"context_fabric_common.v1.schema.json#/$defs/VersionSet":            "#/$defs/context_fabric_common.v1/$defs/VersionSet",
 	// CHAOS-3900 W1: two more cross-file pointers the result schema makes
 	// into context_fabric_common.v1.
 	"context_fabric_common.v1.schema.json#/$defs/EffectiveEvidenceWindow": "#/$defs/context_fabric_common.v1/$defs/EffectiveEvidenceWindow",
@@ -240,6 +244,18 @@ var contextFabricProjectionDefsRewrites = map[string]string{
 	"#/$defs/ProjectedCohortGroup": "#/$defs/context_fabric_answer_projection.v1/$defs/ProjectedCohortGroup",
 	// CHAOS-4690: coverage_details' own new projection-local $defs entry.
 	"#/$defs/CoverageDetail": "#/$defs/context_fabric_answer_projection.v1/$defs/CoverageDetail",
+	// CHAOS-5405 D-d: the census row, relocated like every other
+	// projection-local def.
+	//
+	// It is a PROJECTION-LOCAL copy rather than a cross-file $ref to the
+	// common schema, and that is load-bearing rather than stylistic: the
+	// answer-projection schema has NO external refs at all, and
+	// gojsonschema resolves a relative $ref against the document's own
+	// $id -- an https identifier that does not resolve. The first
+	// cross-file ref added here therefore turns
+	// TestCHAOS4809ProjectedBasisValidatesAgainstThePublishedSchema into a
+	// DNS lookup, which is how this was found.
+	"#/$defs/FactScopeCensusRecord": "#/$defs/context_fabric_answer_projection.v1/$defs/FactScopeCensusRecord",
 	// The refinement step PlanRequirementOutcomeRow.refinements[] points
 	// at, relocated the same way for the same reason.
 	"#/$defs/RequirementRefinement": "#/$defs/context_fabric_answer_projection.v1/$defs/RequirementRefinement",
