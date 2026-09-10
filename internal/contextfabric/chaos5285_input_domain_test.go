@@ -128,24 +128,32 @@ func domainI6(d *domainTable) {
 // --- guard 2: the plan seam ------------------------------------------------
 
 func domainPlanSeam(d *domainTable) {
-	const guard = "plan seam (GroupKind == MemberKind)"
-	// The seam's predicate, exercised directly: the engine refuses when the
-	// two are equal AND the group axis is non-empty.
+	const guard = "plan seam (planGroupAxisCollapsed)"
+	// THE PRODUCTION PREDICATE, not a mirror of it. A mirror written beside
+	// the guard agrees with whatever the author believed the guard did, and
+	// this one did not: the seam compared the kinds bare, so ("", "") --
+	// an axis-less plan over a kindless cohort -- was REFUSED as I6 while
+	// the mirror said "served". The engine-level half of that cell is
+	// TestAPlanWithNoGroupAxisIsNeverRefusedAsASelfGroup.
 	collapses := func(group, member SubjectKind) string {
-		if group != "" && group == member {
+		if planGroupAxisCollapsed(group, member) {
 			return "refused"
 		}
 		return "served"
 	}
-	d.want(guard, "plan.GroupKind", "zero (no group axis)", collapses("", ""), "served")
+	d.want(guard, "plan.{Group,Member}Kind", "zero both (no group axis, kindless cohort)", collapses("", ""), "served")
 	d.want(guard, "plan.GroupKind", "zero with a member kind present", collapses("", SubjectTeam), "served")
 	d.want(guard, "plan.MemberKind", "zero (cohort kind unknown)", collapses(SubjectTeam, ""), "served")
 	d.want(guard, "plan.{Group,Member}Kind", "duplicate (equal kinds)", collapses(SubjectTeam, SubjectTeam), "refused")
 	d.want(guard, "plan.{Group,Member}Kind", "canonical (distinct kinds)", collapses(SubjectTeam, SubjectProject), "served")
 	d.want(guard, "plan.{Group,Member}Kind", "out of vocabulary, equal",
 		collapses(SubjectKind("not_a_kind"), SubjectKind("not_a_kind")), "refused")
+	d.want(guard, "plan.{Group,Member}Kind", "out of vocabulary, distinct",
+		collapses(SubjectKind("not_a_kind"), SubjectTeam), "served")
+	d.want(guard, "plan.{Group,Member}Kind", "equal up to case (Team vs team)",
+		collapses(SubjectKind("Team"), SubjectTeam), "served")
 	d.record(guard, "plan.{Group,Member}Kind", "boundary +/- 1", "n/a - closed unordered vocabulary", "ok")
-	d.record(guard, "all fields", "wrong container / wrong scalar / fractional / empty container", domainExcludedByTypeSystem, "ok")
+	d.record(guard, "all fields", "null / empty container / wrong container / wrong scalar / fractional", domainExcludedByTypeSystem+"; a Go string has no null distinct from zero", "ok")
 }
 
 // --- guard 3: the admission filter ----------------------------------------
@@ -155,24 +163,11 @@ func domainAdmissionFilter(d *domainTable) {
 	proposed := []contractsv1.ContextFabricCohortGroup{
 		{Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: TeamCanonicalID("team_a"), Label: "A"}, MemberCanonicalIDs: []string{"m"}, Total: 1, Complete: true},
 	}
-	// The filter's rule, isolated: a committed subject is admitted only when
-	// it was proposed AND its kind agrees, and never twice.
+	// THE PRODUCTION RULE, called directly -- the same function
+	// authorizeCohortGroups returns through.
 	admit := func(committed []SubjectRef) string {
-		byID := map[string]SubjectRef{}
-		for _, group := range proposed {
-			byID[group.Subject.CanonicalID] = group.Subject
-		}
-		seen := map[string]struct{}{}
 		out := make([]string, 0, len(committed))
-		for _, subject := range committed {
-			candidate, wasProposed := byID[subject.CanonicalID]
-			if !wasProposed || candidate.Kind != subject.Kind {
-				continue
-			}
-			if _, dup := seen[subject.CanonicalID]; dup {
-				continue
-			}
-			seen[subject.CanonicalID] = struct{}{}
+		for _, subject := range admitResolvedGroups(proposed, committed) {
 			out = append(out, subject.CanonicalID)
 		}
 		if len(out) == 0 {
@@ -193,7 +188,15 @@ func domainAdmissionFilter(d *domainTable) {
 		admit([]SubjectRef{{Kind: SubjectProject, CanonicalID: TeamCanonicalID("team_a"), Label: "A"}}), "admitted:none")
 	d.want(guard, "Committed[].Kind", "zero (empty kind)",
 		admit([]SubjectRef{{Kind: "", CanonicalID: TeamCanonicalID("team_a"), Label: "A"}}), "admitted:none")
-	d.record(guard, "resolution.Committed", "null", "same cell as empty container: a nil slice IS the null", "ok")
+	d.want(guard, "resolution.Committed", "null (nil slice)", admit(nil), "admitted:none")
+	d.want(guard, "Committed[].CanonicalID", "raw key of a proposed group (namespace missing)", admit([]SubjectRef{team("team_a")}), "admitted:none")
+	d.want(guard, "Committed[].CanonicalID", "case variant of a proposed identity", admit([]SubjectRef{team("TEAM:team_a")}), "admitted:none")
+	d.want(guard, "proposed groups", "empty container", func() string {
+		if got := admitResolvedGroups(nil, []SubjectRef{team(TeamCanonicalID("team_a"))}); len(got) != 0 {
+			return fmt.Sprintf("admitted:%d", len(got))
+		}
+		return "admitted:none"
+	}(), "admitted:none")
 	d.record(guard, "all fields", "wrong container / wrong scalar / fractional / boundary", domainExcludedByTypeSystem, "ok")
 }
 
@@ -202,8 +205,9 @@ func domainAdmissionFilter(d *domainTable) {
 func domainBound(d *domainTable) {
 	const guard = "group contract bound"
 	bound := contractsv1.ContextFabricCohortGroupsMaxCount
+	// THE PRODUCTION PREDICATE readAdmittedGroupFacts decides with.
 	over := func(count int) string {
-		if count > bound {
+		if groupListOverContractBound(count) {
 			return "refused"
 		}
 		return "served"

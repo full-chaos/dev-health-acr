@@ -2269,7 +2269,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// defect this field exists to make visible.
 	if graphContext.Cohort != nil {
 		plan.MemberKind = graphContext.Cohort.Kind
-		if plan.GroupKind == plan.MemberKind {
+		if planGroupAxisCollapsed(plan.GroupKind, plan.MemberKind) {
 			// A group axis that collapsed onto the member kind partitions a
 			// set by itself, which no grouping can mean -- invariant I6, at
 			// a seam the frame gate cannot reach.

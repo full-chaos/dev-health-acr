@@ -189,16 +189,24 @@ func (e *Engine) authorizeCohortGroups(ctx context.Context, principal storage.Pr
 	if err != nil {
 		return nil, err
 	}
-	// Admitted by IDENTITY, not by count. A resolution that returned the
-	// right NUMBER of subjects and the wrong ones would pass a count check
-	// and then read facts about a group nobody asked for.
+	return admitResolvedGroups(groups, resolution.Committed), nil
+}
+
+// admitResolvedGroups is the authorization step's admission rule: of what the
+// resolver committed, keep exactly the subjects this turn PROPOSED, of the
+// proposed kind, once each, in the resolver's order.
+//
+// Admitted by IDENTITY, not by count. A resolution that returned the right
+// NUMBER of subjects and the wrong ones would pass a count check and then
+// read facts about a group nobody asked for.
+func admitResolvedGroups(groups []contractsv1.ContextFabricCohortGroup, committedSubjects []SubjectRef) []SubjectRef {
 	proposed := make(map[string]SubjectRef, len(groups))
 	for _, group := range groups {
 		proposed[group.Subject.CanonicalID] = group.Subject
 	}
 	admitted := make([]SubjectRef, 0, len(groups))
 	seen := make(map[string]struct{}, len(groups))
-	for _, committed := range resolution.Committed {
+	for _, committed := range committedSubjects {
 		subject, wasProposed := proposed[committed.CanonicalID]
 		if !wasProposed || subject.Kind != committed.Kind {
 			// The resolver returned something this turn did not ask about.
@@ -212,7 +220,26 @@ func (e *Engine) authorizeCohortGroups(ctx context.Context, principal storage.Pr
 		seen[committed.CanonicalID] = struct{}{}
 		admitted = append(admitted, subject)
 	}
-	return admitted, nil
+	return admitted
+}
+
+// groupListOverContractBound reports whether a proposed group list is larger
+// than the published contract can carry. Strictly greater: a list of exactly
+// the bound is legal and is served whole.
+func groupListOverContractBound(proposed int) bool {
+	return proposed > contractsv1.ContextFabricCohortGroupsMaxCount
+}
+
+// planGroupAxisCollapsed reports whether a plan's group axis collapsed onto its
+// member kind -- invariant I6 at the plan seam.
+//
+// A plan with NO group axis cannot collapse, whatever its member kind: I6 is
+// "the group axis equals the member axis", and there is no group axis to
+// equal anything. Comparing the two kinds bare refused an axis-less plan over
+// a kindless cohort ("" == "") with an invariant about grouping, on a turn
+// that never grouped.
+func planGroupAxisCollapsed(groupKind, memberKind SubjectKind) bool {
+	return groupKind != "" && groupKind == memberKind
 }
 
 // readAdmittedGroupFacts issues the ONE group-rooted fact request this turn is
@@ -234,7 +261,7 @@ func (e *Engine) readAdmittedGroupFacts(ctx context.Context, principal storage.P
 	// THE BOUND, BEFORE ANY I/O. Never sliced: an answer about the first 250
 	// of 251 groups is an answer to a question nobody asked, and the caller
 	// has no way to tell it from a complete one.
-	if outcome.Proposed > contractsv1.ContextFabricCohortGroupsMaxCount {
+	if groupListOverContractBound(outcome.Proposed) {
 		outcome.Refused, outcome.Reason = true, GroupReadRefusalOverContractBound
 		return CanonicalFactBundle{}, outcome, nil
 	}
