@@ -676,6 +676,7 @@ func readRequirementOutcomeRow(
 	if threshold > declared {
 		declared = threshold
 	}
+	recordObservationCoverDecision(requirement, threshold, servedCover, declared, evidence, populations.assignment)
 	row := RequirementOutcomeRow{
 		Stage:       contractsv1.ContextFabricOutcomeStageAssembledResult,
 		Requirement: requirement.Requirement,
@@ -824,4 +825,82 @@ func readRequirementOutcomeRow(
 	// Reached only where the evidence itself reported the cause, so there is
 	// a real before-and-after to record.
 	return contractsv1.ContextFabricWithReductionRefinement(row), true
+}
+
+// recordObservationCoverDecision emits the observation-cover decision so it can
+// be rebuilt FROM THE TRACE ALONE, per the observability bar: pre-entry (what
+// was requested), pre-decision (what was measured), the decision and its
+// reason, and post-decision (what was served).
+//
+// WHY THIS LINE EXISTS AT ALL, stated plainly because it is the argument for
+// the bar. The cover replaced a fact-KIND count with a MINIMUM COVER, and
+// nothing about that substitution was observable: a row reading `narrowed 0/2`
+// looked identical whether two kinds honestly collapsed onto one observation
+// or the evaluator had a bug. One did -- the mixed-state rule tainted whole
+// producers instead of observations and silenced a full read -- and it was
+// findable only by reading the code, because the count that changed reached no
+// log line. That is the defect class this line closes.
+//
+// THE DELTA IS THE POINT. Both the kind COUNT and the COVER are emitted for
+// each of served and observed, because the cover alone cannot say whether it
+// collapsed anything: cover 2 of 2 kinds and cover 2 of 5 kinds are the same
+// number describing completely different reads. The pair makes the collapse
+// itself visible, and `tainted_observations` says how much of any gap came
+// from the mixed-state rule rather than from the declaration.
+//
+// EVERY DIMENSION IS A COUNT OR A CLOSED TOKEN. Requirement, obligation and
+// subject kind are closed vocabularies; the rest are integers and one bool.
+// No key VALUES and no kind lists are logged -- those would grow with the
+// registry, and the numbers already answer the question the bar asks.
+//
+// slog.Default() matches this file's existing convention for the same reason
+// its undeclared-code warning gives: the evaluator is a pure function on the
+// finalization path with no engine handle to take a logger from.
+func recordObservationCoverDecision(
+	requirement contractsv1.ContextFabricPlanRequirement,
+	threshold, servedCover, declared int,
+	evidence readEvidence,
+	assignment observationKeyAssignment,
+) {
+	servedKinds := len(evidence.ServedKinds)
+	observedKinds := len(evidence.ObservedKinds)
+	slog.Default().Info("context fabric observation cover",
+		// PRE-ENTRY: what this requirement asked for.
+		"requirement", requirement.Requirement,
+		"obligation", requirement.Obligation,
+		"subject_kind", string(requirement.Subject),
+		"threshold", threshold,
+		"observed_kinds", observedKinds,
+		"served_kinds", servedKinds,
+		// PRE-DECISION: what the declaration measured those kinds to be.
+		"observed_cover", observationCover(evidence.ObservedKinds, requirement.Subject, assignment),
+		"served_cover", servedCover,
+		"collapsed_observations", servedKinds-servedCover,
+		"tainted_observations", taintedObservationCount(evidence, requirement.Subject, assignment),
+		// DECISION + REASON, and POST-DECISION: the numbers the row publishes.
+		"declared", declared,
+		"declared_raised_to_standard", declared > observationCover(evidence.ObservedKinds, requirement.Subject, assignment),
+		"meets_threshold", servedCover >= threshold,
+	)
+}
+
+// taintedObservationCount is how many distinct observations the mixed-state
+// rule excluded: observations backing a kind that was observed but not served.
+// It is the diagnostic half of servedObservationCover -- without it a reader
+// cannot tell a cover reduced by the DECLARATION from one reduced by a LOSS.
+func taintedObservationCount(evidence readEvidence, subject SubjectKind, assignment observationKeyAssignment) int {
+	served := make(map[FactKind]bool, len(evidence.ServedKinds))
+	for _, kind := range evidence.ServedKinds {
+		served[kind] = true
+	}
+	tainted := map[ObservationKey]bool{}
+	for _, kind := range evidence.ObservedKinds {
+		if served[kind] {
+			continue
+		}
+		for _, key := range dedupeObservationKeys(assignment[kind][subject]) {
+			tainted[key] = true
+		}
+	}
+	return len(tainted)
 }
