@@ -67,6 +67,11 @@ const (
 	FieldInt         FieldType = "int"
 	FieldStringSlice FieldType = "string_slice"
 	FieldObjectSlice FieldType = "object_slice"
+	// FieldBool (CHAOS-5516): PR1's two piloted events had no native
+	// boolean field, so this type did not exist until decision_summary's
+	// own migration needed one (offered_under_window_gate,
+	// offer_pool_emptied_by_exclusion).
+	FieldBool FieldType = "bool"
 )
 
 // Field is one key on one event variant's emitted line.
@@ -160,6 +165,16 @@ var RankedCutSummary = Event{
 	BoundedAggregation: "exactly one line per ranked-cut pass -- the per-candidate detail this summary aggregates stays at Debug (case \"ranked_cut\", RankedCutSummary==false).",
 	Fields: []Field{
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		// pass (CHAOS-5516): which finalization of the owning resolution
+		// this line's own pass is, 1-based, in the order they ran -- the
+		// same field, same meaning, thread D's cover events (#496) carry.
+		// certify's exactly_one_per_pass guard keys duplicate detection on
+		// (request_id, pass) rather than byte-identical-except-time (PR1
+		// RISK-NOTES' documented limit): a second line for the SAME pass is
+		// always a defect; a second line for a DIFFERENT pass is always a
+		// legitimate re-decision, regardless of whether every other field
+		// happens to coincide.
+		{Key: "pass", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"ranked_cut"}},
 		{Key: "candidate_count", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "survived_count", Type: FieldInt, Presence: PresenceRequired},
@@ -208,6 +223,9 @@ var AnchorSlotDisplaced = Event{
 	BoundedAggregation: "present iff this pass's RankedCutSummary line reports anchor_slot_displaced > 0 -- the two lines' counts must agree; today at most one candidate can be displaced per pass (kindReserveSlotsPerKind), so at most one line.",
 	Fields: []Field{
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		// pass (CHAOS-5516): the same pass this line's own RankedCutSummary
+		// carries -- see that event's own doc comment on this field.
+		{Key: "pass", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"anchor_slot_displaced"}},
 		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
 		{Key: "subject_canonical_id", Type: FieldString, Presence: PresenceRequired},
@@ -218,7 +236,92 @@ var AnchorSlotDisplaced = Event{
 	},
 }
 
+// DecisionSummary is the once-per-REQUEST Info line (graphrank/tracer.go,
+// case "decision_summary") that decisionSummaryBuffer.flush() emits after
+// resolveSubjects returns -- the ONE line that says what the resolver
+// DECIDED, folding every decision-stage event and the offer_pool/anchor_pool
+// summaries of the whole call, always (even when it counted nothing:
+// dictation 378's explicit-zero rule). Unlike RankedCutSummary/
+// AnchorSlotDisplaced, its own multiplicity is per REQUEST, not per internal
+// pass -- decisionSummaryBuffer accumulates across every pass
+// resolveSubjects runs and flushes exactly once, so it carries no `pass`
+// field of its own.
+//
+// CHAOS-5516 (clauses 2+4): this is the pilot's typed-construction scope.
+// eventspec/gen generates a DecisionSummaryFields struct + SlogArgs() method
+// from these Fields (zz_generated.go) -- decisionSummaryBuffer.flush()
+// constructs one instead of a hand-typed ResolutionTraceEvent composite
+// literal for this event's own fields, and tracer.go's "decision_summary"
+// case emits via the generated SlogArgs() instead of a second, independently
+// hand-typed key list. Three lists (spec.go's Fields, the buffer's struct
+// literal, tracer.go's key strings) become one generated source with two
+// consumers.
+var DecisionSummary = Event{
+	ID:                 "graphrank.decision_summary",
+	Msg:                "context fabric resolution trace: decision summary",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityExactlyOnePerPass,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "exactly one line per resolveSubjects call, emitted from decisionSummaryBuffer.flush() unconditionally (including a zero count) -- the per-candidate decision events this line folds stay at Debug (case \"decision\").",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"decision_summary"}},
+		{Key: "decision_event_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "committed_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "ambiguous_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "no_commit_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "committed_ids", Type: FieldStringSlice, Presence: PresenceRequired},
+		{Key: "commit_gates", Type: FieldStringSlice, Presence: PresenceRequired},
+		{Key: "commit_bases", Type: FieldStringSlice, Presence: PresenceRequired},
+		{
+			Key: "offered_under_window_gate", Type: FieldBool, Presence: PresenceRequired,
+			// OR across the call: true if AT LEAST ONE decision-stage event
+			// this line folds was offers-only (offersOnlyDecisionTracer).
+		},
+		{
+			Key: "frame_gate", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: stamped at construction from the ordering
+			// verdict the call carried in (CommitGatePolicy), decided
+			// BEFORE this call, never re-derived here.
+		},
+		{
+			Key: "refuse_basis", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: the frame's own refusal-reason token, an
+			// input to the call like frame_gate above.
+		},
+		{Key: "offer_pool_vector_only_excluded", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "offer_pool_vector_only_demoted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "offer_pool_emptied_by_exclusion", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "offer_pool_anchor_kind_withheld", Type: FieldInt, Presence: PresenceRequired},
+		{
+			Key: "offer_pool_anchor_kind_withheld_scope", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a contextfabric.SubjectKind token, or "none".
+		},
+		{
+			Key: "offer_pool_anchor_kind_withheld_reason", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a reason token, or "none".
+		},
+		{Key: "offer_pool_anchor_kind_withheld_ids", Type: FieldStringSlice, Presence: PresenceRequired},
+		{Key: "offer_pool_anchor_kind_exempted", Type: FieldInt, Presence: PresenceRequired},
+		{
+			Key: "anchor_pool_kind_scope", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a contextfabric.SubjectKind token, or "none".
+		},
+		{
+			Key: "anchor_pool_kind_scope_source", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: how the scope was decided (receipt,
+			// confirmed_anchor, none, or another producer-defined token).
+		},
+		{
+			Key: "member_kind_confirmed", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a contextfabric.SubjectKind token, or "none".
+		},
+		{Key: "reserved_kinds", Type: FieldStringSlice, Presence: PresenceRequired},
+		{Key: "filter_kinds", Type: FieldStringSlice, Presence: PresenceRequired},
+	},
+}
+
 // All is every event this specification declares. Generate() and the
 // certification runner both range over exactly this slice -- neither
 // maintains a second list.
-var All = []Event{RankedCutSummary, AnchorSlotDisplaced}
+var All = []Event{RankedCutSummary, AnchorSlotDisplaced, DecisionSummary}

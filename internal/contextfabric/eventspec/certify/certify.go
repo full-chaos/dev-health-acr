@@ -167,15 +167,49 @@ func Certify(log *Log, a Assertion) (Result, error) {
 			return Result{}, fmt.Errorf("certify: %s: found 0 lines with msg %q for this attempt, want at least 1 (multiplicity=%s)",
 				a.Event.ID, a.Event.Msg, a.Event.Multiplicity)
 		}
-		// round r2's P2: more than one line in scope is legitimate
-		// multi-pass output ONLY when the passes actually differ. Two
-		// lines identical apart from "time" are indistinguishable from
-		// one pass emitted twice (a genuine duplicate-emission defect,
-		// distinct from a real re-decision) -- refuse rather than
-		// silently certifying the last of two identical copies.
-		if len(scoped) > 1 && linesEqualExceptTime(scoped[len(scoped)-1], scoped[len(scoped)-2]) {
-			return Result{}, fmt.Errorf("certify: %s: the last two lines with msg %q for this attempt are IDENTICAL apart from time -- indistinguishable from a single pass emitted twice; a real re-decision pass must differ in at least one other field",
-				a.Event.ID, a.Event.Msg)
+		// CHAOS-5516: multiplicity is now keyed on (request_id, pass) for an
+		// event that DECLARES a pass field -- a duplicate pass number in
+		// scope is always a defect, regardless of whether the lines' other
+		// fields agree or differ; a distinct pass number is always
+		// legitimate, regardless of whether the lines happen to coincide on
+		// every other field (replaces round r2's byte-identical-except-time
+		// heuristic and its documented limit in PR1's RISK-NOTES).
+		//
+		// An event with NO pass field (decision_summary: once per REQUEST,
+		// not once per internal pass -- it has no legitimate multi-line
+		// shape at all) has no pass number to key on, so more than one line
+		// in scope is unconditionally a defect -- there is no legitimate
+		// re-decision case for it to distinguish from a duplicate, unlike a
+		// pass-bearing event.
+		hasPassField := false
+		for _, f := range a.Event.Fields {
+			if f.Key == "pass" {
+				hasPassField = true
+				break
+			}
+		}
+		if !hasPassField {
+			if len(scoped) > 1 {
+				return Result{}, fmt.Errorf("certify: %s: found %d lines with msg %q for this attempt, want exactly 1 (multiplicity=%s, no pass field declared -- this event has no legitimate multi-line shape to distinguish from a duplicate)",
+					a.Event.ID, len(scoped), a.Event.Msg, a.Event.Multiplicity)
+			}
+		} else {
+			seenPass := make(map[float64]bool, len(scoped))
+			for _, l := range scoped {
+				p, ok := l["pass"].(float64)
+				if !ok {
+					// A missing "pass" key here is a PresenceRequired
+					// violation validateFields catches below with its own
+					// clear message -- not a case this loop needs to
+					// duplicate or paper over by skipping the line.
+					continue
+				}
+				if seenPass[p] {
+					return Result{}, fmt.Errorf("certify: %s: two lines with msg %q for this attempt share pass=%v -- a duplicate pass number is always a defect, regardless of whether the lines' other fields agree",
+						a.Event.ID, a.Event.Msg, p)
+				}
+				seenPass[p] = true
+			}
 		}
 		line = scoped[len(scoped)-1]
 	case eventspec.MultiplicityZeroOrOnePerPass:
@@ -335,6 +369,10 @@ func validateFields(fields []eventspec.Field, obj map[string]any, eventID string
 			if gotFloat != math.Trunc(gotFloat) {
 				return fmt.Errorf("certify: %s: %q = %v, declared type=int but is not a whole number", eventID, field.Key, got)
 			}
+		case eventspec.FieldBool:
+			if _, ok := got.(bool); !ok {
+				return fmt.Errorf("certify: %s: %q = %v (%T), declared type=bool", eventID, field.Key, got, got)
+			}
 		case eventspec.FieldStringSlice:
 			arr, ok := got.([]any)
 			if !ok {
@@ -364,23 +402,6 @@ func validateFields(fields []eventspec.Field, obj map[string]any, eventID string
 	return nil
 }
 
-// canonicalEventsByID indexes eventspec.All -- the ONE declaration authority
-// -- by ID, built once at package init. Certify/CertifyAbsent resolve every
-// caller-supplied Event against this index rather than trusting the struct
-// value handed to them: round r3 found a caller can construct any
-// eventspec.Event value (Go exports the type and every field), including one
-// with its Attribution/Fields stripped, and Certify had no way to tell that
-// apart from the real eventspec.RankedCutSummary -- a degenerate Event with
-// empty Fields and empty Attribution certified ANY line carrying its msg
-// against an empty Want, with zero validation performed.
-var canonicalEventsByID = func() map[string]eventspec.Event {
-	m := make(map[string]eventspec.Event, len(eventspec.All))
-	for _, e := range eventspec.All {
-		m[e.ID] = e
-	}
-	return m
-}()
-
 // requireCanonicalEvent refuses unless ev is byte-for-byte the eventspec.All
 // entry for its own ID -- a caller must pass eventspec.RankedCutSummary (or
 // eventspec.AnchorSlotDisplaced) directly, never a copy, subset, or
@@ -388,8 +409,14 @@ var canonicalEventsByID = func() map[string]eventspec.Event {
 // does this (the two production Assertion/CertifyAbsent call sites in
 // graphrank/falkorgraph reference the exported eventspec vars directly), so
 // this refuses nothing real -- only a weakened or invented Event value.
+//
+// Looks up eventspec.ByID (generated from spec.go by eventspec/gen, part of
+// zz_generated.go) rather than a second, hand-built index -- CHAOS-5516
+// cleanup: PR1's own r3 fix built its own package-level map here instead of
+// using the generated one that already existed, exactly the "second,
+// competing list" clause 1 forbids.
 func requireCanonicalEvent(ev eventspec.Event) error {
-	canon, ok := canonicalEventsByID[ev.ID]
+	canon, ok := eventspec.ByID[ev.ID]
 	if !ok {
 		return fmt.Errorf("certify: %q is not a declared event ID -- eventspec.All is the one declaration authority; pass eventspec.RankedCutSummary/eventspec.AnchorSlotDisplaced (or a future registered event) directly, never a hand-built Event", ev.ID)
 	}
@@ -397,25 +424,6 @@ func requireCanonicalEvent(ev eventspec.Event) error {
 		return fmt.Errorf("certify: %s: the supplied Event does not match its canonical declaration in eventspec.All -- pass the exported eventspec value directly (e.g. eventspec.RankedCutSummary), never a caller-modified or hand-built copy with the same ID", ev.ID)
 	}
 	return nil
-}
-
-// linesEqualExceptTime reports whether a and b carry identical keys/values
-// once "time" (which always differs, even for two genuinely identical
-// emissions) is excluded from the comparison.
-func linesEqualExceptTime(a, b Line) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, v := range a {
-		if k == "time" {
-			continue
-		}
-		bv, ok := b[k]
-		if !ok || !reflect.DeepEqual(v, bv) {
-			return false
-		}
-	}
-	return true
 }
 
 func contains(vocab []string, v string) bool {

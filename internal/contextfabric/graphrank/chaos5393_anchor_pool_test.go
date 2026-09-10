@@ -245,14 +245,14 @@ func TestTheDecisionSummaryNamesTheAnchorScopeAndItsSource(t *testing.T) {
 				t.Fatalf("captured %d decision_summary events, want exactly 1", len(capture.summaries))
 			}
 			got := capture.summaries[0]
-			if got.DecisionAnchorPoolKindScope != testCase.wantScope {
-				t.Errorf("anchor_pool_kind_scope on the FOLDED line = %q, want %q", got.DecisionAnchorPoolKindScope, testCase.wantScope)
+			if got.DecisionSummaryFields.AnchorPoolKindScope != testCase.wantScope {
+				t.Errorf("anchor_pool_kind_scope on the FOLDED line = %q, want %q", got.DecisionSummaryFields.AnchorPoolKindScope, testCase.wantScope)
 			}
-			if got.DecisionAnchorPoolKindScopeSource != testCase.wantSource {
-				t.Errorf("anchor_pool_kind_scope_source on the FOLDED line = %q, want %q -- the two sources fail independently and need different fixes", got.DecisionAnchorPoolKindScopeSource, testCase.wantSource)
+			if got.DecisionSummaryFields.AnchorPoolKindScopeSource != testCase.wantSource {
+				t.Errorf("anchor_pool_kind_scope_source on the FOLDED line = %q, want %q -- the two sources fail independently and need different fixes", got.DecisionSummaryFields.AnchorPoolKindScopeSource, testCase.wantSource)
 			}
-			if got.DecisionMemberKindConfirmed != testCase.wantMemberKind {
-				t.Errorf("member_kind_confirmed on the FOLDED line = %q, want %q", got.DecisionMemberKindConfirmed, testCase.wantMemberKind)
+			if got.DecisionSummaryFields.MemberKindConfirmed != testCase.wantMemberKind {
+				t.Errorf("member_kind_confirmed on the FOLDED line = %q, want %q", got.DecisionSummaryFields.MemberKindConfirmed, testCase.wantMemberKind)
 			}
 
 			// THE IDENTITY: the scope on the line must be the scope the
@@ -263,10 +263,10 @@ func TestTheDecisionSummaryNamesTheAnchorScopeAndItsSource(t *testing.T) {
 			// when the reported scope drifts from the pool it describes
 			// while still agreeing with a literal above.
 			if testCase.wantAnchorInPool && candidateKinds(res)[contextfabric.SubjectTeam] == 0 {
-				t.Errorf("the line claims anchor scope %q but NO candidate of that kind is in the pool -- the reported scope is not the one the filter obeyed; kinds=%v", got.DecisionAnchorPoolKindScope, candidateKinds(res))
+				t.Errorf("the line claims anchor scope %q but NO candidate of that kind is in the pool -- the reported scope is not the one the filter obeyed; kinds=%v", got.DecisionSummaryFields.AnchorPoolKindScope, candidateKinds(res))
 			}
 			if !testCase.wantAnchorInPool && testCase.confirmedKind != nil && candidateKinds(res)[contextfabric.SubjectTeam] != 0 {
-				t.Errorf("the line claims anchor scope %q but a team candidate survived the confirmed-kind filter anyway; kinds=%v", got.DecisionAnchorPoolKindScope, candidateKinds(res))
+				t.Errorf("the line claims anchor scope %q but a team candidate survived the confirmed-kind filter anyway; kinds=%v", got.DecisionSummaryFields.AnchorPoolKindScope, candidateKinds(res))
 			}
 
 			// The folded value must equal what the anchor_pool summary
@@ -276,11 +276,11 @@ func TestTheDecisionSummaryNamesTheAnchorScopeAndItsSource(t *testing.T) {
 					t.Fatal("no anchor_pool summary was emitted, so the folded line reports a scope with no source to agree with")
 				}
 				last := capture.anchorPool[len(capture.anchorPool)-1]
-				if got.DecisionAnchorPoolKindScope != last.DecisionAnchorPoolKindScope ||
-					got.DecisionAnchorPoolKindScopeSource != last.DecisionAnchorPoolKindScopeSource ||
-					got.DecisionMemberKindConfirmed != last.DecisionMemberKindConfirmed {
+				if got.DecisionSummaryFields.AnchorPoolKindScope != last.DecisionAnchorPoolKindScope ||
+					got.DecisionSummaryFields.AnchorPoolKindScopeSource != last.DecisionAnchorPoolKindScopeSource ||
+					got.DecisionSummaryFields.MemberKindConfirmed != last.DecisionMemberKindConfirmed {
 					t.Errorf("the folded line (%q/%q/%q) disagrees with the anchor_pool summary it folded (%q/%q/%q)",
-						got.DecisionAnchorPoolKindScope, got.DecisionAnchorPoolKindScopeSource, got.DecisionMemberKindConfirmed,
+						got.DecisionSummaryFields.AnchorPoolKindScope, got.DecisionSummaryFields.AnchorPoolKindScopeSource, got.DecisionSummaryFields.MemberKindConfirmed,
 						last.DecisionAnchorPoolKindScope, last.DecisionAnchorPoolKindScopeSource, last.DecisionMemberKindConfirmed)
 				}
 			}
@@ -363,9 +363,9 @@ func TestAResolutionThatNeverBuiltAPoolStillCarriesExplicitNoneTokens(t *testing
 	}
 	got := capture.summaries[0]
 	for key, value := range map[string]string{
-		"anchor_pool_kind_scope":        got.DecisionAnchorPoolKindScope,
-		"anchor_pool_kind_scope_source": got.DecisionAnchorPoolKindScopeSource,
-		"member_kind_confirmed":         got.DecisionMemberKindConfirmed,
+		"anchor_pool_kind_scope":        got.DecisionSummaryFields.AnchorPoolKindScope,
+		"anchor_pool_kind_scope_source": got.DecisionSummaryFields.AnchorPoolKindScopeSource,
+		"member_kind_confirmed":         got.DecisionSummaryFields.MemberKindConfirmed,
 	} {
 		if value != anchorPoolKindScopeNone {
 			t.Errorf("%s = %q on a resolution that never built a pool, want the explicit %q -- an empty value here is indistinguishable from a build that stopped emitting the key", key, value, anchorPoolKindScopeNone)
@@ -498,7 +498,7 @@ func TestTheExactHintSummaryStillNamesTheConfirmedMemberKind(t *testing.T) {
 	if len(capture.summaries) != 1 {
 		t.Fatalf("captured %d decision_summary events, want exactly 1", len(capture.summaries))
 	}
-	if got := capture.summaries[0].DecisionMemberKindConfirmed; got != "project" {
+	if got := capture.summaries[0].DecisionSummaryFields.MemberKindConfirmed; got != "project" {
 		t.Errorf("member_kind_confirmed = %q, want \"project\" -- the kind WAS confirmed on this turn; reporting \"none\" is a confident wrong answer, not a missing one", got)
 	}
 }
@@ -529,13 +529,13 @@ func TestTheFoldKeepsTheConfirmedKindItWasBuiltWith(t *testing.T) {
 		t.Fatalf("captured %d decision_summary events, want exactly 1", len(capture.summaries))
 	}
 	got := capture.summaries[0]
-	if got.DecisionMemberKindConfirmed != "project" {
-		t.Errorf("member_kind_confirmed = %q, want \"project\" -- the fold adopted the EVENT's value instead of the confirmed kind it was constructed with", got.DecisionMemberKindConfirmed)
+	if got.DecisionSummaryFields.MemberKindConfirmed != "project" {
+		t.Errorf("member_kind_confirmed = %q, want \"project\" -- the fold adopted the EVENT's value instead of the confirmed kind it was constructed with", got.DecisionSummaryFields.MemberKindConfirmed)
 	}
 	// The scope and its source DO come from the event, and must still.
-	if got.DecisionAnchorPoolKindScope != "team" || got.DecisionAnchorPoolKindScopeSource != "receipt" {
+	if got.DecisionSummaryFields.AnchorPoolKindScope != "team" || got.DecisionSummaryFields.AnchorPoolKindScopeSource != "receipt" {
 		t.Errorf("scope/source = %q/%q, want team/receipt -- those are decided inside the call and folded from the event",
-			got.DecisionAnchorPoolKindScope, got.DecisionAnchorPoolKindScopeSource)
+			got.DecisionSummaryFields.AnchorPoolKindScope, got.DecisionSummaryFields.AnchorPoolKindScopeSource)
 	}
 }
 
@@ -685,11 +685,11 @@ func TestWithAConfirmedKindTheAnchorIsRetrievedReservedAndAdmitted(t *testing.T)
 		t.Fatalf("captured %d decision_summary events, want exactly 1", len(capture.summaries))
 	}
 	var reservedTeam bool
-	for _, k := range capture.summaries[0].DecisionReservedKinds {
+	for _, k := range capture.summaries[0].DecisionSummaryFields.ReservedKinds {
 		reservedTeam = reservedTeam || k == "team"
 	}
 	if !reservedTeam {
-		t.Errorf("reserved_kinds = %v, want the anchor kind among them", capture.summaries[0].DecisionReservedKinds)
+		t.Errorf("reserved_kinds = %v, want the anchor kind among them", capture.summaries[0].DecisionSummaryFields.ReservedKinds)
 	}
 }
 
@@ -772,8 +772,8 @@ func TestAFailedResolutionStillCarriesExplicitNoneTokens(t *testing.T) {
 	}
 	got := capture.summaries[0]
 	for key, value := range map[string]string{
-		"anchor_pool_kind_scope":        got.DecisionAnchorPoolKindScope,
-		"anchor_pool_kind_scope_source": got.DecisionAnchorPoolKindScopeSource,
+		"anchor_pool_kind_scope":        got.DecisionSummaryFields.AnchorPoolKindScope,
+		"anchor_pool_kind_scope_source": got.DecisionSummaryFields.AnchorPoolKindScopeSource,
 	} {
 		if value != anchorPoolKindScopeNone {
 			t.Errorf("%s = %q on a resolution that failed before deciding a scope, want the explicit %q", key, value, anchorPoolKindScopeNone)
@@ -782,8 +782,8 @@ func TestAFailedResolutionStillCarriesExplicitNoneTokens(t *testing.T) {
 	// member_kind_confirmed is stamped at construction, so it survives even
 	// this path with its real value -- asserted so the two mechanisms stay
 	// visibly different.
-	if got.DecisionMemberKindConfirmed != "project" {
-		t.Errorf("member_kind_confirmed = %q, want \"project\" -- it is stamped from the parameter at construction and must survive a path that never reached the decision", got.DecisionMemberKindConfirmed)
+	if got.DecisionSummaryFields.MemberKindConfirmed != "project" {
+		t.Errorf("member_kind_confirmed = %q, want \"project\" -- it is stamped from the parameter at construction and must survive a path that never reached the decision", got.DecisionSummaryFields.MemberKindConfirmed)
 	}
 }
 
@@ -810,11 +810,11 @@ func TestTheDecisionSummaryNamesTheWiringItHandedTheConsumers(t *testing.T) {
 		t.Fatalf("captured %d decision_summary events, want exactly 1", len(capture.summaries))
 	}
 	got := capture.summaries[0]
-	if !has(got.DecisionReservedKinds, "team") {
-		t.Errorf("reserved_kinds = %v, want the anchor kind among them -- a reserve computed from the receipt-only value would omit it on a fallback turn", got.DecisionReservedKinds)
+	if !has(got.DecisionSummaryFields.ReservedKinds, "team") {
+		t.Errorf("reserved_kinds = %v, want the anchor kind among them -- a reserve computed from the receipt-only value would omit it on a fallback turn", got.DecisionSummaryFields.ReservedKinds)
 	}
-	if !has(got.DecisionFilterKinds, "project") || !has(got.DecisionFilterKinds, "team") {
-		t.Errorf("filter_kinds = %v, want both the confirmed member kind and the anchor kind -- these are exactly what the confirmed-kind filter admits", got.DecisionFilterKinds)
+	if !has(got.DecisionSummaryFields.FilterKinds, "project") || !has(got.DecisionSummaryFields.FilterKinds, "team") {
+		t.Errorf("filter_kinds = %v, want both the confirmed member kind and the anchor kind -- these are exactly what the confirmed-kind filter admits", got.DecisionSummaryFields.FilterKinds)
 	}
 	// NEVER NULL, and on a turn this change deliberately leaves alone. With
 	// no confirmed kind nothing is filtered and nothing is widened, so the
@@ -824,11 +824,11 @@ func TestTheDecisionSummaryNamesTheWiringItHandedTheConsumers(t *testing.T) {
 	bare := &anchorScopeCapture{}
 	resolveCapturingAnchorScope(t, bare, anchorOnlyByKindBackend("chaos", 2),
 		scopedProjectsFrame("chaos"), nil, nil, contextfabric.SubjectTeam)
-	if bare.summaries[0].DecisionFilterKinds == nil {
+	if bare.summaries[0].DecisionSummaryFields.FilterKinds == nil {
 		t.Error("filter_kinds is nil with no confirmed kind, want an empty list")
 	}
-	if len(bare.summaries[0].DecisionFilterKinds) != 0 {
-		t.Errorf("filter_kinds = %v with no confirmed kind, want empty -- nothing was filtered on that turn", bare.summaries[0].DecisionFilterKinds)
+	if len(bare.summaries[0].DecisionSummaryFields.FilterKinds) != 0 {
+		t.Errorf("filter_kinds = %v with no confirmed kind, want empty -- nothing was filtered on that turn", bare.summaries[0].DecisionSummaryFields.FilterKinds)
 	}
 	// THE STAGE LINE TOO, and it needs its own assertion. The folded
 	// decision summary passes this field through a nil-to-empty guard, so a

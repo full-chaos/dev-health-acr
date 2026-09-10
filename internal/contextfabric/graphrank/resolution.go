@@ -403,7 +403,11 @@ func ResolveFromMergedCandidatesWithGate(candidatesBySubject map[string]contextf
 // the slot touches inert -- so every caller that is not resolve.go's own
 // first pass keeps a byte-identical cut, and no test call site had to move.
 func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string, confirmedKindScopedBasis bool, lowPopulationKindScopedBasis bool, reservedKinds []contextfabric.SubjectKind) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
-	return resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, tracer, requestID, evidenceCensusAttestedKey, confirmedKindScopedBasis, lowPopulationKindScopedBasis, reservedKinds, anchorReservedSlot{}, nil)
+	// pass=1: every exported entry point is a single-shot call (the
+	// multi-pass callers in resolve.go's own resolveSubjects call the
+	// unexported form below directly, with the pass number their own
+	// control flow actually reached).
+	return resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, max, allowClarification, searchTruncated, vectorArmSimilarity, vectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, calibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, tracer, requestID, evidenceCensusAttestedKey, confirmedKindScopedBasis, lowPopulationKindScopedBasis, reservedKinds, anchorReservedSlot{}, nil, 1)
 }
 
 // resolveFromMergedCandidatesWithAnchorSlot carries the two extra inputs the
@@ -413,7 +417,16 @@ func ResolveFromMergedCandidatesWithGateAndBasis(candidatesBySubject map[string]
 // its only caller with either one non-empty; a nil ledger renders every
 // declared kind as `not_run`, which is the honest reading for a call that
 // never had a retrieval phase of its own.
-func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string, confirmedKindScopedBasis bool, lowPopulationKindScopedBasis bool, reservedKinds []contextfabric.SubjectKind, anchorSlot anchorReservedSlot, kindRescue *kindRescueLedger) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
+//
+// pass (CHAOS-5516) is which finalization of the CALLER's own resolution this
+// call is, 1-based, in the order the caller's own control flow reaches them
+// -- resolveSubjects (resolve.go) is the only caller that can reach this
+// function more than once for one resolution (a scoped or evidence-census
+// re-decision), and passes 1/2/3 as literals at each of its three call
+// sites, in the fixed textual order those sites already run in. Every other
+// caller (including the exported wrapper above and every direct test call)
+// is single-shot and passes 1.
+func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, max int, allowClarification bool, searchTruncated bool, vectorArmSimilarity map[string]float64, vectorMarginCommitThreshold float64, retrievalDegraded bool, effectiveSearchLimit int, calibratedTopK int, unscopedVisibility bool, gate CommitGatePolicy, identity identityClaimants, identityTerms identityMatchTerms, aliasIdentityComplete bool, tracer ResolutionTracer, requestID string, evidenceCensusAttestedKey string, confirmedKindScopedBasis bool, lowPopulationKindScopedBasis bool, reservedKinds []contextfabric.SubjectKind, anchorSlot anchorReservedSlot, kindRescue *kindRescueLedger, pass int) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
 	bases := make(contextfabric.CommitBasisSet)
 	// digests (CHAOS-4087) records IN LOCKSTEP with bases above, at every
 	// SAME bases.Record call site -- see CommitDecisionDigest's own doc
@@ -1456,6 +1469,17 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		rescueReport := declaredKindRescueReport(kindRescue, declaredReached, declaredSurvivors)
 		tracer.Trace(ResolutionTraceEvent{
 			RequestID: requestID, Stage: "ranked_cut", RankedCutSummary: true,
+			// CHAOS-5516: pass is which finalization of THIS resolution
+			// (resolveSubjects) this call is, in the order they run -- 1 for
+			// the first pass, 2/3 for a scoped or evidence-census
+			// re-decision when either fires. The same field, same meaning,
+			// as thread D's cover events (#496): one notion of "pass" across
+			// producers. It replaces certify's own byte-identical-except-time
+			// duplicate heuristic (round r2's known limit, PR1 RISK-NOTES):
+			// two lines sharing a pass number is always a defect, regardless
+			// of content; two lines with different pass numbers are always
+			// legitimate, regardless of whether their other fields coincide.
+			Pass:                    pass,
 			RankedCutCandidateCount: len(ordered), RankedCutSurvivedCount: len(survivedIDs),
 			RankedCutSurvivedIDs: reportedIDs, RankedCutMax: max,
 			AnchorSlotReserved: slotReserved, AnchorSlotSource: slotSource,
@@ -1469,6 +1493,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		if slotOutcome.DisplacedSubject != nil {
 			tracer.Trace(ResolutionTraceEvent{
 				RequestID: requestID, Stage: "anchor_slot_displaced",
+				Pass:    pass,
 				Subject: *slotOutcome.DisplacedSubject, Survived: false,
 				AnchorSlotReserved: slotReserved, AnchorSlotSource: slotSource,
 				AnchorSlotDisplaced: slotOutcome.Displaced, PoolTruncatedN: slotOutcome.PoolTruncatedN,

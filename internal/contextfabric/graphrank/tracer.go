@@ -159,73 +159,16 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// offersOnlyDecisionTracer's own doc comment, resolve.go).
 			"offered_under_window_gate", event.OfferedUnderWindowGate)
 	case "decision_summary":
+		// CHAOS-5516 (clauses 1+4): emits via the GENERATED SlogArgs() on
+		// the typed value decisionSummaryBuffer.flush() built (resolve.go),
+		// not a second, independently hand-typed key list -- the keys this
+		// line carries can never drift from spec.go's DecisionSummary
+		// declaration, because both this call and the declaration derive
+		// from the same generated source
+		// (chaos5516_decision_summary_slog_args_test.go pins the exact key
+		// set a real emitted line carries against it).
 		t.logger.InfoContext(ctx, "context fabric resolution trace: decision summary",
-			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
-			"decision_event_count", event.DecisionEventCount,
-			"committed_count", event.DecisionCommittedCount,
-			"ambiguous_count", event.DecisionAmbiguousCount,
-			"no_commit_count", event.DecisionNoCommitCount,
-			"committed_ids", contextfabric.SanitizeLogStrings(event.DecisionCommittedIDs),
-			"commit_gates", contextfabric.SanitizeLogStrings(event.DecisionCommitGates),
-			"commit_bases", contextfabric.SanitizeLogStrings(event.DecisionCommitBases),
-			// Always emitted, true or false: a provenance field present in
-			// only one of its two states cannot be told apart from a build
-			// that does not emit it, which is the same explicit-zero rule
-			// every count on this line follows.
-			"offered_under_window_gate", event.DecisionOfferedUnderWindowGate,
-			// THE ORDERING SEAM, on the one Info line that says what the
-			// resolver decided. frame_gate/refuse_basis say what this
-			// resolution was ALLOWED to decide before it began;
-			// offer_pool_vector_only_excluded/_demoted say what it was not
-			// allowed to consider. All four always present with explicit
-			// tokens and zeros -- a laundered commit and a correct one are
-			// otherwise indistinguishable on every other key of this line.
-			"frame_gate", contextfabric.SanitizeLogAttr(event.DecisionFrameGate),
-			"refuse_basis", contextfabric.SanitizeLogAttr(event.DecisionRefuseBasis),
-			"offer_pool_vector_only_excluded", event.OfferPoolVectorOnlyExcluded,
-			"offer_pool_vector_only_demoted", event.OfferPoolVectorOnlyDemoted,
-			// The discriminator between two empties that are identical on
-			// every other key of this line: a graph that held nothing, and
-			// a graph that held candidates this resolution may not offer.
-			// Always emitted, true or false.
-			"offer_pool_emptied_by_exclusion", event.OfferPoolEmptiedByExclusion,
-			// CHAOS-5422. The vector counters above say what this resolution
-			// was refused for GUESSING; these say what it was refused for
-			// being the wrong ROLE — a candidate of the kind the question asks
-			// about, offered as the scope it asks about them within. Count,
-			// kind and reason together, because a count with no kind sends an
-			// operator looking for a retrieval failure that did not happen.
-			// All three always present, with an explicit zero and explicit
-			// `none` tokens.
-			"offer_pool_anchor_kind_withheld", event.OfferPoolAnchorKindWithheld,
-			"offer_pool_anchor_kind_withheld_scope", contextfabric.SanitizeLogAttr(event.OfferPoolAnchorKindWithheldScope),
-			"offer_pool_anchor_kind_withheld_reason", contextfabric.SanitizeLogAttr(event.OfferPoolAnchorKindWithheldReason),
-			// WHICH subjects, capped, beside the true count above. Without
-			// these, a build that refuses the wrong subject while refusing the
-			// same number of them is indistinguishable at Info from a correct
-			// one -- the per-candidate dispositions that carry ids are Debug.
-			"offer_pool_anchor_kind_withheld_ids", contextfabric.SanitizeLogStrings(event.OfferPoolAnchorKindWithheldIDs),
-			// The exemption's own number. A refusal count of zero beside an
-			// exemption count of one is a different fact from two zeros, and
-			// only one of them means "this question refused nothing".
-			"offer_pool_anchor_kind_exempted", event.OfferPoolAnchorKindExempted,
-			// CHAOS-5393. anchor_pool_kind_scope says which kind the SCOPE
-			// ANCHOR was allowed to resolve under; member_kind_confirmed
-			// says the kind that scoped MEMBER discovery. On a scope-
-			// anchored frame those two are never equal (invariant I11), and
-			// a build where they ARE equal is one that filtered the anchor
-			// out of its own pool -- the shape that turns a truthfully
-			// answered pair of offers into no_match. _source separates the
-			// two ways the scope can go missing, which need different fixes.
-			"anchor_pool_kind_scope", contextfabric.SanitizeLogAttr(event.DecisionAnchorPoolKindScope),
-			"anchor_pool_kind_scope_source", contextfabric.SanitizeLogAttr(event.DecisionAnchorPoolKindScopeSource),
-			"member_kind_confirmed", contextfabric.SanitizeLogAttr(event.DecisionMemberKindConfirmed),
-			// THE WIRING ITSELF. A consumer reverting to the receipt-only
-			// value leaves the scope and source above reading correctly
-			// while retrieval, the reserve or the filter acts on a
-			// different set -- invisible at Info without these.
-			"reserved_kinds", contextfabric.SanitizeLogStrings(event.DecisionReservedKinds),
-			"filter_kinds", contextfabric.SanitizeLogStrings(event.DecisionFilterKinds))
+			event.DecisionSummaryFields.SlogArgs()...)
 	case "anchor_pool":
 		// Once per resolution, Info: there is no per-candidate counterpart
 		// here, so no volume split is needed. Emitted from the same
@@ -447,6 +390,9 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// is what says whether a slot could have mattered here at all.
 			t.logger.InfoContext(ctx, "context fabric resolution trace: ranked cut summary",
 				"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+				// CHAOS-5516: which finalization of this resolution produced
+				// this line, 1-based.
+				"pass", event.Pass,
 				"candidate_count", event.RankedCutCandidateCount,
 				"survived_count", event.RankedCutSurvivedCount,
 				"survived_ids", contextfabric.SanitizeLogStrings(event.RankedCutSurvivedIDs),
@@ -478,6 +424,9 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// distinguishable because the summary always carries the count.
 		t.logger.InfoContext(ctx, "context fabric resolution trace: anchor slot displaced",
 			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+			// CHAOS-5516: the same pass this displacement's own RankedCutSummary
+			// line carries -- the two lines from one pass agree on it.
+			"pass", event.Pass,
 			"subject_kind", contextfabric.SanitizeLogAttr(string(event.Subject.Kind)), "subject_canonical_id", contextfabric.SanitizeLogAttr(event.Subject.CanonicalID),
 			"anchor_slot_reserved", contextfabric.SanitizeLogAttr(event.AnchorSlotReserved),
 			"anchor_slot_source", contextfabric.SanitizeLogAttr(event.AnchorSlotSource),

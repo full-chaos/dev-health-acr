@@ -48,6 +48,7 @@ func certifyAbsentRecovered(t *testing.T, log *Log, ev eventspec.Event, attribut
 func wantForRankedCutSummary() map[string]any {
 	return map[string]any{
 		"request_id":            "req_1",
+		"pass":                  1,
 		"candidate_count":       92,
 		"survived_count":        20,
 		"max":                   20,
@@ -60,7 +61,7 @@ func wantForRankedCutSummary() map[string]any {
 
 func validRankedCutSummaryLine() string {
 	return `{"time":"2026-09-10T00:00:00Z","level":"INFO","msg":"context fabric resolution trace: ranked cut summary",` +
-		`"request_id":"req_1","stage":"ranked_cut","candidate_count":92,"survived_count":20,"survived_ids":["a","b"],"max":20,` +
+		`"request_id":"req_1","pass":1,"stage":"ranked_cut","candidate_count":92,"survived_count":20,"survived_ids":["a","b"],"max":20,` +
 		`"anchor_slot_reserved":"team","anchor_slot_source":"receipt","anchor_slot_displaced":1,"pool_truncated_n":72,"declared_kind_rescue":[]}`
 }
 
@@ -110,7 +111,12 @@ func TestCertifyRefusesACaptureStructInPlaceOfTheRealHandler(t *testing.T) {
 // refuse when that last line disagrees with Want -- silently picking a
 // value-wrong line and passing is exactly what this control kills.
 func TestCertifyRefusesATwinLineWithTheSameMsgAndDifferentValues(t *testing.T) {
+	// pass:2 on the twin: this test is about the VALUE check on the last of
+	// two genuinely DISTINCT passes, not about duplicate-pass detection
+	// (TestCertifyRefusesTwoIdenticalLinesForAnExactlyOnePerPassEvent and
+	// TestCertifyRefusesTwoLinesForAZeroOrOnePerPassEvent own that).
 	twin := strings.Replace(validRankedCutSummaryLine(), `"anchor_slot_reserved":"team"`, `"anchor_slot_reserved":"repo"`, 1)
+	twin = strings.Replace(twin, `"pass":1`, `"pass":2`, 1)
 	log, err := Parse([]byte(validRankedCutSummaryLine() + "\n" + twin))
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
@@ -132,13 +138,23 @@ func TestCertifyRefusesATwinLineWithTheSameMsgAndDifferentValues(t *testing.T) {
 // accept that shape and certify the LAST (kept) pass, never reject it as an
 // ambiguous duplicate by raw count alone (round r1's P2).
 func TestCertifyAcceptsAGenuineMultiPassTwin(t *testing.T) {
+	// CHAOS-5516: the two passes are now told apart by their own DISTINCT
+	// pass numbers (1 and 2), the real production signal -- not by their
+	// candidate_count happening to differ, which was the pre-pass-field
+	// proxy for "these are really two different passes".
 	firstPass := strings.Replace(validRankedCutSummaryLine(), `"candidate_count":92`, `"candidate_count":2`, 1)
-	log, err := Parse([]byte(firstPass + "\n" + validRankedCutSummaryLine()))
+	keptPass := strings.Replace(validRankedCutSummaryLine(), `"pass":1`, `"pass":2`, 1)
+	log, err := Parse([]byte(firstPass + "\n" + keptPass))
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if _, err := certifyRecovered(t, log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()}); err != nil {
-		t.Fatalf("Certify() refused a genuine multi-pass log (first pass candidate_count=2, kept pass candidate_count=92, same request_id) -- want it to certify the LAST line: %v", err)
+	// "pass" is NOT pinned in Want here: the point of this control is that
+	// Certify accepts and certifies the LAST pass whatever its own pass
+	// number is, without the caller having to know it in advance.
+	want := wantForRankedCutSummary()
+	delete(want, "pass")
+	if _, err := certifyRecovered(t, log, Assertion{Event: eventspec.RankedCutSummary, Want: want}); err != nil {
+		t.Fatalf("Certify() refused a genuine multi-pass log (pass 1 candidate_count=2, pass 2/kept candidate_count=92, same request_id) -- want it to certify the LAST line: %v", err)
 	}
 }
 
@@ -316,7 +332,7 @@ func TestCertifyRefusesZeroLinesForAnExactlyOnePerPassEvent(t *testing.T) {
 // silently certified against one of them.
 func TestCertifyRefusesTwoLinesForAZeroOrOnePerPassEvent(t *testing.T) {
 	line := `{"time":"2026-09-10T00:00:00Z","level":"INFO","msg":"context fabric resolution trace: anchor slot displaced",` +
-		`"request_id":"req_1","stage":"anchor_slot_displaced","subject_kind":"project","subject_canonical_id":"p1",` +
+		`"request_id":"req_1","pass":1,"stage":"anchor_slot_displaced","subject_kind":"project","subject_canonical_id":"p1",` +
 		`"anchor_slot_reserved":"team","anchor_slot_source":"receipt","anchor_slot_displaced":1,"pool_truncated_n":7}`
 	log, err := Parse([]byte(line + "\n" + line))
 	if err != nil {
@@ -387,6 +403,9 @@ func TestCertifyRefusesAWrongTypeNotNamedInWant(t *testing.T) {
 // certified against the last of the two. A genuinely different multi-pass
 // pair (TestCertifyAcceptsAGenuineMultiPassTwin) must still be accepted.
 func TestCertifyRefusesTwoIdenticalLinesForAnExactlyOnePerPassEvent(t *testing.T) {
+	// CHAOS-5516: both lines share pass=1 (validRankedCutSummaryLine()'s own
+	// value, unchanged) -- the duplicate-PASS guard now catches this, not a
+	// byte-identical-except-time comparison.
 	line := validRankedCutSummaryLine()
 	dup := strings.Replace(line, `"2026-09-10T00:00:00Z"`, `"2026-09-10T00:00:01Z"`, 1)
 	log, err := Parse([]byte(line + "\n" + dup))
@@ -395,10 +414,30 @@ func TestCertifyRefusesTwoIdenticalLinesForAnExactlyOnePerPassEvent(t *testing.T
 	}
 	_, err = certifyRecovered(t, log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()})
 	if err == nil {
-		t.Fatal("Certify() accepted two lines identical apart from time -- want a refusal naming the duplicate")
+		t.Fatal("Certify() accepted two lines sharing the same pass number -- want a refusal naming the duplicate")
 	}
-	if !strings.Contains(err.Error(), "IDENTICAL") {
-		t.Errorf("refusal text = %q, want it to name the duplicate", err.Error())
+	if !strings.Contains(err.Error(), "duplicate pass number") {
+		t.Errorf("refusal text = %q, want it to name the duplicate pass", err.Error())
+	}
+}
+
+// CHAOS-5516: the duplicate-pass guard fires even when the two lines'
+// OTHER fields genuinely differ -- a same-pass duplicate is a defect
+// regardless of content, the whole point of keying on pass rather than
+// byte-identity.
+func TestCertifyRefusesTwoLinesSharingAPassNumberEvenWithDifferentOtherFields(t *testing.T) {
+	line := validRankedCutSummaryLine()
+	differentContentSamePass := strings.Replace(line, `"candidate_count":92`, `"candidate_count":2`, 1)
+	log, err := Parse([]byte(line + "\n" + differentContentSamePass))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	_, err = certifyRecovered(t, log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()})
+	if err == nil {
+		t.Fatal("Certify() accepted two lines sharing pass=1 with different candidate_count -- want a refusal naming the duplicate pass, not a value mismatch")
+	}
+	if !strings.Contains(err.Error(), "duplicate pass number") {
+		t.Errorf("refusal text = %q, want it to name the duplicate pass", err.Error())
 	}
 }
 
@@ -407,7 +446,7 @@ func TestCertifyRefusesTwoIdenticalLinesForAnExactlyOnePerPassEvent(t *testing.T
 // the attempt the caller actually means.
 func TestCertifyAbsentIsAttributionScoped(t *testing.T) {
 	line := `{"time":"2026-09-10T00:00:00Z","level":"INFO","msg":"context fabric resolution trace: anchor slot displaced",` +
-		`"request_id":"req_2","stage":"anchor_slot_displaced","subject_kind":"project","subject_canonical_id":"p1",` +
+		`"request_id":"req_2","pass":1,"stage":"anchor_slot_displaced","subject_kind":"project","subject_canonical_id":"p1",` +
 		`"anchor_slot_reserved":"team","anchor_slot_source":"receipt","anchor_slot_displaced":1,"pool_truncated_n":7}`
 	log, err := Parse([]byte(line))
 	if err != nil {

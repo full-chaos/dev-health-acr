@@ -18,5 +18,195 @@ func FieldKeys(e Event) []string {
 // rather than hand-maintained so it can never drift from All.
 var ByID = map[string]Event{
 	"graphrank.anchor_slot_displaced": AnchorSlotDisplaced,
+	"graphrank.decision_summary":      DecisionSummary,
 	"graphrank.ranked_cut_summary":    RankedCutSummary,
+}
+
+// AnchorSlotDisplacedFields is graphrank.anchor_slot_displaced's generated typed construction interface
+// (CHAOS-5516): one Go field per Field AnchorSlotDisplaced.Fields declares in spec.go.
+type AnchorSlotDisplacedFields struct {
+	RequestID           string
+	Pass                int
+	SubjectKind         string
+	SubjectCanonicalID  string
+	AnchorSlotReserved  string
+	AnchorSlotSource    string
+	AnchorSlotDisplaced int
+	PoolTruncatedN      int
+}
+
+// NewAnchorSlotDisplacedFields is the generated constructor for AnchorSlotDisplacedFields -- every
+// field AnchorSlotDisplaced.Fields declares is a required parameter.
+func NewAnchorSlotDisplacedFields(requestID string, pass int, subjectKind string, subjectCanonicalID string, anchorSlotReserved string, anchorSlotSource string, anchorSlotDisplaced int, poolTruncatedN int) AnchorSlotDisplacedFields {
+	return AnchorSlotDisplacedFields{
+		RequestID:           requestID,
+		Pass:                pass,
+		SubjectKind:         subjectKind,
+		SubjectCanonicalID:  subjectCanonicalID,
+		AnchorSlotReserved:  anchorSlotReserved,
+		AnchorSlotSource:    anchorSlotSource,
+		AnchorSlotDisplaced: anchorSlotDisplaced,
+		PoolTruncatedN:      poolTruncatedN,
+	}
+}
+
+// SlogArgs returns AnchorSlotDisplaced's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them.
+func (f AnchorSlotDisplacedFields) SlogArgs() []any {
+	return []any{
+		"request_id", f.RequestID,
+		"pass", f.Pass,
+		"stage", "anchor_slot_displaced",
+		"subject_kind", f.SubjectKind,
+		"subject_canonical_id", f.SubjectCanonicalID,
+		"anchor_slot_reserved", f.AnchorSlotReserved,
+		"anchor_slot_source", f.AnchorSlotSource,
+		"anchor_slot_displaced", f.AnchorSlotDisplaced,
+		"pool_truncated_n", f.PoolTruncatedN,
+	}
+}
+
+// DecisionSummaryFields is graphrank.decision_summary's generated typed construction interface
+// (CHAOS-5516): one Go field per Field DecisionSummary.Fields declares in spec.go.
+type DecisionSummaryFields struct {
+	RequestID                         string
+	DecisionEventCount                int
+	CommittedCount                    int
+	AmbiguousCount                    int
+	NoCommitCount                     int
+	CommittedIDs                      []string
+	CommitGates                       []string
+	CommitBases                       []string
+	OfferedUnderWindowGate            bool
+	FrameGate                         string
+	RefuseBasis                       string
+	OfferPoolVectorOnlyExcluded       int
+	OfferPoolVectorOnlyDemoted        int
+	OfferPoolEmptiedByExclusion       bool
+	OfferPoolAnchorKindWithheld       int
+	OfferPoolAnchorKindWithheldScope  string
+	OfferPoolAnchorKindWithheldReason string
+	OfferPoolAnchorKindWithheldIDs    []string
+	OfferPoolAnchorKindExempted       int
+	AnchorPoolKindScope               string
+	AnchorPoolKindScopeSource         string
+	MemberKindConfirmed               string
+	ReservedKinds                     []string
+	FilterKinds                       []string
+}
+
+// NewDecisionSummaryFields is the generated constructor for DecisionSummaryFields -- every
+// field DecisionSummary.Fields declares is a required parameter.
+func NewDecisionSummaryFields(requestID string, decisionEventCount int, committedCount int, ambiguousCount int, noCommitCount int, committedIDs []string, commitGates []string, commitBases []string, offeredUnderWindowGate bool, frameGate string, refuseBasis string, offerPoolVectorOnlyExcluded int, offerPoolVectorOnlyDemoted int, offerPoolEmptiedByExclusion bool, offerPoolAnchorKindWithheld int, offerPoolAnchorKindWithheldScope string, offerPoolAnchorKindWithheldReason string, offerPoolAnchorKindWithheldIDs []string, offerPoolAnchorKindExempted int, anchorPoolKindScope string, anchorPoolKindScopeSource string, memberKindConfirmed string, reservedKinds []string, filterKinds []string) DecisionSummaryFields {
+	return DecisionSummaryFields{
+		RequestID:                         requestID,
+		DecisionEventCount:                decisionEventCount,
+		CommittedCount:                    committedCount,
+		AmbiguousCount:                    ambiguousCount,
+		NoCommitCount:                     noCommitCount,
+		CommittedIDs:                      committedIDs,
+		CommitGates:                       commitGates,
+		CommitBases:                       commitBases,
+		OfferedUnderWindowGate:            offeredUnderWindowGate,
+		FrameGate:                         frameGate,
+		RefuseBasis:                       refuseBasis,
+		OfferPoolVectorOnlyExcluded:       offerPoolVectorOnlyExcluded,
+		OfferPoolVectorOnlyDemoted:        offerPoolVectorOnlyDemoted,
+		OfferPoolEmptiedByExclusion:       offerPoolEmptiedByExclusion,
+		OfferPoolAnchorKindWithheld:       offerPoolAnchorKindWithheld,
+		OfferPoolAnchorKindWithheldScope:  offerPoolAnchorKindWithheldScope,
+		OfferPoolAnchorKindWithheldReason: offerPoolAnchorKindWithheldReason,
+		OfferPoolAnchorKindWithheldIDs:    offerPoolAnchorKindWithheldIDs,
+		OfferPoolAnchorKindExempted:       offerPoolAnchorKindExempted,
+		AnchorPoolKindScope:               anchorPoolKindScope,
+		AnchorPoolKindScopeSource:         anchorPoolKindScopeSource,
+		MemberKindConfirmed:               memberKindConfirmed,
+		ReservedKinds:                     reservedKinds,
+		FilterKinds:                       filterKinds,
+	}
+}
+
+// SlogArgs returns DecisionSummary's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them.
+func (f DecisionSummaryFields) SlogArgs() []any {
+	return []any{
+		"request_id", f.RequestID,
+		"stage", "decision_summary",
+		"decision_event_count", f.DecisionEventCount,
+		"committed_count", f.CommittedCount,
+		"ambiguous_count", f.AmbiguousCount,
+		"no_commit_count", f.NoCommitCount,
+		"committed_ids", f.CommittedIDs,
+		"commit_gates", f.CommitGates,
+		"commit_bases", f.CommitBases,
+		"offered_under_window_gate", f.OfferedUnderWindowGate,
+		"frame_gate", f.FrameGate,
+		"refuse_basis", f.RefuseBasis,
+		"offer_pool_vector_only_excluded", f.OfferPoolVectorOnlyExcluded,
+		"offer_pool_vector_only_demoted", f.OfferPoolVectorOnlyDemoted,
+		"offer_pool_emptied_by_exclusion", f.OfferPoolEmptiedByExclusion,
+		"offer_pool_anchor_kind_withheld", f.OfferPoolAnchorKindWithheld,
+		"offer_pool_anchor_kind_withheld_scope", f.OfferPoolAnchorKindWithheldScope,
+		"offer_pool_anchor_kind_withheld_reason", f.OfferPoolAnchorKindWithheldReason,
+		"offer_pool_anchor_kind_withheld_ids", f.OfferPoolAnchorKindWithheldIDs,
+		"offer_pool_anchor_kind_exempted", f.OfferPoolAnchorKindExempted,
+		"anchor_pool_kind_scope", f.AnchorPoolKindScope,
+		"anchor_pool_kind_scope_source", f.AnchorPoolKindScopeSource,
+		"member_kind_confirmed", f.MemberKindConfirmed,
+		"reserved_kinds", f.ReservedKinds,
+		"filter_kinds", f.FilterKinds,
+	}
+}
+
+// RankedCutSummaryFields is graphrank.ranked_cut_summary's generated typed construction interface
+// (CHAOS-5516): one Go field per Field RankedCutSummary.Fields declares in spec.go.
+type RankedCutSummaryFields struct {
+	RequestID           string
+	Pass                int
+	CandidateCount      int
+	SurvivedCount       int
+	SurvivedIDs         []string
+	Max                 int
+	AnchorSlotReserved  string
+	AnchorSlotSource    string
+	AnchorSlotDisplaced int
+	PoolTruncatedN      int
+	DeclaredKindRescue  []map[string]any
+}
+
+// NewRankedCutSummaryFields is the generated constructor for RankedCutSummaryFields -- every
+// field RankedCutSummary.Fields declares is a required parameter.
+func NewRankedCutSummaryFields(requestID string, pass int, candidateCount int, survivedCount int, survivedIDs []string, max int, anchorSlotReserved string, anchorSlotSource string, anchorSlotDisplaced int, poolTruncatedN int, declaredKindRescue []map[string]any) RankedCutSummaryFields {
+	return RankedCutSummaryFields{
+		RequestID:           requestID,
+		Pass:                pass,
+		CandidateCount:      candidateCount,
+		SurvivedCount:       survivedCount,
+		SurvivedIDs:         survivedIDs,
+		Max:                 max,
+		AnchorSlotReserved:  anchorSlotReserved,
+		AnchorSlotSource:    anchorSlotSource,
+		AnchorSlotDisplaced: anchorSlotDisplaced,
+		PoolTruncatedN:      poolTruncatedN,
+		DeclaredKindRescue:  declaredKindRescue,
+	}
+}
+
+// SlogArgs returns RankedCutSummary's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them.
+func (f RankedCutSummaryFields) SlogArgs() []any {
+	return []any{
+		"request_id", f.RequestID,
+		"pass", f.Pass,
+		"stage", "ranked_cut",
+		"candidate_count", f.CandidateCount,
+		"survived_count", f.SurvivedCount,
+		"survived_ids", f.SurvivedIDs,
+		"max", f.Max,
+		"anchor_slot_reserved", f.AnchorSlotReserved,
+		"anchor_slot_source", f.AnchorSlotSource,
+		"anchor_slot_displaced", f.AnchorSlotDisplaced,
+		"pool_truncated_n", f.PoolTruncatedN,
+		"declared_kind_rescue", f.DeclaredKindRescue,
+	}
 }

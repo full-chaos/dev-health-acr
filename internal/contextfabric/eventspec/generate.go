@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"go/format"
 	"sort"
+	"strings"
 )
 
 // Generate derives every generated artefact from All, deterministically.
@@ -53,7 +54,11 @@ func generateGo() ([]byte, error) {
 	for _, e := range events {
 		fmt.Fprintf(&b, "\t%q: %s,\n", e.ID, goVarName(e))
 	}
-	b.WriteString("}\n")
+	b.WriteString("}\n\n")
+
+	for _, e := range events {
+		writeTypedConstruction(&b, e)
+	}
 
 	out, err := format.Source(b.Bytes())
 	if err != nil {
@@ -63,19 +68,147 @@ func generateGo() ([]byte, error) {
 }
 
 // goVarName maps an event's stable ID back to the exported var this package
-// declares it under in spec.go. Both variables generation touches
-// (RankedCutSummary, AnchorSlotDisplaced) are named here explicitly so a
-// spec.go addition that forgets to extend this map fails generation loudly
-// (KeyError on ByID build) rather than silently omitting the event.
+// declares it under in spec.go. Every variable generation touches
+// (RankedCutSummary, AnchorSlotDisplaced, DecisionSummary) is named here
+// explicitly so a spec.go addition that forgets to extend this map fails
+// generation loudly (panic on ByID build) rather than silently omitting the
+// event.
 func goVarName(e Event) string {
 	switch e.ID {
 	case RankedCutSummary.ID:
 		return "RankedCutSummary"
 	case AnchorSlotDisplaced.ID:
 		return "AnchorSlotDisplaced"
+	case DecisionSummary.ID:
+		return "DecisionSummary"
 	default:
 		panic("eventspec: goVarName has no mapping for " + e.ID + " -- add one before regenerating")
 	}
+}
+
+// isFixedStageField reports whether f is the "stage" key with a single-member
+// closed vocabulary -- a fixed constant of the event, never a value a caller
+// chooses. Such a field is excluded from the generated struct/constructor
+// (nothing to set) and hardcoded into SlogArgs() instead, so it can never be
+// supplied wrong or omitted.
+func isFixedStageField(f Field) bool {
+	return f.Key == "stage" && len(f.ClosedVocabulary) == 1
+}
+
+// commonInitialisms are rendered fully upper-case, matching this repo's own
+// Go naming (RequestID, SubjectCanonicalID, etc. -- ResolutionTraceEvent's
+// own fields) rather than the literal title-case a naive snake_case
+// conversion would produce ("RequestId").
+var commonInitialisms = map[string]string{"id": "ID", "ids": "IDs"}
+
+// snakeToPascal converts a JSON snake_case key to a Go exported field name
+// (e.g. "decision_event_count" -> "DecisionEventCount", "request_id" ->
+// "RequestID").
+func snakeToPascal(s string) string {
+	parts := strings.Split(s, "_")
+	var b strings.Builder
+	for _, p := range parts {
+		if p == "" {
+			continue
+		}
+		if up, ok := commonInitialisms[p]; ok {
+			b.WriteString(up)
+			continue
+		}
+		b.WriteString(strings.ToUpper(p[:1]))
+		b.WriteString(p[1:])
+	}
+	return b.String()
+}
+
+// lowerFirst lowercases the first rune only, for a Go parameter name derived
+// from an exported field name (e.g. "DecisionEventCount" -> "decisionEventCount").
+func lowerFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToLower(s[:1]) + s[1:]
+}
+
+// goFieldType maps a declared Field.Type to the Go type the generated typed
+// construction interface uses for it. object_slice maps to a generic
+// []map[string]any -- no event this ticket migrates has one; a future
+// migration of an object_slice-carrying event (RankedCutSummary's
+// declared_kind_rescue) can extend this with a nested generated struct
+// without changing any already-migrated event's own generated shape.
+func goFieldType(t FieldType) string {
+	switch t {
+	case FieldString:
+		return "string"
+	case FieldInt:
+		return "int"
+	case FieldBool:
+		return "bool"
+	case FieldStringSlice:
+		return "[]string"
+	case FieldObjectSlice:
+		return "[]map[string]any"
+	default:
+		panic("eventspec: goFieldType has no mapping for " + string(t))
+	}
+}
+
+// writeTypedConstruction emits, for one event, the generated typed
+// construction interface CHAOS-5516 (clauses 1+4) requires: a struct with
+// one Go field per declared Field, a constructor function that takes every
+// one as a required parameter (so a caller cannot silently omit one the way
+// an unkeyed struct literal would allow), and a SlogArgs() method producing
+// the SAME key order spec.go declares -- the one generated source a
+// producer's construction site and its own emission both derive from,
+// instead of two (or three) independently hand-typed lists.
+func writeTypedConstruction(b *bytes.Buffer, e Event) {
+	name := goVarName(e)
+	fmt.Fprintf(b, "// %sFields is %s's generated typed construction interface\n", name, e.ID)
+	fmt.Fprintf(b, "// (CHAOS-5516): one Go field per Field %s.Fields declares in spec.go.\n", name)
+	fmt.Fprintf(b, "type %sFields struct {\n", name)
+	for _, f := range e.Fields {
+		if isFixedStageField(f) {
+			continue
+		}
+		fmt.Fprintf(b, "\t%s %s\n", snakeToPascal(f.Key), goFieldType(f.Type))
+	}
+	fmt.Fprintf(b, "}\n\n")
+
+	fmt.Fprintf(b, "// New%sFields is the generated constructor for %sFields -- every\n", name, name)
+	fmt.Fprintf(b, "// field %s.Fields declares is a required parameter.\n", name)
+	fmt.Fprintf(b, "func New%sFields(", name)
+	first := true
+	for _, f := range e.Fields {
+		if isFixedStageField(f) {
+			continue
+		}
+		if !first {
+			b.WriteString(", ")
+		}
+		first = false
+		fmt.Fprintf(b, "%s %s", lowerFirst(snakeToPascal(f.Key)), goFieldType(f.Type))
+	}
+	fmt.Fprintf(b, ") %sFields {\n\treturn %sFields{\n", name, name)
+	for _, f := range e.Fields {
+		if isFixedStageField(f) {
+			continue
+		}
+		key := snakeToPascal(f.Key)
+		fmt.Fprintf(b, "\t\t%s: %s,\n", key, lowerFirst(key))
+	}
+	fmt.Fprintf(b, "\t}\n}\n\n")
+
+	fmt.Fprintf(b, "// SlogArgs returns %s's own declared fields as alternating slog\n", name)
+	fmt.Fprintf(b, "// key/value pairs, in the SAME order spec.go declares them.\n")
+	fmt.Fprintf(b, "func (f %sFields) SlogArgs() []any {\n\treturn []any{\n", name)
+	for _, f := range e.Fields {
+		if isFixedStageField(f) {
+			fmt.Fprintf(b, "\t\t%q, %q,\n", f.Key, f.ClosedVocabulary[0])
+			continue
+		}
+		fmt.Fprintf(b, "\t\t%q, f.%s,\n", f.Key, snakeToPascal(f.Key))
+	}
+	fmt.Fprintf(b, "\t}\n}\n\n")
 }
 
 // jsonField mirrors Field for schema.json, so the schema's own shape is

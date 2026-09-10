@@ -86,6 +86,8 @@ func canonicalValueFor(f eventspec.Field) any {
 		return "sweep_canonical_string"
 	case eventspec.FieldInt:
 		return 7
+	case eventspec.FieldBool:
+		return true
 	case eventspec.FieldStringSlice:
 		return []string{"sweep_elem"}
 	case eventspec.FieldObjectSlice:
@@ -112,19 +114,23 @@ func zeroValueFor(f eventspec.Field) (val any, applicable bool) {
 		return "", true
 	case eventspec.FieldInt:
 		return 0, true
+	case eventspec.FieldBool:
+		return false, true
 	default:
 		return nil, false // containers use empty_container instead
 	}
 }
 
-// wrongScalarTypeValueFor returns the OTHER JSON scalar shape for a scalar
-// field -- applicable only to FieldString/FieldInt.
+// wrongScalarTypeValueFor returns a JSON scalar shape that is NOT the
+// declared one -- applicable to every scalar type (string/int/bool).
 func wrongScalarTypeValueFor(f eventspec.Field) (val any, applicable bool) {
 	switch f.Type {
 	case eventspec.FieldInt:
 		return "not-an-int", true
 	case eventspec.FieldString:
 		return 12345, true
+	case eventspec.FieldBool:
+		return "not-a-bool", true
 	default:
 		return nil, false
 	}
