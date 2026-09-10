@@ -490,3 +490,29 @@ func (e *Engine) recordCohortMemberAllowance(ctx context.Context, principal stor
 func cohortMemberAllowanceClamped(budget contractsv1.ContextFabricAnswerPlanBudget) bool {
 	return budget.MaxItems > 0 && budget.MaxItems-budget.SynthesisHeadroom < 1
 }
+
+// FactRetentionEvent reports one retention pass on the trace.
+//
+// It exists because a narrowed grouped answer that started failing evidence
+// closure had nothing anywhere saying why. Retention is the step that decides
+// which evidence survives narrowing, and until this line the only way to know
+// what it dropped was to reproduce the turn.
+//
+// GroupKind is on the line because dropped_groups is meaningless without it:
+// on a flat cohort the field is structurally zero and says nothing, and a
+// reader who cannot tell "no groups were dropped" from "this answer has no
+// group axis" is reading the same number for two different facts.
+type FactRetentionEvent struct {
+	Family    QuestionFamily
+	GroupKind SubjectKind
+	Stage     contractsv1.ContextFabricPlanNarrowingStage
+	Decision  FactRetentionDecision
+}
+
+// recordFactRetention emits one retention decision.
+func (e *Engine) recordFactRetention(ctx context.Context, principal storage.Principal, event FactRetentionEvent) {
+	if e.telemetry == nil {
+		return
+	}
+	e.telemetry.RecordFactRetention(ctx, principal, event)
+}

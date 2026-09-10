@@ -56,7 +56,12 @@ func coverageStateLines(t *testing.T, raw string) []map[string]any {
 //
 // NOT t.Parallel(): it installs the process-global default logger.
 func TestBothReadsCoverageStatesReachInfoBeforeTheFold(t *testing.T) {
-	logs := captureDefaultJSONLogger(t)
+	// The ENGINE'S CONFIGURED logger, with the process default captured
+	// separately and asserted empty. slog.Default() never reaches acr-api's
+	// JSON handler, so a pin that both captures the default and hands the
+	// default to the telemetry cannot tell a production-wired emitter from
+	// one calling slog.Default() directly.
+	logs := captureEngineLogger(t)
 
 	recorder := &groupReadRecorder{facts: func(request CanonicalFactRequest) CanonicalFactBundle {
 		bundle := emptyFactBundle()
@@ -73,18 +78,21 @@ func TestBothReadsCoverageStatesReachInfoBeforeTheFold(t *testing.T) {
 		return bundle
 	}}
 
-	engine, request := groupReadEngineFixture(t, NewSlogEngineTelemetry(slog.Default()), recorder)
+	engine, request := groupReadEngineFixture(t, logs.telemetry, recorder)
 	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
 
-	lines := coverageStateLines(t, logs.String())
+	lines := coverageStateLines(t, logs.configured.String())
 	for _, line := range lines {
 		t.Logf("level=%v read=%v source=%v source_state=%v family=%v group_kind=%v",
 			line["level"], line["read"], line["source"], line["source_state"], line["family"], line["group_kind"])
 	}
 	if len(lines) != 2 {
 		t.Fatalf("got %d coverage-state lines, want 2 -- one per read, emitted before the fold", len(lines))
+	}
+	if stray := coverageStateLines(t, logs.fallback.String()); len(stray) != 0 {
+		t.Errorf("%d coverage-state line(s) reached the PROCESS DEFAULT logger -- acr-api's JSON handler never reads it, so those lines do not exist in the deployed service", len(stray))
 	}
 
 	byArm := map[string]map[string]any{}
@@ -193,7 +201,12 @@ func allowanceLines(t *testing.T, raw string) []map[string]any {
 //
 // NOT t.Parallel(): it installs the process-global default logger.
 func TestTheClampedMemberAllowanceIsExplainedAtInfo(t *testing.T) {
-	logs := captureDefaultJSONLogger(t)
+	// The ENGINE'S CONFIGURED logger, with the process default captured
+	// separately and asserted empty. slog.Default() never reaches acr-api's
+	// JSON handler, so a pin that both captures the default and hands the
+	// default to the telemetry cannot tell a production-wired emitter from
+	// one calling slog.Default() directly.
+	logs := captureEngineLogger(t)
 
 	recorder := &groupReadRecorder{facts: func(CanonicalFactRequest) CanonicalFactBundle {
 		bundle := emptyFactBundle()
@@ -207,12 +220,12 @@ func TestTheClampedMemberAllowanceIsExplainedAtInfo(t *testing.T) {
 		{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_a", Label: "project_a"}, Rank: 1, InclusionReasons: []string{"matched"}},
 		{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_b", Label: "project_b"}, Rank: 2, InclusionReasons: []string{"matched"}},
 	}
-	engine, request := groupReadEngineFixtureFull(t, NewSlogEngineTelemetry(slog.Default()), recorder, members, nil, SubjectProject, &options, nil)
+	engine, request := groupReadEngineFixtureFull(t, logs.telemetry, recorder, members, nil, SubjectProject, &options, nil)
 	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
 
-	lines := allowanceLines(t, logs.String())
+	lines := allowanceLines(t, logs.configured.String())
 	for _, line := range lines {
 		t.Logf("level=%v max_items=%v headroom=%v allowance=%v clamped=%v groups=%v before=%v after=%v",
 			line["level"], line["max_items"], line["synthesis_headroom"], line["member_allowance"],
@@ -220,6 +233,9 @@ func TestTheClampedMemberAllowanceIsExplainedAtInfo(t *testing.T) {
 	}
 	if len(lines) != 1 {
 		t.Fatalf("got %d allowance lines, want exactly 1 -- emitted on every turn that has a cohort, narrowed or not", len(lines))
+	}
+	if stray := allowanceLines(t, logs.fallback.String()); len(stray) != 0 {
+		t.Errorf("%d allowance line(s) reached the PROCESS DEFAULT logger -- acr-api's JSON handler never reads it", len(stray))
 	}
 	line := lines[0]
 
@@ -264,7 +280,12 @@ func TestTheClampedMemberAllowanceIsExplainedAtInfo(t *testing.T) {
 //
 // NOT t.Parallel(): it installs the process-global default logger.
 func TestTheUnclampedMemberAllowanceReportsItselfUnclamped(t *testing.T) {
-	logs := captureDefaultJSONLogger(t)
+	// The ENGINE'S CONFIGURED logger, with the process default captured
+	// separately and asserted empty. slog.Default() never reaches acr-api's
+	// JSON handler, so a pin that both captures the default and hands the
+	// default to the telemetry cannot tell a production-wired emitter from
+	// one calling slog.Default() directly.
+	logs := captureEngineLogger(t)
 
 	recorder := &groupReadRecorder{facts: func(CanonicalFactRequest) CanonicalFactBundle {
 		bundle := emptyFactBundle()
@@ -278,12 +299,12 @@ func TestTheUnclampedMemberAllowanceReportsItselfUnclamped(t *testing.T) {
 		{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_a", Label: "project_a"}, Rank: 1, InclusionReasons: []string{"matched"}},
 		{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_b", Label: "project_b"}, Rank: 2, InclusionReasons: []string{"matched"}},
 	}
-	engine, request := groupReadEngineFixtureFull(t, NewSlogEngineTelemetry(slog.Default()), recorder, members, nil, SubjectProject, &options, nil)
+	engine, request := groupReadEngineFixtureFull(t, logs.telemetry, recorder, members, nil, SubjectProject, &options, nil)
 	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
 
-	lines := allowanceLines(t, logs.String())
+	lines := allowanceLines(t, logs.configured.String())
 	if len(lines) != 1 {
 		t.Fatalf("CONTROL BROKEN: got %d allowance lines, want 1", len(lines))
 	}

@@ -1790,3 +1790,32 @@ func (t SlogEngineTelemetry) RecordCohortMemberAllowance(ctx context.Context, pr
 		"members_after", event.MembersAfter,
 	)
 }
+
+// RecordFactRetention emits one retention decision, at Info.
+//
+// `dropped_groups` is the field this line was added for: a group narrowed out
+// of the answer used to keep its evidence, synthesis was handed facts about a
+// population the served document did not contain, and evidence closure
+// rejected the whole result with nothing anywhere explaining it. A non-zero
+// count here is now the visible half of that decision.
+//
+// `group_kind` travels with it because `dropped_groups` alone is ambiguous: on
+// a flat cohort the field is structurally zero, and zero-because-nothing-was-
+// dropped and zero-because-there-is-no-group-axis are different facts wearing
+// the same number.
+func (t SlogEngineTelemetry) RecordFactRetention(ctx context.Context, principal storage.Principal, event FactRetentionEvent) {
+	if t.logger == nil {
+		return
+	}
+	t.logger.InfoContext(ctx, "context fabric fact retention",
+		"org_id", principal.OrgID,
+		"family", string(event.Family),
+		"group_kind", string(event.GroupKind),
+		"stage", string(event.Stage),
+		"facts_before", event.Decision.FactsBefore,
+		"facts_after", event.Decision.FactsAfter,
+		"dropped_members", event.Decision.DroppedMembers,
+		"dropped_groups", event.Decision.DroppedGroups,
+		"retained_groups", event.Decision.RetainedGroups,
+	)
+}

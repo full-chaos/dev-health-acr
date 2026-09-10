@@ -411,6 +411,10 @@ type PlanTelemetry interface {
 	// budget admits and whether that number was clamped by the floor rather
 	// than computed from the budget.
 	RecordCohortMemberAllowance(ctx context.Context, principal storage.Principal, event CohortMemberAllowanceEvent)
+	// RecordFactRetention reports which evidence survived a narrowing pass
+	// and, for a grouped answer, how much was dropped because the group it
+	// spoke for is no longer in the answer.
+	RecordFactRetention(ctx context.Context, principal storage.Principal, event FactRetentionEvent)
 
 	// RecordMembershipCardinality reports the `membership_cardinality`
 	// server step's own result for one served answer: what was counted, how

@@ -2591,7 +2591,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// UNGROUNDED claim, and the evidence-closure validator would
 			// reject the whole result -- turning a narrowed answer into a
 			// failed one.
-			facts.Facts = RetainFactsForCohort(facts.Facts, &cohort, removed)
+			var retention FactRetentionDecision
+			facts.Facts, retention = RetainFactsForCohortWithDecision(facts.Facts, &cohort, removed)
+			e.recordFactRetention(ctx, principal, FactRetentionEvent{
+				Family: plan.Family, GroupKind: plan.GroupKind,
+				Stage:    contractsv1.ContextFabricPlanNarrowingSynthesisInput,
+				Decision: retention,
+			})
 			if len(cohort.Groups) > 0 {
 				ApplyGroupedCohortCompleteness(&cohort)
 			} else {

@@ -160,6 +160,17 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	grouped := params.Graph.Cohort != nil && len(params.Graph.Cohort.Groups) > 0
 	narrowed := narrowSynthesisInput(params, plan)
 	before, after, canNarrow := narrowed.Before, narrowed.After, narrowed.Narrow
+	// Reported HERE because narrowSynthesisInput has no telemetry handle and
+	// this function does. Emitted whether or not the narrowing is ultimately
+	// used: the retention pass RAN, and a decision that ran and was then
+	// discarded is still a decision an operator can be looking for.
+	if canNarrow {
+		e.recordFactRetention(ctx, principal, FactRetentionEvent{
+			Family: plan.Family, GroupKind: plan.GroupKind,
+			Stage:    contractsv1.ContextFabricPlanNarrowingAssembledResult,
+			Decision: narrowed.Retention,
+		})
+	}
 	// Name WHICH of the three reasons declined the retry. They have
 	// completely different fixes -- reconfigure the deployment, accept that
 	// this answer is genuinely slow, or accept that nothing was left to
@@ -476,6 +487,10 @@ type narrowedInput struct {
 	Before int
 	After  int
 	Narrow bool
+	// Retention is what the retention pass dropped, carried out to the
+	// caller because THIS function has no telemetry handle and the caller
+	// does. Recomputing it there would be a second authority for one pass.
+	Retention FactRetentionDecision
 	// Basis is which grouped order NarrowGroupedCohort actually ran
 	// (CHAOS-4678), zero for a flat cohort or when nothing narrowed.
 	Basis contractsv1.ContextFabricNarrowingBasis
@@ -541,10 +556,11 @@ func narrowSynthesisInput(params synthesisAssemblyParams, plan *AnswerPlan) narr
 	// scores computed against the wider member set do not describe this one.
 	rankedCohort, rankEvent, citations := RankCohort(cohort, facts.Facts, facts.Coverage)
 	graph.Cohort = rankedCohort
-	facts.Facts = RetainFactsForCohort(facts.Facts, rankedCohort, removed)
+	var retention FactRetentionDecision
+	facts.Facts, retention = RetainFactsForCohortWithDecision(facts.Facts, rankedCohort, removed)
 	return narrowedInput{
 		Graph: graph, Facts: facts, Citations: citations, Ranked: rankEvent,
-		Before: before, After: len(kept), Narrow: true, Basis: basis,
+		Before: before, After: len(kept), Narrow: true, Basis: basis, Retention: retention,
 	}
 }
 

@@ -365,7 +365,10 @@ type recordingTelemetry struct {
 	groupReadCoverageStates []GroupReadCoverageStateEvent
 	// cohortMemberAllowances records the allowance decision of every turn
 	// that had a cohort, narrowed or not.
-	cohortMemberAllowances     []CohortMemberAllowanceEvent
+	cohortMemberAllowances []CohortMemberAllowanceEvent
+	// factRetentions records every retention pass, so a test can say what
+	// narrowing dropped rather than inferring it from what survived.
+	factRetentions             []FactRetentionEvent
 	membershipCardinalities    []MembershipCardinalityEvent
 	readRequirementPopulations []ReadRequirementPopulationEvent
 	// readRequirementObservationCovers records every observation-cover
@@ -661,6 +664,10 @@ func (r *recordingTelemetry) RecordGroupReadCoverageState(_ context.Context, _ s
 
 func (r *recordingTelemetry) RecordCohortMemberAllowance(_ context.Context, _ storage.Principal, event CohortMemberAllowanceEvent) {
 	r.cohortMemberAllowances = append(r.cohortMemberAllowances, event)
+}
+
+func (r *recordingTelemetry) RecordFactRetention(_ context.Context, _ storage.Principal, event FactRetentionEvent) {
+	r.factRetentions = append(r.factRetentions, event)
 }
 
 // RecordMembershipCardinality records the whole event, same list-not-count

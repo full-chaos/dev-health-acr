@@ -610,9 +610,41 @@ func NarrowFlatCohort(cohort *Cohort, maxMembers int) (kept []CohortMember, narr
 // Facts whose subject is NOT a cohort member are kept untouched: a cohort
 // answer also carries organization- and subject-level facts that no member
 // owns, and dropping those would remove evidence narrowing never asked about.
+// FactRetentionDecision is what one retention pass DID, so the call site can
+// report it without recomputing it.
+//
+// Counts rather than ids: the decision an operator needs is "how much evidence
+// left, and was any of it a group's", and the ids are already recoverable from
+// the cohort. Recomputing these at the call site would be a second authority
+// for one pass, and the two would stop agreeing the first time the rule here
+// changes -- which is exactly what happened when the group axis arrived and
+// the rule silently stopped covering it.
+type FactRetentionDecision struct {
+	FactsBefore    int
+	FactsAfter     int
+	DroppedMembers int
+	// DroppedGroups is how many facts were dropped because the group they
+	// speak for is no longer in the answer, and RetainedGroups how many
+	// groups the answer still carries. Zero and zero on a flat cohort.
+	DroppedGroups  int
+	RetainedGroups int
+}
+
+// RetainFactsForCohort is the decision-free form, for callers that do not
+// report. It is a thin wrapper so there is ONE retention rule, not two.
 func RetainFactsForCohort(facts []CanonicalFact, cohort *Cohort, removed []CohortMember) []CanonicalFact {
+	retained, _ := RetainFactsForCohortWithDecision(facts, cohort, removed)
+	return retained
+}
+
+// RetainFactsForCohortWithDecision retains and reports.
+func RetainFactsForCohortWithDecision(facts []CanonicalFact, cohort *Cohort, removed []CohortMember) ([]CanonicalFact, FactRetentionDecision) {
+	decision := FactRetentionDecision{FactsBefore: len(facts), FactsAfter: len(facts)}
+	if cohort != nil {
+		decision.RetainedGroups = len(cohort.Groups)
+	}
 	if len(removed) == 0 || len(facts) == 0 {
-		return facts
+		return facts, decision
 	}
 	dropped := make(map[string]struct{}, len(removed))
 	for _, member := range removed {
@@ -649,16 +681,19 @@ func RetainFactsForCohort(facts []CanonicalFact, cohort *Cohort, removed []Cohor
 	retained := make([]CanonicalFact, 0, len(facts))
 	for _, fact := range facts {
 		if _, gone := dropped[SubjectMapKey(fact.Subject)]; gone {
+			decision.DroppedMembers++
 			continue
 		}
 		if admitted != nil {
 			if _, stillThere := admitted[SubjectMapKey(fact.Subject)]; !stillThere {
+				decision.DroppedGroups++
 				continue
 			}
 		}
 		retained = append(retained, fact)
 	}
-	return retained
+	decision.FactsAfter = len(retained)
+	return retained, decision
 }
 
 // RemovedCohortMembers reports which members `before` had that `after` does
