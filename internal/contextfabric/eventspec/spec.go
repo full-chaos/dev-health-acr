@@ -73,8 +73,8 @@ const (
 type Field struct {
 	// Key is the JSON key exactly as slog writes it (the log line's own
 	// vocabulary -- this package does not rename what production emits).
-	Key string
-	Type FieldType
+	Key      string
+	Type     FieldType
 	Presence FieldPresence
 	// ClosedVocabulary lists every value this field may take, when the field
 	// is a closed vocabulary. Nil means the field's value space is open
@@ -101,13 +101,13 @@ type Event struct {
 	// Msg is the exact slog msg this variant is emitted under today -- the
 	// line's identity on the wire, and what the certification runner (A2)
 	// locates a line by.
-	Msg string
-	Level Level
+	Msg          string
+	Level        Level
 	Multiplicity Multiplicity
 	// Attribution lists the field keys that jointly make one emitted line
 	// uniquely attributable to the scope and attempt that produced it.
 	Attribution []string
-	Fields []Field
+	Fields      []Field
 	// BoundedAggregation documents, in one sentence, what keeps this
 	// variant's own line volume bounded per pass (a fixed cap, "at most one
 	// per pass", etc.) -- the aggregation clause 1 requires this
@@ -133,11 +133,11 @@ var declaredKindRescueState = []string{
 // resolution's LAST summary reaching the tracer is the one describing the
 // pass whose resolution was actually returned (tracer.go's own doc comment).
 var RankedCutSummary = Event{
-	ID:           "graphrank.ranked_cut_summary",
-	Msg:          "context fabric resolution trace: ranked cut summary",
-	Level:        LevelInfo,
-	Multiplicity: MultiplicityExactlyOnePerPass,
-	Attribution:  []string{"request_id"},
+	ID:                 "graphrank.ranked_cut_summary",
+	Msg:                "context fabric resolution trace: ranked cut summary",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityExactlyOnePerPass,
+	Attribution:        []string{"request_id"},
 	BoundedAggregation: "exactly one line per ranked-cut pass -- the per-candidate detail this summary aggregates stays at Debug (case \"ranked_cut\", RankedCutSummary==false).",
 	Fields: []Field{
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
@@ -181,11 +181,11 @@ var RankedCutSummary = Event{
 // anchor_slot_displaced==0 is the pass's measured zero, not a missing
 // measurement).
 var AnchorSlotDisplaced = Event{
-	ID:           "graphrank.anchor_slot_displaced",
-	Msg:          "context fabric resolution trace: anchor slot displaced",
-	Level:        LevelInfo,
-	Multiplicity: MultiplicityZeroOrOnePerPass,
-	Attribution:  []string{"request_id"},
+	ID:                 "graphrank.anchor_slot_displaced",
+	Msg:                "context fabric resolution trace: anchor slot displaced",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerPass,
+	Attribution:        []string{"request_id"},
 	BoundedAggregation: "present iff this pass's RankedCutSummary line reports anchor_slot_displaced > 0 -- the two lines' counts must agree; today at most one candidate can be displaced per pass (kindReserveSlotsPerKind), so at most one line.",
 	Fields: []Field{
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},

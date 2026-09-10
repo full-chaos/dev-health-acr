@@ -162,7 +162,7 @@ func TestLiveEventspecCertifiesTheAnchorSlotPilotThroughARealFalkorDBAdapter(t *
 	}
 	interpreted := contextfabric.InterpretedQuestion{
 		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", SubjectTerms: subjectTerms,
-		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		TimeContext:      contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
 	}
 	frame := &contextfabric.QuestionFrame{
