@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"sort"
 	"strings"
 	"testing"
 
@@ -103,21 +104,68 @@ func TestSwappingOnePolicyFieldDoesNotTypeCheck(t *testing.T) {
 	}
 }
 
+// duplicateExpressions reports every expression two cases share, as
+// "case A / case B: expr".
+//
+// SEPARATED FROM THE TABLE IT CHECKS, deliberately. A guard written inline over
+// the real table can only ever be exercised by a table that already has the
+// defect — so the real table being clean makes the guard unexecuted code, and a
+// mutation disabling it survives while reporting nothing. That is the same
+// shape as a scan whose only corpus is a codebase containing none of the cases
+// it governs, which review already found once in this change set. As a function
+// it can be run against a table built to contain the defect.
+func duplicateExpressions(cases map[string]policyTypeCase) []string {
+	seen := map[string]string{}
+	duplicates := make([]string, 0)
+	names := make([]string, 0, len(cases))
+	for name := range cases {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		expr := cases[name].expr
+		if previous, ok := seen[expr]; ok {
+			duplicates = append(duplicates, previous+" / "+name+": "+expr)
+			continue
+		}
+		seen[expr] = name
+	}
+	return duplicates
+}
+
 // NO TWO CASES MAY SHARE AN EXPRESSION. A duplicated expression is how the
 // previous version of this table pretended to cover something it did not: one
 // case restated a passing case under a name claiming it measured a limit.
-// Asserting uniqueness turns that from a thing a reader has to notice into a
-// thing the suite refuses.
 func TestNoTwoPolicyTypeCasesShareAnExpression(t *testing.T) {
-	seen := map[string]string{}
-	for name, testCase := range policyTypeCases() {
-		expr := testCase.expr
-		if previous, duplicate := seen[expr]; duplicate {
-			t.Errorf("cases %q and %q use the SAME expression %s — one of them measures nothing, and a case "+
-				"that restates another under a different name reads as coverage it does not have",
-				previous, name, expr)
-		}
-		seen[expr] = name
+	if found := duplicateExpressions(policyTypeCases()); len(found) != 0 {
+		t.Errorf("cases share expressions: %v — a case that restates another under a different name reads as "+
+			"coverage it does not have", found)
+	}
+}
+
+// AND THE DETECTOR IS ITSELF EXERCISED, on a table built to contain exactly the
+// defect the real one must not. Without this the check above is a guard nothing
+// runs: the real table is clean, so disabling the detector changes nothing any
+// test can see.
+func TestTheDuplicateDetectorFindsADuplicate(t *testing.T) {
+	planted := map[string]policyTypeCase{
+		"the contest read, correct":                   {expr: `_ = a.ContestExempt.Exempt()`},
+		"BOTH field and accessor swapped — the shape": {expr: `_ = a.ContestExempt.Exempt()`},
+		"an unrelated case":                           {expr: `_ = a.ShortCircuitEligible.Eligible()`},
+	}
+	found := duplicateExpressions(planted)
+	if len(found) != 1 {
+		t.Fatalf("duplicateExpressions found %d duplicates in a table with exactly one, %v", len(found), found)
+	}
+	if !strings.Contains(found[0], "a.ContestExempt.Exempt()") {
+		t.Errorf("the report %q does not name the shared expression", found[0])
+	}
+	// AND it must not cry duplicate over a clean table.
+	if extra := duplicateExpressions(map[string]policyTypeCase{
+		"one": {expr: `_ = a.ContestExempt.Exempt()`},
+		"two": {expr: `_ = a.ShortCircuitEligible.Eligible()`},
+	}); len(extra) != 0 {
+		t.Errorf("duplicateExpressions reported %v on a table with no duplicates", extra)
 	}
 }
 
