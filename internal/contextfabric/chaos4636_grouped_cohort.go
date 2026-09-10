@@ -628,6 +628,22 @@ type FactRetentionDecision struct {
 	// groups the answer still carries. Zero and zero on a flat cohort.
 	DroppedGroups  int
 	RetainedGroups int
+	// GroupRuleApplied reports whether the group-axis half of the rule RAN.
+	//
+	// It is false when the cohort is nil or carries no groups, and those are
+	// the two shapes in which a group-rooted fact would survive unexamined --
+	// exactly the defect the group rule was added to close. The rule cannot
+	// run there: with no group list there is nothing to admit against, and
+	// dropping every non-member fact would delete the subject-resolution
+	// evidence of every FLAT answer, which is a worse failure than the one
+	// being prevented.
+	//
+	// So the guard is not a behaviour change, it is a DISCLOSURE: a caller
+	// that reaches this function holding group facts and no group list gets
+	// the old behaviour AND says so, rather than getting the old behaviour
+	// silently. A third call site cannot restore the defect without the line
+	// reporting that the rule did not run.
+	GroupRuleApplied bool
 }
 
 // RetainFactsForCohort is the decision-free form, for callers that do not
@@ -642,6 +658,7 @@ func RetainFactsForCohortWithDecision(facts []CanonicalFact, cohort *Cohort, rem
 	decision := FactRetentionDecision{FactsBefore: len(facts), FactsAfter: len(facts)}
 	if cohort != nil {
 		decision.RetainedGroups = len(cohort.Groups)
+		decision.GroupRuleApplied = len(cohort.Groups) > 0
 	}
 	if len(removed) == 0 || len(facts) == 0 {
 		return facts, decision

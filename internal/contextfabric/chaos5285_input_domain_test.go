@@ -285,7 +285,17 @@ func domainRetention(d *domainTable) {
 
 	d.want(guard, "removed", "empty container", run(grouped, nil, facts), "kept=2 dropped_members=0 dropped_groups=0")
 	d.want(guard, "facts", "empty container", run(grouped, gone, nil), "kept=0 dropped_members=0 dropped_groups=0")
+	rule := func(cohort *Cohort) string {
+		_, decision := RetainFactsForCohortWithDecision(facts, cohort, gone)
+		return fmt.Sprintf("group_rule_applied=%v", decision.GroupRuleApplied)
+	}
 	d.want(guard, "cohort", "null (nil pointer)", run(nil, gone, facts), "kept=2 dropped_members=0 dropped_groups=0")
+	// The nil and empty-group shapes keep the pre-group behaviour because the
+	// rule cannot run without a group list -- and they SAY SO, so a third
+	// caller cannot restore the row-14 defect silently.
+	d.want(guard, "cohort", "null (nil pointer) - does the group rule run?", rule(nil), "group_rule_applied=false")
+	d.want(guard, "cohort.Groups", "empty container - does the group rule run?", rule(flat), "group_rule_applied=false")
+	d.want(guard, "cohort.Groups", "canonical - does the group rule run?", rule(grouped), "group_rule_applied=true")
 	d.want(guard, "cohort.Groups", "empty container (flat cohort)", run(flat, gone, facts), "kept=2 dropped_members=0 dropped_groups=0")
 	d.want(guard, "cohort.Groups", "canonical (group still present)", run(grouped, gone, facts), "kept=2 dropped_members=0 dropped_groups=0")
 	d.want(guard, "cohort.Groups", "group absent from the answer",

@@ -1818,5 +1818,6 @@ func (t SlogEngineTelemetry) RecordFactRetention(ctx context.Context, principal 
 		"dropped_members", event.Decision.DroppedMembers,
 		"dropped_groups", event.Decision.DroppedGroups,
 		"retained_groups", event.Decision.RetainedGroups,
+		"group_rule_applied", event.Decision.GroupRuleApplied,
 	)
 }

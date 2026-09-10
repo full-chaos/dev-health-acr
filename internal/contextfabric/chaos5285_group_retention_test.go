@@ -131,3 +131,60 @@ func TestRetentionLeavesAnUnnarrowedGroupedBundleAlone(t *testing.T) {
 		}
 	}
 }
+
+// TestRetentionSaysWhenTheGroupRuleDidNotRun closes the nil/empty-cohort cell
+// of the retention rule's input domain.
+//
+// The group half of the rule cannot run without a group list: there is nothing
+// to admit against, and dropping every non-member fact would delete the
+// subject-resolution evidence of every FLAT answer -- a worse failure than the
+// one being prevented. So those two shapes keep the pre-group behaviour, and
+// that is correct.
+//
+// What was NOT correct is that they kept it SILENTLY. A third call site
+// reaching this function with group facts and no group list would restore the
+// row-14 defect exactly, with nothing anywhere saying the rule had been
+// skipped. The decision now reports whether the rule ran, so the restoration
+// is visible on the trace instead of invisible in the diff.
+func TestRetentionSaysWhenTheGroupRuleDidNotRun(t *testing.T) {
+	t.Parallel()
+
+	member := SubjectRef{Kind: SubjectProject, CanonicalID: "project_a", Label: "a"}
+	removed := []CohortMember{{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_b", Label: "b"}, Rank: 2, InclusionReasons: []string{"m"}}}
+	facts := []CanonicalFact{
+		{Kind: FactMetrics, Subject: member, Fields: map[string]FactValue{}, SourceState: SourceAvailable, Source: "ops", SourceVersion: "v1"},
+		groupFact("team_a"),
+	}
+	flat := &Cohort{Kind: SubjectProject, Rationale: "r", Complete: true,
+		Members: []CohortMember{{Subject: member, Rank: 1, InclusionReasons: []string{"m"}}}}
+	grouped := &Cohort{Kind: SubjectProject, Rationale: "r", Complete: true,
+		Members: flat.Members,
+		Groups: []contractsv1.ContextFabricCohortGroup{
+			{Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: TeamCanonicalID("team_a"), Label: "A"}, MemberCanonicalIDs: []string{"project_a"}, Total: 1, Complete: true},
+		}}
+
+	for _, testCase := range []struct {
+		name       string
+		cohort     *Cohort
+		wantRuleOn bool
+	}{
+		{"nil cohort", nil, false},
+		{"cohort with no groups", flat, false},
+		{"grouped cohort", grouped, true},
+	} {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			retained, decision := RetainFactsForCohortWithDecision(facts, testCase.cohort, removed)
+			t.Logf("%s -> kept=%d group_rule_applied=%v retained_groups=%d dropped_groups=%d",
+				testCase.name, len(retained), decision.GroupRuleApplied, decision.RetainedGroups, decision.DroppedGroups)
+			if decision.GroupRuleApplied != testCase.wantRuleOn {
+				t.Errorf("group_rule_applied = %v, want %v -- a caller that reaches retention holding group facts and no group list gets the pre-group behaviour, and the only thing standing between that and a silent restoration of the defect is this flag",
+					decision.GroupRuleApplied, testCase.wantRuleOn)
+			}
+			if !testCase.wantRuleOn && decision.DroppedGroups != 0 {
+				t.Errorf("dropped_groups = %d with the rule not applied -- the counter must not report work the rule did not do", decision.DroppedGroups)
+			}
+		})
+	}
+}
