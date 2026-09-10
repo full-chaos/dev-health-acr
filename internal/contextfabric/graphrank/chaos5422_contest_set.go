@@ -143,6 +143,28 @@ func (s contestScope) refuses(kind contextfabric.SubjectKind) bool {
 	return s.MemberKind != "" && kind == s.MemberKind
 }
 
+// withheldIDs is the refused subjects' canonical ids for the folded Info line,
+// in withheldSubjects' deterministic order and CAPPED at traceSummaryIDCap.
+//
+// Two properties, both deliberate. It is NEVER nil -- a call that refused
+// nothing renders an empty array, so an absent key and a measured zero cannot
+// read alike, the same discipline the `none` tokens follow. And it is capped
+// while withheldCount() stays the true total, so an operator reading a count of
+// 40 beside 25 ids knows the list is a sample rather than the population; the
+// alternative, an unbounded array on a once-per-call Info line, is the thing
+// traceSummaryIDCap exists to prevent.
+func (a *contestAdmission) withheldIDs() []string {
+	subjects := a.withheldSubjects()
+	ids := make([]string, 0, len(subjects))
+	for _, subject := range subjects {
+		if len(ids) == traceSummaryIDCap {
+			break
+		}
+		ids = append(ids, subject.CanonicalID)
+	}
+	return ids
+}
+
 // observable renders the pair the decision line carries. Both halves are
 // explicit tokens on every pass -- never "" -- so a question that refused
 // nothing and a build that stopped deciding can never read alike.
@@ -245,7 +267,7 @@ const (
 // contract validates only for bounds, so "not one the engine minted" IS the
 // definition of caller-authored. hintsource records the limit that follows.
 func hintCandidateSource(source string) candidateSource {
-	if hintsource.Lookup(source).ContestExempt {
+	if hintsource.Lookup(source).ContestExempt.Exempt() {
 		return sourceCallerHint
 	}
 	return sourceEngineHint

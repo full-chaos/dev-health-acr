@@ -220,6 +220,11 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"offer_pool_anchor_kind_withheld", event.OfferPoolAnchorKindWithheld,
 			"offer_pool_anchor_kind_withheld_scope", event.OfferPoolAnchorKindWithheldScope,
 			"offer_pool_anchor_kind_withheld_reason", event.OfferPoolAnchorKindWithheldReason,
+			// WHICH subjects, capped, beside the true count above. Without
+			// these, a build that refuses the wrong subject while refusing the
+			// same number of them is indistinguishable at Info from a correct
+			// one -- the per-candidate dispositions that carry ids are Debug.
+			"offer_pool_anchor_kind_withheld_ids", event.OfferPoolAnchorKindWithheldIDs,
 			// The exemption's own number. A refusal count of zero beside an
 			// exemption count of one is a different fact from two zeros, and
 			// only one of them means "this question refused nothing".

@@ -1381,6 +1381,21 @@ type ResolutionTraceEvent struct {
 	// caller's authority" -- which are the same outcome and completely different
 	// facts.
 	OfferPoolAnchorKindExempted int
+	// CHAOS-5422 PR-C. WHICH subjects were refused, not merely how many.
+	//
+	// The counts alone leave one regression invisible at Info: a build that
+	// refuses the WRONG subject while refusing the same NUMBER of them reads
+	// identically on this line. The per-candidate dispositions carry the ids
+	// but sit at Debug, which is off in production, so the fact an operator
+	// needs to tell "the boundary refused the member" from "the boundary
+	// refused the anchor" is not available where they are looking.
+	//
+	// CAPPED at traceSummaryIDCap while OfferPoolAnchorKindWithheld stays the
+	// TRUE count, the same pairing RankedCutSurvivedIDs/Count already uses for
+	// the same reason: a large crowd must not turn one Info line into an
+	// unbounded array. ALWAYS non-nil, so "nothing was refused" and "this
+	// build stopped reporting ids" cannot read alike.
+	OfferPoolAnchorKindWithheldIDs []string
 	// OfferPoolSummary marks the once-per-call folded offer_pool event, the
 	// counterpart of DecisionSummary for this stage. Per-candidate
 	// offer_pool lines are retrieval-pool-sized and stay Debug; the summary
@@ -1962,6 +1977,7 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 			OfferPoolAnchorKindWithheld:       admission.withheldCount(),
 			OfferPoolAnchorKindWithheldScope:  withheldKind,
 			OfferPoolAnchorKindWithheldReason: withheldSource,
+			OfferPoolAnchorKindWithheldIDs:    admission.withheldIDs(),
 			OfferPoolAnchorKindExempted:       admission.exemptedCount(),
 		})
 	}
@@ -2062,7 +2078,11 @@ type decisionSummaryBuffer struct {
 	anchorKindWithheld       int
 	anchorKindWithheldScope  string
 	anchorKindWithheldReason string
-	anchorKindExempted       int
+	// anchorKindWithheldIDs rides the same ONE event as the counts, for the
+	// same reason: the folded line must not have to re-derive who was refused
+	// from a source that could disagree with the number beside it.
+	anchorKindWithheldIDs []string
+	anchorKindExempted    int
 	// anchorPoolKindScope / anchorPoolKindScopeSource / memberKindConfirmed
 	// accumulate from the `anchor_pool` summary event rather than being
 	// stamped at construction like frameGate above. The distinction is
@@ -2112,6 +2132,7 @@ func (b *decisionSummaryBuffer) Trace(event ResolutionTraceEvent) {
 			b.anchorKindWithheld = event.OfferPoolAnchorKindWithheld
 			b.anchorKindWithheldScope = event.OfferPoolAnchorKindWithheldScope
 			b.anchorKindWithheldReason = event.OfferPoolAnchorKindWithheldReason
+			b.anchorKindWithheldIDs = event.OfferPoolAnchorKindWithheldIDs
 			b.anchorKindExempted = event.OfferPoolAnchorKindExempted
 		}
 		// OR across the call for the same reason DecisionOfferedUnderWindowGate
@@ -2188,7 +2209,11 @@ func (b *decisionSummaryBuffer) flush() {
 		// value.
 		OfferPoolAnchorKindWithheldScope:  orNone(b.anchorKindWithheldScope),
 		OfferPoolAnchorKindWithheldReason: orNone(b.anchorKindWithheldReason),
-		OfferPoolAnchorKindExempted:       b.anchorKindExempted,
+		// NEVER nil on the emitted line: an absent key and an empty list are
+		// different facts, and only one of them means "this call refused
+		// nothing".
+		OfferPoolAnchorKindWithheldIDs: nonNil(b.anchorKindWithheldIDs),
+		OfferPoolAnchorKindExempted:    b.anchorKindExempted,
 		// orNone keeps the contract that these three are never empty on a
 		// line: a resolution that returned before the filter ran emits no
 		// anchor_pool event at all, and `none` is the honest reading of
@@ -2351,7 +2376,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// search, which was measured before this split was written.
 		hintAttributes := hintsource.Lookup(hint.Source)
 		hintSource := hintCandidateSource(hint.Source)
-		if hintAttributes.ShortCircuitEligible {
+		if hintAttributes.ShortCircuitEligible.Eligible() {
 			callerSourced[SubjectKey(subject)] = true
 		}
 		node, ok, err := deps.ExactHint(ctx, subject)

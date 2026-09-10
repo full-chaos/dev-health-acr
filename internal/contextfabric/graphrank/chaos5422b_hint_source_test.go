@@ -96,12 +96,12 @@ func TestTheRecheckIsEngineMintedAndStillShortCircuitEligible(t *testing.T) {
 		t.Errorf("the reuse recheck is minted by this engine; calling it caller-authored is the misnaming this "+
 			"change removes. got %+v", recheck)
 	}
-	if !recheck.ContestExempt || !recheck.ShortCircuitEligible {
+	if !recheck.ContestExempt.Exempt() || !recheck.ShortCircuitEligible.Eligible() {
 		t.Errorf("the reuse recheck must keep both policies: its subjects commit through the caller-hint short "+
 			"circuit, and moving it off that exit changes the answer-reuse path. got %+v", recheck)
 	}
 	receipt := hintsource.Lookup(string(hintsource.PriorSubjectReceipt))
-	if !receipt.EngineMinted || receipt.ContestExempt || receipt.ShortCircuitEligible {
+	if !receipt.EngineMinted || receipt.ContestExempt.Exempt() || receipt.ShortCircuitEligible.Eligible() {
 		t.Errorf("a prior-subject receipt is engine-minted and neither contest-exempt nor short-circuit "+
 			"eligible. got %+v", receipt)
 	}
@@ -115,7 +115,7 @@ func TestTheRecheckIsEngineMintedAndStillShortCircuitEligible(t *testing.T) {
 	disagrees := false
 	for _, source := range hintsource.All() {
 		attributes := hintsource.Lookup(string(source))
-		if attributes.EngineMinted != !attributes.ContestExempt {
+		if attributes.EngineMinted != !attributes.ContestExempt.Exempt() {
 			disagrees = true
 		}
 	}
