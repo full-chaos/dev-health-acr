@@ -79,6 +79,9 @@ func TestTheInputDomainOfEveryGuardThisChangeTouches(t *testing.T) {
 	domainMetadataConflict(table)
 	domainRetention(table)
 	domainCoverageFold(table)
+	domainCombinedCap(table)
+	domainInterpretationBoundary(table)
+	domainDecodePath(table)
 
 	table.print()
 	if len(table.rows) == 0 {
@@ -383,4 +386,151 @@ func TestAnOutOfVocabularyExpressionKindIsRefusedSomewhere(t *testing.T) {
 	if gate := DecideFrameGate(result, true); !gate.Refuses() {
 		t.Errorf("the gate outcome %q does not refuse an out-of-vocabulary expression kind", gate.Outcome)
 	}
+}
+
+// --- guard 8: the combined per-bundle cap ---------------------------------
+
+func domainCombinedCap(d *domainTable) {
+	const guard = "combined cap (boundGroupFactsToRemainingCapacity)"
+	limit := maxCanonicalFactsPerBundle
+	three := func() []CanonicalFact {
+		return []CanonicalFact{groupKindFact("team_b", FactWorkload), groupKindFact("team_a", FactHealth), groupKindFact("team_c", FactHealth)}
+	}
+	// run calls the PRODUCTION function and reports what it kept, what it
+	// omitted, and which kinds it disclosed as truncated.
+	run := func(turn int, facts []CanonicalFact) string {
+		group := emptyFactBundle()
+		group.Facts = facts
+		omitted := boundGroupFactsToRemainingCapacity(&group, turn)
+		kept := make([]string, 0, len(group.Facts))
+		for _, fact := range group.Facts {
+			kept = append(kept, string(fact.Kind)+"@"+fact.Subject.CanonicalID)
+		}
+		truncated := make([]string, 0, 2)
+		for _, source := range group.Coverage.Sources {
+			if source.State == SourceTruncated {
+				truncated = append(truncated, source.Source)
+			}
+		}
+		return fmt.Sprintf("omitted=%d kept=[%s] truncated=[%s]", omitted, strings.Join(kept, " "), strings.Join(truncated, " "))
+	}
+	keptAll := "omitted=0 kept=[workload@team:team_b health@team:team_a health@team:team_c] truncated=[]"
+
+	d.want(guard, "turnFacts", "zero", run(0, three()), keptAll)
+	d.want(guard, "turnFacts", "boundary - 1 (one slot left)", run(limit-1, three()),
+		"omitted=2 kept=[health@team:team_a] truncated=[canonical_fact:health canonical_fact:workload]")
+	d.want(guard, "turnFacts", "boundary (member read at the cap)", run(limit, three()),
+		"omitted=3 kept=[] truncated=[canonical_fact:health canonical_fact:workload]")
+	d.want(guard, "turnFacts", "boundary + 1 (member read over the cap)", run(limit+1, three()),
+		"omitted=3 kept=[] truncated=[canonical_fact:health canonical_fact:workload]")
+	d.want(guard, "turnFacts", "negative (unreachable: the caller passes len())", run(-1, three()), keptAll)
+	d.want(guard, "group.Facts", "null (nil slice) at the cap", run(limit, nil), "omitted=0 kept=[] truncated=[]")
+	d.want(guard, "group.Facts", "empty container at the cap", run(limit, []CanonicalFact{}), "omitted=0 kept=[] truncated=[]")
+	d.want(guard, "len(group.Facts)", "exactly the remaining capacity", run(limit-3, three()), keptAll)
+	d.want(guard, "len(group.Facts)", "remaining capacity + 1", run(limit-2, three()),
+		"omitted=1 kept=[health@team:team_a health@team:team_c] truncated=[canonical_fact:workload]")
+	d.want(guard, "group.Facts[]", "duplicate facts across the boundary", run(limit-1, []CanonicalFact{
+		groupKindFact("team_a", FactHealth), groupKindFact("team_a", FactHealth), groupKindFact("team_a", FactHealth),
+	}), "omitted=2 kept=[health@team:team_a] truncated=[canonical_fact:health]")
+	d.want(guard, "group.Facts[].Kind", "out of vocabulary (sorts after every known kind, so it yields first)",
+		run(limit-1, []CanonicalFact{
+			{Kind: FactKind("not_a_kind"), Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: TeamCanonicalID("team_a"), Label: "a"}, Fields: map[string]FactValue{}, SourceState: SourceAvailable, Source: "ops", SourceVersion: "v1"},
+			groupKindFact("team_b", FactHealth),
+		}), "omitted=1 kept=[health@team:team_b] truncated=[canonical_fact:not_a_kind]")
+	reversed := three()
+	reversed[0], reversed[2] = reversed[2], reversed[0]
+	d.want(guard, "group.Facts order", "canonical (provider order reversed)", run(limit-2, reversed),
+		"omitted=1 kept=[health@team:team_a health@team:team_c] truncated=[canonical_fact:workload]")
+	// The disclosure must survive the merge with its structured detail: a
+	// degraded reason without its paired detail makes MergeCoverage drop
+	// every detail of the turn (fail-open), which would be a disclosure
+	// that erased others.
+	paired := func() string {
+		group := emptyFactBundle()
+		group.Facts = three()
+		boundGroupFactsToRemainingCapacity(&group, limit-1)
+		merged := MergeCoverage("org_1", Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, group.Coverage)
+		return fmt.Sprintf("degraded_reasons=%d details=%d", len(merged.DegradedReasons), len(merged.Details))
+	}
+	d.want(guard, "group.Coverage", "disclosure reconciles through MergeCoverage", paired(), "degraded_reasons=2 details=2")
+	d.want(guard, "group.Watermarks", "null (nil map)", func() string {
+		group := CanonicalFactBundle{Facts: three()}
+		return fmt.Sprintf("omitted=%d", boundGroupFactsToRemainingCapacity(&group, limit-1))
+	}(), "omitted=2")
+	d.record(guard, "all fields", "wrong container / wrong scalar / fractional", domainExcludedByTypeSystem, "ok")
+}
+
+// --- guard 9: the interpretation boundary ---------------------------------
+
+func domainInterpretationBoundary(d *domainTable) {
+	const guard = "interpretation boundary (InterpretationBoundaryFrom)"
+	// THE PRODUCTION CHAIN: the frame goes through ValidateFrame and
+	// DecideFrameGate exactly as resolveFrame sends it, and the boundary is
+	// read off that gate -- never off a gate literal this table chose.
+	run := func(receipt ModelExecutionReceipt, expression SubjectExpression) string {
+		frame := boundaryFrame(expression)
+		gate := DecideFrameGate(ValidateFrame(frame, nil, ShapeDiscoveredCohort), true)
+		b := InterpretationBoundaryFrom(receipt, frame, gate)
+		return fmt.Sprintf("hint=%s member_hint=%s group=%s member=%s axis=%s",
+			b.RequestedGroupHint, b.RequestedMemberHint, b.ProposedGroupKind, b.ProposedMemberKind, observableGroupAxis(b.GroupAxis))
+	}
+	hint := func(group SubjectKind, unrecognized bool) ModelExecutionReceipt {
+		return ModelExecutionReceipt{GroupKind: group, GroupKindUnrecognized: unrecognized}
+	}
+	team, project := contractsv1.ContextFabricSubjectTeam, contractsv1.ContextFabricSubjectProject
+	flat := discoveredExpression(project)
+
+	d.want(guard, "receipt.GroupKind", "absent", run(hint("", false), flat),
+		"hint=absent member_hint=absent group=not_applicable member=project axis=not_requested")
+	d.want(guard, "receipt.GroupKind", "zero with the unrecognized flag", run(hint("", true), flat),
+		"hint=unrecognized member_hint=absent group=not_applicable member=project axis=dropped_at_interpretation")
+	d.want(guard, "receipt.GroupKind", "out of vocabulary (never written verbatim)", run(hint("not_a_kind", false), flat),
+		"hint=unclassified member_hint=absent group=not_applicable member=project axis=dropped_at_interpretation")
+	d.want(guard, "receipt.GroupKind", "case variant (Team)", run(hint("Team", false), flat),
+		"hint=unclassified member_hint=absent group=not_applicable member=project axis=dropped_at_interpretation")
+	d.want(guard, "receipt.GroupKind", "canonical, frame dropped the grouping", run(hint(team, false), discoveredExpression(team)),
+		"hint=team member_hint=absent group=not_applicable member=team axis=dropped_at_interpretation")
+	d.want(guard, "receipt.RequestedSubjectKind", "canonical", run(ModelExecutionReceipt{RequestedSubjectKind: project}, flat),
+		"hint=absent member_hint=project group=not_applicable member=project axis=not_requested")
+	d.want(guard, "receipt.RequestedSubjectKind", "zero with the unrecognized flag", run(ModelExecutionReceipt{RequestedSubjectKindUnrecognized: true}, flat),
+		"hint=absent member_hint=unrecognized group=not_applicable member=project axis=not_requested")
+	d.want(guard, "SubjectExpression.Kind", "zero (no variant)", run(hint(team, false), SubjectExpression{}),
+		"hint=team member_hint=absent group=not_applicable member=not_applicable axis=dropped_at_interpretation")
+	d.want(guard, "SubjectExpression.Kind", "out of vocabulary", run(hint("", false), SubjectExpression{Kind: SubjectExpressionKind("not_a_variant")}),
+		"hint=absent member_hint=absent group=not_applicable member=not_applicable axis=not_requested")
+	d.want(guard, "SubjectExpression.Grouped", "null on a grouped kind", run(hint(team, false), SubjectExpression{Kind: SubjectExpressionGroupedMembers}),
+		"hint=team member_hint=absent group=unset member=unset axis=refused")
+	d.want(guard, "Grouped.MemberKind", "zero", run(hint(team, false), groupedExpression("", team)),
+		"hint=team member_hint=absent group=team member=unset axis=refused")
+	d.want(guard, "Grouped.GroupKind", "zero with the frame's unrecognized flag",
+		run(ModelExecutionReceipt{GroupKind: team, FrameGroupKindUnrecognized: true}, groupedExpression(project, "")),
+		"hint=team member_hint=absent group=unrecognized member=project axis=refused")
+	d.want(guard, "Grouped.{Group,Member}Kind", "duplicate (a kind grouped by itself)", run(hint(team, false), groupedExpression(team, team)),
+		"hint=team member_hint=absent group=team member=team axis=refused")
+	d.want(guard, "Grouped.{Group,Member}Kind", "canonical (projects by team)", run(hint(team, false), groupedExpression(project, team)),
+		"hint=team member_hint=absent group=team member=project axis=kept")
+	d.want(guard, "Grouped.{Group,Member}Kind", "canonical, no hint", run(hint("", false), groupedExpression(project, team)),
+		"hint=absent member_hint=absent group=team member=project axis=kept")
+	d.want(guard, "SubjectExpression variant", "explicit_set (no member slot)", run(hint("", false), SubjectExpression{Kind: SubjectExpressionExplicitSet}),
+		"hint=absent member_hint=absent group=not_applicable member=not_applicable axis=not_requested")
+	d.want(guard, "SubjectExpression variant", "organization_scope with a null member kind", run(hint("", false), orgExpression(nil)),
+		"hint=absent member_hint=absent group=not_applicable member=unset axis=not_requested")
+	d.want(guard, "SubjectExpression variant", "named_subject with a declared kind", run(hint("", false), namedExpression(project)),
+		"hint=absent member_hint=absent group=not_applicable member=project axis=not_requested")
+	d.want(guard, "group_axis (emitted)", "zero (an event built without a boundary)", observableGroupAxis(""), "unset")
+	d.want(guard, "group_axis (emitted)", "out of vocabulary", observableGroupAxis(GroupAxisDecision("not_a_decision")), "unclassified")
+	d.record(guard, "all kind fields", "boundary +/- 1", "n/a - closed unordered vocabulary", "ok")
+	d.record(guard, "all fields", "wrong container / wrong scalar / fractional", domainExcludedByTypeSystem+"; the receipt and frame are already decoded by sanitizeFrameOutput", "ok")
+}
+
+// --- the decode path ------------------------------------------------------
+
+// domainDecodePath records WHY the wire-facing decode has no cells here: this
+// change does not modify sanitizeFrameOutput or anything it calls, and the
+// evidence for that is the executed `git diff <merge-base>` over the file,
+// quoted in the PR's TEST-EVIDENCE -- not a test reading source text, which
+// would inspect text instead of behaviour.
+func domainDecodePath(d *domainTable) {
+	d.record("decode path (sanitizeFrameOutput)", "all fields", "every shape",
+		"n/a - not modified by this change; the prompt change is prose in prompts.go only (git diff evidence in TEST-EVIDENCE)", "ok")
 }
