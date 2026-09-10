@@ -1,8 +1,12 @@
 package contextfabric
 
 import (
+	"context"
 	"fmt"
+	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // THE INPUT DOMAIN of every guard, validator and counter this change adds or
@@ -162,13 +166,149 @@ func TestTheObservationInputDomainIsEnumeratedAndExecuted(t *testing.T) {
 	taintCell("duplicate in both lists",
 		readEvidence{ObservedKinds: []FactKind{FactHealth, FactHealth}, ServedKinds: []FactKind{FactHealth, FactHealth}}, 1)
 
+	// ---------------------------------------------------------------- surface 4
+	// ValidateObservationCoverBound -- the construction bound. Its contract: at
+	// every subject kind, the number of DISTINCT fact kinds carrying at least one
+	// non-empty observation key must not exceed observationCoverKindGuard.
+	//
+	// This surface was added after the first 28 cells: the bound guard came in
+	// with a later fix and its domain was never enumerated. Enumerating it found
+	// one cell the guard did not treat as its contract says -- a duplicate kind
+	// was counted twice, refusing 20 distinct kinds -- now fixed and pinned here.
+	keyedAt := func(kind FactKind, subject SubjectKind, keys ...ObservationKey) FactCapability {
+		c := boundCapability(kind, false)
+		c.ObservationKey = map[SubjectKind][]ObservationKey{subject: keys}
+		return c
+	}
+	keyedKinds := func(n int, subject SubjectKind) []FactCapability {
+		out := make([]FactCapability, 0, n)
+		for _, kind := range boundKinds[:n] {
+			out = append(out, keyedAt(kind, subject, "one_shared_observation"))
+		}
+		return out
+	}
+	eachKind := func(kinds []FactKind, build func(FactKind) FactCapability) []FactCapability {
+		out := make([]FactCapability, 0, len(kinds))
+		for _, kind := range kinds {
+			out = append(out, build(kind))
+		}
+		return out
+	}
+	guard := observationCoverKindGuard
+	boundCell := func(cell string, capabilities []FactCapability, want string) {
+		got := "accepted"
+		if err := ValidateObservationCoverBound(capabilities); err != nil {
+			got = "refused"
+		}
+		record("ValidateObservationCoverBound", "capabilities", cell, got, want)
+		if got != want {
+			t.Errorf("ValidateObservationCoverBound/%s = %s, want %s", cell, got, want)
+		}
+	}
+	boundCell("capabilities absent (nil)", nil, "accepted")
+	boundCell("capabilities empty container", []FactCapability{}, "accepted")
+	boundCell("zero keyed: all 22 kinds unkeyed", eachKind(boundKinds, func(k FactKind) FactCapability {
+		return boundCapability(k, false)
+	}), "accepted")
+	boundCell("empty key map on all 22", eachKind(boundKinds, func(k FactKind) FactCapability {
+		c := boundCapability(k, false)
+		c.ObservationKey = map[SubjectKind][]ObservationKey{}
+		return c
+	}), "accepted")
+	boundCell("nil key list on all 22 (reads unkeyed)", eachKind(boundKinds, func(k FactKind) FactCapability {
+		return keyedAt(k, SubjectTeam)
+	}), "accepted")
+	boundCell("empty-string-only key on all 22 (dropped, reads unkeyed)", eachKind(boundKinds, func(k FactKind) FactCapability {
+		return keyedAt(k, SubjectTeam, "")
+	}), "accepted")
+	// A blank key is a key to the solve (dedupe drops only ""), so 21 blank-keyed
+	// kinds are 21 bits. Validate refuses a blank key before this in the
+	// registry; the bound still counts what the solve would count.
+	boundCell("whitespace-only key on bound+1 kinds", eachKind(boundKinds[:guard+1], func(k FactKind) FactCapability {
+		return keyedAt(k, SubjectTeam, "   ")
+	}), "refused")
+	boundCell("boundary-1 keyed kinds", keyedKinds(guard-1, SubjectTeam), "accepted")
+	boundCell("boundary: exactly the bound (canonical)", keyedKinds(guard, SubjectTeam), "accepted")
+	boundCell("boundary+1 keyed kinds", keyedKinds(guard+1, SubjectTeam), "refused")
+	boundCell("bound kinds, duplicate keys in every cell", eachKind(boundKinds[:guard], func(k FactKind) FactCapability {
+		return keyedAt(k, SubjectTeam, "one_shared_observation", "one_shared_observation", "second")
+	}), "accepted")
+	boundCell("duplicate kind: bound distinct plus one repeat",
+		append(keyedKinds(guard, SubjectTeam), keyedAt(boundKinds[0], SubjectTeam, "one_shared_observation")), "accepted")
+	boundCell("duplicate kind: bound+1 distinct plus one repeat",
+		append(keyedKinds(guard+1, SubjectTeam), keyedAt(boundKinds[0], SubjectTeam, "one_shared_observation")), "refused")
+	spread := keyedKinds(guard+1, SubjectTeam)
+	for i := range spread {
+		if i%2 == 1 {
+			spread[i] = keyedAt(boundKinds[i], SubjectProject, "one_shared_observation")
+		}
+	}
+	boundCell("bound+1 kinds spread over two subject kinds", spread, "accepted")
+	boundCell("bound+1 kinds each keyed at two subject kinds", eachKind(boundKinds[:guard+1], func(k FactKind) FactCapability {
+		c := boundCapability(k, false)
+		c.ObservationKey = map[SubjectKind][]ObservationKey{
+			SubjectTeam: {"one_shared_observation"}, SubjectProject: {"one_shared_observation"},
+		}
+		return c
+	}), "refused")
+	oneUnkeyed := keyedKinds(guard+1, SubjectTeam)
+	oneUnkeyed[0] = keyedAt(boundKinds[0], SubjectTeam)
+	boundCell("bound+1 entries, one with a nil key list", oneUnkeyed, "accepted")
+	boundCell("subject kind out of vocabulary, bound+1", keyedKinds(guard+1, SubjectKind("not_a_subject_kind")), "refused")
+
+	// ---------------------------------------------------------------- surface 5
+	// (*Engine).recordObservationCover -- the served-pass marker. Its contract:
+	// every event is published exactly once, and Served is true iff the event's
+	// Pass equals the HIGHEST Pass among the events, whatever order they arrive
+	// in and whatever Served they carried in. got/want list the published
+	// events as pass:served in publish order.
+	markCell := func(cell string, telemetryPresent bool, events []ReadRequirementObservationCoverEvent, want string) {
+		sink := &recordingTelemetry{}
+		engine := &Engine{}
+		if telemetryPresent {
+			engine.telemetry = sink
+		}
+		engine.recordObservationCover(context.Background(), storage.Principal{}, events)
+		parts := make([]string, 0, len(sink.readRequirementObservationCovers))
+		for _, event := range sink.readRequirementObservationCovers {
+			parts = append(parts, fmt.Sprintf("%d:%t", event.Pass, event.Served))
+		}
+		got := strings.Join(parts, ",")
+		if got == "" {
+			got = "none"
+		}
+		record("recordObservationCover", "events", cell, got, want)
+		if got != want {
+			t.Errorf("recordObservationCover/%s = %s, want %s", cell, got, want)
+		}
+	}
+	passes := func(pass ...int) []ReadRequirementObservationCoverEvent {
+		out := make([]ReadRequirementObservationCoverEvent, 0, len(pass))
+		for _, p := range pass {
+			out = append(out, ReadRequirementObservationCoverEvent{Requirement: "state", Pass: p})
+		}
+		return out
+	}
+	markCell("events absent (nil)", true, nil, "none")
+	markCell("events empty container", true, passes(), "none")
+	markCell("telemetry sink absent", false, passes(answerPassFirst, answerPassSecond), "none")
+	markCell("canonical: one pass", true, passes(answerPassFirst), "0:true")
+	markCell("two passes in order", true, passes(answerPassFirst, answerPassSecond), "0:false,1:true")
+	markCell("two passes out of order", true, passes(answerPassSecond, answerPassFirst), "1:true,0:false")
+	markCell("boundary: the last pass index", true, passes(answerPassFirst, answerPassSecond, answerPassThird), "0:false,1:false,2:true")
+	markCell("duplicate: two rows at the final pass", true, passes(answerPassFirst, answerPassSecond, answerPassSecond), "0:false,1:true,1:true")
+	markCell("duplicate: every row at one pass", true, passes(answerPassSecond, answerPassSecond), "1:true,1:true")
+	stale := passes(answerPassFirst, answerPassSecond)
+	stale[0].Served = true
+	markCell("incoming Served=true on a discarded pass (overwritten)", true, stale, "0:false,1:true")
+
 	// ---------------------------------------------------------------- print
 	t.Logf("%-26s %-26s %-52s %-10s %s", "SURFACE", "FIELD", "CELL", "GOT", "WANT")
 	for _, r := range table {
 		t.Logf("%-26s %-26s %-52s %-10s %s", r.surface, r.field, r.cell, r.got, r.want)
 	}
 	t.Logf("DOMAIN CELLS EXECUTED: %d", len(table))
-	if len(table) < 25 {
+	if len(table) < 55 {
 		t.Fatalf("only %d cells executed; the domain is being sampled, not enumerated", len(table))
 	}
 }

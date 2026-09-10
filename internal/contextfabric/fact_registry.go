@@ -440,17 +440,27 @@ type FactCapabilityRegistry struct {
 // sources than exist -- silently, in the direction this whole mechanism was
 // built to remove. A registry that grows past the bound is a design decision
 // someone must take deliberately, not a runtime condition to degrade through.
+//
+// It counts DISTINCT kinds, not capability entries, because the solve does: the
+// counter dedupes served kinds before it takes the cover, so a kind listed twice
+// is one bit in the DP. Counting entries would refuse a declaration the solve
+// handles exactly. The registry constructor refuses a duplicate kind before it
+// gets here, but this function is exported and must hold its own contract.
 func ValidateObservationCoverBound(capabilities []FactCapability) error {
-	keyedPerSubject := map[SubjectKind]int{}
+	keyedPerSubject := map[SubjectKind]map[FactKind]struct{}{}
 	for _, capability := range capabilities {
 		for subjectKind, keys := range capability.ObservationKey {
 			if len(dedupeObservationKeys(keys)) == 0 {
 				continue
 			}
-			keyedPerSubject[subjectKind]++
+			if keyedPerSubject[subjectKind] == nil {
+				keyedPerSubject[subjectKind] = map[FactKind]struct{}{}
+			}
+			keyedPerSubject[subjectKind][capability.Kind] = struct{}{}
 		}
 	}
-	for subjectKind, keyed := range keyedPerSubject {
+	for subjectKind, kinds := range keyedPerSubject {
+		keyed := len(kinds)
 		if keyed > observationCoverKindGuard {
 			return fmt.Errorf(
 				"fact registry declares %d observation-keyed fact kinds at subject kind %q, above the exact cover solve's bound of %d: raise the bound deliberately or split the subject kind, never let the counter fall back to an over-count",
