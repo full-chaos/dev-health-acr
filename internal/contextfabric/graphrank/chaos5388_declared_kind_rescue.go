@@ -2,6 +2,7 @@ package graphrank
 
 import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 )
 
 // WHY A DECLARED KIND IS ABSENT FROM THE POOL, SAID BY ARM RATHER THAN LEFT
@@ -56,28 +57,35 @@ type declaredKindRescue struct {
 	Reached int `json:"reached"`
 }
 
+// These four names alias eventspec's own DeclaredKindRescue* constants
+// (internal/contextfabric/eventspec/spec.go) rather than retyping the
+// literals a second time -- round r2's P1 found this file's own
+// independently-typed vocabulary had silently drifted from the certifying
+// spec's copy ("ran_matched_survived" was missing from the spec's list).
+// The vocabulary has exactly ONE declaration now; this producer references
+// it instead of maintaining a second one that can drift again.
 const (
 	// declaredKindRescueNotRun: the kind-scoped arm did not run for this
 	// kind. Today that means deps.SearchKind is not wired -- a DEPLOYMENT
 	// gap, not a retrieval one, and the two must never read alike.
-	declaredKindRescueNotRun = "not_run"
+	declaredKindRescueNotRun = eventspec.DeclaredKindRescueNotRun
 	// declaredKindRescueMatchedZero: the arm ran and the graph returned
 	// nothing under this kind for these terms. A MEASURED zero.
-	declaredKindRescueMatchedZero = "ran_matched_zero"
+	declaredKindRescueMatchedZero = eventspec.DeclaredKindRescueMatchedZero
 	// declaredKindRescueMatchedThenDropped: the arm ran, the graph returned
 	// rows, and none of THOSE ROWS ever reached the ranked list at all --
 	// authorization, the admission boundary, an internal-node rejection or
 	// dedup removed them before ranking. Round 2 found this: calling that
 	// case "cut" was a LIE about which rule lost the subject, in a line whose
 	// whole purpose is to say which rule lost the subject.
-	declaredKindRescueMatchedThenDropped = "ran_matched_then_dropped"
+	declaredKindRescueMatchedThenDropped = eventspec.DeclaredKindRescueMatchedThenDropped
 	// declaredKindRescueMatchedThenCut: the arm ran, its rows DID reach the
 	// ranked list, and phase 4 cut them.
-	declaredKindRescueMatchedThenCut = "ran_matched_then_cut"
+	declaredKindRescueMatchedThenCut = eventspec.DeclaredKindRescueMatchedThenCut
 	// declaredKindRescueMatchedSurvived: the healthy path, stated explicitly
 	// so a pass where nothing went wrong cannot be mistaken for a build that
 	// stopped reporting.
-	declaredKindRescueMatchedSurvived = "ran_matched_survived"
+	declaredKindRescueMatchedSurvived = eventspec.DeclaredKindRescueMatchedSurvived
 )
 
 // kindRescueLedger records what the kind-scoped arm actually did, per kind.
