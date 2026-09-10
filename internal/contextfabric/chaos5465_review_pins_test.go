@@ -59,7 +59,7 @@ func TestReviewR4_ValidatedFrameComposition(t *testing.T) {
 				t.Fatal("discovery was not reached")
 			}
 			failure, invalid := ValidateFramePhaseA1(*graph.seen)
-			t.Logf("fresh_valid=%v fresh_gate=%s disposition=%s accepted_group=%q executed_group=%q executed_member=%q invalid=%v invariant=%s detail=%s served_group=%q", valid.Outcome == FrameValidationOutcomeValid, DecideFrameGate(valid, true).Outcome, d.Disposition, d.Accepted.GroupKind, graph.seen.SubjectExpression.Grouped.GroupKind, graph.seen.SubjectExpression.Grouped.MemberKind, invalid, failure.Invariant, failure.Detail, result.AnswerPlan.GroupKind)
+			t.Logf("fresh_valid=%v fresh_gate=%s disposition=%s accepted_group=%q executed_group=%q executed_member=%q invalid=%v invariant=%s detail=%s served_group=%q", valid.Outcome == FrameValidationOutcomeValid, DecideFrameGate(valid, true).Outcome, d.Disposition, d.AcceptedGroupKind(), graph.seen.SubjectExpression.Grouped.GroupKind, graph.seen.SubjectExpression.Grouped.MemberKind, invalid, failure.Invariant, failure.Detail, result.AnswerPlan.GroupKind)
 			if invalid {
 				t.Errorf("admission converted a validated frame to invalid retrieval input")
 			}
@@ -83,8 +83,8 @@ func TestReviewR4_ComparisonUsesEffectiveGroup(t *testing.T) {
 	h := newContinuationHarness(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}, interpreter)
 	h.investigate(t, req)
 	d := h.soleDecision(t)
-	t.Logf("fresh_plan_group=%q accepted_group=%q compared_fresh_group=%q agreement=%v conflict_fields=%v", freshPlan.GroupKind, d.Accepted.GroupKind, d.Fresh.GroupKind, d.Agreement, d.ConflictFieldTokens())
-	if d.Agreement && freshPlan.GroupKind != d.Accepted.GroupKind {
+	t.Logf("fresh_plan_group=%q accepted_group=%q compared_fresh_group=%q agreement=%v conflict_fields=%v", freshPlan.GroupKind, d.AcceptedGroupKind(), d.Fresh.GroupKind, d.Agreement, d.ConflictFieldTokens())
+	if d.Agreement && freshPlan.GroupKind != d.AcceptedGroupKind() {
 		t.Error("Info comparison reports agreement despite replacing effective group axis")
 	}
 }

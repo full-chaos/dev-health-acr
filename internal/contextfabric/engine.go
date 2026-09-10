@@ -1105,6 +1105,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			continuation.Disposition = ContinuationWithheld
 			continuation = continuation.withReason(ContinuationReasonWindowSuperseded)
 			continuation.AppliedWindow = nil
+			// Same rule as the composition withhold above: a withheld turn
+			// publishes no accepted context. The carried proposal stays on the
+			// event, so the reversal is still readable as "this is what would
+			// have been continued, and here is why it was not".
+			continuation.Accepted = nil
 		}
 		e.telemetry.RecordWindowContinuationDecision(ctx, principal, continuation)
 	}()
@@ -1505,6 +1510,15 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	interpretRequest.PriorSubjectReceipts = priorValidatedReceipts
 	interpretation, familyOutcome, err := e.interpreter.Interpret(ctx, principal, interpretRequest)
 	if err != nil {
+		// THIS EXIT ASSIGNS ITS OWN REASON. With no interpretation there is no
+		// fresh proposal to compare the carried context against, so the
+		// continuation is not withheld for anything the caller did -- it is
+		// withheld because the diagnostic other side never existed. Leaving it
+		// unassigned published `unspecified` on a real, reachable path, which
+		// is the r3 finding class: a reason enum whose default survives to the
+		// emitter tells an operator nothing about which path they are looking
+		// at. Caught here by the enumeration pin, not by review.
+		continuation = continuation.withReason(ContinuationReasonFreshContextUnavailable)
 		return InvestigationResult{}, stageError(StageInterpretation, fmt.Errorf("interpret question: %w", err))
 	}
 	// Bound the INTERPRETED question too, not just the wire request
@@ -1627,6 +1641,16 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				continuation = continuation.withReason(ContinuationReasonCompositionInvalid)
 				continuation.CompositionOutcome = composed.Outcome
 				continuation.CompositionFailedInvariant = composed.FailedInvariant
+				// AND THE ACCEPTED CONTEXT IS CLEARED, which is the half a
+				// reviewer catches later if it is left out. `Accepted` means
+				// "this is the context the turn executed under"; leaving the
+				// admitted carrier there on a WITHHELD turn publishes
+				// `family_accepted` and `accepted_context_id` for a reading
+				// nothing executed -- the same class of untrue field as the
+				// false `agreement=true` this boundary was cut to remove. The
+				// proposal is still disclosed: `Carried` is untouched and
+				// `carried_context_id` still names it.
+				continuation.Accepted = nil
 			}
 		}
 		continuation = compareContinuationProposal(continuation, continuationFreshProposal{

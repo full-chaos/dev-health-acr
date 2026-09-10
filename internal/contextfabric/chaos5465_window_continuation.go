@@ -748,6 +748,21 @@ func (d windowContinuationDecision) FamilyAccepted() QuestionFamily {
 	return d.Accepted.Family
 }
 
+// AcceptedGroupKind is the group axis of the accepted context, empty when
+// nothing was accepted.
+//
+// NIL-SAFE ON PURPOSE, and the reason is a property rather than defensiveness:
+// a WITHHELD turn clears Accepted, so every reader of the accepted axis has to
+// cope with "there is no accepted context" -- which is exactly the state the
+// event exists to report. A reader that dereferenced the pointer would work
+// only on the applied path and crash on the disclosure the event was added for.
+func (d windowContinuationDecision) AcceptedGroupKind() SubjectKind {
+	if d.Accepted == nil {
+		return ""
+	}
+	return d.Accepted.GroupKind
+}
+
 // AcceptedFamilySource is the provenance value of the accepted context, empty
 // when nothing was accepted.
 func (d windowContinuationDecision) AcceptedFamilySource() QuestionFamilySource {
