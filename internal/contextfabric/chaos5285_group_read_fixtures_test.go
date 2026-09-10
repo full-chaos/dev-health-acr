@@ -265,11 +265,13 @@ func groupReadEngineFixtureFull(t *testing.T, telemetry EngineTelemetry, facts C
 			claims := []ClaimedFact{}
 			if input.Graph.Cohort != nil {
 				for _, member := range input.Graph.Cohort.Members {
-					claims = append(claims, ClaimedFact{
-						ClaimID: "claim_" + member.Subject.CanonicalID,
-						Kind:    FactMetrics, Subject: member.Subject, Field: "status",
-						Value: ScalarValue{String: ptrString("green")},
-					})
+					for index := 0; index < groupReadClaimsPerMember; index++ {
+						claims = append(claims, ClaimedFact{
+							ClaimID: fmt.Sprintf("claim_%s_%d", member.Subject.CanonicalID, index),
+							Kind:    FactMetrics, Subject: member.Subject, Field: "status",
+							Value: ScalarValue{String: ptrString("green")},
+						})
+					}
 				}
 			}
 			return InvestigationResult{
@@ -316,3 +318,13 @@ func groupReadEngineOptions(override *EngineOptions) EngineOptions {
 	options.NewResultID = func() string { return "result_52850001" }
 	return options
 }
+
+// groupReadClaimsPerMember is how many claims the fixture's synthesizer emits
+// per surviving cohort member.
+//
+// It is a variable, not a constant, because the retry pin needs the answer's
+// measured size to exceed the item budget on the first pass and fall under it
+// after narrowing -- and the only lever that scales with the cohort is this
+// one. A test that changes it restores it, and no test that changes it may be
+// parallel.
+var groupReadClaimsPerMember = 1

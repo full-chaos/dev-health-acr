@@ -174,3 +174,88 @@ func TestAnUngroupedTurnMakesExactlyOneFactServiceCall(t *testing.T) {
 			len(recorder.requests))
 	}
 }
+
+// TestTheGroupedRetryDoesNotReReadItsProviders is CHAOS-5285 test-table row 7's
+// RETRY arm: "exactly two fact-service calls on the admitted grouped path,
+// INCLUDING RETRIES".
+//
+// The retry is where the guarantee earns its keep. Re-synthesis runs after the
+// reads, on evidence already gathered, and a turn that re-read on the way
+// round would double every provider's load for one answer while producing a
+// byte-identical document. Only the call count can tell.
+//
+// GETTING HERE TOOK AN EXECUTED SWEEP, and the arithmetic is worth stating
+// because it is not obvious and it constrains any future fixture. A grouped
+// plan reserves a synthesis headroom of 20 items, and the cohort's member
+// allowance is `MaxItems - headroom`. For every budget at or below 20 that
+// allowance clamps to one, stage 2's overlap-aware set cover reduces the
+// cohort to ONE MEMBER PER GROUP, and stage 3 can then narrow nothing without
+// dropping a group -- which the design forbids -- so the retry declines
+// `nothing_to_narrow` at every such budget. The retry is reachable only above
+// the headroom: the budget here leaves room for every member, and the answer
+// goes over on CLAIMS instead, which narrowing does reduce.
+//
+// NOT t.Parallel(): it changes the fixture's claims-per-member.
+func TestTheGroupedRetryDoesNotReReadItsProviders(t *testing.T) {
+	previousClaims := groupReadClaimsPerMember
+	groupReadClaimsPerMember = 5
+	t.Cleanup(func() { groupReadClaimsPerMember = previousClaims })
+
+	recorder := &groupReadRecorder{facts: func(CanonicalFactRequest) CanonicalFactBundle {
+		bundle := emptyFactBundle()
+		facts := make([]CanonicalFact, 0, 6)
+		for index, id := range groupReadRetryMemberIDs() {
+			team := "team_security"
+			if index >= 3 {
+				team = "team_platform"
+			}
+			facts = append(facts, teamScopedFact(id, team, team))
+		}
+		bundle.Facts = facts
+		bundle.Coverage.Sources = []SourceObservation{{Source: "canonical_fact:metrics", State: SourceAvailable}}
+		return bundle
+	}}
+
+	synthesisCalls := 0
+	members := make([]CohortMember, 0, 6)
+	for index, id := range groupReadRetryMemberIDs() {
+		members = append(members, CohortMember{
+			Subject:          SubjectRef{Kind: SubjectProject, CanonicalID: id, Label: id},
+			Rank:             index + 1,
+			InclusionReasons: []string{"matched"},
+		})
+	}
+	// Above the grouped headroom, so stage 2 leaves every member in place and
+	// the first answer goes over on claims rather than on members.
+	options := EngineOptions{MaxItems: 26, SynthesisDeadlineReserve: time.Hour}
+	engine, request := groupReadEngineFixtureFull(t, &recordingTelemetry{}, recorder, members, nil, SubjectProject, &options, &synthesisCalls)
+
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+		t.Fatalf("Investigate() error = %v -- this fixture must FIT after one retry, or it is measuring a refusal", err)
+	}
+
+	for index := range recorder.requests {
+		t.Logf("fact request %d: root kinds=%v roots=%v", index, recorder.rootKinds(index), recorder.rootIDs(index))
+	}
+	t.Logf("synthesis calls=%d fact-service calls=%d", synthesisCalls, len(recorder.requests))
+
+	// THE RETRY MUST BE REAL. Asserted first: a fixture that stopped
+	// retrying would otherwise turn this into a duplicate of the
+	// single-synthesis pin and its green would mean nothing.
+	if synthesisCalls != 2 {
+		t.Fatalf("synthesis calls = %d, want 2 -- the bounded retry did not run, so this test is not measuring a retry at all", synthesisCalls)
+	}
+	if len(recorder.requests) != 2 {
+		t.Errorf("fact-service calls = %d across a retry, want exactly 2 -- a re-synthesis that re-reads doubles every provider's load for one answer, and the served document looks identical either way",
+			len(recorder.requests))
+	}
+	if grouped := recorder.groupRootedRequests(SubjectTeam); len(grouped) != 1 {
+		t.Errorf("group-rooted calls at %v across a retry, want exactly one", grouped)
+	}
+}
+
+// groupReadRetryMemberIDs is six members across two groups of three, so
+// narrowing can drop members without dropping a group.
+func groupReadRetryMemberIDs() []string {
+	return []string{"project_a", "project_b", "project_c", "project_d", "project_e", "project_f"}
+}
