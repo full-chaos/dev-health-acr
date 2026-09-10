@@ -177,23 +177,34 @@ type compositionInput struct {
 // composeAcceptedContext produces the frame consumers receive, validates THAT
 // frame, and decides the gate on it.
 func composeAcceptedContext(in compositionInput) AcceptedContext {
+	// THE REFUSAL IS ANSWERED FIRST, BEFORE THE FRAME IS EXAMINED AT ALL.
+	//
+	// A refusal is a fact about the EVALUATION, not about the frame, so asking
+	// "is there a frame?" ahead of it gets the order backwards. It shipped that
+	// way: the nil-frame branch returned `no_fresh_frame`, which Usable()
+	// accepts, so a turn whose gate had already refused came back usable and
+	// ended as an applied continuation serving the carried family. The frame
+	// was nil, the gate said refused_basis, and nothing in between looked.
+	//
+	// Every refusing cell now leaves here, frame or no frame.
+	if in.FreshGate.Refuses() {
+		// Composition does not get to launder a refusal: there is no validated
+		// frame to substitute into, and a composition built on a refused
+		// evaluation is a reading the gate never certified -- the defect this
+		// file exists to close, inverted.
+		return AcceptedContext{Gate: in.FreshGate, Outcome: CompositionFreshRefused}
+	}
 	if in.Fresh == nil {
-		// Nothing to compose into. The gate travels through unchanged: a turn
-		// with no proposed frame has already been described by its own gate
-		// (not_proposed, or a refusal), and inventing a composition verdict for
-		// it would overwrite a decision someone else made correctly.
+		// Nothing to compose into, and the gate ALLOWS. It travels through
+		// unchanged: a turn with no proposed frame has already been described
+		// by its own gate (not_proposed, or not_evaluated), and inventing a
+		// composition verdict for it would overwrite a decision someone else
+		// made correctly.
 		//
 		// The carried group axis still rides out, and here it IS expressible:
 		// with no frame the planner reads the axis off the winning sample, which
 		// is exactly where applyWindowContinuation writes it.
 		return AcceptedContext{Gate: in.FreshGate, Outcome: CompositionNoFreshFrame, GroupKind: in.CarriedGroupKind}
-	}
-	if in.FreshGate.Refuses() {
-		// The server already refused this frame. Composition does not get to
-		// launder that: there is no validated frame to substitute into, and a
-		// composition built on a refused frame would be a frame the gate never
-		// certified -- the defect, inverted.
-		return AcceptedContext{Gate: in.FreshGate, Outcome: CompositionFreshRefused}
 	}
 
 	freshGroup, grouped := in.Fresh.SubjectExpression.GroupKind()
@@ -269,6 +280,11 @@ func composeAcceptedContext(in compositionInput) AcceptedContext {
 // answering the group-axis question. Every turn produces an AcceptedContext;
 // only the outcome differs.
 func freshAcceptedContext(fresh *QuestionFrame, freshGate FrameGate, sampleGroupKind SubjectKind) AcceptedContext {
+	// Same order as composeAcceptedContext, for the same reason: a refused
+	// evaluation is not a usable context whether or not a frame was proposed.
+	if freshGate.Refuses() {
+		return AcceptedContext{Gate: freshGate, Outcome: CompositionFreshRefused}
+	}
 	if fresh == nil {
 		// With no frame, the sample's group kind is the only thing that
 		// describes the axis, and the planner has always read it there.

@@ -36,18 +36,23 @@ func boundaryGroupedFrame(t *testing.T, group, member SubjectKind) (QuestionFram
 	return result.Frame, DecideFrameGate(result, true)
 }
 
-// KILLS ARM `fresh_refused_frame_composed_anyway` (`if freshGate.Refuses()` -> `if false`).
+// KILLS ARM `fresh_refused_frame_composed_anyway` AND ITS NIL-FRAME TWIN.
 //
-// The frame here is perfectly VALID -- the gate refuses for a reason validation
-// never asks about (the declared member kind cannot be discovered). That is the
-// discriminating shape: a battery arm that deletes the refusal check still
-// produces a frame that validates, so only an assertion about the OUTCOME can
-// see the difference. Without this pin, composition laundered a refusal the
-// server had already issued into an `accepted` context.
-func TestBoundary_RefusedFreshGateIsNeverComposedOn(t *testing.T) {
+// A 2x2 OVER {nil, non-nil} x {passing, refusing}, and it is a 2x2 because the
+// cell that shipped a P1 was the one no pin and no arm touched. The refusal pin
+// covered a REFUSING gate with a frame; the nil-frame cells covered a PASSING
+// gate with no frame; nobody wrote nil-and-refusing, and there the boundary
+// returned `no_fresh_frame` -- which `Usable()` accepts -- before it ever asked
+// whether the gate refused. A turn the server had refused was then recorded as
+// an applied continuation and served the carried family.
+//
+// The order is the fix: a refusal is about the EVALUATION, not about the frame,
+// so it is answered before the frame is examined at all. Enumerating the cross
+// product is what stops the next reordering from re-opening a corner.
+func TestBoundary_ARefusingGateIsNeverUsable(t *testing.T) {
 	t.Parallel()
 
-	fresh, passing := boundaryGroupedFrame(t, contractsv1.ContextFabricSubjectProject, contractsv1.ContextFabricSubjectRepository)
+	withFrame, passing := boundaryGroupedFrame(t, contractsv1.ContextFabricSubjectProject, contractsv1.ContextFabricSubjectRepository)
 	if passing.Refuses() {
 		t.Fatalf("fixture defect: the frame must pass its own gate first, got %q", passing.Outcome)
 	}
@@ -57,28 +62,108 @@ func TestBoundary_RefusedFreshGateIsNeverComposedOn(t *testing.T) {
 		DeclaredMemberKind: contractsv1.ContextFabricSubjectRepository,
 	}
 
-	got := composeAcceptedContext(compositionInput{
-		Fresh: &fresh, FreshGate: refusing, FreshFamily: QuestionFamilyGroupedCohortStatus,
-		CarriedFamily: QuestionFamilyGroupedCohortStatus, CarriedGroupKind: contractsv1.ContextFabricSubjectTeam,
-		EmittedShape: ShapeOpen,
-	})
-	t.Logf("fresh_valid=true fresh_gate=%q refuses=%v -> outcome=%q usable=%v frame_nil=%v gate=%q",
-		refusing.Outcome, refusing.Refuses(), got.Outcome, got.Usable(), got.Frame == nil, got.Gate.Outcome)
+	for _, frameCase := range []struct {
+		name  string
+		frame *QuestionFrame
+	}{
+		{"no frame proposed", nil},
+		{"frame proposed", &withFrame},
+	} {
+		for _, gateCase := range []struct {
+			name string
+			gate FrameGate
+		}{
+			{"gate passes", passing},
+			{"gate refuses", refusing},
+		} {
+			t.Run(frameCase.name+"/"+gateCase.name, func(t *testing.T) {
+				got := composeAcceptedContext(compositionInput{
+					Fresh: frameCase.frame, FreshGate: gateCase.gate,
+					FreshFamily:      QuestionFamilyDiscoveredCohortRanking,
+					CarriedFamily:    QuestionFamilyGroupedCohortStatus,
+					CarriedGroupKind: contractsv1.ContextFabricSubjectTeam,
+					EmittedShape:     ShapeOpen,
+				})
+				t.Logf("frame_nil=%v gate=%q refuses=%v -> outcome=%q usable=%v group=%q",
+					frameCase.frame == nil, gateCase.gate.Outcome, gateCase.gate.Refuses(),
+					got.Outcome, got.Usable(), got.EffectiveGroupKind())
 
-	if got.Outcome != CompositionFreshRefused {
-		t.Errorf("outcome=%q want %q -- composition ran on a frame the gate had already refused",
-			got.Outcome, CompositionFreshRefused)
+				if !gateCase.gate.Refuses() {
+					if !got.Usable() {
+						t.Errorf("a PASSING gate produced an unusable context (%q) -- refusal is reserved for a refused evaluation and a substitution that fails",
+							got.Outcome)
+					}
+					return
+				}
+				// EVERY refusing cell, frame or no frame.
+				if got.Outcome != CompositionFreshRefused {
+					t.Errorf("outcome=%q want %q -- the gate had already refused this evaluation",
+						got.Outcome, CompositionFreshRefused)
+				}
+				if got.Usable() {
+					t.Errorf("a REFUSED fresh gate produced a USABLE context (%q) -- the refusal is laundered into a served continuation",
+						got.Outcome)
+				}
+				if got.Frame != nil {
+					t.Errorf("a refused composition handed back a frame")
+				}
+				if got.EffectiveGroupKind() != "" {
+					t.Errorf("a refused composition published an effective group %q -- nothing executed under it",
+						got.EffectiveGroupKind())
+				}
+				if got.Gate.Outcome != gateCase.gate.Outcome {
+					t.Errorf("gate=%q want the ORIGINAL refusal %q", got.Gate.Outcome, gateCase.gate.Outcome)
+				}
+			})
+		}
 	}
-	if got.Usable() {
-		t.Errorf("a composition over a REFUSED fresh gate reported usable -- the refusal was laundered into a served context")
+}
+
+// The same cell through the real engine: a refused evaluation with no proposed
+// frame must not end the turn as an applied continuation serving the carrier.
+func TestBoundary_ARefusedTurnWithNoFrameIsNotAContinuation(t *testing.T) {
+	req := continuationRequest(validInvestigationRequest().Question)
+	prior := r4CheckedPrior(t, continuationPriorID, req.Question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+	h := newContinuationHarness(t,
+		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		nilFrameRefusingGateInterpreter{family: QuestionFamilyDiscoveredCohortRanking})
+
+	result := h.investigate(t, req)
+	d := h.soleDecision(t)
+	t.Logf("disposition=%q reason=%q composition=%q accepted=%v | status=%q plan_source=%q plan_family=%q plan_group=%q",
+		d.Disposition, d.Reason, d.CompositionOutcome, d.Accepted != nil,
+		result.Status, result.AnswerPlan.FamilySource, result.AnswerPlan.Family, result.AnswerPlan.GroupKind)
+
+	if d.Disposition == ContinuationApplied {
+		t.Fatalf("the fresh gate REFUSED and the continuation was applied anyway (composition=%q)", d.CompositionOutcome)
 	}
-	if got.Frame != nil {
-		t.Errorf("a refused composition handed back a frame; downstream would execute on a frame no passing gate certifies")
+	if d.CompositionOutcome != CompositionFreshRefused {
+		t.Errorf("composition_outcome=%q, want %q", d.CompositionOutcome, CompositionFreshRefused)
 	}
-	if got.Gate.Outcome != refusing.Outcome {
-		t.Errorf("gate=%q want the ORIGINAL refusal %q -- the refusal must survive composition unaltered",
-			got.Gate.Outcome, refusing.Outcome)
+	if d.Accepted != nil {
+		t.Errorf("a withheld turn published an accepted context")
 	}
+	if result.AnswerPlan.FamilySource == QuestionFamilySourceCarried {
+		t.Errorf("the refused turn served the carried family anyway (family=%q group=%q)",
+			result.AnswerPlan.Family, result.AnswerPlan.GroupKind)
+	}
+}
+
+type nilFrameRefusingGateInterpreter struct{ family QuestionFamily }
+
+func (i nilFrameRefusingGateInterpreter) Interpret(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, QuestionFamilyOutcome, error) {
+	return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}},
+		QuestionFamilyOutcome{
+			Family: i.family, Source: QuestionFamilySourceModel,
+			Frame: nil,
+			Gate: FrameGate{
+				Outcome:            FrameGateRefusedBasis,
+				RefuseBasis:        CohortMemberKindUnservable,
+				DeclaredMemberKind: contractsv1.ContextFabricSubjectRepository,
+			},
+			WinningSampleIndex: 0, WinningSample: FamilySample{ModelFamily: i.family},
+			Version: QuestionFamilyTableVersion,
+		}, nil
 }
 
 // KILLS ARM `apply_reads_sample_not_accessor`
