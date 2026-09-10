@@ -159,6 +159,16 @@ func Certify(log *Log, a Assertion) (Result, error) {
 			return Result{}, fmt.Errorf("certify: %s: found 0 lines with msg %q for this attempt, want at least 1 (multiplicity=%s)",
 				a.Event.ID, a.Event.Msg, a.Event.Multiplicity)
 		}
+		// round r2's P2: more than one line in scope is legitimate
+		// multi-pass output ONLY when the passes actually differ. Two
+		// lines identical apart from "time" are indistinguishable from
+		// one pass emitted twice (a genuine duplicate-emission defect,
+		// distinct from a real re-decision) -- refuse rather than
+		// silently certifying the last of two identical copies.
+		if len(scoped) > 1 && linesEqualExceptTime(scoped[len(scoped)-1], scoped[len(scoped)-2]) {
+			return Result{}, fmt.Errorf("certify: %s: the last two lines with msg %q for this attempt are IDENTICAL apart from time -- indistinguishable from a single pass emitted twice; a real re-decision pass must differ in at least one other field",
+				a.Event.ID, a.Event.Msg)
+		}
 		line = scoped[len(scoped)-1]
 	case eventspec.MultiplicityZeroOrOnePerPass:
 		if len(scoped) > 1 {
@@ -180,20 +190,17 @@ func Certify(log *Log, a Assertion) (Result, error) {
 			a.Event.ID, gotLevel, wantLevel)
 	}
 
-	// PRESENCE of every declared PresenceRequired field is asserted
-	// regardless of whether the caller named it in Want -- a field the
-	// producer silently stops emitting must never pass because no fixture
-	// happened to pin its value (round r1 P1: proven with an executed
-	// repro that deleting "anchor_slot_displaced" from the real emission
-	// left every existing test PASSING).
-	for _, field := range a.Event.Fields {
-		if field.Presence != eventspec.PresenceRequired {
-			continue
-		}
-		if _, present := line[field.Key]; !present {
-			return Result{}, fmt.Errorf("certify: %s: line has no %q key (declared presence=%s) -- a required field must never be omitted, and missing is never equivalent to a measured zero",
-				a.Event.ID, field.Key, field.Presence)
-		}
+	// PRESENCE, TYPE and CLOSED VOCABULARY of every declared field are
+	// asserted, recursively into every nested (object_slice) field,
+	// regardless of whether the caller named it in Want -- round r1's P1
+	// (a field silently dropped from production output must never pass
+	// because no fixture happened to pin its value) and round r2's P1s
+	// (a nested field's own required children were never checked at all;
+	// Field.Type was declared but never consulted for anything outside
+	// Want). See validateFields' own doc comment for what each check
+	// covers.
+	if err := validateFields(a.Event.Fields, line, a.Event.ID); err != nil {
+		return Result{}, err
 	}
 
 	declared := make(map[string]eventspec.Field, len(a.Event.Fields))
@@ -232,23 +239,124 @@ func Certify(log *Log, a Assertion) (Result, error) {
 	return Result{Line: line}, nil
 }
 
-// CertifyAbsent asserts the event's variant produced NO line -- the explicit
-// zero-multiplicity case for a MultiplicityZeroOrOnePerPass event, so an
-// absence a caller expects is asserted as loudly as a presence it expects.
+// CertifyAbsent asserts the event's variant produced NO line FOR THE
+// ATTEMPT `attribution` IDENTIFIES -- the explicit zero-multiplicity case
+// for a MultiplicityZeroOrOnePerPass event, so an absence a caller expects
+// is asserted as loudly as a presence it expects. `attribution` must carry
+// a value for every one of the event's declared Attribution fields (same
+// contract as Assertion.Want), so a log holding a line for a DIFFERENT
+// attempt never causes a false refusal here (round r2's P2: a line for
+// request_id=req_2 must never block asserting absence for req_1).
 //
-// It refuses (round r1's P2) an event declared MultiplicityExactlyOnePerPass:
-// such an event is required on every pass by its own declaration, so
-// "absent" can never be a legitimate expectation to assert -- a caller
-// hitting this refusal has the wrong event, not a genuine absence to prove.
-func CertifyAbsent(log *Log, ev eventspec.Event) error {
-	if ev.Multiplicity == eventspec.MultiplicityExactlyOnePerPass {
-		return fmt.Errorf("certify: %s: declared multiplicity=%s requires this event on every pass -- absence is never a valid expectation for it (CertifyAbsent only applies to a zero_or_one_per_pass event)", ev.ID, ev.Multiplicity)
+// It refuses for any Multiplicity other than MultiplicityZeroOrOnePerPass
+// -- an ExactlyOnePerPass event is required on every pass by its own
+// declaration, so "absent" can never be a legitimate expectation for one
+// (round r1's P2); an unrecognised Multiplicity value refuses for the same
+// reason Certify's own switch does (round r2's P2: "unknown
+// multiplicities are also accepted" was a real gap -- this closes it by
+// requiring the ONE multiplicity that legitimately allows absence,
+// explicitly, rather than excluding only the one that doesn't).
+func CertifyAbsent(log *Log, ev eventspec.Event, attribution map[string]any) error {
+	if ev.Multiplicity != eventspec.MultiplicityZeroOrOnePerPass {
+		return fmt.Errorf("certify: %s: declared multiplicity=%q is not zero_or_one_per_pass -- CertifyAbsent only applies to a zero_or_one_per_pass event", ev.ID, ev.Multiplicity)
 	}
-	matches := log.linesWithMsg(ev.Msg)
-	if len(matches) != 0 {
-		return fmt.Errorf("certify: %s: found %d lines with msg %q, want 0 (asserted absent)", ev.ID, len(matches), ev.Msg)
+	for _, attrKey := range ev.Attribution {
+		if _, ok := attribution[attrKey]; !ok {
+			return fmt.Errorf("certify: %s: attribution must include %q (one of this event's declared Attribution fields) to scope which attempt's absence is being asserted", ev.ID, attrKey)
+		}
+	}
+	for _, line := range log.linesWithMsg(ev.Msg) {
+		match := true
+		for _, attrKey := range ev.Attribution {
+			if !jsonEqual(attribution[attrKey], line[attrKey]) {
+				match = false
+				break
+			}
+		}
+		if match {
+			return fmt.Errorf("certify: %s: found a line with msg %q for this attempt, want 0 (asserted absent)", ev.ID, ev.Msg)
+		}
 	}
 	return nil
+}
+
+// validateFields asserts PRESENCE (for PresenceRequired fields), JSON TYPE,
+// and CLOSED VOCABULARY membership for every field in `fields` against
+// `obj`, recursing into each element of an object_slice field's own nested
+// Fields. It is unconditional -- it runs over every declared field
+// regardless of whether a caller ever names it in a Want/attribution map
+// (round r2's P1s: nested fields were never checked at all, and
+// Field.Type/ClosedVocabulary were consulted only for fields a caller
+// happened to list in Want).
+func validateFields(fields []eventspec.Field, obj map[string]any, eventID string) error {
+	for _, field := range fields {
+		got, present := obj[field.Key]
+		if !present {
+			if field.Presence == eventspec.PresenceRequired {
+				return fmt.Errorf("certify: %s: line has no %q key (declared presence=%s) -- a required field must never be omitted, and missing is never equivalent to a measured zero",
+					eventID, field.Key, field.Presence)
+			}
+			continue
+		}
+		switch field.Type {
+		case eventspec.FieldString:
+			gotStr, ok := got.(string)
+			if !ok {
+				return fmt.Errorf("certify: %s: %q = %v (%T), declared type=string", eventID, field.Key, got, got)
+			}
+			if len(field.ClosedVocabulary) > 0 && !contains(field.ClosedVocabulary, gotStr) {
+				return fmt.Errorf("certify: %s: %q = %v is not in the declared closed vocabulary %v", eventID, field.Key, got, field.ClosedVocabulary)
+			}
+		case eventspec.FieldInt:
+			if _, ok := got.(float64); !ok {
+				return fmt.Errorf("certify: %s: %q = %v (%T), declared type=int", eventID, field.Key, got, got)
+			}
+		case eventspec.FieldStringSlice:
+			arr, ok := got.([]any)
+			if !ok {
+				return fmt.Errorf("certify: %s: %q = %v (%T), declared type=string_slice", eventID, field.Key, got, got)
+			}
+			for i, elem := range arr {
+				if _, ok := elem.(string); !ok {
+					return fmt.Errorf("certify: %s: %q[%d] = %v (%T), declared element type=string", eventID, field.Key, i, elem, elem)
+				}
+			}
+		case eventspec.FieldObjectSlice:
+			arr, ok := got.([]any)
+			if !ok {
+				return fmt.Errorf("certify: %s: %q = %v (%T), declared type=object_slice", eventID, field.Key, got, got)
+			}
+			for i, elem := range arr {
+				row, ok := elem.(map[string]any)
+				if !ok {
+					return fmt.Errorf("certify: %s: %q[%d] = %v (%T), declared element type=object", eventID, field.Key, i, elem, elem)
+				}
+				if err := validateFields(field.Fields, row, eventID); err != nil {
+					return fmt.Errorf("%w (inside %q[%d])", err, field.Key, i)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// linesEqualExceptTime reports whether a and b carry identical keys/values
+// once "time" (which always differs, even for two genuinely identical
+// emissions) is excluded from the comparison.
+func linesEqualExceptTime(a, b Line) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if k == "time" {
+			continue
+		}
+		bv, ok := b[k]
+		if !ok || !reflect.DeepEqual(v, bv) {
+			return false
+		}
+	}
+	return true
 }
 
 func contains(vocab []string, v string) bool {

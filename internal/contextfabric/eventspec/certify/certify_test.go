@@ -228,7 +228,7 @@ func TestCertifyAbsentRefusesAnExactlyOnePerPassEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	err = CertifyAbsent(log, eventspec.RankedCutSummary)
+	err = CertifyAbsent(log, eventspec.RankedCutSummary, map[string]any{"request_id": "req_1"})
 	if err == nil {
 		t.Fatal("CertifyAbsent() accepted asserting absence for RankedCutSummary, an exactly_one_per_pass event -- want a refusal naming the multiplicity")
 	}
@@ -302,5 +302,101 @@ func TestCertifyRefusesTwoLinesForAZeroOrOnePerPassEvent(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "found 2 lines") {
 		t.Errorf("refusal text = %q, want it to name the count", err.Error())
+	}
+}
+
+// Round r2's P1: a nested (object_slice) field's own required children were
+// never checked at all -- a declared_kind_rescue row missing "kind" must be
+// refused, even though no test names "declared_kind_rescue" in Want.
+func TestCertifyRefusesANestedObjectMissingARequiredChildField(t *testing.T) {
+	// The base fixture's declared_kind_rescue is empty ([]); build a line
+	// carrying one row with "kind" missing.
+	withRow := strings.Replace(validRankedCutSummaryLine(), `"declared_kind_rescue":[]`,
+		`"declared_kind_rescue":[{"state":"ran_matched_survived","terms_queried":1,"matched":1,"survived":1,"reached":1}]`, 1)
+	if withRow == validRankedCutSummaryLine() {
+		t.Fatal("fixture bug: declared_kind_rescue:[] needle not found")
+	}
+	log, err := Parse([]byte(withRow))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	_, err = Certify(log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()})
+	if err == nil {
+		t.Fatal("Certify() accepted a declared_kind_rescue row missing \"kind\" -- want a refusal naming the nested field")
+	}
+	if !strings.Contains(err.Error(), `"kind"`) || !strings.Contains(err.Error(), "declared_kind_rescue") {
+		t.Errorf("refusal text = %q, want it to name both the missing nested field and its parent array", err.Error())
+	}
+}
+
+// Round r2's P1: Field.Type was declared but never consulted for a field
+// not named in Want -- a string where an int is declared must be refused.
+func TestCertifyRefusesAWrongTypeNotNamedInWant(t *testing.T) {
+	wrongType := strings.Replace(validRankedCutSummaryLine(), `"pool_truncated_n":72`, `"pool_truncated_n":"not-an-int"`, 1)
+	log, err := Parse([]byte(wrongType))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	want := wantForRankedCutSummary()
+	delete(want, "pool_truncated_n")
+	_, err = Certify(log, Assertion{Event: eventspec.RankedCutSummary, Want: want})
+	if err == nil {
+		t.Fatal("Certify() accepted pool_truncated_n as a string (declared int), not named in Want -- want a refusal naming the type mismatch")
+	}
+	if !strings.Contains(err.Error(), "declared type=int") {
+		t.Errorf("refusal text = %q, want it to name the declared type", err.Error())
+	}
+}
+
+// Round r2's P2: two lines identical apart from "time" for one attempt must
+// be refused as an indistinguishable duplicate emission, never silently
+// certified against the last of the two. A genuinely different multi-pass
+// pair (TestCertifyAcceptsAGenuineMultiPassTwin) must still be accepted.
+func TestCertifyRefusesTwoIdenticalLinesForAnExactlyOnePerPassEvent(t *testing.T) {
+	line := validRankedCutSummaryLine()
+	dup := strings.Replace(line, `"2026-09-10T00:00:00Z"`, `"2026-09-10T00:00:01Z"`, 1)
+	log, err := Parse([]byte(line + "\n" + dup))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	_, err = Certify(log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()})
+	if err == nil {
+		t.Fatal("Certify() accepted two lines identical apart from time -- want a refusal naming the duplicate")
+	}
+	if !strings.Contains(err.Error(), "IDENTICAL") {
+		t.Errorf("refusal text = %q, want it to name the duplicate", err.Error())
+	}
+}
+
+// Round r2's P2: CertifyAbsent must scope by attribution -- a line for a
+// DIFFERENT attempt (request_id) must never block asserting absence for
+// the attempt the caller actually means.
+func TestCertifyAbsentIsAttributionScoped(t *testing.T) {
+	line := `{"time":"2026-09-10T00:00:00Z","level":"INFO","msg":"context fabric resolution trace: anchor slot displaced",` +
+		`"request_id":"req_2","stage":"anchor_slot_displaced","subject_kind":"project","subject_canonical_id":"p1",` +
+		`"anchor_slot_reserved":"team","anchor_slot_source":"receipt","anchor_slot_displaced":1,"pool_truncated_n":7}`
+	log, err := Parse([]byte(line))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if err := CertifyAbsent(log, eventspec.AnchorSlotDisplaced, map[string]any{"request_id": "req_1"}); err != nil {
+		t.Errorf("CertifyAbsent() refused req_1 absence solely because req_2 has a line -- want it to certify absence for req_1: %v", err)
+	}
+	if err := CertifyAbsent(log, eventspec.AnchorSlotDisplaced, map[string]any{"request_id": "req_2"}); err == nil {
+		t.Error("CertifyAbsent() accepted asserting absence for req_2, which DOES have a line -- want a refusal")
+	}
+}
+
+// Round r2's P2: CertifyAbsent must refuse for any Multiplicity other than
+// zero_or_one_per_pass, including an unrecognised value -- not just the
+// one case (exactly_one_per_pass) the earlier fix named explicitly.
+func TestCertifyAbsentRefusesAnUnrecognisedMultiplicity(t *testing.T) {
+	log, err := Parse([]byte(`{"time":"2026-09-10T00:00:00Z","level":"INFO","msg":"an unrelated line"}`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	bogus := eventspec.Event{ID: "test.bogus", Msg: "an unrelated line", Multiplicity: eventspec.Multiplicity("made_up"), Attribution: nil}
+	if err := CertifyAbsent(log, bogus, map[string]any{}); err == nil {
+		t.Error("CertifyAbsent() accepted an unrecognised Multiplicity value -- want a refusal")
 	}
 }

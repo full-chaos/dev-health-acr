@@ -114,7 +114,7 @@ func TestEventspecCertifiesExplicitZerosWhenNoSlotIsReserved(t *testing.T) {
 		t.Errorf("certify RankedCutSummary (no slot reserved): %v", err)
 	}
 
-	if err := certify.CertifyAbsent(log, eventspec.AnchorSlotDisplaced); err != nil {
+	if err := certify.CertifyAbsent(log, eventspec.AnchorSlotDisplaced, map[string]any{"request_id": req.RequestID}); err != nil {
 		t.Errorf("certify.CertifyAbsent(AnchorSlotDisplaced): %v", err)
 	}
 }

@@ -117,12 +117,18 @@ type Event struct {
 
 // declaredKindRescueState is the CLOSED vocabulary chaos5388_declared_kind_rescue.go
 // already ships (unchanged by this ticket -- "no schema field names or
-// additional outcome tokens are minted by this amendment").
+// additional outcome tokens are minted by this amendment"). All FIVE
+// states (round r2's P1: "ran_matched_survived" was omitted from this
+// list -- the real resolver path emits it, so it certified successfully
+// against an incomplete vocabulary once nested validation was added; fixed
+// by completing the list against chaos5388_declared_kind_rescue.go's own
+// five constants, not by inventing anything new).
 var declaredKindRescueState = []string{
 	"not_run",
 	"ran_matched_zero",
 	"ran_matched_then_dropped",
 	"ran_matched_then_cut",
+	"ran_matched_survived",
 }
 
 // RankedCutSummary is the once-per-pass Info line

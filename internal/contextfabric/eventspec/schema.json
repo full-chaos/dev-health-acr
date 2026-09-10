@@ -145,7 +145,8 @@
               "not_run",
               "ran_matched_zero",
               "ran_matched_then_dropped",
-              "ran_matched_then_cut"
+              "ran_matched_then_cut",
+              "ran_matched_survived"
             ]
           },
           {
