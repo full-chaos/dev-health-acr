@@ -160,7 +160,11 @@ func TestBuildCohortGroupsReadsTheOwningTeamOffMemberFacts(t *testing.T) {
 	// order inside a group. Both are deterministic on purpose: a group order
 	// that varied between identical requests makes every before/after
 	// comparison meaningless.
-	if groups[0].Subject.CanonicalID != "team_1" || groups[1].Subject.CanonicalID != "team_2" {
+	// Ordered by the id the groups are PUBLISHED under, which is now the
+	// canonical team identity. Canonicalisation is a fixed-prefix mint, so
+	// it preserves the raw keys' relative order and this pin still tests
+	// ordering rather than the prefix.
+	if groups[0].Subject.CanonicalID != TeamCanonicalID("team_1") || groups[1].Subject.CanonicalID != TeamCanonicalID("team_2") {
 		t.Fatalf("group order = %q, %q", groups[0].Subject.CanonicalID, groups[1].Subject.CanonicalID)
 	}
 	if got := groups[0].MemberCanonicalIDs; len(got) != 2 || got[0] != "project_a" || got[1] != "project_c" {
@@ -212,8 +216,11 @@ func TestHealthScopeRowsOnlyGroupOnTeamScope(t *testing.T) {
 		SourceState: SourceAvailable, Source: "ops", SourceVersion: "v1",
 	}
 	groups, _, _ := BuildCohortGroups(AnswerPlan{GroupKind: SubjectTeam}, planFixtureCohort("project_a"), []CanonicalFact{fact})
-	if len(groups) != 1 || groups[0].Subject.CanonicalID != "team_9" {
-		t.Fatalf("groups = %#v, want the scope=\"team\" row's id", groups)
+	// The scope="team" row's id, published as the identity a team reader
+	// resolves. The discrimination this pin exists for is unchanged: the
+	// scope="project" row's id must NOT be the one that surfaces.
+	if len(groups) != 1 || groups[0].Subject.CanonicalID != TeamCanonicalID("team_9") {
+		t.Fatalf("groups = %#v, want the canonical identity of the scope=\"team\" row's id", groups)
 	}
 }
 

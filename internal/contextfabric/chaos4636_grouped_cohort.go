@@ -395,15 +395,39 @@ func groupAssignmentsFromValue(value FactValue) []cohortGroupAssignment {
 		if scope, declared := rowString(row, groupScopeColumn); declared && scope != groupScopeTeamKind {
 			continue
 		}
-		canonicalID, ok := firstRowString(row, groupIDColumnCandidates)
-		if !ok || canonicalID == "" {
+		rawKey, ok := firstRowString(row, groupIDColumnCandidates)
+		if !ok || rawKey == "" {
 			continue
 		}
 		label, _ := firstRowString(row, groupLabelColumnCandidates)
+		if label == "" {
+			// The RAW key, deliberately, and set here rather than left for
+			// buildGroupsFrom's own "label = canonicalID" fallback: a group
+			// with no name in its source row should still read as "AUTH" to
+			// a person, not as the wire identity "team:AUTH". The identity
+			// below is for machines; this is the only field for humans.
+			label = rawKey
+		}
+		// CANONICALISED HERE, at the point the source row is accepted --
+		// before the grouping maps, the dedup and the sort in
+		// BuildCohortGroups, all of which key on this value. Canonicalising
+		// later would leave those maps keyed on one spelling and the
+		// published subject carrying another; canonicalising at read time
+		// downstream would be exactly the repair-on-use this ticket rejects.
+		//
+		// Until this line, the published group id was the source row's key
+		// verbatim, while every team fact provider strips
+		// TeamCanonicalIDPrefix off a subject and REJECTS anything without
+		// it -- so a grouped answer's group subjects were unresolvable by
+		// construction and its `each_group` requirement could never be
+		// satisfied from them. Member facts are untouched: the members are
+		// already minted by their own producers, and this row's key is the
+		// GROUP's, not theirs.
+		//
 		// SubjectTeam, not the plan's kind: the scope filter above admitted
 		// this row precisely because it declares itself a team row, and the
 		// columns just read are team columns.
-		found = append(found, cohortGroupAssignment{canonicalID: canonicalID, label: label, kind: SubjectTeam})
+		found = append(found, cohortGroupAssignment{canonicalID: TeamCanonicalID(rawKey), label: label, kind: SubjectTeam})
 	}
 	return found
 }

@@ -1244,7 +1244,7 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "updated_at", rowKey) +
 // space ({CHAOS} and {gl:full.chaos, CHAOS} respectively, both subsets of
 // teams.id). Any other shape leaves all five existing team fact providers
 // dark while still looking like a working projection.
-func teamCanonicalID(teamID string) string { return "team:" + teamID }
+func teamCanonicalID(teamID string) string { return contextfabric.TeamCanonicalID(teamID) }
 
 // projectAuthorizationScope builds a project's authorization scope and is the
 // producer-side half of the reserved-namespace obligation

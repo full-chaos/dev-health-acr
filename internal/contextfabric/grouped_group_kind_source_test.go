@@ -77,8 +77,18 @@ func TestGroupingStillBuildsWhenThePlanKindMatchesTheSource(t *testing.T) {
 	if groups[0].Subject.Kind != SubjectTeam {
 		t.Fatalf("group subject kind = %q, want %q from the fact source", groups[0].Subject.Kind, SubjectTeam)
 	}
-	if groups[0].Subject.CanonicalID != "team_security" {
-		t.Fatalf("group canonical id = %q, want the source's own", groups[0].Subject.CanonicalID)
+	// The source's own key, expressed as the identity every team reader
+	// resolves. Asserting the RAW key here is what this pin used to do, and
+	// that froze the defect CHAOS-5285 exists to remove: a published group
+	// id that no team fact provider will accept. The source-fidelity
+	// property the pin was written for is preserved -- and strengthened --
+	// by round-tripping back to the source's key rather than by comparing
+	// against a bare string.
+	if groups[0].Subject.CanonicalID != TeamCanonicalID("team_security") {
+		t.Fatalf("group canonical id = %q, want the canonical identity of the source's own key", groups[0].Subject.CanonicalID)
+	}
+	if raw, ok := TeamRawKey(groups[0].Subject.CanonicalID); !ok || raw != "team_security" {
+		t.Fatalf("group canonical id %q does not round-trip to the source's key (raw=%q ok=%v)", groups[0].Subject.CanonicalID, raw, ok)
 	}
 }
 
