@@ -426,3 +426,67 @@ func (e *Engine) recordGroupReadCoverageStates(ctx context.Context, principal st
 	emit(GroupReadArmMember, member)
 	emit(GroupReadArmGroup, group)
 }
+
+// CohortMemberAllowanceEvent reports how many cohort members this turn's item
+// budget actually admits, and whether that number was CLAMPED rather than
+// computed.
+//
+// The allowance is `MaxItems - SynthesisHeadroom`, and a grouped plan reserves
+// a headroom of twenty. So every grouped turn whose budget is at or below that
+// headroom gets an allowance of ONE -- not because one member is what the
+// budget affords, but because the subtraction went to zero or below and the
+// floor caught it. Stage 2's set cover then reduces the cohort to one member
+// per group, and a reader of the answer sees a single project under each team
+// with nothing anywhere saying why.
+//
+// Every field is here because its absence leaves two states looking alike.
+// MaxItems and Headroom together are the only way to tell "this budget is
+// genuinely small" from "this budget is large and the reserve ate it".
+// Clamped separates a computed allowance from the floor. Groups explains why
+// MembersAfter does not simply equal Allowance -- the set cover keeps one
+// member per group, so a cohort narrowed to an allowance of one still carries
+// as many members as it has groups.
+type CohortMemberAllowanceEvent struct {
+	Family    QuestionFamily
+	GroupKind SubjectKind
+	// MaxItems and Headroom are the two inputs to the subtraction.
+	MaxItems int
+	Headroom int
+	// Allowance is what the plan will narrow to, and Clamped reports that
+	// the subtraction produced less than one and the floor supplied this
+	// value instead.
+	Allowance int
+	Clamped   bool
+	// Groups, MembersBefore and MembersAfter are what the allowance did to
+	// this particular cohort.
+	Groups        int
+	MembersBefore int
+	MembersAfter  int
+}
+
+// recordCohortMemberAllowance emits the allowance decision on EVERY turn that
+// has a cohort, narrowed or not.
+//
+// Unconditional on purpose: the clamp happens while computing the allowance,
+// not while applying it, so a turn whose cohort was already small enough not
+// to narrow was clamped just as hard as one that was cut -- and emitting only
+// on narrowing would hide exactly the turns where the reader wonders why the
+// answer is so thin.
+func (e *Engine) recordCohortMemberAllowance(ctx context.Context, principal storage.Principal, event CohortMemberAllowanceEvent) {
+	if e.telemetry == nil {
+		return
+	}
+	e.telemetry.RecordCohortMemberAllowance(ctx, principal, event)
+}
+
+// cohortMemberAllowanceClamped reports whether the plan's member allowance was
+// supplied by the floor rather than by the subtraction.
+//
+// It mirrors PlanAnswer's own arithmetic rather than reading a flag, because
+// no flag exists: the plan carries the RESULT, and "one member because the
+// budget affords one" and "one member because the reserve consumed the budget"
+// are the same number there. This is the one place the difference is
+// recoverable, and it is recovered from the plan's own published inputs.
+func cohortMemberAllowanceClamped(budget contractsv1.ContextFabricAnswerPlanBudget) bool {
+	return budget.MaxItems > 0 && budget.MaxItems-budget.SynthesisHeadroom < 1
+}

@@ -407,6 +407,10 @@ type PlanTelemetry interface {
 	// coverage source, before the two reads' coverage is folded together
 	// and the worse state erases the better one.
 	RecordGroupReadCoverageState(ctx context.Context, principal storage.Principal, event GroupReadCoverageStateEvent)
+	// RecordCohortMemberAllowance reports how many cohort members the item
+	// budget admits and whether that number was clamped by the floor rather
+	// than computed from the budget.
+	RecordCohortMemberAllowance(ctx context.Context, principal storage.Principal, event CohortMemberAllowanceEvent)
 
 	// RecordMembershipCardinality reports the `membership_cardinality`
 	// server step's own result for one served answer: what was counted, how

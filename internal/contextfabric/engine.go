@@ -2544,6 +2544,30 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// AFTER this stage shaped it, and reported a stale default basis when it
 	// had no way to know what this stage had already done.
 	var stage2GroupedBasis contractsv1.ContextFabricNarrowingBasis
+	// THE ALLOWANCE, REPORTED WHETHER OR NOT IT NARROWS ANYTHING.
+	//
+	// The clamp happens while COMPUTING the allowance, not while applying it,
+	// so a cohort already small enough to survive was clamped exactly as hard
+	// as one that got cut. Emitting only on narrowing would hide precisely
+	// the turns where a reader wonders why the answer is so thin.
+	//
+	// Captured before the block below runs, so members_before is the count
+	// this decision was taken against rather than whatever survived it.
+	if graphContext.Cohort != nil {
+		allowanceEvent := CohortMemberAllowanceEvent{
+			Family: plan.Family, GroupKind: plan.GroupKind,
+			MaxItems: plan.Budget.MaxItems, Headroom: plan.Budget.SynthesisHeadroom,
+			Allowance: plan.Budget.MaxMembers, Clamped: cohortMemberAllowanceClamped(plan.Budget),
+			Groups:        len(graphContext.Cohort.Groups),
+			MembersBefore: len(graphContext.Cohort.Members),
+		}
+		defer func() {
+			if graphContext.Cohort != nil {
+				allowanceEvent.MembersAfter = len(graphContext.Cohort.Members)
+			}
+			e.recordCohortMemberAllowance(ctx, principal, allowanceEvent)
+		}()
+	}
 	if graphContext.Cohort != nil && plan.Budget.MaxMembers > 0 && len(graphContext.Cohort.Members) > plan.Budget.MaxMembers {
 		before := len(graphContext.Cohort.Members)
 		cohort := *graphContext.Cohort

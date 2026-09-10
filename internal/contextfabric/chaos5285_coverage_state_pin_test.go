@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -148,5 +149,151 @@ func TestTheFoldReallyDoesEraseTheBetterState(t *testing.T) {
 	if merged.Sources[0].State != SourceNoData {
 		t.Fatalf("CONTROL BROKEN: merged state = %q, want %q -- if the fold kept the better state the pin above would be describing a loss that does not happen",
 			merged.Sources[0].State, SourceNoData)
+	}
+}
+
+// allowanceLines reads back every `context fabric cohort member allowance`
+// line the REAL handler wrote, decoded rather than substring-matched.
+func allowanceLines(t *testing.T, raw string) []map[string]any {
+	t.Helper()
+	lines := make([]map[string]any, 0, 2)
+	scanner := bufio.NewScanner(strings.NewReader(raw))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		var entry map[string]any
+		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
+			continue
+		}
+		if entry["msg"] == "context fabric cohort member allowance" {
+			lines = append(lines, entry)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("reading captured log: %v", err)
+	}
+	return lines
+}
+
+// TestTheClampedMemberAllowanceIsExplainedAtInfo pins the line that makes an
+// otherwise inexplicable answer explicable.
+//
+// A grouped plan reserves a synthesis headroom of twenty items, and the
+// cohort's member allowance is the budget minus that reserve. Every grouped
+// turn at or below a twenty-item budget therefore gets an allowance of ONE --
+// not because one member is what the budget affords, but because the
+// subtraction went to zero and the floor caught it. The set cover then leaves
+// one member per group, and a reader sees a single project under each team
+// with nothing anywhere saying why.
+//
+// The values are what make it useful. An allowance of one is unremarkable
+// under a one-item budget and is a reserve swallowing the whole budget under a
+// twenty-item one; only `max_items` beside `synthesis_headroom` separates
+// them, and `allowance_clamped` says which happened rather than leaving a
+// reader to redo the arithmetic.
+//
+// NOT t.Parallel(): it installs the process-global default logger.
+func TestTheClampedMemberAllowanceIsExplainedAtInfo(t *testing.T) {
+	logs := captureDefaultJSONLogger(t)
+
+	recorder := &groupReadRecorder{facts: func(CanonicalFactRequest) CanonicalFactBundle {
+		bundle := emptyFactBundle()
+		bundle.Facts = groupReadMemberFacts()
+		bundle.Coverage.Sources = []SourceObservation{{Source: "canonical_fact:metrics", State: SourceAvailable}}
+		return bundle
+	}}
+	// Below the grouped headroom, so the allowance is supplied by the floor.
+	options := EngineOptions{MaxItems: 6, SynthesisDeadlineReserve: time.Second}
+	members := []CohortMember{
+		{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_a", Label: "project_a"}, Rank: 1, InclusionReasons: []string{"matched"}},
+		{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_b", Label: "project_b"}, Rank: 2, InclusionReasons: []string{"matched"}},
+	}
+	engine, request := groupReadEngineFixtureFull(t, NewSlogEngineTelemetry(slog.Default()), recorder, members, nil, SubjectProject, &options, nil)
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+
+	lines := allowanceLines(t, logs.String())
+	for _, line := range lines {
+		t.Logf("level=%v max_items=%v headroom=%v allowance=%v clamped=%v groups=%v before=%v after=%v",
+			line["level"], line["max_items"], line["synthesis_headroom"], line["member_allowance"],
+			line["allowance_clamped"], line["groups"], line["members_before"], line["members_after"])
+	}
+	if len(lines) != 1 {
+		t.Fatalf("got %d allowance lines, want exactly 1 -- emitted on every turn that has a cohort, narrowed or not", len(lines))
+	}
+	line := lines[0]
+
+	if got := line["allowance_clamped"]; got != true {
+		t.Errorf("allowance_clamped = %v, want true -- this budget is below the reserve, and without the flag a reader cannot tell the floor from a genuinely tiny budget", got)
+	}
+	// NON-TRIVIAL VALUES, and the pair that carries the explanation.
+	if got := line["max_items"]; got != float64(6) {
+		t.Errorf("max_items = %v, want 6", got)
+	}
+	// THE RESERVE ATE THE WHOLE BUDGET. A grouped plan's profile reserve is
+	// twenty items and the contract forbids reserving more than the budget
+	// holds, so at any budget at or below the reserve the headroom lands on
+	// the budget itself and the subtraction leaves nothing for members. That
+	// is the entire explanation, and it is unrecoverable from the allowance
+	// alone -- which is why both numbers are on the line.
+	if got := line["synthesis_headroom"]; got != line["max_items"] {
+		t.Errorf("synthesis_headroom = %v against max_items = %v, want them equal -- below the profile reserve the headroom is the whole budget, and a reader without both numbers cannot tell that from a budget that was simply tiny",
+			got, line["max_items"])
+	}
+	if got := line["member_allowance"]; got != float64(1) {
+		t.Errorf("member_allowance = %v, want 1", got)
+	}
+	// `groups` is why members_after does not equal the allowance: the set
+	// cover keeps one member per group.
+	if got := line["groups"]; got != float64(2) {
+		t.Errorf("groups = %v, want 2 -- without it, a cohort of 2 under an allowance of 1 looks like the allowance being ignored", got)
+	}
+	if got := line["members_before"]; got != float64(2) {
+		t.Errorf("members_before = %v, want 2", got)
+	}
+	if got := line["level"]; got != slog.LevelInfo.String() {
+		t.Errorf("level = %v, want %q -- an operator who must raise the level to learn why an answer was thin cannot ask it of a turn that already happened",
+			got, slog.LevelInfo.String())
+	}
+}
+
+// TestTheUnclampedMemberAllowanceReportsItselfUnclamped is the DISCRIMINATING
+// CONTROL: without it, `allowance_clamped` is satisfied by an implementation
+// that hardcodes true, which would label every ordinary turn as clamped and
+// make the flag worthless in exactly the population it exists to separate.
+//
+// NOT t.Parallel(): it installs the process-global default logger.
+func TestTheUnclampedMemberAllowanceReportsItselfUnclamped(t *testing.T) {
+	logs := captureDefaultJSONLogger(t)
+
+	recorder := &groupReadRecorder{facts: func(CanonicalFactRequest) CanonicalFactBundle {
+		bundle := emptyFactBundle()
+		bundle.Facts = groupReadMemberFacts()
+		bundle.Coverage.Sources = []SourceObservation{{Source: "canonical_fact:metrics", State: SourceAvailable}}
+		return bundle
+	}}
+	// ABOVE the grouped headroom, so the subtraction produces a real number.
+	options := EngineOptions{MaxItems: 26, SynthesisDeadlineReserve: time.Second}
+	members := []CohortMember{
+		{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_a", Label: "project_a"}, Rank: 1, InclusionReasons: []string{"matched"}},
+		{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_b", Label: "project_b"}, Rank: 2, InclusionReasons: []string{"matched"}},
+	}
+	engine, request := groupReadEngineFixtureFull(t, NewSlogEngineTelemetry(slog.Default()), recorder, members, nil, SubjectProject, &options, nil)
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+
+	lines := allowanceLines(t, logs.String())
+	if len(lines) != 1 {
+		t.Fatalf("CONTROL BROKEN: got %d allowance lines, want 1", len(lines))
+	}
+	line := lines[0]
+	t.Logf("control: max_items=%v headroom=%v allowance=%v clamped=%v",
+		line["max_items"], line["synthesis_headroom"], line["member_allowance"], line["allowance_clamped"])
+	if got := line["allowance_clamped"]; got != false {
+		t.Fatalf("CONTROL BROKEN: allowance_clamped = %v on a budget above the reserve -- a flag that is always true separates nothing", got)
+	}
+	if got := line["member_allowance"]; got == float64(1) {
+		t.Fatalf("CONTROL BROKEN: member_allowance = %v above the reserve, which is the clamped value -- this fixture is not exercising the unclamped arm", got)
 	}
 }

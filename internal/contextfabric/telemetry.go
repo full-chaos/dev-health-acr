@@ -1758,3 +1758,35 @@ func (t SlogEngineTelemetry) RecordGroupReadCoverageState(ctx context.Context, p
 		"source_state", string(state),
 	)
 }
+
+// RecordCohortMemberAllowance emits the cohort member allowance and whether it
+// was clamped, at Info, on every turn that has a cohort.
+//
+// `max_items` beside `headroom` is the pair that makes the line worth having:
+// an allowance of one is unremarkable under a one-item budget and is a
+// reserve swallowing the whole budget under a twenty-item one, and the
+// allowance alone cannot tell them apart. `clamped` states which happened
+// rather than leaving a reader to redo the subtraction.
+//
+// `groups` is on the line because `members_after` does not equal `allowance`
+// for a grouped cohort: the set cover keeps one member per group, so a cohort
+// narrowed to an allowance of one still carries as many members as it has
+// groups, and without the group count that looks like the allowance being
+// ignored.
+func (t SlogEngineTelemetry) RecordCohortMemberAllowance(ctx context.Context, principal storage.Principal, event CohortMemberAllowanceEvent) {
+	if t.logger == nil {
+		return
+	}
+	t.logger.InfoContext(ctx, "context fabric cohort member allowance",
+		"org_id", principal.OrgID,
+		"family", string(event.Family),
+		"group_kind", string(event.GroupKind),
+		"max_items", event.MaxItems,
+		"synthesis_headroom", event.Headroom,
+		"member_allowance", event.Allowance,
+		"allowance_clamped", event.Clamped,
+		"groups", event.Groups,
+		"members_before", event.MembersBefore,
+		"members_after", event.MembersAfter,
+	)
+}

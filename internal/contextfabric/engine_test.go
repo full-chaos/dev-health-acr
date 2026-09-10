@@ -362,7 +362,10 @@ type recordingTelemetry struct {
 	cohortGroupReads []CohortGroupReadEvent
 	// groupReadCoverageStates records both reads' per-source observations as
 	// they stood BEFORE the fold, which is the only place they exist apart.
-	groupReadCoverageStates    []GroupReadCoverageStateEvent
+	groupReadCoverageStates []GroupReadCoverageStateEvent
+	// cohortMemberAllowances records the allowance decision of every turn
+	// that had a cohort, narrowed or not.
+	cohortMemberAllowances     []CohortMemberAllowanceEvent
 	membershipCardinalities    []MembershipCardinalityEvent
 	readRequirementPopulations []ReadRequirementPopulationEvent
 	// readRequirementObservationCovers records every observation-cover
@@ -654,6 +657,10 @@ func (r *recordingTelemetry) RecordCohortGroupRead(_ context.Context, _ storage.
 
 func (r *recordingTelemetry) RecordGroupReadCoverageState(_ context.Context, _ storage.Principal, event GroupReadCoverageStateEvent) {
 	r.groupReadCoverageStates = append(r.groupReadCoverageStates, event)
+}
+
+func (r *recordingTelemetry) RecordCohortMemberAllowance(_ context.Context, _ storage.Principal, event CohortMemberAllowanceEvent) {
+	r.cohortMemberAllowances = append(r.cohortMemberAllowances, event)
 }
 
 // RecordMembershipCardinality records the whole event, same list-not-count
