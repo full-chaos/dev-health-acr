@@ -236,3 +236,71 @@ func TestCertifyAbsentRefusesAnExactlyOnePerPassEvent(t *testing.T) {
 		t.Errorf("refusal text = %q, want it to name the multiplicity", err.Error())
 	}
 }
+
+// Certify's attribution-scoping guard: Want omitting a field the event
+// declares in Attribution is refused outright, before any line is even
+// located -- without this guard, multiplicity would silently scope over
+// the WHOLE supplied log (round r1's P2) instead of the one attempt the
+// caller actually means to certify.
+func TestCertifyRefusesWantMissingAnAttributionField(t *testing.T) {
+	log, err := Parse([]byte(validRankedCutSummaryLine()))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	want := wantForRankedCutSummary()
+	delete(want, "request_id")
+	_, err = Certify(log, Assertion{Event: eventspec.RankedCutSummary, Want: want})
+	if err == nil {
+		t.Fatal("Certify() accepted a Want with no \"request_id\" (RankedCutSummary's own declared Attribution field) -- want a refusal naming it")
+	}
+	if !strings.Contains(err.Error(), `"request_id"`) {
+		t.Errorf("refusal text = %q, want it to name the missing attribution field", err.Error())
+	}
+}
+
+// Certify's ExactlyOnePerPass empty-scope guard: zero matching lines for
+// the attempt Want names is refused, never a panic and never silently
+// certifying nothing. RankedCutSummary is exactly_one_per_pass, so an
+// attempt that never reached it must be reported as a refusal, not treated
+// as an empty pass to index into.
+func TestCertifyRefusesZeroLinesForAnExactlyOnePerPassEvent(t *testing.T) {
+	log, err := Parse([]byte(`{"time":"2026-09-10T00:00:00Z","level":"INFO","msg":"an unrelated line","request_id":"req_1"}`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	_, err = Certify(log, Assertion{Event: eventspec.RankedCutSummary, Want: wantForRankedCutSummary()})
+	if err == nil {
+		t.Fatal("Certify() accepted zero RankedCutSummary lines for this attempt -- want a refusal naming the count")
+	}
+	if !strings.Contains(err.Error(), "found 0 lines") {
+		t.Errorf("refusal text = %q, want it to name the zero count", err.Error())
+	}
+}
+
+// Certify's ZeroOrOnePerPass duplicate guard: two lines in scope for a
+// zero_or_one_per_pass event (AnchorSlotDisplaced) is refused, never
+// silently certified against one of them.
+func TestCertifyRefusesTwoLinesForAZeroOrOnePerPassEvent(t *testing.T) {
+	line := `{"time":"2026-09-10T00:00:00Z","level":"INFO","msg":"context fabric resolution trace: anchor slot displaced",` +
+		`"request_id":"req_1","stage":"anchor_slot_displaced","subject_kind":"project","subject_canonical_id":"p1",` +
+		`"anchor_slot_reserved":"team","anchor_slot_source":"receipt","anchor_slot_displaced":1,"pool_truncated_n":7}`
+	log, err := Parse([]byte(line + "\n" + line))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	_, err = Certify(log, Assertion{
+		Event: eventspec.AnchorSlotDisplaced,
+		Want: map[string]any{
+			"request_id":           "req_1",
+			"anchor_slot_reserved": "team",
+			"anchor_slot_source":   "receipt",
+			"subject_kind":         "project",
+		},
+	})
+	if err == nil {
+		t.Fatal("Certify() accepted two AnchorSlotDisplaced lines for one attempt -- want a refusal naming the count")
+	}
+	if !strings.Contains(err.Error(), "found 2 lines") {
+		t.Errorf("refusal text = %q, want it to name the count", err.Error())
+	}
+}
