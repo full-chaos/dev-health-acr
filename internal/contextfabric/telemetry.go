@@ -1719,3 +1719,42 @@ func (t SlogEngineTelemetry) RecordCohortGroupRead(ctx context.Context, principa
 		"group_facts_returned", event.FactsReturned,
 	)
 }
+
+// RecordGroupReadCoverageState emits one read's observation of one coverage
+// source, at Info, BEFORE the two reads' coverage is folded.
+//
+// The fold keeps the worst state per source name, which is right for the
+// served answer and lossy for the trace: a group gap erases the member read's
+// `available`, and nothing downstream can recover which population the gap was
+// in. This line is where that survives. `read` is the discriminator the event
+// exists for; without it the two observations are indistinguishable, which is
+// exactly the state the merged coverage is in.
+//
+// At Info deliberately, not Debug: this is a routine, per-turn statement about
+// what the server saw, and a reader who has to raise the level to find out
+// which population a coverage gap was in cannot answer it about a turn that
+// has already happened.
+func (t SlogEngineTelemetry) RecordGroupReadCoverageState(ctx context.Context, principal storage.Principal, event GroupReadCoverageStateEvent) {
+	if t.logger == nil {
+		return
+	}
+	// Both closed fields go through their own membership checks. A value
+	// outside either vocabulary reaches a field consumers group on, and free
+	// text there is indistinguishable from a member until someone aggregates.
+	arm := event.Read
+	if !ValidGroupReadArm(arm) {
+		arm = GroupReadArm("unclassified")
+	}
+	state := event.State
+	if !validFactSourceState(state) {
+		state = SourceState("unclassified")
+	}
+	t.logger.InfoContext(ctx, "context fabric group read coverage state",
+		"org_id", principal.OrgID,
+		"family", string(event.Family),
+		"group_kind", string(event.GroupKind),
+		"read", string(arm),
+		"source", event.Source,
+		"source_state", string(state),
+	)
+}

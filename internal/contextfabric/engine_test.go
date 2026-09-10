@@ -359,7 +359,10 @@ type recordingTelemetry struct {
 	groupedCohortCompletenesses []GroupedCohortCompletenessEvent
 	// cohortGroupReads records every group-read decision, so a test can say
 	// what the group stage proposed, admitted and actually read.
-	cohortGroupReads           []CohortGroupReadEvent
+	cohortGroupReads []CohortGroupReadEvent
+	// groupReadCoverageStates records both reads' per-source observations as
+	// they stood BEFORE the fold, which is the only place they exist apart.
+	groupReadCoverageStates    []GroupReadCoverageStateEvent
 	membershipCardinalities    []MembershipCardinalityEvent
 	readRequirementPopulations []ReadRequirementPopulationEvent
 	// readRequirementObservationCovers records every observation-cover
@@ -647,6 +650,10 @@ func (r *recordingTelemetry) RecordGroupedCohortCompleteness(_ context.Context, 
 
 func (r *recordingTelemetry) RecordCohortGroupRead(_ context.Context, _ storage.Principal, event CohortGroupReadEvent) {
 	r.cohortGroupReads = append(r.cohortGroupReads, event)
+}
+
+func (r *recordingTelemetry) RecordGroupReadCoverageState(_ context.Context, _ storage.Principal, event GroupReadCoverageStateEvent) {
+	r.groupReadCoverageStates = append(r.groupReadCoverageStates, event)
 }
 
 // RecordMembershipCardinality records the whole event, same list-not-count

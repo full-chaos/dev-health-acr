@@ -2454,6 +2454,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// anywhere, which is the state this stage was in when it
 				// was first written.
 				e.recordFactScopeExpansion(ctx, principal, groupBundle.Scope)
+				// BEFORE THE FOLD. MergeCoverage keeps the worst state per
+				// source name and both reads report under the same
+				// `canonical_fact:<kind>` names, so a group gap erases the
+				// member read's `available` and nothing downstream can say
+				// which population the gap was in. Emitted here, while both
+				// answers still exist separately.
+				e.recordGroupReadCoverageStates(ctx, principal, plan.Family, plan.GroupKind, facts.Coverage, groupBundle.Coverage)
 				if mergeGroupBundle(&facts, groupBundle, principal.OrgID) {
 					groupOutcome.Refused, groupOutcome.Reason = true, GroupReadRefusalMetadataConflict
 					groupOutcome.Read = false

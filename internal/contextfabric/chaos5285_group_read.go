@@ -347,3 +347,82 @@ func mergeGroupBundle(into *CanonicalFactBundle, group CanonicalFactBundle, orgI
 	into.TemporalGrain = coarsestGrain(into.TemporalGrain, group.TemporalGrain)
 	return false
 }
+
+// GroupReadCoverageStateEvent is ONE read's observation of ONE source, emitted
+// BEFORE the two reads' coverage is folded together.
+//
+// It exists because the fold is lossy in a way nothing downstream can undo.
+// Both reads request the same fact kinds, so both report coverage under the
+// same `canonical_fact:<kind>` source names, and MergeCoverage keeps the WORST
+// state per name. That is the conservative direction and it is the right
+// default for the served answer -- but it means a group gap ERASES the member
+// read's `available`, and a reader of the merged coverage cannot tell "neither
+// population had health data" from "the members had it and the groups did
+// not". Those are different answers to different questions.
+//
+// The served document is not widened to carry both: doing that needs a new
+// coverage-detail code or a widened field allowance, and both are contract
+// tokens. This line is the trace-side answer to the same question, and a log
+// line is not a token.
+//
+// Read is the discriminator the whole event exists for -- `member` or `group`
+// -- and it is why one line per observation is emitted rather than one line
+// carrying a summary of both: a consumer aggregating coverage by state needs
+// each observation to stand alone with its own values.
+type GroupReadCoverageStateEvent struct {
+	Family    QuestionFamily
+	GroupKind SubjectKind
+	// Read is which of the turn's two reads made this observation.
+	Read GroupReadArm
+	// Source is the coverage source name, and State the state that read
+	// observed for it -- the pair the fold collapses.
+	Source string
+	State  SourceState
+}
+
+// GroupReadArm names which read an observation came from. Closed, because it
+// reaches a telemetry field consumers group on.
+type GroupReadArm string
+
+const (
+	// GroupReadArmMember is the turn's first read, rooted on the cohort's
+	// members.
+	GroupReadArmMember GroupReadArm = "member"
+	// GroupReadArmGroup is the second read, rooted on the admitted group
+	// identities.
+	GroupReadArmGroup GroupReadArm = "group"
+)
+
+var canonicalGroupReadArms = map[GroupReadArm]GroupReadArm{
+	GroupReadArmMember: GroupReadArmMember,
+	GroupReadArmGroup:  GroupReadArmGroup,
+}
+
+// ValidGroupReadArm reports membership in the closed vocabulary.
+func ValidGroupReadArm(value GroupReadArm) bool {
+	_, member := canonicalGroupReadArms[value]
+	return member
+}
+
+// recordGroupReadCoverageStates emits both reads' per-source states, in a
+// deterministic order, before the fold that collapses them.
+//
+// Emitted for EVERY observation of both reads, not only the ones that differ.
+// A line emitted only on disagreement would make silence mean both "the two
+// reads agreed" and "this build stopped emitting", and it would also deny a
+// reader the baseline they need to interpret the disagreements that do appear.
+func (e *Engine) recordGroupReadCoverageStates(ctx context.Context, principal storage.Principal, family QuestionFamily, groupKind SubjectKind, member, group Coverage) {
+	if e.telemetry == nil {
+		return
+	}
+	emit := func(arm GroupReadArm, coverage Coverage) {
+		for _, observation := range coverage.Sources {
+			e.telemetry.RecordGroupReadCoverageState(ctx, principal, GroupReadCoverageStateEvent{
+				Family: family, GroupKind: groupKind, Read: arm,
+				Source: observation.Source, State: observation.State,
+			})
+		}
+	}
+	emit(GroupReadArmMember, member)
+	emit(GroupReadArmGroup, group)
+}

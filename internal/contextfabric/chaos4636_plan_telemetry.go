@@ -403,6 +403,10 @@ type PlanTelemetry interface {
 	// admitted, whether a group-rooted fact read was issued at all, and the
 	// named reason when it was not.
 	RecordCohortGroupRead(ctx context.Context, principal storage.Principal, event CohortGroupReadEvent)
+	// RecordGroupReadCoverageState reports one read's observation of one
+	// coverage source, before the two reads' coverage is folded together
+	// and the worse state erases the better one.
+	RecordGroupReadCoverageState(ctx context.Context, principal storage.Principal, event GroupReadCoverageStateEvent)
 
 	// RecordMembershipCardinality reports the `membership_cardinality`
 	// server step's own result for one served answer: what was counted, how
