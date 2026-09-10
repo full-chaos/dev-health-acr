@@ -243,6 +243,14 @@ func TestLiveEventspecCertifiesTheAnchorSlotPilotThroughARealFalkorDBAdapter(t *
 	if !found {
 		t.Errorf("displaced subject_canonical_id = %q, not one of the seeded entities -- the collected identity does not trace back to this fixture", displacedID)
 	}
+	// r1 P3: the reported victim must ALSO be genuinely absent from
+	// survived_ids -- naming a subject as displaced while it still
+	// actually survived would be a self-contradictory certificate.
+	for _, v := range summaryResult.Line["survived_ids"].([]any) {
+		if v == displacedID {
+			t.Errorf("displaced subject_canonical_id %q is ALSO present in RankedCutSummary.survived_ids -- a subject reported displaced must be genuinely absent from what survived", displacedID)
+		}
+	}
 
 	// GRAPH REBUILD (chris, 2026-09-10, cf-lane-rules): "If we can't build a
 	// graph from the trace we didn't add the right / enough observability."
