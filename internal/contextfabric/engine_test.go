@@ -359,9 +359,9 @@ type recordingTelemetry struct {
 	groupedCohortCompletenesses []GroupedCohortCompletenessEvent
 	// cohortGroupReads records every group-read decision, so a test can say
 	// what the group stage proposed, admitted and actually read.
-	cohortGroupReads []CohortGroupReadEvent
-	membershipCardinalities     []MembershipCardinalityEvent
-	readRequirementPopulations  []ReadRequirementPopulationEvent
+	cohortGroupReads           []CohortGroupReadEvent
+	membershipCardinalities    []MembershipCardinalityEvent
+	readRequirementPopulations []ReadRequirementPopulationEvent
 	// readRequirementObservationCovers records every observation-cover
 	// decision verbatim, same list-not-count discipline as the fields
 	// around it: a test asserts the EXACT field set, never merely that
