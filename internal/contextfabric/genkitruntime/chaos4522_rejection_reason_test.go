@@ -435,13 +435,16 @@ func TestFallbackSuccessStillRecordsItsGroundingBasis(t *testing.T) {
 	}
 }
 
-// TestRequestIDCannotForgeALogLine pins safeLogRequestID's sink-side
-// behaviour. It does NOT demonstrate a live vulnerability -- see that
-// function's doc comment: the request id reaching the logger has already
-// been sanitized by internal/api's request-id middleware and overwritten
-// from the sanitized context value by the Context Fabric route, so no
-// caller can actually deliver the input this test constructs. The test
-// exists so the sink-side guard cannot be removed or weakened silently.
+// TestRequestIDCannotForgeALogLine pins contextfabric.SanitizeLogAttr's
+// sink-side behaviour, exercised through the REAL production path (a real
+// slog.NewJSONHandler, a real SynthesizeAnswer call) rather than a direct
+// function call. It does NOT demonstrate a live vulnerability -- see
+// logInterpretDecision's doc comment above safeLogRequestID's old
+// definition: the request id reaching the logger has already been
+// sanitized by internal/api's request-id middleware and overwritten from
+// the sanitized context value by the Context Fabric route, so no caller
+// can actually deliver the input this test constructs. The test exists so
+// the sink-side guard cannot be removed or weakened silently.
 func TestRequestIDCannotForgeALogLine(t *testing.T) {
 	t.Parallel()
 	input := validSynthesisInput()
@@ -484,11 +487,15 @@ func TestRequestIDCannotForgeALogLine(t *testing.T) {
 	}
 }
 
-// TestSafeLogRequestIDReplacesRatherThanDrops: a request id is a
+// TestSanitizeLogAttrReplacesRatherThanDrops: a request id is a
 // correlation handle, so sanitizing must keep it recognizable. Dropping the
 // field or the line would destroy the very correlation this telemetry
-// exists for.
-func TestSafeLogRequestIDReplacesRatherThanDrops(t *testing.T) {
+// exists for. CHAOS-5544: this pins `contextfabric.SanitizeLogAttr`, the
+// shared sanitizer that replaced this file's local safeLogRequestID (and
+// telemetry.go's unsanitized requestIDLogAttrs) -- same rune-allowlist
+// behaviour, now additionally routed through strings.NewReplacer for \n/\r
+// so CodeQL's go/log-injection query can recognize the barrier.
+func TestSanitizeLogAttrReplacesRatherThanDrops(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, in, want string }{
 		{"plain id untouched", "req_01J0ACR003", "req_01J0ACR003"},
@@ -500,12 +507,12 @@ func TestSafeLogRequestIDReplacesRatherThanDrops(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := safeLogRequestID(tc.in); got != tc.want {
-				t.Fatalf("safeLogRequestID(%q) = %q, want %q", tc.in, got, tc.want)
+			if got := contextfabric.SanitizeLogAttr(tc.in); got != tc.want {
+				t.Fatalf("SanitizeLogAttr(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}
-	if got := safeLogRequestID(strings.Repeat("a", 300)); len(got) != 256 {
-		t.Fatalf("safeLogRequestID bounded length = %d, want 256", len(got))
+	if got := contextfabric.SanitizeLogAttr(strings.Repeat("a", 300)); len(got) != 256 {
+		t.Fatalf("SanitizeLogAttr bounded length = %d, want 256", len(got))
 	}
 }

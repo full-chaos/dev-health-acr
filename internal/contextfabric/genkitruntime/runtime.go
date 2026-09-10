@@ -1986,22 +1986,17 @@ func decisionOrgIDHash(orgID string) string {
 // Replacement, not rejection: a request id is a correlation handle, and
 // dropping the field would destroy the correlation this telemetry exists
 // for.
-func safeLogRequestID(requestID string) string {
-	if len(requestID) > 256 {
-		requestID = requestID[:256]
-	}
-	sanitized := []rune(requestID)
-	for i, r := range sanitized {
-		if r < 0x20 || r > 0x7e {
-			sanitized[i] = '?'
-		}
-	}
-	return string(sanitized)
-}
+//
+// Follow-up: this sink-side guard is now `contextfabric.SanitizeLogAttr`
+// (shared with `requestIDLogAttrs`, telemetry.go's equivalent site) rather
+// than a local implementation -- one sanitizer, every call site, never a
+// second one to keep in sync. Whether the new implementation's added
+// strings.NewReplacer pass changes CodeQL's read of the finding above is
+// verified per-PR, not assumed from this comment.
 
 func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification, axisSource string, decodingSeed int64, sample int, rejectionReason string, attemptOutcomes []attemptOutcome, fallbackAttempts int, primaryProvider, primaryModel, primaryModelVersion string) {
 	fields := []any{
-		"request_id", safeLogRequestID(requestID),
+		"request_id", contextfabric.SanitizeLogAttr(requestID),
 		"org_id_hash", decisionOrgIDHash(orgID),
 		"operation", string(receipt.Operation),
 		"outcome", receipt.Outcome,
@@ -2105,7 +2100,7 @@ func groundingCountsFrom(draft contextfabric.SynthesisDraft) synthesisGroundingC
 // here.
 func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification string, grounding synthesisGroundingCounts, rejectionReason string, factGroupSize, groundedBeyondFirst int, attemptOutcomes []attemptOutcome, fallbackAttempts int, primaryProvider, primaryModel, primaryModelVersion string) {
 	fields := []any{
-		"request_id", safeLogRequestID(requestID),
+		"request_id", contextfabric.SanitizeLogAttr(requestID),
 		"org_id_hash", decisionOrgIDHash(orgID),
 		"operation", string(receipt.Operation),
 		"outcome", receipt.Outcome,
@@ -2178,7 +2173,7 @@ func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID st
 // attempt list, which is a different shape from every real outcome.
 func (r *Runtime) logPhraseDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, attemptOutcomes []attemptOutcome) {
 	fields := []any{
-		"request_id", safeLogRequestID(requestID),
+		"request_id", contextfabric.SanitizeLogAttr(requestID),
 		"org_id_hash", decisionOrgIDHash(orgID),
 		"operation", string(receipt.Operation),
 		"outcome", receipt.Outcome,

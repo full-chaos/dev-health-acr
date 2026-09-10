@@ -21,7 +21,9 @@ import (
 // line rather than logging an empty string.
 func requestIDLogAttrs(ctx context.Context) []any {
 	if requestID, ok := observability.RequestIDFromContext(ctx); ok {
-		return []any{"request_id", string(requestID)}
+		// CHAOS-5544: sanitized before it becomes a log attribute -- see
+		// SanitizeLogAttr's own doc comment (go/log-injection, CWE-117).
+		return []any{"request_id", SanitizeLogAttr(string(requestID))}
 	}
 	return nil
 }
