@@ -263,6 +263,18 @@ func groupReadEngineFixtureFull(t *testing.T, telemetry EngineTelemetry, facts C
 			// was never cited is invisible in the answer -- and "reached
 			// synthesis" is the property the authorization clause is about.
 			groupReadSynthesisFacts = append(groupReadSynthesisFacts, input.Facts.Facts...)
+			// And PER PASS, so a retry pin can tell the first synthesis's
+			// input from the one the served document was built from.
+			pass := groupReadSynthesisPass{Facts: append([]CanonicalFact(nil), input.Facts.Facts...)}
+			if input.Graph.Cohort != nil {
+				for _, member := range input.Graph.Cohort.Members {
+					pass.Members = append(pass.Members, member.Subject)
+				}
+				for _, group := range input.Graph.Cohort.Groups {
+					pass.Groups = append(pass.Groups, group.Subject)
+				}
+			}
+			groupReadSynthesisPasses = append(groupReadSynthesisPasses, pass)
 			// One claim per SURVIVING cohort member, so the answer's measured
 			// size actually shrinks when narrowing drops a member. A
 			// synthesizer returning a fixed-size answer cannot be retried
@@ -346,3 +358,15 @@ var groupReadClaimsPerMember = 1
 // synthesizer. Reset by the test that reads it; no test that reads it may be
 // parallel.
 var groupReadSynthesisFacts []CanonicalFact
+
+// groupReadSynthesisPass is what ONE synthesis call received: the facts, and
+// the cohort's members and groups as that pass saw them.
+type groupReadSynthesisPass struct {
+	Facts   []CanonicalFact
+	Members []SubjectRef
+	Groups  []SubjectRef
+}
+
+// groupReadSynthesisPasses records every synthesis call's input, in order.
+// Reset by the test that reads it; no test that reads it may be parallel.
+var groupReadSynthesisPasses []groupReadSynthesisPass
