@@ -29,6 +29,8 @@ from pathlib import Path
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 from corpus import CORPUS  # noqa: E402
+import attempt_classes
+import contract  # the shared producer contract; nothing here spells it
 import engine_failures  # noqa: E402  — post-hoc attempt reader, deliberately OFF the measurement path
 # Both are ADDITIVE: classify() and the five
 # buckets below are untouched, so re-merging arm 2's raw files still reproduces
@@ -60,7 +62,9 @@ def classify(row):
     """
     http = row.get("final_http")
     status = row.get("final_payload_status")
-    if http != 200:
+    # ONE definition of served, shared with the attempt classifier (codex r4 P1). Spelled
+    # `!= 200` here and `[200,400)` there, the two disagreed about the same artefact.
+    if not contract.is_success_status(http):
         return "error"
     if status in SERVED_STATUSES:
         return "served_with_data" if (row.get("claimed_facts_n") or 0) > 0 else "served_degraded"
@@ -159,6 +163,96 @@ def classification_by_row(records):
         if kind not in out[r["corpus_id"]]:
             out[r["corpus_id"]] = sorted(set(out[r["corpus_id"]]) | {kind})
     return out
+
+
+# The stand-in name for a row that carries no corpus id. A literal rather than an
+# omission, so the id list and the unavailable count are always the same length.
+NO_CORPUS_ID = "<no corpus_id>"
+
+
+def attempt_class_totals(rows):
+    """Run-level per-class attempt totals, or an explicit REFUSAL. CHAOS-5380.
+
+    A row written by an instrument that never walked the attempts carries no
+    `attempt_class_n`. Summing those with `or 0` prints a confident zero -- which is
+    precisely the report that said ZERO deadline failures against five logged 504s
+    (regression-diagnosis doc §4 O4). §5 (:200) rules the other way: report
+    instrument-unavailable or incomplete capture rather than treat absent required
+    events as a measured zero.
+
+    So `attempt_classes_unavailable` counts the rows that were never measured, and the
+    totals are WITHHELD (None, not a zeroed table) unless every row was. A partial run
+    therefore reads as a partial run, not as a clean one.
+
+    `rows_with` is the honest second denominator: one row can carry several attempts of
+    the same class, so a total alone cannot say how many rows were affected.
+    """
+    # The key set must be EXACTLY the closed vocabulary, not merely "a dict". codex r1 P1,
+    # reproduced live: a syntactically valid PARTIAL dict was accepted and every class it
+    # omitted was published as a zero --
+    #   attempt_class_totals([{"corpus_id":"partial","attempt_class_n":{"upstream_504":1}}])
+    #   -> unavailable=0, ok_200=0
+    # which is the false zero this function exists to refuse, arriving through the one
+    # shape the check did not cover. An unrecognised or missing key is a row that was not
+    # measured the way this vocabulary means, and it is REPORTED, never partially summed.
+    expected = set(attempt_classes.CLASSES)
+
+    def unmeasured(row):
+        counts = row.get("attempt_class_n")
+        if not isinstance(counts, dict) or set(counts) != expected:
+            return True
+        # codex r1 P1: the KEY SET was checked and the VALUES were not, and `counts[name]
+        # or 0` turned a None into a published MEASURED ZERO -- the false zero this
+        # function exists to refuse, arriving through the one axis nobody had enumerated.
+        # Measured before the fix: None published zeros, a negative published -1, a float
+        # published 1.5, True published 1, and a string crashed the merge. A table whose
+        # values are not counts is not a table this vocabulary can sum, and it is REFUSED
+        # exactly like a wrong key set.
+        if not all(attempt_classes.is_valid_count(v) for v in counts.values()):
+            return True
+        # codex r2 P1: a structurally complete class table is NOT proof the row was
+        # fully walked. run_shard reconciles its walk against the harness's own attempt
+        # count; a row that did not reconcile is missing evidence and is refused here
+        # exactly like a missing table. `attempts_reconciled` absent means the row came
+        # from an instrument that predates the check -- also not something to sum.
+        return row.get("attempts_reconciled") is not True
+
+    # A row with no corpus id is COUNTED and NAMED. An earlier version filtered falsy
+    # ids out of the list, so an unnamed row was in the count and in nothing else --
+    # a short list beside a longer count reads as a reporting bug rather than as the
+    # unnamed row it actually is. There is no shape here that is counted and unnamed.
+    unavailable = [r.get("corpus_id") or NO_CORPUS_ID for r in rows if unmeasured(r)]
+    result = {"attempt_classes_unavailable": len(unavailable),
+              "attempt_classes_unavailable_ids": sorted(unavailable),
+              # WHY each refused row was refused, so a reader never has to guess
+              # between "no class table" and "the walk lost an artefact". Carries the
+              # two disagreeing counts and the filenames that could not be sequenced.
+              "attempt_classes_unreconciled": [
+                  {"corpus_id": r.get("corpus_id") or NO_CORPUS_ID,
+                   "harness_attempts": r.get("harness_attempts"),
+                   "attempts_total": r.get("attempts_total"),
+                   "unsequenced_files": r.get("unsequenced_files") or []}
+                  for r in sorted(rows, key=lambda x: x.get("corpus_id") or NO_CORPUS_ID)
+                  if r.get("attempts_reconciled") is False]}
+    if unavailable:
+        # Withheld deliberately. A zeroed table beside a non-zero unavailable count
+        # still reads as a measurement to anything that plots it.
+        result["attempt_class_totals"] = None
+        result["rows_with"] = None
+        return result
+    totals = attempt_classes.zero_counts()
+    rows_with = attempt_classes.zero_counts()
+    for row in rows:
+        counts = row["attempt_class_n"]
+        for name in attempt_classes.CLASSES:
+            # Every key is present by the guard above, so this is a read, not a default.
+            n = counts[name] or 0
+            totals[name] += n
+            if n:
+                rows_with[name] += 1
+    result["attempt_class_totals"] = totals
+    result["rows_with"] = rows_with
+    return result
 
 
 def _post_hoc(root):
@@ -316,6 +410,14 @@ def main():
             # the reporting step and runs identically for both, so it is the
             # right place for this.
             "post_hoc_attempt_classes": _post_hoc(args.indir),
+            # CHAOS-5380: the same attempts, counted PER ROW and summed here, with
+            # every class of the closed vocabulary present -- including the 422s and
+            # the 400 §6 names, which no per-row counter carried before. Distinct
+            # from post_hoc_attempt_classes above, which is a run-level rescan keyed
+            # by engine_failures' own frozen kind strings; these come from the rows
+            # themselves, so a row and the total beside it cannot disagree. A run
+            # whose rows were never walked REFUSES rather than summing to zero.
+            **attempt_class_totals(rows),
             "overrun_413_detail": [
                 {"corpus_id": r["corpus_id"], **(r.get("overrun_detail") or {})}
                 for r in rows if r.get("overrun_detail")
@@ -462,6 +564,14 @@ def main():
               f"axis={od.get('axis')}")
         e = verdict["totals_excluding_ceiling_overruns"]
         print("  excluding those rows: " + "  ".join(f"{b}={e[b]}" for b in BUCKETS) + f"  total={e['total']}")
+    if d.get("attempt_classes_unavailable"):
+        print(f"  ATTEMPT CLASSES UNAVAILABLE for {d['attempt_classes_unavailable']} row(s): "
+              f"{d['attempt_classes_unavailable_ids']} -- per-class totals WITHHELD "
+              f"(an unmeasured row is not a measured zero)")
+    else:
+        t, w = d["attempt_class_totals"], d["rows_with"]
+        print("  attempt classes: " + "  ".join(
+            f"{name}={t[name]}/{w[name]}rows" for name in attempt_classes.CLASSES if t[name]))
     print(f"  upstream 504s: {d['attempt_upstream_504_n']} attempts over {d['rows_with_upstream_504']} rows"
           f"  (retried attempts included; terminal status may still be served)")
     print(f"-> {args.out}")
