@@ -253,7 +253,7 @@ func groupReadEngineFixtureFull(t *testing.T, telemetry EngineTelemetry, facts C
 		Graph:        graph,
 		Facts:        facts,
 		Requirements: groupReadRequirementDeriver{},
-		Synthesizer: synthesizerFunc(func(_ context.Context, _ storage.Principal, input SynthesisInput) (InvestigationResult, error) {
+		Synthesizer: synthesizerFunc(func(_ context.Context, principal storage.Principal, input SynthesisInput) (InvestigationResult, error) {
 			if synthesisCalls != nil {
 				*synthesisCalls++
 			}
@@ -290,7 +290,14 @@ func groupReadEngineFixtureFull(t *testing.T, telemetry EngineTelemetry, facts C
 				Drivers:             []DriverJudgment{},
 				RemainingWork:       []Finding{}, ReadinessGaps: []Finding{}, Paths: []RelationshipPath{},
 				Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{},
-				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				// THE PRODUCTION SYNTHESIZER'S OWN COVERAGE RULE
+				// (model_runtime.go and genkitruntime both compose it this
+				// way), not an empty literal. The requirement evaluator reads
+				// the SERVED document's coverage, so a double that dropped it
+				// made every read requirement look unplanned -- and no pin in
+				// this file read a requirement row until row 4 did, which is
+				// how the double stayed wrong.
+				Coverage: MergeCoverage(principal.OrgID, input.Graph.Coverage, input.Facts.Coverage),
 				Warnings: []string{},
 				Versions: VersionSet{
 					Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",

@@ -69,7 +69,11 @@ func TestBothReadsCoverageStatesReachInfoBeforeTheFold(t *testing.T) {
 		// the same source as the member read, in a WORSE state.
 		for _, subject := range request.Subjects {
 			if subject.Kind == SubjectTeam {
-				bundle.Coverage.Sources = []SourceObservation{{Source: "canonical_fact:health", State: SourceNoData}}
+				// WITH the reason the registry's appendFactCoverage always
+				// attaches to a non-available observation: the served
+				// document's coverage now carries this observation, and the
+				// contract refuses a non-available source with no reason.
+				bundle.Coverage.Sources = []SourceObservation{{Source: "canonical_fact:health", State: SourceNoData, Reason: "canonical fact capability returned no_data"}}
 				return bundle
 			}
 		}
