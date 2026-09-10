@@ -367,6 +367,75 @@ type windowContinuationDecision struct {
 // Every consumer -- the emitter's membership check and the enumeration pin
 // alike -- reads THIS list, so a member added below is a member both of them
 // must account for.
+// continuationDispositions, continuationConflictReasons and
+// continuationConflictFields are the remaining closed vocabularies on this
+// event, in production for the same reason the reason list is.
+func continuationDispositions() []ContinuationDisposition {
+	return []ContinuationDisposition{ContinuationNotApplicable, ContinuationApplied, ContinuationWithheld}
+}
+
+// ValidContinuationDisposition reports membership.
+func ValidContinuationDisposition(value ContinuationDisposition) bool {
+	for _, member := range continuationDispositions() {
+		if member == value {
+			return true
+		}
+	}
+	return false
+}
+
+func continuationConflictReasons() []ContinuationConflictReason {
+	return []ContinuationConflictReason{ContinuationConflictNone, ContinuationConflictNonWindowContext}
+}
+
+// ValidContinuationConflictReason reports membership.
+func ValidContinuationConflictReason(value ContinuationConflictReason) bool {
+	for _, member := range continuationConflictReasons() {
+		if member == value {
+			return true
+		}
+	}
+	return false
+}
+
+func continuationConflictFieldVocabulary() []ContinuationConflictField {
+	return []ContinuationConflictField{
+		ContinuationConflictFieldFamily,
+		ContinuationConflictFieldSubjectExpression,
+		ContinuationConflictFieldNarrowingBasis,
+		ContinuationConflictFieldRoles,
+		ContinuationConflictFieldGoals,
+		ContinuationConflictFieldTemporal,
+		ContinuationConflictFieldEmphasis,
+		ContinuationConflictFieldDimensions,
+		ContinuationConflictFieldObligations,
+		ContinuationConflictFieldWidenedObligations,
+		ContinuationConflictFieldRequirements,
+		ContinuationConflictFieldInterpretation,
+		ContinuationConflictFieldFrameGate,
+	}
+}
+
+// ValidContinuationConflictField reports membership.
+func ValidContinuationConflictField(value ContinuationConflictField) bool {
+	for _, member := range continuationConflictFieldVocabulary() {
+		if member == value {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidCarrySeedSource reports membership of the carry seed vocabulary.
+func ValidCarrySeedSource(value CarrySeedSource) bool {
+	for _, member := range []CarrySeedSource{CarrySeedNone, CarrySeedReceipt, CarrySeedParentField, CarrySeedBoth} {
+		if member == value {
+			return true
+		}
+	}
+	return false
+}
+
 func continuationDecisionReasons() []ContinuationDecisionReason {
 	return []ContinuationDecisionReason{
 		ContinuationReasonNone,
@@ -548,26 +617,37 @@ func (e *Engine) admitWindowContinuation(
 	appliedWindow *contractsv1.ContextFabricEffectiveEvidenceWindow,
 	interpretedAxis contractsv1.ContextFabricTemporalAxis,
 ) windowContinuationDecision {
-	decision := windowContinuationDecision{
-		Observed:       requestCarriesWindowReceipts(request),
-		Disposition:    ContinuationNotApplicable,
-		Reason:         ContinuationReasonUnspecified,
-		SeedSource:     CarrySeedNone,
-		ConflictReason: ContinuationConflictNone,
-		ConflictFields: []ContinuationConflictField{},
-		// R1-4: the window that this turn actually resolved, passed in from
-		// the canonicalisation that decided it rather than re-derived here.
-		// Declared and logged is not the same as populated -- a field that is
-		// always empty is a field the line cannot answer with.
-		AppliedWindow: appliedWindow,
-	}
+	// ONE CONSTRUCTOR (r2 F2). This function used to build its own struct
+	// literal, which silently dropped every field the constructor sets and the
+	// literal did not repeat -- the composition outcome among them, so an
+	// ordinary admission exit published `unrecognised` on a closed field. Two
+	// initialisers for one struct is the same shape as two authorities for one
+	// object, which is the defect this whole seam was re-cut to remove.
+	decision := newWindowContinuationDecision(request)
+	// R1-4: the window that this turn actually resolved, passed in from the
+	// canonicalisation that decided it rather than re-derived here. Declared
+	// and logged is not the same as populated -- a field that is always empty
+	// is a field the line cannot answer with.
+	decision.AppliedWindow = appliedWindow
+
+	// THE SHAPE IS DECIDED ONCE, HERE, BEFORE ANY DISQUALIFIER CAN RETURN
+	// (r2 F1). WindowOnlyShape describes the CARRIER'S SHAPE -- identical
+	// question bytes, exactly one window receipt, nothing else referenced --
+	// and nothing a disqualifier later finds changes what shape the request
+	// arrived in. Assigning it after the disqualifiers meant the interpreted-
+	// axis veto returned with the flag still false, `BlocksLegacyCarry`
+	// answered false, and the old family-only carry served the very carrier
+	// this gate had just refused. That is the third exit to lose this
+	// containment; deciding it above every return is what stops there being a
+	// fourth.
+	referenced, windowOnly := windowOnlyReferencedResultID(request)
+	decision.WindowOnlyShape = decision.Observed && windowOnly
 	if !decision.Observed {
 		decision.Reason = ContinuationReasonNotWindowOnly
 		return decision
 	}
 	decision.SeedSource = CarrySeedReceipt
 
-	referenced, windowOnly := windowOnlyReferencedResultID(request)
 	if !windowOnly {
 		decision.Reason = ContinuationReasonNotWindowOnly
 		return decision
@@ -588,7 +668,6 @@ func (e *Engine) admitWindowContinuation(
 		decision.Reason = ContinuationReasonInterpretedAxisVeto
 		return decision
 	}
-	decision.WindowOnlyShape = true
 	if e.results == nil {
 		decision.Disposition = ContinuationWithheld
 		decision.Reason = ContinuationReasonInvalidContext

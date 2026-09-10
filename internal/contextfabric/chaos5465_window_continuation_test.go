@@ -1125,6 +1125,21 @@ func TestWindowContinuation_EveryReasonIsReachedThroughTheEngine(t *testing.T) {
 			if !ValidContinuationDecisionReason(got) {
 				t.Errorf("emitted reason %q is OUTSIDE the closed vocabulary -- a value no consumer can group on", got)
 			}
+			// AND THE COMPOSITION OUTCOME, ON EVERY EXIT (r2 F2). This is the
+			// pin that catches a second constructor: admission used to rebuild
+			// the decision from a literal, dropping the field the real
+			// constructor sets, so an ordinary admission exit published the
+			// unrecognised sentinel on a closed field. Every driver here ends at
+			// a different exit, so asserting membership WITH A VALUE across all
+			// of them is what makes "assigned above every return" checkable
+			// rather than merely stated in a comment.
+			composition := telemetry.windowContinuationDecisions[0].CompositionOutcome
+			if composition == "" {
+				t.Errorf("composition_outcome is EMPTY at the %q exit -- some path builds this struct without the constructor", d.reason)
+			}
+			if !ValidCompositionOutcome(composition) {
+				t.Errorf("composition_outcome %q at the %q exit is outside the closed vocabulary", composition, d.reason)
+			}
 		})
 	}
 }

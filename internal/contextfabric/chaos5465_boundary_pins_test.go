@@ -500,39 +500,137 @@ func TestBoundary_ContainmentRequiresTheWindowOnlyShape(t *testing.T) {
 	}
 }
 
-// r1 F3, the other half: the membership checks have a PRODUCTION caller.
+// r2 F3 — EVERY CLOSED FIELD IS MEMBERSHIP-CHECKED, AND THE LIST COMES FROM
+// THE PRODUCER.
 //
-// Both vocabularies shipped with a `Valid…` function, a doc comment saying the
-// emitter uses it so an unrecognised value cannot reach a log line, and no
-// caller at all -- coverage measured them at 0.0%. This drives an out-of-
-// vocabulary value through the real emitter and asserts what the line carries.
-func TestBoundary_AnUnrecognisedClosedValueCannotReachTheLine(t *testing.T) {
+// The r1 version of this pin guarded two fields and asserted those same two --
+// an instrument enumerating only the inputs its author chose, which is one of
+// the failures the review prompt names outright. Five other closed fields were
+// reaching the line as free text: seed source, disposition, conflict reason,
+// conflict fields, and the failed invariant.
+//
+// This walks `closedDecisionFields()` and, for each entry, seats an
+// out-of-vocabulary value and asserts the line carries the sentinel and NOT the
+// invented text. A field the emitter forgets to route through the registry
+// fails here by leaking. A field with no driver has to justify itself: nil
+// means "derived, no input can seat a non-member", and that is checked too.
+func TestBoundary_EveryClosedFieldOnTheLineIsMembershipChecked(t *testing.T) {
 	t.Parallel()
 
-	d := newWindowContinuationDecision(continuationRequest(validInvestigationRequest().Question))
-	d.Reason = ContinuationDecisionReason("a-site-invented-this")
-	d.CompositionOutcome = CompositionOutcome("and-this")
+	emit := func(d windowContinuationDecision) string {
+		var buf bytes.Buffer
+		SlogEngineTelemetry{logger: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))}.
+			RecordWindowContinuationDecision(context.Background(), acceptancePrincipal(), d)
+		return buf.String()
+	}
 
-	var buf bytes.Buffer
-	SlogEngineTelemetry{logger: slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))}.
-		RecordWindowContinuationDecision(context.Background(), acceptancePrincipal(), d)
-	line := buf.String()
-	t.Logf("EMITTED %s", strings.TrimSpace(line))
+	fields := closedDecisionFields()
+	if len(fields) < 2 {
+		t.Fatalf("the closed-field registry has %d entries -- it is not describing this line", len(fields))
+	}
 
-	for _, leaked := range []string{"a-site-invented-this", "and-this"} {
-		if strings.Contains(line, leaked) {
-			t.Errorf("free text %q reached a CLOSED telemetry field -- no consumer can group on it", leaked)
+	for _, field := range fields {
+		t.Run(field.Key, func(t *testing.T) {
+			base := newWindowContinuationDecision(continuationRequest(validInvestigationRequest().Question))
+			if !strings.Contains(emit(base), field.Key+"=") {
+				t.Fatalf("registry names %q but the emitted line has no such key -- the registry and the line disagree", field.Key)
+			}
+			if field.Invent == nil {
+				// The claim is that no input can seat a non-member. Check it by
+				// driving the states the decision can actually be in.
+				for _, d := range []windowContinuationDecision{
+					base,
+					func() windowContinuationDecision {
+						withAccepted := base
+						withAccepted.Accepted = &continuationCarriedContext{Family: QuestionFamilyGroupedCohortStatus}
+						return withAccepted
+					}(),
+				} {
+					if got := field.Token(d); got == continuationTelemetryUnrecognised {
+						t.Errorf("%q is declared derived, but a reachable state produced %q", field.Key, got)
+					}
+				}
+				return
+			}
+
+			mutated := base
+			field.Invent(&mutated)
+			token := field.Token(mutated)
+			line := emit(mutated)
+			t.Logf("%s -> token=%q", field.Key, token)
+			if token != continuationTelemetryUnrecognised {
+				t.Errorf("%q accepted an out-of-vocabulary value and reported %q", field.Key, token)
+			}
+			if !strings.Contains(line, field.Key+"="+continuationTelemetryUnrecognised) {
+				t.Errorf("the line does not carry %s=%s; got:\n%s", field.Key, continuationTelemetryUnrecognised, strings.TrimSpace(line))
+			}
+			if strings.Contains(line, "invented-") {
+				t.Errorf("free text reached a CLOSED field -- the emitter does not route %q through the registry; line:\n%s",
+					field.Key, strings.TrimSpace(line))
+			}
+		})
+	}
+
+	// The sentinel must not be mistakable for a member of any of them.
+	t.Run("sentinel is not a member", func(t *testing.T) {
+		if ValidContinuationDecisionReason(ContinuationDecisionReason(continuationTelemetryUnrecognised)) ||
+			ValidCompositionOutcome(CompositionOutcome(continuationTelemetryUnrecognised)) ||
+			ValidContinuationDisposition(ContinuationDisposition(continuationTelemetryUnrecognised)) ||
+			ValidContinuationConflictReason(ContinuationConflictReason(continuationTelemetryUnrecognised)) ||
+			ValidContinuationConflictField(ContinuationConflictField(continuationTelemetryUnrecognised)) ||
+			ValidCarrySeedSource(CarrySeedSource(continuationTelemetryUnrecognised)) {
+			t.Errorf("the unrecognised sentinel is a vocabulary member -- a bug would be counted as a legitimate bucket")
 		}
+	})
+}
+
+// r2 F1 — A REFUSED WINDOW-ONLY CARRIER IS SERVED BY NOTHING.
+//
+// The containment has lost this three times now, at a different exit each time.
+// The discriminating fixture is the one the review had to build: an interpreter
+// that leaves the family UNCLASSIFIED. Every earlier pin used an interpreter
+// that classifies one, which independently disables the old family-only carry
+// -- so the guard was wide open and no arm walked through it.
+func TestBoundary_ARefusedWindowOnlyCarrierIsServedByNothing(t *testing.T) {
+	req := continuationRequest(validInvestigationRequest().Question)
+	prior := r4CheckedPrior(t, continuationPriorID, req.Question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+	h := newContinuationHarness(t,
+		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		unclassifiedAxisMovingInterpreter{})
+
+	result := h.investigate(t, req)
+	d := h.soleDecision(t)
+	t.Logf("disposition=%q reason=%q window_only=%v blocks_legacy=%v | SERVED family=%q family_source=%q group=%q",
+		d.Disposition, d.Reason, d.WindowOnlyShape, d.BlocksLegacyCarry(),
+		result.AnswerPlan.Family, result.AnswerPlan.FamilySource, result.AnswerPlan.GroupKind)
+	for _, o := range h.telemetry.planCarryOutcomes {
+		t.Logf("plan carry: outcome=%q source=%q seed=%q", o.outcome, o.sourceResultID, o.seedSource)
 	}
-	if strings.Count(line, "decision_reason="+continuationTelemetryUnrecognised) != 1 {
-		t.Errorf("decision_reason does not report %q", continuationTelemetryUnrecognised)
+
+	if d.Reason != ContinuationReasonInterpretedAxisVeto {
+		t.Fatalf("fixture defect: wanted the axis veto, got %q/%q", d.Disposition, d.Reason)
 	}
-	if strings.Count(line, "composition_outcome="+continuationTelemetryUnrecognised) != 1 {
-		t.Errorf("composition_outcome does not report %q", continuationTelemetryUnrecognised)
+	if !d.WindowOnlyShape {
+		t.Errorf("window_only_shape=false at the axis veto -- the request IS the window-only shape; a disqualifier does not change the shape it arrived in")
 	}
-	// The sentinel must not be mistakable for a member of either vocabulary.
-	if ValidContinuationDecisionReason(ContinuationDecisionReason(continuationTelemetryUnrecognised)) ||
-		ValidCompositionOutcome(CompositionOutcome(continuationTelemetryUnrecognised)) {
-		t.Errorf("the unrecognised sentinel is itself a vocabulary member -- a bug would be counted as a legitimate bucket")
+	if !d.BlocksLegacyCarry() {
+		t.Errorf("blocks_legacy=false on a refused window-only carrier")
 	}
+	if result.AnswerPlan.FamilySource == QuestionFamilySourceCarried {
+		t.Errorf("the continuation was REFUSED and the legacy carry served the same carrier anyway (family=%q group=%q)",
+			result.AnswerPlan.Family, result.AnswerPlan.GroupKind)
+	}
+}
+
+type unclassifiedAxisMovingInterpreter struct{}
+
+func (unclassifiedAxisMovingInterpreter) Interpret(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, QuestionFamilyOutcome, error) {
+	return InterpretedQuestion{
+		Shape: ShapeOpen, RequestedJudgment: "status",
+		TimeContext: TimeContext{Axis: TemporalValidTime, AsOf: &r2AsOf},
+	}, QuestionFamilyOutcome{
+		Family: QuestionFamilyUnclassified, Source: QuestionFamilySourceNone,
+		WinningSampleIndex: 0, WinningSample: FamilySample{},
+		Version: QuestionFamilyTableVersion,
+	}, nil
 }
