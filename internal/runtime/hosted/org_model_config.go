@@ -3,6 +3,7 @@ package hosted
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -63,7 +64,7 @@ func buildOrgModelConfigStore(postgres postgresComponents, lookup func(string) (
 // this resolver builds reports RecordModelRowsStripped through the SAME
 // sink the deployment-default runtime uses (open()'s own engineTelemetry),
 // never a second, independently-resolved instance.
-func wrapWithOrgModelRuntimeResolver(deploymentDefault contextfabric.ModelRuntime, orgConfigs *pgmodelconfig.Store, lookup func(string) (string, bool), telemetry contextfabric.EngineTelemetry) (contextfabric.ModelRuntime, *modelruntimeresolver.Resolver, error) {
+func wrapWithOrgModelRuntimeResolver(deploymentDefault contextfabric.ModelRuntime, orgConfigs *pgmodelconfig.Store, lookup func(string) (string, bool), telemetry contextfabric.EngineTelemetry, logger *slog.Logger) (contextfabric.ModelRuntime, *modelruntimeresolver.Resolver, error) {
 	if orgConfigs == nil {
 		return deploymentDefault, nil, nil
 	}
@@ -72,6 +73,10 @@ func wrapWithOrgModelRuntimeResolver(deploymentDefault contextfabric.ModelRuntim
 		return nil, nil, fmt.Errorf("load context fabric model defaults for per-organization runtimes: %w", err)
 	}
 	defaults.Telemetry = telemetry
+	// CHAOS-5380: stamped alongside Telemetry, for the same reason -- a
+	// per-organization BYO runtime's decision line (and its attempt fields)
+	// must reach the same collected sink the deployment default's does.
+	defaults.Logger = logger
 	resolver := modelruntimeresolver.New(deploymentDefault, orgConfigs, modelruntimeresolver.NewModelProviderBuild(defaults))
 	return resolver, resolver, nil
 }

@@ -340,11 +340,29 @@ func TestRuntimeOfferPhraser_SinkFailureLogsDistinctlyFromAnOrdinaryFallback(t *
 		Logger:  logger,
 	}
 	phraser.Phrase(context.Background(), storage.Principal{OrgID: "org_1"}, StructureOfferPhrasingInput{Options: offerOptions(), RequestID: "request_00000001"})
-	if len(records) != 1 || records[0].Level != slog.LevelWarn {
-		t.Fatalf("records = %#v, want exactly one WARN record", records)
+	// CHAOS-5380: this used to assert `len(records) != 1`, which counted EVERY record
+	// the logger received. Phrase now also emits one Info guard-decision line on every
+	// path, so that count is 2 and the assertion no longer measured what it meant.
+	// Scoped to the WARN this test is actually about -- and the Info line is asserted
+	// too, so the test documents both rather than being loosened to accommodate one.
+	var warns []slog.Record
+	var guards int
+	for _, record := range records {
+		switch {
+		case record.Level == slog.LevelWarn:
+			warns = append(warns, record)
+		case record.Message == "context fabric offer phrasing guard decision":
+			guards++
+		}
 	}
-	if records[0].Message != "context fabric offer phrasing receipt sink failed" {
-		t.Fatalf("message = %q", records[0].Message)
+	if len(warns) != 1 {
+		t.Fatalf("WARN records = %#v, want exactly one", warns)
+	}
+	if warns[0].Message != "context fabric offer phrasing receipt sink failed" {
+		t.Fatalf("message = %q", warns[0].Message)
+	}
+	if guards != 1 {
+		t.Fatalf("guard decision lines = %d, want exactly one on the sink-failure path too", guards)
 	}
 }
 

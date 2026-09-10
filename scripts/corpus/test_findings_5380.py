@@ -60,6 +60,7 @@ import contract              # noqa: E402
 import harness               # noqa: E402
 import engine_failures as EF     # noqa: E402
 import merge_corpus as MC        # noqa: E402
+import reclassify_deadlines as RD  # noqa: E402
 import run_shard as RS           # noqa: E402
 import validators as VAL         # noqa: E402
 
@@ -2376,6 +2377,899 @@ def test_the_committed_shape_space_is_regenerable_and_shows_no_divergence():
     assert non_2xx_undecodable and \
         all(r["class"] != "served_2xx_undecodable_body" for r in non_2xx_undecodable), \
         "an undecodable body outside the 2xx band still classified as served"
+
+
+# ============================================================ PR-C: reclassify/merge reconciliation
+def test_build_reclassified_row_preserves_original_attempt_evidence():
+    """r5 P1-2, REPRODUCED red-first (see below) then pinned green. Target shape named in
+    the ticket: attempts 2->1, attempt_upstream_504_n 1->0 between the parallel run and its
+    sequential replay, while the file-level scanner still finds the original's 504.
+
+    RED (what the pre-fix code published, reconstructed here rather than re-run from
+    history): `after` alone, with no original_attempt_evidence. Fed into the SAME
+    reconciliation this lane's fix introduced, it must NOT reconcile -- proving the old
+    shape really was silently wrong, not merely differently worded.
+
+    GREEN: RD.build_reclassified_row(before, after) must carry `before`'s attempt-level
+    fields beside `after`'s, unmodified, and reconcile.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        # The ORIGINAL parallel run: 2 attempts, one an upstream 504.
+        original_out, _ = _write_turns(tmp, {1: [_attempt(504), _served()]}, qid="q-a", rep=1)
+        row = {"note": "", "family": "f"}
+        base_r = {"final_http": 200, "final_payload_status": "complete",
+                  "chain": ["t1=complete"], "wrong_kind_flag": False,
+                  "wrong_subject_flag": False, "subject_kind_mismatch_flag": False}
+        RS.UNSEQUENCED.clear()
+        before = RS.detail_for(original_out, "q-a", row, {**base_r, "attempts": 2}, 1.0, 1)
+        assert before["attempt_upstream_504_n"] == 1, before  # the row IS the deadline hit
+
+        # The REPLAY, under reclassify_deadlines.py's own REPLAY_DIRNAME convention: ONE
+        # attempt, served -- the quiet re-run never repeated the 504.
+        replay_dir = Path(tmp) / RD.REPLAY_DIRNAME / "q-a" / "replicate"
+        replay_dir.mkdir(parents=True)
+        (replay_dir / "q-a-rep1-t1-a1.json").write_text(json.dumps(_served()))
+        RS.UNSEQUENCED.clear()
+        after = RS.detail_for(replay_dir, "q-a", row, {**base_r, "attempts": 1}, 1.0, 1)
+        assert after["attempt_upstream_504_n"] == 0, after  # the replay did NOT repeat it
+
+        # RED: the pre-fix shape (published `after` verbatim) disagrees with the files on
+        # disk -- the file scanner still finds the original's 504, under `tmp` (both the
+        # shard's own replicate/ and the reclassify/ replay dir are under it).
+        red_row = dict(after)
+        red_row["reclassified-after-load"] = True
+        red_problems = MC.reconcile_attempt_totals([red_row], tmp)
+        assert red_problems, (
+            "the pre-fix row shape (no original_attempt_evidence) was expected to "
+            "disagree with the file scanner and did not -- this pin is not measuring "
+            "the defect it claims to")
+        assert "q-a" in red_problems[0] and "attempt_upstream_504_n" in red_problems[0], red_problems
+
+        # GREEN: the fixed builder. Every preserved field checked individually -- a
+        # partial preservation (e.g. the count but not the reconciliation flag) is not
+        # what "carries the original's attempts beside the replay's" means.
+        fixed_row = RD.build_reclassified_row(before, after)
+        evidence = fixed_row["original_attempt_evidence"]
+        assert evidence["attempt_upstream_504_n"] == 1, evidence
+        assert evidence["attempt_overrun_413_n"] == before["attempt_overrun_413_n"], evidence
+        assert evidence["attempts"] == 2, evidence
+        assert evidence["attempt_outcomes"] == before["attempt_outcomes"], evidence
+        assert evidence["attempt_class_n"] == before["attempt_class_n"], evidence
+        assert evidence["attempts_reconciled"] == before["attempts_reconciled"], evidence
+        # The row's OWN top-level fields still describe the REPLAY -- original evidence
+        # rides BESIDE it, never overwriting it.
+        assert fixed_row["attempt_upstream_504_n"] == 0, fixed_row
+        assert fixed_row["attempts"] == 1, fixed_row
+        green_problems = MC.reconcile_attempt_totals([fixed_row], tmp)
+        assert green_problems == [], green_problems
+
+
+def test_build_reclassified_row_preserves_original_overrun_413_evidence():
+    """The 413 sibling of the pin above -- a separate fixture because the two frozen
+    counters are INDEPENDENT (codex r4 P1) and a fix that only carried 504 evidence
+    forward would pass every 504-shaped pin while still losing 413 evidence."""
+    with tempfile.TemporaryDirectory() as tmp:
+        original_out, _ = _write_turns(
+            tmp, {1: [_attempt(200, failure={"httpStatus": 413}), _served()]}, qid="q-a", rep=1)
+        row = {"note": "", "family": "f"}
+        base_r = {"final_http": 200, "final_payload_status": "complete",
+                  "chain": ["t1=complete"], "wrong_kind_flag": False,
+                  "wrong_subject_flag": False, "subject_kind_mismatch_flag": False}
+        RS.UNSEQUENCED.clear()
+        before = RS.detail_for(original_out, "q-a", row, {**base_r, "attempts": 2}, 1.0, 1)
+        assert before["attempt_overrun_413_n"] == 1, before
+
+        replay_dir = Path(tmp) / RD.REPLAY_DIRNAME / "q-a" / "replicate"
+        replay_dir.mkdir(parents=True)
+        (replay_dir / "q-a-rep1-t1-a1.json").write_text(json.dumps(_served()))
+        RS.UNSEQUENCED.clear()
+        after = RS.detail_for(replay_dir, "q-a", row, {**base_r, "attempts": 1}, 1.0, 1)
+        assert after["attempt_overrun_413_n"] == 0, after
+
+        red_row = dict(after)
+        red_row["reclassified-after-load"] = True
+        red_problems = MC.reconcile_attempt_totals([red_row], tmp)
+        assert red_problems and any("attempt_overrun_413_n" in p for p in red_problems), red_problems
+
+        fixed_row = RD.build_reclassified_row(before, after)
+        assert fixed_row["original_attempt_evidence"]["attempt_overrun_413_n"] == 1, fixed_row
+        assert MC.reconcile_attempt_totals([fixed_row], tmp) == []
+
+
+def test_reconcile_attempt_totals_control_a_reconciling_run_publishes():
+    """POSITIVE CONTROL: an ordinary (never reclassified) row whose row-derived counters
+    genuinely match the files on disk must NOT be refused -- the refusal fires on
+    disagreement, not on every row that happens to carry attempt evidence."""
+    with tempfile.TemporaryDirectory() as tmp:
+        out, _ = _write_turns(tmp, {1: [_attempt(200, failure={"httpStatus": 413}), _served()]})
+        row = {"note": "", "family": "f"}
+        base_r = {"final_http": 200, "final_payload_status": "complete",
+                  "chain": ["t1=complete"], "wrong_kind_flag": False,
+                  "wrong_subject_flag": False, "subject_kind_mismatch_flag": False}
+        RS.UNSEQUENCED.clear()
+        detail = RS.detail_for(out, "q-a", row, {**base_r, "attempts": 2}, 1.0, 1)
+        assert detail["attempt_overrun_413_n"] == 1, detail
+        problems = MC.reconcile_attempt_totals([detail], tmp)
+    assert problems == [], problems
+
+
+def test_reconcile_attempt_totals_ignores_a_row_with_no_files_on_disk():
+    """A row present in the summary but with NO attempt files under the scanned root (a
+    synthetic fixture, or a row from a different run root) must not be compared -- that
+    silence belongs to `attempts_reconciled`, not to this function, and conflating the two
+    would refuse for a reason this function does not name."""
+    with tempfile.TemporaryDirectory() as tmp:
+        Path(tmp, "shard-00", "replicate").mkdir(parents=True)
+        row = {"corpus_id": "q-nonexistent", "attempt_upstream_504_n": 99, "attempt_overrun_413_n": 99}
+        problems = MC.reconcile_attempt_totals([row], tmp)
+    assert problems == [], problems
+
+
+def test_reconcile_attempt_totals_sums_the_original_AND_the_replays_own_count():
+    """A reclassified row's expected total is `original_attempt_evidence` PLUS the row's
+    OWN current count, never one alone. A fix that dropped either term would still pass
+    the red/green pins above (both use a replay whose own count is zero) but would fail
+    here, where the REPLAY itself also hits a 504 -- so the file scan sees TWO 504s
+    (one from the original's files, one from the replay's) and only the sum accounts
+    for both."""
+    with tempfile.TemporaryDirectory() as tmp:
+        original_out, _ = _write_turns(tmp, {1: [_attempt(504), _served()]}, qid="q-a", rep=1)
+        row = {"note": "", "family": "f"}
+        base_r = {"final_http": 200, "final_payload_status": "complete",
+                  "chain": ["t1=complete"], "wrong_kind_flag": False,
+                  "wrong_subject_flag": False, "subject_kind_mismatch_flag": False}
+        RS.UNSEQUENCED.clear()
+        before = RS.detail_for(original_out, "q-a", row, {**base_r, "attempts": 2}, 1.0, 1)
+        assert before["attempt_upstream_504_n"] == 1, before
+
+        # The REPLAY itself ALSO hits a 504 this time -- an unlucky re-run, not a bug.
+        replay_dir = Path(tmp) / RD.REPLAY_DIRNAME / "q-a" / "replicate"
+        replay_dir.mkdir(parents=True)
+        (replay_dir / "q-a-rep1-t1-a1.json").write_text(json.dumps(_attempt(504)))
+        RS.UNSEQUENCED.clear()
+        after = RS.detail_for(replay_dir, "q-a", row, {**base_r, "attempts": 1}, 1.0, 1)
+        assert after["attempt_upstream_504_n"] == 1, after
+
+        fixed_row = RD.build_reclassified_row(before, after)
+        # TWO 504s on disk in total (original + replay); the row must expect both.
+        assert MC.reconcile_attempt_totals([fixed_row], tmp) == [], (
+            "expected total must be original(1) + replay(1) = 2, matching the files")
+
+
+def test_reconcile_attempt_totals_refuses_when_the_original_never_reconciled():
+    """r1 (codex) P1, REPRODUCED. Summing the frozen 504/413 counters is not enough:
+    the ORIGINAL run's own walk can fail to reconcile (an unsequenced/dropped attempt)
+    while the counter SUMS still happen to agree with the file scanner, because the
+    dropped attempt need not itself have been a 504 or a 413. A row whose original
+    evidence says `attempts_reconciled=False` cannot be trusted for reconciliation
+    just because the numbers it does carry add up -- the numbers it is MISSING are
+    exactly the point.
+
+    Fixture: the original run has a real 504 (sequenced) plus a SERVED attempt that
+    the orderer could not sequence (present on disk, dropped from the walk) --
+    `attempts_reconciled=False` on the original for that reason alone, even though
+    the frozen upstream-504 count (1) already agrees with the file scanner (the
+    dropped attempt was never a 504). The replay is a clean, fully reconciled single
+    serve. Before the fix, `reconcile_attempt_totals` never looked at the original's
+    own reconciliation flag, so this row published as measured. """
+    with tempfile.TemporaryDirectory() as tmp:
+        original_out, _ = _write_turns(tmp, {1: [_attempt(504)]}, qid="q-a", rep=1)
+        # The stray file's name does not match the sequencer's pattern, so it is
+        # UNSEQUENCED -- present on disk, dropped from the walk -- same technique as
+        # test_a_dropped_artefact_makes_the_row_unmeasured above.
+        (original_out / "q-a-rep1-t?-a2.json").write_text(json.dumps(_served()))
+        row = {"note": "", "family": "f"}
+        base_r = {"final_http": 200, "final_payload_status": "complete",
+                  "chain": ["t1=complete"], "wrong_kind_flag": False,
+                  "wrong_subject_flag": False, "subject_kind_mismatch_flag": False}
+        RS.UNSEQUENCED.clear()
+        before = RS.detail_for(original_out, "q-a", row, {**base_r, "attempts": 2}, 1.0, 1)
+        assert before["attempts_reconciled"] is False, before
+        assert before["unsequenced_files"] == ["q-a-rep1-t?-a2.json"], before
+        assert before["attempt_upstream_504_n"] == 1, before  # already agrees with the files
+
+        replay_dir = Path(tmp) / RD.REPLAY_DIRNAME / "q-a" / "replicate"
+        replay_dir.mkdir(parents=True)
+        (replay_dir / "q-a-rep1-t1-a1.json").write_text(json.dumps(_served()))
+        RS.UNSEQUENCED.clear()
+        after = RS.detail_for(replay_dir, "q-a", row, {**base_r, "attempts": 1}, 1.0, 1)
+        assert after["attempts_reconciled"] is True, after
+
+        fixed_row = RD.build_reclassified_row(before, after)
+        assert fixed_row["original_attempt_evidence"]["attempts_reconciled"] is False, fixed_row
+        problems = MC.reconcile_attempt_totals([fixed_row], tmp)
+        assert problems, (
+            "a row whose ORIGINAL evidence never reconciled was accepted -- the "
+            "frozen-counter sums agreeing is not proof the original's own walk did")
+        assert "q-a" in problems[0] and "never reconciled" in problems[0], problems
+
+        # POSITIVE CONTROL: the identical shape, but the original's dropped attempt
+        # never existed -- a clean original reconciles and this row is NOT refused
+        # for the reason above (the OTHER reconciliation checks still apply on top).
+    with tempfile.TemporaryDirectory() as tmp2:
+        clean_original_out, _ = _write_turns(tmp2, {1: [_attempt(504)]}, qid="q-a", rep=1)
+        RS.UNSEQUENCED.clear()
+        clean_before = RS.detail_for(clean_original_out, "q-a", row, {**base_r, "attempts": 1}, 1.0, 1)
+        assert clean_before["attempts_reconciled"] is True, clean_before
+        replay_dir2 = Path(tmp2) / RD.REPLAY_DIRNAME / "q-a" / "replicate"
+        replay_dir2.mkdir(parents=True)
+        (replay_dir2 / "q-a-rep1-t1-a1.json").write_text(json.dumps(_served()))
+        RS.UNSEQUENCED.clear()
+        clean_after = RS.detail_for(replay_dir2, "q-a", row, {**base_r, "attempts": 1}, 1.0, 1)
+        clean_fixed = RD.build_reclassified_row(clean_before, clean_after)
+        assert MC.reconcile_attempt_totals([clean_fixed], tmp2) == [], (
+            "a genuinely reconciled original must not be refused")
+
+
+def test_published_attempt_totals_include_a_reclassified_rows_original_evidence():
+    """r2 (codex) P1, REPRODUCED at `merge_corpus.py:464,484`. `rig_diagnostics.
+    attempt_upstream_504_n` and `**attempt_class_totals(rows)` used to sum the
+    REPLAY row's own fields alone -- a reclassified row's `original_attempt_evidence`
+    (which `reconcile_attempt_totals` already trusts and reconciles against the file
+    scan) never reached the PUBLISHED total. A real original 504, quietly recovered
+    by a clean single-attempt replay, therefore published as attempt_upstream_504_n=0
+    and attempt_class_totals.upstream_504=0 -- a false zero for evidence the merge had
+    just accepted as true.
+
+    Fixture: the original run's own walk hits a genuine 504 and reconciles; the
+    replay is a clean served single attempt. Both `_effective_attempt_counts_by_row`
+    (what `rig_diagnostics` now publishes from) and `attempt_class_totals` must carry
+    the original's 504 through, not just the replay's zero.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        original_out, _ = _write_turns(tmp, {1: [_attempt(504)]}, qid="q-a", rep=1)
+        row = {"note": "", "family": "f"}
+        base_r = {"final_http": 200, "final_payload_status": "complete",
+                  "chain": ["t1=complete"], "wrong_kind_flag": False,
+                  "wrong_subject_flag": False, "subject_kind_mismatch_flag": False}
+        RS.UNSEQUENCED.clear()
+        before = RS.detail_for(original_out, "q-a", row, {**base_r, "attempts": 1}, 1.0, 1)
+        assert before["attempt_upstream_504_n"] == 1, before
+        assert before["attempts_reconciled"] is True, before
+
+        replay_dir = Path(tmp) / RD.REPLAY_DIRNAME / "q-a" / "replicate"
+        replay_dir.mkdir(parents=True)
+        (replay_dir / "q-a-rep1-t1-a1.json").write_text(json.dumps(_served()))
+        RS.UNSEQUENCED.clear()
+        after = RS.detail_for(replay_dir, "q-a", row, {**base_r, "attempts": 1}, 1.0, 1)
+        assert after["attempt_upstream_504_n"] == 0, after
+
+        fixed_row = RD.build_reclassified_row(before, after)
+        fixed_row["corpus_id"] = "q-a"
+
+        # Reconciliation itself passes -- this is the exact shape codex reported
+        # publishing a false zero for.
+        assert MC.reconcile_attempt_totals([fixed_row], tmp) == []
+
+        eff504, bad504 = MC._effective_attempt_counts_by_row([fixed_row], "attempt_upstream_504_n")
+        assert bad504 == [], bad504
+        assert eff504 == {"q-a": 1}, (
+            f"published attempt_upstream_504_n silently dropped the original's evidence: {eff504}")
+
+        totals = MC.attempt_class_totals([fixed_row])
+        assert totals["attempt_class_totals"]["upstream_504"] == 1, (
+            f"published attempt_class_totals silently dropped the original's evidence: {totals}")
+
+
+def test_reconcile_attempt_totals_refuses_a_malformed_counter_instead_of_crashing():
+    """r2 (codex) P1, REPRODUCED at `merge_corpus.py:196` (pre-fix). `(original.get(key)
+    or 0) + (row.get(key) or 0)` crashes with a raw TypeError the moment either side's
+    RAW value is present but not an int -- `or 0` only catches falsy/absent values, not
+    wrong types. Before this fix: `TypeError: unsupported operand type(s) for +: 'int'
+    and 'str'`, an unhandled crash rather than the documented fail-closed merge abort.
+
+    A malformed counter must be NAMED and REFUSED (a problem string), never raised.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp, "shard-00", "replicate")
+        d.mkdir(parents=True)
+        d.joinpath("q-b-rep1-t1-a1.json").write_text(json.dumps(_attempt(504)))
+        row = {
+            "corpus_id": "q-b",
+            "attempt_upstream_504_n": 1,
+            "attempt_overrun_413_n": 0,
+            "attempts_reconciled": True,
+            "original_attempt_evidence": {
+                "attempts": 1, "attempt_outcomes": [],
+                "attempt_class_n": {},
+                "attempt_upstream_504_n": "not-a-number",
+                "attempt_overrun_413_n": 0,
+                "attempts_reconciled": True,
+            },
+        }
+        problems = MC.reconcile_attempt_totals([row], tmp)  # must not raise
+    assert problems, "a malformed original counter must be refused, not silently summed"
+    assert "q-b" in problems[0] and "not valid" in problems[0], problems
+    assert MC._effective_attempt_count(row, "attempt_upstream_504_n") is None
+
+    # POSITIVE CONTROL: the identical shape with a valid original counter reconciles
+    # cleanly -- the refusal fires on the malformed VALUE, not on carrying original
+    # evidence at all.
+    with tempfile.TemporaryDirectory() as tmp2:
+        d2 = Path(tmp2, "shard-00", "replicate")
+        d2.mkdir(parents=True)
+        d2.joinpath("q-c-rep1-t1-a1.json").write_text(json.dumps(_attempt(504)))
+        control_row = dict(row)
+        control_row["corpus_id"] = "q-c"
+        control_row["attempt_upstream_504_n"] = 0
+        control_row["original_attempt_evidence"] = dict(row["original_attempt_evidence"])
+        control_row["original_attempt_evidence"]["attempt_upstream_504_n"] = 1
+        assert MC.reconcile_attempt_totals([control_row], tmp2) == []
+        assert MC._effective_attempt_count(control_row, "attempt_upstream_504_n") == 1
+
+
+def test_attempt_class_totals_refuses_when_the_original_class_table_never_reconciled():
+    """`attempt_class_totals`'s own original-evidence gate (the sibling of `reconcile_
+    attempt_totals`'s r1 P1 fix): a reclassified row whose ORIGINAL run's walk never
+    reconciled must be reported unavailable, never summed in as measured, even though
+    its `attempt_class_n` table is structurally complete and valid."""
+    row = {
+        "corpus_id": "q-a",
+        "attempt_class_n": AC.zero_counts(),
+        "attempts_reconciled": True,
+        "original_attempt_evidence": {
+            "attempt_class_n": AC.zero_counts(),
+            "attempts_reconciled": False,
+        },
+    }
+    totals = MC.attempt_class_totals([row])
+    assert totals["attempt_classes_unavailable"] == 1, totals
+    assert totals["attempt_classes_unavailable_ids"] == ["q-a"], totals
+    assert totals["attempt_class_totals"] is None, totals
+
+
+def test_attempt_class_totals_refuses_when_the_original_class_table_is_malformed():
+    """The other half of the same gate: the original's `attempt_class_n` table itself
+    must be structurally valid (right key set, valid values) -- a reconciled original
+    with a malformed table is still unmeasured, not silently summed as its own zeros.
+
+    The CONTAINER (`original_attempt_evidence` itself) is a fully-keyed, otherwise
+    valid `ORIGINAL_EVIDENCE_KEYS` dict here -- isolating THIS test from the
+    container-level check (`_original_evidence`/`MALFORMED_ORIGINAL_EVIDENCE`,
+    its own dedicated test) so the failure exercised is specifically the nested
+    `attempt_class_n` table's own key set, not the outer container's."""
+    row = {
+        "corpus_id": "q-a",
+        "attempt_class_n": AC.zero_counts(),
+        "attempts_reconciled": True,
+        "original_attempt_evidence": {
+            "attempts": 1, "attempt_outcomes": [],
+            "attempt_class_n": {"upstream_504": 1},  # wrong key set (the nested table)
+            "attempt_upstream_504_n": 1, "attempt_overrun_413_n": 0,
+            "attempts_reconciled": True,
+        },
+    }
+    totals = MC.attempt_class_totals([row])
+    assert totals["attempt_classes_unavailable"] == 1, totals
+    assert totals["attempt_class_totals"] is None, totals
+
+    # POSITIVE CONTROL: a genuinely complete, reconciled original -- the FULL
+    # declared shape (`MC.ORIGINAL_EVIDENCE_KEYS`), not just the two fields this
+    # function itself reads -- is summed in.
+    good = dict(row["attempt_class_n"])
+    good["upstream_504"] = 1
+    control_row = dict(row)
+    control_row["original_attempt_evidence"] = {
+        "attempts": 1, "attempt_outcomes": [], "attempt_class_n": good,
+        "attempt_upstream_504_n": 1, "attempt_overrun_413_n": 0,
+        "attempts_reconciled": True,
+    }
+    control_totals = MC.attempt_class_totals([control_row])
+    assert control_totals["attempt_classes_unavailable"] == 0, control_totals
+    assert control_totals["attempt_class_totals"]["upstream_504"] == 1, control_totals
+
+
+def _rig_diagnostics_literal_keys():
+    """AST census: the string keys of `rig_diagnostics`'s own dict literal in
+    merge_corpus.py, found by locating the one `Dict` node carrying both
+    `attempt_upstream_504_n` and `overrun_413_ids` -- never a hand-typed list.
+    Also reports whether a `**`-spread (a `None` key) is present, which is
+    where `attempt_class_totals(rows)`'s own keys are folded in."""
+    tree = _ast.parse((HERE / "merge_corpus.py").read_text())
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Dict):
+            names = {k.value for k in node.keys
+                     if isinstance(k, _ast.Constant) and isinstance(k.value, str)}
+            if "attempt_upstream_504_n" in names and "overrun_413_ids" in names:
+                has_spread = any(k is None for k in node.keys)
+                return names, has_spread
+    raise AssertionError("rig_diagnostics dict literal not found in merge_corpus.py")
+
+
+def _attempt_class_totals_literal_keys():
+    """AST census: every key `attempt_class_totals` itself contributes to ITS OWN
+    return dict -- the `result = {...}` literal's TOP-LEVEL keys (not any dict
+    nested inside it, such as the per-item dicts in `attempt_classes_unreconciled`'s
+    list comprehension) plus every `result[<literal>] = ...` it assigns."""
+    tree = _ast.parse((HERE / "merge_corpus.py").read_text())
+    fn = next(n for n in _ast.walk(tree)
+              if isinstance(n, _ast.FunctionDef) and n.name == "attempt_class_totals")
+    keys = set()
+    for node in _ast.walk(fn):
+        if (isinstance(node, _ast.Assign)
+                and any(isinstance(t, _ast.Name) and t.id == "result" for t in node.targets)
+                and isinstance(node.value, _ast.Dict)):
+            keys |= {k.value for k in node.value.keys
+                     if isinstance(k, _ast.Constant) and isinstance(k.value, str)}
+        if (isinstance(node, _ast.Subscript) and isinstance(node.ctx, _ast.Store)
+                and isinstance(node.value, _ast.Name) and node.value.id == "result"):
+            s = node.slice
+            if isinstance(s, _ast.Constant) and isinstance(s.value, str):
+                keys.add(s.value)
+    return keys
+
+
+def test_every_published_attempt_derived_rig_diagnostics_key_moves_on_a_real_divergence():
+    """r2 (codex) P1, r3 ruling (chris via team-lead): reconciliation and
+    publication must be ONE path with no second raw `r.get("attempt_...")`
+    read anywhere in merge_corpus.py, and every PUBLISHED aggregate that
+    derives from a row's attempt-level evidence must be PROVEN to move on a
+    real original-vs-replay divergence -- read back from the WRITTEN VERDICT
+    FILE through the real CLI, never asserted against a dict this test built.
+
+    CENSUS, from the producer: `rig_diagnostics`'s own dict literal in
+    merge_corpus.py (AST, never a hand list) plus the keys `attempt_class_totals`
+    contributes via its `**` spread. Three keys are excluded, BY NAME and
+    reason, because they do not derive from a row's attempt_upstream_504_n /
+    attempt_overrun_413_n / attempt_class_n at all:
+      - post_hoc_attempt_classes: a run-level file RESCAN (_post_hoc), not a
+        per-row field read
+      - overrun_413_detail: keyed off `overrun_detail`, a different field
+      - attempt_classes_unreconciled: row-OWN `attempts_reconciled` diagnostic
+        detail, never merged with original evidence -- it is not a total
+    Every remaining key must be in this test's own COVERED set, or the test
+    itself fails: a new attempt-derived key added to the publisher with no
+    divergence proof here is caught immediately, not three review rounds
+    later.
+    """
+    rig_keys, has_spread = _rig_diagnostics_literal_keys()
+    assert has_spread, "expected a **attempt_class_totals(rows) spread in rig_diagnostics"
+    census = rig_keys | _attempt_class_totals_literal_keys()
+    EXCLUDED = {"post_hoc_attempt_classes", "overrun_413_detail", "attempt_classes_unreconciled"}
+    audited = census - EXCLUDED
+    COVERED = {
+        "attempt_upstream_504_n", "attempt_upstream_504_malformed_ids", "rows_with_upstream_504",
+        "attempt_overrun_413_n", "attempt_overrun_413_malformed_ids", "rows_with_overrun_413",
+        "overrun_413_ids", "attempt_classes_unavailable", "attempt_classes_unavailable_ids",
+        "attempt_class_totals", "rows_with",
+    }
+    assert audited == COVERED, f"census vs coverage mismatch: {audited ^ COVERED}"
+
+    # ---- Fixture: a real 4-row corpus run, through the REAL CLI, with TWO
+    # reclassified rows -- one diverging on the 504 counter, one on the 413
+    # counter -- so every COVERED key has to move off its replay-only value.
+    from corpus import CORPUS
+    qid_504 = "example-serve-named-project"
+    qid_413 = "example-refuse-unservable-kind"
+    row_meta = {"note": "", "family": "f"}
+    base_r = {"final_http": 200, "final_payload_status": "complete",
+              "chain": ["t1=complete"], "wrong_kind_flag": False,
+              "wrong_subject_flag": False, "subject_kind_mismatch_flag": False}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        indir = Path(tmp) / "seq"
+        shard = indir / "shard-00"
+        (shard / "replicate").mkdir(parents=True)
+        rows = []
+        for entry in CORPUS:
+            cid = entry["id"]
+            if cid in (qid_504, qid_413):
+                orig_out = shard / "replicate"
+                first = _attempt(504) if cid == qid_504 else _attempt(200, failure={"httpStatus": 413})
+                (orig_out / f"{cid}-rep1-t1-a1.json").write_text(json.dumps(first))
+                (orig_out / f"{cid}-rep1-t1-a2.json").write_text(json.dumps(_served()))
+                RS.UNSEQUENCED.clear()
+                before = RS.detail_for(orig_out, cid, row_meta, {**base_r, "attempts": 2}, 1.0, 1)
+                assert before["attempts_reconciled"] is True, before
+                if cid == qid_504:
+                    assert before["attempt_upstream_504_n"] == 1, before
+                else:
+                    assert before["attempt_overrun_413_n"] == 1, before
+
+                replay_dir = shard / RD.REPLAY_DIRNAME / cid / "replicate"
+                replay_dir.mkdir(parents=True)
+                (replay_dir / f"{cid}-rep1-t1-a1.json").write_text(json.dumps(_served()))
+                RS.UNSEQUENCED.clear()
+                after = RS.detail_for(replay_dir, cid, row_meta, {**base_r, "attempts": 1}, 1.0, 1)
+                assert after["attempt_upstream_504_n"] == 0, after
+                assert after["attempt_overrun_413_n"] == 0, after
+
+                row = RD.build_reclassified_row(before, after)
+                row["corpus_id"] = cid
+                row["family"] = entry.get("family")
+            else:
+                (shard / "replicate" / f"{cid}-rep1-t1-a1.json").write_text(json.dumps(_served()))
+                row = {"corpus_id": cid, "family": entry.get("family"), "section_note": "",
+                       **base_r, "attempts": 1, "wall_seconds": 1.0,
+                       "claimed_facts_n": 1, "failure_code": None}
+                RS.UNSEQUENCED.clear()
+                row.update(RS.attempt_diagnostics(shard / "replicate", cid, 1, harness_attempts=1))
+            rows.append(row)
+
+        (shard / "shard-summary.json").write_text(json.dumps(
+            {"shard": 0, "planned_ids": [r["corpus_id"] for r in rows], "rows": rows,
+             "total_wall_seconds": 1.0, "started_unix": 1, "finished_unix": 2}))
+
+        outfile = Path(tmp) / "verdict.json"
+        proc = subprocess.run(
+            [sys.executable, str(HERE / "merge_corpus.py"), "--shape", "sequential",
+             "--in", str(indir), "--out", str(outfile)],
+            capture_output=True, text=True, cwd=str(HERE),
+            env={**os.environ, "PYTHONPATH": str(HERE / "testdata_corpus")})
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        verdict = json.loads(outfile.read_text())
+
+    rig = verdict["rig_diagnostics"]
+    assert COVERED <= set(rig), sorted(COVERED - set(rig))
+
+    # 504: the ORIGINAL's evidence must show, not the replay's own zero.
+    assert rig["attempt_upstream_504_n"] == 1, rig["attempt_upstream_504_n"]
+    assert rig["attempt_upstream_504_malformed_ids"] == [], rig["attempt_upstream_504_malformed_ids"]
+    assert rig["rows_with_upstream_504"] == 1, rig["rows_with_upstream_504"]
+    # 413: same shape.
+    assert rig["attempt_overrun_413_n"] == 1, rig["attempt_overrun_413_n"]
+    assert rig["attempt_overrun_413_malformed_ids"] == [], rig["attempt_overrun_413_malformed_ids"]
+    assert rig["rows_with_overrun_413"] == 1, rig["rows_with_overrun_413"]
+    assert rig["overrun_413_ids"] == [qid_413], rig["overrun_413_ids"]
+    # attempt_class_totals: the class table carries the ORIGINAL's 504 AND 413.
+    assert rig["attempt_classes_unavailable"] == 0, rig["attempt_classes_unavailable"]
+    assert rig["attempt_classes_unavailable_ids"] == [], rig["attempt_classes_unavailable_ids"]
+    assert rig["attempt_class_totals"]["upstream_504"] == 1, rig["attempt_class_totals"]
+    assert rig["attempt_class_totals"]["overrun_413"] == 1, rig["attempt_class_totals"]
+    assert rig["rows_with"]["upstream_504"] == 1, rig["rows_with"]
+    assert rig["rows_with"]["overrun_413"] == 1, rig["rows_with"]
+
+    # The two publication sites OUTSIDE rig_diagnostics that read the same
+    # merged evidence (r3's full enumeration, not just the rig_diagnostics dict).
+    merged_413_row = next(r for r in verdict["rows"] if r["corpus_id"] == qid_413)
+    assert merged_413_row["overrun_at_rig_ceiling"] is True, merged_413_row
+    assert verdict["totals_excluding_ceiling_overruns"]["total"] == 3, (
+        verdict["totals_excluding_ceiling_overruns"])
+
+
+def test_validate_attempt_counters_refuses_a_string_and_accepts_a_null():
+    """r3 ruling (chris via team-lead), P1-2: every frozen counter is type-validated
+    AT INGESTION, unconditionally -- named by corpus_id, source, and field -- never
+    only where a file-scan match happens to exist (reconcile_attempt_totals's own
+    gate). Pinned with BOTH halves of the axis: a STRING is refused (the exact
+    malformed shape codex reproduced as a raw TypeError one function downstream),
+    and a NULL (absent) is accepted -- absence means "nothing counted there", not
+    "malformed"."""
+    bad_row = {"corpus_id": "q-a", "attempt_upstream_504_n": "not-a-number",
+               "attempt_overrun_413_n": 0}
+    problems = MC.validate_attempt_counters([bad_row])
+    assert problems, "a string counter must be refused at ingestion"
+    assert "q-a" in problems[0] and "row.attempt_upstream_504_n" in problems[0], problems
+
+    # The original_attempt_evidence container itself must be the COMPLETE declared
+    # shape (see test_original_evidence_accessor_covers_every_shape_of_the_axis for
+    # the container-level axis) so this fixture isolates the COUNTER-level check.
+    complete_original = {"attempts": 1, "attempt_outcomes": [], "attempt_class_n": AC.zero_counts(),
+                          "attempt_upstream_504_n": 0, "attempt_overrun_413_n": "also-bad",
+                          "attempts_reconciled": True}
+    bad_original = {"corpus_id": "q-b", "attempt_upstream_504_n": 0, "attempt_overrun_413_n": 0,
+                     "original_attempt_evidence": complete_original}
+    problems2 = MC.validate_attempt_counters([bad_original])
+    assert problems2, "a string counter on original_attempt_evidence must be refused too"
+    assert "q-b" in problems2[0] and "original_attempt_evidence.attempt_overrun_413_n" in problems2[0], problems2
+
+    # POSITIVE CONTROL: null (absent) is legitimate on both sides -- nothing counted
+    # there is not the same claim as "malformed".
+    null_original = {**complete_original, "attempt_upstream_504_n": None, "attempt_overrun_413_n": None}
+    null_row = {"corpus_id": "q-c", "attempt_upstream_504_n": None, "attempt_overrun_413_n": None,
+                "original_attempt_evidence": null_original}
+    assert MC.validate_attempt_counters([null_row]) == []
+
+
+def test_a_malformed_frozen_counter_is_a_controlled_merge_abort_through_the_real_cli():
+    """The same shape as the pin above, but executed end to end through the REAL
+    merge_corpus.py CLI: exit 1, stderr names the row and the field, never a raw
+    TypeError traceback. This is the r2 P1-2 repro itself (`TypeError: unsupported
+    operand type(s) for +: 'int' and 'str'`), now caught at the front door.
+
+    The malformed row deliberately carries NO backing attempt file on disk, so
+    `reconcile_attempt_totals` (which only compares a row against a file-scan
+    match) never reaches it and cannot be the thing that aborts this run --
+    `validate_attempt_counters` must be the one wired into `main()` that catches
+    it, proven by making it the ONLY possible catcher in this fixture."""
+    with tempfile.TemporaryDirectory() as tmp:
+        from corpus import CORPUS
+        rows = []
+        shard = Path(tmp) / "shard-00"
+        (shard / "replicate").mkdir(parents=True)
+        bad_id = CORPUS[0]["id"]
+        for entry in CORPUS:
+            cid = entry["id"]
+            base = {"corpus_id": cid, "family": entry.get("family"), "section_note": "",
+                    "final_http": 200, "final_payload_status": "complete",
+                    "chain": ["t1=complete"], "wrong_kind_flag": False,
+                    "wrong_subject_flag": False, "subject_kind_mismatch_flag": False,
+                    "wall_seconds": 1.0, "claimed_facts_n": 1, "failure_code": None}
+            if cid == bad_id:
+                # NO attempt file written for this row -- scan_frozen_counts finds
+                # nothing for it, so reconcile_attempt_totals skips it outright.
+                row = {**base, "attempts": 1, "attempt_upstream_504_n": "not-a-number",
+                       "attempt_overrun_413_n": 0, "attempt_outcomes": [],
+                       "attempts_total": 0, "attempts_retried": 0,
+                       "attempt_class_n": AC.zero_counts(), "attempts_reconciled": True}
+            else:
+                (shard / "replicate" / f"{cid}-rep1-t1-a1.json").write_text(json.dumps(_served()))
+                RS.UNSEQUENCED.clear()
+                row = {**base, "attempts": 1}
+                row.update(RS.attempt_diagnostics(shard / "replicate", cid, 1, harness_attempts=1))
+            rows.append(row)
+        (shard / "shard-summary.json").write_text(json.dumps(
+            {"shard": 0, "planned_ids": [r["corpus_id"] for r in rows], "rows": rows,
+             "total_wall_seconds": 1.0, "started_unix": 1, "finished_unix": 2}))
+        outfile = Path(tmp) / "verdict.json"
+        proc = subprocess.run(
+            [sys.executable, str(HERE / "merge_corpus.py"), "--shape", "sequential",
+             "--in", str(shard.parent), "--out", str(outfile)],
+            capture_output=True, text=True, cwd=str(HERE),
+            env={**os.environ, "PYTHONPATH": str(HERE / "testdata_corpus")})
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "MERGE ABORT" in proc.stderr, proc.stderr
+    assert bad_id in proc.stderr and "attempt_upstream_504_n" in proc.stderr, proc.stderr
+    assert "Traceback" not in proc.stderr, ("a malformed counter must be a named refusal, "
+                                             "never a raw crash: " + proc.stderr)
+    assert not outfile.exists(), "an aborted merge must not write a verdict file"
+
+
+def test_original_evidence_accessor_covers_every_shape_of_the_axis():
+    """r3 (codex) P1, REPRODUCED (round 1): `original_attempt_evidence` was read with
+    `row.get(...) or {}` (or a bare truthiness check) and then `.get()`-ed
+    unconditionally by all four readers (`_effective_attempt_count`,
+    `_effective_attempt_class_n`, `validate_attempt_counters`,
+    `reconcile_attempt_totals`) -- a PRESENT but non-dict value (a string, in the
+    reviewer's repro) crashed every one of them with a raw
+    `AttributeError: 'str' object has no attribute 'get'`.
+
+    r3 verdict, second finding: an EMPTY dict was silently read as legitimate
+    absence -- but `build_reclassified_row` never writes one, so that shape is
+    exactly as malformed as a wrong type and is refused too, alongside a dict
+    with the WRONG key set (missing or extra keys). Enumerated over the FULL
+    axis of shapes a JSON value can take, through `_original_evidence` (the ONE
+    accessor every reader now calls) and each of its four callers:
+      malformed: "corrupt" (str), [] (list), 0 (int), {} (empty dict),
+                 a dict missing a declared key, a dict with an extra key
+      legitimate: absent (key missing entirely), None, a complete correctly-keyed dict
+    """
+    complete = {"attempts": 1, "attempt_outcomes": [], "attempt_class_n": AC.zero_counts(),
+                "attempt_upstream_504_n": 0, "attempt_overrun_413_n": 0, "attempts_reconciled": True}
+    malformed_shapes = [
+        ("string", "corrupt"), ("list", []), ("int", 0), ("empty dict", {}),
+        ("missing a key", {k: v for k, v in complete.items() if k != "attempts_reconciled"}),
+        ("extra key", {**complete, "unexpected": True}),
+    ]
+    legitimate_shapes = [("absent", "OMIT"), ("null", None), ("complete", dict(complete))]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp, "shard-00", "replicate")
+        d.mkdir(parents=True)
+        d.joinpath("q-a-rep1-t1-a1.json").write_text(json.dumps(_served()))
+
+        for name, value in malformed_shapes:
+            row = {"corpus_id": "q-a", "attempt_upstream_504_n": 0, "attempt_overrun_413_n": 0,
+                   "attempts_reconciled": True, "attempt_class_n": AC.zero_counts(),
+                   "original_attempt_evidence": value}
+            assert MC._original_evidence(row) is MC.MALFORMED_ORIGINAL_EVIDENCE, name
+            problems = MC.validate_attempt_counters([row])
+            assert problems, f"{name}: must be refused at ingestion"
+            assert "q-a" in problems[0], (name, problems)
+            assert MC._effective_attempt_count(row, "attempt_upstream_504_n") is None, name
+            assert MC._effective_attempt_class_n(row) is None, name
+            problems2 = MC.reconcile_attempt_totals([row], tmp)
+            assert problems2, f"{name}: reconcile_attempt_totals must refuse too, not crash"
+
+        for name, value in legitimate_shapes:
+            row = {"corpus_id": "q-a", "attempt_upstream_504_n": 0, "attempt_overrun_413_n": 0,
+                   "attempts_reconciled": True, "attempt_class_n": AC.zero_counts()}
+            if value != "OMIT":
+                row["original_attempt_evidence"] = value
+            assert MC._original_evidence(row) is not MC.MALFORMED_ORIGINAL_EVIDENCE, name
+            assert MC.validate_attempt_counters([row]) == [], (name, "must not be refused")
+            assert MC._effective_attempt_count(row, "attempt_upstream_504_n") == 0, name
+            assert MC._effective_attempt_class_n(row) == AC.zero_counts(), name
+            assert MC.reconcile_attempt_totals([row], tmp) == [], name
+
+
+def test_every_malformed_original_evidence_shape_is_a_controlled_merge_abort_through_the_real_cli():
+    """Same axis as the pin above, executed end to end through the REAL merge_corpus.py
+    CLI for each malformed shape: exit 1, stderr names the row, no raw traceback, no
+    verdict file written. Then the positive control (absent) through the same CLI:
+    exit 0, a verdict IS written. This is the r3 P1 repro itself, both of its named
+    findings, over the full shape axis team-lead's ruling required."""
+    from corpus import CORPUS
+    bad_id = CORPUS[0]["id"]
+
+    def run_with_original(value, omit=False):
+        with tempfile.TemporaryDirectory() as tmp:
+            rows = []
+            shard = Path(tmp) / "shard-00"
+            (shard / "replicate").mkdir(parents=True)
+            for entry in CORPUS:
+                cid = entry["id"]
+                base = {"corpus_id": cid, "family": entry.get("family"), "section_note": "",
+                        "final_http": 200, "final_payload_status": "complete",
+                        "chain": ["t1=complete"], "wrong_kind_flag": False,
+                        "wrong_subject_flag": False, "subject_kind_mismatch_flag": False,
+                        "wall_seconds": 1.0, "claimed_facts_n": 1, "failure_code": None}
+                (shard / "replicate" / f"{cid}-rep1-t1-a1.json").write_text(json.dumps(_served()))
+                RS.UNSEQUENCED.clear()
+                row = {**base, "attempts": 1}
+                row.update(RS.attempt_diagnostics(shard / "replicate", cid, 1, harness_attempts=1))
+                if cid == bad_id and not omit:
+                    row["original_attempt_evidence"] = value
+                rows.append(row)
+            (shard / "shard-summary.json").write_text(json.dumps(
+                {"shard": 0, "planned_ids": [r["corpus_id"] for r in rows], "rows": rows,
+                 "total_wall_seconds": 1.0, "started_unix": 1, "finished_unix": 2}))
+            outfile = Path(tmp) / "verdict.json"
+            proc = subprocess.run(
+                [sys.executable, str(HERE / "merge_corpus.py"), "--shape", "sequential",
+                 "--in", str(shard.parent), "--out", str(outfile)],
+                capture_output=True, text=True, cwd=str(HERE),
+                env={**os.environ, "PYTHONPATH": str(HERE / "testdata_corpus")})
+            return proc, outfile.exists()
+
+    for name, value in [("string", "corrupt"), ("list", []), ("int", 0), ("empty dict", {})]:
+        proc, out_exists = run_with_original(value)
+        assert proc.returncode == 1, (name, proc.stdout + proc.stderr)
+        assert "MERGE ABORT" in proc.stderr, (name, proc.stderr)
+        assert bad_id in proc.stderr, (name, proc.stderr)
+        assert "Traceback" not in proc.stderr, (
+            name, "a malformed container must be a named refusal, never a raw crash: " + proc.stderr)
+        assert not out_exists, (name, "an aborted merge must not write a verdict file")
+
+    # POSITIVE CONTROL: absent (never reclassified) merges clean through the same CLI.
+    proc, out_exists = run_with_original(None, omit=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert out_exists, "a clean run must write a verdict file"
+
+
+def test_the_full_ingestion_input_domain_is_a_controlled_abort_or_a_correct_publish():
+    """Chris's ruling (via team-lead), r3 tabled: the fix is the WHOLE input domain
+    of merge_corpus.py's row ingestion. Every field the merge reads off a row and
+    off `original_attempt_evidence` -- CENSUS-ASSERTED below from the typed
+    accessors' own key lists (`_original_evidence`'s `ORIGINAL_EVIDENCE_KEYS`, the
+    two `_effective_attempt_count` keys, `_effective_attempt_class_n`'s
+    `attempt_class_n`/`attempts_reconciled`) -- crossed with the requested shape
+    axis (absent, null, zero, empty container, wrong container type, wrong scalar
+    type, negative, fractional, boundary values, out-of-vocabulary key sets),
+    GENERATED programmatically (never hand-picked per cell), each cell executed
+    through the REAL CLI over an otherwise-valid 4-row corpus.
+
+    Two contracts, both already established and pinned in earlier rounds, hold
+    over the WHOLE domain without exception:
+      ABORT contract  (the two frozen counters, at both the row level and the
+                       original level, and the `original_attempt_evidence`
+                       container itself): a malformed value is a NAMED MERGE
+                       ABORT -- exit 1, stderr names the row, no verdict written.
+      WITHHOLD contract (`attempt_class_n`, at both levels): a malformed value
+                       never aborts the merge -- exit 0, a verdict IS written,
+                       and the row is named in `attempt_classes_unavailable_ids`
+                       with the aggregate withheld (`attempt_class_totals: null`).
+    The ONE invariant that holds over EVERY cell of both contracts, valid or
+    malformed: no raw traceback, ever.
+    """
+    from corpus import CORPUS
+    bad_id = CORPUS[0]["id"]
+    OMIT = object()
+
+    def complete_original(**overrides):
+        d = {"attempts": 1, "attempt_outcomes": [], "attempt_class_n": AC.zero_counts(),
+             "attempt_upstream_504_n": 0, "attempt_overrun_413_n": 0, "attempts_reconciled": True}
+        d.update(overrides)
+        return d
+
+    def run_with_overrides(overrides):
+        with tempfile.TemporaryDirectory() as tmp:
+            rows = []
+            shard = Path(tmp) / "shard-00"
+            (shard / "replicate").mkdir(parents=True)
+            for entry in CORPUS:
+                cid = entry["id"]
+                base = {"corpus_id": cid, "family": entry.get("family"), "section_note": "",
+                        "final_http": 200, "final_payload_status": "complete",
+                        "chain": ["t1=complete"], "wrong_kind_flag": False,
+                        "wrong_subject_flag": False, "subject_kind_mismatch_flag": False,
+                        "wall_seconds": 1.0, "claimed_facts_n": 1, "failure_code": None}
+                (shard / "replicate" / f"{cid}-rep1-t1-a1.json").write_text(json.dumps(_served()))
+                RS.UNSEQUENCED.clear()
+                row = {**base, "attempts": 1}
+                row.update(RS.attempt_diagnostics(shard / "replicate", cid, 1, harness_attempts=1))
+                if cid == bad_id:
+                    for k, v in overrides.items():
+                        if v is OMIT:
+                            row.pop(k, None)
+                        else:
+                            row[k] = v
+                rows.append(row)
+            (shard / "shard-summary.json").write_text(json.dumps(
+                {"shard": 0, "planned_ids": [r["corpus_id"] for r in rows], "rows": rows,
+                 "total_wall_seconds": 1.0, "started_unix": 1, "finished_unix": 2}))
+            outfile = Path(tmp) / "verdict.json"
+            proc = subprocess.run(
+                [sys.executable, str(HERE / "merge_corpus.py"), "--shape", "sequential",
+                 "--in", str(shard.parent), "--out", str(outfile)],
+                capture_output=True, text=True, cwd=str(HERE),
+                env={**os.environ, "PYTHONPATH": str(HERE / "testdata_corpus")})
+            verdict = json.loads(outfile.read_text()) if outfile.exists() else None
+            return proc.returncode, proc.stdout, proc.stderr, verdict
+
+    def assert_never_a_traceback(cell, stderr):
+        assert "Traceback" not in stderr, (cell, "no cell of the input domain may raise a raw exception", stderr)
+
+    def assert_abort(cell, overrides):
+        rc, out, err, verdict = run_with_overrides(overrides)
+        assert_never_a_traceback(cell, err)
+        assert rc == 1, (cell, "must be a MERGE ABORT", out + err)
+        assert "MERGE ABORT" in err and bad_id in err, (cell, err)
+        assert verdict is None, (cell, "an aborted merge must not write a verdict file")
+
+    def assert_valid_publish(cell, overrides):
+        rc, out, err, verdict = run_with_overrides(overrides)
+        assert_never_a_traceback(cell, err)
+        assert rc == 0, (cell, "a legitimate shape must merge clean", out + err)
+        assert verdict is not None, (cell, "a clean run must write a verdict file")
+        return verdict
+
+    def assert_withheld(cell, overrides):
+        verdict = assert_valid_publish(cell, overrides)
+        rig = verdict["rig_diagnostics"]
+        assert bad_id in rig["attempt_classes_unavailable_ids"], (cell, rig)
+        assert rig["attempt_class_totals"] is None, (cell, rig)
+
+    # ---- ABORT contract: the two frozen counters, GENERATED over both keys and
+    # both levels (row / nested inside a fully-keyed original_attempt_evidence).
+    # LEGIT values here are restricted to {absent, null, zero} -- the only values
+    # that also reconcile against this fixture's real physical attempt file (a
+    # single plain served 200, no 504/413). A genuine positive boundary value
+    # (one, a large count) reconciling against REAL matching attempt files is a
+    # DIFFERENT, already-covered concern
+    # (test_reconcile_attempt_totals_sums_the_original_AND_the_replays_own_count,
+    # test_every_published_attempt_derived_rig_diagnostics_key_moves_on_a_real_divergence)
+    # -- conflating it here would test reconciliation arithmetic, not ingestion
+    # type-validation, through a fixture not built to support it. The boundary
+    # value 0 vs 1 as a TYPE (both valid non-negative ints) is exercised directly
+    # via `attempt_classes.is_valid_count` in test_the_class_table_values_are_
+    # validated_over_the_whole_value_axis.
+    COUNTER_KEYS = ["attempt_upstream_504_n", "attempt_overrun_413_n"]
+    LEGIT_COUNTS = [("null", None), ("zero", 0)]
+    MALFORMED_COUNTS = [("negative", -1), ("fractional", 1.5), ("boolean", True),
+                         ("string", "3"), ("list", [1]), ("dict", {"n": 1})]
+    for key in COUNTER_KEYS:
+        for name, value in LEGIT_COUNTS + [("absent", OMIT)]:
+            assert_valid_publish(f"row.{key}={name}", {key: value})
+        for name, value in LEGIT_COUNTS:  # "absent" is inexpressible inside a fixed-key-set container
+            assert_valid_publish(f"original.{key}={name}", {"original_attempt_evidence": complete_original(**{key: value})})
+        for name, value in MALFORMED_COUNTS:
+            assert_abort(f"row.{key}={name}", {key: value})
+            assert_abort(f"original.{key}={name}", {"original_attempt_evidence": complete_original(**{key: value})})
+
+    # ---- ABORT contract: the `original_attempt_evidence` container itself.
+    for name, value in [("absent", OMIT), ("null", None), ("complete_valid", complete_original())]:
+        assert_valid_publish(f"original_attempt_evidence={name}", {"original_attempt_evidence": value})
+    for name, value in [
+        ("empty_dict", {}), ("string", "corrupt"), ("list", []), ("int", 0),
+        ("missing_a_key", {k: v for k, v in complete_original().items() if k != "attempts_reconciled"}),
+        ("extra_key", {**complete_original(), "unexpected": True}),
+    ]:
+        assert_abort(f"original_attempt_evidence={name}", {"original_attempt_evidence": value})
+
+    # ---- WITHHOLD contract: `attempt_class_n`, at the row level and (nested,
+    # inside a fully-keyed original) the original level -- out-of-vocabulary key
+    # sets and wrong container types never abort the whole merge, only withhold
+    # that row's aggregate contribution.
+    assert_valid_publish("row.attempt_class_n=complete_valid", {"attempt_class_n": AC.zero_counts()})
+    for name, value in [("absent", OMIT), ("empty_dict", {}),
+                         ("wrong_key_set", {"upstream_504": 1}), ("string", "x")]:
+        assert_withheld(f"row.attempt_class_n={name}", {"attempt_class_n": value})
+    assert_valid_publish("original.attempt_class_n=complete_valid",
+                          {"original_attempt_evidence": complete_original()})
+    for name, value in [("empty_dict", {}), ("wrong_key_set", {"upstream_504": 1}), ("string", "x")]:
+        assert_withheld(f"original.attempt_class_n={name}",
+                         {"original_attempt_evidence": complete_original(attempt_class_n=value)})
 
 
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

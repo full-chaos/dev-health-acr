@@ -69,6 +69,41 @@ def scan(root):
     return out
 
 
+def scan_frozen_counts(root):
+    """Per-row attempt counts under the SAME two frozen, INDEPENDENT predicates
+    (attempt_classes.is_upstream_504 / is_overrun_413) run_shard.attempt_diagnostics
+    uses row-side -- read back from every attempt file on disk, not derived from
+    scan()'s legacy_engine_failure_kind ladder above.
+
+    Why a SEPARATE walk rather than reusing scan()'s `kind`: legacy_engine_failure_kind
+    is EXCLUSIVE (one kind per attempt -- a 413 with an outer 504 status classifies
+    RIG_CEILING_413 and nothing else), while is_upstream_504/is_overrun_413 are
+    deliberately INDEPENDENT (codex r4 P1: that exact attempt counts as BOTH). Comparing
+    a row's frozen counters against scan()'s UPSTREAM_504/RIG_CEILING_413 buckets would
+    therefore report a false disagreement on every attempt that is both -- a shape this
+    corpus has actually measured. This walk uses the identical predicates the row side
+    uses, over the identical file population scan() reads, so a real disagreement here
+    is never an artefact of two differently-shaped ladders being compared.
+
+    Returns {corpus_id: {"upstream_504_n": int, "overrun_413_n": int}}, EVERY corpus_id
+    that has at least one readable attempt file under root -- a row entirely absent from
+    this dict never had an attempt file scan() or this walk could read, which is a
+    distinct fact from a row present with both counts at zero.
+    """
+    out = {}
+    for f in sorted(Path(root).rglob("replicate/*.json")):
+        qid = f.stem.split("-rep")[0]
+        ok, a, _ = load_attempt(f)
+        if not ok:
+            continue
+        counts = out.setdefault(qid, {"upstream_504_n": 0, "overrun_413_n": 0})
+        if attempt_classes.is_upstream_504(a):
+            counts["upstream_504_n"] += 1
+        if attempt_classes.is_overrun_413(a):
+            counts["overrun_413_n"] += 1
+    return out
+
+
 def main():
     if len(sys.argv) < 2:
         sys.exit(__doc__)

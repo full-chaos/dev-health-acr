@@ -49,5 +49,10 @@ func orgModelProviderConfig(defaults modelprovider.Config, resolved contextfabri
 		// deployment-default runtime uses -- never a second,
 		// per-organization-scoped telemetry instance.
 		Telemetry: defaults.Telemetry,
+		// CHAOS-5380: inherited from defaults for the same reason
+		// Telemetry is -- a per-organization BYO runtime must emit its
+		// decision line, and therefore its retry attempts, through the
+		// SAME collected sink the deployment-default runtime uses.
+		Logger: defaults.Logger,
 	}
 }

@@ -707,7 +707,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 			return nil, nil, nil, nil, nil, nil, err
 		}
 	}
-	modelRuntime, evictor, err := wrapWithOrgModelRuntimeResolver(deploymentDefaultRuntime, orgModelConfigStore, os.LookupEnv, engineTelemetry)
+	modelRuntime, evictor, err := wrapWithOrgModelRuntimeResolver(deploymentDefaultRuntime, orgModelConfigStore, os.LookupEnv, engineTelemetry, request.options.Logger)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, err
 	}

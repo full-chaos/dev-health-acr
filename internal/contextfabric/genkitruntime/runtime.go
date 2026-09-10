@@ -796,6 +796,68 @@ func (r *Runtime) InterpretQuestionForSample(ctx context.Context, principal stor
 }
 
 func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, sample int) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
+	// CHAOS-3889 (H6/H7/H8): emit one decision-event log line for this
+	// call, covering every return path below via defer instead of a
+	// duplicated call at each return statement. receipt is mutated in
+	// place exactly as it already was; axisSource and
+	// primaryFailureClassification are set at the point each becomes
+	// knowable. The deferred read runs after the function's return values
+	// are computed, so it always sees each variable's final state. This
+	// is pure observability -- it changes nothing about what
+	// InterpretQuestion returns or how an outcome is decided.
+	//
+	// CHAOS-5380 PR-A, C3 RULING (team-lead, option (a)): the var block and
+	// the defer below are now the FIRST two statements, BEFORE
+	// request.Validate() and the OrgID check -- the one-owner pattern
+	// PhraseStructureOffers already uses. A rejected call still emits, with
+	// operation="" and an empty attempt list: a line that only fires when
+	// things went well cannot tell "never reached" from "reached and fine"
+	// (cf-standing-rules dictation 378). decodingSeed moves into this block
+	// (assigned with `=`, not `:=`, further down) because the closure below
+	// must be able to name it before it is computed.
+	var (
+		receipt                      contextfabric.ModelExecutionReceipt
+		axisSource                   string
+		primaryFailureClassification string
+		// rejectionReason names WHICH validator rule rejected this
+		// interpretation, mutated in place at the rejecting return exactly
+		// as receipt/axisSource/primaryFailureClassification are, and read
+		// by the deferred telemetry call below. Empty on every path that
+		// is not a rejection -- success, generation failure, and fallback
+		// success all leave it empty, and logInterpretDecision appends the
+		// field only when it is non-empty. This mirrors
+		// SynthesizeAnswer's own rejectionReason variable one function
+		// down; see it for the CHAOS-4522 precedent this completes.
+		rejectionReason string
+		// CHAOS-5380: hoisted into the SAME var block as receipt, for the
+		// same reason -- the deferred decision line reads them after the
+		// return values are computed, so a `:=` at the withRetry call
+		// below would leave them out of the closure's scope entirely and
+		// the line would silently lose every attempt it exists to carry.
+		attemptOutcomes []attemptOutcome
+		// fallbackAttempts is the FALLBACK leg's own attempt count.
+		// mergeFallbackReceipt keeps the primary's Attempts (deliberately
+		// -- the primary's record must not be overwritten), so before this
+		// a fallback that itself retried left no trace anywhere: the line
+		// read attempts=1 outcome=fallback for two model calls. Explicit
+		// zero when no fallback ran.
+		fallbackAttempts int
+		decodingSeed     int64
+		// primaryProvider/primaryModel/primaryModelVersion (CHAOS-5380 PR-A
+		// B4, r5 P1-1): the PRIMARY leg's own identity, snapshotted BEFORE
+		// mergeFallbackReceipt overwrites receipt.Provider/Model/ModelVersion
+		// with the fallback's. receipt.Model/ModelVersion stay the ANSWER
+		// identity throughout (CHAOS-4631 r3 -- do NOT revert that
+		// direction); these three fields exist so the identity
+		// attempt_outcomes actually describes is never silently lost on a
+		// fallback success. Equal to the answer identity whenever no
+		// fallback ran.
+		primaryProvider, primaryModel, primaryModelVersion string
+	)
+	defer func() {
+		r.logInterpretDecision(ctx, principal.OrgID, request.RequestID, receipt, primaryFailureClassification, axisSource, decodingSeed, sample, rejectionReason, attemptOutcomes, fallbackAttempts, primaryProvider, primaryModel, primaryModelVersion)
+	}()
+
 	if err := request.Validate(); err != nil {
 		return contextfabric.InterpretedQuestion{}, contextfabric.ModelExecutionReceipt{}, fmt.Errorf("interpretation request: %w", err)
 	}
@@ -815,45 +877,19 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 		return contextfabric.InterpretedQuestion{}, contextfabric.ModelExecutionReceipt{}, err
 	}
 
-	// CHAOS-3889 (H6/H7/H8): emit one decision-event log line for this
-	// call, covering every return path below via defer instead of a
-	// duplicated call at each return statement. receipt is mutated in
-	// place exactly as it already was; axisSource and
-	// primaryFailureClassification are set at the point each becomes
-	// knowable. The deferred read runs after the function's return values
-	// are computed, so it always sees each variable's final state. This
-	// is pure observability -- it changes nothing about what
-	// InterpretQuestion returns or how an outcome is decided.
-	var (
-		receipt                      contextfabric.ModelExecutionReceipt
-		axisSource                   string
-		primaryFailureClassification string
-		// rejectionReason names WHICH validator rule rejected this
-		// interpretation, mutated in place at the rejecting return exactly
-		// as receipt/axisSource/primaryFailureClassification are, and read
-		// by the deferred telemetry call below. Empty on every path that
-		// is not a rejection -- success, generation failure, and fallback
-		// success all leave it empty, and logInterpretDecision appends the
-		// field only when it is non-empty. This mirrors
-		// SynthesizeAnswer's own rejectionReason variable one function
-		// down; see it for the CHAOS-4522 precedent this completes.
-		rejectionReason string
-	)
 	// CHAOS-4631: the derived seed is a pure function of the question text
 	// and the sample index, known before the call is even attempted -- so
 	// it is computed once, up front, and threaded into both the actual
 	// request and the deferred telemetry read below, rather than mutated
 	// in place the way receipt/axisSource/primaryFailureClassification are.
 	questionHash := contextfabric.QuestionHash(request.Question)
-	decodingSeed := chaos4631InterpretSeedFor(questionHash, sample)
-	defer func() {
-		r.logInterpretDecision(ctx, principal.OrgID, request.RequestID, receipt, primaryFailureClassification, axisSource, decodingSeed, sample, rejectionReason)
-	}()
+	decodingSeed = chaos4631InterpretSeedFor(questionHash, sample)
 
 	started := r.now().UTC()
 	var output interpretationOutput
 	var usage contextfabric.ModelUsage
-	attempts, generationErr := r.withRetry(ctx, func(callCtx context.Context) error {
+	var generationErr error
+	attemptOutcomes, generationErr = r.withRetry(ctx, func(callCtx context.Context) error {
 		var err error
 		output, usage, err = r.generator.Interpret(callCtx, generationRequest{
 			Model: r.config.ModelRef, System: interpretationSystemPrompt, Prompt: string(encoded),
@@ -862,6 +898,7 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 		return err
 	})
 	completed := r.now().UTC()
+	attempts := len(attemptOutcomes)
 	var classifiedErr error
 	if generationErr != nil {
 		classifiedErr = classifyModelError(generationErr)
@@ -872,10 +909,19 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 	// up front, so it survives every return path below -- including
 	// mergeFallbackReceipt, which never touches this field.
 	receipt.RequestID = request.RequestID
+	// CHAOS-5380 PR-A B4: snapshot the PRIMARY's own identity now, before
+	// either fallback branch below can call mergeFallbackReceipt and
+	// overwrite receipt.Provider/Model/ModelVersion with the fallback's.
+	primaryProvider, primaryModel, primaryModelVersion = receipt.Provider, receipt.Model, receipt.ModelVersion
 	if generationErr != nil {
 		primaryFailureClassification = receipt.Outcome
 		if r.config.Fallback != nil {
 			interpreted, fallbackReceipt, fallbackErr := r.config.Fallback.InterpretQuestion(ctx, principal, request)
+			// CHAOS-5380: the fallback leg's OWN attempt count, recorded
+			// whether it succeeded or failed. mergeFallbackReceipt keeps
+			// the primary's Attempts, so this is the only place the
+			// fallback's retries are observable at all.
+			fallbackAttempts = fallbackReceipt.Attempts
 			if fallbackErr == nil {
 				receipt.FallbackUsed = true
 				receipt.Outcome = "fallback"
@@ -940,6 +986,11 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 		primaryFailureClassification = receipt.Outcome
 		if r.config.Fallback != nil {
 			fallback, fallbackReceipt, fallbackErr := r.config.Fallback.InterpretQuestion(ctx, principal, request)
+			// CHAOS-5380: the fallback leg's OWN attempt count, recorded
+			// whether it succeeded or failed. mergeFallbackReceipt keeps
+			// the primary's Attempts, so this is the only place the
+			// fallback's retries are observable at all.
+			fallbackAttempts = fallbackReceipt.Attempts
 			if fallbackErr == nil {
 				receipt.FallbackUsed = true
 				receipt.Outcome = "fallback"
@@ -1310,19 +1361,17 @@ func sanitizeWindowOutput(output interpretationOutput) (contextfabric.WindowClas
 }
 
 func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Principal, input contextfabric.SynthesisInput) (contextfabric.SynthesisDraft, contextfabric.ModelExecutionReceipt, error) {
-	if strings.TrimSpace(principal.OrgID) == "" {
-		return contextfabric.SynthesisDraft{}, contextfabric.ModelExecutionReceipt{}, errors.New("authenticated organization is required")
-	}
-	payload := synthesisInputFromDomain(principal.OrgID, input)
-	encoded, err := boundedJSON(payload, r.config.MaxInputBytes)
-	if err != nil {
-		return contextfabric.SynthesisDraft{}, contextfabric.ModelExecutionReceipt{}, err
-	}
-
 	// CHAOS-3889 (H6/H7/H8): see the matching comment in InterpretQuestion.
 	// grounding is set from whichever SynthesisDraft (primary or fallback)
 	// actually reaches a successful return; it stays zero-valued on every
 	// failure path, since no draft was ever produced to count.
+	//
+	// CHAOS-5380 PR-A, C3 RULING (team-lead, option (a)): the var block and
+	// the defer below are now the FIRST two statements, BEFORE the OrgID
+	// check and payload encoding -- the one-owner pattern
+	// PhraseStructureOffers already uses. A rejected call still emits, with
+	// operation="" and an empty attempt list (cf-standing-rules dictation
+	// 378).
 	var (
 		receipt                      contextfabric.ModelExecutionReceipt
 		primaryFailureClassification string
@@ -1349,7 +1398,31 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		// factGroupSize alone cannot say that: a large group whose first
 		// member already matched needed no closure at all.
 		groundedBeyondFirst int
+		// CHAOS-5380: declared in the SAME var block as receipt, so the
+		// hoisted defer can close over them even though a rejected call
+		// returns before either is ever assigned.
+		attemptOutcomes  []attemptOutcome
+		fallbackAttempts int
+		// primaryProvider/primaryModel/primaryModelVersion (CHAOS-5380 PR-A
+		// B4, r5 P1-1): the PRIMARY leg's own identity, snapshotted BEFORE
+		// mergeFallbackReceipt overwrites receipt.Provider/Model/ModelVersion
+		// with the fallback's. See the matching field in InterpretQuestion
+		// for the full rationale.
+		primaryProvider, primaryModel, primaryModelVersion string
 	)
+	defer func() {
+		r.logSynthesizeDecision(ctx, principal.OrgID, input.Request.RequestID, receipt, primaryFailureClassification, grounding, rejectionReason, factGroupSize, groundedBeyondFirst, attemptOutcomes, fallbackAttempts, primaryProvider, primaryModel, primaryModelVersion)
+	}()
+
+	if strings.TrimSpace(principal.OrgID) == "" {
+		return contextfabric.SynthesisDraft{}, contextfabric.ModelExecutionReceipt{}, errors.New("authenticated organization is required")
+	}
+	payload := synthesisInputFromDomain(principal.OrgID, input)
+	encoded, err := boundedJSON(payload, r.config.MaxInputBytes)
+	if err != nil {
+		return contextfabric.SynthesisDraft{}, contextfabric.ModelExecutionReceipt{}, err
+	}
+
 	// setDiagnostics populates the two rejection fields from the error whose
 	// outcome the receipt reports -- and ONLY when that error really is a
 	// synthesis rejection (codex R2 finding 1). A transport or rate-limit
@@ -1375,14 +1448,12 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		rejectionReason = string(contextfabric.SynthesisRejectionReasonOf(cause))
 		factGroupSize = contextfabric.SynthesisFactGroupSizeOf(cause)
 	}
-	defer func() {
-		r.logSynthesizeDecision(ctx, principal.OrgID, input.Request.RequestID, receipt, primaryFailureClassification, grounding, rejectionReason, factGroupSize, groundedBeyondFirst)
-	}()
 
 	started := r.now().UTC()
 	var output synthesisOutput
 	var usage contextfabric.ModelUsage
-	attempts, generationErr := r.withRetry(ctx, func(callCtx context.Context) error {
+	var generationErr error
+	attemptOutcomes, generationErr = r.withRetry(ctx, func(callCtx context.Context) error {
 		var err error
 		output, usage, err = r.generator.Synthesize(callCtx, generationRequest{
 			Model: r.config.ModelRef, System: synthesisSystemPrompt, Prompt: string(encoded),
@@ -1390,6 +1461,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		return err
 	})
 	completed := r.now().UTC()
+	attempts := len(attemptOutcomes)
 	var classifiedErr error
 	if generationErr != nil {
 		classifiedErr = classifyModelError(generationErr)
@@ -1398,16 +1470,35 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	// RequestID correlates the durable receipt row back to this
 	// investigation -- see the matching comment in InterpretQuestion.
 	receipt.RequestID = input.Request.RequestID
+	// CHAOS-5380 PR-A B4: snapshot the PRIMARY's own identity now, before
+	// either fallback branch below can call mergeFallbackReceipt and
+	// overwrite receipt.Provider/Model/ModelVersion with the fallback's.
+	primaryProvider, primaryModel, primaryModelVersion = receipt.Provider, receipt.Model, receipt.ModelVersion
 	if generationErr != nil {
 		primaryFailureClassification = receipt.Outcome
 		if r.config.Fallback != nil {
 			draft, fallbackReceipt, fallbackErr := r.config.Fallback.SynthesizeAnswer(ctx, principal, input)
+			// CHAOS-5380: the fallback leg's OWN attempt count, recorded
+			// whether it succeeded or failed. mergeFallbackReceipt keeps
+			// the primary's Attempts, so this is the only place the
+			// fallback's retries are observable at all.
+			fallbackAttempts = fallbackReceipt.Attempts
 			if fallbackErr == nil {
 				receipt.FallbackUsed = true
 				receipt.Outcome = "fallback"
 				grounding = groundingCountsFrom(draft)
 				setGroundingSignal(draft)
-				return draft, mergeFallbackReceipt(receipt, fallbackReceipt), nil
+				// CHAOS-5380: assigned back to the outer `receipt`, not
+				// only returned -- the SAME P2 InterpretQuestion's own
+				// fallback arm records. The deferred decision line reads
+				// `receipt`, so returning the merged value without writing
+				// it back leaves the line describing the PRIMARY's
+				// provider/model for an answer the fallback produced. Only
+				// model_id/model_version are affected today (this emitter
+				// does not carry them), which is precisely why it stayed
+				// invisible here after being fixed one function up.
+				receipt = mergeFallbackReceipt(receipt, fallbackReceipt)
+				return draft, receipt, nil
 			}
 			// See the matching comment in InterpretQuestion: both legs
 			// failed, so the receipt must reflect the fallback's own
@@ -1465,6 +1556,11 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		setDiagnostics(err)
 		if r.config.Fallback != nil {
 			fallback, fallbackReceipt, fallbackErr := r.config.Fallback.SynthesizeAnswer(ctx, principal, input)
+			// CHAOS-5380: the fallback leg's OWN attempt count, recorded
+			// whether it succeeded or failed. mergeFallbackReceipt keeps
+			// the primary's Attempts, so this is the only place the
+			// fallback's retries are observable at all.
+			fallbackAttempts = fallbackReceipt.Attempts
 			if fallbackErr == nil {
 				receipt.FallbackUsed = true
 				receipt.Outcome = "fallback"
@@ -1484,7 +1580,10 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 				rejectionReason = ""
 				setGroundingSignal(fallback)
 				grounding = groundingCountsFrom(fallback)
-				return fallback, mergeFallbackReceipt(receipt, fallbackReceipt), nil
+				// CHAOS-5380: assigned back -- see the matching comment on
+				// the transport-failure fallback arm above.
+				receipt = mergeFallbackReceipt(receipt, fallbackReceipt)
+				return fallback, receipt, nil
 			}
 			// Both legs failed -- see the matching comment in
 			// InterpretQuestion's semantic-invalid-output branch (CHAOS-3770
@@ -1529,6 +1628,25 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 // always reflects the ATTEMPT (success/failure), never the guard's later
 // verdict on the content.
 func (r *Runtime) PhraseStructureOffers(ctx context.Context, principal storage.Principal, input contextfabric.StructureOfferPhrasingInput) (contextfabric.StructureOfferPhrasingDraft, contextfabric.ModelExecutionReceipt, error) {
+	// CHAOS-5380: this is the THIRD withRetry site and, until now, the only
+	// one that emitted NO decision line at all -- so a phrasing model
+	// degrading was invisible at Info however many times it retried, on a
+	// call that runs once per structure-offer pass.
+	//
+	// The defer is installed as the FIRST statement, BEFORE the validation
+	// returns below, not after them the way InterpretQuestion's is: an
+	// observable that only fires on the calls which got far enough cannot
+	// tell "the site was never reached" from "reached, and nothing to
+	// report" (cf-standing-rules dictation 378). A rejected call therefore
+	// still emits, with operation="" and an empty attempt list -- a shape no
+	// real outcome produces.
+	var (
+		receipt         contextfabric.ModelExecutionReceipt
+		attemptOutcomes []attemptOutcome
+	)
+	defer func() {
+		r.logPhraseDecision(ctx, principal.OrgID, input.RequestID, receipt, attemptOutcomes)
+	}()
 	if strings.TrimSpace(principal.OrgID) == "" {
 		return contextfabric.StructureOfferPhrasingDraft{}, contextfabric.ModelExecutionReceipt{}, errors.New("authenticated organization is required")
 	}
@@ -1546,7 +1664,8 @@ func (r *Runtime) PhraseStructureOffers(ctx context.Context, principal storage.P
 	started := r.now().UTC()
 	var output phrasingOutput
 	var usage contextfabric.ModelUsage
-	attempts, generationErr := r.withRetry(ctx, func(callCtx context.Context) error {
+	var generationErr error
+	attemptOutcomes, generationErr = r.withRetry(ctx, func(callCtx context.Context) error {
 		var err error
 		output, usage, err = r.generator.Phrase(callCtx, generationRequest{
 			Model: r.config.PhrasingModelRef, System: phrasingSystemPrompt, Prompt: string(encoded),
@@ -1554,11 +1673,12 @@ func (r *Runtime) PhraseStructureOffers(ctx context.Context, principal storage.P
 		return err
 	})
 	completed := r.now().UTC()
+	attempts := len(attemptOutcomes)
 	var classifiedErr error
 	if generationErr != nil {
 		classifiedErr = classifyModelError(generationErr)
 	}
-	receipt := r.receipt(contextfabric.ModelOperationPhraseOffers, r.config.PhrasingPromptVersion, started, completed, attempts, encoded, nil, usage, classifiedErr)
+	receipt = r.receipt(contextfabric.ModelOperationPhraseOffers, r.config.PhrasingPromptVersion, started, completed, attempts, encoded, nil, usage, classifiedErr)
 	receipt.Model = r.config.PhrasingModel
 	receipt.ModelVersion = r.config.PhrasingModelVersion
 	// RequestID correlates this receipt back to the investigation that
@@ -1580,24 +1700,180 @@ func (r *Runtime) PhraseStructureOffers(ctx context.Context, principal storage.P
 	return draft, receipt, nil
 }
 
-func (r *Runtime) withRetry(ctx context.Context, fn func(context.Context) error) (int, error) {
+// attemptOutcome is ONE pass through withRetry: which pass it was, what class
+// of thing happened on it, and how long it took.
+//
+// CHAOS-5380. withRetry used to return only the COUNT and the LAST error, so
+// every non-terminal attempt's class was discarded at the point of the retry
+// decision. That is the engine-side instance of the regression-diagnosis
+// doc's O4 -- "Retries made successful eventual outcomes erase failed
+// attempts from that statistic" -- and it made attempts=2 outcome=success
+// indistinguishable between a provider rate-limiting us and a provider being
+// briefly down. Class only, never the error text: classifyModelError
+// deliberately drops the original error because it can carry provider
+// response fragments (CHAOS-3756), and this type must not smuggle them back.
+type attemptOutcome struct {
+	// Index is 1-based, matching the attempt numbering callers already see
+	// in receipt.Attempts.
+	Index int
+	// Class is attemptOutcomeClass's own closed vocabulary: success,
+	// rate_limited, invalid_output, unavailable (all shared with
+	// receiptOutcomeForError's terminal Outcome vocabulary), plus cancelled
+	// (CHAOS-5380), which exists ONLY at this per-attempt granularity -- see
+	// attemptOutcomeClass's doc comment. cancelled means the attempt's
+	// context expired or was cancelled, at or before the provider call,
+	// never that the provider itself failed; the terminal receipt.Outcome
+	// for the same attempt still reads "unavailable" (A3 ruling option (b)).
+	Class string
+	// ElapsedMS bounds THIS attempt only. §5 of the regression-diagnosis doc
+	// requires stage latency reported separately from the eventual outcome,
+	// and a single total cannot say which attempt spent the budget.
+	ElapsedMS int64
+}
+
+// attemptOutcomeClass names what happened on one attempt using MOSTLY the
+// same vocabulary the terminal receipt Outcome uses, so a reader never has to
+// learn two spellings for one condition -- success is "success" rather than
+// receiptOutcomeForError's "pending_validation": at attempt granularity the
+// model call did succeed, and whether its OUTPUT validates is a later,
+// separate decision the terminal outcome already reports.
+//
+// "cancelled" is the ONE deliberate exception (CHAOS-5380 PR-A, recut open
+// item 3; team-lead A3 ruling, option (b), 2026-09-10). A context.Canceled/
+// DeadlineExceeded error used to fall through to receiptOutcomeForError's
+// default and read "unavailable" -- identical to the provider actually being
+// down, even on the pre-call ctx.Err() arm where the provider was never
+// reached (generator_calls=0). Scoped to THIS per-attempt class only: the
+// terminal receipt.Outcome vocabulary (ADR-governed: pending_validation,
+// success, fallback, invalid_output, rate_limited, unavailable) is
+// deliberately left unchanged -- extending it is a contract-token decision
+// outside this lane's authority; see the CHRIS-PENDING row in the lane
+// handoff. A cancelled attempt's terminal receipt.Outcome therefore still
+// reads "unavailable" via receiptOutcomeForError, exactly as before; only the
+// per-attempt attempt_outcomes entry distinguishes it.
+func attemptOutcomeClass(err error) string {
+	if err == nil {
+		return "success"
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return "cancelled"
+	}
+	return receiptOutcomeForError(classifyModelError(err))
+}
+
+// formatAttemptOutcomes renders the sequence as "1:unavailable,2:success".
+// Bounded by MaxAttempts (validated 1..3 in New), so this can never grow
+// unbounded, and every component is a digit or a closed-vocabulary word --
+// which is what keeps TestDecisionEventNeverCarriesCorpusText true.
+func formatAttemptOutcomes(outcomes []attemptOutcome) string {
+	parts := make([]string, 0, len(outcomes))
+	for _, outcome := range outcomes {
+		parts = append(parts, fmt.Sprintf("%d:%s", outcome.Index, outcome.Class))
+	}
+	return strings.Join(parts, ",")
+}
+
+// formatAttemptElapsed renders the same sequence's durations as
+// "1:412,2:388", index-aligned with formatAttemptOutcomes so the two lists
+// are read together without a join key.
+func formatAttemptElapsed(outcomes []attemptOutcome) string {
+	parts := make([]string, 0, len(outcomes))
+	for _, outcome := range outcomes {
+		parts = append(parts, fmt.Sprintf("%d:%d", outcome.Index, outcome.ElapsedMS))
+	}
+	return strings.Join(parts, ",")
+}
+
+// attemptsRetried is the count of attempts BEYOND the first. It is derived
+// here rather than at each emitter so the three decision lines cannot
+// disagree, and it is emitted even when it is zero: §5 of the
+// regression-diagnosis doc forbids reporting an absent measurement as a
+// measured zero, whose corollary is that a real zero must be PRESENT -- a
+// missing field then has exactly one meaning, that the site was never
+// reached.
+func attemptsRetried(outcomes []attemptOutcome) int {
+	if len(outcomes) == 0 {
+		return 0
+	}
+	return len(outcomes) - 1
+}
+
+// attemptLogFieldKeys is the shared renderer's own vocabulary, in emission
+// order -- the SINGLE declaration attemptLogFields is built from (see below),
+// not a second copy of it. r1 (codex) P3: a pin that read its expected key
+// set off attemptLogFields's own return value was an expectation computed
+// from the thing under test, so a mutation dropping a field from the
+// renderer dropped it from the pin's expectation too and survived. Pins now
+// reference THIS var directly, never a hand-typed literal and never a call
+// to attemptLogFields -- and because attemptLogFields's own wiring below
+// consumes it, a mutation that shrinks the wiring's range or the value slice
+// without also touching this var creates exactly the field/key-count
+// mismatch a pin can catch.
+var attemptLogFieldKeys = []string{"attempts_total", "attempts_retried", "attempt_outcomes", "attempt_elapsed_ms"}
+
+// attemptLogFields renders the attempt sequence onto a decision line. ONE
+// renderer for all three emitters (CHAOS-5380): the same four keys, in the same
+// order, with the same spelling, so a reader or an alert written against one
+// decision event works unchanged against the others.
+//
+// Every field is a count or an index-prefixed list of digits and
+// closed-vocabulary words -- never provider text -- which is what keeps the
+// corpus-safety guarantee on each emitter's doc comment true for all three at
+// once (TestDecisionEventNeverCarriesCorpusText and its phrase_offers
+// counterpart assert the exact field set).
+func attemptLogFields(outcomes []attemptOutcome) []any {
+	// attempts_total duplicates the pre-existing `attempts` deliberately: the
+	// pair (attempts_total, attempts_retried) is what a reader filters on, and
+	// requiring them to subtract one field from another to learn whether
+	// anything was retried is how the terminal-only read happened.
+	//
+	// attempts_retried is emitted even when ZERO. §5 of the
+	// regression-diagnosis doc forbids reporting an absent measurement as a
+	// measured zero; the corollary is that a present zero must be spelled
+	// out, so a MISSING field has exactly one meaning -- the site was never
+	// reached.
+	values := []any{len(outcomes), attemptsRetried(outcomes), formatAttemptOutcomes(outcomes), formatAttemptElapsed(outcomes)}
+	fields := make([]any, 0, len(attemptLogFieldKeys)*2)
+	for i, key := range attemptLogFieldKeys {
+		fields = append(fields, key, values[i])
+	}
+	return fields
+}
+
+func (r *Runtime) withRetry(ctx context.Context, fn func(context.Context) error) ([]attemptOutcome, error) {
 	var last error
+	outcomes := make([]attemptOutcome, 0, r.config.MaxAttempts)
+	// record appends THIS attempt's outcome before any return, so the
+	// returned slice length always equals the attempt number the caller used
+	// to see -- receipt.Attempts is byte-identical to its pre-CHAOS-5380
+	// value on every path, including the pre-call ctx.Err() arm below, which
+	// counted the attempt it never made.
+	record := func(index int, started time.Time, err error) {
+		outcomes = append(outcomes, attemptOutcome{
+			Index:     index,
+			Class:     attemptOutcomeClass(err),
+			ElapsedMS: r.now().Sub(started).Milliseconds(),
+		})
+	}
 	for attempt := 1; attempt <= r.config.MaxAttempts; attempt++ {
+		started := r.now()
 		if err := ctx.Err(); err != nil {
-			return attempt, err
+			record(attempt, started, err)
+			return outcomes, err
 		}
 		callCtx, cancel := context.WithTimeout(ctx, r.config.Timeout)
 		err := fn(callCtx)
 		cancel()
+		record(attempt, started, err)
 		if err == nil {
-			return attempt, nil
+			return outcomes, nil
 		}
 		last = err
 		if !retryable(err) || attempt == r.config.MaxAttempts {
-			return attempt, err
+			return outcomes, err
 		}
 	}
-	return r.config.MaxAttempts, last
+	return outcomes, last
 }
 
 // receipt builds the content-safe execution receipt for one generation
@@ -1628,6 +1904,14 @@ func (r *Runtime) receipt(operation contextfabric.ModelOperation, promptVersion 
 // deadline error (passed through classifyModelError unchanged) counts as
 // unavailable from a receipts standpoint, since the runtime's own bounded
 // deadline is what stopped the call.
+//
+// CHAOS-5380 PR-A, A3 ruling (team-lead, option (b), 2026-09-10): a context
+// cancellation reads as its own "cancelled" class at the PER-ATTEMPT level
+// (see attemptOutcomeClass) so a pre-call ctx.Err() is distinguishable from
+// the provider actually failing -- but this function, which also backs the
+// TERMINAL receipt.Outcome, deliberately keeps the ADR-documented vocabulary
+// unchanged. Extending it is a contract-token decision outside this lane's
+// authority; see the CHRIS-PENDING row in the lane handoff.
 func receiptOutcomeForError(err error) string {
 	switch {
 	case err == nil:
@@ -1715,7 +1999,7 @@ func safeLogRequestID(requestID string) string {
 	return string(sanitized)
 }
 
-func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification, axisSource string, decodingSeed int64, sample int, rejectionReason string) {
+func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification, axisSource string, decodingSeed int64, sample int, rejectionReason string, attemptOutcomes []attemptOutcome, fallbackAttempts int, primaryProvider, primaryModel, primaryModelVersion string) {
 	fields := []any{
 		"request_id", safeLogRequestID(requestID),
 		"org_id_hash", decisionOrgIDHash(orgID),
@@ -1723,6 +2007,7 @@ func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID str
 		"outcome", receipt.Outcome,
 		"attempts", receipt.Attempts,
 		"fallback_used", receipt.FallbackUsed,
+
 		"primary_failure_classification", primaryFailureClassification,
 		"axis_source", axisSource,
 		// CHAOS-4631: the exact decoding config chaos4631InterpretDecodingConfig
@@ -1748,6 +2033,26 @@ func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID str
 		"model_version", receipt.ModelVersion,
 		"prompt_version", receipt.PromptVersion,
 	}
+	// CHAOS-5380: the attempt sequence, appended by the ONE renderer all three
+	// decision emitters share -- written as a literal in each of them the three
+	// would agree only by inspection, and this seam's entire history is two
+	// readers of one fact disagreeing about it.
+	fields = append(fields, attemptLogFields(attemptOutcomes)...)
+	// The FALLBACK leg's own attempts, explicit zero when no fallback ran.
+	// mergeFallbackReceipt keeps the PRIMARY's Attempts (deliberately -- the
+	// primary's record must not be overwritten), so without this a fallback
+	// that itself retried left no trace anywhere. Deliberately NOT part of
+	// attemptLogFields: offer phrasing has no fallback model, and a field that
+	// could only ever be zero there would be noise rather than a real zero.
+	fields = append(fields, "fallback_attempts_total", fallbackAttempts)
+	// CHAOS-5380 PR-A B4 (r5 P1-1): the PRIMARY's own identity, separate from
+	// model_id/model_version above (which stay the ANSWER identity --
+	// CHAOS-4631 r3, do not revert). On a fallback success these two triples
+	// diverge; attempt_outcomes describes the PRIMARY's attempts, so its
+	// identity must be on the line too, or a primary-model regression is
+	// invisible at Info behind a fallback that happens to still serve. Equal
+	// to model_id/model_version/receipt.Provider when no fallback ran.
+	fields = append(fields, "primary_provider", primaryProvider, "primary_model_id", primaryModel, "primary_model_version", primaryModelVersion)
 	// Appended only when a rejection actually happened, exactly as
 	// logSynthesizeDecision does with its own rejection_reason: an
 	// unconditional field would put rejection_reason="" on every
@@ -1798,7 +2103,7 @@ func groundingCountsFrom(draft contextfabric.SynthesisDraft) synthesisGroundingC
 // counterpart (H7/H8). See logInterpretDecision's doc comment for the
 // corpus-safety and log-level-gating rationale, which applies identically
 // here.
-func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification string, grounding synthesisGroundingCounts, rejectionReason string, factGroupSize, groundedBeyondFirst int) {
+func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification string, grounding synthesisGroundingCounts, rejectionReason string, factGroupSize, groundedBeyondFirst int, attemptOutcomes []attemptOutcome, fallbackAttempts int, primaryProvider, primaryModel, primaryModelVersion string) {
 	fields := []any{
 		"request_id", safeLogRequestID(requestID),
 		"org_id_hash", decisionOrgIDHash(orgID),
@@ -1806,12 +2111,31 @@ func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID st
 		"outcome", receipt.Outcome,
 		"attempts", receipt.Attempts,
 		"fallback_used", receipt.FallbackUsed,
+
 		"primary_failure_classification", primaryFailureClassification,
 		"drivers", grounding.Drivers,
 		"findings", grounding.Findings,
 		"claims", grounding.Claims,
 		"evidence_refs", grounding.EvidenceRefs,
+		// codex r1 observation, fixed here rather than ticketed because it is
+		// three fields on a line this change already rewrites: interpret and
+		// phrase_offers both carry the model/prompt identity and synthesize did
+		// not, so an Info-only reader could see an interpretation-model or
+		// -prompt regression and NOT a synthesis one. Same values the durable
+		// receipt already holds; the point is that the collected line carries
+		// them too, for all three operations rather than two of them.
+		"model_id", receipt.Model,
+		"model_version", receipt.ModelVersion,
+		"prompt_version", receipt.PromptVersion,
 	}
+	// CHAOS-5380: see logInterpretDecision for both of these -- the shared
+	// renderer, and why the fallback count is separate from it.
+	fields = append(fields, attemptLogFields(attemptOutcomes)...)
+	fields = append(fields, "fallback_attempts_total", fallbackAttempts)
+	// CHAOS-5380 PR-A B4 (r5 P1-1): the PRIMARY's own identity, separate
+	// from model_id/model_version above -- see logInterpretDecision's
+	// matching comment for the full rationale.
+	fields = append(fields, "primary_provider", primaryProvider, "primary_model_id", primaryModel, "primary_model_version", primaryModelVersion)
 	// CHAOS-4522: appended, never unconditional, so a successful or
 	// transport-failed call's line stays byte-identical to its pre-4522
 	// shape and only a rejection carries the two new fields. Both values
@@ -1832,6 +2156,38 @@ func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID st
 		// that is the distinguishing fact, not an absence worth hiding.
 		fields = append(fields, "grounded_beyond_first", groundedBeyondFirst)
 	}
+	r.config.Logger.InfoContext(ctx, decisionEventMessage, fields...)
+}
+
+// logPhraseDecision is the offer-phrasing counterpart to
+// logInterpretDecision/logSynthesizeDecision (CHAOS-5380). It carries the
+// same attempt fields and deliberately NOT the interpret/synthesize-specific
+// ones (axis_source, grounding counts, decoding seed): offer phrasing has no
+// axis, no grounding and no fallback model -- a failure degrades to
+// structural, never to a second model -- so fallback_attempts_total is
+// omitted here rather than emitted as a zero that could never be anything
+// else. See logInterpretDecision's doc comment for the corpus-safety
+// rationale, which applies identically: every field below is a count, enum,
+// id or bounded index list.
+//
+// A receipt whose Operation is empty means the call returned BEFORE the
+// receipt was built (an unauthenticated principal, an empty offer set, or an
+// oversized payload). The line still fires -- an observable that only fires
+// on the paths that got far enough cannot distinguish "not reached" from
+// "reached and fine" -- and says so through operation="" with an empty
+// attempt list, which is a different shape from every real outcome.
+func (r *Runtime) logPhraseDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, attemptOutcomes []attemptOutcome) {
+	fields := []any{
+		"request_id", safeLogRequestID(requestID),
+		"org_id_hash", decisionOrgIDHash(orgID),
+		"operation", string(receipt.Operation),
+		"outcome", receipt.Outcome,
+		"attempts", receipt.Attempts,
+		"model_id", receipt.Model,
+		"model_version", receipt.ModelVersion,
+		"prompt_version", receipt.PromptVersion,
+	}
+	fields = append(fields, attemptLogFields(attemptOutcomes)...)
 	r.config.Logger.InfoContext(ctx, decisionEventMessage, fields...)
 }
 
