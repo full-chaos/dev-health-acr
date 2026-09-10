@@ -55,6 +55,78 @@ func (g *groupAuthorizingGraph) ResolveSubjects(ctx context.Context, principal s
 // pins share: project_a under team_security, project_b under team_platform.
 // Two groups, not one, so "the read was rooted on the admitted groups" is a
 // claim a single-group fixture could not discriminate.
+// groupReadRequirementDeriver hands the engine the requirement rows a grouped
+// question actually demands, so the pins drive the REAL derivation consumer
+// (PlanRequirementsFromDerived -> plan.Requirements -> the group read's own
+// row selection) rather than a plan somebody hand-stamped.
+//
+// The rows are TRANSCRIBED FROM A DEPLOYED ANSWER, not invented: the live
+// store's grouped `qa-grouped-clean` result carries exactly this coordinate --
+// obligation `state`, role `group`, subject `team`, kind `read`, scope
+// `each_group`, quantifier `corroborated` -- with that six-kind server list.
+// A member row rides alongside it for the same reason the real plan has one:
+// the group read must select the group row and leave the member row to the
+// member read, and a fixture with only the group row could not tell a correct
+// selection from one that takes every row it sees.
+// groupReadFramedInterpreter reports a grouped family AND the validated frame
+// that family was read off, because the requirement derivation runs on the
+// FRAME and produces nothing without one.
+//
+// The shared groupedFamilyInterpreter carries no frame, which is correct for
+// the pins it was written for -- they are about the grouping refusal, which is
+// decided before requirements matter. A grouped turn in production always has
+// a frame here, so a fixture without one would be measuring a state the
+// deployed engine never reaches.
+type groupReadFramedInterpreter struct {
+	interpretation InterpretedQuestion
+	groupKind      SubjectKind
+	memberKind     SubjectKind
+}
+
+func (i groupReadFramedInterpreter) Interpret(_ context.Context, _ storage.Principal, _ InvestigationRequest) (InterpretedQuestion, QuestionFamilyOutcome, error) {
+	frame := QuestionFrame{
+		Version: QuestionFrameVersion,
+		SubjectExpression: SubjectExpression{
+			Kind:    SubjectExpressionGroupedMembers,
+			Grouped: &GroupedSetExpression{GroupKind: i.groupKind, MemberKind: i.memberKind},
+		},
+		Obligations: []AnswerObligation{ObligationState},
+		Goals:       []InvestigationGoal{GoalAssessState},
+		Temporal:    TemporalIntentCurrent,
+	}
+	validated := ValidateFrame(frame, nil, ShapeDiscoveredCohort)
+	gate := DecideFrameGate(validated, true)
+	accepted := validated.Frame
+	return i.interpretation, QuestionFamilyOutcome{
+		Family:        QuestionFamilyGroupedCohortStatus,
+		Source:        QuestionFamilySourceModel,
+		WinningSample: FamilySample{GroupKind: i.groupKind},
+		Frame:         &accepted,
+		Gate:          gate,
+	}, nil
+}
+
+type groupReadRequirementDeriver struct{}
+
+func (groupReadRequirementDeriver) DeriveRequirements(QuestionFrame) []DerivedRequirement {
+	return []DerivedRequirement{
+		{
+			RequirementCoordinate: RequirementCoordinate{Obligation: ObligationState, Role: SubjectRoleGroup, Subject: SubjectTeam},
+			Kind:                  ObligationKindRead,
+			FactKinds:             []FactKind{FactFlow, FactHealth, FactInvestment, FactLandscape, FactReadiness, FactWorkload},
+			Scope:                 CompletionScopeEachGroup,
+			Quantifier:            CompletionQuantifierCorroborated,
+		},
+		{
+			RequirementCoordinate: RequirementCoordinate{Obligation: ObligationState, Role: SubjectRoleMember, Subject: SubjectProject},
+			Kind:                  ObligationKindRead,
+			FactKinds:             []FactKind{FactMetrics},
+			Scope:                 CompletionScopeEachMember,
+			Quantifier:            CompletionQuantifierAtLeastOne,
+		},
+	}
+}
+
 func groupReadMemberFacts() []CanonicalFact {
 	return []CanonicalFact{
 		teamScopedFact("project_a", "team_security", "Security"),
@@ -141,9 +213,10 @@ func groupReadEngineFixtureWith(t *testing.T, telemetry EngineTelemetry, facts C
 		denied: denied,
 	}
 	engine, err := NewEngine(EngineDependencies{
-		Interpreter: groupedFamilyInterpreter{interpretation: interpretation, groupKind: SubjectTeam},
-		Graph:       graph,
-		Facts:       facts,
+		Interpreter:  groupReadFramedInterpreter{interpretation: interpretation, groupKind: SubjectTeam, memberKind: SubjectProject},
+		Graph:        graph,
+		Facts:        facts,
+		Requirements: groupReadRequirementDeriver{},
 		Synthesizer: synthesizerFunc(func(_ context.Context, _ storage.Principal, _ SynthesisInput) (InvestigationResult, error) {
 			return InvestigationResult{
 				Status:              InvestigationPartial,

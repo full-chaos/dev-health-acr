@@ -398,6 +398,11 @@ type PlanTelemetry interface {
 	// every artifact; this is what makes it countable. Closed
 	// enums/counts only, fired once per grouped answer.
 	RecordGroupedCohortCompleteness(ctx context.Context, principal storage.Principal, event GroupedCohortCompletenessEvent)
+	// RecordCohortGroupRead reports what the grouped path did with its own
+	// group axis: how many groups were proposed, how many the authorizer
+	// admitted, whether a group-rooted fact read was issued at all, and the
+	// named reason when it was not.
+	RecordCohortGroupRead(ctx context.Context, principal storage.Principal, event CohortGroupReadEvent)
 
 	// RecordMembershipCardinality reports the `membership_cardinality`
 	// server step's own result for one served answer: what was counted, how

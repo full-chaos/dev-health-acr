@@ -105,10 +105,21 @@ func TestAGroupedTurnIssuesASecondFactReadRootedOnItsGroups(t *testing.T) {
 		bundle.Coverage.Sources = []SourceObservation{{Source: "canonical_fact:metrics", State: SourceAvailable}}
 		return bundle
 	}}
-	engine, request := groupReadEngineFixture(t, &recordingTelemetry{}, recorder)
+	telemetry := &recordingTelemetry{}
+	engine, request := groupReadEngineFixture(t, telemetry, recorder)
 
 	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
 		t.Fatalf("Investigate() error = %v", err)
+	}
+	// The stage's own decision line, read back. A pin that only counted
+	// requests could not say WHY none was issued, and "the stage refused for a
+	// named reason" and "the stage never ran" are different defects.
+	if len(telemetry.cohortGroupReads) != 1 {
+		t.Errorf("group-read decisions emitted = %d, want exactly 1 on a grouped turn -- the stage must report what it decided even when it decides not to read", len(telemetry.cohortGroupReads))
+	}
+	for _, event := range telemetry.cohortGroupReads {
+		t.Logf("group read decision: proposed=%d admitted=%d denied=%d read=%v refused=%v refusal=%q facts=%d",
+			event.Proposed, event.Admitted, event.Denied, event.Read, event.Refused, event.Refusal, event.FactsReturned)
 	}
 
 	if len(recorder.requests) == 0 {

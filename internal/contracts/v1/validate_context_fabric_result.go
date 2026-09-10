@@ -242,7 +242,7 @@ func (c ContextFabricCohort) validate(bounds contextFabricBounds) error {
 	// the group-blind read this slice exists to prevent), and Truncated
 	// false is refused while any group is truncated.
 	if len(c.Groups) > 0 {
-		if len(c.Groups) > 250 {
+		if len(c.Groups) > ContextFabricCohortGroupsMaxCount {
 			return fmt.Errorf("cohort violates v1 bounds")
 		}
 		if err := ValidateCohortGroups(c.Groups, c.Members); err != nil {

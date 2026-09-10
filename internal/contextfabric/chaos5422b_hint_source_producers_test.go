@@ -107,6 +107,45 @@ func TestEveryEnumeratedHintSourceHasAnExecutedProductionDriver(t *testing.T) {
 		driven[hintsource.AnswerReuseAuthorizationRecheck] = true
 	})
 
+	t.Run("cohort_group_authorization, through the grouped turn's group read", func(t *testing.T) {
+		// Driven through a REAL grouped turn, not by handing the hint to the
+		// port directly: the claim the registry makes is that this string is
+		// produced by a production path, and only a turn that actually
+		// groups, authorizes and reads can show that.
+		recorder := &groupReadRecorder{facts: func(CanonicalFactRequest) CanonicalFactBundle {
+			bundle := emptyFactBundle()
+			bundle.Facts = groupReadMemberFacts()
+			bundle.Coverage.Sources = []SourceObservation{{Source: "canonical_fact:metrics", State: SourceAvailable}}
+			return bundle
+		}}
+		engine, request := groupReadEngineFixture(t, &recordingTelemetry{}, recorder)
+		if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+			t.Fatalf("Investigate() error = %v", err)
+		}
+		graph, ok := engine.graph.(*groupAuthorizingGraph)
+		if !ok {
+			t.Fatalf("fixture defect: the group-read fixture's graph is %T, so no hint can be read back", engine.graph)
+		}
+		sources := make([]string, 0, 2)
+		for _, hints := range graph.hinted {
+			for _, hint := range hints {
+				sources = append(sources, hint.Source)
+			}
+		}
+		t.Logf("sources reaching ResolveSubjects = %v", sources)
+		found := false
+		for _, source := range sources {
+			if source == string(hintsource.CohortGroupAuthorization) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("the grouped turn's group authorization put %v on the wire, none of which is %q -- either the group read did not run in this fixture (then it measures nothing) or it emits a different string than the registry holds",
+				sources, hintsource.CohortGroupAuthorization)
+		}
+		driven[hintsource.CohortGroupAuthorization] = true
+	})
+
 	// THE CLOSURE CHECK. A member added to the registry with no driver above
 	// is an unmeasured member, and the enumeration would then be describing
 	// something no test has ever seen produced.

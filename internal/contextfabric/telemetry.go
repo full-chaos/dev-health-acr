@@ -1677,3 +1677,45 @@ func validNarrationAllocatorOrUnclassified(allocator CohortDriverNarrationAlloca
 	}
 	return CohortDriverNarrationAllocator("unclassified")
 }
+
+// RecordCohortGroupRead emits the grouped path's own decision about its group
+// axis, at Info, on every grouped turn that reached the stage.
+//
+// The line is written so the decision graph can be rebuilt from it alone:
+// `proposed` is the pre-entry state (what grouping produced), `admitted` and
+// `denied` are the pre-decision measurement (what the authorizer said),
+// `read` and `group_read_refusal` are the decision itself, and
+// `facts_returned` is the post-decision result. A reader who has only this
+// line can say what was asked, what was allowed, what ran and what came back.
+//
+// `contract_bound` travels beside `proposed` because a refusal at the edge and
+// a refusal far past it are different operational facts, and a reader should
+// not have to know this build's constant to tell them apart.
+//
+// Ids, counts, booleans and closed enums only -- no group ids, no payload.
+func (t SlogEngineTelemetry) RecordCohortGroupRead(ctx context.Context, principal storage.Principal, event CohortGroupReadEvent) {
+	if t.logger == nil {
+		return
+	}
+	// Routed through the vocabulary's own membership check, not emitted
+	// verbatim: a value escaping the closed set reaches a field consumers
+	// group on, and free text there is indistinguishable from a member until
+	// someone tries to aggregate it.
+	refusal := event.Refusal
+	if !ValidGroupReadRefusal(refusal) {
+		refusal = GroupReadRefusal("unclassified")
+	}
+	t.logger.InfoContext(ctx, "context fabric cohort group read",
+		"org_id", principal.OrgID,
+		"family", string(event.Family),
+		"group_kind", string(event.GroupKind),
+		"groups_proposed", event.Proposed,
+		"groups_admitted", event.Admitted,
+		"groups_denied", event.Denied,
+		"contract_bound", event.ContractBound,
+		"group_read_issued", event.Read,
+		"group_read_refused", event.Refused,
+		"group_read_refusal", string(refusal),
+		"group_facts_returned", event.FactsReturned,
+	)
+}

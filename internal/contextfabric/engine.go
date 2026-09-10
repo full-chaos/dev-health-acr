@@ -2374,6 +2374,58 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				Complete:               cohort.Complete,
 				Truncated:              cohort.Truncated,
 			})
+			// THE GROUP AXIS IS READ HERE, and it has to be here: the group
+			// identities are constructed from the members' own facts, so this
+			// is the first moment they exist, and it is still before
+			// narrowing and ranking, which the pinned group -> narrow -> rank
+			// order requires.
+			//
+			// Until this call, a grouped answer declared an `each_group`
+			// requirement and reported it against evidence read for the
+			// MEMBERS: one fact request, rooted on the cohort, and no
+			// provider ever asked about a group. That made `each_group`
+			// satisfiable only by projecting member evidence onto the group
+			// axis -- a read witness manufactured for a subject nobody was
+			// asked about.
+			//
+			// A failure here does NOT fail the turn. The group read is
+			// additive: the member evidence that was already gathered is
+			// still a true answer to most of the question, and turning a
+			// partially-served grouped answer into a stage error would be a
+			// regression against the very rows this is meant to move. The
+			// refusal is carried instead, and disclosed.
+			groupBundle, groupOutcome, groupErr := e.readAdmittedGroupFacts(ctx, principal, request, interpretation, binding, plan, &cohort, effectiveWindow)
+			if groupErr != nil {
+				groupOutcome.Refused = true
+			}
+			if groupOutcome.Refused && groupOutcome.Reason == GroupReadRefusalOverContractBound {
+				// REFUSED, NOT SLICED. Taking the first 250 of 251 groups
+				// answers a question nobody asked and the caller cannot tell
+				// it from a complete answer. Dropping the axis leaves the
+				// flat answer this turn would have given before the group
+				// axis was proposed, which is honest and is what the reader
+				// is told below.
+				cohort.Groups = nil
+				ApplyGroupedCohortCompleteness(&cohort)
+				plan.GroupKind = ""
+			}
+			graphContext.Cohort = &cohort
+			if groupOutcome.Read && groupErr == nil {
+				facts.Facts = append(facts.Facts, groupBundle.Facts...)
+				facts.Coverage = MergeCoverage(principal.OrgID, facts.Coverage, groupBundle.Coverage)
+			}
+			e.recordCohortGroupRead(ctx, principal, CohortGroupReadEvent{
+				Family:        plan.Family,
+				GroupKind:     plan.GroupKind,
+				Proposed:      groupOutcome.Proposed,
+				Admitted:      len(groupOutcome.Admitted),
+				Denied:        groupOutcome.Denied,
+				Read:          groupOutcome.Read,
+				Refused:       groupOutcome.Refused,
+				Refusal:       groupOutcome.Reason,
+				FactsReturned: len(groupBundle.Facts),
+				ContractBound: contractsv1.ContextFabricCohortGroupsMaxCount,
+			})
 		} else if groupingOutcome.Refusal != CohortGroupingRefusalNone {
 			// ONE arm for EVERY refusal, and the reason there is only one is
 			// worth stating, because there used to be two.

@@ -357,6 +357,9 @@ type recordingTelemetry struct {
 	// groupedCohortCompletenesses (CHAOS-4733) records every grouped-cohort
 	// completeness fold verbatim, same list-not-count discipline.
 	groupedCohortCompletenesses []GroupedCohortCompletenessEvent
+	// cohortGroupReads records every group-read decision, so a test can say
+	// what the group stage proposed, admitted and actually read.
+	cohortGroupReads []CohortGroupReadEvent
 	membershipCardinalities     []MembershipCardinalityEvent
 	readRequirementPopulations  []ReadRequirementPopulationEvent
 	// readRequirementObservationCovers records every observation-cover
@@ -640,6 +643,10 @@ func (r *recordingTelemetry) RecordPlanNarrowing(_ context.Context, _ storage.Pr
 // list-not-count discipline as RecordPlanNarrowing above.
 func (r *recordingTelemetry) RecordGroupedCohortCompleteness(_ context.Context, _ storage.Principal, event GroupedCohortCompletenessEvent) {
 	r.groupedCohortCompletenesses = append(r.groupedCohortCompletenesses, event)
+}
+
+func (r *recordingTelemetry) RecordCohortGroupRead(_ context.Context, _ storage.Principal, event CohortGroupReadEvent) {
+	r.cohortGroupReads = append(r.cohortGroupReads, event)
 }
 
 // RecordMembershipCardinality records the whole event, same list-not-count

@@ -39,6 +39,13 @@ const (
 	// through the caller-hint short circuit -- so it stays short-circuit
 	// eligible and contest-exempt. See the attribute table below.
 	AnswerReuseAuthorizationRecheck Source = "answer_reuse_authorization_recheck"
+	// CohortGroupAuthorization: the grouped-cohort path asking whether this
+	// principal may see each group identity the grouping CONSTRUCTED, before
+	// any group-rooted fact read is issued. Engine-minted, and its subjects
+	// are named by canonical id the engine derived from the source rows, so
+	// it takes the same attributes as the reuse recheck: it is a filter over
+	// identities this turn already holds, never a way to widen a pool.
+	CohortGroupAuthorization Source = "cohort_group_authorization"
 )
 
 // Attributes are the TWO INDEPENDENT FACTS about a source, kept apart on
@@ -126,6 +133,11 @@ var registry = map[Source]Attributes{
 		EngineMinted:         true,
 		ContestExempt:        Contest(true),
 		ShortCircuitEligible: ShortCircuit(true),
+	},
+	CohortGroupAuthorization: {
+		EngineMinted:         true,
+		ContestExempt:        true,
+		ShortCircuitEligible: true,
 	},
 }
 
