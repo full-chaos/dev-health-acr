@@ -618,10 +618,43 @@ func RetainFactsForCohort(facts []CanonicalFact, cohort *Cohort, removed []Cohor
 	for _, member := range removed {
 		dropped[SubjectMapKey(member.Subject)] = struct{}{}
 	}
+	// THE GROUP AXIS IS RETAINED TOO, and it was not before.
+	//
+	// This function was written when every fact in the bundle was rooted on a
+	// cohort MEMBER, so dropping "facts whose subject was removed" was the
+	// whole job. A grouped turn now also carries facts rooted on the GROUP
+	// identities, and a group's subject is never in `removed` -- that list
+	// holds members. So a group narrowed out of the answer kept its evidence,
+	// and synthesis was handed facts about a population the served document
+	// does not contain. The consequence is the one this function's own member
+	// case exists to prevent: a claim minted from them is ungrounded, and
+	// evidence closure rejects the whole result for a reason nothing in the
+	// trace explains.
+	//
+	// Built only when the cohort HAS groups, and admitting anything that is
+	// still a member OR still a group. Dropping by "subject kind equals the
+	// group kind" alone would be wrong for a cohort whose MEMBERS are of that
+	// kind -- teams grouped by organization -- and would delete the member
+	// evidence of every such answer.
+	var admitted map[string]struct{}
+	if cohort != nil && len(cohort.Groups) > 0 {
+		admitted = make(map[string]struct{}, len(cohort.Groups)+len(cohort.Members))
+		for _, group := range cohort.Groups {
+			admitted[SubjectMapKey(group.Subject)] = struct{}{}
+		}
+		for _, member := range cohort.Members {
+			admitted[SubjectMapKey(member.Subject)] = struct{}{}
+		}
+	}
 	retained := make([]CanonicalFact, 0, len(facts))
 	for _, fact := range facts {
 		if _, gone := dropped[SubjectMapKey(fact.Subject)]; gone {
 			continue
+		}
+		if admitted != nil {
+			if _, stillThere := admitted[SubjectMapKey(fact.Subject)]; !stillThere {
+				continue
+			}
 		}
 		retained = append(retained, fact)
 	}
