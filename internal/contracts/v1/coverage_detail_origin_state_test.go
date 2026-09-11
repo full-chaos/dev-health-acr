@@ -143,7 +143,7 @@ func TestFactReadOriginStateLabelNamesKindOriginAndState(t *testing.T) {
 // TestFactReadOriginStateClassification pins the two predicates the result
 // validator consults: never degrading, never population-qualifying.
 func TestFactReadOriginStateClassification(t *testing.T) {
-	if coverageDetailCodeMayDegrade(ContextFabricCoverageDetailFactReadOriginState) {
+	if ContextFabricCoverageDetailCodeMayDegrade(ContextFabricCoverageDetailFactReadOriginState) {
 		t.Error("fact_read_origin_state may degrade; it is a disclosure and must never count a gap twice")
 	}
 	if coverageDetailCodeQualifiesPopulation(ContextFabricCoverageDetailFactReadOriginState) {

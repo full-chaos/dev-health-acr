@@ -525,12 +525,18 @@ func coverageDetailCodeQualifiesPopulation(code ContextFabricCoverageDetailCode)
 	}
 }
 
-// coverageDetailCodeDegrades declares, per the settled design, which codes
-// are NEVER degrading regardless of producer state (parity with the string
-// path: fact_pruned and graph_validity_unbounded never enter
+// ContextFabricCoverageDetailCodeMayDegrade declares, per the settled design,
+// which codes are NEVER degrading regardless of producer state (parity with
+// the string path: fact_pruned and graph_validity_unbounded never enter
 // degraded_reasons; every other code's degrading bit mirrors its producer
-// branch). Used only to reject an impossible combination on write.
-func coverageDetailCodeMayDegrade(code ContextFabricCoverageDetailCode) bool {
+// branch). Used to reject an impossible combination on write, and EXPORTED
+// because the same partition answers a second question one layer up: a code
+// that can never degrade an answer can never be the CAUSE of a loss either,
+// so a reader deriving a requirement row's cause from the coverage details
+// must be able to tell a disclosure from a degradation without a hand list
+// that would fall behind this one (internal/contextfabric,
+// readRequirementEvidence).
+func ContextFabricCoverageDetailCodeMayDegrade(code ContextFabricCoverageDetailCode) bool {
 	switch code {
 	case ContextFabricCoverageDetailFactPruned, ContextFabricCoverageDetailGraphValidityUnbounded,
 		ContextFabricCoverageDetailFactReadOriginState:
@@ -552,7 +558,7 @@ func (d ContextFabricCoverageDetail) Validate() error {
 	if !validCoverageDetailCode(d.Code) {
 		return fmt.Errorf("coverage detail code %q is not in the closed vocabulary", d.Code)
 	}
-	if d.Degrading && !coverageDetailCodeMayDegrade(d.Code) {
+	if d.Degrading && !ContextFabricCoverageDetailCodeMayDegrade(d.Code) {
 		return fmt.Errorf("coverage detail code %q can never degrade", d.Code)
 	}
 	if !stringLengthBetween(strings.TrimSpace(d.Label), 1, ContextFabricCoverageDetailLabelMaxLength) {

@@ -312,3 +312,65 @@ func TestTheOriginRowsFitTheCoverageBoundAtTheVocabularyMaximum(t *testing.T) {
 		t.Fatalf("the vocabulary-maximal served coverage fails the write-path contract: %v", err)
 	}
 }
+
+// A DISCLOSURE MUST NOT RENAME THE CAUSE OF A LOSS.
+//
+// evaluateReadRequirement carries the coverage layer's own code as the
+// requirement row's cause, keyed by fact kind and last-writer-wins. A
+// never-degrading code describes a read that happened; it does not say what
+// cost the read its evidence. fact_read_origin_state made the difference
+// load-bearing: it is emitted per origin for EVERY kind, so before the guard
+// it was the last detail written for every kind and a row narrowed by a
+// provider failure named the disclosure instead.
+//
+// SWEPT OVER THE WHOLE CLASS, enumerated from the contract rather than
+// listed here, so a never-degrading code added later is covered the day it is
+// declared. Each cell puts the degrading detail FIRST and the disclosure
+// SECOND, which is the order that fails without the guard.
+func TestANonDegradingDisclosureNeverBecomesARequirementRowsCause(t *testing.T) {
+	const kind = FactKind("health")
+	requirement := contractsv1.ContextFabricPlanRequirement{
+		Requirement: "state/member/project",
+		Obligation:  "state",
+		FactKinds:   []contractsv1.ContextFabricFactKind{kind},
+	}
+	coverageFor := func(second contractsv1.ContextFabricCoverageDetailCode) Coverage {
+		return Coverage{
+			Sources: []SourceObservation{{Source: canonicalFactSourcePrefix + string(kind), State: SourceUnavailable}},
+			Details: []CoverageDetail{
+				{
+					DetailID: "cov-01", Source: canonicalFactSourcePrefix + string(kind),
+					Code: contractsv1.ContextFabricCoverageDetailFactProviderReported, FactKind: kind,
+				},
+				{
+					DetailID: "cov-02", Source: canonicalFactSourcePrefix + string(kind),
+					Code: second, FactKind: kind,
+				},
+			},
+		}
+	}
+
+	swept := 0
+	for _, code := range contractsv1.ContextFabricCoverageDetailCodeVocabulary() {
+		if contractsv1.ContextFabricCoverageDetailCodeMayDegrade(code) {
+			continue
+		}
+		swept++
+		evidence := evaluateReadRequirement(requirement, coverageFor(code))
+		if evidence.Cause != contractsv1.ContextFabricCoverageDetailFactProviderReported {
+			t.Errorf("second detail %q: cause = %q, want %q -- a code that can never degrade must not name the cause of a loss",
+				code, evidence.Cause, contractsv1.ContextFabricCoverageDetailFactProviderReported)
+		}
+	}
+	if swept < 3 {
+		t.Fatalf("swept %d never-degrading codes, want every member of the class (at least fact_pruned, graph_validity_unbounded, fact_read_origin_state)", swept)
+	}
+
+	// THE DISCRIMINATING CONTROL: a code that CAN degrade still wins the
+	// last-writer-wins map, so the sweep above is proving the guard and not
+	// merely that the first detail is always kept.
+	control := evaluateReadRequirement(requirement, coverageFor(contractsv1.ContextFabricCoverageDetailFactNarrowed))
+	if control.Cause != contractsv1.ContextFabricCoverageDetailFactNarrowed {
+		t.Fatalf("control: cause = %q, want %q -- a degrading code must still be carried", control.Cause, contractsv1.ContextFabricCoverageDetailFactNarrowed)
+	}
+}
