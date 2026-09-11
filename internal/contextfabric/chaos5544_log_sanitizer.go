@@ -49,3 +49,61 @@ func SanitizeLogAttr(s string) string {
 	}
 	return string(runes)
 }
+
+// SanitizeLogStrings (CHAOS-5544, r2 P1) applies SanitizeLogAttr to every
+// element of a []string log attribute value -- an r2 review round found
+// three sites (graphrank/tracer.go's top_ids/fired_ids/eliminated_ids)
+// logging a raw []string directly: the whole-tree instrument classified by
+// SCALAR string type only, so a slice of unsanitized strings was invisible
+// to it. Returns a NEW slice; the caller's own backing array is never
+// mutated (an ID list can be shared with other readers, e.g. a served
+// response, that must keep the unsanitized original).
+func SanitizeLogStrings(ss []string) []string {
+	if ss == nil {
+		return nil
+	}
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = SanitizeLogAttr(s)
+	}
+	return out
+}
+
+// SanitizeLogAttrs (CHAOS-5544, r2 P1) sanitizes a whole `[]any{key, value,
+// key, value, ...}` slog attribute slice before it is spread into a logger
+// call (`logger.InfoContext(ctx, msg, SanitizeLogAttrs(attrs)...)`). An r2
+// review round found seven sites building this slice INCREMENTALLY across
+// several `append` calls rather than one literal, then spreading it with
+// `attrs...` -- a shape the whole-tree instrument's static scan explicitly
+// skipped (an ellipsis call's argument is a runtime value, not visible at
+// the call site), so every incrementally-appended value at those seven
+// sites reached the sink completely unsanitized regardless of type. This
+// is the one exception to "SanitizeLogAttr(Strings) at the value
+// expression": a spread's contents are not statically enumerable the way a
+// literal's are, so the barrier moves to the spread's OWN boundary and
+// sanitizes every string/[]string value in the already-built slice at
+// runtime, keys and non-string values (counts, bools, closed-enum
+// conversions) passed through unchanged. Returns a NEW slice; nil in means
+// nil out, an odd-length slice (a caller bug -- key with no value) has its
+// trailing key passed through unchanged rather than panicking.
+func SanitizeLogAttrs(attrs []any) []any {
+	if attrs == nil {
+		return nil
+	}
+	out := make([]any, len(attrs))
+	for i, v := range attrs {
+		if i%2 == 0 {
+			out[i] = v // a key: never sanitized, always a literal
+			continue
+		}
+		switch value := v.(type) {
+		case string:
+			out[i] = SanitizeLogAttr(value)
+		case []string:
+			out[i] = SanitizeLogStrings(value)
+		default:
+			out[i] = v
+		}
+	}
+	return out
+}

@@ -2064,7 +2064,7 @@ func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID str
 	if rejectionReason != "" {
 		fields = append(fields, "rejection_reason", rejectionReason)
 	}
-	r.config.Logger.InfoContext(ctx, decisionEventMessage, fields...)
+	r.config.Logger.InfoContext(ctx, decisionEventMessage, contextfabric.SanitizeLogAttrs(fields)...)
 }
 
 // synthesisGroundingCounts is H8's fix: how many of the synthesis draft's
@@ -2151,7 +2151,7 @@ func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID st
 		// that is the distinguishing fact, not an absence worth hiding.
 		fields = append(fields, "grounded_beyond_first", groundedBeyondFirst)
 	}
-	r.config.Logger.InfoContext(ctx, decisionEventMessage, fields...)
+	r.config.Logger.InfoContext(ctx, decisionEventMessage, contextfabric.SanitizeLogAttrs(fields)...)
 }
 
 // logPhraseDecision is the offer-phrasing counterpart to
@@ -2183,7 +2183,7 @@ func (r *Runtime) logPhraseDecision(ctx context.Context, orgID, requestID string
 		"prompt_version", contextfabric.SanitizeLogAttr(receipt.PromptVersion),
 	}
 	fields = append(fields, attemptLogFields(attemptOutcomes)...)
-	r.config.Logger.InfoContext(ctx, decisionEventMessage, fields...)
+	r.config.Logger.InfoContext(ctx, decisionEventMessage, contextfabric.SanitizeLogAttrs(fields)...)
 }
 
 func boundedJSON(value any, maximum int) ([]byte, error) {

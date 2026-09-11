@@ -490,6 +490,6 @@ func quarantineLogger(logger *slog.Logger, sourceName string) func(quarantineObs
 		if observation.Detail != "" {
 			attrs = append(attrs, "relationship_type", observation.Detail)
 		}
-		logger.Warn("context_fabric: projection item quarantined; the item is dropped and the batch continues", attrs...)
+		logger.Warn("context_fabric: projection item quarantined; the item is dropped and the batch continues", contextfabric.SanitizeLogAttrs(attrs)...)
 	}
 }

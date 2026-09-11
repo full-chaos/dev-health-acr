@@ -94,3 +94,36 @@ func TestRecordPriorSubjectReceiptsSkippedSanitizesOrgID(t *testing.T) {
 		t.Fatalf("org_id = %q lost its correlation prefix", got)
 	}
 }
+
+// TestRecordAnswerReuseContainmentSanitizesSpreadDisclosure is the r3 pin
+// for the SPREAD class: RecordAnswerReuseContainment builds its `args`
+// []any across an initial literal AND a conditional `append(args,
+// "disclosure", event.Disclosure)`, then spreads `args...` -- the exact
+// shape an r3 review round found seven sites of, invisible to a scanner
+// that only inspected literal key/value pairs. The spread itself is now
+// wrapped (`SanitizeLogAttrs(args)...`); this forges the APPENDED value
+// specifically (never part of any literal) to prove the spread-level
+// barrier, not a per-value one, is what actually catches it.
+func TestRecordAnswerReuseContainmentSanitizesSpreadDisclosure(t *testing.T) {
+	t.Parallel()
+	forged := "structured\r\nlevel=ERROR msg=\"forged\""
+	records := captureSlogJSON(t, func(logger *slog.Logger) {
+		NewSlogEngineTelemetry(logger).RecordAnswerReuseContainment(context.Background(), storage.Principal{OrgID: "org_1"}, AnswerReuseContainmentEvent{
+			DemandedCount:   3,
+			VisibleCount:    2,
+			MissingCount:    1,
+			MissingCitation: false,
+			Disclosure:      forged,
+		})
+	})
+	if len(records) != 1 {
+		t.Fatalf("got %d records, want exactly 1", len(records))
+	}
+	got, _ := records[0]["disclosure"].(string)
+	if strings.ContainsAny(got, "\n\r") {
+		t.Fatalf("a line break survived into disclosure (the spread's own value): %q", got)
+	}
+	if !strings.HasPrefix(got, "structured") {
+		t.Fatalf("disclosure = %q lost its correlation prefix", got)
+	}
+}

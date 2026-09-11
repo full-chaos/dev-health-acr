@@ -924,7 +924,7 @@ func (r *FactCapabilityRegistry) recordFactRead(ctx context.Context, principal s
 		"truncated", truncated,
 	}
 	attrs = append(attrs, requestIDLogAttrs(ctx)...)
-	r.logger.InfoContext(ctx, "context fabric fact read", attrs...)
+	r.logger.InfoContext(ctx, "context fabric fact read", SanitizeLogAttrs(attrs)...)
 }
 
 // distinctSubjectKinds reduces a subject list to its sorted, deduplicated
@@ -1006,7 +1006,7 @@ func (r *FactCapabilityRegistry) recordFactTableDeclarations(ctx context.Context
 				"measure_count", len(value.Table.Measures),
 			}
 			attrs = append(attrs, requestIDLogAttrs(ctx)...)
-			r.logger.InfoContext(ctx, "context fabric fact table declaration", attrs...)
+			r.logger.InfoContext(ctx, "context fabric fact table declaration", SanitizeLogAttrs(attrs)...)
 		}
 	}
 }

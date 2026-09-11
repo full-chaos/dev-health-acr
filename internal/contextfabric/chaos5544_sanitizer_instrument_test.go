@@ -5,25 +5,34 @@ package contextfabric
 // CHAOS-5544's first two commits fixed the four named sites its own commit
 // message claimed were the whole surface. A codex review round found two
 // more, independently-drifted sinks the claim missed (chaos4171_offer_phrasing.go,
-// graphrank/tracer.go), and a SECOND round -- after those were fixed --
-// found MORE still: telemetry.go's own served_request_id/source_result_id,
-// graphrank's Subject.CanonicalID at eleven sites, and falkorgraph's own
-// unsanitized request-id sink. Three rounds, three new cells, because every
-// prior pass enumerated the surface BY HAND (a grep for known field names,
-// a doc comment asserting "safe to log directly") rather than from the
-// producer.
+// graphrank/tracer.go), a SECOND round -- after those were fixed -- found
+// MORE still (telemetry.go's stored ids, graphrank's Subject.CanonicalID,
+// falkorgraph's own request-id sink), and a THIRD round found three
+// distinct blind spots in the INSTRUMENT ITSELF rather than in the
+// production code: (1) a []string attribute (graphrank/tracer.go's
+// top_ids/fired_ids/eliminated_ids) was invisible because the classifier
+// only inspected scalar string types; (2) seven sites built their `[]any`
+// attribute slice across several `append` calls and spread it
+// (`logger.Info(msg, attrs...)`), a shape the scanner explicitly skipped
+// because a spread's contents are not enumerable at the call site; (3) the
+// scanner identified a "sanitizer" call by NAME ONLY, so a same-named
+// impostor function anywhere would have silently passed.
 //
 // This enumerates from the producer: every slog attribute value logged
 // anywhere under internal/contextfabric/... (this package and every
-// subpackage) that is (a) string-typed, (b) not a compile-time constant,
-// and (c) not wrapped by a call to SanitizeLogAttr is a FAILURE, named by
-// path:line. Nothing is exempted by name -- the only allowlist is by TYPE:
-// a named string type (a closed enum, e.g. OfferPhrasingOutcome), even
-// when explicitly converted via string(x), and any bool/numeric-typed
-// value are not flagged, because there is nothing free-text about them to
-// forge a log line with. A new raw string log site added anywhere in this
-// package family fails this test the moment it lands, not on the next
-// adversarial review round.
+// subpackage) that is (a) string- or []string-typed, (b) not a
+// compile-time constant, and (c) not wrapped by a call that RESOLVES (by
+// types.Object identity, never by name) to this package's own
+// SanitizeLogAttr/SanitizeLogStrings/SanitizeLogAttrs is a FAILURE, named
+// by path:line. A spread argument (`attrs...`) that does not resolve to
+// SanitizeLogAttrs is a FAILURE at the spread site itself. Nothing is
+// exempted by name -- the only allowlist is by TYPE: a named string type
+// (a closed enum, e.g. OfferPhrasingOutcome) whose OWN declaring package
+// declares at least one const of that type, and any bool/numeric-typed
+// value, are not flagged, because there is nothing free-text about them to
+// forge a log line with. A new raw string/[]string log site, or a new
+// unwrapped spread, added anywhere in this package family fails this test
+// the moment it lands, not on the next adversarial review round.
 import (
 	"bytes"
 	"fmt"
@@ -46,14 +55,31 @@ var chaos5544LoggerMethods = map[string]bool{
 	"InfoContext": true, "WarnContext": true, "ErrorContext": true, "DebugContext": true,
 }
 
-func chaos5544IsSanitizeCall(call *ast.CallExpr) bool {
+// chaos5544ContextFabricPkgPath is the ONE package whose SanitizeLogAttr/
+// SanitizeLogStrings/SanitizeLogAttrs count as the real barrier. Identity
+// is resolved through go/types (info.Uses -> *types.Func -> Pkg().Path()),
+// never by matching the callee's NAME -- an r3 review round found that a
+// same-named function in a different package (or, worse, a decoy planted
+// in this very file) passed the old name-only check.
+const chaos5544ContextFabricPkgPath = "github.com/full-chaos/dev-health-acr/internal/contextfabric"
+
+func chaos5544ResolveCalleeFunc(call *ast.CallExpr, info *types.Info) *types.Func {
+	var ident *ast.Ident
 	switch fn := call.Fun.(type) {
 	case *ast.Ident:
-		return fn.Name == "SanitizeLogAttr"
+		ident = fn
 	case *ast.SelectorExpr:
-		return fn.Sel.Name == "SanitizeLogAttr"
+		ident = fn.Sel
+	default:
+		return nil
 	}
-	return false
+	fn, _ := info.Uses[ident].(*types.Func)
+	return fn
+}
+
+func chaos5544IsRealBarrierCall(call *ast.CallExpr, info *types.Info, name string) bool {
+	fn := chaos5544ResolveCalleeFunc(call, info)
+	return fn != nil && fn.Pkg() != nil && fn.Pkg().Path() == chaos5544ContextFabricPkgPath && fn.Name() == name
 }
 
 func chaos5544IsStringConversion(call *ast.CallExpr, info *types.Info) (ast.Expr, bool) {
@@ -70,12 +96,17 @@ func chaos5544IsStringConversion(call *ast.CallExpr, info *types.Info) (ast.Expr
 }
 
 // chaos5544Classify returns "" if expr needs no sanitizer, else a reason.
+// Handles both scalar string values (SanitizeLogAttr) and []string values
+// (SanitizeLogStrings), each identity-resolved, never name-matched.
 func chaos5544Classify(expr ast.Expr, info *types.Info, enumTypes map[*types.Named]bool) string {
 	if call, ok := expr.(*ast.CallExpr); ok {
 		if inner, isConv := chaos5544IsStringConversion(call, info); isConv {
 			return chaos5544Classify(inner, info, enumTypes)
 		}
-		if chaos5544IsSanitizeCall(call) {
+		if chaos5544IsRealBarrierCall(call, info, "SanitizeLogAttr") {
+			return ""
+		}
+		if chaos5544IsRealBarrierCall(call, info, "SanitizeLogStrings") {
 			return ""
 		}
 	}
@@ -83,7 +114,21 @@ func chaos5544Classify(expr ast.Expr, info *types.Info, enumTypes map[*types.Nam
 	if t == nil {
 		return ""
 	}
-	basic, isBasic := t.Underlying().(*types.Basic)
+	u := t.Underlying()
+
+	// []string (or a named type over []string): needs SanitizeLogStrings.
+	if slice, isSlice := u.(*types.Slice); isSlice {
+		elemBasic, elemIsBasic := slice.Elem().Underlying().(*types.Basic)
+		if !elemIsBasic || (elemBasic.Kind() != types.String && elemBasic.Kind() != types.UntypedString) {
+			return "" // a slice of something other than string -- out of scope
+		}
+		if named, isNamed := t.(*types.Named); isNamed && enumTypes[named] {
+			return "" // a closed enum slice type with its own consts (unusual, but the same rule)
+		}
+		return "unsanitized []string log attribute"
+	}
+
+	basic, isBasic := u.(*types.Basic)
 	if !isBasic {
 		return ""
 	}
@@ -113,8 +158,7 @@ func chaos5544Classify(expr ast.Expr, info *types.Info, enumTypes map[*types.Nam
 // chaos5544ScanForUnsanitizedLogAttrs walks every package under root
 // (an import-path pattern ending in /...) and returns one finding per
 // violation, sorted by file:line. Shared between the failing test and
-// TestChaos5544SanitizerInstrumentCatchesAnUnwrappedSite's fixture-package
-// exercise below.
+// the fixture-package exercises below.
 func chaos5544ScanForUnsanitizedLogAttrs(t *testing.T, dir, pattern string) []string {
 	t.Helper()
 	cfg := &packages.Config{
@@ -210,6 +254,9 @@ func chaos5544ScanForUnsanitizedLogAttrs(t *testing.T, dir, pattern string) []st
 		}
 	}
 
+	// inspectLoggerCall covers BOTH shapes: a flat, non-spread key/value arg
+	// list, and a spread (`attrs...`) -- which, since r3, is REQUIRED to be
+	// exactly a call resolving to the real SanitizeLogAttrs, not skipped.
 	inspectLoggerCall := func(fset *token.FileSet, info *types.Info, call *ast.CallExpr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || !chaos5544LoggerMethods[sel.Sel.Name] {
@@ -220,10 +267,28 @@ func chaos5544ScanForUnsanitizedLogAttrs(t *testing.T, dir, pattern string) []st
 		if isCtx {
 			start = 2
 		}
-		if start >= len(call.Args) || call.Ellipsis != token.NoPos {
+		if start >= len(call.Args) {
 			return
 		}
 		rest := call.Args[start:]
+
+		if call.Ellipsis != token.NoPos {
+			// A spread: exactly one argument, and it must resolve to the
+			// real SanitizeLogAttrs -- a bare variable, a different
+			// function's result, or an impostor are all failures HERE,
+			// at the spread site, since the slice's own contents are a
+			// runtime value this static walk cannot enumerate.
+			if len(rest) != 1 {
+				return
+			}
+			spreadCall, isCall := rest[0].(*ast.CallExpr)
+			if isCall && chaos5544IsRealBarrierCall(spreadCall, info, "SanitizeLogAttrs") {
+				return
+			}
+			findings = append(findings, found{pos: fset.Position(rest[0].Pos())})
+			return
+		}
+
 		for i := 0; i+1 < len(rest); i += 2 {
 			keyLit, isBasicLit := rest[i].(*ast.BasicLit)
 			if !isBasicLit || keyLit.Kind != token.STRING {
@@ -290,9 +355,10 @@ func TestNoUnsanitizedLogAttributeInContextFabric(t *testing.T) {
 	findings := chaos5544ScanForUnsanitizedLogAttrs(t, root,
 		"github.com/full-chaos/dev-health-acr/internal/contextfabric/...")
 	if len(findings) != 0 {
-		t.Errorf("%d unsanitized string log attribute(s) found -- every one must route through "+
-			"SanitizeLogAttr (bare in this package, contextfabric.SanitizeLogAttr elsewhere) before "+
-			"it becomes a log attribute value:", len(findings))
+		t.Errorf("%d unsanitized string/[]string log attribute(s) or unwrapped spread(s) found -- "+
+			"every one must route through SanitizeLogAttr/SanitizeLogStrings (a value) or "+
+			"SanitizeLogAttrs (a spread), bare in this package, contextfabric.-qualified elsewhere, "+
+			"before it becomes a log attribute value:", len(findings))
 		for _, f := range findings {
 			t.Errorf("  %s", f)
 		}
@@ -336,5 +402,87 @@ func LogIt(logger *slog.Logger, requestID string) {
 	}
 	if want := fmt.Sprintf("%s:6:", filepath.Join(dir, "fixture.go")); findings[0][:len(want)] != want {
 		t.Fatalf("finding = %q, want it to point at fixture.go:6 (the request_id argument)", findings[0])
+	}
+}
+
+// TestChaos5544SanitizerInstrumentCatchesAnUnwrappedSpread is
+// CatchesAnUnwrappedSite's sibling for the r3 spread class: a fixture
+// builds its []any attrs slice across two `append` calls, exactly the
+// shape the seven r3 production sites used, and spreads it unwrapped.
+func TestChaos5544SanitizerInstrumentCatchesAnUnwrappedSpread(t *testing.T) {
+	dir := t.TempDir()
+	src := `package fixture
+
+import "log/slog"
+
+func LogIt(logger *slog.Logger, extra string) {
+	attrs := []any{"request_id", "req_fixed"}
+	attrs = append(attrs, "extra", extra)
+	logger.Info("fixture line", attrs...)
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "fixture.go"), []byte(src), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	modSrc := "module fixture.example/chaos5544spread\n\ngo 1.21\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(modSrc), 0o644); err != nil {
+		t.Fatalf("write fixture go.mod: %v", err)
+	}
+	formatted, err := format.Source([]byte(src))
+	if err != nil {
+		t.Fatalf("fixture does not gofmt clean: %v", err)
+	}
+	if !bytes.Equal(formatted, []byte(src)) {
+		t.Fatalf("fixture source is not gofmt-normalized")
+	}
+
+	findings := chaos5544ScanForUnsanitizedLogAttrs(t, dir, "./...")
+	if len(findings) != 1 {
+		t.Fatalf("the instrument found %d finding(s) in a fixture with exactly one unwrapped spread "+
+			"-- it must find exactly one, proving the spread class can fail: %v", len(findings), findings)
+	}
+}
+
+// TestChaos5544SanitizerInstrumentResolvesRealFunctionIdentity is the r3 P3
+// pin: a fixture plants its OWN function named SanitizeLogAttr (a no-op
+// impostor, in a package that is NOT github.com/full-chaos/dev-health-acr/
+// internal/contextfabric) and asserts the scanner still reports the site --
+// proving identity is resolved by types.Object, never by matching the
+// callee's name string.
+func TestChaos5544SanitizerInstrumentResolvesRealFunctionIdentity(t *testing.T) {
+	dir := t.TempDir()
+	src := `package fixture
+
+import "log/slog"
+
+// SanitizeLogAttr is a same-named IMPOSTOR: a genuine no-op, not this
+// repo's contextfabric.SanitizeLogAttr. A name-only identity check would
+// wrongly treat this as the real barrier.
+func SanitizeLogAttr(s string) string { return s }
+
+func LogIt(logger *slog.Logger, requestID string) {
+	logger.Info("fixture line", "request_id", SanitizeLogAttr(requestID))
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "fixture.go"), []byte(src), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	modSrc := "module fixture.example/chaos5544impostor\n\ngo 1.21\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(modSrc), 0o644); err != nil {
+		t.Fatalf("write fixture go.mod: %v", err)
+	}
+	formatted, err := format.Source([]byte(src))
+	if err != nil {
+		t.Fatalf("fixture does not gofmt clean: %v", err)
+	}
+	if !bytes.Equal(formatted, []byte(src)) {
+		t.Fatalf("fixture source is not gofmt-normalized")
+	}
+
+	findings := chaos5544ScanForUnsanitizedLogAttrs(t, dir, "./...")
+	if len(findings) != 1 {
+		t.Fatalf("the instrument found %d finding(s) in a fixture whose ONLY sanitizer call is an "+
+			"impostor (same name, wrong package) -- it must still report the site as unsanitized: %v",
+			len(findings), findings)
 	}
 }

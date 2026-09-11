@@ -106,7 +106,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			t.logger.InfoContext(ctx, "context fabric resolution trace: corroboration summary",
 				"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 				"candidate_count", event.CorroborationCandidateCount,
-				"top_ids", event.CorroborationTopIDs,
+				"top_ids", contextfabric.SanitizeLogStrings(event.CorroborationTopIDs),
 				"min_confidence", event.CorroborationMinConfidence,
 				"max_confidence", event.CorroborationMaxConfidence)
 			return
@@ -165,9 +165,9 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"committed_count", event.DecisionCommittedCount,
 			"ambiguous_count", event.DecisionAmbiguousCount,
 			"no_commit_count", event.DecisionNoCommitCount,
-			"committed_ids", event.DecisionCommittedIDs,
-			"commit_gates", event.DecisionCommitGates,
-			"commit_bases", event.DecisionCommitBases,
+			"committed_ids", contextfabric.SanitizeLogStrings(event.DecisionCommittedIDs),
+			"commit_gates", contextfabric.SanitizeLogStrings(event.DecisionCommitGates),
+			"commit_bases", contextfabric.SanitizeLogStrings(event.DecisionCommitBases),
 			// Always emitted, true or false: a provenance field present in
 			// only one of its two states cannot be told apart from a build
 			// that does not emit it, which is the same explicit-zero rule
@@ -204,7 +204,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// these, a build that refuses the wrong subject while refusing the
 			// same number of them is indistinguishable at Info from a correct
 			// one -- the per-candidate dispositions that carry ids are Debug.
-			"offer_pool_anchor_kind_withheld_ids", event.OfferPoolAnchorKindWithheldIDs,
+			"offer_pool_anchor_kind_withheld_ids", contextfabric.SanitizeLogStrings(event.OfferPoolAnchorKindWithheldIDs),
 			// The exemption's own number. A refusal count of zero beside an
 			// exemption count of one is a different fact from two zeros, and
 			// only one of them means "this question refused nothing".
@@ -224,8 +224,8 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// value leaves the scope and source above reading correctly
 			// while retrieval, the reserve or the filter acts on a
 			// different set -- invisible at Info without these.
-			"reserved_kinds", event.DecisionReservedKinds,
-			"filter_kinds", event.DecisionFilterKinds)
+			"reserved_kinds", contextfabric.SanitizeLogStrings(event.DecisionReservedKinds),
+			"filter_kinds", contextfabric.SanitizeLogStrings(event.DecisionFilterKinds))
 	case "anchor_pool":
 		// Once per resolution, Info: there is no per-candidate counterpart
 		// here, so no volume split is needed. Emitted from the same
@@ -235,8 +235,8 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"anchor_pool_kind_scope", contextfabric.SanitizeLogAttr(event.DecisionAnchorPoolKindScope),
 			"anchor_pool_kind_scope_source", contextfabric.SanitizeLogAttr(event.DecisionAnchorPoolKindScopeSource),
 			"member_kind_confirmed", contextfabric.SanitizeLogAttr(event.DecisionMemberKindConfirmed),
-			"reserved_kinds", event.DecisionReservedKinds,
-			"filter_kinds", event.DecisionFilterKinds)
+			"reserved_kinds", contextfabric.SanitizeLogStrings(event.DecisionReservedKinds),
+			"filter_kinds", contextfabric.SanitizeLogStrings(event.DecisionFilterKinds))
 	case "offer_pool":
 		// Same volume split as corroboration and identity_gate: the
 		// per-candidate line is retrieval-pool-sized (186 of 329 offered
@@ -276,7 +276,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"fired", event.KindCoverageFloorFired,
 			"missing_kinds", event.KindCoverageMissingKinds,
 			"truncated", event.KindCoverageFloorTruncated,
-			"missing_kinds_list", event.KindCoverageMissingKindsList)
+			"missing_kinds_list", contextfabric.SanitizeLogStrings(event.KindCoverageMissingKindsList))
 	case "confirmed_kind_rescue":
 		// CHAOS-4132: the operator-visible half of the confirmed-kind
 		// rescue -- this event's own presence in a production log already
@@ -362,8 +362,8 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// (ResolutionTraceEvent) for why this must be diagnosable from
 			// the run's own artifacts, not just applied silently.
 			"candidate_offer_labels_normalized_count", event.KindOfferCandidateOfferLabelsNormalizedCount,
-			"boundary_kinds", event.KindOfferBoundaryKinds,
-			"boundary_kinds_before_repair", event.KindOfferBoundaryKindsBeforeRepair,
+			"boundary_kinds", contextfabric.SanitizeLogStrings(event.KindOfferBoundaryKinds),
+			"boundary_kinds_before_repair", contextfabric.SanitizeLogStrings(event.KindOfferBoundaryKindsBeforeRepair),
 			"distinct_kind_count_before_repair", event.KindOfferDistinctKindCountBeforeRepair,
 			"suppressed_by_cardinality_before_repair", event.KindOfferSuppressedByCardinalityBeforeRepair,
 			// CHAOS-4119: handleOfferMaterial's own graph-derived-source
@@ -404,7 +404,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		t.logger.InfoContext(ctx, "context fabric resolution trace: kind offer withheld",
 			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"withheld_count", event.KindOfferDeclaredWithheldNotInPoolCount,
-			"withheld_kinds", event.KindOfferDeclaredWithheldKinds,
+			"withheld_kinds", contextfabric.SanitizeLogStrings(event.KindOfferDeclaredWithheldKinds),
 			"declared_hint_count", event.KindOfferDeclaredHintCount,
 			"distinct_kind_count", event.KindOfferDistinctKindCount,
 			"suppressed_by_cardinality", event.KindOfferSuppressedByCardinality,
@@ -449,7 +449,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 				"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 				"candidate_count", event.RankedCutCandidateCount,
 				"survived_count", event.RankedCutSurvivedCount,
-				"survived_ids", event.RankedCutSurvivedIDs,
+				"survived_ids", contextfabric.SanitizeLogStrings(event.RankedCutSurvivedIDs),
 				"max", event.RankedCutMax,
 				"anchor_slot_reserved", contextfabric.SanitizeLogAttr(event.AnchorSlotReserved),
 				"anchor_slot_source", contextfabric.SanitizeLogAttr(event.AnchorSlotSource),
@@ -583,7 +583,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 				"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 				"candidate_count", event.IdentityGateCandidateCount,
 				"fired_count", event.IdentityGateFiredCount,
-				"fired_ids", event.IdentityGateFiredIDs)
+				"fired_ids", contextfabric.SanitizeLogStrings(event.IdentityGateFiredIDs))
 			return
 		}
 		t.logger.DebugContext(ctx, "context fabric resolution trace: identity gate",
@@ -727,7 +727,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 				"candidate_count", event.SurvivorVerdictCandidateCount,
 				"neutral_count", event.SurvivorVerdictNeutralCount,
 				"eliminated_count", event.SurvivorVerdictEliminatedCount,
-				"eliminated_ids", event.SurvivorVerdictEliminatedIDs)
+				"eliminated_ids", contextfabric.SanitizeLogStrings(event.SurvivorVerdictEliminatedIDs))
 			return
 		}
 		t.logger.DebugContext(ctx, "context fabric resolution trace: slice b survivor verdict",
@@ -783,5 +783,5 @@ func (o SlogRawSignalObserver) ObserveCandidate(ctx context.Context, subjectKey 
 	if node.LexicalTermCount != nil {
 		attrs = append(attrs, "lexical_term_count", *node.LexicalTermCount)
 	}
-	o.logger.DebugContext(ctx, "context fabric raw retrieval signal", attrs...)
+	o.logger.DebugContext(ctx, "context fabric raw retrieval signal", contextfabric.SanitizeLogAttrs(attrs)...)
 }

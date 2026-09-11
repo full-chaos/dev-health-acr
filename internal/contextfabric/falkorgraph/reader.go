@@ -1037,7 +1037,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		droppedCount := admission.DroppedUnknownRelationshipTypeCount
 		appendGraphDetail(contractsv1.ContextFabricCoverageDetailGraphUnknownRelationshipType, true, &droppedCount, unknownTypeReason, "context-fabric:graph")
 		slog.Default().Warn("context_fabric: dropped relationship edge(s) with a type outside the closed vocabulary",
-			"count", admission.DroppedUnknownRelationshipTypeCount, "types", admission.DroppedUnknownRelationshipTypeNames)
+			"count", admission.DroppedUnknownRelationshipTypeCount, "types", contextfabric.SanitizeLogStrings(admission.DroppedUnknownRelationshipTypeNames))
 	}
 	sources := []contextfabric.SourceObservation{{Source: "context-fabric:graph", State: contextfabric.SourceAvailable, ObservedAt: ptrTime(a.now().UTC())}}
 	if unbounded > 0 {
