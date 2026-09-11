@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 )
 
@@ -28,6 +29,27 @@ func NewSlogResolutionTracer(logger *slog.Logger) SlogResolutionTracer {
 		logger = slog.Default()
 	}
 	return SlogResolutionTracer{logger: logger}
+}
+
+// decisionSummaryFieldsUnconstructed reports whether f still carries its Go
+// zero value on every open-vocabulary field the real constructor path
+// (decisionSummaryBuffer.flush(), via orNone()) always sets to an explicit
+// token -- "none" at minimum, never the empty string, on every real call
+// including a genuine zero-decision resolution. A caller who hand-assembles
+// a decision_summary event by setting only the shared struct's OLD
+// individual Decision*/OfferPool* fields (this PR's own named failure mode:
+// "callers still assemble that event's field list") leaves
+// DecisionSummaryFields at its Go zero value; tracer.go stopped reading
+// those old fields for this stage (CHAOS-5516), so emitting it anyway would
+// print a decision_summary line of all zeros -- indistinguishable from a
+// genuine zero-decision resolution, and the ticket's own named failure mode
+// made silent instead of loud. Five independent sentinels (not one) so a
+// single field a future caller happens to leave "" for a legitimate reason
+// cannot trip this by itself.
+func decisionSummaryFieldsUnconstructed(f eventspec.DecisionSummaryFields) bool {
+	return f.FrameGate == "" && f.RefuseBasis == "" &&
+		f.AnchorPoolKindScope == "" && f.AnchorPoolKindScopeSource == "" &&
+		f.MemberKindConfirmed == ""
 }
 
 func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
@@ -167,6 +189,17 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// from the same generated source
 		// (chaos5516_decision_summary_slog_args_test.go pins the exact key
 		// set a real emitted line carries against it).
+		if decisionSummaryFieldsUnconstructed(event.DecisionSummaryFields) {
+			// REFUSED, not a zeroed summary: a caller that still assembles
+			// this stage's OLD individual fields reaches here with
+			// DecisionSummaryFields at its Go zero value. Emitting it would
+			// be silently wrong (all zeros, indistinguishable from a
+			// genuine zero-decision resolution); refusing loudly at Error
+			// makes the gap itself observable instead.
+			t.logger.ErrorContext(ctx, "context fabric resolution trace: decision summary construction refused",
+				"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage))
+			return
+		}
 		t.logger.InfoContext(ctx, "context fabric resolution trace: decision summary",
 			event.DecisionSummaryFields.SlogArgs()...)
 	case "anchor_pool":

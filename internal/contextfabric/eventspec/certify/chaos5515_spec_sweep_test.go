@@ -1,12 +1,15 @@
 package certify
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 )
 
 // This file is the ONE generated pass chris's ruling requires (2026-09-10
@@ -524,6 +527,44 @@ func TestCertifyInputDomainTable(t *testing.T) {
 		}
 	}
 
+	// CHAOS-5516 (team-lead, after the B8 pair caught the class in
+	// internal/runtime/hosted's own fixtures): the construction-refusal
+	// guard tracer.go's "decision_summary" case added
+	// (decisionSummaryFieldsUnconstructed) gets its own cell in this same
+	// generated pass, driven through the REAL production entry point
+	// (graphrank.SlogResolutionTracer.Trace, not a certify-level fixture) --
+	// a caller that hand-assembles the event using only the OLD individual
+	// fields (DecisionSummaryFields left at its Go zero value) must produce
+	// NO certifiable decision_summary line at all (the Error-level refusal
+	// line carries a different msg, so certify's own msg-scoped lookup finds
+	// zero matching lines -- refused, exactly like every other cell in this
+	// table that expects a refusal). Scoped to DecisionSummary alone: grep
+	// of tracer.go's switch shows anchor_pool/offer_pool read their old
+	// fields directly (no typed shadow to leave zero), and
+	// ranked_cut/anchor_slot_displaced don't read their generated Fields
+	// structs at all (unmigrated, brief-pr2.md OUT OF SCOPE) -- the sibling
+	// set swept is empty.
+	{
+		var buf bytes.Buffer
+		tracer := graphrank.NewSlogResolutionTracer(
+			slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+		tracer.Trace(graphrank.ResolutionTraceEvent{
+			RequestID: "sweep_unconstructed_decision_summary", Stage: "decision_summary",
+			DecisionEventCount: 2, DecisionCommittedCount: 1,
+			DecisionCommittedIDs: []string{"team.v2:github:sweep"},
+			DecisionFrameGate:    "passed", DecisionRefuseBasis: "none",
+			// DecisionSummaryFields: intentionally the Go zero value.
+		})
+		refusedRow := domainRow{event: eventspec.DecisionSummary.ID, field: "(construction)", dimension: "unconstructed_typed_fields", applicable: true, wantAccept: false}
+		if log, err := Parse(buf.Bytes()); err != nil {
+			t.Fatalf("Parse() on the real emitted refusal output error = %v", err)
+		} else {
+			_, certErr := certifyRecovered(t, log, Assertion{Event: eventspec.DecisionSummary, Want: map[string]any{"request_id": "sweep_unconstructed_decision_summary"}})
+			refusedRow.gotAccept = certErr == nil
+		}
+		rows = append(rows, refusedRow)
+	}
+
 	failed := 0
 	for _, r := range rows {
 		if !r.ok() {
@@ -543,14 +584,16 @@ func TestCertifyInputDomainTable(t *testing.T) {
 		len(rows), applicableN, naN, failed, len(eventspec.All), totalFieldCount, passMultiplicityRows)
 
 	// Census: the table's own row count must equal fields*dimensions plus
-	// one duplicate row per event plus the pass-multiplicity rows above --
-	// proving the walk reached every declared field, every dimension, and
-	// every ExactlyOnePerPass event's own pass-keying guard, not a
+	// one duplicate row per event plus the pass-multiplicity rows above plus
+	// the one construction-refusal row -- proving the walk reached every
+	// declared field, every dimension, every ExactlyOnePerPass event's own
+	// pass-keying guard, and the typed-construction refusal guard, not a
 	// silently-truncated subset.
-	wantRows := totalFieldCount*len(domainDimensions) + len(eventspec.All) + passMultiplicityRows
+	const constructionRefusalRows = 1
+	wantRows := totalFieldCount*len(domainDimensions) + len(eventspec.All) + passMultiplicityRows + constructionRefusalRows
 	if len(rows) != wantRows {
-		t.Errorf("census: table has %d rows, want %d (%d fields x %d dimensions + %d duplicate rows + %d pass-multiplicity rows)",
-			len(rows), wantRows, totalFieldCount, len(domainDimensions), len(eventspec.All), passMultiplicityRows)
+		t.Errorf("census: table has %d rows, want %d (%d fields x %d dimensions + %d duplicate rows + %d pass-multiplicity rows + %d construction-refusal rows)",
+			len(rows), wantRows, totalFieldCount, len(domainDimensions), len(eventspec.All), passMultiplicityRows, constructionRefusalRows)
 	}
 }
 
