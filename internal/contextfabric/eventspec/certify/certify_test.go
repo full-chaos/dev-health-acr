@@ -310,6 +310,30 @@ func TestCertifyRefusesWantMissingAnAttributionField(t *testing.T) {
 	}
 }
 
+// TestCertifyRefusesWantMissingPassForAPassBearingEvent is round r2
+// finding 5's own new rule, pinned by name: a pass-bearing event's Want
+// MUST include "pass", the same requirement an Attribution field already
+// carries -- the caller must state WHICH pass it certifies, not rely on
+// "the last line" selection rule alone. Every other test in this package
+// happens to always include "pass" in its own Want map, so without this
+// dedicated pin the guard's own removal survives a local mutation battery
+// silently (caught exactly that way before this pin existed).
+func TestCertifyRefusesWantMissingPassForAPassBearingEvent(t *testing.T) {
+	log, err := Parse([]byte(validRankedCutSummaryLine()))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	want := wantForRankedCutSummary()
+	delete(want, "pass")
+	_, err = certifyRecovered(t, log, Assertion{Event: eventspec.RankedCutSummary, Want: want})
+	if err == nil {
+		t.Fatal("Certify() accepted a Want with no \"pass\" for a pass-bearing event -- want a refusal naming it")
+	}
+	if !strings.Contains(err.Error(), `Want must include "pass"`) {
+		t.Errorf("refusal text = %q, want it to name the missing pass requirement", err.Error())
+	}
+}
+
 // Certify's ExactlyOnePerPass empty-scope guard: zero matching lines for
 // the attempt Want names is refused, never a panic and never silently
 // certifying nothing. RankedCutSummary is exactly_one_per_pass, so an
