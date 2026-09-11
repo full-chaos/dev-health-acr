@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/hintsource"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -637,6 +638,68 @@ var canonicalGroupReadArms = map[GroupReadArm]GroupReadArm{
 func ValidGroupReadArm(value GroupReadArm) bool {
 	_, member := canonicalGroupReadArms[value]
 	return member
+}
+
+// originMemberKind is the kind the member read was rooted on: the plan's
+// member kind, or the cohort's own kind when the plan does not name one.
+func originMemberKind(plan AnswerPlan, cohort *Cohort) SubjectKind {
+	if plan.MemberKind != "" {
+		return plan.MemberKind
+	}
+	if cohort != nil {
+		return cohort.Kind
+	}
+	return ""
+}
+
+// readOriginStateCoverage carries both reads' per-kind states onto the SERVED
+// document, one fact_read_origin_state detail per canonical-fact observation
+// of each read, named by the kind of population that read was rooted on.
+//
+// The fold that composes the two reads keeps the WORSE state per source name,
+// and both reads report under the same `canonical_fact:<kind>` names. So after
+// the fold a served `unavailable` cannot say whether the members' evidence or
+// the groups' was the gap -- the pre-fold trace line could, and nothing a
+// reader of the document holds could. These rows are that line's served half:
+// the same observations, taken at the same moment, before the fold.
+//
+// Every row is a disclosure, never a degradation: the folded source and its
+// own detail already carry whatever degraded the answer, and a second
+// degrading row for the same gap would count it twice.
+//
+// An observation that does not name a canonical fact kind, or a row the
+// contract would refuse, is skipped rather than served: the producers of these
+// observations mint only valid ones, and a refused row on the served document
+// would fail the whole investigation over a disclosure.
+func readOriginStateCoverage(member, group Coverage, memberKind, groupKind SubjectKind) Coverage {
+	var details []CoverageDetail
+	add := func(coverage Coverage, origin SubjectKind) {
+		if origin == "" {
+			return
+		}
+		for _, observation := range coverage.Sources {
+			kind, ok := strings.CutPrefix(observation.Source, "canonical_fact:")
+			if !ok {
+				continue
+			}
+			detail := CoverageDetail{
+				DetailID:    fmt.Sprintf("cov-origin-%02d", len(details)+1),
+				Source:      observation.Source,
+				Code:        contractsv1.ContextFabricCoverageDetailFactReadOriginState,
+				FactKind:    FactKind(kind),
+				SourceState: observation.State,
+				OriginKind:  origin,
+			}
+			detail.Label = contractsv1.ComposeCoverageDetailLabel(detail)
+			if detail.Validate() != nil {
+				continue
+			}
+			details = append(details, detail)
+		}
+	}
+	add(member, memberKind)
+	add(group, groupKind)
+	return Coverage{Details: details}
 }
 
 // recordGroupReadCoverageStates emits both reads' per-source states, in a

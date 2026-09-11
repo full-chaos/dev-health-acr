@@ -2616,6 +2616,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// fold -- there is no fold on this path, the bundle is not
 				// composed -- so the trace shows which population failed.
 				e.recordGroupReadCoverageStates(ctx, principal, plan.Family, requestedGroupKind, facts.Coverage, groupBundle.Coverage)
+				// The same observations on the SERVED document, so the failed
+				// read's population is readable there too, not only on the
+				// trace. The member read's own coverage is untouched.
+				facts.Coverage = MergeCoverage(principal.OrgID, facts.Coverage, readOriginStateCoverage(facts.Coverage, groupBundle.Coverage, originMemberKind(plan, &cohort), requestedGroupKind))
 			}
 			if groupOutcome.Read && groupErr == nil {
 				// THE TURN'S ONE FACT BUDGET, before anything else sees the
@@ -2629,6 +2633,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// which population the gap was in. Emitted here, while both
 				// answers still exist separately.
 				e.recordGroupReadCoverageStates(ctx, principal, plan.Family, requestedGroupKind, facts.Coverage, groupBundle.Coverage)
+				// Taken HERE, beside the pre-fold line and from the same two
+				// coverages, and attached only if the merge composes: a group
+				// read refused at reconcile served none of its evidence, so the
+				// document must not describe that read as if it had.
+				originStates := readOriginStateCoverage(facts.Coverage, groupBundle.Coverage, originMemberKind(plan, &cohort), requestedGroupKind)
 				if mergeGroupBundle(&facts, groupBundle, principal.OrgID) {
 					// Refused at RECONCILE, after the request went out. `Read`
 					// stays true for the same reason it stays true on a failed
@@ -2639,6 +2648,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 					groupOutcome.Refused, groupOutcome.Reason = true, GroupReadRefusalMetadataConflict
 				} else {
 					groupFactsMerged = len(groupBundle.Facts)
+					facts.Coverage = MergeCoverage(principal.OrgID, facts.Coverage, originStates)
 				}
 			}
 			groupsWithFacts := 0
