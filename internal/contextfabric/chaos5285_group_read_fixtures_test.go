@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -307,7 +308,14 @@ func groupReadEngineFixtureConfigured(t *testing.T, telemetry EngineTelemetry, f
 			// claims from the cohort, so a fact that reached synthesis and
 			// was never cited is invisible in the answer -- and "reached
 			// synthesis" is the property the authorization clause is about.
+			//
+			// UNDER THE CAPTURE LOCK. Every test that builds this fixture runs
+			// this closure, parallel ones included, so an unguarded append is a
+			// data race between them even though only non-parallel tests read
+			// the captures.
+			groupReadSynthesisCaptureMu.Lock()
 			groupReadSynthesisFacts = append(groupReadSynthesisFacts, input.Facts.Facts...)
+			groupReadSynthesisCaptureMu.Unlock()
 			// And PER PASS, so a retry pin can tell the first synthesis's
 			// input from the one the served document was built from.
 			pass := groupReadSynthesisPass{Facts: append([]CanonicalFact(nil), input.Facts.Facts...)}
@@ -319,7 +327,9 @@ func groupReadEngineFixtureConfigured(t *testing.T, telemetry EngineTelemetry, f
 					pass.Groups = append(pass.Groups, group.Subject)
 				}
 			}
+			groupReadSynthesisCaptureMu.Lock()
 			groupReadSynthesisPasses = append(groupReadSynthesisPasses, pass)
+			groupReadSynthesisCaptureMu.Unlock()
 			// One claim per SURVIVING cohort member, so the answer's measured
 			// size actually shrinks when narrowing drops a member. A
 			// synthesizer returning a fixed-size answer cannot be retried
@@ -399,9 +409,19 @@ func groupReadEngineOptions(override *EngineOptions) EngineOptions {
 // parallel.
 var groupReadClaimsPerMember = 1
 
+// groupReadSynthesisCaptureMu guards every WRITE the fixture's synthesizer
+// makes to the two captures below. Tests that build the fixture run in
+// parallel, so their synthesizers append concurrently; the lock makes those
+// appends safe. It does not make a parallel test's READ of a capture
+// meaningful -- other tests' facts land in the same slice -- which is why a
+// test that reads a capture is still never parallel: parallel tests run only
+// after every non-parallel test has finished, so a non-parallel reader sees
+// its own turn's input alone.
+var groupReadSynthesisCaptureMu sync.Mutex
+
 // groupReadSynthesisFacts accumulates every fact handed to the fixture's
 // synthesizer. Reset by the test that reads it; no test that reads it may be
-// parallel.
+// parallel. Written only under groupReadSynthesisCaptureMu.
 var groupReadSynthesisFacts []CanonicalFact
 
 // groupReadSynthesisPass is what ONE synthesis call received: the facts, and
@@ -414,4 +434,5 @@ type groupReadSynthesisPass struct {
 
 // groupReadSynthesisPasses records every synthesis call's input, in order.
 // Reset by the test that reads it; no test that reads it may be parallel.
+// Written only under groupReadSynthesisCaptureMu.
 var groupReadSynthesisPasses []groupReadSynthesisPass
