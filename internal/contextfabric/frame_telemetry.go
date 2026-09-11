@@ -210,6 +210,12 @@ type FrameValidationEvent struct {
 	// on its own terms: a summary that ran carries Version, and one that
 	// did not is empty.
 	RequirementDerivation RequirementDerivationSummary
+
+	// Boundary is what the model's hints REQUESTED beside what its frame
+	// PROPOSED, and what became of the group axis between them. Set by the
+	// interpreter from the same receipt and the same proposal this event
+	// is built from; see InterpretationBoundaryFrom.
+	Boundary InterpretationBoundary
 }
 
 // FrameValidationEventFrom projects a repair result into the telemetry

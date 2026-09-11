@@ -145,6 +145,23 @@ func (g ContextFabricCohortGroup) Validate() error {
 //     association is read off a project fact's own declared rows, and the
 //     providers that carry it join on compounding risk, so a member whose
 //     facts came back empty has no derivable group.
+//
+// ContextFabricCohortGroupsMaxCount is the most groups one cohort may carry.
+//
+// It is exported and read by BOTH the validator that enforces it and the
+// engine stage that must REFUSE an over-bound group axis before issuing any
+// group I/O. Those are two consumers of one number, and while it was an inline
+// literal in the validator alone the engine had no way to enforce it early --
+// so an over-bound group list was built, carried through the whole turn, and
+// rejected at the very end as a stage error the caller reads as a server
+// fault. A bound only the last step knows is a bound that has already let the
+// cost be paid.
+//
+// It is deliberately NOT parameterised by the legacy/stored bounds split: an
+// already-stored result is bounded by the same number it was written under, so
+// a stored row that exceeded it never existed.
+const ContextFabricCohortGroupsMaxCount = 250
+
 func ValidateCohortGroups(groups []ContextFabricCohortGroup, members []ContextFabricCohortMember) error {
 	if len(groups) == 0 {
 		return nil

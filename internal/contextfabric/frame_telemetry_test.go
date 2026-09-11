@@ -64,6 +64,59 @@ var frameValidationEventLogKeys = map[string]string{
 	// discoverability reason, or one of the outcome tokens -- so neither can
 	// carry a term, a label or a count of anything the caller wrote.
 	"Gate": "frame_gate",
+	// Boundary is a STRUCT flattened across five keys, the same shape as
+	// Gate: this entry names the decision key, and
+	// interpretationBoundaryLogKeys below carries every field one level
+	// down, checked in both directions by its own test.
+	"Boundary": "group_axis",
+}
+
+// interpretationBoundaryLogKeys is the explicit field -> key map for the
+// interpretation boundary flattened onto the frame-validation line. Every
+// value is a closed token or an explicit absence token (see
+// chaos5390_interpretation_boundary.go), so none can carry question text.
+var interpretationBoundaryLogKeys = map[string]string{
+	"RequestedGroupHint":  "requested_group_hint",
+	"RequestedMemberHint": "requested_member_hint",
+	"ProposedGroupKind":   "proposed_group_kind",
+	"ProposedMemberKind":  "proposed_member_kind",
+	"GroupAxis":           "group_axis",
+}
+
+// TestEveryInterpretationBoundaryFieldReachesTheLogLine is the structural
+// half for the boundary: struct and key map agree in both directions, and
+// every key is present on an emitted line.
+func TestEveryInterpretationBoundaryFieldReachesTheLogLine(t *testing.T) {
+	boundaryType := reflect.TypeOf(InterpretationBoundary{})
+	seen := map[string]bool{}
+	for i := 0; i < boundaryType.NumField(); i++ {
+		name := boundaryType.Field(i).Name
+		seen[name] = true
+		if _, ok := interpretationBoundaryLogKeys[name]; !ok {
+			t.Errorf("InterpretationBoundary.%s has no log key", name)
+		}
+	}
+	for name := range interpretationBoundaryLogKeys {
+		if !seen[name] {
+			t.Errorf("log key map names %q, which is not a field on InterpretationBoundary", name)
+		}
+	}
+	records := captureSlogJSON(t, func(logger *slog.Logger) {
+		NewSlogEngineTelemetry(logger).RecordFrameValidation(context.Background(), storage.Principal{OrgID: "org_sink_test"},
+			FrameValidationEvent{Outcome: FrameValidationOutcomeValid})
+	})
+	if len(records) != 1 {
+		t.Fatalf("got %d records, want 1", len(records))
+	}
+	for _, key := range interpretationBoundaryLogKeys {
+		if _, present := records[0][key]; !present {
+			t.Errorf("key %q is absent from the frame-validation line", key)
+		}
+	}
+	// An event built WITHOUT a boundary must not pass for a decision.
+	if records[0]["group_axis"] != "unset" {
+		t.Errorf("group_axis on an event with no boundary = %v, want \"unset\"", records[0]["group_axis"])
+	}
 }
 
 // requirementDerivationLogKeys is the same explicit field -> key map, one
@@ -400,6 +453,11 @@ func TestFrameValidationTelemetryLeaksNoQuestionContent(t *testing.T) {
 	// derived from the question text.
 	allowed["frame_gate"] = true
 	allowed["refuse_basis"] = true
+	// The interpretation boundary's keys, from its own map: closed kind
+	// tokens, explicit absence tokens and a closed decision only.
+	for _, key := range interpretationBoundaryLogKeys {
+		allowed[key] = true
+	}
 	for key := range records[0] {
 		if !allowed[key] {
 			t.Errorf("frame validation record carries unexpected key %q -- this event is closed enums, counts and an org id only", key)

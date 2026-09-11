@@ -73,7 +73,9 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// the family vocabulary list are REMOVED. See
 			// DefaultInterpretationPromptVersion's own doc comment for what
 			// changed and why a subtractive change still bumps the version.
-			digest: "4a65c994fbd5ea86800c8cb440d66b4f69828892313283f4e2eb6b69a698aa92",
+			// v12 -> v13: the grouped_members sentence tells the model to
+			// express a grouping as asked and leaves I6 to the server.
+			digest: "efbf3e935b6c8b2e64b3e1100ab540eb7f353e8cdc8ce7dfc437d95a326c4497",
 		},
 		{
 			name:    "synthesis system prompt",

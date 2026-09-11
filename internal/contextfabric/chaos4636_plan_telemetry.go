@@ -398,6 +398,29 @@ type PlanTelemetry interface {
 	// every artifact; this is what makes it countable. Closed
 	// enums/counts only, fired once per grouped answer.
 	RecordGroupedCohortCompleteness(ctx context.Context, principal storage.Principal, event GroupedCohortCompletenessEvent)
+	// RecordCohortGroupRead reports what the grouped path did with its own
+	// group axis: how many groups were proposed, how many the authorizer
+	// admitted, whether a group-rooted fact read was issued at all, and the
+	// named reason when it was not.
+	RecordCohortGroupRead(ctx context.Context, principal storage.Principal, event CohortGroupReadEvent)
+	// RecordGroupReadCoverageState reports one read's observation of one
+	// coverage source, before the two reads' coverage is folded together
+	// and the worse state erases the better one.
+	RecordGroupReadCoverageState(ctx context.Context, principal storage.Principal, event GroupReadCoverageStateEvent)
+	// RecordCohortMemberAllowance reports how many cohort members the item
+	// budget admits and whether that number was clamped by the floor rather
+	// than computed from the budget.
+	RecordCohortMemberAllowance(ctx context.Context, principal storage.Principal, event CohortMemberAllowanceEvent)
+	// RecordPlanGroupAxisCollapsed reports that the PLAN seam refused a turn
+	// whose group axis collapsed onto its member kind (invariant I6), naming
+	// the invariant, the two kinds and the basis. The frame-validation line
+	// cannot say it: the frame was legal and was logged as valid before the
+	// member kind was known.
+	RecordPlanGroupAxisCollapsed(ctx context.Context, principal storage.Principal, event PlanGroupAxisCollapsedEvent)
+	// RecordFactRetention reports which evidence survived a narrowing pass
+	// and, for a grouped answer, how much was dropped because the group it
+	// spoke for is no longer in the answer.
+	RecordFactRetention(ctx context.Context, principal storage.Principal, event FactRetentionEvent)
 
 	// RecordMembershipCardinality reports the `membership_cardinality`
 	// server step's own result for one served answer: what was counted, how

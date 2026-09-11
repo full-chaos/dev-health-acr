@@ -357,8 +357,22 @@ type recordingTelemetry struct {
 	// groupedCohortCompletenesses (CHAOS-4733) records every grouped-cohort
 	// completeness fold verbatim, same list-not-count discipline.
 	groupedCohortCompletenesses []GroupedCohortCompletenessEvent
-	membershipCardinalities     []MembershipCardinalityEvent
-	readRequirementPopulations  []ReadRequirementPopulationEvent
+	// cohortGroupReads records every group-read decision, so a test can say
+	// what the group stage proposed, admitted and actually read.
+	cohortGroupReads []CohortGroupReadEvent
+	// groupReadCoverageStates records both reads' per-source observations as
+	// they stood BEFORE the fold, which is the only place they exist apart.
+	groupReadCoverageStates []GroupReadCoverageStateEvent
+	// cohortMemberAllowances records the allowance decision of every turn
+	// that had a cohort, narrowed or not.
+	cohortMemberAllowances []CohortMemberAllowanceEvent
+	// planGroupAxisCollapses records every plan-seam I6 refusal.
+	planGroupAxisCollapses []PlanGroupAxisCollapsedEvent
+	// factRetentions records every retention pass, so a test can say what
+	// narrowing dropped rather than inferring it from what survived.
+	factRetentions             []FactRetentionEvent
+	membershipCardinalities    []MembershipCardinalityEvent
+	readRequirementPopulations []ReadRequirementPopulationEvent
 	// readRequirementObservationCovers records every observation-cover
 	// decision verbatim, same list-not-count discipline as the fields
 	// around it: a test asserts the EXACT field set, never merely that
@@ -640,6 +654,26 @@ func (r *recordingTelemetry) RecordPlanNarrowing(_ context.Context, _ storage.Pr
 // list-not-count discipline as RecordPlanNarrowing above.
 func (r *recordingTelemetry) RecordGroupedCohortCompleteness(_ context.Context, _ storage.Principal, event GroupedCohortCompletenessEvent) {
 	r.groupedCohortCompletenesses = append(r.groupedCohortCompletenesses, event)
+}
+
+func (r *recordingTelemetry) RecordCohortGroupRead(_ context.Context, _ storage.Principal, event CohortGroupReadEvent) {
+	r.cohortGroupReads = append(r.cohortGroupReads, event)
+}
+
+func (r *recordingTelemetry) RecordGroupReadCoverageState(_ context.Context, _ storage.Principal, event GroupReadCoverageStateEvent) {
+	r.groupReadCoverageStates = append(r.groupReadCoverageStates, event)
+}
+
+func (r *recordingTelemetry) RecordCohortMemberAllowance(_ context.Context, _ storage.Principal, event CohortMemberAllowanceEvent) {
+	r.cohortMemberAllowances = append(r.cohortMemberAllowances, event)
+}
+
+func (r *recordingTelemetry) RecordPlanGroupAxisCollapsed(_ context.Context, _ storage.Principal, event PlanGroupAxisCollapsedEvent) {
+	r.planGroupAxisCollapses = append(r.planGroupAxisCollapses, event)
+}
+
+func (r *recordingTelemetry) RecordFactRetention(_ context.Context, _ storage.Principal, event FactRetentionEvent) {
+	r.factRetentions = append(r.factRetentions, event)
 }
 
 // RecordMembershipCardinality records the whole event, same list-not-count

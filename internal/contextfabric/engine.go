@@ -2269,12 +2269,67 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// defect this field exists to make visible.
 	if graphContext.Cohort != nil {
 		plan.MemberKind = graphContext.Cohort.Kind
-		if plan.GroupKind == plan.MemberKind {
+		if planGroupAxisCollapsed(plan.GroupKind, plan.MemberKind) {
 			// A group axis that collapsed onto the member kind partitions a
-			// set by itself, which no grouping can mean. Drop the axis
-			// rather than emit a plan the contract refuses -- the answer is
-			// then the flat one it would have been before this slice.
-			plan.GroupKind = ""
+			// set by itself, which no grouping can mean -- invariant I6, at
+			// a seam the frame gate cannot reach.
+			//
+			// THE FRAME GATE COULD NOT HAVE CAUGHT THIS, and that is why the
+			// check lives here at all. The plan's group axis comes from the
+			// model's family hint; its member kind is stamped from the
+			// cohort THE GRAPH ACTUALLY RETURNED, and that is not known when
+			// the frame is validated. A frame that is entirely legal --
+			// projects grouped by team -- still arrives here with both kinds
+			// equal when discovery comes back with teams.
+			//
+			// This used to set the axis to the empty string and answer flat.
+			// That is laundering: the question asked for a partition, the
+			// server could not provide one, and the served document said
+			// nothing about either fact. `GroupKind = ""` in the persisted
+			// plan is indistinguishable from a plan that never had an axis,
+			// so no reader -- operator or caller -- could tell this answer
+			// from an answer to a different question.
+			//
+			// Refused through the SAME gate object the frame path refuses
+			// with, not through a second mechanism: one invariant, one
+			// refusal vocabulary, one basis. The resolution is emptied for
+			// the same reason the frame-gate terminal empties it -- a
+			// refused turn commits nothing and reads nothing.
+			collapsed := FrameValidationResult{
+				Outcome: FrameValidationOutcomeRefusedInvalid,
+				Failure: FrameValidationFailure{
+					Invariant: FrameInvariantI6,
+					Phase:     FrameValidationPhaseA1,
+					Detail:    FrameFailureGroupEqualsMember,
+				},
+			}
+			familyOutcome.Gate = DecideFrameGate(collapsed, true)
+			// NAMED AT INFO, before the axis is cleared so the line carries the
+			// kinds that collapsed. The frame-validation line already went out
+			// as valid, and the terminal names only the basis -- without this
+			// line no Info record says which invariant refused the turn.
+			e.recordPlanGroupAxisCollapsed(ctx, principal, PlanGroupAxisCollapsedEvent{
+				Family: plan.Family, GroupKind: plan.GroupKind, MemberKind: plan.MemberKind,
+				Failure: collapsed.Failure, Gate: familyOutcome.Gate,
+			})
+			// The REQUESTED axis is kept; the collapsed member kind is what
+			// the served plan drops. The served document refuses a grouping,
+			// so it carries the grouping it refuses: a plan reading
+			// `group_kind=""` beside `refusal_basis=frame_invariant_violated`
+			// states a refusal of an axis the same document says was never
+			// asked for (round 2, P1-2).
+			//
+			// The member kind cannot be served beside it: the contract's plan
+			// validator rejects a plan whose group kind equals its member kind,
+			// because a plan claiming that partition is the illegal shape
+			// itself. The member kind here was never the question's -- it was
+			// stamped from the cohort the graph returned, and it is the half
+			// that collapsed -- and this refused turn serves no cohort for it
+			// to describe. Both kinds are on the Info line above.
+			plan.MemberKind = ""
+			collapsedResolution := SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}
+			terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, collapsedResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarry.Outcome == WindowCarryHit, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent))
+			return terminal, terminalErr
 		}
 	}
 	factRequest := CanonicalFactRequest{
@@ -2343,6 +2398,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// narrowing would leave the surviving members carrying scores computed
 	// against members that are no longer in the answer.
 	var groupingRefusalForDisclosure CohortGroupingOutcome
+	var groupReadForDisclosure GroupReadDisclosure
+	var groupReadKindForDisclosure SubjectKind
 	if graphContext.Cohort != nil && plan.GroupKind != "" {
 		// CHAOS-4733: captured BEFORE BuildCohortGroups/
 		// ApplyGroupedCohortCompleteness run, so the telemetry below reports
@@ -2373,6 +2430,132 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				GroupsMarkedIncomplete: groupsMarkedIncomplete,
 				Complete:               cohort.Complete,
 				Truncated:              cohort.Truncated,
+			})
+			// THE GROUP AXIS IS READ HERE, and it has to be here: the group
+			// identities are constructed from the members' own facts, so this
+			// is the first moment they exist, and it is still before
+			// narrowing and ranking, which the pinned group -> narrow -> rank
+			// order requires.
+			//
+			// Until this call, a grouped answer declared an `each_group`
+			// requirement and reported it against evidence read for the
+			// MEMBERS: one fact request, rooted on the cohort, and no
+			// provider ever asked about a group. That made `each_group`
+			// satisfiable only by projecting member evidence onto the group
+			// axis -- a read witness manufactured for a subject nobody was
+			// asked about.
+			//
+			// A failure here does NOT fail the turn. The group read is
+			// additive: the member evidence that was already gathered is
+			// still a true answer to most of the question, and turning a
+			// partially-served grouped answer into a stage error would be a
+			// regression against the very rows this is meant to move. The
+			// refusal is carried instead, and disclosed.
+			groupBundle, groupOutcome, groupErr := e.readAdmittedGroupFacts(ctx, principal, request, interpretation, binding, plan, &cohort, effectiveWindow)
+			// The axis this turn PROPOSED, captured before any refusal below
+			// clears it from the plan. The group-read line reports the decision
+			// taken about this axis; built from the plan after an over-bound
+			// refusal had cleared it, the line said 251 groups of nothing were
+			// refused.
+			requestedGroupKind := plan.GroupKind
+			// Cap-omitted and merged are captured separately because the cap
+			// and a metadata conflict can each make them differ. Returned is
+			// the provider's own count, taken inside the read before the
+			// unadmitted filter (groupOutcome.FactsReturned).
+			var groupFactsCapOmitted, groupFactsMerged int
+			if groupErr != nil {
+				// NAMED, not merely flagged. A read that was issued and
+				// failed is a different operational fact from one that was
+				// never issued -- a provider to look at rather than a policy
+				// -- and `Read` stays true because the request really did go
+				// out. Leaving the reason at its absence-of-refusal member
+				// published `refused=true` with nothing saying why.
+				groupOutcome.Refused, groupOutcome.Reason = true, GroupReadRefusalReadFailed
+			}
+			if groupOutcome.Refused && groupOutcome.Reason == GroupReadRefusalOverContractBound {
+				// REFUSED, NOT SLICED. Taking the first 250 of 251 groups
+				// answers a question nobody asked and the caller cannot tell
+				// it from a complete answer. Dropping the axis leaves the
+				// flat answer this turn would have given before the group
+				// axis was proposed, which is honest and is what the reader
+				// is told below.
+				cohort.Groups = nil
+				ApplyGroupedCohortCompleteness(&cohort)
+				plan.GroupKind = ""
+			}
+			graphContext.Cohort = &cohort
+			if groupOutcome.Read {
+				// The group read's OWN expansion decisions, reported here
+				// and not folded into the first read's. Every scope-
+				// expansion decision a read made is owed to the operator
+				// immediately, whether it expanded, declined or failed --
+				// and the group read makes its own, over a different root
+				// population. Emitting only the member read's would leave
+				// the second read's decisions with no representation
+				// anywhere, which is the state this stage was in when it
+				// was first written.
+				//
+				// ON EVERY ISSUED READ, a failed one included. ReadFacts
+				// returns the partial bundle beside its error, scope and
+				// coverage decisions included, and the failed read is the one
+				// an operator most needs to diagnose; emitting only on success
+				// left it with no trace of what it decided (round 2, P1-4).
+				e.recordFactScopeExpansion(ctx, principal, groupBundle.Scope)
+			}
+			if groupOutcome.Read && groupErr != nil {
+				// The failed read's own coverage observations, BEFORE any
+				// fold -- there is no fold on this path, the bundle is not
+				// composed -- so the trace shows which population failed.
+				e.recordGroupReadCoverageStates(ctx, principal, plan.Family, requestedGroupKind, facts.Coverage, groupBundle.Coverage)
+			}
+			if groupOutcome.Read && groupErr == nil {
+				// THE TURN'S ONE FACT BUDGET, before anything else sees the
+				// group bundle, so the pre-fold coverage line below and the
+				// merge both describe what the turn will actually carry.
+				groupFactsCapOmitted = boundGroupFactsToRemainingCapacity(&groupBundle, len(facts.Facts))
+				// BEFORE THE FOLD. MergeCoverage keeps the worst state per
+				// source name and both reads report under the same
+				// `canonical_fact:<kind>` names, so a group gap erases the
+				// member read's `available` and nothing downstream can say
+				// which population the gap was in. Emitted here, while both
+				// answers still exist separately.
+				e.recordGroupReadCoverageStates(ctx, principal, plan.Family, requestedGroupKind, facts.Coverage, groupBundle.Coverage)
+				if mergeGroupBundle(&facts, groupBundle, principal.OrgID) {
+					// Refused at RECONCILE, after the request went out. `Read`
+					// stays true for the same reason it stays true on a failed
+					// read above: a provider was asked and answered, and
+					// `group_facts_merged=0` beside `metadata_conflict` is what
+					// says none of the answer was composed. Clearing it made
+					// the trace claim the group axis was never queried.
+					groupOutcome.Refused, groupOutcome.Reason = true, GroupReadRefusalMetadataConflict
+				} else {
+					groupFactsMerged = len(groupBundle.Facts)
+				}
+			}
+			groupsWithFacts := 0
+			if groupOutcome.Read && !groupOutcome.Refused {
+				groupsWithFacts = admittedGroupsWithFacts(groupOutcome.Admitted, groupBundle.Facts)
+			}
+			groupReadForDisclosure = groupReadDisclosureFor(groupOutcome, groupsWithFacts)
+			groupReadKindForDisclosure = requestedGroupKind
+			e.recordCohortGroupRead(ctx, principal, CohortGroupReadEvent{
+				Family:                 plan.Family,
+				GroupKind:              requestedGroupKind,
+				Disclosure:             groupReadForDisclosure,
+				Proposed:               groupOutcome.Proposed,
+				Admitted:               len(groupOutcome.Admitted),
+				Denied:                 groupOutcome.Denied,
+				Read:                   groupOutcome.Read,
+				Refused:                groupOutcome.Refused,
+				Refusal:                groupOutcome.Reason,
+				FactsReturned:          groupOutcome.FactsReturned,
+				UnadmittedFactsDropped: groupOutcome.UnadmittedFactsDropped,
+				ContractBound:          contractsv1.ContextFabricCohortGroupsMaxCount,
+				FactsCapOmitted:        groupFactsCapOmitted,
+				FactsMerged:            groupFactsMerged,
+				FactBundleCap:          maxCanonicalFactsPerBundle,
+				AuthorizationBatches:   groupOutcome.AuthorizationBatches,
+				AuthorizationBatchSize: groupAuthorizationBatchSize(),
 			})
 		} else if groupingOutcome.Refusal != CohortGroupingRefusalNone {
 			// ONE arm for EVERY refusal, and the reason there is only one is
@@ -2440,6 +2623,30 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// AFTER this stage shaped it, and reported a stale default basis when it
 	// had no way to know what this stage had already done.
 	var stage2GroupedBasis contractsv1.ContextFabricNarrowingBasis
+	// THE ALLOWANCE, REPORTED WHETHER OR NOT IT NARROWS ANYTHING.
+	//
+	// The clamp happens while COMPUTING the allowance, not while applying it,
+	// so a cohort already small enough to survive was clamped exactly as hard
+	// as one that got cut. Emitting only on narrowing would hide precisely
+	// the turns where a reader wonders why the answer is so thin.
+	//
+	// Captured before the block below runs, so members_before is the count
+	// this decision was taken against rather than whatever survived it.
+	if graphContext.Cohort != nil {
+		allowanceEvent := CohortMemberAllowanceEvent{
+			Family: plan.Family, GroupKind: plan.GroupKind,
+			MaxItems: plan.Budget.MaxItems, Headroom: plan.Budget.SynthesisHeadroom,
+			Allowance: plan.Budget.MaxMembers, Clamped: cohortMemberAllowanceClamped(plan.Budget),
+			Groups:        len(graphContext.Cohort.Groups),
+			MembersBefore: len(graphContext.Cohort.Members),
+		}
+		defer func() {
+			if graphContext.Cohort != nil {
+				allowanceEvent.MembersAfter = len(graphContext.Cohort.Members)
+			}
+			e.recordCohortMemberAllowance(ctx, principal, allowanceEvent)
+		}()
+	}
 	if graphContext.Cohort != nil && plan.Budget.MaxMembers > 0 && len(graphContext.Cohort.Members) > plan.Budget.MaxMembers {
 		before := len(graphContext.Cohort.Members)
 		cohort := *graphContext.Cohort
@@ -2463,7 +2670,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// UNGROUNDED claim, and the evidence-closure validator would
 			// reject the whole result -- turning a narrowed answer into a
 			// failed one.
-			facts.Facts = RetainFactsForCohort(facts.Facts, &cohort, removed)
+			var retention FactRetentionDecision
+			facts.Facts, retention = RetainFactsForCohortWithDecision(facts.Facts, &cohort, removed, resolution.Committed)
+			e.recordFactRetention(ctx, principal, FactRetentionEvent{
+				Family: plan.Family, GroupKind: plan.GroupKind,
+				Stage:    contractsv1.ContextFabricPlanNarrowingSynthesisInput,
+				Decision: retention,
+			})
 			if len(cohort.Groups) > 0 {
 				ApplyGroupedCohortCompleteness(&cohort)
 			} else {
@@ -2519,6 +2732,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		CommitBases: commitBases, CommitDigests: commitDigests,
 		GroupedNarrowingBasis: stage2GroupedBasis,
 		GroupingRefusal:       groupingRefusalForDisclosure,
+		GroupReadDisclosure:   groupReadForDisclosure,
+		GroupReadKind:         groupReadKindForDisclosure,
 	}
 	// The retry's base is snapshotted BEFORE the first pass runs. Taking it
 	// afterwards copied state pass one had already dirtied in place -- see

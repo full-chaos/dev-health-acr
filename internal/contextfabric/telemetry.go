@@ -942,6 +942,15 @@ func (t SlogEngineTelemetry) RecordFrameValidation(ctx context.Context, principa
 		// the emitter predates this seam -- never that the gate passed.
 		"frame_gate", SanitizeLogAttr(event.Gate.Observable()),
 		"refuse_basis", SanitizeLogAttr(event.Gate.ObservableRefuseBasis()),
+		// THE INTERPRETATION BOUNDARY (see chaos5390_interpretation_boundary.go):
+		// what the hints requested beside what the frame proposed, and what
+		// became of the group axis. Every value is a closed token or an
+		// explicit absence token, never an empty string.
+		"requested_group_hint", SanitizeLogAttr(event.Boundary.RequestedGroupHint),
+		"requested_member_hint", SanitizeLogAttr(event.Boundary.RequestedMemberHint),
+		"proposed_group_kind", SanitizeLogAttr(event.Boundary.ProposedGroupKind),
+		"proposed_member_kind", SanitizeLogAttr(event.Boundary.ProposedMemberKind),
+		"group_axis", SanitizeLogAttr(observableGroupAxis(event.Boundary.GroupAxis)),
 	}
 	args = append(args, requirementDerivationLogAttrs(event.RequirementDerivation)...)
 	args = append(args, requestIDLogAttrs(ctx)...)
@@ -1676,4 +1685,289 @@ func validNarrationAllocatorOrUnclassified(allocator CohortDriverNarrationAlloca
 		return allocator
 	}
 	return CohortDriverNarrationAllocator("unclassified")
+}
+
+// RecordCohortGroupRead emits the grouped path's own decision about its group
+// axis, at Info, on every grouped turn that reached the stage.
+//
+// The line is written so the decision graph can be rebuilt from it alone:
+// `proposed` is the pre-entry state (what grouping produced), `admitted` and
+// `denied` are the pre-decision measurement (what the authorizer said),
+// `read` and `group_read_refusal` are the decision itself, and
+// `facts_returned` is the post-decision result. A reader who has only this
+// line can say what was asked, what was allowed, what ran and what came back.
+//
+// `contract_bound` travels beside `proposed` because a refusal at the edge and
+// a refusal far past it are different operational facts, and a reader should
+// not have to know this build's constant to tell them apart.
+//
+// Ids, counts, booleans and closed enums only -- no group ids, no payload.
+func (t SlogEngineTelemetry) RecordCohortGroupRead(ctx context.Context, principal storage.Principal, event CohortGroupReadEvent) {
+	if t.logger == nil {
+		return
+	}
+	// Routed through the vocabulary's own membership check, not emitted
+	// verbatim: a value escaping the closed set reaches a field consumers
+	// group on, and free text there is indistinguishable from a member until
+	// someone tries to aggregate it.
+	refusal := event.Refusal
+	if !ValidGroupReadRefusal(refusal) {
+		refusal = GroupReadRefusal("unclassified")
+	}
+	disclosure := event.Disclosure
+	if !ValidGroupReadDisclosure(disclosure) {
+		disclosure = GroupReadDisclosure("unclassified")
+	}
+	// request_id rides every line, as it does on the frame-validation line,
+	// so each line joins to the turn whose decision graph it belongs to.
+	args := []any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"family", string(event.Family),
+		"group_kind", string(event.GroupKind),
+		"groups_proposed", event.Proposed,
+		"groups_admitted", event.Admitted,
+		"groups_denied", event.Denied,
+		"contract_bound", event.ContractBound,
+		"group_read_issued", event.Read,
+		"group_read_refused", event.Refused,
+		"group_read_refusal", string(refusal),
+		"group_facts_returned", event.FactsReturned,
+		"group_facts_unadmitted_dropped", event.UnadmittedFactsDropped,
+		"group_facts_cap_omitted", event.FactsCapOmitted,
+		"group_facts_merged", event.FactsMerged,
+		"fact_bundle_cap", event.FactBundleCap,
+		// How the proposed set was authorized. A capped call reports the
+		// groups past its cap as denied, so `groups_denied` is a statement
+		// about authorization only when no call carried more than the batch
+		// size -- and these two let a reader check that from this line.
+		"authorization_batches", event.AuthorizationBatches,
+		"authorization_batch_size", event.AuthorizationBatchSize,
+		// What the served document says about this read; through the
+		// vocabulary's membership check like the refusal above.
+		"group_read_disclosure", string(disclosure),
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric cohort group read", args...)
+}
+
+// RecordPlanGroupAxisCollapsed emits the plan seam's I6 refusal, at Info.
+//
+// The keys that name the failure are the frame-validation line's own
+// (`failed_invariant`, `failed_phase`, `failure_detail`, `frame_gate`), so a
+// query for an I6 refusal finds both seams with one predicate; `seam` says
+// which one refused. The two kinds are the ones that collapsed, captured
+// before the plan clears its axis.
+//
+// Closed enums and kinds only -- no ids, no payload.
+func (t SlogEngineTelemetry) RecordPlanGroupAxisCollapsed(ctx context.Context, principal storage.Principal, event PlanGroupAxisCollapsedEvent) {
+	if t.logger == nil {
+		return
+	}
+	// The invariant is the field an I6 query groups on, so it goes through
+	// the vocabulary's own membership check; phase and detail are emitted
+	// exactly as the frame-validation line emits them.
+	invariant := event.Failure.Invariant
+	if !ValidFrameInvariant(invariant) {
+		invariant = FrameInvariant("unclassified")
+	}
+	args := []any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"family", string(event.Family),
+		"seam", "plan",
+		// Through the published kind vocabulary, as the interpretation
+		// boundary's kinds are: the group kind came from the model's hint,
+		// so no model text may reach this line through a kind slot.
+		"group_kind", SanitizeLogAttr(closedKindToken(event.GroupKind)),
+		"member_kind", SanitizeLogAttr(closedKindToken(event.MemberKind)),
+		"failed_invariant", string(invariant),
+		"failed_phase", string(event.Failure.Phase),
+		"failure_detail", string(event.Failure.Detail),
+		"frame_gate", SanitizeLogAttr(event.Gate.Observable()),
+		// The WIRE basis the served document discloses, under the key the
+		// subjectless terminal already uses for it. Not the gate's own
+		// refuse_basis: that names a refused-basis outcome, and on a
+		// rejected-invalid gate like this one it reads `none`.
+		"refusal_basis", string(event.Gate.RefusalBasis()),
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric plan group axis collapsed", args...)
+}
+
+// RecordGroupReadCoverageState emits one read's observation of one coverage
+// source, at Info, BEFORE the two reads' coverage is folded.
+//
+// The fold keeps the worst state per source name, which is right for the
+// served answer and lossy for the trace: a group gap erases the member read's
+// `available`, and nothing downstream can recover which population the gap was
+// in. This line is where that survives. `read` is the discriminator the event
+// exists for; without it the two observations are indistinguishable, which is
+// exactly the state the merged coverage is in.
+//
+// At Info deliberately, not Debug: this is a routine, per-turn statement about
+// what the server saw, and a reader who has to raise the level to find out
+// which population a coverage gap was in cannot answer it about a turn that
+// has already happened.
+func (t SlogEngineTelemetry) RecordGroupReadCoverageState(ctx context.Context, principal storage.Principal, event GroupReadCoverageStateEvent) {
+	if t.logger == nil {
+		return
+	}
+	// Both closed fields go through their own membership checks. A value
+	// outside either vocabulary reaches a field consumers group on, and free
+	// text there is indistinguishable from a member until someone aggregates.
+	arm := event.Read
+	if !ValidGroupReadArm(arm) {
+		arm = GroupReadArm("unclassified")
+	}
+	// The PUBLISHED vocabulary, not the provider-legal one: `pruned` is a
+	// planner verdict the served coverage carries, and the provider predicate
+	// excludes it by design -- which published it as `unclassified`.
+	state := event.State
+	if !contractsv1.ValidContextFabricSourceState(state) {
+		state = SourceState("unclassified")
+	}
+	// request_id rides every line, as it does on the frame-validation line,
+	// so each line joins to the turn whose decision graph it belongs to.
+	args := []any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"family", string(event.Family),
+		"group_kind", string(event.GroupKind),
+		"read", string(arm),
+		"source", SanitizeLogAttr(event.Source),
+		"source_state", string(state),
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric group read coverage state", args...)
+}
+
+// RecordCohortMemberAllowance emits the cohort member allowance and whether it
+// was clamped, at Info, on every turn that has a cohort.
+//
+// `max_items` beside `headroom` is the pair that makes the line worth having:
+// an allowance of one is unremarkable under a one-item budget and is a
+// reserve swallowing the whole budget under a twenty-item one, and the
+// allowance alone cannot tell them apart. `clamped` states which happened
+// rather than leaving a reader to redo the subtraction.
+//
+// `groups` is on the line because `members_after` does not equal `allowance`
+// for a grouped cohort: the set cover keeps one member per group, so a cohort
+// narrowed to an allowance of one still carries as many members as it has
+// groups, and without the group count that looks like the allowance being
+// ignored.
+func (t SlogEngineTelemetry) RecordCohortMemberAllowance(ctx context.Context, principal storage.Principal, event CohortMemberAllowanceEvent) {
+	if t.logger == nil {
+		return
+	}
+	// request_id rides every line, as it does on the frame-validation line,
+	// so each line joins to the turn whose decision graph it belongs to.
+	args := []any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"family", string(event.Family),
+		"group_kind", string(event.GroupKind),
+		// The three budget fields derive from the caller's own request
+		// options (MaxCohortMembers flows into the allowance), so they cross
+		// the one barrier for request-derived integers before they are
+		// logged -- see requestDerivedLogInt.
+		"max_items", requestDerivedLogInt(event.MaxItems),
+		"synthesis_headroom", requestDerivedLogInt(event.Headroom),
+		"member_allowance", requestDerivedLogInt(event.Allowance),
+		"allowance_clamped", event.Clamped,
+		"groups", event.Groups,
+		"members_before", event.MembersBefore,
+		"members_after", event.MembersAfter,
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric cohort member allowance", args...)
+}
+
+// RecordFactRetention emits one retention decision, at Info.
+//
+// The anchor fields name the committed resolution subjects the pass admitted
+// (`anchor_ids`) and every one whose facts it nevertheless dropped
+// (`dropped_anchor_ids`, only ever an anchor that was also a removed member).
+// Without them a narrowed answer that lost the evidence for a subject the
+// question named was indistinguishable, on this line, from one that lost a
+// group's: the facts were counted under `dropped_groups` and no field said
+// whose they were.
+//
+// `dropped_groups` is the field this line was added for: a group narrowed out
+// of the answer used to keep its evidence, synthesis was handed facts about a
+// population the served document did not contain, and evidence closure
+// rejected the whole result with nothing anywhere explaining it. A non-zero
+// count here is now the visible half of that decision.
+//
+// `group_kind` travels with it because `dropped_groups` alone is ambiguous: on
+// a flat cohort the field is structurally zero, and zero-because-nothing-was-
+// dropped and zero-because-there-is-no-group-axis are different facts wearing
+// the same number.
+func (t SlogEngineTelemetry) RecordFactRetention(ctx context.Context, principal storage.Principal, event FactRetentionEvent) {
+	if t.logger == nil {
+		return
+	}
+	// request_id rides every line, as it does on the frame-validation line,
+	// so each line joins to the turn whose decision graph it belongs to.
+	args := []any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"family", string(event.Family),
+		"group_kind", string(event.GroupKind),
+		"stage", string(event.Stage),
+		"facts_before", event.Decision.FactsBefore,
+		"facts_after", event.Decision.FactsAfter,
+		"dropped_members", event.Decision.DroppedMembers,
+		"dropped_groups", event.Decision.DroppedGroups,
+		"retained_groups", event.Decision.RetainedGroups,
+		"group_rule_applied", event.Decision.GroupRuleApplied,
+		"anchors", len(event.Decision.Anchors),
+		"anchor_ids", SanitizeLogStrings(retentionSubjectLogIDs(event.Decision.Anchors)),
+		"anchor_facts_retained", event.Decision.AnchorFactsRetained,
+		"anchor_facts_dropped", event.Decision.AnchorFactsDropped,
+		"dropped_anchor_ids", SanitizeLogStrings(retentionSubjectLogIDs(event.Decision.DroppedAnchors)),
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric fact retention", args...)
+}
+
+// retentionSubjectLogIDs renders subjects for the retention line as
+// "<kind>/<canonical id>", in the order given. Kind travels with the id
+// because a canonical id alone is not unique across kinds.
+func retentionSubjectLogIDs(subjects []SubjectRef) []string {
+	ids := make([]string, 0, len(subjects))
+	for _, subject := range subjects {
+		ids = append(ids, string(subject.Kind)+"/"+subject.CanonicalID)
+	}
+	return ids
+}
+
+// observableGroupAxis routes the group-axis decision through its own
+// membership check. The zero value -- an event built without a boundary --
+// reads `unset`, never a member, so a line from an emitter that did not fill
+// the boundary cannot pass for a real decision.
+func observableGroupAxis(value GroupAxisDecision) string {
+	if value == "" {
+		return "unset"
+	}
+	if !ValidGroupAxisDecision(value) {
+		return "unclassified"
+	}
+	return string(value)
+}
+
+// requestDerivedLogInt is the log barrier for an INTEGER that derives from a
+// decoded request, returned as the same integer so the field stays a JSON
+// number.
+//
+// An int cannot carry the newline CWE-117 is about, and slog's JSON handler
+// would quote one anyway -- but go/log-injection's dataflow has no numeric
+// barrier, so a request option that flows into a logged count (the caller's
+// MaxCohortMembers into the member allowance) is reported as a forgery path.
+// The decimal rendering is passed through SanitizeLogAttr, the package's one
+// recognised barrier, and parsed back. For every int the
+// round trip is the identity: strconv.Itoa never emits a line break, so the
+// strip removes nothing and Atoi always succeeds; the zero on the error arm
+// is unreachable and exists only so the function is total.
+func requestDerivedLogInt(value int) int {
+	parsed, err := strconv.Atoi(SanitizeLogAttr(strconv.Itoa(value)))
+	if err != nil {
+		return 0
+	}
+	return parsed
 }

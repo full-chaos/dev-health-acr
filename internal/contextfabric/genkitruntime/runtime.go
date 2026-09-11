@@ -187,7 +187,21 @@ const (
 	// the question differently than one told only to describe it
 	// structurally. That is measured on the rig before this ships, not
 	// assumed -- the before/after tally is in the PR body.
-	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v12"
+	// v13: the frame section's grouped_members sentence no longer tells the
+	// model the two kinds "must be DIFFERENT". It now tells the model to
+	// express a grouping exactly as asked -- including a kind grouped by
+	// itself -- and states that the SERVER decides whether a grouping is
+	// legal -- and that a question about EACH member of one kind is a
+	// discovered set, not a grouping, so only an explicit partition is ever
+	// expressed as a self-group. The old sentence made the model the judge
+	// of invariant I6: a
+	// question that grouped a kind by itself was re-expressed as a flat
+	// discovered_kind frame, which validates, so the server's I6 check
+	// never saw it and the question was answered flat. Required bump for
+	// the rule stated at v9: any change to the prompt's content changes
+	// the ReuseKey dimension, or stored answers produced under the old
+	// sentence keep being served for exactly the questions it re-expressed.
+	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v13"
 	// DefaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3
 	// closes the driver category vocabulary (a fixed 16-value set, no

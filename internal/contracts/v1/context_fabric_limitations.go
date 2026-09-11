@@ -335,6 +335,71 @@ func IsContextFabricGroupingUnplaceableLimitation(limitation string) bool {
 	return ValidContextFabricSubjectKind(ContextFabricSubjectKind(plannedKind))
 }
 
+// contextFabricGroupReadUnreadLimitationPrefix/-Suffix and
+// contextFabricGroupListOverBoundLimitationPrefix/-Suffix are the fixed
+// segments of the two group-read disclosures: a grouped answer some of whose
+// groups could not be read, and a grouped question whose group list was larger
+// than an answer can carry.
+//
+// KIND-ONLY AND COUNT-FREE, like the grouping disclosures above: the one
+// interpolated value is a member of the closed subject-kind vocabulary the
+// model never writes into, so recognition is a parse that cannot admit model
+// text. Neither sentence shares an opening with the grouping families, so
+// no service family can be read as another.
+const (
+	contextFabricGroupReadUnreadLimitationPrefix    = "Not every "
+	contextFabricGroupReadUnreadLimitationSuffix    = " group in this answer could be read, so what it says about those groups rests on their members' evidence alone."
+	contextFabricGroupListOverBoundLimitationPrefix = "This question asked for more "
+	contextFabricGroupListOverBoundLimitationSuffix = " groups than an answer can carry, so the answer is presented ungrouped."
+)
+
+// ContextFabricGroupReadUnreadLimitation composes the disclosure that at least
+// one group of a grouped answer was not read: denied by authorization, read
+// with nothing returned for it, or not read at all because the group read
+// failed, could not be authorized, or could not be composed with the member
+// read. THE SOLE COMPOSER: recognition is a parse over exactly these segments.
+func ContextFabricGroupReadUnreadLimitation(groupKind ContextFabricSubjectKind) string {
+	return contextFabricGroupReadUnreadLimitationPrefix + string(groupKind) + contextFabricGroupReadUnreadLimitationSuffix
+}
+
+// IsContextFabricGroupReadUnreadLimitation reports whether a limitation is one
+// ContextFabricGroupReadUnreadLimitation could have composed. A parse, not a
+// prefix match, and the kind must be a vocabulary member, so neither a model
+// caveat opening with these words nor a half-composed sentence is recognised.
+func IsContextFabricGroupReadUnreadLimitation(limitation string) bool {
+	body, ok := strings.CutPrefix(limitation, contextFabricGroupReadUnreadLimitationPrefix)
+	if !ok {
+		return false
+	}
+	kind, ok := strings.CutSuffix(body, contextFabricGroupReadUnreadLimitationSuffix)
+	if !ok {
+		return false
+	}
+	return ValidContextFabricSubjectKind(ContextFabricSubjectKind(kind))
+}
+
+// ContextFabricGroupListOverBoundLimitation composes the disclosure that a
+// grouped question proposed more groups than the contract's group bound, so
+// its group axis was refused before any group was read and the answer is
+// presented ungrouped. THE SOLE COMPOSER, for the same reason.
+func ContextFabricGroupListOverBoundLimitation(groupKind ContextFabricSubjectKind) string {
+	return contextFabricGroupListOverBoundLimitationPrefix + string(groupKind) + contextFabricGroupListOverBoundLimitationSuffix
+}
+
+// IsContextFabricGroupListOverBoundLimitation reports whether a limitation is
+// one ContextFabricGroupListOverBoundLimitation could have composed.
+func IsContextFabricGroupListOverBoundLimitation(limitation string) bool {
+	body, ok := strings.CutPrefix(limitation, contextFabricGroupListOverBoundLimitationPrefix)
+	if !ok {
+		return false
+	}
+	kind, ok := strings.CutSuffix(body, contextFabricGroupListOverBoundLimitationSuffix)
+	if !ok {
+		return false
+	}
+	return ValidContextFabricSubjectKind(ContextFabricSubjectKind(kind))
+}
+
 // contextFabricRefusalBasisLimitationPrefix/-Middle/-Suffix are the three
 // FIXED segments of CHAOS-5442's frame-refusal disclosure, and
 // contextFabricFrameInvariantRefusalLimitation is the whole sentence for the
@@ -485,7 +550,9 @@ func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
 	// defect, and it is invisible to any test that drives the composer.
 	return IsContextFabricGroupingRefusalLimitation(limitation) ||
 		IsContextFabricGroupingUnplaceableLimitation(limitation) ||
-		IsContextFabricRefusalBasisLimitation(limitation)
+		IsContextFabricRefusalBasisLimitation(limitation) ||
+		IsContextFabricGroupReadUnreadLimitation(limitation) ||
+		IsContextFabricGroupListOverBoundLimitation(limitation)
 }
 
 // HasContextFabricServiceAuthoredLimitation reports whether any entry is

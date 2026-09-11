@@ -11,12 +11,16 @@ import (
 	"github.com/full-chaos/dev-health-go/readers"
 )
 
-// teamPrefix is the CanonicalID prefix this package uses for team subjects,
-// mirroring workitems.go's workItemPrefix convention. No provider in this
-// repository minted this convention before CHAOS-3780 (devhealthsource has
-// no canonical team producer yet -- teams_projects.go's TeamsProjectsSource
-// is a documented stub), so this is a new but consistent choice.
-const teamPrefix = "team:"
+// teamPrefix is the CanonicalID prefix this package strips off a team subject
+// before querying the team fact tables.
+//
+// It is now an alias of the ONE shared constant rather than this package's own
+// copy. It was declared here first, and the team producer later declared its
+// own matching literal -- two constants that had to agree with nothing making
+// them agree. The grouped-cohort path knew about neither and published raw
+// source-row keys as team identities, which is what left every provider in
+// this package dark for a grouped answer's groups.
+const teamPrefix = contextfabric.TeamCanonicalIDPrefix
 
 // WorkloadProvider implements contextfabric.FactProvider for FactWorkload
 // from capacity_forecasts -- Dev Health Ops' precomputed, team-level Monte

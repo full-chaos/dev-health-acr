@@ -1596,7 +1596,7 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 		return
 	}
 	proposed := *receipt.QuestionFrame
-	result := ValidateFrame(proposed, nil, emittedShape)
+	result := validateProposedFrame(*receipt, proposed, emittedShape)
 
 	receipt.FrameOutcome = result.Outcome
 	receipt.FrameFailedInvariant = result.Failure.Invariant
@@ -1671,8 +1671,63 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 	}
 
 	if r.FrameTelemetry != nil {
-		r.FrameTelemetry.RecordFrameValidation(ctx, principal, FrameValidationEventFrom(proposed, result, emittedShape, requirements))
+		event := FrameValidationEventFrom(proposed, result, emittedShape, requirements)
+		// The requested-versus-proposed half, from THIS receipt and THIS
+		// proposal, judged by the gate this event already carries -- one
+		// verdict, read once.
+		event.Boundary = InterpretationBoundaryFrom(*receipt, proposed, event.Gate)
+		r.FrameTelemetry.RecordFrameValidation(ctx, principal, event)
 	}
+}
+
+// validateProposedFrame validates ONE proposed frame against its own
+// interpretation: the frame's invariants (ValidateFrame), then whether the
+// frame kept the group axis the same call's hint asked for.
+//
+// THE REQUESTED GROUP AXIS IS KEPT OR REFUSED, NEVER DROPPED.
+//
+// The ruling is that the interpreter keeps the axis the question asked for
+// and I6 refuses it, with its basis, when it cannot be expressed legally. A
+// frame that validates on its own terms but expresses NO group axis, from a
+// call whose own hint asked for one, is a third thing: the axis was dropped
+// at interpretation, the gate passed it, and the turn answered a flat
+// question nobody asked. The only trace was a `dropped_at_interpretation`
+// token (round 2, P1-1). It is refused here under I6, the group-axis
+// invariant, with its own detail so the histogram tells it apart from a
+// self-group.
+//
+// Here and not in ValidateFrame, because the hint is the receipt's and the
+// invariant table reads the frame alone; this is the one place both halves of
+// the same model call are in hand. The axis is never restored instead:
+// rewriting the model's frame from its hint would be a repair, and this slice
+// has none. One function, called by resolveFrame and by the input-domain
+// table, so the table measures what production decides.
+func validateProposedFrame(receipt ModelExecutionReceipt, proposed QuestionFrame, emittedShape InvestigationShape) FrameValidationResult {
+	result := ValidateFrame(proposed, nil, emittedShape)
+	if result.Outcome == FrameValidationOutcomeValid && requestedGroupAxisDropped(receipt, proposed) {
+		return FrameValidationResult{
+			Outcome: FrameValidationOutcomeRefusedInvalid,
+			Failure: FrameValidationFailure{Invariant: FrameInvariantI6, Phase: FrameValidationPhaseA1, Detail: FrameFailureGroupAxisNotExpressed},
+		}
+	}
+	return result
+}
+
+// requestedGroupAxisDropped reports whether the interpretation's own hint
+// asked for a group axis -- a recognised kind, or one the sanitizer dropped as
+// unrecognised -- while the frame it proposed expresses none.
+//
+// The same predicate the interpretation boundary reads for its
+// `group_axis` token (InterpretationBoundaryFrom), so the line and the gate
+// cannot disagree about whether an axis was requested.
+func requestedGroupAxisDropped(receipt ModelExecutionReceipt, proposed QuestionFrame) bool {
+	return receiptRequestsGroupAxis(receipt) && proposed.SubjectExpression.Kind != SubjectExpressionGroupedMembers
+}
+
+// receiptRequestsGroupAxis reports whether the model's own hint asked for a
+// grouping.
+func receiptRequestsGroupAxis(receipt ModelExecutionReceipt) bool {
+	return receipt.GroupKind != "" || receipt.GroupKindUnrecognized
 }
 
 // backfillNamedSubjectExpectedKind (CHAOS-4975) fills a named_subject

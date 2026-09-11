@@ -39,10 +39,17 @@ const (
 	// through the caller-hint short circuit -- so it stays short-circuit
 	// eligible and contest-exempt. See the attribute table below.
 	AnswerReuseAuthorizationRecheck Source = "answer_reuse_authorization_recheck"
+	// CohortGroupAuthorization: the grouped-cohort path asking whether this
+	// principal may see each group identity the grouping CONSTRUCTED, before
+	// any group-rooted fact read is issued. Engine-minted, and its subjects
+	// are named by canonical id the engine derived from the source rows, so
+	// it takes the same attributes as the reuse recheck: it is a filter over
+	// identities this turn already holds, never a way to widen a pool.
+	CohortGroupAuthorization Source = "cohort_group_authorization"
 )
 
-// Attributes are the TWO INDEPENDENT FACTS about a source, kept apart on
-// purpose.
+// Attributes are the INDEPENDENT FACTS about a source, kept apart on purpose:
+// authorship, and three policies read at three different decision points.
 //
 // Before this type one boolean carried both, and the two disagreed for the
 // answer-reuse recheck: it is engine-minted (authorship) and it must still
@@ -63,9 +70,24 @@ type Attributes struct {
 	// candidate carrying this source reach the exact-resolution short
 	// circuit instead of falling through to hybrid search.
 	ShortCircuitEligible ShortCircuitPolicy
+	// SearchFallback is POLICY for a hint set that resolved NOTHING: may the
+	// resolution widen into hybrid search, or does it end with the empty
+	// exact answer.
+	//
+	// A third fact, not a reading of the second. The short circuit decides
+	// what happens when a hint RESOLVED; this decides what happens when none
+	// did. For an identity question -- "may this principal see these ids" --
+	// an id the keyed lookup could not authorize cannot be admitted by a
+	// search either, so the search can only cost time, and it costs a great
+	// deal: on the trial venue a batch of 50 group ids that resolved nothing
+	// spent 18-20 s in hybrid search (embeddings included) and admitted
+	// nothing, where one resolvable id in the same call short-circuits in
+	// ~40 ms.
+	SearchFallback SearchFallbackPolicy
 }
 
-// THE TWO POLICIES ARE DIFFERENT TYPES WITH DIFFERENT ACCESSORS, and both
+// THE POLICIES ARE DIFFERENT TYPES WITH DIFFERENT ACCESSORS (the third,
+// SearchFallbackPolicy, joined on the same rule), and both
 // halves of that are load-bearing.
 //
 // They answer different questions at different call sites, and today every
@@ -94,6 +116,9 @@ type (
 	// exact-resolution caller-hint exit rather than falling through to
 	// hybrid search.
 	ShortCircuitPolicy struct{ eligible bool }
+	// SearchFallbackPolicy answers: may a hint set carrying this source,
+	// having resolved nothing, fall through to hybrid search.
+	SearchFallbackPolicy struct{ permitted bool }
 )
 
 // Exempt reports whether the contest boundary admits this source's candidate
@@ -104,6 +129,10 @@ func (p ContestPolicy) Exempt() bool { return p.exempt }
 // short circuit.
 func (p ShortCircuitPolicy) Eligible() bool { return p.eligible }
 
+// Permitted reports whether a hint set of this source that resolved nothing
+// may widen into hybrid search.
+func (p SearchFallbackPolicy) Permitted() bool { return p.permitted }
+
 // Contest and ShortCircuit build the policies, and the registry below uses them
 // rather than composite literals. Two reasons, both about keeping the types
 // meaningful: the field stays unexported, so the accessor is the only way to
@@ -112,20 +141,38 @@ func (p ShortCircuitPolicy) Eligible() bool { return p.eligible }
 // another bare literal invites the transposition these types exist to stop.
 func Contest(exempt bool) ContestPolicy             { return ContestPolicy{exempt: exempt} }
 func ShortCircuit(eligible bool) ShortCircuitPolicy { return ShortCircuitPolicy{eligible: eligible} }
+func SearchFallback(permitted bool) SearchFallbackPolicy {
+	return SearchFallbackPolicy{permitted: permitted}
+}
 
 // registry is the enumeration. Adding a member here is the ONLY way to add an
 // engine-minted source, and the producer-enumeration test fails the build when
 // a production Source: literal is not one of these.
 var registry = map[Source]Attributes{
+	// A receipt is a conversational reference, not an identity question: a
+	// follow-up naming a different subject than the receipt bound must still
+	// be found by search, so it keeps the fallback.
 	PriorSubjectReceipt: {
 		EngineMinted:         true,
 		ContestExempt:        Contest(false),
 		ShortCircuitEligible: ShortCircuit(false),
+		SearchFallback:       SearchFallback(true),
 	},
+	// The two AUTHORIZATION questions never widen. Each asks whether a set of
+	// ids it already holds is visible to this principal; a search cannot
+	// answer that for an id the keyed lookup refused, so it can only spend
+	// the turn's time before reporting the same empty answer.
 	AnswerReuseAuthorizationRecheck: {
 		EngineMinted:         true,
 		ContestExempt:        Contest(true),
 		ShortCircuitEligible: ShortCircuit(true),
+		SearchFallback:       SearchFallback(false),
+	},
+	CohortGroupAuthorization: {
+		EngineMinted:         true,
+		ContestExempt:        Contest(true),
+		ShortCircuitEligible: ShortCircuit(true),
+		SearchFallback:       SearchFallback(false),
 	},
 }
 
@@ -151,7 +198,7 @@ func Lookup(source string) Attributes {
 	if attributes, ok := registry[Source(source)]; ok {
 		return attributes
 	}
-	return Attributes{EngineMinted: false, ContestExempt: Contest(true), ShortCircuitEligible: ShortCircuit(true)}
+	return Attributes{EngineMinted: false, ContestExempt: Contest(true), ShortCircuitEligible: ShortCircuit(true), SearchFallback: SearchFallback(true)}
 }
 
 // All returns every enumerated source, for the tests that must enumerate the

@@ -98,6 +98,11 @@ type synthesisAssemblyParams struct {
 	// so the ANSWER can disclose it. Zero on every request that grouped, and
 	// on every request that never planned a group axis.
 	GroupingRefusal CohortGroupingOutcome
+	// GroupReadDisclosure and GroupReadKind are what the served document
+	// must say about the group read (round 2, P1-3), carried like
+	// GroupingRefusal so the ANSWER discloses it.
+	GroupReadDisclosure GroupReadDisclosure
+	GroupReadKind       SubjectKind
 	// Plan is the answer plan this pass was budgeted against. Carried so the
 	// ONE allocator can be derived HERE, from the same plan every other
 	// spender reads, rather than each spender consulting a ceiling of its
@@ -445,6 +450,10 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// before the commit-affirmation gate, Validate and Save, so the sentence,
 	// its Coverage.Partial flag and the answer are one object throughout.
 	applyGroupingRefusalDisclosure(&result, params.GroupingRefusal)
+	// The group read's half: groups this answer did not read, or a group
+	// list too large to carry, said on the wire beside the grouping refusal
+	// and for the same reason -- telemetry alone is not disclosure.
+	applyGroupReadDisclosure(&result, params.GroupReadDisclosure, params.GroupReadKind)
 	// CHAOS-4398 PR3b: §5a narrated cohort driver judgments. Placed HERE --
 	// AFTER synthesis (synthesisDriverCount = len(result.Drivers) and
 	// synthesisClaimedFactCount = len(result.ClaimedFacts) are the ACTUAL
