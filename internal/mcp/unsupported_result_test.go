@@ -42,6 +42,23 @@ func TestAnUnsupportedResultReachesAnMCPClientWithAnEmptyAnswerSentence(t *testi
 		}
 		assertMatchesToolSchema(t, response, investigateQuestionResponseSchemaFile)
 	})
+	t.Run("investigate_question with the full result attached", func(t *testing.T) {
+		// include_full_result is the ONLY path that carries the canonical
+		// result through the question response's own embedded result schema.
+		// Without it the answer projection is validated and that schema's
+		// copy of the conditional is never exercised.
+		response := callInvestigateQuestion(t, boot, contractsv1.MCPInvestigateQuestionRequest{Question: result.Question, IncludeFullResult: true})
+		if response.FullResult == nil {
+			t.Fatal("include_full_result returned no canonical result; the embedded result schema would not be exercised")
+		}
+		if response.FullResult.DeterministicAnswer != "" {
+			t.Fatalf("full_result.deterministic_answer = %q, want the empty form carried whole", response.FullResult.DeterministicAnswer)
+		}
+		if err := response.Validate(); err != nil {
+			t.Fatalf("the answer wrapper rejected an unsupported full result: %v", err)
+		}
+		assertMatchesToolSchema(t, response, investigateQuestionResponseSchemaFile)
+	})
 	t.Run("investigation_result", func(t *testing.T) {
 		response := callInvestigationResult(t, boot, result.ResultID)
 		if response.Structured.DeterministicAnswer != "" {
