@@ -532,7 +532,9 @@ func TestContinuationRefusal_AdmissionPublishesAnUnreadableCarrierAsItsOwnValue(
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			prior := continuationPrior(t, continuationPriorID, base, QuestionFamilyDiscoveredCohortRanking, "")
-			store := newRefusalStore(&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}, graphEpoch: tc.epoch})
+			carriers := &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}, graphEpoch: tc.epoch}
+			withCarrierStates(t, carriers)
+			store := newRefusalStore(carriers)
 			if tc.failGet {
 				store.failGetOf, store.failGetAfter = continuationPriorID, 0
 			}
