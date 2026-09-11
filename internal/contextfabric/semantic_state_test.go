@@ -324,10 +324,41 @@ func TestSemanticState_EveryMutationOfTheStoredDocumentIsUnavailable(t *testing.
 	if _, status := DecodeSemanticState([]byte(`{"format_version":"semantic-state.v2","anything":[1,2]}`)); status != SemanticStateReadUnsupportedVersion {
 		t.Errorf("a v2 document with a new shape -> %s, want unsupported_version", status)
 	}
-	for _, raw := range []string{`[]`, `"x"`, `null`, `{}`, `{"format_version":null}`, `{"format_version":7}`, `{"format_version":""}`, `not json`, string(canonical) + `{}`} {
+	// A FIELD THE CODEC NEVER WROTE is malformed, whichever guard gets there
+	// first: the decoder refuses unknown fields, and the canonical re-encode
+	// refuses any document whose bytes the codec would not have produced.
+	// Executed as a stored document, not as a struct.
+	surplus := append(append([]byte(nil), canonical[:len(canonical)-1]...), []byte(`,"surplus_key":{"a":[1,2]}}`)...)
+	for _, raw := range []string{`[]`, `"x"`, `null`, `{}`, `{"format_version":null}`, `{"format_version":7}`, `{"format_version":""}`, `not json`, string(canonical) + `{}`, string(surplus)} {
 		if _, status := DecodeSemanticState([]byte(raw)); status != SemanticStateReadMalformed {
 			t.Errorf("DecodeSemanticState(%.40q) -> %s, want malformed", raw, status)
 		}
+	}
+}
+
+// TestSemanticState_TheEncoderRefusesAFormatItDidNotWrite pins the ENCODE side
+// of the format version. A snapshot handed to the codec carrying another
+// format is refused at the boundary, rather than stored and read back later as
+// an unsupported version by a turn that can no longer do anything about it.
+func TestSemanticState_TheEncoderRefusesAFormatItDidNotWrite(t *testing.T) {
+	t.Parallel()
+	for _, version := range []string{"", "semantic-state.v0", "semantic-state.v2", "SEMANTIC-STATE.V1", " semantic-state.v1"} {
+		state := sizedSemanticState(t, 4000)
+		state.FormatVersion = version
+		_, err := EncodeSemanticState(state)
+		t.Logf("format_version %-22q -> %v", version, err)
+		if err == nil || !errors.Is(err, ErrSemanticStateRejected) {
+			t.Errorf("EncodeSemanticState accepted format_version %q: %v", version, err)
+		}
+		// And the write argument carrying it is refused for the same reason,
+		// so no store sees it.
+		if err := SemanticStateOf(state).Validate(); err == nil || !errors.Is(err, ErrSemanticStateRejected) {
+			t.Errorf("SemanticStateWrite.Validate accepted format_version %q: %v", version, err)
+		}
+	}
+	control := sizedSemanticState(t, 4000)
+	if _, err := EncodeSemanticState(control); err != nil {
+		t.Fatalf("the control snapshot (format %q) was refused: %v", control.FormatVersion, err)
 	}
 }
 
