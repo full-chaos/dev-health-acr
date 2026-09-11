@@ -29,11 +29,13 @@ func requestIDLogAttrs(ctx context.Context) []any {
 }
 
 // SlogEngineTelemetry is the production EngineTelemetry: every counter
-// becomes one structured log line, content-safe by construction (org_id
-// plus counts/booleans only -- never question text, subject labels,
-// canonical IDs, or result IDs, matching EngineTelemetry's own doc
-// comment). It is the first production implementation of this interface;
-// composition previously left EngineTelemetry nil.
+// becomes one structured log line, content-safe by construction -- never
+// question text or a subject label. The few fields that ARE
+// request/stored-derived correlation handles (org_id, request ids, result
+// and context ids) route through the one shared SanitizeLogAttr barrier
+// rather than being excluded from this file, matching EngineTelemetry's
+// own doc comment. It is the first production implementation of this
+// interface; composition previously left EngineTelemetry nil.
 //
 // AC-3782-8 (the reuse rate and the saved model-call count are recorded):
 // both are derived entirely from the RecordAnswerReuse log line's
@@ -65,7 +67,7 @@ func (t SlogEngineTelemetry) RecordPriorSubjectReceiptsSkipped(ctx context.Conte
 	// requestIDLogAttrs' own doc comment) -- observability.RequestIDFromContext
 	// existed before this ticket but nothing in this package read it, so
 	// this line and RecordAnswerReuse's below were not request-correlatable.
-	args := append([]any{"org_id", principal.OrgID, "skipped_count", skipped}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "skipped_count", skipped}, requestIDLogAttrs(ctx)...)
 	t.logger.WarnContext(ctx, "context fabric prior-subject receipts skipped", args...)
 }
 
@@ -96,10 +98,10 @@ func (t SlogEngineTelemetry) RecordPriorSubjectReceiptsSkipped(ctx context.Conte
 // makes that worth surfacing above the reuse-outcome stream.
 func (t SlogEngineTelemetry) RecordCommitAffirmationRetraction(ctx context.Context, principal storage.Principal, outcome CommitAffirmationOutcome) {
 	args := append([]any{
-		"org_id", principal.OrgID,
-		"commit_basis", string(outcome.Basis),
-		"subject_kind", string(outcome.SubjectKind),
-		"winning_mechanism", outcome.WinningMechanism,
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"commit_basis", SanitizeLogAttr(string(outcome.Basis)),
+		"subject_kind", SanitizeLogAttr(string(outcome.SubjectKind)),
+		"winning_mechanism", SanitizeLogAttr(outcome.WinningMechanism),
 		"provisional_committed", outcome.ProvisionalCommitted,
 		"final_committed", outcome.FinalCommitted,
 	}, requestIDLogAttrs(ctx)...)
@@ -123,17 +125,17 @@ func (t SlogEngineTelemetry) RecordCommitAffirmationRetraction(ctx context.Conte
 // sits at the same level as the commit-gate retraction it runs beside.
 func (t SlogEngineTelemetry) RecordSynthesisStatusOverride(ctx context.Context, principal storage.Principal, outcome SynthesisStatusOverrideOutcome) {
 	args := append([]any{
-		"org_id", principal.OrgID,
-		"from_status", string(outcome.From),
-		"to_status", string(outcome.To),
-		"reason", string(outcome.Reason),
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"from_status", SanitizeLogAttr(string(outcome.From)),
+		"to_status", SanitizeLogAttr(string(outcome.To)),
+		"reason", SanitizeLogAttr(string(outcome.Reason)),
 		"committed_count", outcome.CommittedCount,
 	}, requestIDLogAttrs(ctx)...)
 	t.logger.WarnContext(ctx, "context fabric synthesis status override", args...)
 }
 
 func (t SlogEngineTelemetry) RecordAnswerReuse(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome) {
-	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome)}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome))}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric answer reuse outcome", args...)
 }
 
@@ -144,7 +146,7 @@ func (t SlogEngineTelemetry) RecordAnswerReuse(ctx context.Context, principal st
 // -- content-safe by construction, never question text, a subject label or
 // a receipt id.
 func (t SlogEngineTelemetry) RecordAnswerReuseBypass(ctx context.Context, principal storage.Principal, reason AnswerReuseBypassReason) {
-	args := append([]any{"org_id", principal.OrgID, "reason", string(reason)}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "reason", SanitizeLogAttr(string(reason))}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric answer reuse bypass", args...)
 }
 
@@ -196,7 +198,7 @@ type AnswerReuseContainmentEvent struct {
 // operator must be able to see without reading response bodies.
 func (t SlogEngineTelemetry) RecordAnswerReuseContainment(ctx context.Context, principal storage.Principal, event AnswerReuseContainmentEvent) {
 	args := []any{
-		"org_id", principal.OrgID,
+		"org_id", SanitizeLogAttr(principal.OrgID),
 		"demanded_refs", event.DemandedCount,
 		"visible_refs", event.VisibleCount,
 		"missing_refs", event.MissingCount,
@@ -233,7 +235,7 @@ func (t SlogEngineTelemetry) RecordSubjectlessTerminal(ctx context.Context, prin
 	// make it the second authority on what an unrefused turn reports, and
 	// would keep this one line looking correct while every other recorder
 	// implementation emitted an empty value.
-	args := append([]any{"org_id", principal.OrgID, "reason", reason, "refusal_basis", refusalBasis}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "reason", SanitizeLogAttr(reason), "refusal_basis", SanitizeLogAttr(refusalBasis)}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric subjectless terminal", args...)
 }
 
@@ -247,7 +249,7 @@ func (t SlogEngineTelemetry) RecordPriorSubjectReceiptSkipReason(ctx context.Con
 	if count <= 0 {
 		return
 	}
-	args := []any{"org_id", principal.OrgID, "reason", reason, "count", count}
+	args := []any{"org_id", SanitizeLogAttr(principal.OrgID), "reason", SanitizeLogAttr(reason), "count", count}
 	if reason == "stale_graph_epoch" {
 		args = append(args, "epoch_delta", epochDelta)
 	}
@@ -259,12 +261,14 @@ func (t SlogEngineTelemetry) RecordPriorSubjectReceiptSkipReason(ctx context.Con
 // ORDINARY case for a reuse hit (the whole point of reuse is serving an
 // EARLIER call's answer for a later, differently-request-id'd one), never
 // itself a sign anything is wrong, so this is diagnostic correlation
-// detail, not a warning condition. request ids are opaque,
-// randomly-generated operational identifiers (observability.RequestIDGenerator),
-// never subject/question content, so both are safe to log directly, exactly
-// like org_id already is throughout this file.
+// detail, not a warning condition. `servedRequestID` is read back from a
+// stored result rather than generated fresh by this process, so -- unlike
+// the LIVE request id `requestIDLogAttrs` below carries -- it never passed
+// through `observability.WithRequestID`'s own format check; it is
+// sanitized here through the one shared barrier (SanitizeLogAttr) like
+// every other request/stored-derived value in this file.
 func (t SlogEngineTelemetry) RecordAnswerReuseServedRequestID(ctx context.Context, principal storage.Principal, servedRequestID string, requestIDMismatch bool) {
-	args := append([]any{"org_id", principal.OrgID, "served_request_id", servedRequestID, "request_id_mismatch", requestIDMismatch}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "served_request_id", SanitizeLogAttr(servedRequestID), "request_id_mismatch", requestIDMismatch}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric answer reuse served a stored result's own request id", args...)
 }
 
@@ -274,7 +278,7 @@ func (t SlogEngineTelemetry) RecordAnswerReuseServedRequestID(ctx context.Contex
 // logs at Debug; flipped=true logs at Info -- worth an operator's attention
 // (grace-window/cache-lease tuning data), never itself an error condition.
 func (t SlogEngineTelemetry) RecordBindingEpochDelta(ctx context.Context, principal storage.Principal, flipped bool, delta int64) {
-	args := append([]any{"org_id", principal.OrgID, "flip_during_investigation", flipped, "binding_epoch_delta", delta}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "flip_during_investigation", flipped, "binding_epoch_delta", delta}, requestIDLogAttrs(ctx)...)
 	if flipped {
 		t.logger.InfoContext(ctx, "context fabric investigation's graph epoch moved between binding resolution and save", args...)
 		return
@@ -286,7 +290,7 @@ func (t SlogEngineTelemetry) RecordBindingEpochDelta(ctx context.Context, princi
 // vocabulary is diagnostic (how often does the proposal-only temporal
 // binder route a question), never itself a sign anything is wrong.
 func (t SlogEngineTelemetry) RecordWindowBinderOutcome(ctx context.Context, principal storage.Principal, reason WindowBindReason) {
-	args := append([]any{"org_id", principal.OrgID, "reason", string(reason)}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "reason", SanitizeLogAttr(string(reason))}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric window binder outcome", args...)
 }
 
@@ -298,7 +302,7 @@ func (t SlogEngineTelemetry) RecordWindowBinderOutcome(ctx context.Context, prin
 // closed-enum stream as every other outcome, exactly like
 // RecordAnswerReuse's own miss-reason split.
 func (t SlogEngineTelemetry) RecordWindowCanonicalization(ctx context.Context, principal storage.Principal, outcome WindowCanonicalizationOutcome) {
-	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome)}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome))}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric window canonicalization outcome", args...)
 }
 
@@ -309,7 +313,7 @@ func (t SlogEngineTelemetry) RecordWindowCanonicalization(ctx context.Context, p
 // comment, engine.go, for why it fires only on the carry-eligible
 // population).
 func (t SlogEngineTelemetry) RecordWindowCarry(ctx context.Context, principal storage.Principal, outcome WindowCarryOutcome, chainDepth int, seedSource CarrySeedSource, viaStoredAncestry bool) {
-	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome), "chain_depth", chainDepth, "seed_source", string(seedSource), "via_stored_ancestry", viaStoredAncestry}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome)), "chain_depth", chainDepth, "seed_source", SanitizeLogAttr(string(seedSource)), "via_stored_ancestry", viaStoredAncestry}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric window carry", args...)
 }
 
@@ -319,8 +323,8 @@ func (t SlogEngineTelemetry) RecordWindowCarry(ctx context.Context, principal st
 // distinct message from the window carry's so the two axes' hit rates can
 // be counted apart.
 func (t SlogEngineTelemetry) RecordKindCarry(ctx context.Context, principal storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind, seedSource CarrySeedSource, viaStoredAncestry bool) {
-	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome), "chain_depth", chainDepth,
-		"carried_kind", string(carriedKind), "redeemed_kind", string(redeemedKind), "seed_source", string(seedSource), "via_stored_ancestry", viaStoredAncestry}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome)), "chain_depth", chainDepth,
+		"carried_kind", SanitizeLogAttr(string(carriedKind)), "redeemed_kind", SanitizeLogAttr(string(redeemedKind)), "seed_source", SanitizeLogAttr(string(seedSource)), "via_stored_ancestry", viaStoredAncestry}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric kind carry", args...)
 }
 
@@ -328,7 +332,7 @@ func (t SlogEngineTelemetry) RecordKindCarry(ctx context.Context, principal stor
 // StructureNeedKind enum value -- content-safe by construction, never
 // question text or a subject identifier.
 func (t SlogEngineTelemetry) RecordStructureNeedsDisclosed(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind) {
-	args := append([]any{"org_id", principal.OrgID, "member", string(member)}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "member", SanitizeLogAttr(string(member))}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric structure needs disclosed", args...)
 }
 
@@ -336,7 +340,7 @@ func (t SlogEngineTelemetry) RecordStructureNeedsDisclosed(ctx context.Context, 
 // closed enums; count is a plain integer -- the full event is
 // counts/enums only, never an offer's own label/value/canonical_id.
 func (t SlogEngineTelemetry) RecordGatedOfferResolution(ctx context.Context, principal storage.Principal, outcome GatedOfferResolutionOutcome) {
-	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome)}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome))}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric gated offer resolution", args...)
 }
 
@@ -347,14 +351,14 @@ func (t SlogEngineTelemetry) RecordGatedOfferResolution(ctx context.Context, pri
 // -- see the interface method's own doc comment (engine.go) for the exact
 // denominator and the two directions it differs in.
 func (t SlogEngineTelemetry) RecordCohortStructureGate(ctx context.Context, principal storage.Principal, outcome CohortStructureGateOutcome, shape InvestigationShape) {
-	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome), "shape", string(shape)}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome)), "shape", SanitizeLogAttr(string(shape))}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric cohort structure gate", args...)
 }
 
 // RecordWindowGateOfferDisclosure (CHAOS-4314) logs at Info: offered is the
 // window_gated_offered/window_gated_silent split's own producer signal.
 func (t SlogEngineTelemetry) RecordWindowGateOfferDisclosure(ctx context.Context, principal storage.Principal, offered bool) {
-	args := append([]any{"org_id", principal.OrgID, "offered", offered}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "offered", offered}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric window gate offer disclosure", args...)
 }
 
@@ -362,7 +366,7 @@ func (t SlogEngineTelemetry) RecordWindowGateOfferDisclosure(ctx context.Context
 // content-bearing field, a plain occurrence count exactly like
 // RecordPriorSubjectReceiptsSkipped's own shape when skipped>0.
 func (t SlogEngineTelemetry) RecordWindowExpandOfferRedeemed(ctx context.Context, principal storage.Principal) {
-	args := append([]any{"org_id", principal.OrgID}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID)}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric window expand offer redeemed", args...)
 }
 
@@ -384,9 +388,9 @@ func (t SlogEngineTelemetry) RecordWindowExpandOfferRedeemed(ctx context.Context
 // dashboard, the same discipline every sibling event here holds.
 func (t SlogEngineTelemetry) RecordInterpretedTimeBound(ctx context.Context, principal storage.Principal, decision InterpretedTimeBoundDecision) {
 	args := append([]any{
-		"org_id", principal.OrgID,
-		"axis", string(decision.Axis),
-		"outcome", string(decision.Outcome),
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"axis", SanitizeLogAttr(string(decision.Axis)),
+		"outcome", SanitizeLogAttr(string(decision.Outcome)),
 		"clamp_applied", decision.ClampApplied,
 		"range_days", decision.RangeDays,
 	}, requestIDLogAttrs(ctx)...)
@@ -394,7 +398,7 @@ func (t SlogEngineTelemetry) RecordInterpretedTimeBound(ctx context.Context, pri
 }
 
 func (t SlogEngineTelemetry) RecordStructureOfferCount(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind, source contractsv1.ContextFabricStructureOfferSource, count int) {
-	args := append([]any{"org_id", principal.OrgID, "member", string(member), "source", string(source), "count", count}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "member", SanitizeLogAttr(string(member)), "source", SanitizeLogAttr(string(source)), "count", count}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric structure offer count", args...)
 }
 
@@ -402,7 +406,7 @@ func (t SlogEngineTelemetry) RecordStructureOfferCount(ctx context.Context, prin
 // enums -- see StructureReceiptOutcome's own doc comment (structure.go)
 // for the three-value vocabulary and its atomicity guarantee.
 func (t SlogEngineTelemetry) RecordStructureReceipt(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind, outcome StructureReceiptOutcome) {
-	args := append([]any{"org_id", principal.OrgID, "member", string(member), "outcome", string(outcome)}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "member", SanitizeLogAttr(string(member)), "outcome", SanitizeLogAttr(string(outcome))}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric structure receipt", args...)
 }
 
@@ -410,14 +414,14 @@ func (t SlogEngineTelemetry) RecordStructureReceipt(ctx context.Context, princip
 // own logging shape exactly, for the explicit (non-receipt) structure
 // fields.
 func (t SlogEngineTelemetry) RecordStructureExplicit(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind, outcome StructureExplicitOutcome) {
-	args := append([]any{"org_id", principal.OrgID, "member", string(member), "outcome", string(outcome)}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "member", SanitizeLogAttr(string(member)), "outcome", SanitizeLogAttr(string(outcome))}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric structure explicit", args...)
 }
 
 // RecordPriorConsulted (CHAOS-3977 P5). member/outcome are both closed
 // enums -- see PriorConsultedOutcome's own doc comment (priors.go).
 func (t SlogEngineTelemetry) RecordPriorConsulted(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind, outcome PriorConsultedOutcome) {
-	args := append([]any{"org_id", principal.OrgID, "member", string(member), "outcome", string(outcome)}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "member", SanitizeLogAttr(string(member)), "outcome", SanitizeLogAttr(string(outcome))}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric prior consulted", args...)
 }
 
@@ -427,7 +431,7 @@ func (t SlogEngineTelemetry) RecordPriorConsulted(ctx context.Context, principal
 // Info for every other state -- an ordinary, expected degrade-and-continue
 // outcome, never itself a sign anything is broken.
 func (t SlogEngineTelemetry) RecordPriorDegradation(ctx context.Context, principal storage.Principal, state PriorDegradationState) {
-	args := append([]any{"org_id", principal.OrgID, "state", string(state)}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "state", SanitizeLogAttr(string(state))}, requestIDLogAttrs(ctx)...)
 	if state == PriorDegradationPointerDangling {
 		t.logger.WarnContext(ctx, "context fabric prior consultation degraded: active version pointer names a missing snapshot", args...)
 		return
@@ -439,7 +443,7 @@ func (t SlogEngineTelemetry) RecordPriorDegradation(ctx context.Context, princip
 // is the closed OfferPhrasingOutcome enum -- content-safe by construction,
 // never the phrasing text itself or a structural Label.
 func (t SlogEngineTelemetry) RecordOfferPhrasing(ctx context.Context, principal storage.Principal, outcome OfferPhrasingOutcome) {
-	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome)}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome))}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric offer phrasing outcome", args...)
 }
 
@@ -447,7 +451,7 @@ func (t SlogEngineTelemetry) RecordOfferPhrasing(ctx context.Context, principal 
 // that method's doc comment for the count/truncated meaning. Content-safe:
 // an org id and two closed, non-identifying numbers.
 func (t SlogEngineTelemetry) RecordProjectedRowsCount(ctx context.Context, principal storage.Principal, count int, truncated bool) {
-	args := append([]any{"org_id", principal.OrgID, "rows_count", count, "truncated", truncated}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "rows_count", count, "truncated", truncated}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric projected rows count", args...)
 }
 
@@ -466,7 +470,7 @@ func (t SlogEngineTelemetry) RecordProjectedRowsByFactKind(ctx context.Context, 
 	}
 	sort.Strings(kinds)
 	for _, kind := range kinds {
-		args := append([]any{"org_id", principal.OrgID, "fact_kind", kind, "rows_projected_by_fact_kind", byKind[FactKind(kind)]}, requestIDLogAttrs(ctx)...)
+		args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "fact_kind", SanitizeLogAttr(kind), "rows_projected_by_fact_kind", byKind[FactKind(kind)]}, requestIDLogAttrs(ctx)...)
 		t.logger.InfoContext(ctx, "context fabric projected rows count by fact kind", args...)
 	}
 }
@@ -475,7 +479,7 @@ func (t SlogEngineTelemetry) RecordProjectedRowsByFactKind(ctx context.Context, 
 // see that method's doc comment for the two counts' meaning. Content-safe:
 // an org id and two non-identifying counts.
 func (t SlogEngineTelemetry) RecordDualTableFacts(ctx context.Context, principal storage.Principal, dualTableClaims, secondaryRowsBytes int) {
-	args := append([]any{"org_id", principal.OrgID, "dual_table_claims", dualTableClaims, "secondary_rows_bytes", secondaryRowsBytes}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "dual_table_claims", dualTableClaims, "secondary_rows_bytes", secondaryRowsBytes}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric dual table facts", args...)
 }
 
@@ -483,7 +487,7 @@ func (t SlogEngineTelemetry) RecordDualTableFacts(ctx context.Context, principal
 // follow-up). Content-safe: an org id and one closed, non-identifying
 // count -- never the stripped rows themselves.
 func (t SlogEngineTelemetry) RecordModelRowsStripped(ctx context.Context, principal storage.Principal, claims int) {
-	args := append([]any{"org_id", principal.OrgID, "cf_model_rows_stripped", claims}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "cf_model_rows_stripped", claims}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric model-authored claimed fact rows stripped before validation", args...)
 }
 
@@ -492,7 +496,7 @@ func (t SlogEngineTelemetry) RecordModelRowsStripped(ctx context.Context, princi
 // call, zeros included. Content-safe: an org id and three counts.
 func (t SlogEngineTelemetry) RecordDriverIdentityCollisions(ctx context.Context, principal storage.Principal, collisions DriverIdentityCollisions) {
 	args := append([]any{
-		"org_id", principal.OrgID,
+		"org_id", SanitizeLogAttr(principal.OrgID),
 		"cf_driver_identity_collisions", collisions.Total(),
 		"cf_driver_identity_restated", collisions.Restated,
 		"cf_driver_identity_reidentified", collisions.Reidentified,
@@ -545,12 +549,12 @@ func loggableFactScopeDecisionReason(reason FactScopeDecisionReason) FactScopeDe
 
 func (t SlogEngineTelemetry) RecordFactScopeExpansion(ctx context.Context, principal storage.Principal, event FactScopeExpansionEvent) {
 	args := append([]any{
-		"org_id", principal.OrgID,
-		"requirement_kind", string(event.RequirementKind),
-		"origin_kind", string(event.OriginKind),
-		"target_kind", string(event.TargetKind),
-		"policy", string(event.Policy),
-		"basis", string(event.Basis),
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"requirement_kind", SanitizeLogAttr(string(event.RequirementKind)),
+		"origin_kind", SanitizeLogAttr(string(event.OriginKind)),
+		"target_kind", SanitizeLogAttr(string(event.TargetKind)),
+		"policy", SanitizeLogAttr(string(event.Policy)),
+		"basis", SanitizeLogAttr(string(event.Basis)),
 		// axis (CHAOS-4109) is the decision-basis signal for as-of scope
 		// expansion: Axis != current with a non-policy_unavailable Outcome
 		// means "as-of resolution applied"; Axis != current WITH
@@ -562,8 +566,8 @@ func (t SlogEngineTelemetry) RecordFactScopeExpansion(ctx context.Context, princ
 		// > 0 names a "fell back to current" admission (no transition
 		// history existed for that candidate at all, so it was admitted
 		// unconditionally rather than through a genuine as-of resolution).
-		"axis", string(event.Axis),
-		"outcome", string(event.Outcome),
+		"axis", SanitizeLogAttr(string(event.Axis)),
+		"outcome", SanitizeLogAttr(string(event.Outcome)),
 		"origin_count", event.OriginCount,
 		"candidate_count", event.CandidateCount,
 		"admitted_count", event.AdmittedCount,
@@ -575,7 +579,7 @@ func (t SlogEngineTelemetry) RecordFactScopeExpansion(ctx context.Context, princ
 		"missing_next_hop_count", event.MissingNextHopCount,
 		"target_kind_mismatch_count", event.TargetKindMismatchCount,
 		"truncated", event.Truncated,
-		"failure_class", string(event.FailureClass),
+		"failure_class", SanitizeLogAttr(string(event.FailureClass)),
 		// AttributionSourceCounts (CHAOS-4101): closed-vocabulary source
 		// breakdown for a team-origin expansion, nil for every project-origin
 		// one. Logged unconditionally, nil included, for the SAME reason
@@ -605,7 +609,7 @@ func (t SlogEngineTelemetry) RecordFactScopeExpansion(ctx context.Context, princ
 		"unknown_attribution_source_count", event.UnknownAttributionSourceCount,
 		"scope_query_count", event.ScopeQueryCount,
 		"scope_rows_returned", event.ScopeRowsReturned,
-		"decision_reason", string(loggableFactScopeDecisionReason(event.DecisionReason)),
+		"decision_reason", SanitizeLogAttr(string(loggableFactScopeDecisionReason(event.DecisionReason))),
 	}, requestIDLogAttrs(ctx)...)
 	if factScopeGapDegrades(event.Outcome) {
 		t.logger.WarnContext(ctx, "context fabric fact scope expansion left a gap", args...)
@@ -623,10 +627,10 @@ func (t SlogEngineTelemetry) RecordFactScopeExpansion(ctx context.Context, princ
 // as an error.
 func (t SlogEngineTelemetry) RecordCohortRanked(ctx context.Context, principal storage.Principal, event CohortRankedEvent) {
 	t.logger.InfoContext(ctx, "context fabric cohort ranked", append([]any{
-		"org_id", principal.OrgID,
-		"cohort_kind", string(event.CohortKind),
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"cohort_kind", SanitizeLogAttr(string(event.CohortKind)),
 		"member_count", event.MemberCount,
-		"formula_version", event.FormulaVersion,
+		"formula_version", SanitizeLogAttr(event.FormulaVersion),
 		"degraded_member_count", event.DegradedMemberCount,
 		"signals_available", event.SignalsAvailable,
 		// outcome_counts (CHAOS-4398 PR3, codex R1): a closed-vocabulary
@@ -647,8 +651,8 @@ func (t SlogEngineTelemetry) RecordCohortRanked(ctx context.Context, principal s
 // ordinary, expected shape an operator may still want to see the rate of.
 func (t SlogEngineTelemetry) RecordCohortDriverNarration(ctx context.Context, principal storage.Principal, event CohortDriverNarrationEvent) {
 	t.logger.InfoContext(ctx, "context fabric cohort driver narration", append([]any{
-		"org_id", principal.OrgID,
-		"outcome", string(event.Outcome),
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"outcome", SanitizeLogAttr(string(event.Outcome)),
 		"judgments_emitted", event.JudgmentsEmitted,
 		"facts_minted", event.FactsMinted,
 		"members_narrated", event.MembersNarrated,
@@ -668,7 +672,7 @@ func (t SlogEngineTelemetry) RecordCohortDriverNarration(ctx context.Context, pr
 		// regression to the caps would otherwise be invisible in the
 		// artifacts. Routed through the closed vocabulary so a value
 		// escaping it reports as unclassified rather than as free text.
-		"narration_allocator", string(validNarrationAllocatorOrUnclassified(event.Allocator)),
+		"narration_allocator", SanitizeLogAttr(string(validNarrationAllocatorOrUnclassified(event.Allocator))),
 		"narration_allocated_items", event.AllocatedItems,
 	}, requestIDLogAttrs(ctx)...)...)
 }
@@ -679,7 +683,7 @@ func (t SlogEngineTelemetry) RecordCohortDriverNarration(ctx context.Context, pr
 // doc comment). Called only when count > 0, same gated-telemetry
 // discipline as RecordModelRowsStripped above it on the interface.
 func (t SlogEngineTelemetry) RecordEvidenceLabelFallback(ctx context.Context, principal storage.Principal, count int) {
-	args := append([]any{"org_id", principal.OrgID, "cf_evidence_label_fallback", count}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "cf_evidence_label_fallback", count}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric evidence ref label fell back to the generic label", args...)
 }
 
@@ -692,9 +696,9 @@ func (t SlogEngineTelemetry) RecordEvidenceLabelFallback(ctx context.Context, pr
 // may still want the rate of.
 func (t SlogEngineTelemetry) RecordCoverageDisclosurePhrasing(ctx context.Context, principal storage.Principal, outcome CoverageDisclosureOutcome, violation CoverageDisclosureViolation, phrased, total int) {
 	args := append([]any{
-		"org_id", principal.OrgID,
-		"outcome", string(outcome),
-		"violation", string(violation),
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"outcome", SanitizeLogAttr(string(outcome)),
+		"violation", SanitizeLogAttr(string(violation)),
 		"phrased", phrased,
 		"total", total,
 	}, requestIDLogAttrs(ctx)...)
@@ -713,9 +717,9 @@ func (t SlogEngineTelemetry) RecordCategoryFactComposition(ctx context.Context, 
 		composedKinds = append(composedKinds, string(kind))
 	}
 	args := append([]any{
-		"org_id", principal.OrgID,
-		"requirement_kind", string(event.RequirementKind),
-		"subject_kind", string(event.SubjectKind),
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"requirement_kind", SanitizeLogAttr(string(event.RequirementKind)),
+		"subject_kind", SanitizeLogAttr(string(event.SubjectKind)),
 		"composed_kinds", composedKinds,
 	}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric status category fact composition", args...)
@@ -737,7 +741,7 @@ func (t SlogEngineTelemetry) RecordCategoryFactComposition(ctx context.Context, 
 // counts. No shape label, subject label, or plotted number is ever logged.
 func (t SlogEngineTelemetry) RecordRenderShapeSelection(ctx context.Context, principal storage.Principal, event RenderShapeSelectionEvent) {
 	base := func(extra ...any) []any {
-		args := append([]any{"org_id", principal.OrgID, "question_shape", string(event.Shape)}, extra...)
+		args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "question_shape", SanitizeLogAttr(string(event.Shape))}, extra...)
 		return append(args, requestIDLogAttrs(ctx)...)
 	}
 	// render_shape_accounting is CHAOS-4621's structural invariant made
@@ -788,13 +792,13 @@ func (t SlogEngineTelemetry) RecordRenderShapeSelection(ctx context.Context, pri
 // `cf_family_sample_0_row` needs a key that exists.
 func (t SlogEngineTelemetry) RecordQuestionFamilyResolution(ctx context.Context, principal storage.Principal, event QuestionFamilyResolutionEvent) {
 	args := []any{
-		"org_id", principal.OrgID,
-		"family", string(event.Family),
-		"source", string(event.Source),
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"family", SanitizeLogAttr(string(event.Family)),
+		"source", SanitizeLogAttr(string(event.Source)),
 		"ensemble_size", event.EnsembleSize,
 		"downgraded_count", event.DowngradedCount,
 		"consensus_field_divergence", event.ConsensusFieldDivergence,
-		"family_version", event.FamilyVersion,
+		"family_version", SanitizeLogAttr(event.FamilyVersion),
 		"sample_families", sortedFamilyDistribution(event.SampleFamilies),
 	}
 	for i, sample := range event.Samples {
@@ -877,13 +881,13 @@ func (t SlogEngineTelemetry) RecordQuestionFamilyResolution(ctx context.Context,
 // and the version is what makes the splice visible.
 func (t SlogEngineTelemetry) RecordServerStatusShadow(ctx context.Context, principal storage.Principal, event ServerStatusShadow) {
 	args := []any{
-		"org_id", principal.OrgID,
-		"model_status", string(event.ModelStatus),
-		"server_status", string(event.ServerStatus),
-		"basis", string(event.Basis),
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"model_status", SanitizeLogAttr(string(event.ModelStatus)),
+		"server_status", SanitizeLogAttr(string(event.ServerStatus)),
+		"basis", SanitizeLogAttr(string(event.Basis)),
 		"derived", event.Derived,
 		"disagreed", event.Disagreed,
-		"version", event.Version,
+		"version", SanitizeLogAttr(event.Version),
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric server status shadow", args...)
@@ -907,19 +911,19 @@ func (t SlogEngineTelemetry) RecordServerStatusShadow(ctx context.Context, princ
 // could only ever read false.
 func (t SlogEngineTelemetry) RecordFrameValidation(ctx context.Context, principal storage.Principal, event FrameValidationEvent) {
 	args := []any{
-		"org_id", principal.OrgID,
-		"outcome", string(event.Outcome),
-		"failed_invariant", string(event.FailedInvariant),
-		"failed_phase", string(event.FailedPhase),
-		"failure_detail", string(event.FailureDetail),
-		"proposed_kind", string(event.ProposedKind),
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"outcome", SanitizeLogAttr(string(event.Outcome)),
+		"failed_invariant", SanitizeLogAttr(string(event.FailedInvariant)),
+		"failed_phase", SanitizeLogAttr(string(event.FailedPhase)),
+		"failure_detail", SanitizeLogAttr(string(event.FailureDetail)),
+		"proposed_kind", SanitizeLogAttr(string(event.ProposedKind)),
 		"proposed_goals", goalsLogValue(event.ProposedGoals),
 		"derived_obligation_count", event.DerivedObligationCount,
 		"widened_obligation_count", event.WidenedObligationCount,
 		"shape_diverged", event.ShapeDiverged,
-		"emitted_shape", string(event.EmittedShape),
-		"derived_shape", string(event.DerivedShape),
-		"frame_version", event.FrameVersion,
+		"emitted_shape", SanitizeLogAttr(string(event.EmittedShape)),
+		"derived_shape", SanitizeLogAttr(string(event.DerivedShape)),
+		"frame_version", SanitizeLogAttr(event.FrameVersion),
 		// WHY the frame can or cannot produce a discovered cohort. It
 		// disambiguates the `unresolvable_member_set` arm below, whose two
 		// causes -- an expression that enumerates nothing, and a declared
@@ -929,15 +933,15 @@ func (t SlogEngineTelemetry) RecordFrameValidation(ctx context.Context, principa
 		// not a member of the vocabulary, so "no validated expression" and a
 		// real reason cannot be confused, and this line's own `outcome` key
 		// says which.
-		"cohort_discoverability", string(event.CohortDiscoverability),
+		"cohort_discoverability", SanitizeLogAttr(string(event.CohortDiscoverability)),
 		// WHETHER THE FINDING WAS ACTED ON. Every key above reports what
 		// validation observed; these two report what the server then did
 		// about it, which for the whole life of the shadow slice was
 		// nothing. Both are ALWAYS present with an explicit token
 		// (`not_proposed`, `none`, `unset`), so a line missing them means
 		// the emitter predates this seam -- never that the gate passed.
-		"frame_gate", event.Gate.Observable(),
-		"refuse_basis", event.Gate.ObservableRefuseBasis(),
+		"frame_gate", SanitizeLogAttr(event.Gate.Observable()),
+		"refuse_basis", SanitizeLogAttr(event.Gate.ObservableRefuseBasis()),
 	}
 	args = append(args, requirementDerivationLogAttrs(event.RequirementDerivation)...)
 	args = append(args, requestIDLogAttrs(ctx)...)
@@ -964,11 +968,11 @@ func requirementDerivationLogAttrs(summary RequirementDerivationSummary) []any {
 		accounting = "violated"
 	}
 	args := []any{
-		"requirement_derivation_version", summary.Version,
+		"requirement_derivation_version", SanitizeLogAttr(summary.Version),
 		"requirement_cells_derived", summary.Derived,
 		"requirement_cells_served", summary.Served,
 		"requirement_cells_unserved", summary.Unserved,
-		"requirement_accounting", accounting,
+		"requirement_accounting", SanitizeLogAttr(accounting),
 	}
 	for index, reason := range RequirementUnavailableReasonVocabulary() {
 		args = append(args, "requirement_unavailable_"+string(reason), summary.UnavailableCells[index])
@@ -1034,11 +1038,11 @@ func requirementDerivationLogAttrs(summary RequirementDerivationSummary) []any {
 // indistinguishable, which is the diagnosis an over-budget answer needs.
 func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal storage.Principal, event PlanNarrowingEvent) {
 	args := []any{
-		"org_id", principal.OrgID,
-		"family", string(event.Family),
-		"family_version", event.FamilyVersion,
-		"stage", string(event.Stage),
-		"basis", string(event.Basis),
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"family", SanitizeLogAttr(string(event.Family)),
+		"family_version", SanitizeLogAttr(event.FamilyVersion),
+		"stage", SanitizeLogAttr(string(event.Stage)),
+		"basis", SanitizeLogAttr(string(event.Basis)),
 		// CHAOS-4809: whether that basis was REPORTED by a selection or
 		// DEFAULTED by planStageBasis. Without it a reader must assume the
 		// order named actually ran, and the same ticket is the proof that
@@ -1047,7 +1051,7 @@ func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal 
 		"before", event.Before,
 		"after", event.After,
 		"groups", event.Groups,
-		"overrun", string(validBudgetOverrunOrUnclassified(event.Overrun)),
+		"overrun", SanitizeLogAttr(string(validBudgetOverrunOrUnclassified(event.Overrun))),
 		"measured_items", event.MeasuredItems,
 		// Beside measured_items on purpose: the plan's own arithmetic for this
 		// cohort (members + reserved SynthesisHeadroom), NOT a per-member rate
@@ -1078,12 +1082,12 @@ func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal 
 		"retry_failed", event.RetryFailed,
 		"refusal_planned", event.RefusalPlanned,
 		"deadline_reserved", event.DeadlineReserved,
-		"retry_declined", string(event.RetryDeclined),
+		"retry_declined", SanitizeLogAttr(string(event.RetryDeclined)),
 		// CHAOS-4735 criterion 6: the continuation the refusal offered, as a
 		// closed token. Empty unless a refusal was planned. Never free text
 		// -- the field it replaces held an English sentence, which could not
 		// be a log dimension without becoming unbounded-cardinality prose.
-		"narrower_continuation_axis", string(event.NarrowerContinuationAxis),
+		"narrower_continuation_axis", SanitizeLogAttr(string(event.NarrowerContinuationAxis)),
 		// S7c: the narrow-instead-of-refuse decision, its numbers, and
 		// what the served answer claims about its own completeness. All
 		// closed tokens and counts, same discipline as every dimension
@@ -1092,8 +1096,8 @@ func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal 
 		"outcome_reduction_inner_fit", event.OutcomeReductionInnerFit,
 		"outcome_items_served", event.OutcomeItemsServed,
 		"outcome_items_declared", event.OutcomeItemsDeclared,
-		"outcome_completeness_state", string(event.OutcomeCompletenessState),
-		"outcome_reduction_declined", string(event.OutcomeReductionDeclined),
+		"outcome_completeness_state", SanitizeLogAttr(string(event.OutcomeCompletenessState)),
+		"outcome_reduction_declined", SanitizeLogAttr(string(event.OutcomeReductionDeclined)),
 		// The item ACCOUNT and the per-group quota for the document this
 		// line describes. quota_availability is what makes the four
 		// numbers readable: a zero allowance, no ceiling, no group axis
@@ -1102,8 +1106,8 @@ func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal 
 		// through a fail-closed helper so a value outside the closed
 		// vocabulary reports as unclassified rather than reaching the log
 		// as free text.
-		"ledger_status", string(validLedgerStatusOrUnclassified(event.LedgerStatus)),
-		"quota_availability", string(validQuotaAvailabilityOrUnclassified(event.QuotaAvailability)),
+		"ledger_status", SanitizeLogAttr(string(validLedgerStatusOrUnclassified(event.LedgerStatus))),
+		"quota_availability", SanitizeLogAttr(string(validQuotaAvailabilityOrUnclassified(event.QuotaAvailability))),
 		"quota_group_allowance", event.QuotaGroupAllowance,
 		"quota_groups_granted", event.QuotaGroupsGranted,
 		"quota_groups_measured", event.QuotaGroupsMeasured,
@@ -1120,8 +1124,8 @@ func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal 
 // RecordPlanNarrowing.
 func (t SlogEngineTelemetry) RecordGroupedCohortCompleteness(ctx context.Context, principal storage.Principal, event GroupedCohortCompletenessEvent) {
 	args := []any{
-		"org_id", principal.OrgID,
-		"family", string(event.Family),
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"family", SanitizeLogAttr(string(event.Family)),
 		"pre_grouping_complete", event.PreGroupingComplete,
 		"pre_grouping_truncated", event.PreGroupingTruncated,
 		"group_count", event.GroupCount,
@@ -1187,18 +1191,18 @@ func (t SlogEngineTelemetry) RecordGroupedCohortCompleteness(ctx context.Context
 // silently restate what the census was.
 func (t SlogEngineTelemetry) RecordReadRequirementPopulation(ctx context.Context, principal storage.Principal, event ReadRequirementPopulationEvent) {
 	args := []any{
-		"org_id", principal.OrgID,
-		"family", string(event.Family),
-		"requirement", event.Requirement,
-		"scope", event.Scope,
-		"outcome", string(event.Outcome),
-		"impact", string(event.Impact),
-		"cause_coverage", string(event.Cause),
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"family", SanitizeLogAttr(string(event.Family)),
+		"requirement", SanitizeLogAttr(event.Requirement),
+		"scope", SanitizeLogAttr(event.Scope),
+		"outcome", SanitizeLogAttr(string(event.Outcome)),
+		"impact", SanitizeLogAttr(string(event.Impact)),
+		"cause_coverage", SanitizeLogAttr(string(event.Cause)),
 		"cause_observed", event.CauseObserved,
 		"row_served", event.Served,
 		"row_declared", event.Declared,
-		"count_units", string(event.Units),
-		"population_census", string(event.Census),
+		"count_units", SanitizeLogAttr(string(event.Units)),
+		"population_census", SanitizeLogAttr(string(event.Census)),
 		"cohort_complete", event.CohortComplete,
 		"cohort_truncated", event.CohortTruncated,
 	}
@@ -1208,10 +1212,10 @@ func (t SlogEngineTelemetry) RecordReadRequirementPopulation(ctx context.Context
 
 func (t SlogEngineTelemetry) RecordMembershipCardinality(ctx context.Context, principal storage.Principal, event MembershipCardinalityEvent) {
 	args := []any{
-		"org_id", principal.OrgID,
-		"family", string(event.Family),
-		"requirement", event.Requirement,
-		"outcome", string(event.Outcome),
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"family", SanitizeLogAttr(string(event.Family)),
+		"requirement", SanitizeLogAttr(event.Requirement),
+		"outcome", SanitizeLogAttr(string(event.Outcome)),
 		"served", event.Served,
 		"declared", event.Declared,
 		"cohort_complete", event.CohortComplete,
@@ -1241,10 +1245,10 @@ func (t SlogEngineTelemetry) RecordMembershipCardinality(ctx context.Context, pr
 // in production instead of inferred from a listing.
 func (t SlogEngineTelemetry) RecordBudgetAssertion(ctx context.Context, principal storage.Principal, event BudgetAssertionEvent) {
 	args := []any{
-		"org_id", principal.OrgID,
-		"assert_stage", string(event.Stage),
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"assert_stage", SanitizeLogAttr(string(event.Stage)),
 		"fits", event.Fits,
-		"overrun", string(validBudgetOverrunOrUnclassified(event.Overrun)),
+		"overrun", SanitizeLogAttr(string(validBudgetOverrunOrUnclassified(event.Overrun))),
 		"measured_items", event.MeasuredItems,
 		"measured_bytes_post_label", event.MeasuredBytesPostLabel,
 		"max_items", event.MaxItems,
@@ -1253,9 +1257,9 @@ func (t SlogEngineTelemetry) RecordBudgetAssertion(ctx context.Context, principa
 		// capacity verdict. `fits` and `certified_fit` are both here on
 		// purpose: an unbounded answer fits and is not certified, and a
 		// dashboard reading only the first cannot tell the two apart.
-		"ledger_status", string(validLedgerStatusOrUnclassified(event.LedgerStatus)),
+		"ledger_status", SanitizeLogAttr(string(validLedgerStatusOrUnclassified(event.LedgerStatus))),
 		"ledger_debits", event.LedgerDebits,
-		"capacity", string(validCapacityVerdictOrUnclassified(event.Capacity)),
+		"capacity", SanitizeLogAttr(string(validCapacityVerdictOrUnclassified(event.Capacity))),
 		"certified_fit", event.CertifiedFit,
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
@@ -1272,13 +1276,13 @@ func (t SlogEngineTelemetry) RecordBudgetAssertion(ctx context.Context, principa
 // on a caller asking too much.
 func (t SlogEngineTelemetry) RecordItemAccounting(ctx context.Context, principal storage.Principal, event ItemAccountingEvent) {
 	args := []any{
-		"org_id", principal.OrgID,
-		"accounting_stage", event.Stage,
-		"ledger_status", string(validLedgerStatusOrUnclassified(event.Status)),
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"accounting_stage", SanitizeLogAttr(event.Stage),
+		"ledger_status", SanitizeLogAttr(string(validLedgerStatusOrUnclassified(event.Status))),
 		// The collection or bucket that disagreed. A status without a name
 		// sends the reader back to the source; this is the field that makes
 		// the defect diagnosable from the artifact.
-		"ledger_disagreement", event.Disagreement,
+		"ledger_disagreement", SanitizeLogAttr(event.Disagreement),
 		"ledger_debits", event.Debits,
 		"budgeted_items", event.Budgeted,
 		"max_items", event.MaxItems,
@@ -1287,7 +1291,7 @@ func (t SlogEngineTelemetry) RecordItemAccounting(ctx context.Context, principal
 		// the two checks fail independently and a reader must be able to tell
 		// which one did. Routed through the closed vocabulary so a corrupted
 		// or future value reports as unclassified rather than as free text.
-		"allocation_disagreement", string(validAllocationDisagreementOrUnclassified(event.AllocationDisagreement)),
+		"allocation_disagreement", SanitizeLogAttr(string(validAllocationDisagreementOrUnclassified(event.AllocationDisagreement))),
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.ErrorContext(ctx, "context fabric item accounting disagreement", args...)
@@ -1343,13 +1347,13 @@ func validCapacityVerdictOrUnclassified(verdict contractsv1.ContextFabricCapacit
 // request id is what joins them.
 func (t SlogEngineTelemetry) RecordPlanCarry(ctx context.Context, principal storage.Principal, event PlanCarryEvent) {
 	args := []any{
-		"org_id", principal.OrgID,
-		"family_replaced", string(event.FamilyReplaced),
-		"family_carried", string(event.FamilyCarried),
-		"source_result_id", event.SourceResultID,
-		"family_source", string(event.Route.Source),
-		"route_class", string(event.Route.Class),
-		"route_disposition", string(event.Route.Disposition),
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"family_replaced", SanitizeLogAttr(string(event.FamilyReplaced)),
+		"family_carried", SanitizeLogAttr(string(event.FamilyCarried)),
+		"source_result_id", SanitizeLogAttr(event.SourceResultID),
+		"family_source", SanitizeLogAttr(string(event.Route.Source)),
+		"route_class", SanitizeLogAttr(string(event.Route.Class)),
+		"route_disposition", SanitizeLogAttr(string(event.Route.Disposition)),
 		"route_switched", event.Route.Switched,
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
@@ -1367,7 +1371,7 @@ func (t SlogEngineTelemetry) RecordPlanCarry(ctx context.Context, principal stor
 // source_result_id is empty on every miss and is the origin on a hit -- the
 // join key that ties this line to the applied-carry line for the same turn.
 func (t SlogEngineTelemetry) RecordPlanCarryOutcome(ctx context.Context, principal storage.Principal, outcome PlanCarryOutcome, sourceResultID string, seedSource CarrySeedSource) {
-	args := append([]any{"org_id", principal.OrgID, "outcome", string(outcome), "source_result_id", sourceResultID, "seed_source", string(seedSource)}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome)), "source_result_id", SanitizeLogAttr(sourceResultID), "seed_source", SanitizeLogAttr(string(seedSource))}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric plan carry outcome", args...)
 }
 
@@ -1576,24 +1580,24 @@ func (t SlogEngineTelemetry) RecordWindowContinuationDecision(ctx context.Contex
 		// unrecognised sentinel.
 		"org_id", SanitizeLogAttr(principal.OrgID),
 		"source_result_id", SanitizeLogAttr(decision.CarriedContextID()),
-		"seed_source", closedDecisionToken("seed_source", decision),
-		"family_carried", closedDecisionToken("family_carried", decision),
-		"family_fresh", closedDecisionToken("family_fresh", decision),
-		"family_accepted", closedDecisionToken("family_accepted", decision),
-		"family_source", closedDecisionToken("family_source", decision),
-		"continuation_disposition", closedDecisionToken("continuation_disposition", decision),
-		"decision_reason", closedDecisionToken("decision_reason", decision),
+		"seed_source", SanitizeLogAttr(closedDecisionToken("seed_source", decision)),
+		"family_carried", SanitizeLogAttr(closedDecisionToken("family_carried", decision)),
+		"family_fresh", SanitizeLogAttr(closedDecisionToken("family_fresh", decision)),
+		"family_accepted", SanitizeLogAttr(closedDecisionToken("family_accepted", decision)),
+		"family_source", SanitizeLogAttr(closedDecisionToken("family_source", decision)),
+		"continuation_disposition", SanitizeLogAttr(closedDecisionToken("continuation_disposition", decision)),
+		"decision_reason", SanitizeLogAttr(closedDecisionToken("decision_reason", decision)),
 		"comparison_evaluated", decision.ComparisonEvaluated,
 		"agreement", decision.Agreement,
-		"conflict_reason", closedDecisionToken("conflict_reason", decision),
+		"conflict_reason", SanitizeLogAttr(closedDecisionToken("conflict_reason", decision)),
 		"conflict_count", decision.ConflictCount(),
-		"conflict_fields", closedDecisionToken("conflict_fields", decision),
+		"conflict_fields", SanitizeLogAttr(closedDecisionToken("conflict_fields", decision)),
 		"applied_window", SanitizeLogAttr(decision.AppliedWindowToken()),
 		"carried_context_id", SanitizeLogAttr(decision.CarriedContextID()),
 		"fresh_context_id", SanitizeLogAttr(decision.FreshContextID()),
 		"accepted_context_id", SanitizeLogAttr(decision.AcceptedContextID()),
-		"composition_outcome", closedDecisionToken("composition_outcome", decision),
-		"composition_failed_invariant", closedDecisionToken("composition_failed_invariant", decision),
+		"composition_outcome", SanitizeLogAttr(closedDecisionToken("composition_outcome", decision)),
+		"composition_failed_invariant", SanitizeLogAttr(closedDecisionToken("composition_failed_invariant", decision)),
 	}
 	// requestIDLogAttrs already returns its value through SanitizeLogAttr --
 	// no second strip needed here.

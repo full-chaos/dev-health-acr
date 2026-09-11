@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"log/slog"
 	"math"
 	"sort"
@@ -268,7 +269,7 @@ func (a *Adapter) fetchEmbedderFenceCorpus(ctx context.Context, key, orgID strin
 
 	if skippedMalformed > 0 {
 		slog.Default().Warn("context_fabric: exact-search oracle corpus fetch skipped malformed Subject row(s)",
-			"org", orgID, "skipped_malformed", skippedMalformed, "usable", len(corpus))
+			"org", contextfabric.SanitizeLogAttr(orgID), "skipped_malformed", skippedMalformed, "usable", len(corpus))
 	}
 
 	if assembled := len(corpus) + skippedMalformed; assembled != expected {

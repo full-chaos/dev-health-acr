@@ -2148,7 +2148,7 @@ func (r RuntimeAnswerSynthesizer) Synthesize(ctx context.Context, principal stor
 		// text (r2 F5's "content-safe by construction" rule applied to
 		// this guard too).
 		slog.Default().Warn("context_fabric: coverage disclosure guard discarded the model's whole disclosure set",
-			"org_id", principal.OrgID, "violation", string(violation))
+			"org_id", SanitizeLogAttr(principal.OrgID), "violation", SanitizeLogAttr(string(violation)))
 	}
 	if r.Telemetry != nil {
 		phrased, total := coverageDisclosurePhrasedCount(result.Coverage.Details)
@@ -2751,7 +2751,7 @@ func mergeCoverageDetails(all []CoverageDetail, reasons []string, orgID string) 
 		// package too, genkitruntime, which has no access to the engine's
 		// own EngineTelemetry sink).
 		slog.Default().Warn("context_fabric: coverage detail derivation did not reconcile with degraded_reasons, dropping structured details",
-			"org_id", orgID, "degrading_details", len(derived), "degraded_reasons", len(reasons))
+			"org_id", SanitizeLogAttr(orgID), "degrading_details", len(derived), "degraded_reasons", len(reasons))
 		return nil
 	}
 

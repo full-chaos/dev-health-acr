@@ -630,18 +630,18 @@ func (t SlogTelemetry) logger() *slog.Logger {
 }
 
 func (t SlogTelemetry) RecordObservationTraversalDegraded(_ context.Context, orgID string, count int) {
-	t.logger().Warn("context_fabric: observation traversal degraded", "org_id", orgID, "count", count)
+	t.logger().Warn("context_fabric: observation traversal degraded", "org_id", contextfabric.SanitizeLogAttr(orgID), "count", count)
 }
 
 func (t SlogTelemetry) RecordVectorRetrievalDegraded(_ context.Context, orgID string) {
-	t.logger().Warn("context_fabric: vector retrieval unavailable for a request", "org_id", orgID)
+	t.logger().Warn("context_fabric: vector retrieval unavailable for a request", "org_id", contextfabric.SanitizeLogAttr(orgID))
 }
 
 // RecordVectorRetrievalSuppressed logs at INFO, not Warn: nothing is wrong.
 // A historical question correctly declined a mechanism that cannot answer it,
 // and paging on correct behaviour is how operators learn to ignore a signal.
 func (t SlogTelemetry) RecordVectorRetrievalSuppressed(_ context.Context, orgID string) {
-	t.logger().Info("context_fabric: vector retrieval suppressed for a historical question", "org_id", orgID)
+	t.logger().Info("context_fabric: vector retrieval suppressed for a historical question", "org_id", contextfabric.SanitizeLogAttr(orgID))
 }
 
 // RecordVectorProjection logs at Warn when anything was cleared -- a cleared
@@ -664,15 +664,15 @@ func (t SlogTelemetry) RecordVectorProjection(_ context.Context, orgID string, e
 	switch {
 	case cleared > 0:
 		t.logger().Warn("context_fabric: projection batch cleared stale vectors",
-			"org_id", orgID, "embedded", embedded, "cleared", cleared,
+			"org_id", contextfabric.SanitizeLogAttr(orgID), "embedded", embedded, "cleared", cleared,
 			"skipped_kind", skippedKind, "skipped_id_only", skippedIDOnly)
 	case skippedKind > 0 || skippedIDOnly > 0:
 		t.logger().Info("context_fabric: projection batch skipped subjects",
-			"org_id", orgID, "embedded", embedded, "cleared", cleared,
+			"org_id", contextfabric.SanitizeLogAttr(orgID), "embedded", embedded, "cleared", cleared,
 			"skipped_kind", skippedKind, "skipped_id_only", skippedIDOnly)
 	default:
 		t.logger().Debug("context_fabric: projection batch embedded nodes",
-			"org_id", orgID, "embedded", embedded, "cleared", cleared,
+			"org_id", contextfabric.SanitizeLogAttr(orgID), "embedded", embedded, "cleared", cleared,
 			"skipped_kind", skippedKind, "skipped_id_only", skippedIDOnly)
 	}
 }
@@ -685,7 +685,7 @@ func (t SlogTelemetry) RecordVectorProjection(_ context.Context, orgID string, e
 // alert rule scoped to level.
 func (t SlogTelemetry) RecordVectorProjectionEmbedFailuresEscalated(_ context.Context, orgID string, consecutiveFailures int, transient bool) {
 	t.logger().Error("context_fabric: sustained embed failures clearing vectors",
-		"org_id", orgID, "consecutive_failures", consecutiveFailures, "transient", transient)
+		"org_id", contextfabric.SanitizeLogAttr(orgID), "consecutive_failures", consecutiveFailures, "transient", transient)
 }
 
 // RecordVectorIndexEfRuntimeMismatch logs through the CONFIGURED logger
@@ -696,7 +696,7 @@ func (t SlogTelemetry) RecordVectorProjectionEmbedFailuresEscalated(_ context.Co
 // class of gap CHAOS-3835's telemetry fix closed elsewhere in this package.
 func (t SlogTelemetry) RecordVectorIndexEfRuntimeMismatch(_ context.Context, key string, policyEfRuntime, indexEfRuntime int) {
 	t.logger().Warn("context_fabric: existing vector index efRuntime does not match the calibrated retrieval policy -- run the CHAOS-3832/CHAOS-3835 index rebuild to apply it",
-		"key", key, "policy_ef_runtime", policyEfRuntime, "index_ef_runtime", indexEfRuntime)
+		"key", contextfabric.SanitizeLogAttr(key), "policy_ef_runtime", policyEfRuntime, "index_ef_runtime", indexEfRuntime)
 }
 
 // RecordIdentityGraphMissing logs at Warn -- unlike RecordVectorRetrievalSuppressed's
@@ -705,7 +705,7 @@ func (t SlogTelemetry) RecordVectorIndexEfRuntimeMismatch(_ context.Context, key
 // always worth an operator's attention regardless of whether this specific
 // resolution needed the identity fast path.
 func (t SlogTelemetry) RecordIdentityGraphMissing(_ context.Context, orgID string, count int) {
-	t.logger().Warn("context_fabric: identity-universe claimant absent from the graph (projection lag)", "org_id", orgID, "count", count)
+	t.logger().Warn("context_fabric: identity-universe claimant absent from the graph (projection lag)", "org_id", contextfabric.SanitizeLogAttr(orgID), "count", count)
 }
 
 // RecordVectorFence logs at Debug when the fence passes (VectorFenceOK) --
@@ -725,11 +725,11 @@ func (t SlogTelemetry) RecordVectorFence(ctx context.Context, orgID string, resu
 	requestID, _ := observability.RequestIDFromContext(ctx)
 	if result == VectorFenceOK {
 		t.logger().DebugContext(ctx, "context_fabric: vector read fence passed",
-			"org_id", orgID, "request_id", requestID, "result", string(result), "memoized", memoized)
+			"org_id", contextfabric.SanitizeLogAttr(orgID), "request_id", contextfabric.SanitizeLogAttr(string(requestID)), "result", contextfabric.SanitizeLogAttr(string(result)), "memoized", memoized)
 		return
 	}
 	t.logger().WarnContext(ctx, "context_fabric: vector read fence did not pass",
-		"org_id", orgID, "request_id", requestID, "result", string(result), "memoized", memoized)
+		"org_id", contextfabric.SanitizeLogAttr(orgID), "request_id", contextfabric.SanitizeLogAttr(string(requestID)), "result", contextfabric.SanitizeLogAttr(string(result)), "memoized", memoized)
 }
 
 // RecordLexiconExpansion logs at Debug -- lexicon expansion firing is
@@ -743,16 +743,16 @@ func (t SlogTelemetry) RecordLexiconExpansion(ctx context.Context, orgID string,
 	requestID, _ := observability.RequestIDFromContext(ctx)
 	if !fired {
 		t.logger().DebugContext(ctx, "context_fabric: lexicon expansion did not fire",
-			"org_id", orgID, "request_id", requestID)
+			"org_id", contextfabric.SanitizeLogAttr(orgID), "request_id", contextfabric.SanitizeLogAttr(string(requestID)))
 		return
 	}
 	if truncatedByExpansion {
 		t.logger().InfoContext(ctx, "context_fabric: lexicon expansion fired and truncated this call's results",
-			"org_id", orgID, "request_id", requestID, "batch_count", batchCount, "added_candidates", addedCandidates)
+			"org_id", contextfabric.SanitizeLogAttr(orgID), "request_id", contextfabric.SanitizeLogAttr(string(requestID)), "batch_count", batchCount, "added_candidates", addedCandidates)
 		return
 	}
 	t.logger().DebugContext(ctx, "context_fabric: lexicon expansion fired",
-		"org_id", orgID, "request_id", requestID, "batch_count", batchCount, "added_candidates", addedCandidates)
+		"org_id", contextfabric.SanitizeLogAttr(orgID), "request_id", contextfabric.SanitizeLogAttr(string(requestID)), "batch_count", batchCount, "added_candidates", addedCandidates)
 }
 
 // RecordSubjectCandidatesAuthzDropped logs at Info, not Warn: an
@@ -763,14 +763,14 @@ func (t SlogTelemetry) RecordLexiconExpansion(ctx context.Context, orgID string,
 // outcome is diagnosable (was the pool ever narrowed by authorization?)
 // without paging an operator over expected, per-request scoping.
 func (t SlogTelemetry) RecordSubjectCandidatesAuthzDropped(_ context.Context, orgID string, count int) {
-	t.logger().Info("context_fabric: subject candidates dropped by authorization", "org_id", orgID, "count", count)
+	t.logger().Info("context_fabric: subject candidates dropped by authorization", "org_id", contextfabric.SanitizeLogAttr(orgID), "count", count)
 }
 
 // RecordCohortMembersAuthzDropped mirrors
 // RecordSubjectCandidatesAuthzDropped's own Info-level, "nothing is wrong"
 // posture -- see its doc comment.
 func (t SlogTelemetry) RecordCohortMembersAuthzDropped(_ context.Context, orgID string, count int) {
-	t.logger().Info("context_fabric: cohort members dropped by authorization", "org_id", orgID, "count", count)
+	t.logger().Info("context_fabric: cohort members dropped by authorization", "org_id", contextfabric.SanitizeLogAttr(orgID), "count", count)
 }
 
 // RecordEdgesFilteredByReason mirrors RecordSubjectCandidatesAuthzDropped's
@@ -779,7 +779,7 @@ func (t SlogTelemetry) RecordCohortMembersAuthzDropped(_ context.Context, orgID 
 // expected outcomes of a correct read, not degradation.
 func (t SlogTelemetry) RecordEdgesFilteredByReason(_ context.Context, orgID string, authz, temporalWindow, selfLoop int) {
 	t.logger().Info("context_fabric: relationship edges filtered",
-		"org_id", orgID, "authz", authz, "temporal_window", temporalWindow, "self_loop", selfLoop)
+		"org_id", contextfabric.SanitizeLogAttr(orgID), "authz", authz, "temporal_window", temporalWindow, "self_loop", selfLoop)
 }
 
 // RecordCohortDeniedByAuthorization logs at WARN, unlike every other
@@ -790,7 +790,7 @@ func (t SlogTelemetry) RecordEdgesFilteredByReason(_ context.Context, orgID stri
 // without already suspecting it.
 func (t SlogTelemetry) RecordCohortDeniedByAuthorization(_ context.Context, orgID string, count int) {
 	t.logger().Warn("context_fabric: entire discovered cohort denied by authorization",
-		"org_id", orgID, "count", count)
+		"org_id", contextfabric.SanitizeLogAttr(orgID), "count", count)
 }
 
 // RecordCohortExactNameCensusGate logs at Info -- both outcomes (admitted
@@ -798,7 +798,7 @@ func (t SlogTelemetry) RecordCohortDeniedByAuthorization(_ context.Context, orgI
 // degradation; see cohortExactNameCensusEligibility's own doc comment for
 // what basis means.
 func (t SlogTelemetry) RecordCohortExactNameCensusGate(ctx context.Context, orgID string, admitted bool, basis CohortExactNameCensusBasis) {
-	args := []any{"org_id", orgID, "admitted", admitted, "basis", string(basis)}
+	args := []any{"org_id", contextfabric.SanitizeLogAttr(orgID), "admitted", admitted, "basis", contextfabric.SanitizeLogAttr(string(basis))}
 	t.logger().Info("context_fabric: cohort exact-name census gate", append(args, graphRequestIDLogAttrs(ctx)...)...)
 }
 
@@ -815,7 +815,7 @@ func (t SlogTelemetry) RecordCohortExactNameCensusGate(ctx context.Context, orgI
 // to know which layer emitted which shape.
 func graphRequestIDLogAttrs(ctx context.Context) []any {
 	if requestID, ok := observability.RequestIDFromContext(ctx); ok {
-		return []any{"request_id", requestID}
+		return []any{"request_id", contextfabric.SanitizeLogAttr(string(requestID))}
 	}
 	return nil
 }
@@ -826,8 +826,8 @@ func graphRequestIDLogAttrs(ctx context.Context) []any {
 // to guess -- so it is reported at the same level as a successful discovery
 // and is distinguished by its basis, never by its log level.
 func (t SlogTelemetry) RecordCohortKindBasis(ctx context.Context, orgID string, declaredKind contextfabric.SubjectKind, basis graphrank.CohortKindBasis, discovered bool, poolTruncation CohortPoolTruncationBasis, poolTruncationArms []CohortPoolTruncationArm) {
-	args := []any{"org_id", orgID, "member_kind", string(declaredKind), "basis", string(basis), "discovered", discovered,
-		"pool_truncation", string(poolTruncation), "pool_truncation_arms", formatCohortPoolTruncationArms(poolTruncationArms)}
+	args := []any{"org_id", contextfabric.SanitizeLogAttr(orgID), "member_kind", contextfabric.SanitizeLogAttr(string(declaredKind)), "basis", contextfabric.SanitizeLogAttr(string(basis)), "discovered", discovered,
+		"pool_truncation", contextfabric.SanitizeLogAttr(string(poolTruncation)), "pool_truncation_arms", contextfabric.SanitizeLogAttr(formatCohortPoolTruncationArms(poolTruncationArms))}
 	t.logger().Info("context_fabric: cohort kind basis", append(args, graphRequestIDLogAttrs(ctx)...)...)
 }
 
@@ -835,7 +835,7 @@ func (t SlogTelemetry) RecordCohortKindBasis(ctx context.Context, orgID string, 
 // IS a degradation -- a subject that should have been in the answer is not,
 // and the operator needs it at the production level without raising verbosity.
 func (t SlogTelemetry) RecordNeighborLookupFailed(ctx context.Context, orgID, originCanonicalID, neighborUUID string, site NeighborLookupFailureSite, err error) {
-	args := []any{"org_id", orgID, "origin_canonical_id", originCanonicalID, "neighbor_uuid", neighborUUID, "site", string(site)}
+	args := []any{"org_id", contextfabric.SanitizeLogAttr(orgID), "origin_canonical_id", contextfabric.SanitizeLogAttr(originCanonicalID), "neighbor_uuid", contextfabric.SanitizeLogAttr(neighborUUID), "site", contextfabric.SanitizeLogAttr(string(site))}
 	if err != nil {
 		args = append(args, "error", err.Error())
 	}

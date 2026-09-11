@@ -391,8 +391,8 @@ func (s *ClickHouseProjectionSource) logOrphanedWorkItems(ctx context.Context, b
 	}
 	if ids := orphanedWorkItemIDs(all); len(ids) > 0 {
 		s.logger.WarnContext(ctx, "devhealthsource projection batch contains orphaned work items",
-			"org_id", redactOrg(batch.OrgID), "source", batch.Source, "batch_id", batch.BatchID,
-			"cursor", batch.Cursor, "next_cursor", batch.NextCursor, "orphaned_work_items", len(ids))
+			"org_id", contextfabric.SanitizeLogAttr(redactOrg(batch.OrgID)), "source", contextfabric.SanitizeLogAttr(batch.Source), "batch_id", contextfabric.SanitizeLogAttr(batch.BatchID),
+			"cursor", contextfabric.SanitizeLogAttr(batch.Cursor), "next_cursor", contextfabric.SanitizeLogAttr(batch.NextCursor), "orphaned_work_items", len(ids))
 	}
 }
 

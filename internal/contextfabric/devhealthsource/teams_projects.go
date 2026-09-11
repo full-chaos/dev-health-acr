@@ -531,7 +531,7 @@ func logTeamAuthorizationTelemetry(ctx context.Context, logger *slog.Logger, org
 	// itself informative and must not read as "telemetry never ran".
 	admitted, denied := ledger.counts()
 	logger.InfoContext(ctx, "devhealthsource team authorization scoped by ownership",
-		"org_id", redactOrg(orgID), "source", TeamsProjectsSourceName,
+		"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName,
 		"teams_admitted_by_ownership", admitted,
 		"teams_denied_no_ownership_data", denied)
 }
@@ -770,7 +770,7 @@ func logPresenceTelemetry(ctx context.Context, logger *slog.Logger, orgID string
 		return
 	}
 	logger.InfoContext(ctx, "devhealthsource read project_membership_presence",
-		"org_id", redactOrg(orgID), "source", TeamsProjectsSourceName,
+		"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName,
 		"presence_rows_transition_work_item", ledger.presenceReadCount("transition", "work_item"),
 		"presence_rows_transition_pull_request", ledger.presenceReadCount("transition", "pull_request"),
 		"presence_rows_work_item_column_work_item", ledger.presenceReadCount("work_item_column", "work_item"),
@@ -784,7 +784,7 @@ func logPresenceTelemetry(ctx context.Context, logger *slog.Logger, orgID string
 		// blast radius (one bad id can drop one row or thousands) -- the
 		// key count alone cannot tell those apart.
 		logger.WarnContext(ctx, "devhealthsource dropped project membership edges for an unresolved (provider, project_id)",
-			"org_id", redactOrg(orgID), "source", TeamsProjectsSourceName,
+			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName,
 			"reason", "(provider, project_id) did not resolve to exactly one projects row",
 			"unresolved_project_entity", unresolved, "unresolved_project_entity_rows", unresolvedRows,
 			"ambiguous_project_entity", ambiguous, "ambiguous_project_entity_rows", ambiguousRows)
@@ -797,7 +797,7 @@ func logPresenceTelemetry(ctx context.Context, logger *slog.Logger, orgID string
 	// folding into the warning above and reading as the same cause.
 	if malformed, malformedRows := ledger.malformedTouchCount(), ledger.malformedTouchRowCount(); malformed > 0 {
 		logger.WarnContext(ctx, "devhealthsource skipped a malformed project membership touch sequence",
-			"org_id", redactOrg(orgID), "source", TeamsProjectsSourceName,
+			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName,
 			"reason", "a REMOVE touch with no prior ADD to close (no open interval, nothing reopened)",
 			"malformed_touch_entity", malformed, "malformed_touch_entity_rows", malformedRows)
 	}
@@ -807,7 +807,7 @@ func logPresenceTelemetry(ctx context.Context, logger *slog.Logger, orgID string
 	// nothing is missing or wrong, this is diagnostic volume only).
 	if duplicate, duplicateRows := ledger.duplicateAddCount(), ledger.duplicateAddRowCount(); duplicate > 0 {
 		logger.InfoContext(ctx, "devhealthsource collapsed a duplicate project membership ADD touch",
-			"org_id", redactOrg(orgID), "source", TeamsProjectsSourceName,
+			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName,
 			"reason", "an ADD touch immediately preceded by another ADD, no intervening REMOVE -- treated as a continuation of the already-open interval",
 			"duplicate_add_entity", duplicate, "duplicate_add_entity_rows", duplicateRows)
 	}

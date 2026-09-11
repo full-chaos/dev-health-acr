@@ -92,7 +92,7 @@ func logTableReadFailure(ctx context.Context, logger *slog.Logger, source, orgID
 	if logger == nil || cause == nil {
 		return
 	}
-	attrs := []any{"source", source, "org_id", redactOrg(orgID), "table", table}
+	attrs := []any{"source", contextfabric.SanitizeLogAttr(source), "org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "table", contextfabric.SanitizeLogAttr(table)}
 	var exception *clickhousedriver.Exception
 	if errors.As(cause, &exception) {
 		attrs = append(attrs, "clickhouse_exception_code", exception.Code, "clickhouse_exception_name", exception.Name)

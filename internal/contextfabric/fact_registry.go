@@ -914,12 +914,12 @@ func (r *FactCapabilityRegistry) recordFactRead(ctx context.Context, principal s
 		return
 	}
 	attrs := []any{
-		"org_id", principal.OrgID,
-		"kind", string(kind),
-		"outcome", string(outcome),
-		"state", string(state),
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"kind", SanitizeLogAttr(string(kind)),
+		"outcome", SanitizeLogAttr(string(outcome)),
+		"state", SanitizeLogAttr(string(state)),
 		"subjects", len(subjects),
-		"subject_kinds", strings.Join(distinctSubjectKinds(subjects), ","),
+		"subject_kinds", SanitizeLogAttr(strings.Join(distinctSubjectKinds(subjects), ",")),
 		"facts", facts,
 		"truncated", truncated,
 	}
@@ -999,9 +999,9 @@ func (r *FactCapabilityRegistry) recordFactTableDeclarations(ctx context.Context
 				continue
 			}
 			attrs := []any{
-				"org_id", principal.OrgID,
-				"kind", string(kind),
-				"shape", string(value.Table.Shape),
+				"org_id", SanitizeLogAttr(principal.OrgID),
+				"kind", SanitizeLogAttr(string(kind)),
+				"shape", SanitizeLogAttr(string(value.Table.Shape)),
 				"key_arity", len(value.Table.Key),
 				"measure_count", len(value.Table.Measures),
 			}

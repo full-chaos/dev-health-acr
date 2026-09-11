@@ -1,6 +1,7 @@
 package devhealthsource
 
 import (
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"log/slog"
 	"strings"
 	"time"
@@ -294,9 +295,9 @@ func normalizationLogger(logger *slog.Logger, sourceName string) func(normalizat
 	}
 	return func(observation normalizationObservation) {
 		logger.Info("context_fabric: projection item normalized to a contract bound; the item is kept",
-			"source", sourceName,
-			"normalization_reason", observation.Reason,
-			"item_kind", observation.Kind,
+			"source", contextfabric.SanitizeLogAttr(sourceName),
+			"normalization_reason", contextfabric.SanitizeLogAttr(observation.Reason),
+			"item_kind", contextfabric.SanitizeLogAttr(observation.Kind),
 		)
 	}
 }

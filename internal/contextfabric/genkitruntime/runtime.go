@@ -1997,14 +1997,14 @@ func decisionOrgIDHash(orgID string) string {
 func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification, axisSource string, decodingSeed int64, sample int, rejectionReason string, attemptOutcomes []attemptOutcome, fallbackAttempts int, primaryProvider, primaryModel, primaryModelVersion string) {
 	fields := []any{
 		"request_id", contextfabric.SanitizeLogAttr(requestID),
-		"org_id_hash", decisionOrgIDHash(orgID),
-		"operation", string(receipt.Operation),
-		"outcome", receipt.Outcome,
+		"org_id_hash", contextfabric.SanitizeLogAttr(decisionOrgIDHash(orgID)),
+		"operation", contextfabric.SanitizeLogAttr(string(receipt.Operation)),
+		"outcome", contextfabric.SanitizeLogAttr(receipt.Outcome),
 		"attempts", receipt.Attempts,
 		"fallback_used", receipt.FallbackUsed,
 
-		"primary_failure_classification", primaryFailureClassification,
-		"axis_source", axisSource,
+		"primary_failure_classification", contextfabric.SanitizeLogAttr(primaryFailureClassification),
+		"axis_source", contextfabric.SanitizeLogAttr(axisSource),
 		// CHAOS-4631: the exact decoding config chaos4631InterpretDecodingConfig
 		// applied to this call (seed + which sample index derived it), logged
 		// as concrete values (never the request/response payload) so replay
@@ -2024,9 +2024,9 @@ func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID str
 		// log-line surface too, closing the "diagnosable from the run's own
 		// completed artifacts alone" bar for this decision event specifically
 		// rather than only the separate receipt sink.
-		"model_id", receipt.Model,
-		"model_version", receipt.ModelVersion,
-		"prompt_version", receipt.PromptVersion,
+		"model_id", contextfabric.SanitizeLogAttr(receipt.Model),
+		"model_version", contextfabric.SanitizeLogAttr(receipt.ModelVersion),
+		"prompt_version", contextfabric.SanitizeLogAttr(receipt.PromptVersion),
 	}
 	// CHAOS-5380: the attempt sequence, appended by the ONE renderer all three
 	// decision emitters share -- written as a literal in each of them the three
@@ -2101,13 +2101,13 @@ func groundingCountsFrom(draft contextfabric.SynthesisDraft) synthesisGroundingC
 func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification string, grounding synthesisGroundingCounts, rejectionReason string, factGroupSize, groundedBeyondFirst int, attemptOutcomes []attemptOutcome, fallbackAttempts int, primaryProvider, primaryModel, primaryModelVersion string) {
 	fields := []any{
 		"request_id", contextfabric.SanitizeLogAttr(requestID),
-		"org_id_hash", decisionOrgIDHash(orgID),
-		"operation", string(receipt.Operation),
-		"outcome", receipt.Outcome,
+		"org_id_hash", contextfabric.SanitizeLogAttr(decisionOrgIDHash(orgID)),
+		"operation", contextfabric.SanitizeLogAttr(string(receipt.Operation)),
+		"outcome", contextfabric.SanitizeLogAttr(receipt.Outcome),
 		"attempts", receipt.Attempts,
 		"fallback_used", receipt.FallbackUsed,
 
-		"primary_failure_classification", primaryFailureClassification,
+		"primary_failure_classification", contextfabric.SanitizeLogAttr(primaryFailureClassification),
 		"drivers", grounding.Drivers,
 		"findings", grounding.Findings,
 		"claims", grounding.Claims,
@@ -2119,9 +2119,9 @@ func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID st
 		// -prompt regression and NOT a synthesis one. Same values the durable
 		// receipt already holds; the point is that the collected line carries
 		// them too, for all three operations rather than two of them.
-		"model_id", receipt.Model,
-		"model_version", receipt.ModelVersion,
-		"prompt_version", receipt.PromptVersion,
+		"model_id", contextfabric.SanitizeLogAttr(receipt.Model),
+		"model_version", contextfabric.SanitizeLogAttr(receipt.ModelVersion),
+		"prompt_version", contextfabric.SanitizeLogAttr(receipt.PromptVersion),
 	}
 	// CHAOS-5380: see logInterpretDecision for both of these -- the shared
 	// renderer, and why the fallback count is separate from it.
@@ -2174,13 +2174,13 @@ func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID st
 func (r *Runtime) logPhraseDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, attemptOutcomes []attemptOutcome) {
 	fields := []any{
 		"request_id", contextfabric.SanitizeLogAttr(requestID),
-		"org_id_hash", decisionOrgIDHash(orgID),
-		"operation", string(receipt.Operation),
-		"outcome", receipt.Outcome,
+		"org_id_hash", contextfabric.SanitizeLogAttr(decisionOrgIDHash(orgID)),
+		"operation", contextfabric.SanitizeLogAttr(string(receipt.Operation)),
+		"outcome", contextfabric.SanitizeLogAttr(receipt.Outcome),
 		"attempts", receipt.Attempts,
-		"model_id", receipt.Model,
-		"model_version", receipt.ModelVersion,
-		"prompt_version", receipt.PromptVersion,
+		"model_id", contextfabric.SanitizeLogAttr(receipt.Model),
+		"model_version", contextfabric.SanitizeLogAttr(receipt.ModelVersion),
+		"prompt_version", contextfabric.SanitizeLogAttr(receipt.PromptVersion),
 	}
 	fields = append(fields, attemptLogFields(attemptOutcomes)...)
 	r.config.Logger.InfoContext(ctx, decisionEventMessage, fields...)

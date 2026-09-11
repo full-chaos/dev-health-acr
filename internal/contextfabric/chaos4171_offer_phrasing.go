@@ -177,13 +177,13 @@ func (r RuntimeOfferPhraser) logGuardDecision(ctx context.Context, principal sto
 	}
 	logger.InfoContext(ctx, "context fabric offer phrasing guard decision",
 		"request_id", SanitizeLogAttr(input.RequestID),
-		"org_id", principal.OrgID,
-		"operation", string(receipt.Operation),
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"operation", SanitizeLogAttr(string(receipt.Operation)),
 		// The MODEL CALL's own outcome, so one line says both things: an empty or
 		// "success" model outcome beside a rejecting guard is precisely the shape
 		// that used to be invisible.
-		"model_outcome", receipt.Outcome,
-		"guard_outcome", string(guardOutcome),
+		"model_outcome", SanitizeLogAttr(receipt.Outcome),
+		"guard_outcome", SanitizeLogAttr(string(guardOutcome)),
 		// How many offers actually received a generated phrasing. Explicit zero on
 		// every rejecting arm: zero applied against a successful model call is the
 		// regression signal.
@@ -227,8 +227,8 @@ func (r RuntimeOfferPhraser) Phrase(ctx context.Context, principal storage.Princ
 		// layer), so only the fixed failure class and correlation ids are
 		// logged -- never the error's own free-text Error() string.
 		logger.WarnContext(ctx, "context fabric offer phrasing receipt sink failed",
-			"org_id", principal.OrgID, "request_id", SanitizeLogAttr(input.RequestID),
-			"operation", string(receipt.Operation))
+			"org_id", SanitizeLogAttr(principal.OrgID), "request_id", SanitizeLogAttr(input.RequestID),
+			"operation", SanitizeLogAttr(string(receipt.Operation)))
 		// Codex R3 review finding (chaos4171pr2-codex-r3): a sink failure
 		// must never OVERWRITE an already-classified outcome that already
 		// means "nothing was applied" (call_failed, rejected_by_guard,

@@ -120,7 +120,7 @@ func (o SlogObserver) ObserveProjectionOutcome(outcome Outcome) {
 		logger = slog.Default()
 	}
 	attrs := []any{
-		"org_id", outcome.OrgID, "source", outcome.Source,
+		"org_id", contextfabric.SanitizeLogAttr(outcome.OrgID), "source", contextfabric.SanitizeLogAttr(outcome.Source),
 		"duration_ms", outcome.Duration.Milliseconds(),
 	}
 	if outcome.Err != nil {
@@ -161,8 +161,8 @@ func (o SlogObserver) ObserveProjectionDrain(outcome DrainOutcome) {
 		logger = slog.Default()
 	}
 	attrs := []any{
-		"org_id", outcome.OrgID, "source", outcome.Source,
-		"batches", outcome.Batches, "applied", outcome.Applied, "drain_yield_reason", string(outcome.YieldReason),
+		"org_id", contextfabric.SanitizeLogAttr(outcome.OrgID), "source", contextfabric.SanitizeLogAttr(outcome.Source),
+		"batches", outcome.Batches, "applied", outcome.Applied, "drain_yield_reason", contextfabric.SanitizeLogAttr(string(outcome.YieldReason)),
 		"duration_ms", outcome.Duration.Milliseconds(),
 	}
 	if outcome.Applied > 1 {
@@ -490,7 +490,7 @@ func (c *Coordinator) Rebuild(ctx context.Context, orgID string) error {
 	}
 	defer func() {
 		if unlockErr := unlock(); unlockErr != nil {
-			c.logger.WarnContext(ctx, "projection organization unlock failed after rebuild", "org_id", orgID, "failure_class", classifyOutcomeError(unlockErr))
+			c.logger.WarnContext(ctx, "projection organization unlock failed after rebuild", "org_id", contextfabric.SanitizeLogAttr(orgID), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(unlockErr)))
 		}
 	}()
 	if c.lifecycle != nil {
@@ -534,7 +534,7 @@ func (c *Coordinator) Rollback(ctx context.Context, orgID string) error {
 	}
 	defer func() {
 		if unlockErr := unlock(); unlockErr != nil {
-			c.logger.WarnContext(ctx, "projection organization unlock failed after rollback", "org_id", orgID, "failure_class", classifyOutcomeError(unlockErr))
+			c.logger.WarnContext(ctx, "projection organization unlock failed after rollback", "org_id", contextfabric.SanitizeLogAttr(orgID), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(unlockErr)))
 		}
 	}()
 
@@ -549,11 +549,11 @@ func (c *Coordinator) Rollback(ctx context.Context, orgID string) error {
 	if err != nil {
 		return fmt.Errorf("projectionrun: rollback: %w", err)
 	}
-	c.logger.WarnContext(ctx, "context_fabric: graph epoch rollback", "org_id", orgID, "from_epoch", row.ActiveEpoch, "to_epoch", rolled.ActiveEpoch)
+	c.logger.WarnContext(ctx, "context_fabric: graph epoch rollback", "org_id", contextfabric.SanitizeLogAttr(orgID), "from_epoch", row.ActiveEpoch, "to_epoch", rolled.ActiveEpoch)
 	c.invalidateEpochResolution(ctx, orgID, contextfabric.LifecycleTransitionRollback)
 	if c.reuseInvalidator != nil {
 		if invalidateErr := c.reuseInvalidator.InvalidateOrganizationReuse(ctx, orgID); invalidateErr != nil {
-			c.logger.WarnContext(ctx, "invalidate answer reuse after rollback failed", "org_id", orgID, "failure_class", classifyOutcomeError(invalidateErr))
+			c.logger.WarnContext(ctx, "invalidate answer reuse after rollback failed", "org_id", contextfabric.SanitizeLogAttr(orgID), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(invalidateErr)))
 		}
 	}
 	return nil
@@ -588,7 +588,7 @@ func (c *Coordinator) Rollback(ctx context.Context, orgID string) error {
 func (c *Coordinator) beginLifecycleBuild(ctx context.Context, orgID string) (opened bool, err error) {
 	_, err = c.lifecycle.BeginBuild(ctx, orgID, c.sourceNames, c.now())
 	if err == nil {
-		c.logger.InfoContext(ctx, "context_fabric: build-aside epoch opened; replay will proceed over subsequent ticks", "org_id", orgID)
+		c.logger.InfoContext(ctx, "context_fabric: build-aside epoch opened; replay will proceed over subsequent ticks", "org_id", contextfabric.SanitizeLogAttr(orgID))
 		c.buildStarted.Store(orgID, c.now())
 		c.invalidateEpochResolution(ctx, orgID, contextfabric.LifecycleTransitionBeginBuild)
 		return true, nil
@@ -611,7 +611,7 @@ func (c *Coordinator) beginLifecycleBuild(ctx context.Context, orgID string) (op
 		return false, fmt.Errorf("projectionrun: begin build-aside epoch: re-read lifecycle row after CAS refusal: %w", getErr)
 	}
 	if found && row.Status == contextfabric.LifecycleStatusBuilding {
-		c.logger.InfoContext(ctx, "context_fabric: build-aside epoch already open for this organization; not restarting", "org_id", orgID)
+		c.logger.InfoContext(ctx, "context_fabric: build-aside epoch already open for this organization; not restarting", "org_id", contextfabric.SanitizeLogAttr(orgID))
 		return false, nil
 	}
 	status := contextfabric.LifecycleStatusServing
@@ -619,7 +619,7 @@ func (c *Coordinator) beginLifecycleBuild(ctx context.Context, orgID string) (op
 		status = row.Status
 	}
 	c.logger.InfoContext(ctx, "context_fabric: cannot open a build-aside epoch right now; organization is not in a rebuildable state",
-		"org_id", orgID, "observed_status", string(status))
+		"org_id", contextfabric.SanitizeLogAttr(orgID), "observed_status", contextfabric.SanitizeLogAttr(string(status)))
 	return false, nil
 }
 
@@ -691,7 +691,7 @@ func (c *Coordinator) performRebuild(ctx context.Context, orgID string) error {
 	if err := c.rebuildMarkers.CompleteRebuild(ctx, orgID); err != nil {
 		return fmt.Errorf("projectionrun: clear rebuild marker: %w", err)
 	}
-	c.logger.InfoContext(ctx, "projection organization rebuilt", "org_id", orgID)
+	c.logger.InfoContext(ctx, "projection organization rebuilt", "org_id", contextfabric.SanitizeLogAttr(orgID))
 	return nil
 }
 
@@ -1504,13 +1504,13 @@ func (c *Coordinator) runOrg(ctx context.Context, orgID string, stats *tickFresh
 	if err != nil {
 		scope.record(scope.stats.recordBackoff)
 		if !errors.Is(err, ErrOrgLocked) {
-			c.logger.WarnContext(ctx, "projection organization lock failed", "org_id", orgID, "failure_class", classifyOutcomeError(err))
+			c.logger.WarnContext(ctx, "projection organization lock failed", "org_id", contextfabric.SanitizeLogAttr(orgID), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
 		}
 		return
 	}
 	defer func() {
 		if unlockErr := unlock(); unlockErr != nil {
-			c.logger.WarnContext(ctx, "projection organization unlock failed", "org_id", orgID, "failure_class", classifyOutcomeError(unlockErr))
+			c.logger.WarnContext(ctx, "projection organization unlock failed", "org_id", contextfabric.SanitizeLogAttr(orgID), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(unlockErr)))
 		}
 	}()
 
@@ -1540,14 +1540,14 @@ func (c *Coordinator) runOrgLegacy(scope *orgScope, orgID string) {
 	})
 	if err != nil {
 		scope.record(scope.stats.recordBackoff)
-		c.logger.WarnContext(scope.logCtx(), "check rebuild marker failed; skipping tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
+		c.logger.WarnContext(scope.logCtx(), "check rebuild marker failed; skipping tick", "org_id", contextfabric.SanitizeLogAttr(orgID), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
 		return
 	} else if inProgress {
 		scope.record(scope.stats.recordBackoff)
 		if err := scope.run(func(ctx context.Context) error { return c.performRebuild(ctx, orgID) }); err != nil {
-			c.logger.WarnContext(scope.logCtx(), "resume interrupted rebuild failed; will retry next tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
+			c.logger.WarnContext(scope.logCtx(), "resume interrupted rebuild failed; will retry next tick", "org_id", contextfabric.SanitizeLogAttr(orgID), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
 		} else {
-			c.logger.InfoContext(scope.logCtx(), "resumed an interrupted rebuild", "org_id", orgID)
+			c.logger.InfoContext(scope.logCtx(), "resumed an interrupted rebuild", "org_id", contextfabric.SanitizeLogAttr(orgID))
 		}
 		return
 	}
@@ -1634,7 +1634,7 @@ func (c *Coordinator) runOrgLifecycle(scope *orgScope, orgID string) {
 	})
 	if err != nil {
 		scope.record(scope.stats.recordBackoff)
-		c.logger.WarnContext(scope.logCtx(), "read graph lifecycle row failed; skipping tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
+		c.logger.WarnContext(scope.logCtx(), "read graph lifecycle row failed; skipping tick", "org_id", contextfabric.SanitizeLogAttr(orgID), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
 		return
 	}
 	if found && row.Status == contextfabric.LifecycleStatusBuilding {
@@ -1754,7 +1754,7 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 	signals := orgSignals{healthy: orgOutcomeBackoff}
 	defer func() { scope.recordOutcome(signals) }()
 	if row.TargetEpoch == nil {
-		c.logger.WarnContext(scope.logCtx(), "graph lifecycle row is building with no target epoch; skipping", "org_id", orgID)
+		c.logger.WarnContext(scope.logCtx(), "graph lifecycle row is building with no target epoch; skipping", "org_id", contextfabric.SanitizeLogAttr(orgID))
 		return
 	}
 	targetEpoch := *row.TargetEpoch
@@ -1767,7 +1767,7 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 		return e
 	})
 	if err != nil {
-		c.logger.WarnContext(scope.logCtx(), "read build source progress failed; skipping build tick", "org_id", orgID, "failure_class", classifyOutcomeError(err))
+		c.logger.WarnContext(scope.logCtx(), "read build source progress failed; skipping build tick", "org_id", contextfabric.SanitizeLogAttr(orgID), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
 		return
 	}
 	byName := make(map[string]contextfabric.BuildSourceProgress, len(progress))
@@ -1799,14 +1799,14 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 		}
 		projectionSource, configured := c.sources[source]
 		if !configured {
-			c.logger.WarnContext(scope.logCtx(), "required build source is no longer configured; flip will remain blocked until it is restored", "org_id", orgID, "source", source)
+			c.logger.WarnContext(scope.logCtx(), "required build source is no longer configured; flip will remain blocked until it is restored", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source))
 			continue
 		}
 		if enablement, ok := projectionSource.(contextfabric.ProjectionSourceEnablement); ok && !enablement.Enabled() {
 			if rerr := scope.run(func(ctx context.Context) error {
 				return c.lifecycle.RecordSourceProgress(ctx, orgID, targetEpoch, source, contextfabric.BuildCompletionDisabledAtFreeze, 0, c.now())
 			}); rerr != nil {
-				c.logger.WarnContext(scope.logCtx(), "record disabled-at-freeze source progress failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(rerr))
+				c.logger.WarnContext(scope.logCtx(), "record disabled-at-freeze source progress failed", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(rerr)))
 			}
 			continue
 		}
@@ -1854,7 +1854,7 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 	})
 	switch {
 	case err == nil:
-		attrs := []any{"org_id", orgID, "from_epoch", row.ActiveEpoch, "to_epoch", flipped.ActiveEpoch}
+		attrs := []any{"org_id", contextfabric.SanitizeLogAttr(orgID), "from_epoch", row.ActiveEpoch, "to_epoch", flipped.ActiveEpoch}
 		// CHAOS-3826: report the build's wall-clock duration when this
 		// process is the one that opened it (buildStarted's doc comment).
 		if started, ok := c.buildStarted.LoadAndDelete(orgID); ok {
@@ -1869,16 +1869,16 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 			if invalidateErr := scope.run(func(ctx context.Context) error {
 				return c.reuseInvalidator.InvalidateOrganizationReuse(ctx, orgID)
 			}); invalidateErr != nil {
-				c.logger.WarnContext(scope.logCtx(), "invalidate answer reuse after flip failed", "org_id", orgID, "failure_class", classifyOutcomeError(invalidateErr))
+				c.logger.WarnContext(scope.logCtx(), "invalidate answer reuse after flip failed", "org_id", contextfabric.SanitizeLogAttr(orgID), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(invalidateErr)))
 			}
 		}
 	case errors.Is(err, contextfabric.ErrLifecycleTransitionRefused):
 		// Expected, ordinary mid-build state: not every required source has
 		// reported a terminal completion yet. Next tick tries again.
 	case errors.Is(err, contextfabric.ErrLifecycleConflict):
-		c.logger.WarnContext(scope.logCtx(), "flip lost a lifecycle CAS race", "org_id", orgID, "failure_class", classifyOutcomeError(err))
+		c.logger.WarnContext(scope.logCtx(), "flip lost a lifecycle CAS race", "org_id", contextfabric.SanitizeLogAttr(orgID), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
 	default:
-		c.logger.WarnContext(scope.logCtx(), "flip attempt failed", "org_id", orgID, "failure_class", classifyOutcomeError(err))
+		c.logger.WarnContext(scope.logCtx(), "flip attempt failed", "org_id", contextfabric.SanitizeLogAttr(orgID), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
 	}
 }
 
@@ -1947,7 +1947,7 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 		if werr != nil {
 			lastErr = werr
 			c.recordBackoff(key, werr)
-			c.logger.WarnContext(ctx, "build tick worker construction failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(werr))
+			c.logger.WarnContext(ctx, "build tick worker construction failed", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(werr)))
 			reason = DrainYieldError
 			break
 		}
@@ -1968,7 +1968,7 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 			if truncatedBy(ctx, err) {
 				reason = DrainYieldContextDone
 			} else {
-				c.logger.WarnContext(ctx, "build tick pair failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(err), "duration_ms", outcome.Duration.Milliseconds())
+				c.logger.WarnContext(ctx, "build tick pair failed", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)), "duration_ms", outcome.Duration.Milliseconds())
 				reason = DrainYieldError
 			}
 			break
@@ -1984,7 +1984,7 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 		if !terminal {
 			mode = contextfabric.BuildCompletionPending
 		} else {
-			c.logger.InfoContext(ctx, "context_fabric: build source completed", "org_id", orgID, "source", source, "epoch", epoch, "completion_mode", string(mode), "rows_projected", total)
+			c.logger.InfoContext(ctx, "context_fabric: build source completed", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "epoch", epoch, "completion_mode", contextfabric.SanitizeLogAttr(string(mode)), "rows_projected", total)
 		}
 		lastMode = mode
 		if rerr := c.lifecycle.RecordSourceProgress(ctx, orgID, epoch, source, mode, total, c.now()); rerr != nil {
@@ -2002,7 +2002,7 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 			// cf_build_source_progress's own DISPLAY row still needs the
 			// finalizing retry below; it no longer gates future-tick
 			// correctness.
-			c.logger.WarnContext(ctx, "record build source progress failed; will retry before the drain returns", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(rerr))
+			c.logger.WarnContext(ctx, "record build source progress failed; will retry before the drain returns", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(rerr)))
 			progressStale = true
 		} else {
 			progressStale = false
@@ -2037,7 +2037,7 @@ func (c *Coordinator) runBuildPair(ctx context.Context, orgID, source string, ep
 	// all).
 	if progressStale {
 		if rerr := c.lifecycle.RecordSourceProgress(ctx, orgID, epoch, source, lastMode, total, c.now()); rerr != nil {
-			c.logger.WarnContext(ctx, "record build source progress failed after retry; the cf_build_source_progress display row may stay stale until a future successful write (rows_projected accumulation itself is unaffected -- see runBuildPair's own doc comment)", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(rerr))
+			c.logger.WarnContext(ctx, "record build source progress failed after retry; the cf_build_source_progress display row may stay stale until a future successful write (rows_projected accumulation itself is unaffected -- see runBuildPair's own doc comment)", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(rerr)))
 		}
 	}
 	if batches > 0 {
@@ -2235,17 +2235,17 @@ func (c *Coordinator) recoverFromDivergence(scope *orgScope, orgID string) {
 	// incident signal -- the durable checkpoint says data was projected and
 	// the graph backend says otherwise -- not routine scheduling chatter.
 	c.logger.ErrorContext(scope.logCtx(), "context_fabric: projection checkpoint-store divergence detected (CHAOS-3882); the durable checkpoint outran the graph backend's own state -- triggering automatic recovery instead of serving resolution against a silently empty or stale graph",
-		"org_id_hash", hash)
+		"org_id_hash", contextfabric.SanitizeLogAttr(hash))
 	err := scope.run(func(ctx context.Context) error { return c.performRebuild(ctx, orgID) })
 	c.recordBackoff(key, err)
 	scope.record(scope.stats.recordDivergenceRecovered)
 	if err != nil {
 		c.logger.ErrorContext(scope.logCtx(), "context_fabric: automatic projection-liveness recovery failed; will retry with backoff",
-			"org_id_hash", hash, "failure_class", classifyOutcomeError(err))
+			"org_id_hash", contextfabric.SanitizeLogAttr(hash), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
 		return
 	}
 	c.logger.WarnContext(scope.logCtx(), "context_fabric: automatic projection-liveness recovery completed; every configured source's checkpoint was reset and replay will resume on the next tick",
-		"org_id_hash", hash)
+		"org_id_hash", contextfabric.SanitizeLogAttr(hash))
 }
 
 // recoverFromDivergenceLifecycle is recoverFromDivergence's CHAOS-3898
@@ -2265,7 +2265,7 @@ func (c *Coordinator) recoverFromDivergenceLifecycle(scope *orgScope, orgID stri
 	}
 	hash := orgIDHash(orgID)
 	c.logger.ErrorContext(scope.logCtx(), "context_fabric: projection checkpoint-store divergence detected (CHAOS-3882); the durable checkpoint outran the graph backend's own state -- triggering automatic build-aside recovery instead of serving resolution against a silently empty or stale graph",
-		"org_id_hash", hash)
+		"org_id_hash", contextfabric.SanitizeLogAttr(hash))
 	var opened bool
 	err := scope.run(func(ctx context.Context) error {
 		var e error
@@ -2276,7 +2276,7 @@ func (c *Coordinator) recoverFromDivergenceLifecycle(scope *orgScope, orgID stri
 	scope.record(scope.stats.recordDivergenceRecovered)
 	if err != nil {
 		c.logger.ErrorContext(scope.logCtx(), "context_fabric: automatic projection-liveness recovery failed to open a build-aside epoch; will retry with backoff",
-			"org_id_hash", hash, "failure_class", classifyOutcomeError(err))
+			"org_id_hash", contextfabric.SanitizeLogAttr(hash), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
 		return
 	}
 	if !opened {
@@ -2289,7 +2289,7 @@ func (c *Coordinator) recoverFromDivergenceLifecycle(scope *orgScope, orgID stri
 		return
 	}
 	c.logger.WarnContext(scope.logCtx(), "context_fabric: automatic projection-liveness recovery opened a build-aside epoch; replay will proceed over subsequent ticks",
-		"org_id_hash", hash)
+		"org_id_hash", contextfabric.SanitizeLogAttr(hash))
 }
 
 // runPairOnce attempts exactly ONE RunOnce call for (orgID, source),
@@ -2317,7 +2317,7 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 	worker, werr := c.workerFor(source, checkpoints)
 	if werr != nil {
 		c.recordBackoff(key, werr)
-		c.logger.WarnContext(ctx, "projection worker construction failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(werr))
+		c.logger.WarnContext(ctx, "projection worker construction failed", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(werr)))
 		return true, false, werr, false, false
 	}
 	run, runErr := worker.RunOnce(ctx, orgID, source)
@@ -2325,11 +2325,11 @@ func (c *Coordinator) runPairOnce(ctx context.Context, orgID, source string, che
 	c.recordBackoff(key, runErr)
 	c.observer.ObserveProjectionOutcome(outcome)
 	if runErr != nil {
-		c.logger.WarnContext(ctx, "projection pair failed", "org_id", orgID, "source", source, "failure_class", classifyOutcomeError(runErr), "duration_ms", outcome.Duration.Milliseconds())
+		c.logger.WarnContext(ctx, "projection pair failed", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(runErr)), "duration_ms", outcome.Duration.Milliseconds())
 		return true, false, runErr, false, false
 	}
 	if run.Applied {
-		c.logger.InfoContext(ctx, "projection batch applied", "org_id", orgID, "source", source, "batch_id", run.BatchID, "backend_watermark", run.BackendWatermark, "duration_ms", outcome.Duration.Milliseconds())
+		c.logger.InfoContext(ctx, "projection batch applied", "org_id", contextfabric.SanitizeLogAttr(orgID), "source", contextfabric.SanitizeLogAttr(source), "batch_id", contextfabric.SanitizeLogAttr(run.BatchID), "backend_watermark", contextfabric.SanitizeLogAttr(run.BackendWatermark), "duration_ms", outcome.Duration.Milliseconds())
 	}
 	// CHAOS-3887 (H1): computed and logged regardless of run.Applied/err --
 	// the whole point is that the prior guard (projector.go RunOnce) only
@@ -2492,13 +2492,13 @@ func (c *Coordinator) emitProjectionFreshness(ctx context.Context, orgID, source
 		// baseline to compare against this tick, so nothing further to
 		// report but "unknown".
 		c.logger.DebugContext(ctx, "context_fabric: projection freshness unknown; no durable watermark yet",
-			"org_id_hash", hash, "source", source)
+			"org_id_hash", contextfabric.SanitizeLogAttr(hash), "source", contextfabric.SanitizeLogAttr(source))
 		return false
 	}
 	current := currentSourceVersion(c.sources[source])
 	staleFields := []any{
-		"org_id_hash", hash, "source", source,
-		"checkpoint_source_version", watermark.SourceVersion, "current_source_version", current,
+		"org_id_hash", contextfabric.SanitizeLogAttr(hash), "source", contextfabric.SanitizeLogAttr(source),
+		"checkpoint_source_version", contextfabric.SanitizeLogAttr(watermark.SourceVersion), "current_source_version", contextfabric.SanitizeLogAttr(current),
 	}
 	if strings.TrimSpace(current) == "" {
 		// Source does not implement the optional ProjectionSourceVersion
@@ -2580,7 +2580,7 @@ func (c *Coordinator) sweepRetirements(ctx context.Context) {
 	}
 	due, err := c.retireScheduler.DueRetirements(ctx)
 	if err != nil {
-		c.logger.WarnContext(ctx, "list due epoch retirements failed", "failure_class", classifyOutcomeError(err))
+		c.logger.WarnContext(ctx, "list due epoch retirements failed", "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
 		return
 	}
 	for _, retirement := range due {
@@ -2611,20 +2611,20 @@ func (c *Coordinator) retireOne(ctx context.Context, orgID string, epoch int64) 
 	unlock, err := c.locker.Lock(ctx, orgID)
 	if err != nil {
 		if !errors.Is(err, ErrOrgLocked) {
-			c.logger.WarnContext(ctx, "acquire organization lock for retirement failed", "org_id", orgID, "failure_class", classifyOutcomeError(err))
+			c.logger.WarnContext(ctx, "acquire organization lock for retirement failed", "org_id", contextfabric.SanitizeLogAttr(orgID), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
 		}
 		return
 	}
 	defer func() {
 		if unlockErr := unlock(); unlockErr != nil {
-			c.logger.WarnContext(ctx, "organization unlock failed after retirement", "org_id", orgID, "failure_class", classifyOutcomeError(unlockErr))
+			c.logger.WarnContext(ctx, "organization unlock failed after retirement", "org_id", contextfabric.SanitizeLogAttr(orgID), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(unlockErr)))
 		}
 	}()
 	if err := c.retireScheduler.RunOne(ctx, orgID, epoch); err != nil {
-		c.logger.WarnContext(ctx, "retire epoch failed", "org_id", orgID, "epoch", epoch, "failure_class", classifyOutcomeError(err))
+		c.logger.WarnContext(ctx, "retire epoch failed", "org_id", contextfabric.SanitizeLogAttr(orgID), "epoch", epoch, "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
 		return
 	}
-	c.logger.InfoContext(ctx, "context_fabric: epoch retired", "org_id", orgID, "epoch", epoch)
+	c.logger.InfoContext(ctx, "context_fabric: epoch retired", "org_id", contextfabric.SanitizeLogAttr(orgID), "epoch", epoch)
 }
 
 // sweepGraceExpirations transitions every configured organization whose
@@ -2664,13 +2664,13 @@ func (c *Coordinator) tryBeginRetire(ctx context.Context, orgID string) {
 	}
 	defer func() {
 		if unlockErr := unlock(); unlockErr != nil {
-			c.logger.WarnContext(ctx, "organization unlock failed after grace-expiration sweep", "org_id", orgID, "failure_class", classifyOutcomeError(unlockErr))
+			c.logger.WarnContext(ctx, "organization unlock failed after grace-expiration sweep", "org_id", contextfabric.SanitizeLogAttr(orgID), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(unlockErr)))
 		}
 	}()
 
 	row, found, err := c.lifecycle.Get(ctx, orgID)
 	if err != nil {
-		c.logger.WarnContext(ctx, "read graph lifecycle row failed during grace sweep", "org_id", orgID, "failure_class", classifyOutcomeError(err))
+		c.logger.WarnContext(ctx, "read graph lifecycle row failed during grace sweep", "org_id", contextfabric.SanitizeLogAttr(orgID), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
 		return
 	}
 	if !found || row.Status != contextfabric.LifecycleStatusGrace || row.GraceDeadline == nil {
@@ -2686,11 +2686,11 @@ func (c *Coordinator) tryBeginRetire(ctx context.Context, orgID string) {
 		// races (a concurrent rollback won, or the deadline moved) -- only
 		// anything else is worth a warning.
 		if !errors.Is(err, contextfabric.ErrLifecycleTransitionRefused) && !errors.Is(err, contextfabric.ErrLifecycleConflict) {
-			c.logger.WarnContext(ctx, "begin retire failed", "org_id", orgID, "failure_class", classifyOutcomeError(err))
+			c.logger.WarnContext(ctx, "begin retire failed", "org_id", contextfabric.SanitizeLogAttr(orgID), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
 		}
 		return
 	}
-	c.logger.InfoContext(ctx, "context_fabric: grace window elapsed; epoch queued for retirement", "org_id", orgID, "epoch", retirement.Epoch)
+	c.logger.InfoContext(ctx, "context_fabric: grace window elapsed; epoch queued for retirement", "org_id", contextfabric.SanitizeLogAttr(orgID), "epoch", retirement.Epoch)
 }
 
 // currentSourceVersion reads the CHAOS-3887 optional
