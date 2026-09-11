@@ -3,6 +3,8 @@
 
 package eventspec
 
+import "github.com/full-chaos/dev-health-acr/internal/contextfabric"
+
 // FieldKeys lists, in declaration order, every JSON key an event's variant
 // carries. It is the generated mirror of Event.Fields -- present so a
 // consumer can range over an event's shape without walking Field structs.
@@ -18,5 +20,278 @@ func FieldKeys(e Event) []string {
 // rather than hand-maintained so it can never drift from All.
 var ByID = map[string]Event{
 	"graphrank.anchor_slot_displaced": AnchorSlotDisplaced,
+	"graphrank.decision_summary":      DecisionSummary,
 	"graphrank.ranked_cut_summary":    RankedCutSummary,
+}
+
+// AnchorSlotDisplacedFields is graphrank.anchor_slot_displaced's generated typed construction interface
+// (CHAOS-5516): one Go field per Field AnchorSlotDisplaced.Fields declares in spec.go.
+type AnchorSlotDisplacedFields struct {
+	RequestID           string
+	Pass                int
+	SubjectKind         string
+	SubjectCanonicalID  string
+	AnchorSlotReserved  string
+	AnchorSlotSource    string
+	AnchorSlotDisplaced int
+	PoolTruncatedN      int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every AnchorSlotDisplacedFields uniformly, set ONLY by NewAnchorSlotDisplacedFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewAnchorSlotDisplacedFields is the generated constructor for AnchorSlotDisplacedFields -- every
+// field AnchorSlotDisplaced.Fields declares is a required parameter.
+func NewAnchorSlotDisplacedFields(requestID string, pass int, subjectKind string, subjectCanonicalID string, anchorSlotReserved string, anchorSlotSource string, anchorSlotDisplaced int, poolTruncatedN int) AnchorSlotDisplacedFields {
+	return AnchorSlotDisplacedFields{
+		RequestID:           requestID,
+		Pass:                pass,
+		SubjectKind:         subjectKind,
+		SubjectCanonicalID:  subjectCanonicalID,
+		AnchorSlotReserved:  anchorSlotReserved,
+		AnchorSlotSource:    anchorSlotSource,
+		AnchorSlotDisplaced: anchorSlotDisplaced,
+		PoolTruncatedN:      poolTruncatedN,
+		constructed:         true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewAnchorSlotDisplacedFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f AnchorSlotDisplacedFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns AnchorSlotDisplaced's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f AnchorSlotDisplacedFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"pass", f.Pass,
+		"stage", "anchor_slot_displaced",
+		"subject_kind", contextfabric.SanitizeLogAttr(f.SubjectKind),
+		"subject_canonical_id", contextfabric.SanitizeLogAttr(f.SubjectCanonicalID),
+		"anchor_slot_reserved", contextfabric.SanitizeLogAttr(f.AnchorSlotReserved),
+		"anchor_slot_source", contextfabric.SanitizeLogAttr(f.AnchorSlotSource),
+		"anchor_slot_displaced", f.AnchorSlotDisplaced,
+		"pool_truncated_n", f.PoolTruncatedN,
+	}
+}
+
+// DecisionSummaryFields is graphrank.decision_summary's generated typed construction interface
+// (CHAOS-5516): one Go field per Field DecisionSummary.Fields declares in spec.go.
+type DecisionSummaryFields struct {
+	RequestID                         string
+	DecisionEventCount                int
+	CommittedCount                    int
+	AmbiguousCount                    int
+	NoCommitCount                     int
+	CommittedIDs                      []string
+	CommitGates                       []string
+	CommitBases                       []string
+	OfferedUnderWindowGate            bool
+	FrameGate                         string
+	RefuseBasis                       string
+	OfferPoolVectorOnlyExcluded       int
+	OfferPoolVectorOnlyDemoted        int
+	OfferPoolEmptiedByExclusion       bool
+	OfferPoolAnchorKindWithheld       int
+	OfferPoolAnchorKindWithheldScope  string
+	OfferPoolAnchorKindWithheldReason string
+	OfferPoolAnchorKindWithheldIDs    []string
+	OfferPoolAnchorKindExempted       int
+	AnchorPoolKindScope               string
+	AnchorPoolKindScopeSource         string
+	MemberKindConfirmed               string
+	ReservedKinds                     []string
+	FilterKinds                       []string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every DecisionSummaryFields uniformly, set ONLY by NewDecisionSummaryFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewDecisionSummaryFields is the generated constructor for DecisionSummaryFields -- every
+// field DecisionSummary.Fields declares is a required parameter.
+func NewDecisionSummaryFields(requestID string, decisionEventCount int, committedCount int, ambiguousCount int, noCommitCount int, committedIDs []string, commitGates []string, commitBases []string, offeredUnderWindowGate bool, frameGate string, refuseBasis string, offerPoolVectorOnlyExcluded int, offerPoolVectorOnlyDemoted int, offerPoolEmptiedByExclusion bool, offerPoolAnchorKindWithheld int, offerPoolAnchorKindWithheldScope string, offerPoolAnchorKindWithheldReason string, offerPoolAnchorKindWithheldIDs []string, offerPoolAnchorKindExempted int, anchorPoolKindScope string, anchorPoolKindScopeSource string, memberKindConfirmed string, reservedKinds []string, filterKinds []string) DecisionSummaryFields {
+	valid := true
+	if committedIDs == nil {
+		valid = false
+	}
+	if commitGates == nil {
+		valid = false
+	}
+	if commitBases == nil {
+		valid = false
+	}
+	if offerPoolAnchorKindWithheldIDs == nil {
+		valid = false
+	}
+	if reservedKinds == nil {
+		valid = false
+	}
+	if filterKinds == nil {
+		valid = false
+	}
+	return DecisionSummaryFields{
+		RequestID:                         requestID,
+		DecisionEventCount:                decisionEventCount,
+		CommittedCount:                    committedCount,
+		AmbiguousCount:                    ambiguousCount,
+		NoCommitCount:                     noCommitCount,
+		CommittedIDs:                      committedIDs,
+		CommitGates:                       commitGates,
+		CommitBases:                       commitBases,
+		OfferedUnderWindowGate:            offeredUnderWindowGate,
+		FrameGate:                         frameGate,
+		RefuseBasis:                       refuseBasis,
+		OfferPoolVectorOnlyExcluded:       offerPoolVectorOnlyExcluded,
+		OfferPoolVectorOnlyDemoted:        offerPoolVectorOnlyDemoted,
+		OfferPoolEmptiedByExclusion:       offerPoolEmptiedByExclusion,
+		OfferPoolAnchorKindWithheld:       offerPoolAnchorKindWithheld,
+		OfferPoolAnchorKindWithheldScope:  offerPoolAnchorKindWithheldScope,
+		OfferPoolAnchorKindWithheldReason: offerPoolAnchorKindWithheldReason,
+		OfferPoolAnchorKindWithheldIDs:    offerPoolAnchorKindWithheldIDs,
+		OfferPoolAnchorKindExempted:       offerPoolAnchorKindExempted,
+		AnchorPoolKindScope:               anchorPoolKindScope,
+		AnchorPoolKindScopeSource:         anchorPoolKindScopeSource,
+		MemberKindConfirmed:               memberKindConfirmed,
+		ReservedKinds:                     reservedKinds,
+		FilterKinds:                       filterKinds,
+		constructed:                       valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewDecisionSummaryFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f DecisionSummaryFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns DecisionSummary's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f DecisionSummaryFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "decision_summary",
+		"decision_event_count", f.DecisionEventCount,
+		"committed_count", f.CommittedCount,
+		"ambiguous_count", f.AmbiguousCount,
+		"no_commit_count", f.NoCommitCount,
+		"committed_ids", contextfabric.SanitizeLogStrings(f.CommittedIDs),
+		"commit_gates", contextfabric.SanitizeLogStrings(f.CommitGates),
+		"commit_bases", contextfabric.SanitizeLogStrings(f.CommitBases),
+		"offered_under_window_gate", f.OfferedUnderWindowGate,
+		"frame_gate", contextfabric.SanitizeLogAttr(f.FrameGate),
+		"refuse_basis", contextfabric.SanitizeLogAttr(f.RefuseBasis),
+		"offer_pool_vector_only_excluded", f.OfferPoolVectorOnlyExcluded,
+		"offer_pool_vector_only_demoted", f.OfferPoolVectorOnlyDemoted,
+		"offer_pool_emptied_by_exclusion", f.OfferPoolEmptiedByExclusion,
+		"offer_pool_anchor_kind_withheld", f.OfferPoolAnchorKindWithheld,
+		"offer_pool_anchor_kind_withheld_scope", contextfabric.SanitizeLogAttr(f.OfferPoolAnchorKindWithheldScope),
+		"offer_pool_anchor_kind_withheld_reason", contextfabric.SanitizeLogAttr(f.OfferPoolAnchorKindWithheldReason),
+		"offer_pool_anchor_kind_withheld_ids", contextfabric.SanitizeLogStrings(f.OfferPoolAnchorKindWithheldIDs),
+		"offer_pool_anchor_kind_exempted", f.OfferPoolAnchorKindExempted,
+		"anchor_pool_kind_scope", contextfabric.SanitizeLogAttr(f.AnchorPoolKindScope),
+		"anchor_pool_kind_scope_source", contextfabric.SanitizeLogAttr(f.AnchorPoolKindScopeSource),
+		"member_kind_confirmed", contextfabric.SanitizeLogAttr(f.MemberKindConfirmed),
+		"reserved_kinds", contextfabric.SanitizeLogStrings(f.ReservedKinds),
+		"filter_kinds", contextfabric.SanitizeLogStrings(f.FilterKinds),
+	}
+}
+
+// RankedCutSummaryFields is graphrank.ranked_cut_summary's generated typed construction interface
+// (CHAOS-5516): one Go field per Field RankedCutSummary.Fields declares in spec.go.
+type RankedCutSummaryFields struct {
+	RequestID           string
+	Pass                int
+	CandidateCount      int
+	SurvivedCount       int
+	SurvivedIDs         []string
+	Max                 int
+	AnchorSlotReserved  string
+	AnchorSlotSource    string
+	AnchorSlotDisplaced int
+	PoolTruncatedN      int
+	DeclaredKindRescue  []map[string]any
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every RankedCutSummaryFields uniformly, set ONLY by NewRankedCutSummaryFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewRankedCutSummaryFields is the generated constructor for RankedCutSummaryFields -- every
+// field RankedCutSummary.Fields declares is a required parameter.
+func NewRankedCutSummaryFields(requestID string, pass int, candidateCount int, survivedCount int, survivedIDs []string, max int, anchorSlotReserved string, anchorSlotSource string, anchorSlotDisplaced int, poolTruncatedN int, declaredKindRescue []map[string]any) RankedCutSummaryFields {
+	valid := true
+	if survivedIDs == nil {
+		valid = false
+	}
+	if declaredKindRescue == nil {
+		valid = false
+	}
+	return RankedCutSummaryFields{
+		RequestID:           requestID,
+		Pass:                pass,
+		CandidateCount:      candidateCount,
+		SurvivedCount:       survivedCount,
+		SurvivedIDs:         survivedIDs,
+		Max:                 max,
+		AnchorSlotReserved:  anchorSlotReserved,
+		AnchorSlotSource:    anchorSlotSource,
+		AnchorSlotDisplaced: anchorSlotDisplaced,
+		PoolTruncatedN:      poolTruncatedN,
+		DeclaredKindRescue:  declaredKindRescue,
+		constructed:         valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewRankedCutSummaryFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f RankedCutSummaryFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns RankedCutSummary's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f RankedCutSummaryFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"pass", f.Pass,
+		"stage", "ranked_cut",
+		"candidate_count", f.CandidateCount,
+		"survived_count", f.SurvivedCount,
+		"survived_ids", contextfabric.SanitizeLogStrings(f.SurvivedIDs),
+		"max", f.Max,
+		"anchor_slot_reserved", contextfabric.SanitizeLogAttr(f.AnchorSlotReserved),
+		"anchor_slot_source", contextfabric.SanitizeLogAttr(f.AnchorSlotSource),
+		"anchor_slot_displaced", f.AnchorSlotDisplaced,
+		"pool_truncated_n", f.PoolTruncatedN,
+		"declared_kind_rescue", f.DeclaredKindRescue,
+	}
 }

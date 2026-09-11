@@ -49,7 +49,11 @@ func TestEventspecCertifiesTheAnchorSlotPilotAtProductionLogLevel(t *testing.T) 
 	if _, err := certify.Certify(log, certify.Assertion{
 		Event: eventspec.RankedCutSummary,
 		Want: map[string]any{
-			"request_id":            req.RequestID,
+			"request_id": req.RequestID,
+			// r3: Want must include "pass" for a pass-keyed event -- this
+			// fixture's single resolveSubjects call never re-decides, so
+			// its one (and only) pass is 1.
+			"pass":                  1,
 			"candidate_count":       92,
 			"survived_count":        20,
 			"max":                   20,
@@ -66,6 +70,7 @@ func TestEventspecCertifiesTheAnchorSlotPilotAtProductionLogLevel(t *testing.T) 
 		Event: eventspec.AnchorSlotDisplaced,
 		Want: map[string]any{
 			"request_id":           req.RequestID,
+			"pass":                 1,
 			"anchor_slot_reserved": string(contextfabric.SubjectTeam),
 			"anchor_slot_source":   anchorPoolKindScopeReceipt,
 			"subject_kind":         string(contextfabric.SubjectProject),
@@ -106,6 +111,7 @@ func TestEventspecCertifiesExplicitZerosWhenNoSlotIsReserved(t *testing.T) {
 		Event: eventspec.RankedCutSummary,
 		Want: map[string]any{
 			"request_id":            req.RequestID,
+			"pass":                  1,
 			"anchor_slot_reserved":  anchorSlotNone,
 			"anchor_slot_source":    anchorSlotNone,
 			"anchor_slot_displaced": 0,
@@ -114,7 +120,7 @@ func TestEventspecCertifiesExplicitZerosWhenNoSlotIsReserved(t *testing.T) {
 		t.Errorf("certify RankedCutSummary (no slot reserved): %v", err)
 	}
 
-	if err := certify.CertifyAbsent(log, eventspec.AnchorSlotDisplaced, map[string]any{"request_id": req.RequestID}); err != nil {
+	if err := certify.CertifyAbsent(log, eventspec.AnchorSlotDisplaced, map[string]any{"request_id": req.RequestID, "pass": 1}); err != nil {
 		t.Errorf("certify.CertifyAbsent(AnchorSlotDisplaced): %v", err)
 	}
 }

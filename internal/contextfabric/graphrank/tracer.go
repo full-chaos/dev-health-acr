@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 )
 
@@ -28,6 +29,27 @@ func NewSlogResolutionTracer(logger *slog.Logger) SlogResolutionTracer {
 		logger = slog.Default()
 	}
 	return SlogResolutionTracer{logger: logger}
+}
+
+// decisionSummaryFieldsUnconstructed reports whether f was NOT built by
+// eventspec.NewDecisionSummaryFields -- the generated constructor is the
+// ONLY thing that can set the unexported "constructed" marker
+// (eventspec.DecisionSummaryFields.IsConstructed()), so no composite
+// literal assembled outside the eventspec package can ever read true here,
+// whether it is a caller hand-assembling the shared struct's OLD individual
+// Decision*/OfferPool* fields and leaving DecisionSummaryFields at its Go
+// zero value (this PR's own named failure mode: "callers still assemble
+// that event's field list"), a PARTIAL hand-built DecisionSummaryFields
+// literal (one exported field set, the rest at their zero value -- round r1's
+// P1: an earlier version of this guard checked five open-vocabulary string
+// fields directly and a literal setting only one of them slipped past it),
+// or even a literal that hand-sets EVERY exported field. tracer.go stopped
+// reading the OLD fields for this stage (CHAOS-5516), so emitting an
+// unconstructed value anyway would print a decision_summary line with
+// misleading zero/nil fields -- indistinguishable from a genuine
+// zero-decision resolution.
+func decisionSummaryFieldsUnconstructed(f eventspec.DecisionSummaryFields) bool {
+	return !f.IsConstructed()
 }
 
 func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
@@ -159,73 +181,58 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// offersOnlyDecisionTracer's own doc comment, resolve.go).
 			"offered_under_window_gate", event.OfferedUnderWindowGate)
 	case "decision_summary":
+		// CHAOS-5516 (clauses 1+4): emits via the GENERATED SlogArgs() on
+		// the typed value decisionSummaryBuffer.flush() built (resolve.go),
+		// not a second, independently hand-typed key list -- the keys this
+		// line carries can never drift from spec.go's DecisionSummary
+		// declaration, because both this call and the declaration derive
+		// from the same generated source
+		// (chaos5516_decision_summary_slog_args_test.go pins the exact key
+		// set a real emitted line carries against it).
+		if decisionSummaryFieldsUnconstructed(event.DecisionSummaryFields) {
+			// REFUSED, not a zeroed summary: a caller that still assembles
+			// this stage's OLD individual fields reaches here with
+			// DecisionSummaryFields at its Go zero value. Emitting it would
+			// be silently wrong (all zeros, indistinguishable from a
+			// genuine zero-decision resolution); refusing loudly at Error
+			// makes the gap itself observable instead.
+			t.logger.ErrorContext(ctx, "context fabric resolution trace: decision summary construction refused",
+				"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage))
+			return
+		}
+		// r3 fix (round r2 finding 3): event.RequestID and
+		// event.DecisionSummaryFields.RequestID are two INDEPENDENT fields
+		// on two different types -- IsConstructed() proves the typed value
+		// went through the real generated constructor, but proves nothing
+		// about whether the caller passed it the SAME request id as the
+		// enclosing event's own top-level RequestID. A mismatch here is
+		// exactly as silent a defect as an unconstructed value: an operator
+		// reading this line's own request_id key (event.RequestID, which
+		// the "decision summary construction refused" line above also
+		// uses) could be looking at a DIFFERENT resolution's decision than
+		// the one this line's every other field actually describes.
+		// Compared post-sanitization (contextfabric.SanitizeLogAttr is
+		// deterministic and idempotent; was sanitizeLogString before #497
+		// routed this package's own sanitization through the shared
+		// barrier) because production's own real call site sanitizes
+		// b.requestID into the typed constructor but keeps the RAW value on
+		// the outer event -- a raw id containing a control character is a
+		// legitimate (if rare) match that a naive unsanitized comparison
+		// would misreport as a mismatch.
+		if contextfabric.SanitizeLogAttr(event.RequestID) != event.DecisionSummaryFields.RequestID {
+			t.logger.ErrorContext(ctx, "context fabric resolution trace: decision summary construction refused",
+				"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+				// Sanitized again here even though the real construction
+				// path already sanitized it before storing (resolve.go) --
+				// a bare struct field read is opaque to
+				// TestNoUnsanitizedLogAttributeInContextFabric's own static
+				// trace (it cannot see the field was sanitized elsewhere),
+				// and double-sanitizing is idempotent and harmless.
+				"typed_request_id", contextfabric.SanitizeLogAttr(event.DecisionSummaryFields.RequestID))
+			return
+		}
 		t.logger.InfoContext(ctx, "context fabric resolution trace: decision summary",
-			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
-			"decision_event_count", event.DecisionEventCount,
-			"committed_count", event.DecisionCommittedCount,
-			"ambiguous_count", event.DecisionAmbiguousCount,
-			"no_commit_count", event.DecisionNoCommitCount,
-			"committed_ids", contextfabric.SanitizeLogStrings(event.DecisionCommittedIDs),
-			"commit_gates", contextfabric.SanitizeLogStrings(event.DecisionCommitGates),
-			"commit_bases", contextfabric.SanitizeLogStrings(event.DecisionCommitBases),
-			// Always emitted, true or false: a provenance field present in
-			// only one of its two states cannot be told apart from a build
-			// that does not emit it, which is the same explicit-zero rule
-			// every count on this line follows.
-			"offered_under_window_gate", event.DecisionOfferedUnderWindowGate,
-			// THE ORDERING SEAM, on the one Info line that says what the
-			// resolver decided. frame_gate/refuse_basis say what this
-			// resolution was ALLOWED to decide before it began;
-			// offer_pool_vector_only_excluded/_demoted say what it was not
-			// allowed to consider. All four always present with explicit
-			// tokens and zeros -- a laundered commit and a correct one are
-			// otherwise indistinguishable on every other key of this line.
-			"frame_gate", contextfabric.SanitizeLogAttr(event.DecisionFrameGate),
-			"refuse_basis", contextfabric.SanitizeLogAttr(event.DecisionRefuseBasis),
-			"offer_pool_vector_only_excluded", event.OfferPoolVectorOnlyExcluded,
-			"offer_pool_vector_only_demoted", event.OfferPoolVectorOnlyDemoted,
-			// The discriminator between two empties that are identical on
-			// every other key of this line: a graph that held nothing, and
-			// a graph that held candidates this resolution may not offer.
-			// Always emitted, true or false.
-			"offer_pool_emptied_by_exclusion", event.OfferPoolEmptiedByExclusion,
-			// CHAOS-5422. The vector counters above say what this resolution
-			// was refused for GUESSING; these say what it was refused for
-			// being the wrong ROLE — a candidate of the kind the question asks
-			// about, offered as the scope it asks about them within. Count,
-			// kind and reason together, because a count with no kind sends an
-			// operator looking for a retrieval failure that did not happen.
-			// All three always present, with an explicit zero and explicit
-			// `none` tokens.
-			"offer_pool_anchor_kind_withheld", event.OfferPoolAnchorKindWithheld,
-			"offer_pool_anchor_kind_withheld_scope", contextfabric.SanitizeLogAttr(event.OfferPoolAnchorKindWithheldScope),
-			"offer_pool_anchor_kind_withheld_reason", contextfabric.SanitizeLogAttr(event.OfferPoolAnchorKindWithheldReason),
-			// WHICH subjects, capped, beside the true count above. Without
-			// these, a build that refuses the wrong subject while refusing the
-			// same number of them is indistinguishable at Info from a correct
-			// one -- the per-candidate dispositions that carry ids are Debug.
-			"offer_pool_anchor_kind_withheld_ids", contextfabric.SanitizeLogStrings(event.OfferPoolAnchorKindWithheldIDs),
-			// The exemption's own number. A refusal count of zero beside an
-			// exemption count of one is a different fact from two zeros, and
-			// only one of them means "this question refused nothing".
-			"offer_pool_anchor_kind_exempted", event.OfferPoolAnchorKindExempted,
-			// CHAOS-5393. anchor_pool_kind_scope says which kind the SCOPE
-			// ANCHOR was allowed to resolve under; member_kind_confirmed
-			// says the kind that scoped MEMBER discovery. On a scope-
-			// anchored frame those two are never equal (invariant I11), and
-			// a build where they ARE equal is one that filtered the anchor
-			// out of its own pool -- the shape that turns a truthfully
-			// answered pair of offers into no_match. _source separates the
-			// two ways the scope can go missing, which need different fixes.
-			"anchor_pool_kind_scope", contextfabric.SanitizeLogAttr(event.DecisionAnchorPoolKindScope),
-			"anchor_pool_kind_scope_source", contextfabric.SanitizeLogAttr(event.DecisionAnchorPoolKindScopeSource),
-			"member_kind_confirmed", contextfabric.SanitizeLogAttr(event.DecisionMemberKindConfirmed),
-			// THE WIRING ITSELF. A consumer reverting to the receipt-only
-			// value leaves the scope and source above reading correctly
-			// while retrieval, the reserve or the filter acts on a
-			// different set -- invisible at Info without these.
-			"reserved_kinds", contextfabric.SanitizeLogStrings(event.DecisionReservedKinds),
-			"filter_kinds", contextfabric.SanitizeLogStrings(event.DecisionFilterKinds))
+			event.DecisionSummaryFields.SlogArgs()...)
 	case "anchor_pool":
 		// Once per resolution, Info: there is no per-candidate counterpart
 		// here, so no volume split is needed. Emitted from the same
@@ -447,6 +454,9 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// is what says whether a slot could have mattered here at all.
 			t.logger.InfoContext(ctx, "context fabric resolution trace: ranked cut summary",
 				"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+				// CHAOS-5516: which finalization of this resolution produced
+				// this line, 1-based.
+				"pass", event.Pass,
 				"candidate_count", event.RankedCutCandidateCount,
 				"survived_count", event.RankedCutSurvivedCount,
 				"survived_ids", contextfabric.SanitizeLogStrings(event.RankedCutSurvivedIDs),
@@ -478,6 +488,9 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// distinguishable because the summary always carries the count.
 		t.logger.InfoContext(ctx, "context fabric resolution trace: anchor slot displaced",
 			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+			// CHAOS-5516: the same pass this displacement's own RankedCutSummary
+			// line carries -- the two lines from one pass agree on it.
+			"pass", event.Pass,
 			"subject_kind", contextfabric.SanitizeLogAttr(string(event.Subject.Kind)), "subject_canonical_id", contextfabric.SanitizeLogAttr(event.Subject.CanonicalID),
 			"anchor_slot_reserved", contextfabric.SanitizeLogAttr(event.AnchorSlotReserved),
 			"anchor_slot_source", contextfabric.SanitizeLogAttr(event.AnchorSlotSource),

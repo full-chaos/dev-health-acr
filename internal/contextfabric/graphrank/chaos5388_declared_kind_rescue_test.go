@@ -387,6 +387,28 @@ func TestEverySummaryPassReportsTheSameDeclaredKinds(t *testing.T) {
 // On the AST, never on the file's text: a grep-shaped check passes on a
 // commented-out call, and an unrecognised shape must be a FAILURE of the pin
 // rather than a silent skip.
+//
+// CHAOS-5516: kindRescue is now the SECOND-to-last argument, not the last --
+// resolveFromMergedCandidatesWithAnchorSlot gained a trailing `pass int`
+// parameter (which finalization of the caller's own resolution this call
+// is; each of the three call sites passes a different value/expression, so
+// this pin does not also assert its identifier name the way it does for
+// kindRescue).
+//
+// r3 (round r3 finding 3): this test checks resolve.go's calls into
+// resolveFromMergedCandidatesWithAnchorSlot ONLY -- it says nothing about
+// resolution.go's OWN separate call, declaredKindRescueReport(kindRescue,
+// ...) (the function that actually BUILDS the declared_kind_rescue rows
+// from the ledger). That call's own behavioral coverage is
+// TestARescueArmThatDeliveredIsDisclosedAsDelivered: mutating
+// resolution.go's declaredKindRescueReport(kindRescue, ...) to
+// declaredKindRescueReport(nil, ...) makes that test fail (declared_kind_rescue
+// reads back empty instead of naming the real survived/matched rescue row)
+// -- verified directly, red-first, before this comment was written. An
+// AST-name check proves a call site's own SOURCE TEXT names the right
+// variable; it was never a substitute for a behavioral proof that the
+// VALUE actually flowed through to the emitted line, which
+// TestARescueArmThatDeliveredIsDisclosedAsDelivered is.
 func TestEveryCutCallInResolveGoPassesTheRescueLedger(t *testing.T) {
 	t.Parallel()
 	fset := token.NewFileSet()
@@ -407,14 +429,14 @@ func TestEveryCutCallInResolveGoPassesTheRescueLedger(t *testing.T) {
 		}
 		seen++
 		pos := fset.Position(call.Pos())
-		if len(call.Args) == 0 {
-			t.Errorf("%s at %s has no arguments; this pin cannot read its shape, which is a failure of the pin, not a skip", target, pos)
+		if len(call.Args) < 2 {
+			t.Errorf("%s at %s has fewer than 2 arguments; this pin cannot read its shape, which is a failure of the pin, not a skip", target, pos)
 			return true
 		}
-		last := call.Args[len(call.Args)-1]
-		arg, ok := last.(*ast.Ident)
+		rescueArg := call.Args[len(call.Args)-2]
+		arg, ok := rescueArg.(*ast.Ident)
 		if !ok {
-			t.Errorf("%s at %s passes an unrecognised final argument shape (%T); recorded rather than skipped", target, pos, last)
+			t.Errorf("%s at %s passes an unrecognised rescue-ledger argument shape (%T); recorded rather than skipped", target, pos, rescueArg)
 			return true
 		}
 		if arg.Name != "kindRescue" {

@@ -105,6 +105,86 @@ type Result struct {
 	Line Line
 }
 
+// eventHasPassField reports whether fields declares a "pass" key -- the one
+// signal this package uses to decide whether an event's multiplicity is
+// scoped per-pass (a duplicate/count check keyed on each distinct pass
+// value) or per-request (the whole scope IS the one thing being counted,
+// with no pass to key on at all).
+func eventHasPassField(fields []eventspec.Field) bool {
+	for _, f := range fields {
+		if f.Key == "pass" {
+			return true
+		}
+	}
+	return false
+}
+
+// multiplicityRequiresPassField states, for a RECOGNISED Multiplicity,
+// whether it requires (true) or forbids (false) a declared "pass" field --
+// the executable consistency rule round r2's finding 5 asked for (a
+// TestEveryEventsMultiplicityAgreesWithWhetherItDeclaresAPassField walks
+// eventspec.All and asserts every event's own eventHasPassField() agrees
+// with this). ok is false for an unrecognised Multiplicity value.
+func multiplicityRequiresPassField(m eventspec.Multiplicity) (requiresPass bool, ok bool) {
+	switch m {
+	case eventspec.MultiplicityExactlyOnePerPass, eventspec.MultiplicityZeroOrOnePerPass:
+		return true, true
+	case eventspec.MultiplicityExactlyOnePerRequest:
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+// scopeMatch reports whether line belongs to the attempt `scope` identifies
+// -- every declared Attribution field, PLUS "pass" whenever `scope` itself
+// carries a "pass" key (never unconditionally on eventHasPassField: Certify
+// gathers the WHOLE request's lines across every pass first, to run its own
+// per-pass duplicate check over the full set, so its own gather step omits
+// "pass" from the scope map on purpose; CertifyAbsent asks about ONE
+// specific pass, so its scope map always carries one). Certify and
+// CertifyAbsent both call this SAME function (r3 fix, round r3 finding 1:
+// CertifyAbsent used to scope by Attribution alone, so a real line for pass
+// 1 wrongly blocked asserting absence for pass 2 of the SAME request -- the
+// two functions had drifted on what "this attempt" means; sharing one
+// function makes that drift impossible going forward).
+func scopeMatch(ev eventspec.Event, scope map[string]any, line Line) bool {
+	for _, attrKey := range ev.Attribution {
+		if !jsonEqual(scope[attrKey], line[attrKey]) {
+			return false
+		}
+	}
+	if p, ok := scope["pass"]; ok {
+		if !jsonEqual(p, line["pass"]) {
+			return false
+		}
+	}
+	return true
+}
+
+// groupLinesByPass partitions scoped lines by their own declared "pass"
+// field value -- every real cell reaching this function has already had
+// "pass" presence and type validated by validateFields (called on EVERY
+// scoped line before this runs, in Certify below), so the !ok branch is a
+// pure defensive fallback: a missing/malformed pass value is bucketed under
+// its own always-unique negative key rather than silently grouped with a
+// real pass number, so it can never mask (or be masked by) a genuine
+// duplicate-pass defect.
+func groupLinesByPass(scoped []Line) map[float64][]Line {
+	groups := make(map[float64][]Line, len(scoped))
+	sentinel := -1.0
+	for _, l := range scoped {
+		p, ok := l["pass"].(float64)
+		if !ok {
+			groups[sentinel] = []Line{l}
+			sentinel--
+			continue
+		}
+		groups[p] = append(groups[p], l)
+	}
+	return groups
+}
+
 // Certify locates the line(s) matching a.Event.Msg AND matching every one of
 // the event's declared Attribution fields against a.Want (round r1's P2:
 // production genuinely emits more than one line with the same msg for one
@@ -113,21 +193,33 @@ type Result struct {
 // is the pre-existing, already-shipped proof -- so multiplicity is scoped to
 // the attempt Want identifies via Attribution, never to the whole supplied
 // log), enforces multiplicity within that scope, asserts production level,
-// asserts PRESENCE of every field the event declares PresenceRequired
-// (round r1's P1: a field's value is only checked when the caller names it
-// in Want, but a field silently DROPPED from production output must never
-// pass unnoticed just because no test happened to pin its value), and
+// asserts PRESENCE/TYPE/VOCABULARY of every declared field on EVERY line in
+// scope (round r3's P1: an EARLIER malformed line used to be skipped
+// entirely -- only the last-selected line was ever field-validated), and
 // asserts exact value equality (JSON-normalized) for every key in a.Want.
 //
-// For MultiplicityExactlyOnePerPass, more than one line in scope is not an
-// error: the LAST one is certified, matching production's own documented
-// rule (tracer.go's RankedCutSummary doc comment: "the LAST summary
-// reaching the tracer for a request_id always describes the pass whose
-// resolution was actually returned"). This does trade away detecting a
-// genuine duplicate-emission defect within one pass via count alone; there
-// is no pass-sequence field in the current spec to distinguish "two
-// legitimate passes" from "one pass, emitted twice" -- callers that need
-// that distinction must pin it via a producer-specific field in Want.
+// Multiplicity is now uniformly PASS-KEYED for any event that declares a
+// "pass" field (MultiplicityExactlyOnePerPass, MultiplicityZeroOrOnePerPass
+// -- round r2's finding 1: the zero-or-one branch used to refuse ANY second
+// line in scope, never examining pass, so two legitimate DISTINCT-pass
+// zero-or-one lines were wrongly refused as a duplicate) and PASS-LESS for
+// MultiplicityExactlyOnePerRequest (decision_summary: the whole scope IS
+// the one thing being counted). For a pass-keyed multiplicity, a duplicate
+// PASS NUMBER within scope is always a defect regardless of whether the
+// lines' other fields agree or differ; a DISTINCT pass number is always
+// legitimate, regardless of whether the lines happen to coincide on every
+// other field (replaces round r2's byte-identical-except-time heuristic).
+// The line CERTIFIED (checked against a.Want's value assertions) is always
+// the LAST one in scope, matching production's own documented rule
+// (tracer.go's RankedCutSummary doc comment: "the LAST summary reaching the
+// tracer for a request_id always describes the pass whose resolution was
+// actually returned").
+//
+// Round r3's finding 5 (Want.pass required): for a pass-keyed event, a.Want
+// must include "pass" -- the caller must say WHICH pass it is certifying,
+// the same requirement Attribution fields already carry, because "the last
+// line" is a selection rule for FINDING the line, not a substitute for the
+// caller stating which attempt it means to assert values against.
 //
 // It returns an error rather than calling testing.T directly so a caller
 // can assert on the error text in a red-first control proof; production
@@ -146,49 +238,92 @@ func Certify(log *Log, a Assertion) (Result, error) {
 		}
 	}
 
+	requiresPass, recognisedMultiplicity := multiplicityRequiresPassField(a.Event.Multiplicity)
+	if !recognisedMultiplicity {
+		return Result{}, fmt.Errorf("certify: %s: unhandled multiplicity %q", a.Event.ID, a.Event.Multiplicity)
+	}
+	hasPassField := eventHasPassField(a.Event.Fields)
+	if requiresPass != hasPassField {
+		// Defensive: the SAME consistency rule
+		// TestEveryEventsMultiplicityAgreesWithWhetherItDeclaresAPassField
+		// asserts statically over eventspec.All. Reaching here means a
+		// caller passed a canonical event whose own declaration is
+		// internally inconsistent -- refuse rather than guess which side is
+		// wrong.
+		return Result{}, fmt.Errorf("certify: %s: declared multiplicity=%q requires pass-field=%v but the event's own Fields declare pass-field=%v -- the declaration itself is inconsistent",
+			a.Event.ID, a.Event.Multiplicity, requiresPass, hasPassField)
+	}
+	if hasPassField {
+		if _, ok := a.Want["pass"]; !ok {
+			return Result{}, fmt.Errorf("certify: %s: Want must include \"pass\" for a pass-keyed event -- the caller must state WHICH pass it is certifying, not rely on \"the last line\" alone", a.Event.ID)
+		}
+	}
+
+	// Attribution-only scope for the GATHER step -- deliberately omits
+	// "pass" even though a.Want carries one (required above), because this
+	// step must collect every pass in the REQUEST so the per-pass
+	// duplicate/distinct check below can see the whole set. scopeMatch only
+	// checks "pass" when the scope map passed to it carries the key.
+	requestScope := make(map[string]any, len(a.Event.Attribution))
+	for _, attrKey := range a.Event.Attribution {
+		requestScope[attrKey] = a.Want[attrKey]
+	}
 	var scoped []Line
 	for _, line := range log.linesWithMsg(a.Event.Msg) {
-		match := true
-		for _, attrKey := range a.Event.Attribution {
-			if !jsonEqual(a.Want[attrKey], line[attrKey]) {
-				match = false
-				break
-			}
-		}
-		if match {
+		if scopeMatch(a.Event, requestScope, line) {
 			scoped = append(scoped, line)
 		}
 	}
 
+	// EVERY line in scope is field-validated, not only the one ultimately
+	// selected (round r3's P1) -- an earlier, malformed line is a defect
+	// regardless of whether a later line in the same scope looks fine.
+	for i, l := range scoped {
+		if err := validateFields(a.Event.Fields, l, a.Event.ID); err != nil {
+			return Result{}, fmt.Errorf("%w (line %d of %d in scope)", err, i+1, len(scoped))
+		}
+	}
+
 	var line Line
-	switch a.Event.Multiplicity {
-	case eventspec.MultiplicityExactlyOnePerPass:
+	if !hasPassField {
+		// MultiplicityExactlyOnePerRequest: the whole scope is the one
+		// thing being counted -- no pass to key on, so more than one line
+		// is unconditionally a defect, same as before this event's own
+		// mislabeling was fixed.
 		if len(scoped) == 0 {
-			return Result{}, fmt.Errorf("certify: %s: found 0 lines with msg %q for this attempt, want at least 1 (multiplicity=%s)",
+			return Result{}, fmt.Errorf("certify: %s: found 0 lines with msg %q for this attempt, want exactly 1 (multiplicity=%s)",
 				a.Event.ID, a.Event.Msg, a.Event.Multiplicity)
 		}
-		// round r2's P2: more than one line in scope is legitimate
-		// multi-pass output ONLY when the passes actually differ. Two
-		// lines identical apart from "time" are indistinguishable from
-		// one pass emitted twice (a genuine duplicate-emission defect,
-		// distinct from a real re-decision) -- refuse rather than
-		// silently certifying the last of two identical copies.
-		if len(scoped) > 1 && linesEqualExceptTime(scoped[len(scoped)-1], scoped[len(scoped)-2]) {
-			return Result{}, fmt.Errorf("certify: %s: the last two lines with msg %q for this attempt are IDENTICAL apart from time -- indistinguishable from a single pass emitted twice; a real re-decision pass must differ in at least one other field",
-				a.Event.ID, a.Event.Msg)
-		}
-		line = scoped[len(scoped)-1]
-	case eventspec.MultiplicityZeroOrOnePerPass:
 		if len(scoped) > 1 {
-			return Result{}, fmt.Errorf("certify: %s: found %d lines with msg %q for this attempt, want at most 1 (multiplicity=%s)",
+			return Result{}, fmt.Errorf("certify: %s: found %d lines with msg %q for this attempt, want exactly 1 (multiplicity=%s, no pass field declared -- this event has no legitimate multi-line shape to distinguish from a duplicate)",
 				a.Event.ID, len(scoped), a.Event.Msg, a.Event.Multiplicity)
 		}
-		if len(scoped) == 0 {
-			return Result{}, fmt.Errorf("certify: %s: no line with msg %q for this attempt -- call CertifyAbsent when absence is the expectation being asserted", a.Event.ID, a.Event.Msg)
-		}
 		line = scoped[0]
-	default:
-		return Result{}, fmt.Errorf("certify: %s: unhandled multiplicity %q", a.Event.ID, a.Event.Multiplicity)
+	} else {
+		switch a.Event.Multiplicity {
+		case eventspec.MultiplicityExactlyOnePerPass:
+			if len(scoped) == 0 {
+				return Result{}, fmt.Errorf("certify: %s: found 0 lines with msg %q for this attempt, want at least 1 (multiplicity=%s)",
+					a.Event.ID, a.Event.Msg, a.Event.Multiplicity)
+			}
+		case eventspec.MultiplicityZeroOrOnePerPass:
+			if len(scoped) == 0 {
+				return Result{}, fmt.Errorf("certify: %s: no line with msg %q for this attempt -- call CertifyAbsent when absence is the expectation being asserted", a.Event.ID, a.Event.Msg)
+			}
+		}
+		// PASS-KEYED for EITHER multiplicity that declares a pass field
+		// (round r2 finding 1: zero_or_one_per_pass used to refuse any
+		// second line without ever examining pass -- two DISTINCT passes
+		// each legitimately carrying zero-or-one line were wrongly refused
+		// as a duplicate). A duplicate PASS NUMBER within scope is always a
+		// defect for either multiplicity; a distinct one is always fine.
+		for p, group := range groupLinesByPass(scoped) {
+			if len(group) > 1 {
+				return Result{}, fmt.Errorf("certify: %s: %d lines with msg %q share pass=%v for this attempt -- a duplicate pass number is always a defect, regardless of whether the lines' other fields agree",
+					a.Event.ID, len(group), a.Event.Msg, p)
+			}
+		}
+		line = scoped[len(scoped)-1]
 	}
 
 	wantLevel := strings.ToUpper(string(a.Event.Level))
@@ -198,18 +333,10 @@ func Certify(log *Log, a Assertion) (Result, error) {
 			a.Event.ID, gotLevel, wantLevel)
 	}
 
-	// PRESENCE, TYPE and CLOSED VOCABULARY of every declared field are
-	// asserted, recursively into every nested (object_slice) field,
-	// regardless of whether the caller named it in Want -- round r1's P1
-	// (a field silently dropped from production output must never pass
-	// because no fixture happened to pin its value) and round r2's P1s
-	// (a nested field's own required children were never checked at all;
-	// Field.Type was declared but never consulted for anything outside
-	// Want). See validateFields' own doc comment for what each check
-	// covers.
-	if err := validateFields(a.Event.Fields, line, a.Event.ID); err != nil {
-		return Result{}, err
-	}
+	// Every declared field's PRESENCE/TYPE/VOCABULARY was already asserted,
+	// unconditionally and for every line in scope, above -- a second call
+	// here would be dead code, never able to fire on a value the loop above
+	// would not already have refused.
 
 	declared := make(map[string]eventspec.Field, len(a.Event.Fields))
 	for _, f := range a.Event.Fields {
@@ -256,14 +383,25 @@ func Certify(log *Log, a Assertion) (Result, error) {
 // attempt never causes a false refusal here (round r2's P2: a line for
 // request_id=req_2 must never block asserting absence for req_1).
 //
+// r3 fix (round r3 finding 1): MultiplicityZeroOrOnePerPass always
+// declares a pass field (multiplicityRequiresPassField), so `attribution`
+// must ALSO include "pass" -- absence is asserted for ONE SPECIFIC pass of
+// the request, never "the whole request has no line at all". Before this
+// fix, a genuine line for pass 1 wrongly blocked asserting absence for pass
+// 2 of the SAME request_id -- exactly the request_id-scoping bug round r2
+// fixed for a DIFFERENT request, now fixed for a different pass of the SAME
+// request, using the SAME scopeMatch function Certify's own pass-keyed
+// duplicate check uses, so the two can never drift apart again.
+//
 // It refuses for any Multiplicity other than MultiplicityZeroOrOnePerPass
-// -- an ExactlyOnePerPass event is required on every pass by its own
-// declaration, so "absent" can never be a legitimate expectation for one
-// (round r1's P2); an unrecognised Multiplicity value refuses for the same
-// reason Certify's own switch does (round r2's P2: "unknown
-// multiplicities are also accepted" was a real gap -- this closes it by
-// requiring the ONE multiplicity that legitimately allows absence,
-// explicitly, rather than excluding only the one that doesn't).
+// -- an ExactlyOnePerPass/ExactlyOnePerRequest event is required on every
+// pass/request by its own declaration, so "absent" can never be a
+// legitimate expectation for one (round r1's P2); an unrecognised
+// Multiplicity value refuses for the same reason Certify's own switch does
+// (round r2's P2: "unknown multiplicities are also accepted" was a real gap
+// -- this closes it by requiring the ONE multiplicity that legitimately
+// allows absence, explicitly, rather than excluding only the ones that
+// don't).
 func CertifyAbsent(log *Log, ev eventspec.Event, attribution map[string]any) error {
 	if log == nil {
 		return fmt.Errorf("certify: %s: log is nil -- CertifyAbsent judges a real Parse()d log, never a nil placeholder", ev.ID)
@@ -279,16 +417,12 @@ func CertifyAbsent(log *Log, ev eventspec.Event, attribution map[string]any) err
 			return fmt.Errorf("certify: %s: attribution must include %q (one of this event's declared Attribution fields) to scope which attempt's absence is being asserted", ev.ID, attrKey)
 		}
 	}
+	if _, ok := attribution["pass"]; !ok {
+		return fmt.Errorf("certify: %s: attribution must include \"pass\" -- a zero_or_one_per_pass event's absence is asserted for ONE specific pass, never the whole request", ev.ID)
+	}
 	for _, line := range log.linesWithMsg(ev.Msg) {
-		match := true
-		for _, attrKey := range ev.Attribution {
-			if !jsonEqual(attribution[attrKey], line[attrKey]) {
-				match = false
-				break
-			}
-		}
-		if match {
-			return fmt.Errorf("certify: %s: found a line with msg %q for this attempt, want 0 (asserted absent)", ev.ID, ev.Msg)
+		if scopeMatch(ev, attribution, line) {
+			return fmt.Errorf("certify: %s: found a line with msg %q for this attempt (pass=%v), want 0 (asserted absent)", ev.ID, ev.Msg, attribution["pass"])
 		}
 	}
 	return nil
@@ -335,6 +469,10 @@ func validateFields(fields []eventspec.Field, obj map[string]any, eventID string
 			if gotFloat != math.Trunc(gotFloat) {
 				return fmt.Errorf("certify: %s: %q = %v, declared type=int but is not a whole number", eventID, field.Key, got)
 			}
+		case eventspec.FieldBool:
+			if _, ok := got.(bool); !ok {
+				return fmt.Errorf("certify: %s: %q = %v (%T), declared type=bool", eventID, field.Key, got, got)
+			}
 		case eventspec.FieldStringSlice:
 			arr, ok := got.([]any)
 			if !ok {
@@ -364,23 +502,6 @@ func validateFields(fields []eventspec.Field, obj map[string]any, eventID string
 	return nil
 }
 
-// canonicalEventsByID indexes eventspec.All -- the ONE declaration authority
-// -- by ID, built once at package init. Certify/CertifyAbsent resolve every
-// caller-supplied Event against this index rather than trusting the struct
-// value handed to them: round r3 found a caller can construct any
-// eventspec.Event value (Go exports the type and every field), including one
-// with its Attribution/Fields stripped, and Certify had no way to tell that
-// apart from the real eventspec.RankedCutSummary -- a degenerate Event with
-// empty Fields and empty Attribution certified ANY line carrying its msg
-// against an empty Want, with zero validation performed.
-var canonicalEventsByID = func() map[string]eventspec.Event {
-	m := make(map[string]eventspec.Event, len(eventspec.All))
-	for _, e := range eventspec.All {
-		m[e.ID] = e
-	}
-	return m
-}()
-
 // requireCanonicalEvent refuses unless ev is byte-for-byte the eventspec.All
 // entry for its own ID -- a caller must pass eventspec.RankedCutSummary (or
 // eventspec.AnchorSlotDisplaced) directly, never a copy, subset, or
@@ -388,8 +509,14 @@ var canonicalEventsByID = func() map[string]eventspec.Event {
 // does this (the two production Assertion/CertifyAbsent call sites in
 // graphrank/falkorgraph reference the exported eventspec vars directly), so
 // this refuses nothing real -- only a weakened or invented Event value.
+//
+// Looks up eventspec.ByID (generated from spec.go by eventspec/gen, part of
+// zz_generated.go) rather than a second, hand-built index -- CHAOS-5516
+// cleanup: PR1's own r3 fix built its own package-level map here instead of
+// using the generated one that already existed, exactly the "second,
+// competing list" clause 1 forbids.
 func requireCanonicalEvent(ev eventspec.Event) error {
-	canon, ok := canonicalEventsByID[ev.ID]
+	canon, ok := eventspec.ByID[ev.ID]
 	if !ok {
 		return fmt.Errorf("certify: %q is not a declared event ID -- eventspec.All is the one declaration authority; pass eventspec.RankedCutSummary/eventspec.AnchorSlotDisplaced (or a future registered event) directly, never a hand-built Event", ev.ID)
 	}
@@ -397,25 +524,6 @@ func requireCanonicalEvent(ev eventspec.Event) error {
 		return fmt.Errorf("certify: %s: the supplied Event does not match its canonical declaration in eventspec.All -- pass the exported eventspec value directly (e.g. eventspec.RankedCutSummary), never a caller-modified or hand-built copy with the same ID", ev.ID)
 	}
 	return nil
-}
-
-// linesEqualExceptTime reports whether a and b carry identical keys/values
-// once "time" (which always differs, even for two genuinely identical
-// emissions) is excluded from the comparison.
-func linesEqualExceptTime(a, b Line) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, v := range a {
-		if k == "time" {
-			continue
-		}
-		bv, ok := b[k]
-		if !ok || !reflect.DeepEqual(v, bv) {
-			return false
-		}
-	}
-	return true
 }
 
 func contains(vocab []string, v string) bool {

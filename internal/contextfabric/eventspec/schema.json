@@ -15,6 +15,11 @@
         "presence": "required"
       },
       {
+        "key": "pass",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "stage",
         "type": "string",
         "presence": "required",
@@ -60,6 +65,146 @@
     ]
   },
   {
+    "id": "graphrank.decision_summary",
+    "msg": "context fabric resolution trace: decision summary",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "exactly one line per resolveSubjects call, emitted from decisionSummaryBuffer.flush() unconditionally (including a zero count) -- the per-candidate decision events this line folds stay at Debug (case \"decision\").",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "decision_summary"
+        ]
+      },
+      {
+        "key": "decision_event_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "committed_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "ambiguous_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "no_commit_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "committed_ids",
+        "type": "string_slice",
+        "presence": "required"
+      },
+      {
+        "key": "commit_gates",
+        "type": "string_slice",
+        "presence": "required"
+      },
+      {
+        "key": "commit_bases",
+        "type": "string_slice",
+        "presence": "required"
+      },
+      {
+        "key": "offered_under_window_gate",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "frame_gate",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "refuse_basis",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "offer_pool_vector_only_excluded",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "offer_pool_vector_only_demoted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "offer_pool_emptied_by_exclusion",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "offer_pool_anchor_kind_withheld",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "offer_pool_anchor_kind_withheld_scope",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "offer_pool_anchor_kind_withheld_reason",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "offer_pool_anchor_kind_withheld_ids",
+        "type": "string_slice",
+        "presence": "required"
+      },
+      {
+        "key": "offer_pool_anchor_kind_exempted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "anchor_pool_kind_scope",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "anchor_pool_kind_scope_source",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "member_kind_confirmed",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "reserved_kinds",
+        "type": "string_slice",
+        "presence": "required"
+      },
+      {
+        "key": "filter_kinds",
+        "type": "string_slice",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "graphrank.ranked_cut_summary",
     "msg": "context fabric resolution trace: ranked cut summary",
     "level": "info",
@@ -72,6 +217,11 @@
       {
         "key": "request_id",
         "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "pass",
+        "type": "int",
         "presence": "required"
       },
       {

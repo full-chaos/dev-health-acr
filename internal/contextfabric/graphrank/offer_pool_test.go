@@ -560,17 +560,17 @@ func TestTheFoldedDecisionSummaryCarriesTheSeamsOwnValues(t *testing.T) {
 				t.Fatalf("captured %d decision_summary events, want exactly 1 -- the fold flushes once per call, including when it counted nothing", len(capture.summaries))
 			}
 			got := capture.summaries[0]
-			if got.DecisionFrameGate != testCase.wantGate {
-				t.Errorf("frame_gate on the FOLDED line = %q, want %q", got.DecisionFrameGate, testCase.wantGate)
+			if got.DecisionSummaryFields.FrameGate != testCase.wantGate {
+				t.Errorf("frame_gate on the FOLDED line = %q, want %q", got.DecisionSummaryFields.FrameGate, testCase.wantGate)
 			}
-			if got.DecisionRefuseBasis != testCase.wantRefuseBasis {
-				t.Errorf("refuse_basis on the FOLDED line = %q, want %q", got.DecisionRefuseBasis, testCase.wantRefuseBasis)
+			if got.DecisionSummaryFields.RefuseBasis != testCase.wantRefuseBasis {
+				t.Errorf("refuse_basis on the FOLDED line = %q, want %q", got.DecisionSummaryFields.RefuseBasis, testCase.wantRefuseBasis)
 			}
-			if got.OfferPoolVectorOnlyExcluded != testCase.wantExcluded {
-				t.Errorf("offer_pool_vector_only_excluded on the FOLDED line = %d, want %d -- the fold must carry what the offer_pool summary reported", got.OfferPoolVectorOnlyExcluded, testCase.wantExcluded)
+			if got.DecisionSummaryFields.OfferPoolVectorOnlyExcluded != testCase.wantExcluded {
+				t.Errorf("offer_pool_vector_only_excluded on the FOLDED line = %d, want %d -- the fold must carry what the offer_pool summary reported", got.DecisionSummaryFields.OfferPoolVectorOnlyExcluded, testCase.wantExcluded)
 			}
-			if got.OfferPoolEmptiedByExclusion != testCase.wantEmptied {
-				t.Errorf("offer_pool_emptied_by_exclusion on the FOLDED line = %t, want %t", got.OfferPoolEmptiedByExclusion, testCase.wantEmptied)
+			if got.DecisionSummaryFields.OfferPoolEmptiedByExclusion != testCase.wantEmptied {
+				t.Errorf("offer_pool_emptied_by_exclusion on the FOLDED line = %t, want %t", got.DecisionSummaryFields.OfferPoolEmptiedByExclusion, testCase.wantEmptied)
 			}
 			// THE IDENTITY: the folded line must equal the SUM of the
 			// per-resolution offer_pool summaries it folded, per counter and
@@ -587,14 +587,14 @@ func TestTheFoldedDecisionSummaryCarriesTheSeamsOwnValues(t *testing.T) {
 			if len(capture.offerPool) == 0 {
 				t.Fatal("no offer_pool summary was emitted, so the identity below would compare the folded line against nothing")
 			}
-			if got.OfferPoolVectorOnlyExcluded != sumExcluded || got.OfferPoolVectorOnlyDemoted != sumDemoted {
-				t.Errorf("folded counters %d/%d disagree with the %d/%d the offer_pool summaries reported", got.OfferPoolVectorOnlyExcluded, got.OfferPoolVectorOnlyDemoted, sumExcluded, sumDemoted)
+			if got.DecisionSummaryFields.OfferPoolVectorOnlyExcluded != sumExcluded || got.DecisionSummaryFields.OfferPoolVectorOnlyDemoted != sumDemoted {
+				t.Errorf("folded counters %d/%d disagree with the %d/%d the offer_pool summaries reported", got.DecisionSummaryFields.OfferPoolVectorOnlyExcluded, got.DecisionSummaryFields.OfferPoolVectorOnlyDemoted, sumExcluded, sumDemoted)
 			}
-			if got.OfferPoolEmptiedByExclusion != anyEmptied {
-				t.Errorf("folded emptied flag %t disagrees with the OR of what it folded (%t)", got.OfferPoolEmptiedByExclusion, anyEmptied)
+			if got.DecisionSummaryFields.OfferPoolEmptiedByExclusion != anyEmptied {
+				t.Errorf("folded emptied flag %t disagrees with the OR of what it folded (%t)", got.DecisionSummaryFields.OfferPoolEmptiedByExclusion, anyEmptied)
 			}
-			if testCase.wantCommitted > 0 && got.DecisionCommittedCount != testCase.wantCommitted {
-				t.Fatalf("committed_count on the FOLDED line = %d, want %d -- the tripwire arm is only meaningful BESIDE a real commit: a refusing verdict standing next to a non-zero committed_count is the bypass it exists to expose", got.DecisionCommittedCount, testCase.wantCommitted)
+			if testCase.wantCommitted > 0 && got.DecisionSummaryFields.CommittedCount != testCase.wantCommitted {
+				t.Fatalf("committed_count on the FOLDED line = %d, want %d -- the tripwire arm is only meaningful BESIDE a real commit: a refusing verdict standing next to a non-zero committed_count is the bypass it exists to expose", got.DecisionSummaryFields.CommittedCount, testCase.wantCommitted)
 			}
 		})
 	}
@@ -756,13 +756,13 @@ func TestTheFoldAccumulatesEveryOfferPoolSummaryItSees(t *testing.T) {
 		t.Fatalf("flush produced %d decision summaries, want 1", len(sink.summaries))
 	}
 	got := sink.summaries[0]
-	if got.OfferPoolVectorOnlyExcluded != 5 {
-		t.Errorf("excluded = %d, want 5 (2+3) -- an overwrite would report 3 and a dropped second summary 2", got.OfferPoolVectorOnlyExcluded)
+	if got.DecisionSummaryFields.OfferPoolVectorOnlyExcluded != 5 {
+		t.Errorf("excluded = %d, want 5 (2+3) -- an overwrite would report 3 and a dropped second summary 2", got.DecisionSummaryFields.OfferPoolVectorOnlyExcluded)
 	}
-	if got.OfferPoolVectorOnlyDemoted != 1 {
-		t.Errorf("demoted = %d, want 1 (1+0) -- an overwrite would report 0", got.OfferPoolVectorOnlyDemoted)
+	if got.DecisionSummaryFields.OfferPoolVectorOnlyDemoted != 1 {
+		t.Errorf("demoted = %d, want 1 (1+0) -- an overwrite would report 0", got.DecisionSummaryFields.OfferPoolVectorOnlyDemoted)
 	}
-	if !got.OfferPoolEmptiedByExclusion {
+	if !got.DecisionSummaryFields.OfferPoolEmptiedByExclusion {
 		t.Error("emptied flag is false; it is an OR across passes and the SECOND summary set it, so reading only the first loses it")
 	}
 }

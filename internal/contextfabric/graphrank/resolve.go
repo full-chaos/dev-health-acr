@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/hintsource"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -1175,6 +1176,17 @@ type ResolutionTraceEvent struct {
 	RankedCutSurvivedCount  int
 	RankedCutSurvivedIDs    []string
 	RankedCutMax            int
+	// Pass (CHAOS-5516, RankedCutSummary and AnchorSlotDisplaced only, for
+	// now): which finalization of the owning resolution (resolveSubjects)
+	// this event's own pass is, 1-based, in the order they ran -- the same
+	// field, same meaning, as thread D's cover events (#496): one notion of
+	// "pass" across producers. Lets certify's exactly_one_per_pass guard
+	// key multiplicity on (request_id, pass) instead of the byte-identical-
+	// except-time heuristic (PR1 RISK-NOTES' documented limit): two lines
+	// sharing a pass number is always a defect; two lines with different
+	// pass numbers are always legitimate, regardless of whether their other
+	// fields happen to coincide.
+	Pass int
 	// IdentityUniverseComplete (identity_universe stage; chris ruling,
 	// 2026-08-17): the RAW devhealthsource.IdentityUniverse completeness
 	// flag, BEFORE falkorgraph/reader.go folds it with graphMissing into
@@ -1477,6 +1489,18 @@ type ResolutionTraceEvent struct {
 	// must not read alike.
 	DecisionReservedKinds []string
 	DecisionFilterKinds   []string
+	// DecisionSummaryFields (CHAOS-5516, "decision_summary" stage ONLY) is
+	// this line's own typed, generated construction (eventspec/gen, off
+	// spec.go's DecisionSummary declaration) -- decisionSummaryBuffer.flush()
+	// is the one place that builds it (via eventspec.NewDecisionSummaryFields,
+	// which requires every field as a parameter), and tracer.go's
+	// "decision_summary" case emits it via its own generated SlogArgs()
+	// instead of a second, independently hand-typed key list. The individual
+	// Decision*/OfferPool* fields above stay exactly as they are for every
+	// OTHER stage that already reads them directly (offer_pool's own summary
+	// line, decision's own per-candidate line) -- this is an ADDITIONAL
+	// field for the one stage migrating, not a replacement of theirs.
+	DecisionSummaryFields eventspec.DecisionSummaryFields
 	// ShadowOutcome/ShadowReason/ShadowDIdentityHash/ShadowPreconditionUnproven/
 	// ShadowUnscopedVisibility/ShadowNonCensusedSurvivor/
 	// ShadowHandleGrammarBound/ShadowAnchorUniqueClaimant/ShadowKindsCensused
@@ -2190,39 +2214,47 @@ func (b *decisionSummaryBuffer) flush() {
 	// see DecisionSummary's own doc comment. Explicit zeros travel on the
 	// line, and the slices are normalized to empty (never nil) so a reader
 	// never has to tell a JSON null apart from a measured empty set.
-	b.real.Trace(ResolutionTraceEvent{
-		RequestID: b.requestID, Stage: "decision_summary",
-		DecisionEventCount: b.eventCount, DecisionCommittedCount: b.committedCount,
-		DecisionAmbiguousCount: b.ambiguousCount, DecisionNoCommitCount: b.noCommitCount,
-		DecisionCommittedIDs:           nonNil(b.committedIDs),
-		DecisionCommitGates:            nonNil(b.commitGates),
-		DecisionCommitBases:            nonNil(b.commitBases),
-		DecisionOfferedUnderWindowGate: b.offeredUnderWindowGate,
-		DecisionFrameGate:              b.frameGate,
-		DecisionRefuseBasis:            b.refuseBasis,
-		OfferPoolVectorOnlyExcluded:    b.vectorOnlyExcluded,
-		OfferPoolVectorOnlyDemoted:     b.vectorOnlyDemoted,
-		OfferPoolEmptiedByExclusion:    b.emptiedByExclusion,
-		OfferPoolAnchorKindWithheld:    b.anchorKindWithheld,
+	//
+	// CHAOS-5516: built via the GENERATED constructor (eventspec/gen, off
+	// spec.go's DecisionSummary declaration) -- every one of its fields is a
+	// required parameter here, so this call site cannot silently drop one
+	// the way an unkeyed or partially-keyed ResolutionTraceEvent composite
+	// literal could. tracer.go's own emission derives its key/value pairs
+	// from this SAME typed value's generated SlogArgs(), not a second,
+	// independently hand-typed key list.
+	fields := eventspec.NewDecisionSummaryFields(
+		// contextfabric.SanitizeLogAttr (post-#497; was the local
+		// sanitizeLogString, deleted when #497 routed every request_id/
+		// stage/subject-id log attribute in this package through the
+		// shared sanitizer): this line's own generated "stage" value is a
+		// hardcoded Go string literal (SlogArgs()), never attacker-
+		// influenced -- but request_id remains a caller-supplied value, and
+		// this stage sanitized it before CHAOS-5516 same as every other
+		// stage that logs it, so the migration keeps sanitizing it here
+		// instead of silently dropping that protection.
+		contextfabric.SanitizeLogAttr(b.requestID), b.eventCount, b.committedCount, b.ambiguousCount, b.noCommitCount,
+		nonNil(b.committedIDs), nonNil(b.commitGates), nonNil(b.commitBases),
+		b.offeredUnderWindowGate, b.frameGate, b.refuseBasis,
+		b.vectorOnlyExcluded, b.vectorOnlyDemoted, b.emptiedByExclusion,
+		b.anchorKindWithheld,
 		// orNone so a buffer built before any offer_pool summary reached it
-		// (this package's own unit callers) renders a word, never an empty log
-		// value.
-		OfferPoolAnchorKindWithheldScope:  orNone(b.anchorKindWithheldScope),
-		OfferPoolAnchorKindWithheldReason: orNone(b.anchorKindWithheldReason),
+		// (this package's own unit callers) renders a word, never an empty
+		// log value.
+		orNone(b.anchorKindWithheldScope), orNone(b.anchorKindWithheldReason),
 		// NEVER nil on the emitted line: an absent key and an empty list are
 		// different facts, and only one of them means "this call refused
 		// nothing".
-		OfferPoolAnchorKindWithheldIDs: nonNil(b.anchorKindWithheldIDs),
-		OfferPoolAnchorKindExempted:    b.anchorKindExempted,
+		nonNil(b.anchorKindWithheldIDs), b.anchorKindExempted,
 		// orNone keeps the contract that these three are never empty on a
 		// line: a resolution that returned before the filter ran emits no
 		// anchor_pool event at all, and `none` is the honest reading of
 		// that -- no anchor kind was admitted, because no pool was built.
-		DecisionAnchorPoolKindScope:       orNone(b.anchorPoolKindScope),
-		DecisionAnchorPoolKindScopeSource: orNone(b.anchorPoolKindScopeSource),
-		DecisionMemberKindConfirmed:       orNone(b.memberKindConfirmed),
-		DecisionReservedKinds:             nonNil(b.reservedKinds),
-		DecisionFilterKinds:               nonNil(b.filterKinds),
+		orNone(b.anchorPoolKindScope), orNone(b.anchorPoolKindScopeSource), orNone(b.memberKindConfirmed),
+		nonNil(b.reservedKinds), nonNil(b.filterKinds),
+	)
+	b.real.Trace(ResolutionTraceEvent{
+		RequestID: b.requestID, Stage: "decision_summary",
+		DecisionSummaryFields: fields,
 	})
 }
 
@@ -3171,7 +3203,14 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// as well as to retrieval and the filter, so the slot the design
 	// promises the anchor is held by the SAME decision the other two
 	// consumers obeyed -- not a second derivation beside them.
-	resolution, firstPassBases, firstPassDigests := resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), anchorReservedSlot{Kind: anchorScope.Kind, Source: anchorScope.Source}, kindRescue)
+	// CHAOS-5516: pass is a real running counter over THIS call's own
+	// finalizations, not a fixed literal per call site -- the scoped
+	// re-decision below and the evidence-census re-decision further down
+	// are each reached only under their own, independent conditions, so
+	// "this resolution's Nth finalization" depends on which of them
+	// actually ran, never on textual position alone.
+	pass := 1
+	resolution, firstPassBases, firstPassDigests := resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, firstPassTracer, request.RequestID, "", false, false, frameReservedKinds(frame, anchorScope.Kind), anchorReservedSlot{Kind: anchorScope.Kind, Source: anchorScope.Source}, kindRescue, pass)
 	commitBases.ResetTo(firstPassBases)
 	commitDigests.ResetTo(firstPassDigests)
 	// coverageFloorDegraded (CHAOS-4038, codex review round 2 finding 1) is
@@ -3340,11 +3379,15 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			// reports the same declared-kind truth the first pass did.
 			// Without it this pass emitted an empty list, and the LAST
 			// summary is the one an operator reads.
+			// CHAOS-5516: increments the running counter -- this resolution's
+			// next finalization, reached only when the scoped re-decision
+			// actually fires.
+			pass++
 			scopedResolution, scopedBases, scopedDigests := resolveFromMergedCandidatesWithAnchorSlot(
 				scopedPool, scopedObservationParentKey, scopedObservationBlocked, request.Options.MaxSubjectCandidates,
 				request.Options.AllowClarification, false, nil, 0, false, effectiveSearchLimit, 0,
 				unscopedVisibility, gate, scopedIdentity, scopedIdentityTerms, aliasIdentityComplete,
-				scopedDecisionTracer, request.RequestID, "", true, false, nil, anchorReservedSlot{}, kindRescue,
+				scopedDecisionTracer, request.RequestID, "", true, false, nil, anchorReservedSlot{}, kindRescue, pass,
 			)
 			if len(scopedResolution.Committed) > 0 {
 				resolution = scopedResolution
@@ -3438,7 +3481,12 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				// the failure mode this vocabulary exists to prevent.
 				var censusBases contextfabric.CommitBasisSet
 				var censusDigests contextfabric.CommitDecisionDigestSet
-				resolution, censusBases, censusDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey, false, false, nil, anchorReservedSlot{}, kindRescue)
+				// CHAOS-5516: increments the running counter -- this
+				// resolution's next finalization, reached only when the
+				// evidence-census re-decision actually fires (independent of
+				// whether the scoped re-decision above did).
+				pass++
+				resolution, censusBases, censusDigests = resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject, observationParentKey, observationBlocked, request.Options.MaxSubjectCandidates, request.Options.AllowClarification, searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold, retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK, unscopedVisibility, gate, identity, identityTerms, aliasIdentityComplete, deps.ResolutionTracer, request.RequestID, attestedKey, false, false, nil, anchorReservedSlot{}, kindRescue, pass)
 				commitBases.ResetTo(censusBases)
 				commitDigests.ResetTo(censusDigests)
 				resolution.RetrievalDegraded = retrievalDegraded || coverageFloorDegraded

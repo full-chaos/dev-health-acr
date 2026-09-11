@@ -1,12 +1,15 @@
 package certify
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 )
 
 // This file is the ONE generated pass chris's ruling requires (2026-09-10
@@ -86,6 +89,8 @@ func canonicalValueFor(f eventspec.Field) any {
 		return "sweep_canonical_string"
 	case eventspec.FieldInt:
 		return 7
+	case eventspec.FieldBool:
+		return true
 	case eventspec.FieldStringSlice:
 		return []string{"sweep_elem"}
 	case eventspec.FieldObjectSlice:
@@ -112,19 +117,23 @@ func zeroValueFor(f eventspec.Field) (val any, applicable bool) {
 		return "", true
 	case eventspec.FieldInt:
 		return 0, true
+	case eventspec.FieldBool:
+		return false, true
 	default:
 		return nil, false // containers use empty_container instead
 	}
 }
 
-// wrongScalarTypeValueFor returns the OTHER JSON scalar shape for a scalar
-// field -- applicable only to FieldString/FieldInt.
+// wrongScalarTypeValueFor returns a JSON scalar shape that is NOT the
+// declared one -- applicable to every scalar type (string/int/bool).
 func wrongScalarTypeValueFor(f eventspec.Field) (val any, applicable bool) {
 	switch f.Type {
 	case eventspec.FieldInt:
 		return "not-an-int", true
 	case eventspec.FieldString:
 		return 12345, true
+	case eventspec.FieldBool:
+		return "not-a-bool", true
 	default:
 		return nil, false
 	}
@@ -207,6 +216,22 @@ func logFromLine(t *testing.T, line map[string]any) *Log {
 	return log
 }
 
+// wantFor builds the Want/attribution map Certify now requires: every
+// declared Attribution field, PLUS "pass" (read off base) whenever ev
+// declares a pass field -- r3's own new rule (Certify refuses a pass-keyed
+// event's Want that omits "pass": the caller must state which attempt it
+// certifies, same as an Attribution field).
+func attributionWant(ev eventspec.Event, base map[string]any) map[string]any {
+	w := map[string]any{}
+	for _, k := range ev.Attribution {
+		w[k] = base[k]
+	}
+	if eventHasPassField(ev.Fields) {
+		w["pass"] = base["pass"]
+	}
+	return w
+}
+
 func countDeclaredFields(fields []eventspec.Field) int {
 	n := 0
 	for _, f := range fields {
@@ -260,7 +285,12 @@ func runCell(t *testing.T, ev eventspec.Event, base map[string]any, attribution 
 	// this spec) -- otherwise mutating e.g. request_id's own value breaks
 	// Certify's scope-match against the UNCHANGED attribution map and every
 	// such cell reads as "0 lines found" (a scoping confound) rather than
-	// the field-value outcome the dimension is actually testing.
+	// the field-value outcome the dimension is actually testing. "pass" gets
+	// the SAME treatment as of r3: Certify now requires Want["pass"] for a
+	// pass-keyed event, so a cell that mutates pass's own value must mirror
+	// it into Want too, or every non-canonical "pass" cell reads as a value
+	// mismatch against the stale canonical Want["pass"] rather than the
+	// outcome the dimension is actually testing.
 	wantFor := func(v any) map[string]any {
 		w := make(map[string]any, len(attribution))
 		for k, vv := range attribution {
@@ -271,6 +301,9 @@ func runCell(t *testing.T, ev eventspec.Event, base map[string]any, attribution 
 				if ak == f.Key {
 					w[ak] = v
 				}
+			}
+			if f.Key == "pass" {
+				w["pass"] = v
 			}
 		}
 		return w
@@ -359,10 +392,7 @@ func TestCertifyInputDomainTable(t *testing.T) {
 	for _, ev := range eventspec.All {
 		ev := ev
 		base := canonicalLineFor(ev)
-		attribution := map[string]any{}
-		for _, k := range ev.Attribution {
-			attribution[k] = base[k]
-		}
+		attribution := attributionWant(ev, base)
 
 		// Control: the sweep's own canonical line must certify clean before
 		// any cell is asserted against it -- a failure here is a fixture
@@ -395,10 +425,7 @@ func TestCertifyInputDomainTable(t *testing.T) {
 	// has to trust from a different file).
 	for _, ev := range eventspec.All {
 		base := canonicalLineFor(ev)
-		attribution := map[string]any{}
-		for _, k := range ev.Attribution {
-			attribution[k] = base[k]
-		}
+		attribution := attributionWant(ev, base)
 		line1 := deepCopyLine(t, base)
 		line2 := deepCopyLine(t, base)
 		b1, _ := json.Marshal(line1)
@@ -409,6 +436,199 @@ func TestCertifyInputDomainTable(t *testing.T) {
 		}
 		_, err = certifyRecovered(t, log, Assertion{Event: ev, Want: attribution})
 		rows = append(rows, domainRow{event: ev.ID, field: "(event-level)", dimension: "duplicate", applicable: true, wantAccept: false, gotAccept: err == nil})
+	}
+
+	// r3: the multiplicity domain -- every event, generated from
+	// eventspec.All rather than hand-picked (round r2's own class was
+	// caught this way, before any review round: adding an event to All
+	// automatically swept it here). Categorised by eventHasPassField, NOT
+	// by which Multiplicity constant is declared -- round r3's finding 1
+	// (zero_or_one_per_pass never got the pass-keyed treatment) is exactly
+	// what a Multiplicity-keyed filter would have kept missing; a
+	// pass-bearing filter covers BOTH exactly_one_per_pass
+	// (RankedCutSummary) and zero_or_one_per_pass (AnchorSlotDisplaced)
+	// uniformly, matching what Certify itself now does.
+	passMultiplicityRows := 0
+	for _, ev := range eventspec.All {
+		hasPassField := eventHasPassField(ev.Fields)
+		base := canonicalLineFor(ev)
+		attribution := attributionWant(ev, base)
+
+		// distinctContentLine deep-copies base and perturbs the first
+		// declared int field that is neither an attribution field nor
+		// "pass" itself -- every event in this spec has at least one such
+		// field today (RankedCutSummary: candidate_count;
+		// AnchorSlotDisplaced: anchor_slot_displaced;
+		// DecisionSummary: decision_event_count), so this never silently
+		// no-ops into an identical-content line.
+		distinctContentLine := func(perturbValue int) map[string]any {
+			m := deepCopyLine(t, base)
+			perturbed := false
+			for _, f := range ev.Fields {
+				if f.Key == "pass" || f.Type != eventspec.FieldInt {
+					continue
+				}
+				isAttr := false
+				for _, ak := range ev.Attribution {
+					if ak == f.Key {
+						isAttr = true
+					}
+				}
+				if isAttr {
+					continue
+				}
+				m[f.Key] = perturbValue
+				perturbed = true
+				break
+			}
+			if !perturbed {
+				t.Fatalf("distinctContentLine: %s declares no non-attribution, non-pass int field to perturb -- fixture needs a new strategy", ev.ID)
+			}
+			return m
+		}
+		// malformedLine corrupts the SAME field distinctContentLine would
+		// perturb, but with a wrong SCALAR TYPE (a string in place of a
+		// declared int) -- a validateFields-catchable defect, for the
+		// "malformed earlier line" cells (round r3 finding 2).
+		malformedLine := func(pass any) map[string]any {
+			m := deepCopyLine(t, base)
+			if pass != nil {
+				m["pass"] = pass
+			}
+			for _, f := range ev.Fields {
+				if f.Key == "pass" || f.Type != eventspec.FieldInt {
+					continue
+				}
+				isAttr := false
+				for _, ak := range ev.Attribution {
+					if ak == f.Key {
+						isAttr = true
+					}
+				}
+				if isAttr {
+					continue
+				}
+				m[f.Key] = "malformed-not-an-int"
+				return m
+			}
+			t.Fatalf("malformedLine: %s declares no non-attribution, non-pass int field to corrupt -- fixture needs a new strategy", ev.ID)
+			return nil
+		}
+		marshalJoin := func(lines ...map[string]any) *Log {
+			parts := make([]string, len(lines))
+			for i, l := range lines {
+				b, err := json.Marshal(l)
+				if err != nil {
+					t.Fatalf("json.Marshal() error = %v", err)
+				}
+				parts[i] = string(b)
+			}
+			log, err := Parse([]byte(strings.Join(parts, "\n")))
+			if err != nil {
+				t.Fatalf("Parse() fixture for %s error = %v", ev.ID, err)
+			}
+			return log
+		}
+		record := func(dim string, wantAccept bool, log *Log, want map[string]any) {
+			_, err := certifyRecovered(t, log, Assertion{Event: ev, Want: want})
+			rows = append(rows, domainRow{event: ev.ID, field: "(multiplicity)", dimension: dim, applicable: true, wantAccept: wantAccept, gotAccept: err == nil})
+			passMultiplicityRows++
+		}
+
+		// 0 lines: refused for every event (Certify asserts PRESENCE;
+		// CertifyAbsent, unchanged, is the absence assertion).
+		record("zero_lines", false, &Log{}, attribution)
+
+		if hasPassField {
+			base1 := deepCopyLine(t, base)
+
+			// same pass, distinct content: refused (a same-pass duplicate is
+			// a defect regardless of whether the lines' other fields agree
+			// -- the whole point of keying on pass rather than
+			// byte-identity). Covers BOTH pass-bearing multiplicities
+			// (round r3 finding 1: zero_or_one_per_pass used to refuse
+			// unconditionally here, never keying on pass at all).
+			samePass := distinctContentLine(999)
+			record("same_pass_distinct_content", false, marshalJoin(base1, samePass), attribution)
+
+			// distinct pass, distinct content: accepted (a genuine second
+			// pass is legitimate regardless of whether its own field
+			// values happen to differ from the first) -- for EITHER
+			// pass-bearing multiplicity.
+			distinctPass := distinctContentLine(999)
+			distinctPass["pass"] = 8 // base's own canonical pass value is 7 (canonicalValueFor)
+			wantLastPass := map[string]any{}
+			for k, v := range attribution {
+				wantLastPass[k] = v
+			}
+			wantLastPass["pass"] = 8
+			record("distinct_pass_distinct_content", true, marshalJoin(base1, distinctPass), wantLastPass)
+
+			// malformed EARLIER line, distinct (valid) later pass: refused
+			// (round r3 finding 2 -- every line in scope is now
+			// field-validated, not only the one ultimately selected).
+			malformedEarlier := malformedLine(6.0)
+			validLater := deepCopyLine(t, base)
+			validLater["pass"] = 9
+			wantLaterPass := map[string]any{}
+			for k, v := range attribution {
+				wantLaterPass[k] = v
+			}
+			wantLaterPass["pass"] = 9
+			record("malformed_earlier_line", false, marshalJoin(malformedEarlier, validLater), wantLaterPass)
+		} else {
+			// no pass field declared: ANY second line in scope is refused,
+			// even with distinct content -- there is no legitimate
+			// multi-line shape for this event to distinguish from a
+			// duplicate (MultiplicityExactlyOnePerRequest).
+			base1 := deepCopyLine(t, base)
+			second := distinctContentLine(999)
+			record("no_pass_field_multi_line_distinct_content", false, marshalJoin(base1, second), attribution)
+
+			// malformed earlier line, pass-less event: refused (round r3
+			// finding 2, the pass-less side of the same fix).
+			malformedEarlier := malformedLine(nil)
+			validLater := deepCopyLine(t, base)
+			record("malformed_earlier_line_no_pass", false, marshalJoin(malformedEarlier, validLater), attribution)
+		}
+	}
+
+	// CHAOS-5516 (team-lead, after the B8 pair caught the class in
+	// internal/runtime/hosted's own fixtures): the construction-refusal
+	// guard tracer.go's "decision_summary" case added
+	// (decisionSummaryFieldsUnconstructed) gets its own cell in this same
+	// generated pass, driven through the REAL production entry point
+	// (graphrank.SlogResolutionTracer.Trace, not a certify-level fixture) --
+	// a caller that hand-assembles the event using only the OLD individual
+	// fields (DecisionSummaryFields left at its Go zero value) must produce
+	// NO certifiable decision_summary line at all (the Error-level refusal
+	// line carries a different msg, so certify's own msg-scoped lookup finds
+	// zero matching lines -- refused, exactly like every other cell in this
+	// table that expects a refusal). Scoped to DecisionSummary alone: grep
+	// of tracer.go's switch shows anchor_pool/offer_pool read their old
+	// fields directly (no typed shadow to leave zero), and
+	// ranked_cut/anchor_slot_displaced don't read their generated Fields
+	// structs at all (unmigrated, brief-pr2.md OUT OF SCOPE) -- the sibling
+	// set swept is empty.
+	{
+		var buf bytes.Buffer
+		tracer := graphrank.NewSlogResolutionTracer(
+			slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+		tracer.Trace(graphrank.ResolutionTraceEvent{
+			RequestID: "sweep_unconstructed_decision_summary", Stage: "decision_summary",
+			DecisionEventCount: 2, DecisionCommittedCount: 1,
+			DecisionCommittedIDs: []string{"team.v2:github:sweep"},
+			DecisionFrameGate:    "passed", DecisionRefuseBasis: "none",
+			// DecisionSummaryFields: intentionally the Go zero value.
+		})
+		refusedRow := domainRow{event: eventspec.DecisionSummary.ID, field: "(construction)", dimension: "unconstructed_typed_fields", applicable: true, wantAccept: false}
+		if log, err := Parse(buf.Bytes()); err != nil {
+			t.Fatalf("Parse() on the real emitted refusal output error = %v", err)
+		} else {
+			_, certErr := certifyRecovered(t, log, Assertion{Event: eventspec.DecisionSummary, Want: map[string]any{"request_id": "sweep_unconstructed_decision_summary"}})
+			refusedRow.gotAccept = certErr == nil
+		}
+		rows = append(rows, refusedRow)
 	}
 
 	failed := 0
@@ -426,16 +646,20 @@ func TestCertifyInputDomainTable(t *testing.T) {
 			naN++
 		}
 	}
-	t.Logf("input-domain table: %d rows (%d applicable, %d N/A), %d failed, %d events, %d fields (recursive)",
-		len(rows), applicableN, naN, failed, len(eventspec.All), totalFieldCount)
+	t.Logf("input-domain table: %d rows (%d applicable, %d N/A), %d failed, %d events, %d fields (recursive), %d pass-multiplicity rows",
+		len(rows), applicableN, naN, failed, len(eventspec.All), totalFieldCount, passMultiplicityRows)
 
 	// Census: the table's own row count must equal fields*dimensions plus
-	// one duplicate row per event -- proving the walk reached every
-	// declared field and every dimension, not a silently-truncated subset.
-	wantRows := totalFieldCount*len(domainDimensions) + len(eventspec.All)
+	// one duplicate row per event plus the pass-multiplicity rows above plus
+	// the one construction-refusal row -- proving the walk reached every
+	// declared field, every dimension, every ExactlyOnePerPass event's own
+	// pass-keying guard, and the typed-construction refusal guard, not a
+	// silently-truncated subset.
+	const constructionRefusalRows = 1
+	wantRows := totalFieldCount*len(domainDimensions) + len(eventspec.All) + passMultiplicityRows + constructionRefusalRows
 	if len(rows) != wantRows {
-		t.Errorf("census: table has %d rows, want %d (%d fields x %d dimensions + %d duplicate rows)",
-			len(rows), wantRows, totalFieldCount, len(domainDimensions), len(eventspec.All))
+		t.Errorf("census: table has %d rows, want %d (%d fields x %d dimensions + %d duplicate rows + %d pass-multiplicity rows + %d construction-refusal rows)",
+			len(rows), wantRows, totalFieldCount, len(domainDimensions), len(eventspec.All), passMultiplicityRows, constructionRefusalRows)
 	}
 }
 
@@ -481,10 +705,10 @@ func TestCertifyCallSurfaceDomainTable(t *testing.T) {
 	fullWant := wantForRankedCutSummary()
 
 	certifyCell("nil_log", false, nil, ev, fullWant)
-	absentCell("nil_log", false, nil, absentEv, map[string]any{"request_id": "req_1"})
+	absentCell("nil_log", false, nil, absentEv, map[string]any{"request_id": "req_1", "pass": 1})
 
 	certifyCell("empty_log", false, emptyLog, ev, fullWant) // zero lines for an exactly_one_per_pass event: refused (not "0 lines" == absent for this multiplicity)
-	absentCell("empty_log", true, emptyLog, absentEv, map[string]any{"request_id": "req_1"})
+	absentCell("empty_log", true, emptyLog, absentEv, map[string]any{"request_id": "req_1", "pass": 1})
 
 	certifyCell("event_not_canonical", false, goodLog, mismatchedEvent, map[string]any{})
 	absentCell("event_not_canonical", false, emptyLog, mismatchedEvent, map[string]any{})

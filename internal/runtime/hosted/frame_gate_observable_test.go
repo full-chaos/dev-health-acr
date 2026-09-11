@@ -22,11 +22,19 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 )
 
 // emitFrameGateDecisionSummary drives one decision_summary event through the
 // deployed sink at the production log level and returns the decoded line.
+//
+// CHAOS-5516: decision_summary's emission now reads ONLY
+// event.DecisionSummaryFields -- every caller below builds its fixture
+// through eventspec.NewDecisionSummaryFields, the same generated typed
+// constructor every real caller (decisionSummaryBuffer.flush()) now goes
+// through, never the OLD individual Decision*/OfferPool* fields this stage
+// stopped reading.
 func emitFrameGateDecisionSummary(t *testing.T, event graphrank.ResolutionTraceEvent) map[string]any {
 	t.Helper()
 	var buf bytes.Buffer
@@ -54,13 +62,13 @@ func emitFrameGateDecisionSummary(t *testing.T, event graphrank.ResolutionTraceE
 func TestTheDeployedDecisionSummaryCarriesAPassingFrameGate(t *testing.T) {
 	rec := emitFrameGateDecisionSummary(t, graphrank.ResolutionTraceEvent{
 		RequestID: "request_frame_gate_passed", Stage: "decision_summary",
-		DecisionEventCount: 1, DecisionCommittedCount: 1,
-		DecisionCommittedIDs: []string{"team.v2:github:platform"},
-		DecisionCommitGates:  []string{"exact_index"},
-		DecisionCommitBases:  []string{"statistical"},
-		DecisionFrameGate:    "passed", DecisionRefuseBasis: "none",
-		OfferPoolVectorOnlyExcluded: 0, OfferPoolVectorOnlyDemoted: 0,
-		OfferPoolEmptiedByExclusion: false,
+		DecisionSummaryFields: eventspec.NewDecisionSummaryFields(
+			"request_frame_gate_passed", 1, 1, 0, 0,
+			[]string{"team.v2:github:platform"}, []string{"exact_index"}, []string{"statistical"},
+			false, "passed", "none",
+			0, 0, false, 0, "none", "none", []string{}, 0,
+			"none", "none", "none", []string{}, []string{},
+		),
 	})
 	// FALSE is emitted, not omitted. This key separates two empties that are
 	// identical on every other key of the line, so a build that printed it
@@ -93,10 +101,13 @@ func TestTheDeployedDecisionSummaryCarriesAPassingFrameGate(t *testing.T) {
 func TestTheDeployedDecisionSummaryCarriesARefusingFrameGate(t *testing.T) {
 	rec := emitFrameGateDecisionSummary(t, graphrank.ResolutionTraceEvent{
 		RequestID: "request_frame_gate_refused", Stage: "decision_summary",
-		DecisionCommittedIDs: []string{}, DecisionCommitGates: []string{}, DecisionCommitBases: []string{},
-		DecisionFrameGate:           "refused:member_kind_unservable",
-		DecisionRefuseBasis:         "member_kind_unservable",
-		OfferPoolVectorOnlyExcluded: 3, OfferPoolVectorOnlyDemoted: 1,
+		DecisionSummaryFields: eventspec.NewDecisionSummaryFields(
+			"request_frame_gate_refused", 0, 0, 0, 0,
+			[]string{}, []string{}, []string{},
+			false, "refused:member_kind_unservable", "member_kind_unservable",
+			3, 1, false, 0, "none", "none", []string{}, 0,
+			"none", "none", "none", []string{}, []string{},
+		),
 	})
 	if got, _ := rec["frame_gate"].(string); got != "refused:member_kind_unservable" {
 		t.Errorf("frame_gate = %q, want the refusing verdict WITH its basis -- the outcome alone does not say what refused it", got)
@@ -119,10 +130,13 @@ func TestTheDeployedDecisionSummaryCarriesARefusingFrameGate(t *testing.T) {
 func TestTheDeployedDecisionSummarySaysWhenThePoolWasEmptiedByTheExclusion(t *testing.T) {
 	rec := emitFrameGateDecisionSummary(t, graphrank.ResolutionTraceEvent{
 		RequestID: "request_offer_pool_emptied", Stage: "decision_summary",
-		DecisionEventCount: 1, DecisionAmbiguousCount: 1,
-		DecisionCommittedIDs: []string{}, DecisionCommitGates: []string{}, DecisionCommitBases: []string{},
-		DecisionFrameGate: "passed", DecisionRefuseBasis: "none",
-		OfferPoolVectorOnlyExcluded: 3, OfferPoolEmptiedByExclusion: true,
+		DecisionSummaryFields: eventspec.NewDecisionSummaryFields(
+			"request_offer_pool_emptied", 1, 0, 1, 0,
+			[]string{}, []string{}, []string{},
+			false, "passed", "none",
+			3, 0, true, 0, "none", "none", []string{}, 0,
+			"none", "none", "none", []string{}, []string{},
+		),
 	})
 	if got, ok := rec["offer_pool_emptied_by_exclusion"].(bool); !ok || !got {
 		t.Fatalf("offer_pool_emptied_by_exclusion = %v (present=%t), want true -- without it a withheld pool and an empty graph print the same line", got, ok)
@@ -195,14 +209,13 @@ func TestTheDeployedOfferPoolSummaryReachesTheProductionLogLevel(t *testing.T) {
 func TestTheDeployedDecisionSummaryNamesTheAnchorPoolKindScope(t *testing.T) {
 	rec := emitFrameGateDecisionSummary(t, graphrank.ResolutionTraceEvent{
 		RequestID: "request_anchor_scope", Stage: "decision_summary",
-		DecisionEventCount: 1, DecisionCommittedCount: 1,
-		DecisionCommittedIDs: []string{"team.v2:github:chaos"},
-		DecisionCommitGates:  []string{"exact_index"},
-		DecisionCommitBases:  []string{"statistical"},
-		DecisionFrameGate:    "passed", DecisionRefuseBasis: "none",
-		DecisionAnchorPoolKindScope:       "team",
-		DecisionAnchorPoolKindScopeSource: "receipt",
-		DecisionMemberKindConfirmed:       "project",
+		DecisionSummaryFields: eventspec.NewDecisionSummaryFields(
+			"request_anchor_scope", 1, 1, 0, 0,
+			[]string{"team.v2:github:chaos"}, []string{"exact_index"}, []string{"statistical"},
+			false, "passed", "none",
+			0, 0, false, 0, "none", "none", []string{}, 0,
+			"team", "receipt", "project", []string{}, []string{},
+		),
 	})
 	for key, want := range map[string]string{
 		"anchor_pool_kind_scope":        "team",
@@ -234,11 +247,13 @@ func TestTheDeployedDecisionSummaryNamesTheAnchorPoolKindScope(t *testing.T) {
 func TestTheDeployedDecisionSummaryCarriesExplicitNoneForTheAnchorScope(t *testing.T) {
 	rec := emitFrameGateDecisionSummary(t, graphrank.ResolutionTraceEvent{
 		RequestID: "request_no_anchor_scope", Stage: "decision_summary",
-		DecisionCommittedIDs: []string{}, DecisionCommitGates: []string{}, DecisionCommitBases: []string{},
-		DecisionFrameGate: "passed", DecisionRefuseBasis: "none",
-		DecisionAnchorPoolKindScope:       "none",
-		DecisionAnchorPoolKindScopeSource: "none",
-		DecisionMemberKindConfirmed:       "none",
+		DecisionSummaryFields: eventspec.NewDecisionSummaryFields(
+			"request_no_anchor_scope", 0, 0, 0, 0,
+			[]string{}, []string{}, []string{},
+			false, "passed", "none",
+			0, 0, false, 0, "none", "none", []string{}, 0,
+			"none", "none", "none", []string{}, []string{},
+		),
 	})
 	for _, key := range []string{"anchor_pool_kind_scope", "anchor_pool_kind_scope_source", "member_kind_confirmed"} {
 		if got, _ := rec[key].(string); got != "none" {

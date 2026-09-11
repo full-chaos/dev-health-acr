@@ -264,7 +264,7 @@ func TestTheRefusedCountIsDistinctSubjectsAcrossTheCall(t *testing.T) {
 	if len(capture.summaries) != 1 {
 		t.Fatalf("captured %d decision_summary events, want 1", len(capture.summaries))
 	}
-	if got := capture.summaries[0].OfferPoolAnchorKindWithheld; got != len(distinct) {
+	if got := capture.summaries[0].DecisionSummaryFields.OfferPoolAnchorKindWithheld; got != len(distinct) {
 		t.Fatalf("the FOLDED decision line reports %d withheld, want %d", got, len(distinct))
 	}
 }
