@@ -35,6 +35,36 @@
     ]
   },
   {
+    "id": "graphrank.anchor_offer",
+    "msg": "context fabric resolution trace: anchor offer",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "exactly one line per resolveSubjects call -- anchorOfferMaterial's own single call site.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "anchor_offer"
+        ]
+      },
+      {
+        "key": "labels_normalized_count",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "graphrank.anchor_pool",
     "msg": "context fabric resolution trace: anchor pool kind scope",
     "level": "info",

@@ -843,6 +843,24 @@ var ExactNameSearch = Event{
 	},
 }
 
+// AnchorOffer is the Info line (graphrank/tracer.go, case "anchor_offer",
+// CHAOS-4210) reporting the anchor-axis label-normalization count -- fires
+// unconditionally, once per resolveSubjects call (anchorOfferMaterial is
+// called and traced independently of kind/candidate/handle's shared site).
+var AnchorOffer = Event{
+	ID:                 "graphrank.anchor_offer",
+	Msg:                "context fabric resolution trace: anchor offer",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityExactlyOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "exactly one line per resolveSubjects call -- anchorOfferMaterial's own single call site.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"anchor_offer"}},
+		{Key: "labels_normalized_count", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
 // All is every event this specification declares. Generate() and the
 // certification runner both range over exactly this slice -- neither
 // maintains a second list.
@@ -850,5 +868,5 @@ var All = []Event{
 	RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld,
 	Corroboration, CorroborationSummary, ReservedKindAdmitted, OfferPool, OfferPoolSummary,
 	Decision, SearchQuestion, AliasLookup, AnchorPool, KindCoverageFloor, ConfirmedKindRescue,
-	IdentityUniverse, KindHintSearch, ExactNameSearch,
+	IdentityUniverse, KindHintSearch, ExactNameSearch, AnchorOffer,
 }

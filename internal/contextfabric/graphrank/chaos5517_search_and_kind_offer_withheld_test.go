@@ -522,6 +522,12 @@ func TestAnchorPoolAndKindCoverageFloorCertifyOnAnOrdinaryResolution(t *testing.
 	}); err != nil {
 		t.Fatalf("Certify(KindCoverageFloor) error = %v", err)
 	}
+	if _, err := certify.Certify(log, certify.Assertion{
+		Event: eventspec.AnchorOffer,
+		Want:  map[string]any{"request_id": req.RequestID, "labels_normalized_count": 0},
+	}); err != nil {
+		t.Fatalf("Certify(AnchorOffer) error = %v", err)
+	}
 }
 
 // TestSearchQuestionCertifiesFiringAndAbsent proves eventspec.SearchQuestion
