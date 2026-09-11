@@ -299,14 +299,14 @@ func domainRetention(d *domainTable) {
 		Members: []CohortMember{{Subject: member, Rank: 1, InclusionReasons: []string{"m"}}}}
 
 	run := func(cohort *Cohort, removed []CohortMember, in []CanonicalFact) string {
-		out, decision := RetainFactsForCohortWithDecision(in, cohort, removed)
+		out, decision := RetainFactsForCohortWithDecision(in, cohort, removed, nil)
 		return fmt.Sprintf("kept=%d dropped_members=%d dropped_groups=%d", len(out), decision.DroppedMembers, decision.DroppedGroups)
 	}
 
 	d.want(guard, "removed", "empty container", run(grouped, nil, facts), "kept=2 dropped_members=0 dropped_groups=0")
 	d.want(guard, "facts", "empty container", run(grouped, gone, nil), "kept=0 dropped_members=0 dropped_groups=0")
 	rule := func(cohort *Cohort) string {
-		_, decision := RetainFactsForCohortWithDecision(facts, cohort, gone)
+		_, decision := RetainFactsForCohortWithDecision(facts, cohort, gone, nil)
 		return fmt.Sprintf("group_rule_applied=%v", decision.GroupRuleApplied)
 	}
 	d.want(guard, "cohort", "null (nil pointer)", run(nil, gone, facts), "kept=2 dropped_members=0 dropped_groups=0")
@@ -327,6 +327,56 @@ func domainRetention(d *domainTable) {
 		"kept=1 dropped_members=0 dropped_groups=1")
 	d.want(guard, "removed[].Subject", "duplicate removals",
 		run(grouped, append(append([]CohortMember{}, gone...), gone...), facts), "kept=2 dropped_members=0 dropped_groups=0")
+
+	// anchors: the committed resolution subjects, admitted on both paths.
+	anchor := SubjectRef{Kind: SubjectRepository, CanonicalID: "repo_anchor", Label: "anchor"}
+	anchorFacts := append(append([]CanonicalFact{}, facts...),
+		CanonicalFact{Kind: FactMetrics, Subject: anchor, Fields: map[string]FactValue{}, SourceState: SourceAvailable, Source: "ops", SourceVersion: "v1"})
+	goneFact := CanonicalFact{Kind: FactMetrics, Subject: gone[0].Subject, Fields: map[string]FactValue{}, SourceState: SourceAvailable, Source: "ops", SourceVersion: "v1"}
+	runAnchors := func(cohort *Cohort, removed []CohortMember, in []CanonicalFact, anchors []SubjectRef) string {
+		out, decision := RetainFactsForCohortWithDecision(in, cohort, removed, anchors)
+		return fmt.Sprintf("kept=%d anchors=%d anchor_facts_retained=%d anchor_facts_dropped=%d dropped_anchors=%s dropped_groups=%d",
+			len(out), len(decision.Anchors), decision.AnchorFactsRetained, decision.AnchorFactsDropped,
+			strings.Join(retentionSubjectLogIDs(decision.DroppedAnchors), ","), decision.DroppedGroups)
+	}
+	d.want(guard, "anchors", "absent (nil) - grouped", runAnchors(grouped, gone, anchorFacts, nil),
+		"kept=2 anchors=0 anchor_facts_retained=0 anchor_facts_dropped=0 dropped_anchors= dropped_groups=1")
+	d.want(guard, "anchors", "empty container - grouped", runAnchors(grouped, gone, anchorFacts, []SubjectRef{}),
+		"kept=2 anchors=0 anchor_facts_retained=0 anchor_facts_dropped=0 dropped_anchors= dropped_groups=1")
+	d.want(guard, "anchors", "canonical - grouped", runAnchors(grouped, gone, anchorFacts, []SubjectRef{anchor}),
+		"kept=3 anchors=1 anchor_facts_retained=1 anchor_facts_dropped=0 dropped_anchors= dropped_groups=0")
+	d.want(guard, "anchors", "canonical - flat", runAnchors(flat, gone, anchorFacts, []SubjectRef{anchor}),
+		"kept=3 anchors=1 anchor_facts_retained=1 anchor_facts_dropped=0 dropped_anchors= dropped_groups=0")
+	d.want(guard, "anchors", "canonical - nil cohort", runAnchors(nil, gone, anchorFacts, []SubjectRef{anchor}),
+		"kept=3 anchors=1 anchor_facts_retained=1 anchor_facts_dropped=0 dropped_anchors= dropped_groups=0")
+	d.want(guard, "anchors", "duplicate - grouped", runAnchors(grouped, gone, anchorFacts, []SubjectRef{anchor, anchor}),
+		"kept=3 anchors=1 anchor_facts_retained=1 anchor_facts_dropped=0 dropped_anchors= dropped_groups=0")
+	d.want(guard, "anchors", "canonical, nothing removed (early return) - grouped", runAnchors(grouped, nil, anchorFacts, []SubjectRef{anchor}),
+		"kept=3 anchors=1 anchor_facts_retained=1 anchor_facts_dropped=0 dropped_anchors= dropped_groups=0")
+	d.want(guard, "anchors", "canonical, facts empty (early return) - grouped", runAnchors(grouped, gone, nil, []SubjectRef{anchor}),
+		"kept=0 anchors=1 anchor_facts_retained=0 anchor_facts_dropped=0 dropped_anchors= dropped_groups=0")
+	d.want(guard, "anchors", "anchor is a surviving member - grouped", runAnchors(grouped, gone, anchorFacts, []SubjectRef{member}),
+		"kept=2 anchors=1 anchor_facts_retained=1 anchor_facts_dropped=0 dropped_anchors= dropped_groups=1")
+	d.want(guard, "anchors", "anchor is a group identity - grouped", runAnchors(grouped, gone, anchorFacts, []SubjectRef{grouped.Groups[0].Subject}),
+		"kept=2 anchors=1 anchor_facts_retained=1 anchor_facts_dropped=0 dropped_anchors= dropped_groups=1")
+	// A removed member that is also an anchor: the member rule wins, and the
+	// drop is NAMED once however many facts the anchor had.
+	twoGoneFacts := append(append([]CanonicalFact{}, anchorFacts...), goneFact, goneFact)
+	d.want(guard, "anchors", "anchor is a removed member, two facts - grouped", runAnchors(grouped, gone, twoGoneFacts, []SubjectRef{anchor, gone[0].Subject}),
+		"kept=3 anchors=2 anchor_facts_retained=1 anchor_facts_dropped=2 dropped_anchors=project/project_b dropped_groups=0")
+	d.want(guard, "anchors", "anchor is a removed member, two facts - flat", runAnchors(flat, gone, twoGoneFacts, []SubjectRef{anchor, gone[0].Subject}),
+		"kept=3 anchors=2 anchor_facts_retained=1 anchor_facts_dropped=2 dropped_anchors=project/project_b dropped_groups=0")
+	d.want(guard, "anchors", "anchor with no facts in the bundle - grouped", runAnchors(grouped, gone, facts, []SubjectRef{anchor}),
+		"kept=2 anchors=1 anchor_facts_retained=0 anchor_facts_dropped=0 dropped_anchors= dropped_groups=0")
+	d.want(guard, "anchors[].Kind", "same canonical id, different kind (not the anchor) - grouped",
+		runAnchors(grouped, gone, anchorFacts, []SubjectRef{{Kind: SubjectDocument, CanonicalID: "repo_anchor", Label: "anchor"}}),
+		"kept=2 anchors=1 anchor_facts_retained=0 anchor_facts_dropped=0 dropped_anchors= dropped_groups=1")
+	d.want(guard, "anchors[].CanonicalID", "case-shadowed id (identifiers are case-sensitive) - grouped",
+		runAnchors(grouped, gone, anchorFacts, []SubjectRef{{Kind: SubjectRepository, CanonicalID: "REPO_ANCHOR", Label: "anchor"}}),
+		"kept=2 anchors=1 anchor_facts_retained=0 anchor_facts_dropped=0 dropped_anchors= dropped_groups=1")
+	d.want(guard, "anchors[].CanonicalID", "empty (zero) id - grouped",
+		runAnchors(grouped, gone, anchorFacts, []SubjectRef{{Kind: SubjectRepository}}),
+		"kept=2 anchors=1 anchor_facts_retained=0 anchor_facts_dropped=0 dropped_anchors= dropped_groups=1")
 	d.record(guard, "all fields", "wrong container / wrong scalar / fractional / boundary / out of vocabulary", domainExcludedByTypeSystem, "ok")
 }
 

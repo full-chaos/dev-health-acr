@@ -318,7 +318,7 @@ func TestRetainFactsForCohortDropsRemovedMembersFacts(t *testing.T) {
 			Fields: map[string]FactValue{}, SourceState: SourceAvailable, Source: "ops", SourceVersion: "v1"},
 	}
 	removed := []CohortMember{{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_b", Label: "b"}}}
-	retained := RetainFactsForCohort(facts, planFixtureCohort("project_a"), removed)
+	retained := RetainFactsForCohort(facts, planFixtureCohort("project_a"), removed, nil)
 	if len(retained) != 2 {
 		t.Fatalf("retained %d facts, want 2", len(retained))
 	}

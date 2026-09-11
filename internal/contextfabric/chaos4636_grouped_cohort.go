@@ -610,6 +610,25 @@ func NarrowFlatCohort(cohort *Cohort, maxMembers int) (kept []CohortMember, narr
 // Facts whose subject is NOT a cohort member are kept untouched: a cohort
 // answer also carries organization- and subject-level facts that no member
 // owns, and dropping those would remove evidence narrowing never asked about.
+//
+// The COMMITTED RESOLUTION SUBJECTS are that evidence, and they are passed in
+// explicitly as `anchors`. The fact read runs over the committed subjects AND
+// the cohort members (investigationSubjects), so a turn that commits an
+// anchor -- an organization, a repository, a team the question named -- holds
+// facts rooted on it that are neither a member nor a group. The group rule
+// below is an ALLOW-LIST, and an allow-list built from groups and members
+// alone deleted every such fact on every narrowed grouped answer while the
+// served document still declared the anchor committed: synthesis lost the
+// evidence for a subject the answer says it is about. Taking the anchors as
+// a parameter, rather than reading them from somewhere ambient, makes every
+// caller state which subjects the turn committed; a caller that has none
+// passes nil and says so at its own call site.
+//
+// An anchor that is ALSO a removed member still loses its facts: the member
+// rule runs first and wins, because the member was narrowed out of the
+// answer and a claim about it would be ungrounded. That drop is not silent --
+// the decision names every such anchor (DroppedAnchors).
+//
 // FactRetentionDecision is what one retention pass DID, so the call site can
 // report it without recomputing it.
 //
@@ -628,6 +647,19 @@ type FactRetentionDecision struct {
 	// groups the answer still carries. Zero and zero on a flat cohort.
 	DroppedGroups  int
 	RetainedGroups int
+	// Anchors is the distinct committed resolution subjects this pass was
+	// handed (duplicates collapse, first occurrence wins). AnchorFactsRetained
+	// counts retained facts rooted on one of them; AnchorFactsDropped counts
+	// dropped facts rooted on one of them -- possible only when the anchor is
+	// also a removed member, so it is a SUBSET of DroppedMembers, never of
+	// DroppedGroups -- and DroppedAnchors names those anchors, distinct, in
+	// fact order. Together they let the trace alone say which named subject
+	// lost its evidence, instead of a count that could only be traced back to
+	// a subject by re-running the turn.
+	Anchors             []SubjectRef
+	AnchorFactsRetained int
+	AnchorFactsDropped  int
+	DroppedAnchors      []SubjectRef
 	// GroupRuleApplied reports whether the group-axis half of the rule RAN.
 	//
 	// It is false when the cohort is nil or carries no groups, and those are
@@ -648,19 +680,38 @@ type FactRetentionDecision struct {
 
 // RetainFactsForCohort is the decision-free form, for callers that do not
 // report. It is a thin wrapper so there is ONE retention rule, not two.
-func RetainFactsForCohort(facts []CanonicalFact, cohort *Cohort, removed []CohortMember) []CanonicalFact {
-	retained, _ := RetainFactsForCohortWithDecision(facts, cohort, removed)
+func RetainFactsForCohort(facts []CanonicalFact, cohort *Cohort, removed []CohortMember, anchors []SubjectRef) []CanonicalFact {
+	retained, _ := RetainFactsForCohortWithDecision(facts, cohort, removed, anchors)
 	return retained
 }
 
-// RetainFactsForCohortWithDecision retains and reports.
-func RetainFactsForCohortWithDecision(facts []CanonicalFact, cohort *Cohort, removed []CohortMember) ([]CanonicalFact, FactRetentionDecision) {
+// RetainFactsForCohortWithDecision retains and reports. `anchors` is the
+// turn's committed resolution subjects (SubjectResolution.Committed) -- see
+// RetainFactsForCohort for why they are admitted.
+func RetainFactsForCohortWithDecision(facts []CanonicalFact, cohort *Cohort, removed []CohortMember, anchors []SubjectRef) ([]CanonicalFact, FactRetentionDecision) {
 	decision := FactRetentionDecision{FactsBefore: len(facts), FactsAfter: len(facts)}
 	if cohort != nil {
 		decision.RetainedGroups = len(cohort.Groups)
 		decision.GroupRuleApplied = len(cohort.Groups) > 0
 	}
+	anchorKeys := make(map[string]struct{}, len(anchors))
+	for _, anchor := range anchors {
+		key := SubjectMapKey(anchor)
+		if _, seen := anchorKeys[key]; seen {
+			continue
+		}
+		anchorKeys[key] = struct{}{}
+		decision.Anchors = append(decision.Anchors, anchor)
+	}
 	if len(removed) == 0 || len(facts) == 0 {
+		// Nothing is dropped, but the anchor count is still EVALUATED, so a
+		// pass that kept anchor evidence never reads the same as a pass that
+		// had none to keep.
+		for _, fact := range facts {
+			if _, isAnchor := anchorKeys[SubjectMapKey(fact.Subject)]; isAnchor {
+				decision.AnchorFactsRetained++
+			}
+		}
 		return facts, decision
 	}
 	dropped := make(map[string]struct{}, len(removed))
@@ -681,31 +732,50 @@ func RetainFactsForCohortWithDecision(facts []CanonicalFact, cohort *Cohort, rem
 	// trace explains.
 	//
 	// Built only when the cohort HAS groups, and admitting anything that is
-	// still a member OR still a group. Dropping by "subject kind equals the
-	// group kind" alone would be wrong for a cohort whose MEMBERS are of that
-	// kind -- teams grouped by organization -- and would delete the member
-	// evidence of every such answer.
+	// still a member, still a group, OR a committed anchor. Dropping by
+	// "subject kind equals the group kind" alone would be wrong for a cohort
+	// whose MEMBERS are of that kind -- teams grouped by organization -- and
+	// would delete the member evidence of every such answer. Admitting only
+	// members and groups was wrong the same way for the anchors: every
+	// committed subject of every kind lost its facts on a narrowed grouped
+	// answer, while the flat path kept them.
 	var admitted map[string]struct{}
 	if cohort != nil && len(cohort.Groups) > 0 {
-		admitted = make(map[string]struct{}, len(cohort.Groups)+len(cohort.Members))
+		admitted = make(map[string]struct{}, len(cohort.Groups)+len(cohort.Members)+len(anchorKeys))
 		for _, group := range cohort.Groups {
 			admitted[SubjectMapKey(group.Subject)] = struct{}{}
 		}
 		for _, member := range cohort.Members {
 			admitted[SubjectMapKey(member.Subject)] = struct{}{}
 		}
+		for key := range anchorKeys {
+			admitted[key] = struct{}{}
+		}
 	}
+	droppedAnchors := make(map[string]struct{})
 	retained := make([]CanonicalFact, 0, len(facts))
 	for _, fact := range facts {
-		if _, gone := dropped[SubjectMapKey(fact.Subject)]; gone {
+		key := SubjectMapKey(fact.Subject)
+		_, isAnchor := anchorKeys[key]
+		if _, gone := dropped[key]; gone {
 			decision.DroppedMembers++
+			if isAnchor {
+				decision.AnchorFactsDropped++
+				if _, named := droppedAnchors[key]; !named {
+					droppedAnchors[key] = struct{}{}
+					decision.DroppedAnchors = append(decision.DroppedAnchors, fact.Subject)
+				}
+			}
 			continue
 		}
 		if admitted != nil {
-			if _, stillThere := admitted[SubjectMapKey(fact.Subject)]; !stillThere {
+			if _, stillThere := admitted[key]; !stillThere {
 				decision.DroppedGroups++
 				continue
 			}
+		}
+		if isAnchor {
+			decision.AnchorFactsRetained++
 		}
 		retained = append(retained, fact)
 	}

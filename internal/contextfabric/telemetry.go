@@ -1881,6 +1881,14 @@ func (t SlogEngineTelemetry) RecordCohortMemberAllowance(ctx context.Context, pr
 
 // RecordFactRetention emits one retention decision, at Info.
 //
+// The anchor fields name the committed resolution subjects the pass admitted
+// (`anchor_ids`) and every one whose facts it nevertheless dropped
+// (`dropped_anchor_ids`, only ever an anchor that was also a removed member).
+// Without them a narrowed answer that lost the evidence for a subject the
+// question named was indistinguishable, on this line, from one that lost a
+// group's: the facts were counted under `dropped_groups` and no field said
+// whose they were.
+//
 // `dropped_groups` is the field this line was added for: a group narrowed out
 // of the answer used to keep its evidence, synthesis was handed facts about a
 // population the served document did not contain, and evidence closure
@@ -1908,9 +1916,25 @@ func (t SlogEngineTelemetry) RecordFactRetention(ctx context.Context, principal 
 		"dropped_groups", event.Decision.DroppedGroups,
 		"retained_groups", event.Decision.RetainedGroups,
 		"group_rule_applied", event.Decision.GroupRuleApplied,
+		"anchors", len(event.Decision.Anchors),
+		"anchor_ids", SanitizeLogStrings(retentionSubjectLogIDs(event.Decision.Anchors)),
+		"anchor_facts_retained", event.Decision.AnchorFactsRetained,
+		"anchor_facts_dropped", event.Decision.AnchorFactsDropped,
+		"dropped_anchor_ids", SanitizeLogStrings(retentionSubjectLogIDs(event.Decision.DroppedAnchors)),
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric fact retention", args...)
+}
+
+// retentionSubjectLogIDs renders subjects for the retention line as
+// "<kind>/<canonical id>", in the order given. Kind travels with the id
+// because a canonical id alone is not unique across kinds.
+func retentionSubjectLogIDs(subjects []SubjectRef) []string {
+	ids := make([]string, 0, len(subjects))
+	for _, subject := range subjects {
+		ids = append(ids, string(subject.Kind)+"/"+subject.CanonicalID)
+	}
+	return ids
 }
 
 // observableGroupAxis routes the group-axis decision through its own

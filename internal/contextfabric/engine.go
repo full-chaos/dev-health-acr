@@ -2671,7 +2671,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// reject the whole result -- turning a narrowed answer into a
 			// failed one.
 			var retention FactRetentionDecision
-			facts.Facts, retention = RetainFactsForCohortWithDecision(facts.Facts, &cohort, removed)
+			facts.Facts, retention = RetainFactsForCohortWithDecision(facts.Facts, &cohort, removed, resolution.Committed)
 			e.recordFactRetention(ctx, principal, FactRetentionEvent{
 				Family: plan.Family, GroupKind: plan.GroupKind,
 				Stage:    contractsv1.ContextFabricPlanNarrowingSynthesisInput,

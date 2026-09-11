@@ -557,7 +557,7 @@ func narrowSynthesisInput(params synthesisAssemblyParams, plan *AnswerPlan) narr
 	rankedCohort, rankEvent, citations := RankCohort(cohort, facts.Facts, facts.Coverage)
 	graph.Cohort = rankedCohort
 	var retention FactRetentionDecision
-	facts.Facts, retention = RetainFactsForCohortWithDecision(facts.Facts, rankedCohort, removed)
+	facts.Facts, retention = RetainFactsForCohortWithDecision(facts.Facts, rankedCohort, removed, params.Resolution.Committed)
 	return narrowedInput{
 		Graph: graph, Facts: facts, Citations: citations, Ranked: rankEvent,
 		Before: before, After: len(kept), Narrow: true, Basis: basis, Retention: retention,

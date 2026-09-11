@@ -60,7 +60,7 @@ func TestFactsForAGroupTheAnswerNoLongerCarriesAreDropped(t *testing.T) {
 		groupFact("team_platform"),
 	}
 
-	retained := RetainFactsForCohort(facts, cohort, removed)
+	retained := RetainFactsForCohort(facts, cohort, removed, nil)
 	kept := map[string]bool{}
 	for _, fact := range retained {
 		kept[fact.Subject.CanonicalID] = true
@@ -118,7 +118,7 @@ func TestRetentionLeavesAnUnnarrowedGroupedBundleAlone(t *testing.T) {
 	removed := []CohortMember{
 		{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_c", Label: "project_c"}, Rank: 3, InclusionReasons: []string{"matched"}},
 	}
-	retained := RetainFactsForCohort(facts, cohort, removed)
+	retained := RetainFactsForCohort(facts, cohort, removed, nil)
 	kept := map[string]bool{}
 	for _, fact := range retained {
 		kept[fact.Subject.CanonicalID] = true
@@ -175,7 +175,7 @@ func TestRetentionSaysWhenTheGroupRuleDidNotRun(t *testing.T) {
 		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			retained, decision := RetainFactsForCohortWithDecision(facts, testCase.cohort, removed)
+			retained, decision := RetainFactsForCohortWithDecision(facts, testCase.cohort, removed, nil)
 			t.Logf("%s -> kept=%d group_rule_applied=%v retained_groups=%d dropped_groups=%d",
 				testCase.name, len(retained), decision.GroupRuleApplied, decision.RetainedGroups, decision.DroppedGroups)
 			if decision.GroupRuleApplied != testCase.wantRuleOn {
