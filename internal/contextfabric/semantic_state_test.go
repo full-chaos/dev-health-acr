@@ -704,3 +704,34 @@ func richestValidGoalSet() []InvestigationGoal {
 	}
 	return goals
 }
+
+// TestSemanticState_ANULCharacterIsRefusedBeforeTheStore: PostgreSQL jsonb
+// cannot hold a NUL, so a snapshot carrying one is refused by the codec (the
+// capture then saves the closed absence), while a string that merely SPELLS
+// \u0000 is ordinary text.
+func TestSemanticState_ANULCharacterIsRefusedBeforeTheStore(t *testing.T) {
+	t.Parallel()
+	withTerm := func(term string) *PersistedSemanticState {
+		state := sizedSemanticState(t, 4000)
+		state.Frame.SubjectExpression.Explicit.Operands[0].Named.Terms[0] = term
+		return state
+	}
+	nul := withTerm("team\x00alpha")
+	_, err := EncodeSemanticState(nul)
+	spelled := withTerm(`team\u0000alpha`)
+	_, spelledErr := EncodeSemanticState(spelled)
+	capture := captureSemanticState(SemanticStateInput{
+		Outcome:      QuestionFamilyOutcome{Family: nul.Family, Source: nul.FamilySource, Frame: nul.Frame, Gate: FrameGate{Outcome: FrameGatePassed}},
+		EmittedShape: nul.Validation.EmittedShape, FamilyVersion: nul.FamilyTableVersion,
+	})
+	t.Logf("NUL term -> %v | spelled term -> %v | capture -> absence=%s", err, spelledErr, capture.Write.Absence)
+	if err == nil || !errors.Is(err, ErrSemanticStateRejected) {
+		t.Errorf("a NUL term was accepted: %v", err)
+	}
+	if spelledErr != nil {
+		t.Errorf("a term spelling \\u0000 was refused: %v", spelledErr)
+	}
+	if capture.Write.State != nil || capture.Write.Absence != SemanticStateAbsenceSnapshotInvalid {
+		t.Errorf("capture of a NUL reading = %+v, want the snapshot_invalid absence", capture.Write)
+	}
+}

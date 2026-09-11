@@ -316,6 +316,13 @@ func EncodeSemanticState(state *PersistedSemanticState) ([]byte, error) {
 	if len(encoded) > SemanticStateMaxEncodedBytes {
 		return nil, fmt.Errorf("%w: %w: %d encoded bytes exceeds the %d-byte cap", ErrSemanticStateRejected, errSemanticStateOversized, len(encoded), SemanticStateMaxEncodedBytes)
 	}
+	// A NUL CHARACTER IS REFUSED HERE, not at the database. PostgreSQL jsonb
+	// cannot store \u0000 and fails the whole insert -- which would turn a
+	// model-proposed retrieval term into a failed turn. Refused as an invalid
+	// snapshot, the result is still saved, with the closed absence instead.
+	if carriesNUL(encoded) {
+		return nil, fmt.Errorf("%w: a string carries a NUL character, which the store cannot hold", ErrSemanticStateRejected)
+	}
 	return encoded, nil
 }
 
@@ -835,4 +842,35 @@ func firstDuplicate(lists ...[]string) string {
 		}
 	}
 	return ""
+}
+
+// carriesNUL reports whether any string value in the JSON document contains a
+// NUL character. Checked on the DECODED values: the encoded bytes cannot tell a
+// real NUL (\u0000) from a string that merely spells those six characters.
+func carriesNUL(document []byte) bool {
+	var root any
+	if json.Unmarshal(document, &root) != nil {
+		return false
+	}
+	var walk func(any) bool
+	walk = func(node any) bool {
+		switch typed := node.(type) {
+		case string:
+			return strings.ContainsRune(typed, 0)
+		case []any:
+			for _, child := range typed {
+				if walk(child) {
+					return true
+				}
+			}
+		case map[string]any:
+			for key, child := range typed {
+				if strings.ContainsRune(key, 0) || walk(child) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return walk(root)
 }

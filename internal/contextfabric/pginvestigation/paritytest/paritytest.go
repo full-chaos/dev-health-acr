@@ -713,6 +713,24 @@ func semanticStateCases() []Case {
 	projectState := SemanticStateFixture(contextfabric.SubjectProject, contextfabric.SubjectRepository)
 	invalidState := SemanticStateFixture(contextfabric.SubjectTeam, contextfabric.SubjectRepository)
 	invalidState.Family = contractsv1.ContextFabricQuestionFamily("invented-family")
+	// PostgreSQL jsonb cannot hold a NUL; the codec refuses it first, so the
+	// adapter reports the closed rejection rather than a driver error.
+	nulKind := contextfabric.SubjectRepository
+	nulFrame := contextfabric.QuestionFrame{
+		Goals: []contextfabric.InvestigationGoal{contextfabric.GoalCompare},
+		SubjectExpression: contextfabric.SubjectExpression{Kind: contextfabric.SubjectExpressionExplicitSet, Explicit: &contextfabric.ExplicitSetExpression{Operands: []contextfabric.SubjectOperand{
+			{Kind: contextfabric.SubjectOperandNamed, Named: &contextfabric.NamedSubjectExpression{Terms: []string{"team\x00alpha"}, ExpectedKind: &nulKind}},
+			{Kind: contextfabric.SubjectOperandNamed, Named: &contextfabric.NamedSubjectExpression{Terms: []string{"team-beta"}, ExpectedKind: &nulKind}},
+		}}},
+		Temporal:    contextfabric.TemporalIntentCurrent,
+		Obligations: []contextfabric.AnswerObligation{contextfabric.ObligationState},
+		Version:     contextfabric.QuestionFrameVersion,
+	}
+	nulState := contextfabric.BuildSemanticState(contextfabric.SemanticStateInput{
+		Outcome:       contextfabric.QuestionFamilyOutcome{Family: contractsv1.ContextFabricQuestionFamilySubjectInvestigation, Source: contractsv1.ContextFabricQuestionFamilySourceModel, Frame: &nulFrame, Gate: contextfabric.FrameGate{Outcome: contextfabric.FrameGatePassed}},
+		EmittedShape:  contextfabric.ShapeExplicitCohort,
+		FamilyVersion: contextfabric.QuestionFamilyTableVersion,
+	})
 	available := contextfabric.SemanticStateReadAvailable
 	absentStatus := contextfabric.SemanticStateReadAbsent
 
@@ -731,6 +749,7 @@ func semanticStateCases() []Case {
 		{"both halves", contextfabric.SemanticStateWrite{State: teamState, Absence: contextfabric.SemanticStateAbsenceContinuationRefused}},
 		{"an absence outside the vocabulary", contextfabric.SemanticStateAbsent("invented-absence")},
 		{"a snapshot that fails validation", contextfabric.SemanticStateOf(invalidState)},
+		{"a snapshot carrying a NUL character", contextfabric.SemanticStateOf(nulState)},
 	}
 	cases := []Case{
 		{
