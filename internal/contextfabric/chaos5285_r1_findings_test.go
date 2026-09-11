@@ -85,6 +85,15 @@ func TestEveryAuthorizedGroupOfALegalCohortIsAdmittedAndRead(t *testing.T) {
 			if got := line["groups_denied"]; got != float64(0) {
 				t.Errorf("groups_denied = %v, want 0 -- a group the cap dropped is reported as one the principal may not see, which is a false statement about authorization", got)
 			}
+			// The line says how the set was authorized, so a reader can check
+			// from the line alone that no call exceeded what it could commit.
+			size := reuseRecheckOptions.MaxSubjectCandidates
+			if got, want := line["authorization_batch_size"], float64(size); got != want {
+				t.Errorf("authorization_batch_size = %v, want %v", got, want)
+			}
+			if got, want := line["authorization_batches"], float64((groups+size-1)/size); got != want {
+				t.Errorf("authorization_batches = %v, want %v -- the fewest calls that keep every call within its cap", got, want)
+			}
 			grouped := recorder.groupRootedRequests(SubjectTeam)
 			if len(grouped) != 1 {
 				t.Fatalf("group-rooted fact requests = %d, want exactly 1 -- the read is ONE request for the whole admitted set", len(grouped))
