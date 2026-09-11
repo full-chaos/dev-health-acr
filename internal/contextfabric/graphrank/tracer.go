@@ -211,16 +211,24 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// the "decision summary construction refused" line above also
 		// uses) could be looking at a DIFFERENT resolution's decision than
 		// the one this line's every other field actually describes.
-		// Compared post-sanitization (sanitizeLogString is deterministic
-		// and idempotent) because production's own real call site sanitizes
+		// Compared post-sanitization (contextfabric.SanitizeLogAttr is
+		// deterministic and idempotent; was sanitizeLogString before #497
+		// routed this package's own sanitization through the shared
+		// barrier) because production's own real call site sanitizes
 		// b.requestID into the typed constructor but keeps the RAW value on
 		// the outer event -- a raw id containing a control character is a
 		// legitimate (if rare) match that a naive unsanitized comparison
 		// would misreport as a mismatch.
-		if sanitizeLogString(event.RequestID) != event.DecisionSummaryFields.RequestID {
+		if contextfabric.SanitizeLogAttr(event.RequestID) != event.DecisionSummaryFields.RequestID {
 			t.logger.ErrorContext(ctx, "context fabric resolution trace: decision summary construction refused",
-				"request_id", sanitizeLogString(event.RequestID), "stage", sanitizeLogString(event.Stage),
-				"typed_request_id", event.DecisionSummaryFields.RequestID)
+				"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+				// Sanitized again here even though the real construction
+				// path already sanitized it before storing (resolve.go) --
+				// a bare struct field read is opaque to
+				// TestNoUnsanitizedLogAttributeInContextFabric's own static
+				// trace (it cannot see the field was sanitized elsewhere),
+				// and double-sanitizing is idempotent and harmless.
+				"typed_request_id", contextfabric.SanitizeLogAttr(event.DecisionSummaryFields.RequestID))
 			return
 		}
 		t.logger.InfoContext(ctx, "context fabric resolution trace: decision summary",

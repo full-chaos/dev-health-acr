@@ -3,6 +3,8 @@
 
 package eventspec
 
+import "github.com/full-chaos/dev-health-acr/internal/contextfabric"
+
 // FieldKeys lists, in declaration order, every JSON key an event's variant
 // carries. It is the generated mirror of Event.Fields -- present so a
 // consumer can range over an event's shape without walking Field structs.
@@ -67,16 +69,19 @@ func NewAnchorSlotDisplacedFields(requestID string, pass int, subjectKind string
 func (f AnchorSlotDisplacedFields) IsConstructed() bool { return f.constructed }
 
 // SlogArgs returns AnchorSlotDisplaced's own declared fields as alternating slog
-// key/value pairs, in the SAME order spec.go declares them.
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
 func (f AnchorSlotDisplacedFields) SlogArgs() []any {
 	return []any{
-		"request_id", f.RequestID,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 		"pass", f.Pass,
 		"stage", "anchor_slot_displaced",
-		"subject_kind", f.SubjectKind,
-		"subject_canonical_id", f.SubjectCanonicalID,
-		"anchor_slot_reserved", f.AnchorSlotReserved,
-		"anchor_slot_source", f.AnchorSlotSource,
+		"subject_kind", contextfabric.SanitizeLogAttr(f.SubjectKind),
+		"subject_canonical_id", contextfabric.SanitizeLogAttr(f.SubjectCanonicalID),
+		"anchor_slot_reserved", contextfabric.SanitizeLogAttr(f.AnchorSlotReserved),
+		"anchor_slot_source", contextfabric.SanitizeLogAttr(f.AnchorSlotSource),
 		"anchor_slot_displaced", f.AnchorSlotDisplaced,
 		"pool_truncated_n", f.PoolTruncatedN,
 	}
@@ -178,34 +183,37 @@ func NewDecisionSummaryFields(requestID string, decisionEventCount int, committe
 func (f DecisionSummaryFields) IsConstructed() bool { return f.constructed }
 
 // SlogArgs returns DecisionSummary's own declared fields as alternating slog
-// key/value pairs, in the SAME order spec.go declares them.
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
 func (f DecisionSummaryFields) SlogArgs() []any {
 	return []any{
-		"request_id", f.RequestID,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 		"stage", "decision_summary",
 		"decision_event_count", f.DecisionEventCount,
 		"committed_count", f.CommittedCount,
 		"ambiguous_count", f.AmbiguousCount,
 		"no_commit_count", f.NoCommitCount,
-		"committed_ids", f.CommittedIDs,
-		"commit_gates", f.CommitGates,
-		"commit_bases", f.CommitBases,
+		"committed_ids", contextfabric.SanitizeLogStrings(f.CommittedIDs),
+		"commit_gates", contextfabric.SanitizeLogStrings(f.CommitGates),
+		"commit_bases", contextfabric.SanitizeLogStrings(f.CommitBases),
 		"offered_under_window_gate", f.OfferedUnderWindowGate,
-		"frame_gate", f.FrameGate,
-		"refuse_basis", f.RefuseBasis,
+		"frame_gate", contextfabric.SanitizeLogAttr(f.FrameGate),
+		"refuse_basis", contextfabric.SanitizeLogAttr(f.RefuseBasis),
 		"offer_pool_vector_only_excluded", f.OfferPoolVectorOnlyExcluded,
 		"offer_pool_vector_only_demoted", f.OfferPoolVectorOnlyDemoted,
 		"offer_pool_emptied_by_exclusion", f.OfferPoolEmptiedByExclusion,
 		"offer_pool_anchor_kind_withheld", f.OfferPoolAnchorKindWithheld,
-		"offer_pool_anchor_kind_withheld_scope", f.OfferPoolAnchorKindWithheldScope,
-		"offer_pool_anchor_kind_withheld_reason", f.OfferPoolAnchorKindWithheldReason,
-		"offer_pool_anchor_kind_withheld_ids", f.OfferPoolAnchorKindWithheldIDs,
+		"offer_pool_anchor_kind_withheld_scope", contextfabric.SanitizeLogAttr(f.OfferPoolAnchorKindWithheldScope),
+		"offer_pool_anchor_kind_withheld_reason", contextfabric.SanitizeLogAttr(f.OfferPoolAnchorKindWithheldReason),
+		"offer_pool_anchor_kind_withheld_ids", contextfabric.SanitizeLogStrings(f.OfferPoolAnchorKindWithheldIDs),
 		"offer_pool_anchor_kind_exempted", f.OfferPoolAnchorKindExempted,
-		"anchor_pool_kind_scope", f.AnchorPoolKindScope,
-		"anchor_pool_kind_scope_source", f.AnchorPoolKindScopeSource,
-		"member_kind_confirmed", f.MemberKindConfirmed,
-		"reserved_kinds", f.ReservedKinds,
-		"filter_kinds", f.FilterKinds,
+		"anchor_pool_kind_scope", contextfabric.SanitizeLogAttr(f.AnchorPoolKindScope),
+		"anchor_pool_kind_scope_source", contextfabric.SanitizeLogAttr(f.AnchorPoolKindScopeSource),
+		"member_kind_confirmed", contextfabric.SanitizeLogAttr(f.MemberKindConfirmed),
+		"reserved_kinds", contextfabric.SanitizeLogStrings(f.ReservedKinds),
+		"filter_kinds", contextfabric.SanitizeLogStrings(f.FilterKinds),
 	}
 }
 
@@ -267,18 +275,21 @@ func NewRankedCutSummaryFields(requestID string, pass int, candidateCount int, s
 func (f RankedCutSummaryFields) IsConstructed() bool { return f.constructed }
 
 // SlogArgs returns RankedCutSummary's own declared fields as alternating slog
-// key/value pairs, in the SAME order spec.go declares them.
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
 func (f RankedCutSummaryFields) SlogArgs() []any {
 	return []any{
-		"request_id", f.RequestID,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 		"pass", f.Pass,
 		"stage", "ranked_cut",
 		"candidate_count", f.CandidateCount,
 		"survived_count", f.SurvivedCount,
-		"survived_ids", f.SurvivedIDs,
+		"survived_ids", contextfabric.SanitizeLogStrings(f.SurvivedIDs),
 		"max", f.Max,
-		"anchor_slot_reserved", f.AnchorSlotReserved,
-		"anchor_slot_source", f.AnchorSlotSource,
+		"anchor_slot_reserved", contextfabric.SanitizeLogAttr(f.AnchorSlotReserved),
+		"anchor_slot_source", contextfabric.SanitizeLogAttr(f.AnchorSlotSource),
 		"anchor_slot_displaced", f.AnchorSlotDisplaced,
 		"pool_truncated_n", f.PoolTruncatedN,
 		"declared_kind_rescue", f.DeclaredKindRescue,
