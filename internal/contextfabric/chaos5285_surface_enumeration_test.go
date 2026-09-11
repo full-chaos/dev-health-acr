@@ -1,10 +1,13 @@
 package contextfabric
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // TestEveryGroupKindByMemberKindPairIsDecidedAtTheFrameGate sweeps the WHOLE
@@ -156,35 +159,39 @@ func TestTheGroupBoundIsDecidedAtEveryBoundary(t *testing.T) {
 func TestThePreFoldLineCanCarryEverySourceState(t *testing.T) {
 	t.Parallel()
 
+	// EVERY member of the published source-state vocabulary, `pruned`
+	// included. `pruned` is a planner verdict, not a provider state, so the
+	// provider-legal predicate (validFactSourceState) does not admit it --
+	// but it is a coverage state the served document legitimately carries,
+	// and on the private pair the member read's
+	// `canonical_fact:operational_deficiencies` observation arrived as
+	// `pruned` and was published as `unclassified`. The first version of this
+	// sweep checked the emitter's PREDICATE against a hand list that shared
+	// its blind spot; this one drives the EMITTER and reads the line.
 	states := []SourceState{
 		SourceAvailable, SourceStale, SourceUnavailable, SourceUnconfigured,
 		SourceUnauthorized, SourceNoData, SourceTruncated, SourceConflicted, SourceNotApplicable,
+		SourcePruned,
 	}
-	// Enumerated against the PRODUCER's predicate, both directions: a member
-	// this list forgot fails here rather than silently going untested.
-	for _, state := range states {
-		if !validFactSourceState(state) {
-			t.Errorf("this sweep names %q, which the producer does not consider a valid source state -- the list has drifted from the vocabulary", state)
-		}
-	}
-	for _, outsider := range []SourceState{"", "AVAILABLE", " available ", "no-data", "unclassified"} {
-		if validFactSourceState(outsider) {
-			t.Errorf("the producer admits %q as a source state, so the sweep above is not enumerating a closed vocabulary", outsider)
-		}
-	}
-
-	for _, state := range states {
-		state := state
-		t.Run(string(state), func(t *testing.T) {
-			t.Parallel()
-			event := GroupReadCoverageStateEvent{
-				Family: QuestionFamilyGroupedCohortStatus, GroupKind: SubjectTeam,
-				Read: GroupReadArmGroup, Source: "canonical_fact:health", State: state,
-			}
-			if !validFactSourceState(event.State) {
-				t.Fatalf("state %q would publish as `unclassified` -- a real coverage state that loses its identity on the line is indistinguishable from a deliberate sentinel", state)
-			}
+	emitted := func(state SourceState) string {
+		records := captureSlogJSON(t, func(logger *slog.Logger) {
+			NewSlogEngineTelemetry(logger).RecordGroupReadCoverageState(context.Background(), storage.Principal{OrgID: "org_1"},
+				GroupReadCoverageStateEvent{Family: QuestionFamilyGroupedCohortStatus, GroupKind: SubjectTeam, Read: GroupReadArmGroup, Source: "canonical_fact:health", State: state})
 		})
+		if len(records) != 1 {
+			return fmt.Sprintf("records=%d", len(records))
+		}
+		return fmt.Sprintf("%v", records[0]["source_state"])
+	}
+	for _, state := range states {
+		if got := emitted(state); got != string(state) {
+			t.Errorf("state %q reached the line as %q -- a real coverage state that loses its identity on the line is indistinguishable from a deliberate sentinel", state, got)
+		}
+	}
+	for _, outsider := range []SourceState{"", "AVAILABLE", " available ", "no-data", "free text"} {
+		if got := emitted(outsider); got != "unclassified" {
+			t.Errorf("an out-of-vocabulary state %q reached the line as %q, want `unclassified`", outsider, got)
+		}
 	}
 
 	// AND BOTH ARMS, enumerated the same way.
