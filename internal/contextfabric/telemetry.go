@@ -1807,9 +1807,13 @@ func (t SlogEngineTelemetry) RecordCohortMemberAllowance(ctx context.Context, pr
 		"org_id", principal.OrgID,
 		"family", string(event.Family),
 		"group_kind", string(event.GroupKind),
-		"max_items", event.MaxItems,
-		"synthesis_headroom", event.Headroom,
-		"member_allowance", event.Allowance,
+		// The three budget fields derive from the caller's own request
+		// options (MaxCohortMembers flows into the allowance), so they cross
+		// the one barrier for request-derived integers before they are
+		// logged -- see requestDerivedLogInt.
+		"max_items", requestDerivedLogInt(event.MaxItems),
+		"synthesis_headroom", requestDerivedLogInt(event.Headroom),
+		"member_allowance", requestDerivedLogInt(event.Allowance),
 		"allowance_clamped", event.Clamped,
 		"groups", event.Groups,
 		"members_before", event.MembersBefore,
@@ -1865,4 +1869,25 @@ func observableGroupAxis(value GroupAxisDecision) string {
 		return "unclassified"
 	}
 	return string(value)
+}
+
+// requestDerivedLogInt is the log barrier for an INTEGER that derives from a
+// decoded request, returned as the same integer so the field stays a JSON
+// number.
+//
+// An int cannot carry the newline CWE-117 is about, and slog's JSON handler
+// would quote one anyway -- but go/log-injection's dataflow has no numeric
+// barrier, so a request option that flows into a logged count (the caller's
+// MaxCohortMembers into the member allowance) is reported as a forgery path.
+// The decimal rendering is passed through sanitizeLogString, the shape that
+// query recognises as breaking taint, and parsed back. For every int the
+// round trip is the identity: strconv.Itoa never emits a line break, so the
+// strip removes nothing and Atoi always succeeds; the zero on the error arm
+// is unreachable and exists only so the function is total.
+func requestDerivedLogInt(value int) int {
+	parsed, err := strconv.Atoi(sanitizeLogString(strconv.Itoa(value)))
+	if err != nil {
+		return 0
+	}
+	return parsed
 }

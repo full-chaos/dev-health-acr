@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -89,6 +90,7 @@ func TestTheInputDomainOfEveryGuardThisChangeTouches(t *testing.T) {
 	domainGroupReadRequirements(table)
 	domainAllowanceClamp(table)
 	domainEmitterVocabularies(t, table)
+	domainRequestDerivedLogInt(table)
 
 	table.print()
 	if len(table.rows) == 0 {
@@ -672,4 +674,21 @@ func domainEmitterVocabularies(t *testing.T, d *domainTable) {
 		tel.RecordGroupReadCoverageState(ctx, principal, GroupReadCoverageStateEvent{Read: GroupReadArmMember, State: SourcePruned})
 	}, "source_state"), "pruned")
 	d.record(guard, "all fields", "wrong container / wrong scalar / fractional / boundary", domainExcludedByTypeSystem, "ok")
+}
+
+// --- guard 14: the log barrier for request-derived integers ---------------
+
+func domainRequestDerivedLogInt(d *domainTable) {
+	const guard = "log barrier (requestDerivedLogInt)"
+	cell := func(value int) string { return strconv.Itoa(requestDerivedLogInt(value)) }
+	maxInt, minInt := int(^uint(0)>>1), -int(^uint(0)>>1)-1
+	d.want(guard, "value", "zero", cell(0), "0")
+	d.want(guard, "value", "canonical (the rig's allowance)", cell(10), "10")
+	d.want(guard, "value", "boundary - 1 of zero (negative)", cell(-1), "-1")
+	d.want(guard, "value", "boundary + 1 of zero", cell(1), "1")
+	d.want(guard, "value", "max int", cell(maxInt), strconv.Itoa(maxInt))
+	d.want(guard, "value", "max int - 1", cell(maxInt-1), strconv.Itoa(maxInt-1))
+	d.want(guard, "value", "min int", cell(minInt), strconv.Itoa(minInt))
+	d.want(guard, "value", "min int + 1", cell(minInt+1), strconv.Itoa(minInt+1))
+	d.record(guard, "value", "null / container / wrong scalar / fractional / out of vocabulary / duplicate", domainExcludedByTypeSystem+"; the parameter is a Go int", "ok")
 }

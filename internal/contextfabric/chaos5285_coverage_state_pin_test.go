@@ -321,4 +321,12 @@ func TestTheUnclampedMemberAllowanceReportsItselfUnclamped(t *testing.T) {
 	if got := line["member_allowance"]; got == float64(1) {
 		t.Fatalf("CONTROL BROKEN: member_allowance = %v above the reserve, which is the clamped value -- this fixture is not exercising the unclamped arm", got)
 	}
+	// THE VALUES THEMSELVES, through the log barrier the three budget fields
+	// cross: 26, 20 and 6 are pairwise distinct, so a barrier that zeroed,
+	// swapped or dropped any one of them puts a wrong number on the line.
+	for field, want := range map[string]float64{"max_items": 26, "synthesis_headroom": 20, "member_allowance": 6} {
+		if got := line[field]; got != want {
+			t.Errorf("%s = %v, want %v -- the request-derived budget fields must reach the line unchanged through requestDerivedLogInt", field, got, want)
+		}
+	}
 }
