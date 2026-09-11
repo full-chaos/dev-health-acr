@@ -404,7 +404,9 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4]
     name: race (shard ${{ matrix.shard }} of 4)
-    runs-on: ubuntu-latest
+    # CI_RACE_RUNNER repo variable selects a larger hosted runner for the
+    # race shards (memory/CPU headroom); unset, this falls back to ubuntu-latest.
+    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     env:
       # CHAOS-4855: see the identical env on the unit job above -- the race
       # shards run the same testcontainers-backed suite, partitioned.
@@ -493,7 +495,8 @@ jobs:
   # `-self-hosted` twin it used to share the name with having been removed.
   race-devhealthschema:
     name: race (devhealthschema, isolated scope)
-    runs-on: ubuntu-latest
+    # Same CI_RACE_RUNNER contract as the `race` job above.
+    runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
