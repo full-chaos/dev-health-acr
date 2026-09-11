@@ -91,6 +91,8 @@ func TestTheInputDomainOfEveryGuardThisChangeTouches(t *testing.T) {
 	domainAllowanceClamp(table)
 	domainEmitterVocabularies(t, table)
 	domainRequestDerivedLogInt(table)
+	domainAuthorizationBatching(table)
+	domainPlanSeamLine(t, table)
 
 	table.print()
 	if len(table.rows) == 0 {
@@ -555,8 +557,24 @@ func domainTeamIdentity(d *domainTable) {
 	}
 	d.want(mint, "rawKey", "zero (empty key mints no identity)", TeamCanonicalID(""), "")
 	d.want(mint, "rawKey", "canonical raw key", TeamCanonicalID("AUTH"), "team:AUTH")
-	d.want(mint, "rawKey", "already canonical (idempotent)", TeamCanonicalID("team:AUTH"), "team:AUTH")
-	d.want(mint, "rawKey", "duplicate prefix already present", TeamCanonicalID("team:team:x"), "team:team:x")
+	// A raw key that already carries the prefix is a DIFFERENT row of
+	// teams.id from the bare key, so it is prefixed like any other: the mint
+	// is injective, not idempotent (r1 P1-2).
+	d.want(mint, "rawKey", "raw key spelled like a canonical id (prefixed, not passed through)", TeamCanonicalID("team:AUTH"), "team:team:AUTH")
+	d.want(mint, "rawKey", "duplicate prefix already present", TeamCanonicalID("team:team:x"), "team:team:team:x")
+	d.want(mint, "rawKey", "whitespace only", TeamCanonicalID(" "), "team: ")
+	d.want(mint, "rawKey", "unicode", TeamCanonicalID("équipe-ß"), "team:équipe-ß")
+	d.want(mint, "rawKey", "injective over the bare / prefixed / double-prefixed trio", func() string {
+		seen := map[string]string{}
+		for _, key := range []string{"x", "team:x", "team:team:x"} {
+			id := TeamCanonicalID(key)
+			if other, taken := seen[id]; taken {
+				return fmt.Sprintf("%q and %q both mint %q", other, key, id)
+			}
+			seen[id] = key
+		}
+		return "ok"
+	}(), "ok")
 	d.want(mint, "rawKey", "prefix only (a raw key spelled \"team:\")", TeamCanonicalID("team:"), "team:team:")
 	d.want(mint, "rawKey", "provider-qualified key (stored gl:full.chaos)", TeamCanonicalID("gl:full.chaos"), "team:gl:full.chaos")
 	d.want(mint, "rawKey", "case variant of the prefix (identifiers are case-sensitive)", TeamCanonicalID("TEAM:AUTH"), "team:TEAM:AUTH")
@@ -568,7 +586,7 @@ func domainTeamIdentity(d *domainTable) {
 	d.want(parse, "canonicalID", "case variant of the prefix", raw("TEAM:AUTH"), `key="" ok=false`)
 	d.want(parse, "canonicalID", "duplicate prefix", raw("team:team:x"), `key="team:x" ok=true`)
 	d.want(parse, "round trip", "every minted identity parses back to its key", func() string {
-		for _, key := range []string{"AUTH", "gl:full.chaos", "gh:ops-team", " AUTH", "team:"} {
+		for _, key := range []string{"AUTH", "gl:full.chaos", "gh:ops-team", " AUTH", "team:", "team:AUTH", "team:team:x", " ", "équipe-ß"} {
 			if back, ok := TeamRawKey(TeamCanonicalID(key)); !ok || back != key {
 				return fmt.Sprintf("broken at %q -> %q ok=%v", key, back, ok)
 			}
@@ -691,4 +709,109 @@ func domainRequestDerivedLogInt(d *domainTable) {
 	d.want(guard, "value", "min int", cell(minInt), strconv.Itoa(minInt))
 	d.want(guard, "value", "min int + 1", cell(minInt+1), strconv.Itoa(minInt+1))
 	d.record(guard, "value", "null / container / wrong scalar / fractional / out of vocabulary / duplicate", domainExcludedByTypeSystem+"; the parameter is a Go int", "ok")
+}
+
+// --- guard 15: group authorization batching (r1 P1-1) ---------------------
+
+// domainAuthorizationBatching drives the REAL authorizeCohortGroups over the
+// whole range of group-list sizes, against the double that models the
+// resolver's candidate cap. Every cell reports what the production function
+// did: how many calls it made, the largest call, and what it admitted.
+func domainAuthorizationBatching(d *domainTable) {
+	const guard = "group authorization batching (authorizeCohortGroups)"
+	size := groupAuthorizationBatchSize()
+	groups := func(count int, id func(int) string) []contractsv1.ContextFabricCohortGroup {
+		out := make([]contractsv1.ContextFabricCohortGroup, 0, count)
+		for index := 0; index < count; index++ {
+			out = append(out, contractsv1.ContextFabricCohortGroup{
+				Subject: contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: id(index), Label: id(index)},
+			})
+		}
+		return out
+	}
+	distinct := func(index int) string { return TeamCanonicalID(fmt.Sprintf("team_%03d", index)) }
+	run := func(list []contractsv1.ContextFabricCohortGroup, denied map[string]struct{}, failOnCall int) string {
+		graph := &batchingProbeGraph{groupAuthorizingGraph: groupAuthorizingGraph{denied: denied}, failOnCall: failOnCall}
+		engine := &Engine{graph: graph}
+		admitted, batches, err := engine.authorizeCohortGroups(context.Background(), storage.Principal{OrgID: "org_1"}, InvestigationRequest{}, InterpretedQuestion{}, ResolvedGraphBinding{}, list)
+		largest := 0
+		for _, hints := range graph.hinted {
+			largest = max(largest, len(hints))
+		}
+		if err != nil {
+			return fmt.Sprintf("error after batches=%d (fail closed)", batches)
+		}
+		return fmt.Sprintf("batches=%d largest=%d admitted=%d", batches, largest, len(admitted))
+	}
+	d.want(guard, "groups", "zero (empty list: no call)", run(nil, nil, 0), "batches=0 largest=0 admitted=0")
+	d.want(guard, "groups", "one", run(groups(1, distinct), nil, 0), "batches=1 largest=1 admitted=1")
+	d.want(guard, "groups", "boundary - 1 of the batch size", run(groups(size-1, distinct), nil, 0), fmt.Sprintf("batches=1 largest=%d admitted=%d", size-1, size-1))
+	d.want(guard, "groups", "boundary (exactly one batch)", run(groups(size, distinct), nil, 0), fmt.Sprintf("batches=1 largest=%d admitted=%d", size, size))
+	d.want(guard, "groups", "boundary + 1 (the reviewer's 51)", run(groups(size+1, distinct), nil, 0), fmt.Sprintf("batches=2 largest=%d admitted=%d", size, size+1))
+	d.want(guard, "groups", "two full batches", run(groups(2*size, distinct), nil, 0), fmt.Sprintf("batches=2 largest=%d admitted=%d", size, 2*size))
+	d.want(guard, "groups", "contract bound (250)", run(groups(contractsv1.ContextFabricCohortGroupsMaxCount, distinct), nil, 0),
+		fmt.Sprintf("batches=%d largest=%d admitted=%d", (contractsv1.ContextFabricCohortGroupsMaxCount+size-1)/size, size, contractsv1.ContextFabricCohortGroupsMaxCount))
+	d.record(guard, "groups", "contract bound + 1 (251)", "n/a - refused before authorization by groupListOverContractBound (guard 4)", "ok")
+	d.want(guard, "groups[]", "duplicate identity across the batch boundary (admitted once)",
+		run(groups(size+1, func(index int) string {
+			if index == size {
+				return distinct(0)
+			}
+			return distinct(index)
+		}), nil, 0), fmt.Sprintf("batches=2 largest=%d admitted=%d", size, size))
+	d.want(guard, "groups[]", "a group denied in the SECOND batch (counted, not admitted)",
+		run(groups(size+1, distinct), map[string]struct{}{distinct(size): {}}, 0), fmt.Sprintf("batches=2 largest=%d admitted=%d", size, size))
+	d.want(guard, "resolver", "the second batch errors (whole step fails closed)", run(groups(size+1, distinct), nil, 2), "error after batches=2 (fail closed)")
+	d.want(guard, "resolver", "the first batch errors", run(groups(size+1, distinct), nil, 1), "error after batches=1 (fail closed)")
+	d.record(guard, "all fields", "null / wrong container / wrong scalar / fractional", domainExcludedByTypeSystem, "ok")
+}
+
+// batchingProbeGraph is the capped authorization double with one addition: it
+// can fail on the Nth hinted call, so the domain can show a failure in a LATER
+// batch fails the whole step closed.
+type batchingProbeGraph struct {
+	groupAuthorizingGraph
+	failOnCall int
+	calls      int
+}
+
+func (g *batchingProbeGraph) ResolveSubjects(ctx context.Context, principal storage.Principal, request InvestigationRequest, interpreted InterpretedQuestion, binding ResolvedGraphBinding, confirmedKind *ConfirmedExpectedKind, confirmedAnchor *ConfirmedAnchorSelection, frame *QuestionFrame, scopeAnchorKind SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+	g.calls++
+	if g.failOnCall > 0 && g.calls == g.failOnCall {
+		g.hinted = append(g.hinted, request.RequestedScope.SubjectHints)
+		return SubjectResolution{}, StructureOfferMaterial{}, nil, nil, fmt.Errorf("authorizer unavailable on call %d", g.calls)
+	}
+	return g.groupAuthorizingGraph.ResolveSubjects(ctx, principal, request, interpreted, binding, confirmedKind, confirmedAnchor, frame, scopeAnchorKind)
+}
+
+// --- guard 16: the plan-seam I6 line (r1 P2-4) ----------------------------
+
+func domainPlanSeamLine(t *testing.T, d *domainTable) {
+	const guard = "plan-seam I6 line (RecordPlanGroupAxisCollapsed)"
+	principal := storage.Principal{OrgID: "org_1"}
+	emit := func(event PlanGroupAxisCollapsedEvent, keys ...string) string {
+		records := captureSlogJSONAtProductionLevel(t, func(logger *slog.Logger) {
+			NewSlogEngineTelemetry(logger).RecordPlanGroupAxisCollapsed(context.Background(), principal, event)
+		})
+		if len(records) != 1 {
+			return fmt.Sprintf("records=%d", len(records))
+		}
+		parts := make([]string, 0, len(keys))
+		for _, key := range keys {
+			parts = append(parts, fmt.Sprintf("%s=%v", key, records[0][key]))
+		}
+		return strings.Join(parts, " ")
+	}
+	i6 := FrameValidationFailure{Invariant: FrameInvariantI6, Phase: FrameValidationPhaseA1, Detail: FrameFailureGroupEqualsMember}
+	rejected := DecideFrameGate(FrameValidationResult{Outcome: FrameValidationOutcomeRefusedInvalid, Failure: i6}, true)
+	d.want(guard, "event", "canonical (the plan seam's own event)",
+		emit(PlanGroupAxisCollapsedEvent{GroupKind: SubjectTeam, MemberKind: SubjectTeam, Failure: i6, Gate: rejected}, "level", "failed_invariant", "frame_gate", "refusal_basis"),
+		"level=INFO failed_invariant=i6 frame_gate=rejected:i6 refusal_basis=frame_invariant_violated")
+	d.want(guard, "Failure.Invariant", "out of vocabulary (named unknown, never free text)",
+		emit(PlanGroupAxisCollapsedEvent{Failure: FrameValidationFailure{Invariant: FrameInvariant("free text")}, Gate: rejected}, "failed_invariant"), "failed_invariant=unclassified")
+	d.want(guard, "Failure.Invariant", "zero", emit(PlanGroupAxisCollapsedEvent{Gate: rejected}, "failed_invariant"), "failed_invariant=unclassified")
+	d.want(guard, "Gate", "zero (not evaluated: never reads as a refusal)", emit(PlanGroupAxisCollapsedEvent{Failure: i6}, "frame_gate", "refusal_basis"), "frame_gate=not_evaluated refusal_basis=")
+	d.want(guard, "GroupKind/MemberKind", "zero (outside the published vocabulary: named unknown)", emit(PlanGroupAxisCollapsedEvent{Failure: i6, Gate: rejected}, "group_kind", "member_kind"), "group_kind=unclassified member_kind=unclassified")
+	d.want(guard, "GroupKind", "out of vocabulary (model text never reaches the line)", emit(PlanGroupAxisCollapsedEvent{GroupKind: SubjectKind("free text"), MemberKind: SubjectTeam, Failure: i6, Gate: rejected}, "group_kind", "member_kind"), "group_kind=unclassified member_kind=team")
+	d.record(guard, "all fields", "wrong container / wrong scalar / fractional / boundary", domainExcludedByTypeSystem, "ok")
 }

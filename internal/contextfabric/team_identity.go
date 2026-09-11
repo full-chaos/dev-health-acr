@@ -32,17 +32,21 @@ const TeamCanonicalIDPrefix = "team:"
 // bare prefix: "team:" is not the name of a team, and minting it would create
 // a well-formed identity naming nothing, which is the failure mode this whole
 // helper exists to remove rather than relocate.
+//
+// NOT IDEMPOTENT, deliberately. It once returned an already-prefixed input
+// unchanged, on the reasoning that a caller canonicalising twice should not
+// produce "team:team:x". That made it non-injective: the raw keys `x` and
+// `team:x` are two different rows of teams.id -- colon-bearing ids are
+// supported by the source contract (`gl:full.chaos` is live) -- and both
+// minted `team:x`, so the grouping map merged two teams and TeamRawKey then
+// recovered `x` for the second one, reading its facts for the first. A raw key
+// is never a canonical id, so the input is always prefixed, and the two
+// callers (the team producer and the grouped-cohort mint) both pass raw
+// source-row keys. TestTeamIdentityIsInjectiveAndRoundTripsOverItsWholeDomain
+// pins the whole domain, prefixed and double-prefixed keys included.
 func TeamCanonicalID(rawKey string) string {
 	if rawKey == "" {
 		return ""
-	}
-	if _, already := TeamRawKey(rawKey); already {
-		// Already canonical. Minting again would produce "team:team:x",
-		// an identity no reader can resolve -- and a caller that
-		// canonicalises defensively at two layers is a normal thing to
-		// happen, so this is idempotent by construction rather than by
-		// every caller remembering.
-		return rawKey
 	}
 	return TeamCanonicalIDPrefix + rawKey
 }

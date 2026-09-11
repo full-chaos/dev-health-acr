@@ -2304,6 +2304,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				},
 			}
 			familyOutcome.Gate = DecideFrameGate(collapsed, true)
+			// NAMED AT INFO, before the axis is cleared so the line carries the
+			// kinds that collapsed. The frame-validation line already went out
+			// as valid, and the terminal names only the basis -- without this
+			// line no Info record says which invariant refused the turn.
+			e.recordPlanGroupAxisCollapsed(ctx, principal, PlanGroupAxisCollapsedEvent{
+				Family: plan.Family, GroupKind: plan.GroupKind, MemberKind: plan.MemberKind,
+				Failure: collapsed.Failure, Gate: familyOutcome.Gate,
+			})
 			plan.GroupKind = ""
 			collapsedResolution := SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}
 			terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, collapsedResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarry.Outcome == WindowCarryHit, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent))
@@ -2428,6 +2436,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// regression against the very rows this is meant to move. The
 			// refusal is carried instead, and disclosed.
 			groupBundle, groupOutcome, groupErr := e.readAdmittedGroupFacts(ctx, principal, request, interpretation, binding, plan, &cohort, effectiveWindow)
+			// The axis this turn PROPOSED, captured before any refusal below
+			// clears it from the plan. The group-read line reports the decision
+			// taken about this axis; built from the plan after an over-bound
+			// refusal had cleared it, the line said 251 groups of nothing were
+			// refused.
+			requestedGroupKind := plan.GroupKind
 			// Returned, cap-omitted and merged are captured separately because
 			// the cap and a metadata conflict can each make them differ.
 			var groupFactsReturned, groupFactsCapOmitted, groupFactsMerged int
@@ -2474,10 +2488,15 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// member read's `available` and nothing downstream can say
 				// which population the gap was in. Emitted here, while both
 				// answers still exist separately.
-				e.recordGroupReadCoverageStates(ctx, principal, plan.Family, plan.GroupKind, facts.Coverage, groupBundle.Coverage)
+				e.recordGroupReadCoverageStates(ctx, principal, plan.Family, requestedGroupKind, facts.Coverage, groupBundle.Coverage)
 				if mergeGroupBundle(&facts, groupBundle, principal.OrgID) {
+					// Refused at RECONCILE, after the request went out. `Read`
+					// stays true for the same reason it stays true on a failed
+					// read above: a provider was asked and answered, and
+					// `group_facts_merged=0` beside `metadata_conflict` is what
+					// says none of the answer was composed. Clearing it made
+					// the trace claim the group axis was never queried.
 					groupOutcome.Refused, groupOutcome.Reason = true, GroupReadRefusalMetadataConflict
-					groupOutcome.Read = false
 				} else {
 					groupFactsMerged = len(groupBundle.Facts)
 				}
@@ -2486,7 +2505,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			}
 			e.recordCohortGroupRead(ctx, principal, CohortGroupReadEvent{
 				Family:                 plan.Family,
-				GroupKind:              plan.GroupKind,
+				GroupKind:              requestedGroupKind,
 				Proposed:               groupOutcome.Proposed,
 				Admitted:               len(groupOutcome.Admitted),
 				Denied:                 groupOutcome.Denied,
@@ -2499,6 +2518,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				FactsCapOmitted:        groupFactsCapOmitted,
 				FactsMerged:            groupFactsMerged,
 				FactBundleCap:          maxCanonicalFactsPerBundle,
+				AuthorizationBatches:   groupOutcome.AuthorizationBatches,
+				AuthorizationBatchSize: groupAuthorizationBatchSize(),
 			})
 		} else if groupingOutcome.Refusal != CohortGroupingRefusalNone {
 			// ONE arm for EVERY refusal, and the reason there is only one is

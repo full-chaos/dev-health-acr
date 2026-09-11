@@ -411,6 +411,12 @@ type PlanTelemetry interface {
 	// budget admits and whether that number was clamped by the floor rather
 	// than computed from the budget.
 	RecordCohortMemberAllowance(ctx context.Context, principal storage.Principal, event CohortMemberAllowanceEvent)
+	// RecordPlanGroupAxisCollapsed reports that the PLAN seam refused a turn
+	// whose group axis collapsed onto its member kind (invariant I6), naming
+	// the invariant, the two kinds and the basis. The frame-validation line
+	// cannot say it: the frame was legal and was logged as valid before the
+	// member kind was known.
+	RecordPlanGroupAxisCollapsed(ctx context.Context, principal storage.Principal, event PlanGroupAxisCollapsedEvent)
 	// RecordFactRetention reports which evidence survived a narrowing pass
 	// and, for a grouped answer, how much was dropped because the group it
 	// spoke for is no longer in the answer.

@@ -366,6 +366,8 @@ type recordingTelemetry struct {
 	// cohortMemberAllowances records the allowance decision of every turn
 	// that had a cohort, narrowed or not.
 	cohortMemberAllowances []CohortMemberAllowanceEvent
+	// planGroupAxisCollapses records every plan-seam I6 refusal.
+	planGroupAxisCollapses []PlanGroupAxisCollapsedEvent
 	// factRetentions records every retention pass, so a test can say what
 	// narrowing dropped rather than inferring it from what survived.
 	factRetentions             []FactRetentionEvent
@@ -664,6 +666,10 @@ func (r *recordingTelemetry) RecordGroupReadCoverageState(_ context.Context, _ s
 
 func (r *recordingTelemetry) RecordCohortMemberAllowance(_ context.Context, _ storage.Principal, event CohortMemberAllowanceEvent) {
 	r.cohortMemberAllowances = append(r.cohortMemberAllowances, event)
+}
+
+func (r *recordingTelemetry) RecordPlanGroupAxisCollapsed(_ context.Context, _ storage.Principal, event PlanGroupAxisCollapsedEvent) {
+	r.planGroupAxisCollapses = append(r.planGroupAxisCollapses, event)
 }
 
 func (r *recordingTelemetry) RecordFactRetention(_ context.Context, _ storage.Principal, event FactRetentionEvent) {

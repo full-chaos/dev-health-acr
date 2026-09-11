@@ -53,8 +53,14 @@ type groupReadOutcome struct {
 	UnadmittedFactsDropped int
 	// Read reports that a group-rooted fact request was actually issued.
 	// Distinguishes "the read happened and returned nothing" from "no read
-	// happened", which no count downstream can tell apart.
+	// happened", which no count downstream can tell apart. Once true it stays
+	// true: a refusal AFTER the request went out -- a failed read, a metadata
+	// conflict at reconcile -- changes what the turn did with the answer, not
+	// whether a provider was asked.
 	Read bool
+	// AuthorizationBatches is how many authorization calls the admitted set
+	// took. Zero means authorization never ran (a refusal before it).
+	AuthorizationBatches int
 }
 
 // GroupReadRefusal is the closed vocabulary of reasons the group axis was not
@@ -167,29 +173,64 @@ func groupReadRequirements(plan AnswerPlan) []FactRequirement {
 // It runs on the CONSTRUCTED group identities, after grouping, which is the
 // first moment those identities exist: a member's owning group is read off
 // that member's own facts.
-func (e *Engine) authorizeCohortGroups(ctx context.Context, principal storage.Principal, request InvestigationRequest, interpretation InterpretedQuestion, binding ResolvedGraphBinding, groups []contractsv1.ContextFabricCohortGroup) ([]SubjectRef, error) {
-	hints := make([]SubjectHint, 0, len(groups))
-	for _, group := range groups {
-		hints = append(hints, SubjectHint{
-			Kind:   group.Subject.Kind,
-			ID:     group.Subject.CanonicalID,
-			Label:  group.Subject.Label,
-			Source: string(hintsource.CohortGroupAuthorization),
-		})
+//
+// IN BATCHES NO LARGER THAN ONE CALL CAN COMMIT. The resolver finalizes its
+// caller-hint exit at Options.MaxSubjectCandidates and drops every hint past
+// it exactly as it drops an unauthorized one
+// (graphrank.TestTheCallerHintExitCommitsNoMoreThanItsCandidateCap). The
+// contract's ceiling for that option is 50 while a cohort may carry 250
+// groups, so one call with every group in it authorized the first 50 and
+// reported the rest as DENIED -- a false statement about authorization, and a
+// legal cohort read one group in five. Raising the option past the contract's
+// own ceiling would put this call outside the bounds every other resolution
+// runs under; batching keeps each call inside them and still authorizes the
+// whole set. Every batch must answer: one that errors fails the whole step
+// closed, because a group whose batch could not be asked is not a group that
+// was allowed.
+//
+// It returns how many calls it made, so the trace can say it.
+func (e *Engine) authorizeCohortGroups(ctx context.Context, principal storage.Principal, request InvestigationRequest, interpretation InterpretedQuestion, binding ResolvedGraphBinding, groups []contractsv1.ContextFabricCohortGroup) ([]SubjectRef, int, error) {
+	batchSize := groupAuthorizationBatchSize()
+	committed := make([]SubjectRef, 0, len(groups))
+	batches := 0
+	for start := 0; start < len(groups); start += batchSize {
+		end := min(start+batchSize, len(groups))
+		hints := make([]SubjectHint, 0, end-start)
+		for _, group := range groups[start:end] {
+			hints = append(hints, SubjectHint{
+				Kind:   group.Subject.Kind,
+				ID:     group.Subject.CanonicalID,
+				Label:  group.Subject.Label,
+				Source: string(hintsource.CohortGroupAuthorization),
+			})
+		}
+		authorizationRequest := request
+		authorizationRequest.Options = reuseRecheckOptions
+		authorizationRequest.RequestedScope.SubjectHints = hints
+		// NO FRAME, no confirmed kind, no anchor -- for the same reason the
+		// reuse recheck supplies none. This call asks only "may this
+		// principal see these identities". Supplying the turn's frame would
+		// hint the pool toward kinds this question's MEMBERS are about, which
+		// is not what is being authorized here.
+		resolution, _, _, _, err := e.graph.ResolveSubjects(ctx, principal, authorizationRequest, interpretation, binding, nil, nil, nil, "")
+		batches++
+		if err != nil {
+			return nil, batches, err
+		}
+		committed = append(committed, resolution.Committed...)
 	}
-	authorizationRequest := request
-	authorizationRequest.Options = reuseRecheckOptions
-	authorizationRequest.RequestedScope.SubjectHints = hints
-	// NO FRAME, no confirmed kind, no anchor -- for the same reason the reuse
-	// recheck supplies none. This call asks only "may this principal see
-	// these identities". Supplying the turn's frame would hint the pool
-	// toward kinds this question's MEMBERS are about, which is not what is
-	// being authorized here.
-	resolution, _, _, _, err := e.graph.ResolveSubjects(ctx, principal, authorizationRequest, interpretation, binding, nil, nil, nil, "")
-	if err != nil {
-		return nil, err
+	return admitResolvedGroups(groups, committed), batches, nil
+}
+
+// groupAuthorizationBatchSize is how many groups one authorization call may
+// carry: exactly as many as that call can commit. It is read off the options
+// the call runs under rather than restated, so the batch and the cap cannot
+// drift apart.
+func groupAuthorizationBatchSize() int {
+	if size := reuseRecheckOptions.MaxSubjectCandidates; size > 0 {
+		return size
 	}
-	return admitResolvedGroups(groups, resolution.Committed), nil
+	return 1
 }
 
 // admitResolvedGroups is the authorization step's admission rule: of what the
@@ -242,6 +283,33 @@ func planGroupAxisCollapsed(groupKind, memberKind SubjectKind) bool {
 	return groupKind != "" && groupKind == memberKind
 }
 
+// PlanGroupAxisCollapsedEvent is the plan seam's I6 refusal, as the trace
+// needs it: which invariant refused the turn, over which two kinds, and with
+// what basis.
+//
+// It exists because no other line can carry it. The frame-validation line for
+// this turn was emitted as VALID -- the frame was legal, and the member kind
+// that collapsed onto the group kind is stamped from the cohort discovery
+// returned, after validation. The only other line is the subjectless
+// terminal, which names the basis and not the invariant, so this refusal read
+// the same as every other frame-gate refusal.
+type PlanGroupAxisCollapsedEvent struct {
+	Family     QuestionFamily
+	GroupKind  SubjectKind
+	MemberKind SubjectKind
+	Failure    FrameValidationFailure
+	Gate       FrameGate
+}
+
+// recordPlanGroupAxisCollapsed emits the plan seam's I6 refusal, before the
+// terminal result is built.
+func (e *Engine) recordPlanGroupAxisCollapsed(ctx context.Context, principal storage.Principal, event PlanGroupAxisCollapsedEvent) {
+	if e.telemetry == nil {
+		return
+	}
+	e.telemetry.RecordPlanGroupAxisCollapsed(ctx, principal, event)
+}
+
 // readAdmittedGroupFacts issues the ONE group-rooted fact request this turn is
 // allowed, and returns what the group stage decided along with the bundle.
 //
@@ -272,7 +340,8 @@ func (e *Engine) readAdmittedGroupFacts(ctx context.Context, principal storage.P
 		return CanonicalFactBundle{}, outcome, nil
 	}
 
-	admitted, err := e.authorizeCohortGroups(ctx, principal, request, interpretation, binding, cohort.Groups)
+	admitted, batches, err := e.authorizeCohortGroups(ctx, principal, request, interpretation, binding, cohort.Groups)
+	outcome.AuthorizationBatches = batches
 	if err != nil {
 		// FAIL CLOSED. An authorizer that could not answer is not an
 		// authorizer that said yes.
@@ -367,6 +436,13 @@ type CohortGroupReadEvent struct {
 	FactsCapOmitted int
 	FactsMerged     int
 	FactBundleCap   int
+	// AuthorizationBatches is how many authorization calls the proposed set
+	// took, and AuthorizationBatchSize the most groups one call may carry.
+	// Together they let a reader check from the line alone that no call was
+	// handed more groups than it could commit -- the condition under which a
+	// capped call reports the overflow as denied.
+	AuthorizationBatches   int
+	AuthorizationBatchSize int
 }
 
 // recordCohortGroupRead emits the group stage's decision, on EVERY grouped

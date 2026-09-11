@@ -1732,9 +1732,58 @@ func (t SlogEngineTelemetry) RecordCohortGroupRead(ctx context.Context, principa
 		"group_facts_cap_omitted", event.FactsCapOmitted,
 		"group_facts_merged", event.FactsMerged,
 		"fact_bundle_cap", event.FactBundleCap,
+		// How the proposed set was authorized. A capped call reports the
+		// groups past its cap as denied, so `groups_denied` is a statement
+		// about authorization only when no call carried more than the batch
+		// size -- and these two let a reader check that from this line.
+		"authorization_batches", event.AuthorizationBatches,
+		"authorization_batch_size", event.AuthorizationBatchSize,
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric cohort group read", args...)
+}
+
+// RecordPlanGroupAxisCollapsed emits the plan seam's I6 refusal, at Info.
+//
+// The keys that name the failure are the frame-validation line's own
+// (`failed_invariant`, `failed_phase`, `failure_detail`, `frame_gate`), so a
+// query for an I6 refusal finds both seams with one predicate; `seam` says
+// which one refused. The two kinds are the ones that collapsed, captured
+// before the plan clears its axis.
+//
+// Closed enums and kinds only -- no ids, no payload.
+func (t SlogEngineTelemetry) RecordPlanGroupAxisCollapsed(ctx context.Context, principal storage.Principal, event PlanGroupAxisCollapsedEvent) {
+	if t.logger == nil {
+		return
+	}
+	// The invariant is the field an I6 query groups on, so it goes through
+	// the vocabulary's own membership check; phase and detail are emitted
+	// exactly as the frame-validation line emits them.
+	invariant := event.Failure.Invariant
+	if !ValidFrameInvariant(invariant) {
+		invariant = FrameInvariant("unclassified")
+	}
+	args := []any{
+		"org_id", principal.OrgID,
+		"family", string(event.Family),
+		"seam", "plan",
+		// Through the published kind vocabulary, as the interpretation
+		// boundary's kinds are: the group kind came from the model's hint,
+		// so no model text may reach this line through a kind slot.
+		"group_kind", closedKindToken(event.GroupKind),
+		"member_kind", closedKindToken(event.MemberKind),
+		"failed_invariant", string(invariant),
+		"failed_phase", string(event.Failure.Phase),
+		"failure_detail", string(event.Failure.Detail),
+		"frame_gate", event.Gate.Observable(),
+		// The WIRE basis the served document discloses, under the key the
+		// subjectless terminal already uses for it. Not the gate's own
+		// refuse_basis: that names a refused-basis outcome, and on a
+		// rejected-invalid gate like this one it reads `none`.
+		"refusal_basis", string(event.Gate.RefusalBasis()),
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric plan group axis collapsed", args...)
 }
 
 // RecordGroupReadCoverageState emits one read's observation of one coverage
