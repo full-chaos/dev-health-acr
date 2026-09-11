@@ -36,6 +36,13 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
+// lookupFactScopePolicy reads the AMBIENT (production) policy table through
+// a throwaway resolver -- this file never installs a narrow table (see the
+// file comment), so there is no per-test table to inject.
+func lookupFactScopePolicy(kind FactKind, origin SubjectKind) (factScopePolicyRule, bool) {
+	return NewFactReadScopeResolver(nil).lookupFactScopePolicy(kind, origin)
+}
+
 // chaos5405Pair is one ratified (requirement kind, origin kind) activation
 // mapping, with the policy name and basis D-b assigns it.
 type chaos5405Pair struct {

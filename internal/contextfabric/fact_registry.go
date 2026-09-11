@@ -312,6 +312,13 @@ type FactRegistryOptions struct {
 	// which is a strict improvement on the silent false prune it replaces
 	// but reads no new facts. See FactScopeExpander.
 	ScopeExpander FactScopeExpander
+	// ScopePolicies overrides the scope resolver's requirement/origin ->
+	// rule table. nil (every production caller) means the resolver uses the
+	// package's production table (factScopePolicies in fact_scope.go). A
+	// test that needs a narrow or altered table passes it here rather than
+	// reassigning the package global, which a t.Parallel reader elsewhere in
+	// the package could observe mid-mutation (the CHAOS-5405 race).
+	ScopePolicies map[FactKind]map[SubjectKind]factScopePolicyRule
 	// Logger (CHAOS-4521) receives one closed-vocabulary decision-basis
 	// record per PLANNED capability -- see FactCapabilityRegistry.recordFactRead.
 	//
@@ -356,7 +363,7 @@ func NewFactCapabilityRegistry(providers []FactProvider, options FactRegistryOpt
 		// and the check that gets forgotten is the one that reintroduces the
 		// silent prune. A resolver with no expander is a complete, correct
 		// resolver -- it answers policy_unavailable.
-		scopeResolver: NewFactReadScopeResolver(options.ScopeExpander),
+		scopeResolver: NewFactReadScopeResolverWithPolicies(options.ScopeExpander, options.ScopePolicies),
 	}
 	for _, provider := range providers {
 		if provider == nil {
@@ -369,9 +376,31 @@ func NewFactCapabilityRegistry(providers []FactProvider, options FactRegistryOpt
 		if _, exists := registry.providers[capability.Kind]; exists {
 			return nil, fmt.Errorf("duplicate fact capability %q", capability.Kind)
 		}
+		// Copied, not aliased: capabilityIndex reads registry.providers
+		// directly and feeds ReadFacts's parameter allowlist and
+		// subject-kind checks, so a provider mutating any of its own
+		// slices/maps after registration would change a live decision.
+		capability.SupportedSubjectKinds = copyProviderSlice(capability.SupportedSubjectKinds)
+		capability.AllowedParameters = copyProviderSlice(capability.AllowedParameters)
+		capability.SubjectRoles = copyProviderSlice(capability.SubjectRoles)
+		capability.Tables = copyTableDeclarations(capability.Tables)
+		capability.Obligations = copyObligationDeclarations(capability.Obligations)
 		registry.providers[capability.Kind] = registeredFactProvider{capability: capability, provider: provider}
 	}
 	return registry, nil
+}
+
+// copyProviderSlice returns an independent copy of values, preserving nil
+// (a nil field a provider never set stays nil after the copy, matching the
+// nil-preserving contract copyTableDeclarations/copyObligationDeclarations
+// already keep below -- unlike cloneSlice in model_runtime.go, which always
+// returns non-nil for a different validator's requirements and would
+// change FactCapability's nil-vs-empty semantics here).
+func copyProviderSlice[T any](values []T) []T {
+	if values == nil {
+		return nil
+	}
+	return append([]T(nil), values...)
 }
 
 // copyTableDeclarations and copyObligationDeclarations deep-copy the two
@@ -407,8 +436,15 @@ func (r *FactCapabilityRegistry) Capabilities() []FactCapability {
 	capabilities := make([]FactCapability, 0, len(r.providers))
 	for _, registered := range r.providers {
 		capability := registered.capability
-		capability.SupportedSubjectKinds = append([]SubjectKind(nil), capability.SupportedSubjectKinds...)
-		capability.AllowedParameters = append([]string(nil), capability.AllowedParameters...)
+		capability.SupportedSubjectKinds = copyProviderSlice(capability.SupportedSubjectKinds)
+		capability.AllowedParameters = copyProviderSlice(capability.AllowedParameters)
+		// SubjectRoles gets the same defence (round-3 class-sweep): the
+		// registry's own field is now an independent copy as of
+		// registration above, but Capabilities() had never copied it
+		// either, on the way IN or the way OUT -- callers of Capabilities()
+		// could reach the registry's storage the same way a mutating
+		// provider used to.
+		capability.SubjectRoles = copyProviderSlice(capability.SubjectRoles)
 		// The MAP fields need the same defence the slice fields above
 		// already get, and for a sharper reason: a struct copy duplicates
 		// the header but shares the backing map, so a caller writing

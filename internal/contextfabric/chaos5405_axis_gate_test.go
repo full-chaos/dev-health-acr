@@ -140,11 +140,6 @@ func TestChaos5405_TheExpandersOwnAxisRefusalNeverReadsAsABackendFault(t *testin
 // or a key that vanishes when its value is empty, would pass a struct read and
 // disappear for the operator this field is for.
 func TestChaos5405_TheRepositoryPoliciesObservedTimeRefusalStillNamesItsReason(t *testing.T) {
-	// NOT t.Parallel(), deliberately: this test swaps the package-level
-	// factScopePolicies table, and a parallel test that mutates shared global
-	// state races every other parallel test in the package. The CHAOS-4099
-	// observed-time test next door omits it for the same reason.
-
 	// A REPOSITORY-target rule, which is what makes this distinct from the
 	// gate test above: it does NOT match the work-item axis rung and must be
 	// refused by the observed-time rung on its own.
@@ -160,12 +155,9 @@ func TestChaos5405_TheRepositoryPoliciesObservedTimeRefusalStillNamesItsReason(t
 
 	resolve := func(t *testing.T, tctx TimeContext) (FactScopeExpansionEvent, *axisGateExpander) {
 		t.Helper()
-		restore := factScopePolicies
-		t.Cleanup(func() { factScopePolicies = restore })
-		factScopePolicies = repoRule
 
 		expander := &axisGateExpander{}
-		scope := NewFactReadScopeResolver(expander).Resolve(
+		scope := NewFactReadScopeResolverWithPolicies(expander, repoRule).Resolve(
 			context.Background(), storage.Principal{OrgID: "org_1"},
 			newFactScopeResolveInput(scopeTimeRequest(
 				[]SubjectRef{scopeProject},

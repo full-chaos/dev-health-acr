@@ -20,6 +20,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -370,9 +371,7 @@ func TestChaos4099_EachTeamPolicyIsNamedOnItsOwnRequirement(t *testing.T) {
 // policy dark, and a test that could not tell the axis gate from the
 // disabled gate would assert nothing about the axis at all.
 func TestChaos4099_ObservedTimeAxisIsRefusedNotSilentlyAnsweredAsCurrent(t *testing.T) {
-	restore := factScopePolicies
-	t.Cleanup(func() { factScopePolicies = restore })
-	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
+	policies := map[FactKind]map[SubjectKind]factScopePolicyRule{
 		FactMetrics: {SubjectProject: {
 			Policy:     FactScopePolicyProjectWorkItemRepository,
 			TargetKind: SubjectRepository,
@@ -394,7 +393,7 @@ func TestChaos4099_ObservedTimeAxisIsRefusedNotSilentlyAnsweredAsCurrent(t *test
 		{"range, missing End", TimeContext{Axis: contractsv1.ContextFabricTemporalRange, Start: &asOf}},
 	}
 	for _, c := range refusalCases {
-		scope := NewFactReadScopeResolver(expander).Resolve(
+		scope := NewFactReadScopeResolverWithPolicies(expander, policies).Resolve(
 			context.Background(), storage.Principal{OrgID: "org_1"},
 			newFactScopeResolveInput(scopeTimeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, c.timeContext)),
 			scopeCapabilities(),
@@ -415,7 +414,7 @@ func TestChaos4099_ObservedTimeAxisIsRefusedNotSilentlyAnsweredAsCurrent(t *test
 
 	// Control: the SAME table on the current axis does expand, proving the
 	// refusals above are attributable to the axis/bounds and nothing else.
-	scope := NewFactReadScopeResolver(expander).Resolve(
+	scope := NewFactReadScopeResolverWithPolicies(expander, policies).Resolve(
 		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
 		scopeCapabilities(),
@@ -444,9 +443,7 @@ func scopeTimeRequest(subjects []SubjectRef, requirements []FactRequirement, tim
 // FactScopeExpansionRequest unmodified, since ScopeExpander.projectRepositoriesAsOf
 // is the thing that actually binds the traversal to it.
 func TestChaos4109_ValidTimeAndRangeAxesReachTheExpanderWithBounds(t *testing.T) {
-	restore := factScopePolicies
-	t.Cleanup(func() { factScopePolicies = restore })
-	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
+	policies := map[FactKind]map[SubjectKind]factScopePolicyRule{
 		FactMetrics: {SubjectProject: {
 			Policy:     FactScopePolicyProjectWorkItemRepository,
 			TargetKind: SubjectRepository,
@@ -467,7 +464,7 @@ func TestChaos4109_ValidTimeAndRangeAxesReachTheExpanderWithBounds(t *testing.T)
 	}
 	for _, c := range cases {
 		expander := &recordingScopeExpander{targets: []SubjectRef{scopeRepo}}
-		scope := NewFactReadScopeResolver(expander).Resolve(
+		scope := NewFactReadScopeResolverWithPolicies(expander, policies).Resolve(
 			context.Background(), storage.Principal{OrgID: "org_1"},
 			newFactScopeResolveInput(scopeTimeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, c.timeContext)),
 			scopeCapabilities(),
@@ -1124,20 +1121,19 @@ func (e *recordingScopeExpander) ExpandFactScope(_ context.Context, request Fact
 	return FactScopeExpansionResult{Targets: targets, Counts: e.counts, TargetBasis: targetBasis, TargetAttributionSource: e.targetAttributionSource, TargetRoot: e.targetRoot}, nil
 }
 
-// disableAllProjectPolicies installs a narrow table with the SAME three
+// disabledProjectPoliciesTable returns a narrow table with the SAME three
 // project policies caseSixtyRequirements() exercises, each pinned
-// Enabled:false, and restores the real global table on cleanup.
+// Enabled:false.
 //
 // Deliberately NOT the ambient factScopePolicies: a test asserting "a
 // disabled policy never reaches the expander" must hold regardless of
 // which policies happen to be live in production right now -- pinning its
 // own disabled table keeps that invariant meaningful even after CHAOS-4099
-// stage 2 activates these same three for real.
-func disableAllProjectPolicies(t *testing.T) {
-	t.Helper()
-	restore := factScopePolicies
-	t.Cleanup(func() { factScopePolicies = restore })
-	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
+// stage 2 activates these same three for real. Returned rather than
+// installed into the package global, which a t.Parallel reader elsewhere
+// could observe mid-mutation.
+func disabledProjectPoliciesTable() map[FactKind]map[SubjectKind]factScopePolicyRule {
+	return map[FactKind]map[SubjectKind]factScopePolicyRule{
 		FactMetrics: {SubjectProject: {
 			Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
 			Basis: FactScopeBasisActivityProxy, Enabled: false,
@@ -1162,10 +1158,8 @@ func disableAllProjectPolicies(t *testing.T) {
 // for that path), so this test installs its own disabled table rather than
 // reading the ambient one.
 func TestChaos4099_ADisabledPolicyNeverReachesTheExpander(t *testing.T) {
-	disableAllProjectPolicies(t)
-
 	expander := &recordingScopeExpander{targets: []SubjectRef{scopeRepo}}
-	scope := NewFactReadScopeResolver(expander).Resolve(
+	scope := NewFactReadScopeResolverWithPolicies(expander, disabledProjectPoliciesTable()).Resolve(
 		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, caseSixtyRequirements(), TemporalCurrent)),
 		scopeCapabilities(),
@@ -1188,9 +1182,7 @@ func TestChaos4099_ADisabledPolicyNeverReachesTheExpander(t *testing.T) {
 // authorization pass is not one anybody may read facts for, so a partial
 // result before the error is discarded rather than used.
 func TestChaos4099_AFailedTraversalAdmitsNothing(t *testing.T) {
-	restore := factScopePolicies
-	t.Cleanup(func() { factScopePolicies = restore })
-	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
+	policies := map[FactKind]map[SubjectKind]factScopePolicyRule{
 		FactMetrics: {SubjectProject: {
 			Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
 			Basis: FactScopeBasisActivityProxy, Enabled: true,
@@ -1201,7 +1193,7 @@ func TestChaos4099_AFailedTraversalAdmitsNothing(t *testing.T) {
 		counts:  FactScopeExpansionCounts{CandidateCount: 4, AuthorizationDroppedCount: 1},
 		err:     context.DeadlineExceeded,
 	}
-	scope := NewFactReadScopeResolver(expander).Resolve(
+	scope := NewFactReadScopeResolverWithPolicies(expander, policies).Resolve(
 		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
 		scopeCapabilities(),
@@ -1239,9 +1231,7 @@ func TestChaos4099_AFailedTraversalAdmitsNothing(t *testing.T) {
 // turn an expansion into a lost investigation. The resolver re-checks the
 // kind itself rather than trusting the expander.
 func TestChaos4099_AWrongKindTargetIsNeverHandedToAProvider(t *testing.T) {
-	restore := factScopePolicies
-	t.Cleanup(func() { factScopePolicies = restore })
-	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
+	policies := map[FactKind]map[SubjectKind]factScopePolicyRule{
 		FactMetrics: {SubjectProject: {
 			Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
 			Basis: FactScopeBasisActivityProxy, Enabled: true,
@@ -1252,7 +1242,7 @@ func TestChaos4099_AWrongKindTargetIsNeverHandedToAProvider(t *testing.T) {
 		targets: []SubjectRef{subject(SubjectWorkItem, "work_item:linear:ABC-1")},
 		counts:  FactScopeExpansionCounts{CandidateCount: 1},
 	}
-	scope := NewFactReadScopeResolver(expander).Resolve(
+	scope := NewFactReadScopeResolverWithPolicies(expander, policies).Resolve(
 		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
 		scopeCapabilities(),
@@ -1279,9 +1269,7 @@ func TestChaos4099_AWrongKindTargetIsNeverHandedToAProvider(t *testing.T) {
 // truncation half: a capped traversal degrades and says so, never silently
 // returning a short list as if it were complete.
 func TestChaos4099_TruncationIsReportedNotSwallowed(t *testing.T) {
-	restore := factScopePolicies
-	t.Cleanup(func() { factScopePolicies = restore })
-	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
+	policies := map[FactKind]map[SubjectKind]factScopePolicyRule{
 		FactMetrics: {SubjectProject: {
 			Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
 			Basis: FactScopeBasisActivityProxy, Enabled: true,
@@ -1291,7 +1279,7 @@ func TestChaos4099_TruncationIsReportedNotSwallowed(t *testing.T) {
 		targets: []SubjectRef{scopeRepo},
 		counts:  FactScopeExpansionCounts{CandidateCount: 1, Truncated: true},
 	}
-	scope := NewFactReadScopeResolver(expander).Resolve(
+	scope := NewFactReadScopeResolverWithPolicies(expander, policies).Resolve(
 		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
 		scopeCapabilities(),
@@ -1506,15 +1494,13 @@ func TestChaos4099_EveryEventFieldReachesTheSink(t *testing.T) {
 // End to end with a policy actually enabled (stage 2's shape, proven now)
 // ---------------------------------------------------------------------------
 
-// enableMetricsProjectPolicy switches on the metrics policy for the duration
-// of one test. Stage 1 ships every policy dark, so without this no test could
-// exercise the admission path at all -- and an admission path that first runs
-// in the change that activates it is an admission path nobody reviewed.
-func enableMetricsProjectPolicy(t *testing.T, limit int) {
-	t.Helper()
-	restore := factScopePolicies
-	t.Cleanup(func() { factScopePolicies = restore })
-	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
+// metricsProjectPolicyTable is the metrics project policy switched on, for
+// injection into FactRegistryOptions.ScopePolicies. Stage 1 ships every
+// policy dark, so without this no test could exercise the admission path at
+// all -- and an admission path that first runs in the change that activates
+// it is an admission path nobody reviewed.
+func metricsProjectPolicyTable(limit int) map[FactKind]map[SubjectKind]factScopePolicyRule {
+	return map[FactKind]map[SubjectKind]factScopePolicyRule{
 		FactMetrics: {SubjectProject: {
 			Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
 			Basis: FactScopeBasisActivityProxy, Enabled: true, Limit: limit,
@@ -1542,8 +1528,6 @@ func enableMetricsProjectPolicy(t *testing.T, limit int) {
 // thrown away, which would present as "expansion did nothing" with no error
 // anywhere.
 func TestChaos4099_AnEnabledPolicyReachesTheProviderAndDisclosesTheProxy(t *testing.T) {
-	enableMetricsProjectPolicy(t, 0)
-
 	observed := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
 	metrics := &factProviderStub{
 		capability: planCapability(FactMetrics, "metrics", SubjectRepository),
@@ -1559,6 +1543,7 @@ func TestChaos4099_AnEnabledPolicyReachesTheProviderAndDisclosesTheProxy(t *test
 	}
 	registry, err := NewFactCapabilityRegistry([]FactProvider{metrics}, FactRegistryOptions{
 		ScopeExpander: &recordingScopeExpander{targets: []SubjectRef{scopeRepo}},
+		ScopePolicies: metricsProjectPolicyTable(0),
 	})
 	if err != nil {
 		t.Fatalf("NewFactCapabilityRegistry: %v", err)
@@ -1609,13 +1594,44 @@ func TestChaos4099_AnEnabledPolicyReachesTheProviderAndDisclosesTheProxy(t *test
 	}
 }
 
-// enableMetricsTeamPolicy is enableMetricsProjectPolicy's twin for
+// TestChaos5547_FactRegistryOptionsScopePoliciesReachesTheResolver pins codex
+// r2's confirmed P3 (PR #495): TestChaos4099_AnEnabledPolicyReachesTheProviderAndDisclosesTheProxy's
+// injected metricsProjectPolicyTable(0) is byte-identical, rule for rule, to
+// the ambient production entry for (metrics, project) -- reproduced by hand:
+// passing nil for ScopePolicies there (silently ignoring it, falling back to
+// production) still passed every one of that test's assertions. It stays as
+// the full-stack proof (proxy disclosure, subject identity, coverage); this
+// test isolates ONLY the wiring question, with a Limit production does NOT
+// share (0, uncapped), against two candidate targets -- a silently-ignored
+// ScopePolicies would admit both, an honoured one admits exactly one.
+func TestChaos5547_FactRegistryOptionsScopePoliciesReachesTheResolver(t *testing.T) {
+	t.Parallel()
+	metrics := &factProviderStub{
+		capability: planCapability(FactMetrics, "metrics", SubjectRepository),
+		result:     FactProviderResult{State: SourceAvailable},
+	}
+	overflowRepo := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:chaos5547-overflow"}
+	registry, err := NewFactCapabilityRegistry([]FactProvider{metrics}, FactRegistryOptions{
+		ScopeExpander: &recordingScopeExpander{targets: []SubjectRef{scopeRepo, overflowRepo}},
+		ScopePolicies: metricsProjectPolicyTable(1),
+	})
+	if err != nil {
+		t.Fatalf("NewFactCapabilityRegistry: %v", err)
+	}
+	bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"},
+		scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent))
+	if err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+	if got := len(bundle.Scope.Derivations); got != 1 {
+		t.Fatalf("derivations = %d, want exactly 1 -- ScopePolicies' Limit:1 was silently ignored (the ambient production entry has no cap, which would admit both candidates)", got)
+	}
+}
+
+// metricsTeamPolicyTable is metricsProjectPolicyTable's twin for
 // CHAOS-4101's team-origin metrics policy.
-func enableMetricsTeamPolicy(t *testing.T, limit int) {
-	t.Helper()
-	restore := factScopePolicies
-	t.Cleanup(func() { factScopePolicies = restore })
-	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
+func metricsTeamPolicyTable(limit int) map[FactKind]map[SubjectKind]factScopePolicyRule {
+	return map[FactKind]map[SubjectKind]factScopePolicyRule{
 		FactMetrics: {SubjectTeam: {
 			Policy: FactScopePolicyTeamPrimaryAttributionRepository, TargetKind: SubjectRepository,
 			Basis: FactScopeBasisActivityProxy, Enabled: true, Limit: limit,
@@ -1633,8 +1649,6 @@ func enableMetricsTeamPolicy(t *testing.T, limit int) {
 // is still activity, not ownership) AND the attributed_primary_team caveat
 // (present only on the heuristic-sourced target).
 func TestChaos4099_ATeamPolicyExpandsWithAPerTargetBasisAndDisclosesBoth(t *testing.T) {
-	enableMetricsTeamPolicy(t, 0)
-
 	nativeRepo := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:native-team-repo"}
 	heuristicRepo := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:heuristic-repo"}
 	metrics := &factProviderStub{
@@ -1653,6 +1667,7 @@ func TestChaos4099_ATeamPolicyExpandsWithAPerTargetBasisAndDisclosesBoth(t *test
 				canonicalFactSubjectKey(heuristicRepo): FactScopeBasisAttributedPrimaryTeam,
 			},
 		},
+		ScopePolicies: metricsTeamPolicyTable(0),
 	})
 	if err != nil {
 		t.Fatalf("NewFactCapabilityRegistry: %v", err)
@@ -1737,8 +1752,6 @@ func TestChaos4099_ATeamPolicyExpandsWithAPerTargetBasisAndDisclosesBoth(t *test
 // only ONE may be admitted, so the count must name only that one winner,
 // never both.
 func TestChaos4101_AttributionSourceCountsExcludeTheOverflowedTarget(t *testing.T) {
-	enableMetricsTeamPolicy(t, 1)
-
 	admittedRepo := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:admitted-repo"}
 	overflowRepo := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:overflow-repo"}
 	metrics := &factProviderStub{
@@ -1757,6 +1770,7 @@ func TestChaos4101_AttributionSourceCountsExcludeTheOverflowedTarget(t *testing.
 				canonicalFactSubjectKey(overflowRepo): "repo_ownership",
 			},
 		},
+		ScopePolicies: metricsTeamPolicyTable(1),
 	})
 	if err != nil {
 		t.Fatalf("NewFactCapabilityRegistry: %v", err)
@@ -1899,9 +1913,7 @@ func TestChaos4101_TeamSubjectAdmitsRealFactsAcrossAllThreeCapabilities(t *testi
 // actually reached -- exactly the overstatement
 // FactScopeBasisAttributedPrimaryTeam exists to prevent.
 func TestChaos4101_ADuplicateAcrossOriginKindsUpgradesToTheWeakerBasis(t *testing.T) {
-	restore := factScopePolicies
-	t.Cleanup(func() { factScopePolicies = restore })
-	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
+	policies := map[FactKind]map[SubjectKind]factScopePolicyRule{
 		FactMetrics: {
 			SubjectProject: {
 				Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
@@ -1936,6 +1948,7 @@ func TestChaos4101_ADuplicateAcrossOriginKindsUpgradesToTheWeakerBasis(t *testin
 				},
 			},
 		},
+		ScopePolicies: policies,
 	})
 	if err != nil {
 		t.Fatalf("NewFactCapabilityRegistry: %v", err)
@@ -1965,9 +1978,7 @@ func TestChaos4101_ADuplicateAcrossOriginKindsUpgradesToTheWeakerBasis(t *testin
 // (it was already counted in `existing`), so the duplicate check must run
 // BEFORE the cap check, not after.
 func TestChaos4101_TheWeakerBasisUpgradeAppliesEvenWhenThePriorOriginFilledTheCap(t *testing.T) {
-	restore := factScopePolicies
-	t.Cleanup(func() { factScopePolicies = restore })
-	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
+	policies := map[FactKind]map[SubjectKind]factScopePolicyRule{
 		FactMetrics: {
 			SubjectProject: {
 				Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
@@ -1998,6 +2009,7 @@ func TestChaos4101_TheWeakerBasisUpgradeAppliesEvenWhenThePriorOriginFilledTheCa
 				},
 			},
 		},
+		ScopePolicies: policies,
 	})
 	if err != nil {
 		t.Fatalf("NewFactCapabilityRegistry: %v", err)
@@ -2029,9 +2041,7 @@ func TestChaos4101_TheWeakerBasisUpgradeAppliesEvenWhenThePriorOriginFilledTheCa
 // prove the resolver actually reads that override rather than falling back
 // to origins[0] for a target the expander COULD attribute precisely.
 func TestChaos4260_RootIsPerTargetAcrossMultipleSameKindOrigins(t *testing.T) {
-	restore := factScopePolicies
-	t.Cleanup(func() { factScopePolicies = restore })
-	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
+	policies := map[FactKind]map[SubjectKind]factScopePolicyRule{
 		FactMetrics: {
 			SubjectTeam: {
 				Policy: FactScopePolicyTeamPrimaryAttributionRepository, TargetKind: SubjectRepository,
@@ -2059,6 +2069,7 @@ func TestChaos4260_RootIsPerTargetAcrossMultipleSameKindOrigins(t *testing.T) {
 				canonicalFactSubjectKey(repoFromSecondTeam): secondTeam,
 			},
 		},
+		ScopePolicies: policies,
 	})
 	if err != nil {
 		t.Fatalf("NewFactCapabilityRegistry: %v", err)
@@ -2144,7 +2155,6 @@ func TestChaos4099_ADirectBasisDerivationDoesNotClaimAProxy(t *testing.T) {
 // count it did not compute.
 func TestChaos4099_TheResolverEnforcesTheCapItselfFromTheOverflowRow(t *testing.T) {
 	const limit = 3
-	enableMetricsProjectPolicy(t, limit)
 
 	// limit+1 targets, and an expander that (incorrectly) reports no
 	// truncation -- the exact miswiring described above.
@@ -2156,7 +2166,7 @@ func TestChaos4099_TheResolverEnforcesTheCapItselfFromTheOverflowRow(t *testing.
 		targets: targets,
 		counts:  FactScopeExpansionCounts{CandidateCount: len(targets), Truncated: false},
 	}
-	scope := NewFactReadScopeResolver(expander).Resolve(
+	scope := NewFactReadScopeResolverWithPolicies(expander, metricsProjectPolicyTable(limit)).Resolve(
 		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
 		scopeCapabilities(),
@@ -2239,11 +2249,9 @@ func TestChaos4099_AForgedScopeOnTheRequestIsIgnored(t *testing.T) {
 // The fix drops the incoming scope BEFORE validation, so the override is
 // rejected as out of scope and the expander is never consulted at all.
 func TestChaos4099_AForgedScopeCannotSmuggleAnExpansionOrigin(t *testing.T) {
-	restore := factScopePolicies
-	t.Cleanup(func() { factScopePolicies = restore })
 	// The project policy ACTIVATED, which is what stage 2 does. The hole is
 	// dark today only because nothing traverses yet.
-	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
+	policies := map[FactKind]map[SubjectKind]factScopePolicyRule{
 		FactMetrics: {SubjectProject: {
 			Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
 			Basis: FactScopeBasisActivityProxy, Enabled: true, Limit: 10,
@@ -2271,7 +2279,7 @@ func TestChaos4099_AForgedScopeCannotSmuggleAnExpansionOrigin(t *testing.T) {
 		result:     FactProviderResult{State: SourceAvailable, Version: "metrics-v1"},
 	}
 	registry, err := NewFactCapabilityRegistry([]FactProvider{metrics},
-		FactRegistryOptions{ScopeExpander: expander})
+		FactRegistryOptions{ScopeExpander: expander, ScopePolicies: policies})
 	if err != nil {
 		t.Fatalf("NewFactCapabilityRegistry: %v", err)
 	}
@@ -2308,12 +2316,10 @@ func TestChaos4099_AForgedScopeCannotSmuggleAnExpansionOrigin(t *testing.T) {
 // HasDisclosableGap reads the same map, so the answer's sentence vanished
 // too. Exactly this ticket's own defect, arrived at from a third direction.
 func TestChaos4099_ACleanGapNeverEvictsADegradingOne(t *testing.T) {
-	restore := factScopePolicies
-	t.Cleanup(func() { factScopePolicies = restore })
 	// The project origin is ENABLED and will find nothing; the team origin
 	// stays disabled and therefore degrades. Sorted order decides project
 	// first, so the non-degrading outcome reaches the slot first.
-	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
+	policies := map[FactKind]map[SubjectKind]factScopePolicyRule{
 		FactMetrics: {
 			SubjectProject: {
 				Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
@@ -2328,7 +2334,7 @@ func TestChaos4099_ACleanGapNeverEvictsADegradingOne(t *testing.T) {
 
 	// No targets and no counts: the chain ran and genuinely ended.
 	expander := &recordingScopeExpander{}
-	scope := NewFactReadScopeResolver(expander).Resolve(
+	scope := NewFactReadScopeResolverWithPolicies(expander, policies).Resolve(
 		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject, scopeTeam},
 			[]FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
@@ -2386,9 +2392,7 @@ func TestChaos4099_ACleanGapNeverEvictsADegradingOne(t *testing.T) {
 // synthesis input read -- claimed complete coverage. A disclosure the fact
 // bundle contradicts is worth less than no disclosure at all.
 func TestChaos4099_APartiallyLostExpansionDegradesTheBundle(t *testing.T) {
-	restore := factScopePolicies
-	t.Cleanup(func() { factScopePolicies = restore })
-	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
+	policies := map[FactKind]map[SubjectKind]factScopePolicyRule{
 		FactMetrics: {SubjectProject: {
 			Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
 			Basis: FactScopeBasisActivityProxy, Enabled: true, Limit: 10,
@@ -2415,7 +2419,7 @@ func TestChaos4099_APartiallyLostExpansionDegradesTheBundle(t *testing.T) {
 		},
 	}
 	registry, err := NewFactCapabilityRegistry([]FactProvider{metrics},
-		FactRegistryOptions{ScopeExpander: expander})
+		FactRegistryOptions{ScopeExpander: expander, ScopePolicies: policies})
 	if err != nil {
 		t.Fatalf("NewFactCapabilityRegistry: %v", err)
 	}
@@ -2472,15 +2476,13 @@ func TestChaos4099_APartiallyLostExpansionDegradesTheBundle(t *testing.T) {
 // destroy the investigation it was meant to help.
 func TestChaos4099_TheCapAndDedupApplyPerRequirementNotPerOriginGroup(t *testing.T) {
 	const limit = 2
-	restore := factScopePolicies
-	t.Cleanup(func() { factScopePolicies = restore })
 	// BOTH origin kinds enabled and aimed at the same target kind, so one
 	// requirement genuinely has two expanding origin groups.
 	rule := factScopePolicyRule{
 		Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
 		Basis: FactScopeBasisActivityProxy, Enabled: true, Limit: limit,
 	}
-	factScopePolicies = map[FactKind]map[SubjectKind]factScopePolicyRule{
+	policies := map[FactKind]map[SubjectKind]factScopePolicyRule{
 		FactMetrics: {SubjectProject: rule, SubjectTeam: rule},
 	}
 	// OVERLAPPING BUT DISTINCT groups: [a,b] and [b,c].
@@ -2500,7 +2502,7 @@ func TestChaos4099_TheCapAndDedupApplyPerRequirementNotPerOriginGroup(t *testing
 		counts:  FactScopeExpansionCounts{CandidateCount: 2},
 	}
 
-	scope := NewFactReadScopeResolver(expander).Resolve(
+	scope := NewFactReadScopeResolverWithPolicies(expander, policies).Resolve(
 		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject, scopeTeam},
 			[]FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
@@ -2539,10 +2541,10 @@ func TestChaos4099_TheCapAndDedupApplyPerRequirementNotPerOriginGroup(t *testing
 		t.Fatalf("events claim %d admitted subjects but %d are in scope -- telemetry must report what the provider is actually asked", totalAdmitted, len(derived))
 	}
 	// Deterministic: the same inputs produce the same scope, every time.
-	repeat := NewFactReadScopeResolver(&recordingScopeExpander{
+	repeat := NewFactReadScopeResolverWithPolicies(&recordingScopeExpander{
 		perCall: [][]SubjectRef{{repoA, repoB}, {repoB, repoC}},
 		counts:  FactScopeExpansionCounts{CandidateCount: 2},
-	}).Resolve(
+	}, policies).Resolve(
 		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject, scopeTeam},
 			[]FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
@@ -2568,15 +2570,13 @@ func TestChaos4099_TheCapAndDedupApplyPerRequirementNotPerOriginGroup(t *testing
 // disclosure, logged at INFO. That is this ticket's own defect reintroduced
 // inside its fix, on the one path where the system knows least.
 func TestChaos4099_ATruncatedTraversalThatAdmittedNothingIsNotAProofOfAbsence(t *testing.T) {
-	enableMetricsProjectPolicy(t, 0)
-
 	expander := &recordingScopeExpander{
 		targets: nil,
 		counts: FactScopeExpansionCounts{
 			CandidateCount: 40, AuthorizationDroppedCount: 40, Truncated: true,
 		},
 	}
-	scope := NewFactReadScopeResolver(expander).Resolve(
+	scope := NewFactReadScopeResolverWithPolicies(expander, metricsProjectPolicyTable(0)).Resolve(
 		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
 		scopeCapabilities(),
@@ -2614,15 +2614,13 @@ func TestChaos4099_ATruncatedTraversalThatAdmittedNothingIsNotAProofOfAbsence(t 
 // by Truncated=false -- this is the "we saw everything, none of it was
 // authorized" case, not "we stopped partway through."
 func TestChaos4099_AllAuthorizationDroppedIsMatchedUnauthorizedNotAttemptedEmpty(t *testing.T) {
-	enableMetricsProjectPolicy(t, 0)
-
 	expander := &recordingScopeExpander{
 		targets: nil,
 		counts: FactScopeExpansionCounts{
 			CandidateCount: 3, AuthorizationDroppedCount: 3, Truncated: false,
 		},
 	}
-	scope := NewFactReadScopeResolver(expander).Resolve(
+	scope := NewFactReadScopeResolverWithPolicies(expander, metricsProjectPolicyTable(0)).Resolve(
 		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
 		scopeCapabilities(),
@@ -2690,15 +2688,13 @@ func TestChaos4099_AllAuthorizationDroppedIsMatchedUnauthorizedNotAttemptedEmpty
 // specifically. Extending the warning to this case is a deliberate v1
 // limitation (design doc §6b), not an oversight.
 func TestChaos4099_MixedAuthorizedAndUnauthorizedStaysExpandedNoWarning(t *testing.T) {
-	enableMetricsProjectPolicy(t, 0)
-
 	expander := &recordingScopeExpander{
 		targets: []SubjectRef{scopeRepo},
 		counts: FactScopeExpansionCounts{
 			CandidateCount: 3, AuthorizationDroppedCount: 2, Truncated: false,
 		},
 	}
-	scope := NewFactReadScopeResolver(expander).Resolve(
+	scope := NewFactReadScopeResolverWithPolicies(expander, metricsProjectPolicyTable(0)).Resolve(
 		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
 		scopeCapabilities(),
@@ -2731,13 +2727,11 @@ func TestChaos4099_MixedAuthorizedAndUnauthorizedStaysExpandedNoWarning(t *testi
 // was a count nobody was alerted to. Whatever else the traversal got right,
 // it produced something it could not use.
 func TestChaos4099_AMixedKindTraversalIsNotReportedAsComplete(t *testing.T) {
-	enableMetricsProjectPolicy(t, 0)
-
 	expander := &recordingScopeExpander{
 		targets: []SubjectRef{scopeRepo, subject(SubjectWorkItem, "work_item:linear:ABC-1")},
 		counts:  FactScopeExpansionCounts{CandidateCount: 2},
 	}
-	scope := NewFactReadScopeResolver(expander).Resolve(
+	scope := NewFactReadScopeResolverWithPolicies(expander, metricsProjectPolicyTable(0)).Resolve(
 		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
 		scopeCapabilities(),
@@ -2764,15 +2758,13 @@ func TestChaos4099_AMixedKindTraversalIsNotReportedAsComplete(t *testing.T) {
 // what its own defensive filter drops. Summing is correct exactly because
 // the two are disjoint.
 func TestChaos4099_TheExpandersOwnMismatchCountIsNotDoubleCounted(t *testing.T) {
-	enableMetricsProjectPolicy(t, 0)
-
 	expander := &recordingScopeExpander{
 		// Two dropped by the expander (and NOT returned), one good target,
 		// one wrong-kind target that slipped through to the resolver.
 		targets: []SubjectRef{scopeRepo, subject(SubjectWorkItem, "work_item:linear:ABC-1")},
 		counts:  FactScopeExpansionCounts{CandidateCount: 4, TargetKindMismatchCount: 2},
 	}
-	scope := NewFactReadScopeResolver(expander).Resolve(
+	scope := NewFactReadScopeResolverWithPolicies(expander, metricsProjectPolicyTable(0)).Resolve(
 		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
 		scopeCapabilities(),
@@ -2787,8 +2779,6 @@ func TestChaos4099_TheExpandersOwnMismatchCountIsNotDoubleCounted(t *testing.T) 
 // every well-sized traversal and train readers past the disclosure.
 func TestChaos4099_ExactlyTheCapIsNotTruncation(t *testing.T) {
 	const limit = 2
-	enableMetricsProjectPolicy(t, limit)
-
 	expander := &recordingScopeExpander{
 		targets: []SubjectRef{
 			subject(SubjectRepository, "repo:github:a"),
@@ -2796,7 +2786,7 @@ func TestChaos4099_ExactlyTheCapIsNotTruncation(t *testing.T) {
 		},
 		counts: FactScopeExpansionCounts{CandidateCount: limit},
 	}
-	scope := NewFactReadScopeResolver(expander).Resolve(
+	scope := NewFactReadScopeResolverWithPolicies(expander, metricsProjectPolicyTable(limit)).Resolve(
 		context.Background(), storage.Principal{OrgID: "org_1"},
 		newFactScopeResolveInput(scopeRequest([]SubjectRef{scopeProject}, []FactRequirement{{Kind: FactMetrics}}, TemporalCurrent)),
 		scopeCapabilities(),
@@ -3248,8 +3238,6 @@ func TestChaos4099_TeamScopedFamiliesFromAProjectStayPruned(t *testing.T) {
 // it -- exactly the gap CHAOS-4085 shipped through. This one goes through
 // Investigate, so deleting the engine's call fails here.
 func TestChaos4099_TheProxyDisclosureReachesTheAnswerThroughTheEngine(t *testing.T) {
-	enableMetricsProjectPolicy(t, 0)
-
 	observed := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
 	metrics := &factProviderStub{
 		capability: planCapability(FactMetrics, "metrics", SubjectRepository),
@@ -3265,6 +3253,7 @@ func TestChaos4099_TheProxyDisclosureReachesTheAnswerThroughTheEngine(t *testing
 	}
 	registry, err := NewFactCapabilityRegistry([]FactProvider{metrics}, FactRegistryOptions{
 		ScopeExpander: &recordingScopeExpander{targets: []SubjectRef{scopeRepo}},
+		ScopePolicies: metricsProjectPolicyTable(0),
 	})
 	if err != nil {
 		t.Fatalf("NewFactCapabilityRegistry: %v", err)
@@ -3302,5 +3291,217 @@ func TestChaos4099_TheProxyDisclosureReachesTheAnswerThroughTheEngine(t *testing
 	}
 	if telemetry.factScopeExpansions[0].Basis != FactScopeBasisActivityProxy {
 		t.Fatalf("basis = %q, want activity_proxy", telemetry.factScopeExpansions[0].Basis)
+	}
+}
+
+// TestChaos5547_ZeroValueResolverUsesProductionPolicies pins the fallback a
+// zero-value FactReadScopeResolver{} depends on. The type's own doc comment
+// on workItemSlots states a test literal built this way is a deliberately
+// supported shape -- before this pin, lookupFactScopePolicy read only
+// r.policies, so a zero-value literal's nil map made every pair ineligible,
+// silently (codex r1, PR #495, P3).
+func TestChaos5547_ZeroValueResolverUsesProductionPolicies(t *testing.T) {
+	t.Parallel()
+	var zeroValue FactReadScopeResolver
+	rule, eligible := zeroValue.lookupFactScopePolicy(FactMetrics, SubjectProject)
+	if !eligible {
+		t.Fatal("a zero-value resolver treated (metrics, project) as ineligible -- it must fall back to the production table")
+	}
+	// Cross-checked against the constructor's own resolution of the same
+	// pair, so this pin does not have to hardcode (and drift against) the
+	// production table's exact contents.
+	constructed := NewFactReadScopeResolver(nil)
+	wantRule, wantEligible := constructed.lookupFactScopePolicy(FactMetrics, SubjectProject)
+	if !wantEligible || rule != wantRule {
+		t.Fatalf("zero-value lookup = %+v (eligible=%v), want the constructed resolver's own production rule %+v (eligible=%v)", rule, eligible, wantRule, wantEligible)
+	}
+}
+
+// TestChaos5547_ExplicitEmptyPolicyTableIsNotReplacedByTheFallback is the
+// discriminating control for the pin above: the fallback triggers ONLY on a
+// nil policies map (the zero-value/unconstructed shape), never on an
+// explicit, deliberately empty table a test injected on purpose. A fallback
+// keyed on emptiness rather than nilness would silently erase every test in
+// this package that installs a narrow or empty table -- the exact class of
+// bug the CHAOS-5547 fix replaced the shared-global write with.
+func TestChaos5547_ExplicitEmptyPolicyTableIsNotReplacedByTheFallback(t *testing.T) {
+	t.Parallel()
+	resolver := NewFactReadScopeResolverWithPolicies(nil, map[FactKind]map[SubjectKind]factScopePolicyRule{})
+	if _, eligible := resolver.lookupFactScopePolicy(FactMetrics, SubjectProject); eligible {
+		t.Fatal("an explicitly empty (non-nil) policy table was replaced by the production fallback -- only a nil map may fall back")
+	}
+}
+
+// TestChaos5547_PolicyLookupInputDomain is the input-domain table for
+// lookupFactScopePolicy (codex r1's merge record, PR #495): every shape the
+// resolver's own policies field can be in, crossed with every shape a
+// (kind, origin) query can take, executed and asserted per cell.
+//
+// "Eligible" here means the pair is PRESENT in the table (lookupFactScopePolicy's
+// own `ok` return) -- independent of the rule's Enabled bit, which is a
+// separate, later concern (resolveRequirement reads Enabled only after
+// eligibility has already been decided).
+func TestChaos5547_PolicyLookupInputDomain(t *testing.T) {
+	t.Parallel()
+
+	const (
+		eligibleKind     = FactMetrics    // present + enabled in the production table
+		eligibleOrigin   = SubjectProject //
+		ineligibleKind   = FactMetrics    // no established path from a repository origin
+		ineligibleOrigin = SubjectRepository
+	)
+	unknownKind := FactKind("chaos5547_unknown_kind_" + string(FactMetrics))
+	unknownOrigin := SubjectKind("chaos5547_unknown_origin_" + string(SubjectProject))
+
+	narrowUnrelated := map[FactKind]map[SubjectKind]factScopePolicyRule{
+		FactPullRequests: {SubjectTeam: {
+			Policy: FactScopePolicyTeamPrimaryAttributionPullRequest, TargetKind: SubjectPullRequest,
+			Basis: FactScopeBasisActivityProxy, Enabled: true,
+		}},
+	}
+	pairDisabled := map[FactKind]map[SubjectKind]factScopePolicyRule{
+		eligibleKind: {eligibleOrigin: {
+			Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
+			Basis: FactScopeBasisActivityProxy, Enabled: false,
+		}},
+	}
+
+	rows := []struct {
+		name     string
+		resolver func() *FactReadScopeResolver
+	}{
+		{"nil_policies_zero_value_literal", func() *FactReadScopeResolver { return &FactReadScopeResolver{} }},
+		{"explicit_nil_arg", func() *FactReadScopeResolver { return NewFactReadScopeResolverWithPolicies(nil, nil) }},
+		{"explicit_empty_table", func() *FactReadScopeResolver {
+			return NewFactReadScopeResolverWithPolicies(nil, map[FactKind]map[SubjectKind]factScopePolicyRule{})
+		}},
+		{"narrow_table_missing_the_pair", func() *FactReadScopeResolver {
+			return NewFactReadScopeResolverWithPolicies(nil, narrowUnrelated)
+		}},
+		{"table_with_the_pair_disabled", func() *FactReadScopeResolver {
+			return NewFactReadScopeResolverWithPolicies(nil, pairDisabled)
+		}},
+		{"production_table", func() *FactReadScopeResolver { return NewFactReadScopeResolver(nil) }},
+		{"table_mutated_after_construction", func() *FactReadScopeResolver {
+			// codex r2, confirmed real, P1: the caller's map used to be
+			// stored by reference. Build with the eligible pair present,
+			// then -- AFTER construction -- delete it and add the
+			// ineligible pair instead (same Requirement, the columns'
+			// ineligibleKind == eligibleKind, different Origin). An
+			// aliasing constructor would show both edits; a copying one
+			// must show neither, so this row's want vector is the
+			// ORIGINAL table's answers, not the mutated one's.
+			table := map[FactKind]map[SubjectKind]factScopePolicyRule{
+				eligibleKind: {eligibleOrigin: {
+					Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
+					Basis: FactScopeBasisActivityProxy, Enabled: true,
+				}},
+			}
+			resolver := NewFactReadScopeResolverWithPolicies(nil, table)
+			delete(table[eligibleKind], eligibleOrigin)
+			table[eligibleKind][ineligibleOrigin] = factScopePolicyRule{
+				Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
+				Basis: FactScopeBasisActivityProxy, Enabled: true,
+			}
+			return resolver
+		}},
+	}
+	columns := []struct {
+		name   string
+		kind   FactKind
+		origin SubjectKind
+	}{
+		{"eligible_pair", eligibleKind, eligibleOrigin},
+		{"ineligible_pair", ineligibleKind, ineligibleOrigin},
+		{"unknown_kind", unknownKind, eligibleOrigin},
+		{"unknown_origin", eligibleKind, unknownOrigin},
+	}
+	// want[row][column] -- derived, not asserted from the code under test:
+	// only "table_with_the_pair_disabled" x "eligible_pair" disagrees with
+	// its row's other columns, because eligibility is presence, not Enabled.
+	want := map[string]map[string]bool{
+		"nil_policies_zero_value_literal":  {"eligible_pair": true, "ineligible_pair": false, "unknown_kind": false, "unknown_origin": false},
+		"explicit_nil_arg":                 {"eligible_pair": true, "ineligible_pair": false, "unknown_kind": false, "unknown_origin": false},
+		"explicit_empty_table":             {"eligible_pair": false, "ineligible_pair": false, "unknown_kind": false, "unknown_origin": false},
+		"narrow_table_missing_the_pair":    {"eligible_pair": false, "ineligible_pair": false, "unknown_kind": false, "unknown_origin": false},
+		"table_with_the_pair_disabled":     {"eligible_pair": true, "ineligible_pair": false, "unknown_kind": false, "unknown_origin": false},
+		"production_table":                 {"eligible_pair": true, "ineligible_pair": false, "unknown_kind": false, "unknown_origin": false},
+		"table_mutated_after_construction": {"eligible_pair": true, "ineligible_pair": false, "unknown_kind": false, "unknown_origin": false},
+	}
+
+	for _, row := range rows {
+		row := row
+		for _, col := range columns {
+			col := col
+			t.Run(row.name+"/"+col.name, func(t *testing.T) {
+				t.Parallel()
+				resolver := row.resolver()
+				_, eligible := resolver.lookupFactScopePolicy(col.kind, col.origin)
+				if want := want[row.name][col.name]; eligible != want {
+					t.Fatalf("(%s, %s) eligible = %v, want %v", row.name, col.name, eligible, want)
+				}
+			})
+		}
+	}
+}
+
+// TestChaos5547_PolicyLookupInputDomain_ConcurrentReaders is the input-domain
+// table's 7th row: many goroutines resolving every query shape concurrently
+// against ONE shared resolver, proving the lookup is race-free under -race
+// (not merely correct single-threaded) -- the resolver-local field this PR
+// replaced the shared-global read with.
+func TestChaos5547_PolicyLookupInputDomain_ConcurrentReaders(t *testing.T) {
+	t.Parallel()
+	resolver := NewFactReadScopeResolver(nil)
+	unknownKind := FactKind("chaos5547_unknown_kind_" + string(FactMetrics))
+	unknownOrigin := SubjectKind("chaos5547_unknown_origin_" + string(SubjectProject))
+	queries := []struct {
+		kind         FactKind
+		origin       SubjectKind
+		wantEligible bool
+	}{
+		{FactMetrics, SubjectProject, true},
+		{FactMetrics, SubjectRepository, false},
+		{unknownKind, SubjectProject, false},
+		{FactMetrics, unknownOrigin, false},
+	}
+	var wg sync.WaitGroup
+	for range 50 {
+		for _, q := range queries {
+			q := q
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if _, eligible := resolver.lookupFactScopePolicy(q.kind, q.origin); eligible != q.wantEligible {
+					t.Errorf("(%s, %s) eligible = %v, want %v", q.kind, q.origin, eligible, q.wantEligible)
+				}
+			}()
+		}
+	}
+	wg.Wait()
+}
+
+// TestChaos5547_PolicyTableIsCopiedNotAliasedAtConstruction pins codex r2's
+// confirmed P1 (PR #495): NewFactReadScopeResolverWithPolicies used to store
+// the caller's map by reference, so a caller that mutated its own table
+// after construction silently changed an already-built resolver's behavior
+// -- contradicting the resolver-owned/immutable framing the rest of this
+// PR's fix depends on. The constructor now copies both the outer and inner
+// maps.
+func TestChaos5547_PolicyTableIsCopiedNotAliasedAtConstruction(t *testing.T) {
+	t.Parallel()
+	table := map[FactKind]map[SubjectKind]factScopePolicyRule{
+		FactMetrics: {SubjectProject: {
+			Policy: FactScopePolicyProjectWorkItemRepository, TargetKind: SubjectRepository,
+			Basis: FactScopeBasisActivityProxy, Enabled: true,
+		}},
+	}
+	resolver := NewFactReadScopeResolverWithPolicies(nil, table)
+	// Mutate the caller's OWN copy after construction -- the resolver must
+	// not see this.
+	table[FactMetrics][SubjectProject] = factScopePolicyRule{Enabled: false}
+	policy, eligible := resolver.lookupFactScopePolicy(FactMetrics, SubjectProject)
+	if !eligible || !policy.Enabled {
+		t.Fatalf("resolver changed after the caller mutated its own input map: policy = %+v, eligible = %v, want the ORIGINAL Enabled:true rule unaffected", policy, eligible)
 	}
 }

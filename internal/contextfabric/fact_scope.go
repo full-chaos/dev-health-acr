@@ -949,8 +949,11 @@ var factScopeEligibility = []factScopeEligibilityRow{
 }
 
 // factScopePolicies is factScopeEligibility folded into the lookup shape.
-// Package-level var rather than a function call per lookup, and reassignable
-// so a test can install a narrow table for one case.
+// Package-level var rather than a function call per lookup. Written exactly
+// once, here, at package init -- never reassigned (a test that wants a
+// narrow or altered table injects it via NewFactReadScopeResolverWithPolicies
+// or FactRegistryOptions.ScopePolicies instead; see lookupFactScopePolicy's
+// fallback), so a concurrent reader can never observe it mid-mutation.
 var factScopePolicies = factScopePoliciesFrom(factScopeEligibility)
 
 func factScopePoliciesFrom(rows []factScopeEligibilityRow) map[FactKind]map[SubjectKind]factScopePolicyRule {
@@ -976,8 +979,17 @@ func factScopePoliciesFrom(rows []factScopeEligibilityRow) map[FactKind]map[Subj
 // missing" remains a statement the system can make. An eligible pair ALWAYS
 // discloses -- including one whose policy is FactScopePolicyNone, which is
 // the team case in full.
-func lookupFactScopePolicy(kind FactKind, origin SubjectKind) (factScopePolicyRule, bool) {
-	rule, ok := factScopePolicies[kind][origin]
+func (r *FactReadScopeResolver) lookupFactScopePolicy(kind FactKind, origin SubjectKind) (factScopePolicyRule, bool) {
+	policies := r.policies
+	if policies == nil {
+		// A zero-value FactReadScopeResolver{} (built by a test literal,
+		// same deliberate shape as the nil workItemSlots channel above) has
+		// never been through either constructor, so it falls back to the
+		// production table exactly as NewFactReadScopeResolverWithPolicies
+		// would for an explicit nil policies argument.
+		policies = factScopePolicies
+	}
+	rule, ok := policies[kind][origin]
 	return rule, ok
 }
 
@@ -1434,6 +1446,15 @@ const maxWorkItemScopeInFlight = 32
 type FactReadScopeResolver struct {
 	// expander performs the traversal. nil in stage 1.
 	expander FactScopeExpander
+	// policies is this resolver's own copy of the requirement/origin ->
+	// rule table. nil (an unconstructed zero value, or an explicit nil to
+	// NewFactReadScopeResolverWithPolicies) falls back to the production
+	// table at lookup time -- see lookupFactScopePolicy, the only place
+	// that reads the package-level factScopePolicies var. A test that
+	// wants a narrow table injects it here (NewFactReadScopeResolverWithPolicies)
+	// instead of mutating shared package state a concurrent t.Parallel
+	// reader could observe mid-test (the CHAOS-5405 race).
+	policies map[FactKind]map[SubjectKind]factScopePolicyRule
 	// workItemSlots is the admission gate for work-item-target expansions
 	// (CHAOS-5405 D-a), buffered to maxWorkItemScopeInFlight. A held slot is
 	// one resident expansion, so the channel's own length IS the count --
@@ -1446,16 +1467,54 @@ type FactReadScopeResolver struct {
 	workItemSlots chan struct{}
 }
 
-// NewFactReadScopeResolver builds the resolver. A nil expander yields the
-// stage-1 resolver: every policy resolves to policy_unavailable, disclosed.
+// NewFactReadScopeResolver builds the resolver against the production policy
+// table. A nil expander yields the stage-1 resolver: every policy resolves
+// to policy_unavailable, disclosed.
 func NewFactReadScopeResolver(expander FactScopeExpander) *FactReadScopeResolver {
+	return NewFactReadScopeResolverWithPolicies(expander, nil)
+}
+
+// NewFactReadScopeResolverWithPolicies builds the resolver against an
+// explicit policy table. A nil table (including the zero value's, since a
+// FactReadScopeResolver{} test literal never runs this constructor at all)
+// falls back to the production table (factScopePolicies) at lookup time --
+// see lookupFactScopePolicy, the single place that fallback lives. The only
+// supported way for a test to exercise a narrow or altered table is to pass
+// it here, never to reassign the package global, which a parallel reader
+// elsewhere in the package could observe mid-mutation.
+func NewFactReadScopeResolverWithPolicies(expander FactScopeExpander, policies map[FactKind]map[SubjectKind]factScopePolicyRule) *FactReadScopeResolver {
 	return &FactReadScopeResolver{
 		expander: expander,
+		// Copied, not aliased (codex r2 review round 2, confirmed real, P1):
+		// a caller that goes on to mutate the map it passed in must never
+		// change a resolver that has already been built from it -- the
+		// resolver's own table is otherwise supposed to be immutable for
+		// exactly the concurrent-read reasons this PR exists for.
+		policies: copyFactScopePolicies(policies),
 		// Buffered to the bound: a receive slot is an admission, and the
 		// channel IS the counter -- there is no separate number that could
 		// disagree with how many are actually running.
 		workItemSlots: make(chan struct{}, maxWorkItemScopeInFlight),
 	}
+}
+
+// copyFactScopePolicies returns an independent copy of policies (both the
+// outer and inner maps), so a resolver's table can never change out from
+// under it after construction -- nil stays nil, so the caller's own nil
+// still reaches lookupFactScopePolicy's fallback unchanged.
+func copyFactScopePolicies(policies map[FactKind]map[SubjectKind]factScopePolicyRule) map[FactKind]map[SubjectKind]factScopePolicyRule {
+	if policies == nil {
+		return nil
+	}
+	copied := make(map[FactKind]map[SubjectKind]factScopePolicyRule, len(policies))
+	for kind, byOrigin := range policies {
+		copiedByOrigin := make(map[SubjectKind]factScopePolicyRule, len(byOrigin))
+		for origin, rule := range byOrigin {
+			copiedByOrigin[origin] = rule
+		}
+		copied[kind] = copiedByOrigin
+	}
+	return copied
 }
 
 // factScopeResolveInput is everything Resolve may read. Narrow by
@@ -1565,7 +1624,7 @@ func (r *FactReadScopeResolver) resolveRequirement(
 	// see expand's own use of it below).
 	derivationIndex := map[string]int{}
 	for _, originKind := range originKinds {
-		rule, eligible := lookupFactScopePolicy(kind, originKind)
+		rule, eligible := r.lookupFactScopePolicy(kind, originKind)
 		if !eligible {
 			// CHAOS-3783's prune is correct and stays correct for this kind:
 			// there is no known path from it, so "nothing is missing" is a
