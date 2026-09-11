@@ -502,6 +502,60 @@ def test_the_shell_launchers_pass_a_set_corpus_base_through_to_run_shard_execute
 
 # ==================================================== r2 review findings, fixed + pinned
 
+def test_report_first_response_cell_table_every_raw_payload_shape():
+    """Class-sweep table (r2 GRANT, before r3): every shape the RAW decoded payload
+    can take on any path through `post()` -- transport failure, undecodable body,
+    well-formed, malformed-but-versioned, missing-version, non-dict -- executed in
+    one pass against `_report_first_response` directly (the same function `post()`
+    calls on every arm, transport/undecodable/success alike). A cell is DETERMINATE
+    iff it consumes the one-shot flag; every other cell must leave it armed."""
+    import importlib
+    saved_base = os.environ.get("CORPUS_BASE")
+    saved_expected = os.environ.pop("CORPUS_EXPECTED_BUILD", None)
+    os.environ["CORPUS_BASE"] = "http://127.0.0.1:1/api/investigations"
+    import harness
+    importlib.reload(harness)
+
+    cells = [
+        ("transport failure envelope", {"error": "connection refused"}, False),
+        ("undecodable body (empty dict)", {}, False),
+        ("non-dict payload", "not a mapping", False),
+        ("well-formed, no versions key", {"result": {"status": "complete"}}, False),
+        ("well-formed, versions present, no service_version",
+         {"result": {"status": "complete", "versions": {}}}, False),
+        ("malformed elsewhere, versions present, no service_version",
+         {"result": {"status": "complete", "versions": {},
+                     "subject_resolution": {"committed": [1]}}}, False),
+        ("well-formed WITH service_version", {"result": {"status": "complete",
+         "versions": {"service_version": "build-A"}}}, True),
+    ]
+    results = []
+    for label, payload, want_determinate in cells:
+        harness._build_checked = False  # each cell starts fresh-armed
+        harness._report_first_response(200, payload)
+        got_determinate = harness._build_checked
+        results.append((label, want_determinate, got_determinate))
+    offenders = [(l, w, g) for l, w, g in results if w != g]
+    assert not offenders, f"cell table mismatches (label, want_determinate, got): {offenders}"
+
+    # Malformed-with-a-real-version is the r2 P1 shape specifically: DETERMINATE, not
+    # swallowed by "malformed elsewhere" the way it was pre-fix.
+    harness._build_checked = False
+    harness._report_first_response(200, {"result": {"status": "complete",
+        "versions": {"service_version": "build-A"},
+        "subject_resolution": {"committed": [1]}}})
+    assert harness._build_checked, (
+        "a malformed-but-versioned payload did not arm/consume the check")
+
+    if saved_base is None:
+        os.environ.pop("CORPUS_BASE", None)
+    else:
+        os.environ["CORPUS_BASE"] = saved_base
+    if saved_expected is not None:
+        os.environ["CORPUS_EXPECTED_BUILD"] = saved_expected
+    importlib.reload(harness)
+
+
 def test_a_malformed_but_versioned_response_still_arms_the_build_check():
     """r2 review, P1, harness.py:268 (pre-fix line): `post()` checked the VALIDATED
     body, which `validate_live_payload` replaces with a bare failure envelope for any

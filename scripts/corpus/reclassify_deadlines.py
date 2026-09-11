@@ -143,6 +143,13 @@ def build_reclassified_row(before, after):
 
 
 def main():
+    # Defense in depth, same as run_shard.py's own main(): the module-level guard
+    # above only fires for a direct `python3 reclassify_deadlines.py` run; a caller
+    # that imports this module and calls main() itself still gets a clean refusal.
+    try:
+        harness.require_base()
+    except harness.MissingCorpusBase as e:
+        sys.exit(str(e))
     shards_dir = Path(sys.argv[1])
     rep = int(sys.argv[2]) if len(sys.argv) > 2 else 1
     summaries = sorted(shards_dir.glob("*/shard-summary.json"))
