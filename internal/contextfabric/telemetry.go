@@ -946,11 +946,11 @@ func (t SlogEngineTelemetry) RecordFrameValidation(ctx context.Context, principa
 		// what the hints requested beside what the frame proposed, and what
 		// became of the group axis. Every value is a closed token or an
 		// explicit absence token, never an empty string.
-		"requested_group_hint", event.Boundary.RequestedGroupHint,
-		"requested_member_hint", event.Boundary.RequestedMemberHint,
-		"proposed_group_kind", event.Boundary.ProposedGroupKind,
-		"proposed_member_kind", event.Boundary.ProposedMemberKind,
-		"group_axis", observableGroupAxis(event.Boundary.GroupAxis),
+		"requested_group_hint", SanitizeLogAttr(event.Boundary.RequestedGroupHint),
+		"requested_member_hint", SanitizeLogAttr(event.Boundary.RequestedMemberHint),
+		"proposed_group_kind", SanitizeLogAttr(event.Boundary.ProposedGroupKind),
+		"proposed_member_kind", SanitizeLogAttr(event.Boundary.ProposedMemberKind),
+		"group_axis", SanitizeLogAttr(observableGroupAxis(event.Boundary.GroupAxis)),
 	}
 	args = append(args, requirementDerivationLogAttrs(event.RequirementDerivation)...)
 	args = append(args, requestIDLogAttrs(ctx)...)
@@ -1721,7 +1721,7 @@ func (t SlogEngineTelemetry) RecordCohortGroupRead(ctx context.Context, principa
 	// request_id rides every line, as it does on the frame-validation line,
 	// so each line joins to the turn whose decision graph it belongs to.
 	args := []any{
-		"org_id", principal.OrgID,
+		"org_id", SanitizeLogAttr(principal.OrgID),
 		"family", string(event.Family),
 		"group_kind", string(event.GroupKind),
 		"groups_proposed", event.Proposed,
@@ -1771,18 +1771,18 @@ func (t SlogEngineTelemetry) RecordPlanGroupAxisCollapsed(ctx context.Context, p
 		invariant = FrameInvariant("unclassified")
 	}
 	args := []any{
-		"org_id", principal.OrgID,
+		"org_id", SanitizeLogAttr(principal.OrgID),
 		"family", string(event.Family),
 		"seam", "plan",
 		// Through the published kind vocabulary, as the interpretation
 		// boundary's kinds are: the group kind came from the model's hint,
 		// so no model text may reach this line through a kind slot.
-		"group_kind", closedKindToken(event.GroupKind),
-		"member_kind", closedKindToken(event.MemberKind),
+		"group_kind", SanitizeLogAttr(closedKindToken(event.GroupKind)),
+		"member_kind", SanitizeLogAttr(closedKindToken(event.MemberKind)),
 		"failed_invariant", string(invariant),
 		"failed_phase", string(event.Failure.Phase),
 		"failure_detail", string(event.Failure.Detail),
-		"frame_gate", event.Gate.Observable(),
+		"frame_gate", SanitizeLogAttr(event.Gate.Observable()),
 		// The WIRE basis the served document discloses, under the key the
 		// subjectless terminal already uses for it. Not the gate's own
 		// refuse_basis: that names a refused-basis outcome, and on a
@@ -1828,11 +1828,11 @@ func (t SlogEngineTelemetry) RecordGroupReadCoverageState(ctx context.Context, p
 	// request_id rides every line, as it does on the frame-validation line,
 	// so each line joins to the turn whose decision graph it belongs to.
 	args := []any{
-		"org_id", principal.OrgID,
+		"org_id", SanitizeLogAttr(principal.OrgID),
 		"family", string(event.Family),
 		"group_kind", string(event.GroupKind),
 		"read", string(arm),
-		"source", event.Source,
+		"source", SanitizeLogAttr(event.Source),
 		"source_state", string(state),
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
@@ -1860,7 +1860,7 @@ func (t SlogEngineTelemetry) RecordCohortMemberAllowance(ctx context.Context, pr
 	// request_id rides every line, as it does on the frame-validation line,
 	// so each line joins to the turn whose decision graph it belongs to.
 	args := []any{
-		"org_id", principal.OrgID,
+		"org_id", SanitizeLogAttr(principal.OrgID),
 		"family", string(event.Family),
 		"group_kind", string(event.GroupKind),
 		// The three budget fields derive from the caller's own request
@@ -1898,7 +1898,7 @@ func (t SlogEngineTelemetry) RecordFactRetention(ctx context.Context, principal 
 	// request_id rides every line, as it does on the frame-validation line,
 	// so each line joins to the turn whose decision graph it belongs to.
 	args := []any{
-		"org_id", principal.OrgID,
+		"org_id", SanitizeLogAttr(principal.OrgID),
 		"family", string(event.Family),
 		"group_kind", string(event.GroupKind),
 		"stage", string(event.Stage),
@@ -1935,13 +1935,13 @@ func observableGroupAxis(value GroupAxisDecision) string {
 // would quote one anyway -- but go/log-injection's dataflow has no numeric
 // barrier, so a request option that flows into a logged count (the caller's
 // MaxCohortMembers into the member allowance) is reported as a forgery path.
-// The decimal rendering is passed through sanitizeLogString, the shape that
-// query recognises as breaking taint, and parsed back. For every int the
+// The decimal rendering is passed through SanitizeLogAttr, the package's one
+// recognised barrier, and parsed back. For every int the
 // round trip is the identity: strconv.Itoa never emits a line break, so the
 // strip removes nothing and Atoi always succeeds; the zero on the error arm
 // is unreachable and exists only so the function is total.
 func requestDerivedLogInt(value int) int {
-	parsed, err := strconv.Atoi(sanitizeLogString(strconv.Itoa(value)))
+	parsed, err := strconv.Atoi(SanitizeLogAttr(strconv.Itoa(value)))
 	if err != nil {
 		return 0
 	}
