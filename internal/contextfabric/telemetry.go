@@ -1762,8 +1762,11 @@ func (t SlogEngineTelemetry) RecordGroupReadCoverageState(ctx context.Context, p
 	if !ValidGroupReadArm(arm) {
 		arm = GroupReadArm("unclassified")
 	}
+	// The PUBLISHED vocabulary, not the provider-legal one: `pruned` is a
+	// planner verdict the served coverage carries, and the provider predicate
+	// excludes it by design -- which published it as `unclassified`.
 	state := event.State
-	if !validFactSourceState(state) {
+	if !contractsv1.ValidContextFabricSourceState(state) {
 		state = SourceState("unclassified")
 	}
 	// request_id rides every line, as it does on the frame-validation line,

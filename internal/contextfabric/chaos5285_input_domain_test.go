@@ -352,7 +352,7 @@ func domainCoverageFold(d *domainTable) {
 	d.want(guard, "SourceObservation.State", "out of vocabulary",
 		fold(source("canonical_fact:health", SourceState("not_a_state"))), "canonical_fact:health=not_a_state")
 	d.record(guard, "SourceObservation.State", "out-of-vocabulary NOTE",
-		"the fold PRESERVES an unknown state rather than refusing it; the pre-fold disclosure routes its own copy through validFactSourceState and publishes `unclassified`", "ok")
+		"the fold PRESERVES an unknown state rather than refusing it; the pre-fold disclosure routes its own copy through contractsv1.ValidContextFabricSourceState and publishes `unclassified`", "ok")
 	d.record(guard, "all fields", "wrong container / wrong scalar / fractional / boundary", domainExcludedByTypeSystem, "ok")
 }
 
@@ -668,5 +668,8 @@ func domainEmitterVocabularies(t *testing.T, d *domainTable) {
 	d.want(guard, "GroupReadCoverageStateEvent.State", "canonical", field(func(tel SlogEngineTelemetry) {
 		tel.RecordGroupReadCoverageState(ctx, principal, GroupReadCoverageStateEvent{Read: GroupReadArmMember, State: SourceTruncated})
 	}, "source_state"), "truncated")
+	d.want(guard, "GroupReadCoverageStateEvent.State", "planner verdict (pruned: published, not provider-legal)", field(func(tel SlogEngineTelemetry) {
+		tel.RecordGroupReadCoverageState(ctx, principal, GroupReadCoverageStateEvent{Read: GroupReadArmMember, State: SourcePruned})
+	}, "source_state"), "pruned")
 	d.record(guard, "all fields", "wrong container / wrong scalar / fractional / boundary", domainExcludedByTypeSystem, "ok")
 }

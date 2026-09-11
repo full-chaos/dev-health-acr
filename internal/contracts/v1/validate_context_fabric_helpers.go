@@ -945,6 +945,15 @@ func validEpistemicStatus(value ContextFabricEpistemicStatus) bool {
 	}
 }
 
+// ValidContextFabricSourceState is the exported form of validSourceState, for
+// emitters outside this package that must close a source-state field against
+// the PUBLISHED vocabulary -- `pruned` included, which the fact registry's
+// provider-legal predicate deliberately excludes. One membership rule, read
+// from here, rather than a second list beside an emitter.
+func ValidContextFabricSourceState(value ContextFabricSourceState) bool {
+	return validSourceState(value)
+}
+
 func validSourceState(value ContextFabricSourceState) bool {
 	switch value {
 	case ContextFabricSourceAvailable, ContextFabricSourceStale, ContextFabricSourceUnavailable, ContextFabricSourceUnconfigured, ContextFabricSourceUnauthorized, ContextFabricSourceNoData, ContextFabricSourceTruncated, ContextFabricSourceConflicted, ContextFabricSourceNotApplicable, ContextFabricSourcePruned:
