@@ -1056,15 +1056,21 @@ flowchart TD
   classDef refuse fill:#7f1d1d,stroke:#ef4444,color:#ffffff
 ```
 
-Anchors: `internal/contextfabric/engine.go:1685` (admission), `:1690`
-(composition), `:1738` (the refusal branch), `:2066` (the frame-gate refusal
+Anchors: `internal/contextfabric/engine.go:1694` (admission), `:1699`
+(composition), `:1747` (the refusal branch), `:2075` (the frame-gate refusal
 it defers to); `chaos5465_continuation_refusal.go:59` (`refusesTurn`, four
 conjuncts), `:95` (`continuationRefusalResult`);
 `internal/contracts/v1/context_fabric_refusal_basis.go`
 (`ContextFabricRefusalBasisContinuationContextUnverifiable`,
 `ValidContextFabricFrameRefusalBasis` — the member-kind sentence and the frame
-gate name frame members only). The result validator requires the member and
-its fixed sentence together, in both directions.
+gate name frame members only). The result validator requires the member to
+carry its fixed sentence; the sentence alone is an ordinary caveat, because a
+model can echo it and a validator cannot tell who wrote a string. The carrier
+is read ONCE per request: window-receipt redemption's successful read is the
+read admission uses (the per-request memo), so a store failure is the
+retryable window veto, never a persisted refusal. The decision line names the
+carrier (`referenced_result_id`) and what admission's read returned
+(`carrier_read`: `not_read` / `read` / `failed`).
 
 ---
 

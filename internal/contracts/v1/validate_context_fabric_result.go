@@ -1174,12 +1174,17 @@ func (r ContextFabricInvestigationResult) validateCompleteness(bounds contextFab
 	if r.RefusalBasis != "" && len(r.ClaimedFacts) > 0 {
 		return fmt.Errorf("refusal_basis %q cannot accompany %d claimed fact(s)", r.RefusalBasis, len(r.ClaimedFacts))
 	}
-	// THE CONTINUATION REFUSAL AND ITS SENTENCE TRAVEL TOGETHER, in both
-	// directions. The member is the machine half and the fixed sentence is the
-	// only half a person reads; a document carrying one without the other
-	// tells its two readers different stories -- the mirror discipline the
-	// completeness block is held to above. The sentence is fixed, so presence
-	// is an exact-match test, never a prefix.
+	// THE CONTINUATION REFUSAL CARRIES ITS SENTENCE. The member is the machine
+	// half and the fixed sentence is the only half a person reads, so a
+	// refusal without it tells its two readers different stories. The
+	// sentence is fixed, so presence is an exact-match test, never a prefix.
+	//
+	// ONE DIRECTION ONLY, like every other fixed disclosure. The sentence
+	// alone is NOT evidence of a refusal: model caveats reach Limitations
+	// unfiltered, and the turn this sentence tells the user to make carries it
+	// verbatim in the conversation the model reads. A validator cannot tell
+	// who wrote a string, so "sentence requires basis" would turn a model echo
+	// on an ordinary answer into a failed turn.
 	continuationSentence := false
 	for _, limitation := range r.Limitations {
 		if limitation == ContextFabricContinuationContextUnverifiableLimitation {
@@ -1190,9 +1195,6 @@ func (r ContextFabricInvestigationResult) validateCompleteness(bounds contextFab
 	continuationBasis := r.RefusalBasis == ContextFabricRefusalBasisContinuationContextUnverifiable
 	if continuationBasis && !continuationSentence {
 		return fmt.Errorf("refusal_basis %q requires its fixed limitation sentence", r.RefusalBasis)
-	}
-	if continuationSentence && !continuationBasis {
-		return fmt.Errorf("the continuation refusal sentence requires refusal_basis %q, got %q", ContextFabricRefusalBasisContinuationContextUnverifiable, r.RefusalBasis)
 	}
 	return validateAnswerOutcomes(c, bounds)
 }

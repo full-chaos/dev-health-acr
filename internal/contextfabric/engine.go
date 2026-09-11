@@ -1224,7 +1224,21 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// means the request must short-circuit HERE: no reuse lookup, no
 	// interpretation, no inference substituted -- windowVetoResult composes
 	// and persists the no_match terminal directly.
-	windowCanon := e.canonicalizeEvidenceWindow(ctx, principal, request)
+	//
+	// carryCtx carries ONE per-request memo of prior-result loads, shared by
+	// window-receipt redemption here, by prior-subject-hint resolution and by
+	// every carry axis below (withCarryResultCache, structure_axis_carry.go).
+	// Installed BEFORE receipt redemption so a window-only continuation reads
+	// its carrier ONCE: the redemption's successful read is the read
+	// admission uses. Two independent reads of one carrier let a transient
+	// failure between them turn a carrier that was just read into a persisted
+	// "cannot verify" refusal, while the same failure on the first read is a
+	// retryable window veto -- one failure, two opposite instructions.
+	// Without the memo, a turn that resolves hints AND attempts both carries
+	// also loads the same prior result three times -- and that turn is
+	// precisely the one a struggling clarification chain keeps landing on.
+	carryCtx := withCarryResultCache(ctx)
+	windowCanon := e.canonicalizeEvidenceWindow(carryCtx, principal, request)
 	if windowCanon.Veto != windowVetoNone {
 		// D-e: a window veto is CHAOS-5271's mechanism, not this one.
 		continuation = continuation.withReason(ContinuationReasonWindowVeto)
@@ -1492,13 +1506,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// `interpretation`. Interpret below now receives ONLY the receipts
 	// resolvePriorSubjectHints itself validated (priorValidatedReceipts).
 	graphRequest := request
-	// carryCtx carries ONE per-request memo of prior-result loads, shared by
-	// prior-subject-hint resolution and by every carry axis below
-	// (withCarryResultCache, structure_axis_carry.go). Without it, a turn
-	// that resolves hints AND attempts both carries loads the same prior
-	// result three times -- and that turn is precisely the one a struggling
-	// clarification chain keeps landing on.
-	carryCtx := withCarryResultCache(ctx)
+	// carryCtx (installed above, before window-receipt redemption) is the
+	// per-request memo every prior-result load below shares.
 	var priorHints []SubjectHint
 	var priorValidatedReceipts []BoundSubjectReceipt
 	var priorOutcomes []priorSubjectReceiptOutcome

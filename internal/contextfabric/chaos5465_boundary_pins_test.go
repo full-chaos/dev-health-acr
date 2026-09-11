@@ -784,6 +784,8 @@ func TestBoundary_NoRequestDerivedValueCanForgeALogLine(t *testing.T) {
 		Family: QuestionFamilyGroupedCohortStatus, GroupKind: contractsv1.ContextFabricSubjectTeam,
 		SourceResultID: carriage,
 	}
+	// The receipt's own result id, published on every window-only decision.
+	d.ReferencedResultID = "result_5465\nlevel=ERROR msg=\"forged referenced id\""
 
 	principal := acceptancePrincipal()
 	principal.OrgID = "org\nlevel=ERROR msg=\"forged org line\""
@@ -805,7 +807,7 @@ func TestBoundary_NoRequestDerivedValueCanForgeALogLine(t *testing.T) {
 		}
 	}
 	// And the value stays USEFUL: the id survives, minus the control bytes.
-	if strings.Count(line, "result_5465") < 2 {
+	if strings.Count(line, "result_5465") < 3 {
 		t.Errorf("the sanitised ids no longer carry the caller's value: %s", strings.TrimSpace(line))
 	}
 	// Secondary, and true either way: the record is still one line.

@@ -354,6 +354,47 @@ type windowContinuationDecision struct {
 	// cleared again at the exit when that refusal produced no document -- so
 	// the line never claims a refusal the caller did not receive.
 	RefusalBasis contractsv1.ContextFabricRefusalBasis
+
+	// ReferencedResultID is the prior result the window-only request names,
+	// set as soon as the shape is recognised and BEFORE admission, so every
+	// withheld decision -- including one refused before a carrier was
+	// admitted, when Carried is still nil -- names the carrier it is about.
+	ReferencedResultID string
+	// CarrierRead is what admission's read of that carrier returned: an
+	// operator must be able to tell "could not read the carrier" from "read it
+	// and proved it invalid" (a stale epoch), which share decision_reason.
+	CarrierRead ContinuationCarrierRead
+}
+
+// ContinuationCarrierRead is the CLOSED outcome of admission's carrier read.
+type ContinuationCarrierRead string
+
+const (
+	// ContinuationCarrierNotRead: admission ended before reading (the shape
+	// was disqualified, or there is no store). The zero value reads as this.
+	ContinuationCarrierNotRead ContinuationCarrierRead = "not_read"
+	// ContinuationCarrierReadOK: the carrier was read (from the per-request
+	// memo when window-receipt redemption already read it).
+	ContinuationCarrierReadOK ContinuationCarrierRead = "read"
+	// ContinuationCarrierReadFailed: the store returned an error.
+	ContinuationCarrierReadFailed ContinuationCarrierRead = "failed"
+)
+
+// ValidContinuationCarrierRead reports membership.
+func ValidContinuationCarrierRead(value ContinuationCarrierRead) bool {
+	switch value {
+	case ContinuationCarrierNotRead, ContinuationCarrierReadOK, ContinuationCarrierReadFailed:
+		return true
+	}
+	return false
+}
+
+// ObservableCarrierRead is the token the decision line carries.
+func (d windowContinuationDecision) ObservableCarrierRead() ContinuationCarrierRead {
+	if d.CarrierRead == "" {
+		return ContinuationCarrierNotRead
+	}
+	return d.CarrierRead
 }
 
 // Applies reports whether the carried context is authoritative for this turn.
@@ -655,6 +696,7 @@ func (e *Engine) admitWindowContinuation(
 		decision.Reason = ContinuationReasonNotWindowOnly
 		return decision
 	}
+	decision.ReferencedResultID = referenced
 	// DISQUALIFIER (R2-1). An explicit expected kind or subject handle is the
 	// caller stating structure on THIS turn. It is not a receipt, so the
 	// receipt-field scan above cannot see it, and it is exactly the semantic
@@ -677,12 +719,20 @@ func (e *Engine) admitWindowContinuation(
 		return decision
 	}
 
+	// Normally a memo hit: window-receipt redemption read this carrier
+	// successfully moments ago in the same request (engine.go, carryCtx), and
+	// a request whose redemption read FAILED never reaches admission -- it
+	// ends on the retryable window veto. A failure here is therefore reached
+	// only by a caller without the memo, and it is published as its own
+	// carrier_read value rather than folded silently into invalid_context.
 	stored, err := carryLoadResult(ctx, e.results, principal, referenced)
 	if err != nil {
+		decision.CarrierRead = ContinuationCarrierReadFailed
 		decision.Disposition = ContinuationWithheld
 		decision.Reason = ContinuationReasonInvalidContext
 		return decision
 	}
+	decision.CarrierRead = ContinuationCarrierReadOK
 	// The SAME CHAOS-3898 ingress taint gate every other carrier check
 	// applies, and it is applied here even for a preloaded entry's id,
 	// because this decision is about semantic authority rather than about a

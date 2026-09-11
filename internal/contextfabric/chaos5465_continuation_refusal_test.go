@@ -204,7 +204,10 @@ type refusalCell struct {
 	priorGroup  SubjectKind
 	storeEpoch  *int64
 	failGetOf   string
-	interpreter QuestionInterpreter
+	// failGetAfter is how many reads of failGetOf succeed before every later
+	// one fails.
+	failGetAfter int
+	interpreter  QuestionInterpreter
 
 	wantRefused         bool
 	wantDisposition     ContinuationDisposition
@@ -213,6 +216,9 @@ type refusalCell struct {
 	// wantServedBasis is the basis the SERVED document carries, which on the
 	// fresh-gate cell is the frame's own basis rather than the continuation's.
 	wantServedBasis contractsv1.ContextFabricRefusalBasis
+	// wantCarrierRead is what admission's read of the carrier must publish;
+	// every window-only decision also names the carrier it is about.
+	wantCarrierRead ContinuationCarrierRead
 }
 
 func staleEpoch() *int64 { e := int64(97); return &e }
@@ -227,15 +233,26 @@ func refusalCells() []refusalCell {
 			interpreter: forced,
 			wantRefused: true, wantDisposition: ContinuationWithheld, wantReason: ContinuationReasonInvalidContext,
 			wantDecisionEmitted: true, wantServedBasis: contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable,
+			wantCarrierRead: ContinuationCarrierReadOK,
+		},
+		// ---- ONE READ OF THE CARRIER PER REQUEST. A store read that fails
+		// is never a persisted "cannot verify" refusal: it fails the window
+		// redemption (retryable veto), and a redemption that succeeded is the
+		// read admission uses, so there is no second read to fail.
+		{
+			name: "carrier read once for the window is not re-read for admission",
+			// Every read of the carrier after the first fails.
+			failGetOf: continuationPriorID, failGetAfter: 1,
+			interpreter: forced,
+			wantRefused: false, wantDisposition: ContinuationApplied, wantReason: ContinuationReasonNone,
+			wantDecisionEmitted: true, wantCarrierRead: ContinuationCarrierReadOK,
 		},
 		{
-			name: "carrier readable for the window and unreadable for admission",
-			// The window canonicalisation reads the carrier ONCE; every later
-			// read of it fails, which is the admission read.
-			failGetOf:   continuationPriorID,
+			name: "carrier unreadable on every read is the retryable window veto",
+			failGetOf: continuationPriorID, failGetAfter: 0,
 			interpreter: forced,
-			wantRefused: true, wantDisposition: ContinuationWithheld, wantReason: ContinuationReasonInvalidContext,
-			wantDecisionEmitted: true, wantServedBasis: contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable,
+			wantRefused: false, wantDisposition: ContinuationNotApplicable, wantReason: ContinuationReasonWindowVeto,
+			wantDecisionEmitted: true, wantCarrierRead: ContinuationCarrierNotRead,
 		},
 		{
 			name: "carrier recorded under a family table not in force",
@@ -327,7 +344,7 @@ func TestContinuationRefusal_TheRefusalMatrixThroughTheEngine(t *testing.T) {
 				graphEpoch: cell.storeEpoch,
 			})
 			if cell.failGetOf != "" {
-				store.failGetOf, store.failGetAfter = cell.failGetOf, 1
+				store.failGetOf, store.failGetAfter = cell.failGetOf, cell.failGetAfter
 			}
 			telemetry := &recordingTelemetry{}
 			engine, counts := newRefusalEngine(t, store, cell.interpreter, telemetry)
@@ -395,6 +412,107 @@ func TestContinuationRefusal_TheRefusalMatrixThroughTheEngine(t *testing.T) {
 			}
 			if cell.wantRefused && decision.Accepted != nil {
 				t.Errorf("a refused continuation publishes accepted context %+v", *decision.Accepted)
+			}
+			if decision.WindowOnlyShape && decision.ReferencedResultID != continuationPriorID {
+				t.Errorf("decision referenced_result_id = %q, want the carrier the request names %q", decision.ReferencedResultID, continuationPriorID)
+			}
+			if cell.wantCarrierRead != "" && decision.ObservableCarrierRead() != cell.wantCarrierRead {
+				t.Errorf("decision carrier_read = %q, want %q", decision.ObservableCarrierRead(), cell.wantCarrierRead)
+			}
+		})
+	}
+}
+
+// TestContinuationRefusal_AdmissionPublishesAnUnreadableCarrierAsItsOwnValue
+// drives admission WITHOUT the per-request memo (the only way its read can
+// fail independently of window redemption): the failure is still withheld,
+// but the line says the carrier could not be read, beside a stale-epoch
+// carrier that was read and proved invalid under the same decision_reason.
+func TestContinuationRefusal_AdmissionPublishesAnUnreadableCarrierAsItsOwnValue(t *testing.T) {
+	t.Parallel()
+	base := validInvestigationRequest().Question
+	for _, tc := range []struct {
+		name       string
+		failGet    bool
+		epoch      *int64
+		wantRead   ContinuationCarrierRead
+		wantReason ContinuationDecisionReason
+	}{
+		{"store read fails", true, nil, ContinuationCarrierReadFailed, ContinuationReasonInvalidContext},
+		{"carrier from another graph epoch", false, staleEpoch(), ContinuationCarrierReadOK, ContinuationReasonInvalidContext},
+		{"carrier admitted", false, nil, ContinuationCarrierReadOK, ContinuationReasonNone},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			prior := continuationPrior(t, continuationPriorID, base, QuestionFamilyDiscoveredCohortRanking, "")
+			store := newRefusalStore(&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}, graphEpoch: tc.epoch})
+			if tc.failGet {
+				store.failGetOf, store.failGetAfter = continuationPriorID, 0
+			}
+			var buf bytes.Buffer
+			sink := SlogEngineTelemetry{logger: slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))}
+			engine, _ := newRefusalEngine(t, store, forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus}, sink)
+			binding := ResolvedGraphBinding{Epoch: 1}
+			if tc.epoch == nil {
+				binding.Epoch = 0
+			}
+			decision := engine.admitWindowContinuation(context.Background(), acceptancePrincipal(), continuationRequest(base),
+				binding, nil, nil, contractsv1.ContextFabricTemporalCurrent)
+			sink.RecordWindowContinuationDecision(context.Background(), acceptancePrincipal(), decision)
+			line := decisionLine(t, buf.String())
+			t.Logf("%s -> disposition=%v decision_reason=%v carrier_read=%v referenced_result_id=%v",
+				tc.name, line["continuation_disposition"], line["decision_reason"], line["carrier_read"], line["referenced_result_id"])
+			if line["carrier_read"] != string(tc.wantRead) || line["decision_reason"] != string(tc.wantReason) {
+				t.Errorf("line carrier_read=%v decision_reason=%v, want %q/%q", line["carrier_read"], line["decision_reason"], tc.wantRead, tc.wantReason)
+			}
+			if line["referenced_result_id"] != continuationPriorID {
+				t.Errorf("line referenced_result_id = %v, want %q", line["referenced_result_id"], continuationPriorID)
+			}
+		})
+	}
+}
+
+// TestContinuationRefusal_AModelEchoOfAnyFixedDisclosureNeverFailsAnOrdinaryTurn
+// is the class pin behind the validator's one-directional sentence rule: model
+// caveats reach Limitations unfiltered, and the turn the continuation sentence
+// asks for carries it verbatim in the conversation the model reads. For EVERY
+// fixed service disclosure, an ordinary turn whose model caveat reproduces it
+// is served, never turned into an error.
+func TestContinuationRefusal_AModelEchoOfAnyFixedDisclosureNeverFailsAnOrdinaryTurn(t *testing.T) {
+	t.Parallel()
+	for _, disclosure := range contractsv1.ContextFabricServiceAuthoredLimitations() {
+		disclosure := disclosure
+		name := disclosure
+		if len(name) > 48 {
+			name = name[:48]
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+			fresh := validInvestigationResult()
+			fresh.Limitations = append(append([]string(nil), fresh.Limitations...), disclosure)
+			engine := mustReuseTestEngine(t, EngineDependencies{
+				Graph: graphReaderStub{
+					resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+					bases:      provenCommitBases(project),
+				},
+				Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+					return CanonicalFactBundle{}, nil
+				}),
+				Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+					return fresh, nil
+				}),
+				Interpreter: forcedFamilyInterpreter{family: QuestionFamilyDiscoveredCohortRanking},
+				Results:     &staticResultStore{results: map[string]InvestigationResult{}},
+				Telemetry:   &recordingTelemetry{},
+			})
+			result, err := engine.Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+			t.Logf("echo -> err=%v status=%q refusal_basis=%q", err, result.Status, result.RefusalBasis)
+			if err != nil {
+				t.Fatalf("an ordinary turn failed because a model caveat reproduced a fixed disclosure: %v", err)
+			}
+			if result.RefusalBasis != "" {
+				t.Errorf("an echoed disclosure made an ordinary turn a refusal: %q", result.RefusalBasis)
 			}
 		})
 	}
@@ -543,12 +661,18 @@ func TestContinuationRefusal_TheValidatorHoldsBothHalvesTogether(t *testing.T) {
 		want string
 	}{
 		{"canonical refusal", func(*InvestigationResult) {}, ""},
-		{"basis absent, sentence present", func(r *InvestigationResult) { r.RefusalBasis = "" }, "the continuation refusal sentence requires refusal_basis"},
+		// The sentence ALONE is not a refusal claim the validator can hold: a
+		// model can echo it (the class pin
+		// TestContinuationRefusal_AModelEchoOfAnyFixedDisclosureNeverFailsAnOrdinaryTurn),
+		// so it validates as a caveat.
+		{"basis absent, sentence present", func(r *InvestigationResult) { r.RefusalBasis = "" }, ""},
 		{"sentence absent, basis present", func(r *InvestigationResult) { r.Limitations = []string{noMatchLimitationUnproven} }, "requires its fixed limitation sentence"},
 		{"no limitation at all, basis present", func(r *InvestigationResult) { r.Limitations = []string{}; r.Warnings = []string{"w"} }, "requires its fixed limitation sentence"},
+		// A frame basis beside the continuation sentence: the sentence is a
+		// caveat here like anywhere else the basis is not its own.
 		{"sentence beside a frame basis", func(r *InvestigationResult) {
 			r.RefusalBasis = contractsv1.ContextFabricRefusalBasisMemberKindUnservable
-		}, "the continuation refusal sentence requires refusal_basis"},
+		}, ""},
 		// Surrounding whitespace is refused by the EXISTING narrative bound
 		// before this rule is reached; pinned so the cell stays rejected
 		// whichever rule gets there first.

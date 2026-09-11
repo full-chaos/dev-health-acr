@@ -515,7 +515,9 @@ func (e *Engine) resolveWindowReceipts(ctx context.Context, principal storage.Pr
 	if resultID == "" || receiptID == "" {
 		return veto
 	}
-	stored, err := e.results.Get(ctx, principal, resultID)
+	// Through the per-request memo: this successful read is the one a
+	// window-only continuation's admission reuses (engine.go, carryCtx).
+	stored, err := carryLoadResult(ctx, e.results, principal, resultID)
 	if err != nil || stored.Result.WindowClarification == nil {
 		return veto
 	}

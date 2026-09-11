@@ -502,7 +502,9 @@ func IsContextFabricRefusalBasisLimitation(limitation string) bool {
 // another are the prior result's id and the internal reason the carrier failed
 // admission, and neither belongs in prose: the id is the caller's own
 // reference, and the reason vocabulary is server-internal. Both are on the
-// Info decision line an operator reads.
+// Info decision line an operator reads (referenced_result_id and
+// decision_reason, with carrier_read separating an unreadable carrier from one
+// read and proved invalid).
 //
 // IT NAMES THE BASIS TOKEN for the reason the member-kind sentence does: a
 // reader joins the sentence to the machine field and to the log line through
