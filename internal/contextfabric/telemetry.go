@@ -1714,7 +1714,9 @@ func (t SlogEngineTelemetry) RecordCohortGroupRead(ctx context.Context, principa
 	if !ValidGroupReadRefusal(refusal) {
 		refusal = GroupReadRefusal("unclassified")
 	}
-	t.logger.InfoContext(ctx, "context fabric cohort group read",
+	// request_id rides every line, as it does on the frame-validation line,
+	// so each line joins to the turn whose decision graph it belongs to.
+	args := []any{
 		"org_id", principal.OrgID,
 		"family", string(event.Family),
 		"group_kind", string(event.GroupKind),
@@ -1730,7 +1732,9 @@ func (t SlogEngineTelemetry) RecordCohortGroupRead(ctx context.Context, principa
 		"group_facts_cap_omitted", event.FactsCapOmitted,
 		"group_facts_merged", event.FactsMerged,
 		"fact_bundle_cap", event.FactBundleCap,
-	)
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric cohort group read", args...)
 }
 
 // RecordGroupReadCoverageState emits one read's observation of one coverage
@@ -1762,14 +1766,18 @@ func (t SlogEngineTelemetry) RecordGroupReadCoverageState(ctx context.Context, p
 	if !validFactSourceState(state) {
 		state = SourceState("unclassified")
 	}
-	t.logger.InfoContext(ctx, "context fabric group read coverage state",
+	// request_id rides every line, as it does on the frame-validation line,
+	// so each line joins to the turn whose decision graph it belongs to.
+	args := []any{
 		"org_id", principal.OrgID,
 		"family", string(event.Family),
 		"group_kind", string(event.GroupKind),
 		"read", string(arm),
 		"source", event.Source,
 		"source_state", string(state),
-	)
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric group read coverage state", args...)
 }
 
 // RecordCohortMemberAllowance emits the cohort member allowance and whether it
@@ -1790,7 +1798,9 @@ func (t SlogEngineTelemetry) RecordCohortMemberAllowance(ctx context.Context, pr
 	if t.logger == nil {
 		return
 	}
-	t.logger.InfoContext(ctx, "context fabric cohort member allowance",
+	// request_id rides every line, as it does on the frame-validation line,
+	// so each line joins to the turn whose decision graph it belongs to.
+	args := []any{
 		"org_id", principal.OrgID,
 		"family", string(event.Family),
 		"group_kind", string(event.GroupKind),
@@ -1801,7 +1811,9 @@ func (t SlogEngineTelemetry) RecordCohortMemberAllowance(ctx context.Context, pr
 		"groups", event.Groups,
 		"members_before", event.MembersBefore,
 		"members_after", event.MembersAfter,
-	)
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric cohort member allowance", args...)
 }
 
 // RecordFactRetention emits one retention decision, at Info.
@@ -1820,7 +1832,9 @@ func (t SlogEngineTelemetry) RecordFactRetention(ctx context.Context, principal 
 	if t.logger == nil {
 		return
 	}
-	t.logger.InfoContext(ctx, "context fabric fact retention",
+	// request_id rides every line, as it does on the frame-validation line,
+	// so each line joins to the turn whose decision graph it belongs to.
+	args := []any{
 		"org_id", principal.OrgID,
 		"family", string(event.Family),
 		"group_kind", string(event.GroupKind),
@@ -1831,7 +1845,9 @@ func (t SlogEngineTelemetry) RecordFactRetention(ctx context.Context, principal 
 		"dropped_groups", event.Decision.DroppedGroups,
 		"retained_groups", event.Decision.RetainedGroups,
 		"group_rule_applied", event.Decision.GroupRuleApplied,
-	)
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric fact retention", args...)
 }
 
 // observableGroupAxis routes the group-axis decision through its own
