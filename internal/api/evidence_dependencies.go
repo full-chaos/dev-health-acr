@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
@@ -60,22 +59,12 @@ type App struct {
 	clientIP             auth.ClientIPResolver
 	usageTelemetry       *auth.UsageTelemetry
 	closers              appClosers
-	// readinessState (dictation 811) tracks the last OBSERVED
-	// /readyz outcome so handleReady can log a transition line -- not
-	// ready -> ready and back -- instead of one line per poll. Zero value
-	// (readinessStateUnknown) guarantees the FIRST /readyz call always logs
-	// its outcome as a transition, so the pre-entry state is observable
-	// from the trace even when the very first probe already finds the
-	// process ready.
-	readinessState atomic.Int32
+	// readinessTransitions (dictation 811) tracks the last OBSERVED /readyz
+	// outcome -- aggregate AND per-check -- so handleReady can log a
+	// transition line whenever either actually changes, instead of one
+	// line per poll. See ReadinessTransitionLogger's own doc comment.
+	readinessTransitions *ReadinessTransitionLogger
 }
-
-// readinessState values for App.readinessState.
-const (
-	readinessStateUnknown int32 = iota
-	readinessStateReady
-	readinessStateNotReady
-)
 
 func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error) {
 	if strings.TrimSpace(cfg.ServiceName) == "" {
@@ -174,6 +163,7 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 		usageTelemetry:       deps.UsageTelemetry,
 		credentialService:    credentialService,
 		deviceFlow:           deviceFlow,
+		readinessTransitions: NewReadinessTransitionLogger(),
 	}
 	if app.clientIP == nil {
 		app.clientIP = auth.RemoteAddressClientIP

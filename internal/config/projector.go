@@ -91,15 +91,19 @@ func LoadProjector() (ProjectorConfig, error) {
 
 func loadProjector(lookup lookupEnv) (ProjectorConfig, error) {
 	environment := stringValue(lookup, envProjectorEnvironment, defaultEnvironment)
-	// requireStoresDefault / environmentForcesStores: same class fix as
-	// acr-api's load() in config.go (dictation 811) -- backing stores are
-	// required by default in every environment now, exempted only by
-	// ACR_ENVIRONMENT=development with the explicit ACR_LOCAL_COMPOSITION_READY
-	// dev flag. environmentForcesStores (staging/production) still forces
-	// the value even over an explicit ACR_REQUIRE_BACKING_STORES=false.
+	// requireStoresDefault: same class fix as acr-api's load() in config.go
+	// -- backing stores are required by default in every environment now,
+	// exempted only by ACR_ENVIRONMENT=development with the explicit
+	// ACR_LOCAL_COMPOSITION_READY dev flag; this is ALSO the force argument
+	// passed to loadHostedRuntimeValues below (r1 P2 finding 1 class sweep:
+	// a bare ACR_REQUIRE_BACKING_STORES=false must not, by itself, disable
+	// the requirement). A separate "staging || production" disjunct would
+	// be dead here: for any environment other than "development" the
+	// negated clause below is unconditionally true regardless, so
+	// staging/production's force-to-true falls entirely out of "not
+	// (development with the dev flag)".
 	localCompositionReadyRequested, _ := boolValue(lookup, "ACR_LOCAL_COMPOSITION_READY", false)
-	environmentForcesStores := environment == "staging" || environment == "production"
-	requireStoresDefault := environmentForcesStores || !(environment == "development" && localCompositionReadyRequested)
+	requireStoresDefault := !(environment == "development" && localCompositionReadyRequested)
 	logLevel, err := parseLogLevel(stringValue(lookup, "ACR_LOG_LEVEL", "info"))
 	if err != nil {
 		return ProjectorConfig{}, err
@@ -113,7 +117,10 @@ func loadProjector(lookup lookupEnv) (ProjectorConfig, error) {
 	// ACR_REQUIRE_BACKING_STORES): both binaries are configured against the
 	// same instances, and this keeps that one loading path authoritative.
 	var hosted Config
-	if err := loadHostedRuntimeValues(lookup, &hosted, requireStoresDefault, environmentForcesStores); err != nil {
+	// r1 P2 finding 1 (class sweep): same fix as acr-api's load() in
+	// config.go -- the dev opt-out flag is the ONLY way to turn backing
+	// stores off for the projector too.
+	if err := loadHostedRuntimeValues(lookup, &hosted, requireStoresDefault, requireStoresDefault); err != nil {
 		return ProjectorConfig{}, err
 	}
 	cfg.ClickHouseDSN, cfg.ClickHouseCACertPath = hosted.ClickHouseDSN, hosted.ClickHouseCACertPath
@@ -200,10 +207,11 @@ func (c ProjectorConfig) Validate() error {
 // booleans only, never DSNs or org identifiers as free text at startup.
 func (c ProjectorConfig) SafeAttributes() []any {
 	return []any{
-		"environment", c.Environment, "projection_enabled", c.ProjectionEnabled,
+		"environment", c.Environment, "listen_address", c.ListenAddress,
+		"projection_enabled", c.ProjectionEnabled,
 		"organization_count", len(c.OrgIDs), "poll_interval", c.PollInterval.String(),
 		"concurrency", c.Concurrency, "drain_batch_budget", c.DrainBatchBudget, "teams_projects_enabled", c.TeamsProjectsEnabled,
-		"require_backing_stores", c.RequireBackingStores,
+		"require_backing_stores", c.RequireBackingStores, "local_composition_ready", c.LocalCompositionReady,
 	}
 }
 

@@ -18,6 +18,17 @@ func TestLoadProjectorDefaults(t *testing.T) {
 	}
 }
 
+// TestLoadProjectorDefaults_bareOverrideAloneCannotDisableBackingStores is
+// r1 P2 finding 1's class-sweep pin for the projector: a bare
+// ACR_REQUIRE_BACKING_STORES=false, without the dev flag, must not disable
+// the requirement here either.
+func TestLoadProjectorDefaults_bareOverrideAloneCannotDisableBackingStores(t *testing.T) {
+	_, err := loadProjector(mapLookup(map[string]string{"ACR_REQUIRE_BACKING_STORES": "false"}))
+	if err == nil || !strings.Contains(err.Error(), "backing stores are required") {
+		t.Fatalf("loadProjector() error = %v, want a backing-stores-required refusal: a bare ACR_REQUIRE_BACKING_STORES=false without the dev flag must not disable the requirement", err)
+	}
+}
+
 // TestLoadProjectorDefaults_developmentWithLocalCompositionReady isolates
 // every other default TestLoadProjectorDefaults itself can no longer
 // observe on the (now-erroring) bare path, using the same dev-flag

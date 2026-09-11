@@ -186,13 +186,20 @@ in [`docs/repository-bootstrap.md`](docs/repository-bootstrap.md).
 Run the hosted API locally:
 
 ```bash
-ACR_ADDR=:8080 go run ./cmd/acr-api serve
+ACR_LOCAL_COMPOSITION_READY=true go run ./cmd/acr-api serve
 curl http://127.0.0.1:8080/healthz
 curl http://127.0.0.1:8080/readyz
 ```
 
-The stock development binary reports not-ready and serves safe `503` read-route
-stubs until a hosting build supplies the complete runtime adapter bundle.
+Backing stores are required by default in every environment now, so the local
+dev opt-out (`ACR_LOCAL_COMPOSITION_READY=true`) is required to start the
+binary at all without real Postgres/ClickHouse configured; without it the
+process refuses to start. The listen address defaults to loopback-only
+(`127.0.0.1:8080`) -- unaffected by the dev flag, which governs backing
+stores, not the bind address; set `ACR_ADDR` explicitly to bind every
+interface. With the dev flag set, the stock development binary reports ready
+immediately and serves safe read-route stubs, since no real backing store is
+wired.
 
 Inspect sidecar metadata and local diagnostics:
 

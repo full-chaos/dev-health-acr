@@ -230,9 +230,18 @@ func load(lookup lookupEnv) (Config, error) {
 	// own parse error is deliberately ignored here: an invalid value falls
 	// through to loadHostedRuntimeValues's identical, authoritative
 	// boolValue read a few lines below, which reports it.
+	// r1 P2 finding 1: requireStoresDefault is now ALSO the force argument
+	// passed to loadHostedRuntimeValues below (a bare
+	// ACR_REQUIRE_BACKING_STORES=false must not, by itself, disable the
+	// requirement -- only the dev flag can). A separate
+	// "environment == staging || production" disjunct here would be dead:
+	// for any environment other than "development", the negated clause
+	// below is unconditionally true regardless of that disjunct, so it can
+	// never change this value. staging/production's force-to-true
+	// therefore falls entirely out of "not (development with the dev
+	// flag)", with nothing left to name separately.
 	localCompositionReadyRequested, _ := boolValue(lookup, "ACR_LOCAL_COMPOSITION_READY", false)
-	environmentForcesStores := environment == "staging" || environment == "production"
-	requireStoresDefault := environmentForcesStores || !(environment == "development" && localCompositionReadyRequested)
+	requireStoresDefault := !(environment == "development" && localCompositionReadyRequested)
 
 	logLevel, err := parseLogLevel(stringValue(lookup, "ACR_LOG_LEVEL", "info"))
 	if err != nil {
@@ -261,7 +270,15 @@ func load(lookup lookupEnv) (Config, error) {
 		WebAssertionJWKSFile:           stringValue(lookup, "ACR_WEB_ASSERTION_JWKS_FILE", ""),
 		DeviceVerificationURL:          stringValue(lookup, "ACR_DEVICE_VERIFICATION_URL", ""),
 	}
-	if err := loadHostedRuntimeValues(lookup, &cfg, requireStoresDefault, environmentForcesStores); err != nil {
+	// r1 P2 finding 1: the explicit dev opt-out (ACR_LOCAL_COMPOSITION_READY)
+	// must be the ONLY way to turn backing stores off -- a bare
+	// ACR_REQUIRE_BACKING_STORES=false, without the dev flag, must not by
+	// itself disable the requirement. Passing requireStoresDefault as BOTH
+	// the default AND the force argument means: whenever the computed
+	// default is true (every case except development+dev-flag), an
+	// explicit false is overridden back to true, the same "force" pattern
+	// staging/production already used against a lone override.
+	if err := loadHostedRuntimeValues(lookup, &cfg, requireStoresDefault, requireStoresDefault); err != nil {
 		return Config{}, err
 	}
 	if cfg.EvidenceIDKeys, err = evidenceIDKeysValue(lookup); err != nil {

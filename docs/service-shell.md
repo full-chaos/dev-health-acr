@@ -6,8 +6,12 @@ The Phase 1 service shell exposes health plus a fail-closed hosted read boundary
 
 ```bash
 go run ./cmd/acr-api version
-go run ./cmd/acr-api serve
+ACR_LOCAL_COMPOSITION_READY=true go run ./cmd/acr-api serve
 ```
+
+`serve` refuses to start without the complete hosted runtime bundle
+(Postgres/ClickHouse configured) unless the explicit local-development
+opt-out above is set -- see `ACR_LOCAL_COMPOSITION_READY` below.
 
 The default listen address is `127.0.0.1:8080` (dictation 811: loopback-only, so a process started with no environment configured at all fails closed instead of silently answering on every interface). Override it through `ACR_ADDR` or the `serve -listen` flag -- every deployment surface in this repo (`deploy/compose`, `deploy/kubernetes`, `deploy/helm`, and the shipped container image itself) sets `ACR_ADDR` explicitly to a `0.0.0.0`-bound address, since a container must be reachable from outside its own network namespace.
 

@@ -78,19 +78,55 @@ func TestLoadDefaults_testEnvironmentAlsoRequiresBackingStoresByDefault(t *testi
 	}
 }
 
-// TestLoadDefaults_developmentExplicitOverrideStillHonored proves an
-// operator's own explicit ACR_REQUIRE_BACKING_STORES=false in development
-// is still honored WITHOUT the dev flag -- dictation 811 raises the DEFAULT,
-// it does not remove the ability to explicitly opt out (that force-override
-// protection stays reserved for staging/production, unchanged from before
-// this change).
-func TestLoadDefaults_developmentExplicitOverrideStillHonored(t *testing.T) {
-	cfg, err := load(mapLookup(map[string]string{"ACR_REQUIRE_BACKING_STORES": "false"}))
+// TestLoadDefaults_bareOverrideAloneCannotDisableBackingStores is r1 P2
+// finding 1's own pin, REVERSING the earlier (wrong) contract this test
+// used to assert: a bare ACR_REQUIRE_BACKING_STORES=false, WITHOUT the
+// explicit ACR_LOCAL_COMPOSITION_READY dev flag, must NOT disable the
+// requirement -- the dev flag is the ONLY storeless opt-out. Reproduced
+// live before this fix: `env -i ACR_REQUIRE_BACKING_STORES=false
+// ACR_ADDR=127.0.0.1:19100 acr-api serve` started and served /healthz with
+// backing_stores_required=false, local_composition_ready=false.
+func TestLoadDefaults_bareOverrideAloneCannotDisableBackingStores(t *testing.T) {
+	_, err := load(mapLookup(map[string]string{"ACR_REQUIRE_BACKING_STORES": "false"}))
+	if err == nil || !strings.Contains(err.Error(), "backing stores are required") {
+		t.Fatalf("load() error = %v, want a backing-stores-required refusal: a bare ACR_REQUIRE_BACKING_STORES=false without the dev flag must not disable the requirement", err)
+	}
+}
+
+// TestLoadDefaults_bareOverridePinnedEvenFullyConfigured pins the FORCED
+// value directly (RequireBackingStores == true with a fully valid
+// configuration), the same style as TestStagingCannotDisableBackingStoresOverride
+// -- an under-configured test above already proves an error, but not that
+// the override was specifically ignored rather than failing for some other
+// reason.
+func TestLoadDefaults_bareOverridePinnedEvenFullyConfigured(t *testing.T) {
+	values := completeRuntimeEnvironment()
+	values["ACR_REQUIRE_BACKING_STORES"] = "false"
+	cfg, err := load(mapLookup(values))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.RequireBackingStores {
+		t.Fatal("a bare ACR_REQUIRE_BACKING_STORES=false must be ignored (forced true) without the dev flag, even with an otherwise-complete configuration")
+	}
+}
+
+// TestLoadDefaults_devFlagPlusExplicitFalseStillWorks proves the dev flag
+// remains a real, reachable opt-out: ACR_LOCAL_COMPOSITION_READY=true
+// together with an explicit ACR_REQUIRE_BACKING_STORES=false (the
+// combination Validate's own interlock requires) still disables the
+// requirement -- finding 1's fix narrows the opt-out path, it does not
+// remove it.
+func TestLoadDefaults_devFlagPlusExplicitFalseStillWorks(t *testing.T) {
+	cfg, err := load(mapLookup(map[string]string{
+		"ACR_LOCAL_COMPOSITION_READY": "true",
+		"ACR_REQUIRE_BACKING_STORES":  "false",
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.RequireBackingStores {
-		t.Fatal("an explicit ACR_REQUIRE_BACKING_STORES=false in development must still be honored")
+		t.Fatal("the dev flag plus an explicit false must still disable the requirement")
 	}
 }
 
