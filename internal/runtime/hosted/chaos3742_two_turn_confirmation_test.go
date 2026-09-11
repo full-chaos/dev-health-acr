@@ -3086,6 +3086,7 @@ func TestTwoTurnRegimeFromWindowCanonicalization(t *testing.T) {
 		{"veto_unresolved is unclassified, not regime B", contextfabric.WindowCanonicalizationVetoUnresolved, ""},
 		{"veto_conflict is unclassified, not regime B", contextfabric.WindowCanonicalizationVetoConflict, ""},
 		{"veto_stale_superseded_offer is unclassified, not regime B", contextfabric.WindowCanonicalizationVetoStaleSupersededOffer, ""},
+		{"veto_axis_conflict is unclassified, not regime B", contextfabric.WindowCanonicalizationVetoAxisConflict, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

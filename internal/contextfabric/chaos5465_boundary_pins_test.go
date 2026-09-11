@@ -689,14 +689,28 @@ func TestBoundary_ARefusedWindowOnlyCarrierIsServedByNothing(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		mutate func(*InvestigationRequest)
+		prior  func(InvestigationResult) InvestigationResult
 		reason ContinuationDecisionReason
 	}{
-		{"interpreted axis veto", nil, ContinuationReasonInterpretedAxisVeto},
+		// CHAOS-5582: the fresh-axis disqualifier is retired. The axis exit
+		// this pin now walks is the CARRIER's recorded axis -- a carrier that
+		// did not record `current` is refused, and under an axis-moving
+		// unclassified turn the legacy carry must not serve it either.
+		{
+			"carrier records a non-current axis",
+			nil,
+			func(p InvestigationResult) InvestigationResult {
+				p.Interpretation.TimeContext = TimeContext{Axis: TemporalValidTime, AsOf: &r2AsOf}
+				return p
+			},
+			ContinuationReasonInvalidContext,
+		},
 		{
 			"explicit structure hint",
 			func(r *InvestigationRequest) {
 				r.ExpectedKinds = []SubjectKind{contractsv1.ContextFabricSubjectProject}
 			},
+			nil,
 			ContinuationReasonExplicitStructureHint,
 		},
 	} {
@@ -706,6 +720,9 @@ func TestBoundary_ARefusedWindowOnlyCarrierIsServedByNothing(t *testing.T) {
 				tc.mutate(&req)
 			}
 			prior := r4CheckedPrior(t, continuationPriorID, req.Question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+			if tc.prior != nil {
+				prior = tc.prior(prior)
+			}
 			h := newContinuationHarness(t,
 				&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
 				unclassifiedAxisMovingInterpreter{})

@@ -1,5 +1,309 @@
 [
   {
+    "id": "contextfabric.window_continuation_decision",
+    "msg": "context fabric window continuation decision",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "exactly one line per Investigate call whose request carries a window receipt, from the one deferred emit site; a request with no window receipt emits none (the line's denominator is receipt-bearing requests).",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "source_result_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "seed_source",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "receipt",
+          "parent_field",
+          "both"
+        ]
+      },
+      {
+        "key": "family_carried",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "subject_investigation",
+          "discovered_cohort_ranking",
+          "scoped_cohort_status",
+          "grouped_cohort_status",
+          "explicit_comparison",
+          "trend",
+          "investment_allocation",
+          "unclassified",
+          ""
+        ]
+      },
+      {
+        "key": "family_fresh",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "subject_investigation",
+          "discovered_cohort_ranking",
+          "scoped_cohort_status",
+          "grouped_cohort_status",
+          "explicit_comparison",
+          "trend",
+          "investment_allocation",
+          "unclassified",
+          ""
+        ]
+      },
+      {
+        "key": "family_accepted",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "subject_investigation",
+          "discovered_cohort_ranking",
+          "scoped_cohort_status",
+          "grouped_cohort_status",
+          "explicit_comparison",
+          "trend",
+          "investment_allocation",
+          "unclassified",
+          ""
+        ]
+      },
+      {
+        "key": "family_source",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "carried",
+          ""
+        ]
+      },
+      {
+        "key": "continuation_disposition",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_applicable",
+          "applied",
+          "withheld"
+        ]
+      },
+      {
+        "key": "decision_reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "not_window_only",
+          "window_veto",
+          "changed_question",
+          "indeterminate_identity",
+          "missing_context",
+          "invalid_context",
+          "context_version_mismatch",
+          "fresh_context_unavailable",
+          "binding_unavailable",
+          "structure_veto",
+          "explicit_structure_hint",
+          "request_invalid",
+          "principal_unauthenticated",
+          "request_time_unresolvable",
+          "request_cancelled",
+          "as_of_unresolvable",
+          "composition_invalid",
+          "window_superseded",
+          "answer_budget_changed",
+          "unspecified"
+        ]
+      },
+      {
+        "key": "comparison_evaluated",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "agreement",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "conflict_reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "non_window_context_conflict"
+        ]
+      },
+      {
+        "key": "conflict_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "conflict_fields",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "applied_window",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "carried_context_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "fresh_context_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "accepted_context_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "composition_outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "accepted",
+          "unchanged",
+          "invalid",
+          "no_fresh_frame",
+          "fresh_refused",
+          "not_evaluated"
+        ]
+      },
+      {
+        "key": "composition_failed_invariant",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "carried_axis_unexpressible",
+          "i1",
+          "i17",
+          "i2",
+          "i3",
+          "i19",
+          "i4",
+          "i5",
+          "i6",
+          "i7",
+          "i8",
+          "i9",
+          "i15",
+          "i10",
+          "i14",
+          "i18",
+          "i16",
+          "i11",
+          "i12",
+          "i13",
+          ""
+        ]
+      },
+      {
+        "key": "refusal_basis",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "continuation_context_unverifiable",
+          "none"
+        ]
+      },
+      {
+        "key": "referenced_result_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "carrier_read",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_read",
+          "read",
+          "failed"
+        ]
+      },
+      {
+        "key": "window_receipt_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "explicit_window_present",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "interpreted_axis",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "current",
+          "valid_time",
+          "observed_time",
+          "range",
+          ""
+        ]
+      },
+      {
+        "key": "carried_axis",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "current",
+          "valid_time",
+          "observed_time",
+          "range",
+          ""
+        ]
+      },
+      {
+        "key": "executed_axis",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "current",
+          "valid_time",
+          "observed_time",
+          "range",
+          ""
+        ]
+      },
+      {
+        "key": "interpreted_axis_outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_evaluated",
+          "agreed",
+          "overridden_by_receipt",
+          "vetoed"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "graphrank.alias_lookup",
     "msg": "context fabric resolution trace: alias lookup",
     "level": "info",

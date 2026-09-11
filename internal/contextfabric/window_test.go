@@ -508,6 +508,13 @@ func TestCHAOS3900_AxisConflict_InterpreterFlipVetoesInsteadOfSilentlyDropping(t
 
 	request := validInvestigationRequest()
 	request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: priorResult.ResultID, ReceiptID: "winr_confirm0002"}}
+	// CHAOS-5582: the redeemed offer belongs to a DIFFERENT question. On the
+	// identical question the window-only transition is established and the
+	// confirmed current axis holds (the window is kept, never dropped --
+	// chaos5582_receipt_axis_test.go); a different question is read afresh,
+	// so its interpreter flip is exactly the disagreement this veto names.
+	priorResult.Question = "What was the status of Ask Dev last spring and what drove it?"
+	store.results[priorResult.ResultID] = priorResult
 
 	result, err := engine.Investigate(context.Background(), reusePrincipal(), request)
 	if err != nil {

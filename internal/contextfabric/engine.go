@@ -1641,7 +1641,34 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if e.telemetry != nil {
 		e.telemetry.RecordInterpretedTimeBound(ctx, principal, interpretedTimeBound)
 	}
+	// CHAOS-5582: ADMISSION AND THE AXIS DECISION RUN BEFORE THE ANSWERABILITY
+	// VERDICT. The fresh interpreted time is a diagnostic on an established
+	// window-only transition -- its AXIS and its BOUNDS alike -- so a sampled
+	// range that is unanswerable must not refuse the question whose window the
+	// user just confirmed, any more than an answerable sampled range may.
+	// Admission reads the carrier and decides nothing about the frame; the
+	// composition that does stays below, after the verdict, where it was.
+	// The fresh line above still reports what the interpreter proposed.
+	windowCommitted := windowCanon.Effective != nil
+	if continuation.Observed {
+		continuation = e.admitWindowContinuation(
+			carryCtx, principal, request, binding, priorLoadedResults,
+			windowCanon.Effective, interpretedTimeBound.Axis,
+		)
+		executedTime, axisOutcome := decideContinuationAxis(continuation, interpretedTimeBound.Bound, clampedRequestTime, windowCommitted)
+		continuation.AxisOutcome = axisOutcome
+		if axisOutcome == ContinuationAxisOverriddenByReceipt {
+			interpretedTimeBound = resolveInterpretedTimeContext(executedTime, e.now())
+		}
+	}
 	if !interpretedTimeBound.Answerable() {
+		// Nothing continued on this exit, whatever admission found: the turn
+		// ends before composition, so the line must not publish `applied` or an
+		// accepted context for it (R2-4's rule, at this exit).
+		if continuation.Disposition == ContinuationApplied {
+			continuation.Disposition = ContinuationNotApplicable
+			continuation.Accepted = nil
+		}
 		// The INTERPRETER produced an unanswerable bound; its own member,
 		// distinct from the caller-side one above.
 		continuation = continuation.withReason(ContinuationReasonAsOfUnresolvable)
@@ -1691,10 +1718,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	freshEffectiveGroup := freshContext.EffectiveGroupKind()
 	accepted := freshContext
 	if continuation.Observed {
-		continuation = e.admitWindowContinuation(
-			carryCtx, principal, request, binding, priorLoadedResults,
-			windowCanon.Effective, clampedInterpretedTime.Axis,
-		)
+		// The executed axis is stamped only once the verdict has passed: an
+		// exit above executed nothing.
+		continuation.ExecutedAxis = clampedInterpretedTime.Axis
 		if continuation.Applies() {
 			composed := composeAcceptedContext(compositionInput{
 				Fresh: familyOutcome.Frame, FreshGate: familyOutcome.Gate,
@@ -1845,6 +1871,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// carries it, with no disclosed reason either way. Name the
 	// disagreement instead: no answer is synthesized under a window
 	// commitment interpretation no longer honors.
+	//
+	// CHAOS-5582: an ESTABLISHED window-only transition never reaches this veto
+	// on a fresh axis drift -- decideContinuationAxis above executed it under
+	// the carried current axis. What still lands here is a resolved window with
+	// no such transition (no receipt, a changed or indeterminate question, a
+	// disqualified or unreadable carrier, a carrier recording another axis):
+	// there the fresh interpretation is the only reading and the disagreement
+	// is named.
 	if windowCanon.Effective != nil && clampedInterpretedTime.Axis != TemporalCurrent {
 		// CHAOS-3478/CHAOS-3813 (codex round-1 finding): this veto returns
 		// before ResolveSubjects ever runs, so it is a never-resolved

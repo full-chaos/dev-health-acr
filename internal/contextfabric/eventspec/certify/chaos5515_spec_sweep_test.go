@@ -80,6 +80,21 @@ import (
 // canonicalValueFor returns one internally-valid value for a declared field,
 // used only to build this sweep's own control line -- never a value pinned
 // as a real production expectation anywhere else.
+// vocabularyContainsValue reports whether a zero value is itself a declared
+// member of a closed string vocabulary. Non-string zeros never are.
+func vocabularyContainsValue(vocabulary []string, value any) bool {
+	s, ok := value.(string)
+	if !ok {
+		return false
+	}
+	for _, member := range vocabulary {
+		if member == s {
+			return true
+		}
+	}
+	return false
+}
+
 func canonicalValueFor(f eventspec.Field) any {
 	switch f.Type {
 	case eventspec.FieldString:
@@ -392,7 +407,16 @@ func runCell(t *testing.T, ev eventspec.Event, base map[string]any, attribution 
 		// per-field ClosedVocabulary: index=0 falls outside the declared
 		// 1..total range, and total=0 disagrees with the sweep's own
 		// single-line fixture (which always carries exactly one line).
-		row.wantAccept = len(f.ClosedVocabulary) == 0 && f.Key != "index" && f.Key != "total"
+		//
+		// CHAOS-5582: "excludes" is MEMBERSHIP, not the presence of a
+		// vocabulary -- a closed field whose declared members include the
+		// explicit empty string (a family, an axis that never applied)
+		// accepts it, and one whose members do not refuses it. The two
+		// rules are independent and both must hold, so they conjoin: the
+		// cross-line index/total constraint is not a vocabulary and no
+		// membership test can satisfy it.
+		row.wantAccept = (len(f.ClosedVocabulary) == 0 || vocabularyContainsValue(f.ClosedVocabulary, v)) &&
+			f.Key != "index" && f.Key != "total"
 		_, err := certifyRecovered(t, mutate(v), Assertion{Event: ev, Want: wantFor(v)})
 		row.gotAccept = err == nil
 	case "empty_container":
