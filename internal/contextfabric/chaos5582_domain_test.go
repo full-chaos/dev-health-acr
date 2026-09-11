@@ -323,49 +323,63 @@ func TestCHAOS5582_EveryExitPublishesTheAxisStateItReached(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		prior       func(InvestigationResult) InvestigationResult
+		mutate      func(*InvestigationRequest)
 		interpreter QuestionInterpreter
 		wantErr     bool
 		want        map[string]any
 		wantVetoed  bool
 	}{
+		// Base-branch siblings, each executed under a drifting fresh axis: a
+		// changed answer budget is decided after the transition is established
+		// (confirmed axis, fresh reading served); a stated scope disqualifies
+		// before any carrier is read (no transition, fresh axis governs).
+		{name: "answer_budget_changed_under_drift",
+			mutate:      func(r *InvestigationRequest) { r.Options.MaxSerializedBytes = r.Options.MaxSerializedBytes / 2 },
+			interpreter: freshAxisInterpreter{family: QuestionFamilyDiscoveredCohortRanking, timeContext: axis5582DriftedAxes()[0].time},
+			want:        map[string]any{"continuation_disposition": "not_applicable", "decision_reason": "answer_budget_changed", "interpreted_axis": "range", "carried_axis": "current", "executed_axis": "current", "interpreted_axis_outcome": "overridden_by_receipt", "refusal_basis": "none"}},
+		{name: "requested_scope_under_drift",
+			mutate:      func(r *InvestigationRequest) { r.RequestedScope.RepositorySlugs = []string{"widget-service"} },
+			interpreter: freshAxisInterpreter{family: QuestionFamilyDiscoveredCohortRanking, timeContext: axis5582DriftedAxes()[0].time},
+			want:        map[string]any{"continuation_disposition": "not_applicable", "decision_reason": "explicit_structure_hint", "interpreted_axis": "range", "carried_axis": "", "executed_axis": "range", "interpreted_axis_outcome": "vetoed", "refusal_basis": "none"},
+			wantVetoed:  true},
 		// An unanswerable fresh BOUND on an established transition is a
 		// diagnostic like a drifted axis: overridden, answered, never refused.
-		{"unanswerable_fresh_bound_on_established_transition", nil, freshAxisInterpreter{family: QuestionFamilyGroupedCohortStatus, timeContext: TimeContext{Axis: TemporalValidTime}}, false,
+		{"unanswerable_fresh_bound_on_established_transition", nil, nil, freshAxisInterpreter{family: QuestionFamilyGroupedCohortStatus, timeContext: TimeContext{Axis: TemporalValidTime}}, false,
 			map[string]any{"continuation_disposition": "applied", "decision_reason": "none", "interpreted_axis": "valid_time", "carried_axis": "current", "executed_axis": "current", "interpreted_axis_outcome": "overridden_by_receipt"}, false},
-		{"unanswerable_fresh_range_on_established_transition", nil, freshAxisInterpreter{family: QuestionFamilyGroupedCohortStatus, timeContext: TimeContext{Axis: TemporalRange, Start: &axis5582RangeEnd, End: &axis5582RangeStart}}, false,
+		{"unanswerable_fresh_range_on_established_transition", nil, nil, freshAxisInterpreter{family: QuestionFamilyGroupedCohortStatus, timeContext: TimeContext{Axis: TemporalRange, Start: &axis5582RangeEnd, End: &axis5582RangeStart}}, false,
 			map[string]any{"continuation_disposition": "applied", "decision_reason": "none", "interpreted_axis": "range", "carried_axis": "current", "executed_axis": "current", "interpreted_axis_outcome": "overridden_by_receipt"}, false},
 		// A fresh CURRENT axis whose bound is unanswerable is the same sampled
 		// failure on an established transition: overridden and answered.
-		{"unanswerable_fresh_current_bound_on_established_transition", nil, freshAxisInterpreter{family: QuestionFamilyGroupedCohortStatus, timeContext: TimeContext{Axis: TemporalCurrent, AsOf: &zeroInstant5582}}, false,
+		{"unanswerable_fresh_current_bound_on_established_transition", nil, nil, freshAxisInterpreter{family: QuestionFamilyGroupedCohortStatus, timeContext: TimeContext{Axis: TemporalCurrent, AsOf: &zeroInstant5582}}, false,
 			map[string]any{"continuation_disposition": "applied", "decision_reason": "none", "interpreted_axis": "current", "carried_axis": "current", "executed_axis": "current", "interpreted_axis_outcome": "overridden_by_receipt", "refusal_basis": "none"}, false},
 		// Without an established transition it still ends at the bound exit.
 		{"unanswerable_fresh_current_bound_changed_question", func(p InvestigationResult) InvestigationResult {
 			p.Question = "What was the status of Ask Dev last spring and what drove it?"
 			return p
-		}, freshAxisInterpreter{family: QuestionFamilyGroupedCohortStatus, timeContext: TimeContext{Axis: TemporalCurrent, AsOf: &zeroInstant5582}}, false,
+		}, nil, freshAxisInterpreter{family: QuestionFamilyGroupedCohortStatus, timeContext: TimeContext{Axis: TemporalCurrent, AsOf: &zeroInstant5582}}, false,
 			map[string]any{"continuation_disposition": "not_applicable", "decision_reason": "as_of_unresolvable", "interpreted_axis": "current", "carried_axis": "current", "executed_axis": "", "interpreted_axis_outcome": "agreed"}, false},
 		// Without an established transition the fresh bound governs, and an
 		// unanswerable one ends the turn exactly as before.
 		{"unanswerable_fresh_bound_changed_question", func(p InvestigationResult) InvestigationResult {
 			p.Question = "What was the status of Ask Dev last spring and what drove it?"
 			return p
-		}, freshAxisInterpreter{family: QuestionFamilyGroupedCohortStatus, timeContext: TimeContext{Axis: TemporalValidTime}}, false,
+		}, nil, freshAxisInterpreter{family: QuestionFamilyGroupedCohortStatus, timeContext: TimeContext{Axis: TemporalValidTime}}, false,
 			map[string]any{"continuation_disposition": "not_applicable", "decision_reason": "as_of_unresolvable", "interpreted_axis": "valid_time", "carried_axis": "current", "executed_axis": "", "interpreted_axis_outcome": "vetoed"}, false},
-		{"interpreter_error", nil, errInterpreter5582{}, true,
+		{"interpreter_error", nil, nil, errInterpreter5582{}, true,
 			map[string]any{"decision_reason": "fresh_context_unavailable", "interpreted_axis": "", "executed_axis": "", "interpreted_axis_outcome": "not_evaluated"}, false},
 		// The reading is withheld, the transition is not: the axis stays the
 		// confirmed one and the turn is served, never refused on the sample.
-		{"composition_refused_under_drift", nil, ungroupedDriftInterpreter{family: QuestionFamilyDiscoveredCohortRanking}, false,
+		{"composition_refused_under_drift", nil, nil, ungroupedDriftInterpreter{family: QuestionFamilyDiscoveredCohortRanking}, false,
 			map[string]any{"continuation_disposition": "withheld", "decision_reason": "composition_invalid", "interpreted_axis": "range", "carried_axis": "current", "executed_axis": "current", "interpreted_axis_outcome": "overridden_by_receipt", "refusal_basis": "continuation_context_unverifiable"}, false},
 		{"version_mismatched_carrier_under_drift", func(p InvestigationResult) InvestigationResult {
 			p.AnswerPlan.FamilyVersion = "question-family.v0-not-in-force"
 			return p
-		}, freshAxisInterpreter{family: QuestionFamilyDiscoveredCohortRanking, timeContext: axis5582DriftedAxes()[0].time}, false,
+		}, nil, freshAxisInterpreter{family: QuestionFamilyDiscoveredCohortRanking, timeContext: axis5582DriftedAxes()[0].time}, false,
 			map[string]any{"continuation_disposition": "withheld", "decision_reason": "context_version_mismatch", "interpreted_axis": "range", "carried_axis": "current", "executed_axis": "current", "interpreted_axis_outcome": "overridden_by_receipt", "refusal_basis": "continuation_context_unverifiable"}, false},
 		{"carrier_without_plan_under_drift", func(p InvestigationResult) InvestigationResult {
 			p.AnswerPlan = nil
 			return p
-		}, freshAxisInterpreter{family: QuestionFamilyDiscoveredCohortRanking, timeContext: axis5582DriftedAxes()[0].time}, false,
+		}, nil, freshAxisInterpreter{family: QuestionFamilyDiscoveredCohortRanking, timeContext: axis5582DriftedAxes()[0].time}, false,
 			map[string]any{"continuation_disposition": "not_applicable", "decision_reason": "missing_context", "interpreted_axis": "range", "carried_axis": "current", "executed_axis": "current", "interpreted_axis_outcome": "overridden_by_receipt", "refusal_basis": "none"}, false},
 	} {
 		tc := tc
@@ -375,7 +389,11 @@ func TestCHAOS5582_EveryExitPublishesTheAxisStateItReached(t *testing.T) {
 			if tc.prior != nil {
 				prior = tc.prior(prior)
 			}
-			run := axis5582Investigate(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}, tc.interpreter, continuationRequest(question))
+			request := continuationRequest(question)
+			if tc.mutate != nil {
+				tc.mutate(&request)
+			}
+			run := axis5582Investigate(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}, tc.interpreter, request)
 			if (run.err != nil) != tc.wantErr {
 				t.Fatalf("Investigate() error = %v, want error %v", run.err, tc.wantErr)
 			}
