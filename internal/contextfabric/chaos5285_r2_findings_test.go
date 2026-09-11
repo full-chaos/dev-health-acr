@@ -157,9 +157,16 @@ type servedGroupReadCase struct {
 }
 
 func servedGroupReadCases() []servedGroupReadCase {
-	twoMembers := []CohortMember{
-		{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_a", Label: "project_a"}, Rank: 1, InclusionReasons: []string{"matched"}},
-		{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_b", Label: "project_b"}, Rank: 2, InclusionReasons: []string{"matched"}},
+	// Each case gets its OWN members. Investigate ranks the cohort IN PLACE
+	// -- RankCohort writes RankingComputed, Score, AttentionRank, Drivers and
+	// the rest into every CohortMember -- so one slice shared by two cases
+	// that both run t.Parallel() is written by one while the other reads it
+	// through investigationSubjects. The fixture, not the engine, owned that.
+	twoMembers := func() []CohortMember {
+		return []CohortMember{
+			{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_a", Label: "project_a"}, Rank: 1, InclusionReasons: []string{"matched"}},
+			{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_b", Label: "project_b"}, Rank: 2, InclusionReasons: []string{"matched"}},
+		}
 	}
 	return []servedGroupReadCase{
 		{"denied (one of two groups)", contractsv1.ContextFabricGroupReadUnreadLimitation(contractsv1.ContextFabricSubjectTeam), GroupReadDisclosureUnread, func(t *testing.T, telemetry *recordingTelemetry) (*Engine, InvestigationRequest) {
@@ -181,10 +188,10 @@ func servedGroupReadCases() []servedGroupReadCase {
 			return groupReadEngineFixtureOverBound(t, telemetry, recorder)
 		}},
 		{"read failed", contractsv1.ContextFabricGroupReadUnreadLimitation(contractsv1.ContextFabricSubjectTeam), GroupReadDisclosureUnread, func(t *testing.T, telemetry *recordingTelemetry) (*Engine, InvestigationRequest) {
-			return groupReadEngineFixtureFull(t, telemetry, &groupReadFailingReader{inner: groupReadServing()}, twoMembers, nil, SubjectProject, nil, nil)
+			return groupReadEngineFixtureFull(t, telemetry, &groupReadFailingReader{inner: groupReadServing()}, twoMembers(), nil, SubjectProject, nil, nil)
 		}},
 		{"authorization unavailable", contractsv1.ContextFabricGroupReadUnreadLimitation(contractsv1.ContextFabricSubjectTeam), GroupReadDisclosureUnread, func(t *testing.T, telemetry *recordingTelemetry) (*Engine, InvestigationRequest) {
-			return groupReadEngineFixtureConfigured(t, telemetry, groupReadServing("team_security", "team_platform"), twoMembers, nil, SubjectProject, nil, nil,
+			return groupReadEngineFixtureConfigured(t, telemetry, groupReadServing("team_security", "team_platform"), twoMembers(), nil, SubjectProject, nil, nil,
 				func(config *groupReadFixtureConfig) {
 					config.graph.authorizationErr = fmt.Errorf("injected: authorizer unavailable")
 				})
@@ -448,9 +455,12 @@ func TestEveryI6RefusalServesTheRequestedAxis(t *testing.T) {
 		Shape: ShapeDiscoveredCohort, RequestedJudgment: "project_status_by_group",
 		TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: []FactRequirement{{Kind: FactMetrics}},
 	}
-	twoMembers := []CohortMember{
-		{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_a", Label: "project_a"}, Rank: 1, InclusionReasons: []string{"matched"}},
-		{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_b", Label: "project_b"}, Rank: 2, InclusionReasons: []string{"matched"}},
+	// Own members per case, for the reason given in servedGroupReadCases.
+	twoMembers := func() []CohortMember {
+		return []CohortMember{
+			{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_a", Label: "project_a"}, Rank: 1, InclusionReasons: []string{"matched"}},
+			{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_b", Label: "project_b"}, Rank: 2, InclusionReasons: []string{"matched"}},
+		}
 	}
 	for name, interpreter := range map[string]QuestionInterpreter{
 		"frame seam: a self-group":             groupReadFramedInterpreter{interpretation: interpretation, groupKind: SubjectTeam, memberKind: SubjectTeam},
@@ -458,7 +468,7 @@ func TestEveryI6RefusalServesTheRequestedAxis(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			engine, request := groupReadEngineFixtureConfigured(t, &recordingTelemetry{}, groupReadServing("team_security", "team_platform"), twoMembers, nil, SubjectProject, nil, nil,
+			engine, request := groupReadEngineFixtureConfigured(t, &recordingTelemetry{}, groupReadServing("team_security", "team_platform"), twoMembers(), nil, SubjectProject, nil, nil,
 				func(config *groupReadFixtureConfig) { config.interpreter = interpreter })
 			result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
 			if err != nil {
