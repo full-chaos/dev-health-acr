@@ -100,6 +100,8 @@ func canonicalValueFor(f eventspec.Field) any {
 			return 1
 		}
 		return 7
+	case eventspec.FieldFloat:
+		return 0.5
 	case eventspec.FieldBool:
 		return true
 	case eventspec.FieldStringSlice:
@@ -128,6 +130,8 @@ func zeroValueFor(f eventspec.Field) (val any, applicable bool) {
 		return "", true
 	case eventspec.FieldInt:
 		return 0, true
+	case eventspec.FieldFloat:
+		return 0.0, true
 	case eventspec.FieldBool:
 		return false, true
 	default:
@@ -136,11 +140,13 @@ func zeroValueFor(f eventspec.Field) (val any, applicable bool) {
 }
 
 // wrongScalarTypeValueFor returns a JSON scalar shape that is NOT the
-// declared one -- applicable to every scalar type (string/int/bool).
+// declared one -- applicable to every scalar type (string/int/float/bool).
 func wrongScalarTypeValueFor(f eventspec.Field) (val any, applicable bool) {
 	switch f.Type {
 	case eventspec.FieldInt:
 		return "not-an-int", true
+	case eventspec.FieldFloat:
+		return "not-a-float", true
 	case eventspec.FieldString:
 		return 12345, true
 	case eventspec.FieldBool:
@@ -489,7 +495,13 @@ func TestCertifyInputDomainTable(t *testing.T) {
 			m := deepCopyLine(t, base)
 			perturbed := false
 			for _, f := range ev.Fields {
-				if f.Key == "pass" || f.Type != eventspec.FieldInt {
+				// CHAOS-5517: "index"/"total" are skipped the same way
+				// "pass" already is -- both carry the bounded-many
+				// cross-line invariant (certifyBoundedMany's own
+				// consistency check), so perturbing either would fail for
+				// a reason unrelated to what this cell is actually testing
+				// (pass-distinctness of the line's OTHER content).
+				if f.Key == "pass" || f.Key == "index" || f.Key == "total" || f.Type != eventspec.FieldInt {
 					continue
 				}
 				isAttr := false
@@ -520,7 +532,7 @@ func TestCertifyInputDomainTable(t *testing.T) {
 				m["pass"] = pass
 			}
 			for _, f := range ev.Fields {
-				if f.Key == "pass" || f.Type != eventspec.FieldInt {
+				if f.Key == "pass" || f.Key == "index" || f.Key == "total" || f.Type != eventspec.FieldInt {
 					continue
 				}
 				isAttr := false

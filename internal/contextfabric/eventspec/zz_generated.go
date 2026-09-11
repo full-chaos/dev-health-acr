@@ -19,11 +19,14 @@ func FieldKeys(e Event) []string {
 // ByID is the generated lookup from Event.ID to its declaration -- generated
 // rather than hand-maintained so it can never drift from All.
 var ByID = map[string]Event{
-	"graphrank.anchor_slot_displaced": AnchorSlotDisplaced,
-	"graphrank.decision_summary":      DecisionSummary,
-	"graphrank.kind_offer_withheld":   KindOfferWithheld,
-	"graphrank.ranked_cut_summary":    RankedCutSummary,
-	"graphrank.search":                Search,
+	"graphrank.anchor_slot_displaced":  AnchorSlotDisplaced,
+	"graphrank.corroboration":          Corroboration,
+	"graphrank.corroboration_summary":  CorroborationSummary,
+	"graphrank.decision_summary":       DecisionSummary,
+	"graphrank.kind_offer_withheld":    KindOfferWithheld,
+	"graphrank.ranked_cut_summary":     RankedCutSummary,
+	"graphrank.reserved_kind_admitted": ReservedKindAdmitted,
+	"graphrank.search":                 Search,
 }
 
 // AnchorSlotDisplacedFields is graphrank.anchor_slot_displaced's generated typed construction interface
@@ -86,6 +89,133 @@ func (f AnchorSlotDisplacedFields) SlogArgs() []any {
 		"anchor_slot_source", contextfabric.SanitizeLogAttr(f.AnchorSlotSource),
 		"anchor_slot_displaced", f.AnchorSlotDisplaced,
 		"pool_truncated_n", f.PoolTruncatedN,
+	}
+}
+
+// CorroborationFields is graphrank.corroboration's generated typed construction interface
+// (CHAOS-5516): one Go field per Field Corroboration.Fields declares in spec.go.
+type CorroborationFields struct {
+	RequestID          string
+	Pass               int
+	Index              int
+	Total              int
+	SubjectKind        string
+	SubjectCanonicalID string
+	BaseConfidence     float64
+	FinalConfidence    float64
+	DistinctMechanisms int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every CorroborationFields uniformly, set ONLY by NewCorroborationFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewCorroborationFields is the generated constructor for CorroborationFields -- every
+// field Corroboration.Fields declares is a required parameter.
+func NewCorroborationFields(requestID string, pass int, index int, total int, subjectKind string, subjectCanonicalID string, baseConfidence float64, finalConfidence float64, distinctMechanisms int) CorroborationFields {
+	return CorroborationFields{
+		RequestID:          requestID,
+		Pass:               pass,
+		Index:              index,
+		Total:              total,
+		SubjectKind:        subjectKind,
+		SubjectCanonicalID: subjectCanonicalID,
+		BaseConfidence:     baseConfidence,
+		FinalConfidence:    finalConfidence,
+		DistinctMechanisms: distinctMechanisms,
+		constructed:        true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewCorroborationFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f CorroborationFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns Corroboration's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f CorroborationFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"pass", f.Pass,
+		"stage", "corroboration",
+		"index", f.Index,
+		"total", f.Total,
+		"subject_kind", contextfabric.SanitizeLogAttr(f.SubjectKind),
+		"subject_canonical_id", contextfabric.SanitizeLogAttr(f.SubjectCanonicalID),
+		"base_confidence", f.BaseConfidence,
+		"final_confidence", f.FinalConfidence,
+		"distinct_mechanisms", f.DistinctMechanisms,
+	}
+}
+
+// CorroborationSummaryFields is graphrank.corroboration_summary's generated typed construction interface
+// (CHAOS-5516): one Go field per Field CorroborationSummary.Fields declares in spec.go.
+type CorroborationSummaryFields struct {
+	RequestID      string
+	Pass           int
+	CandidateCount int
+	TopIDs         []string
+	MinConfidence  float64
+	MaxConfidence  float64
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every CorroborationSummaryFields uniformly, set ONLY by NewCorroborationSummaryFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewCorroborationSummaryFields is the generated constructor for CorroborationSummaryFields -- every
+// field CorroborationSummary.Fields declares is a required parameter.
+func NewCorroborationSummaryFields(requestID string, pass int, candidateCount int, topIDs []string, minConfidence float64, maxConfidence float64) CorroborationSummaryFields {
+	valid := true
+	if topIDs == nil {
+		valid = false
+	}
+	return CorroborationSummaryFields{
+		RequestID:      requestID,
+		Pass:           pass,
+		CandidateCount: candidateCount,
+		TopIDs:         topIDs,
+		MinConfidence:  minConfidence,
+		MaxConfidence:  maxConfidence,
+		constructed:    valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewCorroborationSummaryFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f CorroborationSummaryFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns CorroborationSummary's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f CorroborationSummaryFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"pass", f.Pass,
+		"stage", "corroboration",
+		"candidate_count", f.CandidateCount,
+		"top_ids", contextfabric.SanitizeLogStrings(f.TopIDs),
+		"min_confidence", f.MinConfidence,
+		"max_confidence", f.MaxConfidence,
 	}
 }
 
@@ -359,6 +489,69 @@ func (f RankedCutSummaryFields) SlogArgs() []any {
 		"anchor_slot_displaced", f.AnchorSlotDisplaced,
 		"pool_truncated_n", f.PoolTruncatedN,
 		"declared_kind_rescue", f.DeclaredKindRescue,
+	}
+}
+
+// ReservedKindAdmittedFields is graphrank.reserved_kind_admitted's generated typed construction interface
+// (CHAOS-5516): one Go field per Field ReservedKindAdmitted.Fields declares in spec.go.
+type ReservedKindAdmittedFields struct {
+	RequestID          string
+	Pass               int
+	Index              int
+	Total              int
+	SubjectKind        string
+	SubjectCanonicalID string
+	Rank               int
+	Survived           bool
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every ReservedKindAdmittedFields uniformly, set ONLY by NewReservedKindAdmittedFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewReservedKindAdmittedFields is the generated constructor for ReservedKindAdmittedFields -- every
+// field ReservedKindAdmitted.Fields declares is a required parameter.
+func NewReservedKindAdmittedFields(requestID string, pass int, index int, total int, subjectKind string, subjectCanonicalID string, rank int, survived bool) ReservedKindAdmittedFields {
+	return ReservedKindAdmittedFields{
+		RequestID:          requestID,
+		Pass:               pass,
+		Index:              index,
+		Total:              total,
+		SubjectKind:        subjectKind,
+		SubjectCanonicalID: subjectCanonicalID,
+		Rank:               rank,
+		Survived:           survived,
+		constructed:        true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewReservedKindAdmittedFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f ReservedKindAdmittedFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns ReservedKindAdmitted's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f ReservedKindAdmittedFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"pass", f.Pass,
+		"stage", "reserved_kind_admitted",
+		"index", f.Index,
+		"total", f.Total,
+		"subject_kind", contextfabric.SanitizeLogAttr(f.SubjectKind),
+		"subject_canonical_id", contextfabric.SanitizeLogAttr(f.SubjectCanonicalID),
+		"rank", f.Rank,
+		"survived", f.Survived,
 	}
 }
 

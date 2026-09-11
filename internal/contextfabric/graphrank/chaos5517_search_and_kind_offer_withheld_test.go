@@ -16,6 +16,7 @@ package graphrank
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"testing"
 
@@ -213,5 +214,118 @@ func TestKindOfferWithheldCertifiesAbsentOnTheOrdinaryPath(t *testing.T) {
 	}
 	if err := certify.CertifyAbsent(log, eventspec.KindOfferWithheld, map[string]any{"request_id": req.RequestID}); err != nil {
 		t.Fatalf("CertifyAbsent() error = %v -- an ungrouped frame must never reach CHAOS-5218's own trigger", err)
+	}
+}
+
+// TestCorroborationAndReservedKindAdmittedCertifyThroughTheReserveFixture
+// reuses subject_anchor_kind_test.go's own proven
+// TestReservedPrefix_AdmissionTraceMatchesTheReturnedCandidates fixture (6
+// low-confidence CI-run candidates plus one higher-confidence team
+// candidate, max=3, reservedKinds=[team]) -- known to fire the CHAOS-4038
+// reserve -- but swaps its capture tracer for a REAL
+// NewSlogResolutionTracer + slog.JSONHandler (a capture struct is not an
+// emitted line), driving the exported
+// ResolveFromMergedCandidatesWithGateAndBasis production entry point
+// (pass=1 always, per its own doc comment) directly. Certifies all three
+// CHAOS-5517 events this one fixture reaches: Corroboration (per-candidate,
+// bounded by the 7-candidate pool), CorroborationSummary (the same pool's
+// own count), and ReservedKindAdmitted (bounded by however many the reserve
+// actually admitted here).
+func TestCorroborationAndReservedKindAdmittedCertifyThroughTheReserveFixture(t *testing.T) {
+	t.Parallel()
+	pool := make(map[string]contextfabric.SubjectCandidate)
+	for i := 0; i < 6; i++ {
+		c := contextfabric.SubjectCandidate{
+			Subject:    contextfabric.SubjectRef{Kind: contractsv1.ContextFabricSubjectCIRun, CanonicalID: fmt.Sprintf("ci_%d", i)},
+			State:      contractsv1.ContextFabricResolutionAmbiguous,
+			Confidence: 0.9,
+		}
+		pool[SubjectKey(c.Subject)] = c
+	}
+	team := contextfabric.SubjectCandidate{
+		Subject:    contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team_1", Label: "Platform Team"},
+		State:      contractsv1.ContextFabricResolutionAmbiguous,
+		Confidence: 0.4,
+	}
+	pool[SubjectKey(team.Subject)] = team
+
+	var buf bytes.Buffer
+	tracer := NewSlogResolutionTracer(
+		slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	requestID := "request_5517_reserve"
+	res, _, _ := ResolveFromMergedCandidatesWithGateAndBasis(
+		pool, map[string]string{}, map[string]bool{}, 3, true, false,
+		nil, 0, false, 10, 20, true,
+		DefaultCommitGatePolicy(), nil, nil, false, tracer, requestID, "", false, false,
+		[]contextfabric.SubjectKind{contextfabric.SubjectTeam})
+
+	log, err := certify.Parse(buf.Bytes())
+	if err != nil {
+		t.Fatalf("certify.Parse() on real production output error = %v", err)
+	}
+
+	// Corroboration: one Debug line per candidate in the 7-member pool,
+	// bounded by that pool's own size.
+	corrobLines := log.LinesWithMsg(eventspec.Corroboration.Msg)
+	if len(corrobLines) != 7 {
+		t.Fatalf("captured %d corroboration lines, want exactly 7 (one per pool member)", len(corrobLines))
+	}
+	count, err := certify.CertifyBoundedManyCount(log, eventspec.Corroboration, map[string]any{"request_id": requestID, "pass": 1})
+	if err != nil {
+		t.Fatalf("CertifyBoundedManyCount(Corroboration) error = %v", err)
+	}
+	if count != 7 {
+		t.Fatalf("CertifyBoundedManyCount(Corroboration) = %d, want 7", count)
+	}
+
+	// CorroborationSummary: exactly one line, candidate_count agrees with
+	// the detail count above.
+	if _, err := certify.Certify(log, certify.Assertion{
+		Event: eventspec.CorroborationSummary,
+		Want:  map[string]any{"request_id": requestID, "pass": 1, "candidate_count": 7},
+	}); err != nil {
+		t.Fatalf("Certify(CorroborationSummary) error = %v", err)
+	}
+
+	// ReservedKindAdmitted: at least one admission (the fixture's own proven
+	// claim -- the reserve fires here), every admitted subject actually
+	// present in the returned candidates.
+	admittedLines := log.LinesWithMsg(eventspec.ReservedKindAdmitted.Msg)
+	if len(admittedLines) == 0 {
+		t.Fatal("captured 0 reserved_kind_admitted lines; the reserve did not fire, so this proves nothing (same precondition the reused fixture's own test asserts)")
+	}
+	admittedCount, err := certify.CertifyBoundedManyCount(log, eventspec.ReservedKindAdmitted, map[string]any{"request_id": requestID, "pass": 1})
+	if err != nil {
+		t.Fatalf("CertifyBoundedManyCount(ReservedKindAdmitted) error = %v", err)
+	}
+	if admittedCount != len(admittedLines) {
+		t.Fatalf("CertifyBoundedManyCount(ReservedKindAdmitted) = %d, want %d (matching the raw line count)", admittedCount, len(admittedLines))
+	}
+	// Keyed on (kind, canonical_id) only -- contextfabric.SubjectRef also
+	// carries Label, which the trace line never emits (candidate identity
+	// on the wire is kind+canonical_id, same as every other stage's own
+	// subject_kind/subject_canonical_id pair), so comparing the FULL struct
+	// would spuriously fail on Label alone.
+	type subjectIdentity struct {
+		kind contextfabric.SubjectKind
+		id   string
+	}
+	returned := make(map[subjectIdentity]bool, len(res.Candidates))
+	for _, c := range res.Candidates {
+		returned[subjectIdentity{kind: c.Subject.Kind, id: c.Subject.CanonicalID}] = true
+	}
+	for i := 1; i <= admittedCount; i++ {
+		result, err := certify.Certify(log, certify.Assertion{
+			Event: eventspec.ReservedKindAdmitted,
+			Want:  map[string]any{"request_id": requestID, "pass": 1, "index": i, "total": admittedCount, "survived": true},
+		})
+		if err != nil {
+			t.Fatalf("Certify(ReservedKindAdmitted, index=%d) error = %v", i, err)
+		}
+		subjectKind, _ := result.Line["subject_kind"].(string)
+		subjectID, _ := result.Line["subject_canonical_id"].(string)
+		if !returned[subjectIdentity{kind: contextfabric.SubjectKind(subjectKind), id: subjectID}] {
+			t.Errorf("certified admission (kind=%s id=%s) is NOT in the returned candidates", subjectKind, subjectID)
+		}
 	}
 }

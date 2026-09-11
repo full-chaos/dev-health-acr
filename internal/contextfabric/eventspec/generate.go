@@ -94,6 +94,12 @@ func goVarName(e Event) string {
 		return "Search"
 	case KindOfferWithheld.ID:
 		return "KindOfferWithheld"
+	case Corroboration.ID:
+		return "Corroboration"
+	case CorroborationSummary.ID:
+		return "CorroborationSummary"
+	case ReservedKindAdmitted.ID:
+		return "ReservedKindAdmitted"
 	default:
 		panic("eventspec: goVarName has no mapping for " + e.ID + " -- add one before regenerating")
 	}
@@ -155,6 +161,8 @@ func goFieldType(t FieldType) string {
 		return "string"
 	case FieldInt:
 		return "int"
+	case FieldFloat:
+		return "float64"
 	case FieldBool:
 		return "bool"
 	case FieldStringSlice:

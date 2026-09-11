@@ -65,6 +65,121 @@
     ]
   },
   {
+    "id": "graphrank.corroboration",
+    "msg": "context fabric resolution trace: corroboration",
+    "level": "debug",
+    "multiplicity": "bounded_many_per_pass",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "bounded by this pass's own candidate-set size -- Total on every line is that size, matching CorroborationSummary's own candidate_count for the SAME pass (same underlying slice, no intervening append/removal).",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "pass",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "corroboration"
+        ]
+      },
+      {
+        "key": "index",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_canonical_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "base_confidence",
+        "type": "float",
+        "presence": "required"
+      },
+      {
+        "key": "final_confidence",
+        "type": "float",
+        "presence": "required"
+      },
+      {
+        "key": "distinct_mechanisms",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.corroboration_summary",
+    "msg": "context fabric resolution trace: corroboration summary",
+    "level": "info",
+    "multiplicity": "exactly_one_per_pass",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "exactly one line per corroboration pass -- the per-candidate detail this summary aggregates stays at Debug (Corroboration above).",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "pass",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "corroboration"
+        ]
+      },
+      {
+        "key": "candidate_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "top_ids",
+        "type": "string_slice",
+        "presence": "required"
+      },
+      {
+        "key": "min_confidence",
+        "type": "float",
+        "presence": "required"
+      },
+      {
+        "key": "max_confidence",
+        "type": "float",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "graphrank.decision_summary",
     "msg": "context fabric resolution trace: decision summary",
     "level": "info",
@@ -375,6 +490,66 @@
             "presence": "required"
           }
         ]
+      }
+    ]
+  },
+  {
+    "id": "graphrank.reserved_kind_admitted",
+    "msg": "context fabric resolution trace: reserved kind admitted",
+    "level": "info",
+    "multiplicity": "bounded_many_per_pass",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "bounded by this pass's own reserve-admission count (self-carried index/total) -- 0 on the common path where the reserve never fires; no sibling summary event exists for this stage.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "pass",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "reserved_kind_admitted"
+        ]
+      },
+      {
+        "key": "index",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_canonical_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "rank",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "survived",
+        "type": "bool",
+        "presence": "required"
       }
     ]
   },

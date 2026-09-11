@@ -734,6 +734,14 @@ func validateFields(fields []eventspec.Field, obj map[string]any, eventID string
 			if gotFloat != math.Trunc(gotFloat) {
 				return fmt.Errorf("certify: %s: %q = %v, declared type=int but is not a whole number", eventID, field.Key, got)
 			}
+		case eventspec.FieldFloat:
+			// CHAOS-5517: JSON's own number shape already covers this --
+			// unlike FieldInt, a fractional value here is the EXPECTED
+			// shape, not a defect, so this type asserts only that the JSON
+			// value decoded to a number at all.
+			if _, ok := got.(float64); !ok {
+				return fmt.Errorf("certify: %s: %q = %v (%T), declared type=float", eventID, field.Key, got, got)
+			}
 		case eventspec.FieldBool:
 			if _, ok := got.(bool); !ok {
 				return fmt.Errorf("certify: %s: %q = %v (%T), declared type=bool", eventID, field.Key, got, got)

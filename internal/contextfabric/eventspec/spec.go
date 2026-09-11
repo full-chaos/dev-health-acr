@@ -128,6 +128,15 @@ const (
 	// own migration needed one (offered_under_window_gate,
 	// offer_pool_emptied_by_exclusion).
 	FieldBool FieldType = "bool"
+	// FieldFloat (CHAOS-5517): every event before Corroboration carried
+	// only integer/enum/bool/string measurements -- a candidate's
+	// confidence score is this specification's first genuinely fractional
+	// production value, so FieldInt's own "reject any non-whole number"
+	// rule (round r3's own fractional-value fix) cannot apply to it. A
+	// FieldFloat value is still refused for null/wrong-scalar-type/absent
+	// exactly like FieldInt; the ONLY difference is that a fractional JSON
+	// number is the EXPECTED shape here, not a defect.
+	FieldFloat FieldType = "float"
 )
 
 // Field is one key on one event variant's emitted line.
@@ -450,7 +459,92 @@ var KindOfferWithheld = Event{
 	},
 }
 
+// Corroboration is the Debug per-candidate line (graphrank/tracer.go, case
+// "corroboration", event.CorroborationSummary==false) emitted once per
+// candidate every corroboration pass processes, unconditionally (retrieval-
+// pool-sized -- 96 events measured on a 90-candidate crowd -- past the
+// per-pass Info ceiling, so it stays Debug; CorroborationSummary below is
+// the once-per-pass Info line an operator actually gets). CHAOS-5517's
+// second MultiplicityBoundedManyPerPass event, and the first one that also
+// declares "pass" (emitted from inside resolveFromMergedCandidatesWithAnchorSlot,
+// so a multi-pass resolution legitimately produces this shape more than
+// once per request, once per pass).
+var Corroboration = Event{
+	ID:                 "graphrank.corroboration",
+	Msg:                "context fabric resolution trace: corroboration",
+	Level:              LevelDebug,
+	Multiplicity:       MultiplicityBoundedManyPerPass,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "bounded by this pass's own candidate-set size -- Total on every line is that size, matching CorroborationSummary's own candidate_count for the SAME pass (same underlying slice, no intervening append/removal).",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "pass", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"corroboration"}},
+		{Key: "index", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_canonical_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "base_confidence", Type: FieldFloat, Presence: PresenceRequired},
+		{Key: "final_confidence", Type: FieldFloat, Presence: PresenceRequired},
+		{Key: "distinct_mechanisms", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
+// CorroborationSummary is the once-per-pass Info line (graphrank/tracer.go,
+// case "corroboration", event.CorroborationSummary==true) folding every
+// candidate Corroboration's own pass into one bounded aggregate. Now
+// pass-keyed (CHAOS-5517) the same way ranked_cut/anchor_slot_displaced/
+// decision_summary already are.
+var CorroborationSummary = Event{
+	ID:                 "graphrank.corroboration_summary",
+	Msg:                "context fabric resolution trace: corroboration summary",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityExactlyOnePerPass,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "exactly one line per corroboration pass -- the per-candidate detail this summary aggregates stays at Debug (Corroboration above).",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "pass", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"corroboration"}},
+		{Key: "candidate_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "top_ids", Type: FieldStringSlice, Presence: PresenceRequired},
+		{Key: "min_confidence", Type: FieldFloat, Presence: PresenceRequired},
+		{Key: "max_confidence", Type: FieldFloat, Presence: PresenceRequired},
+	},
+}
+
+// ReservedKindAdmitted is the Info line (graphrank/tracer.go, case
+// "reserved_kind_admitted") emitted once per candidate the CHAOS-4038 kind
+// reserve keeps past the flat cut -- CHAOS-5517's third
+// MultiplicityBoundedManyPerPass, pass-keyed event: bounded by however many
+// admissions this pass's own reserve produced (0 in the common case -- the
+// reserve is inert on most resolutions), never a fixed count, and no
+// sibling summary line exists for it (its own presence, or absence, IS the
+// operator-visible signal), so its bound is self-carried index/total only.
+var ReservedKindAdmitted = Event{
+	ID:                 "graphrank.reserved_kind_admitted",
+	Msg:                "context fabric resolution trace: reserved kind admitted",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityBoundedManyPerPass,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "bounded by this pass's own reserve-admission count (self-carried index/total) -- 0 on the common path where the reserve never fires; no sibling summary event exists for this stage.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "pass", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"reserved_kind_admitted"}},
+		{Key: "index", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_canonical_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "rank", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "survived", Type: FieldBool, Presence: PresenceRequired},
+	},
+}
+
 // All is every event this specification declares. Generate() and the
 // certification runner both range over exactly this slice -- neither
 // maintains a second list.
-var All = []Event{RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld}
+var All = []Event{
+	RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld,
+	Corroboration, CorroborationSummary, ReservedKindAdmitted,
+}

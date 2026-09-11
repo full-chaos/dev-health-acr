@@ -130,6 +130,10 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		if event.CorroborationSummary {
 			t.logger.InfoContext(ctx, "context fabric resolution trace: corroboration summary",
 				"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+				// CHAOS-5517: this summary is now pass-keyed the same way
+				// ranked_cut/anchor_slot_displaced/decision_summary already
+				// are -- see ResolutionTraceEvent.Pass's own doc comment.
+				"pass", event.Pass,
 				"candidate_count", event.CorroborationCandidateCount,
 				"top_ids", contextfabric.SanitizeLogStrings(event.CorroborationTopIDs),
 				"min_confidence", event.CorroborationMinConfidence,
@@ -138,6 +142,10 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		}
 		t.logger.DebugContext(ctx, "context fabric resolution trace: corroboration",
 			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+			"pass", event.Pass,
+			// CHAOS-5517: the self-carried bounded-many identity -- see
+			// ResolutionTraceEvent.Index's own doc comment.
+			"index", event.Index, "total", event.Total,
 			"subject_kind", contextfabric.SanitizeLogAttr(string(event.Subject.Kind)), "subject_canonical_id", contextfabric.SanitizeLogAttr(event.Subject.CanonicalID),
 			"base_confidence", event.BaseConfidence, "final_confidence", event.FinalConfidence,
 			"distinct_mechanisms", event.DistinctMechanisms)
@@ -516,6 +524,11 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// ambiguity this ticket exists to remove.
 		t.logger.InfoContext(ctx, "context fabric resolution trace: reserved kind admitted",
 			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+			// CHAOS-5517: pass-keyed (this admission belongs to the SAME
+			// pass its own ranked_cut/anchor_slot_displaced lines do) and
+			// self-carrying the bounded-many identity -- see
+			// ResolutionTraceEvent.Pass/.Index's own doc comments.
+			"pass", event.Pass, "index", event.Index, "total", event.Total,
 			"subject_kind", contextfabric.SanitizeLogAttr(string(event.Subject.Kind)), "subject_canonical_id", contextfabric.SanitizeLogAttr(event.Subject.CanonicalID),
 			"rank", event.Rank, "survived", event.Survived)
 	case "confirmed_kind_scope":

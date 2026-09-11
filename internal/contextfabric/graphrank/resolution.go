@@ -527,8 +527,18 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 			// transition and the distinct mechanism count.
 			tracer.Trace(ResolutionTraceEvent{
 				RequestID: requestID, Stage: "corroboration", Subject: candidates[index].Subject,
-				BaseConfidence: base, FinalConfidence: candidates[index].Confidence,
+				Pass:               pass,
+				BaseConfidence:     base,
+				FinalConfidence:    candidates[index].Confidence,
 				DistinctMechanisms: DistinctMechanismCount(candidates[index].MatchMechanisms),
+				// CHAOS-5517: this loop ranges over the WHOLE candidates
+				// slice unconditionally (every element gets a line, unlike
+				// offer_pool/reserved_kind_admitted's own filtered loops),
+				// so Total is simply the slice's own length -- the SAME
+				// length CorroborationSummary's own CorroborationCandidateCount
+				// reports below, by construction (same slice, no
+				// intervening append/removal between here and there).
+				Index: index + 1, Total: len(candidates),
 			})
 		}
 	}
@@ -561,6 +571,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		}
 		tracer.Trace(ResolutionTraceEvent{
 			RequestID: requestID, Stage: "corroboration", CorroborationSummary: true,
+			Pass:                        pass,
 			CorroborationCandidateCount: len(candidates), CorroborationTopIDs: topIDs,
 			CorroborationMinConfidence: minConfidence, CorroborationMaxConfidence: maxConfidence,
 		})
@@ -1512,11 +1523,26 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		// so the retained count is unchanged. Traced per admission so the
 		// effect is readable from a run's own artifacts.
 		if tracer != nil {
+			// CHAOS-5517: Total is not known until every admission this
+			// pass produced has been counted -- a cheap pre-count over the
+			// SAME range/condition the emitting loop below uses, never a
+			// second, independently-derived total that could drift from
+			// what actually gets traced.
+			admittedTotal := 0
 			for i := max; i < len(ordered); i++ {
 				if keptIndex[i] {
+					admittedTotal++
+				}
+			}
+			admittedIndex := 0
+			for i := max; i < len(ordered); i++ {
+				if keptIndex[i] {
+					admittedIndex++
 					tracer.Trace(ResolutionTraceEvent{
 						RequestID: requestID, Stage: "reserved_kind_admitted",
+						Pass:    pass,
 						Subject: ordered[i].Subject, Rank: i + 1, Survived: true,
+						Index: admittedIndex, Total: admittedTotal,
 					})
 				}
 			}
