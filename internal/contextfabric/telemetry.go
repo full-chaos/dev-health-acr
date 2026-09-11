@@ -1219,15 +1219,17 @@ func (t SlogEngineTelemetry) RecordReadRequirementPopulation(ctx context.Context
 // "nobody counted" look alike to a reader filtering on it.
 //
 // Content-safe by construction: two closed identity strings, one closed
-// subject-kind token, and the rest integers/booleans -- no key values and no
-// kind lists, which would grow with the fact registry.
+// subject-kind token, one closed withheld-reason token, and the rest
+// integers/booleans -- no key values and no kind lists, which would grow with
+// the fact registry. Every string still routes through SanitizeLogAttr, the
+// package's one log-injection barrier, like every sibling emitter.
 func (t SlogEngineTelemetry) RecordReadRequirementObservationCover(ctx context.Context, principal storage.Principal, event ReadRequirementObservationCoverEvent) {
 	args := append([]any{
-		"org_id", principal.OrgID,
+		"org_id", SanitizeLogAttr(principal.OrgID),
 		// PRE-ENTRY: what this requirement asked for.
-		"requirement", event.Requirement,
-		"obligation", event.Obligation,
-		"subject_kind", string(event.Subject),
+		"requirement", SanitizeLogAttr(event.Requirement),
+		"obligation", SanitizeLogAttr(event.Obligation),
+		"subject_kind", SanitizeLogAttr(string(event.Subject)),
 		"threshold", event.Threshold,
 		"observed_kinds", event.ObservedKinds,
 		"served_kinds", event.ServedKinds,
@@ -1248,7 +1250,7 @@ func (t SlogEngineTelemetry) RecordReadRequirementObservationCover(ctx context.C
 		// group on.
 		"pass", event.Pass,
 		"evaluated_pass", event.EvaluatedPass,
-		"row_withheld", string(event.RowWithheld),
+		"row_withheld", SanitizeLogAttr(string(event.RowWithheld)),
 		"reused", event.Reused,
 		"answer_withheld", event.AnswerWithheld,
 		"served", event.Served,
