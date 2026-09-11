@@ -362,6 +362,50 @@ func TestSemanticState_TheEncoderRefusesAFormatItDidNotWrite(t *testing.T) {
 	}
 }
 
+// TestSemanticState_EachCrossFieldAgreementIsCheckedOnItsOwn breaks ONE
+// agreement at a time. The stored-document domain table cannot separate these:
+// flipping frame_present in the document breaks the requirements_declared
+// agreement too, so either guard alone still refuses it and neither is pinned
+// by that cell. Built at the struct level, each cell leaves every OTHER
+// agreement intact.
+func TestSemanticState_EachCrossFieldAgreementIsCheckedOnItsOwn(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// break makes exactly one agreement false.
+		mutate func(*PersistedSemanticState)
+		want   string
+	}{
+		{"a frame is present while frame_present says it is not", func(s *PersistedSemanticState) {
+			s.FramePresent = false
+			s.RequirementsDeclared = false
+			s.Requirements = []SemanticRequirement{}
+			s.Roles = []SemanticRoleSlot{}
+			s.Validation = SemanticStateValidation{}
+		}, "frame_present=false disagrees with the frame's presence"},
+		{"frame_present says a frame is there and none is", func(s *PersistedSemanticState) {
+			s.Frame = nil
+		}, "frame_present=true disagrees with the frame's presence"},
+		{"declarations are claimed without a frame to derive them from", func(s *PersistedSemanticState) {
+			s.RequirementsDeclared = false
+		}, "requirements_declared=false disagrees with frame_present=true"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			state := sizedSemanticState(t, 4000)
+			tc.mutate(state)
+			_, err := EncodeSemanticState(state)
+			t.Logf("%s -> %v", tc.name, err)
+			if err == nil || !errors.Is(err, ErrSemanticStateRejected) {
+				t.Fatalf("accepted a snapshot whose cross-field agreement is broken: %v", err)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("rejected for the wrong reason:\n got:  %v\n want: %q", err, tc.want)
+			}
+		})
+	}
+}
+
 // sizedSemanticState builds a valid snapshot whose canonical encoding is EXACTLY
 // target bytes, by filling an explicit set's operands with retrieval terms.
 func sizedSemanticState(t testing.TB, target int) *PersistedSemanticState {
