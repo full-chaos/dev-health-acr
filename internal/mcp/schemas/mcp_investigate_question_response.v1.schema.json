@@ -2937,6 +2937,53 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "complete",
+                      "partial"
+                    ]
+                  }
+                },
+                "required": [
+                  "status"
+                ]
+              },
+              {
+                "properties": {
+                  "completeness": {
+                    "properties": {
+                      "claimed_facts_count": {
+                        "minimum": 1
+                      }
+                    },
+                    "required": [
+                      "claimed_facts_count"
+                    ]
+                  },
+                  "evidence_ref_ids": {
+                    "minItems": 1
+                  }
+                },
+                "required": [
+                  "completeness",
+                  "evidence_ref_ids"
+                ]
+              }
+            ]
+          },
+          "then": {
+            "properties": {
+              "deterministic_answer": {
+                "minLength": 1
+              }
+            }
+          }
         }
       ],
       "properties": {
@@ -2979,7 +3026,6 @@
         },
         "deterministic_answer": {
           "maxLength": 12000,
-          "minLength": 1,
           "type": "string"
         },
         "direct_judgment": {

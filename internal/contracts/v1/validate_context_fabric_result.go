@@ -1488,7 +1488,12 @@ func (r ContextFabricInvestigationResult) validateAgainstSchemaVersion(bounds co
 	// model-facing registry (ContextFabricModelFacingBounds) this file
 	// otherwise draws from; likewise Paths, which ACR derives from the
 	// graph, not the model.
-	if !stringLengthBetween(r.DirectJudgment, 0, bounds.judgmentLength) || !stringLengthBetween(r.CurrentState, 0, bounds.judgmentLength) || !stringLengthBetween(r.DeterministicAnswer, 1, bounds.deterministicAnswerLength) ||
+	//
+	// DeterministicAnswer's LOWER bound is decided by the terminal-form
+	// predicate (context_fabric_deterministic_answer.go): required on a
+	// supported result, and on every complete/partial one; may be empty on
+	// a result with nothing read behind it.
+	if !stringLengthBetween(r.DirectJudgment, 0, bounds.judgmentLength) || !stringLengthBetween(r.CurrentState, 0, bounds.judgmentLength) || !stringLengthBetween(r.DeterministicAnswer, contextFabricDeterministicAnswerMinLength(r), bounds.deterministicAnswerLength) ||
 		r.StrongestPressures == nil || len(r.StrongestPressures) > ContextFabricStrongestPressuresMaxCount || !uniqueTrimmedStrings(r.StrongestPressures, ContextFabricStrongestPressureMaxLength) ||
 		r.Drivers == nil || len(r.Drivers) > ContextFabricDriversMaxCount ||
 		r.RemainingWork == nil || len(r.RemainingWork) > ContextFabricRemainingWorkMaxCount ||

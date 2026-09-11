@@ -114,6 +114,30 @@ The fix, concretely:
    This is the only reading of "deterministic" that can't itself
    reintroduce an unchecked claim: every value it renders was already
    proven equal to the canonical bundle by step 3.
+5. `DeterministicAnswer` is **required if and only if the result is
+   supported** (`ContextFabricResultSupported`,
+   `internal/contracts/v1/context_fabric_deterministic_answer.go`). A result
+   is supported when its completeness block counts at least one claimed fact
+   (`completeness.claimed_facts_count >= 1`, the producer's own count) AND it
+   carries at least one citable evidence ref (`evidence_ref_ids` non-empty).
+   Both are structured fields; nothing reads prose to decide whether prose
+   is allowed. On a result that is NOT supported the answer sentence may be
+   empty: nothing was read behind it, and the document's disclosure
+   (`limitations`, `warnings`, `coverage`, the completeness block,
+   `refusal_basis`, the clarification prompt) is what it carries instead.
+   `complete` and `partial` results keep requiring it at every support
+   level, and a stored row with no completeness block keeps the rule it was
+   written under. The published schemas state the same rule as an
+   `allOf` / `if` / `then` on the result object.
+
+   | status | may be supported? | `deterministic_answer` |
+   |---|---|---|
+   | `complete`, `partial` | yes | required |
+   | `degraded`, `clarification_required`, `no_match` | yes | required iff supported; may be empty otherwise |
+
+   This is a WIDENING only: every result that validated before still
+   validates. The server does not yet emit the empty form; it will only
+   after every consumer (including the ask-dev pin) accepts it.
 
 ## 3. The honest residual limitation
 

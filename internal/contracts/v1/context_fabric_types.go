@@ -1728,11 +1728,16 @@ type ContextFabricInvestigationResult struct {
 	//
 	// Optional-first: nil on every result written before this field existed,
 	// and on any path that resolved no scope at all.
-	FactScopeCensus     []ContextFabricFactScopeCensusRecord `json:"fact_scope_census,omitempty"`
-	EvidenceRefLabels   map[string]string                    `json:"evidence_ref_labels,omitempty"`
-	Versions            ContextFabricVersionSet              `json:"versions"`
-	DeterministicAnswer string                               `json:"deterministic_answer"`
-	Warnings            []string                             `json:"warnings"`
+	FactScopeCensus   []ContextFabricFactScopeCensusRecord `json:"fact_scope_census,omitempty"`
+	EvidenceRefLabels map[string]string                    `json:"evidence_ref_labels,omitempty"`
+	Versions          ContextFabricVersionSet              `json:"versions"`
+	// DeterministicAnswer is the service's own answer sentence. Required on
+	// every SUPPORTED result (ContextFabricResultSupported: a claimed fact
+	// AND a citable evidence ref) and on every complete/partial one; may be
+	// empty on a result with nothing read behind it, whose disclosure fields
+	// carry the explanation instead. See context_fabric_deterministic_answer.go.
+	DeterministicAnswer string   `json:"deterministic_answer"`
+	Warnings            []string `json:"warnings"`
 	// Reused marks whether this result was served from the immutable
 	// result store instead of a fresh investigation (CHAOS-3782, TRD
 	// §19.7, AC-3782-2). When true, ResultID and GeneratedAt above are NOT
