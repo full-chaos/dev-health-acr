@@ -156,6 +156,29 @@ func TestDeterministicAnswerPredicateDomainIsEnumeratedAndExecuted(t *testing.T)
 		check("Validate + schemas", "status", "clarification_required that read a fact, answer present, prompt kept", verdicts(r), all("accepted"))
 	}
 
+	// ------------------------------- 2b. the census rule the schema cannot express
+	// The published schemas key the answer rule off `claimed_facts` and
+	// `evidence_ref_ids`, both of which they can see. Go keys it off the
+	// completeness COUNT, the producer's own authority (K5). On every document
+	// the census rule admits the two are the same number, so the verdicts agree
+	// -- proven cell by cell above. A document whose count and array DISAGREE is
+	// refused by Go for the census rule itself, and the schema cannot express
+	// that comparison at all: these cells pin that boundary, and the last two
+	// show the divergence is the census rule's, not the answer rule's.
+	mismatch := func(facts, evidence, count int, answer string) ContextFabricInvestigationResult {
+		r := daFixture(degraded, facts, evidence, answer)
+		r.Completeness.ClaimedFactsCount = count
+		return r
+	}
+	goAndV1 := func(r ContextFabricInvestigationResult) string {
+		return fmt.Sprintf("go=%s v1=%s", daVerdict(r.Validate()), daSchema(t, r, "context_fabric_investigation_result.v1.schema.json"))
+	}
+	check("Validate + schemas", "claimed_facts_count vs claimed_facts", "count 0, one fact, no evidence, answer empty", goAndV1(mismatch(1, 0, 0, "")), "go=refused v1=accepted")
+	check("Validate + schemas", "claimed_facts_count vs claimed_facts", "count 0, one fact, no evidence, answer present (the same divergence without this change)", goAndV1(mismatch(1, 0, 0, daAnswer)), "go=refused v1=accepted")
+	check("Validate + schemas", "claimed_facts_count vs claimed_facts", "count 1, no fact, evidence, answer present", goAndV1(mismatch(0, 1, 1, daAnswer)), "go=refused v1=accepted")
+	check("Validate + schemas", "claimed_facts_count vs claimed_facts", "CONTROL: count 1, one fact, evidence, answer empty (census agrees)", goAndV1(daFixture(degraded, 1, 1, "")), "go=refused v1=refused")
+	check("Validate + schemas", "claimed_facts_count vs claimed_facts", "CONTROL: count 1, one fact, no evidence, answer empty (census agrees)", goAndV1(daFixture(degraded, 1, 0, "")), "go=accepted v1=accepted")
+
 	// ---------------------------------------------------------------- 3. the stored path
 	{
 		legacy := daFixture(degraded, 0, 0, "")

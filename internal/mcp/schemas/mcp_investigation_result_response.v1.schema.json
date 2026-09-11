@@ -119,22 +119,15 @@
               },
               {
                 "properties": {
-                  "completeness": {
-                    "properties": {
-                      "claimed_facts_count": {
-                        "minimum": 1
-                      }
-                    },
-                    "required": [
-                      "claimed_facts_count"
-                    ]
+                  "claimed_facts": {
+                    "minItems": 1
                   },
                   "evidence_ref_ids": {
                     "minItems": 1
                   }
                 },
                 "required": [
-                  "completeness",
+                  "claimed_facts",
                   "evidence_ref_ids"
                 ]
               }

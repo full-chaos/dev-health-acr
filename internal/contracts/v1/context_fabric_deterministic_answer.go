@@ -37,6 +37,16 @@ package v1
 //     predicate reads the basis: validateCompleteness already refuses a basis
 //     alongside any claimed fact, so a refused result has a zero count.
 //
+// THE PUBLISHED SCHEMAS STATE THE SAME RULE OVER THE DATA THEY CAN SEE.
+// A JSON Schema cannot compare a number to an array's length, so the schemas
+// key the rule off `claimed_facts` and `evidence_ref_ids` -- both present in
+// the document -- rather than off the count. validateCompleteness already
+// refuses any document whose count and array disagree, so on every document
+// the contract admits the two readings are the same number and the verdicts
+// coincide; a disagreeing document is refused here for the census rule, which
+// the schema cannot express at all (both directions executed in the domain
+// table). Go keeps reading the COUNT so this file has one authority for it.
+//
 // This file only WIDENS the contract: a result that validated before still
 // validates. Complete and partial results keep requiring the answer sentence
 // (they already require a non-blank DirectJudgment, so a content-free one is
