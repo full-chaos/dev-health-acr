@@ -1016,8 +1016,13 @@ func TestWindowContinuation_EveryReasonIsReachedThroughTheEngine(t *testing.T) {
 		},
 		{reason: ContinuationReasonRequestCancelled, cancel: true},
 		{
+			// CHAOS-5582: on an established window-only transition an
+			// unanswerable fresh time is overridden onto the confirmed current
+			// axis and answered, so this exit is reached by a turn whose fresh
+			// time governs -- a changed question.
 			reason:      ContinuationReasonAsOfUnresolvable,
 			interpreter: futureAsOfInterpreter{family: QuestionFamilyGroupedCohortStatus},
+			prior:       func(p InvestigationResult) InvestigationResult { p.Question = driftQuestion; return p },
 		},
 		{
 			// The carried reading is grouped and the fresh frame has no
@@ -1654,6 +1659,10 @@ func (s sharedFrameInterpreter) Interpret(context.Context, storage.Principal, In
 func TestWindowContinuation_R3_TheInterpretedTimeBoundErrorCarriesItsOwnReason(t *testing.T) {
 	request := continuationRequest(validInvestigationRequest().Question)
 	prior := continuationPrior(t, continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
+	// CHAOS-5582: an established transition overrides an unanswerable fresh
+	// time and answers, so the bound exit is driven by a changed question,
+	// whose fresh time governs.
+	prior.Question = driftQuestion
 	telemetry := &recordingTelemetry{}
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	fresh := validInvestigationResult()

@@ -248,12 +248,14 @@ const (
 	// decision.
 	ContinuationAxisNotEvaluated ContinuationAxisOutcome = "not_evaluated"
 	// ContinuationAxisAgreed: the fresh axis is current, the axis the window
-	// was confirmed under. Nothing was overridden.
+	// was confirmed under. Nothing was overridden. Without an established
+	// transition a current axis with an unanswerable bound also reads `agreed`:
+	// the axis agrees, and the bound exit refuses on its own reason.
 	ContinuationAxisAgreed ContinuationAxisOutcome = "agreed"
 	// ContinuationAxisOverriddenByReceipt: the window-only TRANSITION was
 	// established (one window receipt, a readable taint-valid carrier, the
 	// identical question) on a carrier that recorded the current axis, and the
-	// fresh axis moved off current; the turn executes under the current axis
+	// fresh time moved off current or carried an unanswerable bound; the turn executes under the current axis
 	// with the confirmed window, and the fresh axis is a diagnostic on this
 	// line. A sampled axis is not a user change -- the user changed only the
 	// window. Whether the carried READING was then applied, withheld or absent
@@ -970,16 +972,24 @@ func (e *Engine) admitWindowContinuation(
 //
 // Called after composition and the comparison, so every field it reads is
 // final for the turn.
+//
+// THE FRESH TIME IS ONE VALUE, AXIS AND BOUND TOGETHER. A fresh `current` axis
+// whose bound is unanswerable (a present-zero instant) is as much a sampled
+// failure as a drifted axis, and on an established transition it is overridden
+// the same way; only a fresh `current` axis with an answerable bound `agrees`.
+// Without an established transition the fresh time governs whole: a drifted
+// axis reaches the axis-conflict veto, an unanswerable bound the bound exit.
 func decideContinuationAxis(
 	decision windowContinuationDecision,
 	fresh TimeContext,
+	freshAnswerable bool,
 	requestTime TimeContext,
 	windowCommitted bool,
 ) (TimeContext, ContinuationAxisOutcome) {
 	if !windowCommitted {
 		return fresh, ContinuationAxisNotEvaluated
 	}
-	if fresh.Axis == contractsv1.ContextFabricTemporalCurrent {
+	if fresh.Axis == contractsv1.ContextFabricTemporalCurrent && freshAnswerable {
 		return fresh, ContinuationAxisAgreed
 	}
 	if decision.TransitionEstablished &&
@@ -990,6 +1000,10 @@ func decideContinuationAxis(
 		// window is already the applied window, not a second copy on the
 		// interpretation.
 		return TimeContext{Axis: requestTime.Axis, AsOf: requestTime.AsOf}, ContinuationAxisOverriddenByReceipt
+	}
+	if fresh.Axis == contractsv1.ContextFabricTemporalCurrent {
+		// The axis agrees; the unanswerable bound is the bound exit's to refuse.
+		return fresh, ContinuationAxisAgreed
 	}
 	return fresh, ContinuationAxisVetoed
 }

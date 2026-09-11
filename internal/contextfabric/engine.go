@@ -1655,20 +1655,19 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			carryCtx, principal, request, binding, priorLoadedResults,
 			windowCanon.Effective, interpretedTimeBound.Axis,
 		)
-		executedTime, axisOutcome := decideContinuationAxis(continuation, interpretedTimeBound.Bound, clampedRequestTime, windowCommitted)
+		executedTime, axisOutcome := decideContinuationAxis(continuation, interpretedTimeBound.Bound, interpretedTimeBound.Answerable(), clampedRequestTime, windowCommitted)
 		continuation.AxisOutcome = axisOutcome
 		if axisOutcome == ContinuationAxisOverriddenByReceipt {
 			interpretedTimeBound = resolveInterpretedTimeContext(executedTime, e.now())
 		}
 	}
 	if !interpretedTimeBound.Answerable() {
-		// Nothing continued on this exit, whatever admission found: the turn
-		// ends before composition, so the line must not publish `applied` or an
-		// accepted context for it (R2-4's rule, at this exit).
-		if continuation.Disposition == ContinuationApplied {
-			continuation.Disposition = ContinuationNotApplicable
-			continuation.Accepted = nil
-		}
+		// NO APPLIED CONTINUATION REACHES THIS EXIT (CHAOS-5582): `applied`
+		// requires an established transition on a current carrier, and on such
+		// a transition decideContinuationAxis overrode any unanswerable fresh
+		// time onto the caller's answerable current axis above. What lands here
+		// is a turn whose fresh time governs, and the line keeps the reason
+		// admission gave it until the one below narrows it.
 		// The INTERPRETER produced an unanswerable bound; its own member,
 		// distinct from the caller-side one above.
 		continuation = continuation.withReason(ContinuationReasonAsOfUnresolvable)

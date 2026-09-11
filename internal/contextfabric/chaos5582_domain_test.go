@@ -26,53 +26,62 @@ func TestCHAOS5582_AxisDecisionInputDomain(t *testing.T) {
 	requestWithWindow := TimeContext{Axis: TemporalCurrent, AsOf: &asOf, EvidenceWindow: &RequestedEvidenceWindow{RelativeID: RelativeWindowTrailing90D}}
 
 	for _, tc := range []struct {
-		name         string
-		decision     windowContinuationDecision
-		fresh        TimeContext
-		request      TimeContext
-		committed    bool
-		wantAxis     contractsv1.ContextFabricTemporalAxis
-		wantOutcome  ContinuationAxisOutcome
-		wantAsOf     *time.Time
-		wantNoBounds bool
+		name            string
+		decision        windowContinuationDecision
+		fresh           TimeContext
+		freshAnswerable bool
+		request         TimeContext
+		committed       bool
+		wantAxis        contractsv1.ContextFabricTemporalAxis
+		wantOutcome     ContinuationAxisOutcome
+		wantAsOf        *time.Time
+		wantNoBounds    bool
 	}{
 		// fresh axis x {canonical current, every drifted member, absent, out of vocabulary}
-		{"fresh/current", applied(TemporalCurrent), current, current, true, TemporalCurrent, ContinuationAxisAgreed, nil, true},
-		{"fresh/range", applied(TemporalCurrent), rangeFresh, current, true, TemporalCurrent, ContinuationAxisOverriddenByReceipt, nil, true},
-		{"fresh/valid_time", applied(TemporalCurrent), TimeContext{Axis: TemporalValidTime, AsOf: &axis5582AsOf}, current, true, TemporalCurrent, ContinuationAxisOverriddenByReceipt, nil, true},
-		{"fresh/observed_time", applied(TemporalCurrent), TimeContext{Axis: TemporalObservedTime, AsOf: &axis5582AsOf}, current, true, TemporalCurrent, ContinuationAxisOverriddenByReceipt, nil, true},
-		{"fresh/absent", applied(TemporalCurrent), TimeContext{}, current, true, TemporalCurrent, ContinuationAxisOverriddenByReceipt, nil, true},
-		{"fresh/out_of_vocabulary", applied(TemporalCurrent), TimeContext{Axis: "invented"}, current, true, TemporalCurrent, ContinuationAxisOverriddenByReceipt, nil, true},
+		{"fresh/current", applied(TemporalCurrent), current, true, current, true, TemporalCurrent, ContinuationAxisAgreed, nil, true},
+		{"fresh/range", applied(TemporalCurrent), rangeFresh, true, current, true, TemporalCurrent, ContinuationAxisOverriddenByReceipt, nil, true},
+		{"fresh/valid_time", applied(TemporalCurrent), TimeContext{Axis: TemporalValidTime, AsOf: &axis5582AsOf}, true, current, true, TemporalCurrent, ContinuationAxisOverriddenByReceipt, nil, true},
+		{"fresh/observed_time", applied(TemporalCurrent), TimeContext{Axis: TemporalObservedTime, AsOf: &axis5582AsOf}, true, current, true, TemporalCurrent, ContinuationAxisOverriddenByReceipt, nil, true},
+		{"fresh/absent", applied(TemporalCurrent), TimeContext{}, true, current, true, TemporalCurrent, ContinuationAxisOverriddenByReceipt, nil, true},
+		{"fresh/out_of_vocabulary", applied(TemporalCurrent), TimeContext{Axis: "invented"}, true, current, true, TemporalCurrent, ContinuationAxisOverriddenByReceipt, nil, true},
 		// carried axis x domain (fresh drifted)
-		{"carried/valid_time", applied(TemporalValidTime), rangeFresh, current, true, TemporalRange, ContinuationAxisVetoed, nil, false},
-		{"carried/observed_time", applied(TemporalObservedTime), rangeFresh, current, true, TemporalRange, ContinuationAxisVetoed, nil, false},
-		{"carried/range", applied(TemporalRange), rangeFresh, current, true, TemporalRange, ContinuationAxisVetoed, nil, false},
-		{"carried/absent", applied(""), rangeFresh, current, true, TemporalRange, ContinuationAxisVetoed, nil, false},
-		{"carried/out_of_vocabulary", applied("invented"), rangeFresh, current, true, TemporalRange, ContinuationAxisVetoed, nil, false},
+		{"carried/valid_time", applied(TemporalValidTime), rangeFresh, true, current, true, TemporalRange, ContinuationAxisVetoed, nil, false},
+		{"carried/observed_time", applied(TemporalObservedTime), rangeFresh, true, current, true, TemporalRange, ContinuationAxisVetoed, nil, false},
+		{"carried/range", applied(TemporalRange), rangeFresh, true, current, true, TemporalRange, ContinuationAxisVetoed, nil, false},
+		{"carried/absent", applied(""), rangeFresh, true, current, true, TemporalRange, ContinuationAxisVetoed, nil, false},
+		{"carried/out_of_vocabulary", applied("invented"), rangeFresh, true, current, true, TemporalRange, ContinuationAxisVetoed, nil, false},
 		// request axis x domain (fresh drifted, carrier current)
-		{"request/valid_time", applied(TemporalCurrent), rangeFresh, TimeContext{Axis: TemporalValidTime, AsOf: &asOf}, true, TemporalRange, ContinuationAxisVetoed, nil, false},
-		{"request/range", applied(TemporalCurrent), rangeFresh, TimeContext{Axis: TemporalRange, Start: &axis5582RangeStart, End: &axis5582RangeEnd}, true, TemporalRange, ContinuationAxisVetoed, nil, false},
-		{"request/absent", applied(TemporalCurrent), rangeFresh, TimeContext{}, true, TemporalRange, ContinuationAxisVetoed, nil, false},
-		{"request/out_of_vocabulary", applied(TemporalCurrent), rangeFresh, TimeContext{Axis: "invented"}, true, TemporalRange, ContinuationAxisVetoed, nil, false},
+		{"request/valid_time", applied(TemporalCurrent), rangeFresh, true, TimeContext{Axis: TemporalValidTime, AsOf: &asOf}, true, TemporalRange, ContinuationAxisVetoed, nil, false},
+		{"request/range", applied(TemporalCurrent), rangeFresh, true, TimeContext{Axis: TemporalRange, Start: &axis5582RangeStart, End: &axis5582RangeEnd}, true, TemporalRange, ContinuationAxisVetoed, nil, false},
+		{"request/absent", applied(TemporalCurrent), rangeFresh, true, TimeContext{}, true, TemporalRange, ContinuationAxisVetoed, nil, false},
+		{"request/out_of_vocabulary", applied(TemporalCurrent), rangeFresh, true, TimeContext{Axis: "invented"}, true, TemporalRange, ContinuationAxisVetoed, nil, false},
 		// transition x disposition (fresh drifted): the axis follows the
 		// established transition, never the applied reading
-		{"transition/not_established_but_applied", windowContinuationDecision{Disposition: ContinuationApplied, Accepted: carried, CarriedAxis: TemporalCurrent}, rangeFresh, current, true, TemporalRange, ContinuationAxisVetoed, nil, false},
-		{"transition/established_withheld", windowContinuationDecision{Disposition: ContinuationWithheld, CarriedAxis: TemporalCurrent, TransitionEstablished: true}, rangeFresh, current, true, TemporalCurrent, ContinuationAxisOverriddenByReceipt, nil, true},
-		{"transition/established_not_applicable", windowContinuationDecision{Disposition: ContinuationNotApplicable, CarriedAxis: TemporalCurrent, TransitionEstablished: true}, rangeFresh, current, true, TemporalCurrent, ContinuationAxisOverriddenByReceipt, nil, true},
-		{"transition/zero_decision", windowContinuationDecision{}, rangeFresh, current, true, TemporalRange, ContinuationAxisVetoed, nil, false},
-		{"transition/established_fresh_current", windowContinuationDecision{Disposition: ContinuationWithheld, CarriedAxis: TemporalCurrent, TransitionEstablished: true}, current, current, true, TemporalCurrent, ContinuationAxisAgreed, nil, true},
+		{"transition/not_established_but_applied", windowContinuationDecision{Disposition: ContinuationApplied, Accepted: carried, CarriedAxis: TemporalCurrent}, rangeFresh, true, current, true, TemporalRange, ContinuationAxisVetoed, nil, false},
+		{"transition/established_withheld", windowContinuationDecision{Disposition: ContinuationWithheld, CarriedAxis: TemporalCurrent, TransitionEstablished: true}, rangeFresh, true, current, true, TemporalCurrent, ContinuationAxisOverriddenByReceipt, nil, true},
+		{"transition/established_not_applicable", windowContinuationDecision{Disposition: ContinuationNotApplicable, CarriedAxis: TemporalCurrent, TransitionEstablished: true}, rangeFresh, true, current, true, TemporalCurrent, ContinuationAxisOverriddenByReceipt, nil, true},
+		{"transition/zero_decision", windowContinuationDecision{}, rangeFresh, true, current, true, TemporalRange, ContinuationAxisVetoed, nil, false},
+		{"transition/established_fresh_current", windowContinuationDecision{Disposition: ContinuationWithheld, CarriedAxis: TemporalCurrent, TransitionEstablished: true}, current, true, current, true, TemporalCurrent, ContinuationAxisAgreed, nil, true},
 		// window commitment x {false}
-		{"committed/false_fresh_range", applied(TemporalCurrent), rangeFresh, current, false, TemporalRange, ContinuationAxisNotEvaluated, nil, false},
-		{"committed/false_fresh_current", applied(TemporalCurrent), current, current, false, TemporalCurrent, ContinuationAxisNotEvaluated, nil, true},
-		{"committed/false_not_established", windowContinuationDecision{}, rangeFresh, current, false, TemporalRange, ContinuationAxisNotEvaluated, nil, false},
+		{"committed/false_fresh_range", applied(TemporalCurrent), rangeFresh, true, current, false, TemporalRange, ContinuationAxisNotEvaluated, nil, false},
+		{"committed/false_fresh_current", applied(TemporalCurrent), current, true, current, false, TemporalCurrent, ContinuationAxisNotEvaluated, nil, true},
+		{"committed/false_not_established", windowContinuationDecision{}, rangeFresh, true, current, false, TemporalRange, ContinuationAxisNotEvaluated, nil, false},
+		// fresh CURRENT axis × bound answerability (r1): an unanswerable
+		// current bound is overridden on an established transition like a
+		// drifted axis, and agrees (for the bound exit) without one
+		{"answerability/current_unanswerable_established", applied(TemporalCurrent), TimeContext{Axis: TemporalCurrent, AsOf: &zeroInstant5582}, false, current, true, TemporalCurrent, ContinuationAxisOverriddenByReceipt, nil, true},
+		{"answerability/current_unanswerable_not_established", windowContinuationDecision{Disposition: ContinuationNotApplicable, CarriedAxis: TemporalCurrent}, TimeContext{Axis: TemporalCurrent, AsOf: &zeroInstant5582}, false, current, true, TemporalCurrent, ContinuationAxisAgreed, nil, false},
+		{"answerability/range_unanswerable_established", applied(TemporalCurrent), TimeContext{Axis: TemporalRange, Start: &axis5582RangeEnd, End: &axis5582RangeStart}, false, current, true, TemporalCurrent, ContinuationAxisOverriddenByReceipt, nil, true},
+		{"answerability/range_unanswerable_not_established", windowContinuationDecision{}, TimeContext{Axis: TemporalRange, Start: &axis5582RangeEnd, End: &axis5582RangeStart}, false, current, true, TemporalRange, ContinuationAxisVetoed, nil, false},
+		{"answerability/current_unanswerable_uncommitted", applied(TemporalCurrent), TimeContext{Axis: TemporalCurrent, AsOf: &zeroInstant5582}, false, current, false, TemporalCurrent, ContinuationAxisNotEvaluated, nil, false},
 		// executed instants: the caller's as-of is kept, a fresh range's bounds
 		// and the caller's requested window are not copied onto the interpretation
-		{"executed/keeps_request_as_of_drops_window_and_bounds", applied(TemporalCurrent), rangeFresh, requestWithWindow, true, TemporalCurrent, ContinuationAxisOverriddenByReceipt, &asOf, true},
+		{"executed/keeps_request_as_of_drops_window_and_bounds", applied(TemporalCurrent), rangeFresh, true, requestWithWindow, true, TemporalCurrent, ContinuationAxisOverriddenByReceipt, &asOf, true},
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, outcome := decideContinuationAxis(tc.decision, tc.fresh, tc.request, tc.committed)
+			got, outcome := decideContinuationAxis(tc.decision, tc.fresh, tc.freshAnswerable, tc.request, tc.committed)
 			if got.Axis != tc.wantAxis || outcome != tc.wantOutcome {
 				t.Fatalf("decideContinuationAxis = (%q, %q), want (%q, %q)", got.Axis, outcome, tc.wantAxis, tc.wantOutcome)
 			}
@@ -325,10 +334,16 @@ func TestCHAOS5582_EveryExitPublishesTheAxisStateItReached(t *testing.T) {
 			map[string]any{"continuation_disposition": "applied", "decision_reason": "none", "interpreted_axis": "valid_time", "carried_axis": "current", "executed_axis": "current", "interpreted_axis_outcome": "overridden_by_receipt"}, false},
 		{"unanswerable_fresh_range_on_established_transition", nil, freshAxisInterpreter{family: QuestionFamilyGroupedCohortStatus, timeContext: TimeContext{Axis: TemporalRange, Start: &axis5582RangeEnd, End: &axis5582RangeStart}}, false,
 			map[string]any{"continuation_disposition": "applied", "decision_reason": "none", "interpreted_axis": "range", "carried_axis": "current", "executed_axis": "current", "interpreted_axis_outcome": "overridden_by_receipt"}, false},
-		// A fresh CURRENT axis whose bound is unanswerable agrees on the axis and
-		// still ends the turn at the bound exit, publishing no applied context.
-		{"unanswerable_fresh_current_bound", nil, freshAxisInterpreter{family: QuestionFamilyGroupedCohortStatus, timeContext: TimeContext{Axis: TemporalCurrent, AsOf: &zeroInstant5582}}, false,
-			map[string]any{"continuation_disposition": "not_applicable", "decision_reason": "as_of_unresolvable", "family_accepted": "", "interpreted_axis": "current", "carried_axis": "current", "executed_axis": "", "interpreted_axis_outcome": "agreed"}, false},
+		// A fresh CURRENT axis whose bound is unanswerable is the same sampled
+		// failure on an established transition: overridden and answered.
+		{"unanswerable_fresh_current_bound_on_established_transition", nil, freshAxisInterpreter{family: QuestionFamilyGroupedCohortStatus, timeContext: TimeContext{Axis: TemporalCurrent, AsOf: &zeroInstant5582}}, false,
+			map[string]any{"continuation_disposition": "applied", "decision_reason": "none", "interpreted_axis": "current", "carried_axis": "current", "executed_axis": "current", "interpreted_axis_outcome": "overridden_by_receipt", "refusal_basis": "none"}, false},
+		// Without an established transition it still ends at the bound exit.
+		{"unanswerable_fresh_current_bound_changed_question", func(p InvestigationResult) InvestigationResult {
+			p.Question = "What was the status of Ask Dev last spring and what drove it?"
+			return p
+		}, freshAxisInterpreter{family: QuestionFamilyGroupedCohortStatus, timeContext: TimeContext{Axis: TemporalCurrent, AsOf: &zeroInstant5582}}, false,
+			map[string]any{"continuation_disposition": "not_applicable", "decision_reason": "as_of_unresolvable", "interpreted_axis": "current", "carried_axis": "current", "executed_axis": "", "interpreted_axis_outcome": "agreed"}, false},
 		// Without an established transition the fresh bound governs, and an
 		// unanswerable one ends the turn exactly as before.
 		{"unanswerable_fresh_bound_changed_question", func(p InvestigationResult) InvestigationResult {
