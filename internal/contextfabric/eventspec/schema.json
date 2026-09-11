@@ -1,5 +1,95 @@
 [
   {
+    "id": "graphrank.alias_lookup",
+    "msg": "context fabric resolution trace: alias lookup",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per resolveSubjects call -- gated on deps.AliasLookup != nil, which no production composition root sets today.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "alias_lookup"
+        ]
+      },
+      {
+        "key": "complete",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "matched_claimants",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.anchor_pool",
+    "msg": "context fabric resolution trace: anchor pool kind scope",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "exactly one line per resolveSubjects call -- emitted from the same statement that hands the scope to the confirmed-kind filter.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "anchor_pool"
+        ]
+      },
+      {
+        "key": "anchor_pool_kind_scope",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "anchor_pool_kind_scope_source",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "receipt",
+          "confirmed_anchor",
+          "none"
+        ]
+      },
+      {
+        "key": "member_kind_confirmed",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "reserved_kinds",
+        "type": "string_slice",
+        "presence": "required"
+      },
+      {
+        "key": "filter_kinds",
+        "type": "string_slice",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "graphrank.anchor_slot_displaced",
     "msg": "context fabric resolution trace: anchor slot displaced",
     "level": "info",
@@ -60,6 +150,51 @@
       {
         "key": "pool_truncated_n",
         "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.confirmed_kind_rescue",
+    "msg": "context fabric resolution trace: confirmed kind rescue",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per resolveSubjects call -- gated on confirmedKindRescueAttempted (this event's own PRESENCE already means the rescue was attempted); CertifyAbsent asserts the case where it never ran.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "confirmed_kind_rescue"
+        ]
+      },
+      {
+        "key": "attempted",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "fired",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "result_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "truncated",
+        "type": "bool",
         "presence": "required"
       }
     ]
@@ -419,6 +554,51 @@
       },
       {
         "key": "filter_kinds",
+        "type": "string_slice",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.kind_coverage_floor",
+    "msg": "context fabric resolution trace: kind coverage floor",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "exactly one line per resolveSubjects call.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "kind_coverage_floor"
+        ]
+      },
+      {
+        "key": "fired",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "missing_kinds",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "truncated",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "missing_kinds_list",
         "type": "string_slice",
         "presence": "required"
       }
@@ -799,6 +979,41 @@
         "key": "term_hash",
         "type": "string",
         "presence": "required"
+      },
+      {
+        "key": "result_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "truncated",
+        "type": "bool",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.search_question",
+    "msg": "context fabric resolution trace: search question",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per resolveSubjects call -- gated on deps.SearchQuestion != nil and a non-empty question; CertifyAbsent asserts the (far more common) case where the backend does not implement it.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "search_question"
+        ]
       },
       {
         "key": "result_count",

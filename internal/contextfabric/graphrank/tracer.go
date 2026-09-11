@@ -310,7 +310,17 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"fired", event.KindCoverageFloorFired,
 			"missing_kinds", event.KindCoverageMissingKinds,
 			"truncated", event.KindCoverageFloorTruncated,
-			"missing_kinds_list", contextfabric.SanitizeLogStrings(event.KindCoverageMissingKindsList))
+			// CHAOS-5517: a required string_slice field must never emit
+			// JSON null -- applyKindCoverageFloor (chaos4038_kind_coverage.go)
+			// returns a nil missingKindsList both when nothing is missing
+			// and when deps.SearchKind is unset, and slog's own JSON
+			// handler writes a nil []string as literal `null`, not `[]`
+			// (caught by this ticket's own certification: a required field
+			// silently reading as absence rather than a measured empty set
+			// is exactly what clause 3 forbids). emptyIfNilStrings is the
+			// one barrier; ResolutionTraceEvent's own field stays nil-able,
+			// only the wire format is guaranteed non-null.
+			"missing_kinds_list", contextfabric.SanitizeLogStrings(emptyIfNilStrings(event.KindCoverageMissingKindsList)))
 	case "confirmed_kind_rescue":
 		// CHAOS-4132: the operator-visible half of the confirmed-kind
 		// rescue -- this event's own presence in a production log already
@@ -810,6 +820,24 @@ func NewSlogRawSignalObserver(logger *slog.Logger) SlogRawSignalObserver {
 		logger = slog.Default()
 	}
 	return SlogRawSignalObserver{logger: logger}
+}
+
+// emptyIfNilStrings guarantees a required string_slice trace field never
+// emits JSON null (CHAOS-5517): a nil []string passes through
+// contextfabric.SanitizeLogStrings unchanged and slog's own JSON handler
+// writes it as literal `null`, which is not the same wire shape as a
+// measured empty set -- clause 3's own "absence must never substitute for a
+// measured zero" applies to the FIELD's own container shape, not only its
+// scalar values. Callers whose own producer already guarantees non-nil
+// (e.g. chaos5393_anchor_pool.go's kindTokens/filterKindTokens, both always
+// `make([]string, 0, ...)` or a literal) do not need this -- it is for the
+// producers (subjectKindStrings, chaos4038_kind_coverage.go) that
+// legitimately return nil for "nothing to report".
+func emptyIfNilStrings(ss []string) []string {
+	if ss == nil {
+		return []string{}
+	}
+	return ss
 }
 
 func (o SlogRawSignalObserver) ObserveCandidate(ctx context.Context, subjectKey string, node CandidateNode) {

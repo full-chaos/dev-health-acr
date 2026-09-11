@@ -488,3 +488,214 @@ func TestDecisionCertifiesAllThreeOutcomeCardinalities(t *testing.T) {
 		}
 	})
 }
+
+// TestAnchorPoolAndKindCoverageFloorCertifyOnAnOrdinaryResolution drives an
+// ordinary single-term resolution and certifies AnchorPool and
+// KindCoverageFloor -- both unconditional, once per resolveSubjects call.
+func TestAnchorPoolAndKindCoverageFloorCertifyOnAnOrdinaryResolution(t *testing.T) {
+	t.Parallel()
+	teamA := candidateNode(contextfabric.SubjectTeam, "team:alpha", "Alpha", 0.9, "*")
+	backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{"alpha": {teamA}}}
+	var buf bytes.Buffer
+	deps := backend.deps()
+	deps.ResolutionTracer = NewSlogResolutionTracer(
+		slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	req := testRequest()
+	_, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+		storage.Principal{OrgID: "org_1"}, req, testInterpreted("alpha"), deps, nil, nil, nil, "")
+	if err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+	log, err := certify.Parse(buf.Bytes())
+	if err != nil {
+		t.Fatalf("certify.Parse() on real production output error = %v", err)
+	}
+	if _, err := certify.Certify(log, certify.Assertion{
+		Event: eventspec.AnchorPool,
+		Want:  map[string]any{"request_id": req.RequestID, "anchor_pool_kind_scope": "none", "anchor_pool_kind_scope_source": "none", "member_kind_confirmed": "none"},
+	}); err != nil {
+		t.Fatalf("Certify(AnchorPool) error = %v", err)
+	}
+	if _, err := certify.Certify(log, certify.Assertion{
+		Event: eventspec.KindCoverageFloor,
+		Want:  map[string]any{"request_id": req.RequestID},
+	}); err != nil {
+		t.Fatalf("Certify(KindCoverageFloor) error = %v", err)
+	}
+}
+
+// TestSearchQuestionCertifiesFiringAndAbsent proves eventspec.SearchQuestion
+// both ways: firing (backend wires SearchQuestion) and CertifyAbsent (the
+// ordinary path, no backend wiring -- production reality today).
+func TestSearchQuestionCertifiesFiringAndAbsent(t *testing.T) {
+	t.Parallel()
+	req := testRequest()
+	node := candidateNode(contextfabric.SubjectProject, "project_only_question", "Only Question", 0.9, "*")
+
+	t.Run("fires", func(t *testing.T) {
+		t.Parallel()
+		backend := &fakeGraphBackend{
+			enableSearchQuestion:    true,
+			searchResults:           map[string][]CandidateNode{"alpha": {}},
+			searchQuestionResults:   map[string][]CandidateNode{req.Question: {node}},
+			searchQuestionTruncated: true,
+		}
+		var buf bytes.Buffer
+		deps := backend.deps()
+		deps.ResolutionTracer = NewSlogResolutionTracer(
+			slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+		if _, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+			storage.Principal{OrgID: "org_1"}, req, testInterpreted("alpha"), deps, nil, nil, nil, ""); err != nil {
+			t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+		}
+		log, err := certify.Parse(buf.Bytes())
+		if err != nil {
+			t.Fatalf("certify.Parse() on real production output error = %v", err)
+		}
+		if _, err := certify.Certify(log, certify.Assertion{
+			Event: eventspec.SearchQuestion,
+			Want:  map[string]any{"request_id": req.RequestID, "result_count": 1, "truncated": true},
+		}); err != nil {
+			t.Fatalf("Certify(SearchQuestion) error = %v", err)
+		}
+	})
+
+	t.Run("absent on the ordinary path", func(t *testing.T) {
+		t.Parallel()
+		backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{"alpha": {node}}}
+		var buf bytes.Buffer
+		deps := backend.deps()
+		deps.ResolutionTracer = NewSlogResolutionTracer(
+			slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+		if _, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+			storage.Principal{OrgID: "org_1"}, req, testInterpreted("alpha"), deps, nil, nil, nil, ""); err != nil {
+			t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+		}
+		log, err := certify.Parse(buf.Bytes())
+		if err != nil {
+			t.Fatalf("certify.Parse() on real production output error = %v", err)
+		}
+		if err := certify.CertifyAbsent(log, eventspec.SearchQuestion, map[string]any{"request_id": req.RequestID}); err != nil {
+			t.Fatalf("CertifyAbsent(SearchQuestion) error = %v -- no backend implements SearchQuestion here", err)
+		}
+	})
+}
+
+// TestAliasLookupCertifiesFiringAndAbsent proves eventspec.AliasLookup both
+// ways: firing (backend wires AliasLookup) and CertifyAbsent (no production
+// composition root sets AliasLookup today).
+func TestAliasLookupCertifiesFiringAndAbsent(t *testing.T) {
+	t.Parallel()
+	req := testRequest()
+	node := candidateNode(contextfabric.SubjectRepository, "repo:alpha", "Alpha", 0.9, "*")
+
+	t.Run("fires", func(t *testing.T) {
+		t.Parallel()
+		backend := &fakeGraphBackend{
+			searchResults:        map[string][]CandidateNode{"alpha": {}},
+			enableAliasLookup:    true,
+			aliasLookupClaimants: map[string][]CandidateNode{"alpha": {node}},
+			aliasLookupComplete:  true,
+		}
+		var buf bytes.Buffer
+		deps := backend.deps()
+		deps.ResolutionTracer = NewSlogResolutionTracer(
+			slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+		if _, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+			storage.Principal{OrgID: "org_1"}, req, testInterpreted("alpha"), deps, nil, nil, nil, ""); err != nil {
+			t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+		}
+		log, err := certify.Parse(buf.Bytes())
+		if err != nil {
+			t.Fatalf("certify.Parse() on real production output error = %v", err)
+		}
+		if _, err := certify.Certify(log, certify.Assertion{
+			Event: eventspec.AliasLookup,
+			Want:  map[string]any{"request_id": req.RequestID, "complete": true, "matched_claimants": 1},
+		}); err != nil {
+			t.Fatalf("Certify(AliasLookup) error = %v", err)
+		}
+	})
+
+	t.Run("absent on the ordinary path", func(t *testing.T) {
+		t.Parallel()
+		backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{"alpha": {node}}}
+		var buf bytes.Buffer
+		deps := backend.deps()
+		deps.ResolutionTracer = NewSlogResolutionTracer(
+			slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+		if _, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+			storage.Principal{OrgID: "org_1"}, req, testInterpreted("alpha"), deps, nil, nil, nil, ""); err != nil {
+			t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+		}
+		log, err := certify.Parse(buf.Bytes())
+		if err != nil {
+			t.Fatalf("certify.Parse() on real production output error = %v", err)
+		}
+		if err := certify.CertifyAbsent(log, eventspec.AliasLookup, map[string]any{"request_id": req.RequestID}); err != nil {
+			t.Fatalf("CertifyAbsent(AliasLookup) error = %v -- no production composition root wires AliasLookup today", err)
+		}
+	})
+}
+
+// TestConfirmedKindRescueCertifiesFiringAndAbsent reuses
+// chaos4132_confirmed_kind_rescue_test.go's own proven fixtures for both
+// shapes.
+func TestConfirmedKindRescueCertifiesFiringAndAbsent(t *testing.T) {
+	t.Parallel()
+
+	t.Run("fires", func(t *testing.T) {
+		t.Parallel()
+		subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: "wi_1", Label: "Ask Dev"}
+		node := candidateNode(subject.Kind, subject.CanonicalID, subject.Label, 0.9, "*")
+		backend := &fakeGraphBackend{
+			enableSearchKind: true,
+			searchResults:    map[string][]CandidateNode{"Ask Dev": {}},
+			searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{
+				"Ask Dev": {contextfabric.SubjectWorkItem: {node}},
+			},
+		}
+		var buf bytes.Buffer
+		deps := backend.deps()
+		deps.ResolutionTracer = NewSlogResolutionTracer(
+			slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+		req := testRequest()
+		confirmed := &contextfabric.ConfirmedExpectedKind{Kind: contextfabric.SubjectWorkItem}
+		if _, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+			storage.Principal{OrgID: "org_1"}, req, testInterpreted("Ask Dev"), deps, confirmed, nil, nil, ""); err != nil {
+			t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+		}
+		log, err := certify.Parse(buf.Bytes())
+		if err != nil {
+			t.Fatalf("certify.Parse() on real production output error = %v", err)
+		}
+		if _, err := certify.Certify(log, certify.Assertion{
+			Event: eventspec.ConfirmedKindRescue,
+			Want:  map[string]any{"request_id": req.RequestID, "attempted": true, "fired": true, "result_count": 1},
+		}); err != nil {
+			t.Fatalf("Certify(ConfirmedKindRescue) error = %v", err)
+		}
+	})
+
+	t.Run("absent when never attempted", func(t *testing.T) {
+		t.Parallel()
+		node := candidateNode(contextfabric.SubjectTeam, "team:alpha", "Alpha", 0.9, "*")
+		backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{"alpha": {node}}}
+		var buf bytes.Buffer
+		deps := backend.deps()
+		deps.ResolutionTracer = NewSlogResolutionTracer(
+			slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+		req := testRequest()
+		if _, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+			storage.Principal{OrgID: "org_1"}, req, testInterpreted("alpha"), deps, nil, nil, nil, ""); err != nil {
+			t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+		}
+		log, err := certify.Parse(buf.Bytes())
+		if err != nil {
+			t.Fatalf("certify.Parse() on real production output error = %v", err)
+		}
+		if err := certify.CertifyAbsent(log, eventspec.ConfirmedKindRescue, map[string]any{"request_id": req.RequestID}); err != nil {
+			t.Fatalf("CertifyAbsent(ConfirmedKindRescue) error = %v -- no confirmed kind means the rescue never attempts", err)
+		}
+	})
+}

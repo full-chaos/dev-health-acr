@@ -19,17 +19,134 @@ func FieldKeys(e Event) []string {
 // ByID is the generated lookup from Event.ID to its declaration -- generated
 // rather than hand-maintained so it can never drift from All.
 var ByID = map[string]Event{
+	"graphrank.alias_lookup":           AliasLookup,
+	"graphrank.anchor_pool":            AnchorPool,
 	"graphrank.anchor_slot_displaced":  AnchorSlotDisplaced,
+	"graphrank.confirmed_kind_rescue":  ConfirmedKindRescue,
 	"graphrank.corroboration":          Corroboration,
 	"graphrank.corroboration_summary":  CorroborationSummary,
 	"graphrank.decision":               Decision,
 	"graphrank.decision_summary":       DecisionSummary,
+	"graphrank.kind_coverage_floor":    KindCoverageFloor,
 	"graphrank.kind_offer_withheld":    KindOfferWithheld,
 	"graphrank.offer_pool":             OfferPool,
 	"graphrank.offer_pool_summary":     OfferPoolSummary,
 	"graphrank.ranked_cut_summary":     RankedCutSummary,
 	"graphrank.reserved_kind_admitted": ReservedKindAdmitted,
 	"graphrank.search":                 Search,
+	"graphrank.search_question":        SearchQuestion,
+}
+
+// AliasLookupFields is graphrank.alias_lookup's generated typed construction interface
+// (CHAOS-5516): one Go field per Field AliasLookup.Fields declares in spec.go.
+type AliasLookupFields struct {
+	RequestID        string
+	Complete         bool
+	MatchedClaimants int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every AliasLookupFields uniformly, set ONLY by NewAliasLookupFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewAliasLookupFields is the generated constructor for AliasLookupFields -- every
+// field AliasLookup.Fields declares is a required parameter.
+func NewAliasLookupFields(requestID string, complete bool, matchedClaimants int) AliasLookupFields {
+	return AliasLookupFields{
+		RequestID:        requestID,
+		Complete:         complete,
+		MatchedClaimants: matchedClaimants,
+		constructed:      true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewAliasLookupFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f AliasLookupFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns AliasLookup's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f AliasLookupFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "alias_lookup",
+		"complete", f.Complete,
+		"matched_claimants", f.MatchedClaimants,
+	}
+}
+
+// AnchorPoolFields is graphrank.anchor_pool's generated typed construction interface
+// (CHAOS-5516): one Go field per Field AnchorPool.Fields declares in spec.go.
+type AnchorPoolFields struct {
+	RequestID                 string
+	AnchorPoolKindScope       string
+	AnchorPoolKindScopeSource string
+	MemberKindConfirmed       string
+	ReservedKinds             []string
+	FilterKinds               []string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every AnchorPoolFields uniformly, set ONLY by NewAnchorPoolFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewAnchorPoolFields is the generated constructor for AnchorPoolFields -- every
+// field AnchorPool.Fields declares is a required parameter.
+func NewAnchorPoolFields(requestID string, anchorPoolKindScope string, anchorPoolKindScopeSource string, memberKindConfirmed string, reservedKinds []string, filterKinds []string) AnchorPoolFields {
+	valid := true
+	if reservedKinds == nil {
+		valid = false
+	}
+	if filterKinds == nil {
+		valid = false
+	}
+	return AnchorPoolFields{
+		RequestID:                 requestID,
+		AnchorPoolKindScope:       anchorPoolKindScope,
+		AnchorPoolKindScopeSource: anchorPoolKindScopeSource,
+		MemberKindConfirmed:       memberKindConfirmed,
+		ReservedKinds:             reservedKinds,
+		FilterKinds:               filterKinds,
+		constructed:               valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewAnchorPoolFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f AnchorPoolFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns AnchorPool's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f AnchorPoolFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "anchor_pool",
+		"anchor_pool_kind_scope", contextfabric.SanitizeLogAttr(f.AnchorPoolKindScope),
+		"anchor_pool_kind_scope_source", contextfabric.SanitizeLogAttr(f.AnchorPoolKindScopeSource),
+		"member_kind_confirmed", contextfabric.SanitizeLogAttr(f.MemberKindConfirmed),
+		"reserved_kinds", contextfabric.SanitizeLogStrings(f.ReservedKinds),
+		"filter_kinds", contextfabric.SanitizeLogStrings(f.FilterKinds),
+	}
 }
 
 // AnchorSlotDisplacedFields is graphrank.anchor_slot_displaced's generated typed construction interface
@@ -92,6 +209,60 @@ func (f AnchorSlotDisplacedFields) SlogArgs() []any {
 		"anchor_slot_source", contextfabric.SanitizeLogAttr(f.AnchorSlotSource),
 		"anchor_slot_displaced", f.AnchorSlotDisplaced,
 		"pool_truncated_n", f.PoolTruncatedN,
+	}
+}
+
+// ConfirmedKindRescueFields is graphrank.confirmed_kind_rescue's generated typed construction interface
+// (CHAOS-5516): one Go field per Field ConfirmedKindRescue.Fields declares in spec.go.
+type ConfirmedKindRescueFields struct {
+	RequestID   string
+	Attempted   bool
+	Fired       bool
+	ResultCount int
+	Truncated   bool
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every ConfirmedKindRescueFields uniformly, set ONLY by NewConfirmedKindRescueFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewConfirmedKindRescueFields is the generated constructor for ConfirmedKindRescueFields -- every
+// field ConfirmedKindRescue.Fields declares is a required parameter.
+func NewConfirmedKindRescueFields(requestID string, attempted bool, fired bool, resultCount int, truncated bool) ConfirmedKindRescueFields {
+	return ConfirmedKindRescueFields{
+		RequestID:   requestID,
+		Attempted:   attempted,
+		Fired:       fired,
+		ResultCount: resultCount,
+		Truncated:   truncated,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewConfirmedKindRescueFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f ConfirmedKindRescueFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns ConfirmedKindRescue's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f ConfirmedKindRescueFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "confirmed_kind_rescue",
+		"attempted", f.Attempted,
+		"fired", f.Fired,
+		"result_count", f.ResultCount,
+		"truncated", f.Truncated,
 	}
 }
 
@@ -436,6 +607,64 @@ func (f DecisionSummaryFields) SlogArgs() []any {
 		"member_kind_confirmed", contextfabric.SanitizeLogAttr(f.MemberKindConfirmed),
 		"reserved_kinds", contextfabric.SanitizeLogStrings(f.ReservedKinds),
 		"filter_kinds", contextfabric.SanitizeLogStrings(f.FilterKinds),
+	}
+}
+
+// KindCoverageFloorFields is graphrank.kind_coverage_floor's generated typed construction interface
+// (CHAOS-5516): one Go field per Field KindCoverageFloor.Fields declares in spec.go.
+type KindCoverageFloorFields struct {
+	RequestID        string
+	Fired            bool
+	MissingKinds     int
+	Truncated        bool
+	MissingKindsList []string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every KindCoverageFloorFields uniformly, set ONLY by NewKindCoverageFloorFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewKindCoverageFloorFields is the generated constructor for KindCoverageFloorFields -- every
+// field KindCoverageFloor.Fields declares is a required parameter.
+func NewKindCoverageFloorFields(requestID string, fired bool, missingKinds int, truncated bool, missingKindsList []string) KindCoverageFloorFields {
+	valid := true
+	if missingKindsList == nil {
+		valid = false
+	}
+	return KindCoverageFloorFields{
+		RequestID:        requestID,
+		Fired:            fired,
+		MissingKinds:     missingKinds,
+		Truncated:        truncated,
+		MissingKindsList: missingKindsList,
+		constructed:      valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewKindCoverageFloorFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f KindCoverageFloorFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns KindCoverageFloor's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f KindCoverageFloorFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "kind_coverage_floor",
+		"fired", f.Fired,
+		"missing_kinds", f.MissingKinds,
+		"truncated", f.Truncated,
+		"missing_kinds_list", contextfabric.SanitizeLogStrings(f.MissingKindsList),
 	}
 }
 
@@ -811,6 +1040,54 @@ func (f SearchFields) SlogArgs() []any {
 		"index", f.Index,
 		"total", f.Total,
 		"term_hash", contextfabric.SanitizeLogAttr(f.TermHash),
+		"result_count", f.ResultCount,
+		"truncated", f.Truncated,
+	}
+}
+
+// SearchQuestionFields is graphrank.search_question's generated typed construction interface
+// (CHAOS-5516): one Go field per Field SearchQuestion.Fields declares in spec.go.
+type SearchQuestionFields struct {
+	RequestID   string
+	ResultCount int
+	Truncated   bool
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every SearchQuestionFields uniformly, set ONLY by NewSearchQuestionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewSearchQuestionFields is the generated constructor for SearchQuestionFields -- every
+// field SearchQuestion.Fields declares is a required parameter.
+func NewSearchQuestionFields(requestID string, resultCount int, truncated bool) SearchQuestionFields {
+	return SearchQuestionFields{
+		RequestID:   requestID,
+		ResultCount: resultCount,
+		Truncated:   truncated,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewSearchQuestionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f SearchQuestionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns SearchQuestion's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f SearchQuestionFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "search_question",
 		"result_count", f.ResultCount,
 		"truncated", f.Truncated,
 	}

@@ -106,6 +106,16 @@ func goVarName(e Event) string {
 		return "OfferPoolSummary"
 	case Decision.ID:
 		return "Decision"
+	case SearchQuestion.ID:
+		return "SearchQuestion"
+	case AliasLookup.ID:
+		return "AliasLookup"
+	case AnchorPool.ID:
+		return "AnchorPool"
+	case KindCoverageFloor.ID:
+		return "KindCoverageFloor"
+	case ConfirmedKindRescue.ID:
+		return "ConfirmedKindRescue"
 	default:
 		panic("eventspec: goVarName has no mapping for " + e.ID + " -- add one before regenerating")
 	}

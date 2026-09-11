@@ -642,11 +642,132 @@ var Decision = Event{
 	},
 }
 
+// SearchQuestion is the Info line (graphrank/tracer.go, case
+// "search_question", CHAOS-4120) emitted for the question-level
+// SearchQuestion pass -- gated on `deps.SearchQuestion != nil` (a backend
+// that does not implement it never runs this pass at all, the pre-CHAOS-4120
+// shape), so this is CHAOS-5517's second MultiplicityZeroOrOnePerRequest
+// event, not an unconditional one. Unlike Search (one line per TERM), this
+// pass has no per-term identity even when it does run.
+var SearchQuestion = Event{
+	ID:                 "graphrank.search_question",
+	Msg:                "context fabric resolution trace: search question",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per resolveSubjects call -- gated on deps.SearchQuestion != nil and a non-empty question; CertifyAbsent asserts the (far more common) case where the backend does not implement it.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"search_question"}},
+		{Key: "result_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "truncated", Type: FieldBool, Presence: PresenceRequired},
+	},
+}
+
+// AliasLookup is the Info line (graphrank/tracer.go, case "alias_lookup")
+// emitted from the single alias-lookup emission site in resolve.go -- gated
+// on `deps.AliasLookup != nil`. No production composition root wires
+// AliasLookup today (grep of internal/contextfabric/falkorgraph and
+// internal/runtime/hosted: zero hits outside tests) -- "this backend does
+// not implement it" is today's universal production shape, not a rare
+// branch, so this is a MultiplicityZeroOrOnePerRequest event whose CLOSED
+// form (CertifyAbsent) is expected to be the one certified against real
+// deployed output; the firing form is certified against a fixture that
+// wires the dependency, matching how the real feature would be certified
+// the day a caller adopts it.
+var AliasLookup = Event{
+	ID:                 "graphrank.alias_lookup",
+	Msg:                "context fabric resolution trace: alias lookup",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per resolveSubjects call -- gated on deps.AliasLookup != nil, which no production composition root sets today.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"alias_lookup"}},
+		{Key: "complete", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "matched_claimants", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
+// AnchorPool is the Info line (graphrank/tracer.go, case "anchor_pool")
+// naming the scope anchor decision phase 4 hands to retrieval and the
+// filter -- once per resolution, no per-candidate counterpart.
+var AnchorPool = Event{
+	ID:                 "graphrank.anchor_pool",
+	Msg:                "context fabric resolution trace: anchor pool kind scope",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityExactlyOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "exactly one line per resolveSubjects call -- emitted from the same statement that hands the scope to the confirmed-kind filter.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"anchor_pool"}},
+		{
+			Key: "anchor_pool_kind_scope", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a contextfabric.SubjectKind token, or "none".
+		},
+		{Key: "anchor_pool_kind_scope_source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"receipt", "confirmed_anchor", "none"}},
+		{
+			Key: "member_kind_confirmed", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a contextfabric.SubjectKind token, or "none".
+		},
+		{Key: "reserved_kinds", Type: FieldStringSlice, Presence: PresenceRequired},
+		{Key: "filter_kinds", Type: FieldStringSlice, Presence: PresenceRequired},
+	},
+}
+
+// KindCoverageFloor is the Info line (graphrank/tracer.go, case
+// "kind_coverage_floor", CHAOS-4086/CHAOS-4038) reporting the coverage
+// floor's own operator-visible half -- once per resolution.
+var KindCoverageFloor = Event{
+	ID:                 "graphrank.kind_coverage_floor",
+	Msg:                "context fabric resolution trace: kind coverage floor",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityExactlyOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "exactly one line per resolveSubjects call.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"kind_coverage_floor"}},
+		{Key: "fired", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "missing_kinds", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "truncated", Type: FieldBool, Presence: PresenceRequired},
+		{
+			Key: "missing_kinds_list", Type: FieldStringSlice, Presence: PresenceRequired,
+			// Closed-vocabulary subject-kind VALUES only (never a canonical
+			// id, never candidate identity) -- open string_slice here, same
+			// convention as KindOfferWithheld's own withheld_kinds.
+		},
+	},
+}
+
+// ConfirmedKindRescue is the Info line (graphrank/tracer.go, case
+// "confirmed_kind_rescue", CHAOS-4132) reporting the confirmed-kind
+// rescue's own operator-visible half -- once per resolution; its own
+// presence already means the rescue was attempted.
+var ConfirmedKindRescue = Event{
+	ID:                 "graphrank.confirmed_kind_rescue",
+	Msg:                "context fabric resolution trace: confirmed kind rescue",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per resolveSubjects call -- gated on confirmedKindRescueAttempted (this event's own PRESENCE already means the rescue was attempted); CertifyAbsent asserts the case where it never ran.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"confirmed_kind_rescue"}},
+		{Key: "attempted", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "fired", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "result_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "truncated", Type: FieldBool, Presence: PresenceRequired},
+	},
+}
+
 // All is every event this specification declares. Generate() and the
 // certification runner both range over exactly this slice -- neither
 // maintains a second list.
 var All = []Event{
 	RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld,
 	Corroboration, CorroborationSummary, ReservedKindAdmitted, OfferPool, OfferPoolSummary,
-	Decision,
+	Decision, SearchQuestion, AliasLookup, AnchorPool, KindCoverageFloor, ConfirmedKindRescue,
 }
