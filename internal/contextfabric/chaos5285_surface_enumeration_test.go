@@ -126,7 +126,9 @@ func TestTheGroupBoundIsDecidedAtEveryBoundary(t *testing.T) {
 				})
 			}
 			err := contractsv1.ValidateCohortGroups(cohort.Groups, cohort.Members)
-			overBound := testCase.groups > bound
+			// The PRODUCTION predicate, not a restatement of it beside the
+			// guard (the class the input-domain table was swept for).
+			overBound := groupListOverContractBound(testCase.groups)
 			t.Logf("groups=%d bound=%d over=%v crosscheck_err=%v", testCase.groups, bound, overBound, err)
 			if err != nil {
 				t.Errorf("the group cross-check rejected %d groups: %v -- the bound is enforced by the cohort validator, never by this helper, so this must pass at every size",
