@@ -1,12 +1,15 @@
 package contextfabric
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // THE INPUT-DOMAIN TABLE.
@@ -82,6 +85,10 @@ func TestTheInputDomainOfEveryGuardThisChangeTouches(t *testing.T) {
 	domainCombinedCap(table)
 	domainInterpretationBoundary(table)
 	domainDecodePath(table)
+	domainTeamIdentity(table)
+	domainGroupReadRequirements(table)
+	domainAllowanceClamp(table)
+	domainEmitterVocabularies(t, table)
 
 	table.print()
 	if len(table.rows) == 0 {
@@ -533,4 +540,133 @@ func domainInterpretationBoundary(d *domainTable) {
 func domainDecodePath(d *domainTable) {
 	d.record("decode path (sanitizeFrameOutput)", "all fields", "every shape",
 		"n/a - not modified by this change; the prompt change is prose in prompts.go only (git diff evidence in TEST-EVIDENCE)", "ok")
+}
+
+// --- guard 10: the canonical team identity (stage 1) ----------------------
+
+func domainTeamIdentity(d *domainTable) {
+	const mint = "team identity (TeamCanonicalID)"
+	const parse = "team identity (TeamRawKey)"
+	raw := func(canonical string) string {
+		key, ok := TeamRawKey(canonical)
+		return fmt.Sprintf("key=%q ok=%v", key, ok)
+	}
+	d.want(mint, "rawKey", "zero (empty key mints no identity)", TeamCanonicalID(""), "")
+	d.want(mint, "rawKey", "canonical raw key", TeamCanonicalID("AUTH"), "team:AUTH")
+	d.want(mint, "rawKey", "already canonical (idempotent)", TeamCanonicalID("team:AUTH"), "team:AUTH")
+	d.want(mint, "rawKey", "duplicate prefix already present", TeamCanonicalID("team:team:x"), "team:team:x")
+	d.want(mint, "rawKey", "prefix only (a raw key spelled \"team:\")", TeamCanonicalID("team:"), "team:team:")
+	d.want(mint, "rawKey", "provider-qualified key (stored gl:full.chaos)", TeamCanonicalID("gl:full.chaos"), "team:gl:full.chaos")
+	d.want(mint, "rawKey", "case variant of the prefix (identifiers are case-sensitive)", TeamCanonicalID("TEAM:AUTH"), "team:TEAM:AUTH")
+	d.want(mint, "rawKey", "surrounding whitespace (kept verbatim; the reader queries the same bytes)", TeamCanonicalID(" AUTH"), "team: AUTH")
+	d.want(parse, "canonicalID", "zero", raw(""), `key="" ok=false`)
+	d.want(parse, "canonicalID", "raw key without the prefix", raw("AUTH"), `key="" ok=false`)
+	d.want(parse, "canonicalID", "prefix only", raw("team:"), `key="" ok=false`)
+	d.want(parse, "canonicalID", "canonical", raw("team:AUTH"), `key="AUTH" ok=true`)
+	d.want(parse, "canonicalID", "case variant of the prefix", raw("TEAM:AUTH"), `key="" ok=false`)
+	d.want(parse, "canonicalID", "duplicate prefix", raw("team:team:x"), `key="team:x" ok=true`)
+	d.want(parse, "round trip", "every minted identity parses back to its key", func() string {
+		for _, key := range []string{"AUTH", "gl:full.chaos", "gh:ops-team", " AUTH", "team:"} {
+			if back, ok := TeamRawKey(TeamCanonicalID(key)); !ok || back != key {
+				return fmt.Sprintf("broken at %q -> %q ok=%v", key, back, ok)
+			}
+		}
+		return "ok"
+	}(), "ok")
+	d.record(mint, "all fields", "null / container / wrong scalar / fractional / boundary", domainExcludedByTypeSystem+"; a Go string has no null distinct from zero", "ok")
+}
+
+// --- guard 11: the group read's requirement selection ---------------------
+
+func domainGroupReadRequirements(d *domainTable) {
+	const guard = "group read requirements (groupReadRequirements)"
+	row := func(scope CompletionScope, kind AnswerObligationKind, kinds ...string) contractsv1.ContextFabricPlanRequirement {
+		factKinds := make([]contractsv1.ContextFabricFactKind, 0, len(kinds))
+		for _, k := range kinds {
+			factKinds = append(factKinds, contractsv1.ContextFabricFactKind(k))
+		}
+		return contractsv1.ContextFabricPlanRequirement{Scope: string(scope), Kind: string(kind), FactKinds: factKinds}
+	}
+	run := func(rows ...contractsv1.ContextFabricPlanRequirement) string {
+		out := make([]string, 0, 6)
+		for _, requirement := range groupReadRequirements(AnswerPlan{Requirements: rows}) {
+			out = append(out, string(requirement.Kind))
+		}
+		return "[" + strings.Join(out, " ") + "]"
+	}
+	d.want(guard, "plan.Requirements", "null (nil slice)", run(), "[]")
+	d.want(guard, "plan.Requirements", "only a member row", run(row(CompletionScopeEachMember, ObligationKindRead, "metrics")), "[]")
+	d.want(guard, "row.Kind", "each_group but computed", run(row(CompletionScopeEachGroup, ObligationKindComputed, "health")), "[]")
+	d.want(guard, "row.Scope", "out of vocabulary", run(row(CompletionScope("not_a_scope"), ObligationKindRead, "health")), "[]")
+	d.want(guard, "row.FactKinds", "empty container", run(row(CompletionScopeEachGroup, ObligationKindRead)), "[]")
+	d.want(guard, "row.FactKinds[]", "zero (empty kind skipped)", run(row(CompletionScopeEachGroup, ObligationKindRead, "", "health")), "[health]")
+	d.want(guard, "row.FactKinds[]", "duplicate within and across rows",
+		run(row(CompletionScopeEachGroup, ObligationKindRead, "health", "health"), row(CompletionScopeEachGroup, ObligationKindRead, "workload", "health")),
+		"[health workload]")
+	d.want(guard, "row.FactKinds[]", "out of vocabulary (passed through; the registry builds no query for an unregistered kind and reports it unconfigured)",
+		run(row(CompletionScopeEachGroup, ObligationKindRead, "not_a_kind")), "[not_a_kind]")
+	d.want(guard, "plan.Requirements", "canonical (qa-grouped-clean's rows)",
+		run(row(CompletionScopeEachGroup, ObligationKindRead, "flow", "health", "investment", "landscape", "readiness", "workload"),
+			row(CompletionScopeEachMember, ObligationKindRead, "metrics")),
+		"[flow health investment landscape readiness workload]")
+	d.record(guard, "all fields", "wrong container / wrong scalar / fractional / boundary", domainExcludedByTypeSystem, "ok")
+}
+
+// --- guard 12: the member-allowance clamp predicate -----------------------
+
+func domainAllowanceClamp(d *domainTable) {
+	const guard = "allowance clamp (cohortMemberAllowanceClamped)"
+	clamped := func(maxItems, headroom int) string {
+		return fmt.Sprintf("clamped=%v", cohortMemberAllowanceClamped(contractsv1.ContextFabricAnswerPlanBudget{MaxItems: maxItems, SynthesisHeadroom: headroom}))
+	}
+	d.want(guard, "MaxItems", "zero (no budget: nothing was clamped)", clamped(0, 20), "clamped=false")
+	d.want(guard, "MaxItems", "negative", clamped(-1, 20), "clamped=false")
+	d.want(guard, "MaxItems", "one", clamped(1, 20), "clamped=true")
+	d.want(guard, "MaxItems - headroom", "boundary - 1 (MaxItems = headroom - 1)", clamped(19, 20), "clamped=true")
+	d.want(guard, "MaxItems - headroom", "boundary (MaxItems = headroom: subtraction is 0)", clamped(20, 20), "clamped=true")
+	d.want(guard, "MaxItems - headroom", "boundary + 1 (subtraction is exactly 1: computed, not clamped)", clamped(21, 20), "clamped=false")
+	d.want(guard, "SynthesisHeadroom", "zero", clamped(1, 0), "clamped=false")
+	d.want(guard, "SynthesisHeadroom", "negative", clamped(1, -5), "clamped=false")
+	d.want(guard, "budget", "canonical (the rig's 30 items, headroom 20)", clamped(30, 20), "clamped=false")
+	d.record(guard, "all fields", "null / container / wrong scalar / fractional", domainExcludedByTypeSystem, "ok")
+}
+
+// --- guard 13: the emitters' closed-vocabulary checks ---------------------
+
+// domainEmitterVocabularies drives each new emitter through the REAL slog JSON
+// handler with a value outside its vocabulary and reads the field back: the
+// line must carry a named unknown, never the free text it was handed.
+func domainEmitterVocabularies(t *testing.T, d *domainTable) {
+	const guard = "emitter vocabularies (Record* membership checks)"
+	principal := storage.Principal{OrgID: "org_1"}
+	field := func(emit func(SlogEngineTelemetry), key string) string {
+		records := captureSlogJSON(t, func(logger *slog.Logger) { emit(NewSlogEngineTelemetry(logger)) })
+		if len(records) != 1 {
+			return fmt.Sprintf("records=%d", len(records))
+		}
+		return fmt.Sprintf("%v", records[0][key])
+	}
+	ctx := context.Background()
+	d.want(guard, "CohortGroupReadEvent.Refusal", "out of vocabulary", field(func(tel SlogEngineTelemetry) {
+		tel.RecordCohortGroupRead(ctx, principal, CohortGroupReadEvent{Refusal: GroupReadRefusal("free text")})
+	}, "group_read_refusal"), "unclassified")
+	d.want(guard, "CohortGroupReadEvent.Refusal", "zero (no refusal)", field(func(tel SlogEngineTelemetry) {
+		tel.RecordCohortGroupRead(ctx, principal, CohortGroupReadEvent{})
+	}, "group_read_refusal"), "")
+	d.want(guard, "CohortGroupReadEvent.Refusal", "canonical", field(func(tel SlogEngineTelemetry) {
+		tel.RecordCohortGroupRead(ctx, principal, CohortGroupReadEvent{Refusal: GroupReadRefusalReadFailed})
+	}, "group_read_refusal"), "read_failed")
+	d.want(guard, "GroupReadCoverageStateEvent.Read", "out of vocabulary", field(func(tel SlogEngineTelemetry) {
+		tel.RecordGroupReadCoverageState(ctx, principal, GroupReadCoverageStateEvent{Read: GroupReadArm("free text"), State: SourceAvailable})
+	}, "read"), "unclassified")
+	d.want(guard, "GroupReadCoverageStateEvent.Read", "zero", field(func(tel SlogEngineTelemetry) {
+		tel.RecordGroupReadCoverageState(ctx, principal, GroupReadCoverageStateEvent{State: SourceAvailable})
+	}, "read"), "unclassified")
+	d.want(guard, "GroupReadCoverageStateEvent.State", "out of vocabulary", field(func(tel SlogEngineTelemetry) {
+		tel.RecordGroupReadCoverageState(ctx, principal, GroupReadCoverageStateEvent{Read: GroupReadArmGroup, State: SourceState("free text")})
+	}, "source_state"), "unclassified")
+	d.want(guard, "GroupReadCoverageStateEvent.State", "canonical", field(func(tel SlogEngineTelemetry) {
+		tel.RecordGroupReadCoverageState(ctx, principal, GroupReadCoverageStateEvent{Read: GroupReadArmMember, State: SourceTruncated})
+	}, "source_state"), "truncated")
+	d.record(guard, "all fields", "wrong container / wrong scalar / fractional / boundary", domainExcludedByTypeSystem, "ok")
 }
