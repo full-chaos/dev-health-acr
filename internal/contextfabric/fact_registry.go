@@ -376,23 +376,31 @@ func NewFactCapabilityRegistry(providers []FactProvider, options FactRegistryOpt
 		if _, exists := registry.providers[capability.Kind]; exists {
 			return nil, fmt.Errorf("duplicate fact capability %q", capability.Kind)
 		}
-		// Copied, not aliased (r3 class-sweep on the CHAOS-5405/CHAOS-5547
-		// aliasing shape: NewFactReadScopeResolverWithPolicies had the same
-		// bug for its policy table, see copyFactScopePolicies): a provider
-		// that goes on to mutate the Tables/Obligations map it returned
-		// from Capability() must never change what this registry already
-		// registered. This is the storage-time half of the defence
-		// Capabilities() below already runs at read-time; capabilityIndex
-		// (used by ReadFacts's live classifyUnavailable path on every
-		// request) reads registry.providers directly, so an aliased map
-		// here would have let a provider's own post-registration mutation
-		// silently change a production decision, not merely what an
-		// external Capabilities() caller could observe.
+		// Copied, not aliased: capabilityIndex reads registry.providers
+		// directly and feeds ReadFacts's parameter allowlist and
+		// subject-kind checks, so a provider mutating any of its own
+		// slices/maps after registration would change a live decision.
+		capability.SupportedSubjectKinds = copyProviderSlice(capability.SupportedSubjectKinds)
+		capability.AllowedParameters = copyProviderSlice(capability.AllowedParameters)
+		capability.SubjectRoles = copyProviderSlice(capability.SubjectRoles)
 		capability.Tables = copyTableDeclarations(capability.Tables)
 		capability.Obligations = copyObligationDeclarations(capability.Obligations)
 		registry.providers[capability.Kind] = registeredFactProvider{capability: capability, provider: provider}
 	}
 	return registry, nil
+}
+
+// copyProviderSlice returns an independent copy of values, preserving nil
+// (a nil field a provider never set stays nil after the copy, matching the
+// nil-preserving contract copyTableDeclarations/copyObligationDeclarations
+// already keep below -- unlike cloneSlice in model_runtime.go, which always
+// returns non-nil for a different validator's requirements and would
+// change FactCapability's nil-vs-empty semantics here).
+func copyProviderSlice[T any](values []T) []T {
+	if values == nil {
+		return nil
+	}
+	return append([]T(nil), values...)
 }
 
 // copyTableDeclarations and copyObligationDeclarations deep-copy the two
@@ -428,8 +436,15 @@ func (r *FactCapabilityRegistry) Capabilities() []FactCapability {
 	capabilities := make([]FactCapability, 0, len(r.providers))
 	for _, registered := range r.providers {
 		capability := registered.capability
-		capability.SupportedSubjectKinds = append([]SubjectKind(nil), capability.SupportedSubjectKinds...)
-		capability.AllowedParameters = append([]string(nil), capability.AllowedParameters...)
+		capability.SupportedSubjectKinds = copyProviderSlice(capability.SupportedSubjectKinds)
+		capability.AllowedParameters = copyProviderSlice(capability.AllowedParameters)
+		// SubjectRoles gets the same defence (round-3 class-sweep): the
+		// registry's own field is now an independent copy as of
+		// registration above, but Capabilities() had never copied it
+		// either, on the way IN or the way OUT -- callers of Capabilities()
+		// could reach the registry's storage the same way a mutating
+		// provider used to.
+		capability.SubjectRoles = copyProviderSlice(capability.SubjectRoles)
 		// The MAP fields need the same defence the slice fields above
 		// already get, and for a sharper reason: a struct copy duplicates
 		// the header but shares the backing map, so a caller writing

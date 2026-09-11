@@ -275,52 +275,111 @@ func TestFactCapabilityRegistryCapabilitiesAreDeterministicCopies(t *testing.T) 
 }
 
 // TestChaos5547_ProviderCapabilityDeclarationsAreCopiedNotAliasedAtRegistration
-// pins the r3 class-sweep finding: NewFactCapabilityRegistry stored a
-// registered provider's Tables/Obligations maps by reference at
-// registration -- the same aliasing shape codex r2 found in
-// NewFactReadScopeResolverWithPolicies (see copyFactScopePolicies). The
-// live exposure here was worse: capabilityIndex (which ReadFacts's
-// classifyUnavailable path reads on every request) returns
-// registry.providers' capability directly, so a provider mutating the map
-// it returned from Capability() after registration would have silently
-// changed a live production decision -- not merely what an external
-// Capabilities() caller could observe (already defended by
-// TestFactCapabilityRegistryCapabilitiesAreDeterministicCopies above).
-// Fixed: registration now runs copyTableDeclarations/copyObligationDeclarations
-// on the way IN, mirroring the copy Capabilities() already ran on the way
-// OUT. One subtest per declaration field, both executed in the same pass.
+// pins the r3 class-sweep finding, in its FULL, corrected form (codex r3
+// review, confirmed real P1): the first pass at this fix copied only
+// Tables/Obligations at registration and left SupportedSubjectKinds,
+// AllowedParameters and SubjectRoles aliased -- the same NewFactCapabilityRegistry
+// bug, unfinished. Reproduced live: mutating a registered provider's own
+// AllowedParameters slice after registration made ReadFacts reject a
+// parameter its capability still declared allowed.
+//
+// One subtest per FactCapability field that is a slice or map (every field
+// enumerated from the struct definition that is NOT a plain scalar: Kind,
+// Name, Version, RequiresEvidence, Timeout, Dimension and EstimatedItems
+// are values, not references, and copy for free on the struct assignment
+// already made at registration).
+//
+// Two fields have a LIVE ReadFacts consumer today (capabilityIndex feeds
+// ReadFacts's own pre-pass and buildFactQuery, not classifyUnavailable --
+// classifyUnavailable's own capabilities argument comes from the already-
+// defended Capabilities(), via DeriveRequirements) and are driven through
+// ReadFacts itself, never the accessor: SupportedSubjectKinds,
+// AllowedParameters. The other three have no live ReadFacts (or any)
+// consumer as of this diff -- verified by
+// `grep -rn "\.Tables\b|\.Obligations\b|\.SubjectRoles\b" internal/contextfabric/*.go`
+// outside fact_registry.go/its own tests and DeriveRequirements/Capabilities()
+// -- so their only observable surface is Capabilities(), and that is what
+// their subtests assert against; a future consumer of any of these three
+// gets exactly the same protection this fix already put in place.
 func TestChaos5547_ProviderCapabilityDeclarationsAreCopiedNotAliasedAtRegistration(t *testing.T) {
 	t.Parallel()
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	newProvider := func() *factProviderStub {
-		return &factProviderStub{capability: FactCapability{
-			Kind: FactStatus, Name: "status", Version: "v1",
-			SupportedSubjectKinds: []SubjectKind{SubjectProject},
-			Dimension:             HealthDimensionExecutionCompletion,
-			SubjectRoles:          []FactRole{FactRoleSubject},
-			Tables:                map[SubjectKind][]FactTableShape{SubjectProject: {FactTableTimeSeries}},
-			Obligations:           map[SubjectKind][]AnswerObligation{SubjectProject: {ObligationState}},
-		}}
+		return &factProviderStub{
+			capability: FactCapability{
+				Kind: FactStatus, Name: "status", Version: "v1",
+				SupportedSubjectKinds: []SubjectKind{SubjectProject},
+				AllowedParameters:     []string{"window_days"},
+				Dimension:             HealthDimensionExecutionCompletion,
+				SubjectRoles:          []FactRole{FactRoleSubject},
+				Tables:                map[SubjectKind][]FactTableShape{SubjectProject: {FactTableTimeSeries}},
+				Obligations:           map[SubjectKind][]AnswerObligation{SubjectProject: {ObligationState}},
+			},
+			result: FactProviderResult{State: SourceAvailable},
+		}
 	}
 	rows := []struct {
 		name   string
 		mutate func(p *factProviderStub)
-		check  func(t *testing.T, got FactCapability)
+		check  func(t *testing.T, registry *FactCapabilityRegistry)
 	}{
 		{
-			name:   "tables",
-			mutate: func(p *factProviderStub) { p.capability.Tables[SubjectProject][0] = FactTableBreakdown },
-			check: func(t *testing.T, got FactCapability) {
-				if got.Tables[SubjectProject][0] != FactTableTimeSeries {
-					t.Fatalf("Tables = %v after the provider mutated its own map post-registration, want the ORIGINAL time_series unaffected", got.Tables)
+			// Driven through ReadFacts: mutate the provider's own
+			// SupportedSubjectKinds to a kind the request does NOT use;
+			// if aliased, the request's original, still-registered subject
+			// kind would stop being served.
+			name:   "SupportedSubjectKinds",
+			mutate: func(p *factProviderStub) { p.capability.SupportedSubjectKinds[0] = SubjectRepository },
+			check: func(t *testing.T, registry *FactCapabilityRegistry) {
+				bundle, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, canonicalFactRequest(project, FactStatus))
+				if err != nil {
+					t.Fatalf("ReadFacts() error = %v, want the ORIGINAL SubjectProject support unaffected by the provider's post-registration mutation", err)
+				}
+				if len(bundle.Coverage.Sources) != 1 || bundle.Coverage.Sources[0].State != SourceAvailable {
+					t.Fatalf("coverage = %#v, want the capability still serving the originally-registered subject kind", bundle.Coverage)
 				}
 			},
 		},
 		{
-			name:   "obligations",
+			// Driven through ReadFacts, exactly the r3 reviewer's shape.
+			name:   "AllowedParameters",
+			mutate: func(p *factProviderStub) { p.capability.AllowedParameters[0] = "mutated_out" },
+			check: func(t *testing.T, registry *FactCapabilityRegistry) {
+				request := canonicalFactRequest(project, FactStatus)
+				request.Requirements[0].Parameters = map[string]string{"window_days": "30"}
+				if _, err := registry.ReadFacts(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+					t.Fatalf("ReadFacts() error = %v, want the ORIGINAL allowed parameter still honoured after the provider mutated its own slice", err)
+				}
+			},
+		},
+		{
+			// No live consumer of SubjectRoles exists (see doc comment
+			// above) -- Capabilities() is the only observable surface.
+			name:   "SubjectRoles",
+			mutate: func(p *factProviderStub) { p.capability.SubjectRoles[0] = FactRoleMember },
+			check: func(t *testing.T, registry *FactCapabilityRegistry) {
+				if got := registry.Capabilities()[0].SubjectRoles[0]; got != FactRoleSubject {
+					t.Fatalf("SubjectRoles = %v after the provider mutated its own slice post-registration, want the ORIGINAL FactRoleSubject unaffected", got)
+				}
+			},
+		},
+		{
+			// ReadFacts never reads capability.Tables (grep-verified);
+			// Capabilities()/DeriveRequirements is the only live consumer.
+			name:   "Tables",
+			mutate: func(p *factProviderStub) { p.capability.Tables[SubjectProject][0] = FactTableBreakdown },
+			check: func(t *testing.T, registry *FactCapabilityRegistry) {
+				if got := registry.Capabilities()[0].Tables[SubjectProject][0]; got != FactTableTimeSeries {
+					t.Fatalf("Tables = %v after the provider mutated its own map post-registration, want the ORIGINAL time_series unaffected", got)
+				}
+			},
+		},
+		{
+			name:   "Obligations",
 			mutate: func(p *factProviderStub) { p.capability.Obligations[SubjectProject][0] = ObligationReadiness },
-			check: func(t *testing.T, got FactCapability) {
-				if got.Obligations[SubjectProject][0] != ObligationState {
-					t.Fatalf("Obligations = %v after the provider mutated its own map post-registration, want the ORIGINAL state unaffected", got.Obligations)
+			check: func(t *testing.T, registry *FactCapabilityRegistry) {
+				if got := registry.Capabilities()[0].Obligations[SubjectProject][0]; got != ObligationState {
+					t.Fatalf("Obligations = %v after the provider mutated its own map post-registration, want the ORIGINAL state unaffected", got)
 				}
 			},
 		},
@@ -335,7 +394,7 @@ func TestChaos5547_ProviderCapabilityDeclarationsAreCopiedNotAliasedAtRegistrati
 				t.Fatalf("NewFactCapabilityRegistry: %v", err)
 			}
 			row.mutate(provider)
-			row.check(t, registry.Capabilities()[0])
+			row.check(t, registry)
 		})
 	}
 }
