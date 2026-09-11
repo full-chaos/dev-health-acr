@@ -54,6 +54,22 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+# CHAOS-5562 r2: refuse BEFORE the `corpus` import below, which needs an external
+# module on sys.path for a reason that has nothing to do with CORPUS_BASE. r2 review
+# found that a direct run with CORPUS_BASE unset AND no corpus module supplied hit a
+# raw `ModuleNotFoundError` instead of ever reaching require_base()'s message -- the
+# module-level import runs before any of this file's own code, so no check placed
+# later in the file (require_base() included) can pre-empt it. Gated on
+# `__name__ == "__main__"` so `import harness` (every pin file does this without
+# CORPUS_BASE set) is completely unaffected; only a DIRECT run refuses this early.
+_MISSING_BASE_MSG = (
+    "CORPUS_BASE is not set -- refusing to start. There is no default rig "
+    "leg; set CORPUS_BASE to the investigations endpoint you own (see "
+    "scripts/corpus/README.md)."
+)
+if __name__ == "__main__" and not os.environ.get("CORPUS_BASE"):
+    sys.exit(_MISSING_BASE_MSG)
+
 sys.path.insert(0, str(Path(__file__).parent))
 from corpus import CORPUS, REQUESTED_KIND, ANCHOR_KIND  # noqa: E402
 from validators import validate_attempt, validate_response  # noqa: E402
@@ -95,11 +111,7 @@ class ServedBuildMismatch(RuntimeError):
 
 def require_base():
     if not BASE:
-        raise MissingCorpusBase(
-            "CORPUS_BASE is not set -- refusing to start. There is no default rig "
-            "leg; set CORPUS_BASE to the investigations endpoint you own (see "
-            "scripts/corpus/README.md)."
-        )
+        raise MissingCorpusBase(_MISSING_BASE_MSG)
 
 
 def _service_version(response):
@@ -264,8 +276,17 @@ def post(body):
     if raw is None:
         _report_first_response(status, {})
         return status, {}, time.time() - t0, True
+    # CHAOS-5562 r2: check against the RAW decoded payload, never the validated one.
+    # r2 review found a payload that is malformed by SOME OTHER measure (an unrelated
+    # required field missing/wrong-shaped) but genuinely carries a real
+    # `versions.service_version` -- validate_live_payload replaces the whole body with
+    # a bare failure envelope, which has no `result` key at all, so the genuine served
+    # build was thrown away before this file ever looked at it. The raw payload is
+    # already known to be a dict at this point (the json.loads above succeeded); a
+    # response that is malformed in a way that also loses/omits the version is still
+    # reported as indeterminate and leaves the check armed, same as before.
+    _report_first_response(status, payload)
     validated = validate_live_payload(status, payload)
-    _report_first_response(status, validated)
     return status, validated, time.time() - t0, False
 
 

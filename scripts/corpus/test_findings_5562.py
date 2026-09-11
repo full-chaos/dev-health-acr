@@ -40,7 +40,9 @@ TESTDATA = HERE / "testdata_corpus"
 # Copied together so an isolated invocation resolves them exactly as the real
 # directory does, never against the real replicate/shards output dirs.
 _COPY_FILES = ("harness.py", "validators.py", "contract.py", "attempt_classes.py",
-               "attempt_order.py", "shard_plan.py", "run_shard.py", "artefact_schema.json")
+               "attempt_order.py", "shard_plan.py", "run_shard.py", "artefact_schema.json",
+               "reclassify_deadlines.py", "merge_corpus.py", "engine_failures.py",
+               "subject_identity.py", "expectations.py", "corpus_example.py")
 
 CORPUS_ID = "example-serve-named-project"  # a real id in testdata_corpus/corpus_example.py
 
@@ -496,6 +498,159 @@ def test_the_shell_launchers_pass_a_set_corpus_base_through_to_run_shard_execute
                 out += "\n" + log.read_text()
         assert f"FAKE run_shard.py CORPUS_BASE={base}" in out, (
             f"{name} did not pass the caller's CORPUS_BASE through to run_shard.py:\n{out}")
+
+
+# ==================================================== r2 review findings, fixed + pinned
+
+def test_a_malformed_but_versioned_response_still_arms_the_build_check():
+    """r2 review, P1, harness.py:268 (pre-fix line): `post()` checked the VALIDATED
+    body, which `validate_live_payload` replaces with a bare failure envelope for any
+    response malformed by some OTHER measure -- discarding a genuine
+    `versions.service_version` before the build check ever saw it. The check must read
+    the RAW decoded payload."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = _isolated_copy(tmp)
+        # Malformed per validate_response (a candidate must be an object, this one is
+        # an int) but genuinely carries a real, determinate service_version.
+        malformed_but_versioned = {
+            "result": {"status": "complete",
+                       "versions": {"service_version": "build-A"},
+                       "subject_resolution": {"committed": [1]}}}
+        with _StubServer(service_version=None) as srv:
+            srv.body = malformed_but_versioned
+            r = _run(dest / "harness.py", CORPUS_ID,
+                      env_overrides={"CORPUS_BASE": srv.base,
+                                     "CORPUS_EXPECTED_BUILD": "build-B"})
+        out = r.stdout + r.stderr
+        assert r.returncode != 0, (
+            f"a malformed-but-versioned response did not trip the build-mismatch "
+            f"check:\n{out}")
+        assert "build-A" in out and "build-B" in out, out
+        assert srv.requests == 1, (
+            f"expected exactly 1 request before refusing: {srv.requests}")
+
+
+def _bare_isolated_copy(tmp, entry_files):
+    """Like `_isolated_copy`, but WITHOUT `corpus_example.py` and WITHOUT the
+    synthetic `corpus` module anywhere on PYTHONPATH -- there is genuinely no
+    `corpus` module resolvable, matching the r2 review scenario."""
+    dest = Path(tmp) / "bare"
+    dest.mkdir()
+    for name in entry_files:
+        shutil.copy2(HERE / name, dest / name)
+    return dest
+
+
+def _run_bare(script, *args, env_overrides=None):
+    env = dict(os.environ)
+    env.pop("CORPUS_BASE", None)
+    # Deliberately NOT adding TESTDATA/HERE to PYTHONPATH -- `corpus` must not resolve.
+    env["PYTHONPATH"] = env.get("PYTHONPATH", "")
+    env.update(env_overrides or {})
+    return subprocess.run([sys.executable, str(script), *args], env=env,
+                          capture_output=True, text=True, timeout=30,
+                          cwd=str(script.parent))
+
+
+def test_harness_refuses_before_importing_the_external_corpus_module():
+    """r2 review, P2, harness.py:58 (pre-fix line): a direct run with CORPUS_BASE
+    unset AND no `corpus` module supplied hit a raw `ModuleNotFoundError` instead of
+    ever reaching the CORPUS_BASE message -- the module-level `from corpus import`
+    runs before any of this file's own code. Now refuses before that import."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = _bare_isolated_copy(tmp, ("harness.py", "validators.py", "contract.py"))
+        r = _run_bare(dest / "harness.py", CORPUS_ID)
+    out = r.stdout + r.stderr
+    assert r.returncode != 0, out
+    assert "ModuleNotFoundError" not in out, (
+        f"a missing corpus module leaked past the CORPUS_BASE refusal:\n{out}")
+    assert "CORPUS_BASE" in out, f"refusal does not name the variable: {out}"
+
+
+def test_run_shard_refuses_before_importing_the_external_corpus_module():
+    """Same class as above, for run_shard.py's own `import harness` (which is what
+    actually pulls in `corpus`)."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = _bare_isolated_copy(tmp, ("harness.py", "validators.py", "contract.py",
+                                        "attempt_classes.py", "attempt_order.py",
+                                        "shard_plan.py", "run_shard.py"))
+        r = _run_bare(dest / "run_shard.py", "0", "1", "1")
+    out = r.stdout + r.stderr
+    assert r.returncode != 0, out
+    assert "ModuleNotFoundError" not in out, (
+        f"a missing corpus module leaked past the CORPUS_BASE refusal:\n{out}")
+    assert "CORPUS_BASE" in out, f"refusal does not name the variable: {out}"
+
+
+def test_reclassify_deadlines_also_refuses_when_corpus_base_is_unset():
+    """r2 review caller sweep: reclassify_deadlines.py is ANOTHER direct caller of
+    harness.run_replicate, missed by the r1 caller sweep because it never spells the
+    literal string "harness.py" (only `import harness`). Same guard, same class."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = _bare_isolated_copy(tmp, ("harness.py", "validators.py", "contract.py",
+                                        "attempt_classes.py", "attempt_order.py",
+                                        "shard_plan.py", "run_shard.py",
+                                        "reclassify_deadlines.py", "merge_corpus.py",
+                                        "engine_failures.py", "subject_identity.py",
+                                        "expectations.py"))
+        shards_dir = dest / "shards"
+        shards_dir.mkdir()
+        r = _run_bare(dest / "reclassify_deadlines.py", str(shards_dir), "1")
+    out = r.stdout + r.stderr
+    assert r.returncode != 0, out
+    assert "ModuleNotFoundError" not in out, (
+        f"a missing corpus module leaked past the CORPUS_BASE refusal:\n{out}")
+    assert "CORPUS_BASE" in out, f"refusal does not name the variable: {out}"
+
+
+def test_launcher_abort_never_leaks_corpus_base_credentials_executed():
+    """r2 review, P2, run_corpus_sequential.sh:35 / run_corpus_parallel.sh:54
+    (pre-fix lines): the readiness-probe ABORT message printed the probe URL
+    verbatim, and corpus_origin.sh's own origin extraction PRESERVES userinfo (by
+    necessity -- the real request needs it) -- so a CORPUS_BASE carrying basic-auth
+    credentials or a token leaked straight onto stderr. Redacted for logging only."""
+    import tempfile
+    base = "http://alice:s3cr3t-pw@example.invalid:8443/api/investigations?access_token=q-tok"
+    for name in ("run_corpus_sequential.sh", "run_corpus_parallel.sh"):
+        with tempfile.TemporaryDirectory() as tmp:
+            dest, stub_bin = _launcher_dir(tmp)
+            # Force the readiness probe to FAIL (unlike _launcher_dir's default 200
+            # stub) so the ABORT line actually fires -- this pin is about that one
+            # log line, not about whether run_shard.py ever sees the real value (it
+            # must, unredacted, to make the real request -- separately pinned above).
+            (stub_bin / "curl").write_text("#!/usr/bin/env bash\nprintf '503'\n")
+            env = dict(os.environ)
+            env["CORPUS_BASE"] = base
+            env["PATH"] = f"{stub_bin}:{env['PATH']}"
+            args = [str(dest / name)] if name == "run_corpus_sequential.sh" else \
+                   [str(dest / name), "1", "1"]
+            r = subprocess.run(["bash", *args], env=env, capture_output=True,
+                                text=True, timeout=30, cwd=str(dest))
+        out = r.stdout + r.stderr
+        assert r.returncode != 0, f"{name} did not abort on a failed readiness probe:\n{out}"
+        assert "ABORT" in out, f"{name} never printed the abort line:\n{out}"
+        assert "s3cr3t-pw" not in out, f"{name} leaked the CORPUS_BASE password:\n{out}"
+        assert "alice" not in out, f"{name} leaked the CORPUS_BASE username:\n{out}"
+        assert "q-tok" not in out, f"{name} leaked the CORPUS_BASE query token:\n{out}"
+
+
+def test_launchers_refuse_before_creating_the_logs_directory_executed():
+    """r2 review, P3, run_corpus_sequential.sh:18 / run_corpus_parallel.sh:37
+    (pre-fix lines): both launchers created logs/ BEFORE the unset-CORPUS_BASE
+    guard, contradicting "refuse before doing anything else." Reordered."""
+    import tempfile
+    for name in ("run_corpus_sequential.sh", "run_corpus_parallel.sh"):
+        with tempfile.TemporaryDirectory() as tmp:
+            dest, stub_bin = _launcher_dir(tmp)
+            r = _run_launcher(name, dest, stub_bin, corpus_base=None)
+            logs_exists = (dest / "logs").exists()
+        assert r.returncode != 0, f"{name} exited 0 with CORPUS_BASE unset"
+        assert not logs_exists, (
+            f"{name} created logs/ before refusing on an unset CORPUS_BASE")
 
 
 if __name__ == "__main__":

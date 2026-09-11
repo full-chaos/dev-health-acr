@@ -34,6 +34,18 @@ from pathlib import Path
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 
+# CHAOS-5562 r2: refuse BEFORE `import harness` below, which imports the external
+# `corpus` module for a reason unrelated to CORPUS_BASE -- a direct run with both
+# unset hit a raw ModuleNotFoundError instead of ever reaching harness.require_base().
+# Gated on `__name__ == "__main__"` so `import run_shard as RS` (every pin file does
+# this without CORPUS_BASE set) is unaffected; only a direct run refuses this early.
+if __name__ == "__main__" and not os.environ.get("CORPUS_BASE"):
+    sys.exit(
+        "CORPUS_BASE is not set -- refusing to start. There is no default rig "
+        "leg; set CORPUS_BASE to the investigations endpoint you own (see "
+        "scripts/corpus/README.md)."
+    )
+
 import harness  # noqa: E402
 import attempt_classes  # noqa: E402
 from attempt_order import order_attempts, parse_attempt_name  # noqa: E402
