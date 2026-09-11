@@ -27,6 +27,7 @@ var ByID = map[string]Event{
 	"graphrank.corroboration_summary":  CorroborationSummary,
 	"graphrank.decision":               Decision,
 	"graphrank.decision_summary":       DecisionSummary,
+	"graphrank.identity_universe":      IdentityUniverse,
 	"graphrank.kind_coverage_floor":    KindCoverageFloor,
 	"graphrank.kind_offer_withheld":    KindOfferWithheld,
 	"graphrank.offer_pool":             OfferPool,
@@ -607,6 +608,51 @@ func (f DecisionSummaryFields) SlogArgs() []any {
 		"member_kind_confirmed", contextfabric.SanitizeLogAttr(f.MemberKindConfirmed),
 		"reserved_kinds", contextfabric.SanitizeLogStrings(f.ReservedKinds),
 		"filter_kinds", contextfabric.SanitizeLogStrings(f.FilterKinds),
+	}
+}
+
+// IdentityUniverseFields is graphrank.identity_universe's generated typed construction interface
+// (CHAOS-5516): one Go field per Field IdentityUniverse.Fields declares in spec.go.
+type IdentityUniverseFields struct {
+	RequestID string
+	Complete  bool
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every IdentityUniverseFields uniformly, set ONLY by NewIdentityUniverseFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewIdentityUniverseFields is the generated constructor for IdentityUniverseFields -- every
+// field IdentityUniverse.Fields declares is a required parameter.
+func NewIdentityUniverseFields(requestID string, complete bool) IdentityUniverseFields {
+	return IdentityUniverseFields{
+		RequestID:   requestID,
+		Complete:    complete,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewIdentityUniverseFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f IdentityUniverseFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns IdentityUniverse's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f IdentityUniverseFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "identity_universe",
+		"complete", f.Complete,
 	}
 }
 

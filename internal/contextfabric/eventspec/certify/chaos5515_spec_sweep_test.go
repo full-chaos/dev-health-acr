@@ -525,6 +525,18 @@ func TestCertifyInputDomainTable(t *testing.T) {
 					return f, true
 				}
 			}
+			// CHAOS-5517: IdentityUniverse declares only request_id (attr),
+			// stage (closed vocab, excluded), and "complete" (bool) -- no
+			// int/float/open-string field at all, so bool is the last
+			// fallback.
+			for _, f := range ev.Fields {
+				if f.Key == "pass" || f.Key == "index" || f.Key == "total" || isAttr(f.Key) {
+					continue
+				}
+				if f.Type == eventspec.FieldBool {
+					return f, true
+				}
+			}
 			return eventspec.Field{}, false
 		}
 		distinctContentLine := func(perturbValue int) map[string]any {
@@ -540,6 +552,10 @@ func TestCertifyInputDomainTable(t *testing.T) {
 				m[f.Key] = float64(perturbValue) + 0.5
 			case eventspec.FieldString:
 				m[f.Key] = fmt.Sprintf("sweep_distinct_content_%d", perturbValue)
+			case eventspec.FieldBool:
+				// canonicalValueFor's own bool value is always true --
+				// "distinct content" is simply the other value.
+				m[f.Key] = false
 			}
 			return m
 		}
@@ -562,6 +578,8 @@ func TestCertifyInputDomainTable(t *testing.T) {
 				m[f.Key] = "malformed-not-a-number"
 			case eventspec.FieldString:
 				m[f.Key] = 999
+			case eventspec.FieldBool:
+				m[f.Key] = "malformed-not-a-bool"
 			}
 			return m
 		}

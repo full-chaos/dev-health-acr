@@ -560,6 +560,36 @@
     ]
   },
   {
+    "id": "graphrank.identity_universe",
+    "msg": "context fabric resolution trace: identity universe read",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per resolveSubjects call -- gated on the SAME AliasLookup wiring/temporal-axis condition AliasLookup's own event fires under, plus the identity-universe read itself running.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "identity_universe"
+        ]
+      },
+      {
+        "key": "complete",
+        "type": "bool",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "graphrank.kind_coverage_floor",
     "msg": "context fabric resolution trace: kind coverage floor",
     "level": "info",

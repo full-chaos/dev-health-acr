@@ -666,15 +666,19 @@ var SearchQuestion = Event{
 
 // AliasLookup is the Info line (graphrank/tracer.go, case "alias_lookup")
 // emitted from the single alias-lookup emission site in resolve.go -- gated
-// on `deps.AliasLookup != nil`. No production composition root wires
-// AliasLookup today (grep of internal/contextfabric/falkorgraph and
-// internal/runtime/hosted: zero hits outside tests) -- "this backend does
-// not implement it" is today's universal production shape, not a rare
-// branch, so this is a MultiplicityZeroOrOnePerRequest event whose CLOSED
-// form (CertifyAbsent) is expected to be the one certified against real
-// deployed output; the firing form is certified against a fixture that
-// wires the dependency, matching how the real feature would be certified
-// the day a caller adopts it.
+// on `deps.AliasLookup != nil`. CORRECTED after tracing the real production
+// wiring (initial declaration wrongly claimed no composition root sets it,
+// from a grep that only matched a struct-literal `AliasLookup:` and missed
+// the real site's plain assignment): falkorgraph/reader.go wires
+// deps.AliasLookup whenever `a.config.IdentityUniverse != nil`, and
+// hosted/open.go's real buildContextFabricInvestigator ALWAYS passes
+// wireIdentityUniverse=true -- so AliasLookup IS wired in real production,
+// gated instead on `!temporal.active` (a historical-axis question skips it
+// entirely, HIGH-6's own "temporal authority stays with the graph" rule)
+// and on the identity-universe read itself finding a match. Still
+// MultiplicityZeroOrOnePerRequest: genuinely conditional, just not on
+// today's absent wiring -- CertifyAbsent covers the historical-axis /
+// no-match path, Certify covers the firing one.
 var AliasLookup = Event{
 	ID:                 "graphrank.alias_lookup",
 	Msg:                "context fabric resolution trace: alias lookup",
@@ -763,6 +767,29 @@ var ConfirmedKindRescue = Event{
 	},
 }
 
+// IdentityUniverse is the Info line (falkorgraph/reader.go, case
+// "identity_universe", chris ruling 2026-08-17) -- CHAOS-5517's named
+// cross-package producer: constructed in falkorgraph, not graphrank,
+// inside the SAME deps.AliasLookup closure AliasLookup's own event fires
+// from (falkorgraph wires AliasLookup only when a.config.IdentityUniverse
+// is configured, which hosted/open.go's real production composition root
+// always does), gated further on `!temporal.active` (a historical-axis
+// question skips this mechanism entirely). Genuinely conditional in
+// production, hence MultiplicityZeroOrOnePerRequest, not unconditional.
+var IdentityUniverse = Event{
+	ID:                 "graphrank.identity_universe",
+	Msg:                "context fabric resolution trace: identity universe read",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per resolveSubjects call -- gated on the SAME AliasLookup wiring/temporal-axis condition AliasLookup's own event fires under, plus the identity-universe read itself running.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"identity_universe"}},
+		{Key: "complete", Type: FieldBool, Presence: PresenceRequired},
+	},
+}
+
 // All is every event this specification declares. Generate() and the
 // certification runner both range over exactly this slice -- neither
 // maintains a second list.
@@ -770,4 +797,5 @@ var All = []Event{
 	RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld,
 	Corroboration, CorroborationSummary, ReservedKindAdmitted, OfferPool, OfferPoolSummary,
 	Decision, SearchQuestion, AliasLookup, AnchorPool, KindCoverageFloor, ConfirmedKindRescue,
+	IdentityUniverse,
 }
