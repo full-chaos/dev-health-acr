@@ -220,6 +220,28 @@ func locate(t *testing.T, line map[string]any, path []string) map[string]any {
 	return obj
 }
 
+// marshalJoinLines is the package-level form of the per-event marshalJoin
+// closure -- used by the CHAOS-5517 bounded-many/zero-or-one-per-request
+// cells, which iterate eventspec.All independently of the main
+// per-event multiplicity loop and so cannot reach that loop's own local
+// closure.
+func marshalJoinLines(t *testing.T, eventID string, lines ...map[string]any) *Log {
+	t.Helper()
+	parts := make([]string, len(lines))
+	for i, l := range lines {
+		b, err := json.Marshal(l)
+		if err != nil {
+			t.Fatalf("json.Marshal() error = %v", err)
+		}
+		parts[i] = string(b)
+	}
+	log, err := Parse([]byte(strings.Join(parts, "\n")))
+	if err != nil {
+		t.Fatalf("Parse() fixture for %s error = %v", eventID, err)
+	}
+	return log
+}
+
 func logFromLine(t *testing.T, line map[string]any) *Log {
 	t.Helper()
 	b, err := json.Marshal(line)
@@ -328,6 +350,18 @@ func runCell(t *testing.T, ev eventspec.Event, base map[string]any, attribution 
 			}
 			if f.Key == "pass" {
 				w["pass"] = v
+			}
+			// CHAOS-5517 (hosted battery finding, G16/G18/G19 survived):
+			// mutating "index" on the fixture LINE without also updating
+			// Want["index"] makes the cell refuse for the WRONG reason (a
+			// selection mismatch: certifyBoundedMany can't find a line at
+			// the stale canonical index) rather than the guard the cell
+			// claims to exercise (verifyBoundedManyGroup's own range/
+			// duplicate/count checks) -- a vacuous pin that a mutant
+			// disabling the real guard still passes. Track it the same way
+			// "pass" already is.
+			if f.Key == "index" {
+				w["index"] = v
 			}
 		}
 		return w
@@ -584,19 +618,7 @@ func TestCertifyInputDomainTable(t *testing.T) {
 			return m
 		}
 		marshalJoin := func(lines ...map[string]any) *Log {
-			parts := make([]string, len(lines))
-			for i, l := range lines {
-				b, err := json.Marshal(l)
-				if err != nil {
-					t.Fatalf("json.Marshal() error = %v", err)
-				}
-				parts[i] = string(b)
-			}
-			log, err := Parse([]byte(strings.Join(parts, "\n")))
-			if err != nil {
-				t.Fatalf("Parse() fixture for %s error = %v", ev.ID, err)
-			}
-			return log
+			return marshalJoinLines(t, ev.ID, lines...)
 		}
 		record := func(dim string, wantAccept bool, log *Log, want map[string]any) {
 			_, err := certifyRecovered(t, log, Assertion{Event: ev, Want: want})
@@ -662,6 +684,97 @@ func TestCertifyInputDomainTable(t *testing.T) {
 		}
 	}
 
+	// CHAOS-5517 (hosted battery finding, run 34624597754: G17/G18/G19
+	// survived): a single-canonical-line fixture can NEVER exercise
+	// verifyBoundedManyGroup's own cross-line checks (total-agreement,
+	// duplicate-index, count-equals-total) -- with one line, "total" is
+	// read FROM that line, so count trivially equals it regardless of
+	// whether the guard runs at all. These three cells are the dedicated,
+	// deliberately MULTI-line fixtures each guard needs, generated over
+	// every BoundedManyPerPass event so a future one is swept
+	// automatically.
+	boundedManyExtraRows := 0
+	for _, ev := range eventspec.All {
+		if ev.Multiplicity != eventspec.MultiplicityBoundedManyPerPass {
+			continue
+		}
+		boundedManyExtraRows += 3
+		base := canonicalLineFor(ev)
+		attribution := attributionWant(ev, base)
+
+		// Total disagreement: two lines in the same scope, each with an
+		// index inside ITS OWN declared total's range (so the range check
+		// alone cannot also catch this), but naming a DIFFERENT total --
+		// refused regardless of which line's total is "right". lineB's
+		// index=2 sits inside 1..3 (its own total) AND inside 1..2 (the
+		// scope's total taken from lineA, i==0) -- isolating the
+		// disagreement check from the range check, which lineB's index
+		// would otherwise also trip if it were e.g. 3.
+		lineA := deepCopyLine(t, base)
+		lineA["index"], lineA["total"] = 1, 2
+		lineB := deepCopyLine(t, base)
+		lineB["index"], lineB["total"] = 2, 3
+		wantA := map[string]any{}
+		for k, v := range attribution {
+			wantA[k] = v
+		}
+		wantA["index"] = 1
+		_, err := certifyRecovered(t, marshalJoinLines(t, ev.ID, lineA, lineB), Assertion{Event: ev, Want: wantA})
+		rows = append(rows, domainRow{event: ev.ID, field: "(bounded-many)", dimension: "total_disagreement", applicable: true, wantAccept: false, gotAccept: err == nil})
+
+		// Duplicate index: two lines both claiming index=1 of a total=2
+		// scope -- count(2)==total(2) so verifyBoundedManyGroup's OTHER
+		// checks pass trivially; only the duplicate-index check itself can
+		// refuse this.
+		dupA := deepCopyLine(t, base)
+		dupA["index"], dupA["total"] = 1, 2
+		dupB := deepCopyLine(t, base)
+		dupB["index"], dupB["total"] = 1, 2
+		wantDup := map[string]any{}
+		for k, v := range attribution {
+			wantDup[k] = v
+		}
+		wantDup["index"] = 1
+		_, err = certifyRecovered(t, marshalJoinLines(t, ev.ID, dupA, dupB), Assertion{Event: ev, Want: wantDup})
+		rows = append(rows, domainRow{event: ev.ID, field: "(bounded-many)", dimension: "duplicate_index", applicable: true, wantAccept: false, gotAccept: err == nil})
+
+		// Count mismatch: ONE line self-declaring total=2 (index=1, in
+		// range, no duplicate possible with only one line) -- the scope
+		// actually holds only 1 line, so count(1) != total(2).
+		short := deepCopyLine(t, base)
+		short["index"], short["total"] = 1, 2
+		wantShort := map[string]any{}
+		for k, v := range attribution {
+			wantShort[k] = v
+		}
+		wantShort["index"] = 1
+		_, err = certifyRecovered(t, marshalJoinLines(t, ev.ID, short), Assertion{Event: ev, Want: wantShort})
+		rows = append(rows, domainRow{event: ev.ID, field: "(bounded-many)", dimension: "count_mismatch", applicable: true, wantAccept: false, gotAccept: err == nil})
+	}
+
+	// CHAOS-5517 (hosted battery finding: G20 survived): CertifyAbsent must
+	// refuse an attribution map that includes "pass" for a
+	// zero_or_one_per_request event (it has no pass concept at all) --
+	// generated over every such event.
+	zeroOrOneRequestAbsentRows := 0
+	for _, ev := range eventspec.All {
+		if ev.Multiplicity != eventspec.MultiplicityZeroOrOnePerRequest {
+			continue
+		}
+		zeroOrOneRequestAbsentRows++
+		attribution := map[string]any{}
+		for _, ak := range ev.Attribution {
+			attribution[ak] = "sweep_canonical_string"
+		}
+		withPass := map[string]any{}
+		for k, v := range attribution {
+			withPass[k] = v
+		}
+		withPass["pass"] = 1
+		err := CertifyAbsent(&Log{}, ev, withPass)
+		rows = append(rows, domainRow{event: ev.ID, field: "(multiplicity)", dimension: "absent_forbids_pass_attribution", applicable: true, wantAccept: false, gotAccept: err == nil})
+	}
+
 	// CHAOS-5516 (team-lead, after the B8 pair caught the class in
 	// internal/runtime/hosted's own fixtures): the construction-refusal
 	// guard tracer.go's "decision_summary" case added
@@ -725,10 +838,10 @@ func TestCertifyInputDomainTable(t *testing.T) {
 	// pass-keying guard, and the typed-construction refusal guard, not a
 	// silently-truncated subset.
 	const constructionRefusalRows = 1
-	wantRows := totalFieldCount*len(domainDimensions) + len(eventspec.All) + passMultiplicityRows + constructionRefusalRows
+	wantRows := totalFieldCount*len(domainDimensions) + len(eventspec.All) + passMultiplicityRows + constructionRefusalRows + boundedManyExtraRows + zeroOrOneRequestAbsentRows
 	if len(rows) != wantRows {
-		t.Errorf("census: table has %d rows, want %d (%d fields x %d dimensions + %d duplicate rows + %d pass-multiplicity rows + %d construction-refusal rows)",
-			len(rows), wantRows, totalFieldCount, len(domainDimensions), len(eventspec.All), passMultiplicityRows, constructionRefusalRows)
+		t.Errorf("census: table has %d rows, want %d (%d fields x %d dimensions + %d duplicate rows + %d pass-multiplicity rows + %d construction-refusal rows + %d bounded-many rows + %d zero-or-one-per-request absent rows)",
+			len(rows), wantRows, totalFieldCount, len(domainDimensions), len(eventspec.All), passMultiplicityRows, constructionRefusalRows, boundedManyExtraRows, zeroOrOneRequestAbsentRows)
 	}
 }
 
