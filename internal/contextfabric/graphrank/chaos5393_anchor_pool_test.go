@@ -732,40 +732,54 @@ func TestTheFallbackFixtureCannotLeakTheAnchorThroughPlainSearch(t *testing.T) {
 	}
 }
 
-// THE ERROR PATH THAT FLUSHES WITHOUT AN anchor_pool EVENT.
+// THE ERROR PATH -- AnchorPool folds its own exit.
 //
-// A hosted battery arm caught this and it is a genuine consequence of the
-// fix, not a stale needle: moving the scope decision above retrieval means
-// every SUCCESSFUL path now emits an anchor_pool event, so the fold's
-// `none`-token fallback stopped being reachable through any of them -- and a
-// mutation removing that fallback survived the whole suite.
+// resolveSubjects' two error returns (empty OrgID, a canceled ctx) sit ABOVE
+// anchor_pool's own emission site, so no anchor_pool event reaches
+// decisionSummaryBuffer on this path -- but AnchorPool is declared
+// MultiplicityExactlyOnePerRequest, and an error exit skipping its own line
+// entirely is the same class of gap anchor_offer/kind_coverage_floor's
+// exactlyOnceRequestFold already covers for two other events. AnchorPool
+// (and AnchorKindWithheldSummary) join that same fold, so this path emits an
+// EXPLICIT anchor_pool fallback line, not merely a decision_summary that
+// happens to read `none` by omission.
 //
-// It is still reachable, on the paths that return an ERROR before the
-// decision is made: the fold is installed by the caller and flushed by a
-// defer, so it emits its summary even when the resolution failed at the very
-// first check. Without the fallback those lines carry empty strings, which a
-// JSON sink renders indistinguishably from a build that emits no keys.
-//
-// This is the third time on this seam that a value has been proven only on
-// the paths a fixture happened to reach. The lesson is written here rather
-// than in a commit message: a key that is "always set" must be pinned on a
-// path that sets it by fallback, not only on paths that set it directly.
+// A key that is "always set" must be pinned on a path that sets it by
+// fallback, not only on paths that set it directly -- and an event declared
+// to fire on every exit must be pinned firing on an error exit, not merely
+// inferred from a downstream fold's own default.
 func TestAFailedResolutionStillCarriesExplicitNoneTokens(t *testing.T) {
 	t.Parallel()
 	capture := &anchorScopeCapture{}
 	deps := (&fakeGraphBackend{}).deps()
 	deps.ResolutionTracer = capture
 	// An empty OrgID fails at the first check in resolveSubjects, which is
-	// ABOVE the anchor-scope decision -- so no anchor_pool event is emitted
-	// and the fold has nothing to learn the tokens from.
+	// ABOVE the anchor-scope decision -- so the ordinary anchor_pool
+	// producer call site never runs; anchorPoolFold's own deferred fallback
+	// fires instead.
 	_, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
 		storage.Principal{OrgID: ""}, testRequest(), testInterpreted("chaos"),
 		deps, confirmedProject(), nil, scopedProjectsFrame("chaos"), contextfabric.SubjectTeam)
 	if err == nil {
 		t.Fatal("expected an error from an empty OrgID; this pin only means anything on a path that fails before the scope is decided")
 	}
-	if len(capture.anchorPool) != 0 {
-		t.Fatalf("the failing path emitted %d anchor_pool events, want 0 -- it must return BEFORE the decision for this pin to cover the fallback", len(capture.anchorPool))
+	if len(capture.anchorPool) != 1 {
+		t.Fatalf("the failing path emitted %d anchor_pool events, want exactly 1 -- AnchorPool is exactly_one_per_request and anchorPoolFold's own deferred fallback must fire on this exit even though the ordinary producer call site never runs", len(capture.anchorPool))
+	}
+	fallback := capture.anchorPool[0]
+	for key, value := range map[string]string{
+		"anchor_pool_kind_scope":        fallback.DecisionAnchorPoolKindScope,
+		"anchor_pool_kind_scope_source": fallback.DecisionAnchorPoolKindScopeSource,
+	} {
+		if value != anchorPoolKindScopeNone {
+			t.Errorf("%s = %q on anchorPoolFold's own fallback line, want the explicit %q", key, value, anchorPoolKindScopeNone)
+		}
+	}
+	if fallback.DecisionMemberKindConfirmed != "project" {
+		t.Errorf("member_kind_confirmed = %q on anchorPoolFold's own fallback line, want %q -- it is stamped from the confirmedKind parameter, an input to the call the fallback can still read", fallback.DecisionMemberKindConfirmed, "project")
+	}
+	if len(fallback.DecisionReservedKinds) != 0 || len(fallback.DecisionFilterKinds) != 0 {
+		t.Errorf("reserved_kinds/filter_kinds = %v/%v on anchorPoolFold's own fallback line, want both empty -- no pool was ever built on this exit", fallback.DecisionReservedKinds, fallback.DecisionFilterKinds)
 	}
 	if len(capture.summaries) != 1 {
 		t.Fatalf("captured %d decision_summary events, want exactly 1 -- the fold is deferred, so an error path still flushes", len(capture.summaries))

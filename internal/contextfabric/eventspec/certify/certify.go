@@ -714,6 +714,31 @@ func fieldForKey(ev eventspec.Event, key string) (eventspec.Field, bool) {
 	return eventspec.Field{}, false
 }
 
+// isWholeNumber reports whether v is a Go integer type, or a float32/float64
+// holding a value with no fractional part. Shared by validateFields' FieldInt
+// case (production JSON: no separate integer type, so a genuine int decodes
+// to the SAME float64 shape as a fractional value) and
+// scopeValueHasDeclaredType's FieldInt case (a caller-supplied scope value,
+// e.g. an attribution/Want `"pass"` key) -- one check, so the two can never
+// drift apart: a FieldInt scope value must be whole, whether it names a
+// production line or an attribution/Want key, or `CertifyAbsent(..., map[
+// string]any{"pass": 1.5})` silently fails to match a real pass=1 line (1.5
+// != 1 under scopeMatch's jsonEqual) and certifies a false absence instead of
+// refusing the malformed scope input.
+func isWholeNumber(v any) bool {
+	switch n := v.(type) {
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return true
+	case float32:
+		f := float64(n)
+		return f == math.Trunc(f)
+	case float64:
+		return n == math.Trunc(n)
+	default:
+		return false
+	}
+}
+
 // scopeValueHasDeclaredType reports whether a caller-supplied scope/Want
 // value's own Go type is one the field's declared FieldType can plausibly
 // have come from -- a caller passes a plain Go literal (int, string, ...),
@@ -727,7 +752,11 @@ func scopeValueHasDeclaredType(v any, t eventspec.FieldType) bool {
 	case eventspec.FieldBool:
 		_, ok := v.(bool)
 		return ok
-	case eventspec.FieldInt, eventspec.FieldFloat:
+	case eventspec.FieldInt:
+		// A fractional float64/float32 is never a legitimate int scope
+		// value -- see isWholeNumber's own doc comment.
+		return isWholeNumber(v)
+	case eventspec.FieldFloat:
 		switch v.(type) {
 		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
 			return true
@@ -840,8 +869,10 @@ func validateFields(fields []eventspec.Field, obj map[string]any, eventID string
 			// (e.g. a producer bug computing candidate_count as a ratio)
 			// decodes to the SAME float64 shape as a legitimate integer --
 			// only checking the Go type let candidate_count=92.5 certify as
-			// declared type=int. Refuse anything that is not a whole number.
-			if gotFloat != math.Trunc(gotFloat) {
+			// declared type=int. Refuse anything that is not a whole number,
+			// via the SAME isWholeNumber check scopeValueHasDeclaredType's
+			// own FieldInt case shares, so the two can never disagree.
+			if !isWholeNumber(gotFloat) {
 				return fmt.Errorf("certify: %s: %q = %v, declared type=int but is not a whole number", eventID, field.Key, got)
 			}
 		case eventspec.FieldFloat:

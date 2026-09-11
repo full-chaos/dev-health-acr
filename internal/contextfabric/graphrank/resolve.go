@@ -2044,6 +2044,56 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 		}
 		deps.ResolutionTracer = kindCoverageFloorFold
 		defer kindCoverageFloorFold.flush()
+
+		// AnchorPool and AnchorKindWithheldSummary are both declared
+		// MultiplicityExactlyOnePerRequest, a property of EVERY exit path of
+		// their producer, not only the happy one. AnchorPool's own emission
+		// (inside resolveSubjects) sits after the two error returns at
+		// resolveSubjects' own top; AnchorKindWithheldSummary's own emission
+		// (in THIS function, after resolveSubjects returns) is gated on
+		// `err == nil` -- so an error exit reached neither line. Wrapped
+		// HERE, same as anchorOfferFold/kindCoverageFloorFold immediately
+		// above, for the same reason: one mechanism covering every exit of
+		// resolveSubjects AND of this function's own post-call err!=nil
+		// return (see this PR's own exit-enumeration table), rather than a
+		// matching emission call at each individual exit site -- a shape a
+		// FUTURE early return could silently break again.
+		anchorPoolFold := &exactlyOnceRequestFold{
+			real: deps.ResolutionTracer, stage: "anchor_pool",
+			fallback: func() ResolutionTraceEvent {
+				return ResolutionTraceEvent{
+					RequestID: request.RequestID, Stage: "anchor_pool", AnchorPoolSummary: true,
+					// Explicit "none"/empty, not the Go zero value left bare:
+					// a resolution that returned before the filter ever ran
+					// decided no anchor kind, admitted no scope, and reserved
+					// nothing -- the exact reading orNone/nonNil already give
+					// decisionSummaryBuffer's own never-fired case below.
+					DecisionAnchorPoolKindScope:       anchorPoolKindScopeNone,
+					DecisionAnchorPoolKindScopeSource: anchorPoolKindScopeNone,
+					DecisionMemberKindConfirmed:       confirmedMemberKindToken(confirmedKind),
+					DecisionReservedKinds:             []string{},
+					DecisionFilterKinds:               []string{},
+				}
+			},
+		}
+		deps.ResolutionTracer = anchorPoolFold
+		defer anchorPoolFold.flush()
+
+		anchorKindWithheldSummaryFold := &exactlyOnceRequestFold{
+			real: deps.ResolutionTracer, stage: "anchor_kind_withheld_summary",
+			fallback: func() ResolutionTraceEvent {
+				return ResolutionTraceEvent{
+					RequestID: request.RequestID, Stage: "anchor_kind_withheld_summary",
+					OfferPoolAnchorKindWithheld:       0,
+					OfferPoolAnchorKindWithheldScope:  anchorPoolKindScopeNone,
+					OfferPoolAnchorKindWithheldReason: anchorPoolKindScopeNone,
+					OfferPoolAnchorKindWithheldIDs:    []string{},
+					OfferPoolAnchorKindExempted:       0,
+				}
+			},
+		}
+		deps.ResolutionTracer = anchorKindWithheldSummaryFold
+		defer anchorKindWithheldSummaryFold.flush()
 	}
 	// CHAOS-5422: the contest set's admission, decided ONCE for the whole call
 	// — before any retrieval arm runs, before any identity claim is recorded,
