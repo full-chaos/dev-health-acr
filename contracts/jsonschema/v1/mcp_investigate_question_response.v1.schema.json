@@ -509,7 +509,31 @@
             "authorized_population_count",
             "admitted_count",
             "truncated"
-          ]
+          ],
+          "if": {
+            "properties": {
+              "population_measured": {
+                "const": true
+              }
+            },
+            "required": [
+              "population_measured"
+            ]
+          },
+          "then": {
+            "properties": {
+              "authorized_population_count": {
+                "type": "integer"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "authorized_population_count": {
+                "type": "null"
+              }
+            }
+          }
         },
         "CoverageDetail": {
           "additionalProperties": false,
@@ -4883,7 +4907,31 @@
             "authorized_population_count",
             "admitted_count",
             "truncated"
-          ]
+          ],
+          "if": {
+            "properties": {
+              "population_measured": {
+                "const": true
+              }
+            },
+            "required": [
+              "population_measured"
+            ]
+          },
+          "then": {
+            "properties": {
+              "authorized_population_count": {
+                "type": "integer"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "authorized_population_count": {
+                "type": "null"
+              }
+            }
+          }
         },
         "ConfirmedStructureEntry": {
           "additionalProperties": false,
