@@ -137,7 +137,9 @@ The fix, concretely:
 
    This is a WIDENING only: every result that validated before still
    validates. The server does not yet emit the empty form; it will only
-   after every consumer (including the ask-dev pin) accepts it.
+   after every consumer accepts it -- the ask-dev contract pin, and the
+   acr-mcp sidecar binaries already released, whose embedded validator
+   revalidates every result they fetch and still requires the sentence.
 
 ## 3. The honest residual limitation
 
