@@ -27,6 +27,18 @@ var (
 	// classification from ErrModelUnavailable so callers can apply different
 	// backoff or alerting policy to throttling versus outages.
 	ErrModelRateLimited = errors.New("context fabric model runtime rate limited")
+	// ErrModelCancelled classifies a generation ATTEMPT that never reached
+	// the provider at all because the caller's own context was already
+	// canceled or past its deadline before this attempt began (CHAOS-5577,
+	// ADR 0008 "cancelled"). It is a distinct classification from
+	// ErrModelUnavailable, which continues to cover a call that WAS in
+	// flight -- already sent to the provider -- when its context was
+	// canceled or timed out; that in-call case keeps its existing
+	// "unavailable" receipt outcome unchanged. genkitruntime.withRetry is
+	// the one place that can tell the two apart (its own ctx.Err() check
+	// runs strictly before the per-attempt call is placed), so it is the
+	// only site that wraps an error with this sentinel.
+	ErrModelCancelled = errors.New("context fabric model runtime call not attempted: context already done")
 	// ErrInterpretationRejected classifies an InterpretQuestion failure
 	// caused by ACR's OWN model-facing bound validation
 	// (InterpretedQuestion.Validate, contracts/v1) rejecting the model's
@@ -417,7 +429,8 @@ func (r ModelExecutionReceipt) Validate() error {
 }
 
 // ModelReceiptSink durably records every model execution receipt
-// (success, fallback, invalid_output, rate_limited, or unavailable). It is
+// (success, fallback, invalid_output, rate_limited, unavailable, or
+// cancelled). It is
 // also the defined evaluator seam for CHAOS-3756: an evaluator consumes
 // EvaluatorVersion-keyed receipts from this sink asynchronously, outside the
 // synchronous investigation path, rather than calling back into the model

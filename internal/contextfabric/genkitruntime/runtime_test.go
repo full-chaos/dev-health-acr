@@ -914,6 +914,120 @@ func TestClassifyModelErrorPreservesCancellationAndDeadline(t *testing.T) {
 	if got := classifyModelError(context.DeadlineExceeded); !errors.Is(got, context.DeadlineExceeded) {
 		t.Fatalf("classifyModelError(context.DeadlineExceeded) = %v", got)
 	}
+	// CHAOS-5577 IN-CALL cell: a bare context.Canceled/DeadlineExceeded --
+	// what fn(callCtx) returns when the call was actually in flight and got
+	// canceled or timed out, never tagged ErrModelCancelled -- must NOT
+	// classify as the new ErrModelCancelled. Only withRetry's own pre-call
+	// ctx.Err() branch tags that sentinel; this proves classifyModelError
+	// itself does not conflate the two.
+	if got := classifyModelError(context.Canceled); errors.Is(got, contextfabric.ErrModelCancelled) {
+		t.Fatalf("classifyModelError(context.Canceled) = %v, must NOT match ErrModelCancelled -- an in-call cancellation keeps its unavailable classification", got)
+	}
+	if got := classifyModelError(context.DeadlineExceeded); errors.Is(got, contextfabric.ErrModelCancelled) {
+		t.Fatalf("classifyModelError(context.DeadlineExceeded) = %v, must NOT match ErrModelCancelled", got)
+	}
+	// CHAOS-5577 PRE-CALL cell: withRetry's own tagging, reproduced directly
+	// here at the classify boundary.
+	precall := fmt.Errorf("%w: %w", contextfabric.ErrModelCancelled, context.Canceled)
+	got := classifyModelError(precall)
+	if !errors.Is(got, contextfabric.ErrModelCancelled) {
+		t.Fatalf("classifyModelError(precall-tagged) = %v, want errors.Is match for ErrModelCancelled", got)
+	}
+	if !errors.Is(got, context.Canceled) {
+		t.Fatalf("classifyModelError(precall-tagged) = %v, must still satisfy errors.Is(err, context.Canceled) for back-compat callers", got)
+	}
+}
+
+// TestWithRetryTagsOnlyThePreCallCheckWithErrModelCancelled drives withRetry
+// directly (below the receipt/classification layers) to prove the two
+// cancellation moments CHAOS-5577 distinguishes: PRE-CALL, where ctx.Err()
+// is already non-nil before fn is ever invoked for an attempt, and IN-CALL,
+// where fn(callCtx) is actually invoked and its own context is canceled
+// while the call is in flight.
+func TestWithRetryTagsOnlyThePreCallCheckWithErrModelCancelled(t *testing.T) {
+	t.Parallel()
+	runtime := mustRuntime(t, &generatorStub{}, Config{MaxAttempts: 1})
+
+	t.Run("pre_call", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		called := false
+		_, err := runtime.withRetry(ctx, func(context.Context) error {
+			called = true
+			return nil
+		})
+		if called {
+			t.Fatal("fn was invoked despite the context already being canceled before the attempt")
+		}
+		if !errors.Is(err, contextfabric.ErrModelCancelled) {
+			t.Fatalf("withRetry() error = %v, want errors.Is match for ErrModelCancelled", err)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("withRetry() error = %v, want errors.Is match for context.Canceled too", err)
+		}
+	})
+
+	t.Run("in_call", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		started := make(chan struct{})
+		done := make(chan error, 1)
+		go func() {
+			_, err := runtime.withRetry(ctx, func(callCtx context.Context) error {
+				close(started)
+				<-callCtx.Done()
+				return callCtx.Err()
+			})
+			done <- err
+		}()
+		select {
+		case <-started:
+			cancel()
+		case <-time.After(5 * time.Second):
+			t.Fatal("fn was never invoked before the timeout")
+		}
+		var err error
+		select {
+		case err = <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("withRetry never returned after the in-flight context was canceled")
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("withRetry() error = %v, want errors.Is match for context.Canceled", err)
+		}
+		if errors.Is(err, contextfabric.ErrModelCancelled) {
+			t.Fatalf("withRetry() error = %v, must NOT match ErrModelCancelled -- the call was in flight, not pre-call", err)
+		}
+	})
+}
+
+// TestReceiptOutcomeForErrorClosedVocabularyPinnedByName is the CHAOS-5577
+// closed-set pin: every literal string receiptOutcomeForError can produce,
+// by name, including the new "cancelled" member. A change that adds,
+// removes, renames, or misroutes a branch fails this test by name, not
+// merely by an unrelated symptom elsewhere.
+func TestReceiptOutcomeForErrorClosedVocabularyPinnedByName(t *testing.T) {
+	t.Parallel()
+	preCall := fmt.Errorf("%w: %w", contextfabric.ErrModelCancelled, context.Canceled)
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"nil_error_pending_validation", nil, "pending_validation"},
+		{"rate_limited", fmt.Errorf("%w: quota", contextfabric.ErrModelRateLimited), "rate_limited"},
+		{"invalid_output", fmt.Errorf("%w: schema", contextfabric.ErrModelOutput), "invalid_output"},
+		{"unavailable_default", fmt.Errorf("%w: down", contextfabric.ErrModelUnavailable), "unavailable"},
+		{"in_call_cancellation_stays_unavailable", context.Canceled, "unavailable"},
+		{"in_call_deadline_stays_unavailable", context.DeadlineExceeded, "unavailable"},
+		{"pre_call_cancellation_is_cancelled", preCall, "cancelled"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := receiptOutcomeForError(tc.err); got != tc.want {
+				t.Fatalf("receiptOutcomeForError(%v) = %q, want %q", tc.err, got, tc.want)
+			}
+		})
+	}
 }
 
 func TestRetryableUsesStructuredGenkitStatusOverStringHeuristics(t *testing.T) {
