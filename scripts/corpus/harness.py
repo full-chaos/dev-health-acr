@@ -116,26 +116,65 @@ def _service_version(response):
     return versions.get("service_version")
 
 
-_first_response_reported = False
+def _redacted_base():
+    """CORPUS_BASE with any userinfo (`user:pass@`) and query string stripped before it
+    ever reaches a log line. r1 review found the un-redacted form printed a live
+    credential/token straight into shard logs -- scheme+host+path is enough to show a
+    caller which leg it hit; a query token or basic-auth password is never needed for
+    that and must never be logged."""
+    if not BASE:
+        return BASE
+    from urllib.parse import urlsplit, urlunsplit
+    u = urlsplit(BASE)
+    host = u.hostname or ""
+    if u.port:
+        host = f"{host}:{u.port}"
+    return urlunsplit((u.scheme, host, u.path, "", ""))
+
+
+_base_printed = False
+_build_checked = False
+
+
+def _note_base_selected():
+    """Print CORPUS_BASE exactly once, before the first byte of the first real request
+    goes out (CHAOS-5562) -- independent of whether that request ever gets a usable
+    response, so this fires even if every attempt times out."""
+    global _base_printed
+    if _base_printed:
+        return
+    _base_printed = True
+    print(f"[corpus] CORPUS_BASE={_redacted_base()}", flush=True)
 
 
 def _report_first_response(status, response):
-    """Print the base and the FIRST response's service_version, once, before any
-    further request goes out -- so a caller pointed at the wrong leg finds out after
-    one request, not after five (CHAOS-5562). Refuses if an expected build was given
-    and the served build disagrees.
+    """Check the served service_version against CORPUS_EXPECTED_BUILD, once, the first
+    time a response actually CARRIES a service_version -- so a caller pointed at the
+    wrong build finds out after very few requests, never after the whole run (CHAOS-5562).
+
+    NOT gated on "the first response of any kind": r1 review found that a retryable
+    failure (no body, no service_version) as the very first attempt consumed a naive
+    one-shot flag and permanently disarmed the check -- a SECOND attempt then served the
+    wrong build and nothing caught it. The flag is consumed only once a response actually
+    yields a determinate service_version to compare; an indeterminate response (transport
+    failure, malformed body, a body with no `versions.service_version`) is reported but
+    leaves the check armed for the next response.
     """
-    global _first_response_reported
-    if _first_response_reported:
-        return
-    _first_response_reported = True
+    global _build_checked
     served = _service_version(response)
-    print(f"[corpus] CORPUS_BASE={BASE} first response http={status} "
+    if _build_checked:
+        return
+    if served is None:
+        print(f"[corpus] response http={status} service_version=None "
+              f"(undetermined, still watching)", flush=True)
+        return
+    _build_checked = True
+    print(f"[corpus] first determined response: http={status} "
           f"service_version={served!r}", flush=True)
-    if EXPECTED_BUILD and served and served != EXPECTED_BUILD:
+    if EXPECTED_BUILD and served != EXPECTED_BUILD:
         raise ServedBuildMismatch(
             f"served service_version={served!r} != expected {EXPECTED_BUILD!r} "
-            f"(CORPUS_BASE={BASE}) -- refusing to continue"
+            f"(CORPUS_BASE={_redacted_base()}) -- refusing to continue"
         )
 
 
@@ -192,6 +231,7 @@ def post(body):
     """
     # CHAOS-5562: refuse before the first byte goes anywhere near a socket.
     require_base()
+    _note_base_selected()
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(BASE, data=data, headers={"Content-Type": "application/json"}, method="POST")
     t0 = time.time()

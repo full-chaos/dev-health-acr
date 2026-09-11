@@ -291,6 +291,166 @@ def test_the_shell_launchers_export_corpus_base_before_invoking_run_shard():
             f"{name} invokes run_shard.py before exporting CORPUS_BASE")
 
 
+# ==================================================== r1 review findings, fixed + pinned
+
+class _SequencedServer:
+    """Like `_StubServer`, but serves a DIFFERENT scripted (status, body) per request in
+    order, holding the last one for any request past the end of the list -- needed to
+    prove the build-mismatch check survives a retryable failure as attempt 1."""
+
+    def __init__(self, responses):
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                self.rfile.read(length)
+                idx = min(outer.requests, len(outer.responses) - 1)
+                status, body_obj = outer.responses[idx]
+                outer.requests += 1
+                payload = json.dumps(body_obj).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *_a):
+                pass
+
+        self.requests = 0
+        self.responses = responses
+        self._srv = HTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self._srv.server_port
+
+    @property
+    def base(self):
+        return f"http://127.0.0.1:{self.port}/api/investigations"
+
+    def __enter__(self):
+        import threading
+        self._t = threading.Thread(target=self._srv.serve_forever, daemon=True)
+        self._t.start()
+        return self
+
+    def __exit__(self, *_exc):
+        self._srv.shutdown()
+        self._srv.server_close()
+
+
+def test_a_retryable_first_response_does_not_disarm_the_build_check():
+    """r1 review, P1, harness.py:129 (pre-fix line): a retryable failure with no
+    `service_version` as attempt 1 used to consume the one-shot report/check flag --
+    attempt 2 then served a DIFFERENT (wrong) build and nothing caught it. The check
+    must stay armed until a response actually yields a determinate service_version."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = _isolated_copy(tmp)
+        with _SequencedServer([
+                (503, {"failure": {"code": "acr_upstream_deadline", "retryable": True}}),
+                (200, {"result": {"status": "complete",
+                                  "versions": {"service_version": "build-A"}}}),
+        ]) as srv:
+            r = _run(dest / "harness.py", CORPUS_ID,
+                      env_overrides={"CORPUS_BASE": srv.base,
+                                     "CORPUS_EXPECTED_BUILD": "build-B"})
+        out = r.stdout + r.stderr
+        assert r.returncode != 0, (
+            f"a retryable failure as attempt 1 disarmed the build-mismatch check -- "
+            f"attempt 2's wrong build was never caught:\n{out}")
+        assert "build-A" in out and "build-B" in out, out
+        assert srv.requests == 2, (
+            f"expected exactly 2 requests (the retry, then the mismatch refusal): "
+            f"{srv.requests}")
+
+
+def test_corpus_base_credentials_and_query_are_never_printed():
+    """r1 review, P2, harness.py:133 (pre-fix line): the diagnostic print carried
+    CORPUS_BASE verbatim, which can embed basic-auth credentials or a query token --
+    logging it straight into shard logs. Redacted to scheme+host+path only."""
+    import importlib
+    saved = os.environ.get("CORPUS_BASE")
+    try:
+        os.environ["CORPUS_BASE"] = (
+            "http://alice:s3cr3t-pw@example.invalid:8443/api/investigations"
+            "?access_token=q-secret-tok")
+        import harness
+        importlib.reload(harness)
+        redacted = harness._redacted_base()
+        assert "s3cr3t-pw" not in redacted, redacted
+        assert "alice" not in redacted, redacted
+        assert "q-secret-tok" not in redacted, redacted
+        assert "access_token" not in redacted, redacted
+        assert redacted == "http://example.invalid:8443/api/investigations", redacted
+    finally:
+        if saved is None:
+            os.environ.pop("CORPUS_BASE", None)
+        else:
+            os.environ["CORPUS_BASE"] = saved
+        import harness
+        importlib.reload(harness)
+
+
+def test_corpus_base_with_no_credentials_prints_unchanged():
+    """Negative control for the redaction above: a base with nothing to strip must
+    come back byte-identical, or the redaction could be silently over-eager."""
+    import importlib
+    saved = os.environ.get("CORPUS_BASE")
+    try:
+        os.environ["CORPUS_BASE"] = "http://127.0.0.1:9999/api/investigations"
+        import harness
+        importlib.reload(harness)
+        assert harness._redacted_base() == "http://127.0.0.1:9999/api/investigations"
+    finally:
+        if saved is None:
+            os.environ.pop("CORPUS_BASE", None)
+        else:
+            os.environ["CORPUS_BASE"] = saved
+        import harness
+        importlib.reload(harness)
+
+
+def test_the_shell_launchers_actually_pass_their_default_base_to_run_shard():
+    """r1 review, P3, test_findings_5562.py:284 (pre-fix): the launcher pin checked
+    source text and ordering only, never an executed run. Runs the REAL
+    run_corpus_sequential.sh with `python3`/`curl` stubbed on PATH, and asserts the
+    CORPUS_BASE the launcher's own default actually reaches run_shard.py -- proving
+    requirement 4 (every caller sets CORPUS_BASE) by execution, not by reading source."""
+    import tempfile
+    real_python3 = shutil.which("python3")
+    assert real_python3, "no real python3 on PATH to delegate to"
+    for name in ("run_corpus_sequential.sh",):
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "launcherdir"
+            dest.mkdir()
+            for f in (name, "corpus_origin.sh", "run_shard.py", "merge_corpus.py"):
+                shutil.copy2(HERE / f, dest / f)
+            stub_bin = Path(tmp) / "stubbin"
+            stub_bin.mkdir()
+            (stub_bin / "python3").write_text(
+                "#!/usr/bin/env bash\n"
+                'for a in "$@"; do\n'
+                '  case "$a" in\n'
+                '    */run_shard.py|*/merge_corpus.py)\n'
+                '      echo "FAKE $(basename "$a") CORPUS_BASE=$CORPUS_BASE"\n'
+                "      exit 0 ;;\n"
+                "  esac\n"
+                "done\n"
+                f'exec "{real_python3}" "$@"\n')
+            (stub_bin / "python3").chmod(0o755)
+            (stub_bin / "curl").write_text("#!/usr/bin/env bash\nprintf '200'\n")
+            (stub_bin / "curl").chmod(0o755)
+            env = dict(os.environ)
+            env.pop("CORPUS_BASE", None)
+            env["PATH"] = f"{stub_bin}:{env['PATH']}"
+            r = subprocess.run(["bash", str(dest / name)], env=env,
+                                capture_output=True, text=True, timeout=30, cwd=str(dest))
+        out = r.stdout + r.stderr
+        assert "FAKE run_shard.py CORPUS_BASE=http://127.0.0.1:3040/api/investigations" in out, (
+            f"{name} did not pass its own default CORPUS_BASE through to run_shard.py:\n{out}")
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):
