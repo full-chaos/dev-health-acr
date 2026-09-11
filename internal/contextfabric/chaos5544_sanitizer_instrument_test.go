@@ -65,9 +65,22 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-var chaos5544LoggerMethods = map[string]bool{
-	"Info": true, "Warn": true, "Error": true, "Debug": true,
-	"InfoContext": true, "WarnContext": true, "ErrorContext": true, "DebugContext": true,
+// chaos5544LoggerMethods maps a slog logger method name to the index of
+// its first variadic/key-value argument. r3 review round (CHAOS-5558)
+// found the PRIOR map (bool-valued, with a "does the name end in
+// Context" heuristic computing the start index) omitted `Log`
+// ((*slog.Logger).Log(ctx, level, msg, args...)) entirely -- a real,
+// if currently unused inside internal/contextfabric, logger entry point.
+// `Log` also does not fit the two-shape heuristic (start=1 for a plain
+// name, start=2 for a "...Context" name): its own args start at index 3
+// (ctx, level, msg), a THIRD shape the heuristic had no way to express.
+// Explicit per-name start indices replace the heuristic entirely, the
+// same identity-over-inference preference this file already applies
+// everywhere else.
+var chaos5544LoggerMethods = map[string]int{
+	"Info": 1, "Warn": 1, "Error": 1, "Debug": 1,
+	"InfoContext": 2, "WarnContext": 2, "ErrorContext": 2, "DebugContext": 2,
+	"Log": 3,
 }
 
 // chaos5544ContextFabricPkgPath is the ONE package whose SanitizeLogAttr/
@@ -157,6 +170,31 @@ func chaos5544Classify(expr ast.Expr, info *types.Info, enumTypes map[*types.Nam
 		return "unsanitized []string log attribute"
 	}
 
+	// r3 review round (CHAOS-5558) found a value with static type `any`
+	// fell through every check above to "" (unflagged) purely because it
+	// isn't *types.Basic -- FAIL OPEN, and a genuine blind spot: a string
+	// erased into an `any`-typed variable or parameter before it reaches a
+	// []any{...}/append pair is indistinguishable, to this static walk,
+	// from a bool/struct/anything-else typed value that legitimately
+	// carries no free text. Scoped to the EMPTY interface specifically
+	// (NumMethods() == 0 -- `any`/`interface{}`), not every named
+	// interface: a value statically typed `error` (or another non-empty
+	// interface) is a real, pre-existing, differently-remediated concern
+	// in this codebase (raw error text as a log attribute has its own
+	// documented rule and helper, e.g. classifyWriteError) -- conflating
+	// the two produced findings at genuinely unrelated production sites
+	// this ticket does not own, executed-confirmed while building this
+	// fix. An IndexExpr (`values[i]`) is exempted for the same reason a
+	// CompositeLit's own elements are: genkitruntime's attemptLogFields
+	// stages values in a []any COMPOSITE LITERAL (already checked
+	// directly, by Rule A, at ITS OWN construction) and then reads them
+	// back by index -- the read itself carries no NEW content the literal
+	// didn't already expose to this same scan.
+	if iface, isInterface := u.(*types.Interface); isInterface && iface.NumMethods() == 0 {
+		if _, isIndex := expr.(*ast.IndexExpr); !isIndex {
+			return "unproven any-typed log attribute -- cannot statically verify it carries no free text"
+		}
+	}
 	basic, isBasic := u.(*types.Basic)
 	if !isBasic {
 		return ""
@@ -275,6 +313,10 @@ func chaos5544ScanForUnsanitizedLogAttrs(t *testing.T, dir, pattern string) []st
 	// here (var, assigned further down where its own implementation lives)
 	// so the two can reference each other regardless of source order.
 	var checkPairs func(fset *token.FileSet, info *types.Info, elts []ast.Expr)
+	// checkGroupArgs is Group's own arg scanner, forward-declared for the
+	// same reason (assigned after chaos5544IsOpaqueAttrCallResult, which
+	// it needs, is defined below).
+	var checkGroupArgs func(fset *token.FileSet, info *types.Info, args []ast.Expr)
 
 	// inspectSlogBuilder covers every slog constructor that can carry an
 	// unsanitized value THROUGH a static type (slog.Value, slog.Attr) the
@@ -337,7 +379,7 @@ func chaos5544ScanForUnsanitizedLogAttrs(t *testing.T, dir, pattern string) []st
 		case (name == "StringValue" || name == "AnyValue") && len(call.Args) == 1:
 			report(fset, call.Args[0], info)
 		case name == "Group" && len(call.Args) >= 1:
-			checkPairs(fset, info, call.Args[1:])
+			checkGroupArgs(fset, info, call.Args[1:])
 		}
 	}
 
@@ -385,6 +427,57 @@ func chaos5544ScanForUnsanitizedLogAttrs(t *testing.T, dir, pattern string) []st
 			}
 		}
 		return true // an external, non-builder function -- opaque
+	}
+	// isSlogAttrType reports whether t's underlying named type is
+	// log/slog.Attr specifically (not slog.Value, not any other struct).
+	isSlogAttrType := func(t types.Type) bool {
+		named, isNamed := types.Unalias(t).(*types.Named)
+		if !isNamed || named.Obj().Pkg() == nil {
+			return false
+		}
+		return named.Obj().Pkg().Path() == "log/slog" && named.Obj().Name() == "Attr"
+	}
+	// checkGroupArgs is Group's OWN arg scanner: r3 review round
+	// (CHAOS-5558) found checkPairs' pure odd/even INDEX parity wrong for
+	// Group specifically -- go doc: "the remaining arguments are converted
+	// to Attrs as in Logger.Log", and Logger.Log's own documented rule is
+	// that an argument that is ALREADY an Attr is used directly, never
+	// treated as a key or a value; only non-Attr arguments are paired up
+	// as key/value. A pre-built Attr spliced into a Group's arg list at
+	// any position (most often via an external helper call) was
+	// previously invisible: checkPairs would treat it as a "key" at an
+	// even index (keys are never classified) or misclassify a REAL key at
+	// the wrong parity once an Attr shifted every position after it.
+	// Tracked by a state machine instead of a fixed index: an Attr-typed
+	// element is checked with the SAME opaque-call-result scrutiny a
+	// non-spread LogAttrs/AddAttrs argument gets and does not consume a
+	// key/value slot; anything else alternates key (skipped, same as
+	// checkPairs) then value (classified, same as checkPairs).
+	checkGroupArgs = func(fset *token.FileSet, info *types.Info, args []ast.Expr) {
+		expectingValue := false
+		for _, a := range args {
+			t := info.TypeOf(a)
+			if t != nil && isSlogAttrType(t) {
+				switch v := a.(type) {
+				case *ast.CompositeLit:
+					// its own fields (e.g. Value: slog.StringValue(x)) are
+					// checked unconditionally wherever they appear
+				case *ast.CallExpr:
+					if chaos5544IsOpaqueAttrCallResult(v, info) {
+						findings = append(findings, found{pos: fset.Position(a.Pos())})
+					}
+				default:
+					findings = append(findings, found{pos: fset.Position(a.Pos())})
+				}
+				continue // an Attr is self-contained -- does not flip expectingValue
+			}
+			if expectingValue {
+				report(fset, a, info)
+				expectingValue = false
+				continue
+			}
+			expectingValue = true // this element was a key -- never classified, same as checkPairs
+		}
 	}
 	isOpaqueAttrSpread := func(expr ast.Expr, info *types.Info, funcAssigns map[types.Object][]ast.Expr) bool {
 		switch e := expr.(type) {
@@ -481,9 +574,22 @@ func chaos5544ScanForUnsanitizedLogAttrs(t *testing.T, dir, pattern string) []st
 	// `prefix+"shape", string(sample.Shape)` inside a per-sample loop,
 	// where the key is a string CONCATENATION, not a literal. The key's
 	// own shape has no bearing on whether the value next to it is safe.
+	// r3 review round (CHAOS-5558) found the loop bound (`i+1 <
+	// len(elts)`) silently dropped a TRAILING unpaired element on an
+	// odd-length list -- `logger.Info(msg, "k", "safe", requestID)` has
+	// requestID at the final, unpaired index, and the OLD loop stopped one
+	// iteration short of it. slog's own runtime does not discard that
+	// element: an unpaired trailing arg is still emitted, under the
+	// sentinel key `!BADKEY` (`(*Logger).Log`'s own documented handling
+	// of a malformed args list) -- so it reaches the log line regardless
+	// of whether this scanner checks it. The trailing odd element is
+	// therefore checked the same as any other value position.
 	checkPairs = func(fset *token.FileSet, info *types.Info, elts []ast.Expr) {
 		for i := 0; i+1 < len(elts); i += 2 {
 			report(fset, elts[i+1], info)
+		}
+		if len(elts)%2 == 1 {
+			report(fset, elts[len(elts)-1], info)
 		}
 	}
 
@@ -525,8 +631,10 @@ func chaos5544ScanForUnsanitizedLogAttrs(t *testing.T, dir, pattern string) []st
 		if isAppendCall(call, info) {
 			return 0, false
 		}
-		if sel, isSel := call.Fun.(*ast.SelectorExpr); isSel && chaos5544LoggerMethods[sel.Sel.Name] {
-			return 0, false // the logger call itself: inspectLoggerCall owns this shape
+		if sel, isSel := call.Fun.(*ast.SelectorExpr); isSel {
+			if _, isLoggerMethod := chaos5544LoggerMethods[sel.Sel.Name]; isLoggerMethod {
+				return 0, false // the logger call itself: inspectLoggerCall owns this shape
+			}
 		}
 		sig, isSig := info.TypeOf(call.Fun).(*types.Signature)
 		if !isSig || !sig.Variadic() || sig.Params().Len() == 0 {
@@ -758,13 +866,12 @@ func chaos5544ScanForUnsanitizedLogAttrs(t *testing.T, dir, pattern string) []st
 	// spreads -- never skipped, never satisfied by name alone.
 	inspectLoggerCall := func(fset *token.FileSet, info *types.Info, call *ast.CallExpr, funcAssigns map[types.Object][]ast.Expr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || !chaos5544LoggerMethods[sel.Sel.Name] {
+		if !ok {
 			return
 		}
-		isCtx := len(sel.Sel.Name) > 7 && sel.Sel.Name[len(sel.Sel.Name)-7:] == "Context"
-		start := 1
-		if isCtx {
-			start = 2
+		start, isLoggerMethod := chaos5544LoggerMethods[sel.Sel.Name]
+		if !isLoggerMethod {
+			return
 		}
 		if start >= len(call.Args) {
 			return
@@ -1424,5 +1531,242 @@ func LogIt(logger *slog.Logger, requestID string) {
 		t.Fatalf("the instrument found %d finding(s) in a fixture whose non-spread LogAttrs argument calls "+
 			"a LOCAL function -- it must trust the call site and let the function's own body (already "+
 			"scanned) speak for itself: %v", len(findings), findings)
+	}
+}
+
+// TestChaos5558SanitizerInstrumentCatchesAnUnwrappedLogMethodValue is the
+// r3 review round's P2 pin: chaos5544LoggerMethods omitted `Log`
+// ((*slog.Logger).Log(ctx, level, msg, args...)), a real logger entry
+// point `go doc` confirms -- 0 current contextfabric call sites use it
+// (latent, not active), but the scanner must still recognize it.
+func TestChaos5558SanitizerInstrumentCatchesAnUnwrappedLogMethodValue(t *testing.T) {
+	dir := t.TempDir()
+	src := `package fixture
+
+import (
+	"context"
+	"log/slog"
+)
+
+func LogIt(logger *slog.Logger, ctx context.Context, requestID string) {
+	logger.Log(ctx, slog.LevelInfo, "fixture line", "request_id", requestID)
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "fixture.go"), []byte(src), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	modSrc := "module fixture.example/chaos5558logmethod\n\ngo 1.21\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(modSrc), 0o644); err != nil {
+		t.Fatalf("write fixture go.mod: %v", err)
+	}
+	formatted, err := format.Source([]byte(src))
+	if err != nil {
+		t.Fatalf("fixture does not gofmt clean: %v", err)
+	}
+	if !bytes.Equal(formatted, []byte(src)) {
+		t.Fatalf("fixture source is not gofmt-normalized")
+	}
+
+	findings := chaos5544ScanForUnsanitizedLogAttrs(t, dir, "./...")
+	if len(findings) != 1 {
+		t.Fatalf("the instrument found %d finding(s) in a fixture with one unwrapped value passed to "+
+			"logger.Log -- it must find exactly one: %v", len(findings), findings)
+	}
+	if want := fmt.Sprintf("%s:9:", filepath.Join(dir, "fixture.go")); findings[0][:len(want)] != want {
+		t.Fatalf("finding = %q, want it to point at fixture.go:9 (the Log call's request_id value)", findings[0])
+	}
+}
+
+// TestChaos5558SanitizerInstrumentFailsClosedOnAnAnyTypedValue is the r3
+// review round's other P2 pin: a value statically typed `any` (the
+// concrete string erased by an intermediate variable) fell through the
+// classifier to "" -- unflagged -- purely for not being *types.Basic.
+// This fixture proves the fail-CLOSED behavior: a genuinely opaque
+// any-typed identifier (not an IndexExpr into an already-checked slice,
+// the one exempted shape -- see
+// TestChaos5558SanitizerInstrumentTrustsAnAnyTypedSliceIndex below) must
+// be flagged, not assumed safe.
+func TestChaos5558SanitizerInstrumentFailsClosedOnAnAnyTypedValue(t *testing.T) {
+	dir := t.TempDir()
+	src := `package fixture
+
+import "log/slog"
+
+func LogIt(logger *slog.Logger, requestID string) {
+	var hidden any = requestID
+	logger.Info("fixture line", "request_id", hidden)
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "fixture.go"), []byte(src), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	modSrc := "module fixture.example/chaos5558anytyped\n\ngo 1.21\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(modSrc), 0o644); err != nil {
+		t.Fatalf("write fixture go.mod: %v", err)
+	}
+	formatted, err := format.Source([]byte(src))
+	if err != nil {
+		t.Fatalf("fixture does not gofmt clean: %v", err)
+	}
+	if !bytes.Equal(formatted, []byte(src)) {
+		t.Fatalf("fixture source is not gofmt-normalized")
+	}
+
+	findings := chaos5544ScanForUnsanitizedLogAttrs(t, dir, "./...")
+	if len(findings) != 1 {
+		t.Fatalf("the instrument found %d finding(s) in a fixture with one any-typed value carrying an "+
+			"unsanitized string -- it must fail closed and find exactly one: %v", len(findings), findings)
+	}
+	if want := fmt.Sprintf("%s:7:", filepath.Join(dir, "fixture.go")); findings[0][:len(want)] != want {
+		t.Fatalf("finding = %q, want it to point at fixture.go:7 (the hidden any-typed value)", findings[0])
+	}
+}
+
+// TestChaos5558SanitizerInstrumentTrustsAnAnyTypedSliceIndex is the
+// positive control for the any-typed fail-closed rule: genkitruntime's OWN
+// production shape (attemptLogFields) stages values in a []any COMPOSITE
+// LITERAL -- already checked directly, at ITS OWN construction, by the
+// unconditional per-element walk -- and then reads them back by INDEX to
+// build the real key/value pairs. The indexed read's static type is also
+// `any`, but flagging it would be a duplicate, false finding: the literal
+// already proved (or would have proved) every element safe. This fixture
+// reproduces that exact shape with an ALREADY-SANITIZED value and asserts
+// zero findings.
+func TestChaos5558SanitizerInstrumentTrustsAnAnyTypedSliceIndex(t *testing.T) {
+	dir := t.TempDir()
+	src := `package fixture
+
+import "log/slog"
+
+func SanitizeLogAttr(s string) string { return s }
+
+func LogIt(logger *slog.Logger, requestID string) {
+	values := []any{SanitizeLogAttr(requestID)}
+	fields := make([]any, 0, 2)
+	fields = append(fields, "request_id", values[0])
+	logger.Info("fixture line", fields...)
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "fixture.go"), []byte(src), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	modSrc := "module fixture.example/chaos5558anyindex\n\ngo 1.21\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(modSrc), 0o644); err != nil {
+		t.Fatalf("write fixture go.mod: %v", err)
+	}
+	formatted, err := format.Source([]byte(src))
+	if err != nil {
+		t.Fatalf("fixture does not gofmt clean: %v", err)
+	}
+	if !bytes.Equal(formatted, []byte(src)) {
+		t.Fatalf("fixture source is not gofmt-normalized")
+	}
+
+	findings := chaos5544ScanForUnsanitizedLogAttrs(t, dir, "./...")
+	if len(findings) != 0 {
+		t.Fatalf("the instrument found %d finding(s) in a fixture whose any-typed value is an INDEX into an "+
+			"already-checked []any composite literal -- it must trust the read, not double-flag it: %v",
+			len(findings), findings)
+	}
+}
+
+// TestChaos5558SanitizerInstrumentRefusesAnOpaqueAttrInsideGroup is the r3
+// review round's third P2 pin: go doc's own words for slog.Group --
+// "the remaining arguments are converted to Attrs as in Logger.Log" --
+// mean a pre-built slog.Attr can be SPLICED into a Group's arg list at
+// any position, not only alternating key/value pairs. checkPairs'
+// fixed-index-parity view could not see this: an Attr at an even
+// ("key") index was never classified at all. This fixture splices an
+// opaque, out-of-tree helper's Attr into a Group call and proves it is
+// now refused.
+func TestChaos5558SanitizerInstrumentRefusesAnOpaqueAttrInsideGroup(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "helper"), 0o755); err != nil {
+		t.Fatalf("mkdir helper: %v", err)
+	}
+	helperSrc := `package helper
+
+import "log/slog"
+
+func MakeAttr(v string) slog.Attr {
+	return slog.String("request_id", v)
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "helper", "helper.go"), []byte(helperSrc), 0o644); err != nil {
+		t.Fatalf("write helper: %v", err)
+	}
+	src := `package fixture
+
+import (
+	"log/slog"
+
+	"fixture.example/chaos5558opaquegroup/helper"
+)
+
+func LogIt(logger *slog.Logger, requestID string) {
+	logger.Info("fixture line", "outer", slog.Group("inner", helper.MakeAttr(requestID), "extra", "safe"))
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "fixture.go"), []byte(src), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	modSrc := "module fixture.example/chaos5558opaquegroup\n\ngo 1.21\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(modSrc), 0o644); err != nil {
+		t.Fatalf("write fixture go.mod: %v", err)
+	}
+	formatted, err := format.Source([]byte(src))
+	if err != nil {
+		t.Fatalf("fixture does not gofmt clean: %v", err)
+	}
+	if !bytes.Equal(formatted, []byte(src)) {
+		t.Fatalf("fixture source is not gofmt-normalized")
+	}
+
+	// "." not "./..." -- the helper subpackage must NOT be scanned, the
+	// same boundary the real repo pattern draws around internal/contextfabric.
+	findings := chaos5544ScanForUnsanitizedLogAttrs(t, dir, ".")
+	if len(findings) != 1 {
+		t.Fatalf("the instrument found %d finding(s) in a fixture with one opaque Attr spliced into a "+
+			"Group call -- it must find exactly one: %v", len(findings), findings)
+	}
+}
+
+// TestChaos5558SanitizerInstrumentCatchesATrailingOddLoggerArg is the r3
+// review round's fourth P2 pin: checkPairs' `i+1 < len(elts)` loop bound
+// silently dropped a TRAILING unpaired element on an odd-length arg list.
+// slog's own runtime does not discard it (logged under the sentinel key
+// `!BADKEY`), so the scanner must not either.
+func TestChaos5558SanitizerInstrumentCatchesATrailingOddLoggerArg(t *testing.T) {
+	dir := t.TempDir()
+	src := `package fixture
+
+import "log/slog"
+
+func LogIt(logger *slog.Logger, requestID string) {
+	logger.Info("fixture line", "request_id", "safe", requestID)
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "fixture.go"), []byte(src), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	modSrc := "module fixture.example/chaos5558oddarg\n\ngo 1.21\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(modSrc), 0o644); err != nil {
+		t.Fatalf("write fixture go.mod: %v", err)
+	}
+	formatted, err := format.Source([]byte(src))
+	if err != nil {
+		t.Fatalf("fixture does not gofmt clean: %v", err)
+	}
+	if !bytes.Equal(formatted, []byte(src)) {
+		t.Fatalf("fixture source is not gofmt-normalized")
+	}
+
+	findings := chaos5544ScanForUnsanitizedLogAttrs(t, dir, "./...")
+	if len(findings) != 1 {
+		t.Fatalf("the instrument found %d finding(s) in a fixture with one unwrapped TRAILING odd logger "+
+			"arg -- it must find exactly one: %v", len(findings), findings)
+	}
+	if want := fmt.Sprintf("%s:6:", filepath.Join(dir, "fixture.go")); findings[0][:len(want)] != want {
+		t.Fatalf("finding = %q, want it to point at fixture.go:6 (the trailing requestID arg)", findings[0])
 	}
 }

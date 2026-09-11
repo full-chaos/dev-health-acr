@@ -210,9 +210,21 @@ func PrincipalFromContext(ctx context.Context) (storage.Principal, bool) {
 	return principal, ok
 }
 
+// recordUnknownFailure sanitizes `ip` at the LOG SITE, not just inside
+// RemoteAddressClientIP/NewTrustedProxyClientIPResolver. r3 review round
+// (CHAOS-5558, chris's ruling W10=A) found that r1/r2's fixes hardened
+// only the two resolvers this repo actually configures -- but
+// AuthenticatorOptions.ClientIP is a PUBLIC injection point
+// (ClientIPResolver func(*http.Request) string), and this log line
+// trusted whatever ANY configured resolver returned. Executed proof: a
+// custom resolver returning a raw header forged a multi-line log record.
+// `ip` is sanitized here regardless of which resolver produced it, so the
+// invariant ("every request-derived value that can reach a log attribute
+// is sanitized at its consuming exit") holds for every resolver a caller
+// could ever configure, not only the two this repo ships.
 func (a *Authenticator) recordUnknownFailure(r *http.Request, ip, reason string, now time.Time) {
 	a.limiter.RecordFailure(ip, now)
-	a.logger.WarnContext(r.Context(), "ACR authentication failed", "reason", reason, "remote_ip", ip, "request_id", logsanitize.SanitizeLogAttr(requestID(r)))
+	a.logger.WarnContext(r.Context(), "ACR authentication failed", "reason", reason, "remote_ip", logsanitize.SanitizeLogAttr(ip), "request_id", logsanitize.SanitizeLogAttr(requestID(r)))
 }
 
 func (a *Authenticator) recordKnownFailure(r *http.Request, credential contractsv1.ClientCredential, reason string, now time.Time) {

@@ -28,15 +28,33 @@ func TestSanitizeLogIntDomain(t *testing.T) {
 // Itoa-then-Atoi/ParseInt identity -- is an EQUIVALENT MUTANT: byte-for-byte
 // identical output on every input. CodeQL cares about which SHAPE the
 // value passed through, not the output, so this reads the source directly.
+//
+// r3 review round (CHAOS-5558) found this pin, like its chaos5544 sibling
+// before its own r1 fix, only grepped the WHOLE FILE for the substring --
+// a mutation leaving the exact text in a COMMENT while the function itself
+// no longer called it still passed. Scoped to SanitizeLogInt's own body
+// (isolated by its `func ... {` / closing `}` at column 0), the same class
+// sweep the sibling pin already received.
 func TestSanitizeLogIntRoutesThroughSanitizeLogAttr(t *testing.T) {
 	src, err := os.ReadFile("chaos5558_log_int_sanitizer.go")
 	if err != nil {
 		t.Fatalf("could not read chaos5558_log_int_sanitizer.go: %v", err)
 	}
 	text := string(src)
-	if !strings.Contains(text, "SanitizeLogAttr(strconv.FormatInt(value, 10))") {
-		t.Fatal("SanitizeLogInt must round-trip through SanitizeLogAttr, not merely Itoa/Atoi -- " +
-			"the CALL is the recognized barrier shape, not the value")
+	const marker = "func SanitizeLogInt(value int64) int64 {"
+	start := strings.Index(text, marker)
+	if start == -1 {
+		t.Fatal("could not find `func SanitizeLogInt(value int64) int64 {` in chaos5558_log_int_sanitizer.go -- has the signature changed?")
+	}
+	body := text[start:]
+	end := strings.Index(body, "\n}")
+	if end == -1 {
+		t.Fatal("could not find SanitizeLogInt's closing brace (a line starting with `}`) in chaos5558_log_int_sanitizer.go")
+	}
+	body = body[:end]
+	if !strings.Contains(body, "SanitizeLogAttr(strconv.FormatInt(value, 10))") {
+		t.Fatal("SanitizeLogInt's OWN body must round-trip through SanitizeLogAttr, not merely Itoa/Atoi -- " +
+			"the CALL is the recognized barrier shape, not the value -- and must not merely be referenced dead elsewhere in the file")
 	}
 }
 

@@ -73,6 +73,56 @@ func TestMiddlewareSanitizesRequestIDOnAuthenticationFailure(t *testing.T) {
 	assertSingleCleanJSONLineWithRequestID(t, buf.String())
 }
 
+// TestMiddlewareSanitizesRemoteIPFromACustomClientIPResolver is the r3
+// review round's own P1 pin: AuthenticatorOptions.ClientIP is a PUBLIC
+// injection point, and middleware.go's recordUnknownFailure used to trust
+// whatever any configured resolver returned, unsanitized, at its own log
+// site -- r1/r2 only hardened the two resolvers this repo actually
+// configures (RemoteAddressClientIP, NewTrustedProxyClientIPResolver).
+// This configures a THIRD, deliberately unsafe resolver (returning a raw
+// header verbatim, a shape any caller of this exported API could write)
+// and proves the log site itself is now the barrier, regardless of which
+// resolver produced the value.
+func TestMiddlewareSanitizesRemoteIPFromACustomClientIPResolver(t *testing.T) {
+	now := time.Date(2026, 7, 10, 15, 0, 0, 0, time.UTC)
+	store := newMemoryCredentialStore(t)
+	var buf bytes.Buffer
+	unsafeResolver := func(r *http.Request) string { return r.Header.Get("X-Real-IP") }
+	authenticator, err := NewAuthenticator(store, memory.NewAuditStore(), AuthenticatorOptions{
+		Now: func() time.Time { return now }, Limiter: NoopLimiter{}, Logger: slog.New(slog.NewJSONHandler(&buf, nil)),
+		ClientIP: unsafeResolver,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/", nil) // no Authorization header -- malformed bearer path
+	request.Header.Set("X-Real-IP", "evil\nFAKE_LOG_LINE=injected")
+	response := httptest.NewRecorder()
+	authenticator.Middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("malformed bearer request reached handler")
+	})).ServeHTTP(response, request)
+
+	text := strings.TrimRight(buf.String(), "\n")
+	if text == "" {
+		t.Fatal("nothing was logged")
+	}
+	lines := strings.Split(text, "\n")
+	if len(lines) != 1 {
+		t.Fatalf("got %d log line(s), want exactly 1 -- a forged line break would split the record: %q", len(lines), buf.String())
+	}
+	var record map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &record); err != nil {
+		t.Fatalf("line is not valid JSON (a forged line break split the record): %q: %v", lines[0], err)
+	}
+	remoteIP, ok := record["remote_ip"].(string)
+	if !ok {
+		t.Fatalf("record has no string remote_ip field: %v", record)
+	}
+	if strings.ContainsAny(remoteIP, "\n\r") {
+		t.Fatalf("remote_ip = %q still carries a line break", remoteIP)
+	}
+}
+
 func assertSingleCleanJSONLineWithRequestID(t *testing.T, logged string) {
 	t.Helper()
 	text := strings.TrimRight(logged, "\n")
