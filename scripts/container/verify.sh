@@ -226,7 +226,13 @@ done >"${tmp_dir}/migration-expected-status"
 cmp "${tmp_dir}/migration-expected-status" "${tmp_dir}/migration-status"
 unset migration_dsn migration_password
 
-api_container="$(docker run -d "${readonly_probe_flags[@]}" -p 127.0.0.1::8080 "$api_image")"
+# dictation 811: backing stores now default to required in every
+# environment (including this bare probe's implicit "development"), so
+# this /healthz liveness smoke -- which never needed a real Postgres/
+# ClickHouse to prove the built binary runs and serves -- opts into local,
+# storeless composition explicitly, the same dev flag a real operator
+# would use for the same reason.
+api_container="$(docker run -d "${readonly_probe_flags[@]}" -e ACR_LOCAL_COMPOSITION_READY=true -p 127.0.0.1::8080 "$api_image")"
 track_container "$api_container"
 api_port="$(docker port "$api_container" 8080/tcp | awk -F: '{print $NF}')"
 curl --fail --silent --show-error --retry 20 --retry-connrefused \
