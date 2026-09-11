@@ -34,6 +34,18 @@ from pathlib import Path
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 
+# CHAOS-5562 r2: refuse BEFORE `import harness` below, which imports the external
+# `corpus` module for a reason unrelated to CORPUS_BASE -- a direct run with both
+# unset hit a raw ModuleNotFoundError instead of ever reaching harness.require_base().
+# Gated on `__name__ == "__main__"` so `import run_shard as RS` (every pin file does
+# this without CORPUS_BASE set) is unaffected; only a direct run refuses this early.
+if __name__ == "__main__" and not os.environ.get("CORPUS_BASE"):
+    sys.exit(
+        "CORPUS_BASE is not set -- refusing to start. There is no default rig "
+        "leg; set CORPUS_BASE to the investigations endpoint you own (see "
+        "scripts/corpus/README.md)."
+    )
+
 import harness  # noqa: E402
 import attempt_classes  # noqa: E402
 from attempt_order import order_attempts, parse_attempt_name  # noqa: E402
@@ -242,6 +254,14 @@ def detail_for(outdir, qid, row, r, dt, rep):
 def main():
     if len(sys.argv) != 4:
         sys.exit("usage: run_shard.py <shard-index> <shard-count> <rep>")
+    # CHAOS-5562: fail before planning a single row. A lane invoking this script
+    # directly (not through run_corpus_sequential.sh / run_corpus_parallel.sh,
+    # which already export CORPUS_BASE themselves) must not silently inherit
+    # harness.py's old default rig leg.
+    try:
+        harness.require_base()
+    except harness.MissingCorpusBase as e:
+        sys.exit(str(e))
     idx, count, rep = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
 
     layout = plan(count)
@@ -256,17 +276,20 @@ def main():
 
     rows = []
     t_start = time.time()
-    for i, qid in enumerate(ids, 1):
-        row = BY_ID[qid]
-        print(f"=== shard{idx} [{i}/{len(ids)}] {qid} ===", flush=True)
-        t0 = time.time()
-        r = harness.run_replicate(qid, row["text"], rep)
-        dt = time.time() - t0
-        print(f"  -> attempts={r['attempts']} dt={dt:.1f}s chain={r['chain']}", flush=True)
-        d = detail_for(harness.OUTDIR, qid, row, r, dt, rep)
-        if UNSEQUENCED.get(qid):
-            d["unsequenced_files"] = sorted(set(UNSEQUENCED[qid]))
-        rows.append(d)
+    try:
+        for i, qid in enumerate(ids, 1):
+            row = BY_ID[qid]
+            print(f"=== shard{idx} [{i}/{len(ids)}] {qid} ===", flush=True)
+            t0 = time.time()
+            r = harness.run_replicate(qid, row["text"], rep)
+            dt = time.time() - t0
+            print(f"  -> attempts={r['attempts']} dt={dt:.1f}s chain={r['chain']}", flush=True)
+            d = detail_for(harness.OUTDIR, qid, row, r, dt, rep)
+            if UNSEQUENCED.get(qid):
+                d["unsequenced_files"] = sorted(set(UNSEQUENCED[qid]))
+            rows.append(d)
+    except harness.ServedBuildMismatch as e:
+        sys.exit(str(e))
 
     total = time.time() - t_start
     out = {

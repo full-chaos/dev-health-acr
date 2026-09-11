@@ -78,7 +78,17 @@ CORPUS_BASE=http://127.0.0.1:3040/api/investigations ./run_corpus_sequential.sh 
 CORPUS_MAX_CONCURRENT_SHARDS=2 ./run_corpus_parallel.sh 12 1
 ```
 
-`CORPUS_BASE` defaults to `http://127.0.0.1:3040/api/investigations`.
+`CORPUS_BASE` has **no default anywhere** (CHAOS-5562): `harness.py`, `run_shard.py`,
+and both launchers (`run_corpus_sequential.sh` / `run_corpus_parallel.sh`) all refuse
+to start when it is unset, naming the variable, rather than silently reusing a shared
+rig they do not own. Every invocation shape -- direct, through a launcher, or through
+`run_shard.py` -- must set `CORPUS_BASE` itself.
+
+`CORPUS_EXPECTED_BUILD` (optional env var; `harness.py` also accepts
+`--expected-build VALUE` on its own CLI, which overrides the env value for that
+run) makes the harness print the base and the first response's
+`service_version`, then refuse to continue if a later served build disagrees.
+
 `CORPUS_TICKET` (optional) is stamped into the verdict's `ticket` field.
 
 ### Parallel is a load probe, not a faster measurement

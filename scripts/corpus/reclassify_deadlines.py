@@ -32,6 +32,21 @@ from pathlib import Path
 
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
+
+# CHAOS-5562 r2: same guard as run_shard.py -- this is another caller of
+# harness.run_replicate, found by the r2 reviewer's own caller sweep (it does not
+# contain the literal substring "harness.py", which is why the r1 caller sweep
+# missed it). Refuse before `import harness` below, which imports the external
+# `corpus` module for a reason unrelated to CORPUS_BASE. Gated on
+# `__name__ == "__main__"` so `import reclassify_deadlines as RD` (test_findings_5380.py
+# does this without CORPUS_BASE set) is unaffected.
+if __name__ == "__main__" and not os.environ.get("CORPUS_BASE"):
+    sys.exit(
+        "CORPUS_BASE is not set -- refusing to start. There is no default rig "
+        "leg; set CORPUS_BASE to the investigations endpoint you own (see "
+        "scripts/corpus/README.md)."
+    )
+
 import harness  # noqa: E402
 from corpus import CORPUS  # noqa: E402
 from run_shard import detail_for  # noqa: E402
@@ -128,6 +143,13 @@ def build_reclassified_row(before, after):
 
 
 def main():
+    # Defense in depth, same as run_shard.py's own main(): the module-level guard
+    # above only fires for a direct `python3 reclassify_deadlines.py` run; a caller
+    # that imports this module and calls main() itself still gets a clean refusal.
+    try:
+        harness.require_base()
+    except harness.MissingCorpusBase as e:
+        sys.exit(str(e))
     shards_dir = Path(sys.argv[1])
     rep = int(sys.argv[2]) if len(sys.argv) > 2 else 1
     summaries = sorted(shards_dir.glob("*/shard-summary.json"))
@@ -162,7 +184,10 @@ def main():
         (d / "replicate").mkdir(parents=True, exist_ok=True)
         harness.OUTDIR = d / "replicate"
         t0 = time.time()
-        r = harness.run_replicate(qid, BY_ID[qid]["text"], rep)
+        try:
+            r = harness.run_replicate(qid, BY_ID[qid]["text"], rep)
+        except harness.ServedBuildMismatch as e:
+            sys.exit(str(e))
         after = detail_for(harness.OUTDIR, qid, BY_ID[qid], r, time.time() - t0, rep)
         after = build_reclassified_row(before, after)
         data["rows"] = [after if x["corpus_id"] == qid else x for x in data["rows"]]
