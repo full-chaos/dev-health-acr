@@ -86,6 +86,10 @@ func semanticStateLogGroup(key string, state *PersistedSemanticState) slog.Attr 
 		slog.String("family_table_version", SanitizeLogAttr(state.FamilyTableVersion)),
 		slog.String("group_kind", SanitizeLogAttr(string(state.GroupKind))),
 		slog.String("narrowing_basis", SanitizeLogAttr(string(state.NarrowingBasis))),
+		// The anchor's KIND is a closed value; its term is corpus text, so
+		// only its presence is published.
+		slog.String("scope_anchor_kind", SanitizeLogAttr(string(state.ScopeAnchor.Kind))),
+		slog.Bool("scope_anchor_term_present", state.ScopeAnchor.Term != ""),
 		slog.Bool("frame_present", state.FramePresent),
 		slog.String("frame_version", SanitizeLogAttr(state.FrameVersion)),
 		slog.String("subject_expression_kind", SanitizeLogAttr(string(expression.Kind))),
@@ -152,6 +156,15 @@ func (t SlogEngineTelemetry) RecordSemanticStatePersistence(ctx context.Context,
 			absence = continuationTelemetryUnrecognised
 		}
 	}
+	// The bound a snapshot_oversized capture breached; "none" for every other
+	// write, so an oversized absence can never be read without its bound.
+	bound := "none"
+	if event.Bound != "" {
+		bound = string(event.Bound)
+		if !ValidSemanticStateBound(event.Bound) {
+			bound = continuationTelemetryUnrecognised
+		}
+	}
 	args := []any{
 		"org_id", SanitizeLogAttr(principal.OrgID),
 		"result_id", SanitizeLogAttr(event.ResultID),
@@ -159,6 +172,7 @@ func (t SlogEngineTelemetry) RecordSemanticStatePersistence(ctx context.Context,
 		"site", SanitizeLogAttr(site),
 		"decision", SanitizeLogAttr(decision),
 		"absence", SanitizeLogAttr(absence),
+		"oversized_bound", SanitizeLogAttr(bound),
 		"encoded_bytes", event.EncodedBytes,
 		"encoded_cap", SemanticStateMaxEncodedBytes,
 		semanticStateLogGroup("state", event.State),

@@ -127,6 +127,9 @@ func framelessCarrierState(prior InvestigationResult) *PersistedSemanticState {
 			Family: plan.Family, Source: source,
 			Gate: FrameGate{Outcome: FrameGateNotEvaluated},
 		},
+		// Turn one read the SAME question through the same harness
+		// interpreter, so its interpretation shape is the harness's.
+		EmittedShape:   ShapeOpen,
 		GroupKind:      plan.GroupKind,
 		NarrowingBasis: plan.Budget.NarrowingBasis,
 		FamilyVersion:  version,

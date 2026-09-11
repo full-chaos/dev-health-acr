@@ -917,6 +917,16 @@ func RunSemanticStateReadSuite(t *testing.T, newStore func(t *testing.T) (contex
 				if !errors.Is(replayErr, contextfabric.ErrSemanticStateReplayConflict) {
 					t.Fatalf("replay against a %s snapshot -> %v, want ErrSemanticStateReplayConflict", tc.want, replayErr)
 				}
+				// AN ABSENT REPLAY TOO. A present replay fails the snapshot
+				// comparison whether or not the unreadable-row guard exists, so
+				// it cannot tell the guard is there; only an absence can. A
+				// stored row this build cannot read is not "absent", so an
+				// absent replay of it is a conflict as well.
+				absentErr := store.Save(context.Background(), orgA, row, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation))
+				t.Logf("%s -> absent replay err=%v", tc.name, absentErr)
+				if !errors.Is(absentErr, contextfabric.ErrSemanticStateReplayConflict) {
+					t.Fatalf("an ABSENT replay against a %s snapshot -> %v, want ErrSemanticStateReplayConflict", tc.want, absentErr)
+				}
 			}
 		})
 	}

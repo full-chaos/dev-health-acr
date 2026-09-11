@@ -3572,7 +3572,11 @@ func (e *Engine) emitBindingEpochDelta(ctx context.Context, principal storage.Pr
 // nothing" two distinct paths to the same false rather than one relying on
 // zero-value behavior a future WinningSample field addition could change.
 func scopeAnchorResolved(outcome QuestionFamilyOutcome) bool {
-	return outcome.WinningSampleIndex >= 0 && outcome.WinningSample.ScopeAnchorTerm != ""
+	// A CARRIED reading has no winning index of its own this turn -- the
+	// fresh consensus may have found none -- but its anchor was installed
+	// from the carried snapshot, so its presence is the carried reading's.
+	winner := outcome.WinningSampleIndex >= 0 || outcome.Source == QuestionFamilySourceCarried
+	return winner && outcome.WinningSample.ScopeAnchorTerm != ""
 }
 
 func investigationSubjects(resolution SubjectResolution, cohort *Cohort) []SubjectRef {

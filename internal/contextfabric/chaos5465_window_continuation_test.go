@@ -632,7 +632,8 @@ func TestWindowContinuation_ComparableFieldsAreExactlyTheCarriedComponents(t *te
 		ContinuationConflictFieldFamily, ContinuationConflictFieldSubjectExpression, ContinuationConflictFieldRoles,
 		ContinuationConflictFieldGoals, ContinuationConflictFieldTemporal, ContinuationConflictFieldEmphasis,
 		ContinuationConflictFieldDimensions, ContinuationConflictFieldObligations, ContinuationConflictFieldWidenedObligations,
-		ContinuationConflictFieldRequirements, ContinuationConflictFieldFrameGate,
+		ContinuationConflictFieldRequirements, ContinuationConflictFieldFrameGate, ContinuationConflictFieldScopeAnchor,
+		ContinuationConflictFieldEmittedShape,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("comparable fields = %v, want %v -- this list is what `agreement` is a statement ABOUT; widening it without carrying the component would claim agreement about something nothing carried, and narrowing it would hide a real substitution", got, want)

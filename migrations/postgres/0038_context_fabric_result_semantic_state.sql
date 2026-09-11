@@ -25,6 +25,12 @@
 -- explicit (`?`) because a CHECK passes on NULL, and `->` on a missing key
 -- yields NULL: without it, `{}` would satisfy the constraint.
 --
+-- NOT VALID, as 0027 does: the constraint is enforced on every INSERT and
+-- UPDATE from this point, and the one-time validating scan of existing rows is
+-- skipped. Every existing row is NULL (the column was just added), so the scan
+-- could prove nothing; it would only extend the ACCESS EXCLUSIVE window on a
+-- table every turn writes.
+--
 -- No index: the snapshot is read by the table's existing (org_id, result_id)
 -- point lookup and never searched.
 --
@@ -43,4 +49,5 @@ ALTER TABLE acr.context_fabric_investigation_results
             OR (jsonb_typeof(semantic_state) = 'object'
                 AND semantic_state ? 'format_version'
                 AND jsonb_typeof(semantic_state -> 'format_version') = 'string')
-        );
+        )
+        NOT VALID;

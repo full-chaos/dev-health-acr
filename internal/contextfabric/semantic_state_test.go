@@ -3,9 +3,11 @@ package contextfabric
 // The semantic-snapshot codec's input domain, executed cell by cell.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"testing"
@@ -265,6 +267,7 @@ var validVariantCells = map[string]string{
 	"/requirements empty":                               "a derivation may declare nothing (requirements_declared stays true)",
 	"/frame/widened_obligations absent":                 "a frame with no model widening is a valid frame",
 	"/validation/gate_outcome zero":                     "the empty gate outcome IS not_evaluated, consistent with a present frame",
+	"/scope_anchor/term out_of_vocabulary":              "an anchor term is a retrieval pointer, free text by design",
 }
 
 // TestSemanticState_EveryMutationOfTheStoredDocumentIsUnavailable is the read
@@ -527,22 +530,6 @@ func TestSemanticState_EveryCollectionBoundIsExact(t *testing.T) {
 			},
 			past: func(s *PersistedSemanticState) {
 				s.Requirements = distinctRequirements(s.Requirements, SemanticStateMaxRequirements+1)
-			},
-		},
-		{
-			name: "roles",
-			// A frame cannot offer 64 roles, so the at-limit cell is refused by
-			// the role-consistency rule, NOT by the bound -- which is what
-			// tells the two apart.
-			atLimit: func(s *PersistedSemanticState) {
-				for len(s.Roles) < SemanticStateMaxRoles {
-					s.Roles = append(s.Roles, s.Roles[0])
-				}
-			},
-			past: func(s *PersistedSemanticState) {
-				for len(s.Roles) < SemanticStateMaxRoles+1 {
-					s.Roles = append(s.Roles, s.Roles[0])
-				}
 			},
 		},
 		{
@@ -809,4 +796,105 @@ func TestSemanticState_ANULCharacterIsRefusedBeforeTheStore(t *testing.T) {
 	if capture.Write.State != nil || capture.Write.Absence != SemanticStateAbsenceSnapshotInvalid {
 		t.Errorf("capture of a NUL reading = %+v, want the snapshot_invalid absence", capture.Write)
 	}
+}
+
+// TestSemanticState_AnOversizedCaptureNamesItsBoundOnTheLine drives EVERY bound
+// member through the production capture and the engine's one Save site, and
+// reads the bound off the persistence line the shipped sink emits. A snapshot
+// over a collection bound measures far under the byte cap, so without the bound
+// the line would contradict itself.
+func TestSemanticState_AnOversizedCaptureNamesItsBoundOnTheLine(t *testing.T) {
+	t.Parallel()
+	inputOf := func(s *PersistedSemanticState) SemanticStateInput {
+		return SemanticStateInput{
+			Outcome:       QuestionFamilyOutcome{Family: s.Family, Source: s.FamilySource, Frame: s.Frame, Gate: FrameGate{Outcome: FrameGatePassed}},
+			EmittedShape:  s.Validation.EmittedShape,
+			FamilyVersion: s.FamilyTableVersion,
+			GroupKind:     s.GroupKind,
+			Requirements:  s.DerivedRequirements(),
+		}
+	}
+	kind := contractsv1.ContextFabricSubjectRepository
+	explicit := func(t *testing.T, operands int, terms []string) SemanticStateInput {
+		s := sizedSemanticState(t, 4000)
+		ops := make([]SubjectOperand, 0, operands)
+		for i := 0; i < operands; i++ {
+			list := append([]string{}, terms...)
+			list[0] = fmt.Sprintf("%s-%02d", list[0], i)
+			ops = append(ops, SubjectOperand{Kind: SubjectOperandNamed, Named: &NamedSubjectExpression{Terms: list, ExpectedKind: &kind}})
+		}
+		s.Frame.SubjectExpression = SubjectExpression{Kind: SubjectExpressionExplicitSet, Explicit: &ExplicitSetExpression{Operands: ops}}
+		return inputOf(s)
+	}
+	manyTerms := make([]string, SemanticStateMaxTerms+1)
+	for i := range manyTerms {
+		manyTerms[i] = fmt.Sprintf("term-%02d", i)
+	}
+	drivers := map[SemanticStateBound]func(t *testing.T) SemanticStateInput{
+		SemanticStateBoundEncodedBytes: func(t *testing.T) SemanticStateInput {
+			return inputOf(sizedSemanticState(t, SemanticStateMaxEncodedBytes+1))
+		},
+		SemanticStateBoundRequirements: func(t *testing.T) SemanticStateInput {
+			goals := richestValidGoalSet()
+			s := semanticFixtureWithGoals(t, goals...)
+			in := inputOf(s)
+			s.Requirements = distinctRequirements(s.Requirements, SemanticStateMaxRequirements+1)
+			in.Requirements = s.DerivedRequirements()
+			return in
+		},
+		SemanticStateBoundOperands: func(t *testing.T) SemanticStateInput { return explicit(t, SemanticStateMaxOperands+1, []string{"a"}) },
+		SemanticStateBoundTerms:    func(t *testing.T) SemanticStateInput { return explicit(t, 2, manyTerms) },
+		SemanticStateBoundTermBytes: func(t *testing.T) SemanticStateInput {
+			return explicit(t, 2, []string{strings.Repeat("x", SemanticStateMaxTermBytes+1)})
+		},
+		SemanticStateBoundFrameSet: func(t *testing.T) SemanticStateInput {
+			in := inputOf(sizedSemanticState(t, 4000))
+			frame := cloneFrame(*in.Outcome.Frame)
+			for len(frame.Goals) <= InvestigationGoalCount {
+				frame.Goals = append(frame.Goals, GoalCompare)
+			}
+			in.Outcome.Frame = &frame
+			return in
+		},
+	}
+	for _, bound := range semanticStateBounds() {
+		t.Run(string(bound), func(t *testing.T) {
+			t.Parallel()
+			driver, ok := drivers[bound]
+			if !ok {
+				t.Fatalf("bound %q has no driver -- every member needs one", bound)
+			}
+			capture := captureSemanticState(driver(t))
+			var buf strings.Builder
+			engine := mustReuseTestEngine(t, EngineDependencies{
+				Results:   &staticResultStore{results: map[string]InvestigationResult{}},
+				Telemetry: SlogEngineTelemetry{logger: slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))},
+			})
+			result := validInvestigationResult()
+			if err := engine.saveResult(context.Background(), acceptancePrincipal(), BudgetAssertDecisive, result, nil, nil, TimeAxisKeyFor(TimeContext{Axis: TemporalCurrent}), 0, "", capture); err != nil {
+				t.Fatalf("saveResult: %v", err)
+			}
+			var line map[string]any
+			for _, raw := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+				var candidate map[string]any
+				if json.Unmarshal([]byte(raw), &candidate) == nil && candidate["msg"] == "context fabric semantic state persistence" {
+					line = candidate
+				}
+			}
+			if line == nil {
+				t.Fatalf("no persistence line:\n%s", buf.String())
+			}
+			t.Logf("%s -> absence=%v oversized_bound=%v encoded_bytes=%v encoded_cap=%v", bound, line["absence"], line["oversized_bound"], line["encoded_bytes"], line["encoded_cap"])
+			if line["absence"] != string(SemanticStateAbsenceSnapshotOversized) || line["oversized_bound"] != string(bound) {
+				t.Errorf("line absence=%v oversized_bound=%v, want snapshot_oversized naming %q", line["absence"], line["oversized_bound"], bound)
+			}
+		})
+	}
+	t.Run("a snapshot within every bound names none", func(t *testing.T) {
+		t.Parallel()
+		capture := captureSemanticState(inputOf(sizedSemanticState(t, 4000)))
+		if capture.Write.State == nil || capture.Bound != "" {
+			t.Errorf("an in-bounds capture = %+v, want a snapshot and no bound", capture)
+		}
+	})
 }

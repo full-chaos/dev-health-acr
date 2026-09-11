@@ -32,6 +32,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -49,9 +50,10 @@ const SemanticStateMaxEncodedBytes = 65536
 // The collection bounds. Each is checked explicitly, so an over-long
 // collection is rejected by name rather than only by the byte cap.
 const (
-	// SemanticStateMaxRoles bounds the role slots. A frame's topology offers
-	// one slot per operand plus at most two more.
-	SemanticStateMaxRoles = 64
+	// NO SEPARATE ROLE BOUND. Roles must equal the slots the frame's own
+	// subject expression derives -- one per operand plus at most two -- so
+	// the operand bound bounds them, and any surplus role is refused by that
+	// consistency rule first. A limit no frame can reach is not a bound.
 	// SemanticStateMaxRequirements bounds the requirement declarations at the
 	// public plan's own requirement-row bound, so a snapshot can never carry
 	// more declarations than the plan they were given to could publish.
@@ -84,6 +86,14 @@ type PersistedSemanticState struct {
 	GroupKind SubjectKind `json:"group_kind"`
 	// NarrowingBasis is the plan's declared narrowing basis.
 	NarrowingBasis contractsv1.ContextFabricNarrowingBasis `json:"narrowing_basis"`
+	// ScopeAnchor is the winning sample's scope anchor: the kind of the
+	// population a children_of_scope frame's anchor names, and the anchor
+	// retrieval pointer. Subject resolution consumes both BESIDE the frame
+	// (ScopeAnchorRetrievalKind, scopeAnchorResolved), so a continuation that
+	// installs the carried frame must install the carried anchor with it --
+	// otherwise one turn resolves a carried frame under a fresh sample's
+	// anchor.
+	ScopeAnchor SemanticScopeAnchor `json:"scope_anchor"`
 
 	// FramePresent says whether a validated frame was accepted. Frame is
 	// non-nil exactly when it is true.
@@ -111,6 +121,14 @@ type PersistedSemanticState struct {
 	RequirementDerivationVersion string `json:"requirement_derivation_version"`
 }
 
+// SemanticScopeAnchor is the scope anchor a reading resolved its subject under.
+// Kind is a closed subject kind or empty; Term is a retrieval pointer (corpus
+// text: stored, compared for equality, never logged).
+type SemanticScopeAnchor struct {
+	Kind SubjectKind `json:"kind"`
+	Term string      `json:"term"`
+}
+
 // SemanticStateValidation is the frame's validation and gate verdict.
 type SemanticStateValidation struct {
 	// EmittedShape is the interpretation shape the frame was validated
@@ -118,7 +136,10 @@ type SemanticStateValidation struct {
 	// under the same inputs rather than a guessed one.
 	EmittedShape InvestigationShape `json:"emitted_shape"`
 	// GateOutcome, FailedInvariant, RefuseBasis and DeclaredMemberKind are the
-	// FrameGate fields, verbatim.
+	// FrameGate fields, verbatim. A RECORD, NOT AN AUTHORITY: composition never
+	// enforces the recorded verdict -- it re-decides the gate on the carried
+	// frame from today's table, so a reading recorded as refused_basis is
+	// refused again (carried_frame_refused), never trusted as recorded.
 	GateOutcome        FrameGateOutcome      `json:"gate_outcome"`
 	FailedInvariant    FrameInvariant        `json:"failed_invariant"`
 	RefuseBasis        CohortDiscoverability `json:"refuse_basis"`
@@ -295,6 +316,60 @@ func ValidSemanticStateReadStatus(value SemanticStateReadStatus) bool {
 // validation failure, so the two map to different closed reasons.
 var errSemanticStateOversized = errors.New("semantic state exceeds a bound")
 
+// SemanticStateBound names the ONE bound a snapshot breached, so the
+// persistence line says which limit a rejected reading hit rather than only
+// that one was hit -- a 2,417-byte snapshot reported as oversized against a
+// 65,536-byte cap is a contradiction without it.
+type SemanticStateBound string
+
+const (
+	SemanticStateBoundEncodedBytes SemanticStateBound = "encoded_bytes"
+	SemanticStateBoundRequirements SemanticStateBound = "requirements"
+	SemanticStateBoundOperands     SemanticStateBound = "operands"
+	SemanticStateBoundTerms        SemanticStateBound = "terms"
+	SemanticStateBoundTermBytes    SemanticStateBound = "term_bytes"
+	SemanticStateBoundFrameSet     SemanticStateBound = "frame_set"
+)
+
+func semanticStateBounds() []SemanticStateBound {
+	return []SemanticStateBound{
+		SemanticStateBoundEncodedBytes, SemanticStateBoundRequirements,
+		SemanticStateBoundOperands, SemanticStateBoundTerms, SemanticStateBoundTermBytes, SemanticStateBoundFrameSet,
+	}
+}
+
+// ValidSemanticStateBound reports membership.
+func ValidSemanticStateBound(value SemanticStateBound) bool {
+	return slices.Contains(semanticStateBounds(), value)
+}
+
+// semanticStateBoundError is a bound breach that names its bound. It IS
+// errSemanticStateOversized for errors.Is, so every existing classification
+// is unchanged.
+type semanticStateBoundError struct {
+	bound  SemanticStateBound
+	detail string
+}
+
+func (e *semanticStateBoundError) Error() string {
+	return errSemanticStateOversized.Error() + ": " + e.detail
+}
+
+func (e *semanticStateBoundError) Is(target error) bool { return target == errSemanticStateOversized }
+
+func overBound(bound SemanticStateBound, format string, args ...any) error {
+	return &semanticStateBoundError{bound: bound, detail: fmt.Sprintf(format, args...)}
+}
+
+// breachedSemanticStateBound returns the bound an error names, "" for none.
+func breachedSemanticStateBound(err error) SemanticStateBound {
+	var bound *semanticStateBoundError
+	if errors.As(err, &bound) {
+		return bound.bound
+	}
+	return ""
+}
+
 // EncodeSemanticState validates a snapshot and returns its canonical encoding.
 //
 // CANONICAL: the encoding is a pure function of the value (struct field order,
@@ -314,7 +389,7 @@ func EncodeSemanticState(state *PersistedSemanticState) ([]byte, error) {
 		return nil, fmt.Errorf("%w: encode: %v", ErrSemanticStateRejected, err)
 	}
 	if len(encoded) > SemanticStateMaxEncodedBytes {
-		return nil, fmt.Errorf("%w: %w: %d encoded bytes exceeds the %d-byte cap", ErrSemanticStateRejected, errSemanticStateOversized, len(encoded), SemanticStateMaxEncodedBytes)
+		return nil, fmt.Errorf("%w: %w", ErrSemanticStateRejected, overBound(SemanticStateBoundEncodedBytes, "%d encoded bytes exceeds the %d-byte cap", len(encoded), SemanticStateMaxEncodedBytes))
 	}
 	// A NUL CHARACTER IS REFUSED HERE, not at the database. PostgreSQL jsonb
 	// cannot store \u0000 and fails the whole insert -- which would turn a
@@ -419,8 +494,8 @@ func validateSemanticState(s PersistedSemanticState) error {
 	reject := func(format string, args ...any) error {
 		return fmt.Errorf("%w: %s", ErrSemanticStateRejected, fmt.Sprintf(format, args...))
 	}
-	oversized := func(format string, args ...any) error {
-		return fmt.Errorf("%w: %w: %s", ErrSemanticStateRejected, errSemanticStateOversized, fmt.Sprintf(format, args...))
+	oversized := func(bound SemanticStateBound, format string, args ...any) error {
+		return fmt.Errorf("%w: %w", ErrSemanticStateRejected, overBound(bound, format, args...))
 	}
 	if s.FormatVersion != SemanticStateFormatVersion {
 		return reject("format_version %q is not %q", s.FormatVersion, SemanticStateFormatVersion)
@@ -440,6 +515,12 @@ func validateSemanticState(s PersistedSemanticState) error {
 	if s.NarrowingBasis != "" && !contractsv1.ValidContextFabricNarrowingBasis(s.NarrowingBasis) {
 		return reject("narrowing_basis %q is not a vocabulary member", s.NarrowingBasis)
 	}
+	if s.ScopeAnchor.Kind != "" && !contractsv1.ValidContextFabricSubjectKind(s.ScopeAnchor.Kind) {
+		return reject("scope_anchor.kind %q is not a vocabulary member", s.ScopeAnchor.Kind)
+	}
+	if len(s.ScopeAnchor.Term) > SemanticStateMaxTermBytes {
+		return oversized(SemanticStateBoundTermBytes, "scope_anchor.term is %d bytes, exceeds %d", len(s.ScopeAnchor.Term), SemanticStateMaxTermBytes)
+	}
 	if strings.TrimSpace(s.FrameVersion) == "" || strings.TrimSpace(s.RequirementDerivationVersion) == "" {
 		return reject("frame_version and requirement_derivation_version are required")
 	}
@@ -455,11 +536,8 @@ func validateSemanticState(s PersistedSemanticState) error {
 	if !s.RequirementsDeclared && len(s.Requirements) != 0 {
 		return reject("%d requirement(s) carried with requirements_declared=false", len(s.Requirements))
 	}
-	if len(s.Roles) > SemanticStateMaxRoles {
-		return oversized("%d roles exceeds %d", len(s.Roles), SemanticStateMaxRoles)
-	}
 	if len(s.Requirements) > SemanticStateMaxRequirements {
-		return oversized("%d requirements exceeds %d", len(s.Requirements), SemanticStateMaxRequirements)
+		return oversized(SemanticStateBoundRequirements, "%d requirements exceeds %d", len(s.Requirements), SemanticStateMaxRequirements)
 	}
 	if err := validateSemanticValidation(s.Validation, s.FramePresent); err != nil {
 		return reject("validation: %v", err)
@@ -551,21 +629,19 @@ func validInvestigationShapeMember(shape InvestigationShape) bool {
 }
 
 func validateSemanticFrameBounds(frame QuestionFrame) error {
-	over := func(format string, args ...any) error {
-		return fmt.Errorf("%w: %s", errSemanticStateOversized, fmt.Sprintf(format, args...))
-	}
+	over := overBound
 	if len(frame.Goals) > InvestigationGoalCount || len(frame.Emphasis) > AnswerEmphasisCount ||
 		len(frame.Dimensions) > HealthDimensionCount || len(frame.Obligations) > AnswerObligationCount ||
 		len(frame.WidenedObligations) > AnswerObligationCount {
-		return over("a frame set exceeds its vocabulary's size")
+		return over(SemanticStateBoundFrameSet, "a frame set exceeds its vocabulary's size")
 	}
 	terms := func(list []string) error {
 		if len(list) > SemanticStateMaxTerms {
-			return over("%d retrieval terms exceeds %d", len(list), SemanticStateMaxTerms)
+			return over(SemanticStateBoundTerms, "%d retrieval terms exceeds %d", len(list), SemanticStateMaxTerms)
 		}
 		for _, term := range list {
 			if len(term) > SemanticStateMaxTermBytes {
-				return over("a %d-byte retrieval term exceeds %d", len(term), SemanticStateMaxTermBytes)
+				return over(SemanticStateBoundTermBytes, "a %d-byte retrieval term exceeds %d", len(term), SemanticStateMaxTermBytes)
 			}
 		}
 		return nil
@@ -586,7 +662,7 @@ func validateSemanticFrameBounds(frame QuestionFrame) error {
 	}
 	if expression.Explicit != nil {
 		if len(expression.Explicit.Operands) > SemanticStateMaxOperands {
-			return over("%d operands exceeds %d", len(expression.Explicit.Operands), SemanticStateMaxOperands)
+			return over(SemanticStateBoundOperands, "%d operands exceeds %d", len(expression.Explicit.Operands), SemanticStateMaxOperands)
 		}
 		for _, operand := range expression.Explicit.Operands {
 			if operand.Named != nil {
@@ -766,6 +842,7 @@ func BuildSemanticState(in SemanticStateInput) *PersistedSemanticState {
 		FamilyTableVersion:           in.FamilyVersion,
 		GroupKind:                    in.GroupKind,
 		NarrowingBasis:               in.NarrowingBasis,
+		ScopeAnchor:                  SemanticScopeAnchor{Kind: in.Outcome.WinningSample.ScopeAnchorKind, Term: in.Outcome.WinningSample.ScopeAnchorTerm},
 		FrameVersion:                 QuestionFrameVersion,
 		Roles:                        []SemanticRoleSlot{},
 		Requirements:                 []SemanticRequirement{},
@@ -807,6 +884,8 @@ func cloneFrame(frame QuestionFrame) QuestionFrame {
 type semanticStateCapture struct {
 	Write        SemanticStateWrite
 	EncodedBytes int
+	// Bound is the bound a snapshot_oversized capture breached, "" otherwise.
+	Bound SemanticStateBound
 }
 
 // captureSemanticState builds, validates and measures the snapshot. A snapshot
@@ -818,7 +897,7 @@ func captureSemanticState(in SemanticStateInput) semanticStateCapture {
 	if err != nil {
 		measured, _ := json.Marshal(state)
 		if errors.Is(err, errSemanticStateOversized) {
-			return semanticStateCapture{Write: SemanticStateAbsent(SemanticStateAbsenceSnapshotOversized), EncodedBytes: len(measured)}
+			return semanticStateCapture{Write: SemanticStateAbsent(SemanticStateAbsenceSnapshotOversized), EncodedBytes: len(measured), Bound: breachedSemanticStateBound(err)}
 		}
 		return semanticStateCapture{Write: SemanticStateAbsent(SemanticStateAbsenceSnapshotInvalid), EncodedBytes: len(measured)}
 	}

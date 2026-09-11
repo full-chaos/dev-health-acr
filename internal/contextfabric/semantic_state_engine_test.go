@@ -10,10 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 const (
@@ -81,6 +84,8 @@ func TestSemanticState_EachComponentConflictIsNamedAlone(t *testing.T) {
 		{ContinuationConflictFieldRoles, func(s *PersistedSemanticState) { s.Roles = s.Roles[:1] }},
 		{ContinuationConflictFieldFrameGate, func(s *PersistedSemanticState) { s.Validation.GateOutcome = FrameGateNotEvaluated }},
 		{ContinuationConflictFieldSubjectExpression, func(s *PersistedSemanticState) { s.GroupKind = SubjectProject }},
+		{ContinuationConflictFieldScopeAnchor, func(s *PersistedSemanticState) { s.ScopeAnchor = SemanticScopeAnchor{Kind: SubjectTeam} }},
+		{ContinuationConflictFieldEmittedShape, func(s *PersistedSemanticState) { s.Validation.EmittedShape = ShapeExplicitCohort }},
 	} {
 		t.Run(string(tc.want), func(t *testing.T) {
 			fresh := semanticFixture(t)
@@ -107,6 +112,91 @@ func TestSemanticState_EachComponentConflictIsNamedAlone(t *testing.T) {
 			t.Errorf("fields=%v, want exactly [family]", got.ConflictFieldTokens())
 		}
 	})
+}
+
+// TestSemanticState_EverySnapshotKeyIsComparedOrExemptByName is the coverage
+// half of the component pin above, enumerated from the PRODUCER: every JSON key
+// the snapshot, its validation block and its frame encode is either compared
+// under a named conflict field or exempt with the reason it cannot disagree. A
+// key added to the snapshot without a decision here fails, so conflict_fields
+// cannot silently stop covering the reading.
+func TestSemanticState_EverySnapshotKeyIsComparedOrExemptByName(t *testing.T) {
+	t.Parallel()
+	compared := map[string]ContinuationConflictField{
+		"family":                          ContinuationConflictFieldFamily,
+		"group_kind":                      ContinuationConflictFieldSubjectExpression,
+		"frame_present":                   ContinuationConflictFieldSubjectExpression,
+		"scope_anchor":                    ContinuationConflictFieldScopeAnchor,
+		"roles":                           ContinuationConflictFieldRoles,
+		"requirements_declared":           ContinuationConflictFieldRequirements,
+		"requirements":                    ContinuationConflictFieldRequirements,
+		"validation.emitted_shape":        ContinuationConflictFieldEmittedShape,
+		"validation.gate_outcome":         ContinuationConflictFieldFrameGate,
+		"validation.failed_invariant":     ContinuationConflictFieldFrameGate,
+		"validation.refuse_basis":         ContinuationConflictFieldFrameGate,
+		"validation.declared_member_kind": ContinuationConflictFieldFrameGate,
+		"frame.goals":                     ContinuationConflictFieldGoals,
+		"frame.subject_expression":        ContinuationConflictFieldSubjectExpression,
+		"frame.temporal":                  ContinuationConflictFieldTemporal,
+		"frame.emphasis":                  ContinuationConflictFieldEmphasis,
+		"frame.dimensions":                ContinuationConflictFieldDimensions,
+		"frame.obligations":               ContinuationConflictFieldObligations,
+		"frame.widened_obligations":       ContinuationConflictFieldWidenedObligations,
+	}
+	exempt := map[string]string{
+		"format_version":                 "decode gate: another format reads unsupported_version and never reaches comparison",
+		"family_table_version":           "admission gate: a table not in force is context_version_mismatch before comparison",
+		"frame_version":                  "admission gate: a frame table not in force is context_version_mismatch before comparison",
+		"requirement_derivation_version": "admission gate: a derivation not in force is context_version_mismatch before comparison",
+		"frame.version":                  "validation requires it to equal frame_version, which admission gates",
+		"family_source":                  "provenance of the family value, not a component of the reading; the family itself is compared",
+		"narrowing_basis":                "the fresh side proposes none: it is derived inside PlanAnswer after this comparison",
+		"frame":                          "container: each frame key is decided below",
+		"validation":                     "container: each validation key is decided below",
+	}
+	keys := func(prefix string, typ reflect.Type) []string {
+		out := []string{}
+		for i := 0; i < typ.NumField(); i++ {
+			tag := strings.Split(typ.Field(i).Tag.Get("json"), ",")[0]
+			if tag == "" || tag == "-" {
+				continue
+			}
+			out = append(out, prefix+tag)
+		}
+		return out
+	}
+	all := append(append(keys("", reflect.TypeOf(PersistedSemanticState{})), keys("validation.", reflect.TypeOf(SemanticStateValidation{}))...), keys("frame.", reflect.TypeOf(QuestionFrame{}))...)
+	comparable := map[ContinuationConflictField]bool{}
+	for _, field := range continuationComparableFields() {
+		comparable[field] = true
+	}
+	for _, key := range all {
+		field, isCompared := compared[key]
+		reason, isExempt := exempt[key]
+		switch {
+		case isCompared && isExempt:
+			t.Errorf("key %q is both compared (%s) and exempt (%s)", key, field, reason)
+		case isCompared:
+			if !comparable[field] {
+				t.Errorf("key %q is claimed compared under %q, which is not a comparable field", key, field)
+			}
+			t.Logf("%-36s compared as %s", key, field)
+		case isExempt:
+			t.Logf("%-36s exempt: %s", key, reason)
+		default:
+			t.Errorf("snapshot key %q is neither compared nor exempt by name -- decide it", key)
+		}
+	}
+	for key := range compared {
+		if !slices.Contains(all, key) {
+			t.Errorf("compared key %q is not a key the snapshot encodes", key)
+		}
+	}
+	for key := range exempt {
+		if !slices.Contains(all, key) {
+			t.Errorf("exempt key %q is not a key the snapshot encodes", key)
+		}
+	}
 }
 
 // TestSemanticState_TheLinesCarryValuesAndNeverARetrievalTerm drives the
@@ -258,12 +348,13 @@ func TestSemanticState_ThePersistenceLineRefusesInventedValues(t *testing.T) {
 	sink.RecordSemanticStatePersistence(context.Background(), acceptancePrincipal(), SemanticStatePersistenceEvent{
 		ResultID: "result_semantic_line_02", Site: BudgetAssertStage("invented-site"),
 		Decision: SemanticStatePersistenceDecision("invented-decision"), Absence: SemanticStateAbsence("invented-absence"),
+		Bound: SemanticStateBound("invented-bound"),
 	})
 	var line map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(buf.String())), &line); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	for _, key := range []string{"site", "decision", "absence"} {
+	for _, key := range []string{"site", "decision", "absence", "oversized_bound"} {
 		if line[key] != continuationTelemetryUnrecognised {
 			t.Errorf("%s=%v, want %q", key, line[key], continuationTelemetryUnrecognised)
 		}
@@ -286,7 +377,7 @@ func TestSemanticState_ThePersistenceDecisionClassifiesEveryStoreOutcome(t *test
 	}{
 		{nil, SemanticStatePersisted},
 		{fmt.Errorf("wrapped: %w", ErrSemanticStateReplayConflict), SemanticStateReplayConflictDecision},
-		{fmt.Errorf("wrapped: %w", ErrSemanticStateRejected), SemanticStateRejectedDecision},
+		{fmt.Errorf("wrapped: %w", ErrSemanticStateRejected), SemanticStateSaveFailedDecision},
 		{&ErrStructureOfferSuperseded{Members: []StructureNeedKind{contractsv1.ContextFabricStructureNeedWindow}}, SemanticStateSupersededDecision},
 		{errors.New("connection reset"), SemanticStateSaveFailedDecision},
 	} {
@@ -295,8 +386,8 @@ func TestSemanticState_ThePersistenceDecisionClassifiesEveryStoreOutcome(t *test
 		}
 	}
 	// Every member has a producer in the table above.
-	if len(semanticStatePersistenceDecisions()) != 5 {
-		t.Errorf("the decision vocabulary has %d members; the table drives 5", len(semanticStatePersistenceDecisions()))
+	if len(semanticStatePersistenceDecisions()) != 4 {
+		t.Errorf("the decision vocabulary has %d members; the table drives 4", len(semanticStatePersistenceDecisions()))
 	}
 }
 
@@ -437,5 +528,62 @@ func TestSemanticStateCapture_AContinuationMaterializesTheCarriedShape(t *testin
 	}
 	if !sameJSON(saved.State.Frame, carried.Frame) || saved.State.FamilySource != QuestionFamilySourceCarried {
 		t.Errorf("the continued snapshot is not the carried reading: frame equal=%v source=%s", sameJSON(saved.State.Frame, carried.Frame), saved.State.FamilySource)
+	}
+}
+
+// failingSaveStore is staticResultStore whose Save returns a fixed error.
+type failingSaveStore struct {
+	*staticResultStore
+	saveErr error
+}
+
+func (s failingSaveStore) Save(ctx context.Context, p storage.Principal, r InvestigationResult, w SourceWatermarkSnapshot, e RebuildEpoch, k string, ri ReuseRetrievalIdentity, pv ReusePromptVersions, va ReuseVersionAuthorities, g int64, parent string, semantic SemanticStateWrite) error {
+	_ = s.staticResultStore.Save(ctx, p, r, w, e, k, ri, pv, va, g, parent, semantic)
+	return s.saveErr
+}
+
+// TestSemanticState_ThePersistenceLineReportsTheStoreOutcomeThroughARealExit
+// drives a real engine exit (the continuation refusal over a legacy carrier)
+// against a store whose Save fails each way, and reads the decision from the
+// line the shipped sink emits. The classifier's own table is not enough: a
+// saveResult that published a constant would agree with it on every success.
+func TestSemanticState_ThePersistenceLineReportsTheStoreOutcomeThroughARealExit(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		err  error
+		want SemanticStatePersistenceDecision
+	}{
+		{"save succeeds", nil, SemanticStatePersisted},
+		{"replay conflict", fmt.Errorf("pginvestigation: %w: identical payload, different semantic state", ErrSemanticStateReplayConflict), SemanticStateReplayConflictDecision},
+		{"connection reset", errors.New("pginvestigation: save investigation result: connection reset by peer"), SemanticStateSaveFailedDecision},
+		{"structure claim lost", &ErrStructureOfferSuperseded{Members: []StructureNeedKind{contractsv1.ContextFabricStructureNeedWindow}}, SemanticStateSupersededDecision},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			request := continuationRequest(validInvestigationRequest().Question)
+			prior := continuationPrior(t, continuationPriorID, request.Question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+			inner := &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}, noCarrierStates: true}
+			harness := newContinuationHarness(t, inner, forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam})
+			var buf strings.Builder
+			harness.engine.telemetry = SlogEngineTelemetry{logger: slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))}
+			harness.engine.results = failingSaveStore{staticResultStore: inner, saveErr: tc.err}
+			_, investigateErr := harness.engine.Investigate(context.Background(), acceptancePrincipal(), request)
+			var lines []map[string]any
+			for _, raw := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+				var line map[string]any
+				if json.Unmarshal([]byte(raw), &line) == nil && line["msg"] == "context fabric semantic state persistence" {
+					lines = append(lines, line)
+				}
+			}
+			if len(lines) != 1 {
+				t.Fatalf("persistence lines = %d, want 1 (investigate err=%v)", len(lines), investigateErr)
+			}
+			line := lines[0]
+			t.Logf("store error=%q -> investigate_err=%v | level=%v site=%v decision=%v absence=%v", fmt.Sprint(tc.err), investigateErr != nil, line["level"], line["site"], line["decision"], line["absence"])
+			if line["level"] != "INFO" || line["decision"] != string(tc.want) || line["site"] != string(BudgetAssertContinuationRefusal) || line["absence"] != string(SemanticStateAbsenceContinuationRefused) {
+				t.Errorf("persistence line = %v, want decision=%s site=%s absence=%s at INFO", line, tc.want, BudgetAssertContinuationRefusal, SemanticStateAbsenceContinuationRefused)
+			}
+		})
 	}
 }

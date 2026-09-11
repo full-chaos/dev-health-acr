@@ -33,10 +33,12 @@ const (
 	// identical payload already exists with a DIFFERENT semantic state; the
 	// stored row is untouched.
 	SemanticStateReplayConflictDecision SemanticStatePersistenceDecision = "replay_conflict"
-	// SemanticStateRejectedDecision: the store refused the semantic-state
-	// argument itself (neither/both halves, a non-member absence, a snapshot
-	// failing validation or a bound). Nothing was persisted.
-	SemanticStateRejectedDecision SemanticStatePersistenceDecision = "rejected"
+	// NO "rejected" MEMBER. A store refuses a semantic-state argument only
+	// when it fails the codec, and the engine never hands Save one that has
+	// not already passed the same pure codec at capture (a capture that fails
+	// saves a closed absence instead). A member no engine exit can reach was
+	// removed rather than kept without a driver; a store rejection, were one
+	// ever to happen, is a save_failed like any other store error.
 	// SemanticStateSupersededDecision: the result lost a structure
 	// supersession claim, so neither it nor its snapshot was persisted.
 	SemanticStateSupersededDecision SemanticStatePersistenceDecision = "superseded"
@@ -48,7 +50,6 @@ func semanticStatePersistenceDecisions() []SemanticStatePersistenceDecision {
 	return []SemanticStatePersistenceDecision{
 		SemanticStatePersisted,
 		SemanticStateReplayConflictDecision,
-		SemanticStateRejectedDecision,
 		SemanticStateSupersededDecision,
 		SemanticStateSaveFailedDecision,
 	}
@@ -72,8 +73,6 @@ func classifySemanticStatePersistence(err error) SemanticStatePersistenceDecisio
 		return SemanticStatePersisted
 	case errors.Is(err, ErrSemanticStateReplayConflict):
 		return SemanticStateReplayConflictDecision
-	case errors.Is(err, ErrSemanticStateRejected):
-		return SemanticStateRejectedDecision
 	case errors.As(err, &superseded):
 		return SemanticStateSupersededDecision
 	default:
@@ -94,6 +93,8 @@ type SemanticStatePersistenceEvent struct {
 	// 0 for an absence that never built one.
 	Absence      SemanticStateAbsence
 	EncodedBytes int
+	// Bound is the bound a snapshot_oversized capture breached, "" otherwise.
+	Bound SemanticStateBound
 	// State is the snapshot the write carried, nil for an absence.
 	State *PersistedSemanticState
 }
@@ -114,6 +115,7 @@ func (e *Engine) saveResult(
 			Decision:       classifySemanticStatePersistence(err),
 			Absence:        capture.Write.Absence,
 			EncodedBytes:   capture.EncodedBytes,
+			Bound:          capture.Bound,
 			State:          capture.Write.State,
 		})
 	}

@@ -1421,6 +1421,14 @@ func TestRunner_upgradeTo38AddsSemanticStateColumn(t *testing.T) {
 	}
 	_, err = db.ExecContext(ctx, `UPDATE acr.context_fabric_investigation_results SET semantic_state = NULL WHERE result_id = 'result_legacy_0038'`)
 	require.NoError(t, err, "SQL NULL is the absent snapshot and is always storable")
+
+	// NOT VALID: enforced on every write above, and the one-time validating
+	// scan of existing rows was skipped (0027's precedent) -- the catalogue
+	// records it unvalidated.
+	var validated bool
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT convalidated FROM pg_constraint WHERE conname = 'ck_acr_cf_investigation_results_semantic_state_shape'`).Scan(&validated))
+	t.Logf("ck_acr_cf_investigation_results_semantic_state_shape convalidated=%v", validated)
+	require.False(t, validated, "0038 adds its CHECK NOT VALID, so upgrading never scans existing rows under ACCESS EXCLUSIVE")
 }
 
 // TestRunner_upgradeTo38IsIdempotentOnRetry: 0038 survives being applied twice.

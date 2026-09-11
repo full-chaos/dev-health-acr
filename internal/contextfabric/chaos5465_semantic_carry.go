@@ -75,6 +75,8 @@ func semanticStateDifferences(carried, fresh *PersistedSemanticState) map[Contin
 	differs[ContinuationConflictFieldWidenedObligations] = !sameSet(cf.WidenedObligations, ff.WidenedObligations)
 	differs[ContinuationConflictFieldRequirements] = carried.RequirementsDeclared != fresh.RequirementsDeclared ||
 		!sameJSON(carried.Requirements, fresh.Requirements)
+	differs[ContinuationConflictFieldScopeAnchor] = carried.ScopeAnchor != fresh.ScopeAnchor
+	differs[ContinuationConflictFieldEmittedShape] = carried.Validation.EmittedShape != fresh.Validation.EmittedShape
 	differs[ContinuationConflictFieldFrameGate] = carried.Validation.GateOutcome != fresh.Validation.GateOutcome ||
 		carried.Validation.FailedInvariant != fresh.Validation.FailedInvariant ||
 		carried.Validation.RefuseBasis != fresh.Validation.RefuseBasis ||

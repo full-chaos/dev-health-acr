@@ -49,10 +49,13 @@ package contextfabric
 //     sentence. ContextFabricRefusalBasisLimitation is NOT used for it: that
 //     sentence names a declared member kind, which this condition has none of.
 //
-// The comparison this file performs is COMPLETE with respect to the context it
-// accepts: every semantic component the snapshot carries is compared against
-// the fresh proposal's own, and `agreement` never claims agreement about a
-// component nothing carried.
+// Every key the snapshot encodes is DECIDED BY NAME: either compared against
+// the fresh proposal's own under a conflict field, or exempt because it cannot
+// disagree at comparison time (a version stamp admission already gated, the
+// family's provenance, a narrowing basis the fresh side never proposes).
+// TestSemanticState_EverySnapshotKeyIsComparedOrExemptByName enumerates the
+// keys from the snapshot type itself, so `agreement` never claims agreement
+// about a component nobody decided.
 
 import (
 	"context"
@@ -334,6 +337,8 @@ const (
 	ContinuationConflictFieldRequirements       ContinuationConflictField = "requirements"
 	ContinuationConflictFieldInterpretation     ContinuationConflictField = "interpretation"
 	ContinuationConflictFieldFrameGate          ContinuationConflictField = "frame_gate"
+	ContinuationConflictFieldScopeAnchor        ContinuationConflictField = "scope_anchor"
+	ContinuationConflictFieldEmittedShape       ContinuationConflictField = "emitted_shape"
 )
 
 // continuationComparableFields is the subset this build compares, in a fixed
@@ -366,6 +371,8 @@ func continuationComparableFields() []ContinuationConflictField {
 		ContinuationConflictFieldWidenedObligations,
 		ContinuationConflictFieldRequirements,
 		ContinuationConflictFieldFrameGate,
+		ContinuationConflictFieldScopeAnchor,
+		ContinuationConflictFieldEmittedShape,
 	}
 }
 
@@ -892,12 +899,11 @@ func (e *Engine) admitWindowContinuation(
 		decision.Reason = ContinuationReasonInvalidContext
 		return decision
 	}
-	// The PRELOAD CACHE holds whole carriers, snapshot included, so a cached
-	// entry is read exactly as a fresh one is -- never narrowed to its
-	// payload and then missing the reading it carries.
-	if cached, ok := preloaded[referenced]; ok {
-		stored = cached
-	}
+	// NO PRELOAD SUBSTITUTION. The preload map is filled only for a request
+	// carrying prior-subject receipts, and such a request is never the
+	// window-only shape, so a substitution here could not run -- and placed
+	// after the epoch gate it would install a carrier whose epoch nobody
+	// checked if it ever did. The carrier admitted is the one read above.
 	prior := stored.Result
 	decision.CarriedAxis = prior.Interpretation.TimeContext.Axis
 
@@ -1124,6 +1130,15 @@ func applyWindowContinuation(outcome QuestionFamilyOutcome, decision windowConti
 	// SAME accepted value, so the comparison, the planner and discovery cannot
 	// read different group axes for one turn -- the false-agreement defect.
 	outcome.WinningSample.GroupKind = accepted.EffectiveGroupKind()
+	// THE ANCHOR MOVES WITH THE FRAME. Subject resolution reads the scope
+	// anchor's kind and presence beside the frame; a carried frame resolved
+	// under this turn's sampled anchor is a reading neither turn proposed.
+	outcome.WinningSample.ScopeAnchorKind = ""
+	outcome.WinningSample.ScopeAnchorTerm = ""
+	if carried.State != nil {
+		outcome.WinningSample.ScopeAnchorKind = carried.State.ScopeAnchor.Kind
+		outcome.WinningSample.ScopeAnchorTerm = carried.State.ScopeAnchor.Term
+	}
 	// THE WHOLE CARRIED READING, INCLUDING ITS ABSENCE OF A FRAME. A
 	// frameless carrier is continued frameless: installing the fresh frame
 	// beside a carried family is the half-and-half context the continuation
