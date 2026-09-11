@@ -705,10 +705,10 @@ func TestCertifyCallSurfaceDomainTable(t *testing.T) {
 	fullWant := wantForRankedCutSummary()
 
 	certifyCell("nil_log", false, nil, ev, fullWant)
-	absentCell("nil_log", false, nil, absentEv, map[string]any{"request_id": "req_1"})
+	absentCell("nil_log", false, nil, absentEv, map[string]any{"request_id": "req_1", "pass": 1})
 
 	certifyCell("empty_log", false, emptyLog, ev, fullWant) // zero lines for an exactly_one_per_pass event: refused (not "0 lines" == absent for this multiplicity)
-	absentCell("empty_log", true, emptyLog, absentEv, map[string]any{"request_id": "req_1"})
+	absentCell("empty_log", true, emptyLog, absentEv, map[string]any{"request_id": "req_1", "pass": 1})
 
 	certifyCell("event_not_canonical", false, goodLog, mismatchedEvent, map[string]any{})
 	absentCell("event_not_canonical", false, emptyLog, mismatchedEvent, map[string]any{})

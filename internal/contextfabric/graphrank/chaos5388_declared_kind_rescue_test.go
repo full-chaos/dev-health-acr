@@ -394,6 +394,21 @@ func TestEverySummaryPassReportsTheSameDeclaredKinds(t *testing.T) {
 // is; each of the three call sites passes a different value/expression, so
 // this pin does not also assert its identifier name the way it does for
 // kindRescue).
+//
+// r3 (round r3 finding 3): this test checks resolve.go's calls into
+// resolveFromMergedCandidatesWithAnchorSlot ONLY -- it says nothing about
+// resolution.go's OWN separate call, declaredKindRescueReport(kindRescue,
+// ...) (the function that actually BUILDS the declared_kind_rescue rows
+// from the ledger). That call's own behavioral coverage is
+// TestARescueArmThatDeliveredIsDisclosedAsDelivered: mutating
+// resolution.go's declaredKindRescueReport(kindRescue, ...) to
+// declaredKindRescueReport(nil, ...) makes that test fail (declared_kind_rescue
+// reads back empty instead of naming the real survived/matched rescue row)
+// -- verified directly, red-first, before this comment was written. An
+// AST-name check proves a call site's own SOURCE TEXT names the right
+// variable; it was never a substitute for a behavioral proof that the
+// VALUE actually flowed through to the emitted line, which
+// TestARescueArmThatDeliveredIsDisclosedAsDelivered is.
 func TestEveryCutCallInResolveGoPassesTheRescueLedger(t *testing.T) {
 	t.Parallel()
 	fset := token.NewFileSet()

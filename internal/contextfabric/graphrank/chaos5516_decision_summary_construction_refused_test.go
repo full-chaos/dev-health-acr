@@ -237,6 +237,45 @@ func TestDecisionSummaryConstructionRefusesAMismatchedRequestID(t *testing.T) {
 	}
 }
 
+// TestDecisionSummaryConstructionRefusesNilRequiredSlicesFromTheRealConstructor
+// is round r3 finding 2, reproduced and fixed: calling the REAL generated
+// constructor (not a hand-built literal) with a nil required string_slice
+// argument used to still mark the value constructed=true, and the tracer
+// emitted a "normal-looking" INFO line with `null` in place of the required
+// empty container -- indistinguishable from a field that was never
+// measured (clause 3's own explicit-zero contract, violated). The
+// generated constructor now checks every required slice argument for nil
+// and never sets the marker if any is nil.
+func TestDecisionSummaryConstructionRefusesNilRequiredSlicesFromTheRealConstructor(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	tracer := NewSlogResolutionTracer(logger)
+
+	fields := eventspec.NewDecisionSummaryFields(
+		"request_nil_slices", 0, 0, 0, 0,
+		nil, nil, nil, // required string_slice fields passed nil, not []string{}
+		false, "none", "none",
+		0, 0, false, 0, "none", "none", nil, 0,
+		"none", "none", "none", nil, nil,
+	)
+	tracer.Trace(ResolutionTraceEvent{RequestID: "request_nil_slices", Stage: "decision_summary", DecisionSummaryFields: fields})
+
+	if buf.Len() == 0 {
+		t.Fatal("the tracer emitted NOTHING -- want a refusal line at Error, not silence")
+	}
+	var rec map[string]any
+	if err := json.Unmarshal(bytes.TrimRight(buf.Bytes(), "\n"), &rec); err != nil {
+		t.Fatalf("captured line is not JSON: %v -- line: %s", err, buf.String())
+	}
+	if level, _ := rec["level"].(string); level != "ERROR" {
+		t.Fatalf("level = %q, want ERROR -- the real constructor called with nil required slices must be refused, not emitted with null containers: %v", level, rec)
+	}
+	if _, ok := rec["committed_ids"]; ok {
+		t.Errorf("a committed_ids key reached the log for a nil-slice construction -- the refusal must replace the emission: %v", rec)
+	}
+}
+
 // TestDecisionSummaryConstructionAcceptsTheRealTypedPath is the positive
 // control: a real decisionSummaryBuffer.flush()-shaped construction (every
 // open-vocabulary field explicitly set, including the "none" tokens a

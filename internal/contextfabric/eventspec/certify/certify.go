@@ -136,6 +136,32 @@ func multiplicityRequiresPassField(m eventspec.Multiplicity) (requiresPass bool,
 	}
 }
 
+// scopeMatch reports whether line belongs to the attempt `scope` identifies
+// -- every declared Attribution field, PLUS "pass" whenever `scope` itself
+// carries a "pass" key (never unconditionally on eventHasPassField: Certify
+// gathers the WHOLE request's lines across every pass first, to run its own
+// per-pass duplicate check over the full set, so its own gather step omits
+// "pass" from the scope map on purpose; CertifyAbsent asks about ONE
+// specific pass, so its scope map always carries one). Certify and
+// CertifyAbsent both call this SAME function (r3 fix, round r3 finding 1:
+// CertifyAbsent used to scope by Attribution alone, so a real line for pass
+// 1 wrongly blocked asserting absence for pass 2 of the SAME request -- the
+// two functions had drifted on what "this attempt" means; sharing one
+// function makes that drift impossible going forward).
+func scopeMatch(ev eventspec.Event, scope map[string]any, line Line) bool {
+	for _, attrKey := range ev.Attribution {
+		if !jsonEqual(scope[attrKey], line[attrKey]) {
+			return false
+		}
+	}
+	if p, ok := scope["pass"]; ok {
+		if !jsonEqual(p, line["pass"]) {
+			return false
+		}
+	}
+	return true
+}
+
 // groupLinesByPass partitions scoped lines by their own declared "pass"
 // field value -- every real cell reaching this function has already had
 // "pass" presence and type validated by validateFields (called on EVERY
@@ -233,16 +259,18 @@ func Certify(log *Log, a Assertion) (Result, error) {
 		}
 	}
 
+	// Attribution-only scope for the GATHER step -- deliberately omits
+	// "pass" even though a.Want carries one (required above), because this
+	// step must collect every pass in the REQUEST so the per-pass
+	// duplicate/distinct check below can see the whole set. scopeMatch only
+	// checks "pass" when the scope map passed to it carries the key.
+	requestScope := make(map[string]any, len(a.Event.Attribution))
+	for _, attrKey := range a.Event.Attribution {
+		requestScope[attrKey] = a.Want[attrKey]
+	}
 	var scoped []Line
 	for _, line := range log.linesWithMsg(a.Event.Msg) {
-		match := true
-		for _, attrKey := range a.Event.Attribution {
-			if !jsonEqual(a.Want[attrKey], line[attrKey]) {
-				match = false
-				break
-			}
-		}
-		if match {
+		if scopeMatch(a.Event, requestScope, line) {
 			scoped = append(scoped, line)
 		}
 	}
@@ -355,14 +383,25 @@ func Certify(log *Log, a Assertion) (Result, error) {
 // attempt never causes a false refusal here (round r2's P2: a line for
 // request_id=req_2 must never block asserting absence for req_1).
 //
+// r3 fix (round r3 finding 1): MultiplicityZeroOrOnePerPass always
+// declares a pass field (multiplicityRequiresPassField), so `attribution`
+// must ALSO include "pass" -- absence is asserted for ONE SPECIFIC pass of
+// the request, never "the whole request has no line at all". Before this
+// fix, a genuine line for pass 1 wrongly blocked asserting absence for pass
+// 2 of the SAME request_id -- exactly the request_id-scoping bug round r2
+// fixed for a DIFFERENT request, now fixed for a different pass of the SAME
+// request, using the SAME scopeMatch function Certify's own pass-keyed
+// duplicate check uses, so the two can never drift apart again.
+//
 // It refuses for any Multiplicity other than MultiplicityZeroOrOnePerPass
-// -- an ExactlyOnePerPass event is required on every pass by its own
-// declaration, so "absent" can never be a legitimate expectation for one
-// (round r1's P2); an unrecognised Multiplicity value refuses for the same
-// reason Certify's own switch does (round r2's P2: "unknown
-// multiplicities are also accepted" was a real gap -- this closes it by
-// requiring the ONE multiplicity that legitimately allows absence,
-// explicitly, rather than excluding only the one that doesn't).
+// -- an ExactlyOnePerPass/ExactlyOnePerRequest event is required on every
+// pass/request by its own declaration, so "absent" can never be a
+// legitimate expectation for one (round r1's P2); an unrecognised
+// Multiplicity value refuses for the same reason Certify's own switch does
+// (round r2's P2: "unknown multiplicities are also accepted" was a real gap
+// -- this closes it by requiring the ONE multiplicity that legitimately
+// allows absence, explicitly, rather than excluding only the ones that
+// don't).
 func CertifyAbsent(log *Log, ev eventspec.Event, attribution map[string]any) error {
 	if log == nil {
 		return fmt.Errorf("certify: %s: log is nil -- CertifyAbsent judges a real Parse()d log, never a nil placeholder", ev.ID)
@@ -378,16 +417,12 @@ func CertifyAbsent(log *Log, ev eventspec.Event, attribution map[string]any) err
 			return fmt.Errorf("certify: %s: attribution must include %q (one of this event's declared Attribution fields) to scope which attempt's absence is being asserted", ev.ID, attrKey)
 		}
 	}
+	if _, ok := attribution["pass"]; !ok {
+		return fmt.Errorf("certify: %s: attribution must include \"pass\" -- a zero_or_one_per_pass event's absence is asserted for ONE specific pass, never the whole request", ev.ID)
+	}
 	for _, line := range log.linesWithMsg(ev.Msg) {
-		match := true
-		for _, attrKey := range ev.Attribution {
-			if !jsonEqual(attribution[attrKey], line[attrKey]) {
-				match = false
-				break
-			}
-		}
-		if match {
-			return fmt.Errorf("certify: %s: found a line with msg %q for this attempt, want 0 (asserted absent)", ev.ID, ev.Msg)
+		if scopeMatch(ev, attribution, line) {
+			return fmt.Errorf("certify: %s: found a line with msg %q for this attempt (pass=%v), want 0 (asserted absent)", ev.ID, ev.Msg, attribution["pass"])
 		}
 	}
 	return nil

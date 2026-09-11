@@ -520,11 +520,50 @@ func TestCertifyAbsentIsAttributionScoped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if err := certifyAbsentRecovered(t, log, eventspec.AnchorSlotDisplaced, map[string]any{"request_id": "req_1"}); err != nil {
+	if err := certifyAbsentRecovered(t, log, eventspec.AnchorSlotDisplaced, map[string]any{"request_id": "req_1", "pass": 1}); err != nil {
 		t.Errorf("CertifyAbsent() refused req_1 absence solely because req_2 has a line -- want it to certify absence for req_1: %v", err)
 	}
-	if err := certifyAbsentRecovered(t, log, eventspec.AnchorSlotDisplaced, map[string]any{"request_id": "req_2"}); err == nil {
+	if err := certifyAbsentRecovered(t, log, eventspec.AnchorSlotDisplaced, map[string]any{"request_id": "req_2", "pass": 1}); err == nil {
 		t.Error("CertifyAbsent() accepted asserting absence for req_2, which DOES have a line -- want a refusal")
+	}
+}
+
+// TestCertifyAbsentIsPassScoped is round r3 finding 1, reproduced and
+// fixed: a real line for PASS 1 of req_1 must never block asserting
+// absence for PASS 2 of the SAME req_1 -- CertifyAbsent now scopes by
+// (request_id, pass), the same per-pass keying Certify's own duplicate
+// check uses, via the shared scopeMatch function.
+func TestCertifyAbsentIsPassScoped(t *testing.T) {
+	line := `{"time":"2026-09-10T00:00:00Z","level":"INFO","msg":"context fabric resolution trace: anchor slot displaced",` +
+		`"request_id":"req_1","pass":1,"stage":"anchor_slot_displaced","subject_kind":"project","subject_canonical_id":"p1",` +
+		`"anchor_slot_reserved":"team","anchor_slot_source":"receipt","anchor_slot_displaced":1,"pool_truncated_n":7}`
+	log, err := Parse([]byte(line))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if err := certifyAbsentRecovered(t, log, eventspec.AnchorSlotDisplaced, map[string]any{"request_id": "req_1", "pass": 2}); err != nil {
+		t.Errorf("CertifyAbsent() refused pass-2 absence solely because pass-1 has a line for the SAME request_id -- want it to certify absence for pass 2: %v", err)
+	}
+	if err := certifyAbsentRecovered(t, log, eventspec.AnchorSlotDisplaced, map[string]any{"request_id": "req_1", "pass": 1}); err == nil {
+		t.Error("CertifyAbsent() accepted asserting absence for pass 1, which DOES have a line -- want a refusal")
+	}
+}
+
+// TestCertifyAbsentRefusesAttributionMissingPass pins the new requirement
+// itself: an attribution map that carries every declared Attribution field
+// but omits "pass" must be refused, not silently treated as "the whole
+// request".
+func TestCertifyAbsentRefusesAttributionMissingPass(t *testing.T) {
+	log, err := Parse([]byte(`{"time":"2026-09-10T00:00:00Z","level":"INFO","msg":"an unrelated line"}`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	err = certifyAbsentRecovered(t, log, eventspec.AnchorSlotDisplaced, map[string]any{"request_id": "req_1"})
+	if err == nil {
+		t.Fatal("CertifyAbsent() accepted an attribution map missing \"pass\" -- want a refusal")
+	}
+	if !strings.Contains(err.Error(), `attribution must include "pass"`) {
+		t.Errorf("refusal text = %q, want it to name the missing pass requirement", err.Error())
 	}
 }
 

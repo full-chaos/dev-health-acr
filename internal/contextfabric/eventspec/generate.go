@@ -197,7 +197,41 @@ func writeTypedConstruction(b *bytes.Buffer, e Event) {
 		first = false
 		fmt.Fprintf(b, "%s %s", lowerFirst(snakeToPascal(f.Key)), goFieldType(f.Type))
 	}
-	fmt.Fprintf(b, ") %sFields {\n\treturn %sFields{\n", name, name)
+	fmt.Fprintf(b, ") %sFields {\n", name)
+	// r3 fix (round r3 finding 2): a REQUIRED string_slice/object_slice
+	// field passed nil is a Go-level invalid shape -- the field's own
+	// explicit-zero contract (clause 3) requires an EMPTY container, never
+	// an absent one, and JSON encodes a nil slice as `null`, which reads
+	// exactly like a field that was never measured. Checked here,
+	// uniformly, for every declared required slice field -- valid=false
+	// means the marker below is never set, so IsConstructed() is false and
+	// the caller (tracer.go) refuses the emission instead of printing
+	// malformed `null` JSON for a "constructed" value.
+	hasSliceCheck := false
+	for _, f := range e.Fields {
+		if isFixedStageField(f) || f.Presence != PresenceRequired {
+			continue
+		}
+		if f.Type != FieldStringSlice && f.Type != FieldObjectSlice {
+			continue
+		}
+		hasSliceCheck = true
+		break
+	}
+	if hasSliceCheck {
+		b.WriteString("\tvalid := true\n")
+		for _, f := range e.Fields {
+			if isFixedStageField(f) || f.Presence != PresenceRequired {
+				continue
+			}
+			if f.Type != FieldStringSlice && f.Type != FieldObjectSlice {
+				continue
+			}
+			param := lowerFirst(snakeToPascal(f.Key))
+			fmt.Fprintf(b, "\tif %s == nil {\n\t\tvalid = false\n\t}\n", param)
+		}
+	}
+	fmt.Fprintf(b, "\treturn %sFields{\n", name)
 	for _, f := range e.Fields {
 		if isFixedStageField(f) {
 			continue
@@ -205,7 +239,11 @@ func writeTypedConstruction(b *bytes.Buffer, e Event) {
 		key := snakeToPascal(f.Key)
 		fmt.Fprintf(b, "\t\t%s: %s,\n", key, lowerFirst(key))
 	}
-	fmt.Fprintf(b, "\t\tconstructed: true,\n")
+	if hasSliceCheck {
+		fmt.Fprintf(b, "\t\tconstructed: valid,\n")
+	} else {
+		fmt.Fprintf(b, "\t\tconstructed: true,\n")
+	}
 	fmt.Fprintf(b, "\t}\n}\n\n")
 
 	fmt.Fprintf(b, "// IsConstructed reports whether f was built by New%sFields -- the ONE\n", name)

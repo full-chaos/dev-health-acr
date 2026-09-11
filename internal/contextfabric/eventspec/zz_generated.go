@@ -123,6 +123,25 @@ type DecisionSummaryFields struct {
 // NewDecisionSummaryFields is the generated constructor for DecisionSummaryFields -- every
 // field DecisionSummary.Fields declares is a required parameter.
 func NewDecisionSummaryFields(requestID string, decisionEventCount int, committedCount int, ambiguousCount int, noCommitCount int, committedIDs []string, commitGates []string, commitBases []string, offeredUnderWindowGate bool, frameGate string, refuseBasis string, offerPoolVectorOnlyExcluded int, offerPoolVectorOnlyDemoted int, offerPoolEmptiedByExclusion bool, offerPoolAnchorKindWithheld int, offerPoolAnchorKindWithheldScope string, offerPoolAnchorKindWithheldReason string, offerPoolAnchorKindWithheldIDs []string, offerPoolAnchorKindExempted int, anchorPoolKindScope string, anchorPoolKindScopeSource string, memberKindConfirmed string, reservedKinds []string, filterKinds []string) DecisionSummaryFields {
+	valid := true
+	if committedIDs == nil {
+		valid = false
+	}
+	if commitGates == nil {
+		valid = false
+	}
+	if commitBases == nil {
+		valid = false
+	}
+	if offerPoolAnchorKindWithheldIDs == nil {
+		valid = false
+	}
+	if reservedKinds == nil {
+		valid = false
+	}
+	if filterKinds == nil {
+		valid = false
+	}
 	return DecisionSummaryFields{
 		RequestID:                         requestID,
 		DecisionEventCount:                decisionEventCount,
@@ -148,7 +167,7 @@ func NewDecisionSummaryFields(requestID string, decisionEventCount int, committe
 		MemberKindConfirmed:               memberKindConfirmed,
 		ReservedKinds:                     reservedKinds,
 		FilterKinds:                       filterKinds,
-		constructed:                       true,
+		constructed:                       valid,
 	}
 }
 
@@ -218,6 +237,13 @@ type RankedCutSummaryFields struct {
 // NewRankedCutSummaryFields is the generated constructor for RankedCutSummaryFields -- every
 // field RankedCutSummary.Fields declares is a required parameter.
 func NewRankedCutSummaryFields(requestID string, pass int, candidateCount int, survivedCount int, survivedIDs []string, max int, anchorSlotReserved string, anchorSlotSource string, anchorSlotDisplaced int, poolTruncatedN int, declaredKindRescue []map[string]any) RankedCutSummaryFields {
+	valid := true
+	if survivedIDs == nil {
+		valid = false
+	}
+	if declaredKindRescue == nil {
+		valid = false
+	}
 	return RankedCutSummaryFields{
 		RequestID:           requestID,
 		Pass:                pass,
@@ -230,7 +256,7 @@ func NewRankedCutSummaryFields(requestID string, pass int, candidateCount int, s
 		AnchorSlotDisplaced: anchorSlotDisplaced,
 		PoolTruncatedN:      poolTruncatedN,
 		DeclaredKindRescue:  declaredKindRescue,
-		constructed:         true,
+		constructed:         valid,
 	}
 }
 
