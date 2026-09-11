@@ -54,3 +54,56 @@ func TestOpenPriorsDB_postgresOnlyConfigurationReachesThePostgresOpenPath(t *tes
 		t.Fatalf("openPriorsDB() error = %v, want an \"open postgres\" failure (past configuration)", err)
 	}
 }
+
+// TestOpenPriorsDB_clickHouseDSNFileUnreadableIsNeverRead is r3 P1 finding
+// 1's own pin at the real entry point every priors subcommand shares
+// (curate/flip/rollback/revoke all call openPriorsDB): an unreadable
+// ACR_CLICKHOUSE_DSN_FILE -- plausible in a shared operator environment
+// that also runs `serve` -- must not refuse a priors start. Reproduced
+// live before the fix:
+//
+//	$ env -i PATH=/usr/bin:/bin ACR_ENVIRONMENT=development \
+//	    ACR_POSTGRES_DSN=postgres://... ACR_POSTGRES_CONNECTION_KIND=direct \
+//	    ACR_CLICKHOUSE_DSN_FILE=/nonexistent/ch.dsn \
+//	    acr-projector priors flip --org org-review --version 1 --by operator
+//	configuration: ACR_CLICKHOUSE_DSN_FILE: secret file is unreadable
+func TestOpenPriorsDB_clickHouseDSNFileUnreadableIsNeverRead(t *testing.T) {
+	t.Setenv("ACR_ENVIRONMENT", "development")
+	t.Setenv("ACR_POSTGRES_DSN", "postgres://nouser:nopass@127.0.0.1:1/nodb?sslmode=disable")
+	t.Setenv("ACR_POSTGRES_CONNECTION_KIND", "direct")
+	t.Setenv("ACR_CLICKHOUSE_DSN_FILE", t.TempDir()+"/missing-clickhouse.dsn")
+	_, err := openPriorsDB(context.Background())
+	if err == nil {
+		t.Fatal("openPriorsDB() unexpectedly succeeded against an unreachable Postgres DSN")
+	}
+	if strings.HasPrefix(err.Error(), "configuration:") {
+		t.Fatalf("openPriorsDB() error = %v, is still a configuration refusal -- priors must never read ACR_CLICKHOUSE_DSN_FILE", err)
+	}
+	if !strings.Contains(err.Error(), "open postgres") {
+		t.Fatalf("openPriorsDB() error = %v, want an \"open postgres\" failure (past configuration)", err)
+	}
+}
+
+// TestOpenPriorsDB_projectionEnabledWithoutOrgIDsDoesNotRefuse is r3 P1
+// finding 1's second entry-point pin: priors never runs the projection
+// coordinator loop, so ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true without
+// an org allowlist must not refuse it either. Reproduced live before the
+// fix:
+//
+//	configuration: ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS is required when ACR_CONTEXT_FABRIC_PROJECTION_ENABLED is true in an environment that requires backing stores
+func TestOpenPriorsDB_projectionEnabledWithoutOrgIDsDoesNotRefuse(t *testing.T) {
+	t.Setenv("ACR_ENVIRONMENT", "development")
+	t.Setenv("ACR_POSTGRES_DSN", "postgres://nouser:nopass@127.0.0.1:1/nodb?sslmode=disable")
+	t.Setenv("ACR_POSTGRES_CONNECTION_KIND", "direct")
+	t.Setenv("ACR_CONTEXT_FABRIC_PROJECTION_ENABLED", "true")
+	_, err := openPriorsDB(context.Background())
+	if err == nil {
+		t.Fatal("openPriorsDB() unexpectedly succeeded against an unreachable Postgres DSN")
+	}
+	if strings.HasPrefix(err.Error(), "configuration:") {
+		t.Fatalf("openPriorsDB() error = %v, is still a configuration refusal -- priors does not run the projection loop", err)
+	}
+	if !strings.Contains(err.Error(), "open postgres") {
+		t.Fatalf("openPriorsDB() error = %v, want an \"open postgres\" failure (past configuration)", err)
+	}
+}

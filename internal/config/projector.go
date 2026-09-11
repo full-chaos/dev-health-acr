@@ -99,14 +99,23 @@ type ProjectorConfig struct {
 type requiredStores struct {
 	postgres   bool
 	clickhouse bool
+	// projection marks a caller that actually RUNS the projection
+	// coordinator loop (serve/rebuild/rollback) and therefore cares about
+	// ACR_CONTEXT_FABRIC_PROJECTION_ENABLED/_ORG_IDS. priors (r3 P1
+	// finding 1) never runs that loop, so it must not be refused for a
+	// projection-enabled-without-org-ids combination that a shared
+	// operator environment (the same env a co-located `serve` reads) may
+	// carry for reasons entirely unrelated to priors.
+	projection bool
 }
 
 var (
 	// requiredStoresAll is every acr-projector command except priors:
 	// serve, rebuild, rollback.
-	requiredStoresAll = requiredStores{postgres: true, clickhouse: true}
+	requiredStoresAll = requiredStores{postgres: true, clickhouse: true, projection: true}
 	// requiredStoresPostgresOnly is the priors operator surface's own
-	// requirement (curate, flip, rollback, revoke) -- never ClickHouse.
+	// requirement (curate, flip, rollback, revoke) -- never ClickHouse,
+	// never projection.
 	requiredStoresPostgresOnly = requiredStores{postgres: true}
 )
 
@@ -161,7 +170,12 @@ func loadProjector(lookup lookupEnv, required requiredStores) (ProjectorConfig, 
 	// r1 P2 finding 1 (class sweep): same fix as acr-api's load() in
 	// config.go -- the dev opt-out flag is the ONLY way to turn backing
 	// stores off for the projector too.
-	if err := loadHostedRuntimeValues(lookup, &hosted, requireStoresDefault, requireStoresDefault); err != nil {
+	//
+	// r3 P1 finding 1: required.clickhouse also gates whether ClickHouse
+	// config is even READ -- priors (requiredStoresPostgresOnly) must
+	// never touch ACR_CLICKHOUSE_DSN/_FILE at all, not just skip
+	// validating it. See loadHostedRuntimeValues's own doc comment.
+	if err := loadHostedRuntimeValues(lookup, &hosted, requireStoresDefault, requireStoresDefault, required.clickhouse); err != nil {
 		return ProjectorConfig{}, err
 	}
 	cfg.ClickHouseDSN, cfg.ClickHouseCACertPath = hosted.ClickHouseDSN, hosted.ClickHouseCACertPath
@@ -233,7 +247,12 @@ func (c ProjectorConfig) validate(required requiredStores) error {
 	if c.Concurrency < 1 {
 		return fmt.Errorf("%s must be at least 1", envContextFabricConcurrency)
 	}
-	if c.ClickHouseMaxBytesToRead == 0 {
+	// r3 P1 finding 1 (class sweep): gated on required.clickhouse for the
+	// same reason the DSN load itself is -- priors never reads ClickHouse
+	// at all, so a shared environment's ACR_CLICKHOUSE_MAX_BYTES_TO_READ=0
+	// (meaningless to priors, meaningful to serve/rebuild/rollback) must
+	// not refuse it.
+	if required.clickhouse && c.ClickHouseMaxBytesToRead == 0 {
 		return errors.New("ACR_CLICKHOUSE_MAX_BYTES_TO_READ must be positive")
 	}
 	if c.LocalCompositionReady && (c.Environment != "development" || c.RequireBackingStores) {
@@ -251,7 +270,12 @@ func (c ProjectorConfig) validate(required requiredStores) error {
 			return errors.New("ACR_CLICKHOUSE_DSN is required when backing stores are required")
 		}
 	}
-	if c.ProjectionEnabled && c.RequireBackingStores && len(c.OrgIDs) == 0 {
+	// r3 P1 finding 1 (class sweep): gated on required.projection -- priors
+	// never runs the projection coordinator loop, so a shared operator
+	// environment's ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true (set for a
+	// co-located `serve` process, not for priors) without org ids must not
+	// refuse a priors start that has nothing to do with that loop.
+	if required.projection && c.ProjectionEnabled && c.RequireBackingStores && len(c.OrgIDs) == 0 {
 		return fmt.Errorf("%s is required when %s is true in an environment that requires backing stores", envContextFabricProjectorOrgs, envContextFabricProjection)
 	}
 	return nil

@@ -91,3 +91,50 @@ func TestRebuildWithoutBackingStoresReportsWhatIsMissing(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+// TestRebuildFullStoresConfigurationPassesConfigurationAndReachesRuntimeOpen
+// is r3 P1 finding 1's serve/rebuild/rollback-side proof, through the real
+// `acr-projector rebuild` entry point: rebuild is one of the full-stack
+// (requiredStoresAll) commands the priors narrowing must not have
+// loosened, so a genuinely complete environment (both DSNs, no dev flag)
+// must pass configuration and proceed to the runtime-open step -- proven
+// by the error CLASS changing from "configuration:"-prefixed to
+// "open runtime:"-prefixed against deliberately unreachable DSNs (this
+// needs no real database, same technique as
+// cmd/acr-projector/priors_stores_test.go's postgres-only pin).
+func TestRebuildFullStoresConfigurationPassesConfigurationAndReachesRuntimeOpen(t *testing.T) {
+	t.Setenv("ACR_ENVIRONMENT", "development")
+	t.Setenv("ACR_POSTGRES_DSN", "postgres://nouser:nopass@127.0.0.1:1/nodb?sslmode=disable")
+	t.Setenv("ACR_POSTGRES_CONNECTION_KIND", "direct")
+	t.Setenv("ACR_CLICKHOUSE_DSN", "https://nouser:nopass@127.0.0.1:1")
+	// rebuild forces cfg.ProjectionEnabled=true itself (see rebuild's own
+	// doc comment), so a canonical environment for it also needs the org
+	// allowlist -- unrelated to this fix, just what rebuild always required.
+	t.Setenv("ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS", "org-1")
+	err := run([]string{"rebuild", "--org", "org-1"})
+	if err == nil {
+		t.Fatal("run(rebuild) unexpectedly succeeded against unreachable DSNs")
+	}
+	if strings.HasPrefix(err.Error(), "configuration:") {
+		t.Fatalf("run(rebuild) error = %v, is still a configuration refusal -- a canonical full-stack environment should have passed validation", err)
+	}
+}
+
+// TestRollbackFullStoresConfigurationPassesConfigurationAndReachesRuntimeOpen
+// is the same pin for `acr-projector rollback` -- the other full-stack
+// command besides serve/rebuild.
+func TestRollbackFullStoresConfigurationPassesConfigurationAndReachesRuntimeOpen(t *testing.T) {
+	t.Setenv("ACR_ENVIRONMENT", "development")
+	t.Setenv("ACR_POSTGRES_DSN", "postgres://nouser:nopass@127.0.0.1:1/nodb?sslmode=disable")
+	t.Setenv("ACR_POSTGRES_CONNECTION_KIND", "direct")
+	t.Setenv("ACR_CLICKHOUSE_DSN", "https://nouser:nopass@127.0.0.1:1")
+	// rollback forces cfg.ProjectionEnabled=true itself, same as rebuild.
+	t.Setenv("ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS", "org-1")
+	err := run([]string{"rollback", "--org", "org-1"})
+	if err == nil {
+		t.Fatal("run(rollback) unexpectedly succeeded against unreachable DSNs")
+	}
+	if strings.HasPrefix(err.Error(), "configuration:") {
+		t.Fatalf("run(rollback) error = %v, is still a configuration refusal -- a canonical full-stack environment should have passed validation", err)
+	}
+}

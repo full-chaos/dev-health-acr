@@ -64,6 +64,65 @@ func TestLoadProjectorPriors_postgresOnlyConfigurationSucceeds(t *testing.T) {
 	}
 }
 
+// TestLoadProjectorPriors_clickHouseDSNFileUnreadableIsNeverRead is r3 P1
+// finding 1's own repro made a domain cell: priors' Postgres-only
+// requirement must mean ACR_CLICKHOUSE_DSN_FILE is never even READ, not
+// merely unvalidated -- before this fix, loadHostedRuntimeValues called
+// SecretValue("ACR_CLICKHOUSE_DSN") unconditionally, so an operator's
+// shared environment (the same env a co-located `serve` process reads)
+// naming an unreadable ClickHouse DSN file refused a priors start that
+// never opens that file. Reproduced live before the fix:
+//
+//	configuration: ACR_CLICKHOUSE_DSN_FILE: secret file is unreadable
+func TestLoadProjectorPriors_clickHouseDSNFileUnreadableIsNeverRead(t *testing.T) {
+	cfg, err := loadProjector(mapLookup(map[string]string{
+		"ACR_POSTGRES_DSN":             "postgres://configured",
+		"ACR_POSTGRES_CONNECTION_KIND": "direct",
+		"ACR_CLICKHOUSE_DSN_FILE":      t.TempDir() + "/missing-clickhouse.dsn",
+	}), requiredStoresPostgresOnly)
+	if err != nil {
+		t.Fatalf("loadProjector(requiredStoresPostgresOnly) error = %v, want success -- priors must never read ACR_CLICKHOUSE_DSN_FILE at all", err)
+	}
+	if strings.TrimSpace(cfg.ClickHouseDSN) != "" {
+		t.Fatalf("ClickHouseDSN = %q, want empty -- the file was never opened", cfg.ClickHouseDSN)
+	}
+}
+
+// TestLoadProjectorPriors_projectionEnabledWithoutOrgIDsDoesNotRefuse is r3
+// P1 finding 1's second domain cell: priors never runs the projection
+// coordinator loop, so ACR_CONTEXT_FABRIC_PROJECTION_ENABLED=true without
+// an org allowlist (meaningful only to serve/rebuild/rollback, and plausible
+// in a shared operator environment) must not refuse a priors start.
+// Reproduced live before the fix:
+//
+//	configuration: ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS is required when ACR_CONTEXT_FABRIC_PROJECTION_ENABLED is true in an environment that requires backing stores
+func TestLoadProjectorPriors_projectionEnabledWithoutOrgIDsDoesNotRefuse(t *testing.T) {
+	_, err := loadProjector(mapLookup(map[string]string{
+		"ACR_POSTGRES_DSN":                      "postgres://configured",
+		"ACR_POSTGRES_CONNECTION_KIND":          "direct",
+		"ACR_CONTEXT_FABRIC_PROJECTION_ENABLED": "true",
+	}), requiredStoresPostgresOnly)
+	if err != nil {
+		t.Fatalf("loadProjector(requiredStoresPostgresOnly) error = %v, want success -- priors does not run the projection loop", err)
+	}
+}
+
+// TestLoadProjectorPriors_clickHouseMaxBytesZeroDoesNotRefuse is the
+// symmetric class-sweep cell for ClickHouseMaxBytesToRead: priors never
+// queries ClickHouse, so a shared environment's
+// ACR_CLICKHOUSE_MAX_BYTES_TO_READ=0 (meaningless to priors) must not
+// refuse it either.
+func TestLoadProjectorPriors_clickHouseMaxBytesZeroDoesNotRefuse(t *testing.T) {
+	_, err := loadProjector(mapLookup(map[string]string{
+		"ACR_POSTGRES_DSN":                 "postgres://configured",
+		"ACR_POSTGRES_CONNECTION_KIND":     "direct",
+		"ACR_CLICKHOUSE_MAX_BYTES_TO_READ": "0",
+	}), requiredStoresPostgresOnly)
+	if err != nil {
+		t.Fatalf("loadProjector(requiredStoresPostgresOnly) error = %v, want success -- priors does not read ClickHouse", err)
+	}
+}
+
 // TestLoadProjectorFullStores_postgresOnlyStillRefusesNamingClickHouse
 // proves the OTHER half of the split: every command using the FULL
 // requirement (serve, rebuild, rollback) must still refuse a Postgres-only
@@ -76,6 +135,39 @@ func TestLoadProjectorFullStores_postgresOnlyStillRefusesNamingClickHouse(t *tes
 	}), requiredStoresAll)
 	if err == nil || !strings.Contains(err.Error(), "ACR_CLICKHOUSE_DSN") {
 		t.Fatalf("loadProjector(requiredStoresAll) error = %v, want an ACR_CLICKHOUSE_DSN refusal", err)
+	}
+}
+
+// TestLoadProjectorFullStores_clickHouseOnlyStillRefusesNamingPostgres is
+// r3 P1 finding 1's serve/rebuild/rollback-side counterpart: the full-stack
+// requirement narrowing that let priors stop reading ClickHouse must not
+// have loosened the OTHER half -- a ClickHouse-only environment must still
+// be refused, naming Postgres, for every requiredStoresAll caller.
+func TestLoadProjectorFullStores_clickHouseOnlyStillRefusesNamingPostgres(t *testing.T) {
+	_, err := loadProjector(mapLookup(map[string]string{
+		"ACR_CLICKHOUSE_DSN": "https://clickhouse.internal",
+	}), requiredStoresAll)
+	if err == nil || !strings.Contains(err.Error(), "ACR_POSTGRES_DSN") {
+		t.Fatalf("loadProjector(requiredStoresAll) error = %v, want an ACR_POSTGRES_DSN refusal", err)
+	}
+}
+
+// TestLoadProjectorFullStores_canonicalConfigurationSucceeds is r3 P1
+// finding 1's full-stack canonical cell: a genuinely complete environment
+// (both DSNs, no dev flag) must pass requiredStoresAll validation -- the
+// narrowing for priors must not have tightened anything for the callers
+// that still need everything.
+func TestLoadProjectorFullStores_canonicalConfigurationSucceeds(t *testing.T) {
+	cfg, err := loadProjector(mapLookup(map[string]string{
+		"ACR_POSTGRES_DSN":             "postgres://configured",
+		"ACR_POSTGRES_CONNECTION_KIND": "direct",
+		"ACR_CLICKHOUSE_DSN":           "https://clickhouse.internal",
+	}), requiredStoresAll)
+	if err != nil {
+		t.Fatalf("loadProjector(requiredStoresAll) error = %v, want a canonical full-stack configuration to succeed", err)
+	}
+	if cfg.PostgresDSN == "" || cfg.ClickHouseDSN == "" {
+		t.Fatalf("cfg = %#v, want both DSNs populated", cfg)
 	}
 }
 

@@ -278,7 +278,10 @@ func load(lookup lookupEnv) (Config, error) {
 	// default is true (every case except development+dev-flag), an
 	// explicit false is overridden back to true, the same "force" pattern
 	// staging/production already used against a lone override.
-	if err := loadHostedRuntimeValues(lookup, &cfg, requireStoresDefault, requireStoresDefault); err != nil {
+	// acr-api's serve path always opens ClickHouse (loadClickHouse=true) --
+	// it has no Postgres-only caller the way acr-projector's priors surface
+	// does. See loadHostedRuntimeValues's own doc comment.
+	if err := loadHostedRuntimeValues(lookup, &cfg, requireStoresDefault, requireStoresDefault, true); err != nil {
 		return Config{}, err
 	}
 	if cfg.EvidenceIDKeys, err = evidenceIDKeysValue(lookup); err != nil {
