@@ -56,8 +56,9 @@ func TestWindowContinuation_D0Probe_RedAtParentGreenAtTip(t *testing.T) {
 	prior.ResultID = "result_d0_probe1_turn1"
 	prior.ConfirmedStructure = nil
 	prior.AnswerPlan = &contractsv1.ContextFabricAnswerPlan{
-		Family:    QuestionFamilyDiscoveredCohortRanking,
-		GroupKind: "",
+		Family:        QuestionFamilyDiscoveredCohortRanking,
+		GroupKind:     "",
+		FamilyVersion: QuestionFamilyTableVersion,
 	}
 	prior.WindowClarification = &WindowClarification{Options: []WindowOption{{
 		ReceiptID:  "winr_d0probe1aaaaaaaaaaaa",
@@ -203,7 +204,7 @@ func TestWindowContinuation_D0ControlA_TheLegacyCarryStillApplies(t *testing.T) 
 	prior := validInvestigationResult()
 	prior.ResultID = "result_d0_probe1_turn1"
 	prior.ConfirmedStructure = nil
-	prior.AnswerPlan = &contractsv1.ContextFabricAnswerPlan{Family: QuestionFamilyDiscoveredCohortRanking}
+	prior.AnswerPlan = &contractsv1.ContextFabricAnswerPlan{Family: QuestionFamilyDiscoveredCohortRanking, FamilyVersion: QuestionFamilyTableVersion}
 	prior.WindowClarification = &WindowClarification{Options: []WindowOption{{
 		ReceiptID: "winr_d0probe1aaaaaaaaaaaa", OptionID: "opt_90d", Label: "the last 90 days",
 		RelativeID: RelativeWindowTrailing90D, Start: &frozenStart, End: &frozenEnd,
@@ -269,7 +270,7 @@ func TestWindowContinuation_D0ControlB_TheContinuationEmitCannotPassAsLegacy(t *
 	prior := validInvestigationResult()
 	prior.ResultID = "result_d0_probe1_turn1"
 	prior.ConfirmedStructure = nil
-	prior.AnswerPlan = &contractsv1.ContextFabricAnswerPlan{Family: QuestionFamilyDiscoveredCohortRanking}
+	prior.AnswerPlan = &contractsv1.ContextFabricAnswerPlan{Family: QuestionFamilyDiscoveredCohortRanking, FamilyVersion: QuestionFamilyTableVersion}
 	prior.WindowClarification = &WindowClarification{Options: []WindowOption{{
 		ReceiptID: "winr_d0probe1aaaaaaaaaaaa", OptionID: "opt_90d", Label: "the last 90 days",
 		RelativeID: RelativeWindowTrailing90D, Start: &frozenStart, End: &frozenEnd,

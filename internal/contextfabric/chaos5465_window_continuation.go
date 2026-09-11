@@ -767,7 +767,13 @@ func (e *Engine) admitWindowContinuation(
 	// D-a: revalidate under the RECORDED standard. A carrier stamped by a
 	// different family definition table is not reinterpreted under today's;
 	// an unsupported version is an admission failure.
-	if strings.TrimSpace(plan.FamilyVersion) != "" && plan.FamilyVersion != QuestionFamilyTableVersion {
+	//
+	// EXACT, AND NO "ABSENT" ALLOWANCE. The stamp is compared byte for byte:
+	// a blank, whitespace-only or padded stamp names no table this build can
+	// verify, so it is a mismatch like any other. (The contract already
+	// requires a non-empty family_version, so an allowance for "no stamp"
+	// admitted only whitespace -- a stamp that is not the table in force.)
+	if plan.FamilyVersion != QuestionFamilyTableVersion {
 		decision.Disposition = ContinuationWithheld
 		decision.Reason = ContinuationReasonContextVersionMismatch
 		return decision

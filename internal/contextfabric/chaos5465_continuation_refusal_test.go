@@ -264,6 +264,29 @@ func refusalCells() []refusalCell {
 			wantRefused: true, wantDisposition: ContinuationWithheld, wantReason: ContinuationReasonContextVersionMismatch,
 			wantDecisionEmitted: true, wantServedBasis: contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable,
 		},
+		// ---- A RECORDED STANDARD IS COMPARED EXACTLY. The contract requires a
+		// non-empty family_version, so a blank-looking value is not a legacy
+		// carrier: it is a stamp that is not the table in force.
+		{
+			name: "carrier recorded under a whitespace-only family table version",
+			prior: func(p InvestigationResult) InvestigationResult {
+				p.AnswerPlan.FamilyVersion = "   "
+				return p
+			},
+			interpreter: forced,
+			wantRefused: true, wantDisposition: ContinuationWithheld, wantReason: ContinuationReasonContextVersionMismatch,
+			wantDecisionEmitted: true, wantServedBasis: contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable,
+		},
+		{
+			name: "carrier recorded under the table in force padded with whitespace",
+			prior: func(p InvestigationResult) InvestigationResult {
+				p.AnswerPlan.FamilyVersion = " " + QuestionFamilyTableVersion + "\t"
+				return p
+			},
+			interpreter: forced,
+			wantRefused: true, wantDisposition: ContinuationWithheld, wantReason: ContinuationReasonContextVersionMismatch,
+			wantDecisionEmitted: true, wantServedBasis: contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable,
+		},
 		{
 			name:        "carried axis cannot be expressed by the fresh frame",
 			priorFamily: QuestionFamilyGroupedCohortStatus, priorGroup: contractsv1.ContextFabricSubjectTeam,
@@ -337,6 +360,10 @@ func TestContinuationRefusal_TheRefusalMatrixThroughTheEngine(t *testing.T) {
 			prior := continuationPrior(t, continuationPriorID, base, family, group)
 			if cell.prior != nil {
 				prior = cell.prior(prior)
+				// REACHABLE: the mutated carrier is one the store would read back.
+				if err := ValidateStoredResult(prior); err != nil {
+					t.Fatalf("fixture defect: the mutated carrier fails the stored-result validator, so the cell is unreachable: %v", err)
+				}
 			}
 			older := continuationPrior(t, continuationOlderID, base, QuestionFamilyDiscoveredCohortRanking, "")
 			store := newRefusalStore(&staticResultStore{
