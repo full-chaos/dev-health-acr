@@ -173,7 +173,11 @@ func TestLoad_preservesExplicitZeroPostgreSQLIdleConnections(t *testing.T) {
 
 func TestLoad_episode_writeback_defaults_disabled(t *testing.T) {
 	// When
-	cfg, err := load(mapLookup(nil))
+	// dictation 811: backing stores default to required outside development
+	// with the explicit dev flag -- this test is about EnableEpisodeWriteback,
+	// not backing stores, so opt into local composition to keep the old
+	// storeless default reachable.
+	cfg, err := load(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true"}))
 
 	// Then
 	if err != nil {

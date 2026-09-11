@@ -69,6 +69,22 @@ LABEL org.opencontainers.image.title="ACR API" \
 
 COPY --from=build /out-api-root/ /
 
+# dictation 811 (class sweep): both acr-api's and acr-projector's own
+# process defaults are now loopback-only (127.0.0.1:8080 / 127.0.0.1:8090),
+# so each fails closed if started with no environment at all -- see
+# internal/config/config.go and internal/config/projector.go. This image
+# ships BOTH binaries (acr-projector runs from it with its ENTRYPOINT
+# overridden, never a separate build) and is reached from OUTSIDE its
+# network namespace (the pod/compose network) either way, so it must bind
+# every interface explicitly rather than rely on the loopback default, or
+# the image would be unreachable out of the box. Every orchestration layer
+# in this repo (deploy/compose, deploy/kubernetes, deploy/helm) already
+# sets ACR_ADDR/ACR_PROJECTOR_ADDR itself and overrides these; these ENV
+# lines only cover the image run directly (e.g. a bare `docker run`) with
+# no such layer in front of it.
+ENV ACR_ADDR=0.0.0.0:8080
+ENV ACR_PROJECTOR_ADDR=0.0.0.0:8090
+
 USER 65532:65532
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/acr-api"]

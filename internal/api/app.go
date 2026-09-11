@@ -137,7 +137,46 @@ func (a *App) handleReady(w http.ResponseWriter, r *http.Request) {
 		}
 		response.Checks = append(response.Checks, readinessCheckResponse{Name: check.Name(), Status: checkStatus})
 	}
+	a.logReadinessTransition(r.Context(), response)
 	writeJSON(w, status, response)
+}
+
+// logReadinessTransition (dictation 811) logs one Info line the
+// FIRST time /readyz is observed and again every time the overall status
+// actually changes -- not ready -> ready and back -- naming every check's
+// current state so the decision graph (why did readiness flip) is
+// reconstructable from the trace alone, without polling logs per request.
+func (a *App) logReadinessTransition(ctx context.Context, response readinessResponse) {
+	next := readinessStateReady
+	if response.Status != "ready" {
+		next = readinessStateNotReady
+	}
+	previous := a.readinessState.Swap(next)
+	if previous == next {
+		return
+	}
+	states := make([]any, 0, len(response.Checks)*2)
+	for _, check := range response.Checks {
+		states = append(states, check.Name, check.Status)
+	}
+	a.logger.InfoContext(ctx, "readiness state changed",
+		append([]any{
+			"request_id", RequestID(ctx),
+			"previous_status", readinessStateLabel(previous),
+			"status", response.Status,
+		}, states...)...,
+	)
+}
+
+func readinessStateLabel(state int32) string {
+	switch state {
+	case readinessStateReady:
+		return "ready"
+	case readinessStateNotReady:
+		return "not_ready"
+	default:
+		return "unknown"
+	}
 }
 
 func (a *App) requestIDMiddleware(next http.Handler) http.Handler {

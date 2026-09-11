@@ -10,7 +10,13 @@ import (
 )
 
 const (
-	defaultProjectorListenAddress = ":8090"
+	// defaultProjectorListenAddress: loopback-only, same class fix and same
+	// reason as acr-api's defaultListenAddress in config.go -- an
+	// unauthenticated readiness HTTP server started with no ACR_PROJECTOR_ADDR
+	// configured must not be reachable from the network by default. Every
+	// real deployment surface in this repo sets ACR_PROJECTOR_ADDR explicitly
+	// to a 0.0.0.0-bound address.
+	defaultProjectorListenAddress = "127.0.0.1:8090"
 	defaultProjectionPollInterval = 15 * time.Second
 	defaultProjectionConcurrency  = 4
 	defaultProjectionDrainBudget  = 500
@@ -51,6 +57,11 @@ type ProjectorConfig struct {
 	PostgresConnMaxIdleTime        time.Duration
 	PostgresPingTimeout            time.Duration
 	RequireBackingStores           bool
+	// LocalCompositionReady mirrors Config.LocalCompositionReady (dictation
+	// 811): the explicit dev opt-out allowing RequireBackingStores to
+	// default false, restricted to ACR_ENVIRONMENT=development by Validate
+	// below.
+	LocalCompositionReady bool
 
 	// ProjectionEnabled is this binary's own master switch (independent of
 	// ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED, which gates graph reads in
@@ -80,7 +91,15 @@ func LoadProjector() (ProjectorConfig, error) {
 
 func loadProjector(lookup lookupEnv) (ProjectorConfig, error) {
 	environment := stringValue(lookup, envProjectorEnvironment, defaultEnvironment)
-	requireStoresDefault := environment == "staging" || environment == "production"
+	// requireStoresDefault / environmentForcesStores: same class fix as
+	// acr-api's load() in config.go (dictation 811) -- backing stores are
+	// required by default in every environment now, exempted only by
+	// ACR_ENVIRONMENT=development with the explicit ACR_LOCAL_COMPOSITION_READY
+	// dev flag. environmentForcesStores (staging/production) still forces
+	// the value even over an explicit ACR_REQUIRE_BACKING_STORES=false.
+	localCompositionReadyRequested, _ := boolValue(lookup, "ACR_LOCAL_COMPOSITION_READY", false)
+	environmentForcesStores := environment == "staging" || environment == "production"
+	requireStoresDefault := environmentForcesStores || !(environment == "development" && localCompositionReadyRequested)
 	logLevel, err := parseLogLevel(stringValue(lookup, "ACR_LOG_LEVEL", "info"))
 	if err != nil {
 		return ProjectorConfig{}, err
@@ -94,7 +113,7 @@ func loadProjector(lookup lookupEnv) (ProjectorConfig, error) {
 	// ACR_REQUIRE_BACKING_STORES): both binaries are configured against the
 	// same instances, and this keeps that one loading path authoritative.
 	var hosted Config
-	if err := loadHostedRuntimeValues(lookup, &hosted, requireStoresDefault); err != nil {
+	if err := loadHostedRuntimeValues(lookup, &hosted, requireStoresDefault, environmentForcesStores); err != nil {
 		return ProjectorConfig{}, err
 	}
 	cfg.ClickHouseDSN, cfg.ClickHouseCACertPath = hosted.ClickHouseDSN, hosted.ClickHouseCACertPath
@@ -109,6 +128,7 @@ func loadProjector(lookup lookupEnv) (ProjectorConfig, error) {
 		cfg.PostgresPingTimeout = defaultProjectorPingTimeout
 	}
 	cfg.RequireBackingStores = hosted.RequireBackingStores
+	cfg.LocalCompositionReady = hosted.LocalCompositionReady
 
 	if cfg.ProjectionEnabled, err = boolValue(lookup, envContextFabricProjection, false); err != nil {
 		return ProjectorConfig{}, err
@@ -158,6 +178,9 @@ func (c ProjectorConfig) Validate() error {
 	}
 	if c.ClickHouseMaxBytesToRead == 0 {
 		return errors.New("ACR_CLICKHOUSE_MAX_BYTES_TO_READ must be positive")
+	}
+	if c.LocalCompositionReady && (c.Environment != "development" || c.RequireBackingStores) {
+		return errors.New("ACR_LOCAL_COMPOSITION_READY requires development with backing stores disabled")
 	}
 	if c.RequireBackingStores {
 		if strings.TrimSpace(c.ClickHouseDSN) == "" {

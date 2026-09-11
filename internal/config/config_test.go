@@ -15,19 +15,94 @@ func mapLookup(values map[string]string) lookupEnv {
 	}
 }
 
+// TestLoadDefaults binds dictation 811: a process started with
+// NO environment configured at all must fail closed -- refuse to start --
+// rather than silently come up as a reachable, storeless dev stub. Before
+// this fix, load(mapLookup(nil)) SUCCEEDED with ListenAddress ":8080" (every
+// interface) and RequireBackingStores false; that was the exact defect a
+// mis-started leg hit live (a missing env file sourced without `set -e`).
 func TestLoadDefaults(t *testing.T) {
-	cfg, err := load(mapLookup(nil))
+	_, err := load(mapLookup(nil))
+	if err == nil || !strings.Contains(err.Error(), "backing stores are required") {
+		t.Fatalf("load() error = %v, want a backing-stores-required refusal with zero configuration", err)
+	}
+}
+
+// TestLoadDefaults_listenAddressAndLogLevel isolates the two defaults that
+// TestLoadDefaults itself can no longer observe on the (now-erroring) bare
+// path: with just enough configuration to pass Validate, ListenAddress
+// defaults to loopback-only (dictation 811 -- ":8080" bound every interface)
+// and LogLevel defaults to info.
+func TestLoadDefaults_listenAddressAndLogLevel(t *testing.T) {
+	cfg, err := load(mapLookup(completeRuntimeEnvironment()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ListenAddress != ":8080" || cfg.Environment != "development" {
-		t.Fatalf("unexpected defaults: %#v", cfg)
+	if cfg.ListenAddress != "127.0.0.1:8080" {
+		t.Fatalf("ListenAddress = %q, want the loopback-only default", cfg.ListenAddress)
 	}
 	if cfg.LogLevel != slog.LevelInfo {
 		t.Fatalf("unexpected log level: %v", cfg.LogLevel)
 	}
+}
+
+// TestLoadDefaults_developmentWithLocalCompositionReady is the ONE exemption
+// dictation 811 leaves: ACR_ENVIRONMENT=development plus the explicit dev
+// opt-out flag ACR_LOCAL_COMPOSITION_READY=true. Validate independently
+// enforces that pairing (a lone ACR_LOCAL_COMPOSITION_READY=true in any
+// other environment is rejected -- see
+// TestConfig_rejects_local_composition_in_production-style coverage in
+// cmd/acr-api), so this exemption can never be reached by an
+// unconfigured/missing environment, only by a deliberate, explicit choice.
+func TestLoadDefaults_developmentWithLocalCompositionReady(t *testing.T) {
+	cfg, err := load(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true"}))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if cfg.RequireBackingStores {
-		t.Fatal("development must not require backing stores by default")
+		t.Fatal("ACR_LOCAL_COMPOSITION_READY=true in development must default backing stores to NOT required")
+	}
+	if cfg.Environment != "development" {
+		t.Fatalf("Environment = %q, want development", cfg.Environment)
+	}
+}
+
+// TestLoadDefaults_testEnvironmentAlsoRequiresBackingStoresByDefault proves
+// the new default is NOT staging/production-only: ACR_ENVIRONMENT=test with
+// no other configuration must also refuse to start, because the dev
+// opt-out flag is only honored under ACR_ENVIRONMENT=development.
+func TestLoadDefaults_testEnvironmentAlsoRequiresBackingStoresByDefault(t *testing.T) {
+	_, err := load(mapLookup(map[string]string{"ACR_ENVIRONMENT": "test"}))
+	if err == nil || !strings.Contains(err.Error(), "backing stores are required") {
+		t.Fatalf("load() error = %v, want a backing-stores-required refusal in ACR_ENVIRONMENT=test with no override", err)
+	}
+}
+
+// TestLoadDefaults_developmentExplicitOverrideStillHonored proves an
+// operator's own explicit ACR_REQUIRE_BACKING_STORES=false in development
+// is still honored WITHOUT the dev flag -- dictation 811 raises the DEFAULT,
+// it does not remove the ability to explicitly opt out (that force-override
+// protection stays reserved for staging/production, unchanged from before
+// this change).
+func TestLoadDefaults_developmentExplicitOverrideStillHonored(t *testing.T) {
+	cfg, err := load(mapLookup(map[string]string{"ACR_REQUIRE_BACKING_STORES": "false"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RequireBackingStores {
+		t.Fatal("an explicit ACR_REQUIRE_BACKING_STORES=false in development must still be honored")
+	}
+}
+
+// TestLoadRejectsOutOfVocabularyEnvironment closes the out-of-vocabulary
+// cell of the ACR_ENVIRONMENT domain for Config.Validate itself (the
+// projector's separate ProjectorConfig.Validate already had this cell via
+// TestLoadProjectorRejectsInvalidEnvironment; Config's own switch had no
+// direct pin before this).
+func TestLoadRejectsOutOfVocabularyEnvironment(t *testing.T) {
+	_, err := load(mapLookup(map[string]string{"ACR_ENVIRONMENT": "sandbox"}))
+	if err == nil || !strings.Contains(err.Error(), "ACR_ENVIRONMENT must be") {
+		t.Fatalf("load() error = %v, want an ACR_ENVIRONMENT vocabulary rejection", err)
 	}
 }
 
@@ -63,6 +138,39 @@ func TestProductionCannotDisableKeyringValidationWithBackingStoreOverride(t *tes
 	}))
 	if err == nil {
 		t.Fatal("production disabled backing stores without an evidence keyring")
+	}
+}
+
+// TestStagingCannotDisableBackingStoresOverride mirrors
+// TestProductionCannotDisableKeyringValidationWithBackingStoreOverride for
+// "staging" -- the environmentForcesStores clause in load() (dictation 811)
+// treats staging and production identically. It asserts the FORCED value
+// directly (RequireBackingStores == true with a fully valid configuration)
+// rather than merely "load() errors": an under-configured staging
+// environment already errors independently on its own remote-entitlement
+// requirement regardless of this clause, so a bare error-only assertion
+// does not actually prove the override was ignored (confirmed live: a
+// mutation dropping "staging" from environmentForcesStores, or narrowing it
+// to production-only, still passed an error-only version of this test).
+func TestStagingCannotDisableBackingStoresOverride(t *testing.T) {
+	values := map[string]string{
+		"ACR_ENVIRONMENT":                       "staging",
+		"ACR_REQUIRE_BACKING_STORES":            "false",
+		"ACR_CLICKHOUSE_DSN":                    "clickhouse://redacted",
+		"ACR_POSTGRES_DSN":                      "postgres://redacted?sslmode=verify-full",
+		"ACR_EVIDENCE_ID_ACTIVE_KID":            "current",
+		"ACR_EVIDENCE_ID_KEYS":                  "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
+		"ACR_DEV_HEALTH_ENTITLEMENT_URL":        "https://ops.example.test",
+		"ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE": "/run/secrets/ops-token",
+		"ACR_DEVICE_VERIFICATION_URL":           "https://verify.example.test/device",
+		"ACR_POSTGRES_CONNECTION_KIND":          "direct",
+	}
+	cfg, err := load(mapLookup(values))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.RequireBackingStores {
+		t.Fatal("staging must force RequireBackingStores=true even over an explicit ACR_REQUIRE_BACKING_STORES=false")
 	}
 }
 
@@ -149,8 +257,9 @@ func TestProductionAcceptsPlainHTTPDevHealthEntitlementURL(t *testing.T) {
 
 func TestSafeAttributesDoNotContainDSNs(t *testing.T) {
 	cfg, err := load(mapLookup(map[string]string{
-		"ACR_CLICKHOUSE_DSN": "clickhouse://user:secret@example",
-		"ACR_POSTGRES_DSN":   "postgres://user:secret@example",
+		"ACR_CLICKHOUSE_DSN":          "clickhouse://user:secret@example",
+		"ACR_POSTGRES_DSN":            "postgres://user:secret@example",
+		"ACR_LOCAL_COMPOSITION_READY": "true",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -163,7 +272,10 @@ func TestSafeAttributesDoNotContainDSNs(t *testing.T) {
 }
 
 func TestTrustedProxyCIDRsAreParsedWithoutLoggingValues(t *testing.T) {
-	cfg, err := load(mapLookup(map[string]string{"ACR_TRUSTED_PROXY_CIDRS": "10.0.0.0/8, 192.0.2.0/24"}))
+	cfg, err := load(mapLookup(map[string]string{
+		"ACR_TRUSTED_PROXY_CIDRS":     "10.0.0.0/8, 192.0.2.0/24",
+		"ACR_LOCAL_COMPOSITION_READY": "true",
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +309,10 @@ func TestRevokedClientVersionsRequireCanonicalSemVer(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			// When
-			_, err := load(mapLookup(map[string]string{"ACR_REVOKED_CLIENT_VERSIONS": test.value}))
+			_, err := load(mapLookup(map[string]string{
+				"ACR_REVOKED_CLIENT_VERSIONS": test.value,
+				"ACR_LOCAL_COMPOSITION_READY": "true",
+			}))
 
 			// Then
 			if got := err == nil; got != test.want {
@@ -209,7 +324,10 @@ func TestRevokedClientVersionsRequireCanonicalSemVer(t *testing.T) {
 
 func TestLoad_webAssertionsRequireCompleteConfiguration(t *testing.T) {
 	// Given
-	values := map[string]string{"ACR_WEB_ASSERTION_ISSUER": "https://web.example.test"}
+	values := map[string]string{
+		"ACR_WEB_ASSERTION_ISSUER":    "https://web.example.test",
+		"ACR_LOCAL_COMPOSITION_READY": "true",
+	}
 
 	// When
 	_, err := load(mapLookup(values))
@@ -226,6 +344,7 @@ func TestLoad_webAssertionsRetainFixedIssuerAudienceAndJWKSPath(t *testing.T) {
 		"ACR_WEB_ASSERTION_ISSUER":    "https://web.example.test",
 		"ACR_WEB_ASSERTION_AUDIENCE":  "acr-api",
 		"ACR_WEB_ASSERTION_JWKS_FILE": "/run/secrets/acr-web-assertions.jwks.json",
+		"ACR_LOCAL_COMPOSITION_READY": "true",
 	}
 
 	// When
@@ -245,7 +364,7 @@ func TestLoad_webAssertionsRetainFixedIssuerAudienceAndJWKSPath(t *testing.T) {
 // leave AnswerReuseMaxAge at zero (disabled), never a default duration --
 // answer reuse is opt-in.
 func TestLoad_answerReuseMaxAgeDefaultsToDisabled(t *testing.T) {
-	cfg, err := load(mapLookup(nil))
+	cfg, err := load(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +374,10 @@ func TestLoad_answerReuseMaxAgeDefaultsToDisabled(t *testing.T) {
 }
 
 func TestLoad_answerReuseMaxAgeAcceptsAnExplicitWindow(t *testing.T) {
-	cfg, err := load(mapLookup(map[string]string{"ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE": "30m"}))
+	cfg, err := load(mapLookup(map[string]string{
+		"ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE": "30m",
+		"ACR_LOCAL_COMPOSITION_READY":             "true",
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +408,10 @@ func TestLoad_answerReuseMaxAgeRejectsNegativeDuration(t *testing.T) {
 }
 
 func TestLoad_answerReuseMaxAgeExplicitZeroStaysDisabled(t *testing.T) {
-	cfg, err := load(mapLookup(map[string]string{"ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE": "0s"}))
+	cfg, err := load(mapLookup(map[string]string{
+		"ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE": "0s",
+		"ACR_LOCAL_COMPOSITION_READY":             "true",
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +440,7 @@ func TestLoad_rejectsWriteTimeoutBelowRequestTimeoutPlusHeadroom(t *testing.T) {
 // must stay valid -- the ticket that added this check is explicit that
 // changing the defaults is out of scope.
 func TestLoad_defaultTimeoutPairRemainsValid(t *testing.T) {
-	if _, err := load(mapLookup(nil)); err != nil {
+	if _, err := load(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true"})); err != nil {
 		t.Fatalf("load() with default timeouts error = %v, want no error", err)
 	}
 }
@@ -325,8 +450,9 @@ func TestLoad_defaultTimeoutPairRemainsValid(t *testing.T) {
 // on the comparison operator itself.
 func TestLoad_acceptsWriteTimeoutExactlyAtTheMinimumHeadroom(t *testing.T) {
 	_, err := load(mapLookup(map[string]string{
-		"ACR_REQUEST_TIMEOUT": "490s",
-		"ACR_WRITE_TIMEOUT":   "495s",
+		"ACR_REQUEST_TIMEOUT":         "490s",
+		"ACR_WRITE_TIMEOUT":           "495s",
+		"ACR_LOCAL_COMPOSITION_READY": "true",
 	}))
 	if err != nil {
 		t.Fatalf("load() error = %v, want no error at exactly the minimum headroom", err)

@@ -42,7 +42,10 @@ runtime bundle. It is useful for process and probe development, but not as a
 production configuration:
 
 ```bash
-ACR_ADDR=:8080 go run ./cmd/acr-api serve
+# dictation 811: backing stores are required by default in every environment
+# now, so probing the stock binary without one needs the explicit
+# ACR_LOCAL_COMPOSITION_READY dev opt-out (development only).
+ACR_ADDR=:8080 ACR_LOCAL_COMPOSITION_READY=true go run ./cmd/acr-api serve
 curl http://127.0.0.1:8080/healthz
 curl http://127.0.0.1:8080/readyz
 ```

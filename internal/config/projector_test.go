@@ -7,8 +7,23 @@ import (
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
+// TestLoadProjectorDefaults binds the same class-sweep fix as acr-api's
+// TestLoadDefaults (dictation 811): a process started with NO environment
+// configured at all must fail closed, same as acr-api. Before this fix
+// loadProjector(mapLookup(nil)) SUCCEEDED with RequireBackingStores false.
 func TestLoadProjectorDefaults(t *testing.T) {
-	cfg, err := loadProjector(mapLookup(nil))
+	_, err := loadProjector(mapLookup(nil))
+	if err == nil || !strings.Contains(err.Error(), "backing stores are required") {
+		t.Fatalf("loadProjector() error = %v, want a backing-stores-required refusal with zero configuration", err)
+	}
+}
+
+// TestLoadProjectorDefaults_developmentWithLocalCompositionReady isolates
+// every other default TestLoadProjectorDefaults itself can no longer
+// observe on the (now-erroring) bare path, using the same dev-flag
+// exemption acr-api's Config supports.
+func TestLoadProjectorDefaults_developmentWithLocalCompositionReady(t *testing.T) {
+	cfg, err := loadProjector(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +40,7 @@ func TestLoadProjectorDefaults(t *testing.T) {
 		t.Fatalf("DrainBatchBudget = %d, want default %d", cfg.DrainBatchBudget, defaultProjectionDrainBudget)
 	}
 	if cfg.RequireBackingStores {
-		t.Fatal("development must not require backing stores by default")
+		t.Fatal("ACR_LOCAL_COMPOSITION_READY=true in development must default backing stores to NOT required")
 	}
 	// CHAOS-3848: acr-projector is the binary that was actually wedged --
 	// it must inherit the same raised default acr-api does, via the shared
@@ -35,10 +50,55 @@ func TestLoadProjectorDefaults(t *testing.T) {
 	}
 }
 
+// TestLoadProjectorDefaults_listenAddressLoopback pins the loopback-only
+// listen default directly (dictation 811 -- was ":8090", every interface).
+func TestLoadProjectorDefaults_listenAddressLoopback(t *testing.T) {
+	if defaultProjectorListenAddress != "127.0.0.1:8090" {
+		t.Fatalf("defaultProjectorListenAddress = %q, want loopback-only", defaultProjectorListenAddress)
+	}
+}
+
+// TestLoadProjectorStagingCannotDisableBackingStoresOverride mirrors
+// TestStagingCannotDisableBackingStoresOverride (config_test.go) for the
+// projector: asserts the FORCED value directly rather than merely
+// "loadProjector() errors" (an under-configured staging environment can
+// error for unrelated reasons too).
+func TestLoadProjectorStagingCannotDisableBackingStoresOverride(t *testing.T) {
+	cfg, err := loadProjector(mapLookup(map[string]string{
+		"ACR_ENVIRONMENT":              "staging",
+		"ACR_REQUIRE_BACKING_STORES":   "false",
+		"ACR_CLICKHOUSE_DSN":           "clickhouse://redacted",
+		"ACR_POSTGRES_DSN":             "postgres://redacted?sslmode=verify-full",
+		"ACR_POSTGRES_CONNECTION_KIND": "direct",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.RequireBackingStores {
+		t.Fatal("staging must force RequireBackingStores=true even over an explicit ACR_REQUIRE_BACKING_STORES=false")
+	}
+}
+
+// TestLoadProjectorRejectsLocalCompositionReadyOutsideDevelopment mirrors
+// cmd/acr-api's TestConfig_rejects_local_composition_in_production for the
+// projector's own (new) interlock.
+func TestLoadProjectorRejectsLocalCompositionReadyOutsideDevelopment(t *testing.T) {
+	_, err := loadProjector(mapLookup(map[string]string{
+		"ACR_ENVIRONMENT":             "production",
+		"ACR_LOCAL_COMPOSITION_READY": "true",
+	}))
+	if err == nil {
+		t.Fatal("local composition was accepted in production")
+	}
+}
+
 func TestLoadProjector_appliesConfiguredClickHouseMaxBytesToRead(t *testing.T) {
 	// Given
 	// When
-	cfg, err := loadProjector(mapLookup(map[string]string{"ACR_CLICKHOUSE_MAX_BYTES_TO_READ": "33554432"}))
+	cfg, err := loadProjector(mapLookup(map[string]string{
+		"ACR_CLICKHOUSE_MAX_BYTES_TO_READ": "33554432",
+		"ACR_LOCAL_COMPOSITION_READY":      "true",
+	}))
 
 	// Then
 	if err != nil {
@@ -84,6 +144,7 @@ func TestLoadProjectorParsesOrgAllowlistAndScheduling(t *testing.T) {
 		"ACR_CONTEXT_FABRIC_PROJECTION_POLL_INTERVAL":      "30s",
 		"ACR_CONTEXT_FABRIC_PROJECTION_CONCURRENCY":        "10",
 		"ACR_CONTEXT_FABRIC_PROJECTION_DRAIN_BATCH_BUDGET": "50",
+		"ACR_LOCAL_COMPOSITION_READY":                      "true",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -116,7 +177,8 @@ func TestLoadProjectorRejectsInvalidEnvironment(t *testing.T) {
 func TestProjectionEnablementIsIndependentOfTheGraphReadsFlag(t *testing.T) {
 	enabled, err := loadProjector(mapLookup(map[string]string{
 		"ACR_CONTEXT_FABRIC_PROJECTION_ENABLED": "true", "ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS": "org-1",
-		GraphReadsEnabledEnvVar: "false",
+		GraphReadsEnabledEnvVar:       "false",
+		"ACR_LOCAL_COMPOSITION_READY": "true",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -128,6 +190,7 @@ func TestProjectionEnablementIsIndependentOfTheGraphReadsFlag(t *testing.T) {
 	disabled, err := loadProjector(mapLookup(map[string]string{
 		"ACR_CONTEXT_FABRIC_PROJECTION_ENABLED": "false",
 		GraphReadsEnabledEnvVar:                 "true",
+		"ACR_LOCAL_COMPOSITION_READY":           "true",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -138,7 +201,10 @@ func TestProjectionEnablementIsIndependentOfTheGraphReadsFlag(t *testing.T) {
 }
 
 func TestProjectorConfigSafeAttributesOmitDSNs(t *testing.T) {
-	cfg, err := loadProjector(mapLookup(map[string]string{"ACR_POSTGRES_DSN": "postgres://secret@db/acr"}))
+	cfg, err := loadProjector(mapLookup(map[string]string{
+		"ACR_POSTGRES_DSN":            "postgres://secret@db/acr",
+		"ACR_LOCAL_COMPOSITION_READY": "true",
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,14 +224,16 @@ func TestProjectorConfigSafeAttributesOmitDSNs(t *testing.T) {
 // choice and not a value the loader ignores.
 func TestTeamsProjectsDefaultsToEnabled(t *testing.T) {
 	t.Parallel()
-	cfg, err := loadProjector(mapLookup(nil))
+	cfg, err := loadProjector(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true"}))
 	if err != nil {
 		t.Fatalf("loadProjector: %v", err)
 	}
 	if !cfg.TeamsProjectsEnabled {
 		t.Fatal("ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED must default to true now that the source is implemented")
 	}
-	off, err := loadProjector(mapLookup(map[string]string{envContextFabricTeamsProjects: "false"}))
+	off, err := loadProjector(mapLookup(map[string]string{
+		envContextFabricTeamsProjects: "false", "ACR_LOCAL_COMPOSITION_READY": "true",
+	}))
 	if err != nil {
 		t.Fatalf("loadProjector: %v", err)
 	}

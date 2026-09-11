@@ -9,14 +9,14 @@ go run ./cmd/acr-api version
 go run ./cmd/acr-api serve
 ```
 
-The default listen address is `:8080`. Override it through `ACR_ADDR` or the `serve -listen` flag.
+The default listen address is `127.0.0.1:8080` (dictation 811: loopback-only, so a process started with no environment configured at all fails closed instead of silently answering on every interface). Override it through `ACR_ADDR` or the `serve -listen` flag -- every deployment surface in this repo (`deploy/compose`, `deploy/kubernetes`, `deploy/helm`, and the shipped container image itself) sets `ACR_ADDR` explicitly to a `0.0.0.0`-bound address, since a container must be reachable from outside its own network namespace.
 
 ## Process configuration
 
 | Variable | Default | Purpose |
 |---|---:|---|
 | `ACR_ENVIRONMENT` | `development` | `development`, `test`, `staging`, or `production` |
-| `ACR_ADDR` | `:8080` | HTTP listen address |
+| `ACR_ADDR` | `127.0.0.1:8080` | HTTP listen address (loopback-only by default -- dictation 811) |
 | `ACR_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error` |
 | `ACR_REQUEST_TIMEOUT` | `15s` | Per-request context deadline |
 | `ACR_READ_HEADER_TIMEOUT` | `5s` | HTTP header timeout |
@@ -30,7 +30,8 @@ The default listen address is `:8080`. Override it through `ACR_ADDR` or the `se
 | `ACR_MAX_OUTPUT_TOKENS` | `4000` | Output token budget advertised by capabilities |
 | `ACR_MAX_SERIALIZED_BYTES` | `262144` | Serialized packet byte limit |
 | `ACR_REQUESTS_PER_MINUTE` | `60` | Initial advertised request limit |
-| `ACR_REQUIRE_BACKING_STORES` | environment dependent | Defaults true in staging/production |
+| `ACR_REQUIRE_BACKING_STORES` | environment dependent | Defaults true in every environment (dictation 811) -- the one exemption is `ACR_ENVIRONMENT=development` with `ACR_LOCAL_COMPOSITION_READY=true` |
+| `ACR_LOCAL_COMPOSITION_READY` | `false` | Explicit opt-in to local, storeless development (`ACR_ENVIRONMENT=development` only); `Validate` rejects it anywhere else or alongside `ACR_REQUIRE_BACKING_STORES=true` |
 | `ACR_CLICKHOUSE_DSN` / `ACR_CLICKHOUSE_DSN_FILE` | empty | Read-only Dev Health evidence store configuration |
 | `ACR_CLICKHOUSE_CA_BUNDLE` | empty | Optional PEM CA bundle for ClickHouse TLS |
 | `ACR_POSTGRES_DSN` / `ACR_POSTGRES_DSN_FILE` | empty | ACR operational store configuration |

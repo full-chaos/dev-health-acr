@@ -74,6 +74,10 @@ func TestVersionFlagShortcut(t *testing.T) {
 }
 
 func TestRebuildRequiresOrgFlag(t *testing.T) {
+	// dictation 811 class-sweep: backing stores default to required outside
+	// development with the explicit dev flag -- this test is about the
+	// --org flag, not backing stores, so opt into local composition.
+	t.Setenv("ACR_LOCAL_COMPOSITION_READY", "true")
 	err := run([]string{"rebuild"})
 	if err == nil || !strings.Contains(err.Error(), "requires --org") {
 		t.Fatalf("unexpected error: %v", err)
@@ -81,6 +85,7 @@ func TestRebuildRequiresOrgFlag(t *testing.T) {
 }
 
 func TestRebuildWithoutBackingStoresReportsWhatIsMissing(t *testing.T) {
+	t.Setenv("ACR_LOCAL_COMPOSITION_READY", "true")
 	err := run([]string{"rebuild", "--org", "org-1"})
 	if err == nil || !strings.Contains(err.Error(), "requires Postgres, ClickHouse, and a configured Zep graph backend") {
 		t.Fatalf("unexpected error: %v", err)

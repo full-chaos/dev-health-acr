@@ -112,6 +112,7 @@ func TestOpenRuntimeProjectsIntoRealFalkorDBAndRetrievalReadsItBack(t *testing.T
 	t.Setenv(falkorgraph.EnvTLS, "false")
 	t.Setenv(falkorgraph.EnvAllowInsecure, "true")
 	t.Setenv(falkorgraph.EnvGraphPrefix, "acr-cf-accept")
+	t.Setenv("ACR_LOCAL_COMPOSITION_READY", "true")
 
 	cfg, err := config.LoadProjector()
 	require.NoError(t, err)

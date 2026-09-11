@@ -158,6 +158,11 @@ func TestWireProductionEnv_LogLevel_TrialPrefixedInputReachesACRLogLevel(t *test
 func TestChaos3742TwoTurnLogger_HonorsConfiguredLogLevel(t *testing.T) {
 	newLoggerFromConfiguredLevel := func(t *testing.T, buf *bytes.Buffer) *slog.Logger {
 		t.Helper()
+		// dictation 811: backing stores default to required outside development
+		// with the explicit dev flag -- this test is only about LogLevel, so
+		// opt into local composition to keep config.Load() reachable without
+		// standing up Postgres/ClickHouse.
+		t.Setenv("ACR_LOCAL_COMPOSITION_READY", "true")
 		cfg, err := config.Load()
 		if err != nil {
 			t.Fatalf("load config: %v", err)

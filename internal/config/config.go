@@ -12,7 +12,17 @@ import (
 )
 
 const (
-	defaultListenAddress     = ":8080"
+	// defaultListenAddress (dictation 811): loopback-only, not
+	// the wildcard ":8080" this used to be. A binary started with NO
+	// ACR_ADDR configured -- exactly the mis-started-leg scenario that
+	// surfaced this (a missing env file sourced without `set -e`) -- must
+	// come up unreachable from the network by default, not silently
+	// answer as an all-interfaces dev stub. Every real deployment surface
+	// in this repo (Dockerfile, deploy/compose, deploy/kubernetes,
+	// deploy/helm, scripts/e2e) sets ACR_ADDR explicitly to a
+	// 0.0.0.0-bound address -- see each file's own dictation-811 comment --
+	// so this default only changes behavior for an UNCONFIGURED process.
+	defaultListenAddress     = "127.0.0.1:8080"
 	defaultEnvironment       = "development"
 	defaultMinimumSidecar    = "0.1.0"
 	defaultEntitlementKey    = "agent_context_runtime"
@@ -204,7 +214,25 @@ func Load() (Config, error) {
 
 func load(lookup lookupEnv) (Config, error) {
 	environment := stringValue(lookup, "ACR_ENVIRONMENT", defaultEnvironment)
-	requireStoresDefault := environment == "staging" || environment == "production"
+	// requireStoresDefault (dictation 811): backing stores are
+	// REQUIRED BY DEFAULT in every environment now, not only
+	// staging/production. The sole exemption is a caller that is BOTH
+	// ACR_ENVIRONMENT=development AND has explicitly set the dev opt-out
+	// flag ACR_LOCAL_COMPOSITION_READY=true -- a pairing Validate below
+	// independently enforces ("ACR_LOCAL_COMPOSITION_READY requires
+	// development with backing stores disabled"), so this exemption can
+	// never be reached by an unconfigured/missing environment, only by a
+	// deliberate opt-in. Before this change, a binary started with NO
+	// environment configured at all (ACR_ENVIRONMENT unset ->
+	// "development") silently defaulted backing stores OFF -- a
+	// missing/misconfigured env degraded to a reachable all-interfaces dev
+	// stub instead of refusing to start. localCompositionReadyRequested's
+	// own parse error is deliberately ignored here: an invalid value falls
+	// through to loadHostedRuntimeValues's identical, authoritative
+	// boolValue read a few lines below, which reports it.
+	localCompositionReadyRequested, _ := boolValue(lookup, "ACR_LOCAL_COMPOSITION_READY", false)
+	environmentForcesStores := environment == "staging" || environment == "production"
+	requireStoresDefault := environmentForcesStores || !(environment == "development" && localCompositionReadyRequested)
 
 	logLevel, err := parseLogLevel(stringValue(lookup, "ACR_LOG_LEVEL", "info"))
 	if err != nil {
@@ -233,7 +261,7 @@ func load(lookup lookupEnv) (Config, error) {
 		WebAssertionJWKSFile:           stringValue(lookup, "ACR_WEB_ASSERTION_JWKS_FILE", ""),
 		DeviceVerificationURL:          stringValue(lookup, "ACR_DEVICE_VERIFICATION_URL", ""),
 	}
-	if err := loadHostedRuntimeValues(lookup, &cfg, requireStoresDefault); err != nil {
+	if err := loadHostedRuntimeValues(lookup, &cfg, requireStoresDefault, environmentForcesStores); err != nil {
 		return Config{}, err
 	}
 	if cfg.EvidenceIDKeys, err = evidenceIDKeysValue(lookup); err != nil {
