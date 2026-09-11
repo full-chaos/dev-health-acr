@@ -62,6 +62,9 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// kind_offer's own unconditional-and-bounded promotion (CHAOS-5222).
 		t.logger.InfoContext(ctx, "context fabric resolution trace: search",
 			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+			// CHAOS-5517: the self-carried bounded-many identity -- see
+			// ResolutionTraceEvent.Index's own doc comment.
+			"index", event.Index, "total", event.Total,
 			"term_hash", contextfabric.SanitizeLogAttr(event.TermHash), "result_count", event.SearchResultCount,
 			"truncated", event.Truncated)
 	case "search_question":

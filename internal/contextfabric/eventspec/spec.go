@@ -54,6 +54,48 @@ const (
 	// (enforced by the same consistency check), and this one requires the
 	// opposite.
 	MultiplicityExactlyOnePerRequest Multiplicity = "exactly_one_per_request"
+	// MultiplicityZeroOrOnePerRequest (CHAOS-5517): the request-scoped
+	// sibling of MultiplicityZeroOrOnePerPass -- a line produced at most
+	// once per resolveSubjects CALL, gated behind its own trigger
+	// condition, with NO "pass" field (the mechanism it discloses runs at
+	// most once per call, never once per internal re-decision pass, so a
+	// pass identity would be meaningless on it -- the same "no pass
+	// concept applies" reasoning MultiplicityExactlyOnePerRequest already
+	// carries, just for the zero-or-one shape). CertifyAbsent accepts this
+	// multiplicity the same way it accepts ZeroOrOnePerPass, scoped by
+	// Attribution alone (never "pass", which this multiplicity forbids).
+	MultiplicityZeroOrOnePerRequest Multiplicity = "zero_or_one_per_request"
+	// MultiplicityBoundedManyPerPass (CHAOS-5517): a scope (request, or
+	// request+pass for an event that also declares "pass") may carry ANY
+	// number of lines, 0..N, where N is a cardinality some other part of
+	// the system bounds (a term list's length, a retrieval pool's size, a
+	// fixed enumerated list) -- clause 1's own "bounded aggregation" is
+	// what makes this a specification concern rather than an unbounded
+	// free-for-all. The bound is carried ON THE LINES, never only in
+	// BoundedAggregation's prose (chris's engineering ruling, 2026-09-11):
+	// every event of this multiplicity declares two required int fields,
+	// "index" (1-based position within its own scope) and "total" (the
+	// scope's own declared cardinality, the SAME value on every line in
+	// that scope) -- certify.Certify asserts every line in scope agrees on
+	// "total", that "index" covers exactly 1..total with no gap or
+	// duplicate, and that the observed line count equals "total". A scope
+	// with zero lines needs no such check (there is nothing to disagree)
+	// and CERTIFIES trivially -- this multiplicity's whole point is that
+	// 0..N are all legitimate shapes, so Certify never refuses an empty
+	// scope the way it refuses ExactlyOnePerPass/ExactlyOnePerRequest's
+	// own emptiness. Certify.Assertion.Want must additionally carry
+	// "index" (which of the scope's own lines is being value-asserted),
+	// the same role "pass" plays for a pass-keyed at-most-one event.
+	// Whether a BoundedManyPerPass event ALSO declares "pass" is decided
+	// PER EVENT (unlike every other Multiplicity value, whose pass-field
+	// requirement is fixed): an event emitted once per internal
+	// re-decision pass (corroboration/offer_pool/decision/
+	// reserved_kind_admitted's own per-candidate lines) declares "pass"
+	// and is grouped by (request_id, pass); an event emitted once per
+	// resolveSubjects CALL regardless of internal passes (search's own
+	// per-term lines, and the rest) declares no "pass" and is grouped by
+	// request_id alone.
+	MultiplicityBoundedManyPerPass Multiplicity = "bounded_many_per_pass"
 )
 
 // FieldPresence states whether a field is written on every line of its
@@ -345,7 +387,70 @@ var DecisionSummary = Event{
 	},
 }
 
+// Search is the Info line (graphrank/tracer.go, case "search") emitted once
+// per term in a resolveSubjects call's own terms list -- CHAOS-5517's first
+// MultiplicityBoundedManyPerPass event: a resolution can search anywhere
+// from zero to several terms, bounded by that call's own terms list length,
+// with no per-pass concept (the per-term search loop runs once per
+// resolveSubjects call, before any internal re-decision pass exists).
+var Search = Event{
+	ID:                 "graphrank.search",
+	Msg:                "context fabric resolution trace: search",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityBoundedManyPerPass,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "bounded by resolveSubjects' own terms list length for this call -- Total on every line is that length, Index is this line's 1-based position in the loop that produced it.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"search"}},
+		{Key: "index", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
+		{
+			Key: "term_hash", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a SHA-256 hex digest of the search term,
+			// never the term itself.
+		},
+		{Key: "result_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "truncated", Type: FieldBool, Presence: PresenceRequired},
+	},
+}
+
+// KindOfferWithheld is the Info line (graphrank/tracer.go, case
+// "kind_offer_withheld", CHAOS-5218) emitted ONLY when the unconditional
+// kind_offer event's own offer withheld at least one frame-declared kind
+// because the full merged pool held no candidate of that kind -- a genuine
+// zero-multiplicity event (most resolutions never reach this trigger at
+// all), single-shot per resolveSubjects call (never re-derived per internal
+// pass), hence CHAOS-5517's first MultiplicityZeroOrOnePerRequest event.
+var KindOfferWithheld = Event{
+	ID:                 "graphrank.kind_offer_withheld",
+	Msg:                "context fabric resolution trace: kind offer withheld",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per resolveSubjects call -- emitted only when the offer withheld at least one frame-declared kind; CertifyAbsent asserts the (far more common) case where it never fires.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"kind_offer_withheld"}},
+		{Key: "withheld_count", Type: FieldInt, Presence: PresenceRequired},
+		{
+			Key: "withheld_kinds", Type: FieldStringSlice, Presence: PresenceRequired,
+			// Closed-vocabulary subject-kind VALUES only (never a canonical
+			// id, never candidate identity) -- the same ruled exception
+			// boundary_kinds/missing_kinds_list already carry. Left as an
+			// open string_slice here (the closed vocabulary itself lives on
+			// contextfabric.SubjectKind, outside this package's own import
+			// graph) -- same convention kind_offer's own boundary_kinds
+			// field will use once declared.
+		},
+		{Key: "declared_hint_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "distinct_kind_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "suppressed_by_cardinality", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "suppressed_by_unservable_declared_kind", Type: FieldBool, Presence: PresenceRequired},
+	},
+}
+
 // All is every event this specification declares. Generate() and the
 // certification runner both range over exactly this slice -- neither
 // maintains a second list.
-var All = []Event{RankedCutSummary, AnchorSlotDisplaced, DecisionSummary}
+var All = []Event{RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld}

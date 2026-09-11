@@ -1187,6 +1187,22 @@ type ResolutionTraceEvent struct {
 	// pass numbers are always legitimate, regardless of whether their other
 	// fields happen to coincide.
 	Pass int
+	// Index/Total (CHAOS-5517): the self-carried bound a
+	// MultiplicityBoundedManyPerPass event's own detail line carries --
+	// Index is this line's 1-based position within its own scope (a
+	// request, or a request+pass for an event that also declares Pass),
+	// Total is that scope's own declared cardinality (the SAME value on
+	// every line of the scope). certify.Certify (certifyBoundedMany)
+	// asserts every line in a scope agrees on Total, that Index covers
+	// exactly 1..Total with no gap or duplicate, and that the observed
+	// line count equals Total -- the bound is carried on the lines
+	// themselves, never asserted only from a spec's own prose (chris's
+	// engineering ruling, 2026-09-11). Shared across every
+	// BoundedManyPerPass stage the same way Pass is shared across every
+	// pass-keyed one -- one notion of "which of how many" across
+	// producers, not a second field per stage.
+	Index int
+	Total int
 	// IdentityUniverseComplete (identity_universe stage; chris ruling,
 	// 2026-08-17): the RAW devhealthsource.IdentityUniverse completeness
 	// flag, BEFORE falkorgraph/reader.go folds it with graphMissing into
@@ -2747,7 +2763,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// that case, so nothing new can commit on the strength of it alone).
 	identity := identityClaimants{}
 	identityTerms := identityMatchTerms{}
-	for _, term := range terms {
+	for termIndex, term := range terms {
 		results, truncated, degraded, err := deps.Search(ctx, term, request.Options.MaxSubjectCandidates)
 		if err != nil {
 			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
@@ -2766,6 +2782,11 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				// before the fold into the resolution-wide searchTruncated flag
 				// just below -- see Truncated's own doc comment.
 				Truncated: truncated,
+				// Index/Total (CHAOS-5517): this call's own 1-based position
+				// in THIS resolveSubjects call's own terms list, and that
+				// list's own length -- the self-carried bound certify's
+				// bounded-many check asserts against.
+				Index: termIndex + 1, Total: len(terms),
 			})
 		}
 		// allowExactMatch=true: term here is genuine caller-derived search

@@ -205,6 +205,61 @@
     ]
   },
   {
+    "id": "graphrank.kind_offer_withheld",
+    "msg": "context fabric resolution trace: kind offer withheld",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per resolveSubjects call -- emitted only when the offer withheld at least one frame-declared kind; CertifyAbsent asserts the (far more common) case where it never fires.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "kind_offer_withheld"
+        ]
+      },
+      {
+        "key": "withheld_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "withheld_kinds",
+        "type": "string_slice",
+        "presence": "required"
+      },
+      {
+        "key": "declared_hint_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "distinct_kind_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "suppressed_by_cardinality",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "suppressed_by_unservable_declared_kind",
+        "type": "bool",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "graphrank.ranked_cut_summary",
     "msg": "context fabric resolution trace: ranked cut summary",
     "level": "info",
@@ -320,6 +375,56 @@
             "presence": "required"
           }
         ]
+      }
+    ]
+  },
+  {
+    "id": "graphrank.search",
+    "msg": "context fabric resolution trace: search",
+    "level": "info",
+    "multiplicity": "bounded_many_per_pass",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "bounded by resolveSubjects' own terms list length for this call -- Total on every line is that length, Index is this line's 1-based position in the loop that produced it.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "search"
+        ]
+      },
+      {
+        "key": "index",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "term_hash",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "result_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "truncated",
+        "type": "bool",
+        "presence": "required"
       }
     ]
   }

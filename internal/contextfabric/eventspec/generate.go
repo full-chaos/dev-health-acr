@@ -90,6 +90,10 @@ func goVarName(e Event) string {
 		return "AnchorSlotDisplaced"
 	case DecisionSummary.ID:
 		return "DecisionSummary"
+	case Search.ID:
+		return "Search"
+	case KindOfferWithheld.ID:
+		return "KindOfferWithheld"
 	default:
 		panic("eventspec: goVarName has no mapping for " + e.ID + " -- add one before regenerating")
 	}

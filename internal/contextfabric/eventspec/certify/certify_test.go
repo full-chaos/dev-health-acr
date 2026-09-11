@@ -739,6 +739,20 @@ func TestCertifyAndCertifyAbsentRefuseANilLog(t *testing.T) {
 // day it is declared, not the day a review round finds it.
 func TestEveryEventsMultiplicityAgreesWithWhetherItDeclaresAPassField(t *testing.T) {
 	for _, ev := range eventspec.All {
+		if ev.Multiplicity == eventspec.MultiplicityBoundedManyPerPass {
+			// CHAOS-5517: this ONE multiplicity has no fixed pass-field
+			// requirement (spec.go's own doc comment) -- an event emitted
+			// once per internal re-decision pass declares "pass", one
+			// emitted once per resolveSubjects call regardless of internal
+			// passes does not, and both are legitimate. What IS fixed for
+			// every BoundedManyPerPass event is the self-carried bound:
+			// "index" and "total", both required ints (verifyBoundedManyGroup's
+			// own consistency check depends on both existing).
+			if !hasField(ev.Fields, "index") || !hasField(ev.Fields, "total") {
+				t.Errorf("%s: declares multiplicity=bounded_many_per_pass but does not declare both \"index\" and \"total\" fields -- the bound must be carried on the lines, never only in prose", ev.ID)
+			}
+			continue
+		}
 		requiresPass, ok := multiplicityRequiresPassField(ev.Multiplicity)
 		if !ok {
 			t.Errorf("%s: declares unrecognised multiplicity %q", ev.ID, ev.Multiplicity)
@@ -750,4 +764,13 @@ func TestEveryEventsMultiplicityAgreesWithWhetherItDeclaresAPassField(t *testing
 				ev.ID, ev.Multiplicity, requiresPass, hasPass)
 		}
 	}
+}
+
+func hasField(fields []eventspec.Field, key string) bool {
+	for _, f := range fields {
+		if f.Key == key {
+			return true
+		}
+	}
+	return false
 }

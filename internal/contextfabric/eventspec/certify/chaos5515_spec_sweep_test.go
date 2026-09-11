@@ -88,6 +88,17 @@ func canonicalValueFor(f eventspec.Field) any {
 		}
 		return "sweep_canonical_string"
 	case eventspec.FieldInt:
+		// CHAOS-5517: "index"/"total" are the ONE pair of int fields whose
+		// own VALUES have a cross-field meaning (certifyBoundedMany asserts
+		// the observed line count equals "total", and "index" must fall in
+		// 1..total) -- a single canonical line is self-consistent only at
+		// index=1, total=1 (a bounded-many scope of exactly one line).
+		// Every other int field keeps the arbitrary, non-zero 7 the rest of
+		// this sweep already depends on to distinguish "canonical" from
+		// "zero".
+		if f.Key == "index" || f.Key == "total" {
+			return 1
+		}
 		return 7
 	case eventspec.FieldBool:
 		return true
@@ -229,6 +240,13 @@ func attributionWant(ev eventspec.Event, base map[string]any) map[string]any {
 	if eventHasPassField(ev.Fields) {
 		w["pass"] = base["pass"]
 	}
+	if ev.Multiplicity == eventspec.MultiplicityBoundedManyPerPass {
+		// CHAOS-5517: certifyBoundedMany requires Want["index"] to select
+		// which of the scope's own lines is being value-asserted -- the
+		// canonical single-line fixture is self-consistent at index=1
+		// (canonicalValueFor's own "index"/"total" special case above).
+		w["index"] = base["index"]
+	}
 	return w
 }
 
@@ -327,8 +345,14 @@ func runCell(t *testing.T, ev eventspec.Event, base map[string]any, attribution 
 			return row
 		}
 		row.applicable = true
-		// A zero scalar is accepted UNLESS a closed vocabulary excludes it.
-		row.wantAccept = len(f.ClosedVocabulary) == 0
+		// A zero scalar is accepted UNLESS a closed vocabulary excludes it,
+		// or (CHAOS-5517) the field is "index"/"total" -- the one pair
+		// whose valid range is constrained by a CROSS-LINE invariant
+		// (certifyBoundedMany's own consistency check) rather than a
+		// per-field ClosedVocabulary: index=0 falls outside the declared
+		// 1..total range, and total=0 disagrees with the sweep's own
+		// single-line fixture (which always carries exactly one line).
+		row.wantAccept = len(f.ClosedVocabulary) == 0 && f.Key != "index" && f.Key != "total"
 		_, err := certifyRecovered(t, mutate(v), Assertion{Event: ev, Want: wantFor(v)})
 		row.gotAccept = err == nil
 	case "empty_container":

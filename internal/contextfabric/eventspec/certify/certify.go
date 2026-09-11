@@ -129,9 +129,14 @@ func multiplicityRequiresPassField(m eventspec.Multiplicity) (requiresPass bool,
 	switch m {
 	case eventspec.MultiplicityExactlyOnePerPass, eventspec.MultiplicityZeroOrOnePerPass:
 		return true, true
-	case eventspec.MultiplicityExactlyOnePerRequest:
+	case eventspec.MultiplicityExactlyOnePerRequest, eventspec.MultiplicityZeroOrOnePerRequest:
 		return false, true
 	default:
+		// MultiplicityBoundedManyPerPass is NOT handled here: whether it
+		// declares "pass" is a PER-EVENT choice (spec.go's own doc comment
+		// on the value), not fixed by the multiplicity the way every other
+		// value is -- certifyBoundedMany branches on eventHasPassField
+		// itself rather than consulting this function's fixed answer.
 		return false, false
 	}
 }
@@ -238,6 +243,10 @@ func Certify(log *Log, a Assertion) (Result, error) {
 		}
 	}
 
+	if a.Event.Multiplicity == eventspec.MultiplicityBoundedManyPerPass {
+		return certifyBoundedMany(log, a)
+	}
+
 	requiresPass, recognisedMultiplicity := multiplicityRequiresPassField(a.Event.Multiplicity)
 	if !recognisedMultiplicity {
 		return Result{}, fmt.Errorf("certify: %s: unhandled multiplicity %q", a.Event.ID, a.Event.Multiplicity)
@@ -289,13 +298,19 @@ func Certify(log *Log, a Assertion) (Result, error) {
 		// MultiplicityExactlyOnePerRequest: the whole scope is the one
 		// thing being counted -- no pass to key on, so more than one line
 		// is unconditionally a defect, same as before this event's own
-		// mislabeling was fixed.
+		// mislabeling was fixed. MultiplicityZeroOrOnePerRequest is the
+		// same shape one notch looser: zero is a legitimate expectation
+		// too, asserted via CertifyAbsent instead (mirrors
+		// ZeroOrOnePerPass's own "call CertifyAbsent" refusal below).
 		if len(scoped) == 0 {
+			if a.Event.Multiplicity == eventspec.MultiplicityZeroOrOnePerRequest {
+				return Result{}, fmt.Errorf("certify: %s: no line with msg %q for this attempt -- call CertifyAbsent when absence is the expectation being asserted", a.Event.ID, a.Event.Msg)
+			}
 			return Result{}, fmt.Errorf("certify: %s: found 0 lines with msg %q for this attempt, want exactly 1 (multiplicity=%s)",
 				a.Event.ID, a.Event.Msg, a.Event.Multiplicity)
 		}
 		if len(scoped) > 1 {
-			return Result{}, fmt.Errorf("certify: %s: found %d lines with msg %q for this attempt, want exactly 1 (multiplicity=%s, no pass field declared -- this event has no legitimate multi-line shape to distinguish from a duplicate)",
+			return Result{}, fmt.Errorf("certify: %s: found %d lines with msg %q for this attempt, want at most 1 (multiplicity=%s, no pass field declared -- this event has no legitimate multi-line shape to distinguish from a duplicate)",
 				a.Event.ID, len(scoped), a.Event.Msg, a.Event.Multiplicity)
 		}
 		line = scoped[0]
@@ -374,6 +389,252 @@ func Certify(log *Log, a Assertion) (Result, error) {
 	return Result{Line: line}, nil
 }
 
+// numericWant round-trips a Want/attribution value through JSON, the same
+// normalization jsonEqual uses, so a caller's plain `int` literal compares
+// correctly against this package's own float64-keyed grouping regardless of
+// which concrete numeric Go type the caller happened to write.
+func numericWant(v any) (float64, bool) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return 0, false
+	}
+	var f float64
+	if err := json.Unmarshal(b, &f); err != nil {
+		return 0, false
+	}
+	return f, true
+}
+
+// verifyBoundedManyGroup asserts a MultiplicityBoundedManyPerPass event's own
+// scope consistency for ONE group (a single pass's own lines, or the whole
+// request's lines when the event declares no pass field): every line agrees
+// on "total", "index" covers exactly 1..total with no gap or duplicate, and
+// the observed line count equals "total" -- the bound is carried on the
+// lines themselves, never asserted only from BoundedAggregation's prose
+// (chris's engineering ruling, 2026-09-11). An EMPTY group needs no such
+// check: zero is a legitimate bounded-many count, and this multiplicity
+// certifies it trivially rather than refusing the way
+// ExactlyOnePerPass/ExactlyOnePerRequest refuse an empty scope.
+func verifyBoundedManyGroup(eventID string, group []Line) error {
+	if len(group) == 0 {
+		return nil
+	}
+	var total int
+	seen := make(map[int]bool, len(group))
+	for i, l := range group {
+		tf, ok := l["total"].(float64)
+		if !ok {
+			return fmt.Errorf("certify: %s: line has no numeric %q field (required on every bounded-many line)", eventID, "total")
+		}
+		t := int(tf)
+		if i == 0 {
+			total = t
+		} else if t != total {
+			return fmt.Errorf("certify: %s: lines in the same scope disagree on %q (%d vs %d) -- every line in one scope must declare the SAME bound", eventID, "total", total, t)
+		}
+		idxf, ok := l["index"].(float64)
+		if !ok {
+			return fmt.Errorf("certify: %s: line has no numeric %q field (required on every bounded-many line)", eventID, "index")
+		}
+		idx := int(idxf)
+		if idx < 1 || idx > total {
+			return fmt.Errorf("certify: %s: line index=%d is outside the declared 1..%d range", eventID, idx, total)
+		}
+		if seen[idx] {
+			return fmt.Errorf("certify: %s: duplicate index=%d within the same scope -- every line's index must be unique", eventID, idx)
+		}
+		seen[idx] = true
+	}
+	if len(group) != total {
+		return fmt.Errorf("certify: %s: scope has %d line(s) but total=%d -- the observed line count must equal the declared bound (index 1..total must be exhaustive, not merely non-duplicated)", eventID, len(group), total)
+	}
+	return nil
+}
+
+// certifyBoundedMany is Certify's own handling for
+// eventspec.MultiplicityBoundedManyPerPass -- a scope may carry 0..N lines,
+// each self-carrying its own "index"/"total" bound (verifyBoundedManyGroup),
+// grouped by (request_id, pass) when the event declares "pass" or by
+// request_id alone when it does not (a PER-EVENT choice for this one
+// multiplicity, unlike every other value -- see spec.go's own doc comment).
+// a.Want must additionally carry "index" (which of the scope's own lines is
+// being value-asserted), the same role "pass" plays for an at-most-one
+// pass-keyed event in Certify above.
+func certifyBoundedMany(log *Log, a Assertion) (Result, error) {
+	requestScope := make(map[string]any, len(a.Event.Attribution))
+	for _, attrKey := range a.Event.Attribution {
+		requestScope[attrKey] = a.Want[attrKey]
+	}
+	var scoped []Line
+	for _, line := range log.linesWithMsg(a.Event.Msg) {
+		if scopeMatch(a.Event, requestScope, line) {
+			scoped = append(scoped, line)
+		}
+	}
+
+	for i, l := range scoped {
+		if err := validateFields(a.Event.Fields, l, a.Event.ID); err != nil {
+			return Result{}, fmt.Errorf("%w (line %d of %d in scope)", err, i+1, len(scoped))
+		}
+	}
+
+	hasPass := eventHasPassField(a.Event.Fields)
+	if hasPass {
+		if _, ok := a.Want["pass"]; !ok {
+			return Result{}, fmt.Errorf("certify: %s: Want must include \"pass\" -- this bounded-many event declares a pass field, so the caller must state WHICH pass it is certifying", a.Event.ID)
+		}
+	}
+	wantIndex, ok := numericWant(a.Want["index"])
+	if !ok {
+		return Result{}, fmt.Errorf("certify: %s: Want must include a numeric \"index\" to select which of this scope's bounded-many lines is being value-asserted", a.Event.ID)
+	}
+
+	// Consistency is checked independently within EVERY group in scope, not
+	// only the one a.Want selects -- a defect in a pass the caller is not
+	// currently value-asserting is still a defect (matches the existing
+	// pass-keyed at-most-one path's own "check every group" discipline).
+	var groups map[float64][]Line
+	if hasPass {
+		groups = groupLinesByPass(scoped)
+	} else {
+		groups = map[float64][]Line{0: scoped}
+	}
+	for key, group := range groups {
+		if err := verifyBoundedManyGroup(a.Event.ID, group); err != nil {
+			return Result{}, fmt.Errorf("%w (pass=%v)", err, key)
+		}
+	}
+
+	var selectGroup []Line
+	if hasPass {
+		wantPass, ok := numericWant(a.Want["pass"])
+		if !ok {
+			return Result{}, fmt.Errorf("certify: %s: Want[\"pass\"] must be numeric", a.Event.ID)
+		}
+		selectGroup = groups[wantPass]
+	} else {
+		selectGroup = scoped
+	}
+	var line Line
+	found := false
+	for _, l := range selectGroup {
+		idxf, _ := l["index"].(float64)
+		if idxf == wantIndex {
+			line = l
+			found = true
+			break
+		}
+	}
+	if !found {
+		return Result{}, fmt.Errorf("certify: %s: no line with index=%v found in the selected scope (%d line(s) present)", a.Event.ID, wantIndex, len(selectGroup))
+	}
+
+	wantLevel := strings.ToUpper(string(a.Event.Level))
+	gotLevel, _ := line["level"].(string)
+	if strings.ToUpper(gotLevel) != wantLevel {
+		return Result{}, fmt.Errorf("certify: %s: line at level %q, want %q (production visibility: a line declared Info that ships at Debug is a regression invisible in production, not a passing certificate)",
+			a.Event.ID, gotLevel, wantLevel)
+	}
+
+	declared := make(map[string]eventspec.Field, len(a.Event.Fields))
+	for _, f := range a.Event.Fields {
+		declared[f.Key] = f
+	}
+	keys := make([]string, 0, len(a.Want))
+	for k := range a.Want {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		want := a.Want[key]
+		field, isDeclared := declared[key]
+		if !isDeclared {
+			return Result{}, fmt.Errorf("certify: %s: %q is asserted in Want but not declared on the event -- the specification is the one declaration authority; add the field to eventspec.spec.go first", a.Event.ID, key)
+		}
+		got, present := line[key]
+		if !present {
+			return Result{}, fmt.Errorf("certify: %s: line has no %q key (declared presence=%s) -- a required field must never be omitted, and missing is never equivalent to a measured zero",
+				a.Event.ID, key, field.Presence)
+		}
+		if !jsonEqual(want, got) {
+			return Result{}, fmt.Errorf("certify: %s: %q = %v, want %v", a.Event.ID, key, got, want)
+		}
+	}
+
+	return Result{Line: line}, nil
+}
+
+// CertifyBoundedManyCount asserts a MultiplicityBoundedManyPerPass event's
+// own scope consistency (verifyBoundedManyGroup: every line agrees on
+// "total", "index" covers exactly 1..total with no gap or duplicate) and
+// returns the observed line count -- WITHOUT selecting or value-asserting
+// any one line, unlike Certify (which additionally requires Want["index"]
+// to pick one line to check field values against). This is the entry point
+// for the case Certify's own index-selection cannot express: a scope with
+// ZERO lines. "zero detail lines with a summary count of 0" is a real
+// certified fact (chris's engineering ruling, 2026-09-11), not merely an
+// absence, and a caller compares the int this returns against whatever
+// count field a sibling summary event's own Certify Result already
+// produced. `scope` must carry every one of the event's declared
+// Attribution fields, plus "pass" iff the event declares a pass field (and
+// must NOT carry "pass" otherwise) -- the same contract Certify/
+// CertifyAbsent already hold callers to.
+func CertifyBoundedManyCount(log *Log, ev eventspec.Event, scope map[string]any) (int, error) {
+	if log == nil {
+		return 0, fmt.Errorf("certify: %s: log is nil -- CertifyBoundedManyCount judges a real Parse()d log, never a nil placeholder", ev.ID)
+	}
+	if err := requireCanonicalEvent(ev); err != nil {
+		return 0, err
+	}
+	if ev.Multiplicity != eventspec.MultiplicityBoundedManyPerPass {
+		return 0, fmt.Errorf("certify: %s: declared multiplicity=%q is not bounded_many_per_pass -- CertifyBoundedManyCount only applies to that multiplicity", ev.ID, ev.Multiplicity)
+	}
+	for _, attrKey := range ev.Attribution {
+		if _, ok := scope[attrKey]; !ok {
+			return 0, fmt.Errorf("certify: %s: scope must include %q (one of this event's declared Attribution fields)", ev.ID, attrKey)
+		}
+	}
+	hasPass := eventHasPassField(ev.Fields)
+	_, scopeHasPass := scope["pass"]
+	if hasPass && !scopeHasPass {
+		return 0, fmt.Errorf("certify: %s: scope must include \"pass\" -- this event declares a pass field", ev.ID)
+	}
+	if !hasPass && scopeHasPass {
+		return 0, fmt.Errorf("certify: %s: scope must NOT include \"pass\" -- this event declares no pass field", ev.ID)
+	}
+
+	requestScope := make(map[string]any, len(ev.Attribution))
+	for _, attrKey := range ev.Attribution {
+		requestScope[attrKey] = scope[attrKey]
+	}
+	var scoped []Line
+	for _, line := range log.linesWithMsg(ev.Msg) {
+		if scopeMatch(ev, requestScope, line) {
+			scoped = append(scoped, line)
+		}
+	}
+	for i, l := range scoped {
+		if err := validateFields(ev.Fields, l, ev.ID); err != nil {
+			return 0, fmt.Errorf("%w (line %d of %d in scope)", err, i+1, len(scoped))
+		}
+	}
+
+	var group []Line
+	if hasPass {
+		wantPass, ok := numericWant(scope["pass"])
+		if !ok {
+			return 0, fmt.Errorf("certify: %s: scope[\"pass\"] must be numeric", ev.ID)
+		}
+		group = groupLinesByPass(scoped)[wantPass]
+	} else {
+		group = scoped
+	}
+	if err := verifyBoundedManyGroup(ev.ID, group); err != nil {
+		return 0, err
+	}
+	return len(group), nil
+}
+
 // CertifyAbsent asserts the event's variant produced NO line FOR THE
 // ATTEMPT `attribution` IDENTIFIES -- the explicit zero-multiplicity case
 // for a MultiplicityZeroOrOnePerPass event, so an absence a caller expects
@@ -409,16 +670,20 @@ func CertifyAbsent(log *Log, ev eventspec.Event, attribution map[string]any) err
 	if err := requireCanonicalEvent(ev); err != nil {
 		return err
 	}
-	if ev.Multiplicity != eventspec.MultiplicityZeroOrOnePerPass {
-		return fmt.Errorf("certify: %s: declared multiplicity=%q is not zero_or_one_per_pass -- CertifyAbsent only applies to a zero_or_one_per_pass event", ev.ID, ev.Multiplicity)
+	if ev.Multiplicity != eventspec.MultiplicityZeroOrOnePerPass && ev.Multiplicity != eventspec.MultiplicityZeroOrOnePerRequest {
+		return fmt.Errorf("certify: %s: declared multiplicity=%q is not zero_or_one_per_pass or zero_or_one_per_request -- CertifyAbsent only applies to one of those two", ev.ID, ev.Multiplicity)
 	}
 	for _, attrKey := range ev.Attribution {
 		if _, ok := attribution[attrKey]; !ok {
 			return fmt.Errorf("certify: %s: attribution must include %q (one of this event's declared Attribution fields) to scope which attempt's absence is being asserted", ev.ID, attrKey)
 		}
 	}
-	if _, ok := attribution["pass"]; !ok {
-		return fmt.Errorf("certify: %s: attribution must include \"pass\" -- a zero_or_one_per_pass event's absence is asserted for ONE specific pass, never the whole request", ev.ID)
+	if ev.Multiplicity == eventspec.MultiplicityZeroOrOnePerPass {
+		if _, ok := attribution["pass"]; !ok {
+			return fmt.Errorf("certify: %s: attribution must include \"pass\" -- a zero_or_one_per_pass event's absence is asserted for ONE specific pass, never the whole request", ev.ID)
+		}
+	} else if _, ok := attribution["pass"]; ok {
+		return fmt.Errorf("certify: %s: attribution must NOT include \"pass\" -- a zero_or_one_per_request event has no pass concept, its absence is asserted for the whole request", ev.ID)
 	}
 	for _, line := range log.linesWithMsg(ev.Msg) {
 		if scopeMatch(ev, attribution, line) {
