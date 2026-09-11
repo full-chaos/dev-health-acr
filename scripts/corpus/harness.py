@@ -507,11 +507,13 @@ def run_replicate(qid, question, rep, warn=print):
 
 
 def _parse_argv(argv):
-    """Corpus-id filters plus an optional `--expected-build VALUE` / `--expected-build=VALUE`.
-    A CLI value overrides CORPUS_EXPECTED_BUILD for this run; unset leaves the env value
-    (possibly None) in place."""
+    """Corpus-id filters plus an optional `--expected-build VALUE` / `--expected-build=VALUE`
+    and an optional `--check-only` flag. A CLI expected-build value overrides
+    CORPUS_EXPECTED_BUILD for this run; unset leaves the env value (possibly None) in
+    place. `--check-only` needs no id filter and ignores any given."""
     ids = []
     expected_build = EXPECTED_BUILD
+    check_only = False
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -522,10 +524,42 @@ def _parse_argv(argv):
             expected_build = argv[i]
         elif a.startswith("--expected-build="):
             expected_build = a.split("=", 1)[1]
+        elif a == "--check-only":
+            check_only = True
         else:
             ids.append(a)
         i += 1
-    return ids, expected_build
+    return ids, expected_build, check_only
+
+
+def check_only():
+    """CHAOS-5562 r3: make exactly ONE request and let post()'s own checks
+    (require_base, print the base, print+check the first determined service_version)
+    run -- nothing else. Exists so a caller that is about to fan out N parallel shards
+    can verify the base/build ONCE, before starting any of them, instead of each shard
+    independently discovering a mismatch on its OWN first request (r3 review: a real
+    parallel run sent one request PER SHARD before the whole thing aborted, scaling
+    the very blast radius this ticket exists to shrink). The per-shard check inside
+    run_replicate stays in place as defence in depth -- this is a fast-fail gate in
+    FRONT of it, not a replacement.
+
+    Uses the first CORPUS row's own text: a synthetic/placeholder question risks
+    behaving differently server-side than a real investigation, and the first row is
+    exactly what the first real replicate would ask anyway.
+    """
+    if not CORPUS:
+        sys.exit("check-only: the supplied corpus is empty, nothing to probe with")
+    row = CORPUS[0]
+    print(f"[corpus] check-only: probing with {row['id']!r}", flush=True)
+    try:
+        status, response, _dt, _undecodable = post({"question": row["text"]})
+    except ServedBuildMismatch as e:
+        sys.exit(str(e))
+    if not contract.is_success_status(status):
+        failure = (response or {}).get("failure", {})
+        sys.exit(f"check-only: request failed, http={status} code={failure.get('code')} "
+                  f"-- cannot verify the base/build; refusing to start any shard")
+    print("[corpus] check-only: base and build verified, proceeding", flush=True)
 
 
 def main():
@@ -534,7 +568,10 @@ def main():
         require_base()
     except MissingCorpusBase as e:
         sys.exit(str(e))
-    ids, EXPECTED_BUILD = _parse_argv(sys.argv[1:])
+    ids, EXPECTED_BUILD, want_check_only = _parse_argv(sys.argv[1:])
+    if want_check_only:
+        check_only()
+        return
     which = ids or None
     rows = []
     total = 0

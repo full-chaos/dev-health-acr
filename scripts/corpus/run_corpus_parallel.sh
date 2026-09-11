@@ -59,6 +59,13 @@ for probe in "${probes[@]}"; do
   [[ "$code" == "200" ]] || { echo "ABORT: $("$HERE/corpus_redact.sh" "$probe") returned $code, expected 200" >&2; exit 1; }
 done
 
+# CHAOS-5562 r3: ONE check-only request, BEFORE any shard starts. r3 review found the
+# per-process check (inside run_replicate, still in place as defence in depth) is
+# process-local -- a real parallel run sent one request PER SHARD before the whole
+# fan-out aborted, scaling the exact blast radius this ticket exists to shrink. This
+# preflight caps it at exactly 1 total, matching the sequential launcher.
+python3 "$HERE/harness.py" --check-only
+
 echo "layout:"
 # NB: the f-string below must not need escaped quotes inside a single-quoted
 # python -c — the previous form did, bash passed the backslashes through, and

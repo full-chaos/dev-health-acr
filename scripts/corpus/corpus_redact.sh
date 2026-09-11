@@ -24,11 +24,15 @@ PY
 else
   # Best-effort fallback, same spirit as corpus_origin.sh's own: strip a userinfo@
   # prefix (only the LAST '@' before the first '/', so a path containing '@' with no
-  # real userinfo is left alone) and any ?query/#fragment.
+  # real userinfo is left alone) and any ?query/#fragment. r3 review: the fragment
+  # strip was applied to `authority` only -- a query-or-fragment separator sitting
+  # inside the PATH (the far more common shape: `/api#fragment-secret`) survived
+  # untouched. Strip both from `path` too, same as `?query` already was.
   rest="${url#*://}"; scheme="${url%%://*}"
   authority="${rest%%/*}"
   path="${rest#"$authority"}"
   authority="${authority##*@}"
   authority="${authority%%\?*}"; authority="${authority%%#*}"
-  printf '%s://%s%s\n' "$scheme" "$authority" "${path%%\?*}"
+  path="${path%%\?*}"; path="${path%%#*}"
+  printf '%s://%s%s\n' "$scheme" "$authority" "$path"
 fi

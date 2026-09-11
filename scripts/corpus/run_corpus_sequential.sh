@@ -40,6 +40,12 @@ for probe in "${probes[@]}"; do
   [[ "$code" == "200" ]] || { echo "ABORT: $("$HERE/corpus_redact.sh" "$probe") returned $code, expected 200" >&2; exit 1; }
 done
 
+# CHAOS-5562 r3: ONE check-only request -- verifies base+build BEFORE the real run
+# starts. Belt and braces with run_shard.py's own per-process check (which already
+# bounds this shape at 1 process); the sequential launcher only ever runs one shard,
+# so this mirrors the parallel launcher's fix rather than closing a gap of its own.
+python3 "$HERE/harness.py" --check-only
+
 CORPUS_SHARD_DIR="$HERE/seq/shard-00" python3 "$HERE/run_shard.py" 0 1 "$REP" \
   2>&1 | tee "$HERE/logs/sequential.log"
 

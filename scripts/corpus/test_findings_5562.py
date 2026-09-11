@@ -26,6 +26,8 @@ from `Path(__file__).parent`, so running the real files in place would leave str
 JSON in the repo tree), with the synthetic `testdata_corpus` corpus on PYTHONPATH,
 exactly as `run_pins.sh` supplies it.
 """
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -429,8 +431,11 @@ def _launcher_dir(tmp):
     dest = Path(tmp) / "launcherdir"
     dest.mkdir()
     for f in ("run_corpus_sequential.sh", "run_corpus_parallel.sh", "corpus_origin.sh",
-              "run_shard.py", "merge_corpus.py", "shard_plan.py"):
+              "corpus_redact.sh", "run_shard.py", "merge_corpus.py", "shard_plan.py",
+              "harness.py", "validators.py", "contract.py", "artefact_schema.json"):
         shutil.copy2(HERE / f, dest / f)
+        if f.endswith(".sh"):
+            (dest / f).chmod(0o755)
     stub_bin = Path(tmp) / "stubbin"
     stub_bin.mkdir()
     (stub_bin / "python3").write_text(
@@ -486,17 +491,21 @@ def test_the_shell_launchers_pass_a_set_corpus_base_through_to_run_shard_execute
     run_shard.py unchanged -- proving requirement 4 by execution, not by reading
     source."""
     import tempfile
-    base = "http://127.0.0.1:19999/api/investigations"
     for name in ("run_corpus_sequential.sh", "run_corpus_parallel.sh"):
         with tempfile.TemporaryDirectory() as tmp:
             dest, stub_bin = _launcher_dir(tmp)
-            r = _run_launcher(name, dest, stub_bin, corpus_base=base)
+            # CHAOS-5562 r3: a real, reachable server is now required -- the
+            # check-only preflight (added this round) makes a genuine request
+            # before run_shard.py is ever invoked, so a fake unreachable base no
+            # longer reaches that far.
+            with _StubServer(service_version="build-A") as srv:
+                r = _run_launcher(name, dest, stub_bin, corpus_base=srv.base)
             out = r.stdout + r.stderr
             # run_corpus_parallel.sh redirects each shard's run_shard.py invocation to
             # its own per-shard log file rather than the launcher's own stdout/stderr.
             for log in (dest / "logs").glob("shard-*.log"):
                 out += "\n" + log.read_text()
-        assert f"FAKE run_shard.py CORPUS_BASE={base}" in out, (
+        assert f"FAKE run_shard.py CORPUS_BASE={srv.base}" in out, (
             f"{name} did not pass the caller's CORPUS_BASE through to run_shard.py:\n{out}")
 
 
@@ -705,6 +714,120 @@ def test_launchers_refuse_before_creating_the_logs_directory_executed():
         assert r.returncode != 0, f"{name} exited 0 with CORPUS_BASE unset"
         assert not logs_exists, (
             f"{name} created logs/ before refusing on an unset CORPUS_BASE")
+
+
+# ==================================================== r3 review findings, fixed + pinned
+
+def test_check_only_mode_makes_exactly_one_request_and_refuses_on_mismatch():
+    """r3 review, P1, harness.py:148 / run_corpus_parallel.sh:80 (pre-fix): the
+    build-mismatch check is a module-global flag, so it is PER-PROCESS -- a real
+    parallel run sent one request PER SHARD before the whole fan-out aborted. This is
+    the RED shape (matches r3's own live repro: 4 shards -> 4 requests before abort).
+    The fix is `harness.py --check-only`: exactly one request, before any shard."""
+    import importlib
+    saved_base = os.environ.get("CORPUS_BASE")
+    saved_expected = os.environ.get("CORPUS_EXPECTED_BUILD")
+    try:
+        with _StubServer(service_version="build-A") as srv:
+            os.environ["CORPUS_BASE"] = srv.base
+            os.environ["CORPUS_EXPECTED_BUILD"] = "build-B"
+            import harness
+            importlib.reload(harness)
+            with contextlib.redirect_stdout(io.StringIO()):
+                try:
+                    harness.check_only()
+                    raised = False
+                except SystemExit:
+                    raised = True
+        assert raised, "check-only did not refuse on a mismatched build"
+        assert srv.requests == 1, (
+            f"check-only made {srv.requests} requests, want exactly 1")
+    finally:
+        if saved_base is None:
+            os.environ.pop("CORPUS_BASE", None)
+        else:
+            os.environ["CORPUS_BASE"] = saved_base
+        if saved_expected is None:
+            os.environ.pop("CORPUS_EXPECTED_BUILD", None)
+        else:
+            os.environ["CORPUS_EXPECTED_BUILD"] = saved_expected
+        import harness
+        importlib.reload(harness)
+
+
+def test_check_only_mode_proceeds_on_a_matching_build():
+    """Positive control for the pin above: check-only must not block a genuinely
+    matching build."""
+    import importlib
+    saved_base = os.environ.get("CORPUS_BASE")
+    saved_expected = os.environ.get("CORPUS_EXPECTED_BUILD")
+    try:
+        with _StubServer(service_version="build-A") as srv:
+            os.environ["CORPUS_BASE"] = srv.base
+            os.environ["CORPUS_EXPECTED_BUILD"] = "build-A"
+            import harness
+            importlib.reload(harness)
+            with contextlib.redirect_stdout(io.StringIO()):
+                harness.check_only()  # must not raise/exit
+        assert srv.requests == 1
+    finally:
+        if saved_base is None:
+            os.environ.pop("CORPUS_BASE", None)
+        else:
+            os.environ["CORPUS_BASE"] = saved_base
+        if saved_expected is None:
+            os.environ.pop("CORPUS_EXPECTED_BUILD", None)
+        else:
+            os.environ["CORPUS_EXPECTED_BUILD"] = saved_expected
+        import harness
+        importlib.reload(harness)
+
+
+def test_both_launchers_send_exactly_one_request_total_on_a_mismatch_executed():
+    """r3 review, P1 (pre-fix, GREEN side): the real launcher scripts, executed --
+    the check-only preflight must fire BEFORE any shard starts, capping the whole
+    fan-out at exactly 1 request, never scaling with shard count. python3 is stubbed
+    ONLY for run_shard.py/merge_corpus.py (so shards never truly start); the
+    check-only call to harness.py itself runs for REAL against the stub server."""
+    import tempfile
+    for name, args in (("run_corpus_sequential.sh", []),
+                       ("run_corpus_parallel.sh", ["4", "1"])):
+        with tempfile.TemporaryDirectory() as tmp:
+            dest, stub_bin = _launcher_dir(tmp)
+            with _StubServer(service_version="build-A") as srv:
+                env = dict(os.environ)
+                env["CORPUS_BASE"] = srv.base
+                env["CORPUS_EXPECTED_BUILD"] = "build-B"
+                env["PATH"] = f"{stub_bin}:{env['PATH']}"
+                env["PYTHONPATH"] = f"{TESTDATA}:{HERE}:{env.get('PYTHONPATH', '')}"
+                r = subprocess.run(["bash", str(dest / name), *args], env=env,
+                                    capture_output=True, text=True, timeout=30,
+                                    cwd=str(dest))
+                out = r.stdout + r.stderr
+            assert r.returncode != 0, f"{name} exited 0 on a build mismatch:\n{out}"
+            assert "build-A" in out and "build-B" in out, out
+            assert "FAKE" not in out, (
+                f"{name} started a shard despite the check-only refusal:\n{out}")
+            assert srv.requests == 1, (
+                f"{name} made {srv.requests} requests before refusing, want exactly 1:\n{out}")
+
+
+def test_corpus_redact_fallback_strips_fragment_from_the_path_too():
+    """r3 review, P3, corpus_redact.sh:33 (pre-fix): the no-python3 fallback stripped
+    a `#fragment` from the authority but not from the PATH -- the far more common
+    shape (`/api#fragment-secret`) survived untouched. Uses the r3 repro payload."""
+    real_bash = shutil.which("bash")
+    assert real_bash, "no real bash on PATH to invoke"
+    url = "http://alice:s3cr3t@example.invalid:8443/api#fragment-secret"
+    env = dict(os.environ)
+    env["PATH"] = "/nonexistent"  # force the bash fallback, no python3 on PATH
+    r = subprocess.run([real_bash, str(HERE / "corpus_redact.sh"), url],
+                        env=env, capture_output=True, text=True, timeout=10)
+    out = r.stdout.strip()
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "fragment-secret" not in out, f"fragment leaked through the fallback: {out}"
+    assert "s3cr3t" not in out and "alice" not in out, f"credentials leaked: {out}"
+    assert out == "http://example.invalid:8443/api", out
 
 
 if __name__ == "__main__":
