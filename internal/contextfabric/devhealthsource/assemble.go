@@ -95,11 +95,11 @@ func logTableReadFailure(ctx context.Context, logger *slog.Logger, source, orgID
 	attrs := []any{"source", contextfabric.SanitizeLogAttr(source), "org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "table", contextfabric.SanitizeLogAttr(table)}
 	var exception *clickhousedriver.Exception
 	if errors.As(cause, &exception) {
-		attrs = append(attrs, "clickhouse_exception_code", exception.Code, "clickhouse_exception_name", exception.Name)
+		attrs = append(attrs, "clickhouse_exception_code", exception.Code, "clickhouse_exception_name", contextfabric.SanitizeLogAttr(exception.Name))
 	} else {
-		attrs = append(attrs, "cause_type", fmt.Sprintf("%T", cause))
+		attrs = append(attrs, "cause_type", contextfabric.SanitizeLogAttr(fmt.Sprintf("%T", cause)))
 	}
-	logger.ErrorContext(ctx, "devhealthsource table read failed", contextfabric.SanitizeLogAttrs(attrs)...)
+	logger.ErrorContext(ctx, "devhealthsource table read failed", attrs...)
 }
 
 func (p sourcePlan) nextBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {

@@ -8,31 +8,46 @@ package contextfabric
 // graphrank/tracer.go), a SECOND round -- after those were fixed -- found
 // MORE still (telemetry.go's stored ids, graphrank's Subject.CanonicalID,
 // falkorgraph's own request-id sink), and a THIRD round found three
-// distinct blind spots in the INSTRUMENT ITSELF rather than in the
-// production code: (1) a []string attribute (graphrank/tracer.go's
-// top_ids/fired_ids/eliminated_ids) was invisible because the classifier
-// only inspected scalar string types; (2) seven sites built their `[]any`
-// attribute slice across several `append` calls and spread it
-// (`logger.Info(msg, attrs...)`), a shape the scanner explicitly skipped
-// because a spread's contents are not enumerable at the call site; (3) the
-// scanner identified a "sanitizer" call by NAME ONLY, so a same-named
-// impostor function anywhere would have silently passed.
+// distinct blind spots in the INSTRUMENT ITSELF: (1) a []string attribute
+// was invisible because the classifier only inspected scalar string types;
+// (2) seven sites built their `[]any` attribute slice across several
+// `append` calls and spread it, a shape the scanner explicitly skipped;
+// (3) the scanner identified a "sanitizer" call by NAME ONLY. The FIRST
+// fix for (2) -- wrap the whole spread in one SanitizeLogAttrs([]any)
+// []any barrier -- was itself found wrong by the PR-ref CodeQL gate
+// (never a review round) before merge: CodeQL's array-level taint model
+// conflates a request-derived NUMBER passing through that function's
+// type-switch default case with an unsanitized STRING, because it cannot
+// see that the default branch is a no-op specifically because the value
+// cannot carry a forged line break. A function with the shape func([]any)
+// []any is, for CodeQL's purposes, no better a barrier than the original
+// rune-remap loop this whole ticket exists to replace.
+//
+// So values are sanitized at their OWN construction site (a composite
+// literal element, or an `append` call's key/value argument), never at
+// the spread boundary -- SanitizeLogAttr/SanitizeLogStrings called
+// directly on an OWN string/[]string expression is a shape CodeQL DOES
+// recognize, at every tip already proven clean. A spread's OWN
+// requirement is narrower: its argument's construction must be
+// STATICALLY TRACEABLE to composite literals and simple append
+// reassignments (each already checked by the rules above) within the
+// same function, or to a spread of a call to another function inside
+// this same scanned tree (whose own body is checked wherever it lives).
+// An opaque spread -- a parameter, a field, a call to something outside
+// the scanned tree -- is a FAILURE, reported at the spread site, never
+// silently trusted.
 //
 // This enumerates from the producer: every slog attribute value logged
 // anywhere under internal/contextfabric/... (this package and every
 // subpackage) that is (a) string- or []string-typed, (b) not a
 // compile-time constant, and (c) not wrapped by a call that RESOLVES (by
 // types.Object identity, never by name) to this package's own
-// SanitizeLogAttr/SanitizeLogStrings/SanitizeLogAttrs is a FAILURE, named
-// by path:line. A spread argument (`attrs...`) that does not resolve to
-// SanitizeLogAttrs is a FAILURE at the spread site itself. Nothing is
-// exempted by name -- the only allowlist is by TYPE: a named string type
-// (a closed enum, e.g. OfferPhrasingOutcome) whose OWN declaring package
-// declares at least one const of that type, and any bool/numeric-typed
-// value, are not flagged, because there is nothing free-text about them to
-// forge a log line with. A new raw string/[]string log site, or a new
-// unwrapped spread, added anywhere in this package family fails this test
-// the moment it lands, not on the next adversarial review round.
+// SanitizeLogAttr/SanitizeLogStrings is a FAILURE, named by path:line.
+// Nothing is exempted by name -- the only allowlist is by TYPE: a named
+// string type (a closed enum, e.g. OfferPhrasingOutcome) whose OWN
+// declaring package declares at least one const of that type, and any
+// bool/numeric-typed value, are not flagged, because there is nothing
+// free-text about them to forge a log line with.
 import (
 	"bytes"
 	"fmt"
@@ -56,9 +71,9 @@ var chaos5544LoggerMethods = map[string]bool{
 }
 
 // chaos5544ContextFabricPkgPath is the ONE package whose SanitizeLogAttr/
-// SanitizeLogStrings/SanitizeLogAttrs count as the real barrier. Identity
-// is resolved through go/types (info.Uses -> *types.Func -> Pkg().Path()),
-// never by matching the callee's NAME -- an r3 review round found that a
+// SanitizeLogStrings count as the real barrier. Identity is resolved
+// through go/types (info.Uses -> *types.Func -> Pkg().Path()), never by
+// matching the callee's NAME -- an r3 review round found that a
 // same-named function in a different package (or, worse, a decoy planted
 // in this very file) passed the old name-only check.
 const chaos5544ContextFabricPkgPath = "github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -87,10 +102,16 @@ func chaos5544IsStringConversion(call *ast.CallExpr, info *types.Info) (ast.Expr
 	if !ok || id.Name != "string" || len(call.Args) != 1 {
 		return nil, false
 	}
-	if obj := info.Uses[id]; obj != nil {
-		if _, isBuiltin := obj.(*types.Builtin); !isBuiltin {
-			return nil, false
-		}
+	// The predeclared type "string" resolves through info.Uses to the
+	// UNIVERSE scope's own *types.TypeName object (never *types.Builtin --
+	// that kind is for builtin FUNCTIONS like append/len, not predeclared
+	// types). Comparing identity against types.Universe.Lookup("string")
+	// -- rather than merely checking "not obviously a function" -- is what
+	// keeps a local variable or parameter literally named `string` (an
+	// impostor shadowing the predeclared type) from being misread as this
+	// conversion.
+	if info.Uses[id] != types.Universe.Lookup("string") {
+		return nil, false
 	}
 	return call.Args[0], true
 }
@@ -114,6 +135,14 @@ func chaos5544Classify(expr ast.Expr, info *types.Info, enumTypes map[*types.Nam
 	if t == nil {
 		return ""
 	}
+	// Unalias FIRST: a `type X = Y` alias (SubjectKind = contractsv1.
+	// ContextFabricSubjectKind is exactly this shape) type-checks, from Go
+	// 1.23's materialized aliases onward, to its own *types.Alias node --
+	// a plain `t.(*types.Named)` assertion below would fail on it even
+	// though the aliased type itself is a real, const-bearing enum.
+	// types.Unalias walks through any number of alias layers to the
+	// underlying *types.Named (or other) type the alias ultimately names.
+	t = types.Unalias(t)
 	u := t.Underlying()
 
 	// []string (or a named type over []string): needs SanitizeLogStrings.
@@ -176,11 +205,7 @@ func chaos5544ScanForUnsanitizedLogAttrs(t *testing.T, dir, pattern string) []st
 
 	// Build the enum-type set: every *types.Named whose declaring package
 	// declares at least one `const` of that exact type, walked across the
-	// whole loaded package graph (roots + every transitive import), not
-	// just the packages under scan -- a type like OfferPhrasingOutcome is
-	// USED under internal/contextfabric but DECLARED there too, while a
-	// type declared in an imported package (contracts/v1, observability)
-	// needs its own package's scope inspected.
+	// whole loaded package graph (roots + every transitive import).
 	enumTypes := map[*types.Named]bool{}
 	seenPkgs := map[*types.Package]bool{}
 	var walkPkg func(p *types.Package)
@@ -192,7 +217,7 @@ func chaos5544ScanForUnsanitizedLogAttrs(t *testing.T, dir, pattern string) []st
 		scope := p.Scope()
 		for _, name := range scope.Names() {
 			if c, ok := scope.Lookup(name).(*types.Const); ok {
-				if named, isNamed := c.Type().(*types.Named); isNamed {
+				if named, isNamed := types.Unalias(c.Type()).(*types.Named); isNamed {
 					enumTypes[named] = true
 				}
 			}
@@ -203,6 +228,36 @@ func chaos5544ScanForUnsanitizedLogAttrs(t *testing.T, dir, pattern string) []st
 	}
 	for _, pkg := range pkgs {
 		walkPkg(pkg.Types)
+	}
+
+	// funcDecl bundles a *ast.FuncDecl declared in a ROOT package with the
+	// go/token/go/types plumbing (its own package's Fset/TypesInfo) needed
+	// to check it in isolation.
+	type funcDecl struct {
+		decl *ast.FuncDecl
+		fset *token.FileSet
+		info *types.Info
+	}
+	// localFuncs maps every *types.Func declared in a ROOT package (one of
+	// the scanned pkgs' own Syntax, not merely imported) to its
+	// declaration. A spread of THIS function's call result is trusted
+	// only after RECURSING into its own return statements (see
+	// checkLocalFuncReturnsSafety below) -- trusting it by identity alone
+	// was tried and was wrong: attemptLogFields (genkitruntime/runtime.go)
+	// builds a values-then-append-by-index []any internally, and a bare
+	// identity check let that internal construction go completely
+	// unchecked.
+	localFuncs := map[*types.Func]funcDecl{}
+	for _, pkg := range pkgs {
+		for _, file := range pkg.Syntax {
+			for _, decl := range file.Decls {
+				if fd, ok := decl.(*ast.FuncDecl); ok {
+					if obj, ok := pkg.TypesInfo.Defs[fd.Name].(*types.Func); ok {
+						localFuncs[obj] = funcDecl{decl: fd, fset: pkg.Fset, info: pkg.TypesInfo}
+					}
+				}
+			}
+		}
 	}
 
 	type found struct {
@@ -230,34 +285,309 @@ func chaos5544ScanForUnsanitizedLogAttrs(t *testing.T, dir, pattern string) []st
 		}
 	}
 
-	inspectCompositeLit := func(fset *token.FileSet, info *types.Info, cl *ast.CompositeLit) {
-		arr, ok := cl.Type.(*ast.ArrayType)
+	isEmptyIfaceSliceType := func(typ ast.Expr) bool {
+		arr, ok := typ.(*ast.ArrayType)
 		if !ok || arr.Len != nil {
-			return
+			return false
 		}
-		isEmptyIface := false
 		switch elt := arr.Elt.(type) {
 		case *ast.InterfaceType:
-			isEmptyIface = elt.Methods == nil || len(elt.Methods.List) == 0
+			return elt.Methods == nil || len(elt.Methods.List) == 0
 		case *ast.Ident:
-			isEmptyIface = elt.Name == "any" // `any` is a bare identifier, not an inline interface, in the AST
+			return elt.Name == "any" // `any` is a bare identifier, not an inline interface, in the AST
 		}
-		if !isEmptyIface {
-			return
-		}
-		for i := 0; i+1 < len(cl.Elts); i += 2 {
-			keyLit, isBasicLit := cl.Elts[i].(*ast.BasicLit)
-			if !isBasicLit || keyLit.Kind != token.STRING {
-				continue
-			}
-			report(fset, cl.Elts[i+1], info)
+		return false
+	}
+
+	// checkPairs reports every value at an odd index (0=key,1=value,...)
+	// whose preceding element is a string literal key -- shared by
+	// composite literals and append() argument lists.
+	// checkPairs treats elts as a strict alternating key/value list (the
+	// only shape a []any log-attrs slice is ever built in) and checks
+	// every ODD-indexed VALUE, regardless of whether the key at the
+	// preceding even index is a literal. An earlier version of this
+	// instrument required the key to be a literal string before checking
+	// its value, which silently let a genuinely unsafe value through
+	// whenever the key was itself a computed expression -- e.g.
+	// `prefix+"shape", string(sample.Shape)` inside a per-sample loop,
+	// where the key is a string CONCATENATION, not a literal. The key's
+	// own shape has no bearing on whether the value next to it is safe.
+	checkPairs := func(fset *token.FileSet, info *types.Info, elts []ast.Expr) {
+		for i := 0; i+1 < len(elts); i += 2 {
+			report(fset, elts[i+1], info)
 		}
 	}
 
-	// inspectLoggerCall covers BOTH shapes: a flat, non-spread key/value arg
-	// list, and a spread (`attrs...`) -- which, since r3, is REQUIRED to be
-	// exactly a call resolving to the real SanitizeLogAttrs, not skipped.
-	inspectLoggerCall := func(fset *token.FileSet, info *types.Info, call *ast.CallExpr) {
+	// isAppendCall reports whether call is a call to the builtin append.
+	isAppendCall := func(call *ast.CallExpr, info *types.Info) bool {
+		id, ok := call.Fun.(*ast.Ident)
+		if !ok || id.Name != "append" {
+			return false
+		}
+		_, isBuiltin := info.Uses[id].(*types.Builtin)
+		return isBuiltin
+	}
+
+	// isEmptyIfaceSlice reports whether t is (an alias/underlying of) a
+	// []any / []interface{}.
+	isEmptyIfaceSlice := func(t types.Type) bool {
+		slice, isSlice := t.(*types.Slice)
+		if !isSlice {
+			return false
+		}
+		iface, isIface := slice.Elem().Underlying().(*types.Interface)
+		return isIface && iface.NumMethods() == 0
+	}
+
+	// variadicAnyTailStart returns the index of call's first variadic
+	// argument if call's STATIC callee -- a package-level function OR a
+	// local closure (a variable holding an *ast.FuncLit), resolved either
+	// way through go/types -- both TAKES a final variadic `...any` (or
+	// `...interface{}`) parameter AND RETURNS a single []any -- exactly
+	// the shape of a hand-written per-event field-builder closure
+	// (`func(extra ...any) []any`) -- and ok=false otherwise. Restricting
+	// to this exact shape (not merely "any variadic-any call") keeps Rule
+	// E from misreading an unrelated variadic call such as fmt.Sprintf's
+	// `(format string, a ...any) string` as an alternating key/value
+	// list. append and slog logger methods are excluded by their own
+	// dedicated rules (D and the logger-call handling) to avoid a
+	// duplicate finding at the same position.
+	variadicAnyTailStart := func(call *ast.CallExpr, info *types.Info) (idx int, ok bool) {
+		if isAppendCall(call, info) {
+			return 0, false
+		}
+		if sel, isSel := call.Fun.(*ast.SelectorExpr); isSel && chaos5544LoggerMethods[sel.Sel.Name] {
+			return 0, false // the logger call itself: inspectLoggerCall owns this shape
+		}
+		sig, isSig := info.TypeOf(call.Fun).(*types.Signature)
+		if !isSig || !sig.Variadic() || sig.Params().Len() == 0 {
+			return 0, false
+		}
+		if sig.Results().Len() != 1 || !isEmptyIfaceSlice(sig.Results().At(0).Type()) {
+			return 0, false // must return exactly one []any
+		}
+		last := sig.Params().At(sig.Params().Len() - 1)
+		if !isEmptyIfaceSlice(last.Type()) {
+			return 0, false // not `...any`/`...interface{}`
+		}
+		return sig.Params().Len() - 1, true
+	}
+
+	// collectAssignsInFunc walks one function body and records, for every
+	// identifier ever assigned a `[]any` literal or reassigned via
+	// `ident = append(ident, ...)`, each RHS expression -- regardless of
+	// which block/branch it appears in (order does not matter: every
+	// write must independently be a safe shape for the identifier to be
+	// trusted at all).
+	collectAssignsInFunc := func(body *ast.BlockStmt, info *types.Info) map[types.Object][]ast.Expr {
+		out := map[types.Object][]ast.Expr{}
+		record := func(lhs ast.Expr, rhs ast.Expr) {
+			id, ok := lhs.(*ast.Ident)
+			if !ok {
+				return
+			}
+			obj := info.Defs[id]
+			if obj == nil {
+				obj = info.Uses[id]
+			}
+			if obj == nil {
+				return
+			}
+			out[obj] = append(out[obj], rhs)
+		}
+		ast.Inspect(body, func(n ast.Node) bool {
+			switch s := n.(type) {
+			case *ast.AssignStmt:
+				if len(s.Lhs) == 1 && len(s.Rhs) == 1 {
+					record(s.Lhs[0], s.Rhs[0])
+				}
+			}
+			return true
+		})
+		return out
+	}
+
+	// checkSpreadSafety and checkLocalFuncReturnsSafety are mutually
+	// recursive (a spread may resolve to a local function's call result,
+	// whose own return expressions must in turn be checked the same way),
+	// hence the forward `var` declarations.
+	var checkSpreadSafety func(fset *token.FileSet, expr ast.Expr, info *types.Info, funcAssigns map[types.Object][]ast.Expr, visiting map[types.Object]bool, funcVisiting map[*types.Func]bool) bool
+	var checkLocalFuncReturnsSafety func(fn *types.Func, funcVisiting map[*types.Func]bool) bool
+
+	// checkLocalFuncReturnsSafety is what makes trusting "a spread of a
+	// local function's call result" SOUND rather than merely identity-
+	// based: it finds fn's own FuncDecl, computes ITS OWN funcAssigns, and
+	// recursively checks every bare `return expr` in its body via
+	// checkSpreadSafety, with a FRESH per-callee visiting set (a
+	// different function's locals are a different scope) -- reporting any
+	// finding along the way exactly like a top-level call would.
+	//
+	// Trusting fn by identity alone was tried and was wrong:
+	// attemptLogFields (genkitruntime/runtime.go) stages its values in one
+	// []any composite literal, THEN assembles the real key/value pairs by
+	// INDEXING into it in a loop (`fields = append(fields, key,
+	// values[i])`) -- a shape no rule above recognizes as unsafe, because
+	// `values[i]` is a dynamically-indexed read whose static type is the
+	// element type `any`, carrying no usable string/[]string information.
+	// The only place the actual concrete types are still visible is the
+	// values slice's OWN composite literal, which is exactly what
+	// recursing into the callee's body (checkSpreadSafety's own
+	// *ast.CompositeLit case) reaches.
+	//
+	// funcVisiting guards mutual/self recursion between local functions
+	// (A calls B calls A), the same way checkSpreadSafety's `visiting`
+	// guards the append accumulator cycle: a function already being
+	// checked is trusted at the back-edge.
+	checkLocalFuncReturnsSafety = func(fn *types.Func, funcVisiting map[*types.Func]bool) bool {
+		fd, ok := localFuncs[fn]
+		if !ok {
+			return false
+		}
+		if funcVisiting[fn] {
+			return true
+		}
+		funcVisiting[fn] = true
+		defer delete(funcVisiting, fn)
+
+		if fd.decl.Body == nil {
+			return false
+		}
+		calleeAssigns := collectAssignsInFunc(fd.decl.Body, fd.info)
+		safe := true
+		ast.Inspect(fd.decl.Body, func(n ast.Node) bool {
+			ret, isReturn := n.(*ast.ReturnStmt)
+			if !isReturn {
+				return true
+			}
+			if len(ret.Results) != 1 {
+				safe = false // a shape this walk cannot characterize -- refuse, never skip
+				return true
+			}
+			if !checkSpreadSafety(fd.fset, ret.Results[0], fd.info, calleeAssigns, map[types.Object]bool{}, funcVisiting) {
+				safe = false
+			}
+			return true
+		})
+		return safe
+	}
+
+	// checkSpreadSafety is Rules D+E, SCOPED: it is reached only by
+	// following the actual data flow backward from a logger call's own
+	// spread argument (inspectLoggerCall's ellipsis branch, below) --
+	// never applied tree-wide. An earlier version ran Rule D (append) and
+	// Rule E (variadic-any calls) unconditionally over every append/
+	// variadic call in the whole scanned tree, which misfired on
+	// completely unrelated []interface{} accumulators -- e.g.
+	// falkorgraph/client.go's Redis command-argument builder
+	// (`args = append(args, "GRAPH.CONSTRAINT", ..., graphKey, ...)`,
+	// spread into s.db.Conn.Do, never a logger) -- reporting a Redis
+	// command argument as an unsanitized log attribute. Folding the
+	// per-value checks INTO the same backward trace that already proves
+	// reachability means a value is only ever checked when it is
+	// genuinely on a path to a slog call.
+	//
+	// It returns true if expr's construction is fully accounted for
+	// (every value found along the way was checked directly via
+	// checkPairs/report as this function walked it), false if expr is
+	// opaque -- a parameter, a field, or a call this walk cannot see
+	// into -- in which case the CALLER (inspectLoggerCall) reports the
+	// unresolved spread site itself, never silently trusting it.
+	//
+	// visiting guards the natural accumulator cycle `x = append(x, ...)`:
+	// Args[0] of that call is `x` itself, whose own recorded assigns
+	// include this very statement -- an unguarded walk recurses forever.
+	// An identifier already being traced is trusted at the back-edge
+	// (every one of its assignments is independently walked by the outer
+	// call that first started tracing it).
+	checkSpreadSafety = func(fset *token.FileSet, expr ast.Expr, info *types.Info, funcAssigns map[types.Object][]ast.Expr, visiting map[types.Object]bool, funcVisiting map[*types.Func]bool) bool {
+		switch e := expr.(type) {
+		case *ast.CompositeLit:
+			if !isEmptyIfaceSliceType(e.Type) {
+				return false
+			}
+			checkPairs(fset, info, e.Elts) // Rule A's own check, reached via the trace this time
+			return true
+		case *ast.CallExpr:
+			// make([]any, ...) (with or without an explicit length/cap):
+			// every element such a call produces is the zero value of
+			// `any`, i.e. nil -- there is no shape in which this call
+			// alone can carry a string. Safe unconditionally; whatever
+			// gets INTO the slice afterward is checked at its own
+			// append/index-assignment site, not here.
+			if id, isIdent := e.Fun.(*ast.Ident); isIdent && id.Name == "make" {
+				if _, isBuiltin := info.Uses[id].(*types.Builtin); isBuiltin && isEmptyIfaceSlice(info.TypeOf(e)) {
+					return true
+				}
+			}
+			if isAppendCall(e, info) {
+				if !checkSpreadSafety(fset, e.Args[0], info, funcAssigns, visiting, funcVisiting) {
+					return false
+				}
+				if e.Ellipsis != token.NoPos {
+					// append(dst, other...) -- validate `other` too.
+					return checkSpreadSafety(fset, e.Args[len(e.Args)-1], info, funcAssigns, visiting, funcVisiting)
+				}
+				checkPairs(fset, info, e.Args[1:]) // Rule D: this append's own key/value tail
+				return true
+			}
+			// A call whose own final parameter is variadic `...any` and
+			// which returns a single []any (a per-event field-builder
+			// closure, most often): Rule E checks that call's own
+			// key/value tail directly, then -- if IT is itself a
+			// spread (base(other...) rather than base("k", v)) --
+			// recurses into that spread argument too.
+			if start, ok := variadicAnyTailStart(e, info); ok {
+				if e.Ellipsis != token.NoPos {
+					if len(e.Args) == 0 {
+						return false
+					}
+					return checkSpreadSafety(fset, e.Args[len(e.Args)-1], info, funcAssigns, visiting, funcVisiting)
+				}
+				if start < len(e.Args) {
+					checkPairs(fset, info, e.Args[start:])
+				}
+				return true
+			}
+			// A spread of some OTHER function's call result: trust it only
+			// after recursing into that function's own return expressions
+			// (checkLocalFuncReturnsSafety) -- never by identity alone.
+			fn := chaos5544ResolveCalleeFunc(e, info)
+			return fn != nil && checkLocalFuncReturnsSafety(fn, funcVisiting)
+		case *ast.Ident:
+			if e.Name == "nil" && info.Uses[e] == types.Universe.Lookup("nil") {
+				return true // a literal nil []any (e.g. requestIDLogAttrs' no-request-id branch) carries nothing
+			}
+			obj := info.Uses[e]
+			if obj == nil {
+				obj = info.Defs[e]
+			}
+			if obj != nil && visiting[obj] {
+				return true // back-edge of an in-progress trace -- see comment above
+			}
+			assigns, known := funcAssigns[obj]
+			if !known || len(assigns) == 0 {
+				return false // a parameter, a field, or nothing found -- opaque
+			}
+			if obj != nil {
+				visiting[obj] = true
+				defer delete(visiting, obj)
+			}
+			for _, rhs := range assigns {
+				if !checkSpreadSafety(fset, rhs, info, funcAssigns, visiting, funcVisiting) {
+					return false
+				}
+			}
+			return true
+		default:
+			return false
+		}
+	}
+
+	// inspectLoggerCall covers BOTH shapes: a flat, non-spread key/value
+	// arg list (checked directly), and a spread (`attrs...`), which must
+	// TRACE to composite literals / appends / trusted local-function
+	// spreads -- never skipped, never satisfied by name alone.
+	inspectLoggerCall := func(fset *token.FileSet, info *types.Info, call *ast.CallExpr, funcAssigns map[types.Object][]ast.Expr) {
 		sel, ok := call.Fun.(*ast.SelectorExpr)
 		if !ok || !chaos5544LoggerMethods[sel.Sel.Name] {
 			return
@@ -273,42 +603,33 @@ func chaos5544ScanForUnsanitizedLogAttrs(t *testing.T, dir, pattern string) []st
 		rest := call.Args[start:]
 
 		if call.Ellipsis != token.NoPos {
-			// A spread: exactly one argument, and it must resolve to the
-			// real SanitizeLogAttrs -- a bare variable, a different
-			// function's result, or an impostor are all failures HERE,
-			// at the spread site, since the slice's own contents are a
-			// runtime value this static walk cannot enumerate.
 			if len(rest) != 1 {
 				return
 			}
-			spreadCall, isCall := rest[0].(*ast.CallExpr)
-			if isCall && chaos5544IsRealBarrierCall(spreadCall, info, "SanitizeLogAttrs") {
-				return
+			if !checkSpreadSafety(fset, rest[0], info, funcAssigns, map[types.Object]bool{}, map[*types.Func]bool{}) {
+				findings = append(findings, found{pos: fset.Position(rest[0].Pos())})
 			}
-			findings = append(findings, found{pos: fset.Position(rest[0].Pos())})
 			return
 		}
-
-		for i := 0; i+1 < len(rest); i += 2 {
-			keyLit, isBasicLit := rest[i].(*ast.BasicLit)
-			if !isBasicLit || keyLit.Kind != token.STRING {
-				continue
-			}
-			report(fset, rest[i+1], info)
-		}
+		checkPairs(fset, info, rest)
 	}
 
 	for _, pkg := range pkgs {
 		for _, file := range pkg.Syntax {
 			ast.Inspect(file, func(n ast.Node) bool {
-				switch node := n.(type) {
-				case *ast.CallExpr:
-					inspectSlogBuilder(pkg.Fset, pkg.TypesInfo, node)
-					inspectLoggerCall(pkg.Fset, pkg.TypesInfo, node)
-				case *ast.CompositeLit:
-					inspectCompositeLit(pkg.Fset, pkg.TypesInfo, node)
+				fd, isFunc := n.(*ast.FuncDecl)
+				if !isFunc || fd.Body == nil {
+					return true
 				}
-				return true
+				funcAssigns := collectAssignsInFunc(fd.Body, pkg.TypesInfo)
+				ast.Inspect(fd.Body, func(n ast.Node) bool {
+					if call, isCall := n.(*ast.CallExpr); isCall {
+						inspectSlogBuilder(pkg.Fset, pkg.TypesInfo, call)
+						inspectLoggerCall(pkg.Fset, pkg.TypesInfo, call, funcAssigns)
+					}
+					return true
+				})
+				return false // don't re-descend into the same body via the outer walk
 			})
 		}
 	}
@@ -317,11 +638,25 @@ func chaos5544ScanForUnsanitizedLogAttrs(t *testing.T, dir, pattern string) []st
 		if findings[i].pos.Filename != findings[j].pos.Filename {
 			return findings[i].pos.Filename < findings[j].pos.Filename
 		}
-		return findings[i].pos.Line < findings[j].pos.Line
+		if findings[i].pos.Line != findings[j].pos.Line {
+			return findings[i].pos.Line < findings[j].pos.Line
+		}
+		return findings[i].pos.Column < findings[j].pos.Column
 	})
-	out := make([]string, len(findings))
-	for i, f := range findings {
-		out[i] = f.pos.String()
+	// De-duplicate by exact position: a []any{...} composite literal that
+	// is ALSO reachable via a logger spread's backward trace is checked
+	// twice by design (once unconditionally by Rule A, once again as
+	// checkSpreadSafety walks through it) -- two independent proofs of
+	// the same fact, not two distinct findings.
+	seen := map[string]bool{}
+	out := make([]string, 0, len(findings))
+	for _, f := range findings {
+		s := f.pos.String()
+		if seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
 	}
 	return out
 }
@@ -355,10 +690,10 @@ func TestNoUnsanitizedLogAttributeInContextFabric(t *testing.T) {
 	findings := chaos5544ScanForUnsanitizedLogAttrs(t, root,
 		"github.com/full-chaos/dev-health-acr/internal/contextfabric/...")
 	if len(findings) != 0 {
-		t.Errorf("%d unsanitized string/[]string log attribute(s) or unwrapped spread(s) found -- "+
-			"every one must route through SanitizeLogAttr/SanitizeLogStrings (a value) or "+
-			"SanitizeLogAttrs (a spread), bare in this package, contextfabric.-qualified elsewhere, "+
-			"before it becomes a log attribute value:", len(findings))
+		t.Errorf("%d unsanitized string/[]string log attribute(s) or untraceable spread(s) found -- "+
+			"every value must route through SanitizeLogAttr/SanitizeLogStrings at its OWN construction "+
+			"site (bare in this package, contextfabric.-qualified elsewhere); a spread must trace to "+
+			"composite literals/appends or a trusted local-function spread:", len(findings))
 		for _, f := range findings {
 			t.Errorf("  %s", f)
 		}
@@ -405,11 +740,14 @@ func LogIt(logger *slog.Logger, requestID string) {
 	}
 }
 
-// TestChaos5544SanitizerInstrumentCatchesAnUnwrappedSpread is
+// TestChaos5544SanitizerInstrumentCatchesAnUnwrappedAppendValue is
 // CatchesAnUnwrappedSite's sibling for the r3 spread class: a fixture
-// builds its []any attrs slice across two `append` calls, exactly the
-// shape the seven r3 production sites used, and spreads it unwrapped.
-func TestChaos5544SanitizerInstrumentCatchesAnUnwrappedSpread(t *testing.T) {
+// builds its []any attrs slice across two `append` calls (the exact
+// shape the seven r3 production sites used) with one value left
+// unwrapped, and spreads the fully-traceable slice. The spread itself is
+// traceable (literal + append), so the finding must land on the
+// unwrapped append VALUE, not the spread.
+func TestChaos5544SanitizerInstrumentCatchesAnUnwrappedAppendValue(t *testing.T) {
 	dir := t.TempDir()
 	src := `package fixture
 
@@ -438,8 +776,50 @@ func LogIt(logger *slog.Logger, extra string) {
 
 	findings := chaos5544ScanForUnsanitizedLogAttrs(t, dir, "./...")
 	if len(findings) != 1 {
-		t.Fatalf("the instrument found %d finding(s) in a fixture with exactly one unwrapped spread "+
-			"-- it must find exactly one, proving the spread class can fail: %v", len(findings), findings)
+		t.Fatalf("the instrument found %d finding(s) in a fixture with exactly one unwrapped append "+
+			"value -- it must find exactly one, proving the append-value class can fail: %v",
+			len(findings), findings)
+	}
+	if want := fmt.Sprintf("%s:7:", filepath.Join(dir, "fixture.go")); findings[0][:len(want)] != want {
+		t.Fatalf("finding = %q, want it to point at fixture.go:7 (the append's extra value), not the "+
+			"spread -- a traceable spread must not itself be flagged", findings[0])
+	}
+}
+
+// TestChaos5544SanitizerInstrumentRefusesAnOpaqueSpread proves the spread
+// tracer's OTHER failure mode: a spread argument that is a function
+// PARAMETER (or any other construction this static walk cannot see into)
+// is refused at the spread site, never silently trusted just because it
+// is a []any.
+func TestChaos5544SanitizerInstrumentRefusesAnOpaqueSpread(t *testing.T) {
+	dir := t.TempDir()
+	src := `package fixture
+
+import "log/slog"
+
+func LogIt(logger *slog.Logger, attrs []any) {
+	logger.Info("fixture line", attrs...)
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "fixture.go"), []byte(src), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	modSrc := "module fixture.example/chaos5544opaque\n\ngo 1.21\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(modSrc), 0o644); err != nil {
+		t.Fatalf("write fixture go.mod: %v", err)
+	}
+	formatted, err := format.Source([]byte(src))
+	if err != nil {
+		t.Fatalf("fixture does not gofmt clean: %v", err)
+	}
+	if !bytes.Equal(formatted, []byte(src)) {
+		t.Fatalf("fixture source is not gofmt-normalized")
+	}
+
+	findings := chaos5544ScanForUnsanitizedLogAttrs(t, dir, "./...")
+	if len(findings) != 1 {
+		t.Fatalf("the instrument found %d finding(s) in a fixture whose spread is an untraceable "+
+			"parameter -- it must refuse it as opaque: %v", len(findings), findings)
 	}
 }
 

@@ -1832,7 +1832,7 @@ func attemptLogFields(outcomes []attemptOutcome) []any {
 	// measured zero; the corollary is that a present zero must be spelled
 	// out, so a MISSING field has exactly one meaning -- the site was never
 	// reached.
-	values := []any{len(outcomes), attemptsRetried(outcomes), formatAttemptOutcomes(outcomes), formatAttemptElapsed(outcomes)}
+	values := []any{len(outcomes), attemptsRetried(outcomes), contextfabric.SanitizeLogAttr(formatAttemptOutcomes(outcomes)), contextfabric.SanitizeLogAttr(formatAttemptElapsed(outcomes))}
 	fields := make([]any, 0, len(attemptLogFieldKeys)*2)
 	for i, key := range attemptLogFieldKeys {
 		fields = append(fields, key, values[i])
@@ -2047,7 +2047,7 @@ func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID str
 	// identity must be on the line too, or a primary-model regression is
 	// invisible at Info behind a fallback that happens to still serve. Equal
 	// to model_id/model_version/receipt.Provider when no fallback ran.
-	fields = append(fields, "primary_provider", primaryProvider, "primary_model_id", primaryModel, "primary_model_version", primaryModelVersion)
+	fields = append(fields, "primary_provider", contextfabric.SanitizeLogAttr(primaryProvider), "primary_model_id", contextfabric.SanitizeLogAttr(primaryModel), "primary_model_version", contextfabric.SanitizeLogAttr(primaryModelVersion))
 	// Appended only when a rejection actually happened, exactly as
 	// logSynthesizeDecision does with its own rejection_reason: an
 	// unconditional field would put rejection_reason="" on every
@@ -2062,9 +2062,9 @@ func (r *Runtime) logInterpretDecision(ctx context.Context, orgID, requestID str
 	// TestDecisionEventNeverCarriesCorpusText for the standing assertion
 	// that this whole line stays corpus-free.
 	if rejectionReason != "" {
-		fields = append(fields, "rejection_reason", rejectionReason)
+		fields = append(fields, "rejection_reason", contextfabric.SanitizeLogAttr(rejectionReason))
 	}
-	r.config.Logger.InfoContext(ctx, decisionEventMessage, contextfabric.SanitizeLogAttrs(fields)...)
+	r.config.Logger.InfoContext(ctx, decisionEventMessage, fields...)
 }
 
 // synthesisGroundingCounts is H8's fix: how many of the synthesis draft's
@@ -2130,14 +2130,14 @@ func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID st
 	// CHAOS-5380 PR-A B4 (r5 P1-1): the PRIMARY's own identity, separate
 	// from model_id/model_version above -- see logInterpretDecision's
 	// matching comment for the full rationale.
-	fields = append(fields, "primary_provider", primaryProvider, "primary_model_id", primaryModel, "primary_model_version", primaryModelVersion)
+	fields = append(fields, "primary_provider", contextfabric.SanitizeLogAttr(primaryProvider), "primary_model_id", contextfabric.SanitizeLogAttr(primaryModel), "primary_model_version", contextfabric.SanitizeLogAttr(primaryModelVersion))
 	// CHAOS-4522: appended, never unconditional, so a successful or
 	// transport-failed call's line stays byte-identical to its pre-4522
 	// shape and only a rejection carries the two new fields. Both values
 	// are closed/bounded -- a vocabulary member and a count -- so the
 	// corpus-safety guarantee in this function's doc comment is unchanged.
 	if rejectionReason != "" {
-		fields = append(fields, "rejection_reason", rejectionReason)
+		fields = append(fields, "rejection_reason", contextfabric.SanitizeLogAttr(rejectionReason))
 	}
 	// Emitted independently of the reason (codex R2 finding 4): a SUCCESS
 	// carries a group size and no reason, a rejection normally carries both,
@@ -2151,7 +2151,7 @@ func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID st
 		// that is the distinguishing fact, not an absence worth hiding.
 		fields = append(fields, "grounded_beyond_first", groundedBeyondFirst)
 	}
-	r.config.Logger.InfoContext(ctx, decisionEventMessage, contextfabric.SanitizeLogAttrs(fields)...)
+	r.config.Logger.InfoContext(ctx, decisionEventMessage, fields...)
 }
 
 // logPhraseDecision is the offer-phrasing counterpart to
@@ -2183,7 +2183,7 @@ func (r *Runtime) logPhraseDecision(ctx context.Context, orgID, requestID string
 		"prompt_version", contextfabric.SanitizeLogAttr(receipt.PromptVersion),
 	}
 	fields = append(fields, attemptLogFields(attemptOutcomes)...)
-	r.config.Logger.InfoContext(ctx, decisionEventMessage, contextfabric.SanitizeLogAttrs(fields)...)
+	r.config.Logger.InfoContext(ctx, decisionEventMessage, fields...)
 }
 
 func boundedJSON(value any, maximum int) ([]byte, error) {

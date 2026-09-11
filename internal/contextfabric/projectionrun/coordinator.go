@@ -137,10 +137,10 @@ func (o SlogObserver) ObserveProjectionOutcome(outcome Outcome) {
 		// Same discipline as the embedder's model-identity error: name the
 		// classified thing, never the received text.
 		logger.Error("context_fabric: projection tick failed; checkpoint held for replay",
-			contextfabric.SanitizeLogAttrs(append(attrs, "failure_class", classifyOutcomeError(outcome.Err)))...)
+			append(attrs, "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(outcome.Err)))...)
 		return
 	}
-	logger.Debug("context_fabric: projection tick completed", contextfabric.SanitizeLogAttrs(attrs)...)
+	logger.Debug("context_fabric: projection tick completed", attrs...)
 }
 
 // ObserveProjectionDrain logs CHAOS-3826's per-pair drain summary. Routine
@@ -166,10 +166,10 @@ func (o SlogObserver) ObserveProjectionDrain(outcome DrainOutcome) {
 		"duration_ms", outcome.Duration.Milliseconds(),
 	}
 	if outcome.Applied > 1 {
-		logger.Info("context_fabric: projection tick drained multiple batches", contextfabric.SanitizeLogAttrs(attrs)...)
+		logger.Info("context_fabric: projection tick drained multiple batches", attrs...)
 		return
 	}
-	logger.Debug("context_fabric: projection tick drain summary", contextfabric.SanitizeLogAttrs(attrs)...)
+	logger.Debug("context_fabric: projection tick drain summary", attrs...)
 }
 
 // RebuildMarker enforces the CHAOS-3753 codex finding C2 invariant: no code
@@ -1860,7 +1860,7 @@ func (c *Coordinator) runBuildTick(scope *orgScope, orgID string, row contextfab
 		if started, ok := c.buildStarted.LoadAndDelete(orgID); ok {
 			attrs = append(attrs, "build_wall_clock_ms", c.now().Sub(started.(time.Time)).Milliseconds())
 		}
-		c.logger.InfoContext(scope.logCtx(), "context_fabric: graph epoch flip", contextfabric.SanitizeLogAttrs(attrs)...)
+		c.logger.InfoContext(scope.logCtx(), "context_fabric: graph epoch flip", attrs...)
 		_ = scope.run(func(ctx context.Context) error {
 			c.invalidateEpochResolution(ctx, orgID, contextfabric.LifecycleTransitionFlip)
 			return nil
@@ -2504,7 +2504,7 @@ func (c *Coordinator) emitProjectionFreshness(ctx context.Context, orgID, source
 		// Source does not implement the optional ProjectionSourceVersion
 		// capability -- no code-current baseline to compare the durable
 		// watermark against, so staleness is unknown, not false-positive.
-		c.logger.DebugContext(ctx, "context_fabric: projection freshness unknown; source does not report a current version", contextfabric.SanitizeLogAttrs(staleFields)...)
+		c.logger.DebugContext(ctx, "context_fabric: projection freshness unknown; source does not report a current version", staleFields...)
 		return false
 	}
 	stale := watermark.SourceVersion != current
@@ -2514,9 +2514,9 @@ func (c *Coordinator) emitProjectionFreshness(ctx context.Context, orgID, source
 	}
 	fields := append(staleFields, "stale", stale, "projected_at_age_seconds", ageSeconds)
 	if stale {
-		c.logger.WarnContext(ctx, "context_fabric: projection freshness stale; rebuild required", contextfabric.SanitizeLogAttrs(fields)...)
+		c.logger.WarnContext(ctx, "context_fabric: projection freshness stale; rebuild required", fields...)
 	} else {
-		c.logger.DebugContext(ctx, "context_fabric: projection freshness", contextfabric.SanitizeLogAttrs(fields)...)
+		c.logger.DebugContext(ctx, "context_fabric: projection freshness", fields...)
 	}
 	return stale
 }

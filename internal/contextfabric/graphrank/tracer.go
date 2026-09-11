@@ -783,5 +783,5 @@ func (o SlogRawSignalObserver) ObserveCandidate(ctx context.Context, subjectKey 
 	if node.LexicalTermCount != nil {
 		attrs = append(attrs, "lexical_term_count", *node.LexicalTermCount)
 	}
-	o.logger.DebugContext(ctx, "context fabric raw retrieval signal", contextfabric.SanitizeLogAttrs(attrs)...)
+	o.logger.DebugContext(ctx, "context fabric raw retrieval signal", attrs...)
 }

@@ -799,7 +799,7 @@ func (t SlogTelemetry) RecordCohortDeniedByAuthorization(_ context.Context, orgI
 // what basis means.
 func (t SlogTelemetry) RecordCohortExactNameCensusGate(ctx context.Context, orgID string, admitted bool, basis CohortExactNameCensusBasis) {
 	args := []any{"org_id", contextfabric.SanitizeLogAttr(orgID), "admitted", admitted, "basis", contextfabric.SanitizeLogAttr(string(basis))}
-	t.logger().Info("context_fabric: cohort exact-name census gate", contextfabric.SanitizeLogAttrs(append(args, graphRequestIDLogAttrs(ctx)...))...)
+	t.logger().Info("context_fabric: cohort exact-name census gate", append(args, graphRequestIDLogAttrs(ctx)...)...)
 }
 
 // graphRequestIDLogAttrs attaches the investigation's request id to a graph
@@ -828,7 +828,7 @@ func graphRequestIDLogAttrs(ctx context.Context) []any {
 func (t SlogTelemetry) RecordCohortKindBasis(ctx context.Context, orgID string, declaredKind contextfabric.SubjectKind, basis graphrank.CohortKindBasis, discovered bool, poolTruncation CohortPoolTruncationBasis, poolTruncationArms []CohortPoolTruncationArm) {
 	args := []any{"org_id", contextfabric.SanitizeLogAttr(orgID), "member_kind", contextfabric.SanitizeLogAttr(string(declaredKind)), "basis", contextfabric.SanitizeLogAttr(string(basis)), "discovered", discovered,
 		"pool_truncation", contextfabric.SanitizeLogAttr(string(poolTruncation)), "pool_truncation_arms", contextfabric.SanitizeLogAttr(formatCohortPoolTruncationArms(poolTruncationArms))}
-	t.logger().Info("context_fabric: cohort kind basis", contextfabric.SanitizeLogAttrs(append(args, graphRequestIDLogAttrs(ctx)...))...)
+	t.logger().Info("context_fabric: cohort kind basis", append(args, graphRequestIDLogAttrs(ctx)...)...)
 }
 
 // RecordNeighborLookupFailed logs at Warn: unlike the cohort-kind basis, this
@@ -837,9 +837,9 @@ func (t SlogTelemetry) RecordCohortKindBasis(ctx context.Context, orgID string, 
 func (t SlogTelemetry) RecordNeighborLookupFailed(ctx context.Context, orgID, originCanonicalID, neighborUUID string, site NeighborLookupFailureSite, err error) {
 	args := []any{"org_id", contextfabric.SanitizeLogAttr(orgID), "origin_canonical_id", contextfabric.SanitizeLogAttr(originCanonicalID), "neighbor_uuid", contextfabric.SanitizeLogAttr(neighborUUID), "site", contextfabric.SanitizeLogAttr(string(site))}
 	if err != nil {
-		args = append(args, "error", err.Error())
+		args = append(args, "error", contextfabric.SanitizeLogAttr(err.Error()))
 	}
-	t.logger().Warn("context_fabric: cohort neighbor lookup failed", contextfabric.SanitizeLogAttrs(append(args, graphRequestIDLogAttrs(ctx)...))...)
+	t.logger().Warn("context_fabric: cohort neighbor lookup failed", append(args, graphRequestIDLogAttrs(ctx)...)...)
 }
 
 func (c Config) validate() error {

@@ -68,7 +68,7 @@ func (t SlogEngineTelemetry) RecordPriorSubjectReceiptsSkipped(ctx context.Conte
 	// existed before this ticket but nothing in this package read it, so
 	// this line and RecordAnswerReuse's below were not request-correlatable.
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "skipped_count", skipped}, requestIDLogAttrs(ctx)...)
-	t.logger.WarnContext(ctx, "context fabric prior-subject receipts skipped", SanitizeLogAttrs(args)...)
+	t.logger.WarnContext(ctx, "context fabric prior-subject receipts skipped", args...)
 }
 
 // RecordCommitAffirmationRetraction implements CommitAffirmationTelemetry
@@ -105,7 +105,7 @@ func (t SlogEngineTelemetry) RecordCommitAffirmationRetraction(ctx context.Conte
 		"provisional_committed", outcome.ProvisionalCommitted,
 		"final_committed", outcome.FinalCommitted,
 	}, requestIDLogAttrs(ctx)...)
-	t.logger.WarnContext(ctx, "context fabric commit affirmation retraction", SanitizeLogAttrs(args)...)
+	t.logger.WarnContext(ctx, "context fabric commit affirmation retraction", args...)
 }
 
 // RecordSynthesisStatusOverride implements EngineTelemetry (CHAOS-4098) --
@@ -131,12 +131,12 @@ func (t SlogEngineTelemetry) RecordSynthesisStatusOverride(ctx context.Context, 
 		"reason", SanitizeLogAttr(string(outcome.Reason)),
 		"committed_count", outcome.CommittedCount,
 	}, requestIDLogAttrs(ctx)...)
-	t.logger.WarnContext(ctx, "context fabric synthesis status override", SanitizeLogAttrs(args)...)
+	t.logger.WarnContext(ctx, "context fabric synthesis status override", args...)
 }
 
 func (t SlogEngineTelemetry) RecordAnswerReuse(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome))}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric answer reuse outcome", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric answer reuse outcome", args...)
 }
 
 // RecordAnswerReuseBypass (CHAOS-4998) logs at Info under its OWN message,
@@ -147,7 +147,7 @@ func (t SlogEngineTelemetry) RecordAnswerReuse(ctx context.Context, principal st
 // a receipt id.
 func (t SlogEngineTelemetry) RecordAnswerReuseBypass(ctx context.Context, principal storage.Principal, reason AnswerReuseBypassReason) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "reason", SanitizeLogAttr(string(reason))}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric answer reuse bypass", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric answer reuse bypass", args...)
 }
 
 // AnswerReuseContainmentEvent is one reuse attempt's containment
@@ -212,10 +212,10 @@ func (t SlogEngineTelemetry) RecordAnswerReuseContainment(ctx context.Context, p
 		"dropped_paths", event.DroppedPaths,
 	}
 	if event.Disclosure != "" {
-		args = append(args, "disclosure", event.Disclosure)
+		args = append(args, "disclosure", SanitizeLogAttr(event.Disclosure))
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric answer reuse containment", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric answer reuse containment", args...)
 }
 
 // RecordSubjectlessTerminal logs at Info: the classification itself
@@ -236,7 +236,7 @@ func (t SlogEngineTelemetry) RecordSubjectlessTerminal(ctx context.Context, prin
 	// would keep this one line looking correct while every other recorder
 	// implementation emitted an empty value.
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "reason", SanitizeLogAttr(reason), "refusal_basis", SanitizeLogAttr(refusalBasis)}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric subjectless terminal", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric subjectless terminal", args...)
 }
 
 // RecordPriorSubjectReceiptSkipReason logs at Info: a per-reason breakdown
@@ -254,7 +254,7 @@ func (t SlogEngineTelemetry) RecordPriorSubjectReceiptSkipReason(ctx context.Con
 		args = append(args, "epoch_delta", epochDelta)
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric prior-subject receipt skip reason", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric prior-subject receipt skip reason", args...)
 }
 
 // RecordAnswerReuseServedRequestID logs at Info -- a mismatch is the
@@ -269,7 +269,7 @@ func (t SlogEngineTelemetry) RecordPriorSubjectReceiptSkipReason(ctx context.Con
 // every other request/stored-derived value in this file.
 func (t SlogEngineTelemetry) RecordAnswerReuseServedRequestID(ctx context.Context, principal storage.Principal, servedRequestID string, requestIDMismatch bool) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "served_request_id", SanitizeLogAttr(servedRequestID), "request_id_mismatch", requestIDMismatch}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric answer reuse served a stored result's own request id", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric answer reuse served a stored result's own request id", args...)
 }
 
 // RecordBindingEpochDelta is CHAOS-3898 §5b's flip_during_investigation/
@@ -280,10 +280,10 @@ func (t SlogEngineTelemetry) RecordAnswerReuseServedRequestID(ctx context.Contex
 func (t SlogEngineTelemetry) RecordBindingEpochDelta(ctx context.Context, principal storage.Principal, flipped bool, delta int64) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "flip_during_investigation", flipped, "binding_epoch_delta", delta}, requestIDLogAttrs(ctx)...)
 	if flipped {
-		t.logger.InfoContext(ctx, "context fabric investigation's graph epoch moved between binding resolution and save", SanitizeLogAttrs(args)...)
+		t.logger.InfoContext(ctx, "context fabric investigation's graph epoch moved between binding resolution and save", args...)
 		return
 	}
-	t.logger.DebugContext(ctx, "context fabric investigation's graph epoch unchanged between binding resolution and save", SanitizeLogAttrs(args)...)
+	t.logger.DebugContext(ctx, "context fabric investigation's graph epoch unchanged between binding resolution and save", args...)
 }
 
 // RecordWindowBinderOutcome logs at Info: the closed WindowBindReason
@@ -291,7 +291,7 @@ func (t SlogEngineTelemetry) RecordBindingEpochDelta(ctx context.Context, princi
 // binder route a question), never itself a sign anything is wrong.
 func (t SlogEngineTelemetry) RecordWindowBinderOutcome(ctx context.Context, principal storage.Principal, reason WindowBindReason) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "reason", SanitizeLogAttr(string(reason))}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric window binder outcome", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric window binder outcome", args...)
 }
 
 // RecordWindowCanonicalization logs at Info: the closed
@@ -303,7 +303,7 @@ func (t SlogEngineTelemetry) RecordWindowBinderOutcome(ctx context.Context, prin
 // RecordAnswerReuse's own miss-reason split.
 func (t SlogEngineTelemetry) RecordWindowCanonicalization(ctx context.Context, principal storage.Principal, outcome WindowCanonicalizationOutcome) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome))}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric window canonicalization outcome", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric window canonicalization outcome", args...)
 }
 
 // RecordWindowCarry (CHAOS-4360) logs at Info: outcome/chain_depth are both
@@ -314,7 +314,7 @@ func (t SlogEngineTelemetry) RecordWindowCanonicalization(ctx context.Context, p
 // population).
 func (t SlogEngineTelemetry) RecordWindowCarry(ctx context.Context, principal storage.Principal, outcome WindowCarryOutcome, chainDepth int, seedSource CarrySeedSource, viaStoredAncestry bool) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome)), "chain_depth", chainDepth, "seed_source", SanitizeLogAttr(string(seedSource)), "via_stored_ancestry", viaStoredAncestry}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric window carry", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric window carry", args...)
 }
 
 // RecordKindCarry logs at Info, mirroring RecordWindowCarry exactly:
@@ -325,7 +325,7 @@ func (t SlogEngineTelemetry) RecordWindowCarry(ctx context.Context, principal st
 func (t SlogEngineTelemetry) RecordKindCarry(ctx context.Context, principal storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind, seedSource CarrySeedSource, viaStoredAncestry bool) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome)), "chain_depth", chainDepth,
 		"carried_kind", SanitizeLogAttr(string(carriedKind)), "redeemed_kind", SanitizeLogAttr(string(redeemedKind)), "seed_source", SanitizeLogAttr(string(seedSource)), "via_stored_ancestry", viaStoredAncestry}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric kind carry", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric kind carry", args...)
 }
 
 // RecordStructureNeedsDisclosed (CHAOS-3900 P1.F). member is a closed
@@ -333,7 +333,7 @@ func (t SlogEngineTelemetry) RecordKindCarry(ctx context.Context, principal stor
 // question text or a subject identifier.
 func (t SlogEngineTelemetry) RecordStructureNeedsDisclosed(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "member", SanitizeLogAttr(string(member))}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric structure needs disclosed", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric structure needs disclosed", args...)
 }
 
 // RecordStructureOfferCount (CHAOS-3900 P1.F). member/source are both
@@ -341,7 +341,7 @@ func (t SlogEngineTelemetry) RecordStructureNeedsDisclosed(ctx context.Context, 
 // counts/enums only, never an offer's own label/value/canonical_id.
 func (t SlogEngineTelemetry) RecordGatedOfferResolution(ctx context.Context, principal storage.Principal, outcome GatedOfferResolutionOutcome) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome))}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric gated offer resolution", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric gated offer resolution", args...)
 }
 
 // RecordCohortStructureGate (CHAOS-4579/CHAOS-4531). outcome and shape are
@@ -352,14 +352,14 @@ func (t SlogEngineTelemetry) RecordGatedOfferResolution(ctx context.Context, pri
 // denominator and the two directions it differs in.
 func (t SlogEngineTelemetry) RecordCohortStructureGate(ctx context.Context, principal storage.Principal, outcome CohortStructureGateOutcome, shape InvestigationShape) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome)), "shape", SanitizeLogAttr(string(shape))}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric cohort structure gate", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric cohort structure gate", args...)
 }
 
 // RecordWindowGateOfferDisclosure (CHAOS-4314) logs at Info: offered is the
 // window_gated_offered/window_gated_silent split's own producer signal.
 func (t SlogEngineTelemetry) RecordWindowGateOfferDisclosure(ctx context.Context, principal storage.Principal, offered bool) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "offered", offered}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric window gate offer disclosure", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric window gate offer disclosure", args...)
 }
 
 // RecordWindowExpandOfferRedeemed (CHAOS-4314) logs at Info: no
@@ -367,7 +367,7 @@ func (t SlogEngineTelemetry) RecordWindowGateOfferDisclosure(ctx context.Context
 // RecordPriorSubjectReceiptsSkipped's own shape when skipped>0.
 func (t SlogEngineTelemetry) RecordWindowExpandOfferRedeemed(ctx context.Context, principal storage.Principal) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID)}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric window expand offer redeemed", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric window expand offer redeemed", args...)
 }
 
 // RecordInterpretedTimeBound (CHAOS-5421) logs at Info -- the PRODUCTION
@@ -394,12 +394,12 @@ func (t SlogEngineTelemetry) RecordInterpretedTimeBound(ctx context.Context, pri
 		"clamp_applied", decision.ClampApplied,
 		"range_days", decision.RangeDays,
 	}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric interpreted time bound", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric interpreted time bound", args...)
 }
 
 func (t SlogEngineTelemetry) RecordStructureOfferCount(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind, source contractsv1.ContextFabricStructureOfferSource, count int) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "member", SanitizeLogAttr(string(member)), "source", SanitizeLogAttr(string(source)), "count", count}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric structure offer count", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric structure offer count", args...)
 }
 
 // RecordStructureReceipt (CHAOS-3900 P1.F). member/outcome are both closed
@@ -407,7 +407,7 @@ func (t SlogEngineTelemetry) RecordStructureOfferCount(ctx context.Context, prin
 // for the three-value vocabulary and its atomicity guarantee.
 func (t SlogEngineTelemetry) RecordStructureReceipt(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind, outcome StructureReceiptOutcome) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "member", SanitizeLogAttr(string(member)), "outcome", SanitizeLogAttr(string(outcome))}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric structure receipt", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric structure receipt", args...)
 }
 
 // RecordStructureExplicit (CHAOS-3972 P3) mirrors RecordStructureReceipt's
@@ -415,14 +415,14 @@ func (t SlogEngineTelemetry) RecordStructureReceipt(ctx context.Context, princip
 // fields.
 func (t SlogEngineTelemetry) RecordStructureExplicit(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind, outcome StructureExplicitOutcome) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "member", SanitizeLogAttr(string(member)), "outcome", SanitizeLogAttr(string(outcome))}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric structure explicit", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric structure explicit", args...)
 }
 
 // RecordPriorConsulted (CHAOS-3977 P5). member/outcome are both closed
 // enums -- see PriorConsultedOutcome's own doc comment (priors.go).
 func (t SlogEngineTelemetry) RecordPriorConsulted(ctx context.Context, principal storage.Principal, member contractsv1.ContextFabricStructureNeedKind, outcome PriorConsultedOutcome) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "member", SanitizeLogAttr(string(member)), "outcome", SanitizeLogAttr(string(outcome))}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric prior consulted", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric prior consulted", args...)
 }
 
 // RecordPriorDegradation (CHAOS-3977 P5) logs at Warn for
@@ -433,10 +433,10 @@ func (t SlogEngineTelemetry) RecordPriorConsulted(ctx context.Context, principal
 func (t SlogEngineTelemetry) RecordPriorDegradation(ctx context.Context, principal storage.Principal, state PriorDegradationState) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "state", SanitizeLogAttr(string(state))}, requestIDLogAttrs(ctx)...)
 	if state == PriorDegradationPointerDangling {
-		t.logger.WarnContext(ctx, "context fabric prior consultation degraded: active version pointer names a missing snapshot", SanitizeLogAttrs(args)...)
+		t.logger.WarnContext(ctx, "context fabric prior consultation degraded: active version pointer names a missing snapshot", args...)
 		return
 	}
-	t.logger.InfoContext(ctx, "context fabric prior consultation degraded", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric prior consultation degraded", args...)
 }
 
 // RecordOfferPhrasing implements EngineTelemetry (CHAOS-4171 PR2). outcome
@@ -444,7 +444,7 @@ func (t SlogEngineTelemetry) RecordPriorDegradation(ctx context.Context, princip
 // never the phrasing text itself or a structural Label.
 func (t SlogEngineTelemetry) RecordOfferPhrasing(ctx context.Context, principal storage.Principal, outcome OfferPhrasingOutcome) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome))}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric offer phrasing outcome", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric offer phrasing outcome", args...)
 }
 
 // RecordProjectedRowsCount implements EngineTelemetry (CHAOS-4355) -- see
@@ -452,7 +452,7 @@ func (t SlogEngineTelemetry) RecordOfferPhrasing(ctx context.Context, principal 
 // an org id and two closed, non-identifying numbers.
 func (t SlogEngineTelemetry) RecordProjectedRowsCount(ctx context.Context, principal storage.Principal, count int, truncated bool) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "rows_count", count, "truncated", truncated}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric projected rows count", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric projected rows count", args...)
 }
 
 // RecordProjectedRowsByFactKind implements EngineTelemetry (CHAOS-4418) --
@@ -471,7 +471,7 @@ func (t SlogEngineTelemetry) RecordProjectedRowsByFactKind(ctx context.Context, 
 	sort.Strings(kinds)
 	for _, kind := range kinds {
 		args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "fact_kind", SanitizeLogAttr(kind), "rows_projected_by_fact_kind", byKind[FactKind(kind)]}, requestIDLogAttrs(ctx)...)
-		t.logger.InfoContext(ctx, "context fabric projected rows count by fact kind", SanitizeLogAttrs(args)...)
+		t.logger.InfoContext(ctx, "context fabric projected rows count by fact kind", args...)
 	}
 }
 
@@ -480,7 +480,7 @@ func (t SlogEngineTelemetry) RecordProjectedRowsByFactKind(ctx context.Context, 
 // an org id and two non-identifying counts.
 func (t SlogEngineTelemetry) RecordDualTableFacts(ctx context.Context, principal storage.Principal, dualTableClaims, secondaryRowsBytes int) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "dual_table_claims", dualTableClaims, "secondary_rows_bytes", secondaryRowsBytes}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric dual table facts", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric dual table facts", args...)
 }
 
 // RecordModelRowsStripped implements EngineTelemetry (CHAOS-4355
@@ -488,7 +488,7 @@ func (t SlogEngineTelemetry) RecordDualTableFacts(ctx context.Context, principal
 // count -- never the stripped rows themselves.
 func (t SlogEngineTelemetry) RecordModelRowsStripped(ctx context.Context, principal storage.Principal, claims int) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "cf_model_rows_stripped", claims}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric model-authored claimed fact rows stripped before validation", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric model-authored claimed fact rows stripped before validation", args...)
 }
 
 // RecordDriverIdentityCollisions implements EngineTelemetry (CHAOS-5364).
@@ -501,7 +501,7 @@ func (t SlogEngineTelemetry) RecordDriverIdentityCollisions(ctx context.Context,
 		"cf_driver_identity_restated", collisions.Restated,
 		"cf_driver_identity_reidentified", collisions.Reidentified,
 	}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric driver identity collisions resolved before validation", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric driver identity collisions resolved before validation", args...)
 }
 
 // RecordFactScopeExpansion implements EngineTelemetry (CHAOS-4099) -- the
@@ -612,10 +612,10 @@ func (t SlogEngineTelemetry) RecordFactScopeExpansion(ctx context.Context, princ
 		"decision_reason", SanitizeLogAttr(string(loggableFactScopeDecisionReason(event.DecisionReason))),
 	}, requestIDLogAttrs(ctx)...)
 	if factScopeGapDegrades(event.Outcome) {
-		t.logger.WarnContext(ctx, "context fabric fact scope expansion left a gap", SanitizeLogAttrs(args)...)
+		t.logger.WarnContext(ctx, "context fabric fact scope expansion left a gap", args...)
 		return
 	}
-	t.logger.InfoContext(ctx, "context fabric fact scope expansion outcome", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric fact scope expansion outcome", args...)
 }
 
 // RecordCohortRanked implements EngineTelemetry (CHAOS-4398). Content-safe:
@@ -626,7 +626,7 @@ func (t SlogEngineTelemetry) RecordFactScopeExpansion(ctx context.Context, princ
 // rather than as a log level so a fully-degraded org does not get treated
 // as an error.
 func (t SlogEngineTelemetry) RecordCohortRanked(ctx context.Context, principal storage.Principal, event CohortRankedEvent) {
-	t.logger.InfoContext(ctx, "context fabric cohort ranked", SanitizeLogAttrs(append([]any{
+	t.logger.InfoContext(ctx, "context fabric cohort ranked", append([]any{
 		"org_id", SanitizeLogAttr(principal.OrgID),
 		"cohort_kind", SanitizeLogAttr(string(event.CohortKind)),
 		"member_count", event.MemberCount,
@@ -638,7 +638,7 @@ func (t SlogEngineTelemetry) RecordCohortRanked(ctx context.Context, principal s
 		// not_applicable), content-safe by the same reasoning as
 		// signals_available above -- counts and enum keys only.
 		"outcome_counts", event.OutcomeCounts,
-	}, requestIDLogAttrs(ctx)...))...)
+	}, requestIDLogAttrs(ctx)...)...)
 }
 
 // RecordCohortDriverNarration implements EngineTelemetry (CHAOS-4398 PR3b,
@@ -650,7 +650,7 @@ func (t SlogEngineTelemetry) RecordCohortRanked(ctx context.Context, principal s
 // carry the ranking regardless of whether narration ran), it is an
 // ordinary, expected shape an operator may still want to see the rate of.
 func (t SlogEngineTelemetry) RecordCohortDriverNarration(ctx context.Context, principal storage.Principal, event CohortDriverNarrationEvent) {
-	t.logger.InfoContext(ctx, "context fabric cohort driver narration", SanitizeLogAttrs(append([]any{
+	t.logger.InfoContext(ctx, "context fabric cohort driver narration", append([]any{
 		"org_id", SanitizeLogAttr(principal.OrgID),
 		"outcome", SanitizeLogAttr(string(event.Outcome)),
 		"judgments_emitted", event.JudgmentsEmitted,
@@ -674,7 +674,7 @@ func (t SlogEngineTelemetry) RecordCohortDriverNarration(ctx context.Context, pr
 		// escaping it reports as unclassified rather than as free text.
 		"narration_allocator", SanitizeLogAttr(string(validNarrationAllocatorOrUnclassified(event.Allocator))),
 		"narration_allocated_items", event.AllocatedItems,
-	}, requestIDLogAttrs(ctx)...))...)
+	}, requestIDLogAttrs(ctx)...)...)
 }
 
 // RecordEvidenceLabelFallback implements EngineTelemetry (CHAOS-4690 item
@@ -684,7 +684,7 @@ func (t SlogEngineTelemetry) RecordCohortDriverNarration(ctx context.Context, pr
 // discipline as RecordModelRowsStripped above it on the interface.
 func (t SlogEngineTelemetry) RecordEvidenceLabelFallback(ctx context.Context, principal storage.Principal, count int) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "cf_evidence_label_fallback", count}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric evidence ref label fell back to the generic label", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric evidence ref label fell back to the generic label", args...)
 }
 
 // RecordCoverageDisclosurePhrasing implements EngineTelemetry (CHAOS-4690
@@ -702,7 +702,7 @@ func (t SlogEngineTelemetry) RecordCoverageDisclosurePhrasing(ctx context.Contex
 		"phrased", phrased,
 		"total", total,
 	}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric coverage disclosure phrasing", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric coverage disclosure phrasing", args...)
 }
 
 // RecordCategoryFactComposition implements EngineTelemetry (CHAOS-4347) --
@@ -722,7 +722,7 @@ func (t SlogEngineTelemetry) RecordCategoryFactComposition(ctx context.Context, 
 		"subject_kind", SanitizeLogAttr(string(event.SubjectKind)),
 		"composed_kinds", SanitizeLogStrings(composedKinds),
 	}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric status category fact composition", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric status category fact composition", args...)
 }
 
 // RecordRenderShapeSelection implements EngineTelemetry (CHAOS-4415) -- see
@@ -756,25 +756,25 @@ func (t SlogEngineTelemetry) RecordRenderShapeSelection(ctx context.Context, pri
 		accounting = "violated"
 	}
 	t.logger.InfoContext(ctx, "context fabric render shape selection",
-		SanitizeLogAttrs(base("render_shapes_selected", len(event.Selected),
+		base("render_shapes_selected", len(event.Selected),
 			"render_shape_rules_skipped", len(event.Skipped),
 			"render_shape_members_truncated", event.MembersTruncated,
 			"render_shape_trends_omitted", event.TrendsOmitted,
-			"render_shape_accounting", accounting))...)
+			"render_shape_accounting", SanitizeLogAttr(accounting))...)
 	for _, selection := range event.Selected {
-		t.logger.InfoContext(ctx, "context fabric render shape selected", SanitizeLogAttrs(base(
+		t.logger.InfoContext(ctx, "context fabric render shape selected", base(
 			"render_shape_kind", string(selection.Kind),
 			"render_shape_presentation", string(selection.Presentation),
 			"render_shape_rule", string(selection.Rule),
 			"render_shape_series", selection.SeriesCount,
 			"render_shape_points", selection.PointCount,
-		))...)
+		)...)
 	}
 	for _, skip := range event.Skipped {
-		t.logger.InfoContext(ctx, "context fabric render shape rule skipped", SanitizeLogAttrs(base(
+		t.logger.InfoContext(ctx, "context fabric render shape rule skipped", base(
 			"render_shape_rule", string(skip.Rule),
 			"render_shape_skip_reason", string(skip.Reason),
-		))...)
+		)...)
 	}
 }
 
@@ -825,7 +825,7 @@ func (t SlogEngineTelemetry) RecordQuestionFamilyResolution(ctx context.Context,
 	args = append(args,
 		"shadow_frame_observed", event.Shadow.FrameObserved,
 		"shadow_frame_outcome", string(event.Shadow.FrameOutcome),
-		"shadow_projection_version", event.Shadow.ProjectionVersion,
+		"shadow_projection_version", SanitizeLogAttr(event.Shadow.ProjectionVersion),
 		"shadow_projected_family", string(event.Shadow.Agreement.ProjectedFamily),
 		"shadow_projected_row", string(event.Shadow.Agreement.ProjectedRow),
 		"shadow_precedence_family", string(event.Shadow.Agreement.PrecedenceFamily),
@@ -863,7 +863,7 @@ func (t SlogEngineTelemetry) RecordQuestionFamilyResolution(ctx context.Context,
 		"route_switched", event.Route.Switched,
 	)
 	args = append(args, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric question family resolution", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric question family resolution", args...)
 }
 
 // RecordServerStatusShadow (CHAOS-4452 stage 2, B8) logs at Info, once per
@@ -890,7 +890,7 @@ func (t SlogEngineTelemetry) RecordServerStatusShadow(ctx context.Context, princ
 		"version", SanitizeLogAttr(event.Version),
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric server status shadow", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric server status shadow", args...)
 }
 
 // RecordFrameValidation (CHAOS-4452 stage 2, §13.6) logs at Info, once per
@@ -945,7 +945,7 @@ func (t SlogEngineTelemetry) RecordFrameValidation(ctx context.Context, principa
 	}
 	args = append(args, requirementDerivationLogAttrs(event.RequirementDerivation)...)
 	args = append(args, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric frame validation", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric frame validation", args...)
 }
 
 // requirementDerivationLogAttrs flattens the requirement summary onto the
@@ -1114,7 +1114,7 @@ func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal 
 		"quota_groups_over_allowance", event.QuotaGroupsOverAllowance,
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric plan narrowing", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric plan narrowing", args...)
 }
 
 // RecordGroupedCohortCompleteness (CHAOS-4733) emits one grouped-cohort
@@ -1163,7 +1163,7 @@ func (t SlogEngineTelemetry) RecordGroupedCohortCompleteness(ctx context.Context
 		}
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric grouped cohort completeness", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric grouped cohort completeness", args...)
 }
 
 // RecordMembershipCardinality emits the `membership_cardinality` step's own
@@ -1207,7 +1207,7 @@ func (t SlogEngineTelemetry) RecordReadRequirementPopulation(ctx context.Context
 		"cohort_truncated", event.CohortTruncated,
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric read requirement population", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric read requirement population", args...)
 }
 
 func (t SlogEngineTelemetry) RecordMembershipCardinality(ctx context.Context, principal storage.Principal, event MembershipCardinalityEvent) {
@@ -1232,7 +1232,7 @@ func (t SlogEngineTelemetry) RecordMembershipCardinality(ctx context.Context, pr
 		args = append(args, "overrun", string(validBudgetOverrunOrUnclassified(event.Overrun)))
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric membership cardinality", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric membership cardinality", args...)
 }
 
 // RecordBudgetAssertion emits the FINAL budget assertion for one fresh result
@@ -1263,7 +1263,7 @@ func (t SlogEngineTelemetry) RecordBudgetAssertion(ctx context.Context, principa
 		"certified_fit", event.CertifiedFit,
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric budget assertion", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric budget assertion", args...)
 }
 
 // RecordItemAccounting emits the one line that says an answer's own numbers do
@@ -1294,7 +1294,7 @@ func (t SlogEngineTelemetry) RecordItemAccounting(ctx context.Context, principal
 		"allocation_disagreement", SanitizeLogAttr(string(validAllocationDisagreementOrUnclassified(event.AllocationDisagreement))),
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
-	t.logger.ErrorContext(ctx, "context fabric item accounting disagreement", SanitizeLogAttrs(args)...)
+	t.logger.ErrorContext(ctx, "context fabric item accounting disagreement", args...)
 }
 
 // validAllocationDisagreementOrUnclassified fails closed on a value outside the
@@ -1357,7 +1357,7 @@ func (t SlogEngineTelemetry) RecordPlanCarry(ctx context.Context, principal stor
 		"route_switched", event.Route.Switched,
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric plan carry", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric plan carry", args...)
 }
 
 // RecordPlanCarryOutcome (CHAOS-5003) logs at Info, mirroring
@@ -1372,7 +1372,7 @@ func (t SlogEngineTelemetry) RecordPlanCarry(ctx context.Context, principal stor
 // join key that ties this line to the applied-carry line for the same turn.
 func (t SlogEngineTelemetry) RecordPlanCarryOutcome(ctx context.Context, principal storage.Principal, outcome PlanCarryOutcome, sourceResultID string, seedSource CarrySeedSource) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome)), "source_result_id", SanitizeLogAttr(sourceResultID), "seed_source", SanitizeLogAttr(string(seedSource))}, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric plan carry outcome", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric plan carry outcome", args...)
 }
 
 // RecordWindowContinuationDecision (CHAOS-5465) logs at Info, once per request
@@ -1602,7 +1602,7 @@ func (t SlogEngineTelemetry) RecordWindowContinuationDecision(ctx context.Contex
 	// requestIDLogAttrs already returns its value through SanitizeLogAttr --
 	// no second strip needed here.
 	args = append(args, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric window continuation decision", SanitizeLogAttrs(args)...)
+	t.logger.InfoContext(ctx, "context fabric window continuation decision", args...)
 }
 
 // validBudgetOverrunOrUnclassified fails closed on a value outside the closed

@@ -69,41 +69,29 @@ func SanitizeLogStrings(ss []string) []string {
 	return out
 }
 
-// SanitizeLogAttrs (CHAOS-5544, r2 P1) sanitizes a whole `[]any{key, value,
-// key, value, ...}` slog attribute slice before it is spread into a logger
-// call (`logger.InfoContext(ctx, msg, SanitizeLogAttrs(attrs)...)`). An r2
-// review round found seven sites building this slice INCREMENTALLY across
-// several `append` calls rather than one literal, then spreading it with
-// `attrs...` -- a shape the whole-tree instrument's static scan explicitly
-// skipped (an ellipsis call's argument is a runtime value, not visible at
-// the call site), so every incrementally-appended value at those seven
-// sites reached the sink completely unsanitized regardless of type. This
-// is the one exception to "SanitizeLogAttr(Strings) at the value
-// expression": a spread's contents are not statically enumerable the way a
-// literal's are, so the barrier moves to the spread's OWN boundary and
-// sanitizes every string/[]string value in the already-built slice at
-// runtime, keys and non-string values (counts, bools, closed-enum
-// conversions) passed through unchanged. Returns a NEW slice; nil in means
-// nil out, an odd-length slice (a caller bug -- key with no value) has its
-// trailing key passed through unchanged rather than panicking.
-func SanitizeLogAttrs(attrs []any) []any {
-	if attrs == nil {
-		return nil
-	}
-	out := make([]any, len(attrs))
-	for i, v := range attrs {
-		if i%2 == 0 {
-			out[i] = v // a key: never sanitized, always a literal
-			continue
-		}
-		switch value := v.(type) {
-		case string:
-			out[i] = SanitizeLogAttr(value)
-		case []string:
-			out[i] = SanitizeLogStrings(value)
-		default:
-			out[i] = v
-		}
-	}
-	return out
-}
+// There is deliberately no SanitizeLogAttrs([]any) []any barrier here. An
+// r2 review round found seven sites building a `[]any{key, value, ...}`
+// slog attribute slice INCREMENTALLY across several `append` calls and
+// then spreading it (`attrs...`) -- a shape the whole-tree instrument's
+// static scan first skipped entirely, then (a first fix attempt) tried to
+// close by sanitizing the whole already-built slice at the spread's own
+// boundary. The PR-ref CodeQL go/log-injection gate caught that fix as
+// wrong before merge: CodeQL's array-taint model taints the WHOLE
+// returned []any whenever ANY input element traces to a request source,
+// even one going through this function's `default: out[i] = v` no-op
+// passthrough for a request-derived NUMBER -- it cannot see that the
+// passthrough is safe specifically because a number cannot carry a forged
+// line break. A function shaped func([]any) []any is, to CodeQL, no
+// better a barrier than the hand-rolled loop this whole ticket exists to
+// replace.
+//
+// The fix instead sanitizes each qualifying string/[]string value
+// individually, at its OWN append call (`append(attrs, "key",
+// SanitizeLogAttr(value))`), matching the shape a direct `[]any{"key",
+// SanitizeLogAttr(value)}` literal already used and CodeQL already
+// recognized as clean at every other site. chaos5544_sanitizer_instrument
+// _test.go's Rule D/E enforce this at every append/field-builder call
+// site reachable from a logger spread, and separately require the
+// spread's own construction to be STATICALLY traceable back to composite
+// literals and such appends (never merely trusted because it LOOKS like a
+// []any) -- an opaque spread is a finding, never silently accepted.

@@ -516,10 +516,10 @@ func (t SlogGraphLifecycleTelemetry) RecordEpochRollback(_ context.Context, orgI
 func (t SlogGraphLifecycleTelemetry) RecordEpochRetire(_ context.Context, orgID string, epoch int64, verdict RetireGuardVerdict, drainWait time.Duration) {
 	fields := []any{"org_id", SanitizeLogAttr(orgID), "epoch", epoch, "verdict", SanitizeLogAttr(string(verdict)), "drain_wait_ms", drainWait.Milliseconds()}
 	if verdict == RetireGuardOK {
-		t.logger().Info("context_fabric: graph epoch retired", SanitizeLogAttrs(fields)...)
+		t.logger().Info("context_fabric: graph epoch retired", fields...)
 		return
 	}
-	t.logger().Warn("context_fabric: graph epoch retire guard refused", SanitizeLogAttrs(fields)...)
+	t.logger().Warn("context_fabric: graph epoch retire guard refused", fields...)
 }
 
 func (t SlogGraphLifecycleTelemetry) RecordLifecycleCASConflict(_ context.Context, orgID string, losing LifecycleTransition, observedStatus LifecycleStatus) {

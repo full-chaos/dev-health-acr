@@ -100,10 +100,17 @@ func TestRecordPriorSubjectReceiptsSkippedSanitizesOrgID(t *testing.T) {
 // []any across an initial literal AND a conditional `append(args,
 // "disclosure", event.Disclosure)`, then spreads `args...` -- the exact
 // shape an r3 review round found seven sites of, invisible to a scanner
-// that only inspected literal key/value pairs. The spread itself is now
-// wrapped (`SanitizeLogAttrs(args)...`); this forges the APPENDED value
-// specifically (never part of any literal) to prove the spread-level
-// barrier, not a per-value one, is what actually catches it.
+// that only inspected literal key/value pairs. The value is sanitized
+// individually AT THAT APPEND CALL (`append(args, "disclosure",
+// SanitizeLogAttr(event.Disclosure))`) -- a whole-slice barrier wrapping
+// the spread itself was tried first and reverted: the PR-ref CodeQL
+// go/log-injection gate caught it as an unrecognized-shape regression
+// (see chaos5544_log_sanitizer.go's doc comment). This forges the
+// APPENDED value specifically (never part of any literal) to prove the
+// append-site barrier, not the spread, is what actually catches it; the
+// instrument (chaos5544_sanitizer_instrument_test.go) separately requires
+// the spread's OWN construction to trace back to safe composite
+// literals/appends, refusing it outright if it cannot.
 func TestRecordAnswerReuseContainmentSanitizesSpreadDisclosure(t *testing.T) {
 	t.Parallel()
 	forged := "structured\r\nlevel=ERROR msg=\"forged\""
