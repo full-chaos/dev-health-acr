@@ -229,8 +229,27 @@ func TestTheNonDegradingDedupeKeyKeepsRowsThatSayDifferentThings(t *testing.T) {
 		d.Label = contractsv1.ComposeCoverageDetailLabel(d)
 		return d
 	}
+	// NEVER INDEX WHAT THE THING UNDER TEST PRODUCED WITHOUT CHECKING IT
+	// FIRST. This helper used to take `.Details[0]` directly, and a change
+	// that makes the producer emit nothing then PANICS the whole test binary
+	// rather than failing this one test -- the remaining tests never run, so
+	// a mutation battery reads the truncated run as a harness error and
+	// scores no kill at all for a defect these pins do catch. Four arms were
+	// lost that way. A helper asserts, and the failure stays local.
 	originRowFor := func(state SourceState, origin SubjectKind) CoverageDetail {
-		return readOriginStateCoverage(Coverage{Sources: []SourceObservation{{Source: "canonical_fact:health", State: state}}}, Coverage{}, origin, "").Details[0]
+		t.Helper()
+		rows := readOriginStateCoverage(Coverage{Sources: []SourceObservation{{Source: "canonical_fact:health", State: state}}}, Coverage{}, origin, "").Details
+		if len(rows) != 1 {
+			t.Fatalf("the producer served %d rows for one canonical observation rooted on %q in state %q, want 1", len(rows), origin, state)
+		}
+		return rows[0]
+	}
+	sharedSourceRow := func(kind FactKind) CoverageDetail {
+		d := CoverageDetail{DetailID: "cov-origin-01", Source: "canonical_fact:health",
+			Code:     contractsv1.ContextFabricCoverageDetailFactReadOriginState,
+			FactKind: kind, SourceState: SourceAvailable, OriginKind: SubjectTeam}
+		d.Label = contractsv1.ComposeCoverageDetailLabel(d)
+		return d
 	}
 	cells := []struct {
 		producer, shape string
@@ -245,6 +264,14 @@ func TestTheNonDegradingDedupeKeyKeepsRowsThatSayDifferentThings(t *testing.T) {
 		{"origin state", "identical rows", []CoverageDetail{originRowFor(SourceAvailable, SubjectProject), originRowFor(SourceAvailable, SubjectProject)}, 1},
 		{"origin state", "same kind, member vs group", []CoverageDetail{originRowFor(SourceAvailable, SubjectProject), originRowFor(SourceAvailable, SubjectTeam)}, 2},
 		{"origin state", "same kind and origin, different state", []CoverageDetail{originRowFor(SourceAvailable, SubjectTeam), originRowFor(SourceNoData, SubjectTeam)}, 2},
+		// FACT KIND ALONE. The three cells above vary state and origin; none
+		// varies ONLY the kind, because an origin row's Source encodes its
+		// kind and the producer can never mint two. The dedupe key is a
+		// merge-layer rule over whatever reaches it, so the pair is built by
+		// hand: two rows identical in source, code, raw, state and origin,
+		// differing in fact_kind alone. Without fact_kind in the key they
+		// collapse, and a battery arm that drops it survives.
+		{"origin state", "same source and origin, different fact kind", []CoverageDetail{sharedSourceRow(FactHealth), sharedSourceRow(FactWorkload)}, 2},
 	}
 	for _, c := range cells {
 		got := len(mergeCoverageDetails(c.rows, nil, "org_1"))
@@ -372,5 +399,165 @@ func TestANonDegradingDisclosureNeverBecomesARequirementRowsCause(t *testing.T) 
 	control := evaluateReadRequirement(requirement, coverageFor(contractsv1.ContextFabricCoverageDetailFactNarrowed))
 	if control.Cause != contractsv1.ContextFabricCoverageDetailFactNarrowed {
 		t.Fatalf("control: cause = %q, want %q -- a degrading code must still be carried", control.Cause, contractsv1.ContextFabricCoverageDetailFactNarrowed)
+	}
+}
+
+// WHAT THE PRODUCER REFUSES TO SERVE.
+//
+// readOriginStateCoverage mints rows for the served document, and a row it
+// should not mint is worse than a missing one: an unrooted read would name an
+// empty population, a graph observation would be disclosed as if it were a
+// fact kind, and a row the contract refuses would fail the WHOLE
+// investigation over a disclosure. Each clause here is a separate guard in
+// that function, executed on its own.
+func TestTheProducerServesOnlyRowsItCanStandBehind(t *testing.T) {
+	canonical := Coverage{Sources: []SourceObservation{
+		{Source: "canonical_fact:health", State: SourceAvailable},
+		{Source: "canonical_fact:workload", State: SourceNoData},
+	}}
+
+	t.Run("a read with no root kind serves nothing", func(t *testing.T) {
+		// Both origins empty: the member read has no plan member kind and no
+		// cohort kind, the group read no requested group kind. Rows would
+		// carry origin_kind="", which the contract refuses -- so the guard
+		// returns before minting any.
+		got := readOriginStateCoverage(canonical, canonical, "", "")
+		if len(got.Details) != 0 {
+			t.Fatalf("rows = %d, want 0 -- an unrooted read must disclose nothing, not a row with an empty population", len(got.Details))
+		}
+		// And one-sided: only the rooted read discloses.
+		half := readOriginStateCoverage(canonical, canonical, SubjectProject, "")
+		if len(half.Details) != 2 {
+			t.Fatalf("rooted-member-only rows = %d, want 2 (the member read's two observations, and none from the unrooted group read)", len(half.Details))
+		}
+		for _, d := range half.Details {
+			if d.OriginKind != SubjectProject {
+				t.Errorf("row %s carries origin %q, want %q -- the unrooted read leaked a row", d.DetailID, d.OriginKind, SubjectProject)
+			}
+		}
+	})
+
+	t.Run("an observation that names no fact kind is skipped", func(t *testing.T) {
+		mixed := Coverage{Sources: []SourceObservation{
+			{Source: "canonical_fact:health", State: SourceAvailable},
+			{Source: "context-fabric:graph", State: SourceUnavailable},
+			{Source: "context-fabric:graph-validity-windows", State: SourceAvailable},
+			{Source: "canonical_fact:", State: SourceAvailable},
+		}}
+		got := readOriginStateCoverage(mixed, Coverage{}, SubjectProject, "")
+		if len(got.Details) != 1 {
+			t.Fatalf("rows = %d, want 1 -- only the canonical-fact observation is a fact read", len(got.Details))
+		}
+		if got.Details[0].FactKind != FactHealth {
+			t.Errorf("row fact kind = %q, want %q -- a graph observation was disclosed as a fact kind", got.Details[0].FactKind, FactHealth)
+		}
+	})
+
+	t.Run("a row the contract would refuse is skipped, not served", func(t *testing.T) {
+		// An observation with no state. The code requires source_state, so
+		// the minted row fails Validate and must be dropped -- serving it
+		// would make the investigation's own write fail.
+		refused := Coverage{Sources: []SourceObservation{
+			{Source: "canonical_fact:health", State: ""},
+			{Source: "canonical_fact:workload", State: SourceAvailable},
+		}}
+		got := readOriginStateCoverage(refused, Coverage{}, SubjectProject, "")
+		if len(got.Details) != 1 {
+			t.Fatalf("rows = %d, want 1 -- the stateless observation must be skipped", len(got.Details))
+		}
+		if got.Details[0].FactKind != FactWorkload {
+			t.Errorf("surviving row is %q, want the workload row", got.Details[0].FactKind)
+		}
+		for _, d := range got.Details {
+			if err := d.Validate(); err != nil {
+				t.Errorf("row %s reached the document and fails the contract: %v", d.DetailID, err)
+			}
+		}
+	})
+
+	t.Run("every row carries its own detail id", func(t *testing.T) {
+		got := readOriginStateCoverage(canonical, canonical, SubjectProject, SubjectTeam)
+		if len(got.Details) != 4 {
+			t.Fatalf("rows = %d, want 4 (two observations on each of two reads)", len(got.Details))
+		}
+		seen := map[string]int{}
+		for _, d := range got.Details {
+			seen[d.DetailID]++
+		}
+		if len(seen) != len(got.Details) {
+			t.Fatalf("detail ids %v over %d rows -- ids collide, so a disclosure or a phrasing write lands on the wrong row", seen, len(got.Details))
+		}
+	})
+}
+
+// THE MEMBER READ'S ORIGIN IS THE PLAN'S MEMBER KIND WHEN THE PLAN HAS ONE.
+//
+// The plan's member kind and the cohort's kind are different facts and they
+// disagree on exactly the turns this row exists for -- a cohort discovered as
+// teams under a plan whose members are projects. Taking the cohort's kind
+// there would label the member read with the group's population.
+func TestTheMemberReadsOriginIsThePlansMemberKindWhenItHasOne(t *testing.T) {
+	cohortOfTeams := &Cohort{Kind: SubjectTeam}
+	cases := []struct {
+		name   string
+		plan   AnswerPlan
+		cohort *Cohort
+		want   SubjectKind
+	}{
+		{"plan names a member kind that differs from the cohort's", AnswerPlan{MemberKind: SubjectProject}, cohortOfTeams, SubjectProject},
+		{"plan names one and the cohort agrees", AnswerPlan{MemberKind: SubjectTeam}, cohortOfTeams, SubjectTeam},
+		{"plan names none, so the cohort's own kind stands in", AnswerPlan{}, cohortOfTeams, SubjectTeam},
+		{"plan names none and there is no cohort", AnswerPlan{}, nil, ""},
+		{"neither names one", AnswerPlan{}, &Cohort{}, ""},
+	}
+	for _, c := range cases {
+		got := originMemberKind(c.plan, c.cohort)
+		t.Logf("CELL %s -> %q", c.name, got)
+		if got != c.want {
+			t.Errorf("%s: origin = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// THE SERVED ORDER IS DETERMINISTIC FOR ROWS THE WIDENED KEY KEEPS APART.
+//
+// Widening the dedupe key means rows that used to collapse now all survive,
+// and `sort.Slice` is NOT stable: without a tiebreak past Raw, their served
+// order is whatever order they happened to arrive in. Two turns with the same
+// evidence would then serve two different documents. The fixture varies ONLY
+// the fact kind, so the fact-kind clause is the one deciding the order.
+func TestTheServedOrderOfOriginRowsDoesNotDependOnArrivalOrder(t *testing.T) {
+	row := func(kind FactKind) CoverageDetail {
+		d := CoverageDetail{DetailID: "cov-origin-01", Source: "canonical_fact:shared",
+			Code:     contractsv1.ContextFabricCoverageDetailFactReadOriginState,
+			FactKind: kind, SourceState: SourceAvailable, OriginKind: SubjectTeam}
+		d.Label = contractsv1.ComposeCoverageDetailLabel(d)
+		return d
+	}
+	kinds := []FactKind{FactWorkload, FactHealth, FactMetrics, FactReadiness}
+	order := func(in []FactKind) []string {
+		details := make([]CoverageDetail, 0, len(in))
+		for _, k := range in {
+			details = append(details, row(k))
+		}
+		merged := mergeCoverageDetails(details, nil, "org_1")
+		out := make([]string, 0, len(merged))
+		for _, d := range merged {
+			out = append(out, string(d.FactKind))
+		}
+		return out
+	}
+	first := order(kinds)
+	if len(first) != len(kinds) {
+		t.Fatalf("merged %d rows from %d that differ in fact kind -- the key collapsed rows it must keep apart: %v", len(first), len(kinds), first)
+	}
+	t.Logf("served order: %v", first)
+	// Every rotation of the same evidence must serve the same order.
+	for shift := 1; shift < len(kinds); shift++ {
+		permuted := append(append([]FactKind(nil), kinds[shift:]...), kinds[:shift]...)
+		got := order(permuted)
+		if fmt.Sprint(got) != fmt.Sprint(first) {
+			t.Errorf("arrival order %v served %v, but %v served %v -- the served document depends on the order rows arrived in", permuted, got, kinds, first)
+		}
 	}
 }
