@@ -116,7 +116,7 @@ func answerBoundTable() []answerBound {
 			PastMax: func(r *ContextFabricInvestigationResult) {
 				r.CurrentState = escaped(ContextFabricCurrentStateMaxLength + 1)
 			}},
-		{Field: "DeterministicAnswer", Why: "boundedText 1..ContextFabricDeterministicAnswerMaxLength",
+		{Field: "DeterministicAnswer", Why: "boundedText 1..ContextFabricDeterministicAnswerMaxLength on THIS fixture, which is status=complete: the lower bound is 1 on a complete/partial or SUPPORTED result and 0 only on an unsupported degraded/clarification_required/no_match one (context_fabric_deterministic_answer.go). A complete result still needs a non-blank DirectJudgment and an unsupported non-complete one needs a terminal_reason, so the complete form stays the byte-minimal document",
 			Min: func(r *ContextFabricInvestigationResult) { r.DeterministicAnswer = oneRune },
 			Max: func(r *ContextFabricInvestigationResult) {
 				r.DeterministicAnswer = escaped(ContextFabricDeterministicAnswerMaxLength)

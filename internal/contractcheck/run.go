@@ -58,7 +58,11 @@ var exampleSchemaPairs = map[string]string{
 	// in coverage while the rest of the answer survives (AC-3781-2/5).
 	"context_fabric_investigation_result_historical.v1.json":    "context_fabric_investigation_result.v1.schema.json",
 	"context_fabric_investigation_result_render_shapes.v1.json": "context_fabric_investigation_result.v1.schema.json",
-	"context_fabric_answer_projection.v1.json":                  "context_fabric_answer_projection.v1.schema.json",
+	// An UNSUPPORTED result (no claimed fact, no citable evidence): the one
+	// form whose deterministic_answer may be empty. Its disclosure carries
+	// the explanation instead -- see context_fabric_deterministic_answer.go.
+	"context_fabric_investigation_result_unsupported.v1.json": "context_fabric_investigation_result.v1.schema.json",
+	"context_fabric_answer_projection.v1.json":                "context_fabric_answer_projection.v1.schema.json",
 	// The historical-axis projection (CHAOS-3746): the only published
 	// example carrying a temporal label, so the only one that validates
 	// the label against the projection SCHEMA rather than only against
