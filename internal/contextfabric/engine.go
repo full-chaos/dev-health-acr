@@ -1138,6 +1138,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// have been continued, and here is why it was not".
 			continuation.Accepted = nil
 		}
+		// A REFUSAL IS A DOCUMENT. The basis is recorded where the refusal is
+		// taken, and an error return after that point -- a failed validation
+		// or save of the refusal itself -- served nothing, so the line must not
+		// claim the caller received a refusal.
+		if servedErr != nil {
+			continuation.RefusalBasis = ""
+		}
 		e.telemetry.RecordWindowContinuationDecision(ctx, principal, continuation)
 	}()
 	// THE OBSERVATION-COVER LINES ARE PUBLISHED ONCE, HERE, AT THE EXIT, and
@@ -1722,6 +1729,26 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			GroupKind: freshEffectiveGroup,
 		})
 		familyOutcome = e.applyAndRecordContinuation(ctx, principal, familyOutcome, continuation, accepted)
+		// A WITHHELD CONTINUATION ENDS THE TURN HERE, above the planning stage
+		// and above every retrieval: the carrier could not be established, and
+		// answering under the fresh reading would serve a reading the caller
+		// never confirmed beside a window confirmed for a different one. The
+		// fresh gate is consulted first because a turn it already refused
+		// keeps that refusal and its own basis -- see refusesTurn.
+		if continuation.refusesTurn(familyOutcome.Gate) {
+			continuation.RefusalBasis = contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable
+			refusalDispositions := composePriorSubjectReceiptDispositions(priorOutcomes, SubjectResolution{})
+			if len(refusalDispositions) > 0 {
+				e.recordPriorSubjectReceiptSkips(ctx, principal, refusalDispositions, priorHintsStaleGraphEpochDelta)
+			}
+			// The refused carrier is NOT recorded as this result's parent. It
+			// is a reference this turn proved unusable, and ancestryRoot's own
+			// rule is that such a reference is laundering material for the
+			// next turn rather than history.
+			refusedCarrier, _ := windowOnlyReferencedResultID(request)
+			return e.continuationRefusalResult(ctx, principal, request, binding, refusalDispositions, nil,
+				ancestryRoot(request, receiptsValidated(priorValidatedReceipts), refusedCarrier))
+		}
 	}
 	// CHAOS-4636 -- the PLANNING STAGE (design §6.1). Deterministic, no
 	// model call, no I/O, placed between interpretation and discovery

@@ -699,7 +699,7 @@ func noMatchLimitationForEmptyPool(resolution *SubjectResolution) string {
 // fallback returned true. The empty value is not a registry member either, so
 // this predicate subsumes the one it replaces rather than sitting beside it.
 func refusalLimitation(gate FrameGate, basis contractsv1.ContextFabricRefusalBasis) string {
-	if contractsv1.ValidContextFabricSubjectKind(gate.DeclaredMemberKind) && contractsv1.ValidContextFabricRefusalBasis(basis) {
+	if contractsv1.ValidContextFabricSubjectKind(gate.DeclaredMemberKind) && contractsv1.ValidContextFabricFrameRefusalBasis(basis) {
 		return contractsv1.ContextFabricRefusalBasisLimitation(gate.DeclaredMemberKind, basis)
 	}
 	return contractsv1.ContextFabricFrameInvariantRefusalLimitation

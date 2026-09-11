@@ -56,10 +56,21 @@ func TestReviewR4_ValidatedFrameComposition(t *testing.T) {
 			result := harness.investigate(t, req)
 			d := harness.soleDecision(t)
 			if graph.seen == nil {
-				t.Fatal("discovery was not reached")
+				// NO RETRIEVAL AT ALL is the strong form of this property: a
+				// composition that cannot be validated is withheld, and a
+				// withheld window-only continuation refuses above retrieval,
+				// so no frame -- valid or not -- reaches discovery. Anything
+				// else that skipped discovery is a defect this pin reports.
+				t.Logf("fresh_valid=%v disposition=%s reason=%s composition=%s refusal_basis=%q", valid.Outcome == FrameValidationOutcomeValid, d.Disposition, d.Reason, d.CompositionOutcome, result.RefusalBasis)
+				if d.Disposition != ContinuationWithheld {
+					t.Fatalf("discovery was not reached and the continuation was %q, not withheld", d.Disposition)
+				}
+				assertContinuationRefused(t, result)
+				return
 			}
+			_, _, servedGroup := servedPlanAxes(result)
 			failure, invalid := ValidateFramePhaseA1(*graph.seen)
-			t.Logf("fresh_valid=%v fresh_gate=%s disposition=%s accepted_group=%q executed_group=%q executed_member=%q invalid=%v invariant=%s detail=%s served_group=%q", valid.Outcome == FrameValidationOutcomeValid, DecideFrameGate(valid, true).Outcome, d.Disposition, d.AcceptedGroupKind(), graph.seen.SubjectExpression.Grouped.GroupKind, graph.seen.SubjectExpression.Grouped.MemberKind, invalid, failure.Invariant, failure.Detail, result.AnswerPlan.GroupKind)
+			t.Logf("fresh_valid=%v fresh_gate=%s disposition=%s accepted_group=%q executed_group=%q executed_member=%q invalid=%v invariant=%s detail=%s served_group=%q", valid.Outcome == FrameValidationOutcomeValid, DecideFrameGate(valid, true).Outcome, d.Disposition, d.AcceptedGroupKind(), graph.seen.SubjectExpression.Grouped.GroupKind, graph.seen.SubjectExpression.Grouped.MemberKind, invalid, failure.Invariant, failure.Detail, servedGroup)
 			if invalid {
 				t.Errorf("admission converted a validated frame to invalid retrieval input")
 			}

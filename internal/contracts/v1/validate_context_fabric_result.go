@@ -1174,6 +1174,26 @@ func (r ContextFabricInvestigationResult) validateCompleteness(bounds contextFab
 	if r.RefusalBasis != "" && len(r.ClaimedFacts) > 0 {
 		return fmt.Errorf("refusal_basis %q cannot accompany %d claimed fact(s)", r.RefusalBasis, len(r.ClaimedFacts))
 	}
+	// THE CONTINUATION REFUSAL AND ITS SENTENCE TRAVEL TOGETHER, in both
+	// directions. The member is the machine half and the fixed sentence is the
+	// only half a person reads; a document carrying one without the other
+	// tells its two readers different stories -- the mirror discipline the
+	// completeness block is held to above. The sentence is fixed, so presence
+	// is an exact-match test, never a prefix.
+	continuationSentence := false
+	for _, limitation := range r.Limitations {
+		if limitation == ContextFabricContinuationContextUnverifiableLimitation {
+			continuationSentence = true
+			break
+		}
+	}
+	continuationBasis := r.RefusalBasis == ContextFabricRefusalBasisContinuationContextUnverifiable
+	if continuationBasis && !continuationSentence {
+		return fmt.Errorf("refusal_basis %q requires its fixed limitation sentence", r.RefusalBasis)
+	}
+	if continuationSentence && !continuationBasis {
+		return fmt.Errorf("the continuation refusal sentence requires refusal_basis %q, got %q", ContextFabricRefusalBasisContinuationContextUnverifiable, r.RefusalBasis)
+	}
 	return validateAnswerOutcomes(c, bounds)
 }
 

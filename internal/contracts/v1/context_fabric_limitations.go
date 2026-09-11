@@ -490,8 +490,24 @@ func IsContextFabricRefusalBasisLimitation(limitation string) bool {
 		return false
 	}
 	return ValidContextFabricSubjectKind(ContextFabricSubjectKind(declaredKind)) &&
-		ValidContextFabricRefusalBasis(ContextFabricRefusalBasis(basis))
+		ValidContextFabricFrameRefusalBasis(ContextFabricRefusalBasis(basis))
 }
+
+// ContextFabricContinuationContextUnverifiableLimitation is the fixed
+// disclosure for a window-only continuation refused because the prior turn's
+// semantic context could not be verified
+// (ContextFabricRefusalBasisContinuationContextUnverifiable).
+//
+// FIXED, not interpolated. The only values that would tell one instance from
+// another are the prior result's id and the internal reason the carrier failed
+// admission, and neither belongs in prose: the id is the caller's own
+// reference, and the reason vocabulary is server-internal. Both are on the
+// Info decision line an operator reads.
+//
+// IT NAMES THE BASIS TOKEN for the reason the member-kind sentence does: a
+// reader joins the sentence to the machine field and to the log line through
+// the one value all three share.
+const ContextFabricContinuationContextUnverifiableLimitation = "This request continued an earlier answer by confirming only its evidence window, and the server could not verify the earlier answer's reading of the question, so it did not answer under a different reading and no canonical facts were read. Ask the question again without the earlier answer's window offer to start a fresh investigation. The server refused this continuation on the basis continuation_context_unverifiable."
 
 // ContextFabricServiceAuthoredLimitations returns every disclosure this
 // service composes for itself, in no significant order.
@@ -522,6 +538,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricFactScopeActivityProxyLimitation,
 		ContextFabricFactScopeAttributedPrimaryTeamLimitation,
 		ContextFabricFrameInvariantRefusalLimitation,
+		ContextFabricContinuationContextUnverifiableLimitation,
 	}
 }
 

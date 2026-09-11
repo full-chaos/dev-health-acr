@@ -358,13 +358,17 @@ func TestBoundary_AGroupedFamilyIsNeverServedWithoutItsAxis(t *testing.T) {
 
 	result := h.investigate(t, req)
 	d := h.soleDecision(t)
-	t.Logf("disposition=%q reason=%q composition=%q invariant=%q accepted_group=%q plan_family=%q plan_group=%q",
+	planFamily, _, planGroup := servedPlanAxes(result)
+	t.Logf("disposition=%q reason=%q composition=%q invariant=%q accepted_group=%q plan_family=%q plan_group=%q refusal_basis=%q",
 		d.Disposition, d.Reason, d.CompositionOutcome, d.CompositionFailedInvariant,
-		d.AcceptedGroupKind(), result.AnswerPlan.Family, result.AnswerPlan.GroupKind)
+		d.AcceptedGroupKind(), planFamily, planGroup, result.RefusalBasis)
 
-	if result.AnswerPlan.Family == QuestionFamilyGroupedCohortStatus && result.AnswerPlan.GroupKind == "" {
+	if planFamily == QuestionFamilyGroupedCohortStatus && planGroup == "" {
 		t.Fatalf("a grouped family was served with NO grouping axis -- the carried family moved and its axis did not")
 	}
+	// The composition could not be honoured, so the turn refuses rather than
+	// answering under the fresh reading the caller never confirmed.
+	assertContinuationRefused(t, result)
 	if d.Disposition != ContinuationWithheld {
 		t.Errorf("disposition=%q, want %q: the carried axis cannot be expressed by a non-grouped frame",
 			d.Disposition, ContinuationWithheld)

@@ -47,15 +47,12 @@ package contextfabric
 //     answer plan carriablePlan already reads: family, group kind and declared
 //     narrowing basis.
 //
-//   - THERE IS NO REFUSAL PATH HERE. D-b refuses when a carrier cannot be
-//     established at all. That refusal needs BOTH a ContextFabricRefusalBasis
-//     member and a new fixed service-authored limitation, and both are wire
-//     contract tokens. ContextFabricRefusalBasisLimitation composes its
-//     sentence from a declared MEMBER KIND, which this condition has none of,
-//     so reusing it would state something false. Until those tokens are ruled,
-//     an unestablishable carrier is reported as `withheld` with its own reason
-//     and the turn proceeds exactly as it does today -- no regression, and the
-//     condition is now visible, which it was not before.
+//   - THE REFUSAL IS NOT DECIDED HERE. A carrier that cannot be established
+//     is reported as `withheld` with its own reason, and the turn it ends is
+//     refused by chaos5465_continuation_refusal.go through its own terminal,
+//     with the wire basis `continuation_context_unverifiable` and a fixed
+//     sentence. ContextFabricRefusalBasisLimitation is NOT used for it: that
+//     sentence names a declared member kind, which this condition has none of.
 //
 // The comparison this file performs is therefore COMPLETE with respect to the
 // context it accepts: the accepted context is the plan, and every component of
@@ -351,6 +348,12 @@ type windowContinuationDecision struct {
 	// invariant refused the composition rather than only that one did.
 	CompositionOutcome         CompositionOutcome
 	CompositionFailedInvariant string
+
+	// RefusalBasis is the wire refusal basis this decision SERVED, empty when
+	// it served none. Set only where the continuation refusal is taken, and
+	// cleared again at the exit when that refusal produced no document -- so
+	// the line never claims a refusal the caller did not receive.
+	RefusalBasis contractsv1.ContextFabricRefusalBasis
 }
 
 // Applies reports whether the carried context is authoritative for this turn.

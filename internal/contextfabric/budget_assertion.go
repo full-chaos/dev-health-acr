@@ -89,12 +89,16 @@ const (
 	// produced refuses through, once that refusal stopped travelling as an
 	// error through the caller's own 400 channel.
 	BudgetAssertInterpretedTimeBound BudgetAssertStage = "interpreted_time_bound"
+	// BudgetAssertContinuationRefusal is chaos5465_continuation_refusal.go's
+	// continuationRefusalResult: the terminal a window-only continuation
+	// refuses through when its carrier could not be established.
+	BudgetAssertContinuationRefusal BudgetAssertStage = "continuation_refusal"
 )
 
 // BudgetAssertStageCount is the vocabulary size, so a test that must cover
 // every member fails to compile rather than silently covering fewer when a
 // member is added.
-const BudgetAssertStageCount = 7
+const BudgetAssertStageCount = 8
 
 // BudgetAssertStageVocabulary returns every member. Returned as a sized array
 // rather than a slice for the same reason the count above is exported: a new
@@ -108,6 +112,7 @@ func BudgetAssertStageVocabulary() [BudgetAssertStageCount]BudgetAssertStage {
 		BudgetAssertStructureVeto,
 		BudgetAssertReuse,
 		BudgetAssertInterpretedTimeBound,
+		BudgetAssertContinuationRefusal,
 	}
 }
 

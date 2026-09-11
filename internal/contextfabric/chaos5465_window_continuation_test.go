@@ -209,9 +209,12 @@ func TestWindowContinuation_AVersionMismatchedCarrierIsWithheldNotReinterpreted(
 
 	result := harness.investigate(t, request)
 	// NOT reinterpreted under today's tables, and not silently carried either.
-	if result.AnswerPlan.FamilySource == QuestionFamilySourceCarried {
+	if result.AnswerPlan != nil && result.AnswerPlan.FamilySource == QuestionFamilySourceCarried {
 		t.Errorf("served family_source = carried on a carrier stamped by a version not in force")
 	}
+	// And not answered under the fresh reading: a carrier that cannot be
+	// established refuses the turn.
+	assertContinuationRefused(t, result)
 
 	decision := harness.soleDecision(t)
 	if decision.Disposition != ContinuationWithheld {
@@ -812,12 +815,14 @@ func TestWindowContinuation_R1_AWithheldCarrierCannotBeServedByTheLegacyCarry(t 
 	if len(harness.telemetry.planCarryOutcomes) > 0 {
 		outcome = string(harness.telemetry.planCarryOutcomes[0].outcome)
 	}
-	t.Logf("R1-2: decision=%q/%q plan_carry_outcome=%q served_family=%q served_family_source=%q",
-		decision.Disposition, decision.Reason, outcome, result.AnswerPlan.Family, result.AnswerPlan.FamilySource)
-	if result.AnswerPlan.FamilySource == QuestionFamilySourceCarried {
+	family, source, _ := servedPlanAxes(result)
+	t.Logf("R1-2: decision=%q/%q plan_carry_outcome=%q served_family=%q served_family_source=%q refusal_basis=%q",
+		decision.Disposition, decision.Reason, outcome, family, source, result.RefusalBasis)
+	if source == QuestionFamilySourceCarried {
 		t.Fatalf("R1-2 REGRESSION: the continuation was %q for %q, yet the legacy carry served family=%q with family_source=carried from the SAME refused carrier",
-			decision.Disposition, decision.Reason, result.AnswerPlan.Family)
+			decision.Disposition, decision.Reason, family)
 	}
+	assertContinuationRefused(t, result)
 }
 
 // R1-3: a window-receipt request that fails graph binding emits no decision

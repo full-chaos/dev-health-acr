@@ -143,7 +143,8 @@ def test_refusal_basis_vocabulary_matches_the_go_contract():
     members = set(re.findall(r'ContextFabricRefusalBasis\w+\s+ContextFabricRefusalBasis\s*='
                               r'\s*"([^"]+)"', go_src))
     assert members == E.REFUSAL_BASIS_VOCABULARY == {
-        "member_kind_unservable", "frame_invariant_violated", "unspecified"}
+        "member_kind_unservable", "frame_invariant_violated", "unspecified",
+        "continuation_context_unverifiable"}
 
 
 def test_refusal_basis_observed_on_the_wire_is_a_subset_of_the_vocabulary():
