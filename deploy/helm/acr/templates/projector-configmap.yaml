@@ -18,6 +18,11 @@ data:
   # Fixed to the container/probe port, matching acr-api's ACR_ADDR convention.
   ACR_PROJECTOR_ADDR: ":8090"
   ACR_REQUIRE_BACKING_STORES: {{ .Values.config.requireBackingStores | quote }}
+  # r1 P2 finding 1: a bare ACR_REQUIRE_BACKING_STORES=false is not a
+  # storeless opt-out on its own -- the projector honors it only paired with
+  # this explicit dev flag (same interlock acr-api's ConfigMap already
+  # renders below and Config/ProjectorConfig.Validate both enforce).
+  ACR_LOCAL_COMPOSITION_READY: {{ .Values.config.localCompositionReady | quote }}
   ACR_POSTGRES_CONNECTION_KIND: {{ .Values.config.postgresConnectionKind | quote }}
   ACR_CONTEXT_FABRIC_PROJECTION_ENABLED: {{ .Values.contextFabric.projector.projectionEnabled | quote }}
   ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS: {{ join "," .Values.contextFabric.projector.orgIds | quote }}

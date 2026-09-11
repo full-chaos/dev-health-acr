@@ -59,6 +59,11 @@ type App struct {
 	clientIP             auth.ClientIPResolver
 	usageTelemetry       *auth.UsageTelemetry
 	closers              appClosers
+	// readinessTransitions (dictation 811) tracks the last OBSERVED /readyz
+	// outcome -- aggregate AND per-check -- so handleReady can log a
+	// transition line whenever either actually changes, instead of one
+	// line per poll. See ReadinessTransitionLogger's own doc comment.
+	readinessTransitions *ReadinessTransitionLogger
 }
 
 func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error) {
@@ -158,6 +163,7 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 		usageTelemetry:       deps.UsageTelemetry,
 		credentialService:    credentialService,
 		deviceFlow:           deviceFlow,
+		readinessTransitions: NewReadinessTransitionLogger(),
 	}
 	if app.clientIP == nil {
 		app.clientIP = auth.RemoteAddressClientIP

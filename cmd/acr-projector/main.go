@@ -205,7 +205,7 @@ func serve(args []string) error {
 		}
 	}()
 
-	server := &http.Server{Addr: cfg.ListenAddress, Handler: readinessHandler(info.Version, runtime.Checks), ReadHeaderTimeout: 5 * time.Second}
+	server := &http.Server{Addr: cfg.ListenAddress, Handler: readinessHandler(info.Version, runtime.Checks, logger), ReadHeaderTimeout: 5 * time.Second}
 	serverErr := make(chan error, 1)
 	go func() { serverErr <- server.ListenAndServe() }()
 

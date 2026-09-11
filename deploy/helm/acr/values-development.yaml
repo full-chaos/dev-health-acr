@@ -19,7 +19,13 @@ serviceAccount:
 config:
   environment: development
   logLevel: debug
+  # r1 P2 finding 1: a bare requireBackingStores: false is no longer a
+  # storeless opt-out by itself -- the code now honors it only paired with
+  # the explicit dev flag below (the same interlock Config.Validate already
+  # enforces: LocalCompositionReady requires development with backing
+  # stores disabled). Both must be set together.
   requireBackingStores: false
+  localCompositionReady: true
   postgresConnectionKind: direct
   deviceVerificationUrl: https://dev-health.internal/acr/device
   webAssertion:

@@ -12,10 +12,49 @@ import (
 
 const defaultHostedPostgresPingTimeout = 5 * time.Second
 
-func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, requiredByEnvironment bool) error {
+// loadHostedRuntimeValues loads the Postgres/ClickHouse/backing-store knobs
+// shared by acr-api (Config) and acr-projector (ProjectorConfig).
+//
+// defaultRequireStores is the default fed to ACR_REQUIRE_BACKING_STORES when
+// it is unset. forceRequireStores, always environment-only
+// (staging/production), overrides even an EXPLICIT
+// ACR_REQUIRE_BACKING_STORES=false -- unchanged from before dictation 811,
+// still exercised by
+// TestProductionCannotDisableKeyringValidationWithBackingStoreOverride.
+// Both callers pass the same value for both parameters EXCEPT acr-api's
+// config.go load() (dictation 811): there, defaultRequireStores
+// additionally defaults true in development/test (not just
+// staging/production) unless the caller has explicitly opted into local,
+// storeless development via ACR_LOCAL_COMPOSITION_READY=true -- a
+// misconfigured or entirely-missing environment must fail closed, never
+// silently serve as an all-interfaces dev stub -- while forceRequireStores
+// stays staging/production-only so an operator's explicit
+// ACR_REQUIRE_BACKING_STORES=false in development/test is still honored.
+//
+// loadClickHouse (r3 P1 finding 1): whether THIS caller opens ClickHouse at
+// all. acr-api always passes true. acr-projector's priors operator surface
+// (CHAOS-3977 P5) passes false -- it never opens ClickHouse (see
+// openPriorsDB's own doc comment in cmd/acr-projector/priors.go) -- so it
+// must not even READ ACR_CLICKHOUSE_DSN/_FILE. Reading it unconditionally
+// was the actual defect: an operator's shared environment (the same env a
+// co-located `serve` process also reads) can carry
+// ACR_CLICKHOUSE_DSN_FILE pointing at a file priors has no reason to open,
+// and SecretValue fails closed on an unreadable/invalid file regardless of
+// whether the value it names is ever used -- refusing a priors deployment
+// for a store it does not touch. Reproduced live before this fix:
+//
+//	$ env -i PATH=/usr/bin:/bin ACR_ENVIRONMENT=development \
+//	    ACR_POSTGRES_DSN=postgres://u:p@127.0.0.1:1/d?sslmode=disable \
+//	    ACR_POSTGRES_CONNECTION_KIND=direct \
+//	    ACR_CLICKHOUSE_DSN_FILE=/nonexistent/ch.dsn \
+//	    acr-projector priors flip --org org-review --version 1 --by operator
+//	configuration: ACR_CLICKHOUSE_DSN_FILE: secret file is unreadable
+func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, defaultRequireStores, forceRequireStores, loadClickHouse bool) error {
 	var err error
-	if cfg.ClickHouseDSN, err = SecretValue(lookup, "ACR_CLICKHOUSE_DSN"); err != nil {
-		return err
+	if loadClickHouse {
+		if cfg.ClickHouseDSN, err = SecretValue(lookup, "ACR_CLICKHOUSE_DSN"); err != nil {
+			return err
+		}
 	}
 	cfg.ClickHouseCACertPath = stringValue(lookup, "ACR_CLICKHOUSE_CA_BUNDLE", "")
 	if cfg.ClickHouseMaxBytesToRead, err = uint64Value(lookup, "ACR_CLICKHOUSE_MAX_BYTES_TO_READ", runtimeclickhouse.DefaultMaxBytesToRead); err != nil {
@@ -46,10 +85,10 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, requiredByEnvironmen
 	if cfg.PostgresPingTimeout, err = durationValue(lookup, "ACR_POSTGRES_PING_TIMEOUT", defaultHostedPostgresPingTimeout); err != nil {
 		return err
 	}
-	if cfg.RequireBackingStores, err = boolValue(lookup, "ACR_REQUIRE_BACKING_STORES", requiredByEnvironment); err != nil {
+	if cfg.RequireBackingStores, err = boolValue(lookup, "ACR_REQUIRE_BACKING_STORES", defaultRequireStores); err != nil {
 		return err
 	}
-	cfg.RequireBackingStores = cfg.RequireBackingStores || requiredByEnvironment
+	cfg.RequireBackingStores = cfg.RequireBackingStores || forceRequireStores
 	if cfg.LocalCompositionReady, err = boolValue(lookup, "ACR_LOCAL_COMPOSITION_READY", false); err != nil {
 		return err
 	}

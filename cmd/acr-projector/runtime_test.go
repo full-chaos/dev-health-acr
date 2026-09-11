@@ -12,6 +12,7 @@ import (
 func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 func TestOpenRuntimeStaysDisabledWhenProjectionIsNotEnabled(t *testing.T) {
+	t.Setenv("ACR_LOCAL_COMPOSITION_READY", "true")
 	cfg, err := config.LoadProjector()
 	if err != nil {
 		t.Fatal(err)
@@ -32,6 +33,7 @@ func TestOpenRuntimeStaysDisabledWhenProjectionIsNotEnabled(t *testing.T) {
 }
 
 func TestOpenRuntimeStaysDisabledWhenBackingStoresAreUnconfigured(t *testing.T) {
+	t.Setenv("ACR_LOCAL_COMPOSITION_READY", "true")
 	cfg, err := config.LoadProjector()
 	if err != nil {
 		t.Fatal(err)

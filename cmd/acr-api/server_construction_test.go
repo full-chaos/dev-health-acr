@@ -111,14 +111,27 @@ func TestConfig_rejects_local_composition_in_production(t *testing.T) {
 	}
 }
 
+// developmentServeConfig returns a config.Config with Environment ==
+// "development" and LocalCompositionReady left at its default (false) --
+// r1 P2 finding 1 means a bare ACR_REQUIRE_BACKING_STORES=false is no
+// longer, by itself, a valid loadable configuration, so this now supplies
+// a fully-configured backing-store setup (RequireBackingStores ends up
+// forced true) purely so config.Load() succeeds; developmentDependencies()
+// itself only branches on cfg.LocalCompositionReady, never on
+// cfg.RequireBackingStores, so this has no effect on what either caller
+// actually tests.
 func developmentServeConfig(t *testing.T) config.Config {
 	t.Helper()
 	for key, value := range map[string]string{
-		"ACR_ENVIRONMENT":             "development",
-		"ACR_REQUIRE_BACKING_STORES":  "false",
-		"ACR_EVIDENCE_ID_ACTIVE_KID":  "current",
-		"ACR_EVIDENCE_ID_KEYS":        "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
-		"ACR_DEVICE_VERIFICATION_URL": "https://verify.example.test/device",
+		"ACR_ENVIRONMENT":                       "development",
+		"ACR_CLICKHOUSE_DSN":                    "clickhouse://configured",
+		"ACR_POSTGRES_DSN":                      "postgres://configured",
+		"ACR_POSTGRES_CONNECTION_KIND":          "direct",
+		"ACR_EVIDENCE_ID_ACTIVE_KID":            "current",
+		"ACR_EVIDENCE_ID_KEYS":                  "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
+		"ACR_DEV_HEALTH_ENTITLEMENT_URL":        "https://ops.example.test",
+		"ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE": "/run/secrets/ops-token",
+		"ACR_DEVICE_VERIFICATION_URL":           "https://verify.example.test/device",
 	} {
 		t.Setenv(key, value)
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/full-chaos/dev-health-acr/internal/api"
@@ -32,7 +33,13 @@ type readinessResponse struct {
 // empty (projection disabled, see openRuntime), /readyz reports ready with
 // projection_enabled=false rather than failing: a deliberately disabled
 // projector is a healthy state, not an outage.
-func readinessHandler(serviceVersion string, checks []api.ReadinessCheck) http.Handler {
+//
+// logger may be nil (server_test.go's existing HTTP-shape tests construct
+// this handler without one); a nil logger disables transition logging
+// rather than panicking, since those tests exercise the response body, not
+// telemetry.
+func readinessHandler(serviceVersion string, checks []api.ReadinessCheck, logger *slog.Logger) http.Handler {
+	transitions := api.NewReadinessTransitionLogger()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, healthResponse{Status: "ok", Service: "acr-projector", Version: serviceVersion})
@@ -51,6 +58,13 @@ func readinessHandler(serviceVersion string, checks []api.ReadinessCheck) http.H
 				status = http.StatusServiceUnavailable
 			}
 			response.Checks = append(response.Checks, readinessCheckResponse{Name: check.Name(), Status: checkStatus})
+		}
+		if logger != nil {
+			observations := make([]api.ReadinessCheckObservation, 0, len(response.Checks))
+			for _, check := range response.Checks {
+				observations = append(observations, api.ReadinessCheckObservation{Name: check.Name, Status: check.Status})
+			}
+			transitions.Observe(r.Context(), logger, "", response.Status, observations)
 		}
 		writeJSON(w, status, response)
 	})

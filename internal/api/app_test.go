@@ -178,6 +178,167 @@ func TestReadinessFailureIsSafe(t *testing.T) {
 	}
 }
 
+// TestReadinessTransitionIsLoggedOnce is dictation 811: /readyz
+// must log an Info "readiness state changed" line the FIRST time it is
+// observed and again every time the overall status actually flips -- not
+// ready -> ready and back -- naming every check's state, but NOT on every
+// repeated poll that finds the same status. Exercises the handler at
+// production level (real Handler().ServeHTTP, real App, real logger, no
+// mocked transition tracker) with non-trivial values (a real check name,
+// "postgres", never the field's zero value) so this pin cannot pass by
+// asserting an unevaluated default.
+func TestReadinessTransitionIsLoggedOnce(t *testing.T) {
+	buffer := &bytes.Buffer{}
+	failing := false
+	app := testApp(t, CheckFunc{CheckName: "postgres", Fn: func(context.Context) error {
+		if failing {
+			return errors.New("postgres unreachable")
+		}
+		return nil
+	}})
+	app.logger = testLogger(buffer)
+
+	poll := func(wantStatus int) {
+		t.Helper()
+		response := httptest.NewRecorder()
+		app.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+		if response.Code != wantStatus {
+			t.Fatalf("readyz status = %d, want %d", response.Code, wantStatus)
+		}
+	}
+	transitionLines := func() []string {
+		var lines []string
+		for _, line := range strings.Split(strings.TrimSpace(buffer.String()), "\n") {
+			if strings.Contains(line, "readiness state changed") {
+				lines = append(lines, line)
+			}
+		}
+		return lines
+	}
+
+	// First observation: unknown -> ready. Must log exactly once.
+	poll(http.StatusOK)
+	if lines := transitionLines(); len(lines) != 1 {
+		t.Fatalf("after first observation, transition lines = %d, want 1: %v", len(lines), lines)
+	} else if !strings.Contains(lines[0], `"previous_status":"unknown"`) || !strings.Contains(lines[0], `"status":"ready"`) || !strings.Contains(lines[0], `"postgres":"ready"`) {
+		t.Fatalf("unexpected first transition line: %s", lines[0])
+	}
+
+	// Repeated poll at the same status: must NOT log again.
+	poll(http.StatusOK)
+	poll(http.StatusOK)
+	if lines := transitionLines(); len(lines) != 1 {
+		t.Fatalf("after repeated ready polls, transition lines = %d, want 1 (no duplicate): %v", len(lines), lines)
+	}
+
+	// ready -> not_ready: must log again, naming the failing store.
+	failing = true
+	poll(http.StatusServiceUnavailable)
+	lines := transitionLines()
+	if len(lines) != 2 {
+		t.Fatalf("after failure, transition lines = %d, want 2: %v", len(lines), lines)
+	}
+	if !strings.Contains(lines[1], `"previous_status":"ready"`) || !strings.Contains(lines[1], `"status":"not_ready"`) || !strings.Contains(lines[1], `"postgres":"not_ready"`) {
+		t.Fatalf("unexpected not_ready transition line: %s", lines[1])
+	}
+
+	// Repeated not_ready poll: must NOT log again.
+	poll(http.StatusServiceUnavailable)
+	if lines := transitionLines(); len(lines) != 2 {
+		t.Fatalf("after repeated not_ready polls, transition lines = %d, want 2 (no duplicate): %v", len(lines), lines)
+	}
+
+	// not_ready -> ready: must log a third time.
+	failing = false
+	poll(http.StatusOK)
+	lines = transitionLines()
+	if len(lines) != 3 {
+		t.Fatalf("after recovery, transition lines = %d, want 3: %v", len(lines), lines)
+	}
+	if !strings.Contains(lines[2], `"previous_status":"not_ready"`) || !strings.Contains(lines[2], `"status":"ready"`) {
+		t.Fatalf("unexpected recovery transition line: %s", lines[2])
+	}
+	if strings.Contains(buffer.String(), "postgres unreachable") {
+		t.Fatal("readiness transition log leaked the raw check error")
+	}
+}
+
+// TestReadinessPerCheckTransitionIsLoggedWhileAggregateStaysNotReady is r1
+// P3 finding 5's own pin: with two checks and one (postgres) ALREADY
+// failing, when the SECOND (clickhouse) also changes state, that must
+// still log an Info "readiness check state changed" line naming clickhouse
+// specifically -- even though the AGGREGATE status never changes (it was
+// not_ready before and stays not_ready after). The aggregate-only
+// "readiness state changed" line cannot catch this: it only fires again
+// once the aggregate itself flips, which it does not here.
+func TestReadinessPerCheckTransitionIsLoggedWhileAggregateStaysNotReady(t *testing.T) {
+	buffer := &bytes.Buffer{}
+	postgresFailing := true
+	clickhouseFailing := false
+	app := testApp(t,
+		CheckFunc{CheckName: "postgres", Fn: func(context.Context) error {
+			if postgresFailing {
+				return errors.New("postgres unreachable")
+			}
+			return nil
+		}},
+		CheckFunc{CheckName: "clickhouse", Fn: func(context.Context) error {
+			if clickhouseFailing {
+				return errors.New("clickhouse unreachable")
+			}
+			return nil
+		}},
+	)
+	app.logger = testLogger(buffer)
+
+	poll := func(wantStatus int) {
+		t.Helper()
+		response := httptest.NewRecorder()
+		app.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+		if response.Code != wantStatus {
+			t.Fatalf("readyz status = %d, want %d", response.Code, wantStatus)
+		}
+	}
+	checkLines := func() []string {
+		var lines []string
+		for _, line := range strings.Split(strings.TrimSpace(buffer.String()), "\n") {
+			if strings.Contains(line, "readiness check state changed") {
+				lines = append(lines, line)
+			}
+		}
+		return lines
+	}
+
+	// First observation: postgres not_ready (unknown -> not_ready),
+	// clickhouse ready (unknown -> ready). Both are first-observation
+	// transitions -- 2 per-check lines.
+	poll(http.StatusServiceUnavailable)
+	if lines := checkLines(); len(lines) != 2 {
+		t.Fatalf("after first observation, per-check lines = %d, want 2: %v", len(lines), lines)
+	}
+
+	// clickhouse flips to failing too. Aggregate status is "not_ready"
+	// BOTH before and after this poll -- the aggregate line does not fire
+	// again -- but this is a real, distinct per-check transition that must
+	// still be observable at Info.
+	clickhouseFailing = true
+	poll(http.StatusServiceUnavailable)
+	lines := checkLines()
+	if len(lines) != 3 {
+		t.Fatalf("after clickhouse also fails, per-check lines = %d, want 3: %v", len(lines), lines)
+	}
+	last := lines[2]
+	if !strings.Contains(last, `"check":"clickhouse"`) || !strings.Contains(last, `"previous_status":"ready"`) || !strings.Contains(last, `"status":"not_ready"`) {
+		t.Fatalf("unexpected clickhouse transition line: %s", last)
+	}
+
+	// Repeated poll at the same per-check states: no new per-check lines.
+	poll(http.StatusServiceUnavailable)
+	if lines := checkLines(); len(lines) != 3 {
+		t.Fatalf("after a repeated poll, per-check lines = %d, want 3 (no duplicate): %v", len(lines), lines)
+	}
+}
+
 func TestCapabilitiesShape(t *testing.T) {
 	app, token := newHostedTestApp(t, nil, nil, []string{auth.ScopeContextRead}, nil, nil)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/capabilities", nil)

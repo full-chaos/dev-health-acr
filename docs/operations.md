@@ -37,12 +37,19 @@ make contract-test
 make verify
 ```
 
-The stock API binary is intentionally not ready without the complete hosted
-runtime bundle. It is useful for process and probe development, but not as a
-production configuration:
+The stock API binary refuses to start at all without the complete hosted
+runtime bundle, unless the explicit local-development opt-out is set. It is
+useful for process and probe development this way, but not as a production
+configuration:
 
 ```bash
-ACR_ADDR=:8080 go run ./cmd/acr-api serve
+# Backing stores are required by default in every environment now; probing
+# the stock binary without one needs the explicit ACR_LOCAL_COMPOSITION_READY
+# dev opt-out (development only) -- without it the process refuses to start.
+# The listen address stays loopback-only by default regardless of this flag
+# (they are independent knobs): do NOT set ACR_ADDR to a wildcard here, or
+# this probe becomes reachable from every interface on the host.
+ACR_LOCAL_COMPOSITION_READY=true go run ./cmd/acr-api serve
 curl http://127.0.0.1:8080/healthz
 curl http://127.0.0.1:8080/readyz
 ```

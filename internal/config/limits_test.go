@@ -10,7 +10,10 @@ import (
 
 func TestLimitOptionsConfiguresEveryRequestClass(t *testing.T) {
 	// Given
-	cfg, err := load(mapLookup(nil))
+	// dictation 811: backing stores default to required outside development
+	// with the explicit dev flag -- this test is about request-class
+	// limits, not backing stores, so opt into local composition.
+	cfg, err := load(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,6 +47,7 @@ func TestLimitOptionsUseIndependentClassPoliciesAndPacketBudgets(t *testing.T) {
 		"ACR_EVIDENCE_REQUESTS_PER_WINDOW": "4",
 		"ACR_LIMIT_WINDOW":                 "2m",
 		"ACR_MAXIMUM_RETRY_AFTER":          "2m",
+		"ACR_LOCAL_COMPOSITION_READY":      "true",
 	}))
 	if err != nil {
 		t.Fatal(err)

@@ -137,6 +137,11 @@ func (a *App) handleReady(w http.ResponseWriter, r *http.Request) {
 		}
 		response.Checks = append(response.Checks, readinessCheckResponse{Name: check.Name(), Status: checkStatus})
 	}
+	observations := make([]ReadinessCheckObservation, 0, len(response.Checks))
+	for _, check := range response.Checks {
+		observations = append(observations, ReadinessCheckObservation{Name: check.Name, Status: check.Status})
+	}
+	a.readinessTransitions.Observe(r.Context(), a.logger, RequestID(r.Context()), response.Status, observations)
 	writeJSON(w, status, response)
 }
 

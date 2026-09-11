@@ -36,6 +36,7 @@ func TestOpenRuntimeWiresPostgresAndClickHouseThenDisablesWithoutAFalkorBackend(
 	dsn, err := container.ConnectionString(ctx, "sslmode=disable")
 	require.NoError(t, err)
 
+	t.Setenv("ACR_LOCAL_COMPOSITION_READY", "true")
 	cfg, err := config.LoadProjector()
 	require.NoError(t, err)
 	cfg.ProjectionEnabled = true
@@ -52,6 +53,7 @@ func TestOpenRuntimeWiresPostgresAndClickHouseThenDisablesWithoutAFalkorBackend(
 }
 
 func TestOpenRuntimeSurfacesUnreachablePostgres(t *testing.T) {
+	t.Setenv("ACR_LOCAL_COMPOSITION_READY", "true")
 	cfg, err := config.LoadProjector()
 	require.NoError(t, err)
 	cfg.ProjectionEnabled = true
