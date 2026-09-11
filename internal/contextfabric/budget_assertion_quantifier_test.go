@@ -148,6 +148,7 @@ func TestNothingIsPersistedWithoutBeingFinalized(t *testing.T) {
 	persisting := map[string]site{}
 	finalizedAt := map[string]token.Pos{}
 	savedAt := map[string]token.Pos{}
+	rawSinkCallers := map[string]int{}
 
 	for _, file := range files {
 		for _, decl := range file.Decls {
@@ -165,12 +166,22 @@ func TestNothingIsPersistedWithoutBeingFinalized(t *testing.T) {
 				if !isSel {
 					return true
 				}
-				// e.results.Save(...) -- the persistence sink.
+				// e.results.Save(...) -- the persistence sink -- and
+				// e.saveResult(...), the engine's one wrapper around it.
+				// The wrapper is itself the only function allowed to call the
+				// sink (asserted below), so every PERSISTING path is a caller
+				// of the wrapper and is quantified here.
 				if sel.Sel.Name == "Save" {
 					if inner, ok := sel.X.(*ast.SelectorExpr); ok && inner.Sel.Name == "results" {
-						if !save.IsValid() || call.Pos() < save {
+						rawSinkCallers[fn.Name.Name]++
+						if fn.Name.Name != "saveResult" && (!save.IsValid() || call.Pos() < save) {
 							save = call.Pos()
 						}
+					}
+				}
+				if sel.Sel.Name == "saveResult" {
+					if !save.IsValid() || call.Pos() < save {
+						save = call.Pos()
 					}
 				}
 				if sel.Sel.Name == "finalizeServed" {
@@ -190,6 +201,11 @@ func TestNothingIsPersistedWithoutBeingFinalized(t *testing.T) {
 
 	if len(persisting) == 0 {
 		t.Fatal("found zero functions persisting a result: the walk is not seeing the persistence sink, so it proves nothing")
+	}
+	// ONE WAY IN. The wrapper emits the persistence decision; a second direct
+	// caller of the sink would persist a result with no decision on the trace.
+	if len(rawSinkCallers) != 1 || rawSinkCallers["saveResult"] != 1 {
+		t.Errorf("e.results.Save is called from %v; only saveResult may call it, once", rawSinkCallers)
 	}
 
 	for name := range persisting {

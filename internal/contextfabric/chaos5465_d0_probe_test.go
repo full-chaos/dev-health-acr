@@ -83,7 +83,8 @@ func TestWindowContinuation_D0Probe_RedAtParentGreenAtTip(t *testing.T) {
 		t.Fatalf("probe fixture defect: turn-two question bytes must equal turn one's")
 	}
 
-	store := &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}
+	// Turn one saved its accepted reading, as every production turn does.
+	store := withCarrierStates(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}})
 	telemetry := &recordingTelemetry{}
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	fresh := validInvestigationResult()
@@ -218,7 +219,8 @@ func TestWindowContinuation_D0ControlA_TheLegacyCarryStillApplies(t *testing.T) 
 	// legacy carry is the only route left.
 	request.ParentResultID = prior.ResultID
 
-	store := &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}
+	// Turn one saved its accepted reading, as every production turn does.
+	store := withCarrierStates(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}})
 	telemetry := &recordingTelemetry{}
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	fresh := validInvestigationResult()
@@ -281,7 +283,8 @@ func TestWindowContinuation_D0ControlB_TheContinuationEmitCannotPassAsLegacy(t *
 	request.Question = prior.Question
 	request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: prior.ResultID, ReceiptID: "winr_d0probe1aaaaaaaaaaaa"}}
 
-	store := &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}
+	// Turn one saved its accepted reading, as every production turn does.
+	store := withCarrierStates(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}})
 	telemetry := &recordingTelemetry{}
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	fresh := validInvestigationResult()

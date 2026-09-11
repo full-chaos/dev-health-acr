@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"io/fs"
+	"strings"
 	"sync"
 	"testing"
 	"testing/fstest"
@@ -83,7 +84,7 @@ import (
 // shape again, fencing reuse on contextfabric.QuestionFamilyTableVersion
 // so a stored turn-1 disclosure computed under an old family table
 // definition is never served under a newer one's ApplicableAxes.
-var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37}
+var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38}
 
 func TestEmbeddedRunner_appliesMigrationsInOrder_whenDatabaseIsFresh(t *testing.T) {
 	// Given
@@ -1353,4 +1354,82 @@ func storedMigrationVersions(t *testing.T, ctx context.Context, db *sql.DB) []in
 	}
 	require.NoError(t, rows.Err())
 	return versions
+}
+
+// TestRunner_upgradeTo38AddsSemanticStateColumn is the dedicated boundary proof
+// for the result's semantic snapshot column: a database at every migration
+// before 0038, holding a pre-existing result row, upgraded to the full embedded
+// set must gain the nullable semantic_state column and its shape constraint;
+// the pre-existing row must read back NULL (never backfilled); and the
+// constraint must refuse a value that is not an object naming its format while
+// accepting one that is.
+func TestRunner_upgradeTo38AddsSemanticStateColumn(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDatabase(t, ctx)
+	pre := fstest.MapFS{}
+	entries, err := fs.ReadDir(Files, ".")
+	require.NoError(t, err)
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".sql") || strings.HasPrefix(name, "0038_") {
+			continue
+		}
+		body, readErr := fs.ReadFile(Files, name)
+		require.NoError(t, readErr)
+		pre[name] = &fstest.MapFile{Data: body}
+	}
+	require.Len(t, pre, len(expectedMigrationVersions)-1, "every migration except 0038")
+	released, err := NewRunner(pre)
+	require.NoError(t, err)
+	require.NoError(t, released.Up(ctx, db))
+
+	// A result row written before the column existed.
+	_, err = db.ExecContext(ctx, `INSERT INTO acr.context_fabric_investigation_results (result_id, org_id, payload, generated_at) VALUES ('result_legacy_0038', 'org-0038', '{}'::jsonb, now())`)
+	require.NoError(t, err)
+
+	latest, err := Embedded()
+	require.NoError(t, err)
+	require.NoError(t, latest.Up(ctx, db))
+	require.Equal(t, expectedMigrationVersions, migrationVersions(t, ctx, latest, db))
+	requireContextFabricInvestigationResultsColumn(t, ctx, db, "semantic_state")
+	requireConstraintExists(t, ctx, db, "ck_acr_cf_investigation_results_semantic_state_shape")
+
+	var legacy sql.NullString
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT semantic_state::text FROM acr.context_fabric_investigation_results WHERE result_id = 'result_legacy_0038'`).Scan(&legacy))
+	require.False(t, legacy.Valid, "a row written before the column must read back NULL, never backfilled")
+
+	for _, tc := range []struct {
+		value string
+		ok    bool
+	}{
+		{`{"format_version":"semantic-state.v1"}`, true},
+		{`{"format_version":"some-future-format","other":1}`, true},
+		{`[]`, false},
+		{`"a string"`, false},
+		{`null`, false}, // JSON null is a value, not SQL NULL, and is not an object
+		{`{}`, false},
+		{`{"format_version":1}`, false},
+		{`{"format_version":null}`, false},
+	} {
+		_, err := db.ExecContext(ctx, `UPDATE acr.context_fabric_investigation_results SET semantic_state = $1::jsonb WHERE result_id = 'result_legacy_0038'`, tc.value)
+		t.Logf("semantic_state=%s -> err=%v", tc.value, err)
+		if tc.ok {
+			require.NoError(t, err, tc.value)
+		} else {
+			require.Error(t, err, tc.value)
+		}
+	}
+	_, err = db.ExecContext(ctx, `UPDATE acr.context_fabric_investigation_results SET semantic_state = NULL WHERE result_id = 'result_legacy_0038'`)
+	require.NoError(t, err, "SQL NULL is the absent snapshot and is always storable")
+}
+
+// TestRunner_upgradeTo38IsIdempotentOnRetry: 0038 survives being applied twice.
+func TestRunner_upgradeTo38IsIdempotentOnRetry(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDatabase(t, ctx)
+	runner, err := Embedded()
+	require.NoError(t, err)
+	require.NoError(t, runner.Up(ctx, db))
+	require.NoError(t, runner.Up(ctx, db), "a second Up() over an already-migrated database must not error")
+	require.Equal(t, expectedMigrationVersions, migrationVersions(t, ctx, runner, db))
 }

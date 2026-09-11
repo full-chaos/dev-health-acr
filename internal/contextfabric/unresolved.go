@@ -261,7 +261,13 @@ func (e *Engine) terminalResult(
 	// validation has run yet, and a terminal that recomputed it with nil would
 	// silently drop a validated prior-subject receipt on exactly the paths
 	// where one exists.
-	ancestryParent string) (InvestigationResult, error) {
+	ancestryParent string,
+	// semantic is this result's semantic-state capture: the accepted
+	// snapshot, or the closed reason there is none. Passed in rather than
+	// built here -- only the caller knows whether interpretation and
+	// planning ran, and an exit must never reconstruct a reading it did not
+	// accept.
+	semantic semanticStateCapture) (InvestigationResult, error) {
 	// CHAOS-4634 (subsumes CHAOS-4579/CHAOS-4531's §1.3 class-conditional
 	// gate): applied HERE, at the top, before ANY reader of
 	// structureMaterial below -- both the schemaVersion dispatch
@@ -539,7 +545,7 @@ func (e *Engine) terminalResult(
 		// introduce a difference, and a terminal result saved under a key no
 		// lookup will ever form is a row the clarification loop cannot reach.
 		epochDeltaSample := e.sampleBindingEpochDelta(ctx, principal, binding)
-		if err := e.results.Save(ctx, principal, result, watermark, epoch, composeTimeAxisKey(TimeAxisKeyFor(request.TimeContext), windowCanon.KeyComponent), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch, ancestryParent); err != nil {
+		if err := e.saveResult(ctx, principal, BudgetAssertSubjectlessTerminal, result, watermark, epoch, composeTimeAxisKey(TimeAxisKeyFor(request.TimeContext), windowCanon.KeyComponent), binding.Epoch, ancestryParent, semantic); err != nil {
 			// CHAOS-3927 P4 (codex round-2 adversarial review fix): a
 			// subjectless terminal can carry confirmed structure exactly
 			// like a synthesized answer can (result.ConfirmedStructure
@@ -556,7 +562,7 @@ func (e *Engine) terminalResult(
 				// already carries whatever dispositions this terminal's own
 				// resolution parameter carried -- the race terminal must not
 				// silently drop them.
-				return e.structureSupersessionVetoResult(ctx, principal, request, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions, carriedStructureEntries, plan, ancestryParent)
+				return e.structureSupersessionVetoResult(ctx, principal, request, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions, carriedStructureEntries, plan, ancestryParent, semantic)
 			}
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}

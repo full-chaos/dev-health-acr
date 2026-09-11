@@ -143,7 +143,7 @@ func (s *refusalStore) Get(ctx context.Context, principal storage.Principal, res
 	return s.staticResultStore.Get(ctx, principal, resultID)
 }
 
-func (s *refusalStore) Save(ctx context.Context, principal storage.Principal, result InvestigationResult, snap SourceWatermarkSnapshot, epoch RebuildEpoch, axisKey string, retrieval ReuseRetrievalIdentity, prompts ReusePromptVersions, authorities ReuseVersionAuthorities, graphEpoch int64, parentResultID string) error {
+func (s *refusalStore) Save(ctx context.Context, principal storage.Principal, result InvestigationResult, snap SourceWatermarkSnapshot, epoch RebuildEpoch, axisKey string, retrieval ReuseRetrievalIdentity, prompts ReusePromptVersions, authorities ReuseVersionAuthorities, graphEpoch int64, parentResultID string, semantic SemanticStateWrite) error {
 	if s.saveErr != nil {
 		return s.saveErr
 	}
@@ -151,7 +151,7 @@ func (s *refusalStore) Save(ctx context.Context, principal storage.Principal, re
 	s.savedParents = append(s.savedParents, parentResultID)
 	s.savedResultID = append(s.savedResultID, result.ResultID)
 	s.mu.Unlock()
-	return s.staticResultStore.Save(ctx, principal, result, snap, epoch, axisKey, retrieval, prompts, authorities, graphEpoch, parentResultID)
+	return s.staticResultStore.Save(ctx, principal, result, snap, epoch, axisKey, retrieval, prompts, authorities, graphEpoch, parentResultID, semantic)
 }
 
 type refusalReadCounts struct {
@@ -214,6 +214,12 @@ type refusalCell struct {
 	// one fails.
 	failGetAfter int
 	interpreter  QuestionInterpreter
+	// legacyCarrier leaves the carrier without a snapshot; stateRead forces
+	// its read status.
+	legacyCarrier bool
+	stateRead     SemanticStateReadStatus
+	// carrier replaces the carrier's snapshot.
+	carrier func(testing.TB, InvestigationResult) *PersistedSemanticState
 
 	wantRefused         bool
 	wantDisposition     ContinuationDisposition
@@ -294,19 +300,57 @@ func refusalCells() []refusalCell {
 			wantDecisionEmitted: true, wantServedBasis: contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable,
 		},
 		{
-			name:        "carried axis cannot be expressed by the fresh frame",
+			name:        "carried frame would be repaired by today's validation",
 			priorFamily: QuestionFamilyGroupedCohortStatus, priorGroup: contractsv1.ContextFabricSubjectTeam,
-			interpreter: r1UngroupedInterpreter{family: QuestionFamilyDiscoveredCohortRanking},
+			carrier:     strippedFramedCarrierState,
+			interpreter: forced,
 			wantRefused: true, wantDisposition: ContinuationWithheld, wantReason: ContinuationReasonCompositionInvalid,
 			wantDecisionEmitted: true, wantServedBasis: contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable,
 		},
 		{
-			name: "composed frame violates a frame invariant",
-			// The carried group axis equals the fresh frame's MEMBER kind, so
-			// the composition is grouped-by-itself (i6).
-			priorFamily: QuestionFamilyGroupedCohortStatus, priorGroup: SubjectRepository,
-			interpreter: frameBearingInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam, frameGroup: contractsv1.ContextFabricSubjectTeam},
+			name:        "carried frame refused by today's gate",
+			priorFamily: QuestionFamilyDiscoveredCohortRanking,
+			carrier: func(t testing.TB, prior InvestigationResult) *PersistedSemanticState {
+				frame, gate := unservableDiscoveredFrame(t.(*testing.T))
+				return carriedStateFor(t.(*testing.T), prior.AnswerPlan.Family, "", &frame, gate)
+			},
+			interpreter: forced,
 			wantRefused: true, wantDisposition: ContinuationWithheld, wantReason: ContinuationReasonCompositionInvalid,
+			wantDecisionEmitted: true, wantServedBasis: contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable,
+		},
+		{
+			name:          "legacy carrier with no persisted reading",
+			legacyCarrier: true,
+			interpreter:   forced,
+			wantRefused:   true, wantDisposition: ContinuationWithheld, wantReason: ContinuationReasonSemanticStateAbsent,
+			wantDecisionEmitted: true, wantServedBasis: contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable,
+		},
+		{
+			name:        "carrier snapshot of an unsupported format",
+			stateRead:   SemanticStateReadUnsupportedVersion,
+			interpreter: forced,
+			wantRefused: true, wantDisposition: ContinuationWithheld, wantReason: ContinuationReasonContextVersionMismatch,
+			wantDecisionEmitted: true, wantServedBasis: contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable,
+		},
+		{
+			name:        "carrier snapshot malformed",
+			stateRead:   SemanticStateReadMalformed,
+			interpreter: forced,
+			wantRefused: true, wantDisposition: ContinuationWithheld, wantReason: ContinuationReasonSemanticStateInvalid,
+			wantDecisionEmitted: true, wantServedBasis: contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable,
+		},
+		{
+			name:        "carrier snapshot oversized",
+			stateRead:   SemanticStateReadOversized,
+			interpreter: forced,
+			wantRefused: true, wantDisposition: ContinuationWithheld, wantReason: ContinuationReasonSemanticStateInvalid,
+			wantDecisionEmitted: true, wantServedBasis: contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable,
+		},
+		{
+			name:        "carrier snapshot status unreported by the store",
+			stateRead:   SemanticStateReadStatus("unreported-fixture"),
+			interpreter: forced,
+			wantRefused: true, wantDisposition: ContinuationWithheld, wantReason: ContinuationReasonSemanticStateInvalid,
 			wantDecisionEmitted: true, wantServedBasis: contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable,
 		},
 
@@ -372,10 +416,20 @@ func TestContinuationRefusal_TheRefusalMatrixThroughTheEngine(t *testing.T) {
 				}
 			}
 			older := continuationPrior(t, continuationOlderID, base, QuestionFamilyDiscoveredCohortRanking, "")
-			store := newRefusalStore(&staticResultStore{
+			base := &staticResultStore{
 				results:    map[string]InvestigationResult{prior.ResultID: prior, older.ResultID: older},
 				graphEpoch: cell.storeEpoch,
-			})
+			}
+			if cell.carrier != nil {
+				base.states = map[string]*PersistedSemanticState{prior.ResultID: cell.carrier(t, prior)}
+			}
+			if !cell.legacyCarrier {
+				withCarrierStates(t, base)
+			}
+			if cell.stateRead != "" {
+				base.stateReads = map[string]SemanticStateReadStatus{continuationPriorID: cell.stateRead}
+			}
+			store := newRefusalStore(base)
 			if cell.failGetOf != "" {
 				store.failGetOf, store.failGetAfter = cell.failGetOf, cell.failGetAfter
 			}
@@ -636,7 +690,7 @@ func TestContinuationRefusal_TheDecisionLineNamesTheServedBasis(t *testing.T) {
 			var buf bytes.Buffer
 			sink := SlogEngineTelemetry{logger: slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))}
 			prior := continuationPrior(t, continuationPriorID, base, QuestionFamilyDiscoveredCohortRanking, "")
-			store := newRefusalStore(&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}, graphEpoch: tc.storeEpoch})
+			store := newRefusalStore(withCarrierStates(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}, graphEpoch: tc.storeEpoch}))
 			store.saveErr = tc.saveErr
 			engine, _ := newRefusalEngine(t, store, forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam}, sink)
 			_, err := engine.Investigate(context.Background(), acceptancePrincipal(), continuationRequest(base))
@@ -764,7 +818,7 @@ func servedContinuationRefusal(t *testing.T) InvestigationResult {
 	t.Helper()
 	base := validInvestigationRequest().Question
 	prior := continuationPrior(t, continuationPriorID, base, QuestionFamilyDiscoveredCohortRanking, "")
-	store := newRefusalStore(&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}, graphEpoch: staleEpoch()})
+	store := newRefusalStore(withCarrierStates(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}, graphEpoch: staleEpoch()}))
 	engine, _ := newRefusalEngine(t, store, forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam}, &recordingTelemetry{})
 	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), continuationRequest(base))
 	if err != nil {

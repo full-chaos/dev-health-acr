@@ -33,19 +33,14 @@ package contextfabric
 // WHAT THIS FILE DELIBERATELY DOES NOT DO, and why, so the next reader does
 // not mistake the gap for an oversight:
 //
-//   - THE CARRIED CONTEXT IS THE DURABLE PLAN, NOT THE FRAME. Nothing persists
-//     a QuestionFrame today. pginvestigation/store.go writes
-//     `json.Marshal(result)` as the row payload, so the payload IS the public
-//     InvestigationResult, and both context_fabric_investigation_result
-//     schemas pin `additionalProperties:false`; binding.go's
-//     StoredInvestigationResult doc comment states the resulting rule -- a
-//     server-internal value lives on the envelope (a column), never on the
-//     payload. Measured: 0 of 38 archived turn-one artefacts carry any frame.
-//     So the frame, roles, obligations and requirement declarations cannot be
-//     preserved until a column and a migration exist (CHAOS-5465 M2, held).
-//     What IS durable, and therefore what this build carries, is exactly the
-//     answer plan carriablePlan already reads: family, group kind and declared
-//     narrowing basis.
+//   - THE CARRIED CONTEXT IS THE PERSISTED SEMANTIC SNAPSHOT. Every result
+//     now saves its accepted reading -- family, normalized frame, gate
+//     verdict, role slots and requirement declarations -- beside its payload
+//     (semantic_state.go). Admission requires it: a carrier without one (a row
+//     written before the column, or one whose snapshot is malformed, oversized
+//     or of an unsupported format) is WITHHELD with its own reason and the
+//     turn is refused, never continued on a reading reconstructed from the
+//     plan's family label.
 //
 //   - THE REFUSAL IS NOT DECIDED HERE. A carrier that cannot be established
 //     is reported as `withheld` with its own reason, and the turn it ends is
@@ -54,10 +49,10 @@ package contextfabric
 //     sentence. ContextFabricRefusalBasisLimitation is NOT used for it: that
 //     sentence names a declared member kind, which this condition has none of.
 //
-// The comparison this file performs is therefore COMPLETE with respect to the
-// context it accepts: the accepted context is the plan, and every component of
-// the plan is compared. `agreement` never claims agreement about a component
-// nothing carried.
+// The comparison this file performs is COMPLETE with respect to the context it
+// accepts: every semantic component the snapshot carries is compared against
+// the fresh proposal's own, and `agreement` never claims agreement about a
+// component nothing carried.
 
 import (
 	"context"
@@ -225,6 +220,15 @@ const (
 	// more than the evidence window: it is not a window-only continuation, and
 	// it takes the fresh path rather than the carrier's plan.
 	ContinuationReasonAnswerBudgetChanged ContinuationDecisionReason = "answer_budget_changed"
+	// ContinuationReasonSemanticStateAbsent: the carrier read back and carries
+	// NO persisted semantic snapshot -- a row saved before the column existed,
+	// or one whose turn recorded a closed absence. The reading is
+	// unavailable; it is never reconstructed from the plan's family label.
+	ContinuationReasonSemanticStateAbsent ContinuationDecisionReason = "semantic_state_absent"
+	// ContinuationReasonSemanticStateInvalid: the carrier's snapshot is
+	// present and unusable -- malformed, oversized, unreported by the store,
+	// or inconsistent with the carrier's own public plan.
+	ContinuationReasonSemanticStateInvalid ContinuationDecisionReason = "semantic_state_invalid"
 	// ContinuationReasonUnspecified: a decision site reached a return without
 	// recording a reason. Loud by construction, and NEVER expected to reach the
 	// emitter -- TestWindowContinuation_EveryReasonIsAssignedBySomePath
@@ -332,14 +336,14 @@ const (
 	ContinuationConflictFieldFrameGate          ContinuationConflictField = "frame_gate"
 )
 
-// continuationComparableFields is the subset this build can actually compare,
-// in a fixed order so conflict_fields is deterministic.
+// continuationComparableFields is the subset this build compares, in a fixed
+// order so conflict_fields is deterministic: every component the persisted
+// snapshot carries.
 //
-// Every other member of the vocabulary above describes something no stored
-// result carries, so this build never claims those agreed and never claims
-// they conflicted -- there is nothing carried for them to disagree with. When
-// durable context persistence lands, this list grows and the pin that names it
-// fails until it is updated deliberately.
+// INTERPRETATION IS NOT COMPARED because the snapshot does not carry the
+// interpretation (shape, judgment, fact requirements) -- only the frame
+// validation's emitted shape -- so there is nothing carried for a fresh
+// interpretation to disagree with.
 //
 // NARROWING BASIS IS CARRIED BUT NOT COMPARED, and the distinction is the
 // point. The carried basis reaches the plan through the existing plan-carry
@@ -353,6 +357,15 @@ func continuationComparableFields() []ContinuationConflictField {
 	return []ContinuationConflictField{
 		ContinuationConflictFieldFamily,
 		ContinuationConflictFieldSubjectExpression,
+		ContinuationConflictFieldRoles,
+		ContinuationConflictFieldGoals,
+		ContinuationConflictFieldTemporal,
+		ContinuationConflictFieldEmphasis,
+		ContinuationConflictFieldDimensions,
+		ContinuationConflictFieldObligations,
+		ContinuationConflictFieldWidenedObligations,
+		ContinuationConflictFieldRequirements,
+		ContinuationConflictFieldFrameGate,
 	}
 }
 
@@ -364,6 +377,10 @@ type continuationCarriedContext struct {
 	NarrowingBasis contractsv1.ContextFabricNarrowingBasis
 	FamilyVersion  string
 	SourceResultID string
+	// State is the carrier's persisted semantic snapshot -- the WHOLE
+	// reading composition establishes and planning consumes. Never nil on an
+	// admitted carrier.
+	State *PersistedSemanticState
 }
 
 // continuationFreshProposal is the interpreter's return, held as a
@@ -372,6 +389,11 @@ type continuationFreshProposal struct {
 	Available bool
 	Family    QuestionFamily
 	GroupKind SubjectKind
+	// State is the fresh proposal rendered in the snapshot's own shape, so
+	// the two readings are compared component by component with one
+	// representation. Diagnostic only: it is never validated as a carrier
+	// and never persisted.
+	State *PersistedSemanticState
 }
 
 // windowContinuationDecision is the whole decision, and the single value that
@@ -419,6 +441,13 @@ type windowContinuationDecision struct {
 	// invariant refused the composition rather than only that one did.
 	CompositionOutcome         CompositionOutcome
 	CompositionFailedInvariant string
+
+	// CarriedStateConsulted is true once admission has consulted the
+	// carrier's snapshot, and CarriedStateRead is the snapshot read status the
+	// store reported for it -- kept apart so "never consulted" and "consulted,
+	// status unreported" cannot share the empty value.
+	CarriedStateConsulted bool
+	CarriedStateRead      SemanticStateReadStatus
 
 	// RefusalBasis is the wire refusal basis this decision SERVED, empty when
 	// it served none. Set only where the continuation refusal is taken, and
@@ -608,6 +637,8 @@ func continuationDecisionReasons() []ContinuationDecisionReason {
 		ContinuationReasonCompositionInvalid,
 		ContinuationReasonWindowSuperseded,
 		ContinuationReasonAnswerBudgetChanged,
+		ContinuationReasonSemanticStateAbsent,
+		ContinuationReasonSemanticStateInvalid,
 		ContinuationReasonUnspecified,
 	}
 }
@@ -768,7 +799,7 @@ func (e *Engine) admitWindowContinuation(
 	principal storage.Principal,
 	request InvestigationRequest,
 	binding ResolvedGraphBinding,
-	preloaded map[string]InvestigationResult,
+	preloaded map[string]StoredInvestigationResult,
 	appliedWindow *contractsv1.ContextFabricEffectiveEvidenceWindow,
 	// interpretedAxis is RECORDED, NEVER DECIDED ON (CHAOS-5582). It is passed
 	// in for the same reason appliedWindow is: this function builds the
@@ -861,10 +892,13 @@ func (e *Engine) admitWindowContinuation(
 		decision.Reason = ContinuationReasonInvalidContext
 		return decision
 	}
-	prior := stored.Result
+	// The PRELOAD CACHE holds whole carriers, snapshot included, so a cached
+	// entry is read exactly as a fresh one is -- never narrowed to its
+	// payload and then missing the reading it carries.
 	if cached, ok := preloaded[referenced]; ok {
-		prior = cached
+		stored = cached
 	}
+	prior := stored.Result
 	decision.CarriedAxis = prior.Interpretation.TimeContext.Axis
 
 	if reason := continuationQuestionIdentity(request.Question, prior.Question); reason != ContinuationReasonNone {
@@ -925,12 +959,23 @@ func (e *Engine) admitWindowContinuation(
 		return decision
 	}
 
+	// THE READING ITSELF. The plan above is the public half; the snapshot is
+	// the whole of it. Without a usable snapshot there is no reading to
+	// continue, and the plan's family label is not a substitute for one.
+	decision.CarriedStateConsulted = true
+	decision.CarriedStateRead = stored.SemanticStateRead
+	if reason := semanticStateAdmission(stored, plan); reason != ContinuationReasonNone {
+		decision.Disposition = ContinuationWithheld
+		decision.Reason = reason
+		return decision
+	}
 	decision.Carried = &continuationCarriedContext{
 		Family:         plan.Family,
 		GroupKind:      plan.GroupKind,
 		NarrowingBasis: plan.Budget.NarrowingBasis,
 		FamilyVersion:  plan.FamilyVersion,
 		SourceResultID: prior.ResultID,
+		State:          cloneSemanticState(stored.SemanticState),
 	}
 	decision.Accepted = decision.Carried
 	// THE FRAME IS NOT BUILT HERE. Admission decides WHETHER this turn
@@ -1038,10 +1083,8 @@ func compareContinuationProposal(decision windowContinuationDecision, fresh cont
 	// EVERY differing component, in a fixed order -- not merely the first.
 	// A same-family subject-expression substitution is exactly the shape that
 	// is invisible when only the family is compared.
-	differs := map[ContinuationConflictField]bool{
-		ContinuationConflictFieldFamily:            accepted.Family != fresh.Family,
-		ContinuationConflictFieldSubjectExpression: accepted.GroupKind != fresh.GroupKind,
-	}
+	differs := semanticStateDifferences(accepted.State, fresh.State)
+	differs[ContinuationConflictFieldFamily] = accepted.Family != fresh.Family
 	fields := []ContinuationConflictField{}
 	for _, field := range continuationComparableFields() {
 		if differs[field] {
@@ -1081,8 +1124,15 @@ func applyWindowContinuation(outcome QuestionFamilyOutcome, decision windowConti
 	// SAME accepted value, so the comparison, the planner and discovery cannot
 	// read different group axes for one turn -- the false-agreement defect.
 	outcome.WinningSample.GroupKind = accepted.EffectiveGroupKind()
+	// THE WHOLE CARRIED READING, INCLUDING ITS ABSENCE OF A FRAME. A
+	// frameless carrier is continued frameless: installing the fresh frame
+	// beside a carried family is the half-and-half context the continuation
+	// exists to prevent. FrameObligations moves with the frame, as it does
+	// everywhere it is set.
+	outcome.Frame = accepted.Frame
+	outcome.FrameObligations = nil
 	if accepted.Frame != nil {
-		outcome.Frame = accepted.Frame
+		outcome.FrameObligations = append([]AnswerObligation(nil), accepted.Frame.Obligations...)
 	}
 	outcome.Gate = accepted.Gate
 	outcome.Route = FamilyRouteDecision{
@@ -1176,6 +1226,22 @@ func (d windowContinuationDecision) AcceptedFamilySource() QuestionFamilySource 
 		return ""
 	}
 	return QuestionFamilySourceCarried
+}
+
+// carriedState and freshState are the two snapshots the decision line renders,
+// nil where that reading does not exist.
+func (d windowContinuationDecision) carriedState() *PersistedSemanticState {
+	if d.Carried == nil {
+		return nil
+	}
+	return d.Carried.State
+}
+
+func (d windowContinuationDecision) freshState() *PersistedSemanticState {
+	if !d.Fresh.Available {
+		return nil
+	}
+	return d.Fresh.State
 }
 
 // ConflictCount is explicitly zero or the number of differing components.

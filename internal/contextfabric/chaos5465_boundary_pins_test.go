@@ -36,83 +36,93 @@ func boundaryGroupedFrame(t *testing.T, group, member SubjectKind) (QuestionFram
 	return result.Frame, DecideFrameGate(result, true)
 }
 
-// KILLS ARM `fresh_refused_frame_composed_anyway` AND ITS NIL-FRAME TWIN.
+// carriedStateFor builds a carrier snapshot through the producer: a frame (or
+// none), the gate decided on it, the plan's family and group axis.
+func carriedStateFor(t *testing.T, family QuestionFamily, group SubjectKind, frame *QuestionFrame, gate FrameGate) *PersistedSemanticState {
+	t.Helper()
+	state := BuildSemanticState(SemanticStateInput{
+		Outcome:       QuestionFamilyOutcome{Family: family, Source: QuestionFamilySourceModel, Frame: frame, Gate: gate},
+		EmittedShape:  ShapeOpen,
+		GroupKind:     group,
+		FamilyVersion: QuestionFamilyTableVersion,
+	})
+	if _, err := EncodeSemanticState(state); err != nil {
+		t.Fatalf("fixture defect: carrier snapshot does not validate: %v", err)
+	}
+	return state
+}
+
+// unservableDiscoveredFrame finds a discovered-kind frame the gate REFUSES
+// (member kind unservable), read off the producer rather than hand-listed.
+func unservableDiscoveredFrame(t *testing.T) (QuestionFrame, FrameGate) {
+	t.Helper()
+	for _, kind := range contractsv1.ContextFabricSubjectKindVocabulary() {
+		frame := QuestionFrame{
+			Goals:             []InvestigationGoal{GoalAssessState},
+			SubjectExpression: SubjectExpression{Kind: SubjectExpressionDiscoveredKind, Discovered: &DiscoveredSetExpression{MemberKind: kind}},
+			Temporal:          TemporalIntentCurrent,
+		}
+		result := ValidateFrame(frame, nil, ShapeOpen)
+		if result.Outcome != FrameValidationOutcomeValid {
+			continue
+		}
+		if gate := DecideFrameGate(result, true); gate.Outcome == FrameGateRefusedBasis {
+			return result.Frame, gate
+		}
+	}
+	t.Fatalf("fixture defect: no discovered kind is refused by the gate")
+	return QuestionFrame{}, FrameGate{}
+}
+
+// A REFUSING CARRIED READING IS NEVER USABLE, AND THE FRESH GATE IS NOT
+// AUTHORITY OVER A USABLE ONE.
 //
-// A 2x2 OVER {nil, non-nil} x {passing, refusing}, and it is a 2x2 because the
-// cell that shipped a P1 was the one no pin and no arm touched. The refusal pin
-// covered a REFUSING gate with a frame; the nil-frame cells covered a PASSING
-// gate with no frame; nobody wrote nil-and-refusing, and there the boundary
-// returned `no_fresh_frame` -- which `Usable()` accepts -- before it ever asked
-// whether the gate refused. A turn the server had refused was then recorded as
-// an applied continuation and served the carried family.
-//
-// The order is the fix: a refusal is about the EVALUATION, not about the frame,
-// so it is answered before the frame is examined at all. Enumerating the cross
-// product is what stops the next reordering from re-opening a corner.
+// A 2x2 over {carried frameless, carried framed} x {carried gate passes,
+// carried gate refuses}, each cell run beside BOTH a passing and a refusing
+// fresh gate. The carried gate decides; the fresh gate's verdict never
+// changes the outcome. Before the reading persisted it was the other way
+// round -- the fresh frame was the base the carried axis was substituted
+// into, so a refused fresh evaluation had to refuse the composition.
 func TestBoundary_ARefusingGateIsNeverUsable(t *testing.T) {
 	t.Parallel()
-
-	withFrame, passing := boundaryGroupedFrame(t, contractsv1.ContextFabricSubjectProject, contractsv1.ContextFabricSubjectRepository)
-	if passing.Refuses() {
-		t.Fatalf("fixture defect: the frame must pass its own gate first, got %q", passing.Outcome)
-	}
-	refusing := FrameGate{
-		Outcome:            FrameGateRefusedBasis,
-		RefuseBasis:        CohortMemberKindUnservable,
-		DeclaredMemberKind: contractsv1.ContextFabricSubjectRepository,
-	}
-
-	for _, frameCase := range []struct {
-		name  string
-		frame *QuestionFrame
+	framed, passing := boundaryGroupedFrame(t, contractsv1.ContextFabricSubjectProject, contractsv1.ContextFabricSubjectRepository)
+	unservable, refusing := unservableDiscoveredFrame(t)
+	freshFramed, _ := boundaryGroupedFrame(t, contractsv1.ContextFabricSubjectTeam, contractsv1.ContextFabricSubjectRepository)
+	for _, tc := range []struct {
+		name       string
+		carried    *PersistedSemanticState
+		wantUsable bool
 	}{
-		{"no frame proposed", nil},
-		{"frame proposed", &withFrame},
+		{"carried frameless, gate not evaluated", carriedStateFor(t, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam, nil, FrameGate{}), true},
+		{"carried frameless, gate refused", carriedStateFor(t, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam, nil, FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable}), false},
+		{"carried framed, gate passes", carriedStateFor(t, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectProject, &framed, passing), true},
+		{"carried framed, gate refuses", carriedStateFor(t, QuestionFamilyDiscoveredCohortRanking, "", &unservable, refusing), false},
 	} {
-		for _, gateCase := range []struct {
-			name string
-			gate FrameGate
-		}{
-			{"gate passes", passing},
-			{"gate refuses", refusing},
-		} {
-			t.Run(frameCase.name+"/"+gateCase.name, func(t *testing.T) {
-				got := composeAcceptedContext(compositionInput{
-					Fresh: frameCase.frame, FreshGate: gateCase.gate,
-					FreshFamily:      QuestionFamilyDiscoveredCohortRanking,
-					CarriedFamily:    QuestionFamilyGroupedCohortStatus,
-					CarriedGroupKind: contractsv1.ContextFabricSubjectTeam,
-					EmittedShape:     ShapeOpen,
-				})
-				t.Logf("frame_nil=%v gate=%q refuses=%v -> outcome=%q usable=%v group=%q",
-					frameCase.frame == nil, gateCase.gate.Outcome, gateCase.gate.Refuses(),
-					got.Outcome, got.Usable(), got.EffectiveGroupKind())
-
-				if !gateCase.gate.Refuses() {
-					if !got.Usable() {
-						t.Errorf("a PASSING gate produced an unusable context (%q) -- refusal is reserved for a refused evaluation and a substitution that fails",
-							got.Outcome)
+		for _, fresh := range []struct {
+			name  string
+			frame *QuestionFrame
+		}{{"fresh frame absent", nil}, {"fresh frame present", &freshFramed}} {
+			t.Run(tc.name+"/"+fresh.name, func(t *testing.T) {
+				got := composeAcceptedContext(compositionInput{Carried: tc.carried, Fresh: fresh.frame, FreshFamily: QuestionFamilyDiscoveredCohortRanking})
+				t.Logf("carried_frame=%v carried_gate=%q -> outcome=%q usable=%v invariant=%q group=%q",
+					tc.carried.FramePresent, tc.carried.Validation.GateOutcome, got.Outcome, got.Usable(), got.FailedInvariant, got.EffectiveGroupKind())
+				if got.Usable() != tc.wantUsable {
+					t.Fatalf("usable=%v, want %v (outcome %q, invariant %q)", got.Usable(), tc.wantUsable, got.Outcome, got.FailedInvariant)
+				}
+				if !tc.wantUsable {
+					if got.Outcome != CompositionInvalid || got.FailedInvariant != CompositionInvariantCarriedFrameRefused {
+						t.Errorf("outcome=%q invariant=%q, want %q/%q", got.Outcome, got.FailedInvariant, CompositionInvalid, CompositionInvariantCarriedFrameRefused)
+					}
+					if got.Frame != nil || got.EffectiveGroupKind() != "" {
+						t.Errorf("a refused composition handed back frame=%v group=%q", got.Frame != nil, got.EffectiveGroupKind())
 					}
 					return
 				}
-				// EVERY refusing cell, frame or no frame.
-				if got.Outcome != CompositionFreshRefused {
-					t.Errorf("outcome=%q want %q -- the gate had already refused this evaluation",
-						got.Outcome, CompositionFreshRefused)
+				if got.EffectiveGroupKind() != tc.carried.GroupKind {
+					t.Errorf("group=%q, want the CARRIED axis %q", got.EffectiveGroupKind(), tc.carried.GroupKind)
 				}
-				if got.Usable() {
-					t.Errorf("a REFUSED fresh gate produced a USABLE context (%q) -- the refusal is laundered into a served continuation",
-						got.Outcome)
-				}
-				if got.Frame != nil {
-					t.Errorf("a refused composition handed back a frame")
-				}
-				if got.EffectiveGroupKind() != "" {
-					t.Errorf("a refused composition published an effective group %q -- nothing executed under it",
-						got.EffectiveGroupKind())
-				}
-				if got.Gate.Outcome != gateCase.gate.Outcome {
-					t.Errorf("gate=%q want the ORIGINAL refusal %q", got.Gate.Outcome, gateCase.gate.Outcome)
+				if (got.Frame != nil) != tc.carried.FramePresent {
+					t.Errorf("frame present=%v, want the carried presence %v -- a frameless carrier continues frameless", got.Frame != nil, tc.carried.FramePresent)
 				}
 			})
 		}
@@ -164,6 +174,12 @@ func TestBoundary_ARefusedFreshGateDoesNotDecideAnEstablishedTransition(t *testi
 		t.Errorf("served plan source=%q, want %q -- the carried reading is what the caller confirmed",
 			servedPlanSource(result), QuestionFamilySourceCarried)
 	}
+	if result.RefusalBasis != "" {
+		t.Errorf("the turn was refused (%q) on the fresh gate's verdict", result.RefusalBasis)
+	}
+	if !containsConflictField(d.ConflictFields, ContinuationConflictFieldFrameGate) {
+		t.Errorf("conflict_fields=%v does not name frame_gate -- the fresh refusal must be disclosed as a disagreement", d.ConflictFieldTokens())
+	}
 }
 
 // The control for the pin above: the SAME refusing fresh gate on a turn whose
@@ -197,6 +213,15 @@ func TestBoundary_ARefusedFreshGateStillStandsWithoutAnEstablishedTransition(t *
 		t.Errorf("the refused turn served the carried family anyway (family=%q group=%q)",
 			servedPlanFamily(result), servedPlanGroup(result))
 	}
+}
+
+func containsConflictField(fields []ContinuationConflictField, want ContinuationConflictField) bool {
+	for _, field := range fields {
+		if field == want {
+			return true
+		}
+	}
+	return false
 }
 
 type nilFrameRefusingGateInterpreter struct{ family QuestionFamily }
@@ -282,14 +307,13 @@ func TestBoundary_ApplyReadsOnlyTheAccessor(t *testing.T) {
 func TestBoundary_ApplyInstallsNothingWhenUnusable(t *testing.T) {
 	t.Parallel()
 
-	// group=project member=team; carrying `team` makes group == member, which
-	// invariant I6 forbids.
+	// A carried frame today's validation would REPAIR (goals out of canonical
+	// order, obligations not derived from them), so revalidation does not
+	// return the recorded frame.
 	fresh, gate := boundaryGroupedFrame(t, contractsv1.ContextFabricSubjectProject, contractsv1.ContextFabricSubjectTeam)
-	accepted := composeAcceptedContext(compositionInput{
-		Fresh: &fresh, FreshGate: gate, FreshFamily: QuestionFamilyGroupedCohortStatus,
-		CarriedFamily: QuestionFamilyGroupedCohortStatus, CarriedGroupKind: contractsv1.ContextFabricSubjectTeam,
-		EmittedShape: ShapeOpen,
-	})
+	tampered := nonCanonicalFrame(fresh)
+	carried := carriedStateFor(t, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectProject, &tampered, gate)
+	accepted := composeAcceptedContext(compositionInput{Carried: carried, Fresh: &fresh, FreshFamily: QuestionFamilyGroupedCohortStatus})
 	if accepted.Outcome != CompositionInvalid || accepted.Usable() {
 		t.Fatalf("fixture defect: this composition must be %q and unusable; got %q usable=%v",
 			CompositionInvalid, accepted.Outcome, accepted.Usable())
@@ -391,14 +415,13 @@ func (i r1UngroupedInterpreter) Interpret(context.Context, storage.Principal, In
 
 // r1 F1 — A CARRIED FAMILY AND ITS AXIS MOVE TOGETHER, OR NEITHER DOES.
 //
-// The previous build composed a grouped carrier onto a valid NON-grouped fresh
-// frame, called the result `unchanged`, and served it: the grouped family was
-// carried while the axis it groups by was silently dropped, so the answer was
-// grouped-family data with no groups. The pin that existed asserted the empty
-// axis as CORRECT, which is worse than no pin -- it froze the defect.
-//
-// A frame that cannot express the carried axis is a composition that cannot be
-// honoured. It refuses, and names why.
+// The first build composed a grouped carrier onto a valid NON-grouped fresh
+// frame, called the result `unchanged`, and served the grouped family with no
+// axis. The re-cut refused that composition. With the reading persisted, the
+// carrier's OWN reading (family and axis together, and its own frame or its
+// own absence of one) is what composition establishes, so a non-grouped fresh
+// frame is simply a disagreement: the carried family is served WITH its axis,
+// and the fresh frame's ungrouped expression is disclosed as a conflict.
 func TestBoundary_AGroupedFamilyIsNeverServedWithoutItsAxis(t *testing.T) {
 	req := continuationRequest(validInvestigationRequest().Question)
 	prior := r4CheckedPrior(t, continuationPriorID, req.Question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
@@ -408,103 +431,59 @@ func TestBoundary_AGroupedFamilyIsNeverServedWithoutItsAxis(t *testing.T) {
 
 	result := h.investigate(t, req)
 	d := h.soleDecision(t)
-	planFamily, _, planGroup := servedPlanAxes(result)
-	t.Logf("disposition=%q reason=%q composition=%q invariant=%q accepted_group=%q plan_family=%q plan_group=%q refusal_basis=%q",
+	planFamily, planSource, planGroup := servedPlanAxes(result)
+	t.Logf("disposition=%q reason=%q composition=%q invariant=%q accepted_group=%q plan_family=%q plan_source=%q plan_group=%q conflicts=%v",
 		d.Disposition, d.Reason, d.CompositionOutcome, d.CompositionFailedInvariant,
-		d.AcceptedGroupKind(), planFamily, planGroup, result.RefusalBasis)
+		d.AcceptedGroupKind(), planFamily, planSource, planGroup, d.ConflictFieldTokens())
 
 	if planFamily == QuestionFamilyGroupedCohortStatus && planGroup == "" {
 		t.Fatalf("a grouped family was served with NO grouping axis -- the carried family moved and its axis did not")
 	}
-	// The composition could not be honoured, so the turn refuses rather than
-	// answering under the fresh reading the caller never confirmed.
-	assertContinuationRefused(t, result)
-	if d.Disposition != ContinuationWithheld {
-		t.Errorf("disposition=%q, want %q: the carried axis cannot be expressed by a non-grouped frame",
-			d.Disposition, ContinuationWithheld)
+	if d.Disposition != ContinuationApplied {
+		t.Fatalf("disposition=%q/%q, want applied: the carrier's own reading is established whole", d.Disposition, d.Reason)
 	}
-	if d.Reason != ContinuationReasonCompositionInvalid {
-		t.Errorf("reason=%q, want %q", d.Reason, ContinuationReasonCompositionInvalid)
+	if planFamily != QuestionFamilyGroupedCohortStatus || planGroup != contractsv1.ContextFabricSubjectTeam || planSource != QuestionFamilySourceCarried {
+		t.Errorf("served %q/%q/%q, want the carried grouped_cohort_status/team/carried", planFamily, planGroup, planSource)
 	}
-	if d.CompositionOutcome != CompositionInvalid {
-		t.Errorf("composition_outcome=%q, want %q", d.CompositionOutcome, CompositionInvalid)
-	}
-	if d.CompositionFailedInvariant != CompositionInvariantCarriedAxisUnexpressible {
-		t.Errorf("invariant=%q, want %q -- a refusal with no named cause is not actionable",
-			d.CompositionFailedInvariant, CompositionInvariantCarriedAxisUnexpressible)
+	if !containsConflictField(d.ConflictFields, ContinuationConflictFieldSubjectExpression) {
+		t.Errorf("conflict_fields=%v does not name subject_expression -- the fresh ungrouped reading disagreed", d.ConflictFieldTokens())
 	}
 }
 
 // r1 F1, at the boundary itself: `unchanged` means the fresh reading ALREADY
-// carries this family and this axis. Anything else either composes or refuses.
+// carries this family and this frame (or this absence of one). Anything else
+// the carrier establishes is `accepted`.
 func TestBoundary_UnchangedMeansTheFreshReadingAlreadyMatches(t *testing.T) {
 	t.Parallel()
-	ungrouped := QuestionFrame{
-		Goals:             []InvestigationGoal{GoalAssessState},
-		SubjectExpression: SubjectExpression{Kind: SubjectExpressionOrganizationScope, Org: &OrganizationScopeExpression{}},
-		Temporal:          TemporalIntentCurrent,
-	}
-	v := ValidateFrame(ungrouped, nil, ShapeOpen)
-	if v.Outcome != FrameValidationOutcomeValid {
-		t.Fatalf("fixture defect: %v", v.Failure.Invariant)
-	}
-	gate := DecideFrameGate(v, true)
-
-	got := composeAcceptedContext(compositionInput{
-		Fresh: &v.Frame, FreshGate: gate, FreshFamily: QuestionFamilyDiscoveredCohortRanking,
-		CarriedFamily: QuestionFamilyGroupedCohortStatus, CarriedGroupKind: contractsv1.ContextFabricSubjectTeam,
-		EmittedShape: ShapeOpen,
-	})
-	t.Logf("non-grouped frame + carried team axis -> outcome=%q invariant=%q usable=%v",
-		got.Outcome, got.FailedInvariant, got.Usable())
-	if got.Outcome != CompositionInvalid || got.Usable() {
-		t.Fatalf("outcome=%q usable=%v, want %q and unusable", got.Outcome, got.Usable(), CompositionInvalid)
-	}
-
-	// The axis-free carrier on the same frame IS unchanged only when the
-	// family matches too.
-	same := composeAcceptedContext(compositionInput{
-		Fresh: &v.Frame, FreshGate: gate, FreshFamily: QuestionFamilyDiscoveredCohortRanking,
-		CarriedFamily: QuestionFamilyDiscoveredCohortRanking, CarriedGroupKind: "",
-		EmittedShape: ShapeOpen,
-	})
-	if same.Outcome != CompositionUnchanged {
-		t.Errorf("same family and axis -> outcome=%q, want %q", same.Outcome, CompositionUnchanged)
-	}
-	diff := composeAcceptedContext(compositionInput{
-		Fresh: &v.Frame, FreshGate: gate, FreshFamily: QuestionFamilyGroupedCohortStatus,
-		CarriedFamily: QuestionFamilyDiscoveredCohortRanking, CarriedGroupKind: "",
-		EmittedShape: ShapeOpen,
-	})
-	if diff.Outcome == CompositionUnchanged {
-		t.Errorf("a DIFFERENT carried family on a non-grouped frame reported %q -- `unchanged` must mean nothing was carried that was not already there",
-			CompositionUnchanged)
-	}
-
-	// AND THE SAME RULE ON THE GROUPED BRANCH. The two branches decide
-	// `unchanged` independently, so a pin that exercises one of them leaves the
-	// other free to call a real family carry "nothing changed" -- which a
-	// mutation arm demonstrated it would.
 	grouped, groupedGate := boundaryGroupedFrame(t, contractsv1.ContextFabricSubjectTeam, contractsv1.ContextFabricSubjectRepository)
-	sameAxis := compositionInput{
-		Fresh: &grouped, FreshGate: groupedGate,
-		CarriedGroupKind: contractsv1.ContextFabricSubjectTeam,
-		EmittedShape:     ShapeOpen,
-	}
-	sameAxis.FreshFamily, sameAxis.CarriedFamily = QuestionFamilyGroupedCohortStatus, QuestionFamilyGroupedCohortStatus
-	if got := composeAcceptedContext(sameAxis); got.Outcome != CompositionUnchanged {
-		t.Errorf("grouped frame, same family AND axis -> %q, want %q", got.Outcome, CompositionUnchanged)
-	}
-	sameAxis.FreshFamily, sameAxis.CarriedFamily = QuestionFamilyGroupedCohortStatus, QuestionFamilyDiscoveredCohortRanking
-	carriedFamily := composeAcceptedContext(sameAxis)
-	t.Logf("grouped frame, matching axis, DIFFERENT family -> outcome=%q group=%q", carriedFamily.Outcome, carriedFamily.EffectiveGroupKind())
-	if carriedFamily.Outcome == CompositionUnchanged {
-		t.Errorf("grouped frame with a DIFFERENT carried family reported %q -- a family WAS carried, so the composition is not `unchanged`",
-			CompositionUnchanged)
-	}
-	if !carriedFamily.Usable() || carriedFamily.EffectiveGroupKind() != contractsv1.ContextFabricSubjectTeam {
-		t.Errorf("outcome=%q group=%q -- carrying a family on a matching axis must stay usable and keep the axis",
-			carriedFamily.Outcome, carriedFamily.EffectiveGroupKind())
+	other, _ := boundaryGroupedFrame(t, contractsv1.ContextFabricSubjectProject, contractsv1.ContextFabricSubjectRepository)
+	framed := carriedStateFor(t, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam, &grouped, groupedGate)
+	frameless := carriedStateFor(t, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam, nil, FrameGate{})
+	for _, tc := range []struct {
+		name        string
+		carried     *PersistedSemanticState
+		fresh       *QuestionFrame
+		freshFamily QuestionFamily
+		want        CompositionOutcome
+	}{
+		{"framed carrier, identical fresh frame and family", framed, &grouped, QuestionFamilyGroupedCohortStatus, CompositionUnchanged},
+		{"framed carrier, identical frame, DIFFERENT family", framed, &grouped, QuestionFamilyDiscoveredCohortRanking, CompositionAccepted},
+		{"framed carrier, DIFFERENT frame, same family", framed, &other, QuestionFamilyGroupedCohortStatus, CompositionAccepted},
+		{"framed carrier, no fresh frame", framed, nil, QuestionFamilyGroupedCohortStatus, CompositionAccepted},
+		{"frameless carrier, no fresh frame, same family", frameless, nil, QuestionFamilyGroupedCohortStatus, CompositionUnchanged},
+		{"frameless carrier, no fresh frame, DIFFERENT family", frameless, nil, QuestionFamilyDiscoveredCohortRanking, CompositionAccepted},
+		{"frameless carrier, a fresh frame", frameless, &grouped, QuestionFamilyGroupedCohortStatus, CompositionAccepted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := composeAcceptedContext(compositionInput{Carried: tc.carried, Fresh: tc.fresh, FreshFamily: tc.freshFamily})
+			t.Logf("-> outcome=%q usable=%v group=%q frame=%v", got.Outcome, got.Usable(), got.EffectiveGroupKind(), got.Frame != nil)
+			if got.Outcome != tc.want {
+				t.Errorf("outcome=%q, want %q", got.Outcome, tc.want)
+			}
+			if !got.Usable() || got.EffectiveGroupKind() != contractsv1.ContextFabricSubjectTeam {
+				t.Errorf("usable=%v group=%q, want usable with the carried axis", got.Usable(), got.EffectiveGroupKind())
+			}
+		})
 	}
 }
 

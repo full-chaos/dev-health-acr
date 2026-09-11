@@ -127,13 +127,13 @@ func TestStore_saveAndGetReturnContextCanceledWithoutWrappingAsUnavailable(t *te
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
 
-	saveErr := store.Save(cancelled, storage.Principal{OrgID: "org-1"}, validResult("result-cancelled-save"), nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "")
+	saveErr := store.Save(cancelled, storage.Principal{OrgID: "org-1"}, validResult("result-cancelled-save"), nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation))
 	require.Error(t, saveErr)
 	require.True(t, errors.Is(saveErr, context.Canceled), "save error should be context.Canceled, got %v", saveErr)
 	require.False(t, errors.Is(saveErr, contextfabric.ErrUnavailable), "a canceled context is not a bounded dependency failure")
 
 	// Seed a row (with a live context) so Get has something to reach for.
-	require.NoError(t, store.Save(ctx, storage.Principal{OrgID: "org-1"}, validResult("result-cancelled-get"), nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, ""))
+	require.NoError(t, store.Save(ctx, storage.Principal{OrgID: "org-1"}, validResult("result-cancelled-get"), nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)))
 
 	_, getErr := store.Get(cancelled, storage.Principal{OrgID: "org-1"}, "result-cancelled-get")
 	require.Error(t, getErr)
@@ -146,13 +146,13 @@ func TestStore_saveAndGetReturnUnavailableOnDeadlineExceeded(t *testing.T) {
 	db := newInvestigationTestDatabase(t, ctx)
 	store, err := pginvestigation.NewStore(db)
 	require.NoError(t, err)
-	require.NoError(t, store.Save(ctx, storage.Principal{OrgID: "org-1"}, validResult("result-deadline-seed"), nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, ""))
+	require.NoError(t, store.Save(ctx, storage.Principal{OrgID: "org-1"}, validResult("result-deadline-seed"), nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)))
 
 	expired, cancel := context.WithTimeout(ctx, time.Nanosecond)
 	defer cancel()
 	time.Sleep(time.Millisecond)
 
-	saveErr := store.Save(expired, storage.Principal{OrgID: "org-1"}, validResult("result-deadline-save"), nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "")
+	saveErr := store.Save(expired, storage.Principal{OrgID: "org-1"}, validResult("result-deadline-save"), nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation))
 	require.Error(t, saveErr)
 	require.True(t, errors.Is(saveErr, context.DeadlineExceeded), "save error should be context.DeadlineExceeded, got %v", saveErr)
 
@@ -166,7 +166,7 @@ func TestStore_getUnknownResultIDIsIndistinguishableFromWrongOrg(t *testing.T) {
 	db := newInvestigationTestDatabase(t, ctx)
 	store, err := pginvestigation.NewStore(db)
 	require.NoError(t, err)
-	require.NoError(t, store.Save(ctx, storage.Principal{OrgID: "org-1"}, validResult("result-non-enumerating"), nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, ""))
+	require.NoError(t, store.Save(ctx, storage.Principal{OrgID: "org-1"}, validResult("result-non-enumerating"), nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)))
 
 	_, wrongOrgErr := store.Get(ctx, storage.Principal{OrgID: "org-2"}, "result-non-enumerating")
 	_, unknownIDErr := store.Get(ctx, storage.Principal{OrgID: "org-2"}, "result-does-not-exist")
@@ -256,6 +256,83 @@ VALUES ($1, $2, $3, $4)`, resultID, orgID, payload, time.Date(2026, 1, 15, 9, 30
 	})
 }
 
+// TestStore_semanticStateCap runs the shared byte-cap cells against REAL
+// Postgres: 65,535 and 65,536 bytes round-trip whole through jsonb, 65,537 is
+// refused before any SQL runs and leaves no row.
+func TestStore_semanticStateCap(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	paritytest.RunSemanticStateCapSuite(t,
+		func(t *testing.T) contextfabric.InvestigationResultStore {
+			store, err := pginvestigation.NewStore(db)
+			require.NoError(t, err)
+			return store
+		},
+		func(err error) bool { return errors.Is(err, pginvestigation.ErrNotFound) },
+	)
+}
+
+// TestStore_semanticStateReadParity runs the SHARED semantic-snapshot read
+// table against REAL Postgres, seeding the jsonb column directly.
+func TestStore_semanticStateReadParity(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	paritytest.RunSemanticStateReadSuite(t, func(t *testing.T) (contextfabric.InvestigationResultStore, paritytest.SemanticSeed) {
+		store, err := pginvestigation.NewStore(db)
+		require.NoError(t, err)
+		return store, func(t *testing.T, orgID, resultID string, payload, semanticState []byte) {
+			t.Helper()
+			_, execErr := db.ExecContext(ctx, `
+INSERT INTO acr.context_fabric_investigation_results (result_id, org_id, payload, generated_at, semantic_state)
+VALUES ($1, $2, $3, $4, $5::jsonb)`, resultID, orgID, payload, time.Date(2026, 1, 15, 9, 30, 0, 0, time.UTC), string(semanticState))
+			require.NoError(t, execErr)
+		}
+	})
+}
+
+// TestStore_semanticStateIsInsertedWithThePayloadOrNotAtAll pins atomicity on
+// REAL Postgres. A claim-bearing result that LOSES its supersession claim
+// rolls back its insert, snapshot included; the winner's row keeps its own
+// snapshot; and no path attaches a snapshot to an existing row afterwards --
+// a later Save of the same id with a snapshot is refused as a conflict and the
+// stored column is still exactly what the first insert wrote.
+func TestStore_semanticStateIsInsertedWithThePayloadOrNotAtAll(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	store, err := pginvestigation.NewStore(db)
+	require.NoError(t, err)
+	principal := storage.Principal{OrgID: "org-semantic-atomic"}
+	winnerState := paritytest.SemanticStateFixture(contextfabric.SubjectTeam, contextfabric.SubjectRepository)
+	loserState := paritytest.SemanticStateFixture(contextfabric.SubjectProject, contextfabric.SubjectRepository)
+
+	winner := resultWithConfirmedStructure("result-semantic-atomic-winner", "expected_kind", "result-prior-semantic-atomic", "kindr_atomicwinner01")
+	require.NoError(t, store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateOf(winnerState)))
+	loser := resultWithConfirmedStructure("result-semantic-atomic-loser1", "expected_kind", "result-prior-semantic-atomic", "kindr_atomicloser001")
+	loseErr := store.Save(ctx, principal, loser, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateOf(loserState))
+	var superseded *contextfabric.ErrStructureOfferSuperseded
+	require.ErrorAs(t, loseErr, &superseded)
+
+	var rows int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM acr.context_fabric_investigation_results WHERE result_id = $1`, loser.ResultID).Scan(&rows))
+	require.Zero(t, rows, "the losing insert, snapshot and all, must have rolled back")
+
+	stored, err := store.Get(ctx, principal, winner.ResultID)
+	require.NoError(t, err)
+	require.Equal(t, contextfabric.SemanticStateReadAvailable, stored.SemanticStateRead)
+	require.True(t, contextfabric.SemanticStatesEqual(stored.SemanticState, winnerState), "the winner keeps exactly its own snapshot")
+
+	// No attach-later path: an ABSENT row cannot gain a snapshot by a later
+	// Save of the same payload.
+	plain := validResult("result-semantic-atomic-plain1")
+	require.NoError(t, store.Save(ctx, principal, plain, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)))
+	attachErr := store.Save(ctx, principal, plain, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateOf(winnerState))
+	require.ErrorIs(t, attachErr, contextfabric.ErrSemanticStateReplayConflict)
+	var column sql.NullString
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT semantic_state::text FROM acr.context_fabric_investigation_results WHERE result_id = $1`, plain.ResultID).Scan(&column))
+	require.False(t, column.Valid, "the column is still NULL: nothing attached a snapshot after the insert")
+	t.Logf("loser_rows=%d winner_read=%s attach_err=%v column_null=%v", rows, stored.SemanticStateRead, attachErr, !column.Valid)
+}
+
 // resultWithConfirmedStructure builds a FULLY VALID InvestigationResult
 // (validResult's own contract) additionally carrying one applied,
 // receipt-sourced ConfirmedStructure entry for member -- CHAOS-3927 P4's
@@ -312,14 +389,14 @@ func TestStore_structureSupersessionClaims(t *testing.T) {
 			require.False(t, superseded, "IsStructureSuperseded before any Save must be false")
 
 			winner := resultWithConfirmedStructure("result-supersession-winner-"+string(member), member, priorResultID, "kindr_winner00000001")
-			require.NoError(t, store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, ""))
+			require.NoError(t, store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)))
 
 			superseded, err = store.IsStructureSuperseded(ctx, principal.OrgID, priorResultID, member)
 			require.NoError(t, err)
 			require.True(t, superseded, "IsStructureSuperseded after the winning Save must be true")
 
 			loser := resultWithConfirmedStructure("result-supersession-loser-"+string(member), member, priorResultID, "kindr_loser000000001")
-			saveErr := store.Save(ctx, principal, loser, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "")
+			saveErr := store.Save(ctx, principal, loser, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation))
 			require.Error(t, saveErr, "a second Save redeeming the SAME (org, prior_result_id, member) must fail")
 			var conflict *contextfabric.ErrStructureOfferSuperseded
 			require.ErrorAs(t, saveErr, &conflict)
@@ -340,7 +417,7 @@ func TestStore_structureSupersessionClaims(t *testing.T) {
 			// is already held by the SAME result_id, matching the design brief's
 			// own "receipts are NOT consumed by a failed round" symmetry the other
 			// direction: a successful round replaying itself is not a conflict.
-			require.NoError(t, store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, ""))
+			require.NoError(t, store.Save(ctx, principal, winner, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)))
 		})
 	}
 }
@@ -485,7 +562,7 @@ VALUES ($1, $2, $3, $4)`, malformed.resultID, principal.OrgID, []byte(malformed.
 	// rejected -- exactly the double-redemption the finding described,
 	// now closed.
 	racer := resultWithConfirmedStructure("result-racer-post-backfill-01", member, priorResultID, "ancr_racer000000001")
-	racerErr := store.Save(ctx, principal, racer, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "")
+	racerErr := store.Save(ctx, principal, racer, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation))
 	var conflict *contextfabric.ErrStructureOfferSuperseded
 	require.ErrorAs(t, racerErr, &conflict)
 	require.Equal(t, []contextfabric.StructureNeedKind{member}, conflict.Members)

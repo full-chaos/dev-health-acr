@@ -103,7 +103,7 @@ type resultStoreStub struct {
 	savedEpoch    RebuildEpoch
 }
 
-func (s *resultStoreStub) Save(_ context.Context, _ storage.Principal, result InvestigationResult, reuseSnapshot SourceWatermarkSnapshot, reuseEpoch RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities, _ int64, _ string) error {
+func (s *resultStoreStub) Save(_ context.Context, _ storage.Principal, result InvestigationResult, reuseSnapshot SourceWatermarkSnapshot, reuseEpoch RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities, _ int64, _ string, semantic SemanticStateWrite) error {
 	s.saved = result
 	s.savedSnapshot = reuseSnapshot
 	s.savedEpoch = reuseEpoch
@@ -134,10 +134,23 @@ type staticResultStore struct {
 	// persistence actually happened, not merely that Save returned no
 	// error -- Save previously discarded its argument entirely.
 	saved *InvestigationResult
+	// states (the persisted semantic snapshot) is the snapshot Get returns
+	// per result id, as an independent copy with read status `available`. A
+	// result with no entry reads back `absent` -- a row saved without one.
+	// stateReads overrides the status for an id, to drive the unavailable
+	// statuses (malformed, oversized, unsupported, unreported).
+	states     map[string]*PersistedSemanticState
+	stateReads map[string]SemanticStateReadStatus
+	// savedSemantic records the LAST semantic-state argument Save received.
+	savedSemantic *SemanticStateWrite
+	// noCarrierStates stops newContinuationHarness registering snapshots, so
+	// a pin can drive a LEGACY carrier.
+	noCarrierStates bool
 }
 
-func (s *staticResultStore) Save(_ context.Context, _ storage.Principal, result InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities, _ int64, _ string) error {
+func (s *staticResultStore) Save(_ context.Context, _ storage.Principal, result InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities, _ int64, _ string, semantic SemanticStateWrite) error {
 	s.saved = &result
+	s.savedSemantic = &semantic
 	return nil
 }
 
@@ -155,7 +168,18 @@ func (s *staticResultStore) Get(_ context.Context, _ storage.Principal, resultID
 		zero := int64(0)
 		epoch = &zero
 	}
-	return StoredInvestigationResult{Result: result, GraphEpoch: epoch}, nil
+	stored := StoredInvestigationResult{Result: result, GraphEpoch: epoch, SemanticStateRead: SemanticStateReadAbsent}
+	if state, ok := s.states[resultID]; ok && state != nil {
+		stored.SemanticState = cloneSemanticState(state)
+		stored.SemanticStateRead = SemanticStateReadAvailable
+	}
+	if status, ok := s.stateReads[resultID]; ok {
+		stored.SemanticStateRead = status
+		if status != SemanticStateReadAvailable {
+			stored.SemanticState = nil
+		}
+	}
+	return stored, nil
 }
 
 // capturingGraphReader records every request ResolveSubjects/DiscoverContext
@@ -318,6 +342,9 @@ type recordingTelemetry struct {
 	// decision verbatim, so a test asserts the WHOLE decision rather than the
 	// one field it expects to have moved.
 	windowContinuationDecisions []windowContinuationDecision
+	// semanticStatePersistences records every Save's semantic-state decision
+	// verbatim, in order.
+	semanticStatePersistences   []SemanticStatePersistenceEvent
 	priorSubjectReceiptsSkipped []int
 	answerReuseOutcomes         []AnswerReuseOutcome
 	answerReuseContainment      []AnswerReuseContainmentEvent
@@ -816,6 +843,10 @@ func (r *recordingTelemetry) RecordPlanCarryOutcome(_ context.Context, _ storage
 	r.planCarryOutcomes = append(r.planCarryOutcomes, planCarryOutcomeRecord{outcome, sourceResultID, seedSource})
 }
 
+func (r *recordingTelemetry) RecordSemanticStatePersistence(_ context.Context, _ storage.Principal, event SemanticStatePersistenceEvent) {
+	r.semanticStatePersistences = append(r.semanticStatePersistences, event)
+}
+
 func (r *recordingTelemetry) RecordWindowContinuationDecision(_ context.Context, _ storage.Principal, decision windowContinuationDecision) {
 	r.windowContinuationDecisions = append(r.windowContinuationDecisions, decision)
 }
@@ -989,7 +1020,7 @@ type bindingEpochDeltaOrderingStore struct {
 	bindingCallCountObserved bool
 }
 
-func (s *bindingEpochDeltaOrderingStore) Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string, ReuseRetrievalIdentity, ReusePromptVersions, ReuseVersionAuthorities, int64, string) error {
+func (s *bindingEpochDeltaOrderingStore) Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string, ReuseRetrievalIdentity, ReusePromptVersions, ReuseVersionAuthorities, int64, string, SemanticStateWrite) error {
 	s.graph.bindingCallCountMu.Lock()
 	s.bindingCallCountAtSave = s.graph.bindingCallCount
 	s.bindingCallCountObserved = true

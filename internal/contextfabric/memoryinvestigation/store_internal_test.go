@@ -57,7 +57,7 @@ func TestGetReturnsStoredResultThatPassesValidation(t *testing.T) {
 	store := NewStore()
 	valid := paritytest.ValidResult("result-id-valid", "is the rollout healthy?")
 
-	if err := store.Save(context.Background(), principal, valid, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, ""); err != nil {
+	if err := store.Save(context.Background(), principal, valid, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 	got, err := store.Get(context.Background(), principal, valid.ResultID)
@@ -124,4 +124,49 @@ func TestStore_explicitNullDegradedReasonsParity(t *testing.T) {
 			store.results[resultID] = entry{orgID: orgID, payload: payload}
 		}
 	})
+}
+
+// TestStore_semanticStateReadParity runs the SHARED semantic-snapshot read
+// table: a stored column this build cannot read comes back unavailable with
+// the status that names why, and a replay against it is a conflict.
+func TestStore_semanticStateReadParity(t *testing.T) {
+	t.Parallel()
+	paritytest.RunSemanticStateReadSuite(t, func(t *testing.T) (contextfabric.InvestigationResultStore, paritytest.SemanticSeed) {
+		store := NewStore()
+		return store, func(t *testing.T, orgID, resultID string, payload, semanticState []byte) {
+			t.Helper()
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			store.results[resultID] = entry{orgID: orgID, payload: payload, semanticState: semanticState}
+		}
+	})
+}
+
+// TestStore_semanticStateIsNeverAliased: the store keeps its own encoded
+// bytes, so neither the snapshot a caller saved nor the one Get returned can
+// reach back into what is stored.
+func TestStore_semanticStateIsNeverAliased(t *testing.T) {
+	t.Parallel()
+	store := NewStore()
+	principal := storage.Principal{OrgID: "org-alias"}
+	saved := paritytest.SemanticStateFixture(contextfabric.SubjectTeam, contextfabric.SubjectRepository)
+	row := paritytest.ValidResult("result-semantic-alias-01", "is the stored reading independent?")
+	if err := store.Save(context.Background(), principal, row, nil, nil, "unkeyed", contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateOf(saved)); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	want := paritytest.SemanticStateFixture(contextfabric.SubjectTeam, contextfabric.SubjectRepository)
+	saved.Family = contextfabric.QuestionFamilyDiscoveredCohortRanking
+	saved.Frame.Goals[0] = contextfabric.GoalCompare
+	first, err := store.Get(context.Background(), principal, row.ResultID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	first.SemanticState.Roles[0].SlotID = "mutated"
+	second, err := store.Get(context.Background(), principal, row.ResultID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !contextfabric.SemanticStatesEqual(second.SemanticState, want) {
+		t.Fatalf("a caller's mutation reached the stored snapshot")
+	}
 }

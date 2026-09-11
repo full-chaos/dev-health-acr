@@ -535,7 +535,16 @@ type InvestigationResultStore interface {
 	//
 	// Implementations persist it as an additive NULLABLE column (migration
 	// 0037); "" is stored as NULL and reads back as "".
-	Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string, ReuseRetrievalIdentity, ReusePromptVersions, ReuseVersionAuthorities, int64, string) error
+	//
+	// The LAST argument is the result's internal semantic snapshot, or the
+	// closed reason it has none -- EXACTLY ONE, refused otherwise with
+	// ErrSemanticStateRejected. It is written in the SAME insert as the
+	// payload (migration 0038's nullable semantic_state column), never
+	// attached afterwards, so a row exists with its snapshot or not at all.
+	// A replay compares it too: an identical payload with a different
+	// snapshot -- presence, format or any value -- is refused with
+	// ErrSemanticStateReplayConflict and the stored row is left intact.
+	Save(context.Context, storage.Principal, InvestigationResult, SourceWatermarkSnapshot, RebuildEpoch, string, ReuseRetrievalIdentity, ReusePromptVersions, ReuseVersionAuthorities, int64, string, SemanticStateWrite) error
 	// Get returns the CHAOS-3898 §2.4 metadata-bearing
 	// StoredInvestigationResult carrier, not a bare InvestigationResult --
 	// see that type's own doc comment for why persistence metadata (here,

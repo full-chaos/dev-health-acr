@@ -124,7 +124,7 @@ type planCarryResult struct {
 // id that is not in it is fetched. That matters because the common follow-up
 // turn names exactly the result whose plan it wants to continue, so the carry
 // should not double the store reads on the hot path.
-func (e *Engine) resolveCarriedPlan(ctx context.Context, principal storage.Principal, request InvestigationRequest, validatedSubjectReceipts []BoundSubjectReceipt, binding ResolvedGraphBinding, preloaded map[string]InvestigationResult) planCarryResult {
+func (e *Engine) resolveCarriedPlan(ctx context.Context, principal storage.Principal, request InvestigationRequest, validatedSubjectReceipts []BoundSubjectReceipt, binding ResolvedGraphBinding, preloaded map[string]StoredInvestigationResult) planCarryResult {
 	if e.results == nil {
 		return planCarryResult{Outcome: PlanCarryMissNoReference}
 	}
@@ -172,7 +172,7 @@ func (e *Engine) resolveCarriedPlan(ctx context.Context, principal storage.Princ
 // TRAVERSAL (one hop, per this file's header): it does not know how its seeds
 // were derived and does not apply the same-question rule -- that belongs to
 // resolveCarriedPlan, its sole caller (CHAOS-5003).
-func (e *Engine) walkCarriedPlan(ctx context.Context, principal storage.Principal, binding ResolvedGraphBinding, preloaded map[string]InvestigationResult, seeds []string) planCarryResult {
+func (e *Engine) walkCarriedPlan(ctx context.Context, principal storage.Principal, binding ResolvedGraphBinding, preloaded map[string]StoredInvestigationResult, seeds []string) planCarryResult {
 	referenced := seeds
 	if len(referenced) == 0 {
 		return planCarryResult{Outcome: PlanCarryMissNoReference}
@@ -188,7 +188,8 @@ func (e *Engine) walkCarriedPlan(ctx context.Context, principal storage.Principa
 			continue
 		}
 		visited[resultID] = struct{}{}
-		prior, cached := preloaded[resultID]
+		cachedCarrier, cached := preloaded[resultID]
+		prior := cachedCarrier.Result
 		if !cached {
 			fetched, err := e.results.Get(ctx, principal, resultID)
 			if err != nil {

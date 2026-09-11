@@ -110,7 +110,7 @@ func NewStore(db *sql.DB, opts ...StoreOption) (*Store, error) {
 // identical payload is treated as success (idempotent retry); a replay
 // under the same result_id with a DIFFERENT payload is rejected, since that
 // would silently overwrite an immutable record.
-func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch, timeAxisKey string, retrieval contextfabric.ReuseRetrievalIdentity, promptVersions contextfabric.ReusePromptVersions, versionAuthorities contextfabric.ReuseVersionAuthorities, graphEpoch int64, parentResultID string) error {
+func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch, timeAxisKey string, retrieval contextfabric.ReuseRetrievalIdentity, promptVersions contextfabric.ReusePromptVersions, versionAuthorities contextfabric.ReuseVersionAuthorities, graphEpoch int64, parentResultID string, semantic contextfabric.SemanticStateWrite) error {
 	if s == nil || s.db == nil {
 		return errors.New("pginvestigation: store is not configured")
 	}
@@ -138,6 +138,18 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 	payload, err := json.Marshal(result)
 	if err != nil {
 		return fmt.Errorf("pginvestigation: marshal investigation result: %w", err)
+	}
+	// THE SEMANTIC SNAPSHOT IS VALIDATED, BOUNDED AND ENCODED BEFORE ANY SQL
+	// RUNS, through the same codec the in-memory store uses, so the two
+	// adapters refuse exactly the same writes. nil means an absence, stored as
+	// SQL NULL -- never an empty object.
+	semanticColumn, err := semantic.EncodedColumn()
+	if err != nil {
+		return fmt.Errorf("pginvestigation: %w", err)
+	}
+	var semanticStateColumn any
+	if semanticColumn != nil {
+		semanticStateColumn = semanticColumn
 	}
 	questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks, invalidationEpoch := s.reuseColumnsFor(result, reuseSnapshot, reuseEpoch)
 	// CHAOS-3833: the two retrieval discriminators are persisted if and
@@ -259,11 +271,12 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 		embedRetrievalIdentity, retrievalPolicyVersion, interpretationPromptVersion, synthesisPromptVersion,
 		queryVersion, canonicalServiceVersion, modelOutputSchemaVersion, identityNormalizationVersion, graphEpochColumn,
 		windowInferenceVersion, commitGateVersion, rankingFormulaVersion, questionFamilyVersion, parentResultIDColumn,
+		semanticStateColumn,
 	}
 	const insertResultSQL = `
 INSERT INTO acr.context_fabric_investigation_results
-    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version, identity_normalization_version, graph_epoch, window_inference_version, commit_gate_version, ranking_formula_version, question_family_version, parent_result_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version, identity_normalization_version, graph_epoch, window_inference_version, commit_gate_version, ranking_formula_version, question_family_version, parent_result_id, semantic_state)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
 ON CONFLICT (result_id) DO NOTHING`
 
 	// CHAOS-3927 P4 (design brief §2.1): claims is empty for the
@@ -287,7 +300,7 @@ ON CONFLICT (result_id) DO NOTHING`
 		if rows == 1 {
 			return nil
 		}
-		return s.verifyIdempotentReplay(ctx, orgID, resultID, payload)
+		return s.verifyIdempotentReplay(ctx, orgID, resultID, payload, semantic.State)
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -316,7 +329,7 @@ ON CONFLICT (result_id) DO NOTHING`
 		if rollbackErr := tx.Rollback(); rollbackErr != nil {
 			return fmt.Errorf("pginvestigation: rollback idempotent-replay transaction: %w", sanitizeError(rollbackErr))
 		}
-		return s.verifyIdempotentReplay(ctx, orgID, resultID, payload)
+		return s.verifyIdempotentReplay(ctx, orgID, resultID, payload, semantic.State)
 	}
 
 	var conflicted []contractsv1.ContextFabricStructureNeedKind
@@ -370,12 +383,13 @@ ON CONFLICT (org_id, prior_result_id, member) DO NOTHING`,
 // DIFFERENT org would otherwise pass the content-equality check below and
 // be treated as a successful idempotent replay, while the row still
 // belongs to whichever org wrote it first.
-func (s *Store) verifyIdempotentReplay(ctx context.Context, orgID, resultID string, payload []byte) error {
+func (s *Store) verifyIdempotentReplay(ctx context.Context, orgID, resultID string, payload []byte, semanticState *contextfabric.PersistedSemanticState) error {
 	row := s.db.QueryRowContext(ctx, `
-SELECT org_id, payload FROM acr.context_fabric_investigation_results WHERE result_id = $1`, resultID)
+SELECT org_id, payload, semantic_state FROM acr.context_fabric_investigation_results WHERE result_id = $1`, resultID)
 	var existingOrgID string
 	var existingPayload []byte
-	if err := row.Scan(&existingOrgID, &existingPayload); err != nil {
+	var existingSemanticState []byte
+	if err := row.Scan(&existingOrgID, &existingPayload, &existingSemanticState); err != nil {
 		return fmt.Errorf("read existing investigation result: %w", sanitizeError(err))
 	}
 	// P2 (Codex delta review, CHAOS-3755): the EXISTING stored row may
@@ -395,6 +409,18 @@ SELECT org_id, payload FROM acr.context_fabric_investigation_results WHERE resul
 	}
 	if !same {
 		return fmt.Errorf("pginvestigation: investigation result %q already exists with different content", resultID)
+	}
+	// AND THE SEMANTIC SNAPSHOT, including its presence. The stored column is
+	// DECODED and compared through the codec's canonical form -- jsonb
+	// re-renders the document, so its own bytes are never the comparison. A
+	// stored snapshot this build cannot read never equals a valid incoming
+	// one: an unreadable row is not a row this replay reproduces.
+	storedState, status := contextfabric.DecodeSemanticState(existingSemanticState)
+	switch {
+	case status != contextfabric.SemanticStateReadAvailable && status != contextfabric.SemanticStateReadAbsent:
+		return fmt.Errorf("pginvestigation: investigation result %q: %w: stored semantic state is %s", resultID, contextfabric.ErrSemanticStateReplayConflict, status)
+	case !contextfabric.SemanticStatesEqual(storedState, semanticState):
+		return fmt.Errorf("pginvestigation: investigation result %q: %w: identical payload, different semantic state (stored %s, incoming present=%v)", resultID, contextfabric.ErrSemanticStateReplayConflict, status, semanticState != nil)
 	}
 	return nil
 }
@@ -480,12 +506,13 @@ func (s *Store) Get(ctx context.Context, principal storage.Principal, resultID s
 	}
 
 	row := s.db.QueryRowContext(ctx, `
-SELECT payload, graph_epoch, created_at, parent_result_id FROM acr.context_fabric_investigation_results WHERE result_id = $1 AND org_id = $2`, resultID, orgID)
+SELECT payload, graph_epoch, created_at, parent_result_id, semantic_state FROM acr.context_fabric_investigation_results WHERE result_id = $1 AND org_id = $2`, resultID, orgID)
 	var payload []byte
 	var graphEpoch sql.NullInt64
 	var createdAt time.Time
 	var parentResultID sql.NullString
-	switch err := row.Scan(&payload, &graphEpoch, &createdAt, &parentResultID); {
+	var semanticStateColumn []byte
+	switch err := row.Scan(&payload, &graphEpoch, &createdAt, &parentResultID, &semanticStateColumn); {
 	case errors.Is(err, sql.ErrNoRows):
 		return contextfabric.StoredInvestigationResult{}, ErrNotFound
 	case err != nil:
@@ -526,7 +553,12 @@ SELECT payload, graph_epoch, created_at, parent_result_id FROM acr.context_fabri
 	if graphEpoch.Valid {
 		graphEpochPtr = &graphEpoch.Int64
 	}
-	return contextfabric.StoredInvestigationResult{Result: result, GraphEpoch: graphEpochPtr, SavedAt: createdAt, ParentResultID: parentResultID.String}, nil
+	// The snapshot is decoded under its own format and validated; anything
+	// but an available snapshot comes back nil with the status that names
+	// why. It never fails the read: the public result is still valid, and it
+	// is the continuation's decision what an unavailable reading means.
+	semanticState, semanticStatus := contextfabric.DecodeSemanticState(semanticStateColumn)
+	return contextfabric.StoredInvestigationResult{Result: result, GraphEpoch: graphEpochPtr, SavedAt: createdAt, ParentResultID: parentResultID.String, SemanticState: semanticState, SemanticStateRead: semanticStatus}, nil
 }
 
 // reuseColumnsFor computes the CHAOS-3782 reuse-key column values Save
