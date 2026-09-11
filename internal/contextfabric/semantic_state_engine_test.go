@@ -430,6 +430,14 @@ func TestSemanticStateAdmission_TheRecordedStandardsMustBeInForce(t *testing.T) 
 			s.FrameVersion, s.Frame.Version = "question-frame.v0", "question-frame.v0"
 		}, plan, ContinuationReasonContextVersionMismatch},
 		{"requirement derivation not in force", func(s *PersistedSemanticState) { s.RequirementDerivationVersion = "requirement-derivation.v1" }, plan, ContinuationReasonContextVersionMismatch},
+		// EXACT, like the plan's own stamp: a stamp padded with whitespace names
+		// no standard this build can verify, even when its trimmed text is the
+		// one in force.
+		{"family table in force, padded", func(s *PersistedSemanticState) { s.FamilyTableVersion = " " + QuestionFamilyTableVersion + "\t" }, plan, ContinuationReasonContextVersionMismatch},
+		{"frame table in force, padded", func(s *PersistedSemanticState) {
+			s.FrameVersion, s.Frame.Version = QuestionFrameVersion+" ", QuestionFrameVersion+" "
+		}, plan, ContinuationReasonContextVersionMismatch},
+		{"requirement derivation in force, padded", func(s *PersistedSemanticState) { s.RequirementDerivationVersion = " " + RequirementDerivationVersion }, plan, ContinuationReasonContextVersionMismatch},
 		{"family disagrees with the public plan", func(*PersistedSemanticState) {}, &AnswerPlan{Family: QuestionFamilyDiscoveredCohortRanking}, ContinuationReasonSemanticStateInvalid},
 		{"no public plan", func(*PersistedSemanticState) {}, nil, ContinuationReasonSemanticStateInvalid},
 	} {
