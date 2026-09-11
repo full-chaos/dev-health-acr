@@ -127,7 +127,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// bug present to the caller as "your question was too big". An
 		// account that does not reconcile is the SAME kind of defect and
 		// takes the same exit -- never the budget refusal.
-		return InvestigationResult{}, assemblyTelemetry{}, err
+		return InvestigationResult{}, firstPass, err
 	}
 	overrun := measured.Overrun
 	if overrun == contractsv1.ContextFabricBudgetFits {
@@ -185,7 +185,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// without any content reduction ever being attempted.
 		attempt, accountingErr := e.planCandidateNarrowing(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts, &firstPass, answerPassSecond)
 		if accountingErr != nil {
-			return InvestigationResult{}, assemblyTelemetry{}, accountingErr
+			return InvestigationResult{}, firstPass, accountingErr
 		}
 		if attempt.Served {
 			e.recordCandidateNarrowing(ctx, principal, plan, attempt, overrun, grouped, narrowed.Basis, before, after, declined, false, false)
@@ -223,7 +223,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// A refusal is still where a per-group breach matters most, and it
 		// still carries real quota fields rather than the zeros both
 		// refusal arms used to emit.
-		return InvestigationResult{}, assemblyTelemetry{}, e.planRefusal(ctx, principal, plan, measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined)
+		return InvestigationResult{}, firstPass, e.planRefusal(ctx, principal, plan, measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined)
 	}
 
 	e.recordPlanNarrowingStep(plan, PlanNarrowing{
@@ -294,7 +294,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// recorded just above, so this is its own accurate "state right
 		// before this synthesis call" snapshot, not a stale reuse of the
 		// first call's.
-		return InvestigationResult{}, assemblyTelemetry{}, withSynthesisNarrowingSnapshot(retryErr, *plan)
+		return InvestigationResult{}, firstPass, withSynthesisNarrowingSnapshot(retryErr, *plan)
 	}
 	// CARRY THE FIRST PASS'S COVER EVENTS FORWARD, into the retry's OWN
 	// assemblyTelemetry, before this pass appends its own. `retryPending` is a
@@ -339,7 +339,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// that the producer RETURNS what it consumed and the guard measures that.
 	retryMeasured, err := e.measureAssembledAttempt(ctx, principal, "re_synthesized_result", consumedRetryAllocation, retried, budget)
 	if err != nil {
-		return InvestigationResult{}, assemblyTelemetry{}, err
+		return InvestigationResult{}, retryPending, err
 	}
 	retryMeasurement := retryMeasured.Measurement
 	retryOverrun := retryMeasured.Overrun
@@ -361,7 +361,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		var accountingErr error
 		outcomeAttempt, accountingErr = e.planCandidateNarrowing(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts, &retryPending, answerPassThird)
 		if accountingErr != nil {
-			return InvestigationResult{}, assemblyTelemetry{}, accountingErr
+			return InvestigationResult{}, retryPending, accountingErr
 		}
 	}
 	// ONE decision event per investigation. When the reduction rescues a
@@ -428,7 +428,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// retries explicitly: they inherit the same deadline problem and
 		// merely move the terminal case, arriving at the same unanswered
 		// question with more latency.
-		return InvestigationResult{}, assemblyTelemetry{}, e.refusalFrom(plan, retryMeasurement, retryOverrun, true)
+		return InvestigationResult{}, retryPending, e.refusalFrom(plan, retryMeasurement, retryOverrun, true)
 	}
 	// The SERVED answer is the retry's, so the ranking event that describes it
 	// is the retry's too. Emitting the first pass's would report a ranking

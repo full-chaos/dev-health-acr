@@ -271,6 +271,7 @@ func TestTheObservationCoverLineReachesTheEnginesConfiguredLoggerNotTheProcessDe
 		Coverage: coverage,
 	}, AnswerPlan{Requirements: []contractsv1.ContextFabricPlanRequirement{requirement}}, &frame, CanonicalFactBundle{}, pending, answerPassFirst)
 	engine.emit(context.Background(), principal, *pending)
+	engine.publishObservationCover(context.Background(), principal, pending.ObservationCover, true)
 
 	const msg = "context fabric observation cover"
 	if !bytes.Contains(engineBuf.Bytes(), []byte(msg)) {

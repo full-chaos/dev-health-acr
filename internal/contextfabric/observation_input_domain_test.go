@@ -258,30 +258,40 @@ func TestTheObservationInputDomainIsEnumeratedAndExecuted(t *testing.T) {
 	boundCell("subject kind out of vocabulary, bound+1", keyedKinds(guard+1, SubjectKind("not_a_subject_kind")), "refused")
 
 	// ---------------------------------------------------------------- surface 5
-	// (*Engine).recordObservationCover -- the served-pass marker. Its contract:
-	// every event is published exactly once, and Served is true iff the event's
-	// Pass equals the HIGHEST Pass among the events, whatever order they arrive
-	// in and whatever Served they carried in. got/want list the published
-	// events as pass:served in publish order.
-	markCell := func(cell string, telemetryPresent bool, events []ReadRequirementObservationCoverEvent, want string) {
+	// (*Engine).publishObservationCover -- the served-pass marker, run once at
+	// Investigate's exit. Its contract: every event is published exactly once;
+	// when the answer was returned, Served is true iff the event's Pass equals
+	// the HIGHEST Pass among the events, whatever order they arrive in and
+	// whatever Served they carried in, and AnswerWithheld is false; when it was
+	// NOT returned, every event is Served=false and AnswerWithheld=true. got/want
+	// list the published events as pass:served in publish order, with
+	// ":withheld" on a line that carries AnswerWithheld.
+	publishCell := func(cell string, telemetryPresent, answered bool, events []ReadRequirementObservationCoverEvent, want string) {
 		sink := &recordingTelemetry{}
 		engine := &Engine{}
 		if telemetryPresent {
 			engine.telemetry = sink
 		}
-		engine.recordObservationCover(context.Background(), storage.Principal{}, events)
+		engine.publishObservationCover(context.Background(), storage.Principal{}, events, answered)
 		parts := make([]string, 0, len(sink.readRequirementObservationCovers))
 		for _, event := range sink.readRequirementObservationCovers {
-			parts = append(parts, fmt.Sprintf("%d:%t", event.Pass, event.Served))
+			part := fmt.Sprintf("%d:%t", event.Pass, event.Served)
+			if event.AnswerWithheld {
+				part += ":withheld"
+			}
+			parts = append(parts, part)
 		}
 		got := strings.Join(parts, ",")
 		if got == "" {
 			got = "none"
 		}
-		record("recordObservationCover", "events", cell, got, want)
+		record("publishObservationCover", "events/answered", cell, got, want)
 		if got != want {
-			t.Errorf("recordObservationCover/%s = %s, want %s", cell, got, want)
+			t.Errorf("publishObservationCover/%s = %s, want %s", cell, got, want)
 		}
+	}
+	markCell := func(cell string, telemetryPresent bool, events []ReadRequirementObservationCoverEvent, want string) {
+		publishCell(cell, telemetryPresent, true, events, want)
 	}
 	passes := func(pass ...int) []ReadRequirementObservationCoverEvent {
 		out := make([]ReadRequirementObservationCoverEvent, 0, len(pass))
@@ -302,6 +312,12 @@ func TestTheObservationInputDomainIsEnumeratedAndExecuted(t *testing.T) {
 	stale := passes(answerPassFirst, answerPassSecond)
 	stale[0].Served = true
 	markCell("incoming Served=true on a discarded pass (overwritten)", true, stale, "0:false,1:true")
+	// NOT ANSWERED: the evaluated answer never reached the caller.
+	publishCell("answer withheld: one pass", true, false, passes(answerPassFirst), "0:false:withheld")
+	publishCell("answer withheld: the final pass is NOT served", true, false, passes(answerPassFirst, answerPassSecond), "0:false:withheld,1:false:withheld")
+	publishCell("answer withheld: carried final pass", true, false, passes(answerPassFirst, answerPassSecond, answerPassThird), "0:false:withheld,1:false:withheld,2:false:withheld")
+	publishCell("answer withheld: events absent", true, false, nil, "none")
+	publishCell("answer withheld: incoming Served=true is overwritten", true, false, stale, "0:false:withheld,1:false:withheld")
 
 	// ---------------------------------------------------------------- surface 5b
 	// carryObservationCover -- what a re-finalizing pass re-states for the rows
@@ -343,6 +359,62 @@ func TestTheObservationInputDomainIsEnumeratedAndExecuted(t *testing.T) {
 	carryCell("incoming served=true is not carried over (emit decides served)", []ReadRequirementObservationCoverEvent{carryEvent("r", 0, 0, true)}, []string{"r"}, 1, "r:1:0:false")
 	carryCell("two identities, each from its own latest pass",
 		[]ReadRequirementObservationCoverEvent{carryEvent("a", 0, 0, false), carryEvent("b", 0, 0, false), carryEvent("b", 1, 1, false)}, []string{"a", "b"}, 2, "a:2:0:false,b:2:1:false")
+
+	// ---------------------------------------------------------------- surface 5c
+	// reusedObservationCoverEvents -- the reuse path's re-statement of a stored
+	// document's cover decisions. Its contract: one line per SERVED READ
+	// requirement of the stored plan with a known quantifier, marked Reused, at
+	// pass 0, whose row_withheld says whether the stored document carries the
+	// row it describes. got/want: requirement:row_withheld:served_cover/declared
+	// per line, "none" for no lines.
+	reuseCell := func(cell string, result InvestigationResult, want string) {
+		parts := []string{}
+		for _, event := range reusedObservationCoverEvents(result, a) {
+			if !event.Reused || event.Pass != 0 || event.EvaluatedPass != 0 {
+				parts = append(parts, "NOT-REUSED-SHAPE")
+				continue
+			}
+			parts = append(parts, fmt.Sprintf("%s:%s:%d/%d", event.Requirement, event.RowWithheld, event.ServedCover, event.Declared))
+		}
+		got := strings.Join(parts, ",")
+		if got == "" {
+			got = "none"
+		}
+		record("reusedObservationCoverEvents", "stored document", cell, got, want)
+		if got != want {
+			t.Errorf("reusedObservationCoverEvents/%s = %s, want %s", cell, got, want)
+		}
+	}
+	stored := func(requirements []contractsv1.ContextFabricPlanRequirement, coverage Coverage, rows ...string) InvestigationResult {
+		result := InvestigationResult{AnswerPlan: &AnswerPlan{Requirements: requirements}, Coverage: coverage}
+		for _, identity := range rows {
+			result.Completeness.Outcomes = append(result.Completeness.Outcomes, RequirementOutcomeRow{
+				Stage: contractsv1.ContextFabricOutcomeStageAssembledResult, Requirement: identity, Obligation: string(ObligationState),
+			})
+		}
+		return result
+	}
+	storedRead := readRequirement(CompletionQuantifierAtLeastOne)
+	healthKind := contractsv1.ContextFabricFactHealth
+	available := factCoverage(healthKind, SourceAvailable)
+	unserved := readRequirement(CompletionQuantifierAtLeastOne)
+	unserved.Unavailable = string(RequirementReasonComputedPopulationAbsent)
+	computed := readRequirement(CompletionQuantifierAtLeastOne)
+	computed.Kind = string(ObligationKindComputed)
+	unknownQuantifier := readRequirement(CompletionQuantifierAtLeastOne)
+	unknownQuantifier.Quantifier = "not_a_quantifier"
+	second := readRequirement(CompletionQuantifierAtLeastOne)
+	second.Requirement = "state/subject/team#2"
+	reuseCell("plan absent (nil)", InvestigationResult{Coverage: available}, "none")
+	reuseCell("plan with no requirements", stored(nil, available), "none")
+	reuseCell("a computed requirement (not a read)", stored([]contractsv1.ContextFabricPlanRequirement{computed}, available, computed.Requirement), "none")
+	reuseCell("an unserved read requirement", stored([]contractsv1.ContextFabricPlanRequirement{unserved}, available), "none")
+	reuseCell("quantifier out of vocabulary", stored([]contractsv1.ContextFabricPlanRequirement{unknownQuantifier}, available, unknownQuantifier.Requirement), "none")
+	reuseCell("canonical: the stored row is present", stored([]contractsv1.ContextFabricPlanRequirement{storedRead}, available, storedRead.Requirement), "state/subject/team:none:1/1")
+	reuseCell("every declared kind pruned", stored([]contractsv1.ContextFabricPlanRequirement{storedRead}, factCoverage(healthKind, SourcePruned, contractsv1.ContextFabricFactWorkload, SourcePruned)), "state/subject/team:all_pruned:0/1")
+	reuseCell("an undeclared cause code, no row", stored([]contractsv1.ContextFabricPlanRequirement{storedRead}, codedCoverage(contractsv1.ContextFabricCoverageDetailCode("fact_invented_by_a_future_producer"), healthKind, healthKind, SourceUnavailable)), "state/subject/team:undeclared_cause:0/1")
+	reuseCell("observed, but stored without a row", stored([]contractsv1.ContextFabricPlanRequirement{storedRead}, available), "state/subject/team:stored_without_row:1/1")
+	reuseCell("two requirements, one line each", stored([]contractsv1.ContextFabricPlanRequirement{storedRead, second}, available, storedRead.Requirement, second.Requirement), "state/subject/team:none:1/1,state/subject/team#2:none:1/1")
 
 	// ---------------------------------------------------------------- surface 6
 	// readRequirementObservationCoverEvent -- the cover line's field builder,
@@ -426,7 +498,7 @@ func TestTheObservationInputDomainIsEnumeratedAndExecuted(t *testing.T) {
 		t.Logf("%-26s %-26s %-52s %-10s %s", r.surface, r.field, r.cell, r.got, r.want)
 	}
 	t.Logf("DOMAIN CELLS EXECUTED: %d", len(table))
-	if len(table) < 82 {
+	if len(table) < 97 {
 		t.Fatalf("only %d cells executed; the domain is being sampled, not enumerated", len(table))
 	}
 }

@@ -627,14 +627,23 @@ func (e *Engine) emit(ctx context.Context, principal storage.Principal, pending 
 		e.telemetry.RecordCohortDriverNarration(ctx, principal, *pending.CohortNarration)
 	}
 	e.recordCommitAffirmation(ctx, principal, pending.CommitAffirmations)
-	e.recordObservationCover(ctx, principal, pending.ObservationCover)
+	// The observation-cover events are NOT published here. emit runs before
+	// the final budget assertion, validation and persistence, any of which can
+	// still withhold the answer, and a cover line marked served for an answer
+	// the caller never received is the defect this ordering removes. They are
+	// published once, at Investigate's exit -- see publishObservationCover.
 }
 
-// recordObservationCover publishes every pass's observation-cover events,
-// marking the FINAL pass's -- the highest Pass value, which is the one whose
-// result this investigation actually serves -- Served=true, and every earlier
-// pass's Served=false.
-func (e *Engine) recordObservationCover(ctx context.Context, principal storage.Principal, events []ReadRequirementObservationCoverEvent) {
+// publishObservationCover publishes every pass's observation-cover events,
+// ONCE, from Investigate's exit, when it is known whether the answer was
+// returned.
+//
+// answered: the FINAL pass's events -- the highest Pass value, the one whose
+// result is returned -- read Served=true and every earlier pass's false.
+// Not answered (a refusal, a failed validation, a save-time supersession, a
+// persistence failure after evaluation): every event reads Served=false and
+// AnswerWithheld=true, so no line claims an answer the caller never received.
+func (e *Engine) publishObservationCover(ctx context.Context, principal storage.Principal, events []ReadRequirementObservationCoverEvent, answered bool) {
 	if e.telemetry == nil || len(events) == 0 {
 		return
 	}
@@ -645,7 +654,8 @@ func (e *Engine) recordObservationCover(ctx context.Context, principal storage.P
 		}
 	}
 	for _, event := range events {
-		event.Served = event.Pass == finalPass
+		event.Served = answered && event.Pass == finalPass
+		event.AnswerWithheld = !answered
 		e.telemetry.RecordReadRequirementObservationCover(ctx, principal, event)
 	}
 }

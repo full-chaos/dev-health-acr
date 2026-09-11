@@ -1248,6 +1248,9 @@ func (t SlogEngineTelemetry) RecordReadRequirementObservationCover(ctx context.C
 		// group on.
 		"pass", event.Pass,
 		"evaluated_pass", event.EvaluatedPass,
+		"row_withheld", string(event.RowWithheld),
+		"reused", event.Reused,
+		"answer_withheld", event.AnswerWithheld,
 		"served", event.Served,
 	}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric observation cover", args...)

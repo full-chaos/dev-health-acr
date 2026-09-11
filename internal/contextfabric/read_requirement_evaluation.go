@@ -472,13 +472,15 @@ func appendReadRequirementEvaluationsWithCover(
 			continue
 		}
 		row, ok, cover := readRequirementOutcomeRow(requirement, threshold, evaluateReadRequirement(requirement, coverage), populations)
+		// The cover line is collected whether or not a row is published: a
+		// withheld row names its reason on the line (RowWithheld).
+		if cover != nil {
+			events = append(events, *cover)
+		}
 		if !ok {
 			continue
 		}
 		added = append(added, row)
-		if cover != nil {
-			events = append(events, *cover)
-		}
 	}
 	return appendOutcomeRows(rows, added...), events, carried
 }
@@ -703,8 +705,15 @@ func readRequirementOutcomeRow(
 	//
 	// This arm is BEFORE the not-planned row for that reason: reaching the
 	// row first is how the defect happened.
+	// THE COVER DECISION IS TAKEN FIRST, for every branch below, including the
+	// ones that publish no row: an evaluated requirement always says what its
+	// evaluation found, and a withheld row says why it was withheld
+	// (RowWithheld). Silence here is indistinguishable, on the trace, from an
+	// evaluation that never ran.
+	servedCover, declared, cover := readRequirementCoverDecision(requirement, threshold, evidence, populations.assignment)
+
 	if evidence.Observed == 0 && evidence.Pruned > 0 {
-		return RequirementOutcomeRow{}, false, nil
+		return RequirementOutcomeRow{}, false, cover
 	}
 
 	if evidence.Observed == 0 {
@@ -724,8 +733,7 @@ func readRequirementOutcomeRow(
 			CauseObserved: false,
 			Served:        0,
 			Declared:      threshold,
-		}, true, readRequirementObservationCoverEvent(
-			requirement, threshold, 0, threshold, evidence, populations.assignment)
+		}, true, cover
 	}
 
 	// AN UNDECLARED CAUSE CODE EMITS NO ROW.
@@ -759,7 +767,8 @@ func readRequirementOutcomeRow(
 			"obligation", SanitizeLogAttr(requirement.Obligation),
 			"undeclared_code", SanitizeLogAttr(string(evidence.UndeclaredCode)),
 			"observed_kinds", evidence.Observed)
-		return RequirementOutcomeRow{}, false, nil
+		cover.RowWithheld = RowWithheldUndeclaredCause
+		return RequirementOutcomeRow{}, false, cover
 	}
 
 	// THE SNAPSHOT, read off `populations` -- the SAME snapshot the caller
@@ -770,12 +779,6 @@ func readRequirementOutcomeRow(
 	// already treats a nil/unkeyed lookup as "no declared observation" -- so
 	// every kind is its own singleton and the cover equals the kind count,
 	// reproducing this function's pre-cover behaviour exactly.
-	servedCover := servedObservationCover(evidence, requirement.Subject, populations.assignment)
-	declared := observationCover(evidence.ObservedKinds, requirement.Subject, populations.assignment)
-	if threshold > declared {
-		declared = threshold
-	}
-	cover := readRequirementObservationCoverEvent(requirement, threshold, servedCover, declared, evidence, populations.assignment)
 	row := RequirementOutcomeRow{
 		Stage:       contractsv1.ContextFabricOutcomeStageAssembledResult,
 		Requirement: requirement.Requirement,
@@ -818,7 +821,8 @@ func readRequirementOutcomeRow(
 					"requirement", SanitizeLogAttr(requirement.Requirement),
 					"obligation", SanitizeLogAttr(requirement.Obligation),
 					"scope", SanitizeLogAttr(requirement.Scope))
-				return RequirementOutcomeRow{}, false, nil
+				cover.RowWithheld = RowWithheldNoPopulationEvidence
+				return RequirementOutcomeRow{}, false, cover
 			}
 			population, owned := populations.populationFor(requirement)
 			if !owned {
@@ -826,7 +830,8 @@ func readRequirementOutcomeRow(
 					"requirement", SanitizeLogAttr(requirement.Requirement),
 					"obligation", SanitizeLogAttr(requirement.Obligation),
 					"scope", SanitizeLogAttr(requirement.Scope))
-				return RequirementOutcomeRow{}, false, nil
+				cover.RowWithheld = RowWithheldNoPopulationOwner
+				return RequirementOutcomeRow{}, false, cover
 			}
 			return readPopulationOutcomeRow(row, population, populations, evidence.ServedKinds, threshold, requirement.Subject), true, cover
 		}
@@ -1025,11 +1030,25 @@ type ReadRequirementObservationCoverEvent struct {
 	// because the evaluator has no notion of which attempt it is running
 	// inside.
 	Pass int
+	// RowWithheld is why this requirement published no assembled-result row,
+	// or RowWithheldNone when it published one. The line is emitted either
+	// way: an evaluated requirement always states its evaluation.
+	RowWithheld RowWithheldReason
+	// Reused is true when the line re-states a STORED document's decision for
+	// a reused answer (reusedObservationCoverEvents): nothing was evaluated on
+	// this request.
+	Reused bool
+	// AnswerWithheld is true on every line of an investigation whose answer
+	// was NOT returned to the caller after it was evaluated -- a budget
+	// refusal, a failed validation, a save-time supersession or a persistence
+	// failure. Served is then false on every line, and this field is what
+	// tells "a discarded pass of a served answer" apart from "no answer was
+	// served at all" on the line itself.
+	AnswerWithheld bool
 	// Served is whether THIS pass's result is the one the investigation
-	// actually served. (*Engine).emit sets it true on the events from the
-	// FINAL pass only -- the pass whose result is returned -- and false on
-	// every earlier pass's, once it can see the whole set and knows which
-	// pass that was. A row with Served=false still describes a real
+	// actually served. (*Engine).publishObservationCover sets it true on the
+	// events from the FINAL pass only, and only when the answer was returned
+	// -- decided once, at Investigate's exit, when both are known. A row with Served=false still describes a real
 	// decision: the answer that pass would have served, and why a later
 	// pass replaced it.
 	Served bool
@@ -1064,7 +1083,117 @@ func readRequirementObservationCoverEvent(
 		Declared:                 declared,
 		DeclaredRaisedToStandard: declared > observedCover,
 		MeetsThreshold:           servedCover >= threshold,
+		RowWithheld:              RowWithheldNone,
 	}
+}
+
+// readRequirementCoverDecision is the ONE place the cover decision for an
+// evaluated read requirement is computed: the served cover (after the
+// mixed-state taint), the published standard (the observed cover raised to the
+// threshold) and the event that states both. readRequirementOutcomeRow builds
+// its row from these numbers, and the reuse path re-states a stored document's
+// decisions from the same function, so the two cannot disagree about what a
+// requirement's coverage means.
+//
+// Nothing observed -- every declared kind pruned, or none planned -- serves
+// nothing against the threshold as its standard; the all-pruned case is marked
+// on the event because it publishes no row.
+func readRequirementCoverDecision(
+	requirement contractsv1.ContextFabricPlanRequirement,
+	threshold int,
+	evidence readEvidence,
+	assignment observationKeyAssignment,
+) (int, int, *ReadRequirementObservationCoverEvent) {
+	if evidence.Observed == 0 {
+		event := readRequirementObservationCoverEvent(requirement, threshold, 0, threshold, evidence, assignment)
+		if evidence.Pruned > 0 {
+			event.RowWithheld = RowWithheldAllPruned
+		}
+		return 0, threshold, event
+	}
+	servedCover := servedObservationCover(evidence, requirement.Subject, assignment)
+	declared := observationCover(evidence.ObservedKinds, requirement.Subject, assignment)
+	if threshold > declared {
+		declared = threshold
+	}
+	return servedCover, declared, readRequirementObservationCoverEvent(requirement, threshold, servedCover, declared, evidence, assignment)
+}
+
+// RowWithheldReason names why an evaluated read requirement published no
+// assembled-result row, on the cover line that still reports its evaluation.
+// CLOSED: RowWithheldReasonVocabulary is the whole set, and every member has an
+// executed production driver (TestTheSiblingSweepIsExecuted and the reuse cells
+// of TestTheObservationInputDomainIsEnumeratedAndExecuted).
+type RowWithheldReason string
+
+const (
+	// RowWithheldNone: the row was published.
+	RowWithheldNone RowWithheldReason = "none"
+	// RowWithheldAllPruned: every declared kind was pruned; a prune is not a
+	// loss, so the requirement keeps its planning seed and publishes no row.
+	RowWithheldAllPruned RowWithheldReason = "all_pruned"
+	// RowWithheldUndeclaredCause: a coverage detail carried a code outside the
+	// closed vocabulary, and a row naming it would publish an undeclared cause.
+	RowWithheldUndeclaredCause RowWithheldReason = "undeclared_cause"
+	// RowWithheldNoPopulationEvidence: a distributive requirement reached the
+	// evaluator with no population evidence threaded (a caller defect).
+	RowWithheldNoPopulationEvidence RowWithheldReason = "no_population_evidence"
+	// RowWithheldNoPopulationOwner: a distributive requirement's scope has no
+	// population owner in the evidence (a caller defect).
+	RowWithheldNoPopulationOwner RowWithheldReason = "no_population_owner"
+	// RowWithheldStoredWithoutRow: a REUSED document carries a served read
+	// requirement with no assembled-result row for it (a row stored before
+	// the evaluator existed), so the re-stated decision has no row behind it.
+	RowWithheldStoredWithoutRow RowWithheldReason = "stored_without_row"
+)
+
+// RowWithheldReasonVocabulary returns every RowWithheldReason, in declaration
+// order.
+func RowWithheldReasonVocabulary() []RowWithheldReason {
+	return []RowWithheldReason{
+		RowWithheldNone, RowWithheldAllPruned, RowWithheldUndeclaredCause,
+		RowWithheldNoPopulationEvidence, RowWithheldNoPopulationOwner, RowWithheldStoredWithoutRow,
+	}
+}
+
+// reusedObservationCoverEvents re-states, for a REUSED answer, the cover
+// decision behind each served read requirement the stored document carries.
+//
+// A reused answer is served without evaluating anything, so the fresh path's
+// lines never run and the served document's decisions would be invisible on
+// the trace. The stored document carries its plan and its coverage, and the
+// cover decision is a pure function of those and the observation-key snapshot
+// (readRequirementCoverDecision), so it is re-stated here -- marked Reused,
+// pass 0 -- and each line says whether the stored document has the row it
+// describes.
+func reusedObservationCoverEvents(result InvestigationResult, assignment observationKeyAssignment) []ReadRequirementObservationCoverEvent {
+	if result.AnswerPlan == nil {
+		return nil
+	}
+	var out []ReadRequirementObservationCoverEvent
+	for _, requirement := range result.AnswerPlan.Requirements {
+		if requirement.Kind != string(ObligationKindRead) || !requirement.Served() {
+			continue
+		}
+		threshold, known := readQuantifierThreshold(requirement.Quantifier)
+		if !known {
+			continue
+		}
+		evidence := evaluateReadRequirement(requirement, result.Coverage)
+		_, _, event := readRequirementCoverDecision(requirement, threshold, evidence, assignment)
+		switch {
+		case hasEvaluatedReadOutcome(result.Completeness.Outcomes, requirement.Requirement):
+			event.RowWithheld = RowWithheldNone
+		case event.RowWithheld == RowWithheldAllPruned:
+		case evidence.UndeclaredCause:
+			event.RowWithheld = RowWithheldUndeclaredCause
+		default:
+			event.RowWithheld = RowWithheldStoredWithoutRow
+		}
+		event.Reused = true
+		out = append(out, *event)
+	}
+	return out
 }
 
 // distinctFactKindCount is the number of distinct kinds in a list.
