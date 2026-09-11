@@ -483,6 +483,34 @@ check_pin_binds_checkout_ref() {
 }
 
 
+# CHAOS-5584: the race matrix job and its isolated-scope twin both die on
+# `ubuntu-latest`'s 4 vCPU/~16 GB when a ClickHouse testcontainer OOMs under
+# `go test -p 4 -race` (chris: "it needs more memory and cpu"). The fix moves
+# both jobs to a CI_RACE_RUNNER repo variable with a hosted fallback -- but a
+# hardcoded label creeping back in (a revert, a copy-paste onto a new race
+# job) silently drops back to the runner that OOMs, with every other check
+# in this file still green. This check requires BOTH race jobs to read the
+# variable, with the documented `vars.X || 'default'` fallback form, never a
+# bare literal.
+check_race_runner_uses_variable() {
+  local file="$1" job status=0 block
+  for job in race race-devhealthschema; do
+    block="$(job_block "$file" "$job")"
+    if [ -z "$block" ]; then
+      printf 'no top-level "%s" job found in %s\n' "$job" "$file" >&2
+      status=1
+      continue
+    fi
+    # shellcheck disable=SC2016
+    if ! grep -qF 'runs-on: ${{ vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}' <<<"$block"; then
+      printf 'job "%s" does not set runs-on from the CI_RACE_RUNNER variable with a '"'"'ubuntu-latest'"'"' fallback -- it would either hardcode a label or silently drop the fallback\n' \
+        "$job" >&2
+      status=1
+    fi
+  done
+  return "$status"
+}
+
 run_all_checks() {
   local file="$1"
   check_verify_job_exists "$file"
@@ -498,6 +526,7 @@ run_all_checks() {
   check_endpoint_profile_gate_step "$file"
   check_pin_requires_full_sha "$file"
   check_pin_binds_checkout_ref "$file"
+  check_race_runner_uses_variable "$file"
 }
 
 # ---- positive run -------------------------------------------------------
@@ -728,6 +757,44 @@ sed "s|grep -Eq '\^\[0-9a-f\]{40}\$'|grep -Eq '^[a-z0-9]+\$' # [0-9a-f]{40}|" \
   "$workflow" > "$pin_decoy_comment"
 assert_check_fails 'loosened the pin regex while leaving a decoy [0-9a-f]{40} in a comment' \
   check_pin_requires_full_sha "$pin_decoy_comment"
+
+# (s) revert the `race` job's runs-on to a hardcoded label -- the exact
+# regression this check exists to catch (the OOM'ing default silently
+# returning).
+race_runner_hardcoded="$tmpdir/race-runner-hardcoded.yml"
+awk '
+  /^  race:$/ { in_race=1 }
+  in_race && /^  [A-Za-z0-9_-]+:/ && !/^  race:$/ { in_race=0 }
+  in_race && /runs-on: \$\{\{ vars\.CI_RACE_RUNNER/ {
+    print "    runs-on: ubuntu-latest"
+    next
+  }
+  { print }
+' "$workflow" > "$race_runner_hardcoded"
+assert_check_fails 'reverted the race job'"'"'s runs-on to a hardcoded ubuntu-latest' \
+  check_race_runner_uses_variable "$race_runner_hardcoded"
+
+# (t) same revert, but on the isolated-scope twin only -- proves the check
+# reads both jobs rather than being satisfied once either one is right.
+isolated_runner_hardcoded="$tmpdir/isolated-runner-hardcoded.yml"
+awk '
+  /^  race-devhealthschema:$/ { in_job=1 }
+  in_job && /^  [A-Za-z0-9_-]+:/ && !/^  race-devhealthschema:$/ { in_job=0 }
+  in_job && /runs-on: \$\{\{ vars\.CI_RACE_RUNNER/ {
+    print "    runs-on: ubuntu-latest"
+    next
+  }
+  { print }
+' "$workflow" > "$isolated_runner_hardcoded"
+assert_check_fails 'reverted the race-devhealthschema job'"'"'s runs-on to a hardcoded ubuntu-latest' \
+  check_race_runner_uses_variable "$isolated_runner_hardcoded"
+
+# (u) keep the fallback shape but rename the variable, which would silently
+# read a different (or nonexistent) repo variable at runtime.
+race_runner_wrong_var="$tmpdir/race-runner-wrong-var.yml"
+sed 's/vars\.CI_RACE_RUNNER/vars.CI_RUNNER_RACE/g' "$workflow" > "$race_runner_wrong_var"
+assert_check_fails 'renamed the CI_RACE_RUNNER variable in the runs-on expression' \
+  check_race_runner_uses_variable "$race_runner_wrong_var"
 
 printf 'PASS: all negative controls correctly failed their check\n'
 
