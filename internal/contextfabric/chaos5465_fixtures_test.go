@@ -11,6 +11,7 @@ package contextfabric
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -119,7 +120,10 @@ func framelessCarrierState(prior InvestigationResult) *PersistedSemanticState {
 	if source == "" {
 		source = QuestionFamilySourceModel
 	}
-	if version == "" {
+	// The SNAPSHOT records the table in force at capture; a plan stamp a cell
+	// has deliberately corrupted (blank, whitespace) is the plan gate's input,
+	// not a value the capture would have written.
+	if strings.TrimSpace(version) != version || version == "" {
 		version = QuestionFamilyTableVersion
 	}
 	return BuildSemanticState(SemanticStateInput{
