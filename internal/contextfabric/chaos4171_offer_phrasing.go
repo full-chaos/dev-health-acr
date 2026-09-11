@@ -176,8 +176,8 @@ func (r RuntimeOfferPhraser) logGuardDecision(ctx context.Context, principal sto
 		logger = slog.Default()
 	}
 	logger.InfoContext(ctx, "context fabric offer phrasing guard decision",
-		"request_id", sanitizeLogString(input.RequestID),
-		"org_id", sanitizeLogString(principal.OrgID),
+		"request_id", SanitizeLogAttr(input.RequestID),
+		"org_id", principal.OrgID,
 		"operation", string(receipt.Operation),
 		// The MODEL CALL's own outcome, so one line says both things: an empty or
 		// "success" model outcome beside a rejecting guard is precisely the shape
@@ -227,7 +227,7 @@ func (r RuntimeOfferPhraser) Phrase(ctx context.Context, principal storage.Princ
 		// layer), so only the fixed failure class and correlation ids are
 		// logged -- never the error's own free-text Error() string.
 		logger.WarnContext(ctx, "context fabric offer phrasing receipt sink failed",
-			"org_id", sanitizeLogString(principal.OrgID), "request_id", sanitizeLogString(input.RequestID),
+			"org_id", principal.OrgID, "request_id", SanitizeLogAttr(input.RequestID),
 			"operation", string(receipt.Operation))
 		// Codex R3 review finding (chaos4171pr2-codex-r3): a sink failure
 		// must never OVERWRITE an already-classified outcome that already
@@ -408,31 +408,4 @@ func applyPhrasings(needs *contractsv1.ContextFabricStructureNeeds, phrasings ma
 			needs.CandidateOptions[i].Phrasing = text
 		}
 	}
-}
-
-// sanitizeLogString strips ASCII control characters -- notably \n and \r,
-// the classic log-forging vector: an unescaped newline inside a logged
-// value can make attacker-influenced text masquerade as a separate,
-// fabricated log line -- from s before it reaches a logging sink (CodeQL
-// go/log-injection; same finding and same fix graphrank.sanitizeLogString
-// already carries, CHAOS-3918, 2026-08-19 -- duplicated here rather than
-// exported across the package boundary for one four-line helper).
-// Belt-and-suspenders on top of log/slog's own TextHandler/JSONHandler
-// value quoting (Go's stdlib already escapes control characters inside a
-// structured attribute value for both handlers -- so this specific
-// forging vector is not actually exploitable through this file's
-// WarnContext call today), applied because a static analyzer has no way
-// to credit that runtime behavior. \t is kept (harmless inside one log
-// line, more readable than dropped).
-func sanitizeLogString(s string) string {
-	// strings.ReplaceAll, not strings.Map -- CodeQL's go/log-injection
-	// query's own remediation example uses exactly this shape
-	// (strings.ReplaceAll(s, "\n", ""); strings.ReplaceAll(s, "\r", "")),
-	// which its dataflow model recognizes as breaking the taint flow; a
-	// Map-based filter closure is opaque to that model and left a
-	// go/log-injection finding open on this exact call site even after
-	// the identical runtime behavior (chaos4171pr2 alert #51/#52).
-	s = strings.ReplaceAll(s, "\n", "")
-	s = strings.ReplaceAll(s, "\r", "")
-	return s
 }

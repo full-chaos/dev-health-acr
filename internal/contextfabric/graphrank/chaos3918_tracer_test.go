@@ -2,6 +2,7 @@ package graphrank
 
 import (
 	"bytes"
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"testing"
@@ -90,70 +91,99 @@ func TestSlogResolutionTracer_SliceBSurvivorVerdictStage(t *testing.T) {
 	}
 }
 
-// TestSanitizeLogString pins sanitizeLogString's own contract (CodeQL
-// go/log-injection, CHAOS-3918, 2026-08-19): strips \n/\r/other ASCII
-// control characters (the classic log-forging vector -- an unescaped
-// newline can make injected text masquerade as a separate, fabricated log
-// line), leaves ordinary printable text -- including \t -- untouched.
-func TestSanitizeLogString(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"plain", "req_0123456789abcdef", "req_0123456789abcdef"},
-		{"newline_forged_fake_line", "req-1\nfake_log_line=injected", "req-1fake_log_line=injected"},
-		{"carriage_return", "req-1\rinjected", "req-1injected"},
-		{"other_control_char", "req-1\x00\x07injected", "req-1injected"},
-		{"tab_kept", "req-1\tstill-one-field", "req-1\tstill-one-field"},
-		{"empty", "", ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			got := sanitizeLogString(tc.in)
-			if got != tc.want {
-				t.Fatalf("sanitizeLogString(%q) = %q, want %q", tc.in, got, tc.want)
-			}
-		})
-	}
-}
-
 // TestSlogResolutionTracer_EvidenceSourceNativeStages_NoInjectionCharacters
-// is the regression guard for the CodeQL go/log-injection finding: plants
-// control characters (a newline, specifically) in EVERY string-typed
-// field the two new stages carry (RequestID, Stage, and
-// ShadowSourceNativeGrammar) and asserts none of them survive into the
-// rendered log line -- proving sanitizeLogString is actually wired into
-// both new cases, not just correct in isolation.
+// is the regression guard for the CodeQL go/log-injection finding, exercised
+// through the REAL production sink (NewSlogResolutionTracer + a real
+// slog.JSONHandler), CHAOS-5544: plants CR, LF, an ANSI escape, and a NUL
+// byte -- the forgery-shape axis, not one hand-picked newline case -- in
+// RequestID (and, for the probe stage, ShadowSourceNativeGrammar) and
+// asserts none of them survive into the DECODED field value. JSONHandler
+// (not TextHandler) is deliberate: both handlers already escape a raw
+// control byte in their own on-the-wire encoding regardless of any
+// sanitizer -- Go's stdlib quoting is belt-and-suspenders on top of this
+// ticket's fix, not a substitute test oracle for it (an earlier draft of
+// this test used TextHandler and raw-byte matching on the rendered line,
+// and every arm SURVIVED: the stdlib's own escaping made sanitized and
+// unsanitized output byte-identical, an equivalent-mutant trap the same
+// shape chaos5544_log_sanitizer.go's own NewReplacer pin already named).
+// json.Unmarshal round-trips a JSON handler's `\n` escape back into a raw
+// byte, so checking the DECODED value distinguishes "SanitizeLogAttr
+// replaced it with '?' before slog ever saw it" from "slog's own encoder
+// escaped it for the wire" -- the former has no raw byte to round-trip
+// back; the latter does. Stage itself stays the EXACT case string (Trace's
+// switch matches on it verbatim) so the mutation battery's arms actually
+// exercise the two sinks' own lines rather than falling through to the
+// "unknown stage" default -- a forged Stage would just select a different
+// (also-sanitized) branch, not prove anything about the branch under test.
+// The local `sanitizeLogString` this used to pin (strings.Map-based,
+// CHAOS-3918) is deleted -- CHAOS-5544 found it was a second, drifted
+// implementation of the exact same concern contextfabric.SanitizeLogAttr
+// already owns everywhere else in this repo; every
+// request_id/stage/source_native_grammar site in this file now routes
+// through that ONE shared function (its own input-domain table lives in
+// internal/contextfabric/chaos5544_sanitize_log_attr_domain_test.go -- same
+// function, so not re-duplicated here).
 func TestSlogResolutionTracer_EvidenceSourceNativeStages_NoInjectionCharacters(t *testing.T) {
 	t.Parallel()
 	const forged = "fake_injected_field=1"
-	poisoned := "req-1\n" + forged
 
-	t.Run("evidence_source_native", func(t *testing.T) {
-		t.Parallel()
-		var buf bytes.Buffer
-		tracer := NewSlogResolutionTracer(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-		tracer.Trace(ResolutionTraceEvent{RequestID: poisoned, Stage: "evidence_source_native\n" + forged})
-		out := buf.String()
-		if strings.Contains(out, "\n"+forged) {
-			t.Fatalf("a raw newline survived into the log line, forging a fake field: %q", out)
+	decodeField := func(t *testing.T, buf *bytes.Buffer, key string) string {
+		t.Helper()
+		var fields map[string]any
+		if err := json.Unmarshal(buf.Bytes(), &fields); err != nil {
+			t.Fatalf("emitted line is not valid JSON (more than one line, or malformed): %v; raw=%q", err, buf.String())
 		}
-	})
+		got, _ := fields[key].(string)
+		return got
+	}
 
-	t.Run("evidence_source_native_probe", func(t *testing.T) {
-		t.Parallel()
-		var buf bytes.Buffer
-		tracer := NewSlogResolutionTracer(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-		tracer.Trace(ResolutionTraceEvent{
-			RequestID: poisoned, Stage: "evidence_source_native_probe\n" + forged,
-			ShadowSourceNativeGrammar: "repo_slug\n" + forged,
+	for _, tc := range []struct {
+		name    string
+		control string
+	}{
+		{"lf", "\n"},
+		{"cr", "\r"},
+		{"ansi_escape", "\x1b[31m"},
+		{"nul", "\x00"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			poisoned := "req-1" + tc.control + forged
+
+			t.Run("evidence_source_native", func(t *testing.T) {
+				t.Parallel()
+				var buf bytes.Buffer
+				tracer := NewSlogResolutionTracer(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+				tracer.Trace(ResolutionTraceEvent{RequestID: poisoned, Stage: "evidence_source_native"})
+				got := decodeField(t, &buf, "request_id")
+				if strings.Contains(got, tc.control) {
+					t.Fatalf("the raw control byte %q survived into the decoded request_id: %q", tc.control, got)
+				}
+				if !strings.HasPrefix(got, "req-1") {
+					t.Fatalf("request_id = %q lost its correlation prefix", got)
+				}
+			})
+
+			t.Run("evidence_source_native_probe", func(t *testing.T) {
+				t.Parallel()
+				var buf bytes.Buffer
+				tracer := NewSlogResolutionTracer(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+				tracer.Trace(ResolutionTraceEvent{
+					RequestID: poisoned, Stage: "evidence_source_native_probe",
+					ShadowSourceNativeGrammar: "repo_slug" + tc.control + forged,
+				})
+				gotReqID := decodeField(t, &buf, "request_id")
+				if strings.Contains(gotReqID, tc.control) {
+					t.Fatalf("the raw control byte %q survived into the decoded request_id: %q", tc.control, gotReqID)
+				}
+				gotGrammar := decodeField(t, &buf, "source_native_grammar")
+				if strings.Contains(gotGrammar, tc.control) {
+					t.Fatalf("the raw control byte %q survived into the decoded source_native_grammar: %q", tc.control, gotGrammar)
+				}
+				if !strings.HasPrefix(gotReqID, "req-1") {
+					t.Fatalf("request_id = %q lost its correlation prefix", gotReqID)
+				}
+			})
 		})
-		out := buf.String()
-		if strings.Contains(out, "\n"+forged) {
-			t.Fatalf("a raw newline survived into the log line, forging a fake field: %q", out)
-		}
-	})
+	}
 }

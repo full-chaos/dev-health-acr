@@ -314,17 +314,82 @@ func TestRuntimeOfferPhraser_SinkFailureFallsBackStructural(t *testing.T) {
 // vocabulary, so the logger call is the ONLY place an operator can tell
 // "the model call worked but we lost the receipt" apart from "the model's
 // own output was unusable".
-// TestSanitizeLogString_StripsNewlinesButKeepsPrintableText is RED-FIRST
-// evidence for a codeQL go/log-injection finding (chaos4171pr2, alert #51):
-// an attacker-controlled request_id containing a newline must not reach
-// the sink-failure WARN log unsanitized, or it could forge a fabricated
-// log line.
-func TestSanitizeLogString_StripsNewlinesButKeepsPrintableText(t *testing.T) {
+// TestRuntimeOfferPhraser_GuardDecisionSanitizesRequestIDAcrossTheInputDomain
+// is the CHAOS-5544 real-handler pin for BOTH of this file's request_id log
+// sites -- the guard decision line and the sink-failure WARN line --
+// exercised through the REAL production path (a real
+// RuntimeOfferPhraser.Phrase call, a real recordingHandler): a forged
+// request id carrying CR, LF, an ANSI escape, and a NUL byte -- the
+// forgery-shape axis, not one hand-picked newline case (chaos4171pr2 alert
+// #51's original RED-FIRST case is subsumed here). This file's own
+// `sanitizeLogString` (a second, drifted implementation of the same concern
+// contextfabric.SanitizeLogAttr already owns) is deleted; both request_id
+// sites now route through that ONE shared function (its own input-domain
+// table lives in chaos5544_sanitize_log_attr_domain_test.go -- same
+// function, not re-duplicated here).
+func TestRuntimeOfferPhraser_GuardDecisionSanitizesRequestIDAcrossTheInputDomain(t *testing.T) {
 	t.Parallel()
-	got := sanitizeLogString("request_00000001\nfake_log_line=forged\rtail")
-	want := "request_00000001fake_log_line=forgedtail"
-	if got != want {
-		t.Fatalf("sanitizeLogString() = %q, want %q", got, want)
+	for _, tc := range []struct{ name, control string }{
+		{"lf", "\n"}, {"cr", "\r"}, {"ansi_escape", "\x1b[31m"}, {"nul", "\x00"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			forged := "request_00000001" + tc.control + "fake_log_line=forged"
+			checkRequestID := func(t *testing.T, records []slog.Record, message string) {
+				t.Helper()
+				var lines int
+				for _, record := range records {
+					if record.Message != message {
+						continue
+					}
+					lines++
+					record.Attrs(func(a slog.Attr) bool {
+						if a.Key != "request_id" {
+							return true
+						}
+						got := a.Value.String()
+						if strings.Contains(got, tc.control) {
+							t.Fatalf("the raw control byte %q survived into request_id: %q", tc.control, got)
+						}
+						if !strings.HasPrefix(got, "request_00000001") {
+							t.Fatalf("request_id = %q lost its correlation prefix", got)
+						}
+						return true
+					})
+				}
+				if lines != 1 {
+					t.Fatalf("%q lines = %d, want exactly 1 -- more means the request id forged one", message, lines)
+				}
+			}
+
+			t.Run("guard_decision", func(t *testing.T) {
+				t.Parallel()
+				var records []slog.Record
+				logger := slog.New(recordingHandler{records: &records})
+				draft := StructureOfferPhrasingDraft{Phrasings: []StructureOfferPhrasingEntry{{OptionID: "opt_pr", Phrasing: "an open pull request"}}}
+				phraser := RuntimeOfferPhraser{
+					Runtime: fakeOfferPhrasingModelRuntime{draft: draft, receipt: validModelReceiptFixture(ModelOperationPhraseOffers)},
+					Sink:    &fakeReceiptSink{},
+					Logger:  logger,
+				}
+				phraser.Phrase(context.Background(), storage.Principal{OrgID: "org_1"}, StructureOfferPhrasingInput{Options: offerOptions(), RequestID: forged})
+				checkRequestID(t, records, "context fabric offer phrasing guard decision")
+			})
+
+			t.Run("sink_failure_warn", func(t *testing.T) {
+				t.Parallel()
+				var records []slog.Record
+				logger := slog.New(recordingHandler{records: &records})
+				draft := StructureOfferPhrasingDraft{Phrasings: []StructureOfferPhrasingEntry{{OptionID: "opt_pr", Phrasing: "an open pull request"}}}
+				phraser := RuntimeOfferPhraser{
+					Runtime: fakeOfferPhrasingModelRuntime{draft: draft, receipt: validModelReceiptFixture(ModelOperationPhraseOffers)},
+					Sink:    &fakeReceiptSink{err: errors.New("store unavailable")},
+					Logger:  logger,
+				}
+				phraser.Phrase(context.Background(), storage.Principal{OrgID: "org_1"}, StructureOfferPhrasingInput{Options: offerOptions(), RequestID: forged})
+				checkRequestID(t, records, "context fabric offer phrasing receipt sink failed")
+			})
+		})
 	}
 }
 

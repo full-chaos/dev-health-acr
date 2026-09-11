@@ -3,30 +3,10 @@ package graphrank
 import (
 	"context"
 	"log/slog"
-	"strings"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 )
-
-// sanitizeLogString strips ASCII control characters -- notably \n and \r,
-// the classic log-forging vector: an unescaped newline inside a logged
-// value can make attacker-influenced text masquerade as a separate,
-// fabricated log line -- from s before it reaches a logging sink (CodeQL
-// go/log-injection, CHAOS-3918, 2026-08-19). Belt-and-suspenders on top of
-// log/slog's own TextHandler/JSONHandler value quoting (Go's stdlib
-// already escapes control characters inside a structured attribute value
-// for both handlers -- so this specific forging vector is not actually
-// exploitable through this type's DebugContext calls today), applied
-// because a static analyzer has no way to credit that runtime behavior.
-// \t is kept (harmless inside one log line, more readable than dropped).
-func sanitizeLogString(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r == '\n' || r == '\r' || (r < 0x20 && r != '\t') {
-			return -1
-		}
-		return r
-	}, s)
-}
 
 // SlogResolutionTracer is the production ResolutionTracer (team-lead
 // ruling, 2026-08-17): every stage event becomes one structured log line,
@@ -59,7 +39,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// handful) -- safe to promote straight to Info, same reasoning as
 		// kind_offer's own unconditional-and-bounded promotion (CHAOS-5222).
 		t.logger.InfoContext(ctx, "context fabric resolution trace: search",
-			"request_id", event.RequestID, "stage", event.Stage,
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"term_hash", event.TermHash, "result_count", event.SearchResultCount,
 			"truncated", event.Truncated)
 	case "search_question":
@@ -73,14 +53,14 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// Rig-visibility fix: one call per resolution -- safe
 		// to promote straight to Info.
 		t.logger.InfoContext(ctx, "context fabric resolution trace: search question",
-			"request_id", event.RequestID, "stage", event.Stage,
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"result_count", event.SearchResultCount, "truncated", event.Truncated)
 	case "alias_lookup":
 		// Rig-visibility fix: a single emission site
 		// (resolve.go), no per-candidate loop -- safe to promote straight
 		// to Info.
 		t.logger.InfoContext(ctx, "context fabric resolution trace: alias lookup",
-			"request_id", event.RequestID, "stage", event.Stage,
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"complete", event.AliasLookupComplete, "matched_claimants", event.AliasLookupMatchedClaimants)
 	case "kind_hint_search":
 		// CHAOS-4348: traceKindHintSearch's own event (chaos4348_reachability.go)
@@ -97,7 +77,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// in general, and no existing summary event covers this stage's
 		// own aggregate, so it stays at Debug rather than being folded.
 		t.logger.DebugContext(ctx, "context fabric resolution trace: kind hint search",
-			"request_id", event.RequestID, "stage", event.Stage,
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"term_hash", event.TermHash, "subject_kind", string(event.Subject.Kind),
 			"subject_canonical_id", event.Subject.CanonicalID)
 	case "exact_name_search":
@@ -110,7 +90,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// stage (unlike corroboration/identity_gate/slice_b_survivor_verdict,
 		// each of which folds into a genuine summary).
 		t.logger.DebugContext(ctx, "context fabric resolution trace: exact name search",
-			"request_id", event.RequestID, "stage", event.Stage,
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"term_hash", event.TermHash, "subject_kind", string(event.Subject.Kind),
 			"subject_canonical_id", event.Subject.CanonicalID)
 	case "corroboration":
@@ -124,7 +104,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// rather than promoting this one.
 		if event.CorroborationSummary {
 			t.logger.InfoContext(ctx, "context fabric resolution trace: corroboration summary",
-				"request_id", event.RequestID, "stage", event.Stage,
+				"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 				"candidate_count", event.CorroborationCandidateCount,
 				"top_ids", event.CorroborationTopIDs,
 				"min_confidence", event.CorroborationMinConfidence,
@@ -132,7 +112,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			return
 		}
 		t.logger.DebugContext(ctx, "context fabric resolution trace: corroboration",
-			"request_id", event.RequestID, "stage", event.Stage,
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
 			"base_confidence", event.BaseConfidence, "final_confidence", event.FinalConfidence,
 			"distinct_mechanisms", event.DistinctMechanisms)
@@ -148,7 +128,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// than what it looked at. See
 		// ResolutionTraceEvent.DecisionSummary's own doc comment.
 		t.logger.DebugContext(ctx, "context fabric resolution trace: decision",
-			"request_id", event.RequestID, "stage", event.Stage,
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
 			"outcome", event.Outcome, "winning_mechanism", event.WinningMechanism, "commit_gate", event.CommitGate,
 			"alias_identity_complete", event.AliasLookupComplete, "identity_trust_gate_blocked", event.IdentityTrustGateBlocked,
@@ -180,7 +160,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"offered_under_window_gate", event.OfferedUnderWindowGate)
 	case "decision_summary":
 		t.logger.InfoContext(ctx, "context fabric resolution trace: decision summary",
-			"request_id", sanitizeLogString(event.RequestID), "stage", sanitizeLogString(event.Stage),
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"decision_event_count", event.DecisionEventCount,
 			"committed_count", event.DecisionCommittedCount,
 			"ambiguous_count", event.DecisionAmbiguousCount,
@@ -251,7 +231,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// here, so no volume split is needed. Emitted from the same
 		// statement that hands the scope to the confirmed-kind filter.
 		t.logger.InfoContext(ctx, "context fabric resolution trace: anchor pool kind scope",
-			"request_id", sanitizeLogString(event.RequestID), "stage", sanitizeLogString(event.Stage),
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"anchor_pool_kind_scope", event.DecisionAnchorPoolKindScope,
 			"anchor_pool_kind_scope_source", event.DecisionAnchorPoolKindScopeSource,
 			"member_kind_confirmed", event.DecisionMemberKindConfirmed,
@@ -266,14 +246,14 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// never a term, never a confidence.
 		if event.OfferPoolSummary {
 			t.logger.InfoContext(ctx, "context fabric resolution trace: offer pool summary",
-				"request_id", sanitizeLogString(event.RequestID), "stage", sanitizeLogString(event.Stage),
+				"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 				"vector_only_excluded", event.OfferPoolVectorOnlyExcluded,
 				"vector_only_demoted", event.OfferPoolVectorOnlyDemoted,
 				"emptied_by_exclusion", event.OfferPoolEmptiedByExclusion)
 			return
 		}
 		t.logger.DebugContext(ctx, "context fabric resolution trace: offer pool",
-			"request_id", event.RequestID, "stage", event.Stage,
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
 			"disposition", event.OfferPoolDisposition)
 	case "kind_coverage_floor":
@@ -292,7 +272,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// (ResolutionTraceEvent) for the CHAOS-4012 re-smoke ambiguity this
 		// resolves.
 		t.logger.InfoContext(ctx, "context fabric resolution trace: kind coverage floor",
-			"request_id", event.RequestID, "stage", event.Stage,
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"fired", event.KindCoverageFloorFired,
 			"missing_kinds", event.KindCoverageMissingKinds,
 			"truncated", event.KindCoverageFloorTruncated,
@@ -321,7 +301,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// trigger, fires at most once per pass -- safe to promote straight
 		// to Info.
 		t.logger.InfoContext(ctx, "context fabric resolution trace: confirmed kind rescue",
-			"request_id", event.RequestID, "stage", event.Stage,
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"attempted", true,
 			"fired", event.ConfirmedKindRescueFired,
 			"result_count", event.ConfirmedKindRescueResultCount,
@@ -361,7 +341,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// unconditional per-resolution offer summary; ranked_cut and
 		// reserved_kind_admitted just below carry the same reasoning.
 		t.logger.InfoContext(ctx, "context fabric resolution trace: kind offer",
-			"request_id", event.RequestID, "stage", event.Stage,
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"explicit_hint_count", event.KindOfferExplicitHintCount,
 			"declared_hint_count", event.KindOfferDeclaredHintCount,
 			// CHAOS-5218: the decision basis for withdrawing an unservable
@@ -422,7 +402,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// same ruled exception boundary_kinds carries; never a canonical id,
 		// never candidate identity.
 		t.logger.InfoContext(ctx, "context fabric resolution trace: kind offer withheld",
-			"request_id", event.RequestID, "stage", event.Stage,
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"withheld_count", event.KindOfferDeclaredWithheldNotInPoolCount,
 			"withheld_kinds", event.KindOfferDeclaredWithheldKinds,
 			"declared_hint_count", event.KindOfferDeclaredHintCount,
@@ -440,7 +420,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// Info (CHAOS-5222) -- so it was already safe to promote and had
 		// simply never been. Safe straight promotion.
 		t.logger.InfoContext(ctx, "context fabric resolution trace: anchor offer",
-			"request_id", event.RequestID, "stage", event.Stage,
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"labels_normalized_count", event.AnchorOfferLabelsNormalizedCount)
 	case "ranked_cut":
 		// Measured before picking a shape (a volume gate on log lines per
@@ -466,7 +446,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// slot" with "this pass reserved none" -- and pool_truncated_n
 			// is what says whether a slot could have mattered here at all.
 			t.logger.InfoContext(ctx, "context fabric resolution trace: ranked cut summary",
-				"request_id", event.RequestID, "stage", event.Stage,
+				"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 				"candidate_count", event.RankedCutCandidateCount,
 				"survived_count", event.RankedCutSurvivedCount,
 				"survived_ids", event.RankedCutSurvivedIDs,
@@ -481,7 +461,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			return
 		}
 		t.logger.DebugContext(ctx, "context fabric resolution trace: ranked cut",
-			"request_id", event.RequestID, "stage", event.Stage,
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
 			"rank", event.Rank, "survived", event.Survived, "coverage_bypass", event.CoverageBypass)
 	case "anchor_slot_displaced":
@@ -497,7 +477,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// measured zero, not a missing measurement -- the two are
 		// distinguishable because the summary always carries the count.
 		t.logger.InfoContext(ctx, "context fabric resolution trace: anchor slot displaced",
-			"request_id", event.RequestID, "stage", event.Stage,
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
 			"anchor_slot_reserved", event.AnchorSlotReserved,
 			"anchor_slot_source", event.AnchorSlotSource,
@@ -519,7 +499,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// indistinguishable from "the reserve was inert," exactly the
 		// ambiguity this ticket exists to remove.
 		t.logger.InfoContext(ctx, "context fabric resolution trace: reserved kind admitted",
-			"request_id", event.RequestID, "stage", event.Stage,
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
 			"rank", event.Rank, "survived", event.Survived)
 	case "confirmed_kind_scope":
@@ -546,7 +526,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// trigger, fires at most once per pass -- safe to promote straight
 		// to Info.
 		t.logger.InfoContext(ctx, "context fabric resolution trace: confirmed kind scope",
-			"request_id", event.RequestID, "stage", event.Stage,
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"state", event.ConfirmedKindScopeState,
 			"candidate_count", event.ConfirmedKindScopeCandidateCount,
 			"vector_census_state", event.ConfirmedKindVectorScopeState,
@@ -571,7 +551,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// attempt's own isolated snapshot size (0 whenever state !=
 		// "complete").
 		t.logger.DebugContext(ctx, "context fabric resolution trace: low population kind scope",
-			"request_id", event.RequestID, "stage", event.Stage,
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"kind", event.LowPopulationKindScopeKind,
 			"state", event.LowPopulationKindScopeState,
 			"candidate_count", event.LowPopulationKindScopeCandidateCount,
@@ -584,7 +564,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// (falkorgraph/reader.go), once per resolution's identity read --
 		// safe to promote straight to Info.
 		t.logger.InfoContext(ctx, "context fabric resolution trace: identity universe read",
-			"request_id", event.RequestID, "stage", event.Stage,
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"complete", event.IdentityUniverseComplete)
 	case "identity_gate":
 		// Measured retrieval-pool-sized (90 events on a
@@ -600,14 +580,14 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// the full rule.
 		if event.IdentityGateSummary {
 			t.logger.InfoContext(ctx, "context fabric resolution trace: identity gate summary",
-				"request_id", event.RequestID, "stage", event.Stage,
+				"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 				"candidate_count", event.IdentityGateCandidateCount,
 				"fired_count", event.IdentityGateFiredCount,
 				"fired_ids", event.IdentityGateFiredIDs)
 			return
 		}
 		t.logger.DebugContext(ctx, "context fabric resolution trace: identity gate",
-			"request_id", event.RequestID, "stage", event.Stage,
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
 			"from_keyed_identity_lookup", event.FromKeyedIdentityLookup, "eligible_kind", event.EligibleKind,
 			"alias_matched", event.AliasMatched, "provider_matched", event.ProviderMatched,
@@ -619,7 +599,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// Content-safe: ShadowDIdentityHash is a SHA-256, never handle/
 		// anchor text; every other field is a count/enum/bool.
 		t.logger.InfoContext(ctx, "context fabric resolution trace: evidence round (shadow)",
-			"request_id", event.RequestID, "stage", event.Stage,
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"shadow_outcome", event.ShadowOutcome, "shadow_reason", event.ShadowReason,
 			"shadow_d_identity_hash", event.ShadowDIdentityHash,
 			"shadow_precondition_unproven", event.ShadowPreconditionUnproven,
@@ -660,7 +640,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// CHAOS-3899: ONE per-kind census receipt (brief §1.3(3), "Per-kind,
 		// never aggregated across kinds").
 		t.logger.InfoContext(ctx, "context fabric resolution trace: evidence probe (shadow census)",
-			"request_id", event.RequestID, "stage", event.Stage,
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"census_kind", string(event.CensusKind), "census_complete", event.CensusComplete,
 			"census_count", event.CensusCount, "census_read_at_unix", event.CensusReadAtUnix,
 			"census_protocol", event.CensusProtocol, "census_closure_mismatch", event.CensusClosureMismatch,
@@ -682,7 +662,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// closed-vocabulary DegradationReason string, never term/question
 		// text.
 		t.logger.InfoContext(ctx, "context fabric resolution trace: evidence census commit",
-			"request_id", event.RequestID, "stage", event.Stage,
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
 			"outcome", event.Outcome, "graph_existence_ok", event.GraphExistenceOK,
 			"census_commit_reason", event.CensusCommitReason)
@@ -694,10 +674,10 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// silently discarded in production -- the same defect class
 		// evidence_census_commit above was already fixed for). Content-safe:
 		// both non-request-id/stage fields are a count and a bool.
-		// request_id/stage pass through sanitizeLogString -- see its own
-		// doc comment (CodeQL go/log-injection).
+		// request_id/stage pass through contextfabric.SanitizeLogAttr --
+		// CHAOS-5544, the one recognized barrier (CodeQL go/log-injection).
 		t.logger.InfoContext(ctx, "context fabric resolution trace: evidence source native (shadow widening)",
-			"request_id", sanitizeLogString(event.RequestID), "stage", sanitizeLogString(event.Stage),
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"source_native_match_count", event.ShadowSourceNativeMatchCount,
 			"source_native_any_resolved", event.ShadowSourceNativeAnyResolved)
 	case "evidence_source_native_probe":
@@ -709,8 +689,8 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// `Grammar: entry.name`, chaos3899_source_native_grammar.go, always
 		// one of 5 fixed constants), Kind is a closed enum. Every
 		// string-typed field here (including request_id/stage) still passes
-		// through sanitizeLogString -- see its own doc comment (CodeQL
-		// go/log-injection): a static analyzer cannot credit "this string
+		// through contextfabric.SanitizeLogAttr -- CHAOS-5544, the one
+		// recognized barrier (CodeQL go/log-injection): a static analyzer cannot credit "this string
 		// is registry-constant by construction" the way a human review can.
 		// STAYS Debug: an adversarial review round reproduced this as
 		// genuinely retrieval-pool-sized (90 Info lines from 45 grammar
@@ -722,8 +702,8 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// existing sibling event already IS this stage's own summary in
 		// substance, just under a different token.
 		t.logger.DebugContext(ctx, "context fabric resolution trace: evidence source native probe (shadow widening)",
-			"request_id", sanitizeLogString(event.RequestID), "stage", sanitizeLogString(event.Stage),
-			"source_native_grammar", sanitizeLogString(event.ShadowSourceNativeGrammar),
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+			"source_native_grammar", contextfabric.SanitizeLogAttr(event.ShadowSourceNativeGrammar),
 			"source_native_resolved", event.ShadowSourceNativeResolved,
 			"source_native_kind", string(event.ShadowSourceNativeKind))
 	case "slice_b_survivor_verdict":
@@ -743,7 +723,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// comment for the full rule.
 		if event.SurvivorVerdictSummary {
 			t.logger.InfoContext(ctx, "context fabric resolution trace: slice b survivor verdict summary",
-				"request_id", event.RequestID, "stage", event.Stage,
+				"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 				"candidate_count", event.SurvivorVerdictCandidateCount,
 				"neutral_count", event.SurvivorVerdictNeutralCount,
 				"eliminated_count", event.SurvivorVerdictEliminatedCount,
@@ -751,12 +731,12 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			return
 		}
 		t.logger.DebugContext(ctx, "context fabric resolution trace: slice b survivor verdict",
-			"request_id", event.RequestID, "stage", event.Stage,
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"subject_kind", string(event.Subject.Kind), "subject_canonical_id", event.Subject.CanonicalID,
 			"survivor_verdict", event.SurvivorVerdict)
 	default:
 		t.logger.DebugContext(ctx, "context fabric resolution trace: unknown stage",
-			"request_id", event.RequestID, "stage", event.Stage)
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage))
 	}
 }
 
@@ -790,7 +770,7 @@ func NewSlogRawSignalObserver(logger *slog.Logger) SlogRawSignalObserver {
 func (o SlogRawSignalObserver) ObserveCandidate(ctx context.Context, subjectKey string, node CandidateNode) {
 	requestID, _ := observability.RequestIDFromContext(ctx)
 	attrs := []any{
-		"request_id", requestID,
+		"request_id", contextfabric.SanitizeLogAttr(string(requestID)),
 		"subject_key", subjectKey,
 		"mechanism", string(node.Mechanism),
 	}

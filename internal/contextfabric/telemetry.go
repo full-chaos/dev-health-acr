@@ -1558,18 +1558,24 @@ func closedDecisionToken(key string, decision windowContinuationDecision) string
 
 func (t SlogEngineTelemetry) RecordWindowContinuationDecision(ctx context.Context, principal storage.Principal, decision windowContinuationDecision) {
 	args := []any{
-		// REQUEST-DERIVED VALUES GO THROUGH THE PACKAGE'S EXISTING STRIP.
+		// REQUEST-DERIVED VALUES GO THROUGH THE ONE RECOGNIZED BARRIER.
 		//
 		// The context ids are the caller's: a window receipt names a prior
-		// result id and the event echoes it back. sanitizeLogString is this
-		// package's answer to go/log-injection already (chaos4171_offer_phrasing.go,
-		// CHAOS-3918 before it) and its doc comment carries the reasoning,
-		// including why the ReplaceAll shape rather than a Map filter: CodeQL's
-		// dataflow model recognises the former as breaking taint and is opaque
-		// to the latter. The closed fields above and below need none of this --
-		// they can only be a vocabulary member or the unrecognised sentinel.
-		"org_id", sanitizeLogString(principal.OrgID),
-		"source_result_id", sanitizeLogString(decision.CarriedContextID()),
+		// result id and the event echoes it back -- SanitizeLogAttr
+		// (CHAOS-5544) is this package's one answer to go/log-injection,
+		// replacing the local sanitizeLogString this line used to call (a
+		// second, drifted implementation of the same concern). org_id is
+		// normally a different trust class elsewhere in this file
+		// (backend-validated, not caller-supplied free text, so logged
+		// raw) -- but THIS line's own pre-existing test
+		// (TestBoundary_NoRequestDerivedValueCanForgeALogLine,
+		// chaos5465_boundary_pins_test.go) already asserts org_id is
+		// sanitized here specifically; kept exactly as it already behaved,
+		// not widened or narrowed. The closed fields above and below need
+		// neither: they can only be a vocabulary member or the
+		// unrecognised sentinel.
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"source_result_id", SanitizeLogAttr(decision.CarriedContextID()),
 		"seed_source", closedDecisionToken("seed_source", decision),
 		"family_carried", closedDecisionToken("family_carried", decision),
 		"family_fresh", closedDecisionToken("family_fresh", decision),
@@ -1582,25 +1588,16 @@ func (t SlogEngineTelemetry) RecordWindowContinuationDecision(ctx context.Contex
 		"conflict_reason", closedDecisionToken("conflict_reason", decision),
 		"conflict_count", decision.ConflictCount(),
 		"conflict_fields", closedDecisionToken("conflict_fields", decision),
-		"applied_window", sanitizeLogString(decision.AppliedWindowToken()),
-		"carried_context_id", sanitizeLogString(decision.CarriedContextID()),
-		"fresh_context_id", sanitizeLogString(decision.FreshContextID()),
-		"accepted_context_id", sanitizeLogString(decision.AcceptedContextID()),
+		"applied_window", SanitizeLogAttr(decision.AppliedWindowToken()),
+		"carried_context_id", SanitizeLogAttr(decision.CarriedContextID()),
+		"fresh_context_id", SanitizeLogAttr(decision.FreshContextID()),
+		"accepted_context_id", SanitizeLogAttr(decision.AcceptedContextID()),
 		"composition_outcome", closedDecisionToken("composition_outcome", decision),
 		"composition_failed_invariant", closedDecisionToken("composition_failed_invariant", decision),
 	}
-	// The request id rides in from the context and is caller-supplied too. The
-	// shared helper is left alone -- it serves emitters across this package and
-	// widening it is not this change's to make -- so the strip is applied to
-	// what THIS line publishes.
-	for i, attr := range requestIDLogAttrs(ctx) {
-		if i%2 == 1 {
-			if value, ok := attr.(string); ok {
-				attr = sanitizeLogString(value)
-			}
-		}
-		args = append(args, attr)
-	}
+	// requestIDLogAttrs already returns its value through SanitizeLogAttr --
+	// no second strip needed here.
+	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric window continuation decision", args...)
 }
 
