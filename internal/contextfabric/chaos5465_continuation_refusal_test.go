@@ -248,7 +248,7 @@ func refusalCells() []refusalCell {
 			wantDecisionEmitted: true, wantCarrierRead: ContinuationCarrierReadOK,
 		},
 		{
-			name: "carrier unreadable on every read is the retryable window veto",
+			name:      "carrier unreadable on every read is the retryable window veto",
 			failGetOf: continuationPriorID, failGetAfter: 0,
 			interpreter: forced,
 			wantRefused: false, wantDisposition: ContinuationNotApplicable, wantReason: ContinuationReasonWindowVeto,
