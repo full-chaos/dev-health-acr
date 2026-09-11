@@ -172,6 +172,15 @@ func writeTypedConstruction(b *bytes.Buffer, e Event) {
 		}
 		fmt.Fprintf(b, "\t%s %s\n", snakeToPascal(f.Key), goFieldType(f.Type))
 	}
+	fmt.Fprintf(b, "\t// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on\n")
+	fmt.Fprintf(b, "\t// every %sFields uniformly, set ONLY by New%sFields below. A caller\n", name, name)
+	fmt.Fprintf(b, "\t// outside this package cannot set an unexported field via a composite\n")
+	fmt.Fprintf(b, "\t// literal -- not partially (one exported field set, the rest at their\n")
+	fmt.Fprintf(b, "\t// Go zero value) and not even by hand-setting every EXPORTED field --\n")
+	fmt.Fprintf(b, "\t// so this is the class fix for \"a caller still assembles that event's\n")
+	fmt.Fprintf(b, "\t// field list\": no composite literal built outside eventspec, complete or\n")
+	fmt.Fprintf(b, "\t// partial, can ever read as constructed.\n")
+	fmt.Fprintf(b, "\tconstructed bool\n")
 	fmt.Fprintf(b, "}\n\n")
 
 	fmt.Fprintf(b, "// New%sFields is the generated constructor for %sFields -- every\n", name, name)
@@ -196,7 +205,14 @@ func writeTypedConstruction(b *bytes.Buffer, e Event) {
 		key := snakeToPascal(f.Key)
 		fmt.Fprintf(b, "\t\t%s: %s,\n", key, lowerFirst(key))
 	}
+	fmt.Fprintf(b, "\t\tconstructed: true,\n")
 	fmt.Fprintf(b, "\t}\n}\n\n")
+
+	fmt.Fprintf(b, "// IsConstructed reports whether f was built by New%sFields -- the ONE\n", name)
+	fmt.Fprintf(b, "// exported way to read the unexported \"constructed\" marker from outside\n")
+	fmt.Fprintf(b, "// this package. false for the Go zero value and for ANY composite literal\n")
+	fmt.Fprintf(b, "// assembled elsewhere, complete or partial.\n")
+	fmt.Fprintf(b, "func (f %sFields) IsConstructed() bool { return f.constructed }\n\n", name)
 
 	fmt.Fprintf(b, "// SlogArgs returns %s's own declared fields as alternating slog\n", name)
 	fmt.Fprintf(b, "// key/value pairs, in the SAME order spec.go declares them.\n")

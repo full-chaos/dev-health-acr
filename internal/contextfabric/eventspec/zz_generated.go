@@ -33,6 +33,15 @@ type AnchorSlotDisplacedFields struct {
 	AnchorSlotSource    string
 	AnchorSlotDisplaced int
 	PoolTruncatedN      int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every AnchorSlotDisplacedFields uniformly, set ONLY by NewAnchorSlotDisplacedFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
 }
 
 // NewAnchorSlotDisplacedFields is the generated constructor for AnchorSlotDisplacedFields -- every
@@ -47,8 +56,15 @@ func NewAnchorSlotDisplacedFields(requestID string, pass int, subjectKind string
 		AnchorSlotSource:    anchorSlotSource,
 		AnchorSlotDisplaced: anchorSlotDisplaced,
 		PoolTruncatedN:      poolTruncatedN,
+		constructed:         true,
 	}
 }
+
+// IsConstructed reports whether f was built by NewAnchorSlotDisplacedFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f AnchorSlotDisplacedFields) IsConstructed() bool { return f.constructed }
 
 // SlogArgs returns AnchorSlotDisplaced's own declared fields as alternating slog
 // key/value pairs, in the SAME order spec.go declares them.
@@ -93,6 +109,15 @@ type DecisionSummaryFields struct {
 	MemberKindConfirmed               string
 	ReservedKinds                     []string
 	FilterKinds                       []string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every DecisionSummaryFields uniformly, set ONLY by NewDecisionSummaryFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
 }
 
 // NewDecisionSummaryFields is the generated constructor for DecisionSummaryFields -- every
@@ -123,8 +148,15 @@ func NewDecisionSummaryFields(requestID string, decisionEventCount int, committe
 		MemberKindConfirmed:               memberKindConfirmed,
 		ReservedKinds:                     reservedKinds,
 		FilterKinds:                       filterKinds,
+		constructed:                       true,
 	}
 }
+
+// IsConstructed reports whether f was built by NewDecisionSummaryFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f DecisionSummaryFields) IsConstructed() bool { return f.constructed }
 
 // SlogArgs returns DecisionSummary's own declared fields as alternating slog
 // key/value pairs, in the SAME order spec.go declares them.
@@ -172,6 +204,15 @@ type RankedCutSummaryFields struct {
 	AnchorSlotDisplaced int
 	PoolTruncatedN      int
 	DeclaredKindRescue  []map[string]any
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every RankedCutSummaryFields uniformly, set ONLY by NewRankedCutSummaryFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
 }
 
 // NewRankedCutSummaryFields is the generated constructor for RankedCutSummaryFields -- every
@@ -189,8 +230,15 @@ func NewRankedCutSummaryFields(requestID string, pass int, candidateCount int, s
 		AnchorSlotDisplaced: anchorSlotDisplaced,
 		PoolTruncatedN:      poolTruncatedN,
 		DeclaredKindRescue:  declaredKindRescue,
+		constructed:         true,
 	}
 }
+
+// IsConstructed reports whether f was built by NewRankedCutSummaryFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f RankedCutSummaryFields) IsConstructed() bool { return f.constructed }
 
 // SlogArgs returns RankedCutSummary's own declared fields as alternating slog
 // key/value pairs, in the SAME order spec.go declares them.

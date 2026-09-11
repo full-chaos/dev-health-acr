@@ -31,25 +31,25 @@ func NewSlogResolutionTracer(logger *slog.Logger) SlogResolutionTracer {
 	return SlogResolutionTracer{logger: logger}
 }
 
-// decisionSummaryFieldsUnconstructed reports whether f still carries its Go
-// zero value on every open-vocabulary field the real constructor path
-// (decisionSummaryBuffer.flush(), via orNone()) always sets to an explicit
-// token -- "none" at minimum, never the empty string, on every real call
-// including a genuine zero-decision resolution. A caller who hand-assembles
-// a decision_summary event by setting only the shared struct's OLD
-// individual Decision*/OfferPool* fields (this PR's own named failure mode:
-// "callers still assemble that event's field list") leaves
-// DecisionSummaryFields at its Go zero value; tracer.go stopped reading
-// those old fields for this stage (CHAOS-5516), so emitting it anyway would
-// print a decision_summary line of all zeros -- indistinguishable from a
-// genuine zero-decision resolution, and the ticket's own named failure mode
-// made silent instead of loud. Five independent sentinels (not one) so a
-// single field a future caller happens to leave "" for a legitimate reason
-// cannot trip this by itself.
+// decisionSummaryFieldsUnconstructed reports whether f was NOT built by
+// eventspec.NewDecisionSummaryFields -- the generated constructor is the
+// ONLY thing that can set the unexported "constructed" marker
+// (eventspec.DecisionSummaryFields.IsConstructed()), so no composite
+// literal assembled outside the eventspec package can ever read true here,
+// whether it is a caller hand-assembling the shared struct's OLD individual
+// Decision*/OfferPool* fields and leaving DecisionSummaryFields at its Go
+// zero value (this PR's own named failure mode: "callers still assemble
+// that event's field list"), a PARTIAL hand-built DecisionSummaryFields
+// literal (one exported field set, the rest at their zero value -- round r1's
+// P1: an earlier version of this guard checked five open-vocabulary string
+// fields directly and a literal setting only one of them slipped past it),
+// or even a literal that hand-sets EVERY exported field. tracer.go stopped
+// reading the OLD fields for this stage (CHAOS-5516), so emitting an
+// unconstructed value anyway would print a decision_summary line with
+// misleading zero/nil fields -- indistinguishable from a genuine
+// zero-decision resolution.
 func decisionSummaryFieldsUnconstructed(f eventspec.DecisionSummaryFields) bool {
-	return f.FrameGate == "" && f.RefuseBasis == "" &&
-		f.AnchorPoolKindScope == "" && f.AnchorPoolKindScopeSource == "" &&
-		f.MemberKindConfirmed == ""
+	return !f.IsConstructed()
 }
 
 func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
