@@ -190,6 +190,23 @@ const (
 	// a repair -- the same reasoning `population_truncated` above records for
 	// its own case.
 	ContextFabricCoverageDetailRequirementReadNotPlanned ContextFabricCoverageDetailCode = "requirement_read_not_planned"
+	// ContextFabricCoverageDetailFactReadOriginState: ONE read's own state for
+	// one fact kind, named by the population that read was rooted on.
+	//
+	// A grouped answer reads each fact kind twice -- once for the cohort's
+	// members and once for its groups -- and both reads report under the same
+	// `canonical_fact:<kind>` source. The coverage fold keeps the WORSE of the
+	// two states per source, so a served document could say a kind was
+	// `unavailable` without saying whether the members' evidence or the
+	// groups' was the gap, and a reader who needs to know which population
+	// the answer is weak on had nothing to read it from.
+	//
+	// It is a DISCLOSURE, never a degradation: the folded source state and
+	// its own detail already carry the degradation, and a second degrading
+	// row for the same gap would count it twice. OriginKind is the root kind
+	// of the read (the member kind or the group kind), never a scope-expansion
+	// origin, which is why it rides alone rather than with the scope quartet.
+	ContextFabricCoverageDetailFactReadOriginState ContextFabricCoverageDetailCode = "fact_read_origin_state"
 )
 
 // contextFabricCoverageDetailCodes is the closed vocabulary in published
@@ -211,6 +228,7 @@ var contextFabricCoverageDetailCodes = [...]ContextFabricCoverageDetailCode{
 	ContextFabricCoverageDetailPopulationTruncated,
 	ContextFabricCoverageDetailReadPopulationUnverified,
 	ContextFabricCoverageDetailRequirementReadNotPlanned,
+	ContextFabricCoverageDetailFactReadOriginState,
 }
 
 // ContextFabricCoverageDetailCodeCount is the vocabulary size as a
@@ -402,6 +420,11 @@ type coverageDetailFieldRule struct {
 	allowSupported   bool
 	requireCount     bool
 	allowCount       bool
+	// requireOriginKind: OriginKind is required ON ITS OWN, outside the scope
+	// quartet. Only a code that names a read's root population sets it; for
+	// every other code OriginKind stays part of requireScope's all-or-nothing.
+	requireOriginKind  bool
+	requireSourceState bool
 }
 
 var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetailFieldRule{
@@ -459,6 +482,16 @@ var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetai
 	//
 	// A source state is refused for the same reason: no source produced one.
 	ContextFabricCoverageDetailRequirementReadNotPlanned: {},
+	// Kind, state and origin, all three REQUIRED, and nothing else: the row
+	// says "this kind, read for this population, came back in this state".
+	// No count (the row is per read, not per subject), no scope fields (the
+	// origin is the read's root, not an expansion), no narrowing or supported
+	// kinds (those belong to the folded source's own detail).
+	ContextFabricCoverageDetailFactReadOriginState: {
+		requireFactKind: true, allowFactKind: true,
+		requireSourceState: true, allowSourceState: true,
+		requireOriginKind: true,
+	},
 }
 
 // coverageDetailCodeQualifiesPopulation names the codes that describe the
@@ -475,6 +508,10 @@ func coverageDetailCodeQualifiesPopulation(code ContextFabricCoverageDetailCode)
 	switch code {
 	case ContextFabricCoverageDetailPopulationTruncated:
 		return true
+	case ContextFabricCoverageDetailFactReadOriginState:
+		// A read's state, not a value computed over a population. Named
+		// rather than left to the default for the reason given below.
+		return false
 	default:
 		// `requirement_read_not_planned` deliberately does NOT qualify. It
 		// says nothing was read, so there is no value computed over any
@@ -495,7 +532,8 @@ func coverageDetailCodeQualifiesPopulation(code ContextFabricCoverageDetailCode)
 // branch). Used only to reject an impossible combination on write.
 func coverageDetailCodeMayDegrade(code ContextFabricCoverageDetailCode) bool {
 	switch code {
-	case ContextFabricCoverageDetailFactPruned, ContextFabricCoverageDetailGraphValidityUnbounded:
+	case ContextFabricCoverageDetailFactPruned, ContextFabricCoverageDetailGraphValidityUnbounded,
+		ContextFabricCoverageDetailFactReadOriginState:
 		return false
 	default:
 		return true
@@ -571,7 +609,16 @@ func (d ContextFabricCoverageDetail) Validate() error {
 	if !rule.allowFactKind && d.FactKind != "" {
 		return fmt.Errorf("coverage detail code %q forbids fact_kind", d.Code)
 	}
-	scopeSet := d.ScopeOutcome != "" || d.OriginKind != "" || d.Policy != "" || d.Basis != ""
+	// OriginKind counts toward the scope quartet ONLY for a code that does not
+	// require it on its own; a code with requireOriginKind still refuses the
+	// other three scope fields.
+	scopeSet := d.ScopeOutcome != "" || d.Policy != "" || d.Basis != "" || (d.OriginKind != "" && !rule.requireOriginKind)
+	if rule.requireOriginKind && d.OriginKind == "" {
+		return fmt.Errorf("coverage detail code %q requires origin_kind", d.Code)
+	}
+	if rule.requireSourceState && d.SourceState == "" {
+		return fmt.Errorf("coverage detail code %q requires source_state", d.Code)
+	}
 	if rule.requireScope && (d.ScopeOutcome == "" || d.OriginKind == "" || d.Policy == "" || d.Basis == "") {
 		return fmt.Errorf("coverage detail code %q requires scope_outcome/origin_kind/policy/basis together", d.Code)
 	}

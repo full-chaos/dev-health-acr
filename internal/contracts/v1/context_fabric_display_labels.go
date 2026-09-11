@@ -279,6 +279,12 @@ func ComposeCoverageDetailLabel(d ContextFabricCoverageDetail) string {
 		// -- the same rule as `answer_terminated_before_attempt` above, for
 		// the same reason.
 		label = "This was not looked at for this question"
+	case ContextFabricCoverageDetailFactReadOriginState:
+		// Names the POPULATION the read was for, then its state, in the
+		// state registry's own words. No count and no "could not": the row
+		// is a disclosure of one read's outcome, and the folded source's own
+		// detail is what says whether that outcome degraded the answer.
+		label = kindClause(kind) + " facts, read for each " + humanizeVocabularyToken(string(d.OriginKind)) + ": " + ContextFabricSourceStateLabel(d.SourceState)
 	default:
 		label = "Coverage was limited"
 	}
