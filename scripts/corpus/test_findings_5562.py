@@ -278,17 +278,22 @@ def test_require_base_is_silent_once_corpus_base_is_set():
 
 
 # ==================================================== requirement 4: the two shell
-# launchers must set CORPUS_BASE for every lane that goes through them, even though
-# the harness itself no longer defaults it.
+# launchers require CORPUS_BASE explicitly, same as the harness -- team-lead ruling
+# after r1: finding 3 (launchers still defaulted to the shared rig) is IN SCOPE, same
+# class as the ticket. No launcher anywhere in scripts/ may default CORPUS_BASE.
 
-def test_the_shell_launchers_export_corpus_base_before_invoking_run_shard():
+def test_the_shell_launchers_refuse_before_exporting_an_unset_corpus_base():
     for name in ("run_corpus_sequential.sh", "run_corpus_parallel.sh"):
         t = (HERE / name).read_text()
+        assert "http://127.0.0.1:3040" not in t, (
+            f"{name} still hard-codes the old default base")
+        assert '${CORPUS_BASE:?' in t, f"{name} no longer refuses an unset CORPUS_BASE"
         assert "export CORPUS_BASE" in t, f"{name} no longer exports CORPUS_BASE"
         invoke = 'python3 "$HERE/run_shard.py"'
         assert invoke in t, f"{name} no longer invokes run_shard.py the expected way"
-        assert t.index("export CORPUS_BASE") < t.index(invoke), (
-            f"{name} invokes run_shard.py before exporting CORPUS_BASE")
+        refuse_at = t.index('${CORPUS_BASE:?')
+        assert refuse_at < t.index("export CORPUS_BASE") < t.index(invoke), (
+            f"{name} does not refuse-then-export CORPUS_BASE before invoking run_shard.py")
 
 
 # ==================================================== r1 review findings, fixed + pinned
@@ -411,44 +416,86 @@ def test_corpus_base_with_no_credentials_prints_unchanged():
         importlib.reload(harness)
 
 
-def test_the_shell_launchers_actually_pass_their_default_base_to_run_shard():
-    """r1 review, P3, test_findings_5562.py:284 (pre-fix): the launcher pin checked
-    source text and ordering only, never an executed run. Runs the REAL
-    run_corpus_sequential.sh with `python3`/`curl` stubbed on PATH, and asserts the
-    CORPUS_BASE the launcher's own default actually reaches run_shard.py -- proving
-    requirement 4 (every caller sets CORPUS_BASE) by execution, not by reading source."""
-    import tempfile
+def _launcher_dir(tmp):
+    """A throwaway copy of one launcher plus everything it shells out to, with
+    `python3`/`curl` stubbed on PATH: `python3` intercepts run_shard.py/merge_corpus.py
+    invocations (echoing what CORPUS_BASE it was handed) and delegates every other
+    invocation (corpus_origin.sh's URL parse, shard_plan.py) to the REAL python3;
+    `curl` always answers 200 so the readiness probe never needs a real rig."""
     real_python3 = shutil.which("python3")
     assert real_python3, "no real python3 on PATH to delegate to"
-    for name in ("run_corpus_sequential.sh",):
+    dest = Path(tmp) / "launcherdir"
+    dest.mkdir()
+    for f in ("run_corpus_sequential.sh", "run_corpus_parallel.sh", "corpus_origin.sh",
+              "run_shard.py", "merge_corpus.py", "shard_plan.py"):
+        shutil.copy2(HERE / f, dest / f)
+    stub_bin = Path(tmp) / "stubbin"
+    stub_bin.mkdir()
+    (stub_bin / "python3").write_text(
+        "#!/usr/bin/env bash\n"
+        'for a in "$@"; do\n'
+        '  case "$a" in\n'
+        '    */run_shard.py|*/merge_corpus.py)\n'
+        '      echo "FAKE $(basename "$a") CORPUS_BASE=$CORPUS_BASE"\n'
+        "      exit 0 ;;\n"
+        "  esac\n"
+        "done\n"
+        f'exec "{real_python3}" "$@"\n')
+    (stub_bin / "python3").chmod(0o755)
+    (stub_bin / "curl").write_text("#!/usr/bin/env bash\nprintf '200'\n")
+    (stub_bin / "curl").chmod(0o755)
+    return dest, stub_bin
+
+
+def _run_launcher(name, dest, stub_bin, corpus_base):
+    env = dict(os.environ)
+    if corpus_base is None:
+        env.pop("CORPUS_BASE", None)
+    else:
+        env["CORPUS_BASE"] = corpus_base
+    env["PATH"] = f"{stub_bin}:{env['PATH']}"
+    # shard_plan.py (invoked for real by run_corpus_parallel.sh) needs the synthetic
+    # corpus on PYTHONPATH, same as every other subprocess test in this file.
+    env["PYTHONPATH"] = f"{TESTDATA}:{HERE}:{env.get('PYTHONPATH', '')}"
+    args = [str(dest / name)] if name == "run_corpus_sequential.sh" else [str(dest / name), "1", "1"]
+    return subprocess.run(["bash", *args], env=env, capture_output=True, text=True,
+                          timeout=30, cwd=str(dest))
+
+
+def test_the_shell_launchers_refuse_when_corpus_base_is_unset_executed():
+    """r1 review team-lead ruling: finding 3 is in scope, same class as the ticket --
+    the launchers must refuse an unset CORPUS_BASE too, executed, not just documented."""
+    import tempfile
+    for name in ("run_corpus_sequential.sh", "run_corpus_parallel.sh"):
         with tempfile.TemporaryDirectory() as tmp:
-            dest = Path(tmp) / "launcherdir"
-            dest.mkdir()
-            for f in (name, "corpus_origin.sh", "run_shard.py", "merge_corpus.py"):
-                shutil.copy2(HERE / f, dest / f)
-            stub_bin = Path(tmp) / "stubbin"
-            stub_bin.mkdir()
-            (stub_bin / "python3").write_text(
-                "#!/usr/bin/env bash\n"
-                'for a in "$@"; do\n'
-                '  case "$a" in\n'
-                '    */run_shard.py|*/merge_corpus.py)\n'
-                '      echo "FAKE $(basename "$a") CORPUS_BASE=$CORPUS_BASE"\n'
-                "      exit 0 ;;\n"
-                "  esac\n"
-                "done\n"
-                f'exec "{real_python3}" "$@"\n')
-            (stub_bin / "python3").chmod(0o755)
-            (stub_bin / "curl").write_text("#!/usr/bin/env bash\nprintf '200'\n")
-            (stub_bin / "curl").chmod(0o755)
-            env = dict(os.environ)
-            env.pop("CORPUS_BASE", None)
-            env["PATH"] = f"{stub_bin}:{env['PATH']}"
-            r = subprocess.run(["bash", str(dest / name)], env=env,
-                                capture_output=True, text=True, timeout=30, cwd=str(dest))
+            dest, stub_bin = _launcher_dir(tmp)
+            r = _run_launcher(name, dest, stub_bin, corpus_base=None)
         out = r.stdout + r.stderr
-        assert "FAKE run_shard.py CORPUS_BASE=http://127.0.0.1:3040/api/investigations" in out, (
-            f"{name} did not pass its own default CORPUS_BASE through to run_shard.py:\n{out}")
+        assert r.returncode != 0, f"{name} exited 0 with CORPUS_BASE unset:\n{out}"
+        assert "CORPUS_BASE" in out, f"{name}'s refusal does not name the variable: {out}"
+        assert "FAKE" not in out, (
+            f"{name} reached run_shard.py/merge_corpus.py despite CORPUS_BASE unset:\n{out}")
+
+
+def test_the_shell_launchers_pass_a_set_corpus_base_through_to_run_shard_executed():
+    """r1 review, P3 (pre-fix): the launcher pin checked source text and ordering
+    only, never an executed run. Runs each REAL launcher with `python3`/`curl`
+    stubbed on PATH, and asserts a CALLER-SUPPLIED CORPUS_BASE actually reaches
+    run_shard.py unchanged -- proving requirement 4 by execution, not by reading
+    source."""
+    import tempfile
+    base = "http://127.0.0.1:19999/api/investigations"
+    for name in ("run_corpus_sequential.sh", "run_corpus_parallel.sh"):
+        with tempfile.TemporaryDirectory() as tmp:
+            dest, stub_bin = _launcher_dir(tmp)
+            r = _run_launcher(name, dest, stub_bin, corpus_base=base)
+            out = r.stdout + r.stderr
+            # run_corpus_parallel.sh redirects each shard's run_shard.py invocation to
+            # its own per-shard log file rather than the launcher's own stdout/stderr.
+            for log in (dest / "logs").glob("shard-*.log"):
+                out += "\n" + log.read_text()
+        assert f"FAKE run_shard.py CORPUS_BASE={base}" in out, (
+            f"{name} did not pass the caller's CORPUS_BASE through to run_shard.py:\n{out}")
 
 
 if __name__ == "__main__":

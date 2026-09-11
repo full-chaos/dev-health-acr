@@ -78,13 +78,11 @@ CORPUS_BASE=http://127.0.0.1:3040/api/investigations ./run_corpus_sequential.sh 
 CORPUS_MAX_CONCURRENT_SHARDS=2 ./run_corpus_parallel.sh 12 1
 ```
 
-`CORPUS_BASE` has **no default** (CHAOS-5562): `harness.py` refuses to start when
-it is unset, naming the variable, rather than silently reusing a shared rig it
-does not own. `run_corpus_sequential.sh` / `run_corpus_parallel.sh` export their own
-default (`http://127.0.0.1:3040/api/investigations`) before invoking the harness
--- that is a considered choice by those two launchers, not the harness's own
-default. A direct invocation of `harness.py` or `run_shard.py` must set
-`CORPUS_BASE` itself.
+`CORPUS_BASE` has **no default anywhere** (CHAOS-5562): `harness.py`, `run_shard.py`,
+and both launchers (`run_corpus_sequential.sh` / `run_corpus_parallel.sh`) all refuse
+to start when it is unset, naming the variable, rather than silently reusing a shared
+rig they do not own. Every invocation shape -- direct, through a launcher, or through
+`run_shard.py` -- must set `CORPUS_BASE` itself.
 
 `CORPUS_EXPECTED_BUILD` (optional env var; `harness.py` also accepts
 `--expected-build VALUE` on its own CLI, which overrides the env value for that

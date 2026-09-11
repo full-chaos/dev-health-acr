@@ -17,12 +17,16 @@ REP="${1:-1}"
 # before producing any artefact at all.
 mkdir -p "$HERE/logs"
 
+# CHAOS-5562: NO DEFAULT. This launcher used to default an unset CORPUS_BASE to the
+# shared rig leg -- the same class of silent default the harness itself no longer has.
+# Refuse before doing anything else, naming the variable, same as harness.require_base().
+: "${CORPUS_BASE:?CORPUS_BASE is not set -- refusing to start. There is no default rig leg; set CORPUS_BASE to the investigations endpoint you own (see scripts/corpus/README.md).}"
+export CORPUS_BASE
+
 # r1 #13: probe the base the harness will ACTUALLY use. These probes used to hard-code
 # :3040/:18090/:18095, so pointing CORPUS_BASE at a private leg aborted against ports
 # that were not under test -- or, worse, passed because the SHARED rig was healthy while
 # the configured endpoint was not. Extra probes stay available via CORPUS_EXTRA_PROBES.
-CORPUS_BASE="${CORPUS_BASE:-http://127.0.0.1:3040/api/investigations}"
-export CORPUS_BASE
 base_root="$("$HERE/corpus_origin.sh" "$CORPUS_BASE")"
 probes=("$base_root/")
 for extra in ${CORPUS_EXTRA_PROBES:-}; do probes+=("$extra"); done
