@@ -28,13 +28,29 @@ GOTEST_TIMEOUT ?= 420s
 # package list; the default is the whole module so local `make test*`
 # invocations are unchanged.
 GOTEST_PKGS ?= ./...
-# CHAOS-4567: the timeout the isolated packages (scripts/ci/test-shard.sh
-# isolated -- today internal/contextfabric/devhealthschema) run under when
-# test-race-split runs them on their own. Mirrors ci.yml's race-devhealthschema
-# job, which has passed GOTEST_TIMEOUT=900s since CHAOS-3974; keep the two
-# in step. This is the ONLY budget that has to grow when the full-repo walk
-# gets more expensive -- GOTEST_TIMEOUT above must not move on its account.
+# CHAOS-4567: the default timeout an isolated package (scripts/ci/test-shard.sh
+# isolated) runs under when test-race-split/test-race-isolated runs it on its
+# own, for any isolated package that does not name its own override below.
+# Today that is internal/contextfabric/devhealthschema. Mirrors ci.yml's
+# race-devhealthschema job, which has passed GOTEST_TIMEOUT=900s since
+# CHAOS-3974; keep the two in step. This is the ONLY budget that has to grow
+# when the full-repo walk gets more expensive -- GOTEST_TIMEOUT above must not
+# move on its account.
 GOTEST_ISOLATED_TIMEOUT ?= 900s
+# CHAOS-5572: internal/contextfabric's own isolated budget, deliberately a
+# separate knob from GOTEST_ISOLATED_TIMEOUT above -- its growth story is
+# unrelated to devhealthschema's (rent paid on the shared bucket's total
+# package count growing under -race contention, not on this package's own
+# -race cost, which measured flat -- see scripts/ci/test-shard.sh), so a
+# future retune of one must not silently move the other. Sized >=3x the
+# measured -race wall time on a real GH-hosted runner, not bigboy: a 64-core
+# box changes the profile for a suite this t.Parallel()-heavy, so bigboy
+# solo timing (274-276s, flat across the two shas that broke Release) is not
+# a safe stand-in. The real hosted number comes from ci.yml's own race-matrix
+# shard (bounded ~20-package contention, not full isolation): 247.735s at
+# e7e48b5c, 229.427s at 8299ec38 -- isolation removes contention, so it will
+# not run slower than that. 3 * 247.735s ~= 743s; rounded up to 750s.
+GOTEST_CONTEXTFABRIC_TIMEOUT ?= 750s
 VERSION_PKG := github.com/full-chaos/dev-health-acr/internal/version
 
 # Pinned exact versions (not @latest) so the coverage/JUnit toolchain is
@@ -104,8 +120,28 @@ test-race:
 test-race-shared:
 	$(MAKE) test-race GOTEST_PKGS="$$(scripts/ci/test-shard.sh 1 1)"
 
+# CHAOS-5572: each isolated package runs as its OWN `go test` invocation,
+# sequentially, rather than one `go test pkg1 pkg2 ...` call. `go test` runs
+# multiple packages named on one command line concurrently by default --
+# the same mechanism that makes test-race-shared's single combined
+# invocation contend (see scripts/ci/test-shard.sh) -- so a flat
+# multi-package call here would just move that same contention bug down to
+# a smaller scale between the isolated packages themselves instead of
+# removing it. Sequential, one package's resources at a time, is what
+# "isolated scope" is supposed to mean. The per-package timeout lookup
+# below is what makes GOTEST_CONTEXTFABRIC_TIMEOUT (and any future
+# isolated package's own override) actually apply to only that package,
+# instead of every isolated package sharing whatever GOTEST_ISOLATED_TIMEOUT
+# happens to be set to. internal/releasebuild pins this selection.
 test-race-isolated:
-	$(MAKE) test-race GOTEST_PKGS="$$(scripts/ci/test-shard.sh isolated)" GOTEST_TIMEOUT=$(GOTEST_ISOLATED_TIMEOUT)
+	@for pkg in $$(scripts/ci/test-shard.sh isolated); do \
+		case "$$pkg" in \
+			*/internal/contextfabric) timeout="$(GOTEST_CONTEXTFABRIC_TIMEOUT)" ;; \
+			*) timeout="$(GOTEST_ISOLATED_TIMEOUT)" ;; \
+		esac; \
+		echo "test-race-isolated: $$pkg (GOTEST_TIMEOUT=$$timeout)"; \
+		$(MAKE) test-race GOTEST_PKGS="$$pkg" GOTEST_TIMEOUT="$$timeout" || exit $$?; \
+	done
 
 test-race-split: test-race-shared test-race-isolated
 

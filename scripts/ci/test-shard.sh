@@ -55,8 +55,28 @@ list_err=""
 # more as the repo grows, but now only its own dedicated job's timeout has
 # to grow to absorb that -- the shared GOTEST_TIMEOUT other shards run under
 # never has to move again on this package's account.
+#
+# CHAOS-5572: internal/contextfabric (the top-level package, not a
+# subpackage) joins the list for a DIFFERENT reason -- not its own cost
+# growing, but everyone else's. release.yml's `make verify` runs
+# test-race-shared as ONE unsharded `go test` over every non-isolated
+# package (unlike ci.yml's 4-way race matrix, which bounds each shard to
+# ~1/4 of them); the more packages that single invocation covers, the more
+# they all contend for the runner's CPU under -race at the same time, and
+# internal/contextfabric -- whose suite leans on many t.Parallel() subtests,
+# so it is unusually sensitive to how many cores it actually gets -- pays
+# for that contention out of GOTEST_TIMEOUT (420s) even though its own
+# -race cost did not grow. Measured proof (CHAOS-5572 TEST-EVIDENCE): a
+# solo run (no contention) is flat across the two shas that broke the
+# Release build (274-276s both), and so is its real ci.yml race-matrix
+# shard (a bounded ~20-package contention set: 247.735s -> 229.427s); only
+# the full ~90-package release.yml bucket times it out. Isolating it here
+# removes it from that bucket the same way devhealthschema was removed, so
+# release.yml's shared-bucket size can keep growing without spending this
+# package's budget on rent for packages it has nothing to do with.
 isolated_packages=(
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
+  "github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
 
 usage() {
