@@ -2,6 +2,7 @@ package genkitruntime
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -72,17 +73,16 @@ func TestMidCallFailureStillClassifiesUnavailable(t *testing.T) {
 	}
 }
 
-// TestPreCallCancellationTerminalReceiptOutcomeStaysUnavailable pins the A3
-// ruling's SCOPE (team-lead, option (b), 2026-09-10): the new "cancelled"
-// class exists ONLY at the per-attempt level. The terminal receipt.Outcome
-// -- the ADR-0008-governed field -- is deliberately left unchanged: a
-// pre-call cancellation that exhausts every attempt still reads
-// outcome=unavailable, exactly as it did before this lane's A3 fix. Extending
-// that documented vocabulary is a contract-token decision outside this
-// lane's authority (see the handoff's CHRIS-PENDING row). Without this pin,
-// a future change could widen receiptOutcomeForError itself and silently
-// cross that boundary.
-func TestPreCallCancellationTerminalReceiptOutcomeStaysUnavailable(t *testing.T) {
+// TestPreCallCancellationTerminalReceiptOutcomeIsCancelled pins the CHAOS-5577
+// resolution (chris, dictation 969, "Recommends accepted", D2 = A): the
+// terminal receipt.Outcome vocabulary is now widened with "cancelled" for
+// exactly this case. This SUPERSEDES the earlier A3 scope-limit (team-lead,
+// option (b), 2026-09-10), which deliberately left the terminal vocabulary
+// unchanged pending this exact CHRIS-PENDING decision (see ADR 0008's dated
+// CHAOS-5577 section). The per-attempt attempt_outcomes class is UNCHANGED by
+// this ticket -- "1:cancelled" already existed before CHAOS-5577 and still
+// reads that way; only the TERMINAL field's vocabulary widened.
+func TestPreCallCancellationTerminalReceiptOutcomeIsCancelled(t *testing.T) {
 	t.Parallel()
 	handler, logger := newCaptureLogger()
 	generator := &sequencedGenerator{interpretation: validInterpretationOutput()}
@@ -93,10 +93,77 @@ func TestPreCallCancellationTerminalReceiptOutcomeStaysUnavailable(t *testing.T)
 	if _, _, err := runtime.InterpretQuestion(ctx, storage.Principal{OrgID: "org_1"}, validRequest()); err == nil {
 		t.Fatal("InterpretQuestion() error = nil, want the pre-call cancellation surfaced")
 	}
+	if generator.calls != 0 {
+		t.Fatalf("generator.calls = %d, want 0 -- a pre-call cancellation must never reach the provider", generator.calls)
+	}
+	attrs := onlyDecisionEvent(t, handler).Attrs
+	if got := attrString(t, attrs, "outcome"); got != "cancelled" {
+		t.Fatalf("outcome = %q, want %q (CHAOS-5577: the terminal vocabulary now distinguishes a "+
+			"pre-call cancellation from a genuine provider outage)", got, "cancelled")
+	}
+	if got := attrString(t, attrs, "attempt_outcomes"); got != "1:cancelled" {
+		t.Fatalf("attempt_outcomes = %q, want %q", got, "1:cancelled")
+	}
+}
+
+// inCallCancelGenerator lets a test cancel a context while a call is
+// genuinely IN FLIGHT, as opposed to before the call is even placed --
+// closing started is itself the happens-before edge the test goroutine
+// synchronizes on before calling cancel(), so there is no data race waiting
+// for the call to begin. sequencedGenerator cannot express this: none of its
+// three methods ever blocks.
+type inCallCancelGenerator struct {
+	started chan struct{}
+}
+
+func (g *inCallCancelGenerator) Interpret(ctx context.Context, request generationRequest) (interpretationOutput, contextfabric.ModelUsage, error) {
+	close(g.started)
+	<-ctx.Done()
+	return interpretationOutput{}, contextfabric.ModelUsage{}, ctx.Err()
+}
+
+func (g *inCallCancelGenerator) Synthesize(context.Context, generationRequest) (synthesisOutput, contextfabric.ModelUsage, error) {
+	return synthesisOutput{}, contextfabric.ModelUsage{}, errors.New("not used by this test")
+}
+
+func (g *inCallCancelGenerator) Phrase(context.Context, generationRequest) (phrasingOutput, contextfabric.ModelUsage, error) {
+	return phrasingOutput{}, contextfabric.ModelUsage{}, errors.New("not used by this test")
+}
+
+// TestInCallCancellationTerminalReceiptOutcomeStaysUnavailable is the
+// IN-CALL control CHAOS-5577's own lane brief requires pinned alongside the
+// pre-call cell above: the generator IS invoked -- the call was actually
+// placed and is genuinely in flight -- when its context is canceled. This
+// must keep reporting the pre-existing "unavailable" terminal outcome, never
+// "cancelled". Without this control, a fix that made every context
+// cancellation read "cancelled" terminally (not just the pre-call one) would
+// pass TestPreCallCancellationTerminalReceiptOutcomeIsCancelled above for the
+// wrong reason.
+func TestInCallCancellationTerminalReceiptOutcomeStaysUnavailable(t *testing.T) {
+	t.Parallel()
+	handler, logger := newCaptureLogger()
+	generator := &inCallCancelGenerator{started: make(chan struct{})}
+	runtime := mustRuntime(t, generator, Config{Logger: logger, MaxAttempts: 1, Timeout: time.Minute})
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		runtime.InterpretQuestion(ctx, storage.Principal{OrgID: "org_1"}, validRequest())
+		close(done)
+	}()
+	select {
+	case <-generator.started:
+		// The call is genuinely in flight -- cancel now, which is what makes
+		// this case IN-CALL rather than pre-call.
+		cancel()
+	case <-time.After(5 * time.Second):
+		t.Fatal("generator was never invoked before the timeout -- cannot exercise the in-call case")
+	}
+	<-done
+
 	attrs := onlyDecisionEvent(t, handler).Attrs
 	if got := attrString(t, attrs, "outcome"); got != "unavailable" {
-		t.Fatalf("outcome = %q, want %q (the ADR-0008 terminal vocabulary is unchanged; "+
-			"only attempt_outcomes' per-attempt class distinguishes cancellation)", got, "unavailable")
+		t.Fatalf("outcome = %q, want %q -- an IN-CALL cancellation must keep the pre-CHAOS-5577 outcome, unlike the pre-call case", got, "unavailable")
 	}
 	if got := attrString(t, attrs, "attempt_outcomes"); got != "1:cancelled" {
 		t.Fatalf("attempt_outcomes = %q, want %q", got, "1:cancelled")

@@ -1717,13 +1717,16 @@ type attemptOutcome struct {
 	// in receipt.Attempts.
 	Index int
 	// Class is attemptOutcomeClass's own closed vocabulary: success,
-	// rate_limited, invalid_output, unavailable (all shared with
-	// receiptOutcomeForError's terminal Outcome vocabulary), plus cancelled
-	// (CHAOS-5380), which exists ONLY at this per-attempt granularity -- see
-	// attemptOutcomeClass's doc comment. cancelled means the attempt's
-	// context expired or was cancelled, at or before the provider call,
-	// never that the provider itself failed; the terminal receipt.Outcome
-	// for the same attempt still reads "unavailable" (A3 ruling option (b)).
+	// rate_limited, invalid_output, unavailable, cancelled (all shared with
+	// receiptOutcomeForError's terminal Outcome vocabulary since CHAOS-5577
+	// added "cancelled" there too -- see attemptOutcomeClass's doc comment).
+	// cancelled means the attempt's context expired or was cancelled, at or
+	// before the provider call, never that the provider itself failed. This
+	// per-attempt class does NOT distinguish pre-call from in-call the way
+	// the terminal receipt.Outcome now does (CHAOS-5577): a cancelled LAST
+	// attempt therefore reads Class="cancelled" here regardless of which
+	// moment stopped it, while the terminal Outcome for that same attempt
+	// reads "cancelled" only if it was pre-call, "unavailable" if in-call.
 	Class string
 	// ElapsedMS bounds THIS attempt only. §5 of the regression-diagnosis doc
 	// requires stage latency reported separately from the eventual outcome,
@@ -1738,19 +1741,31 @@ type attemptOutcome struct {
 // model call did succeed, and whether its OUTPUT validates is a later,
 // separate decision the terminal outcome already reports.
 //
-// "cancelled" is the ONE deliberate exception (CHAOS-5380 PR-A, recut open
-// item 3; team-lead A3 ruling, option (b), 2026-09-10). A context.Canceled/
-// DeadlineExceeded error used to fall through to receiptOutcomeForError's
-// default and read "unavailable" -- identical to the provider actually being
-// down, even on the pre-call ctx.Err() arm where the provider was never
-// reached (generator_calls=0). Scoped to THIS per-attempt class only: the
-// terminal receipt.Outcome vocabulary (ADR-governed: pending_validation,
-// success, fallback, invalid_output, rate_limited, unavailable) is
-// deliberately left unchanged -- extending it is a contract-token decision
-// outside this lane's authority; see the CHRIS-PENDING row in the lane
-// handoff. A cancelled attempt's terminal receipt.Outcome therefore still
-// reads "unavailable" via receiptOutcomeForError, exactly as before; only the
-// per-attempt attempt_outcomes entry distinguishes it.
+// "cancelled" was the ONE deliberate exception at this per-attempt level
+// (CHAOS-5380 PR-A, recut open item 3; team-lead A3 ruling, option (b),
+// 2026-09-10). A context.Canceled/DeadlineExceeded error used to fall
+// through to receiptOutcomeForError's default and read "unavailable" --
+// identical to the provider actually being down, even on the pre-call
+// ctx.Err() arm where the provider was never reached (generator_calls=0).
+// That ruling deliberately scoped "cancelled" to THIS per-attempt class
+// only, leaving the terminal receipt.Outcome vocabulary (ADR-governed:
+// pending_validation, success, fallback, invalid_output, rate_limited,
+// unavailable) unchanged -- widening it was a contract-token decision
+// outside that lane's authority, tracked as a CHRIS-PENDING row.
+//
+// CHAOS-5577 (chris, dictation 969, "Recommends accepted", D2 = A) resolves
+// that row: the terminal vocabulary now ALSO carries "cancelled", but only
+// for a PRE-CALL cancellation (withRetry's own ctx.Err() check, tagged with
+// contextfabric.ErrModelCancelled before it ever reaches
+// receiptOutcomeForError). An IN-CALL cancellation -- the attempt this
+// function is classifying was actually placed and its context was canceled
+// or timed out while the call was in flight -- is NOT tagged, and its
+// terminal receipt.Outcome still reads "unavailable" via
+// receiptOutcomeForError, exactly as before CHAOS-5577. This function
+// itself is unchanged by that ticket: it still classifies BOTH moments as
+// "cancelled" at the per-attempt attempt_outcomes granularity, which is
+// coarser than the terminal field on purpose -- see attemptOutcome.Class's
+// own doc comment for the resulting asymmetry.
 func attemptOutcomeClass(err error) string {
 	if err == nil {
 		return "success"
@@ -1858,8 +1873,21 @@ func (r *Runtime) withRetry(ctx context.Context, fn func(context.Context) error)
 	for attempt := 1; attempt <= r.config.MaxAttempts; attempt++ {
 		started := r.now()
 		if err := ctx.Err(); err != nil {
+			// PRE-CALL cancellation (CHAOS-5577): record() below still
+			// classifies THIS attempt from the bare, unwrapped err, exactly
+			// as before -- attemptOutcomeClass's own "cancelled" class
+			// (CHAOS-5380) is unaffected. Only the error RETURNED from
+			// withRetry is tagged with ErrModelCancelled, so
+			// classifyModelError/receiptOutcomeForError can report the new
+			// TERMINAL "cancelled" outcome for this case specifically,
+			// without touching the per-attempt log. An IN-CALL cancellation
+			// -- fn(callCtx) below actually invoked, its context canceled or
+			// timed out while the call was in flight -- returns its own bare
+			// context.Canceled/context.DeadlineExceeded from the branch
+			// below, never tagged, and keeps the pre-existing "unavailable"
+			// terminal classification.
 			record(attempt, started, err)
-			return outcomes, err
+			return outcomes, fmt.Errorf("%w: %w", contextfabric.ErrModelCancelled, err)
 		}
 		callCtx, cancel := context.WithTimeout(ctx, r.config.Timeout)
 		err := fn(callCtx)
@@ -1898,24 +1926,32 @@ func (r *Runtime) receipt(operation contextfabric.ModelOperation, promptVersion 
 
 // receiptOutcomeForError maps a nil or already-classified generation error
 // to the receipt Outcome vocabulary from ADR 0008 (success, fallback,
-// invalid_output, unavailable), plus rate_limited for the finer-grained
-// classification callers get from classifyModelError. err is expected to be
-// nil or the direct result of classifyModelError; a context cancellation or
-// deadline error (passed through classifyModelError unchanged) counts as
-// unavailable from a receipts standpoint, since the runtime's own bounded
-// deadline is what stopped the call.
+// invalid_output, unavailable, cancelled), plus rate_limited for the
+// finer-grained classification callers get from classifyModelError. err is
+// expected to be nil or the direct result of classifyModelError.
 //
-// CHAOS-5380 PR-A, A3 ruling (team-lead, option (b), 2026-09-10): a context
-// cancellation reads as its own "cancelled" class at the PER-ATTEMPT level
-// (see attemptOutcomeClass) so a pre-call ctx.Err() is distinguishable from
-// the provider actually failing -- but this function, which also backs the
-// TERMINAL receipt.Outcome, deliberately keeps the ADR-documented vocabulary
-// unchanged. Extending it is a contract-token decision outside this lane's
-// authority; see the CHRIS-PENDING row in the lane handoff.
+// CHAOS-5380 PR-A, A3 ruling (team-lead, option (b), 2026-09-10) first added
+// "cancelled" as its own class at the PER-ATTEMPT level only (see
+// attemptOutcomeClass), deliberately leaving THIS function's TERMINAL
+// vocabulary unchanged pending a contract-token decision outside that lane's
+// authority (the CHRIS-PENDING row in its handoff). CHAOS-5577 (chris,
+// dictation 969, "Recommends accepted", D2 = A) resolves that row: a
+// PRE-CALL cancellation -- withRetry's own ctx.Err() check tags it with
+// ErrModelCancelled before classifyModelError ever sees it, since that is
+// the one place able to tell a pre-call cancellation apart from an in-call
+// one -- now reports "cancelled" here too. Every OTHER context cancellation
+// or deadline error -- an IN-CALL cancellation: the provider call was
+// actually in flight, or a per-attempt timeout,
+// neither of which is tagged ErrModelCancelled -- falls through to the
+// default branch below and keeps reporting "unavailable", exactly as before
+// CHAOS-5577: the runtime's own bounded deadline is what stopped the call,
+// same as any other unavailability.
 func receiptOutcomeForError(err error) string {
 	switch {
 	case err == nil:
 		return "pending_validation"
+	case errors.Is(err, contextfabric.ErrModelCancelled):
+		return "cancelled"
 	case errors.Is(err, contextfabric.ErrModelRateLimited):
 		return "rate_limited"
 	case errors.Is(err, contextfabric.ErrModelOutput):
@@ -1951,7 +1987,7 @@ func decisionOrgIDHash(orgID string) string {
 // primary_failure_classification are closed vocabularies already enforced
 // elsewhere (ModelOperation, receiptOutcomeForError, the model|default axis
 // source, and receiptOutcomeForError's own rate_limited/invalid_output/
-// unavailable set), and attempts/fallback_used are the receipt's own
+// unavailable/cancelled set), and attempts/fallback_used are the receipt's own
 // bounded numeric/boolean fields. NONE of the model's prompt, question
 // text, extracted subject/term text, or output text ever reaches this call
 // -- see TestDecisionEventNeverCarriesCorpusText for the standing
@@ -2262,13 +2298,25 @@ var contextFabricSanitizedStatusPattern = regexp.MustCompile(`provider response 
 
 // classifyModelError maps a raw generation error into one of the ACR-owned
 // model runtime sentinels (ErrModelRateLimited, ErrModelOutput,
-// ErrModelUnavailable) so callers can apply distinct handling and alerting
-// per CHAOS-3756. Only the error class and provider status name are
+// ErrModelUnavailable, or -- for a PRE-CALL cancellation withRetry already
+// tagged -- ErrModelCancelled) so callers can apply distinct handling and
+// alerting per CHAOS-3756. Only the error class and provider status name are
 // preserved in the wrapped message; the original error (which may carry
 // provider response fragments) is intentionally dropped rather than
 // wrapped, so raw prompt or response content never reaches logs, receipts,
 // or telemetry built from this error.
 func classifyModelError(err error) error {
+	// CHAOS-5577: withRetry tags a PRE-CALL cancellation with
+	// ErrModelCancelled before this function ever sees it. That error still
+	// also satisfies errors.Is(err, context.Canceled) /
+	// context.DeadlineExceeded, since it wraps whichever one ctx.Err()
+	// returned -- so this check MUST run first, or the branch below would
+	// swallow the distinction. Passed through unchanged, same as the bare
+	// context errors below: callers that only check
+	// errors.Is(err, context.Canceled) see no behavior change.
+	if errors.Is(err, contextfabric.ErrModelCancelled) {
+		return err
+	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}

@@ -139,9 +139,22 @@ Every operation records a content-safe receipt containing:
 - start and completion time;
 - attempts and token usage;
 - SHA-256 input and output digests;
-- outcome: `pending_validation` (generation succeeded, domain validation not yet applied by the caller), `success`, `fallback`, `invalid_output`, `rate_limited`, or `unavailable`. The last three mirror the error classification above one-for-one, so a receipt reader and a Go caller agree on what happened without re-deriving it from the error string.
+- outcome: `pending_validation` (generation succeeded, domain validation not yet applied by the caller), `success`, `fallback`, `invalid_output`, `rate_limited`, `unavailable`, or `cancelled`. The rate-limited/invalid-output/unavailable/cancelled members mirror the error classification above one-for-one, so a receipt reader and a Go caller agree on what happened without re-deriving it from the error string.
 
 Receipts never contain raw prompts, questions, credentials, unrestricted source bodies, or model chain-of-thought.
+
+### `cancelled` outcome for pre-call context cancellation (2026-09-11, CHAOS-5577)
+
+CHAOS-5380 (2026-09-10) first gave a context cancellation its own `cancelled` class, but scoped to the *per-attempt* `attempt_outcomes` decision-log field only (`genkitruntime.attemptOutcomeClass`) -- the terminal `receipt.Outcome` documented above was deliberately left unchanged, both moments still folding into `unavailable`, because widening the ADR-governed terminal vocabulary was ruled a contract-token decision outside that lane's authority.
+
+CHAOS-5577 (chris, dictation 969, "Recommends accepted", D2 = A) resolves that open item for the terminal field too, but narrower than the per-attempt class: it distinguishes two different moments a call can stop, where the per-attempt class does not --
+
+- **pre-call**: the caller's own context was already canceled or past its deadline *before* `withRetry` placed this attempt's call -- the provider never saw a request;
+- **in-call**: the call was actually in flight -- already sent to the provider -- when its context was canceled, or the per-attempt timeout elapsed.
+
+Only the pre-call case now reports the terminal outcome `cancelled`. `withRetry` is the one place that can tell the two apart (its own `ctx.Err()` check, in `internal/contextfabric/genkitruntime/runtime.go`, runs strictly before the per-attempt call is placed), so it tags a pre-call cancellation with the new `contextfabric.ErrModelCancelled` sentinel; `classifyModelError`/`receiptOutcomeForError` map that sentinel to `cancelled`. The in-call case is untouched: it keeps producing a bare `context.Canceled`/`context.DeadlineExceeded` (or a genkit-classified error), which still maps to `unavailable`, exactly as before this change. The per-attempt `attempt_outcomes` class from CHAOS-5380 is unaffected either way -- it still reads `cancelled` for both moments, coarser than the terminal field by design.
+
+This is telemetry-only: no wire contract, schema, OpenAPI, or MCP surface is touched -- `ModelExecutionReceipt.Outcome` stays a plain `string` field, and this section only documents which literal values a well-behaved writer emits.
 
 ## Evaluator seam
 
