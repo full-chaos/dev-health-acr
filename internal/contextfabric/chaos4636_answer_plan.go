@@ -1,7 +1,10 @@
 package contextfabric
 
 import (
+	"context"
+
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // CHAOS-4636 (S5 of the CHAOS-4452 intent-engine design, §6): the AnswerPlan
@@ -429,10 +432,44 @@ func stampAnswerPlan(result InvestigationResult, plan AnswerPlan) InvestigationR
 // route, and gate agreement -- the whole reason the measurement moved to
 // internal/contracts/v1 -- did not hold on the byte axis.
 //
-// Pure, and deliberately telemetry-free: it runs once per synthesis pass, and
-// a retry must not double-count a render-selection decision. The engine emits
-// that event once, for the result it actually serves.
+// Deliberately telemetry-free FOR EVERY DECISION EXCEPT ONE: it runs once per
+// synthesis pass, and a retry must not double-count a render-selection
+// decision or a membership-cardinality count, so those events are emitted
+// once, by the caller, for the result it actually serves -- never from here.
+//
+// THE ONE EXCEPTION is the read-requirement observation-cover decision.
+// Unlike the events above, it has no field on the served row to be read back
+// from later (see ReadRequirementObservationCoverEvent's own doc comment):
+// it is a pure diagnostic of HOW the row was computed, not part of the wire
+// document, so there is nothing to defer to and nothing to recompute at a
+// later point. It USED to be emitted directly here, through e.telemetry, at
+// the same call frequency the evaluator's own diagnostic line always had --
+// but this function runs once per PASS (first synthesis, the one bounded
+// budget retry, a candidate-narrowing re-finalize) and emitting inline meant
+// a served investigation logged one set of cover lines per pass, the
+// discarded ones included, with nothing to tell a reader which pass had
+// actually been served (P1, adversarial review). It now APPENDS its events
+// onto the pending assemblyTelemetry instead, tagged with `pass`, for
+// (*Engine).emit to publish exactly once, marking the served pass -- see
+// assemblyTelemetry.ObservationCover.
+const (
+	// answerPassFirst is the first synthesis attempt for an investigation.
+	answerPassFirst = 0
+	// answerPassSecond is whichever second attempt actually ran: the one
+	// bounded budget retry, OR -- when the cohort lever declined and no
+	// retry ran at all -- the candidate-narrowing re-finalize of the FIRST
+	// pass's result. The two are mutually exclusive within one investigation
+	// (fitAssembledResult only reaches one of them), so sharing the index is
+	// not ambiguous: it names the position in the sequence, not the mechanism.
+	answerPassSecond = 1
+	// answerPassThird is the candidate-narrowing re-finalize that runs after
+	// a retry (answerPassSecond) still did not fit.
+	answerPassThird = 2
+)
+
 func (e *Engine) finalizeResult(
+	ctx context.Context,
+	principal storage.Principal,
 	result InvestigationResult, plan AnswerPlan, frame *QuestionFrame,
 	// facts is BY VALUE: the bundle is already copied per attempt, and the
 	// population is derived INSIDE this function rather than threaded as a
@@ -446,6 +483,16 @@ func (e *Engine) finalizeResult(
 	// evaluated against stale facts reports coverage for a document nobody
 	// served.
 	facts CanonicalFactBundle,
+	// pending is the investigation's held telemetry. This function only ever
+	// APPENDS its cover events onto pending.ObservationCover -- never emits,
+	// never replaces -- so a caller that has no pending telemetry to thread
+	// (a direct unit-test call, say) may pass nil and simply lose the
+	// diagnostic, exactly as it would have if e.telemetry were nil before
+	// this change.
+	pending *assemblyTelemetry,
+	// pass is which attempt this call is, for the events this call produces
+	// -- see the answerPass* constants above.
+	pass int,
 ) InvestigationResult {
 	stamped := plan
 	result.AnswerPlan = &stamped
@@ -527,9 +574,45 @@ func (e *Engine) finalizeResult(
 	// served document publishes. Reading the `plan` parameter instead would
 	// be the same value today and a second source the first time a caller
 	// stamps something else.
-	result.Completeness.Outcomes = appendReadRequirementEvaluations(
+	//
+	// THE OBSERVATION-KEY SNAPSHOT IS CAPTURED ONCE, HERE, and threaded into
+	// the ONE readPopulationEvidence this whole finalization builds --
+	// never re-read per requirement. That is the snapshot discipline
+	// observationKeyAssignment's own doc comment states: an operand
+	// evaluated against one registry state and compared against another
+	// would produce a row no single registry state ever justified. A nil
+	// e.observationKeys (no dependency wired) yields a nil assignment, which
+	// every comparison already treats as "nothing declared" -- see
+	// ObservationKeys' own doc comment on EngineDependencies.
+	var observationKeys observationKeyAssignment
+	if e.observationKeys != nil {
+		observationKeys = e.observationKeys.ObservationKeyAssignment()
+	}
+	rows, coverEvents, carried := appendReadRequirementEvaluationsWithCover(
 		result.Completeness.Outcomes, stamped.Requirements, result.Coverage,
-		readPopulationEvidenceFrom(frame, result, stamped, facts))
+		readPopulationEvidenceFrom(frame, result, stamped, facts, observationKeys))
+	result.Completeness.Outcomes = rows
+	// THE ONE EXCEPTION this function's own doc comment names: APPENDED here
+	// onto the pending telemetry, tagged with this call's pass, for
+	// (*Engine).emit to publish exactly once per event -- nil-safe like every
+	// other deferred emitter, because a caller with nothing to thread (a
+	// direct unit-test call) simply gets no diagnostic, same as before.
+	//
+	// EVERY PASS SPEAKS FOR EVERY SERVED READ REQUIREMENT: a requirement this
+	// pass evaluated gets its fresh event (EvaluatedPass == pass), and one whose
+	// row this pass CARRIES from an earlier pass gets that pass's decision
+	// re-stated under this pass's number (carryObservationCover). A pass that
+	// carried rows used to emit nothing, and emit then marked the discarded
+	// pass served.
+	if pending != nil {
+		for i := range coverEvents {
+			coverEvents[i].Pass = pass
+			coverEvents[i].EvaluatedPass = pass
+		}
+		carriedEvents := carryObservationCover(pending.ObservationCover, carried, pass)
+		pending.ObservationCover = append(pending.ObservationCover, coverEvents...)
+		pending.ObservationCover = append(pending.ObservationCover, carriedEvents...)
+	}
 	result.Completeness = ComputeAnswerCompleteness(result)
 	return result
 }

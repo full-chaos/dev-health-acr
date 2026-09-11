@@ -127,7 +127,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// bug present to the caller as "your question was too big". An
 		// account that does not reconcile is the SAME kind of defect and
 		// takes the same exit -- never the budget refusal.
-		return InvestigationResult{}, assemblyTelemetry{}, err
+		return InvestigationResult{}, firstPass, err
 	}
 	overrun := measured.Overrun
 	if overrun == contractsv1.ContextFabricBudgetFits {
@@ -183,9 +183,9 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// single-subject investigation has no cohort, so `declined` is
 		// always nothing_to_narrow here and the refusal was reached
 		// without any content reduction ever being attempted.
-		attempt, accountingErr := e.planCandidateNarrowing(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts)
+		attempt, accountingErr := e.planCandidateNarrowing(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts, &firstPass, answerPassSecond)
 		if accountingErr != nil {
-			return InvestigationResult{}, assemblyTelemetry{}, accountingErr
+			return InvestigationResult{}, firstPass, accountingErr
 		}
 		if attempt.Served {
 			e.recordCandidateNarrowing(ctx, principal, plan, attempt, overrun, grouped, narrowed.Basis, before, after, declined, false, false)
@@ -223,7 +223,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// A refusal is still where a per-group breach matters most, and it
 		// still carries real quota fields rather than the zeros both
 		// refusal arms used to emit.
-		return InvestigationResult{}, assemblyTelemetry{}, e.planRefusal(ctx, principal, plan, measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined)
+		return InvestigationResult{}, firstPass, e.planRefusal(ctx, principal, plan, measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined)
 	}
 
 	e.recordPlanNarrowingStep(plan, PlanNarrowing{
@@ -294,8 +294,20 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// recorded just above, so this is its own accurate "state right
 		// before this synthesis call" snapshot, not a stale reuse of the
 		// first call's.
-		return InvestigationResult{}, assemblyTelemetry{}, withSynthesisNarrowingSnapshot(retryErr, *plan)
+		return InvestigationResult{}, firstPass, withSynthesisNarrowingSnapshot(retryErr, *plan)
 	}
+	// CARRY THE FIRST PASS'S COVER EVENTS FORWARD, into the retry's OWN
+	// assemblyTelemetry, before this pass appends its own. `retryPending` is a
+	// FRESH struct from this second synthesizeAndAssemble call -- it does not
+	// inherit `firstPass`'s fields -- and every return below this point
+	// returns some form of `retryPending`, never `firstPass`, so without this
+	// merge the first pass's discarded-answer cover events would simply be
+	// lost rather than published as the deliberate exception they are. See
+	// assemblyTelemetry.ObservationCover.
+	merged := make([]ReadRequirementObservationCoverEvent, 0, len(firstPass.ObservationCover)+len(retryPending.ObservationCover))
+	merged = append(merged, firstPass.ObservationCover...)
+	merged = append(merged, retryPending.ObservationCover...)
+	retryPending.ObservationCover = merged
 	// Finalize the retry too, or the second pass repeats round 1 finding 1's
 	// defect: measuring a pre-final shape and serving a larger one.
 	// TWO BINDINGS AT ONE SITE, and they are not alternatives.
@@ -311,7 +323,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// They are the same "stale document at the retry" class on different
 	// axes, found independently by two lanes. Taking one without the other
 	// re-opens the half it did not fix.
-	retried = e.finalizeResult(retried, *plan, params.Frame, retryParams.Facts)
+	retried = e.finalizeResult(ctx, principal, retried, *plan, params.Frame, retryParams.Facts, &retryPending, answerPassSecond)
 	// READ BACK FROM THE PRODUCER, not from the params and not from the local
 	// `retryAllocation`, and the difference is the entire lesson of this class.
 	//
@@ -327,7 +339,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// that the producer RETURNS what it consumed and the guard measures that.
 	retryMeasured, err := e.measureAssembledAttempt(ctx, principal, "re_synthesized_result", consumedRetryAllocation, retried, budget)
 	if err != nil {
-		return InvestigationResult{}, assemblyTelemetry{}, err
+		return InvestigationResult{}, retryPending, err
 	}
 	retryMeasurement := retryMeasured.Measurement
 	retryOverrun := retryMeasured.Overrun
@@ -347,9 +359,9 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	outcomeAttempt := outcomeNarrowingAttempt{Measured: retryMeasured}
 	if retryOverrun != contractsv1.ContextFabricBudgetFits {
 		var accountingErr error
-		outcomeAttempt, accountingErr = e.planCandidateNarrowing(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts)
+		outcomeAttempt, accountingErr = e.planCandidateNarrowing(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts, &retryPending, answerPassThird)
 		if accountingErr != nil {
-			return InvestigationResult{}, assemblyTelemetry{}, accountingErr
+			return InvestigationResult{}, retryPending, accountingErr
 		}
 	}
 	// ONE decision event per investigation. When the reduction rescues a
@@ -416,7 +428,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// retries explicitly: they inherit the same deadline problem and
 		// merely move the terminal case, arriving at the same unanswered
 		// question with more latency.
-		return InvestigationResult{}, assemblyTelemetry{}, e.refusalFrom(plan, retryMeasurement, retryOverrun, true)
+		return InvestigationResult{}, retryPending, e.refusalFrom(plan, retryMeasurement, retryOverrun, true)
 	}
 	// The SERVED answer is the retry's, so the ranking event that describes it
 	// is the retry's too. Emitting the first pass's would report a ranking

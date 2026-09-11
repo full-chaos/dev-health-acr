@@ -359,7 +359,12 @@ type recordingTelemetry struct {
 	groupedCohortCompletenesses []GroupedCohortCompletenessEvent
 	membershipCardinalities     []MembershipCardinalityEvent
 	readRequirementPopulations  []ReadRequirementPopulationEvent
-	commitAffirmations          int
+	// readRequirementObservationCovers records every observation-cover
+	// decision verbatim, same list-not-count discipline as the fields
+	// around it: a test asserts the EXACT field set, never merely that
+	// something fired.
+	readRequirementObservationCovers []ReadRequirementObservationCoverEvent
+	commitAffirmations               int
 	// categoryFactCompositions (CHAOS-4347) records every status-category
 	// composition event verbatim, same list-not-count discipline.
 	categoryFactCompositions       []CategoryFactCompositionEvent
@@ -651,6 +656,13 @@ func (r *recordingTelemetry) RecordMembershipCardinality(_ context.Context, _ st
 // recorded.
 func (r *recordingTelemetry) RecordReadRequirementPopulation(_ context.Context, _ storage.Principal, event ReadRequirementPopulationEvent) {
 	r.readRequirementPopulations = append(r.readRequirementPopulations, event)
+}
+
+// RecordReadRequirementObservationCover records the whole event, same
+// list-not-count discipline: a test must be able to assert the EXACT field
+// set the decision carried, not merely that something was recorded.
+func (r *recordingTelemetry) RecordReadRequirementObservationCover(_ context.Context, _ storage.Principal, event ReadRequirementObservationCoverEvent) {
+	r.readRequirementObservationCovers = append(r.readRequirementObservationCovers, event)
 }
 
 // RecordBudgetAssertion (Y3) records the whole event, same list-not-count

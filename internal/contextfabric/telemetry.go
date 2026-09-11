@@ -1210,6 +1210,54 @@ func (t SlogEngineTelemetry) RecordReadRequirementPopulation(ctx context.Context
 	t.logger.InfoContext(ctx, "context fabric read requirement population", args...)
 }
 
+// RecordReadRequirementObservationCover emits the observation-cover decision
+// at Info, with EVERY field on the event -- the same "delta is the point"
+// discipline ReadRequirementObservationCoverEvent's own doc comment states:
+// the kind count and the cover are both logged for served and observed alike,
+// because the cover alone cannot say whether it collapsed anything, and a
+// field omitted at its zero value would make "nothing collapsed" and
+// "nobody counted" look alike to a reader filtering on it.
+//
+// Content-safe by construction: two closed identity strings, one closed
+// subject-kind token, one closed withheld-reason token, and the rest
+// integers/booleans -- no key values and no kind lists, which would grow with
+// the fact registry. Every string still routes through SanitizeLogAttr, the
+// package's one log-injection barrier, like every sibling emitter.
+func (t SlogEngineTelemetry) RecordReadRequirementObservationCover(ctx context.Context, principal storage.Principal, event ReadRequirementObservationCoverEvent) {
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		// PRE-ENTRY: what this requirement asked for.
+		"requirement", SanitizeLogAttr(event.Requirement),
+		"obligation", SanitizeLogAttr(event.Obligation),
+		"subject_kind", SanitizeLogAttr(string(event.Subject)),
+		"threshold", event.Threshold,
+		"observed_kinds", event.ObservedKinds,
+		"served_kinds", event.ServedKinds,
+		// PRE-DECISION: what the declaration measured those kinds to be.
+		"observed_cover", event.ObservedCover,
+		"served_cover", event.ServedCover,
+		"collapsed_observations", event.CollapsedObservations,
+		"tainted_observations", event.TaintedObservations,
+		// DECISION + REASON, and POST-DECISION: the numbers the row publishes.
+		"declared", event.Declared,
+		"declared_raised_to_standard", event.DeclaredRaisedToStandard,
+		"meets_threshold", event.MeetsThreshold,
+		// pass/served: WHICH finalization produced this row and whether it is
+		// the one actually served. Cover events are kept for every pass, not
+		// just the last -- see assemblyTelemetry.ObservationCover -- so a
+		// reader filtering on served=true gets the served document's own
+		// numbers, and a reader who wants the discarded pass's has pass to
+		// group on.
+		"pass", event.Pass,
+		"evaluated_pass", event.EvaluatedPass,
+		"row_withheld", SanitizeLogAttr(string(event.RowWithheld)),
+		"reused", event.Reused,
+		"answer_withheld", event.AnswerWithheld,
+		"served", event.Served,
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric observation cover", args...)
+}
+
 func (t SlogEngineTelemetry) RecordMembershipCardinality(ctx context.Context, principal storage.Principal, event MembershipCardinalityEvent) {
 	args := []any{
 		"org_id", SanitizeLogAttr(principal.OrgID),

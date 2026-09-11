@@ -263,6 +263,23 @@ type EngineDependencies struct {
 	// *FactCapabilityRegistry implements it, and hosted/open.go wires the
 	// registry it already builds.
 	Requirements RequirementDeriver
+	// ObservationKeys (the observation-cover change) hands finalizeResult a
+	// SNAPSHOT of the registry's ObservationKey declarations, captured once
+	// per finalization and threaded to every threshold comparison the read
+	// evaluator and the read-population layer make -- see
+	// observationKeyAssignment's own doc comment for why a snapshot rather
+	// than a live handle.
+	//
+	// AN EXPLICITLY-WIRED FIELD, optional, the same discipline Requirements
+	// beside it follows. Left nil, every comparison falls back to counting
+	// fact KINDS -- an unkeyed lookup on a nil map returns no labels, which
+	// observationCover already treats as "no declared observation", so this
+	// is not a silent behaviour change for a caller that never wires it, only
+	// for one that does and whose declarations say two kinds are one source.
+	// *FactCapabilityRegistry implements it too, and hosted/open.go wires the
+	// SAME registry instance again, exactly as it already does for
+	// Requirements and Facts.
+	ObservationKeys ObservationKeyDeclarer
 }
 
 // EngineTelemetry receives content-safe operational counters from Engine.
@@ -1030,6 +1047,7 @@ type Engine struct {
 	priorHandleGrammarChecker  HandleGrammarChecker
 	offerPhraser               OfferPhraser
 	requirements               RequirementDeriver
+	observationKeys            ObservationKeyDeclarer
 	regimeAOffersDisabled      bool
 	maxItems                   int
 	maxSerializedBytes         int64
@@ -1068,6 +1086,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		priorHandleGrammarChecker:  dependencies.PriorHandleGrammarChecker,
 		offerPhraser:               dependencies.OfferPhraser,
 		requirements:               dependencies.Requirements,
+		observationKeys:            dependencies.ObservationKeys,
 		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
 		reuseRetrievalIdentity:   options.ReuseRetrievalIdentity,
 		reusePromptVersions:      options.ReusePromptVersions,
@@ -1121,6 +1140,21 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 		e.telemetry.RecordWindowContinuationDecision(ctx, principal, continuation)
 	}()
+	// THE OBSERVATION-COVER LINES ARE PUBLISHED ONCE, HERE, AT THE EXIT, and
+	// the exit decides `served`. They were published from emit, which runs
+	// before the final budget assertion, validation and persistence -- so an
+	// answer refused after evaluation still logged served=true for a document
+	// the caller never received. Declared above every return, like the
+	// continuation decision above, so no exit can skip it: `events` is kept
+	// current at every point that produces cover events, and `answered` is
+	// set ONLY at the two returns that hand the evaluated answer (fresh or
+	// reused) to the caller. Every other exit -- including a future one --
+	// publishes the lines with AnswerWithheld, never served.
+	var cover struct {
+		events   []ReadRequirementObservationCoverEvent
+		answered bool
+	}
+	defer func() { e.publishObservationCover(ctx, principal, cover.events, cover.answered) }()
 	if err := request.Validate(); err != nil {
 		continuation = continuation.withReason(ContinuationReasonRequestInvalid)
 		return InvestigationResult{}, fmt.Errorf("investigation request: %w", err)
@@ -1402,10 +1436,22 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// made here. The REMEDY when it no longer fits (budget-keyed reuse
 			// vs re-investigation) is floor paper C2 and is ticketed
 			// separately; refusing is the interim answer, not the final one.
+			//
+			// The reused document's cover decisions are re-stated for the
+			// trace BEFORE the re-validation, so a reuse refused here still
+			// shows what it would have served (AnswerWithheld) -- nothing on
+			// this path evaluates, and without this a reused answer carried
+			// read decisions with no line behind them.
+			var reuseKeys observationKeyAssignment
+			if e.observationKeys != nil {
+				reuseKeys = e.observationKeys.ObservationKeyAssignment()
+			}
+			cover.events = reusedObservationCoverEvents(reused, reuseKeys)
 			reused, reuseBudgetErr := e.finalizeServed(ctx, principal, BudgetAssertReuse, reused, nil, e.effectiveResponseBudget(request))
 			if reuseBudgetErr != nil {
 				return InvestigationResult{}, reuseBudgetErr
 			}
+			cover.answered = true
 			return reused, nil
 		}
 	}
@@ -2513,8 +2559,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// stage 3 measures that. The retry re-runs assembly AND finalization, so
 	// the shape measured on the second pass is the shape that would be
 	// served on the second pass.
-	result = e.finalizeResult(result, plan, familyOutcome.Frame, facts)
+	result = e.finalizeResult(ctx, principal, result, plan, familyOutcome.Frame, facts, &pendingTelemetry, answerPassFirst)
+	cover.events = pendingTelemetry.ObservationCover
 	result, pendingTelemetry, err = e.fitAssembledResult(ctx, principal, &plan, result, consumedAllocation, pendingTelemetry, retryBase)
+	// Read BEFORE the error check: a stage-3 refusal returns the telemetry of
+	// the passes it evaluated, so a refused answer still shows every decision
+	// it made (published with AnswerWithheld by the deferred publisher).
+	cover.events = pendingTelemetry.ObservationCover
 	if err != nil {
 		return InvestigationResult{}, err
 	}
@@ -2661,6 +2712,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// hand-copied.
 		e.recordStructureConfirmationOutcome(ctx, principal, request, structureCanon)
 	}
+	cover.answered = true
 	return result, nil
 }
 

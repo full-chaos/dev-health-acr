@@ -1,11 +1,13 @@
 package contextfabric
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // The read-requirement evaluator, held to the acceptance the design states:
@@ -773,13 +775,13 @@ func TestFinalizingAServedTurnEvaluatesItsReadRequirements(t *testing.T) {
 			"the row assertions below have nothing to scope to", servable)
 	}
 
-	served := engine.finalizeResult(InvestigationResult{
+	served := engine.finalizeResult(context.Background(), storage.Principal{}, InvestigationResult{
 		Status:   InvestigationComplete,
 		ResultID: "result_51050001",
 		Coverage: factCoverage(
 			contractsv1.ContextFabricFactHealth, SourceAvailable,
 			contractsv1.ContextFabricFactWorkload, SourceAvailable),
-	}, AnswerPlan{Requirements: published}, &frame, CanonicalFactBundle{})
+	}, AnswerPlan{Requirements: published}, &frame, CanonicalFactBundle{}, &assemblyTelemetry{}, answerPassFirst)
 
 	evaluated, seeded := 0, 0
 	for _, row := range served.Completeness.Outcomes {
@@ -884,7 +886,7 @@ func TestUnservableAndComputedRequirementsAreNotEvaluated(t *testing.T) {
 		AnswerPlan{},
 		CanonicalFactBundle{Facts: []CanonicalFact{
 			{Kind: contractsv1.ContextFabricFactHealth, Subject: member, SourceState: SourceAvailable},
-		}})
+		}}, nil)
 
 	unservable := readRequirement(CompletionQuantifierAtLeastOne)
 	unservable.Unavailable = string(RequirementReasonNoDeclaringProducer)
@@ -1580,5 +1582,127 @@ func TestTheNarrowedCauseIsTheFirstNarrowedKindInPublishedOrder(t *testing.T) {
 		t.Fatalf("outcome = %q, want narrowed -- one kind served in full and one was narrowed; if "+
 			"this ever reads satisfied the cause assertion above is measuring a row nobody looks at",
 			mixedRows[0].Outcome)
+	}
+}
+
+// TestTwoServedKindsSharingOneObservationDoNotCorroborate is the RED-FIRST
+// PIN for the observation-cover change: two DISTINCT fact kinds, both served
+// in full and both unnarrowed, that a KIND count would read `satisfied 2/2`
+// against a corroborated standard -- but whose registry declares them proxies
+// for the SAME observation, so the ruled count ("the minimum number of
+// distinct observations that covers every served kind") is 1, not 2.
+//
+// RED AT THE PARENT (d22c81e3). Commit 2 added observationCover as a pure
+// primitive but wired nothing to it -- readRequirementOutcomeRow still counts
+// by fact KIND there, so evidence.Served == 2 >= the corroborated threshold
+// of 2, `lossless` is true, and this exact fixture reads `satisfied 2/2`
+// (impact none, no cause) at the parent. The assertion that fails there is
+// the OUTCOME: this test wants `narrowed`/`depth`/`fact_narrowed` with the
+// shortfall counts 1/2, which only a cover-based `lossless` test produces.
+// This is TestEveryOperandReadReadsSatisfiedWithPopulationCounts's sibling
+// for the single_subject scope, in the same "red by the number, not by
+// coincidence" shape.
+//
+// TWO REGISTERED FIXTURE PROVIDERS, driven through the REAL registry:
+// NewFactCapabilityRegistry validates and stores both declarations, and
+// (*FactCapabilityRegistry).ObservationKeyAssignment -- the production
+// method finalizeResult calls -- is what turns them into the snapshot this
+// test hands to the evaluator. A hand-built observationKeyAssignment literal
+// would only prove the cover primitive works, which
+// observation_cover_test.go already does; this proves the REGISTRY -> the
+// evaluator's threshold comparison actually wires the two declarations
+// together.
+//
+// THE PRODUCTION FINALIZER. appendReadRequirementEvaluations is the exact
+// function finalizeResult calls to turn published read requirements plus
+// coverage plus population evidence into assembled-result rows -- see
+// finalizeResult's own call site in chaos4636_answer_plan.go. Every sibling
+// table test in this file drives requirements through it directly for the
+// same reason: it is the seam a caller cannot get around by hand-building a
+// row.
+func TestTwoServedKindsSharingOneObservationDoNotCorroborate(t *testing.T) {
+	t.Parallel()
+	health, workload := contractsv1.ContextFabricFactHealth, contractsv1.ContextFabricFactWorkload
+
+	// TWO FIXTURE PROVIDERS, ONE DECLARED OBSERVATION. Both project a fixture
+	// observation for SubjectTeam and both declare the SAME mnemonic key
+	// there -- the shape factKindObservationKey documents for a real
+	// (kind, subject kind) pairing built from one physical table.
+	healthProvider := &factProviderStub{capability: FactCapability{
+		Kind: health, Name: "fixture-health", Version: "v1",
+		SupportedSubjectKinds: []SubjectKind{SubjectTeam},
+		Dimension:             HealthDimensionCodeOwnershipRisk,
+		SubjectRoles:          []FactRole{FactRoleSubject},
+		ObservationKey: map[SubjectKind][]ObservationKey{
+			SubjectTeam: {"fixture_shared_observation"},
+		},
+	}}
+	workloadProvider := &factProviderStub{capability: FactCapability{
+		Kind: workload, Name: "fixture-workload", Version: "v1",
+		SupportedSubjectKinds: []SubjectKind{SubjectTeam},
+		Dimension:             HealthDimensionCodeOwnershipRisk,
+		SubjectRoles:          []FactRole{FactRoleSubject},
+		ObservationKey: map[SubjectKind][]ObservationKey{
+			SubjectTeam: {"fixture_shared_observation"},
+		},
+	}}
+	registry, err := NewFactCapabilityRegistry([]FactProvider{healthProvider, workloadProvider}, FactRegistryOptions{})
+	if err != nil {
+		t.Fatalf("NewFactCapabilityRegistry() error = %v", err)
+	}
+	assignment := registry.ObservationKeyAssignment()
+	if len(assignment) != 2 {
+		t.Fatalf("assignment carries %d fact kinds, want 2 -- the premise (both providers registered "+
+			"and both declaring an ObservationKey) did not hold, so the assertions below would not be "+
+			"measuring what this test claims: %+v", len(assignment), assignment)
+	}
+
+	// A corroborated requirement over both kinds, single_subject scope --
+	// readRequirement's own fixture shape, reused so this test's identity and
+	// subject kind match the sibling table above exactly.
+	requirement := readRequirement(CompletionQuantifierCorroborated)
+	// BOTH KINDS AVAILABLE AND UNNARROWED: the premise that makes a kind
+	// count read `satisfied` and only the observation cover disagrees.
+	coverage := factCoverage(health, SourceAvailable, workload, SourceAvailable)
+
+	rows := appendReadRequirementEvaluations(nil,
+		[]contractsv1.ContextFabricPlanRequirement{requirement}, coverage,
+		readPopulationEvidence{assignment: assignment})
+	row := rowFor(t, rows, requirement.Requirement)
+
+	assertRow(t, row,
+		contractsv1.ContextFabricRequirementNarrowed,
+		contractsv1.ContextFabricAnswerImpactDepth,
+		contractsv1.ContextFabricCoverageDetailFactNarrowed,
+		// CauseObserved FALSE: nothing REPORTED a narrowing or a failure --
+		// both kinds came back clean. The shortfall is the evaluator's own
+		// inference from the cover, exactly the source-shortfall arm's rule.
+		false,
+		// THE SHORTFALL COUNTS: one distinct observation served, against a
+		// corroborated standard of two. Not 2/2 (kind count) and not the
+		// union-size mutant observationCover's own tests already kill.
+		1, 2)
+	// NO REDUCTION REFINEMENT: Declared here is the standard's own demand,
+	// never a population that held 2 observations and lost one -- there was
+	// only ever one observation in play.
+	if len(row.Refinements) != 0 {
+		t.Fatalf("no reduction step ran (nothing failed; the shortfall is a cover collapse, not a "+
+			"loss), so the row must carry no refinement, got %+v", row.Refinements)
+	}
+
+	// PARTIAL COMPLETENESS WITH EVERY OTHER REQUIREMENT SATISFIED. A second,
+	// unrelated identity's satisfied row sits beside this one so the overall
+	// state is exercised too, not just this row in isolation.
+	satisfiedElsewhere := RequirementOutcomeRow{
+		Stage:       contractsv1.ContextFabricOutcomeStageAssembledResult,
+		Requirement: "state/subject/project", Obligation: string(ObligationState),
+		Outcome: contractsv1.ContextFabricRequirementSatisfied,
+		Impact:  contractsv1.ContextFabricAnswerImpactNone,
+		Served:  1, Declared: 1,
+	}
+	state := contractsv1.DeriveContextFabricAnswerCompletenessState(append(rows, satisfiedElsewhere))
+	if state != contractsv1.ContextFabricAnswerCompletenessPartial {
+		t.Fatalf("answer state = %q, want partial -- one narrowed row beside an otherwise-satisfied "+
+			"set derives partial, never complete", state)
 	}
 }

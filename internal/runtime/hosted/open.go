@@ -801,11 +801,20 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// contract and dead in production, which is the disposition this
 		// file's own comment records happening once already.
 		Requirements: factRegistry,
-		Graph:        graphReader,
-		Facts:        factRegistry,
-		Synthesizer:  contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextFabricSynthesizerOptions(request.options.ServiceVersion), Telemetry: engineTelemetry},
-		Results:      investigationStore,
-		ReuseGate:    investigationStore,
+		// The SAME factRegistry again, for the observation-key snapshot the
+		// engine's read evaluator and read-population layer thread through
+		// one finalization -- see ObservationKeys' own doc comment
+		// (EngineDependencies) and *FactCapabilityRegistry.ObservationKeyAssignment.
+		// Wired for the identical reason Requirements is: left nil, every
+		// threshold comparison falls back to counting fact KINDS, silently
+		// losing the "two kinds, one observation" disclosure this registry
+		// declares.
+		ObservationKeys: factRegistry,
+		Graph:           graphReader,
+		Facts:           factRegistry,
+		Synthesizer:     contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextFabricSynthesizerOptions(request.options.ServiceVersion), Telemetry: engineTelemetry},
+		Results:         investigationStore,
+		ReuseGate:       investigationStore,
 		// CHAOS-3782 Codex round-1 F1: same *pginvestigation.Store also
 		// implements SourceWatermarkSnapshotter, so Engine can capture
 		// the reuse snapshot itself, before the graph read, rather than

@@ -450,6 +450,21 @@ type PlanTelemetry interface {
 	// silently empty stream on the one path that means the answer's own
 	// numbers do not add up.
 	RecordItemAccounting(ctx context.Context, principal storage.Principal, event ItemAccountingEvent)
+	// RecordReadRequirementObservationCover reports ONE read requirement's
+	// observation-cover decision: the kind counts, the covers on each side
+	// of the mixed-state rule, and the standard the row was measured
+	// against. See ReadRequirementObservationCoverEvent's own doc comment
+	// for why both the kind count and the cover ride every line, and why no
+	// key values or kind lists do.
+	//
+	// It used to reach only slog.Default() -- Go's process-wide fallback
+	// logger, never the service's own configured stream -- which made the
+	// decision emittable in a test that installed its own default handler
+	// but unobservable in production. REQUIRED on this interface for the
+	// same reason every sibling method states: a sink that cannot report
+	// this decision must be a compile error, not a line that quietly keeps
+	// missing the service's own log stream.
+	RecordReadRequirementObservationCover(ctx context.Context, principal storage.Principal, event ReadRequirementObservationCoverEvent)
 }
 
 // GroupedCohortCompletenessEvent (CHAOS-4733) is CLOSED ENUMS AND COUNTS

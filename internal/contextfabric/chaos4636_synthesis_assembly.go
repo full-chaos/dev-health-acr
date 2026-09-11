@@ -584,11 +584,37 @@ type assemblyTelemetry struct {
 	// event published always describes the cohort actually served.
 	CohortRanked       *CohortRankedEvent
 	CommitAffirmations []CommitAffirmationOutcome
+	// ObservationCover holds every read-requirement observation-cover event
+	// from EVERY pass this investigation ran (finalizeResult APPENDS to it,
+	// never replaces it), tagged per event with which pass produced it -- see
+	// ReadRequirementObservationCoverEvent.Pass.
+	//
+	// THIS DIFFERS FROM CohortRanked ON PURPOSE, even though both are
+	// per-pass values seeded by the engine and touched again on a retry.
+	// CohortRanked is REPLACED because it describes the cohort actually
+	// served, and a discarded pass's ranking is not itself a decision a
+	// reader needs. A discarded PASS is a decision, though: a P1 review found
+	// finalizeResult emitting cover events inline, once per pass, so a served
+	// investigation logged two sets of cover lines and the FIRST described an
+	// answer nobody received. The fix here is not to suppress that first set
+	// -- the governing rule for this event is that a reader must be able to
+	// rebuild the whole decision graph from the trace, and "the first answer
+	// was too big, here is what it would have covered" is part of that graph.
+	// So every pass's events are kept, and (*Engine).emit marks which one was
+	// actually served.
+	ObservationCover []ReadRequirementObservationCoverEvent
 }
 
 // emit publishes the held events. The engine calls it EXACTLY ONCE, for the
 // result it actually serves, so a retry's discarded first pass contributes
 // nothing to any per-investigation counter.
+//
+// ObservationCover is the ONE DELIBERATE EXCEPTION to that rule: it publishes
+// EVERY pass's events, not just the served one's. See
+// assemblyTelemetry.ObservationCover for why -- in short, a discarded pass is
+// itself a decision the observability bar requires a reader be able to
+// rebuild, so suppressing it here would trade one defect (double-counting)
+// for another (losing the record of the first attempt entirely).
 func (e *Engine) emit(ctx context.Context, principal storage.Principal, pending assemblyTelemetry) {
 	if e.telemetry != nil && pending.WindowCanonicalization != nil {
 		e.telemetry.RecordWindowCanonicalization(ctx, principal, *pending.WindowCanonicalization)
@@ -601,4 +627,35 @@ func (e *Engine) emit(ctx context.Context, principal storage.Principal, pending 
 		e.telemetry.RecordCohortDriverNarration(ctx, principal, *pending.CohortNarration)
 	}
 	e.recordCommitAffirmation(ctx, principal, pending.CommitAffirmations)
+	// The observation-cover events are NOT published here. emit runs before
+	// the final budget assertion, validation and persistence, any of which can
+	// still withhold the answer, and a cover line marked served for an answer
+	// the caller never received is the defect this ordering removes. They are
+	// published once, at Investigate's exit -- see publishObservationCover.
+}
+
+// publishObservationCover publishes every pass's observation-cover events,
+// ONCE, from Investigate's exit, when it is known whether the answer was
+// returned.
+//
+// answered: the FINAL pass's events -- the highest Pass value, the one whose
+// result is returned -- read Served=true and every earlier pass's false.
+// Not answered (a refusal, a failed validation, a save-time supersession, a
+// persistence failure after evaluation): every event reads Served=false and
+// AnswerWithheld=true, so no line claims an answer the caller never received.
+func (e *Engine) publishObservationCover(ctx context.Context, principal storage.Principal, events []ReadRequirementObservationCoverEvent, answered bool) {
+	if e.telemetry == nil || len(events) == 0 {
+		return
+	}
+	finalPass := events[0].Pass
+	for _, event := range events {
+		if event.Pass > finalPass {
+			finalPass = event.Pass
+		}
+	}
+	for _, event := range events {
+		event.Served = answered && event.Pass == finalPass
+		event.AnswerWithheld = !answered
+		e.telemetry.RecordReadRequirementObservationCover(ctx, principal, event)
+	}
 }

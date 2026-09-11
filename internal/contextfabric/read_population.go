@@ -155,6 +155,17 @@ type readPopulationEvidence struct {
 	// per-slot standard would REQUIRE that binding, which is why it is refused
 	// rather than merely unbuilt.
 	comparisonStandards map[SubjectKind]operandStandard
+	// assignment is the SNAPSHOT of the registry's ObservationKey
+	// declarations this whole evidence set was built from -- see
+	// observationKeyAssignment's own doc comment for why a snapshot rather
+	// than a live handle. Captured ONCE, by readPopulationEvidenceFrom, and
+	// read by every site in this file that turns a served-kind list into a
+	// THRESHOLD COMPARISON (readSubjectCount, unreadSubjectCause,
+	// readPopulationOutcomeRow's sameness arm). Nil is a legal value -- "no
+	// dependency wired" -- and every reader already treats an unkeyed lookup
+	// as "no declared observation", so a nil assignment reproduces the old
+	// kind-count behaviour exactly rather than failing closed some other way.
+	assignment observationKeyAssignment
 }
 
 // operandStandard is one operand kind's declared completion standard: the
@@ -168,6 +179,23 @@ type readPopulationEvidence struct {
 type operandStandard struct {
 	kinds     []FactKind
 	threshold int
+	// assignment is the SAME snapshot readPopulationEvidence.assignment
+	// carries, captured with kinds/threshold IN THE SAME readPopulationEvidenceFrom
+	// CALL -- not a bare set of extracted keys.
+	//
+	// A BARE []ObservationKey WAS THE ALTERNATIVE, AND IT LOSES THE
+	// ASSOCIATION TO THE KIND WITNESSES. comparisonFullyRead judges an
+	// operand by intersecting servedKindsForSubject's per-subject result
+	// (a []FactKind) against this standard's catalog and threshold; turning
+	// that into a count needs, per kind, WHICH keys that kind declares --
+	// exactly what observationCover(kinds, subject, assignment) reads. A
+	// flattened key set could no longer answer "which of these served kinds
+	// carries which key", only "which keys exist somewhere in the catalog",
+	// which is not enough to cover a caller-supplied served-kind subset.
+	// Carrying the whole snapshot keeps kind -> key resolution exact for
+	// ANY subset, at the cost of nothing (the map is shared, not copied,
+	// across every operand's standard).
+	assignment observationKeyAssignment
 }
 
 // populationFor returns the population a requirement's scope names, and
@@ -467,6 +495,12 @@ func readPopulationEvidenceFrom(
 	result InvestigationResult,
 	plan AnswerPlan,
 	facts CanonicalFactBundle,
+	// assignment is the registry's ObservationKey snapshot, captured by the
+	// caller ONCE per finalization -- see readPopulationEvidence.assignment's
+	// own doc comment. Threaded straight onto the evidence and onto every
+	// operandStandard built below, so every reader of either shares the
+	// exact same registry-state snapshot this evaluation was built from.
+	assignment observationKeyAssignment,
 ) readPopulationEvidence {
 	evidence := readPopulationEvidence{
 		Present:             true,
@@ -475,6 +509,7 @@ func readPopulationEvidenceFrom(
 		groupPopulation:     cohortGroupPopulation(result.Cohort, plan.Narrowing),
 		operandPopulations:  map[SubjectKind]readPopulation{},
 		comparisonStandards: map[SubjectKind]operandStandard{},
+		assignment:          assignment,
 	}
 
 	// EACH OPERAND KIND'S OWN STANDARD, off the published plan.
@@ -499,8 +534,9 @@ func readPopulationEvidenceFrom(
 			continue
 		}
 		evidence.comparisonStandards[requirement.Subject] = operandStandard{
-			kinds:     requirement.FactKinds,
-			threshold: threshold,
+			kinds:      requirement.FactKinds,
+			threshold:  threshold,
+			assignment: assignment,
 		}
 	}
 
@@ -550,7 +586,15 @@ func operandKinds(frame *QuestionFrame) []SubjectKind {
 }
 
 // readSubjectCount returns how many of a population's subjects were READ --
-// i.e. met the requirement's own kind standard on their own facts.
+// i.e. met the requirement's own OBSERVATION standard on their own facts.
+//
+// THE THRESHOLD IS AN OBSERVATION COVER, NOT A KIND COUNT (the ruling: "two
+// fact kinds backed by one observation are one source"). servedKindsForSubject
+// already filters to what the KIND-LEVEL evaluator called served for this one
+// subject; observationCover then dedupes THAT per-subject set against the
+// subject's OWN kind -- a population is homogeneous (every member of one
+// readPopulation shares one subject kind), so subject.Kind is exactly the
+// coordinate the standard's catalog was declared against.
 //
 // Iterates `population.Subjects` and the requirement's declared kinds, NEVER
 // the coverage map, so the count cannot depend on Go's map iteration order.
@@ -559,10 +603,12 @@ func readSubjectCount(
 	servedKinds []FactKind,
 	threshold int,
 	coverage map[string]map[FactKind]SourceState,
+	assignment observationKeyAssignment,
 ) int {
 	read := 0
 	for _, subject := range population.Subjects {
-		if len(servedKindsForSubject(subject, servedKinds, coverage)) >= threshold {
+		served := servedKindsForSubject(subject, servedKinds, coverage)
+		if observationCover(served, subject.Kind, assignment) >= threshold {
 			read++
 		}
 	}
@@ -616,11 +662,13 @@ func unreadSubjectCause(
 	servedKinds []FactKind,
 	threshold int,
 	coverage map[string]map[FactKind]SourceState,
+	assignment observationKeyAssignment,
 ) (contractsv1.ContextFabricCoverageDetailCode, bool) {
 	worst := 0
 	var code contractsv1.ContextFabricCoverageDetailCode
 	for _, subject := range population.Subjects {
-		if len(servedKindsForSubject(subject, servedKinds, coverage)) >= threshold {
+		served := servedKindsForSubject(subject, servedKinds, coverage)
+		if observationCover(served, subject.Kind, assignment) >= threshold {
 			continue
 		}
 		states := coverage[SubjectMapKey(subject)]
@@ -659,6 +707,13 @@ func readPopulationOutcomeRow(
 	evidence readPopulationEvidence,
 	servedKinds []FactKind,
 	threshold int,
+	// subject is THIS ROW's own declared subject kind (requirement.Subject),
+	// carried down so the sameness arm's comparison-wide intersection --
+	// which can span operands of SEVERAL subject kinds -- is covered against
+	// THIS row's own standard, the same "readiness at the operand's own
+	// standard, sameness at this row's" split comparisonFullyRead already
+	// documents.
+	subject SubjectKind,
 ) RequirementOutcomeRow {
 	// NOT ENUMERABLE: nothing can name this population, so nothing may
 	// certify or reduce over it. `unavailable`/`dimension` with its own
@@ -678,7 +733,7 @@ func readPopulationOutcomeRow(
 		return row
 	}
 
-	read := readSubjectCount(population, servedKinds, threshold, evidence.coverage)
+	read := readSubjectCount(population, servedKinds, threshold, evidence.coverage, evidence.assignment)
 
 	// PARTIALLY READ: fewer of the population were read than the owner
 	// declared. Scope, not depth -- the caller is shown fewer subjects, and
@@ -688,7 +743,7 @@ func readPopulationOutcomeRow(
 		row.Impact = contractsv1.ContextFabricAnswerImpactScope
 		row.Served = read
 		row.Declared = population.Declared
-		if code, observed := unreadSubjectCause(population, servedKinds, threshold, evidence.coverage); observed {
+		if code, observed := unreadSubjectCause(population, servedKinds, threshold, evidence.coverage, evidence.assignment); observed {
 			row.CauseCoverage = code
 			row.CauseObserved = true
 			return row
@@ -739,16 +794,24 @@ func readPopulationOutcomeRow(
 	// against it.
 	if population.Census != populationIncomplete && evidence.comparisonFullyRead() {
 		common := commonServedKinds(evidence.comparisonOperands, servedKinds, evidence.coverage)
-		if len(common) < threshold {
+		// THE OBSERVATION COVER OF THE SHARED KINDS, NOT THEIR COUNT. Two
+		// kinds in `common` backed by one declared observation are one
+		// source sharing the SAME evidence, not two independent sources
+		// corroborating each other -- the ruling this whole change
+		// implements, applied to the sameness conjunct exactly as it is
+		// applied everywhere else. Covered at THIS ROW's own subject kind:
+		// see readPopulationOutcomeRow's `subject` parameter doc comment.
+		commonCover := observationCover(common, subject, evidence.assignment)
+		if commonCover < threshold {
 			// Depth: the subjects the answer covers are unchanged, and what
-			// stands behind them is thinner. KIND counts, and no refinement
-			// -- no reduction STEP ran, there was simply less shared to
-			// begin with.
+			// stands behind them is thinner. OBSERVATION counts, and no
+			// refinement -- no reduction STEP ran, there was simply less
+			// shared to begin with.
 			row.Outcome = contractsv1.ContextFabricRequirementNarrowed
 			row.Impact = contractsv1.ContextFabricAnswerImpactDepth
 			row.CauseCoverage = contractsv1.ContextFabricCoverageDetailFactNarrowed
 			row.CauseObserved = false
-			row.Served = len(common)
+			row.Served = commonCover
 			row.Declared = threshold
 			return row
 		}
@@ -853,7 +916,11 @@ func readRequirementPopulationEventsFrom(
 	if result.AnswerPlan == nil {
 		return nil
 	}
-	populations := readPopulationEvidenceFrom(frame, result, plan, facts)
+	// nil assignment: this builder only reads `populations.populationFor`'s
+	// Census off the population authority (see the doc comment above) and
+	// never runs a threshold comparison, so the observation-key snapshot has
+	// nothing to affect here.
+	populations := readPopulationEvidenceFrom(frame, result, plan, facts, nil)
 	byIdentity := make(map[string]contractsv1.ContextFabricPlanRequirement, len(result.AnswerPlan.Requirements))
 	for _, requirement := range result.AnswerPlan.Requirements {
 		byIdentity[requirement.Requirement] = requirement
@@ -956,7 +1023,15 @@ func (e readPopulationEvidence) comparisonFullyRead() bool {
 		if !declared {
 			return false
 		}
-		if len(servedKindsForSubject(subject, standard.kinds, e.coverage)) < standard.threshold {
+		// THE OBSERVATION COVER OF THE OPERAND'S OWN SERVED KINDS, against
+		// ITS OWN threshold -- and covered with the standard's OWN captured
+		// assignment (operandStandard.assignment), not e.assignment: both are
+		// the same snapshot in production, but the standard's own copy is
+		// what keeps this readiness test tied to the exact declarations
+		// `kinds`/`threshold` were read off, per operandStandard's own doc
+		// comment.
+		served := servedKindsForSubject(subject, standard.kinds, e.coverage)
+		if observationCover(served, subject.Kind, standard.assignment) < standard.threshold {
 			return false
 		}
 	}
