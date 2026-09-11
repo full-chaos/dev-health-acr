@@ -116,9 +116,9 @@ func TestWindowContinuation_D0Probe_RedAtParentGreenAtTip(t *testing.T) {
 	t.Logf("  turn-one carried family ....... %q", prior.AnswerPlan.Family)
 	t.Logf("  turn-two FORCED fresh family .. %q (group_kind=%q)", QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
 	if result.AnswerPlan != nil {
-		t.Logf("  SERVED answer_plan.family ..... %q", result.AnswerPlan.Family)
-		t.Logf("  SERVED family_source .......... %q", result.AnswerPlan.FamilySource)
-		t.Logf("  SERVED group_kind ............. %q", result.AnswerPlan.GroupKind)
+		t.Logf("  SERVED answer_plan.family ..... %q", servedPlanFamily(result))
+		t.Logf("  SERVED family_source .......... %q", servedPlanSource(result))
+		t.Logf("  SERVED group_kind ............. %q", servedPlanGroup(result))
 	} else {
 		t.Logf("  SERVED answer_plan ............ <nil>")
 	}
@@ -134,15 +134,15 @@ func TestWindowContinuation_D0Probe_RedAtParentGreenAtTip(t *testing.T) {
 	}
 	// THE FALSIFIER. Passes only if the parent already preserves turn one's
 	// validated reading under forced disagreement.
-	if result.AnswerPlan.Family != QuestionFamilyDiscoveredCohortRanking ||
-		result.AnswerPlan.FamilySource != QuestionFamilySourceCarried {
+	if servedPlanFamily(result) != QuestionFamilyDiscoveredCohortRanking ||
+		servedPlanSource(result) != QuestionFamilySourceCarried {
 		t.Fatalf(
 			"D-0 PROBE 1: NOT FALSIFIED. The parent DISCARDED the validated turn-one context.\n"+
 				"  want family=%q family_source=%q (parent preserves -> F2 wholly CHAOS-4835)\n"+
 				"  got  family=%q family_source=%q\n"+
 				"  plan-carry lookup outcome=%v, applied-carry emits=%d",
 			QuestionFamilyDiscoveredCohortRanking, QuestionFamilySourceCarried,
-			result.AnswerPlan.Family, result.AnswerPlan.FamilySource,
+			servedPlanFamily(result), servedPlanSource(result),
 			func() []PlanCarryOutcome {
 				out := make([]PlanCarryOutcome, 0, len(telemetry.planCarryOutcomes))
 				for _, r := range telemetry.planCarryOutcomes {
@@ -243,12 +243,12 @@ func TestWindowContinuation_D0ControlA_TheLegacyCarryStillApplies(t *testing.T) 
 		t.Fatalf("Investigate() error = %v", err)
 	}
 	t.Logf("CONTROL A: served family=%q source=%q legacy_carries=%d continuation_carries=%d",
-		result.AnswerPlan.Family, result.AnswerPlan.FamilySource,
+		servedPlanFamily(result), servedPlanSource(result),
 		legacyAppliedCarries(telemetry), continuationAppliedCarries(telemetry))
 
-	if result.AnswerPlan.FamilySource != QuestionFamilySourceCarried {
+	if servedPlanSource(result) != QuestionFamilySourceCarried {
 		t.Fatalf("CONTROL A FAILED: served family_source=%q, want carried -- the legacy carry must still apply, or the probe's red at the parent proves nothing",
-			result.AnswerPlan.FamilySource)
+			servedPlanSource(result))
 	}
 	if legacyAppliedCarries(telemetry) != 1 {
 		t.Fatalf("CONTROL A FAILED: legacy-attributed applied-carry emits = %d, want 1", legacyAppliedCarries(telemetry))
@@ -306,7 +306,7 @@ func TestWindowContinuation_D0ControlB_TheContinuationEmitCannotPassAsLegacy(t *
 		t.Fatalf("Investigate() error = %v", err)
 	}
 	t.Logf("CONTROL B: served family=%q source=%q legacy_carries=%d continuation_carries=%d",
-		result.AnswerPlan.Family, result.AnswerPlan.FamilySource,
+		servedPlanFamily(result), servedPlanSource(result),
 		legacyAppliedCarries(telemetry), continuationAppliedCarries(telemetry))
 
 	if continuationAppliedCarries(telemetry) != 1 {

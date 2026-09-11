@@ -33,6 +33,25 @@ func servedPlanAxes(result InvestigationResult) (QuestionFamily, QuestionFamilyS
 	return result.AnswerPlan.Family, result.AnswerPlan.FamilySource, result.AnswerPlan.GroupKind
 }
 
+// servedPlanFamily, servedPlanSource and servedPlanGroup are servedPlanAxes'
+// three halves, for pins that read one of them. Every pin in these files reads
+// the served plan through them, so a refused turn (no plan) is a failed
+// assertion rather than a panic that aborts the whole package.
+func servedPlanFamily(result InvestigationResult) QuestionFamily {
+	family, _, _ := servedPlanAxes(result)
+	return family
+}
+
+func servedPlanSource(result InvestigationResult) QuestionFamilySource {
+	_, source, _ := servedPlanAxes(result)
+	return source
+}
+
+func servedPlanGroup(result InvestigationResult) SubjectKind {
+	_, _, group := servedPlanAxes(result)
+	return group
+}
+
 // assertContinuationRefused asserts the served document IS the continuation
 // refusal, on both surfaces and in prose.
 func assertContinuationRefused(t *testing.T, result InvestigationResult) {

@@ -132,7 +132,7 @@ func TestBoundary_ARefusedTurnWithNoFrameIsNotAContinuation(t *testing.T) {
 	d := h.soleDecision(t)
 	t.Logf("disposition=%q reason=%q composition=%q accepted=%v | status=%q plan_source=%q plan_family=%q plan_group=%q",
 		d.Disposition, d.Reason, d.CompositionOutcome, d.Accepted != nil,
-		result.Status, result.AnswerPlan.FamilySource, result.AnswerPlan.Family, result.AnswerPlan.GroupKind)
+		result.Status, servedPlanSource(result), servedPlanFamily(result), servedPlanGroup(result))
 
 	if d.Disposition == ContinuationApplied {
 		t.Fatalf("the fresh gate REFUSED and the continuation was applied anyway (composition=%q)", d.CompositionOutcome)
@@ -143,9 +143,9 @@ func TestBoundary_ARefusedTurnWithNoFrameIsNotAContinuation(t *testing.T) {
 	if d.Accepted != nil {
 		t.Errorf("a withheld turn published an accepted context")
 	}
-	if result.AnswerPlan.FamilySource == QuestionFamilySourceCarried {
+	if servedPlanSource(result) == QuestionFamilySourceCarried {
 		t.Errorf("the refused turn served the carried family anyway (family=%q group=%q)",
-			result.AnswerPlan.Family, result.AnswerPlan.GroupKind)
+			servedPlanFamily(result), servedPlanGroup(result))
 	}
 }
 
@@ -714,7 +714,7 @@ func TestBoundary_ARefusedWindowOnlyCarrierIsServedByNothing(t *testing.T) {
 			d := h.soleDecision(t)
 			t.Logf("disposition=%q reason=%q window_only=%v blocks_legacy=%v | SERVED family=%q family_source=%q group=%q",
 				d.Disposition, d.Reason, d.WindowOnlyShape, d.BlocksLegacyCarry(),
-				result.AnswerPlan.Family, result.AnswerPlan.FamilySource, result.AnswerPlan.GroupKind)
+				servedPlanFamily(result), servedPlanSource(result), servedPlanGroup(result))
 			for _, o := range h.telemetry.planCarryOutcomes {
 				t.Logf("plan carry: outcome=%q source=%q seed=%q", o.outcome, o.sourceResultID, o.seedSource)
 			}
@@ -728,9 +728,9 @@ func TestBoundary_ARefusedWindowOnlyCarrierIsServedByNothing(t *testing.T) {
 			if !d.BlocksLegacyCarry() {
 				t.Errorf("blocks_legacy=false on a refused window-only carrier")
 			}
-			if result.AnswerPlan.FamilySource == QuestionFamilySourceCarried {
+			if servedPlanSource(result) == QuestionFamilySourceCarried {
 				t.Errorf("the continuation was REFUSED and the legacy carry served the same carrier anyway (family=%q group=%q)",
-					result.AnswerPlan.Family, result.AnswerPlan.GroupKind)
+					servedPlanFamily(result), servedPlanGroup(result))
 			}
 		})
 	}
