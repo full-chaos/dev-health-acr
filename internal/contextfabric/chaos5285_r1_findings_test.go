@@ -409,3 +409,118 @@ func TestAnAtBoundGroupReadLineCarriesItsGroupKind(t *testing.T) {
 		t.Fatalf("CONTROL BROKEN: group_kind = %v on an in-bound turn", line["group_kind"])
 	}
 }
+
+// TestTheGroupReadLineIsTrueOnEveryExit is the SWEEP behind P2-3 and P2-5:
+// every exit the group stage has, driven through Engine.Investigate onto the
+// configured logger, with the line's claims checked against what the turn
+// actually did.
+//
+// The invariant is `group_read_issued` <=> a group-rooted provider request was
+// recorded, on EVERY exit -- the two P2 findings were each one exit where the
+// line and the execution disagreed, and a pin per finding would not see the
+// next exit that drifts. The axis is checked on every row for the same reason.
+//
+// NOT t.Parallel(): it installs the process default logger.
+func TestTheGroupReadLineIsTrueOnEveryExit(t *testing.T) {
+	onlyMemberRow := stubRequirementDeriver{rows: []DerivedRequirement{{
+		RequirementCoordinate: RequirementCoordinate{Obligation: ObligationState, Role: SubjectRoleMember, Subject: SubjectProject},
+		Kind:                  ObligationKindRead,
+		FactKinds:             []FactKind{FactMetrics},
+		Scope:                 CompletionScopeEachMember,
+		Quantifier:            CompletionQuantifierAtLeastOne,
+	}}}
+	twoMembers := []CohortMember{
+		{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_a", Label: "project_a"}, Rank: 1, InclusionReasons: []string{"matched"}},
+		{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_b", Label: "project_b"}, Rank: 2, InclusionReasons: []string{"matched"}},
+	}
+	type exit struct {
+		name    string
+		refusal GroupReadRefusal
+		issued  bool
+		build   func(t *testing.T, telemetry EngineTelemetry) (*Engine, InvestigationRequest, *groupReadRecorder)
+	}
+	exits := []exit{
+		{"served", GroupReadRefusalNone, true, func(t *testing.T, tel EngineTelemetry) (*Engine, InvestigationRequest, *groupReadRecorder) {
+			recorder := groupReadServing("team_security", "team_platform")
+			engine, request := groupReadEngineFixture(t, tel, recorder)
+			return engine, request, recorder
+		}},
+		{"over_contract_bound", GroupReadRefusalOverContractBound, false, func(t *testing.T, tel EngineTelemetry) (*Engine, InvestigationRequest, *groupReadRecorder) {
+			recorder := &groupReadRecorder{facts: func(CanonicalFactRequest) CanonicalFactBundle {
+				bundle := emptyFactBundle()
+				bundle.Facts = groupReadOverBoundMemberFacts()
+				bundle.Coverage.Sources = []SourceObservation{{Source: "canonical_fact:metrics", State: SourceAvailable}}
+				return bundle
+			}}
+			engine, request := groupReadEngineFixtureOverBound(t, tel, recorder)
+			return engine, request, recorder
+		}},
+		{"no_read_requirement", GroupReadRefusalNoReadRequirement, false, func(t *testing.T, tel EngineTelemetry) (*Engine, InvestigationRequest, *groupReadRecorder) {
+			recorder := groupReadServing("team_security", "team_platform")
+			engine, request := groupReadEngineFixtureConfigured(t, tel, recorder, twoMembers, nil, SubjectProject, nil, nil,
+				func(config *groupReadFixtureConfig) { config.deriver = onlyMemberRow })
+			return engine, request, recorder
+		}},
+		{"authorization_unavailable", GroupReadRefusalAuthorizationUnavailable, false, func(t *testing.T, tel EngineTelemetry) (*Engine, InvestigationRequest, *groupReadRecorder) {
+			recorder := groupReadServing("team_security", "team_platform")
+			engine, request := groupReadEngineFixtureConfigured(t, tel, recorder, twoMembers, nil, SubjectProject, nil, nil,
+				func(config *groupReadFixtureConfig) {
+					config.graph.authorizationErr = fmt.Errorf("injected: authorizer unavailable")
+				})
+			return engine, request, recorder
+		}},
+		{"no_group_admitted", GroupReadRefusalNoGroupAdmitted, false, func(t *testing.T, tel EngineTelemetry) (*Engine, InvestigationRequest, *groupReadRecorder) {
+			recorder := groupReadServing("team_security", "team_platform")
+			engine, request := groupReadEngineFixtureDenying(t, tel, recorder, TeamCanonicalID("team_security"), TeamCanonicalID("team_platform"))
+			return engine, request, recorder
+		}},
+		{"read_failed", GroupReadRefusalReadFailed, true, func(t *testing.T, tel EngineTelemetry) (*Engine, InvestigationRequest, *groupReadRecorder) {
+			recorder := groupReadServing()
+			engine, request := groupReadEngineFixtureFull(t, tel, &groupReadFailingReader{inner: recorder}, twoMembers, nil, SubjectProject, nil, nil)
+			return engine, request, recorder
+		}},
+		{"metadata_conflict", GroupReadRefusalMetadataConflict, true, func(t *testing.T, tel EngineTelemetry) (*Engine, InvestigationRequest, *groupReadRecorder) {
+			recorder := metadataConflictRecorder("health-v2")
+			engine, request := groupReadEngineFixture(t, tel, recorder)
+			return engine, request, recorder
+		}},
+	}
+	covered := map[GroupReadRefusal]bool{}
+	for _, row := range exits {
+		t.Run(row.name, func(t *testing.T) {
+			logs := captureEngineLogger(t)
+			engine, request, recorder := row.build(t, logs.telemetry)
+			if _, err := engine.Investigate(canonicalRequestContext(), storage.Principal{OrgID: "org_1"}, request); err != nil {
+				t.Fatalf("Investigate() error = %v", err)
+			}
+			line := cohortGroupReadLine(t, logs)
+			sent := len(recorder.groupRootedRequests(SubjectTeam))
+			t.Logf("exit=%s refusal=%v issued=%v refused=%v group_kind=%v group_requests_sent=%d",
+				row.name, line["group_read_refusal"], line["group_read_issued"], line["group_read_refused"], line["group_kind"], sent)
+			if line["group_read_refusal"] != string(row.refusal) {
+				t.Fatalf("refusal = %v, want %q -- the fixture must reach this exit", line["group_read_refusal"], row.refusal)
+			}
+			covered[row.refusal] = true
+			if got := line["group_read_issued"]; got != row.issued || got != (sent > 0) {
+				t.Errorf("group_read_issued = %v with %d group-rooted request(s) sent -- the line must say whether a provider was asked, and it disagrees with the execution", got, sent)
+			}
+			if got, want := line["group_read_refused"], row.refusal != GroupReadRefusalNone; got != want {
+				t.Errorf("group_read_refused = %v, want %v", got, want)
+			}
+			if line["group_kind"] != string(SubjectTeam) {
+				t.Errorf("group_kind = %v, want %q -- the axis this turn proposed", line["group_kind"], SubjectTeam)
+			}
+		})
+	}
+	// Every member of the refusal vocabulary is an exit, and every exit is a
+	// row: a refusal added later without a row here fails this check.
+	for _, refusal := range []GroupReadRefusal{GroupReadRefusalNone, GroupReadRefusalOverContractBound, GroupReadRefusalNoReadRequirement,
+		GroupReadRefusalAuthorizationUnavailable, GroupReadRefusalNoGroupAdmitted, GroupReadRefusalReadFailed, GroupReadRefusalMetadataConflict} {
+		if !covered[refusal] {
+			t.Errorf("exit %q was not reached by any row", refusal)
+		}
+	}
+	if len(canonicalGroupReadRefusals) != len(covered) {
+		t.Errorf("the refusal vocabulary has %d members and the sweep reached %d -- an exit has no row", len(canonicalGroupReadRefusals), len(covered))
+	}
+}
