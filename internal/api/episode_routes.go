@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/episode"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
@@ -58,7 +59,7 @@ func (a *App) handleEpisode(w http.ResponseWriter, r *http.Request) {
 	}
 	episode.Duplicate = duplicate
 	if err := episode.Validate(); err != nil {
-		a.logger.ErrorContext(r.Context(), "episode creator returned invalid output", "request_id", RequestID(r.Context()), "failure_class", "episode_output")
+		a.logger.ErrorContext(r.Context(), "episode creator returned invalid output", "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "episode_output")
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "Episode response is invalid", false, nil)
 		return
 	}
@@ -100,7 +101,7 @@ func (a *App) writeEpisodeError(w http.ResponseWriter, r *http.Request, principa
 	case errors.Is(err, context.DeadlineExceeded) || errors.Is(r.Context().Err(), context.DeadlineExceeded):
 		writeError(w, r, http.StatusGatewayTimeout, "upstream_unavailable", "Episode recording timed out", true, nil)
 	default:
-		a.logger.ErrorContext(r.Context(), "episode recording dependency failed", "request_id", RequestID(r.Context()), "failure_class", "episode_creator")
+		a.logger.ErrorContext(r.Context(), "episode recording dependency failed", "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "episode_creator")
 		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Episode recording is temporarily unavailable", true, nil)
 	}
 }

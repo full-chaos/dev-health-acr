@@ -111,7 +111,7 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 		if state := result.Completeness.State; state != "" &&
 			state != contractsv1.DeriveContextFabricAnswerCompletenessState(result.Completeness.Outcomes) {
 			a.logger.InfoContext(r.Context(), "context fabric legacy completeness state admitted",
-				"request_id", RequestID(r.Context()),
+				"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
 				"stored_state", string(state),
 				"outcome_rows", len(result.Completeness.Outcomes))
 		}
@@ -141,7 +141,7 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 			// document the store already validated on read.
 			if err := projection.Validate(); err != nil {
 				a.logger.ErrorContext(r.Context(), "context fabric projection failed contract validation",
-					"request_id", RequestID(r.Context()), "failure_class", "context_fabric_projection")
+					"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "context_fabric_projection")
 				writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric answer projection could not be produced", false, nil)
 				return
 			}
@@ -308,6 +308,6 @@ func (a *App) writeInvestigationResultError(w http.ResponseWriter, r *http.Reque
 		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Context Fabric is temporarily unavailable", true, nil)
 		return
 	}
-	a.logger.ErrorContext(r.Context(), "context fabric investigation result read failed", "request_id", RequestID(r.Context()), "failure_class", "context_fabric_investigation_result")
+	a.logger.ErrorContext(r.Context(), "context fabric investigation result read failed", "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "context_fabric_investigation_result")
 	writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation result read failed", false, nil)
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/logsanitize"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -114,7 +115,7 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 				a.writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
 				return
 			}
-			a.logger.ErrorContext(r.Context(), "credential lookup failed", "request_id", requestID(r), "failure_class", "credential_store")
+			a.logger.ErrorContext(r.Context(), "credential lookup failed", "request_id", logsanitize.SanitizeLogAttr(requestID(r)), "failure_class", "credential_store")
 			a.writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Credential service is temporarily unavailable", true, nil)
 			return
 		}
@@ -211,7 +212,7 @@ func PrincipalFromContext(ctx context.Context) (storage.Principal, bool) {
 
 func (a *Authenticator) recordUnknownFailure(r *http.Request, ip, reason string, now time.Time) {
 	a.limiter.RecordFailure(ip, now)
-	a.logger.WarnContext(r.Context(), "ACR authentication failed", "reason", reason, "remote_ip", ip, "request_id", requestID(r))
+	a.logger.WarnContext(r.Context(), "ACR authentication failed", "reason", reason, "remote_ip", ip, "request_id", logsanitize.SanitizeLogAttr(requestID(r)))
 }
 
 func (a *Authenticator) recordKnownFailure(r *http.Request, credential contractsv1.ClientCredential, reason string, now time.Time) {

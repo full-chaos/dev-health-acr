@@ -76,11 +76,17 @@ func TestSanitizeLogAttrIsTheOnlyImplementationLeft(t *testing.T) {
 // not of any output, so this pin reads the source directly -- the same
 // justification the codebase's own AST-shaped pins elsewhere in this repo
 // use when a property is structural rather than behavioural.
+//
+// CHAOS-5558 RELOCATED the actual implementation to internal/logsanitize
+// (internal/auth needed the same barrier and cannot import this package --
+// a real cycle, see chaos5544_log_sanitizer.go's own doc comment) -- this
+// pin follows it there rather than reading this package's now-thin
+// re-export, which no longer contains the NewReplacer call at all.
 func TestSanitizeLogAttrUsesTheRecognizedReplacerShape(t *testing.T) {
 	t.Parallel()
-	src, err := os.ReadFile("chaos5544_log_sanitizer.go")
+	src, err := os.ReadFile("../logsanitize/logsanitize.go")
 	if err != nil {
-		t.Fatalf("could not read chaos5544_log_sanitizer.go: %v", err)
+		t.Fatalf("could not read ../logsanitize/logsanitize.go: %v", err)
 	}
 	text := string(src)
 	if !strings.Contains(text, "strings.NewReplacer(") {
