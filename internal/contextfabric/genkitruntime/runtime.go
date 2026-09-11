@@ -1877,17 +1877,32 @@ func (r *Runtime) withRetry(ctx context.Context, fn func(context.Context) error)
 			// classifies THIS attempt from the bare, unwrapped err, exactly
 			// as before -- attemptOutcomeClass's own "cancelled" class
 			// (CHAOS-5380) is unaffected. Only the error RETURNED from
-			// withRetry is tagged with ErrModelCancelled, so
+			// withRetry is CONDITIONALLY tagged with ErrModelCancelled, so
 			// classifyModelError/receiptOutcomeForError can report the new
-			// TERMINAL "cancelled" outcome for this case specifically,
-			// without touching the per-attempt log. An IN-CALL cancellation
-			// -- fn(callCtx) below actually invoked, its context canceled or
-			// timed out while the call was in flight -- returns its own bare
+			// TERMINAL "cancelled" outcome for this case, without touching
+			// the per-attempt log.
+			//
+			// Tagged ONLY on attempt==1 (round 2 finding, P1): attempt N>1
+			// is reachable ONLY after a PRIOR attempt actually invoked
+			// fn(callCtx) below and returned a retryable failure -- the
+			// provider WAS genuinely contacted earlier in this same
+			// operation, contradicting the ADR's own "the provider never
+			// saw a request" definition of "cancelled". A pre-call
+			// cancellation on attempt 2+ therefore falls through to the
+			// bare, untagged err (same as an in-call cancellation) and
+			// keeps the pre-existing "unavailable" terminal classification
+			// -- only a cancellation before the VERY FIRST attempt, where
+			// no provider contact has ever happened for this operation,
+			// is "cancelled". An in-call cancellation -- fn(callCtx) below
+			// actually invoked, its context canceled or timed out while
+			// the call was in flight -- always returns its own bare
 			// context.Canceled/context.DeadlineExceeded from the branch
-			// below, never tagged, and keeps the pre-existing "unavailable"
-			// terminal classification.
+			// below, never tagged, regardless of attempt number.
 			record(attempt, started, err)
-			return outcomes, fmt.Errorf("%w: %w", contextfabric.ErrModelCancelled, err)
+			if attempt == 1 {
+				return outcomes, fmt.Errorf("%w: %w", contextfabric.ErrModelCancelled, err)
+			}
+			return outcomes, err
 		}
 		callCtx, cancel := context.WithTimeout(ctx, r.config.Timeout)
 		err := fn(callCtx)

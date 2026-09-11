@@ -505,3 +505,69 @@ func TestSynthesizeDecisionLineFiresOnOversizedPayload(t *testing.T) {
 	}
 	assertDecisionLineNotReached(t, onlyDecisionEvent(t, handler).Attrs)
 }
+
+// --- round 2 P1: a pre-call cancellation on a LATER attempt, after an
+// earlier attempt already contacted the provider, must NOT read
+// "cancelled" terminally ---
+
+// cancelAfterFirstAttemptGenerator lets a test cancel the caller's own ctx
+// from INSIDE the generator's first call -- deterministic and race-free
+// (single goroutine, no synchronization needed): attempt 1 genuinely
+// contacts the provider and returns a retryable failure, then cancels ctx
+// before returning, so attempt 2's pre-call ctx.Err() check in withRetry
+// fires with the caller's context already done. If attempt 2's own
+// Interpret is ever invoked, that is itself the failure this generator
+// exists to catch (attempt 2 must never reach the provider once ctx is
+// already cancelled) -- it returns a distinguishable error rather than
+// panicking, so a regression reads as a normal test failure.
+type cancelAfterFirstAttemptGenerator struct {
+	calls  int
+	cancel context.CancelFunc
+}
+
+func (g *cancelAfterFirstAttemptGenerator) Interpret(context.Context, generationRequest) (interpretationOutput, contextfabric.ModelUsage, error) {
+	g.calls++
+	if g.calls == 1 {
+		g.cancel()
+		return interpretationOutput{}, contextfabric.ModelUsage{}, retryableUnavailable()
+	}
+	return interpretationOutput{}, contextfabric.ModelUsage{}, errors.New("attempt 2 must never reach the provider once ctx is already cancelled")
+}
+
+func (g *cancelAfterFirstAttemptGenerator) Synthesize(context.Context, generationRequest) (synthesisOutput, contextfabric.ModelUsage, error) {
+	return synthesisOutput{}, contextfabric.ModelUsage{}, errors.New("not used by this test")
+}
+
+func (g *cancelAfterFirstAttemptGenerator) Phrase(context.Context, generationRequest) (phrasingOutput, contextfabric.ModelUsage, error) {
+	return phrasingOutput{}, contextfabric.ModelUsage{}, errors.New("not used by this test")
+}
+
+// TestPreCallCancellationOnALaterAttemptStaysUnavailable pins the round 2
+// P1 fix: attempt 1 actually contacts the provider (a real retryable
+// failure), the caller's context is cancelled before attempt 2 is placed,
+// and attempt 2's own pre-call ctx.Err() check fires -- but because the
+// provider WAS already contacted earlier in this same operation, the
+// terminal outcome must read "unavailable", not "cancelled". Only a
+// cancellation before the operation's very FIRST attempt (no prior
+// provider contact at all) reads "cancelled" -- see
+// TestPreCallCancellationTerminalReceiptOutcomeIsCancelled for that cell.
+func TestPreCallCancellationOnALaterAttemptStaysUnavailable(t *testing.T) {
+	t.Parallel()
+	handler, logger := newCaptureLogger()
+	ctx, cancel := context.WithCancel(context.Background())
+	generator := &cancelAfterFirstAttemptGenerator{cancel: cancel}
+	runtime := mustRuntime(t, generator, Config{Logger: logger, MaxAttempts: 2})
+	if _, _, err := runtime.InterpretQuestion(ctx, storage.Principal{OrgID: "org_1"}, validRequest()); err == nil {
+		t.Fatal("InterpretQuestion() error = nil, want the terminal failure surfaced")
+	}
+	if generator.calls != 1 {
+		t.Fatalf("generator.calls = %d, want 1 -- attempt 2 must never reach the provider once ctx is already cancelled", generator.calls)
+	}
+	attrs := onlyDecisionEvent(t, handler).Attrs
+	if got := attrString(t, attrs, "outcome"); got != "unavailable" {
+		t.Fatalf("outcome = %q, want %q -- attempt 1 already contacted the provider, so a later pre-call cancellation is not \"the provider never saw a request\"", got, "unavailable")
+	}
+	if got := attrString(t, attrs, "attempt_outcomes"); got != "1:unavailable,2:cancelled" {
+		t.Fatalf("attempt_outcomes = %q, want %q (per-attempt class is unaffected by this fix)", got, "1:unavailable,2:cancelled")
+	}
+}

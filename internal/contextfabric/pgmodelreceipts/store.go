@@ -2,8 +2,8 @@
 // contextfabric.ModelReceiptSink (CHAOS-3775, AC-3775-6; closes drift item
 // D16 -- §19.13 confirmed no non-test ModelReceiptSink implementation
 // existed anywhere on main). It durably records every model execution
-// receipt: success, fallback, invalid_output, rate_limited, and
-// unavailable outcomes alike, for every organization's runtime, so usage,
+// receipt: success, fallback, invalid_output, rate_limited, unavailable,
+// and cancelled outcomes alike, for every organization's runtime, so usage,
 // cost, and the fallback rate are measurable.
 //
 // Insert-only: this package never updates or deletes a receipt row. A
