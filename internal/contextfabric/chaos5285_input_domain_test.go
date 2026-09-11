@@ -888,6 +888,25 @@ func domainGroupReadDisclosure(t *testing.T, d *domainTable) {
 	d.want(guard, "applyGroupReadDisclosure", "over_bound", apply(GroupReadDisclosureOverBound, SubjectTeam), "partial=true limitations=1")
 	d.want(guard, "applyGroupReadDisclosure", "zero group kind (no axis to name)", apply(GroupReadDisclosureUnread, ""), "partial=false limitations=0")
 	d.want(guard, "applyGroupReadDisclosure", "out-of-vocabulary disclosure token", apply(GroupReadDisclosure("free text"), SubjectTeam), "partial=false limitations=0")
+	// A list already at the contract's limitation cap: the disclosure takes a
+	// model caveat's place and the loss is counted, never dropped silently.
+	full := func(disclosure GroupReadDisclosure) string {
+		result := InvestigationResult{}
+		for i := 0; i < contractsv1.ContextFabricLimitationsMaxCount; i++ {
+			result.Limitations = append(result.Limitations, fmt.Sprintf("model caveat %d.", i))
+		}
+		applyGroupReadDisclosure(&result, disclosure, SubjectTeam)
+		return fmt.Sprintf("limitations=%d displaced=%d disclosed=%v", len(result.Limitations), result.LimitationsDisplaced, hasGroupReadDisclosure(result.Limitations))
+	}
+	d.want(guard, "applyGroupReadDisclosure", "unread onto a full list", full(GroupReadDisclosureUnread), fmt.Sprintf("limitations=%d displaced=1 disclosed=true", contractsv1.ContextFabricLimitationsMaxCount))
+	// Each token reaches its OWN composer: the exact sentence, not a count.
+	sentence := func(disclosure GroupReadDisclosure) string {
+		result := InvestigationResult{}
+		applyGroupReadDisclosure(&result, disclosure, SubjectTeam)
+		return strings.Join(result.Limitations, "|")
+	}
+	d.want(guard, "applyGroupReadDisclosure", "unread (its sentence)", sentence(GroupReadDisclosureUnread), contractsv1.ContextFabricGroupReadUnreadLimitation(contractsv1.ContextFabricSubjectTeam))
+	d.want(guard, "applyGroupReadDisclosure", "over_bound (its sentence)", sentence(GroupReadDisclosureOverBound), contractsv1.ContextFabricGroupListOverBoundLimitation(contractsv1.ContextFabricSubjectTeam))
 	principal := storage.Principal{OrgID: "org_1"}
 	key := func(disclosure GroupReadDisclosure) string {
 		records := captureSlogJSON(t, func(logger *slog.Logger) {

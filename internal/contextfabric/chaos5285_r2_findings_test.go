@@ -151,8 +151,9 @@ func TestAPlanSeamI6RefusalServesTheRequestedAxis(t *testing.T) {
 // that a proposed group was not read.
 type servedGroupReadCase struct {
 	name  string
-	want  string // the exact limitation the served document must carry
-	build func(t *testing.T) (*Engine, InvestigationRequest)
+	want  string              // the exact limitation the served document must carry
+	token GroupReadDisclosure // what the group-read line must say it disclosed
+	build func(t *testing.T, telemetry *recordingTelemetry) (*Engine, InvestigationRequest)
 }
 
 func servedGroupReadCases() []servedGroupReadCase {
@@ -161,35 +162,35 @@ func servedGroupReadCases() []servedGroupReadCase {
 		{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_b", Label: "project_b"}, Rank: 2, InclusionReasons: []string{"matched"}},
 	}
 	return []servedGroupReadCase{
-		{"denied (one of two groups)", contractsv1.ContextFabricGroupReadUnreadLimitation(contractsv1.ContextFabricSubjectTeam), func(t *testing.T) (*Engine, InvestigationRequest) {
-			return groupReadEngineFixtureDenying(t, &recordingTelemetry{}, groupReadServing("team_security", "team_platform"), TeamCanonicalID("team_platform"))
+		{"denied (one of two groups)", contractsv1.ContextFabricGroupReadUnreadLimitation(contractsv1.ContextFabricSubjectTeam), GroupReadDisclosureUnread, func(t *testing.T, telemetry *recordingTelemetry) (*Engine, InvestigationRequest) {
+			return groupReadEngineFixtureDenying(t, telemetry, groupReadServing("team_security", "team_platform"), TeamCanonicalID("team_platform"))
 		}},
-		{"missing (admitted, no facts returned)", contractsv1.ContextFabricGroupReadUnreadLimitation(contractsv1.ContextFabricSubjectTeam), func(t *testing.T) (*Engine, InvestigationRequest) {
-			return groupReadEngineFixture(t, &recordingTelemetry{}, groupReadServing("team_security"))
+		{"missing (admitted, no facts returned)", contractsv1.ContextFabricGroupReadUnreadLimitation(contractsv1.ContextFabricSubjectTeam), GroupReadDisclosureUnread, func(t *testing.T, telemetry *recordingTelemetry) (*Engine, InvestigationRequest) {
+			return groupReadEngineFixture(t, telemetry, groupReadServing("team_security"))
 		}},
-		{"no group admitted", contractsv1.ContextFabricGroupReadUnreadLimitation(contractsv1.ContextFabricSubjectTeam), func(t *testing.T) (*Engine, InvestigationRequest) {
-			return groupReadEngineFixtureDenying(t, &recordingTelemetry{}, groupReadServing("team_security", "team_platform"), TeamCanonicalID("team_security"), TeamCanonicalID("team_platform"))
+		{"no group admitted", contractsv1.ContextFabricGroupReadUnreadLimitation(contractsv1.ContextFabricSubjectTeam), GroupReadDisclosureUnread, func(t *testing.T, telemetry *recordingTelemetry) (*Engine, InvestigationRequest) {
+			return groupReadEngineFixtureDenying(t, telemetry, groupReadServing("team_security", "team_platform"), TeamCanonicalID("team_security"), TeamCanonicalID("team_platform"))
 		}},
-		{"over the contract bound", contractsv1.ContextFabricGroupListOverBoundLimitation(contractsv1.ContextFabricSubjectTeam), func(t *testing.T) (*Engine, InvestigationRequest) {
+		{"over the contract bound", contractsv1.ContextFabricGroupListOverBoundLimitation(contractsv1.ContextFabricSubjectTeam), GroupReadDisclosureOverBound, func(t *testing.T, telemetry *recordingTelemetry) (*Engine, InvestigationRequest) {
 			recorder := &groupReadRecorder{facts: func(CanonicalFactRequest) CanonicalFactBundle {
 				bundle := emptyFactBundle()
 				bundle.Facts = groupReadOverBoundMemberFacts()
 				bundle.Coverage.Sources = []SourceObservation{{Source: "canonical_fact:metrics", State: SourceAvailable}}
 				return bundle
 			}}
-			return groupReadEngineFixtureOverBound(t, &recordingTelemetry{}, recorder)
+			return groupReadEngineFixtureOverBound(t, telemetry, recorder)
 		}},
-		{"read failed", contractsv1.ContextFabricGroupReadUnreadLimitation(contractsv1.ContextFabricSubjectTeam), func(t *testing.T) (*Engine, InvestigationRequest) {
-			return groupReadEngineFixtureFull(t, &recordingTelemetry{}, &groupReadFailingReader{inner: groupReadServing()}, twoMembers, nil, SubjectProject, nil, nil)
+		{"read failed", contractsv1.ContextFabricGroupReadUnreadLimitation(contractsv1.ContextFabricSubjectTeam), GroupReadDisclosureUnread, func(t *testing.T, telemetry *recordingTelemetry) (*Engine, InvestigationRequest) {
+			return groupReadEngineFixtureFull(t, telemetry, &groupReadFailingReader{inner: groupReadServing()}, twoMembers, nil, SubjectProject, nil, nil)
 		}},
-		{"authorization unavailable", contractsv1.ContextFabricGroupReadUnreadLimitation(contractsv1.ContextFabricSubjectTeam), func(t *testing.T) (*Engine, InvestigationRequest) {
-			return groupReadEngineFixtureConfigured(t, &recordingTelemetry{}, groupReadServing("team_security", "team_platform"), twoMembers, nil, SubjectProject, nil, nil,
+		{"authorization unavailable", contractsv1.ContextFabricGroupReadUnreadLimitation(contractsv1.ContextFabricSubjectTeam), GroupReadDisclosureUnread, func(t *testing.T, telemetry *recordingTelemetry) (*Engine, InvestigationRequest) {
+			return groupReadEngineFixtureConfigured(t, telemetry, groupReadServing("team_security", "team_platform"), twoMembers, nil, SubjectProject, nil, nil,
 				func(config *groupReadFixtureConfig) {
 					config.graph.authorizationErr = fmt.Errorf("injected: authorizer unavailable")
 				})
 		}},
-		{"metadata conflict", contractsv1.ContextFabricGroupReadUnreadLimitation(contractsv1.ContextFabricSubjectTeam), func(t *testing.T) (*Engine, InvestigationRequest) {
-			return groupReadEngineFixture(t, &recordingTelemetry{}, metadataConflictRecorder("health-v2"))
+		{"metadata conflict", contractsv1.ContextFabricGroupReadUnreadLimitation(contractsv1.ContextFabricSubjectTeam), GroupReadDisclosureUnread, func(t *testing.T, telemetry *recordingTelemetry) (*Engine, InvestigationRequest) {
+			return groupReadEngineFixture(t, telemetry, metadataConflictRecorder("health-v2"))
 		}},
 	}
 }
@@ -231,10 +232,18 @@ func TestAnUnreadGroupIsDisclosedOnTheServedDocument(t *testing.T) {
 	for _, row := range servedGroupReadCases() {
 		t.Run(row.name, func(t *testing.T) {
 			t.Parallel()
-			engine, request := row.build(t)
+			telemetry := &recordingTelemetry{}
+			engine, request := row.build(t, telemetry)
 			result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
 			if err != nil {
 				t.Fatalf("Investigate() error = %v", err)
+			}
+			// The trace and the document say the same thing: the group-read
+			// line names the disclosure the served document carries.
+			if reads := telemetry.cohortGroupReads; len(reads) == 0 {
+				t.Errorf("no group-read line was recorded")
+			} else if got := reads[len(reads)-1].Disclosure; got != row.token {
+				t.Errorf("group-read line disclosure = %q, want %q -- the line and the served document disagree", got, row.token)
 			}
 			service := servedServiceAuthoredLimitations(result)
 			t.Logf("%s: partial=%v limitations=%q service_authored=%d groups=%v", row.name, result.Coverage.Partial, result.Limitations, len(service), groupCompleteness(result))
@@ -263,13 +272,17 @@ func TestAnUnreadGroupIsDisclosedOnTheServedDocument(t *testing.T) {
 // P1-3, and it passes on both sides: both groups read, nothing to disclose.
 func TestAFullyReadGroupAxisCarriesNoGroupReadDisclosure(t *testing.T) {
 	t.Parallel()
-	engine, request := groupReadEngineFixture(t, &recordingTelemetry{}, groupReadServing("team_security", "team_platform"))
+	telemetry := &recordingTelemetry{}
+	engine, request := groupReadEngineFixture(t, telemetry, groupReadServing("team_security", "team_platform"))
 	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
 	if err != nil {
 		t.Fatalf("CONTROL BROKEN: Investigate() error = %v", err)
 	}
 	if hasGroupReadDisclosure(result.Limitations) {
 		t.Fatalf("CONTROL BROKEN: a fully read group axis carries a group-read disclosure: %q", result.Limitations)
+	}
+	if reads := telemetry.cohortGroupReads; len(reads) == 0 || reads[len(reads)-1].Disclosure != GroupReadDisclosureNone {
+		t.Fatalf("CONTROL BROKEN: the group-read line of a fully read axis does not say none: %+v", reads)
 	}
 }
 
