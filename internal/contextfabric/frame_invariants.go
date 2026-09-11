@@ -317,19 +317,25 @@ type FrameValidationFailure struct {
 type FrameFailureDetail string
 
 const (
-	FrameFailureNoVariant             FrameFailureDetail = "no_variant_set"
-	FrameFailureMultipleVariants      FrameFailureDetail = "multiple_variants_set"
-	FrameFailureVariantKindMismatch   FrameFailureDetail = "variant_disagrees_with_kind"
-	FrameFailureKindUnset             FrameFailureDetail = "kind_unset"
-	FrameFailureTooFewOperands        FrameFailureDetail = "too_few_operands"
-	FrameFailureNoTerms               FrameFailureDetail = "no_terms"
-	FrameFailureBlankTerm             FrameFailureDetail = "blank_term"
-	FrameFailureNoAnchorTerms         FrameFailureDetail = "no_anchor_terms"
-	FrameFailureMemberKindUnset       FrameFailureDetail = "member_kind_unset"
-	FrameFailureMemberKindInvalid     FrameFailureDetail = "member_kind_invalid"
-	FrameFailureGroupKindUnset        FrameFailureDetail = "group_kind_unset"
-	FrameFailureGroupKindInvalid      FrameFailureDetail = "group_kind_invalid"
-	FrameFailureGroupEqualsMember     FrameFailureDetail = "group_kind_equals_member_kind"
+	FrameFailureNoVariant           FrameFailureDetail = "no_variant_set"
+	FrameFailureMultipleVariants    FrameFailureDetail = "multiple_variants_set"
+	FrameFailureVariantKindMismatch FrameFailureDetail = "variant_disagrees_with_kind"
+	FrameFailureKindUnset           FrameFailureDetail = "kind_unset"
+	FrameFailureTooFewOperands      FrameFailureDetail = "too_few_operands"
+	FrameFailureNoTerms             FrameFailureDetail = "no_terms"
+	FrameFailureBlankTerm           FrameFailureDetail = "blank_term"
+	FrameFailureNoAnchorTerms       FrameFailureDetail = "no_anchor_terms"
+	FrameFailureMemberKindUnset     FrameFailureDetail = "member_kind_unset"
+	FrameFailureMemberKindInvalid   FrameFailureDetail = "member_kind_invalid"
+	FrameFailureGroupKindUnset      FrameFailureDetail = "group_kind_unset"
+	FrameFailureGroupKindInvalid    FrameFailureDetail = "group_kind_invalid"
+	FrameFailureGroupEqualsMember   FrameFailureDetail = "group_kind_equals_member_kind"
+	// FrameFailureGroupAxisNotExpressed: the interpretation's own group hint
+	// asked for a grouping and the frame it proposed expresses no group
+	// axis. Decided in resolveFrame, which holds both halves of the same
+	// model call; ValidateFrame sees only the frame. See
+	// requestedGroupAxisDropped.
+	FrameFailureGroupAxisNotExpressed FrameFailureDetail = "requested_group_axis_not_expressed"
 	FrameFailureCompareNeedsSet       FrameFailureDetail = "compare_requires_explicit_set"
 	FrameFailureTrendNeedsTemporal    FrameFailureDetail = "trend_requires_non_current_temporal"
 	FrameFailureCountNeedsSetKind     FrameFailureDetail = "count_requires_set_valued_kind"

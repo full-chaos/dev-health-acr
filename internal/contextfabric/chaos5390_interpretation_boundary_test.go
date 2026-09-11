@@ -78,13 +78,15 @@ func assertBoundaryLine(t *testing.T, line map[string]any, want map[string]strin
 }
 
 // TestTheBoundaryShowsAGroupingTheFrameDropped is the laundering signature
-// CHAOS-5390 was found by, now readable from the trace alone.
+// CHAOS-5390 was found by, and it is now REFUSED rather than only named.
 //
 // The model's own hint asked for a grouping by team; the frame it proposed is
-// a flat discovered_kind frame over teams. That frame VALIDATES and the gate
-// PASSES -- so before this line, the trace of this turn was identical to the
-// trace of a question that never asked for a grouping, and proving otherwise
-// took a join of interpret receipts against stored results.
+// a flat discovered_kind frame over teams. That frame validates on its own
+// terms, and the gate used to PASS it -- this pin once asserted exactly that,
+// with `dropped_at_interpretation` as the only trace of an axis the question
+// asked for and the answer silently lost (round 2, P1-1). The ruling is that
+// the requested axis is kept or refused under i6 with its basis; a dropped
+// axis is neither, so the gate refuses it.
 func TestTheBoundaryShowsAGroupingTheFrameDropped(t *testing.T) {
 	line := interpretThroughTheBoundary(t, contractsv1.ContextFabricSubjectTeam, contractsv1.ContextFabricSubjectProject,
 		boundaryFrame(discoveredExpression(contractsv1.ContextFabricSubjectTeam)))
@@ -94,9 +96,11 @@ func TestTheBoundaryShowsAGroupingTheFrameDropped(t *testing.T) {
 		"proposed_kind":         string(SubjectExpressionDiscoveredKind),
 		"proposed_group_kind":   "not_applicable",
 		"proposed_member_kind":  "team",
-		"outcome":               string(FrameValidationOutcomeValid),
-		"frame_gate":            string(FrameGatePassed),
-		"group_axis":            "dropped_at_interpretation",
+		"outcome":               string(FrameValidationOutcomeRefusedInvalid),
+		"failed_invariant":      string(FrameInvariantI6),
+		"failure_detail":        "requested_group_axis_not_expressed",
+		"frame_gate":            "rejected:" + string(FrameInvariantI6),
+		"group_axis":            "refused",
 	})
 }
 

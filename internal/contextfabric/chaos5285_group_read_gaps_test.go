@@ -127,7 +127,11 @@ func TestADroppedUnadmittedFactIsCountedOnTheDecision(t *testing.T) {
 	if decision.UnadmittedFactsDropped != 2 {
 		t.Errorf("unadmitted_facts_dropped = %d, want 2 -- the provider answered about a team nobody admitted, twice", decision.UnadmittedFactsDropped)
 	}
-	if decision.FactsReturned != 1 || decision.FactsMerged != 1 {
-		t.Errorf("returned=%d merged=%d, want 1 and 1 -- only the admitted team's fact survives the filter", decision.FactsReturned, decision.FactsMerged)
+	// RETURNED IS THE PROVIDER'S ANSWER, three facts; merged is what survived
+	// the filter, one. This pin once asserted returned=1, which counted the
+	// two dropped facts out of `returned` AND into `unadmitted_dropped`
+	// (round 2, P1-5).
+	if decision.FactsReturned != 3 || decision.FactsMerged != 1 {
+		t.Errorf("returned=%d merged=%d, want 3 and 1 -- the provider sent three facts, and only the admitted team's one survives the filter", decision.FactsReturned, decision.FactsMerged)
 	}
 }

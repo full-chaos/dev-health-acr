@@ -1714,6 +1714,10 @@ func (t SlogEngineTelemetry) RecordCohortGroupRead(ctx context.Context, principa
 	if !ValidGroupReadRefusal(refusal) {
 		refusal = GroupReadRefusal("unclassified")
 	}
+	disclosure := event.Disclosure
+	if !ValidGroupReadDisclosure(disclosure) {
+		disclosure = GroupReadDisclosure("unclassified")
+	}
 	// request_id rides every line, as it does on the frame-validation line,
 	// so each line joins to the turn whose decision graph it belongs to.
 	args := []any{
@@ -1738,6 +1742,9 @@ func (t SlogEngineTelemetry) RecordCohortGroupRead(ctx context.Context, principa
 		// size -- and these two let a reader check that from this line.
 		"authorization_batches", event.AuthorizationBatches,
 		"authorization_batch_size", event.AuthorizationBatchSize,
+		// What the served document says about this read; through the
+		// vocabulary's membership check like the refusal above.
+		"group_read_disclosure", string(disclosure),
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric cohort group read", args...)

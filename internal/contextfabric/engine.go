@@ -2312,7 +2312,21 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				Family: plan.Family, GroupKind: plan.GroupKind, MemberKind: plan.MemberKind,
 				Failure: collapsed.Failure, Gate: familyOutcome.Gate,
 			})
-			plan.GroupKind = ""
+			// The REQUESTED axis is kept; the collapsed member kind is what
+			// the served plan drops. The served document refuses a grouping,
+			// so it carries the grouping it refuses: a plan reading
+			// `group_kind=""` beside `refusal_basis=frame_invariant_violated`
+			// states a refusal of an axis the same document says was never
+			// asked for (round 2, P1-2).
+			//
+			// The member kind cannot be served beside it: the contract's plan
+			// validator rejects a plan whose group kind equals its member kind,
+			// because a plan claiming that partition is the illegal shape
+			// itself. The member kind here was never the question's -- it was
+			// stamped from the cohort the graph returned, and it is the half
+			// that collapsed -- and this refused turn serves no cohort for it
+			// to describe. Both kinds are on the Info line above.
+			plan.MemberKind = ""
 			collapsedResolution := SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}
 			terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, collapsedResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarry.Outcome == WindowCarryHit, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent))
 			return terminal, terminalErr
@@ -2384,6 +2398,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// narrowing would leave the surviving members carrying scores computed
 	// against members that are no longer in the answer.
 	var groupingRefusalForDisclosure CohortGroupingOutcome
+	var groupReadForDisclosure GroupReadDisclosure
+	var groupReadKindForDisclosure SubjectKind
 	if graphContext.Cohort != nil && plan.GroupKind != "" {
 		// CHAOS-4733: captured BEFORE BuildCohortGroups/
 		// ApplyGroupedCohortCompleteness run, so the telemetry below reports
@@ -2442,9 +2458,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// refusal had cleared it, the line said 251 groups of nothing were
 			// refused.
 			requestedGroupKind := plan.GroupKind
-			// Returned, cap-omitted and merged are captured separately because
-			// the cap and a metadata conflict can each make them differ.
-			var groupFactsReturned, groupFactsCapOmitted, groupFactsMerged int
+			// Cap-omitted and merged are captured separately because the cap
+			// and a metadata conflict can each make them differ. Returned is
+			// the provider's own count, taken inside the read before the
+			// unadmitted filter (groupOutcome.FactsReturned).
+			var groupFactsCapOmitted, groupFactsMerged int
 			if groupErr != nil {
 				// NAMED, not merely flagged. A read that was issued and
 				// failed is a different operational fact from one that was
@@ -2466,7 +2484,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				plan.GroupKind = ""
 			}
 			graphContext.Cohort = &cohort
-			if groupOutcome.Read && groupErr == nil {
+			if groupOutcome.Read {
 				// The group read's OWN expansion decisions, reported here
 				// and not folded into the first read's. Every scope-
 				// expansion decision a read made is owed to the operator
@@ -2476,11 +2494,24 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// the second read's decisions with no representation
 				// anywhere, which is the state this stage was in when it
 				// was first written.
+				//
+				// ON EVERY ISSUED READ, a failed one included. ReadFacts
+				// returns the partial bundle beside its error, scope and
+				// coverage decisions included, and the failed read is the one
+				// an operator most needs to diagnose; emitting only on success
+				// left it with no trace of what it decided (round 2, P1-4).
 				e.recordFactScopeExpansion(ctx, principal, groupBundle.Scope)
+			}
+			if groupOutcome.Read && groupErr != nil {
+				// The failed read's own coverage observations, BEFORE any
+				// fold -- there is no fold on this path, the bundle is not
+				// composed -- so the trace shows which population failed.
+				e.recordGroupReadCoverageStates(ctx, principal, plan.Family, requestedGroupKind, facts.Coverage, groupBundle.Coverage)
+			}
+			if groupOutcome.Read && groupErr == nil {
 				// THE TURN'S ONE FACT BUDGET, before anything else sees the
 				// group bundle, so the pre-fold coverage line below and the
 				// merge both describe what the turn will actually carry.
-				groupFactsReturned = len(groupBundle.Facts)
 				groupFactsCapOmitted = boundGroupFactsToRemainingCapacity(&groupBundle, len(facts.Facts))
 				// BEFORE THE FOLD. MergeCoverage keeps the worst state per
 				// source name and both reads report under the same
@@ -2500,19 +2531,24 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				} else {
 					groupFactsMerged = len(groupBundle.Facts)
 				}
-			} else {
-				groupFactsReturned = len(groupBundle.Facts)
 			}
+			groupsWithFacts := 0
+			if groupOutcome.Read && !groupOutcome.Refused {
+				groupsWithFacts = admittedGroupsWithFacts(groupOutcome.Admitted, groupBundle.Facts)
+			}
+			groupReadForDisclosure = groupReadDisclosureFor(groupOutcome, groupsWithFacts)
+			groupReadKindForDisclosure = requestedGroupKind
 			e.recordCohortGroupRead(ctx, principal, CohortGroupReadEvent{
 				Family:                 plan.Family,
 				GroupKind:              requestedGroupKind,
+				Disclosure:             groupReadForDisclosure,
 				Proposed:               groupOutcome.Proposed,
 				Admitted:               len(groupOutcome.Admitted),
 				Denied:                 groupOutcome.Denied,
 				Read:                   groupOutcome.Read,
 				Refused:                groupOutcome.Refused,
 				Refusal:                groupOutcome.Reason,
-				FactsReturned:          groupFactsReturned,
+				FactsReturned:          groupOutcome.FactsReturned,
 				UnadmittedFactsDropped: groupOutcome.UnadmittedFactsDropped,
 				ContractBound:          contractsv1.ContextFabricCohortGroupsMaxCount,
 				FactsCapOmitted:        groupFactsCapOmitted,
@@ -2696,6 +2732,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		CommitBases: commitBases, CommitDigests: commitDigests,
 		GroupedNarrowingBasis: stage2GroupedBasis,
 		GroupingRefusal:       groupingRefusalForDisclosure,
+		GroupReadDisclosure:   groupReadForDisclosure,
+		GroupReadKind:         groupReadKindForDisclosure,
 	}
 	// The retry's base is snapshotted BEFORE the first pass runs. Taking it
 	// afterwards copied state pass one had already dirtied in place -- see

@@ -50,15 +50,16 @@ const (
 	// GroupAxisKept: the frame expressed a grouping and the gate let it
 	// through.
 	GroupAxisKept GroupAxisDecision = "kept"
-	// GroupAxisRefused: the frame expressed a grouping and the gate refused
-	// the frame -- for a self-group, invariant i6, named on the same line.
+	// GroupAxisRefused: the gate refused the frame under i6 -- a self-group,
+	// or a requested axis the frame did not express
+	// (requested_group_axis_not_expressed), named on the same line.
 	GroupAxisRefused GroupAxisDecision = "refused"
 	// GroupAxisDroppedAtInterpretation: the model's own hint asked for a
-	// grouping and the frame it proposed expresses none. This is the
-	// signature of a grouped question re-expressed as a flat one before the
-	// server could judge it -- the state the prompt now tells the model not
-	// to produce, made countable so that a model still producing it is
-	// visible rather than silently answered flat.
+	// grouping, the frame it proposed expresses none, AND the turn was let
+	// through. The gate refuses that frame, so this token names a state the
+	// server must never produce: a regression that lets a dropped axis
+	// through is counted under its own name rather than reading as a refusal
+	// or as an ordinary flat question.
 	GroupAxisDroppedAtInterpretation GroupAxisDecision = "dropped_at_interpretation"
 )
 
@@ -105,7 +106,7 @@ func InterpretationBoundaryFrom(receipt ModelExecutionReceipt, proposed Question
 		member, _ := expression.MemberKind()
 		boundary.ProposedMemberKind = slotKindToken(member, receipt.FrameMemberKindUnrecognized)
 	}
-	boundary.GroupAxis = groupAxisDecisionFor(receipt.GroupKind != "" || receipt.GroupKindUnrecognized, expression.Kind, gate)
+	boundary.GroupAxis = groupAxisDecisionFor(receiptRequestsGroupAxis(receipt), expression.Kind, gate)
 	return boundary
 }
 
@@ -120,6 +121,14 @@ func groupAxisDecisionFor(hintRequested bool, proposedKind SubjectExpressionKind
 		return GroupAxisKept
 	}
 	if hintRequested {
+		// A requested axis the frame did not express is REFUSED by the gate
+		// (resolveFrame). `dropped_at_interpretation` is kept for the state
+		// the gate must never produce -- the axis dropped AND the turn let
+		// through -- so a regression there is named on the line rather than
+		// reading as a refusal or as a flat question.
+		if gate.Refuses() {
+			return GroupAxisRefused
+		}
 		return GroupAxisDroppedAtInterpretation
 	}
 	return GroupAxisNotRequested

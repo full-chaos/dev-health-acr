@@ -61,6 +61,12 @@ type groupReadOutcome struct {
 	// AuthorizationBatches is how many authorization calls the admitted set
 	// took. Zero means authorization never ran (a refusal before it).
 	AuthorizationBatches int
+	// FactsReturned is how many facts the provider sent, counted BEFORE the
+	// unadmitted filter -- on a failed read, what the partial bundle carried.
+	// It is the provider's answer; UnadmittedFactsDropped is the part of it
+	// this turn could not use. Counting after the filter made the two fields
+	// count the drop twice (round 2, P1-5).
+	FactsReturned int
 }
 
 // GroupReadRefusal is the closed vocabulary of reasons the group axis was not
@@ -365,6 +371,7 @@ func (e *Engine) readAdmittedGroupFacts(ctx context.Context, principal storage.P
 		Requirements: requirements,
 	})
 	outcome.Read = true
+	outcome.FactsReturned = len(bundle.Facts)
 	if err != nil {
 		return bundle, outcome, err
 	}
@@ -426,13 +433,15 @@ type CohortGroupReadEvent struct {
 	// UnadmittedFactsDropped is how many returned facts named a subject the
 	// turn never admitted and were discarded before synthesis.
 	UnadmittedFactsDropped int
-	// FactsCapOmitted is how many of the returned facts the turn's combined
-	// per-bundle cap left out, FactsMerged how many actually entered the
-	// turn's bundle, and FactBundleCap the cap itself. Returned, omitted and
-	// merged are three different numbers on purpose: "the provider sent
-	// seven, the budget took four, four reached synthesis" and "the provider
-	// sent four" are different turns, and a metadata conflict merges none of
-	// what was admitted.
+	// FactsReturned is the provider's own answer, counted before the
+	// unadmitted filter; UnadmittedFactsDropped is the part of it naming a
+	// subject this turn never admitted. FactsCapOmitted is how many of the
+	// ADMITTED facts the turn's combined per-bundle cap left out, FactsMerged
+	// how many actually entered the turn's bundle, and FactBundleCap the cap
+	// itself. So returned = dropped + cap_omitted + merged on a composed read,
+	// and a metadata conflict merges none of what was admitted: "the provider
+	// sent seven, the budget took four" and "the provider sent four" are
+	// different turns.
 	FactsCapOmitted int
 	FactsMerged     int
 	FactBundleCap   int
@@ -443,6 +452,9 @@ type CohortGroupReadEvent struct {
 	// capped call reports the overflow as denied.
 	AuthorizationBatches   int
 	AuthorizationBatchSize int
+	// Disclosure is what the served document says about this read (none,
+	// unread, over_bound) -- the wire half of the decision this line records.
+	Disclosure GroupReadDisclosure
 }
 
 // recordCohortGroupRead emits the group stage's decision, on EVERY grouped
@@ -738,4 +750,105 @@ func (e *Engine) recordFactRetention(ctx context.Context, principal storage.Prin
 		return
 	}
 	e.telemetry.RecordFactRetention(ctx, principal, event)
+}
+
+// GroupReadDisclosure is what the SERVED document says about the group read,
+// as a closed token so the group-read line can report the decision it made.
+type GroupReadDisclosure string
+
+const (
+	// GroupReadDisclosureNone: every proposed group was read, or no group
+	// read was owed (no `read`/`each_group` row), so there is nothing to say.
+	GroupReadDisclosureNone GroupReadDisclosure = "none"
+	// GroupReadDisclosureUnread: at least one proposed group was not read --
+	// denied, read with nothing returned for it, or not read at all because
+	// the read failed, could not be authorized, or could not be composed.
+	GroupReadDisclosureUnread GroupReadDisclosure = "unread"
+	// GroupReadDisclosureOverBound: the group list was larger than the
+	// contract can carry, so the axis was refused and the answer is flat.
+	GroupReadDisclosureOverBound GroupReadDisclosure = "over_bound"
+)
+
+var canonicalGroupReadDisclosures = map[GroupReadDisclosure]struct{}{
+	GroupReadDisclosureNone:      {},
+	GroupReadDisclosureUnread:    {},
+	GroupReadDisclosureOverBound: {},
+}
+
+// ValidGroupReadDisclosure reports membership in the closed vocabulary.
+func ValidGroupReadDisclosure(value GroupReadDisclosure) bool {
+	_, member := canonicalGroupReadDisclosures[value]
+	return member
+}
+
+// groupReadDisclosureFor decides what the served document must say about the
+// group read, from what the stage decided and how many admitted groups the
+// served facts actually speak for.
+//
+// Every group-read outcome used to reach the TRACE and nothing else (round 2,
+// P1-3): the served document read `partial=false` with no limitation, so a
+// reader could not tell a fully read grouped answer from one whose group axis
+// was never read at all. The per-group state rides the served `each_group`
+// requirement row (served/declared, with its cause); this is the document-level
+// half. group.complete is deliberately NOT used -- it is membership
+// completeness, and an unread group is a read state.
+func groupReadDisclosureFor(outcome groupReadOutcome, groupsWithFacts int) GroupReadDisclosure {
+	switch outcome.Reason {
+	case GroupReadRefusalOverContractBound:
+		return GroupReadDisclosureOverBound
+	case GroupReadRefusalNoReadRequirement:
+		return GroupReadDisclosureNone
+	case GroupReadRefusalNone:
+		if outcome.Denied > 0 || groupsWithFacts < len(outcome.Admitted) {
+			return GroupReadDisclosureUnread
+		}
+		return GroupReadDisclosureNone
+	default:
+		// Every other refusal -- no group admitted, authorization unavailable,
+		// the read failed, the reconcile refused -- leaves every proposed
+		// group unread. An unknown future refusal discloses too: silence is
+		// the failure this exists to remove.
+		return GroupReadDisclosureUnread
+	}
+}
+
+// admittedGroupsWithFacts counts the admitted groups at least one of the
+// given facts speaks for -- the served group facts, after the cap and the
+// merge.
+func admittedGroupsWithFacts(admitted []SubjectRef, facts []CanonicalFact) int {
+	admittedKeys := make(map[string]struct{}, len(admitted))
+	for _, subject := range admitted {
+		admittedKeys[SubjectMapKey(subject)] = struct{}{}
+	}
+	read := make(map[string]struct{}, len(admitted))
+	for _, fact := range facts {
+		key := SubjectMapKey(fact.Subject)
+		if _, ok := admittedKeys[key]; ok {
+			read[key] = struct{}{}
+		}
+	}
+	return len(read)
+}
+
+// applyGroupReadDisclosure states on the WIRE what the group read could not
+// do: coverage is partial, and ONE service-authored limitation names the
+// cause. Through the bounded appender, and composed by the contract's own
+// composer so its recogniser keeps it undisplaceable.
+func applyGroupReadDisclosure(result *InvestigationResult, disclosure GroupReadDisclosure, groupKind SubjectKind) {
+	if result == nil || groupKind == "" {
+		return
+	}
+	var sentence string
+	switch disclosure {
+	case GroupReadDisclosureUnread:
+		sentence = contractsv1.ContextFabricGroupReadUnreadLimitation(groupKind)
+	case GroupReadDisclosureOverBound:
+		sentence = contractsv1.ContextFabricGroupListOverBoundLimitation(groupKind)
+	default:
+		return
+	}
+	composed, displaced := appendBoundedLimitations(result.Limitations, []string{sentence})
+	result.Limitations = composed
+	result.LimitationsDisplaced += displaced
+	result.Coverage.Partial = true
 }

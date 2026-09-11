@@ -251,6 +251,9 @@ func groupReadEngineFixtureFull(t *testing.T, telemetry EngineTelemetry, facts C
 type groupReadFixtureConfig struct {
 	graph   *groupAuthorizingGraph
 	deriver RequirementDeriver
+	// interpreter, when set, replaces the legal projects-by-team framed
+	// interpreter -- for a pin about what a FRAME-seam refusal serves.
+	interpreter QuestionInterpreter
 }
 
 // groupReadEngineFixtureConfigured is the same fixture with a hook onto the
@@ -277,12 +280,13 @@ func groupReadEngineFixtureConfigured(t *testing.T, telemetry EngineTelemetry, f
 		},
 		denied: denied,
 	}
-	config := groupReadFixtureConfig{graph: graph, deriver: groupReadRequirementDeriver{}}
+	config := groupReadFixtureConfig{graph: graph, deriver: groupReadRequirementDeriver{},
+		interpreter: groupReadFramedInterpreter{interpretation: interpretation, groupKind: SubjectTeam, memberKind: SubjectProject}}
 	if configure != nil {
 		configure(&config)
 	}
 	engine, err := NewEngine(EngineDependencies{
-		Interpreter: groupReadFramedInterpreter{interpretation: interpretation, groupKind: SubjectTeam, memberKind: SubjectProject},
+		Interpreter: config.interpreter,
 		// The FRAME stays legal -- projects grouped by team -- on purpose,
 		// even when the cohort comes back as teams. That is the whole point
 		// of the plan-seam pin: the collapse the plan sees is invisible to

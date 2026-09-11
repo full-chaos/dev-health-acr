@@ -86,7 +86,6 @@ func TestTheInputDomainOfEveryGuardThisChangeTouches(t *testing.T) {
 	domainCoverageFold(table)
 	domainCombinedCap(table)
 	domainInterpretationBoundary(table)
-	domainDecodePath(table)
 	domainTeamIdentity(table)
 	domainGroupReadRequirements(table)
 	domainAllowanceClamp(table)
@@ -95,6 +94,7 @@ func TestTheInputDomainOfEveryGuardThisChangeTouches(t *testing.T) {
 	domainAuthorizationBatching(table)
 	domainPlanSeamLine(t, table)
 	domainSearchFallbackPolicy(table)
+	domainGroupReadDisclosure(t, table)
 
 	table.print()
 	if len(table.rows) == 0 {
@@ -477,12 +477,13 @@ func domainCombinedCap(d *domainTable) {
 
 func domainInterpretationBoundary(d *domainTable) {
 	const guard = "interpretation boundary (InterpretationBoundaryFrom)"
-	// THE PRODUCTION CHAIN: the frame goes through ValidateFrame and
-	// DecideFrameGate exactly as resolveFrame sends it, and the boundary is
-	// read off that gate -- never off a gate literal this table chose.
+	// THE PRODUCTION CHAIN: the frame goes through validateProposedFrame (the
+	// frame's invariants, then the requested-axis check) and DecideFrameGate
+	// exactly as resolveFrame sends it, and the boundary is read off that
+	// gate -- never off a gate literal this table chose.
 	run := func(receipt ModelExecutionReceipt, expression SubjectExpression) string {
 		frame := boundaryFrame(expression)
-		gate := DecideFrameGate(ValidateFrame(frame, nil, ShapeDiscoveredCohort), true)
+		gate := DecideFrameGate(validateProposedFrame(receipt, frame, ShapeDiscoveredCohort), true)
 		b := InterpretationBoundaryFrom(receipt, frame, gate)
 		return fmt.Sprintf("hint=%s member_hint=%s group=%s member=%s axis=%s",
 			b.RequestedGroupHint, b.RequestedMemberHint, b.ProposedGroupKind, b.ProposedMemberKind, observableGroupAxis(b.GroupAxis))
@@ -496,19 +497,33 @@ func domainInterpretationBoundary(d *domainTable) {
 	d.want(guard, "receipt.GroupKind", "absent", run(hint("", false), flat),
 		"hint=absent member_hint=absent group=not_applicable member=project axis=not_requested")
 	d.want(guard, "receipt.GroupKind", "zero with the unrecognized flag", run(hint("", true), flat),
-		"hint=unrecognized member_hint=absent group=not_applicable member=project axis=dropped_at_interpretation")
+		"hint=unrecognized member_hint=absent group=not_applicable member=project axis=refused")
 	d.want(guard, "receipt.GroupKind", "out of vocabulary (never written verbatim)", run(hint("not_a_kind", false), flat),
-		"hint=unclassified member_hint=absent group=not_applicable member=project axis=dropped_at_interpretation")
+		"hint=unclassified member_hint=absent group=not_applicable member=project axis=refused")
 	d.want(guard, "receipt.GroupKind", "case variant (Team)", run(hint("Team", false), flat),
-		"hint=unclassified member_hint=absent group=not_applicable member=project axis=dropped_at_interpretation")
-	d.want(guard, "receipt.GroupKind", "canonical, frame dropped the grouping", run(hint(team, false), discoveredExpression(team)),
-		"hint=team member_hint=absent group=not_applicable member=team axis=dropped_at_interpretation")
+		"hint=unclassified member_hint=absent group=not_applicable member=project axis=refused")
+	d.want(guard, "receipt.GroupKind", "canonical, frame dropped the grouping (refused under i6, round 2 P1-1)", run(hint(team, false), discoveredExpression(team)),
+		"hint=team member_hint=absent group=not_applicable member=team axis=refused")
+	gateOf := func(receipt ModelExecutionReceipt, expression SubjectExpression) string {
+		result := validateProposedFrame(receipt, boundaryFrame(expression), ShapeDiscoveredCohort)
+		return fmt.Sprintf("gate=%s detail=%s", DecideFrameGate(result, true).Observable(), result.Failure.Detail)
+	}
+	d.want(guard, "receipt.GroupKind x frame", "hint set, frame flat: the requested axis is refused with its own detail", gateOf(hint(team, false), discoveredExpression(team)),
+		"gate=rejected:i6 detail=requested_group_axis_not_expressed")
+	d.want(guard, "receipt.GroupKind x frame", "hint unrecognized, frame flat", gateOf(hint("", true), flat),
+		"gate=rejected:i6 detail=requested_group_axis_not_expressed")
+	d.want(guard, "receipt.GroupKind x frame", "hint set, frame grouped legally", gateOf(hint(team, false), groupedExpression(project, team)),
+		"gate=passed detail=")
+	d.want(guard, "receipt.GroupKind x frame", "hint absent, frame flat (the ordinary question)", gateOf(hint("", false), flat),
+		"gate=passed detail=")
+	d.want(guard, "receipt.GroupKind x frame", "hint set, frame invalid on its own (its own invariant wins)", gateOf(hint(team, false), SubjectExpression{}),
+		"gate=rejected:i1 detail=kind_unset")
 	d.want(guard, "receipt.RequestedSubjectKind", "canonical", run(ModelExecutionReceipt{RequestedSubjectKind: project}, flat),
 		"hint=absent member_hint=project group=not_applicable member=project axis=not_requested")
 	d.want(guard, "receipt.RequestedSubjectKind", "zero with the unrecognized flag", run(ModelExecutionReceipt{RequestedSubjectKindUnrecognized: true}, flat),
 		"hint=absent member_hint=unrecognized group=not_applicable member=project axis=not_requested")
 	d.want(guard, "SubjectExpression.Kind", "zero (no variant)", run(hint(team, false), SubjectExpression{}),
-		"hint=team member_hint=absent group=not_applicable member=not_applicable axis=dropped_at_interpretation")
+		"hint=team member_hint=absent group=not_applicable member=not_applicable axis=refused")
 	d.want(guard, "SubjectExpression.Kind", "out of vocabulary", run(hint("", false), SubjectExpression{Kind: SubjectExpressionKind("not_a_variant")}),
 		"hint=absent member_hint=absent group=not_applicable member=not_applicable axis=not_requested")
 	d.want(guard, "SubjectExpression.Grouped", "null on a grouped kind", run(hint(team, false), SubjectExpression{Kind: SubjectExpressionGroupedMembers}),
@@ -537,16 +552,6 @@ func domainInterpretationBoundary(d *domainTable) {
 }
 
 // --- the decode path ------------------------------------------------------
-
-// domainDecodePath records WHY the wire-facing decode has no cells here: this
-// change does not modify sanitizeFrameOutput or anything it calls, and the
-// evidence for that is the executed `git diff <merge-base>` over the file,
-// quoted in the PR's TEST-EVIDENCE -- not a test reading source text, which
-// would inspect text instead of behaviour.
-func domainDecodePath(d *domainTable) {
-	d.record("decode path (sanitizeFrameOutput)", "all fields", "every shape",
-		"n/a - not modified by this change; the prompt change is prose in prompts.go only (git diff evidence in TEST-EVIDENCE)", "ok")
-}
 
 // --- guard 10: the canonical team identity (stage 1) ----------------------
 
@@ -838,4 +843,62 @@ func domainSearchFallbackPolicy(d *domainTable) {
 	d.want(guard, "Source", "out of vocabulary near-miss", permitted("cohort_group_authorization_x"), "permitted=true")
 	d.want(guard, "Source", "case variant (identifiers are case-sensitive)", permitted("COHORT_GROUP_AUTHORIZATION"), "permitted=true")
 	d.record(guard, "Source", "null / container / wrong scalar / fractional / boundary", domainExcludedByTypeSystem+"; the parameter is a Go string", "ok")
+}
+
+// --- guard 18: the served group-read disclosure (r2 P1-3) ------------------
+
+// domainGroupReadDisclosure drives the REAL decision over every refusal and
+// every served shape, the admitted-group count it reads, the composer it
+// reaches, and the emitter's vocabulary check for the line's new key.
+func domainGroupReadDisclosure(t *testing.T, d *domainTable) {
+	const guard = "group-read disclosure (groupReadDisclosureFor)"
+	two := []SubjectRef{{Kind: SubjectTeam, CanonicalID: "team:a"}, {Kind: SubjectTeam, CanonicalID: "team:b"}}
+	decide := func(outcome groupReadOutcome, withFacts int) string {
+		return string(groupReadDisclosureFor(outcome, withFacts))
+	}
+	for _, refusal := range []GroupReadRefusal{GroupReadRefusalNoGroupAdmitted, GroupReadRefusalAuthorizationUnavailable, GroupReadRefusalReadFailed, GroupReadRefusalMetadataConflict} {
+		d.want(guard, "outcome.Reason", string(refusal)+" (every group unread)", decide(groupReadOutcome{Refused: true, Reason: refusal}, 0), "unread")
+	}
+	d.want(guard, "outcome.Reason", "over_contract_bound", decide(groupReadOutcome{Refused: true, Reason: GroupReadRefusalOverContractBound, Proposed: 251}, 0), "over_bound")
+	d.want(guard, "outcome.Reason", "no_read_requirement (nothing owed)", decide(groupReadOutcome{Refused: true, Reason: GroupReadRefusalNoReadRequirement}, 0), "none")
+	d.want(guard, "outcome.Reason", "out of vocabulary (discloses: silence is the failure)", decide(groupReadOutcome{Refused: true, Reason: GroupReadRefusal("free text")}, 0), "unread")
+	d.want(guard, "served", "every admitted group read, none denied", decide(groupReadOutcome{Admitted: two}, 2), "none")
+	d.want(guard, "served", "one denied", decide(groupReadOutcome{Admitted: two[:1], Denied: 1}, 1), "unread")
+	d.want(guard, "served", "one admitted group with no facts (missing)", decide(groupReadOutcome{Admitted: two}, 1), "unread")
+	d.want(guard, "served", "zero admitted groups read", decide(groupReadOutcome{Admitted: two}, 0), "unread")
+	d.want(guard, "served", "zero proposed (unreachable: the stage is not entered)", decide(groupReadOutcome{}, 0), "none")
+	count := func(admitted []SubjectRef, facts ...CanonicalFact) string {
+		return fmt.Sprintf("with_facts=%d", admittedGroupsWithFacts(admitted, facts))
+	}
+	fact := func(id string) CanonicalFact {
+		return CanonicalFact{Kind: FactHealth, Subject: SubjectRef{Kind: SubjectTeam, CanonicalID: id}}
+	}
+	d.want(guard, "admittedGroupsWithFacts", "null facts", count(two), "with_facts=0")
+	d.want(guard, "admittedGroupsWithFacts", "duplicate facts for one group", count(two, fact("team:a"), fact("team:a")), "with_facts=1")
+	d.want(guard, "admittedGroupsWithFacts", "a fact for an unadmitted group", count(two, fact("team:z")), "with_facts=0")
+	d.want(guard, "admittedGroupsWithFacts", "canonical (both groups)", count(two, fact("team:a"), fact("team:b")), "with_facts=2")
+	d.want(guard, "admittedGroupsWithFacts", "null admitted", count(nil, fact("team:a")), "with_facts=0")
+	apply := func(disclosure GroupReadDisclosure, kind SubjectKind) string {
+		result := InvestigationResult{}
+		applyGroupReadDisclosure(&result, disclosure, kind)
+		return fmt.Sprintf("partial=%v limitations=%d", result.Coverage.Partial, len(result.Limitations))
+	}
+	d.want(guard, "applyGroupReadDisclosure", "none", apply(GroupReadDisclosureNone, SubjectTeam), "partial=false limitations=0")
+	d.want(guard, "applyGroupReadDisclosure", "unread", apply(GroupReadDisclosureUnread, SubjectTeam), "partial=true limitations=1")
+	d.want(guard, "applyGroupReadDisclosure", "over_bound", apply(GroupReadDisclosureOverBound, SubjectTeam), "partial=true limitations=1")
+	d.want(guard, "applyGroupReadDisclosure", "zero group kind (no axis to name)", apply(GroupReadDisclosureUnread, ""), "partial=false limitations=0")
+	d.want(guard, "applyGroupReadDisclosure", "out-of-vocabulary disclosure token", apply(GroupReadDisclosure("free text"), SubjectTeam), "partial=false limitations=0")
+	principal := storage.Principal{OrgID: "org_1"}
+	key := func(disclosure GroupReadDisclosure) string {
+		records := captureSlogJSON(t, func(logger *slog.Logger) {
+			NewSlogEngineTelemetry(logger).RecordCohortGroupRead(context.Background(), principal, CohortGroupReadEvent{Disclosure: disclosure})
+		})
+		if len(records) != 1 {
+			return fmt.Sprintf("records=%d", len(records))
+		}
+		return fmt.Sprintf("%v", records[0]["group_read_disclosure"])
+	}
+	d.want(guard, "CohortGroupReadEvent.Disclosure", "canonical", key(GroupReadDisclosureUnread), "unread")
+	d.want(guard, "CohortGroupReadEvent.Disclosure", "out of vocabulary (named unknown)", key(GroupReadDisclosure("free text")), "unclassified")
+	d.record(guard, "all fields", "wrong container / wrong scalar / fractional", domainExcludedByTypeSystem, "ok")
 }
