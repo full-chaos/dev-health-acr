@@ -342,6 +342,15 @@ func (c *Client) Investigate(ctx context.Context, requestID string, request cont
 	if err := json.Unmarshal(body, &result); err != nil {
 		return contractsv1.ContextFabricInvestigationResult{}, fmt.Errorf("panelharness: decode investigation response: %w", err)
 	}
+	// json.Unmarshal decodes an absent or null wire-required key to its Go
+	// zero value, and ValidateStoredResult below only sees that value -- for
+	// a required string that may legitimately be empty it cannot tell the
+	// three apart, so without this a response the published schema refuses
+	// would reach the caller. The sidecar client runs the same walker on
+	// every hosted response; this client uses that one check.
+	if err := sidecar.RequiredFieldsPresent(body, &result); err != nil {
+		return contractsv1.ContextFabricInvestigationResult{}, fmt.Errorf("panelharness: hosted API returned an investigation result missing a required field: %w", err)
+	}
 	// codex round 1 (MEDIUM): a permissive json.Unmarshal alone accepts a
 	// well-formed-but-empty `{}` as a "successful" decisive result.
 	// internal/sidecar.Client.Investigate calls this SAME method
