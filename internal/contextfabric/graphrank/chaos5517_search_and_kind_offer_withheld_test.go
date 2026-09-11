@@ -389,3 +389,102 @@ func TestOfferPoolCertifiesBothDispositionsWithACombinedTotal(t *testing.T) {
 		t.Fatalf("certified dispositions = %v, want both vector_only_demoted and vector_only_excluded present", seenDispositions)
 	}
 }
+
+// TestDecisionCertifiesAllThreeOutcomeCardinalities reuses three existing,
+// independently proven fixtures (chaos4096's own multi-subject-commit
+// shape for "committed", N=2; chaos4117's own single-candidate no-commit
+// and two-tied-candidates ambiguous shapes) with a REAL
+// NewSlogResolutionTracer, driving the SAME exported
+// ResolveFromMergedCandidatesWithGateAndBasis entry point (pass=1) each of
+// those fixtures already uses. Certifies eventspec.Decision's own bound:
+// Total=2 with two distinct indices for the multi-commit case, Total=1/
+// Index=1 for the two single-line outcomes.
+func TestDecisionCertifiesAllThreeOutcomeCardinalities(t *testing.T) {
+	t.Parallel()
+
+	t.Run("committed_N=2", func(t *testing.T) {
+		t.Parallel()
+		first := corroborationCandidate("multi_first", 1, contextfabric.MatchExact)
+		first.State = contextfabric.ResolutionCommitted
+		second := corroborationCandidate("multi_second", 1, contextfabric.MatchAlias)
+		second.State = contextfabric.ResolutionCommitted
+		bySubject := map[string]contextfabric.SubjectCandidate{
+			SubjectKey(first.Subject):  first,
+			SubjectKey(second.Subject): second,
+		}
+		var buf bytes.Buffer
+		tracer := NewSlogResolutionTracer(
+			slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		resolution, _, _ := ResolveFromMergedCandidatesWithGateAndBasis(
+			bySubject, map[string]string{}, map[string]bool{}, 10, true, false,
+			nil, 0, false, 10, 20, true,
+			DefaultCommitGatePolicy(), nil, nil, false, tracer, "req-multi", "", false, false, nil)
+		if len(resolution.Committed) != 2 {
+			t.Fatalf("resolution.Committed = %v, want 2", resolution.Committed)
+		}
+
+		log, err := certify.Parse(buf.Bytes())
+		if err != nil {
+			t.Fatalf("certify.Parse() on real production output error = %v", err)
+		}
+		count, err := certify.CertifyBoundedManyCount(log, eventspec.Decision, map[string]any{"request_id": "req-multi", "pass": 1})
+		if err != nil {
+			t.Fatalf("CertifyBoundedManyCount(Decision) error = %v", err)
+		}
+		if count != 2 {
+			t.Fatalf("CertifyBoundedManyCount(Decision) = %d, want 2", count)
+		}
+		for i := 1; i <= 2; i++ {
+			if _, err := certify.Certify(log, certify.Assertion{
+				Event: eventspec.Decision,
+				Want:  map[string]any{"request_id": "req-multi", "pass": 1, "index": i, "total": 2, "outcome": "committed"},
+			}); err != nil {
+				t.Fatalf("Certify(Decision, index=%d) error = %v", i, err)
+			}
+		}
+	})
+
+	t.Run("no_commit_empty_pool", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		tracer := NewSlogResolutionTracer(
+			slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		resolution := resolveWithTracer(tracer, 10, true)
+		if len(resolution.Committed) != 0 {
+			t.Fatalf("resolution.Committed = %v, want none", resolution.Committed)
+		}
+		log, err := certify.Parse(buf.Bytes())
+		if err != nil {
+			t.Fatalf("certify.Parse() on real production output error = %v", err)
+		}
+		if _, err := certify.Certify(log, certify.Assertion{
+			Event: eventspec.Decision,
+			Want:  map[string]any{"request_id": "request_1", "pass": 1, "index": 1, "total": 1, "outcome": "no_commit"},
+		}); err != nil {
+			t.Fatalf("Certify(Decision, no_commit) error = %v", err)
+		}
+	})
+
+	t.Run("ambiguous_tied", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		tracer := NewSlogResolutionTracer(
+			slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		resolution := resolveWithTracer(tracer, 7, false,
+			corroborationCandidate("a", 0.30, contextfabric.MatchLexical),
+			corroborationCandidate("b", 0.30, contextfabric.MatchLexical))
+		if len(resolution.Committed) != 0 {
+			t.Fatalf("resolution.Committed = %v, want none (ambiguous)", resolution.Committed)
+		}
+		log, err := certify.Parse(buf.Bytes())
+		if err != nil {
+			t.Fatalf("certify.Parse() on real production output error = %v", err)
+		}
+		if _, err := certify.Certify(log, certify.Assertion{
+			Event: eventspec.Decision,
+			Want:  map[string]any{"request_id": "request_1", "pass": 1, "index": 1, "total": 1, "outcome": "ambiguous"},
+		}); err != nil {
+			t.Fatalf("Certify(Decision, ambiguous) error = %v", err)
+		}
+	})
+}

@@ -180,6 +180,111 @@
     ]
   },
   {
+    "id": "graphrank.decision",
+    "msg": "context fabric resolution trace: decision",
+    "level": "debug",
+    "multiplicity": "bounded_many_per_pass",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "bounded by the pass's own outcome: one line per committed subject for a \"committed\" pass (self-carried index/total), otherwise exactly one line (index=1/total=1) -- never zero.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "pass",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "decision"
+        ]
+      },
+      {
+        "key": "index",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_canonical_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "committed",
+          "ambiguous",
+          "no_commit"
+        ]
+      },
+      {
+        "key": "winning_mechanism",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "commit_gate",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "alias_identity_complete",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "identity_trust_gate_blocked",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "search_truncated",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "commit_basis",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "tied_statistical_top",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "search_candidate_limit",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "population_basis",
+        "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "graphrank.decision_summary",
     "msg": "context fabric resolution trace: decision summary",
     "level": "info",

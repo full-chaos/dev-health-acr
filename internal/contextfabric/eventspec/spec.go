@@ -593,10 +593,60 @@ var OfferPoolSummary = Event{
 	},
 }
 
+// Decision is the Debug line (graphrank/tracer.go, case "decision") reporting
+// phase-3's own commit decision for a pass -- CHAOS-5517's fifth
+// MultiplicityBoundedManyPerPass event, and the only one whose own bound is
+// NEVER zero: every pass reaches exactly one of three mutually exclusive
+// branches (resolution.go's own switch), each unconditional -- "committed"
+// (one line per committed subject, Total=len(resolution.Committed)) or
+// "ambiguous"/"no_commit" (exactly one line, Total=1). DecisionSummary is
+// the folded per-REQUEST Info line an operator actually reads; this is its
+// own per-pass, per-outcome detail.
+var Decision = Event{
+	ID:                 "graphrank.decision",
+	Msg:                "context fabric resolution trace: decision",
+	Level:              LevelDebug,
+	Multiplicity:       MultiplicityBoundedManyPerPass,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "bounded by the pass's own outcome: one line per committed subject for a \"committed\" pass (self-carried index/total), otherwise exactly one line (index=1/total=1) -- never zero.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "pass", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"decision"}},
+		{Key: "index", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_canonical_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"committed", "ambiguous", "no_commit"}},
+		{
+			Key: "winning_mechanism", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a contextfabric.MatchMechanism token, or "".
+		},
+		{
+			Key: "commit_gate", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a commit-gate reason token, or "".
+		},
+		{Key: "alias_identity_complete", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "identity_trust_gate_blocked", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "search_truncated", Type: FieldBool, Presence: PresenceRequired},
+		{
+			Key: "commit_basis", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a contextfabric.CommitBasis token, or "".
+		},
+		{Key: "tied_statistical_top", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "search_candidate_limit", Type: FieldInt, Presence: PresenceRequired},
+		{
+			Key: "population_basis", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a population-basis token, or "none".
+		},
+	},
+}
+
 // All is every event this specification declares. Generate() and the
 // certification runner both range over exactly this slice -- neither
 // maintains a second list.
 var All = []Event{
 	RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld,
 	Corroboration, CorroborationSummary, ReservedKindAdmitted, OfferPool, OfferPoolSummary,
+	Decision,
 }

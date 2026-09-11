@@ -608,7 +608,10 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 			// decision-stage emission site this ticket's own populationBasis
 			// local (computed further down, unreached on this early return)
 			// never covered.
-			tracer.Trace(ResolutionTraceEvent{RequestID: requestID, Stage: "decision", Outcome: "no_commit", SearchTruncated: searchTruncated, SearchCandidateLimit: max, PopulationBasis: "none"})
+			tracer.Trace(ResolutionTraceEvent{
+				RequestID: requestID, Stage: "decision", Outcome: "no_commit", SearchTruncated: searchTruncated, SearchCandidateLimit: max, PopulationBasis: "none",
+				Pass: pass, Index: 1, Total: 1,
+			})
 		}
 		return resolution, bases, digests
 	}
@@ -1732,7 +1735,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		// rest.
 		switch {
 		case len(resolution.Committed) >= 1:
-			for _, subject := range resolution.Committed {
+			for committedIndex, subject := range resolution.Committed {
 				committedKey := SubjectKey(subject)
 				winningMechanism := ""
 				for index := range candidates {
@@ -1766,6 +1769,10 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 					SearchCandidateLimit: max,
 					// CHAOS-4154: populationBasis's own doc comment above.
 					PopulationBasis: populationBasis,
+					// CHAOS-5517: bounded by resolution.Committed's own
+					// length -- the ONE decision event per committed
+					// subject this switch's own doc comment describes.
+					Pass: pass, Index: committedIndex + 1, Total: len(resolution.Committed),
 				})
 			}
 		case len(resolution.Committed) == 0 && ambiguous:
@@ -1786,12 +1793,14 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 				// uniformity so a reader never has to special-case a missing
 				// field on a non-committed decision event.
 				PopulationBasis: populationBasis,
+				Pass:            pass, Index: 1, Total: 1,
 			})
 		case len(resolution.Committed) == 0:
 			tracer.Trace(ResolutionTraceEvent{
 				RequestID: requestID, Stage: "decision", Outcome: "no_commit",
 				AliasLookupComplete: aliasIdentityComplete, IdentityTrustGateBlocked: identityTrustGateBlocked,
 				SearchTruncated: searchTruncated, TiedStatisticalTop: tiedStatisticalTop,
+				Pass: pass, Index: 1, Total: 1,
 				// CHAOS-4117: SearchCandidateLimit's own doc comment.
 				SearchCandidateLimit: max,
 				PopulationBasis:      populationBasis,

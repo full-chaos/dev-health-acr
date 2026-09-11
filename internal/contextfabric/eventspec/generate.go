@@ -104,6 +104,8 @@ func goVarName(e Event) string {
 		return "OfferPool"
 	case OfferPoolSummary.ID:
 		return "OfferPoolSummary"
+	case Decision.ID:
+		return "Decision"
 	default:
 		panic("eventspec: goVarName has no mapping for " + e.ID + " -- add one before regenerating")
 	}

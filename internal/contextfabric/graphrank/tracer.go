@@ -162,6 +162,13 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// ResolutionTraceEvent.DecisionSummary's own doc comment.
 		t.logger.DebugContext(ctx, "context fabric resolution trace: decision",
 			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+			"pass", event.Pass,
+			// CHAOS-5517: the self-carried bounded-many identity -- 1..N
+			// per committed subject on the "committed" outcome, 1..1 on
+			// every other outcome (ambiguous/no_commit never split across
+			// more than one line) -- see ResolutionTraceEvent.Index's own
+			// doc comment.
+			"index", event.Index, "total", event.Total,
 			"subject_kind", contextfabric.SanitizeLogAttr(string(event.Subject.Kind)), "subject_canonical_id", contextfabric.SanitizeLogAttr(event.Subject.CanonicalID),
 			"outcome", contextfabric.SanitizeLogAttr(event.Outcome), "winning_mechanism", contextfabric.SanitizeLogAttr(event.WinningMechanism), "commit_gate", contextfabric.SanitizeLogAttr(event.CommitGate),
 			"alias_identity_complete", event.AliasLookupComplete, "identity_trust_gate_blocked", event.IdentityTrustGateBlocked,

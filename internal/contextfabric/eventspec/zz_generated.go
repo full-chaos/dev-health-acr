@@ -22,6 +22,7 @@ var ByID = map[string]Event{
 	"graphrank.anchor_slot_displaced":  AnchorSlotDisplaced,
 	"graphrank.corroboration":          Corroboration,
 	"graphrank.corroboration_summary":  CorroborationSummary,
+	"graphrank.decision":               Decision,
 	"graphrank.decision_summary":       DecisionSummary,
 	"graphrank.kind_offer_withheld":    KindOfferWithheld,
 	"graphrank.offer_pool":             OfferPool,
@@ -218,6 +219,93 @@ func (f CorroborationSummaryFields) SlogArgs() []any {
 		"top_ids", contextfabric.SanitizeLogStrings(f.TopIDs),
 		"min_confidence", f.MinConfidence,
 		"max_confidence", f.MaxConfidence,
+	}
+}
+
+// DecisionFields is graphrank.decision's generated typed construction interface
+// (CHAOS-5516): one Go field per Field Decision.Fields declares in spec.go.
+type DecisionFields struct {
+	RequestID                string
+	Pass                     int
+	Index                    int
+	Total                    int
+	SubjectKind              string
+	SubjectCanonicalID       string
+	Outcome                  string
+	WinningMechanism         string
+	CommitGate               string
+	AliasIdentityComplete    bool
+	IdentityTrustGateBlocked bool
+	SearchTruncated          bool
+	CommitBasis              string
+	TiedStatisticalTop       bool
+	SearchCandidateLimit     int
+	PopulationBasis          string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every DecisionFields uniformly, set ONLY by NewDecisionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewDecisionFields is the generated constructor for DecisionFields -- every
+// field Decision.Fields declares is a required parameter.
+func NewDecisionFields(requestID string, pass int, index int, total int, subjectKind string, subjectCanonicalID string, outcome string, winningMechanism string, commitGate string, aliasIdentityComplete bool, identityTrustGateBlocked bool, searchTruncated bool, commitBasis string, tiedStatisticalTop bool, searchCandidateLimit int, populationBasis string) DecisionFields {
+	return DecisionFields{
+		RequestID:                requestID,
+		Pass:                     pass,
+		Index:                    index,
+		Total:                    total,
+		SubjectKind:              subjectKind,
+		SubjectCanonicalID:       subjectCanonicalID,
+		Outcome:                  outcome,
+		WinningMechanism:         winningMechanism,
+		CommitGate:               commitGate,
+		AliasIdentityComplete:    aliasIdentityComplete,
+		IdentityTrustGateBlocked: identityTrustGateBlocked,
+		SearchTruncated:          searchTruncated,
+		CommitBasis:              commitBasis,
+		TiedStatisticalTop:       tiedStatisticalTop,
+		SearchCandidateLimit:     searchCandidateLimit,
+		PopulationBasis:          populationBasis,
+		constructed:              true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewDecisionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f DecisionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns Decision's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f DecisionFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"pass", f.Pass,
+		"stage", "decision",
+		"index", f.Index,
+		"total", f.Total,
+		"subject_kind", contextfabric.SanitizeLogAttr(f.SubjectKind),
+		"subject_canonical_id", contextfabric.SanitizeLogAttr(f.SubjectCanonicalID),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"winning_mechanism", contextfabric.SanitizeLogAttr(f.WinningMechanism),
+		"commit_gate", contextfabric.SanitizeLogAttr(f.CommitGate),
+		"alias_identity_complete", f.AliasIdentityComplete,
+		"identity_trust_gate_blocked", f.IdentityTrustGateBlocked,
+		"search_truncated", f.SearchTruncated,
+		"commit_basis", contextfabric.SanitizeLogAttr(f.CommitBasis),
+		"tied_statistical_top", f.TiedStatisticalTop,
+		"search_candidate_limit", f.SearchCandidateLimit,
+		"population_basis", contextfabric.SanitizeLogAttr(f.PopulationBasis),
 	}
 }
 
