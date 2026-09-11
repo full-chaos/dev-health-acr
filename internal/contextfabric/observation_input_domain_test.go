@@ -303,6 +303,47 @@ func TestTheObservationInputDomainIsEnumeratedAndExecuted(t *testing.T) {
 	stale[0].Served = true
 	markCell("incoming Served=true on a discarded pass (overwritten)", true, stale, "0:false,1:true")
 
+	// ---------------------------------------------------------------- surface 5b
+	// carryObservationCover -- what a re-finalizing pass re-states for the rows
+	// it CARRIES. Its contract: for each carried identity, the latest earlier
+	// event for that identity, re-tagged with this pass, evaluated_pass kept,
+	// served left for emit to decide; nothing for an identity no earlier pass
+	// evaluated; one event per identity. got/want: requirement:pass:evaluated.
+	carryEvent := func(requirement string, pass, evaluated int, served bool) ReadRequirementObservationCoverEvent {
+		return ReadRequirementObservationCoverEvent{Requirement: requirement, Pass: pass, EvaluatedPass: evaluated, Served: served}
+	}
+	carryCell := func(cell string, prior []ReadRequirementObservationCoverEvent, carried []string, pass int, want string) {
+		parts := []string{}
+		for _, event := range carryObservationCover(prior, carried, pass) {
+			parts = append(parts, fmt.Sprintf("%s:%d:%d:%t", event.Requirement, event.Pass, event.EvaluatedPass, event.Served))
+		}
+		got := strings.Join(parts, ",")
+		if got == "" {
+			got = "none"
+		}
+		record("carryObservationCover", "prior/carried/pass", cell, got, want)
+		if got != want {
+			t.Errorf("carryObservationCover/%s = %s, want %s", cell, got, want)
+		}
+	}
+	carryCell("carried absent (nil)", []ReadRequirementObservationCoverEvent{carryEvent("r", 0, 0, false)}, nil, 1, "none")
+	carryCell("carried empty container", []ReadRequirementObservationCoverEvent{carryEvent("r", 0, 0, false)}, []string{}, 1, "none")
+	carryCell("prior absent (a row no earlier pass evaluated)", nil, []string{"r"}, 1, "none")
+	carryCell("canonical: pass 0 evaluated, pass 1 carries", []ReadRequirementObservationCoverEvent{carryEvent("r", 0, 0, false)}, []string{"r"}, 1, "r:1:0:false")
+	carryCell("latest earlier pass wins: 0 and 1 evaluated, pass 2 carries",
+		[]ReadRequirementObservationCoverEvent{carryEvent("r", 0, 0, false), carryEvent("r", 1, 1, false)}, []string{"r"}, 2, "r:2:1:false")
+	carryCell("latest earlier pass wins regardless of arrival order",
+		[]ReadRequirementObservationCoverEvent{carryEvent("r", 1, 1, false), carryEvent("r", 0, 0, false)}, []string{"r"}, 2, "r:2:1:false")
+	carryCell("carrying a carried line keeps the ORIGINAL evaluator",
+		[]ReadRequirementObservationCoverEvent{carryEvent("r", 0, 0, false), carryEvent("r", 1, 0, false)}, []string{"r"}, 2, "r:2:0:false")
+	carryCell("boundary: a prior at THIS pass is not earlier", []ReadRequirementObservationCoverEvent{carryEvent("r", 1, 1, false)}, []string{"r"}, 1, "none")
+	carryCell("boundary+1: a prior at a LATER pass is not earlier", []ReadRequirementObservationCoverEvent{carryEvent("r", 2, 2, false)}, []string{"r"}, 1, "none")
+	carryCell("identity out of vocabulary (prior names another requirement)", []ReadRequirementObservationCoverEvent{carryEvent("other", 0, 0, false)}, []string{"r"}, 1, "none")
+	carryCell("duplicate carried identity (one line per identity)", []ReadRequirementObservationCoverEvent{carryEvent("r", 0, 0, false)}, []string{"r", "r"}, 1, "r:1:0:false")
+	carryCell("incoming served=true is not carried over (emit decides served)", []ReadRequirementObservationCoverEvent{carryEvent("r", 0, 0, true)}, []string{"r"}, 1, "r:1:0:false")
+	carryCell("two identities, each from its own latest pass",
+		[]ReadRequirementObservationCoverEvent{carryEvent("a", 0, 0, false), carryEvent("b", 0, 0, false), carryEvent("b", 1, 1, false)}, []string{"a", "b"}, 2, "a:2:0:false,b:2:1:false")
+
 	// ---------------------------------------------------------------- surface 6
 	// readRequirementObservationCoverEvent -- the cover line's field builder,
 	// driven through its only production caller, readRequirementOutcomeRow, so
@@ -385,7 +426,7 @@ func TestTheObservationInputDomainIsEnumeratedAndExecuted(t *testing.T) {
 		t.Logf("%-26s %-26s %-52s %-10s %s", r.surface, r.field, r.cell, r.got, r.want)
 	}
 	t.Logf("DOMAIN CELLS EXECUTED: %d", len(table))
-	if len(table) < 69 {
+	if len(table) < 82 {
 		t.Fatalf("only %d cells executed; the domain is being sampled, not enumerated", len(table))
 	}
 }

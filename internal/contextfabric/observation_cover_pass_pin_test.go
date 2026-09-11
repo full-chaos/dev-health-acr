@@ -155,11 +155,20 @@ func TestTheEmittedCoverLinesCarryEachPassesOwnPassAndServedValues(t *testing.T)
 		t.Fatalf("served line pass = %v, want %d -- the served document is the retry's", got, answerPassSecond)
 	}
 
+	// Both passes of a retry EVALUATE (the retry synthesizes a fresh document),
+	// so evaluated_pass equals pass on both lines by contract. It is asserted
+	// here at those values and excluded from the coincidence sweep below; the
+	// candidate-rescue pin is where the two differ, and asserts both.
+	if discardedLine["evaluated_pass"] != float64(answerPassFirst) || servedLine["evaluated_pass"] != float64(answerPassSecond) {
+		t.Fatalf("evaluated_pass = %v / %v, want %d / %d -- both retry passes evaluated",
+			discardedLine["evaluated_pass"], servedLine["evaluated_pass"], answerPassFirst, answerPassSecond)
+	}
+
 	// THE DIFFERENCE IS THE ASSERTION. No other field may track `pass` or
 	// `served` across the two lines; if one did, an emitter publishing it
 	// under that key would pass every assertion above.
 	for field := range servedLine {
-		if field == "pass" || field == "served" {
+		if field == "pass" || field == "served" || field == "evaluated_pass" {
 			continue
 		}
 		for _, key := range []string{"pass", "served"} {

@@ -63,7 +63,7 @@ func TestTheSiblingSweepIsExecuted(t *testing.T) {
 
 	// ------------------------------------------------ published row <=> cover line
 	published := func(requirement contractsv1.ContextFabricPlanRequirement, coverage Coverage, populations readPopulationEvidence) string {
-		rows, events := appendReadRequirementEvaluationsWithCover(nil,
+		rows, events, _ := appendReadRequirementEvaluationsWithCover(nil,
 			[]contractsv1.ContextFabricPlanRequirement{requirement}, coverage, populations)
 		assembled := 0
 		for _, r := range rows {

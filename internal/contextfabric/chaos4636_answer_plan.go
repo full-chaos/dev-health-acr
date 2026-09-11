@@ -588,7 +588,7 @@ func (e *Engine) finalizeResult(
 	if e.observationKeys != nil {
 		observationKeys = e.observationKeys.ObservationKeyAssignment()
 	}
-	rows, coverEvents := appendReadRequirementEvaluationsWithCover(
+	rows, coverEvents, carried := appendReadRequirementEvaluationsWithCover(
 		result.Completeness.Outcomes, stamped.Requirements, result.Coverage,
 		readPopulationEvidenceFrom(frame, result, stamped, facts, observationKeys))
 	result.Completeness.Outcomes = rows
@@ -597,11 +597,21 @@ func (e *Engine) finalizeResult(
 	// (*Engine).emit to publish exactly once per event -- nil-safe like every
 	// other deferred emitter, because a caller with nothing to thread (a
 	// direct unit-test call) simply gets no diagnostic, same as before.
-	if pending != nil && len(coverEvents) > 0 {
+	//
+	// EVERY PASS SPEAKS FOR EVERY SERVED READ REQUIREMENT: a requirement this
+	// pass evaluated gets its fresh event (EvaluatedPass == pass), and one whose
+	// row this pass CARRIES from an earlier pass gets that pass's decision
+	// re-stated under this pass's number (carryObservationCover). A pass that
+	// carried rows used to emit nothing, and emit then marked the discarded
+	// pass served.
+	if pending != nil {
 		for i := range coverEvents {
 			coverEvents[i].Pass = pass
+			coverEvents[i].EvaluatedPass = pass
 		}
+		carriedEvents := carryObservationCover(pending.ObservationCover, carried, pass)
 		pending.ObservationCover = append(pending.ObservationCover, coverEvents...)
+		pending.ObservationCover = append(pending.ObservationCover, carriedEvents...)
 	}
 	result.Completeness = ComputeAnswerCompleteness(result)
 	return result

@@ -426,13 +426,22 @@ func appendReadRequirementEvaluations(
 	coverage Coverage,
 	populations readPopulationEvidence,
 ) []RequirementOutcomeRow {
-	rows, _ = appendReadRequirementEvaluationsWithCover(rows, published, coverage, populations)
+	rows, _, _ = appendReadRequirementEvaluationsWithCover(rows, published, coverage, populations)
 	return rows
 }
 
 // appendReadRequirementEvaluationsWithCover is appendReadRequirementEvaluations's
 // full form: it ALSO returns one ReadRequirementObservationCoverEvent per row it
 // appends, in the same order, for finalizeResult to emit through e.telemetry.
+//
+// Its third return names every served READ requirement it did NOT evaluate
+// because the document already CARRIES that requirement's assembled-result row
+// from an earlier pass. The row is not re-appended (one row per identity), but
+// the pass that serves it must still say which decision it is serving, so
+// finalizeResult re-states the carried decision for this pass -- see
+// carryObservationCover. Returning the identities from THIS loop, rather than
+// re-deriving "which were skipped" at the caller, keeps one authority for the
+// skip.
 //
 // It stays a PURE FUNCTION -- no ctx, no principal, no I/O -- exactly like its
 // sibling: readRequirementOutcomeRow already computes the cover diagnostic as
@@ -443,17 +452,19 @@ func appendReadRequirementEvaluationsWithCover(
 	published []contractsv1.ContextFabricPlanRequirement,
 	coverage Coverage,
 	populations readPopulationEvidence,
-) ([]RequirementOutcomeRow, []ReadRequirementObservationCoverEvent) {
+) ([]RequirementOutcomeRow, []ReadRequirementObservationCoverEvent, []string) {
 	if len(published) == 0 {
-		return rows, nil
+		return rows, nil, nil
 	}
 	var added []RequirementOutcomeRow
 	var events []ReadRequirementObservationCoverEvent
+	var carried []string
 	for _, requirement := range published {
 		if requirement.Kind != string(ObligationKindRead) || !requirement.Served() {
 			continue
 		}
 		if hasEvaluatedReadOutcome(rows, requirement.Requirement) {
+			carried = append(carried, requirement.Requirement)
 			continue
 		}
 		threshold, known := readQuantifierThreshold(requirement.Quantifier)
@@ -469,7 +480,54 @@ func appendReadRequirementEvaluationsWithCover(
 			events = append(events, *cover)
 		}
 	}
-	return appendOutcomeRows(rows, added...), events
+	return appendOutcomeRows(rows, added...), events, carried
+}
+
+// carryObservationCover re-states, for THIS pass, the cover decision each
+// carried requirement's row came from.
+//
+// A re-finalization (the candidate narrowing after the first pass, or after the
+// retry) serves a document that carries an earlier pass's assembled-result row
+// for a requirement instead of evaluating it again. Before this, that pass
+// emitted nothing for the requirement, so the only cover line on the trace was
+// the EARLIER pass's -- and emit marked it served, describing a document nobody
+// received. Now the carried decision is emitted again with this pass's number
+// and with EvaluatedPass left at the pass that actually evaluated it: the trace
+// shows the discarded pass, the served pass, and that the served pass carried
+// rather than re-evaluated.
+//
+// The source is the LATEST earlier event for the identity on the pending
+// telemetry (the highest Pass below this one). An identity with no earlier
+// event is carried by a row the evaluator never wrote -- a candidate-reduction
+// row occupying the identity after an earlier pass published no evaluator row
+// -- and there is no cover decision to re-state, so nothing is invented.
+func carryObservationCover(prior []ReadRequirementObservationCoverEvent, carried []string, pass int) []ReadRequirementObservationCoverEvent {
+	var out []ReadRequirementObservationCoverEvent
+	stated := map[string]bool{}
+	for _, identity := range carried {
+		// One line per identity per pass, whatever the caller hands in.
+		if stated[identity] {
+			continue
+		}
+		stated[identity] = true
+		found := -1
+		for i := range prior {
+			if prior[i].Requirement != identity || prior[i].Pass >= pass {
+				continue
+			}
+			if found < 0 || prior[i].Pass > prior[found].Pass {
+				found = i
+			}
+		}
+		if found < 0 {
+			continue
+		}
+		event := prior[found]
+		event.Pass = pass
+		event.Served = false
+		out = append(out, event)
+	}
+	return out
 }
 
 // servedObservationCover is the SERVED half of a read requirement's two
@@ -952,6 +1010,13 @@ type ReadRequirementObservationCoverEvent struct {
 	DeclaredRaisedToStandard bool
 	// MeetsThreshold is the row's own pass/fail: ServedCover >= Threshold.
 	MeetsThreshold bool
+	// EvaluatedPass is the pass whose evaluation produced the row this event
+	// describes. It equals Pass when this pass evaluated the requirement, and
+	// is an EARLIER pass when this pass served a row it carried from that
+	// pass instead of evaluating again (see carryObservationCover). Without
+	// it, a carried decision re-stated for the served pass would read as a
+	// fresh evaluation that never ran.
+	EvaluatedPass int
 	// Pass is which finalization this event came from, in the order they ran
 	// for this investigation (0 for the first synthesis, 1 for the one
 	// bounded budget retry or a candidate-narrowing re-finalize that ran
