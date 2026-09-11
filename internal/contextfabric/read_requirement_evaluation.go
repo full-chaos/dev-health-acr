@@ -912,8 +912,10 @@ type ReadRequirementObservationCoverEvent struct {
 	Subject     SubjectKind
 	// Threshold is the completion quantifier's own demand.
 	Threshold int
-	// ObservedKinds and ServedKinds are the KIND counts -- the catalogue
-	// size on each side of the decision, before any cover is taken.
+	// ObservedKinds and ServedKinds are the KIND counts -- the number of
+	// DISTINCT fact kinds on each side of the decision, before any cover is
+	// taken. Distinct, not list entries: the cover dedupes kinds, so a count
+	// of entries would read a kind listed twice as a collapse.
 	ObservedKinds int
 	ServedKinds   int
 	// ObservedCover and ServedCover are the MINIMUM COVER on each side: the
@@ -922,9 +924,19 @@ type ReadRequirementObservationCoverEvent struct {
 	// mixed-state alias rule this number depends on.
 	ObservedCover int
 	ServedCover   int
-	// CollapsedObservations is ServedKinds minus ServedCover: how many served
-	// KINDS shared an observation with another served kind, so the cover
-	// counted them once. Zero whenever every served kind is independent.
+	// CollapsedObservations is how many served KINDS shared an observation
+	// with another served kind, so the cover counted them once: ServedKinds
+	// minus the cover of the served kinds BEFORE the mixed-state rule removes
+	// any tainted key. Zero whenever every served kind is independent.
+	//
+	// It is taken before the taint on purpose. ServedCover is taken after it,
+	// so a served kind whose only observation was also lost elsewhere drops
+	// out of ServedCover without having collapsed into anything; subtracting
+	// the post-taint cover would report that drop as a collapse. With this
+	// definition the trace alone rebuilds both steps: ServedKinds minus
+	// CollapsedObservations is the cover before the taint, ServedCover is the
+	// cover after it, and TaintedObservations names how many keys the rule
+	// removed in between.
 	CollapsedObservations int
 	// TaintedObservations is how many observations the mixed-state rule
 	// excluded from ServedCover because they also backed a kind this turn
@@ -969,9 +981,10 @@ func readRequirementObservationCoverEvent(
 	evidence readEvidence,
 	assignment observationKeyAssignment,
 ) *ReadRequirementObservationCoverEvent {
-	servedKinds := len(evidence.ServedKinds)
-	observedKinds := len(evidence.ObservedKinds)
+	servedKinds := distinctFactKindCount(evidence.ServedKinds)
+	observedKinds := distinctFactKindCount(evidence.ObservedKinds)
 	observedCover := observationCover(evidence.ObservedKinds, requirement.Subject, assignment)
+	servedCoverBeforeTaint := observationCover(evidence.ServedKinds, requirement.Subject, assignment)
 	return &ReadRequirementObservationCoverEvent{
 		Requirement:              requirement.Requirement,
 		Obligation:               requirement.Obligation,
@@ -981,12 +994,21 @@ func readRequirementObservationCoverEvent(
 		ServedKinds:              servedKinds,
 		ObservedCover:            observedCover,
 		ServedCover:              servedCover,
-		CollapsedObservations:    servedKinds - servedCover,
+		CollapsedObservations:    servedKinds - servedCoverBeforeTaint,
 		TaintedObservations:      taintedObservationCount(evidence, requirement.Subject, assignment),
 		Declared:                 declared,
 		DeclaredRaisedToStandard: declared > observedCover,
 		MeetsThreshold:           servedCover >= threshold,
 	}
+}
+
+// distinctFactKindCount is the number of distinct kinds in a list.
+func distinctFactKindCount(kinds []FactKind) int {
+	seen := make(map[FactKind]struct{}, len(kinds))
+	for _, kind := range kinds {
+		seen[kind] = struct{}{}
+	}
+	return len(seen)
 }
 
 // taintedObservationCount is how many distinct observations the mixed-state

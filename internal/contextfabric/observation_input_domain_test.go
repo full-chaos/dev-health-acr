@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -302,13 +303,89 @@ func TestTheObservationInputDomainIsEnumeratedAndExecuted(t *testing.T) {
 	stale[0].Served = true
 	markCell("incoming Served=true on a discarded pass (overwritten)", true, stale, "0:false,1:true")
 
+	// ---------------------------------------------------------------- surface 6
+	// readRequirementObservationCoverEvent -- the cover line's field builder,
+	// driven through its only production caller, readRequirementOutcomeRow, so
+	// served cover and declared come from the production formulas. Its
+	// contract, field by field: kind counts are DISTINCT kinds; collapsed is
+	// served kinds minus the served cover BEFORE the taint; tainted counts only
+	// keys a served kind stands on; declared is the observed cover raised to the
+	// threshold; meets is served cover >= threshold.
+	//
+	// got/want: "kinds o/s cover o/s collapsed tainted declared raised meets".
+	eventRequirement := contractsv1.ContextFabricPlanRequirement{
+		Requirement: "principal_drivers", Obligation: "drivers",
+		Subject: contractsv1.ContextFabricSubjectKind(SubjectTeam),
+	}
+	eventCell := func(cell string, threshold int, ev readEvidence, want string) {
+		got := "no event"
+		if _, _, event := readRequirementOutcomeRow(eventRequirement, threshold, ev, readPopulationEvidence{assignment: a}); event != nil {
+			got = fmt.Sprintf("kinds %d/%d cover %d/%d collapsed %d tainted %d declared %d raised %t meets %t",
+				event.ObservedKinds, event.ServedKinds, event.ObservedCover, event.ServedCover,
+				event.CollapsedObservations, event.TaintedObservations, event.Declared,
+				event.DeclaredRaisedToStandard, event.MeetsThreshold)
+		}
+		record("readRequirementObservationCoverEvent", "evidence/threshold", cell, got, want)
+		if got != want {
+			t.Errorf("readRequirementObservationCoverEvent/%s = %s, want %s", cell, got, want)
+		}
+	}
+	served := func(observed, servedKinds []FactKind) readEvidence {
+		return readEvidence{
+			Observed: len(observed), Served: len(servedKinds), Narrowed: len(observed) - len(servedKinds),
+			ObservedKinds: observed, ServedKinds: servedKinds,
+		}
+	}
+	eventCell("evidence absent (nothing observed: the measured zero)", 2, readEvidence{},
+		"kinds 0/0 cover 0/0 collapsed 0 tainted 0 declared 2 raised true meets false")
+	eventCell("canonical: two kinds that are one observation, nothing lost", 2,
+		served([]FactKind{FactOperationalDeficiencies, FactHealth}, []FactKind{FactOperationalDeficiencies, FactHealth}),
+		"kinds 2/2 cover 1/1 collapsed 1 tainted 0 declared 2 raised true meets false")
+	eventCell("two independent kinds, nothing lost", 2,
+		served([]FactKind{FactHealth, FactFlow}, []FactKind{FactHealth, FactFlow}),
+		"kinds 2/2 cover 2/2 collapsed 0 tainted 0 declared 2 raised false meets true")
+	eventCell("duplicate served and observed kind (counted once)", 1,
+		served([]FactKind{FactHealth, FactHealth}, []FactKind{FactHealth, FactHealth}),
+		"kinds 1/1 cover 1/1 collapsed 0 tainted 0 declared 1 raised false meets true")
+	eventCell("duplicate observed kind only (counted once)", 1,
+		readEvidence{Observed: 2, Served: 1, ObservedKinds: []FactKind{FactHealth, FactHealth}, ServedKinds: []FactKind{FactHealth}},
+		"kinds 1/1 cover 1/1 collapsed 0 tainted 0 declared 1 raised false meets true")
+	// A served kind whose ONLY observation is also lost elsewhere drops out of
+	// the served cover without collapsing into anything: collapsed stays 0.
+	eventCell("taint-only drop: served kind's only key is lost elsewhere", 2,
+		served([]FactKind{FactHealth, FactOperationalDeficiencies}, []FactKind{FactHealth}),
+		"kinds 2/1 cover 1/0 collapsed 0 tainted 1 declared 2 raised true meets false")
+	// The live shape at team: a collapse AND a taint in one row.
+	eventCell("collapse and taint together (the live shape)", 2,
+		served([]FactKind{FactHealth, FactInvestment, FactMetrics, FactOperationalDeficiencies, FactReadiness, FactWorkload},
+			[]FactKind{FactHealth, FactInvestment, FactOperationalDeficiencies, FactWorkload}),
+		"kinds 6/4 cover 5/3 collapsed 1 tainted 1 declared 5 raised false meets true")
+	eventCell("lost kind whose key no served kind stands on (no taint)", 2,
+		served([]FactKind{FactHealth, FactFlow}, []FactKind{FactHealth}),
+		"kinds 2/1 cover 2/1 collapsed 0 tainted 0 declared 2 raised false meets false")
+	eventCell("unkeyed served kind (a singleton)", 1,
+		served([]FactKind{FactInvestment}, []FactKind{FactInvestment}),
+		"kinds 1/1 cover 1/1 collapsed 0 tainted 0 declared 1 raised false meets true")
+	eventCell("served kind out of vocabulary (a singleton)", 1,
+		served([]FactKind{FactKind("not_a_kind")}, []FactKind{FactKind("not_a_kind")}),
+		"kinds 1/1 cover 1/1 collapsed 0 tainted 0 declared 1 raised false meets true")
+	independent := served([]FactKind{FactHealth, FactFlow}, []FactKind{FactHealth, FactFlow})
+	eventCell("threshold boundary-1 (served cover 2, threshold 1)", 1, independent,
+		"kinds 2/2 cover 2/2 collapsed 0 tainted 0 declared 2 raised false meets true")
+	eventCell("threshold boundary (served cover 2, threshold 2)", 2, independent,
+		"kinds 2/2 cover 2/2 collapsed 0 tainted 0 declared 2 raised false meets true")
+	eventCell("threshold boundary+1 (served cover 2, threshold 3)", 3, independent,
+		"kinds 2/2 cover 2/2 collapsed 0 tainted 0 declared 3 raised true meets false")
+	eventCell("threshold zero", 0, independent,
+		"kinds 2/2 cover 2/2 collapsed 0 tainted 0 declared 2 raised false meets true")
+
 	// ---------------------------------------------------------------- print
 	t.Logf("%-26s %-26s %-52s %-10s %s", "SURFACE", "FIELD", "CELL", "GOT", "WANT")
 	for _, r := range table {
 		t.Logf("%-26s %-26s %-52s %-10s %s", r.surface, r.field, r.cell, r.got, r.want)
 	}
 	t.Logf("DOMAIN CELLS EXECUTED: %d", len(table))
-	if len(table) < 55 {
+	if len(table) < 69 {
 		t.Fatalf("only %d cells executed; the domain is being sampled, not enumerated", len(table))
 	}
 }
