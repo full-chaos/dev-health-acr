@@ -252,3 +252,123 @@ func TestSemanticState_ThePreloadCacheKeepsWholeCarriers(t *testing.T) {
 		t.Fatalf("the preload cache narrowed the carrier: ok=%v read=%s", ok, cached.SemanticStateRead)
 	}
 }
+
+// TestSemanticStateAdmission_TheRecordedStandardsMustBeInForce is admission's
+// input domain over an AVAILABLE snapshot: each recorded standard out of
+// force alone, the family disagreeing with the public plan, no plan at all,
+// and the in-force control.
+func TestSemanticStateAdmission_TheRecordedStandardsMustBeInForce(t *testing.T) {
+	t.Parallel()
+	plan := &AnswerPlan{Family: QuestionFamilyGroupedCohortStatus}
+	for _, tc := range []struct {
+		name string
+		edit func(*PersistedSemanticState)
+		plan *AnswerPlan
+		want ContinuationDecisionReason
+	}{
+		{"every standard in force", func(*PersistedSemanticState) {}, plan, ContinuationReasonNone},
+		{"family table not in force", func(s *PersistedSemanticState) { s.FamilyTableVersion = "question-family.v0" }, plan, ContinuationReasonContextVersionMismatch},
+		{"frame table not in force", func(s *PersistedSemanticState) {
+			s.FrameVersion, s.Frame.Version = "question-frame.v0", "question-frame.v0"
+		}, plan, ContinuationReasonContextVersionMismatch},
+		{"requirement derivation not in force", func(s *PersistedSemanticState) { s.RequirementDerivationVersion = "requirement-derivation.v1" }, plan, ContinuationReasonContextVersionMismatch},
+		{"family disagrees with the public plan", func(*PersistedSemanticState) {}, &AnswerPlan{Family: QuestionFamilyDiscoveredCohortRanking}, ContinuationReasonSemanticStateInvalid},
+		{"no public plan", func(*PersistedSemanticState) {}, nil, ContinuationReasonSemanticStateInvalid},
+	} {
+		state := semanticFixture(t)
+		tc.edit(state)
+		got := semanticStateAdmission(StoredInvestigationResult{SemanticState: state, SemanticStateRead: SemanticStateReadAvailable}, tc.plan)
+		t.Logf("%-40s -> %s", tc.name, got)
+		if got != tc.want {
+			t.Errorf("%s: reason=%q, want %q", tc.name, got, tc.want)
+		}
+	}
+	// Every read status other than available withholds, and an available
+	// status with no snapshot is invalid.
+	for status, want := range map[SemanticStateReadStatus]ContinuationDecisionReason{
+		SemanticStateReadAbsent:             ContinuationReasonSemanticStateAbsent,
+		SemanticStateReadUnsupportedVersion: ContinuationReasonContextVersionMismatch,
+		SemanticStateReadMalformed:          ContinuationReasonSemanticStateInvalid,
+		SemanticStateReadOversized:          ContinuationReasonSemanticStateInvalid,
+		"":                                  ContinuationReasonSemanticStateInvalid,
+		SemanticStateReadStatus("invented"): ContinuationReasonSemanticStateInvalid,
+		SemanticStateReadAvailable:          ContinuationReasonSemanticStateInvalid, // with a nil snapshot
+	} {
+		if got := semanticStateAdmission(StoredInvestigationResult{SemanticStateRead: status}, plan); got != want {
+			t.Errorf("status %q with no snapshot -> %q, want %q", status, got, want)
+		}
+	}
+}
+
+// TestSemanticStateComposition_APassedGateWithoutAFrameIsIncomplete: a snapshot
+// whose gate certified a frame it no longer carries is not composed as a
+// frameless reading.
+func TestSemanticStateComposition_APassedGateWithoutAFrameIsIncomplete(t *testing.T) {
+	t.Parallel()
+	state := carriedStateFor(t, QuestionFamilyGroupedCohortStatus, SubjectTeam, nil, FrameGate{})
+	control := composeAcceptedContext(compositionInput{Carried: state})
+	state.Validation.GateOutcome = FrameGatePassed
+	got := composeAcceptedContext(compositionInput{Carried: state})
+	t.Logf("frameless not_evaluated -> %s usable=%v | frameless passed -> %s invariant=%s", control.Outcome, control.Usable(), got.Outcome, got.FailedInvariant)
+	if !control.Usable() {
+		t.Fatalf("control: a frameless not-evaluated reading must compose")
+	}
+	if got.Usable() || got.FailedInvariant != CompositionInvariantCarriedStateIncomplete {
+		t.Errorf("a passed gate with no frame composed as %q (invariant %q)", got.Outcome, got.FailedInvariant)
+	}
+}
+
+// TestSemanticStateApply_FrameObligationsMoveWithTheFrame: installing the
+// carried frame installs its obligation set, and a frameless carrier installs
+// none -- the frame and its obligations are never from two readings.
+func TestSemanticStateApply_FrameObligationsMoveWithTheFrame(t *testing.T) {
+	t.Parallel()
+	state := semanticFixture(t)
+	decision := windowContinuationDecision{Observed: true, WindowOnlyShape: true, Disposition: ContinuationApplied,
+		Accepted: &continuationCarriedContext{Family: state.Family, GroupKind: state.GroupKind, State: state}}
+	freshObligations := []AnswerObligation{ObligationRanking}
+	before := QuestionFamilyOutcome{Family: QuestionFamilyDiscoveredCohortRanking, Source: QuestionFamilySourceModel, FrameObligations: freshObligations}
+	accepted := composeAcceptedContext(compositionInput{Carried: state})
+	after, applied := applyWindowContinuation(before, decision, accepted)
+	if !applied || after.Frame == nil || !sameJSON(after.FrameObligations, after.Frame.Obligations) || sameJSON(after.FrameObligations, freshObligations) {
+		t.Fatalf("applied=%v obligations=%v frame=%v -- the installed frame's obligations must replace the fresh ones", applied, after.FrameObligations, after.Frame != nil)
+	}
+	frameless := carriedStateFor(t, QuestionFamilyGroupedCohortStatus, SubjectTeam, nil, FrameGate{})
+	decision.Accepted.State = frameless
+	after, applied = applyWindowContinuation(before, decision, composeAcceptedContext(compositionInput{Carried: frameless}))
+	t.Logf("frameless carrier -> applied=%v frame=%v obligations=%v", applied, after.Frame != nil, after.FrameObligations)
+	if !applied || after.Frame != nil || after.FrameObligations != nil {
+		t.Errorf("a frameless carrier must continue frameless with no obligations, got frame=%v obligations=%v", after.Frame != nil, after.FrameObligations)
+	}
+}
+
+// TestSemanticStateCapture_AContinuationMaterializesTheCarriedShape: the
+// continued turn's own snapshot records the CARRIED reading's emitted shape
+// (the input its frame was validated with), not this turn's fresh one.
+func TestSemanticStateCapture_AContinuationMaterializesTheCarriedShape(t *testing.T) {
+	t.Parallel()
+	request := continuationRequest(validInvestigationRequest().Question)
+	prior := continuationPrior(t, continuationPriorID, request.Question, QuestionFamilyGroupedCohortStatus, SubjectTeam)
+	carried := framedCarrierState(t, prior, SubjectRepository)
+	carried.Validation.EmittedShape = ShapeDiscoveredCohort
+	if _, err := EncodeSemanticState(carried); err != nil {
+		t.Fatalf("fixture defect: %v", err)
+	}
+	store := &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}, states: map[string]*PersistedSemanticState{prior.ResultID: carried}}
+	harness := newContinuationHarness(t, store, frameBearingInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: SubjectProject, frameGroup: SubjectProject})
+	harness.investigate(t, request)
+	if d := harness.soleDecision(t); d.Disposition != ContinuationApplied {
+		t.Fatalf("fixture defect: the continuation did not apply (%s/%s)", d.Disposition, d.Reason)
+	}
+	saved := store.savedSemantic
+	if saved == nil || saved.State == nil {
+		t.Fatalf("the continued turn saved no snapshot: %+v", saved)
+	}
+	t.Logf("carried shape=%s fresh shape=%s saved shape=%s", carried.Validation.EmittedShape, ShapeOpen, saved.State.Validation.EmittedShape)
+	if saved.State.Validation.EmittedShape != ShapeDiscoveredCohort {
+		t.Errorf("saved emitted_shape=%q, want the carried %q", saved.State.Validation.EmittedShape, ShapeDiscoveredCohort)
+	}
+	if !sameJSON(saved.State.Frame, carried.Frame) || saved.State.FamilySource != QuestionFamilySourceCarried {
+		t.Errorf("the continued snapshot is not the carried reading: frame equal=%v source=%s", sameJSON(saved.State.Frame, carried.Frame), saved.State.FamilySource)
+	}
+}
