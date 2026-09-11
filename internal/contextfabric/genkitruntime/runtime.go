@@ -915,7 +915,7 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 	primaryProvider, primaryModel, primaryModelVersion = receipt.Provider, receipt.Model, receipt.ModelVersion
 	if generationErr != nil {
 		primaryFailureClassification = receipt.Outcome
-		if r.config.Fallback != nil {
+		if r.config.Fallback != nil && !fallbackWouldSeeADeadContext(ctx, receipt.Outcome != "cancelled") {
 			interpreted, fallbackReceipt, fallbackErr := r.config.Fallback.InterpretQuestion(ctx, principal, request)
 			// CHAOS-5380: the fallback leg's OWN attempt count, recorded
 			// whether it succeeded or failed. mergeFallbackReceipt keeps
@@ -984,7 +984,7 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 	if err != nil {
 		receipt.Outcome = "invalid_output"
 		primaryFailureClassification = receipt.Outcome
-		if r.config.Fallback != nil {
+		if r.config.Fallback != nil && !fallbackWouldSeeADeadContext(ctx, receipt.Outcome != "cancelled") {
 			fallback, fallbackReceipt, fallbackErr := r.config.Fallback.InterpretQuestion(ctx, principal, request)
 			// CHAOS-5380: the fallback leg's OWN attempt count, recorded
 			// whether it succeeded or failed. mergeFallbackReceipt keeps
@@ -1476,7 +1476,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	primaryProvider, primaryModel, primaryModelVersion = receipt.Provider, receipt.Model, receipt.ModelVersion
 	if generationErr != nil {
 		primaryFailureClassification = receipt.Outcome
-		if r.config.Fallback != nil {
+		if r.config.Fallback != nil && !fallbackWouldSeeADeadContext(ctx, receipt.Outcome != "cancelled") {
 			draft, fallbackReceipt, fallbackErr := r.config.Fallback.SynthesizeAnswer(ctx, principal, input)
 			// CHAOS-5380: the fallback leg's OWN attempt count, recorded
 			// whether it succeeded or failed. mergeFallbackReceipt keeps
@@ -1554,7 +1554,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		// that was never evaluated -- which would make the documented
 		// "1 versus >1" reading wrong in exactly the case it diagnoses.
 		setDiagnostics(err)
-		if r.config.Fallback != nil {
+		if r.config.Fallback != nil && !fallbackWouldSeeADeadContext(ctx, receipt.Outcome != "cancelled") {
 			fallback, fallbackReceipt, fallbackErr := r.config.Fallback.SynthesizeAnswer(ctx, principal, input)
 			// CHAOS-5380: the fallback leg's OWN attempt count, recorded
 			// whether it succeeded or failed. mergeFallbackReceipt keeps
@@ -1917,6 +1917,41 @@ func (r *Runtime) withRetry(ctx context.Context, fn func(context.Context) error)
 		}
 	}
 	return outcomes, last
+}
+
+// fallbackWouldSeeADeadContext reports whether invoking the fallback leg
+// would be certain to fail on ITS OWN pre-call ctx.Err() check, in
+// withRetry, without ever reaching its provider -- true only when the
+// caller's ctx is already done AND a provider has already been genuinely
+// contacted somewhere earlier in THIS OPERATION (primaryContactedProvider,
+// true whenever the primary's own already-computed receipt.Outcome is not
+// "cancelled" -- see receiptOutcomeForError).
+//
+// This is the round 3 (CHAOS-5577) composition fix: the operation-wide
+// "cancelled" outcome means no leg's call ever reached a provider, but the
+// fallback's own withRetry cannot know whether the PRIMARY reached one --
+// it only sees the ctx it was handed. Calling it anyway in this exact
+// situation is certain to produce a fallback receipt tagged "cancelled"
+// (its own attempt 1 sees the same already-done ctx), and the existing
+// "both legs failed -> report the fallback's own outcome" composition rule
+// (receipt.Outcome = fallbackReceipt.Outcome, unchanged and still correct
+// for every OTHER failure class) would then let that misleading tag
+// overwrite an operation where a provider genuinely WAS contacted.
+//
+// The fix is to never place that doomed call at all: when this reports
+// true, every fallback call site below falls through to the exact code
+// path it already runs for r.config.Fallback == nil, which already
+// reports the primary's own truthful classification. Both receipts stay
+// truthful this way -- the primary's own attempt_outcomes/classification
+// were already recorded before this check runs, and no fallback receipt is
+// fabricated for a call that was never placed. A primary that itself never
+// contacted a provider (primaryContactedProvider false, its own outcome
+// already correctly "cancelled") still invokes the fallback exactly as
+// before -- unchanged, and correct: nothing in the operation has reached a
+// provider yet, so letting the fallback's own attempt decide the outcome
+// is still right.
+func fallbackWouldSeeADeadContext(ctx context.Context, primaryContactedProvider bool) bool {
+	return primaryContactedProvider && ctx.Err() != nil
 }
 
 // receipt builds the content-safe execution receipt for one generation

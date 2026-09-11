@@ -3,6 +3,7 @@ package genkitruntime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -569,5 +570,340 @@ func TestPreCallCancellationOnALaterAttemptStaysUnavailable(t *testing.T) {
 	}
 	if got := attrString(t, attrs, "attempt_outcomes"); got != "1:unavailable,2:cancelled" {
 		t.Fatalf("attempt_outcomes = %q, want %q (per-attempt class is unaffected by this fix)", got, "1:unavailable,2:cancelled")
+	}
+}
+
+// --- round 3 (CHAOS-5577 D15=A): the terminal outcome is an OPERATION-WIDE
+// question -- "did ANY leg ever contact a provider" -- not a per-leg one.
+// Round 2's attempt==1 fix only proved a LATER attempt in the SAME leg's own
+// retry sequence never contacted a provider; it said nothing about a
+// DIFFERENT leg (primary vs. fallback). A primary that genuinely contacted a
+// provider and was then canceled IN FLIGHT correctly reads "unavailable" for
+// its own leg (round 2's fix is right there) -- but with a fallback
+// configured, the fallback inherits the SAME already-canceled ctx, sees it
+// on ITS OWN attempt 1, tags ErrModelCancelled correctly for ITS leg, and
+// the pre-existing "both legs failed -> report the fallback's own outcome"
+// composition rule then overwrote the WHOLE OPERATION's outcome to
+// "cancelled" -- even though a provider genuinely was contacted. The fix
+// (fallbackWouldSeeADeadContext, runtime.go) skips the doomed fallback call
+// entirely in that exact situation, letting each of these four call sites
+// fall through to the same code path it already runs when no fallback is
+// configured at all -- see the pin group below, one per site, plus a
+// regression pin proving the fallback is STILL invoked, and can still
+// compose a genuine "cancelled" outcome, when neither leg has contacted a
+// provider.
+
+// neverCalledFallback is a fallback ModelRuntime that must NEVER be invoked
+// in the tests below -- proving the fix skips the call outright, rather than
+// invoking it and merely discarding/overriding its result. Tracking a call
+// counter (checked only AFTER the primary call's goroutine has finished, via
+// a happens-before `<-done` channel receive) follows this file's own
+// established pattern (cancelAfterFirstAttemptGenerator.calls,
+// inCallCancelGenerator) rather than calling t.Fatal from a background
+// goroutine, which the testing package does not support.
+type neverCalledFallback struct {
+	calls       int
+	interpreted contextfabric.InterpretedQuestion
+	draft       contextfabric.SynthesisDraft
+}
+
+func (f *neverCalledFallback) InterpretQuestion(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
+	f.calls++
+	return f.interpreted, validReceipt(contextfabric.ModelOperationInterpret), nil
+}
+
+func (f *neverCalledFallback) SynthesizeAnswer(context.Context, storage.Principal, contextfabric.SynthesisInput) (contextfabric.SynthesisDraft, contextfabric.ModelExecutionReceipt, error) {
+	f.calls++
+	return f.draft, validReceipt(contextfabric.ModelOperationSynthesize), nil
+}
+
+// inCallCancelSynthesizeGenerator is inCallCancelGenerator's Synthesize
+// counterpart -- the existing type's Synthesize method is a fixed "not used
+// by this test" stub, so a distinct type is needed to block on ctx.Done()
+// from inside Synthesize specifically.
+type inCallCancelSynthesizeGenerator struct {
+	started chan struct{}
+}
+
+func (g *inCallCancelSynthesizeGenerator) Interpret(context.Context, generationRequest) (interpretationOutput, contextfabric.ModelUsage, error) {
+	return interpretationOutput{}, contextfabric.ModelUsage{}, errors.New("not used by this test")
+}
+
+func (g *inCallCancelSynthesizeGenerator) Synthesize(ctx context.Context, request generationRequest) (synthesisOutput, contextfabric.ModelUsage, error) {
+	close(g.started)
+	<-ctx.Done()
+	return synthesisOutput{}, contextfabric.ModelUsage{}, ctx.Err()
+}
+
+func (g *inCallCancelSynthesizeGenerator) Phrase(context.Context, generationRequest) (phrasingOutput, contextfabric.ModelUsage, error) {
+	return phrasingOutput{}, contextfabric.ModelUsage{}, errors.New("not used by this test")
+}
+
+// TestFallbackSkippedWhenPrimaryInterpretationContactedProviderThenCanceled
+// is the r3 repro itself, over InterpretQuestion's generation-error fallback
+// site (runtime.go:918): the primary's call is genuinely IN FLIGHT --
+// inCallCancelGenerator blocks until the caller cancels ctx -- so the
+// primary's own leg correctly classifies "unavailable" (round 2's fix), and
+// the fix under test must now skip the fallback call outright rather than
+// let it inherit the same dead ctx and overwrite that with "cancelled".
+func TestFallbackSkippedWhenPrimaryInterpretationContactedProviderThenCanceled(t *testing.T) {
+	t.Parallel()
+	handler, logger := newCaptureLogger()
+	generator := &inCallCancelGenerator{started: make(chan struct{})}
+	fallback := &neverCalledFallback{interpreted: validInterpretedQuestion(), draft: validDraft()}
+	runtime := mustRuntime(t, generator, Config{Logger: logger, MaxAttempts: 1, Timeout: time.Minute, Fallback: fallback})
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	var err error
+	go func() {
+		_, _, err = runtime.InterpretQuestion(ctx, storage.Principal{OrgID: "org_1"}, validRequest())
+		close(done)
+	}()
+	select {
+	case <-generator.started:
+		cancel()
+	case <-time.After(5 * time.Second):
+		t.Fatal("generator was never invoked before the timeout -- cannot exercise the in-call case")
+	}
+	<-done
+
+	if err == nil {
+		t.Fatal("InterpretQuestion() error = nil, want the primary's own cancellation error surfaced")
+	}
+	if fallback.calls != 0 {
+		t.Fatalf("fallback.calls = %d, want 0 -- the primary already contacted the provider, so the fallback must never be invoked on the same already-canceled ctx", fallback.calls)
+	}
+	attrs := onlyDecisionEvent(t, handler).Attrs
+	if got := attrString(t, attrs, "outcome"); got != "unavailable" {
+		t.Fatalf("outcome = %q, want %q -- the primary genuinely contacted the provider before the in-flight cancellation, so the operation must not read cancelled", got, "unavailable")
+	}
+	if got := attrString(t, attrs, "primary_failure_classification"); got != "unavailable" {
+		t.Fatalf("primary_failure_classification = %q, want %q", got, "unavailable")
+	}
+	if got, ok := attrs["fallback_used"].(bool); !ok || got {
+		t.Fatalf("fallback_used = %#v, want false", attrs["fallback_used"])
+	}
+}
+
+// cancelThenInvalidInterpretGenerator returns a genuinely-generated (no
+// error) but semantically invalid interpretation, canceling the caller's own
+// ctx as a side effect of the call -- so by the time the domain-validation
+// fallback guard (runtime.go:987) runs, ctx is already done, exactly as it
+// could be if the caller's deadline landed between the provider's response
+// and that check.
+type cancelThenInvalidInterpretGenerator struct {
+	cancel context.CancelFunc
+	output interpretationOutput
+}
+
+func (g *cancelThenInvalidInterpretGenerator) Interpret(context.Context, generationRequest) (interpretationOutput, contextfabric.ModelUsage, error) {
+	g.cancel()
+	return g.output, contextfabric.ModelUsage{InputTokens: 10, OutputTokens: 4, TotalTokens: 14}, nil
+}
+
+func (g *cancelThenInvalidInterpretGenerator) Synthesize(context.Context, generationRequest) (synthesisOutput, contextfabric.ModelUsage, error) {
+	return synthesisOutput{}, contextfabric.ModelUsage{}, errors.New("not used by this test")
+}
+
+func (g *cancelThenInvalidInterpretGenerator) Phrase(context.Context, generationRequest) (phrasingOutput, contextfabric.ModelUsage, error) {
+	return phrasingOutput{}, contextfabric.ModelUsage{}, errors.New("not used by this test")
+}
+
+// TestFallbackSkippedWhenPrimaryInterpretationInvalidAfterContextCanceled
+// covers InterpretQuestion's SECOND fallback site (runtime.go:987, the
+// domain-validation-failure branch): the primary DID produce output (a
+// provider was genuinely contacted -- generationErr is nil), the output is
+// semantically invalid, and ctx is already canceled by the time the fallback
+// guard runs. The fix must skip the fallback call here too.
+func TestFallbackSkippedWhenPrimaryInterpretationInvalidAfterContextCanceled(t *testing.T) {
+	t.Parallel()
+	handler, logger := newCaptureLogger()
+	ctx, cancel := context.WithCancel(context.Background())
+	invalid := validInterpretationOutput()
+	invalid.RequestedJudgment = strings.Repeat("a", 259)
+	generator := &cancelThenInvalidInterpretGenerator{cancel: cancel, output: invalid}
+	fallback := &neverCalledFallback{interpreted: validInterpretedQuestion(), draft: validDraft()}
+	runtime := mustRuntime(t, generator, Config{Logger: logger, MaxAttempts: 1, Fallback: fallback})
+
+	_, receipt, err := runtime.InterpretQuestion(ctx, storage.Principal{OrgID: "org_1"}, validRequest())
+	if err == nil || !errors.Is(err, contextfabric.ErrInterpretationRejected) {
+		t.Fatalf("InterpretQuestion() error = %v, want ErrInterpretationRejected surfaced from the primary's own rejection", err)
+	}
+	if fallback.calls != 0 {
+		t.Fatalf("fallback.calls = %d, want 0 -- the primary already contacted the provider, so the fallback must never be invoked on the same already-canceled ctx", fallback.calls)
+	}
+	if receipt.Outcome != "invalid_output" {
+		t.Fatalf("receipt.Outcome = %q, want %q", receipt.Outcome, "invalid_output")
+	}
+	attrs := onlyDecisionEvent(t, handler).Attrs
+	if got := attrString(t, attrs, "primary_failure_classification"); got != "invalid_output" {
+		t.Fatalf("primary_failure_classification = %q, want %q", got, "invalid_output")
+	}
+}
+
+// cancelThenInvalidSynthesizeGenerator is
+// cancelThenInvalidInterpretGenerator's Synthesize counterpart.
+type cancelThenInvalidSynthesizeGenerator struct {
+	cancel context.CancelFunc
+	output synthesisOutput
+}
+
+func (g *cancelThenInvalidSynthesizeGenerator) Interpret(context.Context, generationRequest) (interpretationOutput, contextfabric.ModelUsage, error) {
+	return interpretationOutput{}, contextfabric.ModelUsage{}, errors.New("not used by this test")
+}
+
+func (g *cancelThenInvalidSynthesizeGenerator) Synthesize(context.Context, generationRequest) (synthesisOutput, contextfabric.ModelUsage, error) {
+	g.cancel()
+	return g.output, contextfabric.ModelUsage{InputTokens: 20, OutputTokens: 8, TotalTokens: 28}, nil
+}
+
+func (g *cancelThenInvalidSynthesizeGenerator) Phrase(context.Context, generationRequest) (phrasingOutput, contextfabric.ModelUsage, error) {
+	return phrasingOutput{}, contextfabric.ModelUsage{}, errors.New("not used by this test")
+}
+
+// TestFallbackSkippedWhenPrimarySynthesisContactedProviderThenCanceled is the
+// r3 repro over SynthesizeAnswer's generation-error fallback site
+// (runtime.go:1479) -- the SynthesizeAnswer sibling of
+// TestFallbackSkippedWhenPrimaryInterpretationContactedProviderThenCanceled.
+func TestFallbackSkippedWhenPrimarySynthesisContactedProviderThenCanceled(t *testing.T) {
+	t.Parallel()
+	handler, logger := newCaptureLogger()
+	generator := &inCallCancelSynthesizeGenerator{started: make(chan struct{})}
+	fallback := &neverCalledFallback{interpreted: validInterpretedQuestion(), draft: validDraft()}
+	runtime := mustRuntime(t, generator, Config{Logger: logger, MaxAttempts: 1, Timeout: time.Minute, Fallback: fallback})
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	var err error
+	go func() {
+		_, _, err = runtime.SynthesizeAnswer(ctx, storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+		close(done)
+	}()
+	select {
+	case <-generator.started:
+		cancel()
+	case <-time.After(5 * time.Second):
+		t.Fatal("generator was never invoked before the timeout -- cannot exercise the in-call case")
+	}
+	<-done
+
+	if err == nil {
+		t.Fatal("SynthesizeAnswer() error = nil, want the primary's own cancellation error surfaced")
+	}
+	if fallback.calls != 0 {
+		t.Fatalf("fallback.calls = %d, want 0 -- the primary already contacted the provider, so the fallback must never be invoked on the same already-canceled ctx", fallback.calls)
+	}
+	attrs := onlyDecisionEvent(t, handler).Attrs
+	if got := attrString(t, attrs, "outcome"); got != "unavailable" {
+		t.Fatalf("outcome = %q, want %q -- the primary genuinely contacted the provider before the in-flight cancellation, so the operation must not read cancelled", got, "unavailable")
+	}
+	if got := attrString(t, attrs, "primary_failure_classification"); got != "unavailable" {
+		t.Fatalf("primary_failure_classification = %q, want %q", got, "unavailable")
+	}
+}
+
+// TestFallbackSkippedWhenPrimarySynthesisInvalidAfterContextCanceled covers
+// SynthesizeAnswer's SECOND fallback site (runtime.go:1557, the
+// domain-validation-failure branch) -- the SynthesizeAnswer sibling of
+// TestFallbackSkippedWhenPrimaryInterpretationInvalidAfterContextCanceled.
+func TestFallbackSkippedWhenPrimarySynthesisInvalidAfterContextCanceled(t *testing.T) {
+	t.Parallel()
+	handler, logger := newCaptureLogger()
+	ctx, cancel := context.WithCancel(context.Background())
+	invalid := validSynthesisOutput()
+	invalid.EvidenceRefIDs = []string{"evidence_not_in_input"}
+	generator := &cancelThenInvalidSynthesizeGenerator{cancel: cancel, output: invalid}
+	fallback := &neverCalledFallback{interpreted: validInterpretedQuestion(), draft: validDraft()}
+	runtime := mustRuntime(t, generator, Config{Logger: logger, MaxAttempts: 1, Fallback: fallback})
+
+	_, receipt, err := runtime.SynthesizeAnswer(ctx, storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+	if err == nil || !errors.Is(err, contextfabric.ErrSynthesisRejected) {
+		t.Fatalf("SynthesizeAnswer() error = %v, want ErrSynthesisRejected surfaced from the primary's own rejection", err)
+	}
+	if fallback.calls != 0 {
+		t.Fatalf("fallback.calls = %d, want 0 -- the primary already contacted the provider, so the fallback must never be invoked on the same already-canceled ctx", fallback.calls)
+	}
+	if receipt.Outcome != "invalid_output" {
+		t.Fatalf("receipt.Outcome = %q, want %q", receipt.Outcome, "invalid_output")
+	}
+	attrs := onlyDecisionEvent(t, handler).Attrs
+	if got := attrString(t, attrs, "primary_failure_classification"); got != "invalid_output" {
+		t.Fatalf("primary_failure_classification = %q, want %q", got, "invalid_output")
+	}
+}
+
+// trackedErroringFallback is erroringFallbackRuntime plus a call counter --
+// needed by the regression pin below to prove the fallback WAS invoked (not
+// merely that its result surfaced), since with this fix's guard in place a
+// SKIPPED fallback and an INVOKED-then-both-legs-failed fallback can produce
+// indistinguishable errors/outcomes when both legs report "cancelled" (see
+// the test's own comment). erroringFallbackRuntime itself is left untouched
+// -- every OTHER test using it purely for its returned result, never for
+// whether it was actually invoked.
+type trackedErroringFallback struct {
+	calls   int
+	err     error
+	receipt contextfabric.ModelExecutionReceipt
+}
+
+func (f *trackedErroringFallback) InterpretQuestion(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
+	f.calls++
+	return contextfabric.InterpretedQuestion{}, f.receipt, f.err
+}
+
+func (f *trackedErroringFallback) SynthesizeAnswer(context.Context, storage.Principal, contextfabric.SynthesisInput) (contextfabric.SynthesisDraft, contextfabric.ModelExecutionReceipt, error) {
+	f.calls++
+	return contextfabric.SynthesisDraft{}, f.receipt, f.err
+}
+
+// TestFallbackStillInvokedAndComposesCancelledWhenNeitherLegContactsProvider
+// is the regression pin chris's ruling also required: "the existing
+// first-attempt cell stays cancelled". A primary that is ITSELF pre-call
+// canceled (ctx already done before its very first attempt --
+// primaryContactedProvider false, receipt.Outcome already "cancelled") must
+// still invoke the fallback exactly as before this fix -- the guard must
+// fire ONLY when a provider was genuinely contacted somewhere in the
+// operation, never here. When that fallback ALSO never reaches a provider
+// (the same dead ctx) and fails, the pre-existing "both legs failed -> use
+// the fallback's own outcome" composition rule correctly still yields
+// "cancelled" for the operation as a whole -- the genuine double-miss case
+// this ticket's whole vocabulary exists to distinguish from a real outage.
+// Asserting fallback.calls == 1 (not just the error/outcome shape) is what
+// proves the fallback was actually invoked here, rather than skipped for the
+// wrong reason and coincidentally producing the same "cancelled" reading.
+func TestFallbackStillInvokedAndComposesCancelledWhenNeitherLegContactsProvider(t *testing.T) {
+	t.Parallel()
+	handler, logger := newCaptureLogger()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	generator := &sequencedGenerator{interpretation: validInterpretationOutput()}
+	fbReceipt := validReceipt(contextfabric.ModelOperationInterpret)
+	fbReceipt.Outcome = "cancelled"
+	fallback := &trackedErroringFallback{
+		err:     fmt.Errorf("%w: %w", contextfabric.ErrModelCancelled, context.Canceled),
+		receipt: fbReceipt,
+	}
+	runtime := mustRuntime(t, generator, Config{Logger: logger, MaxAttempts: 1, Fallback: fallback})
+
+	_, receipt, err := runtime.InterpretQuestion(ctx, storage.Principal{OrgID: "org_1"}, validRequest())
+	if err == nil || !errors.Is(err, contextfabric.ErrModelCancelled) {
+		t.Fatalf("InterpretQuestion() error = %v, want ErrModelCancelled surfaced from the fallback leg", err)
+	}
+	if generator.calls != 0 {
+		t.Fatalf("generator.calls = %d, want 0 -- the primary itself must never reach the provider once ctx is already canceled before the first attempt", generator.calls)
+	}
+	if fallback.calls != 1 {
+		t.Fatalf("fallback.calls = %d, want 1 -- neither leg has contacted a provider yet, so the fix must NOT have skipped the fallback call", fallback.calls)
+	}
+	if receipt.Outcome != "cancelled" {
+		t.Fatalf("receipt.Outcome = %q, want %q -- neither leg ever contacted a provider", receipt.Outcome, "cancelled")
+	}
+	attrs := onlyDecisionEvent(t, handler).Attrs
+	if got := attrString(t, attrs, "primary_failure_classification"); got != "cancelled" {
+		t.Fatalf("primary_failure_classification = %q, want %q", got, "cancelled")
+	}
+	if got := attrString(t, attrs, "outcome"); got != "cancelled" {
+		t.Fatalf("outcome = %q, want %q", got, "cancelled")
 	}
 }
