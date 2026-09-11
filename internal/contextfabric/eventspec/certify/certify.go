@@ -105,6 +105,60 @@ type Result struct {
 	Line Line
 }
 
+// eventHasPassField reports whether fields declares a "pass" key -- the one
+// signal this package uses to decide whether an event's multiplicity is
+// scoped per-pass (a duplicate/count check keyed on each distinct pass
+// value) or per-request (the whole scope IS the one thing being counted,
+// with no pass to key on at all).
+func eventHasPassField(fields []eventspec.Field) bool {
+	for _, f := range fields {
+		if f.Key == "pass" {
+			return true
+		}
+	}
+	return false
+}
+
+// multiplicityRequiresPassField states, for a RECOGNISED Multiplicity,
+// whether it requires (true) or forbids (false) a declared "pass" field --
+// the executable consistency rule round r2's finding 5 asked for (a
+// TestEveryEventsMultiplicityAgreesWithWhetherItDeclaresAPassField walks
+// eventspec.All and asserts every event's own eventHasPassField() agrees
+// with this). ok is false for an unrecognised Multiplicity value.
+func multiplicityRequiresPassField(m eventspec.Multiplicity) (requiresPass bool, ok bool) {
+	switch m {
+	case eventspec.MultiplicityExactlyOnePerPass, eventspec.MultiplicityZeroOrOnePerPass:
+		return true, true
+	case eventspec.MultiplicityExactlyOnePerRequest:
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+// groupLinesByPass partitions scoped lines by their own declared "pass"
+// field value -- every real cell reaching this function has already had
+// "pass" presence and type validated by validateFields (called on EVERY
+// scoped line before this runs, in Certify below), so the !ok branch is a
+// pure defensive fallback: a missing/malformed pass value is bucketed under
+// its own always-unique negative key rather than silently grouped with a
+// real pass number, so it can never mask (or be masked by) a genuine
+// duplicate-pass defect.
+func groupLinesByPass(scoped []Line) map[float64][]Line {
+	groups := make(map[float64][]Line, len(scoped))
+	sentinel := -1.0
+	for _, l := range scoped {
+		p, ok := l["pass"].(float64)
+		if !ok {
+			groups[sentinel] = []Line{l}
+			sentinel--
+			continue
+		}
+		groups[p] = append(groups[p], l)
+	}
+	return groups
+}
+
 // Certify locates the line(s) matching a.Event.Msg AND matching every one of
 // the event's declared Attribution fields against a.Want (round r1's P2:
 // production genuinely emits more than one line with the same msg for one
@@ -113,21 +167,33 @@ type Result struct {
 // is the pre-existing, already-shipped proof -- so multiplicity is scoped to
 // the attempt Want identifies via Attribution, never to the whole supplied
 // log), enforces multiplicity within that scope, asserts production level,
-// asserts PRESENCE of every field the event declares PresenceRequired
-// (round r1's P1: a field's value is only checked when the caller names it
-// in Want, but a field silently DROPPED from production output must never
-// pass unnoticed just because no test happened to pin its value), and
+// asserts PRESENCE/TYPE/VOCABULARY of every declared field on EVERY line in
+// scope (round r3's P1: an EARLIER malformed line used to be skipped
+// entirely -- only the last-selected line was ever field-validated), and
 // asserts exact value equality (JSON-normalized) for every key in a.Want.
 //
-// For MultiplicityExactlyOnePerPass, more than one line in scope is not an
-// error: the LAST one is certified, matching production's own documented
-// rule (tracer.go's RankedCutSummary doc comment: "the LAST summary
-// reaching the tracer for a request_id always describes the pass whose
-// resolution was actually returned"). This does trade away detecting a
-// genuine duplicate-emission defect within one pass via count alone; there
-// is no pass-sequence field in the current spec to distinguish "two
-// legitimate passes" from "one pass, emitted twice" -- callers that need
-// that distinction must pin it via a producer-specific field in Want.
+// Multiplicity is now uniformly PASS-KEYED for any event that declares a
+// "pass" field (MultiplicityExactlyOnePerPass, MultiplicityZeroOrOnePerPass
+// -- round r2's finding 1: the zero-or-one branch used to refuse ANY second
+// line in scope, never examining pass, so two legitimate DISTINCT-pass
+// zero-or-one lines were wrongly refused as a duplicate) and PASS-LESS for
+// MultiplicityExactlyOnePerRequest (decision_summary: the whole scope IS
+// the one thing being counted). For a pass-keyed multiplicity, a duplicate
+// PASS NUMBER within scope is always a defect regardless of whether the
+// lines' other fields agree or differ; a DISTINCT pass number is always
+// legitimate, regardless of whether the lines happen to coincide on every
+// other field (replaces round r2's byte-identical-except-time heuristic).
+// The line CERTIFIED (checked against a.Want's value assertions) is always
+// the LAST one in scope, matching production's own documented rule
+// (tracer.go's RankedCutSummary doc comment: "the LAST summary reaching the
+// tracer for a request_id always describes the pass whose resolution was
+// actually returned").
+//
+// Round r3's finding 5 (Want.pass required): for a pass-keyed event, a.Want
+// must include "pass" -- the caller must say WHICH pass it is certifying,
+// the same requirement Attribution fields already carry, because "the last
+// line" is a selection rule for FINDING the line, not a substitute for the
+// caller stating which attempt it means to assert values against.
 //
 // It returns an error rather than calling testing.T directly so a caller
 // can assert on the error text in a red-first control proof; production
@@ -146,6 +212,27 @@ func Certify(log *Log, a Assertion) (Result, error) {
 		}
 	}
 
+	requiresPass, recognisedMultiplicity := multiplicityRequiresPassField(a.Event.Multiplicity)
+	if !recognisedMultiplicity {
+		return Result{}, fmt.Errorf("certify: %s: unhandled multiplicity %q", a.Event.ID, a.Event.Multiplicity)
+	}
+	hasPassField := eventHasPassField(a.Event.Fields)
+	if requiresPass != hasPassField {
+		// Defensive: the SAME consistency rule
+		// TestEveryEventsMultiplicityAgreesWithWhetherItDeclaresAPassField
+		// asserts statically over eventspec.All. Reaching here means a
+		// caller passed a canonical event whose own declaration is
+		// internally inconsistent -- refuse rather than guess which side is
+		// wrong.
+		return Result{}, fmt.Errorf("certify: %s: declared multiplicity=%q requires pass-field=%v but the event's own Fields declare pass-field=%v -- the declaration itself is inconsistent",
+			a.Event.ID, a.Event.Multiplicity, requiresPass, hasPassField)
+	}
+	if hasPassField {
+		if _, ok := a.Want["pass"]; !ok {
+			return Result{}, fmt.Errorf("certify: %s: Want must include \"pass\" for a pass-keyed event -- the caller must state WHICH pass it is certifying, not rely on \"the last line\" alone", a.Event.ID)
+		}
+	}
+
 	var scoped []Line
 	for _, line := range log.linesWithMsg(a.Event.Msg) {
 		match := true
@@ -160,69 +247,55 @@ func Certify(log *Log, a Assertion) (Result, error) {
 		}
 	}
 
+	// EVERY line in scope is field-validated, not only the one ultimately
+	// selected (round r3's P1) -- an earlier, malformed line is a defect
+	// regardless of whether a later line in the same scope looks fine.
+	for i, l := range scoped {
+		if err := validateFields(a.Event.Fields, l, a.Event.ID); err != nil {
+			return Result{}, fmt.Errorf("%w (line %d of %d in scope)", err, i+1, len(scoped))
+		}
+	}
+
 	var line Line
-	switch a.Event.Multiplicity {
-	case eventspec.MultiplicityExactlyOnePerPass:
+	if !hasPassField {
+		// MultiplicityExactlyOnePerRequest: the whole scope is the one
+		// thing being counted -- no pass to key on, so more than one line
+		// is unconditionally a defect, same as before this event's own
+		// mislabeling was fixed.
 		if len(scoped) == 0 {
-			return Result{}, fmt.Errorf("certify: %s: found 0 lines with msg %q for this attempt, want at least 1 (multiplicity=%s)",
+			return Result{}, fmt.Errorf("certify: %s: found 0 lines with msg %q for this attempt, want exactly 1 (multiplicity=%s)",
 				a.Event.ID, a.Event.Msg, a.Event.Multiplicity)
 		}
-		// CHAOS-5516: multiplicity is now keyed on (request_id, pass) for an
-		// event that DECLARES a pass field -- a duplicate pass number in
-		// scope is always a defect, regardless of whether the lines' other
-		// fields agree or differ; a distinct pass number is always
-		// legitimate, regardless of whether the lines happen to coincide on
-		// every other field (replaces round r2's byte-identical-except-time
-		// heuristic and its documented limit in PR1's RISK-NOTES).
-		//
-		// An event with NO pass field (decision_summary: once per REQUEST,
-		// not once per internal pass -- it has no legitimate multi-line
-		// shape at all) has no pass number to key on, so more than one line
-		// in scope is unconditionally a defect -- there is no legitimate
-		// re-decision case for it to distinguish from a duplicate, unlike a
-		// pass-bearing event.
-		hasPassField := false
-		for _, f := range a.Event.Fields {
-			if f.Key == "pass" {
-				hasPassField = true
-				break
+		if len(scoped) > 1 {
+			return Result{}, fmt.Errorf("certify: %s: found %d lines with msg %q for this attempt, want exactly 1 (multiplicity=%s, no pass field declared -- this event has no legitimate multi-line shape to distinguish from a duplicate)",
+				a.Event.ID, len(scoped), a.Event.Msg, a.Event.Multiplicity)
+		}
+		line = scoped[0]
+	} else {
+		switch a.Event.Multiplicity {
+		case eventspec.MultiplicityExactlyOnePerPass:
+			if len(scoped) == 0 {
+				return Result{}, fmt.Errorf("certify: %s: found 0 lines with msg %q for this attempt, want at least 1 (multiplicity=%s)",
+					a.Event.ID, a.Event.Msg, a.Event.Multiplicity)
+			}
+		case eventspec.MultiplicityZeroOrOnePerPass:
+			if len(scoped) == 0 {
+				return Result{}, fmt.Errorf("certify: %s: no line with msg %q for this attempt -- call CertifyAbsent when absence is the expectation being asserted", a.Event.ID, a.Event.Msg)
 			}
 		}
-		if !hasPassField {
-			if len(scoped) > 1 {
-				return Result{}, fmt.Errorf("certify: %s: found %d lines with msg %q for this attempt, want exactly 1 (multiplicity=%s, no pass field declared -- this event has no legitimate multi-line shape to distinguish from a duplicate)",
-					a.Event.ID, len(scoped), a.Event.Msg, a.Event.Multiplicity)
-			}
-		} else {
-			seenPass := make(map[float64]bool, len(scoped))
-			for _, l := range scoped {
-				p, ok := l["pass"].(float64)
-				if !ok {
-					// A missing "pass" key here is a PresenceRequired
-					// violation validateFields catches below with its own
-					// clear message -- not a case this loop needs to
-					// duplicate or paper over by skipping the line.
-					continue
-				}
-				if seenPass[p] {
-					return Result{}, fmt.Errorf("certify: %s: two lines with msg %q for this attempt share pass=%v -- a duplicate pass number is always a defect, regardless of whether the lines' other fields agree",
-						a.Event.ID, a.Event.Msg, p)
-				}
-				seenPass[p] = true
+		// PASS-KEYED for EITHER multiplicity that declares a pass field
+		// (round r2 finding 1: zero_or_one_per_pass used to refuse any
+		// second line without ever examining pass -- two DISTINCT passes
+		// each legitimately carrying zero-or-one line were wrongly refused
+		// as a duplicate). A duplicate PASS NUMBER within scope is always a
+		// defect for either multiplicity; a distinct one is always fine.
+		for p, group := range groupLinesByPass(scoped) {
+			if len(group) > 1 {
+				return Result{}, fmt.Errorf("certify: %s: %d lines with msg %q share pass=%v for this attempt -- a duplicate pass number is always a defect, regardless of whether the lines' other fields agree",
+					a.Event.ID, len(group), a.Event.Msg, p)
 			}
 		}
 		line = scoped[len(scoped)-1]
-	case eventspec.MultiplicityZeroOrOnePerPass:
-		if len(scoped) > 1 {
-			return Result{}, fmt.Errorf("certify: %s: found %d lines with msg %q for this attempt, want at most 1 (multiplicity=%s)",
-				a.Event.ID, len(scoped), a.Event.Msg, a.Event.Multiplicity)
-		}
-		if len(scoped) == 0 {
-			return Result{}, fmt.Errorf("certify: %s: no line with msg %q for this attempt -- call CertifyAbsent when absence is the expectation being asserted", a.Event.ID, a.Event.Msg)
-		}
-		line = scoped[0]
-	default:
-		return Result{}, fmt.Errorf("certify: %s: unhandled multiplicity %q", a.Event.ID, a.Event.Multiplicity)
 	}
 
 	wantLevel := strings.ToUpper(string(a.Event.Level))
@@ -232,18 +305,10 @@ func Certify(log *Log, a Assertion) (Result, error) {
 			a.Event.ID, gotLevel, wantLevel)
 	}
 
-	// PRESENCE, TYPE and CLOSED VOCABULARY of every declared field are
-	// asserted, recursively into every nested (object_slice) field,
-	// regardless of whether the caller named it in Want -- round r1's P1
-	// (a field silently dropped from production output must never pass
-	// because no fixture happened to pin its value) and round r2's P1s
-	// (a nested field's own required children were never checked at all;
-	// Field.Type was declared but never consulted for anything outside
-	// Want). See validateFields' own doc comment for what each check
-	// covers.
-	if err := validateFields(a.Event.Fields, line, a.Event.ID); err != nil {
-		return Result{}, err
-	}
+	// Every declared field's PRESENCE/TYPE/VOCABULARY was already asserted,
+	// unconditionally and for every line in scope, above -- a second call
+	// here would be dead code, never able to fire on a value the loop above
+	// would not already have refused.
 
 	declared := make(map[string]eventspec.Field, len(a.Event.Fields))
 	for _, f := range a.Event.Fields {

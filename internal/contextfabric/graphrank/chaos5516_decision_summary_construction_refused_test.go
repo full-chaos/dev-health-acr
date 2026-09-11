@@ -194,6 +194,49 @@ func TestDecisionSummaryConstructionRefusesAFullyHandSetLiteralWithoutTheMarker(
 	}
 }
 
+// TestDecisionSummaryConstructionRefusesAMismatchedRequestID is round r2
+// finding 3, reproduced and fixed: event.RequestID (the shared struct's own
+// top-level field) and event.DecisionSummaryFields.RequestID (the typed
+// value's own, independently-settable field) are two DIFFERENT fields --
+// IsConstructed()==true proves the typed value went through the real
+// generated constructor, but proves NOTHING about whether the caller handed
+// it the SAME request id as the enclosing event. A caller who fully,
+// correctly constructs DecisionSummaryFields for one request but wraps it
+// in a ResolutionTraceEvent naming a DIFFERENT request must be refused --
+// an operator reading request_id off this line could otherwise be looking
+// at the wrong resolution's decision entirely.
+func TestDecisionSummaryConstructionRefusesAMismatchedRequestID(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	tracer := NewSlogResolutionTracer(logger)
+
+	tracer.Trace(ResolutionTraceEvent{
+		RequestID: "outer-request", Stage: "decision_summary",
+		DecisionSummaryFields: eventspec.NewDecisionSummaryFields(
+			"typed-request", 0, 0, 0, 0,
+			[]string{}, []string{}, []string{},
+			false, "none", "none",
+			0, 0, false, 0, "none", "none", []string{}, 0,
+			"none", "none", "none", []string{}, []string{},
+		),
+	})
+
+	if buf.Len() == 0 {
+		t.Fatal("the tracer emitted NOTHING -- want a refusal line at Error, not silence")
+	}
+	var rec map[string]any
+	if err := json.Unmarshal(bytes.TrimRight(buf.Bytes(), "\n"), &rec); err != nil {
+		t.Fatalf("captured line is not JSON: %v -- line: %s", err, buf.String())
+	}
+	if level, _ := rec["level"].(string); level != "ERROR" {
+		t.Fatalf("level = %q, want ERROR -- a constructed-but-mismatched-request-id summary must be refused, not silently emitted under one of the two request ids: %v", level, rec)
+	}
+	if _, ok := rec["decision_event_count"]; ok {
+		t.Errorf("a decision_event_count key reached the log for a mismatched-request-id event -- the refusal must replace the emission: %v", rec)
+	}
+}
+
 // TestDecisionSummaryConstructionAcceptsTheRealTypedPath is the positive
 // control: a real decisionSummaryBuffer.flush()-shaped construction (every
 // open-vocabulary field explicitly set, including the "none" tokens a

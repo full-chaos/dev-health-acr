@@ -196,7 +196,10 @@ func TestLiveEventspecCertifiesTheAnchorSlotPilotThroughARealFalkorDBAdapter(t *
 	summaryResult, err := certify.Certify(log, certify.Assertion{
 		Event: eventspec.RankedCutSummary,
 		Want: map[string]any{
-			"request_id":            req.RequestID,
+			"request_id": req.RequestID,
+			// r3: Want must include "pass" for a pass-keyed event -- this
+			// fixture's single resolveSubjects call never re-decides.
+			"pass":                  1,
 			"stage":                 "ranked_cut",
 			"max":                   20,
 			"candidate_count":       crowd,
@@ -252,6 +255,7 @@ func TestLiveEventspecCertifiesTheAnchorSlotPilotThroughARealFalkorDBAdapter(t *
 		Event: eventspec.AnchorSlotDisplaced,
 		Want: map[string]any{
 			"request_id":            req.RequestID,
+			"pass":                  1,
 			"stage":                 "anchor_slot_displaced",
 			"anchor_slot_reserved":  string(contextfabric.SubjectTeam),
 			"anchor_slot_source":    "receipt",

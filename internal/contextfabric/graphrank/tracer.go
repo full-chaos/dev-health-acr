@@ -200,6 +200,29 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 				"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage))
 			return
 		}
+		// r3 fix (round r2 finding 3): event.RequestID and
+		// event.DecisionSummaryFields.RequestID are two INDEPENDENT fields
+		// on two different types -- IsConstructed() proves the typed value
+		// went through the real generated constructor, but proves nothing
+		// about whether the caller passed it the SAME request id as the
+		// enclosing event's own top-level RequestID. A mismatch here is
+		// exactly as silent a defect as an unconstructed value: an operator
+		// reading this line's own request_id key (event.RequestID, which
+		// the "decision summary construction refused" line above also
+		// uses) could be looking at a DIFFERENT resolution's decision than
+		// the one this line's every other field actually describes.
+		// Compared post-sanitization (sanitizeLogString is deterministic
+		// and idempotent) because production's own real call site sanitizes
+		// b.requestID into the typed constructor but keeps the RAW value on
+		// the outer event -- a raw id containing a control character is a
+		// legitimate (if rare) match that a naive unsanitized comparison
+		// would misreport as a mismatch.
+		if sanitizeLogString(event.RequestID) != event.DecisionSummaryFields.RequestID {
+			t.logger.ErrorContext(ctx, "context fabric resolution trace: decision summary construction refused",
+				"request_id", sanitizeLogString(event.RequestID), "stage", sanitizeLogString(event.Stage),
+				"typed_request_id", event.DecisionSummaryFields.RequestID)
+			return
+		}
 		t.logger.InfoContext(ctx, "context fabric resolution trace: decision summary",
 			event.DecisionSummaryFields.SlogArgs()...)
 	case "anchor_pool":

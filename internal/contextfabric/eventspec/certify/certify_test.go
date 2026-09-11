@@ -148,11 +148,13 @@ func TestCertifyAcceptsAGenuineMultiPassTwin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	// "pass" is NOT pinned in Want here: the point of this control is that
-	// Certify accepts and certifies the LAST pass whatever its own pass
-	// number is, without the caller having to know it in advance.
+	// r3 fix: Want MUST include "pass" for a pass-keyed event (the caller
+	// states which attempt it means to certify, the same requirement
+	// Attribution fields already carry) -- pinned to 2, the KEPT pass, so
+	// this control still proves Certify selects the LAST line in scope
+	// (whose own pass happens to be 2 here) rather than the first.
 	want := wantForRankedCutSummary()
-	delete(want, "pass")
+	want["pass"] = 2
 	if _, err := certifyRecovered(t, log, Assertion{Event: eventspec.RankedCutSummary, Want: want}); err != nil {
 		t.Fatalf("Certify() refused a genuine multi-pass log (pass 1 candidate_count=2, pass 2/kept candidate_count=92, same request_id) -- want it to certify the LAST line: %v", err)
 	}
@@ -342,16 +344,58 @@ func TestCertifyRefusesTwoLinesForAZeroOrOnePerPassEvent(t *testing.T) {
 		Event: eventspec.AnchorSlotDisplaced,
 		Want: map[string]any{
 			"request_id":           "req_1",
+			"pass":                 1,
 			"anchor_slot_reserved": "team",
 			"anchor_slot_source":   "receipt",
 			"subject_kind":         "project",
 		},
 	})
 	if err == nil {
-		t.Fatal("Certify() accepted two AnchorSlotDisplaced lines for one attempt -- want a refusal naming the count")
+		t.Fatal("Certify() accepted two AnchorSlotDisplaced lines sharing the same pass for one attempt -- want a refusal naming the duplicate pass")
 	}
-	if !strings.Contains(err.Error(), "found 2 lines") {
-		t.Errorf("refusal text = %q, want it to name the count", err.Error())
+	// r3 fix: zero_or_one_per_pass is now pass-keyed like exactly_one_per_pass
+	// -- both lines here share pass=1, so the refusal names the duplicate
+	// pass, not a raw line count (round r2 finding 1: a raw-count refusal
+	// would also wrongly reject two DISTINCT passes, which
+	// TestCertifyAcceptsDistinctPassesForAZeroOrOnePerPassEvent below proves
+	// must be accepted).
+	if !strings.Contains(err.Error(), "duplicate pass number") {
+		t.Errorf("refusal text = %q, want it to name the duplicate pass", err.Error())
+	}
+}
+
+// TestCertifyAcceptsDistinctPassesForAZeroOrOnePerPassEvent is round r2's
+// finding 1, reproduced and fixed: TWO AnchorSlotDisplaced lines for the
+// SAME request_id, on DISTINCT passes, must be ACCEPTED -- each pass
+// legitimately carries its own zero-or-one line; the multiplicity bounds
+// each PASS's own count, never the whole request's line count. Before the
+// fix, Certify's zero_or_one_per_pass branch refused any second line in
+// scope without ever examining pass, wrongly rejecting this.
+func TestCertifyAcceptsDistinctPassesForAZeroOrOnePerPassEvent(t *testing.T) {
+	pass1 := `{"time":"2026-09-10T00:00:00Z","level":"INFO","msg":"context fabric resolution trace: anchor slot displaced",` +
+		`"request_id":"req_1","pass":1,"stage":"anchor_slot_displaced","subject_kind":"project","subject_canonical_id":"p1",` +
+		`"anchor_slot_reserved":"team","anchor_slot_source":"receipt","anchor_slot_displaced":1,"pool_truncated_n":7}`
+	pass2 := `{"time":"2026-09-10T00:00:01Z","level":"INFO","msg":"context fabric resolution trace: anchor slot displaced",` +
+		`"request_id":"req_1","pass":2,"stage":"anchor_slot_displaced","subject_kind":"project","subject_canonical_id":"p2",` +
+		`"anchor_slot_reserved":"team","anchor_slot_source":"receipt","anchor_slot_displaced":1,"pool_truncated_n":5}`
+	log, err := Parse([]byte(pass1 + "\n" + pass2))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	// The LAST line in scope (pass 2) is the one certified against Want,
+	// same "last pass wins" rule every pass-keyed multiplicity now shares.
+	if _, err := certifyRecovered(t, log, Assertion{
+		Event: eventspec.AnchorSlotDisplaced,
+		Want: map[string]any{
+			"request_id":           "req_1",
+			"pass":                 2,
+			"anchor_slot_reserved": "team",
+			"anchor_slot_source":   "receipt",
+			"subject_kind":         "project",
+			"subject_canonical_id": "p2",
+		},
+	}); err != nil {
+		t.Fatalf("Certify() refused two AnchorSlotDisplaced lines on DISTINCT passes for the same request -- want it to accept and certify the last: %v", err)
 	}
 }
 
@@ -621,4 +665,26 @@ func TestCertifyAndCertifyAbsentRefuseANilLog(t *testing.T) {
 			t.Error("CertifyAbsent(nil, ...) returned no error -- want a refusal naming the nil log")
 		}
 	}()
+}
+
+// TestEveryEventsMultiplicityAgreesWithWhetherItDeclaresAPassField is round
+// r2 finding 5's own executable consistency check: DecisionSummary used to
+// declare MultiplicityExactlyOnePerPass while having NO pass field at all
+// (once per REQUEST, not once per pass) -- a real inconsistency between the
+// declared label and the declared shape. Walks eventspec.All generically
+// (not hand-picked) so a future event with the same mismatch is caught the
+// day it is declared, not the day a review round finds it.
+func TestEveryEventsMultiplicityAgreesWithWhetherItDeclaresAPassField(t *testing.T) {
+	for _, ev := range eventspec.All {
+		requiresPass, ok := multiplicityRequiresPassField(ev.Multiplicity)
+		if !ok {
+			t.Errorf("%s: declares unrecognised multiplicity %q", ev.ID, ev.Multiplicity)
+			continue
+		}
+		hasPass := eventHasPassField(ev.Fields)
+		if requiresPass != hasPass {
+			t.Errorf("%s: declares multiplicity=%q (requires pass field=%v) but its own Fields declare pass field=%v -- the declaration is inconsistent",
+				ev.ID, ev.Multiplicity, requiresPass, hasPass)
+		}
+	}
 }

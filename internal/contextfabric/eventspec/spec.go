@@ -40,6 +40,20 @@ const (
 	// line the variant is bounded against explicitly says so (see each
 	// event's BoundedAggregation).
 	MultiplicityZeroOrOnePerPass Multiplicity = "zero_or_one_per_pass"
+	// MultiplicityExactlyOnePerRequest (r3 fix): exactly one line per
+	// resolveSubjects CALL, never per internal pass -- the event has NO
+	// "pass" field at all, because the concept does not apply to it (it
+	// folds every pass the call ran into one line, emitted once after the
+	// call returns). Round r2's own finding: DecisionSummary was declared
+	// MultiplicityExactlyOnePerPass while actually being per-REQUEST with
+	// no pass field, and an executable consistency check (certify's own
+	// TestEveryEventsMultiplicityAgreesWithWhetherItDeclaresAPassField)
+	// failed against that mismatch. This is the pass-less member the two
+	// pass-bearing ones were missing: MultiplicityExactlyOnePerPass and
+	// MultiplicityZeroOrOnePerPass now REQUIRE a declared "pass" field
+	// (enforced by the same consistency check), and this one requires the
+	// opposite.
+	MultiplicityExactlyOnePerRequest Multiplicity = "exactly_one_per_request"
 )
 
 // FieldPresence states whether a field is written on every line of its
@@ -256,11 +270,21 @@ var AnchorSlotDisplaced = Event{
 // hand-typed key list. Three lists (spec.go's Fields, the buffer's struct
 // literal, tracer.go's key strings) become one generated source with two
 // consumers.
+//
+// r3 FIX: declared MultiplicityExactlyOnePerRequest, not
+// MultiplicityExactlyOnePerPass -- round r2 found the label lying about the
+// shape (an executable consistency check failed: this event has no `pass`
+// field, and MultiplicityExactlyOnePerPass now means "per PASS", which
+// requires one). ExactlyOnePerRequest is the pass-less member: certify's
+// own scoping (Attribution: request_id) already IS the whole scope for
+// this event, so it needs no per-pass grouping at all -- more than one line
+// in the request's own scope is unconditionally a defect, exactly the
+// behavior this event always had; only the DECLARED label changes.
 var DecisionSummary = Event{
 	ID:                 "graphrank.decision_summary",
 	Msg:                "context fabric resolution trace: decision summary",
 	Level:              LevelInfo,
-	Multiplicity:       MultiplicityExactlyOnePerPass,
+	Multiplicity:       MultiplicityExactlyOnePerRequest,
 	Attribution:        []string{"request_id"},
 	BoundedAggregation: "exactly one line per resolveSubjects call, emitted from decisionSummaryBuffer.flush() unconditionally (including a zero count) -- the per-candidate decision events this line folds stay at Debug (case \"decision\").",
 	Fields: []Field{

@@ -68,7 +68,7 @@
     "id": "graphrank.decision_summary",
     "msg": "context fabric resolution trace: decision summary",
     "level": "info",
-    "multiplicity": "exactly_one_per_pass",
+    "multiplicity": "exactly_one_per_request",
     "attribution": [
       "request_id"
     ],
