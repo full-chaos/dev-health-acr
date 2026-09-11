@@ -181,6 +181,73 @@ func TestSemanticState_TheLinesCarryValuesAndNeverARetrievalTerm(t *testing.T) {
 	}
 }
 
+// TestSemanticState_NoTermBearingPositionReachesALine is the class sweep of the
+// test above: EVERY position a frame keeps a retrieval term in -- a named
+// subject, a scope's anchor, and both inside an explicit set -- rendered on
+// both lines through the shipped sink. Each position carries a distinct marker
+// so a leak names the position, and each line still counts every term.
+func TestSemanticState_NoTermBearingPositionReachesALine(t *testing.T) {
+	t.Parallel()
+	kind := SubjectRepository
+	for _, tc := range []struct {
+		name       string
+		expression SubjectExpression
+		markers    []string
+	}{
+		{"named subject", SubjectExpression{Kind: SubjectExpressionNamed, Named: &NamedSubjectExpression{Terms: []string{"LEAK-NAMED-A", "LEAK-NAMED-B"}, ExpectedKind: &kind}}, []string{"LEAK-NAMED-A", "LEAK-NAMED-B"}},
+		{"children of scope", SubjectExpression{Kind: SubjectExpressionChildrenOfScope, Scoped: &ScopedSetExpression{AnchorTerms: []string{"LEAK-ANCHOR-A", "LEAK-ANCHOR-B"}, MemberKind: SubjectRepository}}, []string{"LEAK-ANCHOR-A", "LEAK-ANCHOR-B"}},
+		{"explicit set, named and scoped operands", SubjectExpression{Kind: SubjectExpressionExplicitSet, Explicit: &ExplicitSetExpression{Operands: []SubjectOperand{
+			{Kind: SubjectOperandNamed, Named: &NamedSubjectExpression{Terms: []string{"LEAK-OPERAND-NAMED"}, ExpectedKind: &kind}},
+			{Kind: SubjectOperandScoped, Scoped: &ScopedSetExpression{AnchorTerms: []string{"LEAK-OPERAND-ANCHOR"}, MemberKind: SubjectRepository}},
+		}}}, []string{"LEAK-OPERAND-NAMED", "LEAK-OPERAND-ANCHOR"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			state := semanticFixture(t)
+			state.Frame.SubjectExpression = tc.expression
+			var buf strings.Builder
+			sink := SlogEngineTelemetry{logger: slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))}
+			sink.RecordSemanticStatePersistence(context.Background(), acceptancePrincipal(), SemanticStatePersistenceEvent{
+				ResultID: "result_semantic_sweep_01", Site: BudgetAssertDecisive, Decision: SemanticStatePersisted, EncodedBytes: 1, State: state,
+			})
+			decision := newWindowContinuationDecision(continuationRequest(validInvestigationRequest().Question))
+			decision.Disposition = ContinuationApplied
+			decision.Carried = &continuationCarriedContext{Family: state.Family, State: state, SourceResultID: continuationPriorID}
+			decision.Accepted = decision.Carried
+			decision.CarriedStateConsulted, decision.CarriedStateRead = true, SemanticStateReadAvailable
+			sink.RecordWindowContinuationDecision(context.Background(), acceptancePrincipal(), decision)
+			out := buf.String()
+			for _, marker := range tc.markers {
+				if strings.Contains(out, marker) {
+					t.Errorf("the retrieval term %q reached a log line", marker)
+				}
+			}
+			lines := 0
+			for _, raw := range strings.Split(strings.TrimSpace(out), "\n") {
+				var line map[string]any
+				if err := json.Unmarshal([]byte(raw), &line); err != nil {
+					t.Fatalf("decode: %v", err)
+				}
+				group, _ := line["state"].(map[string]any)
+				if group == nil {
+					group, _ = line["carried_state"].(map[string]any)
+				}
+				if group == nil {
+					continue
+				}
+				lines++
+				t.Logf("%s: %s retrieval_term_count=%v operands=%v", tc.name, line["msg"], group["retrieval_term_count"], group["operands"])
+				if group["retrieval_term_count"] != float64(len(tc.markers)) {
+					t.Errorf("%s retrieval_term_count=%v, want %d", line["msg"], group["retrieval_term_count"], len(tc.markers))
+				}
+			}
+			if lines != 2 {
+				t.Fatalf("rendered %d snapshot groups, want the persistence line and the decision line:\n%s", lines, out)
+			}
+		})
+	}
+}
+
 // TestSemanticState_ThePersistenceLineRefusesInventedValues: every closed field
 // on the persistence line publishes the unrecognised sentinel for a value its
 // vocabulary does not name, never the invented text.
