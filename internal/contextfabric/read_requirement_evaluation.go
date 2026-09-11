@@ -539,9 +539,9 @@ func readRequirementOutcomeRow(
 	// on the finalization path and has no engine handle to take one from.
 	if evidence.UndeclaredCause {
 		slog.Default().Warn("context fabric read requirement dropped for an undeclared coverage code",
-			"requirement", requirement.Requirement,
-			"obligation", requirement.Obligation,
-			"undeclared_code", string(evidence.UndeclaredCode),
+			"requirement", SanitizeLogAttr(requirement.Requirement),
+			"obligation", SanitizeLogAttr(requirement.Obligation),
+			"undeclared_code", SanitizeLogAttr(string(evidence.UndeclaredCode)),
 			"observed_kinds", evidence.Observed)
 		return RequirementOutcomeRow{}, false
 	}
@@ -589,17 +589,17 @@ func readRequirementOutcomeRow(
 				// does: dropping a row silently would send the answer out a
 				// disclosure short with nothing anywhere saying why.
 				slog.Default().Warn("context fabric distributive read requirement reached the evaluator with no population evidence",
-					"requirement", requirement.Requirement,
-					"obligation", requirement.Obligation,
-					"scope", requirement.Scope)
+					"requirement", SanitizeLogAttr(requirement.Requirement),
+					"obligation", SanitizeLogAttr(requirement.Obligation),
+					"scope", SanitizeLogAttr(requirement.Scope))
 				return RequirementOutcomeRow{}, false
 			}
 			population, owned := populations.populationFor(requirement)
 			if !owned {
 				slog.Default().Warn("context fabric distributive read requirement has no population owner",
-					"requirement", requirement.Requirement,
-					"obligation", requirement.Obligation,
-					"scope", requirement.Scope)
+					"requirement", SanitizeLogAttr(requirement.Requirement),
+					"obligation", SanitizeLogAttr(requirement.Obligation),
+					"scope", SanitizeLogAttr(requirement.Scope))
 				return RequirementOutcomeRow{}, false
 			}
 			return readPopulationOutcomeRow(row, population, populations, evidence.ServedKinds, threshold), true

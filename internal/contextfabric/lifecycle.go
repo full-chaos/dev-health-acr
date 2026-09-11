@@ -481,12 +481,12 @@ func (t SlogGraphLifecycleTelemetry) logger() *slog.Logger {
 // investigation or projection batch, never retrieval-pool-sized. Safe to
 // promote straight to Info.
 func (t SlogGraphLifecycleTelemetry) RecordResolvedGraphKey(_ context.Context, orgID string, epoch int64, role GraphKeyRole, key string) {
-	t.logger().Info("context_fabric: resolved graph key", "org_id", orgID, "epoch", epoch, "role", string(role), "key", key)
+	t.logger().Info("context_fabric: resolved graph key", "org_id", SanitizeLogAttr(orgID), "epoch", epoch, "role", SanitizeLogAttr(string(role)), "key", SanitizeLogAttr(key))
 }
 
 func (t SlogGraphLifecycleTelemetry) RecordGraphKeyDivergence(_ context.Context, orgID string, epoch int64, role GraphKeyRole) {
 	t.logger().Error("context_fabric: graph key divergence detected -- two different keys observed for the same (org, epoch, role)",
-		"org_id", orgID, "epoch", epoch, "role", string(role))
+		"org_id", SanitizeLogAttr(orgID), "epoch", epoch, "role", SanitizeLogAttr(string(role)))
 }
 
 func (t SlogGraphLifecycleTelemetry) RecordStartupPrefixAssertion(_ context.Context, ok bool) {
@@ -501,20 +501,20 @@ func (t SlogGraphLifecycleTelemetry) RecordStartupPrefixAssertion(_ context.Cont
 
 func (t SlogGraphLifecycleTelemetry) RecordEpochFlip(_ context.Context, orgID string, fromEpoch, toEpoch int64, buildDuration time.Duration, sourcesCompleted int) {
 	t.logger().Info("context_fabric: graph epoch flip",
-		"org_id", orgID, "from_epoch", fromEpoch, "to_epoch", toEpoch,
+		"org_id", SanitizeLogAttr(orgID), "from_epoch", fromEpoch, "to_epoch", toEpoch,
 		"build_duration_ms", buildDuration.Milliseconds(), "sources_completed", sourcesCompleted)
 }
 
 func (t SlogGraphLifecycleTelemetry) RecordEpochRollback(_ context.Context, orgID string, fromEpoch, toEpoch int64, graceRemaining time.Duration) {
 	t.logger().Warn("context_fabric: graph epoch rollback",
-		"org_id", orgID, "from_epoch", fromEpoch, "to_epoch", toEpoch, "grace_remaining_ms", graceRemaining.Milliseconds())
+		"org_id", SanitizeLogAttr(orgID), "from_epoch", fromEpoch, "to_epoch", toEpoch, "grace_remaining_ms", graceRemaining.Milliseconds())
 }
 
 // RecordEpochRetire logs at Warn for any refused_* verdict (the guard is
 // the race being caught, worth an operator's attention) and Info for ok
 // (routine, expected teardown).
 func (t SlogGraphLifecycleTelemetry) RecordEpochRetire(_ context.Context, orgID string, epoch int64, verdict RetireGuardVerdict, drainWait time.Duration) {
-	fields := []any{"org_id", orgID, "epoch", epoch, "verdict", string(verdict), "drain_wait_ms", drainWait.Milliseconds()}
+	fields := []any{"org_id", SanitizeLogAttr(orgID), "epoch", epoch, "verdict", SanitizeLogAttr(string(verdict)), "drain_wait_ms", drainWait.Milliseconds()}
 	if verdict == RetireGuardOK {
 		t.logger().Info("context_fabric: graph epoch retired", fields...)
 		return
@@ -524,7 +524,7 @@ func (t SlogGraphLifecycleTelemetry) RecordEpochRetire(_ context.Context, orgID 
 
 func (t SlogGraphLifecycleTelemetry) RecordLifecycleCASConflict(_ context.Context, orgID string, losing LifecycleTransition, observedStatus LifecycleStatus) {
 	t.logger().Info("context_fabric: lifecycle CAS conflict",
-		"org_id", orgID, "losing_transition", string(losing), "observed_status", string(observedStatus))
+		"org_id", SanitizeLogAttr(orgID), "losing_transition", SanitizeLogAttr(string(losing)), "observed_status", SanitizeLogAttr(string(observedStatus)))
 }
 
 // rig-visibility audit: read, not promoted. Called from
@@ -540,7 +540,7 @@ func (t SlogGraphLifecycleTelemetry) RecordLifecycleCASConflict(_ context.Contex
 // gap. Stays Debug.
 func (t SlogGraphLifecycleTelemetry) RecordCheckpointEpochState(_ context.Context, orgID string, epoch int64, state CheckpointEpochState, cursorAge time.Duration) {
 	t.logger().Debug("context_fabric: checkpoint epoch state",
-		"org_id", orgID, "epoch", epoch, "state", string(state), "cursor_age_seconds", cursorAge.Seconds())
+		"org_id", SanitizeLogAttr(orgID), "epoch", epoch, "state", SanitizeLogAttr(string(state)), "cursor_age_seconds", cursorAge.Seconds())
 }
 
 // Called from pglifecycle/store.go once per source per build
@@ -549,11 +549,11 @@ func (t SlogGraphLifecycleTelemetry) RecordCheckpointEpochState(_ context.Contex
 // to Info.
 func (t SlogGraphLifecycleTelemetry) RecordBuildSourceProgress(_ context.Context, orgID string, epoch int64, source string, mode BuildCompletionMode, rowsProjected int64) {
 	t.logger().Info("context_fabric: build source progress",
-		"org_id", orgID, "epoch", epoch, "source", source, "completion_mode", string(mode), "rows_projected", rowsProjected)
+		"org_id", SanitizeLogAttr(orgID), "epoch", epoch, "source", SanitizeLogAttr(source), "completion_mode", SanitizeLogAttr(string(mode)), "rows_projected", rowsProjected)
 }
 
 func (t SlogGraphLifecycleTelemetry) RecordEpochResolverInvalidation(_ context.Context, orgID string, transition LifecycleTransition) {
-	t.logger().Info("context_fabric: epoch resolver cache invalidated", "org_id", orgID, "transition", string(transition))
+	t.logger().Info("context_fabric: epoch resolver cache invalidated", "org_id", SanitizeLogAttr(orgID), "transition", SanitizeLogAttr(string(transition)))
 }
 
 var _ GraphLifecycleTelemetry = SlogGraphLifecycleTelemetry{}

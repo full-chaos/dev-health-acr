@@ -3,6 +3,7 @@ package devhealthsource
 import (
 	"context"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -1564,7 +1565,7 @@ func countAmbiguousProjectKeysInCatalog(ctx context.Context, client contextpacke
 		return nil
 	}
 	logger.WarnContext(ctx, "devhealthsource organization catalog holds ambiguous project keys",
-		"org_id", redactOrg(orgID), "source", TeamsProjectsSourceName,
+		"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName,
 		"reason", "a project_key naming more than one project cannot resolve an ownership row that carries only that key",
 		"ambiguous_project_keys_in_catalog", ambiguous,
 		"count_bounded_at", ambiguousProjectKeysCensusLimit)
@@ -1655,7 +1656,7 @@ func logRetractions(ctx context.Context, logger *slog.Logger, orgID string, ledg
 		return
 	}
 	logger.WarnContext(ctx, "devhealthsource tombstoned project ownership edges",
-		"org_id", redactOrg(orgID), "source", TeamsProjectsSourceName,
+		"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName,
 		"reason", "an ownership can no longer be substantiated, so any OWNED_BY_TEAM edge a previous projection left behind is retracted rather than merely not re-asserted",
 		"counts", "tombstones emitted; a tombstone for an edge that was never projected is a no-op, so these are an upper bound on edges removed",
 		"ownership_edge_tombstones_"+string(retractionReasonAmbiguousKey), ambiguous,
@@ -1679,6 +1680,6 @@ func logConflictingIdentities(ctx context.Context, logger *slog.Logger, orgID st
 		return
 	}
 	logger.WarnContext(ctx, "devhealthsource suppressed project ownership edges for conflicting identities",
-		"org_id", redactOrg(orgID), "source", TeamsProjectsSourceName,
+		"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName,
 		"reason", "ownership row's project_id and project_key resolve to different projects", "suppressed_conflicting_identities", suppressed)
 }

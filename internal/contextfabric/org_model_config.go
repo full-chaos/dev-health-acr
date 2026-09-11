@@ -88,10 +88,10 @@ func (r ResolvedOrgModelConfig) GoString() string {
 // LogValue redacts Credential for log/slog -- see the type's doc comment.
 func (r ResolvedOrgModelConfig) LogValue() slog.Value {
 	return slog.GroupValue(
-		slog.String("provider", r.Provider),
-		slog.String("base_url", r.BaseURL),
-		slog.String("model", r.Model),
-		slog.String("fallback_model", r.FallbackModel),
+		slog.String("provider", SanitizeLogAttr(r.Provider)),
+		slog.String("base_url", SanitizeLogAttr(r.BaseURL)),
+		slog.String("model", SanitizeLogAttr(r.Model)),
+		slog.String("fallback_model", SanitizeLogAttr(r.FallbackModel)),
 		slog.String("credential", redactedCredentialPlaceholder),
 		slog.Int64("generation", r.Generation),
 		slog.Time("updated_at", r.UpdatedAt),

@@ -2,6 +2,7 @@ package devhealthsource
 
 import (
 	"errors"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"log/slog"
 	"strings"
 	"time"
@@ -482,12 +483,12 @@ func quarantineLogger(logger *slog.Logger, sourceName string) func(quarantineObs
 	}
 	return func(observation quarantineObservation) {
 		attrs := []any{
-			"source", sourceName,
-			"quarantine_reason", observation.Reason,
-			"item_kind", observation.Kind,
+			"source", contextfabric.SanitizeLogAttr(sourceName),
+			"quarantine_reason", contextfabric.SanitizeLogAttr(observation.Reason),
+			"item_kind", contextfabric.SanitizeLogAttr(observation.Kind),
 		}
 		if observation.Detail != "" {
-			attrs = append(attrs, "relationship_type", observation.Detail)
+			attrs = append(attrs, "relationship_type", contextfabric.SanitizeLogAttr(observation.Detail))
 		}
 		logger.Warn("context_fabric: projection item quarantined; the item is dropped and the batch continues", attrs...)
 	}

@@ -185,6 +185,6 @@ func AssertResolvedPrefix(logger *slog.Logger, telemetry contextfabric.GraphLife
 	if resolved == "" {
 		return errors.New("falkorgraph: resolved graph key prefix is empty at startup")
 	}
-	logger.Info("context_fabric: resolved falkordb graph key prefix", "graph_prefix", resolved)
+	logger.Info("context_fabric: resolved falkordb graph key prefix", "graph_prefix", contextfabric.SanitizeLogAttr(resolved))
 	return nil
 }

@@ -835,8 +835,8 @@ func combinedRowsExceedBytesBound(legacyRows, timeSeriesRows []contextfabric.Fac
 // log/slog"); never a request id, subject label, or row content.
 func recordFactBytesBoundExceeded(producer string, kind contextfabric.FactKind) {
 	slog.Warn("context_fabric_fact_bytes_bound_exceeded",
-		"producer", producer,
-		"kind", string(kind),
+		"producer", contextfabric.SanitizeLogAttr(producer),
+		"kind", contextfabric.SanitizeLogAttr(string(kind)),
 		"combined_cells_max", contractsv1.ContextFabricClaimedFactCombinedCellsMax,
 		"combined_bytes_max", contractsv1.ContextFabricClaimedFactCombinedContentBytesMax,
 	)
@@ -901,8 +901,8 @@ const subjectIDShapeRejectedReason = "subject_id_shape_rejected"
 // a count, never a subject id or CanonicalID.
 func recordSubjectIDShapeRejected(producer string, kind contextfabric.FactKind, rejected int) {
 	slog.Warn("context_fabric_subject_id_shape_rejected",
-		"producer", producer,
-		"kind", string(kind),
+		"producer", contextfabric.SanitizeLogAttr(producer),
+		"kind", contextfabric.SanitizeLogAttr(string(kind)),
 		"rejected", rejected,
 	)
 }
