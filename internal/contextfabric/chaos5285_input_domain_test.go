@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/hintsource"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -93,6 +94,7 @@ func TestTheInputDomainOfEveryGuardThisChangeTouches(t *testing.T) {
 	domainRequestDerivedLogInt(table)
 	domainAuthorizationBatching(table)
 	domainPlanSeamLine(t, table)
+	domainSearchFallbackPolicy(table)
 
 	table.print()
 	if len(table.rows) == 0 {
@@ -814,4 +816,26 @@ func domainPlanSeamLine(t *testing.T, d *domainTable) {
 	d.want(guard, "GroupKind/MemberKind", "zero (outside the published vocabulary: named unknown)", emit(PlanGroupAxisCollapsedEvent{Failure: i6, Gate: rejected}, "group_kind", "member_kind"), "group_kind=unclassified member_kind=unclassified")
 	d.want(guard, "GroupKind", "out of vocabulary (model text never reaches the line)", emit(PlanGroupAxisCollapsedEvent{GroupKind: SubjectKind("free text"), MemberKind: SubjectTeam, Failure: i6, Gate: rejected}, "group_kind", "member_kind"), "group_kind=unclassified member_kind=team")
 	d.record(guard, "all fields", "wrong container / wrong scalar / fractional / boundary", domainExcludedByTypeSystem, "ok")
+}
+
+// --- guard 17: the hint-source search-fallback policy ---------------------
+
+// domainSearchFallbackPolicy reads the policy the resolver consults for a hint
+// set that resolved nothing, for every source that can reach it. The resolver's
+// set predicate over these values is tabled in graphrank
+// (TestTheNoFallbackPredicateOverItsWholeDomain), which this package cannot
+// import without a cycle.
+func domainSearchFallbackPolicy(d *domainTable) {
+	const guard = "search fallback (hintsource.SearchFallback)"
+	permitted := func(source string) string {
+		return fmt.Sprintf("permitted=%v", hintsource.Lookup(source).SearchFallback.Permitted())
+	}
+	d.want(guard, "Source", "the group authorization (this change's caller)", permitted(string(hintsource.CohortGroupAuthorization)), "permitted=false")
+	d.want(guard, "Source", "the answer-reuse recheck (the sibling)", permitted(string(hintsource.AnswerReuseAuthorizationRecheck)), "permitted=false")
+	d.want(guard, "Source", "a prior-subject receipt (a conversational reference a search can answer)", permitted(string(hintsource.PriorSubjectReceipt)), "permitted=true")
+	d.want(guard, "Source", "canonical caller source", permitted("workbench"), "permitted=true")
+	d.want(guard, "Source", "zero (empty string: unenumerated, caller-authored)", permitted(""), "permitted=true")
+	d.want(guard, "Source", "out of vocabulary near-miss", permitted("cohort_group_authorization_x"), "permitted=true")
+	d.want(guard, "Source", "case variant (identifiers are case-sensitive)", permitted("COHORT_GROUP_AUTHORIZATION"), "permitted=true")
+	d.record(guard, "Source", "null / container / wrong scalar / fractional / boundary", domainExcludedByTypeSystem+"; the parameter is a Go string", "ok")
 }

@@ -2590,6 +2590,26 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		}
 		return exactResolution, contextfabric.StructureOfferMaterial{}, nil
 	}
+	// AN IDENTITY QUESTION THAT RESOLVED NOTHING ENDS HERE, empty, and never
+	// widens into search.
+	//
+	// Every hint in this set came from a source whose policy forbids the
+	// fallback: the engine asking whether ids it already holds are visible to
+	// this principal (the grouped path's group authorization, the answer-reuse
+	// recheck). Nothing resolved, so nothing reached the short circuit above.
+	// Hybrid search cannot change that answer -- an id the keyed lookup could
+	// not find or could not authorize is not admitted by a search either, and
+	// both callers keep only the ids they asked about -- so it could only spend
+	// the turn's time. Measured on the trial venue: 18-20 s per 50 unresolvable
+	// group ids, embeddings included, for an empty answer.
+	//
+	// A set that mixes in any source permitting the fallback (a caller's own
+	// hint, a conversational receipt) still falls through: those are questions
+	// a search can answer.
+	if hintsForbidSearchFallback(request.RequestedScope.SubjectHints) {
+		return contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: []contextfabric.SubjectRef{}},
+			contextfabric.StructureOfferMaterial{}, nil
+	}
 	// observationParentKey maps an observation (document/episode) subject
 	// key to its found canonical parent's subject key -- only set when
 	// traversal actually found one. observationBlocked marks an observation
@@ -4403,4 +4423,19 @@ func mergeSearchResults(ctx context.Context, principal storage.Principal, reques
 		}
 	}
 	return traversalErrored, authzDropped
+}
+
+// hintsForbidSearchFallback reports whether a hint set is an identity question
+// whose every hint forbids the hybrid-search fallback. An empty set forbids
+// nothing: a resolution with no hints is a search by definition.
+func hintsForbidSearchFallback(hints []contextfabric.SubjectHint) bool {
+	if len(hints) == 0 {
+		return false
+	}
+	for _, hint := range hints {
+		if hintsource.Lookup(hint.Source).SearchFallback.Permitted() {
+			return false
+		}
+	}
+	return true
 }

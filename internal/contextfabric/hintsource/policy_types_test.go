@@ -74,6 +74,32 @@ func policyTypeCases() map[string]policyTypeCase {
 			expr: `if a.ContestExempt { _ = 1 }`, wantError: true,
 			wantMessage: "non-boolean condition",
 		},
+		// THE THIRD POLICY joins on the same rule: its own type, its own
+		// accessor, unusable as a bare condition, and never readable through
+		// either of the other two accessors (nor they through its).
+		"the search-fallback read, correct": {
+			expr: `_ = a.SearchFallback.Permitted()`,
+		},
+		"search-fallback field with the short-circuit accessor": {
+			expr: `_ = a.SearchFallback.Eligible()`, wantError: true,
+			wantMessage: "Eligible",
+		},
+		"search-fallback field with the contest accessor": {
+			expr: `_ = a.SearchFallback.Exempt()`, wantError: true,
+			wantMessage: "Exempt",
+		},
+		"short-circuit field with the search-fallback accessor": {
+			expr: `_ = a.ShortCircuitEligible.Permitted()`, wantError: true,
+			wantMessage: "Permitted",
+		},
+		"contest field with the search-fallback accessor": {
+			expr: `_ = a.ContestExempt.Permitted()`, wantError: true,
+			wantMessage: "Permitted",
+		},
+		"the search-fallback policy used directly as a condition": {
+			expr: `if a.SearchFallback { _ = 1 }`, wantError: true,
+			wantMessage: "non-boolean condition",
+		},
 	}
 }
 
@@ -203,5 +229,18 @@ func TestThePolicyAccessorsReportTheStoredValue(t *testing.T) {
 	}
 	if !recheck.ContestExempt.Exempt() || !recheck.ShortCircuitEligible.Eligible() {
 		t.Errorf("the reuse recheck is both; got %+v", recheck)
+	}
+	// The search-fallback policy, for every enumerated source and for an
+	// unenumerated (caller) one: the two authorization questions forbid it,
+	// the receipt and the caller keep it.
+	for source, want := range map[string]bool{
+		string(hintsource.PriorSubjectReceipt):             true,
+		string(hintsource.AnswerReuseAuthorizationRecheck): false,
+		string(hintsource.CohortGroupAuthorization):        false,
+		"workbench": true,
+	} {
+		if got := hintsource.Lookup(source).SearchFallback.Permitted(); got != want {
+			t.Errorf("%s: search fallback permitted = %v, want %v", source, got, want)
+		}
 	}
 }
