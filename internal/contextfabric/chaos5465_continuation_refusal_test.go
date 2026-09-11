@@ -887,6 +887,7 @@ func TestContinuationRefusal_TheProjectionKeepsBothHalvesAtTheCap(t *testing.T) 
 // the reading cannot ride a window receipt unnoticed.
 func TestWindowContinuation_EveryRequestFieldIsDecidedByName(t *testing.T) {
 	t.Parallel()
+	const unrecordedOption = "not recorded at turn one; compared in the stacked semantic-state digest"
 	base := validInvestigationRequest().Question
 	type decided struct {
 		kind   string // key | disqualifier | exempt
@@ -930,9 +931,22 @@ func TestWindowContinuation_EveryRequestFieldIsDecidedByName(t *testing.T) {
 		}},
 		"schema_version": {"exempt", "the request contract's major, validated before the engine; not a reading input", nil},
 		"request_id":     {"exempt", "correlation metadata (D-a: not semantic input)", func(r *InvestigationRequest) { r.RequestID = "request_87654321" }},
-		"options": {"exempt", "output budgets, clarification allowance and debug: how much is served, not which reading", func(r *InvestigationRequest) {
-			r.Options.MaxDrivers, r.Options.IncludeDebug = 3, true
+		// OPTIONS, FIELD BY FIELD. Every consumer sends every option on every
+		// request, so an option disqualifies only by DIFFERING from turn one,
+		// and turn one recorded exactly one of them: the effective byte budget.
+		"options.max_serialized_bytes": {"disqualifier", "the effective byte budget turn one recorded on the carrier's plan differs", func(r *InvestigationRequest) {
+			r.Options.MaxSerializedBytes = r.Options.MaxSerializedBytes / 2
 		}},
+		"options.max_subject_candidates": {"exempt", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxSubjectCandidates = 3 }},
+		"options.max_cohort_members":     {"exempt", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxCohortMembers = 7 }},
+		"options.max_relationship_paths": {"exempt", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxRelationshipPaths = 7 }},
+		"options.max_drivers":            {"exempt", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxDrivers = 3 }},
+		"options.max_evidence_refs":      {"exempt", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxEvidenceRefs = 7 }},
+		"options.allow_clarification":    {"exempt", unrecordedOption, func(r *InvestigationRequest) { r.Options.AllowClarification = false }},
+		"options.window_confirmation_mode": {"exempt", unrecordedOption, func(r *InvestigationRequest) {
+			r.Options.WindowConfirmationMode = contractsv1.ContextFabricWindowConfirmationNudge
+		}},
+		"options.include_debug": {"exempt", "debug output only: executed, the continuation decision is unchanged", func(r *InvestigationRequest) { r.Options.IncludeDebug = true }},
 		"consumer": {"exempt", "the caller's identity: who asks, not what is asked", func(r *InvestigationRequest) {
 			r.Consumer = ConsumerInfo{Name: "test", Version: "1.0.0", Surface: "mcp"}
 		}},
@@ -945,7 +959,7 @@ func TestWindowContinuation_EveryRequestFieldIsDecidedByName(t *testing.T) {
 	for i := 0; i < requestType.NumField(); i++ {
 		field := requestType.Field(i)
 		tag := strings.Split(field.Tag.Get("json"), ",")[0]
-		if field.Type == reflect.TypeOf(RequestedScope{}) {
+		if field.Type == reflect.TypeOf(RequestedScope{}) || field.Type == reflect.TypeOf(InvestigationOptions{}) {
 			for j := 0; j < field.Type.NumField(); j++ {
 				names = append(names, tag+"."+strings.Split(field.Type.Field(j).Tag.Get("json"), ",")[0])
 			}
@@ -1055,5 +1069,71 @@ func TestContinuationRefusal_TheServedRefusalValidatesAgainstEveryPublishedSchem
 	})
 	if served.RefusalBasis != contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable {
 		t.Fatalf("fixture defect: the served document is not the continuation refusal (%q)", served.RefusalBasis)
+	}
+}
+
+// TestWindowContinuation_TheRecordedByteBudgetIsComparedAsTheEffectiveBudget
+// holds the one answer-shaping option turn one records. First the echo: a real
+// turn through the engine stamps its plan with the EFFECTIVE budget (service
+// ceiling narrowed by the caller's max_serialized_bytes), never the raw option.
+// Then the comparison, under a service ceiling below the caller's option: a
+// turn two whose raw option differs but whose effective budget is the same
+// still continues; a turn two whose effective budget differs takes the fresh
+// path.
+func TestWindowContinuation_TheRecordedByteBudgetIsComparedAsTheEffectiveBudget(t *testing.T) {
+	t.Parallel()
+	const ceiling = 300_000
+	base := validInvestigationRequest().Question
+	t.Run("a real turn records the effective budget", func(t *testing.T) {
+		t.Parallel()
+		store := newRefusalStore(&staticResultStore{results: map[string]InvestigationResult{}})
+		engine, _ := newRefusalEngine(t, store, forcedFamilyInterpreter{family: QuestionFamilyDiscoveredCohortRanking}, &recordingTelemetry{})
+		engine.maxSerializedBytes = ceiling
+		request := validInvestigationRequestWithConfirmedWindow()
+		request.Question = base
+		result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+		if err != nil || result.AnswerPlan == nil {
+			t.Fatalf("turn one: err=%v plan=%v", err, result.AnswerPlan != nil)
+		}
+		t.Logf("request max_serialized_bytes=%d service ceiling=%d -> recorded plan budget=%d effective=%d",
+			request.Options.MaxSerializedBytes, ceiling, result.AnswerPlan.Budget.MaxSerializedBytes, engine.effectiveResponseBudget(request).MaxSerializedBytes)
+		if result.AnswerPlan.Budget.MaxSerializedBytes != engine.effectiveResponseBudget(request).MaxSerializedBytes || result.AnswerPlan.Budget.MaxSerializedBytes != ceiling {
+			t.Errorf("the plan recorded %d, want the effective budget %d", result.AnswerPlan.Budget.MaxSerializedBytes, ceiling)
+		}
+	})
+	for _, tc := range []struct {
+		name   string
+		option int
+		want   ContinuationDecisionReason
+	}{
+		{"the same option", validInvestigationRequest().Options.MaxSerializedBytes, ContinuationReasonNone},
+		{"a different raw option narrowed to the same effective budget", 2 * ceiling, ContinuationReasonNone},
+		{"an option that narrows the effective budget", ceiling / 2, ContinuationReasonAnswerBudgetChanged},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			prior := continuationPrior(t, continuationPriorID, base, QuestionFamilyDiscoveredCohortRanking, "")
+			prior.AnswerPlan.Budget.MaxSerializedBytes = ceiling
+			store := newRefusalStore(&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}})
+			telemetry := &recordingTelemetry{}
+			engine, _ := newRefusalEngine(t, store, forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam}, telemetry)
+			engine.maxSerializedBytes = ceiling
+			request := continuationRequest(base)
+			request.Options.MaxSerializedBytes = tc.option
+			if _, err := engine.Investigate(context.Background(), acceptancePrincipal(), request); err != nil {
+				t.Fatalf("Investigate: %v", err)
+			}
+			if len(telemetry.windowContinuationDecisions) != 1 {
+				t.Fatalf("decisions = %d", len(telemetry.windowContinuationDecisions))
+			}
+			d := telemetry.windowContinuationDecisions[0]
+			t.Logf("%s: option=%d effective=%d recorded=%d -> %s/%s", tc.name, tc.option, engine.effectiveResponseBudget(request).MaxSerializedBytes, ceiling, d.Disposition, d.Reason)
+			if d.Reason != tc.want {
+				t.Errorf("reason = %s, want %s", d.Reason, tc.want)
+			}
+			if (tc.want == ContinuationReasonNone) != (d.Disposition == ContinuationApplied) {
+				t.Errorf("disposition = %s for reason %s", d.Disposition, d.Reason)
+			}
+		})
 	}
 }

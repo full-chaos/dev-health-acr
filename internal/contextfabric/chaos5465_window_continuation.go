@@ -210,6 +210,12 @@ const (
 	// result it was applied to. The decision is not final until save; an event
 	// left reporting `applied` here describes a turn that did not happen.
 	ContinuationReasonWindowSuperseded ContinuationDecisionReason = "window_superseded"
+	// ContinuationReasonAnswerBudgetChanged: this request's effective response
+	// byte budget differs from the one the carrier's plan recorded. The budget
+	// shapes what the answer may contain, so a turn that changes it has changed
+	// more than the evidence window: it is not a window-only continuation, and
+	// it takes the fresh path rather than the carrier's plan.
+	ContinuationReasonAnswerBudgetChanged ContinuationDecisionReason = "answer_budget_changed"
 	// ContinuationReasonUnspecified: a decision site reached a return without
 	// recording a reason. Loud by construction, and NEVER expected to reach the
 	// emitter -- TestWindowContinuation_EveryReasonIsAssignedBySomePath
@@ -502,6 +508,7 @@ func continuationDecisionReasons() []ContinuationDecisionReason {
 		ContinuationReasonAsOfUnresolvable,
 		ContinuationReasonCompositionInvalid,
 		ContinuationReasonWindowSuperseded,
+		ContinuationReasonAnswerBudgetChanged,
 		ContinuationReasonUnspecified,
 	}
 }
@@ -764,6 +771,19 @@ func (e *Engine) admitWindowContinuation(
 		// The carrier read back perfectly and had nothing to continue.
 		decision.Disposition = ContinuationNotApplicable
 		decision.Reason = ContinuationReasonMissingContext
+		return decision
+	}
+	// THE ANSWER-SHAPING OPTION TURN ONE RECORDED. Every consumer sends every
+	// option on every request, so an option cannot disqualify by being
+	// present -- only by DIFFERING from turn one. The one turn one recorded is
+	// the effective response byte budget (service ceiling narrowed by the
+	// caller's max_serialized_bytes), stamped on the carrier's plan. Compared
+	// as the EFFECTIVE value on both sides, byte for byte: the raw option is
+	// not what shaped either answer. The other answer-shaping options are not
+	// recorded at turn one; the stacked semantic-state change compares them.
+	if e.effectiveResponseBudget(request).MaxSerializedBytes != plan.Budget.MaxSerializedBytes {
+		decision.Disposition = ContinuationNotApplicable
+		decision.Reason = ContinuationReasonAnswerBudgetChanged
 		return decision
 	}
 	// D-a: revalidate under the RECORDED standard. A carrier stamped by a

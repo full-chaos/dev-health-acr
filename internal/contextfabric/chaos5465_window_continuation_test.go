@@ -1030,6 +1030,11 @@ func TestWindowContinuation_EveryReasonIsReachedThroughTheEngine(t *testing.T) {
 				}
 			},
 		},
+		{
+			// The effective byte budget differs from the one turn one recorded.
+			reason: ContinuationReasonAnswerBudgetChanged,
+			mutate: func(r *InvestigationRequest) { r.Options.MaxSerializedBytes = r.Options.MaxSerializedBytes / 2 },
+		},
 	}
 
 	// EVERY MEMBER HAS A DRIVER, and `unspecified` deliberately has none.
