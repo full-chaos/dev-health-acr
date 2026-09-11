@@ -790,6 +790,59 @@ var IdentityUniverse = Event{
 	},
 }
 
+// KindHintSearch is the Debug per-node line (graphrank/tracer.go, case
+// "kind_hint_search", CHAOS-4348) emitted once per matched node from
+// traceKindHintSearch (chaos4348_reachability.go) -- CALLED MORE THAN ONCE
+// PER REQUEST (once per kind x term the coverage-floor hint loop tries),
+// each call with its own independent node set, so unlike every other
+// BoundedManyPerPass event declared so far, its Attribution includes
+// "term_hash": the bound is scoped per (request_id, term_hash) CALL, never
+// accumulated across calls that share no buffer.
+var KindHintSearch = Event{
+	ID:                 "graphrank.kind_hint_search",
+	Msg:                "context fabric resolution trace: kind hint search",
+	Level:              LevelDebug,
+	Multiplicity:       MultiplicityBoundedManyPerPass,
+	Attribution:        []string{"request_id", "term_hash"},
+	BoundedAggregation: "bounded per (request_id, term_hash) call -- self-carried index/total, never accumulated across the multiple calls one resolution can make.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"kind_hint_search"}},
+		{Key: "index", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
+		{
+			Key: "term_hash", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a SHA-256 hex digest of the search term.
+		},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_canonical_id", Type: FieldString, Presence: PresenceRequired},
+	},
+}
+
+// ExactNameSearch is the Debug per-node line (graphrank/tracer.go, case
+// "exact_name_search", CHAOS-4348) -- the same per-(request_id, term_hash)
+// call-scoped shape as KindHintSearch above, from traceExactNameSearch.
+var ExactNameSearch = Event{
+	ID:                 "graphrank.exact_name_search",
+	Msg:                "context fabric resolution trace: exact name search",
+	Level:              LevelDebug,
+	Multiplicity:       MultiplicityBoundedManyPerPass,
+	Attribution:        []string{"request_id", "term_hash"},
+	BoundedAggregation: "bounded per (request_id, term_hash) call -- self-carried index/total, never accumulated across the multiple calls one resolution can make.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"exact_name_search"}},
+		{Key: "index", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
+		{
+			Key: "term_hash", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a SHA-256 hex digest of the search term.
+		},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_canonical_id", Type: FieldString, Presence: PresenceRequired},
+	},
+}
+
 // All is every event this specification declares. Generate() and the
 // certification runner both range over exactly this slice -- neither
 // maintains a second list.
@@ -797,5 +850,5 @@ var All = []Event{
 	RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld,
 	Corroboration, CorroborationSummary, ReservedKindAdmitted, OfferPool, OfferPoolSummary,
 	Decision, SearchQuestion, AliasLookup, AnchorPool, KindCoverageFloor, ConfirmedKindRescue,
-	IdentityUniverse,
+	IdentityUniverse, KindHintSearch, ExactNameSearch,
 }

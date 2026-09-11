@@ -103,6 +103,10 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// own aggregate, so it stays at Debug rather than being folded.
 		t.logger.DebugContext(ctx, "context fabric resolution trace: kind hint search",
 			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+			// CHAOS-5517: self-carried bounded-many identity, scoped per
+			// (request_id, term_hash) call -- see traceKindHintSearch's own
+			// doc comment (chaos4348_reachability.go).
+			"index", event.Index, "total", event.Total,
 			"term_hash", contextfabric.SanitizeLogAttr(event.TermHash), "subject_kind", contextfabric.SanitizeLogAttr(string(event.Subject.Kind)),
 			"subject_canonical_id", contextfabric.SanitizeLogAttr(event.Subject.CanonicalID))
 	case "exact_name_search":
@@ -116,6 +120,9 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// each of which folds into a genuine summary).
 		t.logger.DebugContext(ctx, "context fabric resolution trace: exact name search",
 			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+			// CHAOS-5517: same per-call bounded-many identity as
+			// kind_hint_search above.
+			"index", event.Index, "total", event.Total,
 			"term_hash", contextfabric.SanitizeLogAttr(event.TermHash), "subject_kind", contextfabric.SanitizeLogAttr(string(event.Subject.Kind)),
 			"subject_canonical_id", contextfabric.SanitizeLogAttr(event.Subject.CanonicalID))
 	case "corroboration":

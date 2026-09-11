@@ -303,14 +303,30 @@ func traceKindHintSearch(deps ResolveDeps, requestID, term string, results []Can
 	if deps.ResolutionTracer == nil {
 		return
 	}
+	// CHAOS-5517: bounded per (request_id, term_hash) CALL, not per
+	// resolution -- this function can run more than once per resolution
+	// (once per kind x term the coverage floor's own hint loop tries), each
+	// with its own independent node set, so the self-carried Total is THIS
+	// call's own count, never a request-wide accumulation across calls
+	// that never share a buffer. eventspec.KindHintSearch's own Attribution
+	// includes "term_hash" for exactly this reason.
+	total := 0
+	for _, node := range results {
+		if _, ok := NodeSubject(node); ok {
+			total++
+		}
+	}
+	index := 0
 	for _, node := range results {
 		subject, ok := NodeSubject(node)
 		if !ok {
 			continue
 		}
+		index++
 		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 			RequestID: requestID, Stage: "kind_hint_search",
 			TermHash: traceTermHash(term), Subject: subject,
+			Index: index, Total: total,
 		})
 	}
 }
@@ -319,14 +335,25 @@ func traceExactNameSearch(deps ResolveDeps, requestID, term string, results []Ca
 	if deps.ResolutionTracer == nil {
 		return
 	}
+	// CHAOS-5517: same per-(request_id, term_hash)-call bound as
+	// traceKindHintSearch above.
+	total := 0
+	for _, node := range results {
+		if _, ok := NodeSubject(node); ok {
+			total++
+		}
+	}
+	index := 0
 	for _, node := range results {
 		subject, ok := NodeSubject(node)
 		if !ok {
 			continue
 		}
+		index++
 		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 			RequestID: requestID, Stage: "exact_name_search",
 			TermHash: traceTermHash(term), Subject: subject,
+			Index: index, Total: total,
 		})
 	}
 }

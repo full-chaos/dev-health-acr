@@ -560,6 +560,57 @@
     ]
   },
   {
+    "id": "graphrank.exact_name_search",
+    "msg": "context fabric resolution trace: exact name search",
+    "level": "debug",
+    "multiplicity": "bounded_many_per_pass",
+    "attribution": [
+      "request_id",
+      "term_hash"
+    ],
+    "bounded_aggregation": "bounded per (request_id, term_hash) call -- self-carried index/total, never accumulated across the multiple calls one resolution can make.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "exact_name_search"
+        ]
+      },
+      {
+        "key": "index",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "term_hash",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_canonical_id",
+        "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "graphrank.identity_universe",
     "msg": "context fabric resolution trace: identity universe read",
     "level": "info",
@@ -630,6 +681,57 @@
       {
         "key": "missing_kinds_list",
         "type": "string_slice",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.kind_hint_search",
+    "msg": "context fabric resolution trace: kind hint search",
+    "level": "debug",
+    "multiplicity": "bounded_many_per_pass",
+    "attribution": [
+      "request_id",
+      "term_hash"
+    ],
+    "bounded_aggregation": "bounded per (request_id, term_hash) call -- self-carried index/total, never accumulated across the multiple calls one resolution can make.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "kind_hint_search"
+        ]
+      },
+      {
+        "key": "index",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "term_hash",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_canonical_id",
+        "type": "string",
         "presence": "required"
       }
     ]

@@ -118,6 +118,10 @@ func goVarName(e Event) string {
 		return "ConfirmedKindRescue"
 	case IdentityUniverse.ID:
 		return "IdentityUniverse"
+	case KindHintSearch.ID:
+		return "KindHintSearch"
+	case ExactNameSearch.ID:
+		return "ExactNameSearch"
 	default:
 		panic("eventspec: goVarName has no mapping for " + e.ID + " -- add one before regenerating")
 	}

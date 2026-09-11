@@ -699,3 +699,89 @@ func TestConfirmedKindRescueCertifiesFiringAndAbsent(t *testing.T) {
 		}
 	})
 }
+
+// TestKindHintSearchAndExactNameSearchCertifyPerCallBounds reuses
+// chaos4348_reachability_test.go's own two proven fixtures (a kind-hinted
+// project ordinary Search cannot find, and an exact-name-matched project
+// with no hint at all) with a real slog tracer, certifying each event's own
+// per-(request_id, term_hash) bound.
+func TestKindHintSearchAndExactNameSearchCertifyPerCallBounds(t *testing.T) {
+	t.Parallel()
+
+	t.Run("kind_hint_search", func(t *testing.T) {
+		t.Parallel()
+		target := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project.v2:linear:chaos-ops", Label: "chaos-ops"}
+		targetNode := candidateNode(target.Kind, target.CanonicalID, target.Label, 1.0, "*")
+		backend := &fakeGraphBackend{
+			searchResults:     map[string][]CandidateNode{"chaos-ops": nil},
+			enableSearchKind:  true,
+			searchKindResults: map[string]map[contextfabric.SubjectKind][]CandidateNode{"chaos-ops": {contextfabric.SubjectProject: {targetNode}}},
+		}
+		req := testRequest()
+		req.ExpectedKinds = []contextfabric.SubjectKind{contextfabric.SubjectProject}
+		var buf bytes.Buffer
+		deps := backend.deps()
+		deps.ResolutionTracer = NewSlogResolutionTracer(
+			slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		if _, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+			storage.Principal{OrgID: "org_1"}, req, testInterpreted("chaos-ops"), deps, nil, nil, nil, ""); err != nil {
+			t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+		}
+		log, err := certify.Parse(buf.Bytes())
+		if err != nil {
+			t.Fatalf("certify.Parse() on real production output error = %v", err)
+		}
+		termHash := traceTermHash("chaos-ops")
+		count, err := certify.CertifyBoundedManyCount(log, eventspec.KindHintSearch, map[string]any{"request_id": req.RequestID, "term_hash": termHash})
+		if err != nil {
+			t.Fatalf("CertifyBoundedManyCount(KindHintSearch) error = %v", err)
+		}
+		if count != 1 {
+			t.Fatalf("CertifyBoundedManyCount(KindHintSearch) = %d, want 1", count)
+		}
+		if _, err := certify.Certify(log, certify.Assertion{
+			Event: eventspec.KindHintSearch,
+			Want:  map[string]any{"request_id": req.RequestID, "term_hash": termHash, "index": 1, "total": 1, "subject_canonical_id": target.CanonicalID},
+		}); err != nil {
+			t.Fatalf("Certify(KindHintSearch) error = %v", err)
+		}
+	})
+
+	t.Run("exact_name_search", func(t *testing.T) {
+		t.Parallel()
+		target := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project.v2:gitlab:chaos-ops", Label: "chaos-ops"}
+		targetNode := candidateNode(target.Kind, target.CanonicalID, target.Label, 0, "*")
+		backend := &fakeGraphBackend{
+			searchResults:             map[string][]CandidateNode{"chaos-ops": nil},
+			enableExactNameCandidates: true,
+			exactNameCandidates:       []CandidateNode{targetNode},
+		}
+		req := testRequest()
+		var buf bytes.Buffer
+		deps := backend.deps()
+		deps.ResolutionTracer = NewSlogResolutionTracer(
+			slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		if _, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+			storage.Principal{OrgID: "org_1"}, req, testInterpreted("chaos-ops"), deps, nil, nil, nil, ""); err != nil {
+			t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+		}
+		log, err := certify.Parse(buf.Bytes())
+		if err != nil {
+			t.Fatalf("certify.Parse() on real production output error = %v", err)
+		}
+		termHash := traceTermHash("chaos-ops")
+		count, err := certify.CertifyBoundedManyCount(log, eventspec.ExactNameSearch, map[string]any{"request_id": req.RequestID, "term_hash": termHash})
+		if err != nil {
+			t.Fatalf("CertifyBoundedManyCount(ExactNameSearch) error = %v", err)
+		}
+		if count != 1 {
+			t.Fatalf("CertifyBoundedManyCount(ExactNameSearch) = %d, want 1", count)
+		}
+		if _, err := certify.Certify(log, certify.Assertion{
+			Event: eventspec.ExactNameSearch,
+			Want:  map[string]any{"request_id": req.RequestID, "term_hash": termHash, "index": 1, "total": 1, "subject_canonical_id": target.CanonicalID},
+		}); err != nil {
+			t.Fatalf("Certify(ExactNameSearch) error = %v", err)
+		}
+	})
+}

@@ -27,8 +27,10 @@ var ByID = map[string]Event{
 	"graphrank.corroboration_summary":  CorroborationSummary,
 	"graphrank.decision":               Decision,
 	"graphrank.decision_summary":       DecisionSummary,
+	"graphrank.exact_name_search":      ExactNameSearch,
 	"graphrank.identity_universe":      IdentityUniverse,
 	"graphrank.kind_coverage_floor":    KindCoverageFloor,
+	"graphrank.kind_hint_search":       KindHintSearch,
 	"graphrank.kind_offer_withheld":    KindOfferWithheld,
 	"graphrank.offer_pool":             OfferPool,
 	"graphrank.offer_pool_summary":     OfferPoolSummary,
@@ -611,6 +613,63 @@ func (f DecisionSummaryFields) SlogArgs() []any {
 	}
 }
 
+// ExactNameSearchFields is graphrank.exact_name_search's generated typed construction interface
+// (CHAOS-5516): one Go field per Field ExactNameSearch.Fields declares in spec.go.
+type ExactNameSearchFields struct {
+	RequestID          string
+	Index              int
+	Total              int
+	TermHash           string
+	SubjectKind        string
+	SubjectCanonicalID string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every ExactNameSearchFields uniformly, set ONLY by NewExactNameSearchFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewExactNameSearchFields is the generated constructor for ExactNameSearchFields -- every
+// field ExactNameSearch.Fields declares is a required parameter.
+func NewExactNameSearchFields(requestID string, index int, total int, termHash string, subjectKind string, subjectCanonicalID string) ExactNameSearchFields {
+	return ExactNameSearchFields{
+		RequestID:          requestID,
+		Index:              index,
+		Total:              total,
+		TermHash:           termHash,
+		SubjectKind:        subjectKind,
+		SubjectCanonicalID: subjectCanonicalID,
+		constructed:        true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewExactNameSearchFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f ExactNameSearchFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns ExactNameSearch's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f ExactNameSearchFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "exact_name_search",
+		"index", f.Index,
+		"total", f.Total,
+		"term_hash", contextfabric.SanitizeLogAttr(f.TermHash),
+		"subject_kind", contextfabric.SanitizeLogAttr(f.SubjectKind),
+		"subject_canonical_id", contextfabric.SanitizeLogAttr(f.SubjectCanonicalID),
+	}
+}
+
 // IdentityUniverseFields is graphrank.identity_universe's generated typed construction interface
 // (CHAOS-5516): one Go field per Field IdentityUniverse.Fields declares in spec.go.
 type IdentityUniverseFields struct {
@@ -711,6 +770,63 @@ func (f KindCoverageFloorFields) SlogArgs() []any {
 		"missing_kinds", f.MissingKinds,
 		"truncated", f.Truncated,
 		"missing_kinds_list", contextfabric.SanitizeLogStrings(f.MissingKindsList),
+	}
+}
+
+// KindHintSearchFields is graphrank.kind_hint_search's generated typed construction interface
+// (CHAOS-5516): one Go field per Field KindHintSearch.Fields declares in spec.go.
+type KindHintSearchFields struct {
+	RequestID          string
+	Index              int
+	Total              int
+	TermHash           string
+	SubjectKind        string
+	SubjectCanonicalID string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every KindHintSearchFields uniformly, set ONLY by NewKindHintSearchFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewKindHintSearchFields is the generated constructor for KindHintSearchFields -- every
+// field KindHintSearch.Fields declares is a required parameter.
+func NewKindHintSearchFields(requestID string, index int, total int, termHash string, subjectKind string, subjectCanonicalID string) KindHintSearchFields {
+	return KindHintSearchFields{
+		RequestID:          requestID,
+		Index:              index,
+		Total:              total,
+		TermHash:           termHash,
+		SubjectKind:        subjectKind,
+		SubjectCanonicalID: subjectCanonicalID,
+		constructed:        true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewKindHintSearchFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f KindHintSearchFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns KindHintSearch's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f KindHintSearchFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "kind_hint_search",
+		"index", f.Index,
+		"total", f.Total,
+		"term_hash", contextfabric.SanitizeLogAttr(f.TermHash),
+		"subject_kind", contextfabric.SanitizeLogAttr(f.SubjectKind),
+		"subject_canonical_id", contextfabric.SanitizeLogAttr(f.SubjectCanonicalID),
 	}
 }
 
