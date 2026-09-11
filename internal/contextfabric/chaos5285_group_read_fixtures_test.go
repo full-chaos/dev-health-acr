@@ -30,6 +30,10 @@ type groupAuthorizingGraph struct {
 	// hinted records, in order, the subject hints of every resolution this
 	// double was asked to perform.
 	hinted [][]SubjectHint
+	// hintedCaps records, per resolution, the MaxSubjectCandidates it ran
+	// with, so a pin can prove no authorization call was handed more hints
+	// than it could commit.
+	hintedCaps []int
 	// authorizationErr, when set, is returned by every HINTED resolution --
 	// an authorizer that could not answer, as distinct from one that said no.
 	authorizationErr error
@@ -38,6 +42,7 @@ type groupAuthorizingGraph struct {
 func (g *groupAuthorizingGraph) ResolveSubjects(ctx context.Context, principal storage.Principal, request InvestigationRequest, interpreted InterpretedQuestion, binding ResolvedGraphBinding, confirmedKind *ConfirmedExpectedKind, confirmedAnchor *ConfirmedAnchorSelection, frame *QuestionFrame, scopeAnchorKind SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
 	hints := request.RequestedScope.SubjectHints
 	g.hinted = append(g.hinted, hints)
+	g.hintedCaps = append(g.hintedCaps, request.Options.MaxSubjectCandidates)
 	if len(hints) == 0 {
 		return g.graphReaderStub.ResolveSubjects(ctx, principal, request, interpreted, binding, confirmedKind, confirmedAnchor, frame, scopeAnchorKind)
 	}
@@ -52,6 +57,17 @@ func (g *groupAuthorizingGraph) ResolveSubjects(ctx context.Context, principal s
 			continue
 		}
 		committed = append(committed, SubjectRef{Kind: hint.Kind, CanonicalID: hint.ID, Label: hint.Label})
+	}
+	// THE RESOLVER'S CANDIDATE CAP, modelled rather than ignored. The real
+	// caller-hint exit finalizes at request.Options.MaxSubjectCandidates and
+	// drops every resolvable hint past it, exactly as it drops an
+	// unauthorized one -- measured on the real resolver by
+	// graphrank.TestTheCallerHintExitCommitsNoMoreThanItsCandidateCap. A
+	// double without the cap admitted all 250 groups of a legal cohort while
+	// production admitted 50, which is how a turn that read one group in five
+	// passed every pin here.
+	if limit := request.Options.MaxSubjectCandidates; limit > 0 && len(committed) > limit {
+		committed = committed[:limit]
 	}
 	return SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed},
 		StructureOfferMaterial{}, provenCommitBases(committed...), nil, nil
