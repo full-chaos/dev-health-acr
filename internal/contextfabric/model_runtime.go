@@ -429,7 +429,8 @@ func (r ModelExecutionReceipt) Validate() error {
 }
 
 // ModelReceiptSink durably records every model execution receipt
-// (success, fallback, invalid_output, rate_limited, or unavailable). It is
+// (success, fallback, invalid_output, rate_limited, unavailable, or
+// cancelled). It is
 // also the defined evaluator seam for CHAOS-3756: an evaluator consumes
 // EvaluatorVersion-keyed receipts from this sink asynchronously, outside the
 // synchronous investigation path, rather than calling back into the model
