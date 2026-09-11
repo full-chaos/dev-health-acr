@@ -376,6 +376,20 @@ func NewFactCapabilityRegistry(providers []FactProvider, options FactRegistryOpt
 		if _, exists := registry.providers[capability.Kind]; exists {
 			return nil, fmt.Errorf("duplicate fact capability %q", capability.Kind)
 		}
+		// Copied, not aliased (r3 class-sweep on the CHAOS-5405/CHAOS-5547
+		// aliasing shape: NewFactReadScopeResolverWithPolicies had the same
+		// bug for its policy table, see copyFactScopePolicies): a provider
+		// that goes on to mutate the Tables/Obligations map it returned
+		// from Capability() must never change what this registry already
+		// registered. This is the storage-time half of the defence
+		// Capabilities() below already runs at read-time; capabilityIndex
+		// (used by ReadFacts's live classifyUnavailable path on every
+		// request) reads registry.providers directly, so an aliased map
+		// here would have let a provider's own post-registration mutation
+		// silently change a production decision, not merely what an
+		// external Capabilities() caller could observe.
+		capability.Tables = copyTableDeclarations(capability.Tables)
+		capability.Obligations = copyObligationDeclarations(capability.Obligations)
 		registry.providers[capability.Kind] = registeredFactProvider{capability: capability, provider: provider}
 	}
 	return registry, nil
