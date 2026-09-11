@@ -65,18 +65,78 @@ from validators import validate_attempt, validate_response  # noqa: E402
 # defines the contract.
 import contract  # noqa: E402
 
-# ONE env var, default
-# byte-identical to the frozen value, so an unset environment reproduces the rig
-# runs exactly. Needed because the 3A-read control drives a PRIVATE ask-dev leg on
-# :3042 (in front of a private embed-free acr-api on :18092) while the shared rig
-# keeps serving on :3040 — a control must never touch the shared acceptance surface.
-BASE = os.environ.get("CORPUS_BASE", "http://127.0.0.1:3040/api/investigations")
+# CHAOS-5562: NO DEFAULT. A silent default to the shared rig leg is exactly how
+# lane-thread-a-engine drove 5 investigations into a shared rig leg it did not
+# own, on 2026-09-11, without meaning to touch it at all -- an unset environment
+# must refuse, not reproduce that leg by accident. Every caller states its own base explicitly
+# (`run_corpus_sequential.sh` / `run_corpus_parallel.sh` already export one before
+# invoking `run_shard.py`; that is THEIR considered default, not this module's).
+BASE = os.environ.get("CORPUS_BASE")
+# Optional guard rail: refuse to proceed once the first response names a served
+# build that disagrees with this. Env by default (so it reaches every caller that
+# imports this module -- run_shard.py included -- without extra plumbing); harness.py's
+# own CLI also accepts `--expected-build`, which overrides the env value for a direct run.
+EXPECTED_BUILD = os.environ.get("CORPUS_EXPECTED_BUILD")
 OUTDIR = Path(__file__).parent / "replicate"
 OUTDIR.mkdir(exist_ok=True)
 MAX_TURNS = 5
 MAX_ATTEMPTS_PER_TURN = 5
 SERVED_STATUSES = {"complete", "partial", "degraded", "answered"}
 TERMINAL_STATUSES = SERVED_STATUSES | {"no_match", "refused"}
+
+
+class MissingCorpusBase(RuntimeError):
+    """CORPUS_BASE is unset. Refuse to start rather than default to a rig leg."""
+
+
+class ServedBuildMismatch(RuntimeError):
+    """The first response's service_version disagrees with the caller's expected build."""
+
+
+def require_base():
+    if not BASE:
+        raise MissingCorpusBase(
+            "CORPUS_BASE is not set -- refusing to start. There is no default rig "
+            "leg; set CORPUS_BASE to the investigations endpoint you own (see "
+            "scripts/corpus/README.md)."
+        )
+
+
+def _service_version(response):
+    """Same extraction shape as run_shard.py's own reading of `versions.service_version`,
+    so the two never disagree about where the build name lives."""
+    if not isinstance(response, dict):
+        return None
+    result = response.get("result")
+    if not isinstance(result, dict):
+        return None
+    versions = result.get("versions")
+    if not isinstance(versions, dict):
+        return None
+    return versions.get("service_version")
+
+
+_first_response_reported = False
+
+
+def _report_first_response(status, response):
+    """Print the base and the FIRST response's service_version, once, before any
+    further request goes out -- so a caller pointed at the wrong leg finds out after
+    one request, not after five (CHAOS-5562). Refuses if an expected build was given
+    and the served build disagrees.
+    """
+    global _first_response_reported
+    if _first_response_reported:
+        return
+    _first_response_reported = True
+    served = _service_version(response)
+    print(f"[corpus] CORPUS_BASE={BASE} first response http={status} "
+          f"service_version={served!r}", flush=True)
+    if EXPECTED_BUILD and served and served != EXPECTED_BUILD:
+        raise ServedBuildMismatch(
+            f"served service_version={served!r} != expected {EXPECTED_BUILD!r} "
+            f"(CORPUS_BASE={BASE}) -- refusing to continue"
+        )
 
 
 def validate_live_payload(status, payload):
@@ -130,6 +190,8 @@ def post(body):
        controls what is INSIDE the response body, not the envelope the harness writes
        around it.
     """
+    # CHAOS-5562: refuse before the first byte goes anywhere near a socket.
+    require_base()
     data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(BASE, data=data, headers={"Content-Type": "application/json"}, method="POST")
     t0 = time.time()
@@ -149,6 +211,7 @@ def post(body):
     except Exception as e:  # noqa: BLE001 -- a transport failure is a row, not a crash
         # NO STATUS EVER CAME BACK (connection refused, DNS, read timeout before a
         # response line was received): the only arm that writes status 0.
+        _report_first_response(0, {contract.ERROR_BODY_KEY: str(e)})
         return 0, {contract.ERROR_BODY_KEY: str(e)}, time.time() - t0, False
     # An exchange COMPLETED -- `status` is real. A body that could not be READ (raw is
     # None) or could not be DECODED is the same fact from here: the exchange happened,
@@ -159,8 +222,11 @@ def post(body):
         except Exception:
             raw = None
     if raw is None:
+        _report_first_response(status, {})
         return status, {}, time.time() - t0, True
-    return status, validate_live_payload(status, payload), time.time() - t0, False
+    validated = validate_live_payload(status, payload)
+    _report_first_response(status, validated)
+    return status, validated, time.time() - t0, False
 
 
 def is_retryable(status, payload):
@@ -379,19 +445,50 @@ def run_replicate(qid, question, rep, warn=print):
     }
 
 
+def _parse_argv(argv):
+    """Corpus-id filters plus an optional `--expected-build VALUE` / `--expected-build=VALUE`.
+    A CLI value overrides CORPUS_EXPECTED_BUILD for this run; unset leaves the env value
+    (possibly None) in place."""
+    ids = []
+    expected_build = EXPECTED_BUILD
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--expected-build":
+            i += 1
+            if i >= len(argv):
+                sys.exit("--expected-build requires a value")
+            expected_build = argv[i]
+        elif a.startswith("--expected-build="):
+            expected_build = a.split("=", 1)[1]
+        else:
+            ids.append(a)
+        i += 1
+    return ids, expected_build
+
+
 def main():
-    which = sys.argv[1:] if len(sys.argv) > 1 else None
+    global EXPECTED_BUILD
+    try:
+        require_base()
+    except MissingCorpusBase as e:
+        sys.exit(str(e))
+    ids, EXPECTED_BUILD = _parse_argv(sys.argv[1:])
+    which = ids or None
     rows = []
     total = 0
-    for row in CORPUS:
-        if which and row["id"] not in which:
-            continue
-        for rep in range(1, 4):
-            print(f"=== {row['id']} rep{rep} ===", flush=True)
-            r = run_replicate(row["id"], row["text"], rep)
-            rows.append(r)
-            total += r["attempts"]
-            print(f"  -> attempts={r['attempts']} cumulative_total={total} chain={r['chain']}", flush=True)
+    try:
+        for row in CORPUS:
+            if which and row["id"] not in which:
+                continue
+            for rep in range(1, 4):
+                print(f"=== {row['id']} rep{rep} ===", flush=True)
+                r = run_replicate(row["id"], row["text"], rep)
+                rows.append(r)
+                total += r["attempts"]
+                print(f"  -> attempts={r['attempts']} cumulative_total={total} chain={r['chain']}", flush=True)
+    except ServedBuildMismatch as e:
+        sys.exit(str(e))
     with open(OUTDIR / "summary.json", "w") as f:
         json.dump(rows, f, indent=2)
     print(f"DONE {len(rows)} replicate-rows, {total} total attempts -> {OUTDIR}/summary.json")

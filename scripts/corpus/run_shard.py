@@ -242,6 +242,14 @@ def detail_for(outdir, qid, row, r, dt, rep):
 def main():
     if len(sys.argv) != 4:
         sys.exit("usage: run_shard.py <shard-index> <shard-count> <rep>")
+    # CHAOS-5562: fail before planning a single row. A lane invoking this script
+    # directly (not through run_corpus_sequential.sh / run_corpus_parallel.sh,
+    # which already export CORPUS_BASE themselves) must not silently inherit
+    # harness.py's old default rig leg.
+    try:
+        harness.require_base()
+    except harness.MissingCorpusBase as e:
+        sys.exit(str(e))
     idx, count, rep = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
 
     layout = plan(count)
@@ -256,17 +264,20 @@ def main():
 
     rows = []
     t_start = time.time()
-    for i, qid in enumerate(ids, 1):
-        row = BY_ID[qid]
-        print(f"=== shard{idx} [{i}/{len(ids)}] {qid} ===", flush=True)
-        t0 = time.time()
-        r = harness.run_replicate(qid, row["text"], rep)
-        dt = time.time() - t0
-        print(f"  -> attempts={r['attempts']} dt={dt:.1f}s chain={r['chain']}", flush=True)
-        d = detail_for(harness.OUTDIR, qid, row, r, dt, rep)
-        if UNSEQUENCED.get(qid):
-            d["unsequenced_files"] = sorted(set(UNSEQUENCED[qid]))
-        rows.append(d)
+    try:
+        for i, qid in enumerate(ids, 1):
+            row = BY_ID[qid]
+            print(f"=== shard{idx} [{i}/{len(ids)}] {qid} ===", flush=True)
+            t0 = time.time()
+            r = harness.run_replicate(qid, row["text"], rep)
+            dt = time.time() - t0
+            print(f"  -> attempts={r['attempts']} dt={dt:.1f}s chain={r['chain']}", flush=True)
+            d = detail_for(harness.OUTDIR, qid, row, r, dt, rep)
+            if UNSEQUENCED.get(qid):
+                d["unsequenced_files"] = sorted(set(UNSEQUENCED[qid]))
+            rows.append(d)
+    except harness.ServedBuildMismatch as e:
+        sys.exit(str(e))
 
     total = time.time() - t_start
     out = {
