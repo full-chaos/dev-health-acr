@@ -124,6 +124,10 @@ func goVarName(e Event) string {
 		return "ExactNameSearch"
 	case AnchorOffer.ID:
 		return "AnchorOffer"
+	case AnchorKindWithheld.ID:
+		return "AnchorKindWithheld"
+	case AnchorKindWithheldSummary.ID:
+		return "AnchorKindWithheldSummary"
 	default:
 		panic("eventspec: goVarName has no mapping for " + e.ID + " -- add one before regenerating")
 	}

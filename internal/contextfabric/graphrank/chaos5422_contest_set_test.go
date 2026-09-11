@@ -60,13 +60,14 @@ func (c *contestCapture) Trace(event ResolutionTraceEvent) {
 	switch {
 	case event.Stage == "decision_summary":
 		c.summaries = append(c.summaries, event)
-	// ONLY the summary this seam emits. resolution.go emits an offer_pool
-	// summary of its own once per resolver pass for the vector counters; those
-	// are a different quantity and counting them here would measure the number
-	// of passes, not the number of disclosures.
-	case event.Stage == "offer_pool" && event.OfferPoolSummary && event.OfferPoolAnchorKindWithheldScope != "":
+	// r1 class fix (CHAOS-5517): this seam's own disclosure now emits under
+	// its own Stage ("anchor_kind_withheld"/"anchor_kind_withheld_summary"),
+	// never "offer_pool" -- see AnchorKindWithheld/AnchorKindWithheldSummary's
+	// own doc comments (eventspec/spec.go) for why the two could no longer
+	// share a wire shape with resolution.go's own per-pass vector counters.
+	case event.Stage == "anchor_kind_withheld_summary":
 		c.offerPool = append(c.offerPool, event)
-	case event.Stage == "offer_pool" && event.OfferPoolDisposition != "":
+	case event.Stage == "anchor_kind_withheld" && event.OfferPoolDisposition != "":
 		c.dispositions = append(c.dispositions, event)
 	}
 }

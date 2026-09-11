@@ -107,7 +107,8 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// (request_id, term_hash) call -- see traceKindHintSearch's own
 			// doc comment (chaos4348_reachability.go).
 			"index", event.Index, "total", event.Total,
-			"term_hash", contextfabric.SanitizeLogAttr(event.TermHash), "subject_kind", contextfabric.SanitizeLogAttr(string(event.Subject.Kind)),
+			"term_hash", contextfabric.SanitizeLogAttr(event.TermHash), "queried_kind", contextfabric.SanitizeLogAttr(event.QueriedKind),
+			"subject_kind", contextfabric.SanitizeLogAttr(string(event.Subject.Kind)),
 			"subject_canonical_id", contextfabric.SanitizeLogAttr(event.Subject.CanonicalID))
 	case "exact_name_search":
 		// CHAOS-4348: traceExactNameSearch's own event, same convention as
@@ -297,6 +298,38 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"index", event.Index, "total", event.Total,
 			"subject_kind", contextfabric.SanitizeLogAttr(string(event.Subject.Kind)), "subject_canonical_id", contextfabric.SanitizeLogAttr(event.Subject.CanonicalID),
 			"disposition", contextfabric.SanitizeLogAttr(event.OfferPoolDisposition))
+	case "anchor_kind_withheld":
+		// r1 class fix (CHAOS-5517): split out of "offer_pool" -- this is
+		// resolve.go's contest-admission per-candidate disclosure
+		// (admission.withheldSubjects()), genuinely REQUEST-scoped (fires
+		// once per call, after every internal pass, describing the union
+		// across them all), never pass-scoped like the sibling "offer_pool"
+		// dispositions above. Self-carried index/total, same convention as
+		// search/kind_hint_search/exact_name_search -- no "pass" field.
+		// STAYS Debug: bounded by the contest set's own withheld-subject
+		// count, same "retrieval-pool-sized, not aggregate-sized" reasoning
+		// as offer_pool's own per-candidate case.
+		t.logger.DebugContext(ctx, "context fabric resolution trace: anchor kind withheld",
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+			"index", event.Index, "total", event.Total,
+			"subject_kind", contextfabric.SanitizeLogAttr(string(event.Subject.Kind)), "subject_canonical_id", contextfabric.SanitizeLogAttr(event.Subject.CanonicalID),
+			"disposition", contextfabric.SanitizeLogAttr(event.OfferPoolDisposition))
+	case "anchor_kind_withheld_summary":
+		// r1 class fix (CHAOS-5517): the once-per-call fold of the above,
+		// split into its own Stage rather than reusing "offer_pool"'s own
+		// OfferPoolSummary flag -- the two summaries carry entirely
+		// different fields, and sharing one Stage/Msg meant this content
+		// was never actually read by the "offer_pool" case below, reaching
+		// production as a decoy all-zero line. ALWAYS emitted, explicit
+		// zero included -- see ResolutionTraceEvent.OfferPoolAnchorKindWithheld's
+		// own doc comment (resolve.go).
+		t.logger.InfoContext(ctx, "context fabric resolution trace: anchor kind withheld summary",
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+			"anchor_kind_withheld", event.OfferPoolAnchorKindWithheld,
+			"anchor_kind_withheld_scope", contextfabric.SanitizeLogAttr(event.OfferPoolAnchorKindWithheldScope),
+			"anchor_kind_withheld_reason", contextfabric.SanitizeLogAttr(event.OfferPoolAnchorKindWithheldReason),
+			"anchor_kind_withheld_ids", contextfabric.SanitizeLogStrings(event.OfferPoolAnchorKindWithheldIDs),
+			"anchor_kind_exempted", event.OfferPoolAnchorKindExempted)
 	case "kind_coverage_floor":
 		// CHAOS-4086: the operator-visible half of CHAOS-4038's floor. The
 		// harness reads the same event off an in-process tracer to put

@@ -593,6 +593,86 @@ var OfferPoolSummary = Event{
 	},
 }
 
+// AnchorKindWithheld is the Debug per-candidate line (graphrank/tracer.go,
+// case "anchor_kind_withheld") emitted for every subject resolve.go's
+// contest-admission boundary (CHAOS-5422, chaos5422_contest_set.go) refused
+// on the grouping/scope axis -- resolve.go's own admission.withheldSubjects().
+//
+// r1 class finding (CHAOS-5517): this used to be emitted under Stage
+// "offer_pool", the SAME wire Msg as the pass-scoped vector-only detail
+// lines (OfferPool above) -- an executed AST enumeration of every
+// ResolutionTraceEvent{...} construction site (not the original hand
+// sweep, which missed it) found it carrying disposition
+// "anchor_kind_withheld", outside OfferPool's own declared closed
+// vocabulary, with no pass/index/total at all. Genuinely REQUEST-scoped,
+// not pass-scoped: it fires once per resolveSubjects call, after every
+// internal pass has finished, describing the union of everything refused
+// across however many passes ran -- tagging it with a fabricated pass
+// number would misrepresent it as belonging to one pass it does not
+// describe. Given its own Stage/Msg so it can never again collide with
+// OfferPool's; self-carries index/total (no "pass" field declared) the
+// same way Search/KindHintSearch/ExactNameSearch already do -- a per-event
+// choice MultiplicityBoundedManyPerPass's own doc comment allows.
+var AnchorKindWithheld = Event{
+	ID:                 "graphrank.anchor_kind_withheld",
+	Msg:                "context fabric resolution trace: anchor kind withheld",
+	Level:              LevelDebug,
+	Multiplicity:       MultiplicityBoundedManyPerPass,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "bounded per request_id call by len(admission.withheldSubjects()) -- self-carried index/total, cross-checked against AnchorKindWithheldSummary's own anchor_kind_withheld count.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"anchor_kind_withheld"}},
+		{Key: "index", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_canonical_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "disposition", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"anchor_kind_withheld"}},
+	},
+}
+
+// AnchorKindWithheldSummary is the Info line (graphrank/tracer.go, case
+// "anchor_kind_withheld_summary") folding resolve.go's contest-admission
+// disclosure into one unconditional per-call line -- explicit zeros
+// included, so a question that refused nothing and a build where the
+// refusal stopped happening can never read alike.
+//
+// r1 class finding (CHAOS-5517): pre-fix this reused Stage "offer_pool"
+// with the SAME OfferPoolSummary==true flag OfferPoolSummary's own
+// pass-scoped vector-only summary uses, but populated an entirely
+// DIFFERENT field set (the anchor-kind-withheld aggregate) that
+// tracer.go's "offer_pool" case never read -- the line reached production
+// as a decoy, all vector-only fields at their zero default and pass=0,
+// with its real content silently absent from that wire shape (visible
+// only via DecisionSummary's own fold of the same producer call). Given
+// its own Stage/Msg, ExactlyOnePerRequest like AnchorPool/
+// KindCoverageFloor/AnchorOffer (no "pass" field: this fires once per
+// call, not once per internal pass).
+var AnchorKindWithheldSummary = Event{
+	ID:                 "graphrank.anchor_kind_withheld_summary",
+	Msg:                "context fabric resolution trace: anchor kind withheld summary",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityExactlyOnePerRequest,
+	Attribution:        []string{"request_id"},
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"anchor_kind_withheld_summary"}},
+		{Key: "anchor_kind_withheld", Type: FieldInt, Presence: PresenceRequired},
+		{
+			Key: "anchor_kind_withheld_scope", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a SubjectKind token, or "none".
+		},
+		{
+			Key: "anchor_kind_withheld_reason", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a reason token, or "none" -- matches
+			// DecisionSummary's own offer_pool_anchor_kind_withheld_reason
+			// field for the same underlying producer value.
+		},
+		{Key: "anchor_kind_withheld_ids", Type: FieldStringSlice, Presence: PresenceRequired},
+		{Key: "anchor_kind_exempted", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
 // Decision is the Debug line (graphrank/tracer.go, case "decision") reporting
 // phase-3's own commit decision for a pass -- CHAOS-5517's fifth
 // MultiplicityBoundedManyPerPass event, and the only one whose own bound is
@@ -798,13 +878,22 @@ var IdentityUniverse = Event{
 // BoundedManyPerPass event declared so far, its Attribution includes
 // "term_hash": the bound is scoped per (request_id, term_hash) CALL, never
 // accumulated across calls that share no buffer.
+//
+// Attribution ALSO includes "queried_kind" (r1 finding, CHAOS-5517): the
+// hint loop calls traceKindHintSearch once per (kind, term) pair, so two
+// different hinted kinds queried for the SAME term each independently
+// produce their own index=1..N/total=N sequence. Without queried_kind in
+// scope, two such calls collapse into one (request_id, term_hash) group
+// and their otherwise-identical indices read as duplicates. queried_kind
+// is the loop's OWN kind for this call, distinct from subject_kind (the
+// matched node's own kind, read off the result).
 var KindHintSearch = Event{
 	ID:                 "graphrank.kind_hint_search",
 	Msg:                "context fabric resolution trace: kind hint search",
 	Level:              LevelDebug,
 	Multiplicity:       MultiplicityBoundedManyPerPass,
-	Attribution:        []string{"request_id", "term_hash"},
-	BoundedAggregation: "bounded per (request_id, term_hash) call -- self-carried index/total, never accumulated across the multiple calls one resolution can make.",
+	Attribution:        []string{"request_id", "term_hash", "queried_kind"},
+	BoundedAggregation: "bounded per (request_id, term_hash, queried_kind) call -- self-carried index/total, never accumulated across the multiple calls one resolution can make.",
 	Fields: []Field{
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"kind_hint_search"}},
@@ -814,6 +903,7 @@ var KindHintSearch = Event{
 			Key: "term_hash", Type: FieldString, Presence: PresenceRequired,
 			// Open vocabulary: a SHA-256 hex digest of the search term.
 		},
+		{Key: "queried_kind", Type: FieldString, Presence: PresenceRequired},
 		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
 		{Key: "subject_canonical_id", Type: FieldString, Presence: PresenceRequired},
 	},
@@ -869,4 +959,5 @@ var All = []Event{
 	Corroboration, CorroborationSummary, ReservedKindAdmitted, OfferPool, OfferPoolSummary,
 	Decision, SearchQuestion, AliasLookup, AnchorPool, KindCoverageFloor, ConfirmedKindRescue,
 	IdentityUniverse, KindHintSearch, ExactNameSearch, AnchorOffer,
+	AnchorKindWithheld, AnchorKindWithheldSummary,
 }

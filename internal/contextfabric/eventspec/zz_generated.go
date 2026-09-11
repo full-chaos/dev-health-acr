@@ -19,26 +19,28 @@ func FieldKeys(e Event) []string {
 // ByID is the generated lookup from Event.ID to its declaration -- generated
 // rather than hand-maintained so it can never drift from All.
 var ByID = map[string]Event{
-	"graphrank.alias_lookup":           AliasLookup,
-	"graphrank.anchor_offer":           AnchorOffer,
-	"graphrank.anchor_pool":            AnchorPool,
-	"graphrank.anchor_slot_displaced":  AnchorSlotDisplaced,
-	"graphrank.confirmed_kind_rescue":  ConfirmedKindRescue,
-	"graphrank.corroboration":          Corroboration,
-	"graphrank.corroboration_summary":  CorroborationSummary,
-	"graphrank.decision":               Decision,
-	"graphrank.decision_summary":       DecisionSummary,
-	"graphrank.exact_name_search":      ExactNameSearch,
-	"graphrank.identity_universe":      IdentityUniverse,
-	"graphrank.kind_coverage_floor":    KindCoverageFloor,
-	"graphrank.kind_hint_search":       KindHintSearch,
-	"graphrank.kind_offer_withheld":    KindOfferWithheld,
-	"graphrank.offer_pool":             OfferPool,
-	"graphrank.offer_pool_summary":     OfferPoolSummary,
-	"graphrank.ranked_cut_summary":     RankedCutSummary,
-	"graphrank.reserved_kind_admitted": ReservedKindAdmitted,
-	"graphrank.search":                 Search,
-	"graphrank.search_question":        SearchQuestion,
+	"graphrank.alias_lookup":                 AliasLookup,
+	"graphrank.anchor_kind_withheld":         AnchorKindWithheld,
+	"graphrank.anchor_kind_withheld_summary": AnchorKindWithheldSummary,
+	"graphrank.anchor_offer":                 AnchorOffer,
+	"graphrank.anchor_pool":                  AnchorPool,
+	"graphrank.anchor_slot_displaced":        AnchorSlotDisplaced,
+	"graphrank.confirmed_kind_rescue":        ConfirmedKindRescue,
+	"graphrank.corroboration":                Corroboration,
+	"graphrank.corroboration_summary":        CorroborationSummary,
+	"graphrank.decision":                     Decision,
+	"graphrank.decision_summary":             DecisionSummary,
+	"graphrank.exact_name_search":            ExactNameSearch,
+	"graphrank.identity_universe":            IdentityUniverse,
+	"graphrank.kind_coverage_floor":          KindCoverageFloor,
+	"graphrank.kind_hint_search":             KindHintSearch,
+	"graphrank.kind_offer_withheld":          KindOfferWithheld,
+	"graphrank.offer_pool":                   OfferPool,
+	"graphrank.offer_pool_summary":           OfferPoolSummary,
+	"graphrank.ranked_cut_summary":           RankedCutSummary,
+	"graphrank.reserved_kind_admitted":       ReservedKindAdmitted,
+	"graphrank.search":                       Search,
+	"graphrank.search_question":              SearchQuestion,
 }
 
 // AliasLookupFields is graphrank.alias_lookup's generated typed construction interface
@@ -86,6 +88,124 @@ func (f AliasLookupFields) SlogArgs() []any {
 		"stage", "alias_lookup",
 		"complete", f.Complete,
 		"matched_claimants", f.MatchedClaimants,
+	}
+}
+
+// AnchorKindWithheldFields is graphrank.anchor_kind_withheld's generated typed construction interface
+// (CHAOS-5516): one Go field per Field AnchorKindWithheld.Fields declares in spec.go.
+type AnchorKindWithheldFields struct {
+	RequestID          string
+	Index              int
+	Total              int
+	SubjectKind        string
+	SubjectCanonicalID string
+	Disposition        string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every AnchorKindWithheldFields uniformly, set ONLY by NewAnchorKindWithheldFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewAnchorKindWithheldFields is the generated constructor for AnchorKindWithheldFields -- every
+// field AnchorKindWithheld.Fields declares is a required parameter.
+func NewAnchorKindWithheldFields(requestID string, index int, total int, subjectKind string, subjectCanonicalID string, disposition string) AnchorKindWithheldFields {
+	return AnchorKindWithheldFields{
+		RequestID:          requestID,
+		Index:              index,
+		Total:              total,
+		SubjectKind:        subjectKind,
+		SubjectCanonicalID: subjectCanonicalID,
+		Disposition:        disposition,
+		constructed:        true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewAnchorKindWithheldFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f AnchorKindWithheldFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns AnchorKindWithheld's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f AnchorKindWithheldFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "anchor_kind_withheld",
+		"index", f.Index,
+		"total", f.Total,
+		"subject_kind", contextfabric.SanitizeLogAttr(f.SubjectKind),
+		"subject_canonical_id", contextfabric.SanitizeLogAttr(f.SubjectCanonicalID),
+		"disposition", contextfabric.SanitizeLogAttr(f.Disposition),
+	}
+}
+
+// AnchorKindWithheldSummaryFields is graphrank.anchor_kind_withheld_summary's generated typed construction interface
+// (CHAOS-5516): one Go field per Field AnchorKindWithheldSummary.Fields declares in spec.go.
+type AnchorKindWithheldSummaryFields struct {
+	RequestID                string
+	AnchorKindWithheld       int
+	AnchorKindWithheldScope  string
+	AnchorKindWithheldReason string
+	AnchorKindWithheldIDs    []string
+	AnchorKindExempted       int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every AnchorKindWithheldSummaryFields uniformly, set ONLY by NewAnchorKindWithheldSummaryFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewAnchorKindWithheldSummaryFields is the generated constructor for AnchorKindWithheldSummaryFields -- every
+// field AnchorKindWithheldSummary.Fields declares is a required parameter.
+func NewAnchorKindWithheldSummaryFields(requestID string, anchorKindWithheld int, anchorKindWithheldScope string, anchorKindWithheldReason string, anchorKindWithheldIDs []string, anchorKindExempted int) AnchorKindWithheldSummaryFields {
+	valid := true
+	if anchorKindWithheldIDs == nil {
+		valid = false
+	}
+	return AnchorKindWithheldSummaryFields{
+		RequestID:                requestID,
+		AnchorKindWithheld:       anchorKindWithheld,
+		AnchorKindWithheldScope:  anchorKindWithheldScope,
+		AnchorKindWithheldReason: anchorKindWithheldReason,
+		AnchorKindWithheldIDs:    anchorKindWithheldIDs,
+		AnchorKindExempted:       anchorKindExempted,
+		constructed:              valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewAnchorKindWithheldSummaryFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f AnchorKindWithheldSummaryFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns AnchorKindWithheldSummary's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f AnchorKindWithheldSummaryFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "anchor_kind_withheld_summary",
+		"anchor_kind_withheld", f.AnchorKindWithheld,
+		"anchor_kind_withheld_scope", contextfabric.SanitizeLogAttr(f.AnchorKindWithheldScope),
+		"anchor_kind_withheld_reason", contextfabric.SanitizeLogAttr(f.AnchorKindWithheldReason),
+		"anchor_kind_withheld_ids", contextfabric.SanitizeLogStrings(f.AnchorKindWithheldIDs),
+		"anchor_kind_exempted", f.AnchorKindExempted,
 	}
 }
 
@@ -826,6 +946,7 @@ type KindHintSearchFields struct {
 	Index              int
 	Total              int
 	TermHash           string
+	QueriedKind        string
 	SubjectKind        string
 	SubjectCanonicalID string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
@@ -841,12 +962,13 @@ type KindHintSearchFields struct {
 
 // NewKindHintSearchFields is the generated constructor for KindHintSearchFields -- every
 // field KindHintSearch.Fields declares is a required parameter.
-func NewKindHintSearchFields(requestID string, index int, total int, termHash string, subjectKind string, subjectCanonicalID string) KindHintSearchFields {
+func NewKindHintSearchFields(requestID string, index int, total int, termHash string, queriedKind string, subjectKind string, subjectCanonicalID string) KindHintSearchFields {
 	return KindHintSearchFields{
 		RequestID:          requestID,
 		Index:              index,
 		Total:              total,
 		TermHash:           termHash,
+		QueriedKind:        queriedKind,
 		SubjectKind:        subjectKind,
 		SubjectCanonicalID: subjectCanonicalID,
 		constructed:        true,
@@ -871,6 +993,7 @@ func (f KindHintSearchFields) SlogArgs() []any {
 		"index", f.Index,
 		"total", f.Total,
 		"term_hash", contextfabric.SanitizeLogAttr(f.TermHash),
+		"queried_kind", contextfabric.SanitizeLogAttr(f.QueriedKind),
 		"subject_kind", contextfabric.SanitizeLogAttr(f.SubjectKind),
 		"subject_canonical_id", contextfabric.SanitizeLogAttr(f.SubjectCanonicalID),
 	}

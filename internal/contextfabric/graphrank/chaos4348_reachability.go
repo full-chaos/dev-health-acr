@@ -218,7 +218,7 @@ func applyKindHintedPoolSearch(ctx context.Context, principal storage.Principal,
 			// the question a retrieval fix needs is what the GRAPH returned,
 			// which the pool can no longer answer once those have run.
 			ledger.recordQuery(kind, results)
-			traceKindHintSearch(deps, request.RequestID, term, results)
+			traceKindHintSearch(deps, request.RequestID, term, string(kind), results)
 			termTraversalDegraded, termAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, results, pool, observationParentKey, observationBlocked, true, nil, identity, identityTerms, admission)
 			traversalDegraded += termTraversalDegraded
 			authzDropped += termAuthzDropped
@@ -299,7 +299,7 @@ func applyExactNameArm(ctx context.Context, principal storage.Principal, request
 // fallback in production with no test ever catching it (exactly the defect
 // class that test exists to close). See tracer.go's own new cases for the
 // two stage strings these functions emit.
-func traceKindHintSearch(deps ResolveDeps, requestID, term string, results []CandidateNode) {
+func traceKindHintSearch(deps ResolveDeps, requestID, term, kind string, results []CandidateNode) {
 	if deps.ResolutionTracer == nil {
 		return
 	}
@@ -310,6 +310,16 @@ func traceKindHintSearch(deps ResolveDeps, requestID, term string, results []Can
 	// call's own count, never a request-wide accumulation across calls
 	// that never share a buffer. eventspec.KindHintSearch's own Attribution
 	// includes "term_hash" for exactly this reason.
+	//
+	// r1 finding (CHAOS-5517): (request_id, term_hash) alone is not enough
+	// -- applyKindHintedPoolSearch's own outer loop calls this function
+	// once per (kind, term) pair, so two different kinds hinted for the
+	// SAME term each independently produce their own index=1..N/total=N.
+	// Without the queried kind also in scope, certify's own grouping folds
+	// both kinds' calls into one (request_id, term_hash) scope and reads
+	// their otherwise-identical indices as duplicates. QueriedKind carries
+	// which of this call's own kind that is; eventspec.KindHintSearch's
+	// Attribution now includes it alongside request_id and term_hash.
 	total := 0
 	for _, node := range results {
 		if _, ok := NodeSubject(node); ok {
@@ -326,7 +336,8 @@ func traceKindHintSearch(deps ResolveDeps, requestID, term string, results []Can
 		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 			RequestID: requestID, Stage: "kind_hint_search",
 			TermHash: traceTermHash(term), Subject: subject,
-			Index: index, Total: total,
+			QueriedKind: kind,
+			Index:       index, Total: total,
 		})
 	}
 }
