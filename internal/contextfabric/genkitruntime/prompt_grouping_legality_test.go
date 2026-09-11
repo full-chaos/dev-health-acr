@@ -29,8 +29,18 @@ func TestTheFramePromptLeavesGroupingLegalityToTheServer(t *testing.T) {
 		t.Errorf("the interpretation prompt still says grouped_members kinds %q -- the model would go on deciding I6 itself and re-expressing a self-group as a flat frame the server cannot judge", retired)
 	}
 	for _, required := range []string{
-		`grouped_members with group_kind "team" and member_kind "team"`,
-		"Never re-express a grouped question as discovered_kind or any other variant",
+		// The self-group is expressed only when the question EXPLICITLY
+		// partitions by the member's own kind ...
+		`"group the projects by project"`,
+		"even when it groups a kind by that same kind",
+		// ... and "each <kind>" alone stays a discovered set. Without this
+		// sentence the first v13 wording steered a question about each
+		// team's trend into grouped_members{team,team}, which I6 then
+		// refused -- a served question lost (executed on the private pair).
+		// The examples are deliberately NOT corpus phrasings.
+		"A question about EACH member of one kind",
+		"is discovered_kind over that kind, not a grouping",
+		"Never re-express an explicit grouping as discovered_kind or any other variant",
 		"whether a grouping is legal is decided by the server after you answer, never by you",
 	} {
 		if !strings.Contains(interpretationSystemPrompt, required) {

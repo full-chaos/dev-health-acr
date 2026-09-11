@@ -191,7 +191,10 @@ const (
 	// model the two kinds "must be DIFFERENT". It now tells the model to
 	// express a grouping exactly as asked -- including a kind grouped by
 	// itself -- and states that the SERVER decides whether a grouping is
-	// legal. The old sentence made the model the judge of invariant I6: a
+	// legal -- and that a question about EACH member of one kind is a
+	// discovered set, not a grouping, so only an explicit partition is ever
+	// expressed as a self-group. The old sentence made the model the judge
+	// of invariant I6: a
 	// question that grouped a kind by itself was re-expressed as a flat
 	// discovered_kind frame, which validates, so the server's I6 check
 	// never saw it and the question was answered flat. Required bump for

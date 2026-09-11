@@ -75,7 +75,7 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// changed and why a subtractive change still bumps the version.
 			// v12 -> v13: the grouped_members sentence tells the model to
 			// express a grouping as asked and leaves I6 to the server.
-			digest: "00def386560e08e0ad63a5876505dcbd8135700826b0d796ead46da35c7182c6",
+			digest: "efbf3e935b6c8b2e64b3e1100ab540eb7f353e8cdc8ce7dfc437d95a326c4497",
 		},
 		{
 			name:    "synthesis system prompt",
