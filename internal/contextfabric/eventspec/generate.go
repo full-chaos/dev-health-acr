@@ -100,6 +100,10 @@ func goVarName(e Event) string {
 		return "CorroborationSummary"
 	case ReservedKindAdmitted.ID:
 		return "ReservedKindAdmitted"
+	case OfferPool.ID:
+		return "OfferPool"
+	case OfferPoolSummary.ID:
+		return "OfferPoolSummary"
 	default:
 		panic("eventspec: goVarName has no mapping for " + e.ID + " -- add one before regenerating")
 	}

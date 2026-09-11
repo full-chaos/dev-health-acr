@@ -491,64 +491,79 @@ func TestCertifyInputDomainTable(t *testing.T) {
 		// AnchorSlotDisplaced: anchor_slot_displaced;
 		// DecisionSummary: decision_event_count), so this never silently
 		// no-ops into an identical-content line.
-		distinctContentLine := func(perturbValue int) map[string]any {
-			m := deepCopyLine(t, base)
-			perturbed := false
-			for _, f := range ev.Fields {
-				// CHAOS-5517: "index"/"total" are skipped the same way
-				// "pass" already is -- both carry the bounded-many
-				// cross-line invariant (certifyBoundedMany's own
-				// consistency check), so perturbing either would fail for
-				// a reason unrelated to what this cell is actually testing
-				// (pass-distinctness of the line's OTHER content).
-				if f.Key == "pass" || f.Key == "index" || f.Key == "total" || f.Type != eventspec.FieldInt {
-					continue
-				}
-				isAttr := false
+		// perturbableField returns the first declared field eligible for
+		// this sweep's own content-perturbation fixtures: an int/float
+		// field is preferred (the original strategy every earlier event
+		// used); CHAOS-5517's OfferPool declares none (its only
+		// non-attribution, non-pass/index/total fields are subject_kind/
+		// subject_canonical_id/disposition, all strings) -- an
+		// open-vocabulary string field (no ClosedVocabulary; "stage" and
+		// "disposition" are closed and excluded) is the fallback, so this
+		// never silently no-ops into an identical-content line.
+		perturbableField := func() (eventspec.Field, bool) {
+			isAttr := func(key string) bool {
 				for _, ak := range ev.Attribution {
-					if ak == f.Key {
-						isAttr = true
+					if ak == key {
+						return true
 					}
 				}
-				if isAttr {
+				return false
+			}
+			for _, f := range ev.Fields {
+				if f.Key == "pass" || f.Key == "index" || f.Key == "total" || isAttr(f.Key) {
 					continue
 				}
-				m[f.Key] = perturbValue
-				perturbed = true
-				break
+				if f.Type == eventspec.FieldInt || f.Type == eventspec.FieldFloat {
+					return f, true
+				}
 			}
-			if !perturbed {
-				t.Fatalf("distinctContentLine: %s declares no non-attribution, non-pass int field to perturb -- fixture needs a new strategy", ev.ID)
+			for _, f := range ev.Fields {
+				if f.Key == "pass" || f.Key == "index" || f.Key == "total" || isAttr(f.Key) {
+					continue
+				}
+				if f.Type == eventspec.FieldString && len(f.ClosedVocabulary) == 0 {
+					return f, true
+				}
+			}
+			return eventspec.Field{}, false
+		}
+		distinctContentLine := func(perturbValue int) map[string]any {
+			m := deepCopyLine(t, base)
+			f, ok := perturbableField()
+			if !ok {
+				t.Fatalf("distinctContentLine: %s declares no non-attribution, non-pass field to perturb -- fixture needs a new strategy", ev.ID)
+			}
+			switch f.Type {
+			case eventspec.FieldInt:
+				m[f.Key] = perturbValue
+			case eventspec.FieldFloat:
+				m[f.Key] = float64(perturbValue) + 0.5
+			case eventspec.FieldString:
+				m[f.Key] = fmt.Sprintf("sweep_distinct_content_%d", perturbValue)
 			}
 			return m
 		}
 		// malformedLine corrupts the SAME field distinctContentLine would
 		// perturb, but with a wrong SCALAR TYPE (a string in place of a
-		// declared int) -- a validateFields-catchable defect, for the
-		// "malformed earlier line" cells (round r3 finding 2).
+		// declared int/float, a number in place of a declared string) -- a
+		// validateFields-catchable defect, for the "malformed earlier line"
+		// cells (round r3 finding 2).
 		malformedLine := func(pass any) map[string]any {
 			m := deepCopyLine(t, base)
 			if pass != nil {
 				m["pass"] = pass
 			}
-			for _, f := range ev.Fields {
-				if f.Key == "pass" || f.Key == "index" || f.Key == "total" || f.Type != eventspec.FieldInt {
-					continue
-				}
-				isAttr := false
-				for _, ak := range ev.Attribution {
-					if ak == f.Key {
-						isAttr = true
-					}
-				}
-				if isAttr {
-					continue
-				}
-				m[f.Key] = "malformed-not-an-int"
-				return m
+			f, ok := perturbableField()
+			if !ok {
+				t.Fatalf("malformedLine: %s declares no non-attribution, non-pass field to corrupt -- fixture needs a new strategy", ev.ID)
 			}
-			t.Fatalf("malformedLine: %s declares no non-attribution, non-pass int field to corrupt -- fixture needs a new strategy", ev.ID)
-			return nil
+			switch f.Type {
+			case eventspec.FieldInt, eventspec.FieldFloat:
+				m[f.Key] = "malformed-not-a-number"
+			case eventspec.FieldString:
+				m[f.Key] = 999
+			}
+			return m
 		}
 		marshalJoin := func(lines ...map[string]any) *Log {
 			parts := make([]string, len(lines))

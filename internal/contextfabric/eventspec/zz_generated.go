@@ -24,6 +24,8 @@ var ByID = map[string]Event{
 	"graphrank.corroboration_summary":  CorroborationSummary,
 	"graphrank.decision_summary":       DecisionSummary,
 	"graphrank.kind_offer_withheld":    KindOfferWithheld,
+	"graphrank.offer_pool":             OfferPool,
+	"graphrank.offer_pool_summary":     OfferPoolSummary,
 	"graphrank.ranked_cut_summary":     RankedCutSummary,
 	"graphrank.reserved_kind_admitted": ReservedKindAdmitted,
 	"graphrank.search":                 Search,
@@ -410,6 +412,120 @@ func (f KindOfferWithheldFields) SlogArgs() []any {
 		"distinct_kind_count", f.DistinctKindCount,
 		"suppressed_by_cardinality", f.SuppressedByCardinality,
 		"suppressed_by_unservable_declared_kind", f.SuppressedByUnservableDeclaredKind,
+	}
+}
+
+// OfferPoolFields is graphrank.offer_pool's generated typed construction interface
+// (CHAOS-5516): one Go field per Field OfferPool.Fields declares in spec.go.
+type OfferPoolFields struct {
+	RequestID          string
+	Pass               int
+	Index              int
+	Total              int
+	SubjectKind        string
+	SubjectCanonicalID string
+	Disposition        string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every OfferPoolFields uniformly, set ONLY by NewOfferPoolFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewOfferPoolFields is the generated constructor for OfferPoolFields -- every
+// field OfferPool.Fields declares is a required parameter.
+func NewOfferPoolFields(requestID string, pass int, index int, total int, subjectKind string, subjectCanonicalID string, disposition string) OfferPoolFields {
+	return OfferPoolFields{
+		RequestID:          requestID,
+		Pass:               pass,
+		Index:              index,
+		Total:              total,
+		SubjectKind:        subjectKind,
+		SubjectCanonicalID: subjectCanonicalID,
+		Disposition:        disposition,
+		constructed:        true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewOfferPoolFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f OfferPoolFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns OfferPool's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f OfferPoolFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"pass", f.Pass,
+		"stage", "offer_pool",
+		"index", f.Index,
+		"total", f.Total,
+		"subject_kind", contextfabric.SanitizeLogAttr(f.SubjectKind),
+		"subject_canonical_id", contextfabric.SanitizeLogAttr(f.SubjectCanonicalID),
+		"disposition", contextfabric.SanitizeLogAttr(f.Disposition),
+	}
+}
+
+// OfferPoolSummaryFields is graphrank.offer_pool_summary's generated typed construction interface
+// (CHAOS-5516): one Go field per Field OfferPoolSummary.Fields declares in spec.go.
+type OfferPoolSummaryFields struct {
+	RequestID          string
+	Pass               int
+	VectorOnlyExcluded int
+	VectorOnlyDemoted  int
+	EmptiedByExclusion bool
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every OfferPoolSummaryFields uniformly, set ONLY by NewOfferPoolSummaryFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewOfferPoolSummaryFields is the generated constructor for OfferPoolSummaryFields -- every
+// field OfferPoolSummary.Fields declares is a required parameter.
+func NewOfferPoolSummaryFields(requestID string, pass int, vectorOnlyExcluded int, vectorOnlyDemoted int, emptiedByExclusion bool) OfferPoolSummaryFields {
+	return OfferPoolSummaryFields{
+		RequestID:          requestID,
+		Pass:               pass,
+		VectorOnlyExcluded: vectorOnlyExcluded,
+		VectorOnlyDemoted:  vectorOnlyDemoted,
+		EmptiedByExclusion: emptiedByExclusion,
+		constructed:        true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewOfferPoolSummaryFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f OfferPoolSummaryFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns OfferPoolSummary's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f OfferPoolSummaryFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"pass", f.Pass,
+		"stage", "offer_pool",
+		"vector_only_excluded", f.VectorOnlyExcluded,
+		"vector_only_demoted", f.VectorOnlyDemoted,
+		"emptied_by_exclusion", f.EmptiedByExclusion,
 	}
 }
 

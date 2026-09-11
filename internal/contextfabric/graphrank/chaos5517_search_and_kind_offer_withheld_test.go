@@ -329,3 +329,63 @@ func TestCorroborationAndReservedKindAdmittedCertifyThroughTheReserveFixture(t *
 		}
 	}
 }
+
+// TestOfferPoolCertifiesBothDispositionsWithACombinedTotal reuses
+// offer_pool_test.go's own proven "both dispositions in one call" fixture
+// (one vector-only-excluded candidate, one vector-only-demoted candidate,
+// one ordinary exact-match candidate) but swaps its capture tracer
+// (offerPoolTracer) for a REAL NewSlogResolutionTracer + slog.JSONHandler,
+// driving the same exported ResolveFromMergedCandidatesWithGateAndBasis
+// entry point (pass=1) resolveOfferPoolTraced already uses. Certifies that
+// the DETAIL event's own self-carried Total (2: one demoted + one excluded)
+// agrees with OfferPoolSummary's own two separate counts for the SAME pass
+// -- the cross-event agreement chris's ruling names as the preferred
+// cross-check wherever a natural summary count exists.
+func TestOfferPoolCertifiesBothDispositionsWithACombinedTotal(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	tracer := NewSlogResolutionTracer(
+		slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	requestID := "req_offer_pool_identity_0000000000"
+	resolveOfferPoolTraced(tracer,
+		vectorOfferCandidate("team_vector_only", 0.5, contextfabric.ResolutionProposed, contextfabric.MatchVector),
+		vectorOfferCandidate("team_receipt_named", 1, contextfabric.ResolutionCommitted, contextfabric.MatchVector),
+		vectorOfferCandidate("team_exact", 1, contextfabric.ResolutionProposed, contextfabric.MatchExact),
+	)
+
+	log, err := certify.Parse(buf.Bytes())
+	if err != nil {
+		t.Fatalf("certify.Parse() on real production output error = %v", err)
+	}
+
+	if _, err := certify.Certify(log, certify.Assertion{
+		Event: eventspec.OfferPoolSummary,
+		Want:  map[string]any{"request_id": requestID, "pass": 1, "vector_only_excluded": 1, "vector_only_demoted": 1},
+	}); err != nil {
+		t.Fatalf("Certify(OfferPoolSummary) error = %v", err)
+	}
+
+	count, err := certify.CertifyBoundedManyCount(log, eventspec.OfferPool, map[string]any{"request_id": requestID, "pass": 1})
+	if err != nil {
+		t.Fatalf("CertifyBoundedManyCount(OfferPool) error = %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("CertifyBoundedManyCount(OfferPool) = %d, want 2 (the summary's own 1 excluded + 1 demoted)", count)
+	}
+
+	seenDispositions := map[string]bool{}
+	for i := 1; i <= count; i++ {
+		result, err := certify.Certify(log, certify.Assertion{
+			Event: eventspec.OfferPool,
+			Want:  map[string]any{"request_id": requestID, "pass": 1, "index": i, "total": 2},
+		})
+		if err != nil {
+			t.Fatalf("Certify(OfferPool, index=%d) error = %v", i, err)
+		}
+		disposition, _ := result.Line["disposition"].(string)
+		seenDispositions[disposition] = true
+	}
+	if !seenDispositions["vector_only_demoted"] || !seenDispositions["vector_only_excluded"] {
+		t.Fatalf("certified dispositions = %v, want both vector_only_demoted and vector_only_excluded present", seenDispositions)
+	}
+}

@@ -466,16 +466,24 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 	// would over-report. Each candidate lands in exactly one bucket, so the
 	// pair sums to the population, which is the identity the tests assert.
 	demotedKeys := make(map[string]bool)
+	// offerPoolDemotedForTrace (CHAOS-5517): buffered rather than traced
+	// immediately -- the offer_pool DETAIL event's own bounded-many Total
+	// spans BOTH this loop's demoted candidates AND the phase-4 exclusion
+	// loop's own excluded candidates (same Stage/Msg, distinguished only by
+	// "disposition"), and the exclusion loop runs much later in this same
+	// function, after `ordered` exists. Emitting here with a per-loop-only
+	// total would under-report; buffering and emitting both loops' lines
+	// together (at the exclusion loop, once the combined total is known)
+	// keeps Total honest without a second, incompatible event declaration
+	// under the same wire Msg.
+	var offerPoolDemotedForTrace []contextfabric.SubjectRef
 	for _, candidate := range candidatesBySubject {
 		if candidate.State == contextfabric.ResolutionCommitted && isVectorOnlyCandidate(candidate.MatchMechanisms) {
 			candidate.State = contextfabric.ResolutionProposed
 			offerPoolVectorOnlyDemoted++
 			demotedKeys[SubjectKey(candidate.Subject)] = true
 			if tracer != nil {
-				tracer.Trace(ResolutionTraceEvent{
-					RequestID: requestID, Stage: "offer_pool", Subject: candidate.Subject,
-					OfferPoolDisposition: "vector_only_demoted",
-				})
+				offerPoolDemotedForTrace = append(offerPoolDemotedForTrace, candidate.Subject)
 			}
 		}
 		candidates = append(candidates, candidate)
@@ -589,6 +597,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 			// test, which read zero summaries here.
 			tracer.Trace(ResolutionTraceEvent{
 				RequestID: requestID, Stage: "offer_pool", OfferPoolSummary: true,
+				Pass:                        pass,
 				OfferPoolVectorOnlyExcluded: 0, OfferPoolVectorOnlyDemoted: 0,
 				OfferPoolEmptiedByExclusion: false,
 			})
@@ -1579,6 +1588,30 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 	// embeddings-off run reaches.
 	offered := make([]contextfabric.SubjectCandidate, 0, len(ordered))
 	offerPoolVectorOnlyExcluded := 0
+	// CHAOS-5517: pre-count the excluded set BEFORE emitting anything, so
+	// the offer_pool DETAIL event's own Total (demoted + excluded, the
+	// SAME two counts OfferPoolSummary reports below) is known before the
+	// first line is traced -- never a second, independently-derived total
+	// that could drift from what actually gets traced.
+	var offerPoolDetailTotal int
+	offerPoolDetailIndex := 0
+	if tracer != nil {
+		excludedPrecount := 0
+		for _, candidate := range ordered {
+			if isVectorOnlyCandidate(candidate.MatchMechanisms) && !demotedKeys[SubjectKey(candidate.Subject)] {
+				excludedPrecount++
+			}
+		}
+		offerPoolDetailTotal = len(offerPoolDemotedForTrace) + excludedPrecount
+		for _, subject := range offerPoolDemotedForTrace {
+			offerPoolDetailIndex++
+			tracer.Trace(ResolutionTraceEvent{
+				RequestID: requestID, Stage: "offer_pool", Subject: subject,
+				Pass: pass, OfferPoolDisposition: "vector_only_demoted",
+				Index: offerPoolDetailIndex, Total: offerPoolDetailTotal,
+			})
+		}
+	}
 	for _, candidate := range ordered {
 		if isVectorOnlyCandidate(candidate.MatchMechanisms) {
 			// A demoted arrival is withheld from the offer for the same
@@ -1588,9 +1621,11 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 			if !demotedKeys[SubjectKey(candidate.Subject)] {
 				offerPoolVectorOnlyExcluded++
 				if tracer != nil {
+					offerPoolDetailIndex++
 					tracer.Trace(ResolutionTraceEvent{
 						RequestID: requestID, Stage: "offer_pool", Subject: candidate.Subject,
-						OfferPoolDisposition: "vector_only_excluded",
+						Pass: pass, OfferPoolDisposition: "vector_only_excluded",
+						Index: offerPoolDetailIndex, Total: offerPoolDetailTotal,
 					})
 				}
 			}
@@ -1651,6 +1686,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		// and this is what the folded Info line reads.
 		tracer.Trace(ResolutionTraceEvent{
 			RequestID: requestID, Stage: "offer_pool", OfferPoolSummary: true,
+			Pass:                        pass,
 			OfferPoolVectorOnlyExcluded: offerPoolVectorOnlyExcluded,
 			OfferPoolVectorOnlyDemoted:  offerPoolVectorOnlyDemoted,
 			OfferPoolEmptiedByExclusion: offerPoolEmptiedByExclusion,

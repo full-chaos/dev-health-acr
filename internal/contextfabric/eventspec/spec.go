@@ -541,10 +541,62 @@ var ReservedKindAdmitted = Event{
 	},
 }
 
+// OfferPool is the Debug per-candidate line (graphrank/tracer.go, case
+// "offer_pool", event.OfferPoolSummary==false) emitted for every vector-only
+// candidate the phase-4 offer-pool seam acts on -- EITHER demoted (still
+// competes for the commit decision, never offered) or excluded (withheld
+// from the offer entirely) -- distinguished by the "disposition" field, the
+// SAME wire Msg either way. CHAOS-5517's fourth MultiplicityBoundedManyPerPass
+// event: bounded by the combined demoted+excluded count for this pass, the
+// SAME two counts OfferPoolSummary reports below (its own resolution.go
+// producer computes the combined Total BEFORE emitting the first line, so
+// it is never a second, independently-derived number).
+var OfferPool = Event{
+	ID:                 "graphrank.offer_pool",
+	Msg:                "context fabric resolution trace: offer pool",
+	Level:              LevelDebug,
+	Multiplicity:       MultiplicityBoundedManyPerPass,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "bounded by this pass's own combined vector_only_demoted + vector_only_excluded count -- Total on every line is that sum, matching OfferPoolSummary's own two fields for the SAME pass.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "pass", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"offer_pool"}},
+		{Key: "index", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_canonical_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "disposition", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"vector_only_demoted", "vector_only_excluded"}},
+	},
+}
+
+// OfferPoolSummary is the once-per-pass Info line (graphrank/tracer.go, case
+// "offer_pool", event.OfferPoolSummary==true) folding the phase-4 offer-pool
+// seam's own pass into one bounded aggregate -- emitted unconditionally,
+// including on the early-return "the graph held nothing" path (explicit
+// zeros, distinguishable from a build where this seam never ran). Now
+// pass-keyed (CHAOS-5517) the same way CorroborationSummary already is.
+var OfferPoolSummary = Event{
+	ID:                 "graphrank.offer_pool_summary",
+	Msg:                "context fabric resolution trace: offer pool summary",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityExactlyOnePerPass,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "exactly one line per pass, emitted unconditionally (including explicit zeros on the early-return empty-graph path) -- the per-candidate detail this summary aggregates stays at Debug (OfferPool above).",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "pass", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"offer_pool"}},
+		{Key: "vector_only_excluded", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "vector_only_demoted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "emptied_by_exclusion", Type: FieldBool, Presence: PresenceRequired},
+	},
+}
+
 // All is every event this specification declares. Generate() and the
 // certification runner both range over exactly this slice -- neither
 // maintains a second list.
 var All = []Event{
 	RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld,
-	Corroboration, CorroborationSummary, ReservedKindAdmitted,
+	Corroboration, CorroborationSummary, ReservedKindAdmitted, OfferPool, OfferPoolSummary,
 }

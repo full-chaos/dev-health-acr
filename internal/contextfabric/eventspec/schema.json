@@ -375,6 +375,110 @@
     ]
   },
   {
+    "id": "graphrank.offer_pool",
+    "msg": "context fabric resolution trace: offer pool",
+    "level": "debug",
+    "multiplicity": "bounded_many_per_pass",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "bounded by this pass's own combined vector_only_demoted + vector_only_excluded count -- Total on every line is that sum, matching OfferPoolSummary's own two fields for the SAME pass.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "pass",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "offer_pool"
+        ]
+      },
+      {
+        "key": "index",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_canonical_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "disposition",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "vector_only_demoted",
+          "vector_only_excluded"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "graphrank.offer_pool_summary",
+    "msg": "context fabric resolution trace: offer pool summary",
+    "level": "info",
+    "multiplicity": "exactly_one_per_pass",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "exactly one line per pass, emitted unconditionally (including explicit zeros on the early-return empty-graph path) -- the per-candidate detail this summary aggregates stays at Debug (OfferPool above).",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "pass",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "offer_pool"
+        ]
+      },
+      {
+        "key": "vector_only_excluded",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "vector_only_demoted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "emptied_by_exclusion",
+        "type": "bool",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "graphrank.ranked_cut_summary",
     "msg": "context fabric resolution trace: ranked cut summary",
     "level": "info",

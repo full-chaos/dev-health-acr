@@ -265,6 +265,9 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		if event.OfferPoolSummary {
 			t.logger.InfoContext(ctx, "context fabric resolution trace: offer pool summary",
 				"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+				// CHAOS-5517: pass-keyed the same way corroboration_summary
+				// now is -- see ResolutionTraceEvent.Pass's own doc comment.
+				"pass", event.Pass,
 				"vector_only_excluded", event.OfferPoolVectorOnlyExcluded,
 				"vector_only_demoted", event.OfferPoolVectorOnlyDemoted,
 				"emptied_by_exclusion", event.OfferPoolEmptiedByExclusion)
@@ -272,6 +275,12 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		}
 		t.logger.DebugContext(ctx, "context fabric resolution trace: offer pool",
 			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+			"pass", event.Pass,
+			// CHAOS-5517: the self-carried bounded-many identity, spanning
+			// BOTH dispositions this stage carries (vector_only_demoted AND
+			// vector_only_excluded) -- see ResolutionTraceEvent.Index's own
+			// doc comment.
+			"index", event.Index, "total", event.Total,
 			"subject_kind", contextfabric.SanitizeLogAttr(string(event.Subject.Kind)), "subject_canonical_id", contextfabric.SanitizeLogAttr(event.Subject.CanonicalID),
 			"disposition", contextfabric.SanitizeLogAttr(event.OfferPoolDisposition))
 	case "kind_coverage_floor":
