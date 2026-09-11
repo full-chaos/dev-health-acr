@@ -14,10 +14,16 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/xeipuuv/gojsonschema"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/answerprojection"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -862,5 +868,192 @@ func TestContinuationRefusal_TheProjectionKeepsBothHalvesAtTheCap(t *testing.T) 
 				t.Logf("projected limitations=%d omitted=%d basis=%q", len(projection.Limitations), projection.ProjectionBudget.LimitationsOmitted, projection.Completeness.RefusalBasis)
 			}
 		})
+	}
+}
+
+// TestWindowContinuation_EveryRequestFieldIsDecidedByName enumerates the
+// request's fields FROM THE TYPE and holds each to one executed decision
+// against D-a's transition ("identical question bytes, one valid window
+// receipt, no change to other semantic request inputs or addition of a
+// subject, kind, anchor, handle or candidate selection"):
+//
+//   - key:          the transition's own inputs;
+//   - disqualifier: stating it beside the receipt means this is NOT a
+//     window-only continuation (never applied, never refused as one);
+//   - exempt:       not a semantic reading input -- executed: the continuation
+//     still applies with it changed.
+//
+// A request field added without a decision here fails, so a new way to change
+// the reading cannot ride a window receipt unnoticed.
+func TestWindowContinuation_EveryRequestFieldIsDecidedByName(t *testing.T) {
+	t.Parallel()
+	base := validInvestigationRequest().Question
+	type decided struct {
+		kind   string // key | disqualifier | exempt
+		reason string
+		mutate func(*InvestigationRequest)
+	}
+	receipt := BoundSubjectReceipt{ResultID: continuationOlderID, ReceiptID: "rcpt_other_00000001"}
+	decisions := map[string]decided{
+		"question": {"key", "identity rule: a byte-different question is not a continuation", func(r *InvestigationRequest) { r.Question = driftQuestion }},
+		"prior_window_receipts": {"key", "exactly one receipt: two are never window-only", func(r *InvestigationRequest) {
+			r.PriorWindowReceipts = append(r.PriorWindowReceipts, BoundSubjectReceipt{ResultID: continuationOlderID, ReceiptID: continuationReceiptID})
+		}},
+		"prior_subject_receipts": {"disqualifier", "a subject selection", func(r *InvestigationRequest) { r.PriorSubjectReceipts = []BoundSubjectReceipt{receipt} }},
+		"prior_kind_receipts": {"disqualifier", "a kind selection", func(r *InvestigationRequest) {
+			r.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: continuationOlderID, ReceiptID: "kindr_other_0000001"}}
+		}},
+		"prior_anchor_receipts": {"disqualifier", "an anchor selection", func(r *InvestigationRequest) {
+			r.PriorAnchorReceipts = []BoundSubjectReceipt{{ResultID: continuationOlderID, ReceiptID: "ancr_other_00000001"}}
+		}},
+		"prior_handle_receipts": {"disqualifier", "a handle selection", func(r *InvestigationRequest) {
+			r.PriorHandleReceipts = []BoundSubjectReceipt{{ResultID: continuationOlderID, ReceiptID: "handr_other_0000001"}}
+		}},
+		"prior_candidate_receipts": {"disqualifier", "a candidate selection", func(r *InvestigationRequest) {
+			r.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: continuationOlderID, ReceiptID: "candr_other_0000001"}}
+		}},
+		"parent_result_id": {"disqualifier", "a second prior-result reference", func(r *InvestigationRequest) { r.ParentResultID = continuationOlderID }},
+		"expected_kinds": {"disqualifier", "a stated kind", func(r *InvestigationRequest) {
+			r.ExpectedKinds = []SubjectKind{contractsv1.ContextFabricSubjectProject}
+		}},
+		"subject_handles": {"disqualifier", "a stated handle", func(r *InvestigationRequest) {
+			r.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: SubjectPullRequest, PatternID: "pull_request_number", Value: "532"}}
+		}},
+		"requested_scope.repository_slugs": {"disqualifier", "a stated repository scope", func(r *InvestigationRequest) { r.RequestedScope.RepositorySlugs = []string{"widget-service"} }},
+		"requested_scope.project_ids":      {"disqualifier", "a stated project scope", func(r *InvestigationRequest) { r.RequestedScope.ProjectIDs = []string{"project_ask_dev"} }},
+		"requested_scope.team_ids":         {"disqualifier", "a stated team scope", func(r *InvestigationRequest) { r.RequestedScope.TeamIDs = []string{"team_platform"} }},
+		"requested_scope.subject_hints": {"disqualifier", "a stated subject hint", func(r *InvestigationRequest) {
+			r.RequestedScope.SubjectHints = []contractsv1.ContextFabricSubjectHint{{Kind: contractsv1.ContextFabricSubjectTeam, Label: "platform", Source: "caller"}}
+		}},
+		"time_context": {"disqualifier", "a non-current axis beside a window receipt is the window veto", func(r *InvestigationRequest) {
+			r.TimeContext = TimeContext{Axis: TemporalValidTime, AsOf: timePtr(time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC))}
+		}},
+		"schema_version": {"exempt", "the request contract's major, validated before the engine; not a reading input", nil},
+		"request_id":     {"exempt", "correlation metadata (D-a: not semantic input)", func(r *InvestigationRequest) { r.RequestID = "request_87654321" }},
+		"options": {"exempt", "output budgets, clarification allowance and debug: how much is served, not which reading", func(r *InvestigationRequest) {
+			r.Options.MaxDrivers, r.Options.IncludeDebug = 3, true
+		}},
+		"consumer": {"exempt", "the caller's identity: who asks, not what is asked", func(r *InvestigationRequest) {
+			r.Consumer = ConsumerInfo{Name: "test", Version: "1.0.0", Surface: "mcp"}
+		}},
+		"conversation": {"exempt", "a window-only continuation's conversation is the referenced turn's own exchange; a user change to what is asked arrives as different question bytes, which the identity rule refuses", func(r *InvestigationRequest) {
+			r.Conversation = []contractsv1.ContextFabricConversationTurn{{TurnID: "turn_0001", Role: contractsv1.ContextFabricConversationUser, Content: base, CreatedAt: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}}
+		}},
+	}
+	var names []string
+	requestType := reflect.TypeOf(InvestigationRequest{})
+	for i := 0; i < requestType.NumField(); i++ {
+		field := requestType.Field(i)
+		tag := strings.Split(field.Tag.Get("json"), ",")[0]
+		if field.Type == reflect.TypeOf(RequestedScope{}) {
+			for j := 0; j < field.Type.NumField(); j++ {
+				names = append(names, tag+"."+strings.Split(field.Type.Field(j).Tag.Get("json"), ",")[0])
+			}
+			continue
+		}
+		names = append(names, tag)
+	}
+	for _, name := range names {
+		d, ok := decisions[name]
+		if !ok {
+			t.Errorf("request field %q has no decision -- decide it: key, disqualifier or exempt", name)
+			continue
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if d.mutate == nil {
+				t.Logf("%s: %s (%s) -- not mutable at the engine: %s", name, d.kind, d.reason, "the request contract rejects any other major before Investigate")
+				return
+			}
+			request := continuationRequest(base)
+			d.mutate(&request)
+			if err := request.Validate(); err != nil {
+				t.Fatalf("fixture defect: the mutated request fails the request contract, so the cell is unreachable: %v", err)
+			}
+			prior := continuationPrior(t, continuationPriorID, base, QuestionFamilyDiscoveredCohortRanking, "")
+			older := continuationPrior(t, continuationOlderID, base, QuestionFamilyDiscoveredCohortRanking, "")
+			store := newRefusalStore(&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior, older.ResultID: older}})
+			telemetry := &recordingTelemetry{}
+			engine, _ := newRefusalEngine(t, store, forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam}, telemetry)
+			result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
+			disposition, reason := ContinuationDisposition("<no decision>"), ContinuationDecisionReason("")
+			if len(telemetry.windowContinuationDecisions) == 1 {
+				disposition, reason = telemetry.windowContinuationDecisions[0].Disposition, telemetry.windowContinuationDecisions[0].Reason
+			}
+			t.Logf("%-34s %-12s -> err=%v disposition=%s reason=%s refusal_basis=%q (%s)", name, d.kind, err != nil, disposition, reason, result.RefusalBasis, d.reason)
+			switch d.kind {
+			case "exempt":
+				if disposition != ContinuationApplied {
+					t.Errorf("an exempt field changed the decision: %s/%s -- it is a reading input after all, decide it", disposition, reason)
+				}
+			default:
+				if disposition == ContinuationApplied {
+					t.Errorf("%s %q beside the window receipt still APPLIED the continuation", d.kind, name)
+				}
+				if result.RefusalBasis == contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable {
+					t.Errorf("%s %q was refused as a window-only continuation; it is not one", d.kind, name)
+				}
+			}
+		})
+	}
+	for name := range decisions {
+		if !slices.Contains(names, name) {
+			t.Errorf("decision for %q names no request field", name)
+		}
+	}
+}
+
+// TestContinuationRefusal_TheServedRefusalValidatesAgainstEveryPublishedSchema
+// is the runtime half of the enum-site sweep: the refusal the engine actually
+// serves -- not a hand-written document -- is validated by a JSON Schema
+// validator against the canonical result schema, the answer projection schema
+// and the MCP response schema it travels in, and by the stored-result
+// validator a later read applies.
+func TestContinuationRefusal_TheServedRefusalValidatesAgainstEveryPublishedSchema(t *testing.T) {
+	t.Parallel()
+	served := servedContinuationRefusal(t)
+	if err := ValidateStoredResult(served); err != nil {
+		t.Fatalf("the stored-result validator rejects the refusal it would read back: %v", err)
+	}
+	validate := func(t *testing.T, schemaFile string, doc any) {
+		t.Helper()
+		encoded, err := json.Marshal(doc)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		root, err := filepath.Abs(filepath.Join("..", ".."))
+		if err != nil {
+			t.Fatal(err)
+		}
+		loader := gojsonschema.NewSchemaLoader()
+		common := filepath.Join(root, "contracts/jsonschema/v1/context_fabric_common.v1.schema.json")
+		if err := loader.AddSchemas(gojsonschema.NewReferenceLoader("file://" + common)); err != nil {
+			t.Fatalf("add common schema: %v", err)
+		}
+		compiled, err := loader.Compile(gojsonschema.NewReferenceLoader("file://" + filepath.Join(root, schemaFile)))
+		if err != nil {
+			t.Fatalf("compile %s: %v", schemaFile, err)
+		}
+		report, err := compiled.Validate(gojsonschema.NewBytesLoader(encoded))
+		if err != nil {
+			t.Fatalf("validate %s: %v", schemaFile, err)
+		}
+		t.Logf("%s: valid=%v (%d bytes)", schemaFile, report.Valid(), len(encoded))
+		for _, e := range report.Errors() {
+			t.Errorf("%s: %s", schemaFile, e)
+		}
+	}
+	projection := answerprojection.Project(served, answerprojection.DefaultBudget)
+	validate(t, "contracts/jsonschema/v1/context_fabric_investigation_result.v1.schema.json", served)
+	validate(t, "contracts/jsonschema/v1/context_fabric_answer_projection.v1.schema.json", projection)
+	validate(t, "internal/mcp/schemas/mcp_investigate_question_response.v1.schema.json", contractsv1.MCPInvestigateQuestionResponse{
+		SchemaVersion:    contractsv1.MCPInvestigateQuestionResponseSchema,
+		Structured:       projection,
+		FullResult:       &served,
+		RenderedMarkdown: contractsv1.MCPRenderedMarkdown{Markdown: "x", Untrusted: true},
+		UntrustedContent: contractsv1.MCPUntrustedContent{Untrusted: true, Notice: contractsv1.MCPUntrustedContentNotice, Fields: contractsv1.MCPInvestigateQuestionUntrustedFields},
+	})
+	if served.RefusalBasis != contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable {
+		t.Fatalf("fixture defect: the served document is not the continuation refusal (%q)", served.RefusalBasis)
 	}
 }

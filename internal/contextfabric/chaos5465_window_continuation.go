@@ -697,11 +697,13 @@ func (e *Engine) admitWindowContinuation(
 		return decision
 	}
 	decision.ReferencedResultID = referenced
-	// DISQUALIFIER (R2-1). An explicit expected kind or subject handle is the
-	// caller stating structure on THIS turn. It is not a receipt, so the
-	// receipt-field scan above cannot see it, and it is exactly the semantic
-	// change that makes this NOT a window-only continuation.
-	if len(request.ExpectedKinds) > 0 || len(request.SubjectHandles) > 0 {
+	// DISQUALIFIER (R2-1). A caller stating structure on THIS turn -- an
+	// expected kind, a subject handle, or any requested scope (repositories,
+	// projects, teams, subject hints) -- is not a receipt, so the receipt-field
+	// scan above cannot see it, and it is exactly the semantic change that
+	// makes this NOT a window-only continuation. Every request field is decided
+	// by name in TestWindowContinuation_EveryRequestFieldIsDecidedByName.
+	if requestStatesStructure(request) {
 		decision.Reason = ContinuationReasonExplicitStructureHint
 		return decision
 	}
@@ -1101,4 +1103,12 @@ func (e *Engine) applyAndRecordContinuation(ctx context.Context, principal stora
 		})
 	}
 	return carried
+}
+
+// requestStatesStructure reports whether the request states subject structure
+// of its own: an expected kind, a subject handle, or any requested scope.
+func requestStatesStructure(request InvestigationRequest) bool {
+	scope := request.RequestedScope
+	return len(request.ExpectedKinds) > 0 || len(request.SubjectHandles) > 0 ||
+		len(scope.RepositorySlugs) > 0 || len(scope.ProjectIDs) > 0 || len(scope.TeamIDs) > 0 || len(scope.SubjectHints) > 0
 }
