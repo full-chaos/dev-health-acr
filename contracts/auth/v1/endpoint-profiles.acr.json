@@ -13,7 +13,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 74
+        "line": 75
       },
       "classification": "public",
       "public_rationale": "Liveness probe; no principal, no org context.",
@@ -22,8 +22,8 @@
         "description": "No authenticator wrapper -- mux.HandleFunc directly.",
         "anchor": {
           "path": "internal/api/app.go",
-          "line": 74,
-          "line_end": 74
+          "line": 75,
+          "line_end": 75
         }
       },
       "token_shape": null,
@@ -46,7 +46,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 75
+        "line": 76
       },
       "classification": "public",
       "public_rationale": "Readiness probe (postgres/clickhouse/entitlement checks); no principal, no org context.",
@@ -55,8 +55,8 @@
         "description": "No authenticator wrapper -- mux.HandleFunc directly.",
         "anchor": {
           "path": "internal/api/app.go",
-          "line": 75,
-          "line_end": 75
+          "line": 76,
+          "line_end": 76
         }
       },
       "token_shape": null,
@@ -79,7 +79,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 76,
+        "line": 77,
         "router_local_path": "/api/v1/agent-context/capabilities"
       },
       "classification": "protected",
@@ -134,7 +134,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 77
+        "line": 78
       },
       "classification": "protected",
       "public_rationale": null,
@@ -190,7 +190,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 78
+        "line": 79
       },
       "classification": "protected",
       "public_rationale": null,
@@ -244,7 +244,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 79
+        "line": 80
       },
       "classification": "protected",
       "public_rationale": null,
@@ -288,7 +288,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 80
+        "line": 81
       },
       "classification": "protected",
       "public_rationale": null,
@@ -342,7 +342,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 81
+        "line": 82
       },
       "classification": "protected",
       "public_rationale": null,
@@ -398,7 +398,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 82
+        "line": 83
       },
       "classification": "protected",
       "public_rationale": null,
@@ -454,7 +454,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 83
+        "line": 84
       },
       "classification": "protected",
       "public_rationale": null,
@@ -498,7 +498,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 84
+        "line": 85
       },
       "classification": "protected",
       "public_rationale": null,
@@ -540,7 +540,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 85
+        "line": 86
       },
       "classification": "public",
       "public_rationale": "First call in the OAuth 2.0 device-authorization grant (RFC 8628); the caller has no credential yet by definition. deviceRuntimeHandler only checks runtime/authenticator presence, no principal.",
@@ -591,7 +591,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 86
+        "line": 87
       },
       "classification": "public",
       "public_rationale": "Token-issuance endpoint by definition has no principal on entry. Content-Type dispatches to one of two grants (see primary_validator) -- neither requires a pre-existing ACR credential.",
@@ -666,7 +666,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 87
+        "line": 88
       },
       "classification": "protected",
       "public_rationale": null,
@@ -718,7 +718,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 88
+        "line": 89
       },
       "classification": "protected",
       "public_rationale": null,
@@ -760,7 +760,7 @@
       "service": "dev-health-acr-api",
       "source": {
         "file": "internal/api/app.go",
-        "line": 89
+        "line": 90
       },
       "classification": "protected",
       "public_rationale": null,
