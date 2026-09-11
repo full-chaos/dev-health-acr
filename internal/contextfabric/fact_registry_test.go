@@ -314,6 +314,7 @@ func TestChaos5547_ProviderCapabilityDeclarationsAreCopiedNotAliasedAtRegistrati
 				SubjectRoles:          []FactRole{FactRoleSubject},
 				Tables:                map[SubjectKind][]FactTableShape{SubjectProject: {FactTableTimeSeries}},
 				Obligations:           map[SubjectKind][]AnswerObligation{SubjectProject: {ObligationState}},
+				ObservationKey:        map[SubjectKind][]ObservationKey{SubjectProject: {"project_status_rollup"}},
 			},
 			result: FactProviderResult{State: SourceAvailable},
 		}
@@ -380,6 +381,25 @@ func TestChaos5547_ProviderCapabilityDeclarationsAreCopiedNotAliasedAtRegistrati
 			check: func(t *testing.T, registry *FactCapabilityRegistry) {
 				if got := registry.Capabilities()[0].Obligations[SubjectProject][0]; got != ObligationState {
 					t.Fatalf("Obligations = %v after the provider mutated its own map post-registration, want the ORIGINAL state unaffected", got)
+				}
+			},
+		},
+		{
+			// Driven through ObservationKeyAssignment, the live consumer every
+			// threshold comparison reads -- the observation-key map is the same
+			// shape as Tables and Obligations and needs the same copy.
+			name: "ObservationKey",
+			mutate: func(p *factProviderStub) {
+				p.capability.ObservationKey[SubjectProject][0] = "mutated_out"
+				p.capability.ObservationKey[SubjectTeam] = []ObservationKey{"added_after_registration"}
+			},
+			check: func(t *testing.T, registry *FactCapabilityRegistry) {
+				keys := registry.ObservationKeyAssignment()[FactStatus]
+				if got := keys[SubjectProject]; len(got) != 1 || got[0] != "project_status_rollup" {
+					t.Fatalf("ObservationKey[project] = %v after the provider mutated its own map post-registration, want the ORIGINAL [project_status_rollup]", got)
+				}
+				if got, present := keys[SubjectTeam]; present {
+					t.Fatalf("ObservationKey[team] = %v appeared after registration; the registered declaration must not grow", got)
 				}
 			},
 		},

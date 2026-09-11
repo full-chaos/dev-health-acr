@@ -512,6 +512,13 @@ func NewFactCapabilityRegistry(providers []FactProvider, options FactRegistryOpt
 		capability.SubjectRoles = copyProviderSlice(capability.SubjectRoles)
 		capability.Tables = copyTableDeclarations(capability.Tables)
 		capability.Obligations = copyObligationDeclarations(capability.Obligations)
+		// The observation-key declaration is the same shape of map and has a
+		// live consumer of its own: ObservationKeyAssignment feeds every
+		// threshold comparison, and the construction bound below is checked
+		// once, here. Aliased, a provider mutating its own map after
+		// registration would change the counted observations -- and could
+		// push a subject kind past the bound that was already checked.
+		capability.ObservationKey = copyObservationKeyDeclarations(capability.ObservationKey)
 		registry.providers[capability.Kind] = registeredFactProvider{capability: capability, provider: provider}
 	}
 	// The exact-cover bound is a property of the WHOLE declaration set, so it
