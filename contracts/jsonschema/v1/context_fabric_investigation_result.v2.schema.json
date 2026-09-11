@@ -143,7 +143,6 @@
     },
     "deterministic_answer": {
       "type": "string",
-      "minLength": 1,
       "maxLength": 12000
     },
     "warnings": {
@@ -272,6 +271,46 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 4000
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "anyOf": [
+          {
+            "properties": {
+              "status": {
+                "enum": [
+                  "complete",
+                  "partial"
+                ]
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          {
+            "properties": {
+              "claimed_facts": {
+                "minItems": 1
+              },
+              "evidence_ref_ids": {
+                "minItems": 1
+              }
+            },
+            "required": [
+              "claimed_facts",
+              "evidence_ref_ids"
+            ]
+          }
+        ]
+      },
+      "then": {
+        "properties": {
+          "deterministic_answer": {
+            "minLength": 1
           }
         }
       }

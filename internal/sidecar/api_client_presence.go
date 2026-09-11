@@ -31,6 +31,23 @@ import (
 // context_packet.items[0].flags) is caught the same way a top-level one
 // is.
 func requiredFieldsPresent(data []byte, target any) error {
+	return requiredFieldsPresentIn(data, target)
+}
+
+// RequiredFieldsPresent is the same check for a client outside this package
+// that decodes a hosted API response itself (internal/panelharness). It
+// exists so every Go client of the hosted API refuses an absent or null
+// wire-required field through ONE walker, rather than each client deciding
+// for itself whether presence matters -- a client that skipped it would
+// accept a document the published schema refuses, most visibly for a
+// required string that may legitimately be empty (deterministic_answer on an
+// unsupported result, direct_judgment, current_state), because encoding/json
+// decodes an absent key, a null and "" to the same value.
+func RequiredFieldsPresent(data []byte, target any) error {
+	return requiredFieldsPresentIn(data, target)
+}
+
+func requiredFieldsPresentIn(data []byte, target any) error {
 	rv := reflect.ValueOf(target)
 	if rv.Kind() != reflect.Pointer || rv.IsNil() || rv.Elem().Kind() != reflect.Struct {
 		return nil

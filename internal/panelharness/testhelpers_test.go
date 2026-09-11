@@ -40,6 +40,9 @@ func minimalValidResult(resultID, requestID string) contractsv1.ContextFabricInv
 		Interpretation: contractsv1.ContextFabricInterpretedQuestion{
 			Shape: contractsv1.ContextFabricShapeSingleSubject, RequestedJudgment: "release_readiness",
 			TimeContext: contractsv1.ContextFabricTimeContext{Axis: contractsv1.ContextFabricTemporalCurrent},
+			// A required array: nil marshals to null, which the published schema
+			// and the client's required-field check both refuse.
+			FactRequirements: []contractsv1.ContextFabricFactRequirement{},
 		},
 		SubjectResolution:   contractsv1.ContextFabricSubjectResolution{Candidates: []contractsv1.ContextFabricSubjectCandidate{}, Committed: []contractsv1.ContextFabricSubjectRef{}},
 		DirectJudgment:      "direct-judgment-placeholder", // required whenever Status is complete/partial (ValidateStored's own "answer-capable result" rule)

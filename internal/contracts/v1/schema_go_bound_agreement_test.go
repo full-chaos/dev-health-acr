@@ -793,9 +793,22 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.WindowOption.properties.receipt_id.minLength":                               8,
 		"result#allOf.0.then.properties.direct_judgment.maxLength":                                4000,
 		"result#allOf.0.then.properties.direct_judgment.minLength":                                1,
-		"result#properties.evidence_ref_labels.additionalProperties.maxLength":                    160,
-		"result#properties.evidence_ref_labels.additionalProperties.minLength":                    1,
-		"result#properties.render_shapes.maxItems":                                                8,
+		// The terminal-form predicate (context_fabric_deterministic_answer.go):
+		// the answer sentence is required (minLength 1) when the result is
+		// complete/partial or SUPPORTED --
+		// Go reads the completeness COUNT (ClaimedFactsCount > 0) and the
+		// evidence refs; the schema reads the claimed-fact ARRAY and the evidence
+		// refs, because a JSON Schema cannot compare a number to an array's
+		// length. validateCompleteness refuses any document where the two
+		// disagree, so on every document the contract admits they are the same
+		// number -- executed both ways by
+		// TestDeterministicAnswerPredicateDomainIsEnumeratedAndExecuted.
+		"result#allOf.1.if.anyOf.1.properties.claimed_facts.minItems":          1,
+		"result#allOf.1.if.anyOf.1.properties.evidence_ref_ids.minItems":       1,
+		"result#allOf.1.then.properties.deterministic_answer.minLength":        1,
+		"result#properties.evidence_ref_labels.additionalProperties.maxLength": 160,
+		"result#properties.evidence_ref_labels.additionalProperties.minLength": 1,
+		"result#properties.render_shapes.maxItems":                             8,
 	}
 
 	discovered := schemaBounds(t, documents)

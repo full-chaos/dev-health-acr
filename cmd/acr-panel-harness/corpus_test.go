@@ -87,6 +87,9 @@ func minimalDecisiveResult(resultID, requestID string) contractsv1.ContextFabric
 		Interpretation: contractsv1.ContextFabricInterpretedQuestion{
 			Shape: contractsv1.ContextFabricShapeSingleSubject, RequestedJudgment: "release_readiness",
 			TimeContext: contractsv1.ContextFabricTimeContext{Axis: contractsv1.ContextFabricTemporalCurrent},
+			// A required array: nil marshals to null, which the published schema
+			// and the harness client's required-field check both refuse.
+			FactRequirements: []contractsv1.ContextFabricFactRequirement{},
 		},
 		SubjectResolution:   contractsv1.ContextFabricSubjectResolution{Candidates: []contractsv1.ContextFabricSubjectCandidate{}, Committed: []contractsv1.ContextFabricSubjectRef{}},
 		DirectJudgment:      "direct-judgment-placeholder",
