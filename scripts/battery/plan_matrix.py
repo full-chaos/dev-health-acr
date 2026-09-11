@@ -20,6 +20,56 @@ import sys
 # number looking exactly like the full one.
 MATRIX_CAP = 256
 
+# The _SENTINEL arm (run_arm.sh) proves the apply mechanism is inert by
+# appending `// mutation-battery sentinel: an inert comment...` to its target
+# file. A trailing `//` line is legal Go anywhere after the last top-level
+# declaration -- but it is not a comment in JSON or YAML at all, it is
+# trailing garbage that breaks every consumer's parse. Hit live: PR #501's
+# battery picked a .json mutant's own file as the sentinel target (the old
+# default, mutants[0]["file"], with no language check), and the sentinel
+# arm went HARNESS_ERROR with 119 named failures -- all of them downstream of
+# the same broken JSON parse, none a real finding, voiding a run whose 11
+# real mutants had all correctly reported KILLED.
+#
+# internal/version/version.go is the FIXED fallback for a table with no .go
+# mutant at all: a small leaf package (build metadata only), not the subject
+# of any mutation battery in this repo, and proven safe by
+# test_plan_matrix.py's executed pin (appends the real sentinel text, runs
+# `go vet` on it, asserts rc=0).
+SENTINEL_FALLBACK_GO_FILE = "internal/version/version.go"
+
+_SENTINEL_UNSAFE_SUFFIXES = (".json", ".yaml", ".yml")
+
+
+def choose_sentinel_file(mutants, override):
+    """Pick the _SENTINEL arm's target file.
+
+    An explicit --sentinel-file override is honoured but never allowed to be
+    JSON/YAML -- an appended `//` line breaks JSON/YAML parsing outright, and
+    for a byte-identical MIRROR PIN (e.g. the internal/mcp/schemas/ copies a
+    sync check compares byte-for-byte against their canonical source) even a
+    single appended WHITESPACE line would false-kill the sync check, which is
+    exactly the false-positive class this arm exists to rule out.
+
+    With no override: the first .go file named by any mutant in the table (so
+    the sentinel exercises the SAME package family a Go-targeting battery is
+    actually touching), or SENTINEL_FALLBACK_GO_FILE when the table has no .go
+    mutant at all (e.g. a schema-only table like #501's).
+    """
+    if override:
+        if override.endswith(_SENTINEL_UNSAFE_SUFFIXES):
+            raise ValueError(
+                "--sentinel-file %r is JSON/YAML -- an appended // line is not an "
+                "inert edit for a non-Go file (it breaks parsing outright, or for a "
+                "byte-identical mirror pin, false-kills on a whitespace-only change)"
+                % override
+            )
+        return override
+    go_mutant_files = [m["file"] for m in mutants if m["file"].endswith(".go")]
+    if go_mutant_files:
+        return go_mutant_files[0]
+    return SENTINEL_FALLBACK_GO_FILE
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
@@ -71,7 +121,12 @@ def main():
         )
         return 2
 
-    sentinel_file = args.sentinel_file or mutants[0]["file"]
+    try:
+        sentinel_file = choose_sentinel_file(mutants, args.sentinel_file)
+    except ValueError as exc:
+        print("REFUSING: %s" % exc, file=sys.stderr)
+        return 2
+
     print(json.dumps({"include": entries}))
     print("arm_count=%d" % len(chosen), file=sys.stderr)
     print("table_arm_count=%d" % len(mutants), file=sys.stderr)
