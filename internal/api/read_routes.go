@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -147,6 +148,6 @@ func (a *App) writeReadDependencyError(w http.ResponseWriter, r *http.Request, e
 		writeError(w, r, http.StatusGatewayTimeout, "upstream_unavailable", "The read operation timed out", true, nil)
 		return
 	}
-	a.logger.ErrorContext(r.Context(), "hosted read dependency failed", "request_id", RequestID(r.Context()), "failure_class", failureClass)
+	a.logger.ErrorContext(r.Context(), "hosted read dependency failed", "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", failureClass)
 	writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "The read operation is temporarily unavailable", true, nil)
 }

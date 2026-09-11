@@ -15,6 +15,7 @@ import (
 	"unicode"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
@@ -131,7 +132,7 @@ func (a *App) handleReady(w http.ResponseWriter, r *http.Request) {
 			response.Status = "not_ready"
 			status = http.StatusServiceUnavailable
 			a.logger.WarnContext(r.Context(), "readiness check failed",
-				"request_id", RequestID(r.Context()),
+				"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
 				"failure_class", "readiness_check",
 			)
 		}
@@ -213,7 +214,7 @@ func (a *App) recoveryMiddleware(next http.Handler) http.Handler {
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				a.logger.ErrorContext(r.Context(), "request panic recovered",
-					"request_id", RequestID(r.Context()),
+					"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
 					"status", http.StatusInternalServerError,
 				)
 				writeError(w, r, http.StatusInternalServerError, "internal_error", "Internal server error", false, nil)
@@ -237,7 +238,7 @@ func (a *App) accessLogMiddleware(next http.Handler) http.Handler {
 		// in this log line and in the observability snapshot, without
 		// changing what `status` itself reports.
 		fields := []any{
-			"request_id", RequestID(r.Context()),
+			"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
 			"operation", requestOperation(r),
 			"status", wrapped.status,
 			"bytes", wrapped.bytes,

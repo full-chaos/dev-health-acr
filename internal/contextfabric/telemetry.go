@@ -1085,7 +1085,7 @@ func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal 
 		"attribution_multi_group", event.Attribution.MultiGroup,
 		"measured_bytes", event.MeasuredBytes,
 		"max_items", event.MaxItems,
-		"max_serialized_bytes", event.MaxSerializedBytes,
+		"max_serialized_bytes", SanitizeLogInt(event.MaxSerializedBytes),
 		"retry_attempted", event.RetryAttempted,
 		"retry_fit", event.RetryFit,
 		"retry_failed", event.RetryFailed,
@@ -1309,7 +1309,7 @@ func (t SlogEngineTelemetry) RecordBudgetAssertion(ctx context.Context, principa
 		"measured_items", event.MeasuredItems,
 		"measured_bytes_post_label", event.MeasuredBytesPostLabel,
 		"max_items", event.MaxItems,
-		"max_serialized_bytes", event.MaxSerializedBytes,
+		"max_serialized_bytes", SanitizeLogInt(event.MaxSerializedBytes),
 		// The FINISHED document's own account and the ledger-backed
 		// capacity verdict. `fits` and `certified_fit` are both here on
 		// purpose: an unbounded answer fits and is not certified, and a

@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
 
 // readinessState values shared by every transition cell (aggregate and
@@ -76,7 +78,16 @@ func NewReadinessTransitionLogger() *ReadinessTransitionLogger {
 // RequestID(ctx), acr-projector has no request-ID middleware at all -- so
 // this stays a plain string parameter rather than assuming one context key
 // shape).
+//
+// CHAOS-5558: requestID is sanitized ONCE here, the single choke point both
+// InfoContext calls below share, rather than at each caller -- acr-api's
+// RequestID(ctx) is app.go's own request-ID middleware output (already
+// control-character-checked there, but CodeQL's go/log-injection query does
+// not recognize that hand-rolled check as a barrier, the same reason
+// CHAOS-5544 exists at all) and acr-projector's caller, whatever it turns
+// out to be, gets the same guarantee for free.
 func (t *ReadinessTransitionLogger) Observe(ctx context.Context, logger *slog.Logger, requestID string, aggregateStatus string, checks []ReadinessCheckObservation) {
+	requestID = contextfabric.SanitizeLogAttr(requestID)
 	for _, check := range checks {
 		cellAny, _ := t.perCheck.LoadOrStore(check.Name, new(atomic.Int32))
 		cell := cellAny.(*atomic.Int32)

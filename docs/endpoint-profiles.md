@@ -16,7 +16,7 @@ ship").
 
 ## Coverage
 
-16 route registrations in `internal/api/app.go` (lines 74-89), matching the
+16 route registrations in `internal/api/app.go` (lines 75-90), matching the
 orchestrator's estimate exactly. Two are unauthenticated probes
 (`/healthz`, `/readyz`); two are unauthenticated-by-design OAuth entry
 points (`device_authorization`, `token`); the remaining 12 are behind
@@ -28,7 +28,7 @@ points (`device_authorization`, `token`); the remaining 12 are behind
 Unlike ops (separate `OrgIdMiddleware`/`ImpersonationMiddleware` layers
 that can each independently observe a credential) and web (`proxy.ts`
 running ahead of route.ts's own check), acr's `Authenticator.MiddlewareFor`
-(`internal/auth/middleware.go:92-159`) is **one function that dispatches on
+(`internal/auth/middleware.go:93-160`) is **one function that dispatches on
 header presence**, not a chain multiple validators can each partially see:
 
 1. `len(r.Header.Values(WebAssertionHeader)) > 0` → `authenticateWebAssertion`,
@@ -59,7 +59,7 @@ github.com/full-chaos/dev-health-go/authverify, a fourth repo outside this
 lane's assigned read set."* CHAOS-3273's scope was widened by ruling to
 include `dev-health-go`, READ-ONLY. This section closes that gap.
 
-**Endpoint:** `POST /api/v1/oauth/token` (`internal/api/app.go:86`) —
+**Endpoint:** `POST /api/v1/oauth/token` (`internal/api/app.go:87`) —
 `handleDeviceToken` (`internal/api/device_routes.go:69-79`) dispatches on
 `Content-Type: application/x-www-form-urlencoded` to
 `handleTokenExchange` (`internal/api/token_exchange_routes.go:27-81`), the

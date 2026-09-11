@@ -147,7 +147,7 @@ func (a *App) ContextFabricOrgModelConfigPutHandler(store contextfabric.OrgModel
 			// left un-invalidated for this organization, but the request
 			// still reports its own success to the caller.
 			if err := invalidator.InvalidateOrganizationReuse(r.Context(), principal.OrgID); err != nil {
-				a.logger.ErrorContext(r.Context(), "context fabric answer reuse invalidation failed after model config write", "request_id", RequestID(r.Context()), "failure_class", "context_fabric_reuse_invalidation")
+				a.logger.ErrorContext(r.Context(), "context fabric answer reuse invalidation failed after model config write", "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "context_fabric_reuse_invalidation")
 			}
 		}
 		encoded, err := encodeBounded(config, int64(a.config.MaxSerializedBytes))
@@ -208,7 +208,7 @@ func (a *App) ContextFabricOrgModelConfigDeleteHandler(store contextfabric.OrgMo
 			// See the matching comment in ContextFabricOrgModelConfigPutHandler:
 			// a failed invalidation must not be treated as a failed delete.
 			if err := invalidator.InvalidateOrganizationReuse(r.Context(), principal.OrgID); err != nil {
-				a.logger.ErrorContext(r.Context(), "context fabric answer reuse invalidation failed after model config delete", "request_id", RequestID(r.Context()), "failure_class", "context_fabric_reuse_invalidation")
+				a.logger.ErrorContext(r.Context(), "context fabric answer reuse invalidation failed after model config delete", "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "context_fabric_reuse_invalidation")
 			}
 		}
 		a.recordReadAudit(r.Context(), principal, "context_fabric_org_model_config_deleted", "context_fabric_org_model_config", principal.OrgID, "success", nil)
@@ -234,6 +234,6 @@ func (a *App) writeContextFabricOrgModelConfigError(w http.ResponseWriter, r *ht
 		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Context Fabric model configuration storage is temporarily unavailable", true, nil)
 		return
 	}
-	a.logger.ErrorContext(r.Context(), "context fabric model configuration request failed", "request_id", RequestID(r.Context()), "failure_class", "context_fabric_org_model_config")
+	a.logger.ErrorContext(r.Context(), "context fabric model configuration request failed", "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "context_fabric_org_model_config")
 	writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric model configuration request failed", false, nil)
 }

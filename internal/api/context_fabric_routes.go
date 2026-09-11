@@ -487,7 +487,7 @@ func (a *App) logContextFabricFailure(r *http.Request, err error, classification
 		level = slog.LevelError
 	}
 	fields := []any{
-		"request_id", RequestID(r.Context()),
+		"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
 		"failure_class", contextFabricInvestigationFailureName,
 		"failure_stage", string(stage),
 		"failure_classification", classification,
@@ -835,7 +835,7 @@ func contextFabricResponseBudgetFields(maxItems int, measuredBytes, maximumBytes
 // caller-visible half of this same disclosure.
 func (a *App) logContextFabricResponseBudgetExceeded(r *http.Request, reason string, measuredBytes, maximumBytes, estimatedTokens int64, counts contextFabricItemCounts) {
 	fields := append([]any{
-		"request_id", RequestID(r.Context()), "failure_class", "context_fabric_response_budget", "reason", reason,
+		"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "context_fabric_response_budget", "reason", reason,
 	}, contextFabricResponseBudgetFields(a.config.MaxItems, measuredBytes, maximumBytes, estimatedTokens, counts)...)
 	a.logger.WarnContext(r.Context(), "context fabric response exceeded service limits", fields...)
 }
@@ -851,7 +851,7 @@ func (a *App) logContextFabricResponseBudgetExceeded(r *http.Request, reason str
 // successful run. The exceed-path WARN above is unchanged in name, level and
 // field set, so existing consumers of it are unaffected.
 func (a *App) logContextFabricResponseBudgetMeasured(r *http.Request, measuredBytes, maximumBytes, estimatedTokens int64, counts contextFabricItemCounts) {
-	fields := append([]any{"request_id", RequestID(r.Context())},
+	fields := append([]any{"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context()))},
 		contextFabricResponseBudgetFields(a.config.MaxItems, measuredBytes, maximumBytes, estimatedTokens, counts)...)
 	a.logger.InfoContext(r.Context(), "context fabric response measured", fields...)
 }

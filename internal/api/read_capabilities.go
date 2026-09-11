@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
 
 func (a *App) handleCapabilities(w http.ResponseWriter, r *http.Request) {
@@ -18,7 +19,7 @@ func (a *App) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	providerRequest.Body = nil
 	capabilities, err := a.capabilities.Capabilities(r.Context(), providerRequest)
 	if err != nil {
-		a.logger.ErrorContext(r.Context(), "capabilities resolution failed", "request_id", RequestID(r.Context()), "failure_class", "capabilities_provider")
+		a.logger.ErrorContext(r.Context(), "capabilities resolution failed", "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "capabilities_provider")
 		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Capabilities are temporarily unavailable", true, nil)
 		return
 	}
