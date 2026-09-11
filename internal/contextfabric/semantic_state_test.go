@@ -898,3 +898,25 @@ func TestSemanticState_AnOversizedCaptureNamesItsBoundOnTheLine(t *testing.T) {
 		}
 	})
 }
+
+// TestSemanticState_TheScopeAnchorTermIsBoundedLikeEveryTerm: the anchor term
+// is a retrieval term stored beside the frame, bounded at the same per-term
+// limit and reported under the same bound.
+func TestSemanticState_TheScopeAnchorTermIsBoundedLikeEveryTerm(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		bytes  int
+		accept bool
+	}{{SemanticStateMaxTermBytes - 1, true}, {SemanticStateMaxTermBytes, true}, {SemanticStateMaxTermBytes + 1, false}} {
+		state := sizedSemanticState(t, 4000)
+		state.ScopeAnchor = SemanticScopeAnchor{Kind: SubjectTeam, Term: strings.Repeat("a", tc.bytes)}
+		_, err := EncodeSemanticState(state)
+		t.Logf("scope_anchor.term %d bytes -> err=%v bound=%q", tc.bytes, err, breachedSemanticStateBound(err))
+		if tc.accept != (err == nil) {
+			t.Errorf("scope_anchor.term %d bytes accepted=%v, want %v", tc.bytes, err == nil, tc.accept)
+		}
+		if !tc.accept && breachedSemanticStateBound(err) != SemanticStateBoundTermBytes {
+			t.Errorf("scope_anchor.term %d bytes bound=%q, want %q", tc.bytes, breachedSemanticStateBound(err), SemanticStateBoundTermBytes)
+		}
+	}
+}

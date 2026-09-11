@@ -38,6 +38,9 @@ func (g *anchorRecordingGraph) DiscoverContext(ctx context.Context, p storage.Pr
 type scopedAnchorInterpreter struct {
 	anchorKind SubjectKind
 	anchorTerm string
+	// noWinner models a fresh consensus that found no winning sample: the
+	// index is -1 and the winning sample is its zero value.
+	noWinner bool
 }
 
 func scopedAnchorFrame(t testing.TB) QuestionFrame {
@@ -57,6 +60,12 @@ func scopedAnchorFrame(t testing.TB) QuestionFrame {
 }
 
 func (f scopedAnchorInterpreter) outcome(frame QuestionFrame) QuestionFamilyOutcome {
+	if f.noWinner {
+		return QuestionFamilyOutcome{
+			Family: QuestionFamilyScopedCohortStatus, Source: QuestionFamilySourceModel, Frame: &frame,
+			Gate: FrameGate{Outcome: FrameGatePassed}, WinningSampleIndex: -1, Version: QuestionFamilyTableVersion,
+		}
+	}
 	return QuestionFamilyOutcome{
 		Family: QuestionFamilyScopedCohortStatus, Source: QuestionFamilySourceModel, Frame: &frame,
 		Gate:               FrameGate{Outcome: FrameGatePassed},
@@ -108,6 +117,10 @@ func TestSemanticStateContinuation_TheScopeAnchorMovesWithTheCarriedFrame(t *tes
 		{"the fresh sample names the same anchor", scopedAnchorInterpreter{anchorKind: SubjectTeam, anchorTerm: "the platform team"}, true},
 		{"the fresh sample names another anchor kind", scopedAnchorInterpreter{anchorKind: SubjectProject, anchorTerm: "the platform team"}, false},
 		{"the fresh sample names no anchor at all", scopedAnchorInterpreter{}, false},
+		// The carried anchor's PRESENCE must survive a fresh consensus with no
+		// winner: discovery reads it off the carried reading, not off an index
+		// this turn never produced.
+		{"the fresh consensus found no winning sample", scopedAnchorInterpreter{noWinner: true}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -157,7 +170,9 @@ func TestSemanticStateContinuation_TheScopeAnchorMovesWithTheCarriedFrame(t *tes
 			if graph.resolveCalls == 0 || graph.anchorKind != SubjectTeam {
 				t.Errorf("subject resolution ran under anchor kind %q (calls=%d), want the CARRIED %q", graph.anchorKind, graph.resolveCalls, SubjectTeam)
 			}
-			if graph.anchorResolved != nil && !*graph.anchorResolved {
+			if graph.anchorResolved == nil {
+				t.Errorf("discovery was never called, so the carried anchor's presence was never observed")
+			} else if !*graph.anchorResolved {
 				t.Errorf("discovery saw scope_anchor_resolved=false, want the carried anchor's presence")
 			}
 			if saved != carried.ScopeAnchor {
