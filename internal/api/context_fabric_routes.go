@@ -487,7 +487,7 @@ func (a *App) logContextFabricFailure(r *http.Request, err error, classification
 		level = slog.LevelError
 	}
 	fields := []any{
-		"request_id", RequestID(r.Context()),
+		"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
 		"failure_class", contextFabricInvestigationFailureName,
 		"failure_stage", string(stage),
 		"failure_classification", classification,
