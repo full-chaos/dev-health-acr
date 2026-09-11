@@ -229,9 +229,17 @@ func groupReadEngineFixtureFull(t *testing.T, telemetry EngineTelemetry, facts C
 	return groupReadEngineFixtureConfigured(t, telemetry, facts, members, denied, cohortKind, options, synthesisCalls, nil)
 }
 
+// groupReadFixtureConfig is what a configured fixture may change: the graph
+// double (for an authorizer that misbehaves) and the requirement deriver (for
+// a plan whose rows differ from the transcribed qa-grouped-clean pair).
+type groupReadFixtureConfig struct {
+	graph   *groupAuthorizingGraph
+	deriver RequirementDeriver
+}
+
 // groupReadEngineFixtureConfigured is the same fixture with a hook onto the
-// graph double, for the pins that need the authorizer itself to misbehave.
-func groupReadEngineFixtureConfigured(t *testing.T, telemetry EngineTelemetry, facts CanonicalFactReader, members []CohortMember, denied map[string]struct{}, cohortKind SubjectKind, options *EngineOptions, synthesisCalls *int, configure func(*groupAuthorizingGraph)) (*Engine, InvestigationRequest) {
+// graph double and the deriver.
+func groupReadEngineFixtureConfigured(t *testing.T, telemetry EngineTelemetry, facts CanonicalFactReader, members []CohortMember, denied map[string]struct{}, cohortKind SubjectKind, options *EngineOptions, synthesisCalls *int, configure func(*groupReadFixtureConfig)) (*Engine, InvestigationRequest) {
 	t.Helper()
 	cohort := &Cohort{
 		Kind: cohortKind, Rationale: "kind census match", Complete: true,
@@ -253,8 +261,9 @@ func groupReadEngineFixtureConfigured(t *testing.T, telemetry EngineTelemetry, f
 		},
 		denied: denied,
 	}
+	config := groupReadFixtureConfig{graph: graph, deriver: groupReadRequirementDeriver{}}
 	if configure != nil {
-		configure(graph)
+		configure(&config)
 	}
 	engine, err := NewEngine(EngineDependencies{
 		Interpreter: groupReadFramedInterpreter{interpretation: interpretation, groupKind: SubjectTeam, memberKind: SubjectProject},
@@ -268,7 +277,7 @@ func groupReadEngineFixtureConfigured(t *testing.T, telemetry EngineTelemetry, f
 		// seam under test.
 		Graph:        graph,
 		Facts:        facts,
-		Requirements: groupReadRequirementDeriver{},
+		Requirements: config.deriver,
 		Synthesizer: synthesizerFunc(func(_ context.Context, principal storage.Principal, input SynthesisInput) (InvestigationResult, error) {
 			if synthesisCalls != nil {
 				*synthesisCalls++

@@ -26,8 +26,8 @@ func TestAnAuthorizerThatCannotAnswerIssuesNoGroupRead(t *testing.T) {
 	engine, request := groupReadEngineFixtureConfigured(t, telemetry, recorder, []CohortMember{
 		{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_a", Label: "project_a"}, Rank: 1, InclusionReasons: []string{"matched"}},
 		{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_b", Label: "project_b"}, Rank: 2, InclusionReasons: []string{"matched"}},
-	}, nil, SubjectProject, nil, nil, func(graph *groupAuthorizingGraph) {
-		graph.authorizationErr = errors.New("injected: authorizer unavailable")
+	}, nil, SubjectProject, nil, nil, func(config *groupReadFixtureConfig) {
+		config.graph.authorizationErr = errors.New("injected: authorizer unavailable")
 	})
 
 	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
