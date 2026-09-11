@@ -649,11 +649,11 @@ var AnchorKindWithheld = Event{
 // KindCoverageFloor/AnchorOffer (no "pass" field: this fires once per
 // call, not once per internal pass).
 var AnchorKindWithheldSummary = Event{
-	ID:                 "graphrank.anchor_kind_withheld_summary",
-	Msg:                "context fabric resolution trace: anchor kind withheld summary",
-	Level:              LevelInfo,
-	Multiplicity:       MultiplicityExactlyOnePerRequest,
-	Attribution:        []string{"request_id"},
+	ID:           "graphrank.anchor_kind_withheld_summary",
+	Msg:          "context fabric resolution trace: anchor kind withheld summary",
+	Level:        LevelInfo,
+	Multiplicity: MultiplicityExactlyOnePerRequest,
+	Attribution:  []string{"request_id"},
 	Fields: []Field{
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"anchor_kind_withheld_summary"}},
