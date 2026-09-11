@@ -94,13 +94,41 @@ func seedChaos5405Fixture(t *testing.T, ctx context.Context, direct interface {
 	mustSeed("repo", `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
 		chaos5405LiveRepoID, orgID, chaos5405LiveRepoSlug, "github", at)
 
+	// ONE STATEMENT PER TABLE, not one per row.
+	//
+	// Every row below has a distinct sorting key for its table, so a
+	// multi-row INSERT writes exactly the rows a row-at-a-time seed did.
+	// It is the same relation, and the assertions read the same counts.
+	//
+	// What this is NOT is a smaller fixture: at repoBackedCount=200 the
+	// row-at-a-time form issued 410 statements, each of which writes its own
+	// part, and the parts are what the server then carries and merges. The
+	// re-synced duplicate below is deliberately left OUT of these batches,
+	// and its comment says why.
+	const workItemsInsert = `INSERT INTO work_items (work_item_id, repo_id, org_id, provider, title, status, url, parent_id, project_id, updated_at)`
+	var workItemRows, attributionRows [][]any
 	workItem := func(id, repoID string) {
-		mustSeed("work item "+id, `INSERT INTO work_items (work_item_id, repo_id, org_id, provider, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, repoID, orgID, chaos5405LiveProjectProvider, "issue "+id, "open", "", "", chaos5405LiveProjectID, at)
+		workItemRows = append(workItemRows, []any{id, repoID, orgID, chaos5405LiveProjectProvider, "issue " + id, "open", "", "", chaos5405LiveProjectID, at})
 	}
-	attribution := func(label, workItemID, repoID, source string) {
-		mustSeed(label, `INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, source, is_primary, confidence, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			orgID, repoID, workItemID, chaos5405LiveTeamID, source, uint8(1), "high", at)
+	attribution := func(_, workItemID, repoID, source string) {
+		attributionRows = append(attributionRows, []any{orgID, repoID, workItemID, chaos5405LiveTeamID, source, uint8(1), "high", at})
+	}
+	flush := func(label, statement string, rows [][]any) {
+		t.Helper()
+		if len(rows) == 0 {
+			return
+		}
+		placeholders := make([]string, 0, len(rows))
+		args := make([]any, 0, len(rows)*len(rows[0]))
+		for _, row := range rows {
+			marks := make([]string, len(row))
+			for i := range row {
+				marks[i] = "?"
+			}
+			placeholders = append(placeholders, "("+strings.Join(marks, ", ")+")")
+			args = append(args, row...)
+		}
+		mustSeed(label, statement+" VALUES "+strings.Join(placeholders, ", "), args...)
 	}
 
 	for i := 0; i < repoBackedCount; i++ {
@@ -117,22 +145,36 @@ func seedChaos5405Fixture(t *testing.T, ctx context.Context, direct interface {
 	// repository.
 	workItem("WI-ORPHAN", chaos5405LiveOrphanRepo)
 	attribution("orphan attribution", "WI-ORPHAN", chaos5405LiveOrphanRepo, "repo_ownership")
-	// A RE-SYNCED duplicate of WI-0: work_items is a ReplacingMergeTree, so
-	// without FINAL the census double-counts it.
-	if repoBackedCount > 0 {
-		mustSeed("work item WI-0 resync", `INSERT INTO work_items (work_item_id, repo_id, org_id, provider, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			"WI-0", chaos5405LiveRepoID, orgID, chaos5405LiveProjectProvider, "issue WI-0 (resynced)", "in_progress", "", "", chaos5405LiveProjectID, at.Add(time.Minute))
-	}
-	// A DIFFERENT project whose own id equals this project's project_key:
-	// the join key is ambiguous org-wide, so neither claim may be guessed.
-	mustSeed("decoy project", `INSERT INTO projects (id, org_id, name, project_key, provider, state, url, is_active, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		chaos5405LiveProjectKey, orgID, "Decoy", chaos5405LiveDecoyProjID, chaos5405LiveDecoyProvider, "active", "", uint8(1), at)
 	// Seeded with the DECOY's provider so the ambiguity guard, not the
 	// provider condition, is what excludes it -- otherwise this row would
 	// start being dropped for the wrong reason and the guard would stop being
 	// tested at all.
-	mustSeed("ambiguous work item", `INSERT INTO work_items (work_item_id, repo_id, org_id, provider, title, status, url, parent_id, project_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"WI-AMBIGUOUS", chaos5405LiveRepoID, orgID, chaos5405LiveDecoyProvider, "issue WI-AMBIGUOUS", "open", "", "", chaos5405LiveProjectKey, at)
+	workItemRows = append(workItemRows, []any{"WI-AMBIGUOUS", chaos5405LiveRepoID, orgID, chaos5405LiveDecoyProvider, "issue WI-AMBIGUOUS", "open", "", "", chaos5405LiveProjectKey, at})
+
+	// A RE-SYNCED duplicate of WI-0: work_items is a ReplacingMergeTree, so
+	// without FINAL the census double-counts it.
+	//
+	// IT IS FLUSHED SEPARATELY, and it must stay that way. ClickHouse applies
+	// the engine's merging algorithm to the rows of a single insert block
+	// (optimize_on_insert, on by default), so a duplicate batched WITH its
+	// original collapses as the part is written and never reaches the table
+	// as two rows. The duplicate this fixture needs is an ACROSS-PARTS one:
+	// that is the state FINAL exists to resolve, and the state the census
+	// assertions here distinguish. A second statement is what makes a second
+	// part, and TestChaos5405_TheSeedBatchesItsRowsButNotTheResyncDuplicate
+	// executes that.
+	var resyncRows [][]any
+	if repoBackedCount > 0 {
+		resyncRows = append(resyncRows, []any{"WI-0", chaos5405LiveRepoID, orgID, chaos5405LiveProjectProvider, "issue WI-0 (resynced)", "in_progress", "", "", chaos5405LiveProjectID, at.Add(time.Minute)})
+	}
+
+	flush("work items", workItemsInsert, workItemRows)
+	flush("work item team attributions", `INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, source, is_primary, confidence, computed_at)`, attributionRows)
+	flush("work item WI-0 resync", workItemsInsert, resyncRows)
+	// A DIFFERENT project whose own id equals this project's project_key:
+	// the join key is ambiguous org-wide, so neither claim may be guessed.
+	mustSeed("decoy project", `INSERT INTO projects (id, org_id, name, project_key, provider, state, url, is_active, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		chaos5405LiveProjectKey, orgID, "Decoy", chaos5405LiveDecoyProjID, chaos5405LiveDecoyProvider, "active", "", uint8(1), at)
 }
 
 // TestChaos5405_ProjectWorkItemScopeAgainstRealClickHouse is the project arm.
