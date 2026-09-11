@@ -1469,7 +1469,31 @@
         "authorized_population_count",
         "admitted_count",
         "truncated"
-      ]
+      ],
+      "if": {
+        "properties": {
+          "population_measured": {
+            "const": true
+          }
+        },
+        "required": [
+          "population_measured"
+        ]
+      },
+      "then": {
+        "properties": {
+          "authorized_population_count": {
+            "type": "integer"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "authorized_population_count": {
+            "type": "null"
+          }
+        }
+      }
     },
     "ConfirmedStructureEntry": {
       "description": "CHAOS-3900 P1: the wire-visible disposition for one carried structure member -- one entry per carried member, including vetoed ones.",
