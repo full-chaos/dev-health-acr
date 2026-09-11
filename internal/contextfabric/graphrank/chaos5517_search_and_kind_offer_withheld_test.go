@@ -1001,3 +1001,111 @@ func TestAnchorKindWithheldAndSummaryCertifyThroughTheContestFixture(t *testing.
 		}
 	})
 }
+
+// TestCorroborationSummaryFiresEvenOnAnEmptyMergedPool is the r2 class
+// ruling's own permanent pin (CHAOS-5517): CorroborationSummary's own
+// emission used to be gated behind `len(candidates) > 0`, so
+// eventspec.CorroborationSummary's declared MultiplicityExactlyOnePerPass
+// contract ("explicit zero included") silently broke on any pass whose
+// merged pool was empty -- the SAME "fires HERE too, with explicit zeros"
+// discipline resolution.go's own OfferPoolSummary right below it already
+// follows, which CorroborationSummary never got.
+func TestCorroborationSummaryFiresEvenOnAnEmptyMergedPool(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	tracer := NewSlogResolutionTracer(
+		slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	resolveWithTracer(tracer, 10, true)
+	log, err := certify.Parse(buf.Bytes())
+	if err != nil {
+		t.Fatalf("certify.Parse() on real production output error = %v", err)
+	}
+	if _, err := certify.Certify(log, certify.Assertion{
+		Event: eventspec.CorroborationSummary,
+		Want:  map[string]any{"request_id": "request_1", "pass": 1, "candidate_count": 0, "min_confidence": 0.0, "max_confidence": 0.0},
+	}); err != nil {
+		t.Fatalf("Certify(CorroborationSummary, empty pool) error = %v", err)
+	}
+}
+
+// TestKindCoverageFloorFiresExplicitlyNotApplicableUnderAConfirmedKind is
+// the r2 class ruling's own permanent pin: applyKindCoverageFloor's whole
+// call site sits inside `if confirmedKind == nil`, so eventspec.
+// KindCoverageFloor's declared MultiplicityExactlyOnePerRequest contract
+// ("exactly one line per resolveSubjects call", no gating condition)
+// silently broke on every confirmed-member-kind resolution. Drives the
+// SAME confirmedTeamKind() fixture chaos5422_contest_set_test.go's own
+// tests already prove triggers this code path.
+func TestKindCoverageFloorFiresExplicitlyNotApplicableUnderAConfirmedKind(t *testing.T) {
+	t.Parallel()
+	teamA := candidateNode(contextfabric.SubjectTeam, "team:alpha", "Alpha", 0.9, "*")
+	backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{"alpha": {teamA}}}
+	var buf bytes.Buffer
+	deps := backend.deps()
+	deps.ResolutionTracer = NewSlogResolutionTracer(
+		slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	req := testRequest()
+	if _, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+		storage.Principal{OrgID: "org_1"}, req, testInterpreted("alpha"), deps,
+		confirmedTeamKind(), nil, nil, ""); err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+	log, err := certify.Parse(buf.Bytes())
+	if err != nil {
+		t.Fatalf("certify.Parse() on real production output error = %v", err)
+	}
+	if _, err := certify.Certify(log, certify.Assertion{
+		Event: eventspec.KindCoverageFloor,
+		Want:  map[string]any{"request_id": req.RequestID, "fired": false, "missing_kinds": 0, "truncated": false},
+	}); err != nil {
+		t.Fatalf("Certify(KindCoverageFloor, not applicable under confirmed kind) error = %v", err)
+	}
+}
+
+// TestCallerHintShortCircuitStillEmitsEveryOtherUnconditionalEvent is the
+// r2 class ruling's own permanent pin: the caller-hint short circuit
+// (AnyCallerSourced) returns before EVERY unconditional
+// (ExactlyOnePerRequest) event this function emits later on the ordinary
+// path -- anchor_offer and kind_coverage_floor both used to go silently
+// missing on every caller-hint commit, the same class of gap the r1 fix
+// already closed for "decision" alone. Reuses chaos4096's own proven
+// caller-hint fixture.
+func TestCallerHintShortCircuitStillEmitsEveryOtherUnconditionalEvent(t *testing.T) {
+	t.Parallel()
+	explicit := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_explicit", Label: "Explicit"}
+	backend := &fakeGraphBackend{exactHints: map[string]CandidateNode{
+		SubjectKey(explicit): candidateNode(explicit.Kind, explicit.CanonicalID, explicit.Label, 0.2, "*"),
+	}}
+	request := testRequest()
+	request.RequestedScope.SubjectHints = []contextfabric.SubjectHint{
+		{Kind: explicit.Kind, ID: explicit.CanonicalID, Label: explicit.Label, Source: "workbench"},
+	}
+	var buf bytes.Buffer
+	deps := backend.deps()
+	deps.ResolutionTracer = NewSlogResolutionTracer(
+		slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org_1"}, request, testInterpreted(), deps, nil, nil, nil, "")
+	if err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis error = %v", err)
+	}
+	if len(resolution.Committed) != 1 {
+		t.Fatalf("hint must still commit, got %v", resolution.Committed)
+	}
+	log, err := certify.Parse(buf.Bytes())
+	if err != nil {
+		t.Fatalf("certify.Parse() on real production output error = %v", err)
+	}
+	if _, err := certify.Certify(log, certify.Assertion{
+		Event: eventspec.AnchorOffer,
+		Want:  map[string]any{"request_id": request.RequestID, "labels_normalized_count": 0},
+	}); err != nil {
+		t.Fatalf("Certify(AnchorOffer, caller-hint short circuit) error = %v", err)
+	}
+	if _, err := certify.Certify(log, certify.Assertion{
+		Event: eventspec.KindCoverageFloor,
+		Want:  map[string]any{"request_id": request.RequestID, "fired": false, "missing_kinds": 0, "truncated": false},
+	}); err != nil {
+		t.Fatalf("Certify(KindCoverageFloor, caller-hint short circuit) error = %v", err)
+	}
+}

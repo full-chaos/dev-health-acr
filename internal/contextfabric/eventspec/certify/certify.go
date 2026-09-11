@@ -242,6 +242,9 @@ func Certify(log *Log, a Assertion) (Result, error) {
 			return Result{}, fmt.Errorf("certify: %s: Want must include %q (one of this event's declared Attribution fields) to scope which attempt is being certified -- multiplicity is asserted per attempt, never over the whole supplied log", a.Event.ID, attrKey)
 		}
 	}
+	if err := requireScopeValueTypes(a.Event, a.Want); err != nil {
+		return Result{}, err
+	}
 
 	if a.Event.Multiplicity == eventspec.MultiplicityBoundedManyPerPass {
 		return certifyBoundedMany(log, a)
@@ -284,11 +287,15 @@ func Certify(log *Log, a Assertion) (Result, error) {
 		}
 	}
 
-	// EVERY line in scope is field-validated, not only the one ultimately
-	// selected (round r3's P1) -- an earlier, malformed line is a defect
+	// EVERY line in scope is field- AND level-validated, not only the one
+	// ultimately selected (round r3's P1 for fields; r2 class finding for
+	// level) -- an earlier, malformed or wrong-level line is a defect
 	// regardless of whether a later line in the same scope looks fine.
 	for i, l := range scoped {
 		if err := validateFields(a.Event.Fields, l, a.Event.ID); err != nil {
+			return Result{}, fmt.Errorf("%w (line %d of %d in scope)", err, i+1, len(scoped))
+		}
+		if err := validateLevel(a.Event, l); err != nil {
 			return Result{}, fmt.Errorf("%w (line %d of %d in scope)", err, i+1, len(scoped))
 		}
 	}
@@ -341,17 +348,10 @@ func Certify(log *Log, a Assertion) (Result, error) {
 		line = scoped[len(scoped)-1]
 	}
 
-	wantLevel := strings.ToUpper(string(a.Event.Level))
-	gotLevel, _ := line["level"].(string)
-	if strings.ToUpper(gotLevel) != wantLevel {
-		return Result{}, fmt.Errorf("certify: %s: line at level %q, want %q (production visibility: a line declared Info that ships at Debug is a regression invisible in production, not a passing certificate)",
-			a.Event.ID, gotLevel, wantLevel)
-	}
-
-	// Every declared field's PRESENCE/TYPE/VOCABULARY was already asserted,
-	// unconditionally and for every line in scope, above -- a second call
-	// here would be dead code, never able to fire on a value the loop above
-	// would not already have refused.
+	// Every declared field's PRESENCE/TYPE/VOCABULARY, and the line's own
+	// LEVEL, were already asserted, unconditionally and for every line in
+	// scope, above -- a second call here would be dead code, never able to
+	// fire on a value the loop above would not already have refused.
 
 	declared := make(map[string]eventspec.Field, len(a.Event.Fields))
 	for _, f := range a.Event.Fields {
@@ -476,6 +476,9 @@ func certifyBoundedMany(log *Log, a Assertion) (Result, error) {
 		if err := validateFields(a.Event.Fields, l, a.Event.ID); err != nil {
 			return Result{}, fmt.Errorf("%w (line %d of %d in scope)", err, i+1, len(scoped))
 		}
+		if err := validateLevel(a.Event, l); err != nil {
+			return Result{}, fmt.Errorf("%w (line %d of %d in scope)", err, i+1, len(scoped))
+		}
 	}
 
 	hasPass := eventHasPassField(a.Event.Fields)
@@ -528,13 +531,7 @@ func certifyBoundedMany(log *Log, a Assertion) (Result, error) {
 	if !found {
 		return Result{}, fmt.Errorf("certify: %s: no line with index=%v found in the selected scope (%d line(s) present)", a.Event.ID, wantIndex, len(selectGroup))
 	}
-
-	wantLevel := strings.ToUpper(string(a.Event.Level))
-	gotLevel, _ := line["level"].(string)
-	if strings.ToUpper(gotLevel) != wantLevel {
-		return Result{}, fmt.Errorf("certify: %s: line at level %q, want %q (production visibility: a line declared Info that ships at Debug is a regression invisible in production, not a passing certificate)",
-			a.Event.ID, gotLevel, wantLevel)
-	}
+	// Level was already asserted for every line in scope, above.
 
 	declared := make(map[string]eventspec.Field, len(a.Event.Fields))
 	for _, f := range a.Event.Fields {
@@ -594,6 +591,9 @@ func CertifyBoundedManyCount(log *Log, ev eventspec.Event, scope map[string]any)
 			return 0, fmt.Errorf("certify: %s: scope must include %q (one of this event's declared Attribution fields)", ev.ID, attrKey)
 		}
 	}
+	if err := requireScopeValueTypes(ev, scope); err != nil {
+		return 0, err
+	}
 	hasPass := eventHasPassField(ev.Fields)
 	_, scopeHasPass := scope["pass"]
 	if hasPass && !scopeHasPass {
@@ -615,6 +615,14 @@ func CertifyBoundedManyCount(log *Log, ev eventspec.Event, scope map[string]any)
 	}
 	for i, l := range scoped {
 		if err := validateFields(ev.Fields, l, ev.ID); err != nil {
+			return 0, fmt.Errorf("%w (line %d of %d in scope)", err, i+1, len(scoped))
+		}
+		// r2 class finding (CHAOS-5517): CertifyBoundedManyCount checked
+		// NO line's level at all before this -- unlike Certify, it never
+		// selects a single line to check, so without its own loop-covered
+		// check every bounded-many line's own production visibility went
+		// completely unverified by this entry point.
+		if err := validateLevel(ev, l); err != nil {
 			return 0, fmt.Errorf("%w (line %d of %d in scope)", err, i+1, len(scoped))
 		}
 	}
@@ -678,6 +686,9 @@ func CertifyAbsent(log *Log, ev eventspec.Event, attribution map[string]any) err
 			return fmt.Errorf("certify: %s: attribution must include %q (one of this event's declared Attribution fields) to scope which attempt's absence is being asserted", ev.ID, attrKey)
 		}
 	}
+	if err := requireScopeValueTypes(ev, attribution); err != nil {
+		return err
+	}
 	if ev.Multiplicity == eventspec.MultiplicityZeroOrOnePerPass {
 		if _, ok := attribution["pass"]; !ok {
 			return fmt.Errorf("certify: %s: attribution must include \"pass\" -- a zero_or_one_per_pass event's absence is asserted for ONE specific pass, never the whole request", ev.ID)
@@ -689,6 +700,105 @@ func CertifyAbsent(log *Log, ev eventspec.Event, attribution map[string]any) err
 		if scopeMatch(ev, attribution, line) {
 			return fmt.Errorf("certify: %s: found a line with msg %q for this attempt (pass=%v), want 0 (asserted absent)", ev.ID, ev.Msg, attribution["pass"])
 		}
+	}
+	return nil
+}
+
+// fieldForKey finds ev's own declared Field for key, if any.
+func fieldForKey(ev eventspec.Event, key string) (eventspec.Field, bool) {
+	for _, f := range ev.Fields {
+		if f.Key == key {
+			return f, true
+		}
+	}
+	return eventspec.Field{}, false
+}
+
+// scopeValueHasDeclaredType reports whether a caller-supplied scope/Want
+// value's own Go type is one the field's declared FieldType can plausibly
+// have come from -- a caller passes a plain Go literal (int, string, ...),
+// never a JSON-decoded value, so this checks the NATIVE Go shape, not the
+// json.Unmarshal shape validateFields checks production output against.
+func scopeValueHasDeclaredType(v any, t eventspec.FieldType) bool {
+	switch t {
+	case eventspec.FieldString:
+		_, ok := v.(string)
+		return ok
+	case eventspec.FieldBool:
+		_, ok := v.(bool)
+		return ok
+	case eventspec.FieldInt, eventspec.FieldFloat:
+		switch v.(type) {
+		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+			return true
+		default:
+			return false
+		}
+	default:
+		// FieldStringSlice/FieldObjectSlice are never Attribution/pass keys
+		// today (Attribution is always a scalar identity, spec.go's own
+		// declared shape) -- no scope caller has a legitimate reason to
+		// scope by one, so an unrecognised type here is treated as "no
+		// declared shape to check", not silently accepted.
+		return false
+	}
+}
+
+// requireScopeValueTypes asserts every key that actually SCOPES which
+// attempt is being certified -- ev.Attribution's own keys, plus "pass"
+// when present -- carries a Go value of that field's own declared type.
+// r2 class finding (CHAOS-5517): scopeMatch's own jsonEqual comparison
+// silently treats a WRONG-TYPED scope value (e.g. an int where the field
+// is a string) as simply "does not match", which reads identically to a
+// genuine absence -- a caller's own typo (`"request_id": 123` instead of
+// `"request_id": "123"`) certified a false empty count instead of being
+// refused as the malformed scope input it actually is.
+//
+// DELIBERATELY narrower than "every key in m": m is often the SAME map a
+// caller also uses for downstream VALUE-equality assertions (Certify's own
+// a.Want, e.g. `"reserved_kinds": []string{}`) -- fields with no scoping
+// role at all, including every FieldStringSlice/FieldObjectSlice field
+// that legitimately appears there. Checking those too would refuse a
+// perfectly well-typed value-assertion field for not looking like a scalar
+// scope key, which is not this fix's defect class.
+func requireScopeValueTypes(ev eventspec.Event, m map[string]any) error {
+	keys := append([]string{}, ev.Attribution...)
+	if _, ok := m["pass"]; ok {
+		keys = append(keys, "pass")
+	}
+	for _, key := range keys {
+		value, present := m[key]
+		if !present {
+			continue
+		}
+		field, ok := fieldForKey(ev, key)
+		if !ok {
+			continue
+		}
+		if !scopeValueHasDeclaredType(value, field.Type) {
+			return fmt.Errorf("certify: %s: scope/Want[%q] = %v (Go type %T) does not match this field's declared type %q -- a wrong-typed scope value must be refused, not silently treated as a non-matching (and therefore falsely absent/zero) line", ev.ID, key, value, value, field.Type)
+		}
+	}
+	return nil
+}
+
+// validateLevel asserts a line's own slog "level" key against the event's
+// declared Level -- r2 class finding (CHAOS-5517): both Certify (for its
+// pass-keyed at-most-one shape) and CertifyBoundedManyCount checked level
+// on at most ONE line (the last-selected one, or none at all for
+// CertifyBoundedManyCount), never on every line in scope the way
+// validateFields already does -- an earlier pass's line shipping at the
+// wrong production level was invisible to either, exactly the
+// "production visibility" regression this check exists to catch in the
+// FIRST place. Called from the SAME per-line loop as validateFields in
+// every one of the three call sites below, so a caller can never reach one
+// check without the other.
+func validateLevel(ev eventspec.Event, line Line) error {
+	wantLevel := strings.ToUpper(string(ev.Level))
+	gotLevel, _ := line["level"].(string)
+	if strings.ToUpper(gotLevel) != wantLevel {
+		return fmt.Errorf("certify: %s: line at level %q, want %q (production visibility: a line declared %s that ships at a different level is a regression invisible at its declared level, not a passing certificate)",
+			ev.ID, gotLevel, wantLevel, wantLevel)
 	}
 	return nil
 }

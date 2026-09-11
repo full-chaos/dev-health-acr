@@ -774,3 +774,70 @@ func hasField(fields []eventspec.Field, key string) bool {
 	}
 	return false
 }
+
+// TestCertifyChecksLevelOnEveryLineInScopeNotOnlyTheSelectedOne is the r2
+// class ruling's own permanent pin (CHAOS-5517): an earlier pass's line
+// shipping at the WRONG production level used to be invisible to Certify,
+// which only checked level on the LAST-selected line for a pass-keyed
+// event -- exactly the "production visibility" regression this whole
+// check exists to catch, undetected by the very mechanism meant to catch
+// it. Two distinct passes, pass 1 at the wrong level (DEBUG, declared
+// INFO), pass 2 correct -- Certify must refuse regardless of which pass a
+// caller's own Want selects.
+func TestCertifyChecksLevelOnEveryLineInScopeNotOnlyTheSelectedOne(t *testing.T) {
+	pass1WrongLevel := strings.Replace(validRankedCutSummaryLine(), `"level":"INFO"`, `"level":"DEBUG"`, 1)
+	pass2Right := strings.Replace(validRankedCutSummaryLine(), `"pass":1`, `"pass":2`, 1)
+	log, err := Parse([]byte(pass1WrongLevel + "\n" + pass2Right))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	want := wantForRankedCutSummary()
+	want["pass"] = 2
+	if _, err := certifyRecovered(t, log, Assertion{Event: eventspec.RankedCutSummary, Want: want}); err == nil {
+		t.Fatal("Certify() accepted pass=2 as INFO while pass=1's own DEBUG-level line for the SAME request_id/event was never checked -- want a refusal naming the level mismatch")
+	} else if !strings.Contains(err.Error(), `level "DEBUG", want "INFO"`) {
+		t.Errorf("refusal text = %q, want it to name the level mismatch", err.Error())
+	}
+}
+
+// TestCertifyBoundedManyCountChecksLevelOnEveryLine is the bounded-many
+// sibling of the pin above: CertifyBoundedManyCount checked NO line's
+// level at all before this fix (it never selects a single line the way
+// Certify does), so a whole event declared Info that silently shipped at
+// Debug (or vice versa) was completely invisible to it.
+func TestCertifyBoundedManyCountChecksLevelOnEveryLine(t *testing.T) {
+	// eventspec.Search declares LevelInfo; this line ships at DEBUG.
+	wrongLevelLine := `{"time":"2026-09-10T00:00:00Z","level":"DEBUG","msg":"context fabric resolution trace: search",` +
+		`"request_id":"req_1","stage":"search","index":1,"total":1,"term_hash":"abc","result_count":3,"truncated":false}`
+	log, err := Parse([]byte(wrongLevelLine))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if _, err := CertifyBoundedManyCount(log, eventspec.Search, map[string]any{"request_id": "req_1"}); err == nil {
+		t.Fatal("CertifyBoundedManyCount() accepted a DEBUG-level line for an event declared LevelInfo -- want a refusal naming the level mismatch")
+	} else if !strings.Contains(err.Error(), `level "DEBUG", want "INFO"`) {
+		t.Errorf("refusal text = %q, want it to name the level mismatch", err.Error())
+	}
+}
+
+// TestCertifyRefusesAWrongTypedScopeValueInsteadOfCertifyingFalseAbsence is
+// the r2 class ruling's own permanent pin for the type-check gap: a
+// wrong-typed scope/Want value (an int where the declared field is a
+// string) used to be silently treated as "does not match" by scopeMatch's
+// own jsonEqual comparison -- indistinguishable from a genuine absence --
+// rather than refused as the malformed input it is. A real line for
+// request_id="req-real" exists; scoping by request_id=123 (an int) must
+// refuse, never certify a false zero/absent count.
+func TestCertifyRefusesAWrongTypedScopeValueInsteadOfCertifyingFalseAbsence(t *testing.T) {
+	realLine := `{"time":"2026-09-10T00:00:00Z","level":"DEBUG","msg":"context fabric resolution trace: search",` +
+		`"request_id":"req-real","stage":"search","index":1,"total":1,"term_hash":"abc","result_count":3,"truncated":false}`
+	log, err := Parse([]byte(realLine))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if _, err := CertifyBoundedManyCount(log, eventspec.Search, map[string]any{"request_id": 123}); err == nil {
+		t.Fatal("CertifyBoundedManyCount() accepted a wrong-typed (int) request_id scope value instead of refusing it -- a real line for request_id=\"req-real\" exists, so this must not silently certify a false absence")
+	} else if !strings.Contains(err.Error(), "does not match this field's declared type") {
+		t.Errorf("refusal text = %q, want it to name the type mismatch", err.Error())
+	}
+}

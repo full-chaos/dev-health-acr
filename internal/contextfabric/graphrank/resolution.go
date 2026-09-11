@@ -556,21 +556,35 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		}
 		return candidates[i].Confidence > candidates[j].Confidence
 	})
-	if tracer != nil && len(candidates) > 0 {
-		// The once-per-PASS Info summary (mirrors
-		// RankedCutSummary's own shape exactly, see
-		// ResolutionTraceEvent.CorroborationSummary's own doc comment) --
-		// emitted HERE, after the sort above, so "top" is a real rank by
-		// FinalConfidence, not encounter order. minConfidence/maxConfidence
-		// span EVERY candidate this pass corroborated, not just the capped
-		// top set below.
-		minConfidence, maxConfidence := candidates[0].Confidence, candidates[0].Confidence
-		for _, candidate := range candidates {
-			if candidate.Confidence < minConfidence {
-				minConfidence = candidate.Confidence
-			}
-			if candidate.Confidence > maxConfidence {
-				maxConfidence = candidate.Confidence
+	if tracer != nil {
+		// The once-per-PASS Info summary (mirrors RankedCutSummary's own
+		// shape exactly, see ResolutionTraceEvent.CorroborationSummary's
+		// own doc comment) -- emitted HERE, after the sort above, so "top"
+		// is a real rank by FinalConfidence, not encounter order.
+		// minConfidence/maxConfidence span EVERY candidate this pass
+		// corroborated, not just the capped top set below.
+		//
+		// r2 class finding (CHAOS-5517): this used to be gated behind
+		// `len(candidates) > 0`, so eventspec.CorroborationSummary's own
+		// MultiplicityExactlyOnePerPass contract ("every pass produces
+		// exactly one line, explicit zero included") silently broke on
+		// every pass whose merged pool was empty -- exactly the
+		// "OfferPoolSummary fires HERE too, with explicit zeros" discipline
+		// the comment on THIS function's own next branch already applies;
+		// CorroborationSummary just above it never got the same treatment.
+		// Explicit zeros below when candidates is empty: MinConfidence/
+		// MaxConfidence at their honest zero value (there is no candidate
+		// to have a confidence at all), TopIDs an empty, non-nil slice.
+		var minConfidence, maxConfidence float64
+		if len(candidates) > 0 {
+			minConfidence, maxConfidence = candidates[0].Confidence, candidates[0].Confidence
+			for _, candidate := range candidates {
+				if candidate.Confidence < minConfidence {
+					minConfidence = candidate.Confidence
+				}
+				if candidate.Confidence > maxConfidence {
+					maxConfidence = candidate.Confidence
+				}
 			}
 		}
 		topIDs := make([]string, 0, traceSummaryIDCap)

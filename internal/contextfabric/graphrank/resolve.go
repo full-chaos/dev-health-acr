@@ -2010,6 +2010,41 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 		deps.ResolutionTracer = decisionFold
 		defer decisionFold.flush()
 	}
+	// r2 class fix (CHAOS-5517): anchor_offer and kind_coverage_floor are
+	// both declared MultiplicityExactlyOnePerRequest, but their own
+	// producer call sites sit INSIDE resolveSubjects, downstream of its
+	// caller-hint short circuit (and, for kind_coverage_floor, also gated
+	// behind `confirmedKind == nil`) -- both used to go silently missing
+	// on any exit that never reaches them. Wrapped HERE, outermost, the
+	// same way idGateFold/decisionFold already are, so BOTH known exits
+	// and any future one are covered by one mechanism instead of a
+	// per-exit patch. See exactlyOnceRequestFold's own doc comment.
+	if deps.ResolutionTracer != nil {
+		anchorOfferFold := &exactlyOnceRequestFold{
+			real: deps.ResolutionTracer, stage: "anchor_offer",
+			fallback: func() ResolutionTraceEvent {
+				return ResolutionTraceEvent{
+					RequestID: request.RequestID, Stage: "anchor_offer",
+					AnchorOfferLabelsNormalizedCount: 0,
+				}
+			},
+		}
+		deps.ResolutionTracer = anchorOfferFold
+		defer anchorOfferFold.flush()
+
+		kindCoverageFloorFold := &exactlyOnceRequestFold{
+			real: deps.ResolutionTracer, stage: "kind_coverage_floor",
+			fallback: func() ResolutionTraceEvent {
+				return ResolutionTraceEvent{
+					RequestID: request.RequestID, Stage: "kind_coverage_floor",
+					KindCoverageFloorFired: false, KindCoverageMissingKinds: 0,
+					KindCoverageFloorTruncated: false, KindCoverageMissingKindsList: []string{},
+				}
+			},
+		}
+		deps.ResolutionTracer = kindCoverageFloorFold
+		defer kindCoverageFloorFold.flush()
+	}
 	// CHAOS-5422: the contest set's admission, decided ONCE for the whole call
 	// — before any retrieval arm runs, before any identity claim is recorded,
 	// and therefore before ranking, reservation and truncation can ever see a
@@ -2080,6 +2115,45 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 		return resolution, offerMaterial, make(contextfabric.CommitBasisSet), make(contextfabric.CommitDecisionDigestSet), err
 	}
 	return resolution, offerMaterial, bases, digests, nil
+}
+
+// exactlyOnceRequestFold is the r2 class ruling's own structural fix
+// (CHAOS-5517, team-lead: "a declared multiplicity is a property of EVERY
+// exit path of the producer, not of the happy path... emit from a single
+// deferred/terminal point per request... so a new early return cannot
+// skip it"): guarantees exactly one line of Stage `stage` reaches the real
+// tracer for this call, regardless of which of resolveSubjects' own exit
+// paths fires -- the ordinary path, the caller-hint short circuit, or any
+// early return added after this fix. Every event still passes through to
+// the real tracer immediately and unchanged (the SAME "forward first,
+// bookkeep second" shape identityGateSummaryBuffer/decisionSummaryBuffer
+// already use); only on flush, DEFERRED so it runs on every return
+// including a panic, does it check whether `stage` ever fired at all and
+// synthesize `fallback()`'s own line if it did not. This replaces adding a
+// matching emission call at each individual exit site the review found
+// (resolve.go's own confirmedKind!=nil branch, the caller-hint short
+// circuit) -- that shape is exactly the fragile pattern this fix retires:
+// a FUTURE early return would silently reintroduce the same gap, since
+// nothing forces every new `return` to remember the call.
+type exactlyOnceRequestFold struct {
+	real     ResolutionTracer
+	stage    string
+	fired    bool
+	fallback func() ResolutionTraceEvent
+}
+
+func (f *exactlyOnceRequestFold) Trace(event ResolutionTraceEvent) {
+	f.real.Trace(event)
+	if event.Stage == f.stage {
+		f.fired = true
+	}
+}
+
+func (f *exactlyOnceRequestFold) flush() {
+	if f.fired {
+		return
+	}
+	f.real.Trace(f.fallback())
 }
 
 // identityGateSummaryBuffer holds back every per-candidate "identity_gate"
@@ -2619,6 +2693,17 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				})
 			}
 		}
+		// r2 class finding (CHAOS-5517): this short circuit returns BEFORE
+		// EVERY other unconditional (ExactlyOnePerRequest) event this
+		// function emits later on the ordinary path -- anchor_offer and
+		// kind_coverage_floor both live structurally downstream of this
+		// return, so both used to go silently missing on every caller-hint
+		// commit, the same class of gap the decision fix above already
+		// closed for "decision". Fixed at the STRUCTURAL level instead of
+		// here: ResolveSubjectsWithCommitBasis's own exactlyOnceRequestFold
+		// wrappers (see that type's own doc comment) guarantee both fire
+		// exactly once regardless of this or any future early return, so
+		// there is nothing to emit at this specific exit any more.
 		// CHAOS-4300: this short circuit's own commit is already final
 		// (FinalizeExactResolutionWithBasis/commitBases.ResetTo above) --
 		// runShadowEvidenceRoundForResolution is called exactly once
@@ -3132,6 +3217,15 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				KindCoverageMissingKindsList: coverageMissingKindsList,
 			})
 		}
+		// r2 class finding (CHAOS-5517): when confirmedKind != nil, the
+		// floor mechanism above never runs at all -- applyKindCoverageFloor
+		// is never called -- so the "exactly one line per request" contract
+		// used to silently break on every confirmed-kind resolution. Fixed
+		// at the STRUCTURAL level: ResolveSubjectsWithCommitBasis's own
+		// exactlyOnceRequestFold for "kind_coverage_floor" (see that type's
+		// own doc comment) emits the explicit not-applicable line on flush
+		// if this branch never ran, so there is nothing to emit in an
+		// `else` here any more.
 	}
 	if traversalDegraded > 0 && deps.TraversalDegraded != nil {
 		deps.TraversalDegraded(ctx, principal.OrgID, traversalDegraded)
