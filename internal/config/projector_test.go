@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net"
 	"strings"
 	"testing"
 
@@ -10,9 +11,9 @@ import (
 // TestLoadProjectorDefaults binds the same class-sweep fix as acr-api's
 // TestLoadDefaults (dictation 811): a process started with NO environment
 // configured at all must fail closed, same as acr-api. Before this fix
-// loadProjector(mapLookup(nil)) SUCCEEDED with RequireBackingStores false.
+// loadProjector(mapLookup(nil), requiredStoresAll) SUCCEEDED with RequireBackingStores false.
 func TestLoadProjectorDefaults(t *testing.T) {
-	_, err := loadProjector(mapLookup(nil))
+	_, err := loadProjector(mapLookup(nil), requiredStoresAll)
 	if err == nil || !strings.Contains(err.Error(), "backing stores are required") {
 		t.Fatalf("loadProjector() error = %v, want a backing-stores-required refusal with zero configuration", err)
 	}
@@ -23,9 +24,58 @@ func TestLoadProjectorDefaults(t *testing.T) {
 // ACR_REQUIRE_BACKING_STORES=false, without the dev flag, must not disable
 // the requirement here either.
 func TestLoadProjectorDefaults_bareOverrideAloneCannotDisableBackingStores(t *testing.T) {
-	_, err := loadProjector(mapLookup(map[string]string{"ACR_REQUIRE_BACKING_STORES": "false"}))
+	_, err := loadProjector(mapLookup(map[string]string{"ACR_REQUIRE_BACKING_STORES": "false"}), requiredStoresAll)
 	if err == nil || !strings.Contains(err.Error(), "backing stores are required") {
 		t.Fatalf("loadProjector() error = %v, want a backing-stores-required refusal: a bare ACR_REQUIRE_BACKING_STORES=false without the dev flag must not disable the requirement", err)
+	}
+}
+
+// TestLoadProjectorPriors_zeroEnvRefusesNamingPostgresOnly is r2 P1
+// finding 1's own domain cell: the priors operator surface (CHAOS-3977 P5)
+// is Postgres-only, so a zero-env start must refuse naming ONLY
+// ACR_POSTGRES_DSN, never ACR_CLICKHOUSE_DSN (which this surface never
+// opens). Reproduced live before the fix:
+// `env -i acr-projector priors flip ...` -> "ACR_CLICKHOUSE_DSN is
+// required when backing stores are required" (the wrong store named).
+func TestLoadProjectorPriors_zeroEnvRefusesNamingPostgresOnly(t *testing.T) {
+	_, err := loadProjector(mapLookup(nil), requiredStoresPostgresOnly)
+	if err == nil || !strings.Contains(err.Error(), "ACR_POSTGRES_DSN") {
+		t.Fatalf("loadProjector(requiredStoresPostgresOnly) error = %v, want an ACR_POSTGRES_DSN refusal", err)
+	}
+	if strings.Contains(err.Error(), "ACR_CLICKHOUSE_DSN") {
+		t.Fatalf("loadProjector(requiredStoresPostgresOnly) error = %v, must never name ACR_CLICKHOUSE_DSN -- priors never opens it", err)
+	}
+}
+
+// TestLoadProjectorPriors_postgresOnlyConfigurationSucceeds is r2 P1
+// finding 1's second domain cell: a fully-valid Postgres-only environment
+// (no ClickHouse DSN at all) must be ACCEPTED for the priors operator
+// surface -- this is the exact scenario the review found refused.
+func TestLoadProjectorPriors_postgresOnlyConfigurationSucceeds(t *testing.T) {
+	cfg, err := loadProjector(mapLookup(map[string]string{
+		"ACR_POSTGRES_DSN":             "postgres://configured",
+		"ACR_POSTGRES_CONNECTION_KIND": "direct",
+	}), requiredStoresPostgresOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(cfg.ClickHouseDSN) != "" {
+		t.Fatalf("ClickHouseDSN = %q, want empty (never configured, never required for priors)", cfg.ClickHouseDSN)
+	}
+}
+
+// TestLoadProjectorFullStores_postgresOnlyStillRefusesNamingClickHouse
+// proves the OTHER half of the split: every command using the FULL
+// requirement (serve, rebuild, rollback) must still refuse a Postgres-only
+// environment, naming ClickHouse specifically -- the split must narrow
+// priors alone, not silently loosen the requirement for everyone.
+func TestLoadProjectorFullStores_postgresOnlyStillRefusesNamingClickHouse(t *testing.T) {
+	_, err := loadProjector(mapLookup(map[string]string{
+		"ACR_POSTGRES_DSN":             "postgres://configured",
+		"ACR_POSTGRES_CONNECTION_KIND": "direct",
+	}), requiredStoresAll)
+	if err == nil || !strings.Contains(err.Error(), "ACR_CLICKHOUSE_DSN") {
+		t.Fatalf("loadProjector(requiredStoresAll) error = %v, want an ACR_CLICKHOUSE_DSN refusal", err)
 	}
 }
 
@@ -34,7 +84,7 @@ func TestLoadProjectorDefaults_bareOverrideAloneCannotDisableBackingStores(t *te
 // observe on the (now-erroring) bare path, using the same dev-flag
 // exemption acr-api's Config supports.
 func TestLoadProjectorDefaults_developmentWithLocalCompositionReady(t *testing.T) {
-	cfg, err := loadProjector(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true"}))
+	cfg, err := loadProjector(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true"}), requiredStoresAll)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,6 +119,35 @@ func TestLoadProjectorDefaults_listenAddressLoopback(t *testing.T) {
 	}
 }
 
+// TestDefaultProjectorListenAddressActuallyBindsLoopbackOnly is r2 P3
+// finding 3's class sweep to acr-projector: executes a REAL net.Listen
+// against defaultProjectorListenAddress's own host (port swapped for an
+// ephemeral 0) and asserts the address the OS actually bound -- read back
+// from the live listener, never the config string -- is loopback. See
+// TestDefaultListenAddressActuallyBindsLoopbackOnly (config_test.go) for
+// why a string-only assertion cannot catch a wiring regression here.
+func TestDefaultProjectorListenAddressActuallyBindsLoopbackOnly(t *testing.T) {
+	host, _, err := net.SplitHostPort(defaultProjectorListenAddress)
+	if err != nil {
+		t.Fatalf("defaultProjectorListenAddress = %q is not host:port: %v", defaultProjectorListenAddress, err)
+	}
+	if host != "127.0.0.1" {
+		t.Fatalf("defaultProjectorListenAddress host = %q, want 127.0.0.1", host)
+	}
+	listener, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
+	if err != nil {
+		t.Fatalf("net.Listen(%q) = %v, want a successful loopback bind", net.JoinHostPort(host, "0"), err)
+	}
+	defer listener.Close()
+	boundHost, _, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatalf("listener.Addr() = %q is not host:port: %v", listener.Addr().String(), err)
+	}
+	if boundHost != "127.0.0.1" {
+		t.Fatalf("listener actually bound host = %q (from the live OS-assigned address, not the config string), want 127.0.0.1", boundHost)
+	}
+}
+
 // TestLoadProjectorStagingCannotDisableBackingStoresOverride mirrors
 // TestStagingCannotDisableBackingStoresOverride (config_test.go) for the
 // projector: asserts the FORCED value directly rather than merely
@@ -81,7 +160,7 @@ func TestLoadProjectorStagingCannotDisableBackingStoresOverride(t *testing.T) {
 		"ACR_CLICKHOUSE_DSN":           "clickhouse://redacted",
 		"ACR_POSTGRES_DSN":             "postgres://redacted?sslmode=verify-full",
 		"ACR_POSTGRES_CONNECTION_KIND": "direct",
-	}))
+	}), requiredStoresAll)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +176,7 @@ func TestLoadProjectorRejectsLocalCompositionReadyOutsideDevelopment(t *testing.
 	_, err := loadProjector(mapLookup(map[string]string{
 		"ACR_ENVIRONMENT":             "production",
 		"ACR_LOCAL_COMPOSITION_READY": "true",
-	}))
+	}), requiredStoresAll)
 	if err == nil {
 		t.Fatal("local composition was accepted in production")
 	}
@@ -109,7 +188,7 @@ func TestLoadProjector_appliesConfiguredClickHouseMaxBytesToRead(t *testing.T) {
 	cfg, err := loadProjector(mapLookup(map[string]string{
 		"ACR_CLICKHOUSE_MAX_BYTES_TO_READ": "33554432",
 		"ACR_LOCAL_COMPOSITION_READY":      "true",
-	}))
+	}), requiredStoresAll)
 
 	// Then
 	if err != nil {
@@ -123,7 +202,7 @@ func TestLoadProjector_appliesConfiguredClickHouseMaxBytesToRead(t *testing.T) {
 func TestLoadProjector_rejectsInvalidClickHouseMaxBytesToRead(t *testing.T) {
 	for _, value := range []string{"0", "-1", "garbage"} {
 		t.Run(value, func(t *testing.T) {
-			_, err := loadProjector(mapLookup(map[string]string{"ACR_CLICKHOUSE_MAX_BYTES_TO_READ": value}))
+			_, err := loadProjector(mapLookup(map[string]string{"ACR_CLICKHOUSE_MAX_BYTES_TO_READ": value}), requiredStoresAll)
 			if err == nil || !strings.Contains(err.Error(), "ACR_CLICKHOUSE_MAX_BYTES_TO_READ") {
 				t.Fatalf("loadProjector() error = %v, want ACR_CLICKHOUSE_MAX_BYTES_TO_READ rejection", err)
 			}
@@ -132,7 +211,7 @@ func TestLoadProjector_rejectsInvalidClickHouseMaxBytesToRead(t *testing.T) {
 }
 
 func TestLoadProjectorProductionRequiresBackingStores(t *testing.T) {
-	_, err := loadProjector(mapLookup(map[string]string{"ACR_ENVIRONMENT": "production"}))
+	_, err := loadProjector(mapLookup(map[string]string{"ACR_ENVIRONMENT": "production"}), requiredStoresAll)
 	if err == nil {
 		t.Fatal("expected an error: production requires ACR_CLICKHOUSE_DSN/ACR_POSTGRES_DSN")
 	}
@@ -142,7 +221,7 @@ func TestLoadProjectorEnabledProductionRequiresOrgAllowlist(t *testing.T) {
 	_, err := loadProjector(mapLookup(map[string]string{
 		"ACR_ENVIRONMENT": "production", "ACR_CLICKHOUSE_DSN": "https://clickhouse.internal", "ACR_POSTGRES_DSN": "postgres://db/acr",
 		"ACR_POSTGRES_CONNECTION_KIND": "direct", "ACR_CONTEXT_FABRIC_PROJECTION_ENABLED": "true",
-	}))
+	}), requiredStoresAll)
 	if err == nil {
 		t.Fatal("expected an error: enabling projection without an organization allowlist")
 	}
@@ -156,7 +235,7 @@ func TestLoadProjectorParsesOrgAllowlistAndScheduling(t *testing.T) {
 		"ACR_CONTEXT_FABRIC_PROJECTION_CONCURRENCY":        "10",
 		"ACR_CONTEXT_FABRIC_PROJECTION_DRAIN_BATCH_BUDGET": "50",
 		"ACR_LOCAL_COMPOSITION_READY":                      "true",
-	}))
+	}), requiredStoresAll)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +248,7 @@ func TestLoadProjectorParsesOrgAllowlistAndScheduling(t *testing.T) {
 }
 
 func TestLoadProjectorRejectsInvalidEnvironment(t *testing.T) {
-	_, err := loadProjector(mapLookup(map[string]string{"ACR_ENVIRONMENT": "sandbox"}))
+	_, err := loadProjector(mapLookup(map[string]string{"ACR_ENVIRONMENT": "sandbox"}), requiredStoresAll)
 	if err == nil {
 		t.Fatal("expected an error for an invalid environment")
 	}
@@ -190,7 +269,7 @@ func TestProjectionEnablementIsIndependentOfTheGraphReadsFlag(t *testing.T) {
 		"ACR_CONTEXT_FABRIC_PROJECTION_ENABLED": "true", "ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS": "org-1",
 		GraphReadsEnabledEnvVar:       "false",
 		"ACR_LOCAL_COMPOSITION_READY": "true",
-	}))
+	}), requiredStoresAll)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +281,7 @@ func TestProjectionEnablementIsIndependentOfTheGraphReadsFlag(t *testing.T) {
 		"ACR_CONTEXT_FABRIC_PROJECTION_ENABLED": "false",
 		GraphReadsEnabledEnvVar:                 "true",
 		"ACR_LOCAL_COMPOSITION_READY":           "true",
-	}))
+	}), requiredStoresAll)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +294,7 @@ func TestProjectorConfigSafeAttributesOmitDSNs(t *testing.T) {
 	cfg, err := loadProjector(mapLookup(map[string]string{
 		"ACR_POSTGRES_DSN":            "postgres://secret@db/acr",
 		"ACR_LOCAL_COMPOSITION_READY": "true",
-	}))
+	}), requiredStoresAll)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +314,7 @@ func TestProjectorConfigSafeAttributesOmitDSNs(t *testing.T) {
 // choice and not a value the loader ignores.
 func TestTeamsProjectsDefaultsToEnabled(t *testing.T) {
 	t.Parallel()
-	cfg, err := loadProjector(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true"}))
+	cfg, err := loadProjector(mapLookup(map[string]string{"ACR_LOCAL_COMPOSITION_READY": "true"}), requiredStoresAll)
 	if err != nil {
 		t.Fatalf("loadProjector: %v", err)
 	}
@@ -244,7 +323,7 @@ func TestTeamsProjectsDefaultsToEnabled(t *testing.T) {
 	}
 	off, err := loadProjector(mapLookup(map[string]string{
 		envContextFabricTeamsProjects: "false", "ACR_LOCAL_COMPOSITION_READY": "true",
-	}))
+	}), requiredStoresAll)
 	if err != nil {
 		t.Fatalf("loadProjector: %v", err)
 	}

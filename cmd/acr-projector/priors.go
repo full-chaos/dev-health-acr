@@ -65,7 +65,13 @@ func priorsCommand(args []string) error {
 // stack (rebuild/rollback, main.go), so this is a deliberately lighter
 // composition, not a reuse of that heavier path.
 func openPriorsDB(ctx context.Context) (*sql.DB, error) {
-	cfg, err := config.LoadProjector()
+	// r2 P1 finding: priors is deliberately Postgres-only (see this
+	// function's own doc comment above) -- config.LoadProjector() requires
+	// the FULL backing-store set (Postgres AND ClickHouse) that
+	// serve/rebuild/rollback actually need, which would refuse a
+	// legitimately-configured Postgres-only priors deployment for a store
+	// this command never opens.
+	cfg, err := config.LoadProjectorPriors()
 	if err != nil {
 		return nil, fmt.Errorf("configuration: %w", err)
 	}

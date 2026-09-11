@@ -86,10 +86,27 @@ func TestReadinessHandlerLogsTransitions(t *testing.T) {
 		t.Helper()
 		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	}
-	transitionLines := func() []string {
+	// aggregateLines matches ONLY the aggregate "readiness state changed"
+	// line. r2 P3 finding: this filter previously also silently excluded
+	// the per-check message, so the test never actually observed it --
+	// "readiness state changed" is not a substring of "readiness check
+	// state changed" (the word "check" breaks the contiguous match), so
+	// the two message classes never collided here, but the test also never
+	// asserted the per-check message fired at all. perCheckLines below
+	// closes that gap.
+	aggregateLines := func() []string {
 		var lines []string
 		for _, line := range strings.Split(strings.TrimSpace(buffer.String()), "\n") {
-			if strings.Contains(line, "readiness state changed") {
+			if strings.Contains(line, `"msg":"readiness state changed"`) {
+				lines = append(lines, line)
+			}
+		}
+		return lines
+	}
+	perCheckLines := func() []string {
+		var lines []string
+		for _, line := range strings.Split(strings.TrimSpace(buffer.String()), "\n") {
+			if strings.Contains(line, `"msg":"readiness check state changed"`) {
 				lines = append(lines, line)
 			}
 		}
@@ -97,18 +114,28 @@ func TestReadinessHandlerLogsTransitions(t *testing.T) {
 	}
 
 	poll()
-	if lines := transitionLines(); len(lines) != 1 || !strings.Contains(lines[0], `"postgres":"ready"`) {
-		t.Fatalf("after first observation, transition lines = %v", lines)
+	if lines := aggregateLines(); len(lines) != 1 || !strings.Contains(lines[0], `"postgres":"ready"`) {
+		t.Fatalf("after first observation, aggregate transition lines = %v", lines)
+	}
+	if lines := perCheckLines(); len(lines) != 1 || !strings.Contains(lines[0], `"check":"postgres"`) || !strings.Contains(lines[0], `"status":"ready"`) {
+		t.Fatalf("after first observation, per-check transition lines = %v, want exactly 1 naming postgres", lines)
 	}
 	poll()
-	if lines := transitionLines(); len(lines) != 1 {
-		t.Fatalf("after a repeated ready poll, transition lines = %d, want 1 (no duplicate): %v", len(lines), lines)
+	if lines := aggregateLines(); len(lines) != 1 {
+		t.Fatalf("after a repeated ready poll, aggregate transition lines = %d, want 1 (no duplicate): %v", len(lines), lines)
+	}
+	if lines := perCheckLines(); len(lines) != 1 {
+		t.Fatalf("after a repeated ready poll, per-check transition lines = %d, want 1 (no duplicate): %v", len(lines), lines)
 	}
 
 	failing = true
 	poll()
-	lines := transitionLines()
+	lines := aggregateLines()
 	if len(lines) != 2 || !strings.Contains(lines[1], `"previous_status":"ready"`) || !strings.Contains(lines[1], `"status":"not_ready"`) {
-		t.Fatalf("after failure, transition lines = %v", lines)
+		t.Fatalf("after failure, aggregate transition lines = %v", lines)
+	}
+	checkLines := perCheckLines()
+	if len(checkLines) != 2 || !strings.Contains(checkLines[1], `"check":"postgres"`) || !strings.Contains(checkLines[1], `"previous_status":"ready"`) || !strings.Contains(checkLines[1], `"status":"not_ready"`) {
+		t.Fatalf("after failure, per-check transition lines = %v, want a named postgres flip", checkLines)
 	}
 }

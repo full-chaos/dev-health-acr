@@ -83,13 +83,54 @@ type ProjectorConfig struct {
 	TeamsProjectsEnabled bool
 }
 
-// LoadProjector reads cmd/acr-projector's configuration from the process
-// environment and validates it.
-func LoadProjector() (ProjectorConfig, error) {
-	return loadProjector(os.LookupEnv)
+// requiredStores names the specific backing stores ONE CALLER of
+// ProjectorConfig actually opens -- r2 P1 finding: acr-projector's
+// commands do not all open the same stores (serve/rebuild/rollback run the
+// full projection composition, Postgres AND ClickHouse; the priors
+// operator surface, CHAOS-3977 P5, is deliberately Postgres-only, see
+// openPriorsDB's own doc comment in cmd/acr-projector/priors.go), so a
+// single binary-wide "backing stores required" boolean cannot validate
+// both correctly -- requiring ClickHouse for a command that never opens it
+// would refuse a legitimately-configured priors deployment, and NOT
+// requiring it for serve would reintroduce the original defect this whole
+// change exists to close. RequireBackingStores itself still answers "is
+// validation active at all" (the dev-flag exemption); requiredStores
+// answers "which DSNs does THIS validation enforce".
+type requiredStores struct {
+	postgres   bool
+	clickhouse bool
 }
 
-func loadProjector(lookup lookupEnv) (ProjectorConfig, error) {
+var (
+	// requiredStoresAll is every acr-projector command except priors:
+	// serve, rebuild, rollback.
+	requiredStoresAll = requiredStores{postgres: true, clickhouse: true}
+	// requiredStoresPostgresOnly is the priors operator surface's own
+	// requirement (curate, flip, rollback, revoke) -- never ClickHouse.
+	requiredStoresPostgresOnly = requiredStores{postgres: true}
+)
+
+// LoadProjector reads cmd/acr-projector's configuration from the process
+// environment and validates it against the FULL backing-store requirement
+// (Postgres AND ClickHouse) -- the requirement every acr-projector command
+// EXCEPT priors actually has. Use LoadProjectorPriors for the priors
+// operator surface.
+func LoadProjector() (ProjectorConfig, error) {
+	return loadProjector(os.LookupEnv, requiredStoresAll)
+}
+
+// LoadProjectorPriors reads cmd/acr-projector's configuration for the
+// priors operator surface (CHAOS-3977 P5) -- Postgres-only, never
+// ClickHouse, unlike every other acr-projector command. Validating against
+// the full requirement here would refuse a legitimately-configured
+// Postgres-only priors deployment for a store it never opens (r2 P1
+// finding, reproduced live: a fully-valid Postgres-only environment was
+// refused with "ACR_CLICKHOUSE_DSN is required...").
+func LoadProjectorPriors() (ProjectorConfig, error) {
+	return loadProjector(os.LookupEnv, requiredStoresPostgresOnly)
+}
+
+func loadProjector(lookup lookupEnv, required requiredStores) (ProjectorConfig, error) {
 	environment := stringValue(lookup, envProjectorEnvironment, defaultEnvironment)
 	// requireStoresDefault: same class fix as acr-api's load() in config.go
 	// -- backing stores are required by default in every environment now,
@@ -162,13 +203,22 @@ func loadProjector(lookup lookupEnv) (ProjectorConfig, error) {
 		return ProjectorConfig{}, err
 	}
 
-	if err := cfg.Validate(); err != nil {
+	if err := cfg.validate(required); err != nil {
 		return ProjectorConfig{}, err
 	}
 	return cfg, nil
 }
 
+// Validate checks cfg against the FULL backing-store requirement
+// (Postgres AND ClickHouse) -- every acr-projector command except priors.
+// cmd/acr-projector/main.go's rebuild/rollback re-validate after forcing
+// ProjectionEnabled=true using this same zero-argument form, since they
+// too need the full set.
 func (c ProjectorConfig) Validate() error {
+	return c.validate(requiredStoresAll)
+}
+
+func (c ProjectorConfig) validate(required requiredStores) error {
 	switch c.Environment {
 	case "development", "test", "staging", "production":
 	default:
@@ -190,11 +240,15 @@ func (c ProjectorConfig) Validate() error {
 		return errors.New("ACR_LOCAL_COMPOSITION_READY requires development with backing stores disabled")
 	}
 	if c.RequireBackingStores {
-		if strings.TrimSpace(c.ClickHouseDSN) == "" {
-			return errors.New("ACR_CLICKHOUSE_DSN is required when backing stores are required")
-		}
-		if strings.TrimSpace(c.PostgresDSN) == "" {
+		// r2 P1 finding: required is per-CALLER (see requiredStores' own
+		// doc comment) -- a Postgres-only caller (priors) must never be
+		// refused for a ClickHouse DSN it never opens, and a full-stack
+		// caller (serve/rebuild/rollback) must still require both.
+		if required.postgres && strings.TrimSpace(c.PostgresDSN) == "" {
 			return errors.New("ACR_POSTGRES_DSN is required when backing stores are required")
+		}
+		if required.clickhouse && strings.TrimSpace(c.ClickHouseDSN) == "" {
+			return errors.New("ACR_CLICKHOUSE_DSN is required when backing stores are required")
 		}
 	}
 	if c.ProjectionEnabled && c.RequireBackingStores && len(c.OrgIDs) == 0 {

@@ -3,6 +3,7 @@ package config
 import (
 	"log/slog"
 	"math"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,37 @@ func TestLoadDefaults(t *testing.T) {
 	_, err := load(mapLookup(nil))
 	if err == nil || !strings.Contains(err.Error(), "backing stores are required") {
 		t.Fatalf("load() error = %v, want a backing-stores-required refusal with zero configuration", err)
+	}
+}
+
+// TestDefaultListenAddressActuallyBindsLoopbackOnly is r2 P3 finding 3's
+// own pin: executes a REAL net.Listen against defaultListenAddress's own
+// host (port swapped for an ephemeral 0, so this needs no reserved port
+// and cannot collide with anything else on the host) and asserts the
+// address the OS actually bound -- read back from the live listener via
+// Addr(), never the config string -- is loopback. A wiring regression that
+// left the string "127.0.0.1:8080" in place but changed what
+// net.Listen("tcp", ...) was actually called with would leave the earlier,
+// string-only assertions green while this one catches it.
+func TestDefaultListenAddressActuallyBindsLoopbackOnly(t *testing.T) {
+	host, _, err := net.SplitHostPort(defaultListenAddress)
+	if err != nil {
+		t.Fatalf("defaultListenAddress = %q is not host:port: %v", defaultListenAddress, err)
+	}
+	if host != "127.0.0.1" {
+		t.Fatalf("defaultListenAddress host = %q, want 127.0.0.1", host)
+	}
+	listener, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
+	if err != nil {
+		t.Fatalf("net.Listen(%q) = %v, want a successful loopback bind", net.JoinHostPort(host, "0"), err)
+	}
+	defer listener.Close()
+	boundHost, _, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatalf("listener.Addr() = %q is not host:port: %v", listener.Addr().String(), err)
+	}
+	if boundHost != "127.0.0.1" {
+		t.Fatalf("listener actually bound host = %q (from the live OS-assigned address, not the config string), want 127.0.0.1", boundHost)
 	}
 }
 
