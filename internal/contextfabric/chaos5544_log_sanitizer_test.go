@@ -82,6 +82,16 @@ func TestSanitizeLogAttrIsTheOnlyImplementationLeft(t *testing.T) {
 // a real cycle, see chaos5544_log_sanitizer.go's own doc comment) -- this
 // pin follows it there rather than reading this package's now-thin
 // re-export, which no longer contains the NewReplacer call at all.
+//
+// r1 review round (CHAOS-5558) found this pin only ever grepped the WHOLE
+// FILE for the substring, never confirmed the replacer is actually
+// referenced INSIDE SanitizeLogAttr's own body -- proven by an executed
+// mutation: SanitizeLogAttr rewritten to `return s` (a complete no-op),
+// with logAttrForgeryReplacer's declaration left dead and unused in the
+// same file, still passed this test. Scoped now to the SanitizeLogAttr
+// function body specifically (isolated by its own `func ... {` / closing
+// `}` at column 0, the gofmt-guaranteed shape of a top-level declaration),
+// so a dead reference elsewhere in the file can no longer satisfy it.
 func TestSanitizeLogAttrUsesTheRecognizedReplacerShape(t *testing.T) {
 	t.Parallel()
 	src, err := os.ReadFile("../logsanitize/logsanitize.go")
@@ -89,10 +99,37 @@ func TestSanitizeLogAttrUsesTheRecognizedReplacerShape(t *testing.T) {
 		t.Fatalf("could not read ../logsanitize/logsanitize.go: %v", err)
 	}
 	text := string(src)
-	if !strings.Contains(text, "strings.NewReplacer(") {
-		t.Fatal("SanitizeLogAttr must route \\n/\\r through strings.NewReplacer -- the go/log-injection query's own documented recognized barrier shape")
+	const marker = "func SanitizeLogAttr(s string) string {"
+	start := strings.Index(text, marker)
+	if start == -1 {
+		t.Fatal("could not find `func SanitizeLogAttr(s string) string {` in logsanitize.go -- has the signature changed?")
 	}
-	if !strings.Contains(text, `"\n"`) || !strings.Contains(text, `"\r"`) {
+	body := text[start:]
+	end := strings.Index(body, "\n}")
+	if end == -1 {
+		t.Fatal("could not find SanitizeLogAttr's closing brace (a line starting with `}`) in logsanitize.go")
+	}
+	body = body[:end]
+	// The real shape is a package-level `var logAttrForgeryReplacer =
+	// strings.NewReplacer(...)`, called by NAME inside the function body
+	// (`logAttrForgeryReplacer.Replace(s)`) -- so the body itself never
+	// contains the literal text "strings.NewReplacer(". Two independent
+	// checks, not one substring test on the whole file: the body must
+	// actually CALL the replacer (defeats a `return s` no-op regardless of
+	// what else is dead in the file), and the file must declare that exact
+	// name via `var ... = strings.NewReplacer(...)` naming both \n and \r
+	// (defeats a same-named decoy that calls something else).
+	if !strings.Contains(body, "logAttrForgeryReplacer.Replace(") {
+		t.Fatal("SanitizeLogAttr's OWN body must call logAttrForgeryReplacer.Replace(...) -- a mutation that stops calling it (even a bare `return s`) must fail this test, not merely leave the declaration dead elsewhere in the file")
+	}
+	const declMarker = "var logAttrForgeryReplacer = strings.NewReplacer("
+	declStart := strings.Index(text, declMarker)
+	if declStart == -1 {
+		t.Fatal("could not find `var logAttrForgeryReplacer = strings.NewReplacer(...)` in logsanitize.go -- the go/log-injection query's own documented recognized barrier shape")
+	}
+	declLineEnd := strings.Index(text[declStart:], "\n")
+	declLine := text[declStart : declStart+declLineEnd]
+	if !strings.Contains(declLine, `"\n"`) || !strings.Contains(declLine, `"\r"`) {
 		t.Fatal("the NewReplacer call must name both \\n and \\r explicitly -- CWE-117's own two forgery characters")
 	}
 }

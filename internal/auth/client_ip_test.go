@@ -2,8 +2,32 @@ package auth
 
 import (
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
+
+// TestRemoteAddressClientIPSanitizesTheMalformedFallback is the CHAOS-5558
+// r1 P1 pin: when RemoteAddr is not "host:port" shape, net.SplitHostPort
+// fails and the function used to return the raw value UNCHANGED -- straight
+// into middleware.go's "remote_ip" log field with no barrier in between.
+// A real net/http server never sets RemoteAddr to anything but a clean TCP
+// peer address, but a non-standard listener/transport or (as here) a test
+// double can, and the function's own contract makes no such promise --
+// this pins the fallback branch specifically, not the ordinary path.
+func TestRemoteAddressClientIPSanitizesTheMalformedFallback(t *testing.T) {
+	request := httptest.NewRequest("GET", "http://example.test", nil)
+	request.RemoteAddr = "evil\nFAKE_LOG_LINE=injected\r\n"
+	got := RemoteAddressClientIP(request)
+	if strings.ContainsAny(got, "\n\r") {
+		t.Fatalf("RemoteAddressClientIP(%q) = %q, still carries a line break", request.RemoteAddr, got)
+	}
+	// strings.TrimSpace runs BEFORE the sanitizer (it strips the trailing
+	// \r\n as whitespace before SanitizeLogAttr ever sees it), so only the
+	// embedded \n survives to be replaced.
+	if got != "evil?FAKE_LOG_LINE=injected" {
+		t.Fatalf("RemoteAddressClientIP(%q) = %q, want the SanitizeLogAttr shape", request.RemoteAddr, got)
+	}
+}
 
 func TestTrustedProxyClientIPResolver(t *testing.T) {
 	resolver, err := NewTrustedProxyClientIPResolver([]string{"10.0.0.0/8", "192.0.2.0/24"})

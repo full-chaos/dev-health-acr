@@ -6,10 +6,22 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
+
+	"github.com/full-chaos/dev-health-acr/internal/logsanitize"
 )
 
 type ClientIPResolver func(*http.Request) string
 
+// RemoteAddressClientIP's ordinary output (SplitHostPort succeeding on a
+// real TCP peer address) is never free text -- host is a bare IP literal.
+// r1 review round (CHAOS-5558) found the FALLBACK branch was not: when
+// RemoteAddr is not "host:port" shape (a non-standard listener/transport,
+// or a test double), the function returned `value` UNMODIFIED -- reachable
+// straight into middleware.go's "remote_ip" log field with no sanitizer in
+// between, the same class of gap this whole ticket exists to close.
+// SanitizeLogAttr is a no-op on the well-formed "host:port" path (that
+// branch returns before reaching here) and only ever touches this one
+// fallback.
 func RemoteAddressClientIP(request *http.Request) string {
 	value := strings.TrimSpace(request.RemoteAddr)
 	host, _, err := net.SplitHostPort(value)
@@ -19,7 +31,7 @@ func RemoteAddressClientIP(request *http.Request) string {
 	if value == "" {
 		return "unknown"
 	}
-	return value
+	return logsanitize.SanitizeLogAttr(value)
 }
 
 func NewTrustedProxyClientIPResolver(cidrs []string) (ClientIPResolver, error) {

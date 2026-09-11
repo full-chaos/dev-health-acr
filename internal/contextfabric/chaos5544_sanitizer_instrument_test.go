@@ -299,7 +299,22 @@ func chaos5544ScanForUnsanitizedLogAttrs(t *testing.T, dir, pattern string) []st
 			return
 		}
 		pkgIdent, ok := sel.X.(*ast.Ident)
-		if !ok || pkgIdent.Name != "slog" {
+		// r1 review round (CHAOS-5558) found this resolved the package
+		// qualifier by NAME ("slog"), not identity -- an aliased import
+		// (`import log "log/slog"`; `log.Group(..., requestID)`) made
+		// pkgIdent.Name == "log" and silently skipped the whole check,
+		// executed-confirmed (findings: [] on a fixture with a genuinely
+		// unwrapped value). Every OTHER identity check in this file
+		// resolves through go/types rather than trusting a name string
+		// (chaos5544ResolveCalleeFunc, chaos5544IsStringConversion) for
+		// exactly this reason; this was the one holdout. info.Uses on a
+		// package qualifier resolves to *types.PkgName, whose Imported()
+		// names the real import path regardless of the local alias.
+		if !ok {
+			return
+		}
+		pkgName, isPkgName := info.Uses[pkgIdent].(*types.PkgName)
+		if !isPkgName || pkgName.Imported().Path() != "log/slog" {
 			return
 		}
 		switch {
@@ -1126,5 +1141,51 @@ func LogIt(logger *slog.Logger, requestID string) {
 	if want := fmt.Sprintf("%s:6:", filepath.Join(dir, "fixture.go")); findings[0][:len(want)] != want {
 		t.Fatalf("finding = %q, want it to point at fixture.go:6 (the slog.String value), not the "+
 			"spread on line 7 -- a traceable spread must not itself be flagged", findings[0])
+	}
+}
+
+// TestChaos5558SanitizerInstrumentResolvesSlogByIdentityNotName is the r1
+// review round's own P3 finding, pinned: inspectSlogBuilder used to check
+// the package qualifier by NAME ("slog"), not identity -- an aliased
+// import (`import log "log/slog"`) made an unsanitized value inside
+// log.Group/log.String/etc invisible, executed-confirmed with
+// `findings: []` on a fixture whose request_id genuinely never passes
+// through a sanitizer. Matches this file's own established standard
+// (chaos5544ResolveCalleeFunc/chaos5544IsStringConversion already resolve
+// by go/types identity, never by name) -- this was the one builder-side
+// holdout.
+func TestChaos5558SanitizerInstrumentResolvesSlogByIdentityNotName(t *testing.T) {
+	dir := t.TempDir()
+	src := `package fixture
+
+import log "log/slog"
+
+func LogIt(logger *log.Logger, requestID string) {
+	logger.Info("fixture line", "outer", log.Group("inner", "request_id", requestID))
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "fixture.go"), []byte(src), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	modSrc := "module fixture.example/chaos5558slogalias\n\ngo 1.21\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(modSrc), 0o644); err != nil {
+		t.Fatalf("write fixture go.mod: %v", err)
+	}
+	formatted, err := format.Source([]byte(src))
+	if err != nil {
+		t.Fatalf("fixture does not gofmt clean: %v", err)
+	}
+	if !bytes.Equal(formatted, []byte(src)) {
+		t.Fatalf("fixture source is not gofmt-normalized")
+	}
+
+	findings := chaos5544ScanForUnsanitizedLogAttrs(t, dir, "./...")
+	if len(findings) != 1 {
+		t.Fatalf("the instrument found %d finding(s) in a fixture that imports \"log/slog\" under the "+
+			"alias \"log\" with one genuinely unwrapped value -- it must find exactly one, resolving the "+
+			"package by identity regardless of the local import name: %v", len(findings), findings)
+	}
+	if want := fmt.Sprintf("%s:6:", filepath.Join(dir, "fixture.go")); findings[0][:len(want)] != want {
+		t.Fatalf("finding = %q, want it to point at fixture.go:6 (the Group's request_id value)", findings[0])
 	}
 }
