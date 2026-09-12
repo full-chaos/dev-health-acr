@@ -500,3 +500,209 @@ func TestCHAOS5582_TheLineVocabularyIsTheGuardsVocabulary(t *testing.T) {
 		t.Errorf("an unknown key returned a vocabulary")
 	}
 }
+
+// EVERY FIELD THAT ASSERTS SOMETHING HAPPENED is decided from the FINAL
+// continuation state at the single exit fold, never from an intermediate
+// stage.
+//
+// `applied_window` is copied in at ADMISSION, before the composition verdict
+// exists. A turn admitted and then withheld applied no window at all, and the
+// line went on publishing the admitted one -- a field asserting a decision that
+// did not hold. The supersession branch cleared it, but only on the `Applies()`
+// path, so the far more common withholds kept it. This table walks the
+// disposition x composition-outcome space THROUGH THE ENGINE and reads the
+// EMITTED line: `applied_window` and `accepted_context_id` are non-empty iff
+// the continuation applied, and every other cell publishes neither.
+func TestCHAOS5582_TheLineAssertsOnlyDecisionsThatHeldAtEmission(t *testing.T) {
+	t.Parallel()
+	question := validInvestigationRequest().Question
+	for _, tc := range []struct {
+		name            string
+		prior           func(InvestigationResult) InvestigationResult
+		mutate          func(*InvestigationRequest)
+		interpreter     QuestionInterpreter
+		wantDisposition string
+		wantComposition string
+		wantApplied     bool
+	}{
+		{name: "applied/no_fresh_frame -- the one cell that DID apply a window",
+			interpreter:     freshAxisInterpreter{family: QuestionFamilyGroupedCohortStatus, timeContext: TimeContext{Axis: TemporalCurrent}},
+			wantDisposition: "applied", wantComposition: "no_fresh_frame", wantApplied: true},
+		{name: "withheld/invalid -- composition could not express the carried reading",
+			interpreter:     ungroupedDriftInterpreter{family: QuestionFamilyDiscoveredCohortRanking},
+			wantDisposition: "withheld", wantComposition: "invalid", wantApplied: false},
+		{name: "withheld/not_evaluated -- version-mismatched carrier, never composed",
+			prior: func(p InvestigationResult) InvestigationResult {
+				p.AnswerPlan.FamilyVersion = "question-family.v0-not-in-force"
+				return p
+			},
+			interpreter:     freshAxisInterpreter{family: QuestionFamilyDiscoveredCohortRanking, timeContext: axis5582DriftedAxes()[0].time},
+			wantDisposition: "withheld", wantComposition: "not_evaluated", wantApplied: false},
+		{name: "not_applicable/not_evaluated -- carrier without a plan",
+			prior: func(p InvestigationResult) InvestigationResult {
+				p.AnswerPlan = nil
+				return p
+			},
+			interpreter:     freshAxisInterpreter{family: QuestionFamilyDiscoveredCohortRanking, timeContext: axis5582DriftedAxes()[0].time},
+			wantDisposition: "not_applicable", wantComposition: "not_evaluated", wantApplied: false},
+		{name: "not_applicable/not_evaluated -- the request states its own scope",
+			mutate:          func(r *InvestigationRequest) { r.RequestedScope.RepositorySlugs = []string{"widget-service"} },
+			interpreter:     freshAxisInterpreter{family: QuestionFamilyDiscoveredCohortRanking, timeContext: axis5582DriftedAxes()[0].time},
+			wantDisposition: "not_applicable", wantComposition: "not_evaluated", wantApplied: false},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			prior := continuationPrior(t, continuationPriorID, question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+			if tc.prior != nil {
+				prior = tc.prior(prior)
+			}
+			request := continuationRequest(question)
+			if tc.mutate != nil {
+				tc.mutate(&request)
+			}
+			run := axis5582Investigate(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}, tc.interpreter, request)
+			if run.err != nil {
+				t.Fatalf("Investigate() error = %v", run.err)
+			}
+			line := run.soleDecisionLine(t)
+			applied, _ := line["applied_window"].(string)
+			acceptedID, _ := line["accepted_context_id"].(string)
+			t.Logf("disposition=%v composition=%v applied_window=%q accepted_context_id=%q served_window=%v",
+				line["continuation_disposition"], line["composition_outcome"], applied, acceptedID,
+				run.result.EffectiveEvidenceWindow != nil)
+
+			if got := line["continuation_disposition"]; got != tc.wantDisposition {
+				t.Fatalf("continuation_disposition = %v, want %q -- the cell does not exercise what it claims", got, tc.wantDisposition)
+			}
+			if got := line["composition_outcome"]; got != tc.wantComposition {
+				t.Errorf("composition_outcome = %v, want %q", got, tc.wantComposition)
+			}
+			// THE INVARIANT, asserted in BOTH directions so neither a always-
+			// empty nor an always-populated field can satisfy it.
+			if tc.wantApplied {
+				if applied == "" {
+					t.Errorf("applied_window is empty on an APPLIED continuation -- the line cannot say which window executed")
+				}
+				if acceptedID == "" {
+					t.Errorf("accepted_context_id is empty on an APPLIED continuation")
+				}
+				if run.result.EffectiveEvidenceWindow == nil {
+					t.Errorf("the line claims an applied window on a result that carries none")
+				}
+			} else {
+				if applied != "" {
+					t.Errorf("applied_window = %q on a %s continuation -- no window was applied and the line says one was",
+						applied, tc.wantDisposition)
+				}
+				if acceptedID != "" {
+					t.Errorf("accepted_context_id = %q on a %s continuation -- nothing executed under that context",
+						acceptedID, tc.wantDisposition)
+				}
+			}
+		})
+	}
+}
+
+// refusingGate5582 is a fresh interpretation whose gate REFUSES, parameterised
+// over the whole refusing half of the gate's closed vocabulary and over whether
+// a frame was proposed at all. It exists so the sweep below is over the gate's
+// own members rather than over a single hand-picked shape.
+type refusingGate5582 struct {
+	family    QuestionFamily
+	gate      FrameGate
+	withFrame bool
+}
+
+func (i refusingGate5582) Interpret(ctx context.Context, p storage.Principal, r InvestigationRequest) (InterpretedQuestion, QuestionFamilyOutcome, error) {
+	outcome := QuestionFamilyOutcome{
+		Family: i.family, Source: QuestionFamilySourceModel, Gate: i.gate,
+		WinningSampleIndex: 0, WinningSample: FamilySample{ModelFamily: i.family},
+		Version: QuestionFamilyTableVersion,
+	}
+	if i.withFrame {
+		frame := QuestionFrame{
+			Goals:             []InvestigationGoal{GoalAssessState},
+			SubjectExpression: SubjectExpression{Kind: SubjectExpressionOrganizationScope, Org: &OrganizationScopeExpression{}},
+			Temporal:          TemporalIntentCurrent,
+		}
+		v := ValidateFrame(frame, nil, ShapeOpen)
+		if v.Outcome != FrameValidationOutcomeValid {
+			panic("fixture defect: frame invalid " + string(v.Failure.Invariant))
+		}
+		outcome.Frame = &v.Frame
+	}
+	return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, outcome, nil
+}
+
+// ON AN ESTABLISHED TRANSITION NO GATE BELONGING TO THE FRESH INTERPRETATION
+// DECIDES THE TURN.
+//
+// Not the axis, not the bound, and not the frame gate: a frame proposed for a
+// question the receipt has already settled can refuse `member_kind_unservable`
+// on a reading nobody asked to execute. The rule is not "and also the frame
+// gate" -- it is that the fresh proposal is not a party to such a turn at all.
+// This sweep is over the REFUSING half of the gate vocabulary crossed with
+// frame-proposed and frame-absent, each executed through the engine, and each
+// paired with the same fixture on an UNESTABLISHED turn, where the refusal must
+// still stand. Without that control the table would pass on a build that simply
+// stopped refusing.
+func TestCHAOS5582_NoFreshGateDecidesAnEstablishedTransition(t *testing.T) {
+	t.Parallel()
+	question := validInvestigationRequest().Question
+	changed := "What was the status of Ask Dev last spring and what drove it?"
+	gates := map[string]FrameGate{
+		"rejected_invalid": {Outcome: FrameGateRejectedInvalid, FailedInvariant: FrameInvariant("i6")},
+		"refused_basis":    {Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable, DeclaredMemberKind: contractsv1.ContextFabricSubjectRepository},
+	}
+	for gateName, gate := range gates {
+		for _, withFrame := range []bool{false, true} {
+			shape := "frame_absent"
+			if withFrame {
+				shape = "frame_proposed"
+			}
+			gateName, gate, withFrame, shape := gateName, gate, withFrame, shape
+			interpreter := refusingGate5582{family: QuestionFamilyDiscoveredCohortRanking, gate: gate, withFrame: withFrame}
+
+			t.Run(gateName+"/"+shape+"/established: served", func(t *testing.T) {
+				t.Parallel()
+				prior := continuationPrior(t, continuationPriorID, question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+				run := axis5582Investigate(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}, interpreter, continuationRequest(question))
+				if run.err != nil {
+					t.Fatalf("Investigate() error = %v", run.err)
+				}
+				line := run.soleDecisionLine(t)
+				t.Logf("disposition=%v composition=%v status=%q basis=%q", line["continuation_disposition"], line["composition_outcome"], run.result.Status, run.result.RefusalBasis)
+				if run.result.Status == InvestigationNoMatch {
+					t.Errorf("REFUSED on an established transition: status=%q basis=%q -- the fresh %s gate decided a turn the receipt had already settled",
+						run.result.Status, run.result.RefusalBasis, gateName)
+				}
+				if got := line["composition_outcome"]; got == string(CompositionFreshRefused) {
+					t.Errorf("composition_outcome = %v -- the fresh gate was consulted", got)
+				}
+				if got := line["continuation_disposition"]; got != "applied" {
+					t.Errorf("continuation_disposition = %v, want applied -- the carried reading is what the caller confirmed", got)
+				}
+			})
+
+			t.Run(gateName+"/"+shape+"/not_established: refusal stands", func(t *testing.T) {
+				t.Parallel()
+				prior := continuationPrior(t, continuationPriorID, question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+				prior.Question = changed
+				run := axis5582Investigate(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}, interpreter, continuationRequest(question))
+				if run.err != nil {
+					t.Fatalf("Investigate() error = %v", run.err)
+				}
+				line := run.soleDecisionLine(t)
+				t.Logf("CONTROL disposition=%v composition=%v status=%q basis=%q", line["continuation_disposition"], line["composition_outcome"], run.result.Status, run.result.RefusalBasis)
+				if run.result.Status != InvestigationNoMatch {
+					t.Errorf("the control was SERVED: status=%q -- nothing about this turn was confirmed, so the fresh %s gate must still end it",
+						run.result.Status, gateName)
+				}
+				if got := line["continuation_disposition"]; got == "applied" {
+					t.Errorf("continuation_disposition = applied on an unestablished turn whose fresh gate refused")
+				}
+			})
+		}
+	}
+}

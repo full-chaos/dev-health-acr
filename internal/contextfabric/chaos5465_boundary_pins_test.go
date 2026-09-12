@@ -121,7 +121,20 @@ func TestBoundary_ARefusingGateIsNeverUsable(t *testing.T) {
 
 // The same cell through the real engine: a refused evaluation with no proposed
 // frame must not end the turn as an applied continuation serving the carrier.
-func TestBoundary_ARefusedTurnWithNoFrameIsNotAContinuation(t *testing.T) {
+func TestBoundary_ARefusedFreshGateDoesNotDecideAnEstablishedTransition(t *testing.T) {
+	// FLIPPED by the axis-carry change, and this is the cell that flipped.
+	//
+	// It was written as "a refused turn with no frame is not a continuation",
+	// which is right for a turn the caller has NOT already settled and wrong
+	// for one they have. On an established transition -- identical question
+	// bytes, exactly one valid window receipt, no explicit window, a readable
+	// taint-valid carrier -- the caller has confirmed which reading they want
+	// and that reading has already been served once under a gate of its own.
+	// Consulting the fresh frame's gate there refuses the very turn the user
+	// just confirmed, on a frame proposed for a question the receipt settled.
+	// So the fresh proposal is dropped on this branch and the carried reading
+	// is served. The control below is the same fixture with the transition
+	// NOT established: there the fresh refusal still stands, unchanged.
 	req := continuationRequest(validInvestigationRequest().Question)
 	prior := r4CheckedPrior(t, continuationPriorID, req.Question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
 	h := newContinuationHarness(t,
@@ -134,11 +147,48 @@ func TestBoundary_ARefusedTurnWithNoFrameIsNotAContinuation(t *testing.T) {
 		d.Disposition, d.Reason, d.CompositionOutcome, d.Accepted != nil,
 		result.Status, servedPlanSource(result), servedPlanFamily(result), servedPlanGroup(result))
 
-	if d.Disposition == ContinuationApplied {
-		t.Fatalf("the fresh gate REFUSED and the continuation was applied anyway (composition=%q)", d.CompositionOutcome)
+	if !d.TransitionEstablished {
+		t.Fatalf("fixture did not establish the transition, so it pins nothing")
 	}
-	if d.CompositionOutcome != CompositionFreshRefused {
-		t.Errorf("composition_outcome=%q, want %q", d.CompositionOutcome, CompositionFreshRefused)
+	if d.Disposition != ContinuationApplied {
+		t.Fatalf("disposition=%q, want %q -- the fresh gate refused a turn the receipt had already settled",
+			d.Disposition, ContinuationApplied)
+	}
+	if d.CompositionOutcome == CompositionFreshRefused {
+		t.Errorf("composition_outcome=%q -- the fresh gate was consulted on an established transition", d.CompositionOutcome)
+	}
+	if result.Status == InvestigationNoMatch {
+		t.Errorf("the confirmed turn was refused: status=%q basis=%q", result.Status, result.RefusalBasis)
+	}
+	if servedPlanSource(result) != QuestionFamilySourceCarried {
+		t.Errorf("served plan source=%q, want %q -- the carried reading is what the caller confirmed",
+			servedPlanSource(result), QuestionFamilySourceCarried)
+	}
+}
+
+// The control for the pin above: the SAME refusing fresh gate on a turn whose
+// transition is NOT established (the question changed). Nothing about that turn
+// was confirmed, so the fresh refusal stands and the carried family is not
+// served -- the behaviour the original pin was written to protect, kept.
+func TestBoundary_ARefusedFreshGateStillStandsWithoutAnEstablishedTransition(t *testing.T) {
+	req := continuationRequest(validInvestigationRequest().Question)
+	prior := r4CheckedPrior(t, continuationPriorID, req.Question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
+	prior.Question = "What was the status of Ask Dev last spring and what drove it?"
+	h := newContinuationHarness(t,
+		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		nilFrameRefusingGateInterpreter{family: QuestionFamilyDiscoveredCohortRanking})
+
+	result := h.investigate(t, req)
+	d := h.soleDecision(t)
+	t.Logf("disposition=%q reason=%q composition=%q established=%v | status=%q plan_source=%q",
+		d.Disposition, d.Reason, d.CompositionOutcome, d.TransitionEstablished,
+		result.Status, servedPlanSource(result))
+
+	if d.TransitionEstablished {
+		t.Fatalf("the control established the transition, so it is not a control")
+	}
+	if d.Disposition == ContinuationApplied {
+		t.Errorf("the fresh gate REFUSED on an unestablished turn and the continuation applied anyway (composition=%q)", d.CompositionOutcome)
 	}
 	if d.Accepted != nil {
 		t.Errorf("a withheld turn published an accepted context")

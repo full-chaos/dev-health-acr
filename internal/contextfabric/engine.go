@@ -1145,6 +1145,27 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		if servedErr != nil {
 			continuation.RefusalBasis = ""
 		}
+		// EVERY FIELD THAT ASSERTS SOMETHING HAPPENED IS DECIDED FROM THE
+		// FINAL STATE, HERE. `AppliedWindow` is copied in at
+		// ADMISSION, before the composition verdict exists, because that is
+		// where the canonicalisation that chose it lives. A turn admitted and
+		// then withheld -- composition invalid, an unexpressible carried axis,
+		// a version-mismatched carrier -- applied no window at all, and the
+		// line went on publishing the admitted one. The supersession branch
+		// above cleared it, but only on the `Applies()` path, so the far more
+		// common withhold kept a window it never used: a field asserting a
+		// decision that did not hold, which is the same class of untrue field
+		// as the `agreement=true` and the stale `family_accepted` this seam was
+		// cut to remove.
+		//
+		// Stated as the rule rather than as a list of exits, because the list
+		// is what goes stale: a decision field is populated IFF its decision
+		// holds at EMISSION. Derive it from the final disposition, never from
+		// whatever an intermediate stage happened to leave behind.
+		if !continuation.Applies() {
+			continuation.AppliedWindow = nil
+			continuation.Accepted = nil
+		}
 		e.telemetry.RecordWindowContinuationDecision(ctx, principal, continuation)
 	}()
 	// THE OBSERVATION-COVER LINES ARE PUBLISHED ONCE, HERE, AT THE EXIT, and
@@ -1728,6 +1749,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				CarriedGroupKind: continuation.Accepted.GroupKind,
 				ModelObligations: familyOutcome.FrameObligations,
 				EmittedShape:     interpretation.Shape,
+				// The one flag that tells the boundary the caller has already
+				// settled this turn, so no fresh-path gate is consulted.
+				TransitionEstablished: continuation.TransitionEstablished,
 			})
 			// THE OUTCOME IS RECORDED BEFORE THE BRANCH, so the successful
 			// path publishes it too. Recording it only in the else-arm is how

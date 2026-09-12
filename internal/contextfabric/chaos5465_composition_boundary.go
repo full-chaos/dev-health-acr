@@ -172,6 +172,13 @@ type compositionInput struct {
 	// two-authorities defect in a new place.
 	ModelObligations []AnswerObligation
 	EmittedShape     InvestigationShape
+	// TransitionEstablished is the window-only transition, proven by admission:
+	// the identical question bytes, exactly one valid window receipt, no
+	// explicit window, and a readable taint-valid carrier. On such a turn the
+	// caller has already confirmed which reading they want, so NO GATE
+	// BELONGING TO THE FRESH INTERPRETATION IS CONSULTED -- not the axis, not
+	// the bound, and not this frame gate. See composeAcceptedContext.
+	TransitionEstablished bool
 }
 
 // composeAcceptedContext produces the frame consumers receive, validates THAT
@@ -186,6 +193,23 @@ func composeAcceptedContext(in compositionInput) AcceptedContext {
 	// ended as an applied continuation serving the carried family. The frame
 	// was nil, the gate said refused_basis, and nothing in between looked.
 	//
+	// ON AN ESTABLISHED TRANSITION THE FRESH READING IS NOT A PARTY TO THIS
+	// TURN AT ALL -- neither its frame nor the gate decided on it.
+	//
+	// A caller who sends the identical question bytes, exactly one valid window
+	// receipt and no explicit window has already settled which reading they
+	// want, and that reading has been served once under a gate of its own.
+	// Consulting the fresh frame's gate there refuses the very turn the caller
+	// just confirmed, for a reading nobody asked to execute. The rule is stated
+	// once and covers every gate rather than excepting them one at a time: the
+	// fresh proposal is DROPPED on this branch -- no frame, and a gate that says
+	// none was proposed FOR THIS TURN. The carried reading rides out under its
+	// own already-served frame, so a refusal on this path can come only from the
+	// carried reading itself.
+	if in.TransitionEstablished && in.FreshGate.Refuses() {
+		in.Fresh = nil
+		in.FreshGate = FrameGate{Outcome: FrameGateNotProposed}
+	}
 	// Every refusing cell now leaves here, frame or no frame.
 	if in.FreshGate.Refuses() {
 		// Composition does not get to launder a refusal: there is no validated
