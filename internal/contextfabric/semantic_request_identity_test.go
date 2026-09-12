@@ -159,15 +159,23 @@ func TestSemanticState_TheNamedBoundsImplyTheByteCap(t *testing.T) {
 	}
 }
 
-// TestSemanticState_AnInvalidEncodingIsRefusedAndNeverRewritten is the pin the
-// UTF-8 guard was missing: the battery removed the guard and every test still
-// passed, which is exactly what "a surviving mutant is a finding" means.
+// TestSemanticState_AnInvalidEncodingIsRefusedAndNeverRewritten holds the
+// invariant that the reading STORED is the reading ACCEPTED, byte for byte.
 //
-// encoding/json replaces a byte sequence that is not valid UTF-8 with U+FFFD
-// rather than failing, so without the guard the stored snapshot is a DIFFERENT
-// reading from the one accepted, and a reading that merely SPELLS the
-// replacement character encodes to the same bytes -- the replay comparison
-// then cannot tell the two apart.
+// encoding/json does not fail on a byte sequence that is not valid UTF-8; it
+// substitutes U+FFFD. Unrefused, that makes the stored snapshot a different
+// reading from the accepted one, and it makes a reading that merely SPELLS the
+// replacement character encode to identical bytes -- so the replay comparison,
+// whose whole job is to tell two readings apart, cannot.
+//
+// THE REFUSAL LIVES AT TWO LAYERS BECAUSE THE SUBSTITUTION DOES. A string the
+// snapshot carries directly reaches the encoder as the caller wrote it, so the
+// encoder is where it is refused. A string inside the accepted frame does not:
+// the snapshot's builder clones that frame through a JSON round trip, so the
+// bytes are already substituted before any snapshot exists, and the only place
+// that can still see the original is the capture's own input. Each layer is
+// executed below, and a cell executes the substitution itself, so the reason
+// for the second layer is proven rather than asserted.
 func TestSemanticState_AnInvalidEncodingIsRefusedAndNeverRewritten(t *testing.T) {
 	t.Parallel()
 	const invalid = "platform\xff\xfeteam"

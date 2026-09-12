@@ -1069,9 +1069,10 @@ func TestWindowContinuation_EveryReasonIsReachedThroughTheEngine(t *testing.T) {
 		{
 			// An answer-shaping option the public plan does not record: turn
 			// one stamped it into the snapshot's request-identity digest, and
-			// this turn asks with a different one. max_drivers is the cell the
-			// review round proved reaches graph discovery and truncates what
-			// the answer may say, so it is the one driven here.
+			// this turn asks with a different one. max_drivers is driven here
+			// because it reaches graph discovery, where it truncates the
+			// drivers the answer may cite -- a changed value changes the
+			// answer, which is what makes it part of the identity.
 			reason: ContinuationReasonRequestIdentityChanged,
 			mutate: func(r *InvestigationRequest) { r.Options.MaxDrivers = r.Options.MaxDrivers + 1 },
 		},
@@ -1476,7 +1477,7 @@ func TestWindowContinuation_R2_TheGraphConsumersNeverSeeANilFrame(t *testing.T) 
 	if _, err := engine.Investigate(context.Background(), acceptancePrincipal(), request); err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
-	t.Logf("R2-3: ResolveSubjects saw frame=%v (calls=%d); the carrier saved a non-nil frame",
+	t.Logf("ResolveSubjects saw frame=%v (calls=%d); the carrier saved a non-nil frame",
 		graph.lastFrameNonNil, graph.calls)
 	if graph.calls > 0 && !graph.lastFrameNonNil {
 		t.Fatalf("R2-3 REGRESSION: the fresh frame was cleared for the PLANNER and the nil then reached ResolveSubjects, a CURRENT-request consumer that reads the frame for this turn's retrieval -- the fix for R1-1 is scoped wider than the defect it closed")
