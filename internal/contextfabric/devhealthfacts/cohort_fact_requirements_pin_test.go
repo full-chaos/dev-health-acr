@@ -124,3 +124,54 @@ func TestRepositoryCohortsDoNotAskForWorkload(t *testing.T) {
 		}
 	}
 }
+
+// TestCohortDerivedFactKindsIsExactlyTheTablesUnion closes the hole every
+// other guard in this file shares: they take their QUANTIFICATION UNIVERSE
+// from CohortDerivedFactKinds(), which is the artifact under test.
+//
+// TestCohortFactRequirementsOmitNothingAProviderServes loops over
+// `graphrank.CohortDerivedFactKinds()` to decide which fact kinds to ask
+// about. So a derived set that silently LOSES a value does not fail that
+// guard -- it shrinks it. Drop FactIncidents from the union and the guard
+// simply stops asking whether anything declares FactIncidents; the same
+// shrinkage blinds the admission guard next door, whose
+// declaringCohortFactKinds walks the same set and therefore reports "no
+// declaring producer" for a kind whose producer is registered and declaring.
+// Every one of those tests stays green while the accessor no longer describes
+// the table. A guard whose universe is supplied by its own subject cannot see
+// its subject get smaller.
+//
+// This test recomputes the union INDEPENDENTLY, from the table itself
+// (CohortFactRequirementKinds, a different accessor over the same rows), and
+// compares. It quantifies over the rows, so shrinking the derived set is a
+// disagreement rather than a narrower question.
+func TestCohortDerivedFactKindsIsExactlyTheTablesUnion(t *testing.T) {
+	t.Parallel()
+	table := graphrank.CohortFactRequirementKinds()
+	if len(table) == 0 {
+		t.Fatal("the cohort fact-requirement table is empty, so this comparison has nothing to disagree about")
+	}
+	fromRows := map[contextfabric.FactKind]bool{}
+	for _, declared := range table {
+		for _, factKind := range declared {
+			fromRows[factKind] = true
+		}
+	}
+	if len(fromRows) == 0 {
+		t.Fatal("no row declares any fact kind, so the union is empty and this guard asserts nothing")
+	}
+	fromAccessor := map[contextfabric.FactKind]bool{}
+	for _, factKind := range graphrank.CohortDerivedFactKinds() {
+		fromAccessor[factKind] = true
+	}
+	for factKind := range fromRows {
+		if !fromAccessor[factKind] {
+			t.Errorf("%q is declared by a row of the cohort fact-requirement table but is absent from CohortDerivedFactKinds() -- every guard that takes its universe from that accessor has silently stopped asking about %q", factKind, factKind)
+		}
+	}
+	for factKind := range fromAccessor {
+		if !fromRows[factKind] {
+			t.Errorf("CohortDerivedFactKinds() reports %q, which no row of the table declares -- the accessor claims a cohort can ask for a fact nothing asks for", factKind)
+		}
+	}
+}
