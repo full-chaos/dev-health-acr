@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -58,3 +59,92 @@ func TestAProjectResolvesByItsSlugHandleInTheSearchText(t *testing.T) {
 }
 
 func stringPointer(value string) *string { return &value }
+
+// THE CUT WOULD HAVE LANDED INSIDE A HANDLE. Three handles whose join is 131
+// runes: capping the joined string at 120 ends the line eighteen runes into the
+// third handle, publishing a prefix of it as if it were a spelling. Whole-
+// handle budgeting leaves the third handle out and keeps the first two intact.
+func TestAHandleIsNeverIndexedAsATruncatedPrefix(t *testing.T) {
+	t.Parallel()
+	first := strings.Repeat("a", 50)
+	second := strings.Repeat("b", 50)
+	third := strings.Repeat("c", 29)
+	handles := []string{first, second, third} // join = 50+1+50+1+29 = 131
+	if joined := strings.Join(handles, " "); len([]rune(joined)) <= capHandles {
+		t.Fatalf("fixture joins to %d runes, want more than the %d budget or the cut this test is about cannot occur", len([]rune(joined)), capHandles)
+	}
+	// The old rule, stated as a literal so this test is not computed from the
+	// thing under test: the first 120 runes of the join end 18 runes into
+	// the third handle.
+	if oldCut := capRunes(strings.Join(handles, " "), capHandles); !strings.HasSuffix(oldCut, strings.Repeat("c", 18)) {
+		t.Fatalf("fixture no longer places the old cut inside the third handle: %q", oldCut)
+	}
+
+	got := retrievalHandles(contextfabric.EntityProjection{Aliases: handles})
+	if want := first + " " + second; got != want {
+		t.Fatalf("retrievalHandles = %q (%d runes), want the two whole handles that fit and nothing of the third", got, len([]rune(got)))
+	}
+	if strings.Contains(got, "c") {
+		t.Fatalf("a prefix of the handle that did not fit was indexed: %q", got)
+	}
+}
+
+// A LATER, SHORTER HANDLE THAT STILL FITS IS KEPT. Skipping a handle that
+// overflows must not end the line: a short handle after it in sorted order
+// still fits the remaining budget.
+func TestAShorterHandleAfterAnOverflowingOneIsKept(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("m", 70) // sorts after "a..." and before "z"
+	head := strings.Repeat("a", 60) // 60 + 1 + 70 = 131 -> "m..." overflows
+	tail := "zz"                    // 60 + 1 + 2 = 63 -> fits after the skip
+	got := retrievalHandles(contextfabric.EntityProjection{Aliases: []string{long, head, tail}})
+	if want := head + " " + tail; got != want {
+		t.Fatalf("retrievalHandles = %q, want %q -- the overflowing handle is skipped, not a stop", got, want)
+	}
+}
+
+// A SINGLE HANDLE LONGER THAN THE BUDGET IS LEFT OUT WHOLE, never cut to fit.
+func TestASingleHandleOverTheBudgetIsLeftOutWhole(t *testing.T) {
+	t.Parallel()
+	over := strings.Repeat("h", capHandles+1)
+	if got := retrievalHandles(contextfabric.EntityProjection{Aliases: []string{over}}); got != "" {
+		t.Fatalf("a %d-rune handle produced %q (%d runes), want nothing -- a prefix of it is not its spelling", len([]rune(over)), got, len([]rune(got)))
+	}
+	exact := strings.Repeat("h", capHandles)
+	if got := retrievalHandles(contextfabric.EntityProjection{Aliases: []string{exact}}); got != exact {
+		t.Fatalf("a handle of exactly the budget was not kept whole")
+	}
+}
+
+// BYTE-IDENTICAL UNDER THE CAP. For every entity whose handles fit, the new
+// line equals the old capped join exactly, so its search text and embedding
+// do not move. Asserted over every templated fixture this package already
+// uses, plus a multi-byte case at exactly the budget, rather than one hand-
+// picked entity.
+func TestHandleLinesUnderTheBudgetAreByteIdentical(t *testing.T) {
+	t.Parallel()
+	entities := fullTemplateEntities()
+	entities = append(entities,
+		contextfabric.EntityProjection{Aliases: []string{"BILL", "billing"}, PreviousNames: []string{"Old Billing"}},
+		contextfabric.EntityProjection{Aliases: []string{strings.Repeat("é", 59), strings.Repeat("ö", 60)}}, // 59+1+60 = 120 runes, 240 bytes
+	)
+	compared := 0
+	for _, entity := range entities {
+		handles := make([]string, 0)
+		handles = append(handles, entity.Aliases...)
+		handles = append(handles, entity.ProviderAliases...)
+		handles = append(handles, entity.PreviousNames...)
+		joined := strings.Join(graphrank.UniqueSorted(handles), " ")
+		if len([]rune(joined)) > capHandles {
+			continue
+		}
+		compared++
+		old := capRunes(joined, capHandles)
+		if got := retrievalHandles(entity); got != old {
+			t.Errorf("%s: handle line changed under the budget: got %q, want the old %q", entity.Subject.CanonicalID, got, old)
+		}
+	}
+	if compared < 3 {
+		t.Fatalf("only %d under-budget entities compared -- the identity control is too thin to mean anything", compared)
+	}
+}
