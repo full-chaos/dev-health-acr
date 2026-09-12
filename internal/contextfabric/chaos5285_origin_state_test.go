@@ -332,7 +332,7 @@ func TestTheOriginRowsFitTheCoverageBoundAtTheVocabularyMaximum(t *testing.T) {
 		appendFactCoverage(&group, FactKind(kind), SourceStale, nil, "", "group read returned stale", coverageDetailSpec{})
 	}
 	// AND THE COMBINED CAP'S SECOND OBSERVATION, on every kind of the group
-	// read. This is the shape r1 P1-2 found: the cap appends a `truncated`
+	// read. The cap appends a `truncated`
 	// observation for a kind the provider already reported, so a producer
 	// that emitted per OBSERVATION served two rows per kind per read -- 88
 	// origin details instead of 44 -- and a LEGAL full-vocabulary grouped
@@ -742,9 +742,16 @@ func TestEveryRowTheProducerDropsSaysWhyItWasDropped(t *testing.T) {
 		if skipped[0].Source != "context-fabric:graph-validity-windows" {
 			t.Errorf("source = %q, want the graph source", skipped[0].Source)
 		}
-		// AND IT IS DROPPED HERE, not carried on to be refused downstream.
-		if other := reasons(read(t, buf), "contract_refused"); len(other) != 0 {
-			t.Fatalf("a graph observation produced %d contract_refused line(s): %+v", len(other), other)
+		// AND IT IS DROPPED HERE, not carried on for a later guard to catch.
+		// A graph source has no `canonical_fact:` entry on the served
+		// document, so carrying it past this filter reaches the
+		// no-served-source guard instead and reports a routine observation
+		// as a missing join -- the right outcome for the wrong reason, and
+		// the wrong reason is what an operator would read.
+		for _, reason := range []string{"contract_refused", "no_served_source"} {
+			if other := reasons(read(t, buf), reason); len(other) != 0 {
+				t.Fatalf("a graph observation produced %d %s line(s): %+v -- it was carried past the filter", len(other), reason, other)
+			}
 		}
 	})
 

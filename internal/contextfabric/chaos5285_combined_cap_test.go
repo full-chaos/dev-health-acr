@@ -159,11 +159,11 @@ func TestTheSecondReadSharesTheTurnsFactBudget(t *testing.T) {
 	}
 	// AND ON THE DISCLOSURE ROWS, not only on the folded source states.
 	//
-	// This assertion is r1 finding P3: the checks above read
-	// `Coverage.Sources` alone, so they passed while the served document
-	// carried two origin rows for one read and one kind. The cap appends a
-	// SECOND observation for a kind the provider already reported, and a
-	// producer that emits per observation emits twice for that kind.
+	// The checks above read `Coverage.Sources` alone, and a disclosure
+	// defect does not live there: the cap appends a SECOND observation for a
+	// kind the provider already reported, and what that does to the served
+	// rows is only visible in `Coverage.Details`. A cap test that never
+	// reads them cannot see it.
 	//
 	// ONE ROW PER (READ, KIND) is the rule: a read's state for a kind is one
 	// fact, whatever number of observations the pipeline used to arrive at it.
