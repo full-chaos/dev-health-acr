@@ -340,7 +340,12 @@ func DeriveFrameObligations(frame QuestionFrame, modelEmitted []AnswerObligation
 // check. The fixed order matters for the same reason the telemetry rows
 // are index-ordered: two runs of one frame must produce a diffable list.
 func FrameAxisDischarges(frame QuestionFrame) []AxisDischarge {
-	discharges := make([]AxisDischarge, 0, len(frame.Goals)+len(frame.Dimensions)+3)
+	// BOUNDED HINT: goals and dimensions are closed vocabularies, and the
+	// frame may have been read back from the store, so the sum is clamped to
+	// what those vocabularies can hold rather than taken from the document.
+	discharges := make([]AxisDischarge, 0,
+		boundedCapacity(len(frame.Goals), InvestigationGoalCount)+
+			boundedCapacity(len(frame.Dimensions), HealthDimensionCount)+3)
 
 	for _, goal := range frame.Goals {
 		if discharge, ok := goalDischarge[goal]; ok {

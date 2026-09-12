@@ -349,13 +349,15 @@ var errSemanticStateOversized = errors.New("semantic state exceeds a bound")
 type SemanticStateBound string
 
 const (
-	SemanticStateBoundEncodedBytes   SemanticStateBound = "encoded_bytes"
-	SemanticStateBoundRequirements   SemanticStateBound = "requirements"
-	SemanticStateBoundOperands       SemanticStateBound = "operands"
-	SemanticStateBoundTerms          SemanticStateBound = "terms"
-	SemanticStateBoundTermBytes      SemanticStateBound = "term_bytes"
-	SemanticStateBoundTermBytesTotal SemanticStateBound = "term_bytes_total"
-	SemanticStateBoundFrameSet       SemanticStateBound = "frame_set"
+	SemanticStateBoundEncodedBytes          SemanticStateBound = "encoded_bytes"
+	SemanticStateBoundRequirements          SemanticStateBound = "requirements"
+	SemanticStateBoundOperands              SemanticStateBound = "operands"
+	SemanticStateBoundTerms                 SemanticStateBound = "terms"
+	SemanticStateBoundTermBytes             SemanticStateBound = "term_bytes"
+	SemanticStateBoundTermBytesTotal        SemanticStateBound = "term_bytes_total"
+	SemanticStateBoundRequirementFactKinds  SemanticStateBound = "requirement_fact_kinds"
+	SemanticStateBoundRequirementDimensions SemanticStateBound = "requirement_dimensions"
+	SemanticStateBoundFrameSet              SemanticStateBound = "frame_set"
 )
 
 func semanticStateBounds() []SemanticStateBound {
@@ -363,6 +365,7 @@ func semanticStateBounds() []SemanticStateBound {
 		SemanticStateBoundEncodedBytes, SemanticStateBoundRequirements,
 		SemanticStateBoundOperands, SemanticStateBoundTerms, SemanticStateBoundTermBytes,
 		SemanticStateBoundTermBytesTotal, SemanticStateBoundFrameSet,
+		SemanticStateBoundRequirementFactKinds, SemanticStateBoundRequirementDimensions,
 	}
 }
 
@@ -573,6 +576,22 @@ func validateSemanticState(s PersistedSemanticState) error {
 	}
 	if !s.RequirementsDeclared && len(s.Requirements) != 0 {
 		return reject("%d requirement(s) carried with requirements_declared=false", len(s.Requirements))
+	}
+	for i, row := range s.Requirements {
+		// A STORED REQUIREMENT ROW IS UNTRUSTED LIKE THE REST OF THE DOCUMENT.
+		// Its fact-kind and dimension lists are closed vocabularies, so a row
+		// carrying more than the vocabulary holds is a document this build did
+		// not write -- refused here, by name, before any consumer sizes an
+		// allocation from it.
+		if len(row.FactKinds) > contractsv1.ContextFabricFactKindCount {
+			return oversized(SemanticStateBoundRequirementFactKinds, "requirement %d carries %d fact kinds, exceeds the %d the vocabulary holds", i, len(row.FactKinds), contractsv1.ContextFabricFactKindCount)
+		}
+		if len(row.InputFactKinds) > contractsv1.ContextFabricFactKindCount {
+			return oversized(SemanticStateBoundRequirementFactKinds, "requirement %d carries %d input fact kinds, exceeds the %d the vocabulary holds", i, len(row.InputFactKinds), contractsv1.ContextFabricFactKindCount)
+		}
+		if len(row.Dimensions) > HealthDimensionCount {
+			return oversized(SemanticStateBoundRequirementDimensions, "requirement %d carries %d dimensions, exceeds the %d the vocabulary holds", i, len(row.Dimensions), HealthDimensionCount)
+		}
 	}
 	if len(s.Requirements) > SemanticStateMaxRequirements {
 		return oversized(SemanticStateBoundRequirements, "%d requirements exceeds %d", len(s.Requirements), SemanticStateMaxRequirements)
@@ -915,6 +934,28 @@ func BuildSemanticState(in SemanticStateInput) *PersistedSemanticState {
 		state.Requirements = semanticRequirements(in.Requirements, &frame)
 	}
 	return state
+}
+
+// boundedCapacity clamps a slice or map CAPACITY HINT to the largest value the
+// thing being counted can legitimately reach.
+//
+// A capacity hint is not a correctness input: Go grows a slice or map that
+// outruns it, so clamping changes no behaviour and loses no element. What it
+// removes is the arithmetic -- a length read from a STORED document, multiplied
+// or summed, deciding how much memory to reserve. Every collection these hints
+// count is a closed vocabulary or a bounded collection, so the maximum is known
+// at the call site, and the decode path refuses a stored document over those
+// bounds before any consumer sees it. The clamp is the second of those two
+// guards, at the allocation itself, for the case where a caller reaches one of
+// these helpers with a frame that did not come through decode.
+func boundedCapacity(hint, maximum int) int {
+	if hint < 0 {
+		return 0
+	}
+	if hint > maximum {
+		return maximum
+	}
+	return hint
 }
 
 // cloneFrame deep-copies a frame through its own encoding.

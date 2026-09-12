@@ -281,8 +281,15 @@ func DeriveRequirementCoordinates(frame QuestionFrame) []RequirementCoordinate {
 		}
 	}
 
-	seen := make(map[RequirementCoordinate]bool, len(slots)*len(frame.Obligations))
-	coordinates := make([]RequirementCoordinate, 0, len(slots)*len(frame.Obligations))
+	// BOUNDED HINTS. One coordinate per (slot, obligation) pair is the maximum
+	// this can produce, and both factors are bounded: a frame offers at most
+	// one slot per operand plus two, and obligations are a closed vocabulary.
+	// The frame may have come back from the store, so the product is clamped
+	// rather than trusted -- a capacity hint is not a correctness input, and
+	// nothing here reserves memory in proportion to a stored number.
+	coordinateCap := boundedCapacity(len(slots), SemanticStateMaxOperands+2) * boundedCapacity(len(frame.Obligations), AnswerObligationCount)
+	seen := make(map[RequirementCoordinate]bool, coordinateCap)
+	coordinates := make([]RequirementCoordinate, 0, coordinateCap)
 	for _, obligation := range frame.Obligations {
 		kind, known := KindOfObligation(obligation)
 		if !known || kind == ObligationKindAnswerContract {

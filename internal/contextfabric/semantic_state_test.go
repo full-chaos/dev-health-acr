@@ -910,6 +910,26 @@ func TestSemanticState_AnOversizedCaptureNamesItsBoundOnTheLine(t *testing.T) {
 			}
 			return explicit(t, 1, list)
 		},
+		SemanticStateBoundRequirementFactKinds: func(t *testing.T) SemanticStateInput {
+			s := semanticFixture(t)
+			in := inputOf(s)
+			rows := s.DerivedRequirements()
+			for len(rows[0].FactKinds) <= contractsv1.ContextFabricFactKindCount {
+				rows[0].FactKinds = append(rows[0].FactKinds, contractsv1.ContextFabricFactHealth)
+			}
+			in.Requirements = rows
+			return in
+		},
+		SemanticStateBoundRequirementDimensions: func(t *testing.T) SemanticStateInput {
+			s := semanticFixture(t)
+			in := inputOf(s)
+			rows := s.DerivedRequirements()
+			for len(rows[0].Dimensions) <= HealthDimensionCount {
+				rows[0].Dimensions = append(rows[0].Dimensions, HealthDimensionDeliveryFlow)
+			}
+			in.Requirements = rows
+			return in
+		},
 		SemanticStateBoundFrameSet: func(t *testing.T) SemanticStateInput {
 			in := inputOf(sizedSemanticState(t, 4000))
 			frame := cloneFrame(*in.Outcome.Frame)

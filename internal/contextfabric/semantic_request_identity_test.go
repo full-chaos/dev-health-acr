@@ -292,3 +292,93 @@ func TestSemanticState_AnInvalidEncodingIsRefusedAndNeverRewritten(t *testing.T)
 		}
 	})
 }
+
+// TestSemanticState_AStoredRowIsBoundedBeforeAnyConsumerSizesFromIt holds the
+// rule that a decoded document's collections are inside their vocabularies
+// BEFORE any consumer counts them, and that no allocation sizes itself from a
+// stored number even if one reaches it anyway.
+//
+// A frame used to arrive only from the interpreter, which produces vocabulary
+// members by construction. A frame now also arrives from the database, so the
+// lengths that size allocations downstream are lengths a stored document chose.
+// Two guards, in order: decode refuses a row over its vocabulary by name, and
+// the allocation hints clamp to what the vocabulary can hold.
+func TestSemanticState_AStoredRowIsBoundedBeforeAnyConsumerSizesFromIt(t *testing.T) {
+	t.Parallel()
+
+	t.Run("decode refuses an over-vocabulary requirement row by name", func(t *testing.T) {
+		t.Parallel()
+		for _, tc := range []struct {
+			name  string
+			blow  func(*SemanticRequirement)
+			bound SemanticStateBound
+		}{
+			{"fact kinds", func(r *SemanticRequirement) {
+				for len(r.FactKinds) <= contractsv1.ContextFabricFactKindCount {
+					r.FactKinds = append(r.FactKinds, contractsv1.ContextFabricFactHealth)
+				}
+			}, SemanticStateBoundRequirementFactKinds},
+			{"input fact kinds", func(r *SemanticRequirement) {
+				for len(r.InputFactKinds) <= contractsv1.ContextFabricFactKindCount {
+					r.InputFactKinds = append(r.InputFactKinds, contractsv1.ContextFabricFactHealth)
+				}
+			}, SemanticStateBoundRequirementFactKinds},
+			{"dimensions", func(r *SemanticRequirement) {
+				for len(r.Dimensions) <= HealthDimensionCount {
+					r.Dimensions = append(r.Dimensions, HealthDimensionDeliveryFlow)
+				}
+			}, SemanticStateBoundRequirementDimensions},
+		} {
+			tc := tc
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+				state := semanticFixture(t)
+				if len(state.Requirements) == 0 {
+					t.Fatalf("fixture defect: no requirement row to blow up")
+				}
+				rows := append([]SemanticRequirement{}, state.Requirements...)
+				tc.blow(&rows[0])
+				state.Requirements = rows
+				_, err := EncodeSemanticState(state)
+				t.Logf("%s over vocabulary -> err=%v bound=%q", tc.name, err, breachedSemanticStateBound(err))
+				if err == nil {
+					t.Fatalf("an over-vocabulary %s row was accepted", tc.name)
+				}
+				if got := breachedSemanticStateBound(err); got != tc.bound {
+					t.Errorf("bound = %q, want %q -- the refusal must name what it refused", got, tc.bound)
+				}
+			})
+		}
+	})
+
+	// The clamp itself: a hint never exceeds the maximum, never goes negative,
+	// and passes a legitimate value through unchanged. Capacity is not
+	// correctness, so the CELLS here are about the arithmetic, and the
+	// consumers above are what prove nothing is lost by clamping.
+	t.Run("the capacity clamp", func(t *testing.T) {
+		t.Parallel()
+		for _, tc := range []struct{ hint, max, want int }{
+			{0, 8, 0}, {1, 8, 1}, {8, 8, 8}, {9, 8, 8}, {1 << 40, 8, 8}, {-1, 8, 0},
+		} {
+			if got := boundedCapacity(tc.hint, tc.max); got != tc.want {
+				t.Errorf("boundedCapacity(%d, %d) = %d, want %d", tc.hint, tc.max, got, tc.want)
+			}
+		}
+	})
+
+	// AND NOTHING IS LOST. The derivation over a real frame produces the same
+	// coordinates whether or not the hint was clamped -- the clamp is a
+	// reservation, not a limit.
+	t.Run("a clamped hint loses no element", func(t *testing.T) {
+		t.Parallel()
+		state := semanticFixture(t)
+		if state.Frame == nil {
+			t.Fatalf("fixture defect: no frame")
+		}
+		derived := DeriveRequirements(*state.Frame, ObligationSeed{}, nil)
+		t.Logf("derivation over the fixture frame produced %d declaration(s)", len(derived))
+		if len(derived) == 0 {
+			t.Errorf("the derivation produced nothing, so this cell cannot show an element surviving the clamp")
+		}
+	})
+}
