@@ -135,7 +135,10 @@ const (
 	// is not_applicable, not a withholding.
 	ContinuationReasonMissingContext ContinuationDecisionReason = "missing_context"
 	// ContinuationReasonInvalidContext: the carrier could not be read at all,
-	// or failed the CHAOS-3898 ingress taint gate.
+	// failed the CHAOS-3898 ingress taint gate, or records a time axis a window
+	// confirmation cannot apply to (CHAOS-5582: a window is canonicalized ONLY
+	// on the current axis, so a carrier whose recorded axis is not current has
+	// no reading this window-only turn can continue).
 	ContinuationReasonInvalidContext ContinuationDecisionReason = "invalid_context"
 	// ContinuationReasonContextVersionMismatch: the carrier's recorded family
 	// definition-table version is not the one in force. D-a: revalidate under
@@ -176,11 +179,17 @@ const (
 	// that hint's turn. A DISQUALIFIER, evaluated inside admission before any
 	// effect.
 	ContinuationReasonExplicitStructureHint ContinuationDecisionReason = "explicit_structure_hint"
-	// ContinuationReasonInterpretedAxisVeto: interpretation moved the axis off
-	// current while a window commitment was resolved, so the window veto below
-	// will end this turn. Evaluated INSIDE admission: a continuation must never
-	// be published as `applied` when a later step can undo it.
-	ContinuationReasonInterpretedAxisVeto ContinuationDecisionReason = "interpreted_axis_veto"
+	// NOTE (CHAOS-5582): there is deliberately NO `interpreted_axis_veto`
+	// member. It disqualified admission whenever THIS turn's fresh
+	// interpretation moved the axis off current, so one valid receipt, the
+	// identical question and no explicit window were refused on a sampled
+	// axis alone -- the falsification shape the design of record names for
+	// keeping the receipt conflicts (plural receipts, an explicit window
+	// beyond skew) apart from continuation drift. Those conflicts veto before
+	// Interpret and report `window_veto`; the fresh axis of an ADMITTED
+	// continuation is now a diagnostic (ContinuationAxisOutcome), and a turn
+	// the axis-conflict veto does end is one that was never admitted, so it
+	// already carries the reason it was not.
 	// ContinuationReasonRequestInvalid: the request failed validation, so the
 	// turn ended before anything about a continuation could be decided.
 	ContinuationReasonRequestInvalid ContinuationDecisionReason = "request_invalid"
@@ -222,6 +231,62 @@ const (
 	// enumerates the vocabulary against the paths that produce it.
 	ContinuationReasonUnspecified ContinuationDecisionReason = "unspecified"
 )
+
+// ContinuationAxisOutcome is what the engine did with THIS turn's fresh
+// interpreted time axis on a request carrying a window receipt (CHAOS-5582).
+//
+// A CLOSED VOCABULARY, NOT A BOOL, because four different facts end in the same
+// two served axes: the fresh axis already agreed, the receipt overrode a fresh
+// drift, a fresh drift was followed and the axis-conflict veto ended the turn,
+// and the turn ended before any axis was reconciled at all.
+type ContinuationAxisOutcome string
+
+const (
+	// ContinuationAxisNotEvaluated: no fresh axis was reconciled against a
+	// window commitment -- the turn ended before interpretation, the
+	// interpreted bound was unanswerable, or no window commitment reached the
+	// decision.
+	ContinuationAxisNotEvaluated ContinuationAxisOutcome = "not_evaluated"
+	// ContinuationAxisAgreed: the fresh axis is current, the axis the window
+	// was confirmed under. Nothing was overridden. Without an established
+	// transition a current axis with an unanswerable bound also reads `agreed`:
+	// the axis agrees, and the bound exit refuses on its own reason.
+	ContinuationAxisAgreed ContinuationAxisOutcome = "agreed"
+	// ContinuationAxisOverriddenByReceipt: the window-only TRANSITION was
+	// established (one window receipt, a readable taint-valid carrier, the
+	// identical question) on a carrier that recorded the current axis, and the
+	// fresh time moved off current or carried an unanswerable bound; the turn executes under the current axis
+	// with the confirmed window, and the fresh axis is a diagnostic on this
+	// line. A sampled axis is not a user change -- the user changed only the
+	// window. Whether the carried READING was then applied, withheld or absent
+	// is decision_reason's to say; the axis does not depend on it.
+	ContinuationAxisOverriddenByReceipt ContinuationAxisOutcome = "overridden_by_receipt"
+	// ContinuationAxisVetoed: the window-only transition was NOT established on
+	// a current-axis carrier (a changed or indeterminate question, a
+	// disqualified, unreadable or other-axis carrier), the fresh axis moved off
+	// current and a window commitment was resolved, so the fresh interpretation
+	// governs and the axis-conflict veto ends the turn.
+	ContinuationAxisVetoed ContinuationAxisOutcome = "vetoed"
+)
+
+func continuationAxisOutcomes() []ContinuationAxisOutcome {
+	return []ContinuationAxisOutcome{
+		ContinuationAxisNotEvaluated,
+		ContinuationAxisAgreed,
+		ContinuationAxisOverriddenByReceipt,
+		ContinuationAxisVetoed,
+	}
+}
+
+// ValidContinuationAxisOutcome reports membership.
+func ValidContinuationAxisOutcome(value ContinuationAxisOutcome) bool {
+	for _, member := range continuationAxisOutcomes() {
+		if member == value {
+			return true
+		}
+	}
+	return false
+}
 
 // ContinuationConflictReason is the Info-only disagreement token.
 //
@@ -370,6 +435,35 @@ type windowContinuationDecision struct {
 	// operator must be able to tell "could not read the carrier" from "read it
 	// and proved it invalid" (a stale epoch), which share decision_reason.
 	CarrierRead ContinuationCarrierRead
+
+	// THE AXIS DECISION'S PRE-DECISION STATE, DECISION AND POST-DECISION STATE
+	// (CHAOS-5582), all on the one line, so a refused or overridden turn is
+	// readable from the trace alone.
+	//
+	// WindowReceiptCount and ExplicitWindowPresent are the request inputs the
+	// receipt conflicts veto on (plural receipts; an explicit window beyond
+	// skew), counted exactly as resolveWindowReceipts counts them.
+	WindowReceiptCount    int
+	ExplicitWindowPresent bool
+	// TransitionEstablished is D-a's transition, proven: the window-only
+	// shape, a carrier that loaded and passed the ingress taint gate, and the
+	// identical question with a nonempty canonical identity. It is set BEFORE
+	// the carried reading is examined (plan, family-table version, recorded
+	// axis, composition), because the time the user confirmed the window under
+	// is a property of the transition, not of whether the family reading could
+	// be continued. Read from the line as: carried_axis non-empty and
+	// decision_reason not changed_question/indeterminate_identity.
+	TransitionEstablished bool
+	// InterpretedAxis is THIS turn's fresh interpreted axis, empty when
+	// interpretation never produced one.
+	InterpretedAxis contractsv1.ContextFabricTemporalAxis
+	// CarriedAxis is the axis the referenced carrier recorded, empty when no
+	// carrier was loaded.
+	CarriedAxis contractsv1.ContextFabricTemporalAxis
+	// ExecutedAxis is the axis the rest of the turn executed under, empty when
+	// the turn ended before the axis was decided.
+	ExecutedAxis contractsv1.ContextFabricTemporalAxis
+	AxisOutcome  ContinuationAxisOutcome
 }
 
 // ContinuationCarrierRead is the CLOSED outcome of admission's carrier read.
@@ -476,9 +570,15 @@ func ValidContinuationConflictField(value ContinuationConflictField) bool {
 	return false
 }
 
+// carrySeedSources is the closed carry seed vocabulary, in one place for the
+// membership check and the line vocabulary alike.
+func carrySeedSources() []CarrySeedSource {
+	return []CarrySeedSource{CarrySeedNone, CarrySeedReceipt, CarrySeedParentField, CarrySeedBoth}
+}
+
 // ValidCarrySeedSource reports membership of the carry seed vocabulary.
 func ValidCarrySeedSource(value CarrySeedSource) bool {
-	for _, member := range []CarrySeedSource{CarrySeedNone, CarrySeedReceipt, CarrySeedParentField, CarrySeedBoth} {
+	for _, member := range carrySeedSources() {
 		if member == value {
 			return true
 		}
@@ -500,7 +600,6 @@ func continuationDecisionReasons() []ContinuationDecisionReason {
 		ContinuationReasonBindingUnavailable,
 		ContinuationReasonStructureVeto,
 		ContinuationReasonExplicitStructureHint,
-		ContinuationReasonInterpretedAxisVeto,
 		ContinuationReasonRequestInvalid,
 		ContinuationReasonPrincipalUnauthenticated,
 		ContinuationReasonRequestTimeUnresolvable,
@@ -558,6 +657,11 @@ func newWindowContinuationDecision(request InvestigationRequest) windowContinuat
 		// string, and left the vocabulary's own membership check with no
 		// production caller at all.
 		CompositionOutcome: CompositionNotEvaluated,
+		// A pure function of the request, set above every return for the same
+		// reason: an early exit still reports what the caller sent.
+		WindowReceiptCount:    len(request.PriorWindowReceipts),
+		ExplicitWindowPresent: request.TimeContext.EvidenceWindow != nil,
+		AxisOutcome:           ContinuationAxisNotEvaluated,
 	}
 	if decision.Observed {
 		decision.SeedSource = CarrySeedReceipt
@@ -666,6 +770,11 @@ func (e *Engine) admitWindowContinuation(
 	binding ResolvedGraphBinding,
 	preloaded map[string]InvestigationResult,
 	appliedWindow *contractsv1.ContextFabricEffectiveEvidenceWindow,
+	// interpretedAxis is RECORDED, NEVER DECIDED ON (CHAOS-5582). It is passed
+	// in for the same reason appliedWindow is: this function builds the
+	// decision from the constructor, so a value the caller stamped on the
+	// previous decision would not survive the rebuild, and the line would
+	// publish an empty fresh axis for exactly the turns it exists to explain.
 	interpretedAxis contractsv1.ContextFabricTemporalAxis,
 ) windowContinuationDecision {
 	// ONE CONSTRUCTOR (r2 F2). This function used to build its own struct
@@ -680,6 +789,7 @@ func (e *Engine) admitWindowContinuation(
 	// and logged is not the same as populated -- a field that is always empty
 	// is a field the line cannot answer with.
 	decision.AppliedWindow = appliedWindow
+	decision.InterpretedAxis = interpretedAxis
 
 	// THE SHAPE IS DECIDED ONCE, HERE, BEFORE ANY DISQUALIFIER CAN RETURN
 	// (r2 F1). WindowOnlyShape describes the CARRIER'S SHAPE -- identical
@@ -714,14 +824,13 @@ func (e *Engine) admitWindowContinuation(
 		decision.Reason = ContinuationReasonExplicitStructureHint
 		return decision
 	}
-	// DISQUALIFIER (R2-4). A resolved window commitment plus an interpreted
-	// axis that is no longer `current` is the shape the axis-conflict veto ends
-	// the turn on. Evaluated HERE, before any effect, so `applied` can never be
-	// published for a turn a later step undoes.
-	if appliedWindow != nil && interpretedAxis != contractsv1.ContextFabricTemporalCurrent {
-		decision.Reason = ContinuationReasonInterpretedAxisVeto
-		return decision
-	}
+	// NO FRESH-AXIS DISQUALIFIER (CHAOS-5582). The fresh interpreted axis is
+	// deliberately not an input to admission: admission decides whether the
+	// carrier's reading continues, and the carrier recorded its own axis. What
+	// happens to a fresh axis that disagrees is decided once, after admission
+	// and composition are final, by decideContinuationAxis -- and R2-4's rule
+	// still holds, because a continuation that is applied executes under the
+	// carried axis, so the axis-conflict veto cannot undo it.
 	if e.results == nil {
 		decision.Disposition = ContinuationWithheld
 		decision.Reason = ContinuationReasonInvalidContext
@@ -756,6 +865,7 @@ func (e *Engine) admitWindowContinuation(
 	if cached, ok := preloaded[referenced]; ok {
 		prior = cached
 	}
+	decision.CarriedAxis = prior.Interpretation.TimeContext.Axis
 
 	if reason := continuationQuestionIdentity(request.Question, prior.Question); reason != ContinuationReasonNone {
 		// NOT a withholding: the transition was never established, so there
@@ -765,6 +875,10 @@ func (e *Engine) admitWindowContinuation(
 		decision.Reason = reason
 		return decision
 	}
+	// CHAOS-5582: the transition is established here -- shape, readable
+	// taint-valid carrier, identical question. Every check below is about the
+	// carried READING, and none of them changes what the user confirmed.
+	decision.TransitionEstablished = true
 
 	plan := carriablePlan(prior)
 	if plan == nil {
@@ -800,6 +914,16 @@ func (e *Engine) admitWindowContinuation(
 		decision.Reason = ContinuationReasonContextVersionMismatch
 		return decision
 	}
+	// CHAOS-5582, D-a's "revalidate under the recorded standard" for the time
+	// axis: the window this turn redeems was offered under the carrier's
+	// current axis, so a carrier recording any other axis has no reading a
+	// window-only turn can continue. Withheld, never reinterpreted onto today's
+	// axis.
+	if decision.CarriedAxis != contractsv1.ContextFabricTemporalCurrent {
+		decision.Disposition = ContinuationWithheld
+		decision.Reason = ContinuationReasonInvalidContext
+		return decision
+	}
 
 	decision.Carried = &continuationCarriedContext{
 		Family:         plan.Family,
@@ -818,6 +942,70 @@ func (e *Engine) admitWindowContinuation(
 	decision.Disposition = ContinuationApplied
 	decision.Reason = ContinuationReasonNone
 	return decision
+}
+
+// decideContinuationAxis reconciles THIS turn's fresh interpreted time with an
+// established window-only transition, and returns the time the rest of the
+// turn executes under together with the outcome the line reports (CHAOS-5582).
+//
+// ONE RULE. When the transition is established, the carrier recorded
+// `current`, the caller's own axis is `current` and a window commitment was
+// resolved, a fresh axis that moved off current is a DIAGNOSTIC: the turn
+// executes under the caller's clamped current axis -- the one the window was
+// canonicalized against -- and the confirmed window stays applied. In every
+// other case the fresh interpretation governs, exactly as before, and a
+// resolved window commitment on a non-current fresh axis ends at the
+// axis-conflict veto.
+//
+// KEYED ON THE TRANSITION, NOT ON THE APPLIED READING. A corpus replicate
+// measured the difference: the carried family could not be composed onto the
+// fresh frame (withheld, composition_invalid), the fresh axis drifted to
+// `range`, and a rule keyed on `applied` let the sampled axis refuse the very
+// question whose window the user had just confirmed. Whether the family
+// reading continues and which time the confirmed window speaks for are
+// separate facts; a changed question still follows its own fresh reading (D-d).
+//
+// THE RECEIPT CONFLICTS ARE NOT DECIDED HERE, and that is the separation the
+// design of record holds: plural receipts and an explicit window beyond skew
+// veto in resolveWindowReceipts before Interpret runs, so no request carrying
+// either reaches this function.
+//
+// Called after composition and the comparison, so every field it reads is
+// final for the turn.
+//
+// THE FRESH TIME IS ONE VALUE, AXIS AND BOUND TOGETHER. A fresh `current` axis
+// whose bound is unanswerable (a present-zero instant) is as much a sampled
+// failure as a drifted axis, and on an established transition it is overridden
+// the same way; only a fresh `current` axis with an answerable bound `agrees`.
+// Without an established transition the fresh time governs whole: a drifted
+// axis reaches the axis-conflict veto, an unanswerable bound the bound exit.
+func decideContinuationAxis(
+	decision windowContinuationDecision,
+	fresh TimeContext,
+	freshAnswerable bool,
+	requestTime TimeContext,
+	windowCommitted bool,
+) (TimeContext, ContinuationAxisOutcome) {
+	if !windowCommitted {
+		return fresh, ContinuationAxisNotEvaluated
+	}
+	if fresh.Axis == contractsv1.ContextFabricTemporalCurrent && freshAnswerable {
+		return fresh, ContinuationAxisAgreed
+	}
+	if decision.TransitionEstablished &&
+		decision.CarriedAxis == contractsv1.ContextFabricTemporalCurrent &&
+		requestTime.Axis == contractsv1.ContextFabricTemporalCurrent {
+		// The caller's axis and instant only: a fresh proposal's range bounds
+		// are not carried onto the current axis, and the caller's requested
+		// window is already the applied window, not a second copy on the
+		// interpretation.
+		return TimeContext{Axis: requestTime.Axis, AsOf: requestTime.AsOf}, ContinuationAxisOverriddenByReceipt
+	}
+	if fresh.Axis == contractsv1.ContextFabricTemporalCurrent {
+		// The axis agrees; the unanswerable bound is the bound exit's to refuse.
+		return fresh, ContinuationAxisAgreed
+	}
+	return fresh, ContinuationAxisVetoed
 }
 
 // compareContinuationProposal folds the fresh interpreter return in as a

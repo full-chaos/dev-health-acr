@@ -221,6 +221,14 @@ const (
 	// comment.
 	WindowCanonicalizationVetoUnresolved WindowCanonicalizationOutcome = "veto_unresolved"
 	WindowCanonicalizationVetoConflict   WindowCanonicalizationOutcome = "veto_conflict"
+	// WindowCanonicalizationVetoAxisConflict (CHAOS-5582) is the post-Interpret
+	// windowVetoAxisConflict's OWN outcome. It used to share `veto_conflict`,
+	// the label of the receipt conflicts (plural receipts; a receipt disagreeing
+	// with an explicit window beyond skew), so a veto produced solely by a fresh
+	// interpretation read, on this line, exactly like the conflict the design of
+	// record keeps separate from it. The two are different producers and are
+	// counted apart.
+	WindowCanonicalizationVetoAxisConflict WindowCanonicalizationOutcome = "veto_axis_conflict"
 	// WindowCanonicalizationVetoStaleSupersededOffer (CHAOS-4003) mirrors
 	// windowVetoStaleSupersededOffer -- its own counted outcome, distinct
 	// from VetoUnresolved/VetoConflict, matching structure's own dedicated
@@ -987,8 +995,10 @@ func windowVetoLimitation(veto windowVetoReason) string {
 
 func windowCanonicalizationOutcomeForVeto(veto windowVetoReason) WindowCanonicalizationOutcome {
 	switch veto {
-	case windowVetoConfirmationConflict, windowVetoAxisConflict:
+	case windowVetoConfirmationConflict:
 		return WindowCanonicalizationVetoConflict
+	case windowVetoAxisConflict:
+		return WindowCanonicalizationVetoAxisConflict
 	case windowVetoStaleSupersededOffer:
 		return WindowCanonicalizationVetoStaleSupersededOffer
 	default:

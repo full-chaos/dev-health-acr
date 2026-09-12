@@ -19,28 +19,157 @@ func FieldKeys(e Event) []string {
 // ByID is the generated lookup from Event.ID to its declaration -- generated
 // rather than hand-maintained so it can never drift from All.
 var ByID = map[string]Event{
-	"graphrank.alias_lookup":                 AliasLookup,
-	"graphrank.anchor_kind_withheld":         AnchorKindWithheld,
-	"graphrank.anchor_kind_withheld_summary": AnchorKindWithheldSummary,
-	"graphrank.anchor_offer":                 AnchorOffer,
-	"graphrank.anchor_pool":                  AnchorPool,
-	"graphrank.anchor_slot_displaced":        AnchorSlotDisplaced,
-	"graphrank.confirmed_kind_rescue":        ConfirmedKindRescue,
-	"graphrank.corroboration":                Corroboration,
-	"graphrank.corroboration_summary":        CorroborationSummary,
-	"graphrank.decision":                     Decision,
-	"graphrank.decision_summary":             DecisionSummary,
-	"graphrank.exact_name_search":            ExactNameSearch,
-	"graphrank.identity_universe":            IdentityUniverse,
-	"graphrank.kind_coverage_floor":          KindCoverageFloor,
-	"graphrank.kind_hint_search":             KindHintSearch,
-	"graphrank.kind_offer_withheld":          KindOfferWithheld,
-	"graphrank.offer_pool":                   OfferPool,
-	"graphrank.offer_pool_summary":           OfferPoolSummary,
-	"graphrank.ranked_cut_summary":           RankedCutSummary,
-	"graphrank.reserved_kind_admitted":       ReservedKindAdmitted,
-	"graphrank.search":                       Search,
-	"graphrank.search_question":              SearchQuestion,
+	"contextfabric.window_continuation_decision": WindowContinuationDecision,
+	"graphrank.alias_lookup":                     AliasLookup,
+	"graphrank.anchor_kind_withheld":             AnchorKindWithheld,
+	"graphrank.anchor_kind_withheld_summary":     AnchorKindWithheldSummary,
+	"graphrank.anchor_offer":                     AnchorOffer,
+	"graphrank.anchor_pool":                      AnchorPool,
+	"graphrank.anchor_slot_displaced":            AnchorSlotDisplaced,
+	"graphrank.confirmed_kind_rescue":            ConfirmedKindRescue,
+	"graphrank.corroboration":                    Corroboration,
+	"graphrank.corroboration_summary":            CorroborationSummary,
+	"graphrank.decision":                         Decision,
+	"graphrank.decision_summary":                 DecisionSummary,
+	"graphrank.exact_name_search":                ExactNameSearch,
+	"graphrank.identity_universe":                IdentityUniverse,
+	"graphrank.kind_coverage_floor":              KindCoverageFloor,
+	"graphrank.kind_hint_search":                 KindHintSearch,
+	"graphrank.kind_offer_withheld":              KindOfferWithheld,
+	"graphrank.offer_pool":                       OfferPool,
+	"graphrank.offer_pool_summary":               OfferPoolSummary,
+	"graphrank.ranked_cut_summary":               RankedCutSummary,
+	"graphrank.reserved_kind_admitted":           ReservedKindAdmitted,
+	"graphrank.search":                           Search,
+	"graphrank.search_question":                  SearchQuestion,
+}
+
+// WindowContinuationDecisionFields is contextfabric.window_continuation_decision's generated typed construction interface
+// (CHAOS-5516): one Go field per Field WindowContinuationDecision.Fields declares in spec.go.
+type WindowContinuationDecisionFields struct {
+	OrgID                      string
+	SourceResultID             string
+	SeedSource                 string
+	FamilyCarried              string
+	FamilyFresh                string
+	FamilyAccepted             string
+	FamilySource               string
+	ContinuationDisposition    string
+	DecisionReason             string
+	ComparisonEvaluated        bool
+	Agreement                  bool
+	ConflictReason             string
+	ConflictCount              int
+	ConflictFields             string
+	AppliedWindow              string
+	CarriedContextID           string
+	FreshContextID             string
+	AcceptedContextID          string
+	CompositionOutcome         string
+	CompositionFailedInvariant string
+	RefusalBasis               string
+	ReferencedResultID         string
+	CarrierRead                string
+	WindowReceiptCount         int
+	ExplicitWindowPresent      bool
+	InterpretedAxis            string
+	CarriedAxis                string
+	ExecutedAxis               string
+	InterpretedAxisOutcome     string
+	RequestID                  string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every WindowContinuationDecisionFields uniformly, set ONLY by NewWindowContinuationDecisionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewWindowContinuationDecisionFields is the generated constructor for WindowContinuationDecisionFields -- every
+// field WindowContinuationDecision.Fields declares is a required parameter.
+func NewWindowContinuationDecisionFields(orgID string, sourceResultID string, seedSource string, familyCarried string, familyFresh string, familyAccepted string, familySource string, continuationDisposition string, decisionReason string, comparisonEvaluated bool, agreement bool, conflictReason string, conflictCount int, conflictFields string, appliedWindow string, carriedContextID string, freshContextID string, acceptedContextID string, compositionOutcome string, compositionFailedInvariant string, refusalBasis string, referencedResultID string, carrierRead string, windowReceiptCount int, explicitWindowPresent bool, interpretedAxis string, carriedAxis string, executedAxis string, interpretedAxisOutcome string, requestID string) WindowContinuationDecisionFields {
+	return WindowContinuationDecisionFields{
+		OrgID:                      orgID,
+		SourceResultID:             sourceResultID,
+		SeedSource:                 seedSource,
+		FamilyCarried:              familyCarried,
+		FamilyFresh:                familyFresh,
+		FamilyAccepted:             familyAccepted,
+		FamilySource:               familySource,
+		ContinuationDisposition:    continuationDisposition,
+		DecisionReason:             decisionReason,
+		ComparisonEvaluated:        comparisonEvaluated,
+		Agreement:                  agreement,
+		ConflictReason:             conflictReason,
+		ConflictCount:              conflictCount,
+		ConflictFields:             conflictFields,
+		AppliedWindow:              appliedWindow,
+		CarriedContextID:           carriedContextID,
+		FreshContextID:             freshContextID,
+		AcceptedContextID:          acceptedContextID,
+		CompositionOutcome:         compositionOutcome,
+		CompositionFailedInvariant: compositionFailedInvariant,
+		RefusalBasis:               refusalBasis,
+		ReferencedResultID:         referencedResultID,
+		CarrierRead:                carrierRead,
+		WindowReceiptCount:         windowReceiptCount,
+		ExplicitWindowPresent:      explicitWindowPresent,
+		InterpretedAxis:            interpretedAxis,
+		CarriedAxis:                carriedAxis,
+		ExecutedAxis:               executedAxis,
+		InterpretedAxisOutcome:     interpretedAxisOutcome,
+		RequestID:                  requestID,
+		constructed:                true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewWindowContinuationDecisionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f WindowContinuationDecisionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns WindowContinuationDecision's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f WindowContinuationDecisionFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"source_result_id", contextfabric.SanitizeLogAttr(f.SourceResultID),
+		"seed_source", contextfabric.SanitizeLogAttr(f.SeedSource),
+		"family_carried", contextfabric.SanitizeLogAttr(f.FamilyCarried),
+		"family_fresh", contextfabric.SanitizeLogAttr(f.FamilyFresh),
+		"family_accepted", contextfabric.SanitizeLogAttr(f.FamilyAccepted),
+		"family_source", contextfabric.SanitizeLogAttr(f.FamilySource),
+		"continuation_disposition", contextfabric.SanitizeLogAttr(f.ContinuationDisposition),
+		"decision_reason", contextfabric.SanitizeLogAttr(f.DecisionReason),
+		"comparison_evaluated", f.ComparisonEvaluated,
+		"agreement", f.Agreement,
+		"conflict_reason", contextfabric.SanitizeLogAttr(f.ConflictReason),
+		"conflict_count", f.ConflictCount,
+		"conflict_fields", contextfabric.SanitizeLogAttr(f.ConflictFields),
+		"applied_window", contextfabric.SanitizeLogAttr(f.AppliedWindow),
+		"carried_context_id", contextfabric.SanitizeLogAttr(f.CarriedContextID),
+		"fresh_context_id", contextfabric.SanitizeLogAttr(f.FreshContextID),
+		"accepted_context_id", contextfabric.SanitizeLogAttr(f.AcceptedContextID),
+		"composition_outcome", contextfabric.SanitizeLogAttr(f.CompositionOutcome),
+		"composition_failed_invariant", contextfabric.SanitizeLogAttr(f.CompositionFailedInvariant),
+		"refusal_basis", contextfabric.SanitizeLogAttr(f.RefusalBasis),
+		"referenced_result_id", contextfabric.SanitizeLogAttr(f.ReferencedResultID),
+		"carrier_read", contextfabric.SanitizeLogAttr(f.CarrierRead),
+		"window_receipt_count", f.WindowReceiptCount,
+		"explicit_window_present", f.ExplicitWindowPresent,
+		"interpreted_axis", contextfabric.SanitizeLogAttr(f.InterpretedAxis),
+		"carried_axis", contextfabric.SanitizeLogAttr(f.CarriedAxis),
+		"executed_axis", contextfabric.SanitizeLogAttr(f.ExecutedAxis),
+		"interpreted_axis_outcome", contextfabric.SanitizeLogAttr(f.InterpretedAxisOutcome),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
 }
 
 // AliasLookupFields is graphrank.alias_lookup's generated typed construction interface

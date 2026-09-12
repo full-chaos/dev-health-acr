@@ -128,6 +128,8 @@ func goVarName(e Event) string {
 		return "AnchorKindWithheld"
 	case AnchorKindWithheldSummary.ID:
 		return "AnchorKindWithheldSummary"
+	case WindowContinuationDecision.ID:
+		return "WindowContinuationDecision"
 	default:
 		panic("eventspec: goVarName has no mapping for " + e.ID + " -- add one before regenerating")
 	}

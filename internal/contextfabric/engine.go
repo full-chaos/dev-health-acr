@@ -1131,12 +1131,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		if servedErr == nil && continuation.Applies() && continuation.AppliedWindow != nil && served.EffectiveEvidenceWindow == nil {
 			continuation.Disposition = ContinuationWithheld
 			continuation = continuation.withReason(ContinuationReasonWindowSuperseded)
-			continuation.AppliedWindow = nil
-			// Same rule as the composition withhold above: a withheld turn
-			// publishes no accepted context. The carried proposal stays on the
-			// event, so the reversal is still readable as "this is what would
-			// have been continued, and here is why it was not".
-			continuation.Accepted = nil
+			// The fields this reversal invalidates -- the applied window and
+			// the accepted context -- are cleared by the normalisation below,
+			// which owns that question for EVERY exit rather than for the
+			// three that remembered to ask it. The carried proposal stays on
+			// the event either way, so the reversal is still readable as
+			// "this is what would have been continued, and here is why not".
 		}
 		// A REFUSAL IS A DOCUMENT. The basis is recorded where the refusal is
 		// taken, and an error return after that point -- a failed validation
@@ -1144,6 +1144,45 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// claim the caller received a refusal.
 		if servedErr != nil {
 			continuation.RefusalBasis = ""
+		}
+		// EVERY FIELD THAT ASSERTS SOMETHING HAPPENED IS DECIDED FROM THE
+		// FINAL STATE, HERE. `AppliedWindow` is copied in at
+		// ADMISSION, before the composition verdict exists, because that is
+		// where the canonicalisation that chose it lives. A turn admitted and
+		// then withheld -- composition invalid, an unexpressible carried axis,
+		// a version-mismatched carrier -- applied no window at all, and the
+		// line went on publishing the admitted one. The supersession branch
+		// above cleared it, but only on the `Applies()` path, so the far more
+		// common withhold kept a window it never used: a field asserting a
+		// decision that did not hold, which is the same class of untrue field
+		// as the `agreement=true` and the stale `family_accepted` this seam was
+		// cut to remove.
+		//
+		// Stated as the rule rather than as a list of exits, because the list
+		// is what goes stale: a decision field is populated IFF its decision
+		// holds at EMISSION. Derive it from the final disposition, never from
+		// whatever an intermediate stage happened to leave behind.
+		if !continuation.Applies() {
+			continuation.AppliedWindow = nil
+			continuation.Accepted = nil
+		}
+		// THE SAME RULE, FOR THE FIELDS THAT DESCRIBE EXECUTION RATHER THAN
+		// THE CONTINUATION. `ExecutedAxis` is the axis the REST OF THE TURN ran
+		// under, and its own declaration says it is empty when the turn ended
+		// before the axis was decided. It is stamped once the axis verdict
+		// passes, which is above composition, planning and every retrieval --
+		// so a turn that then ended with no plan and no answer still published
+		// an axis it never executed anything under.
+		//
+		// The condition is SERVED-NOTHING, not `!Applies()`, and the difference
+		// is the whole point: a withheld continuation that goes on to serve the
+		// caller under the FRESH reading did execute an axis and must say so,
+		// while a withheld continuation that ends the turn executed nothing and
+		// must not. The served document is the only thing that can tell those
+		// apart, and it is in scope precisely here, which is why the rule lives
+		// at this fold rather than at any of the exits.
+		if servedErr != nil || served.AnswerPlan == nil {
+			continuation.ExecutedAxis = ""
 		}
 		e.telemetry.RecordWindowContinuationDecision(ctx, principal, continuation)
 	}()
@@ -1641,7 +1680,33 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if e.telemetry != nil {
 		e.telemetry.RecordInterpretedTimeBound(ctx, principal, interpretedTimeBound)
 	}
+	// CHAOS-5582: ADMISSION AND THE AXIS DECISION RUN BEFORE THE ANSWERABILITY
+	// VERDICT. The fresh interpreted time is a diagnostic on an established
+	// window-only transition -- its AXIS and its BOUNDS alike -- so a sampled
+	// range that is unanswerable must not refuse the question whose window the
+	// user just confirmed, any more than an answerable sampled range may.
+	// Admission reads the carrier and decides nothing about the frame; the
+	// composition that does stays below, after the verdict, where it was.
+	// The fresh line above still reports what the interpreter proposed.
+	windowCommitted := windowCanon.Effective != nil
+	if continuation.Observed {
+		continuation = e.admitWindowContinuation(
+			carryCtx, principal, request, binding, priorLoadedResults,
+			windowCanon.Effective, interpretedTimeBound.Axis,
+		)
+		executedTime, axisOutcome := decideContinuationAxis(continuation, interpretedTimeBound.Bound, interpretedTimeBound.Answerable(), clampedRequestTime, windowCommitted)
+		continuation.AxisOutcome = axisOutcome
+		if axisOutcome == ContinuationAxisOverriddenByReceipt {
+			interpretedTimeBound = resolveInterpretedTimeContext(executedTime, e.now())
+		}
+	}
 	if !interpretedTimeBound.Answerable() {
+		// NO APPLIED CONTINUATION REACHES THIS EXIT (CHAOS-5582): `applied`
+		// requires an established transition on a current carrier, and on such
+		// a transition decideContinuationAxis overrode any unanswerable fresh
+		// time onto the caller's answerable current axis above. What lands here
+		// is a turn whose fresh time governs, and the line keeps the reason
+		// admission gave it until the one below narrows it.
 		// The INTERPRETER produced an unanswerable bound; its own member,
 		// distinct from the caller-side one above.
 		continuation = continuation.withReason(ContinuationReasonAsOfUnresolvable)
@@ -1691,10 +1756,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	freshEffectiveGroup := freshContext.EffectiveGroupKind()
 	accepted := freshContext
 	if continuation.Observed {
-		continuation = e.admitWindowContinuation(
-			carryCtx, principal, request, binding, priorLoadedResults,
-			windowCanon.Effective, clampedInterpretedTime.Axis,
-		)
+		// The executed axis is stamped only once the verdict has passed: an
+		// exit above executed nothing.
+		continuation.ExecutedAxis = clampedInterpretedTime.Axis
 		if continuation.Applies() {
 			composed := composeAcceptedContext(compositionInput{
 				Fresh: familyOutcome.Frame, FreshGate: familyOutcome.Gate,
@@ -1703,6 +1767,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				CarriedGroupKind: continuation.Accepted.GroupKind,
 				ModelObligations: familyOutcome.FrameObligations,
 				EmittedShape:     interpretation.Shape,
+				// The one flag that tells the boundary the caller has already
+				// settled this turn, so no fresh-path gate is consulted.
+				TransitionEstablished: continuation.TransitionEstablished,
 			})
 			// THE OUTCOME IS RECORDED BEFORE THE BRANCH, so the successful
 			// path publishes it too. Recording it only in the else-arm is how
@@ -1718,18 +1785,16 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// there is no continuation to serve. Withheld with the
 				// composition's own reason -- never served under the fresh
 				// frame's gate, which certified a different object.
+				// Disposition alone stops the continuation from applying:
+				// Applies() requires ContinuationApplied, so nothing downstream
+				// executes under the admitted carrier once this is set. The
+				// fields that would otherwise still ASSERT it did -- the accepted
+				// context and the applied window -- are cleared by the exit
+				// fold, which owns that question for every exit rather than only
+				// for the ones that remembered to ask it. Two places clearing one
+				// field is two authorities for one object.
 				continuation.Disposition = ContinuationWithheld
 				continuation = continuation.withReason(ContinuationReasonCompositionInvalid)
-				// AND THE ACCEPTED CONTEXT IS CLEARED, which is the half a
-				// reviewer catches later if it is left out. `Accepted` means
-				// "this is the context the turn executed under"; leaving the
-				// admitted carrier there on a WITHHELD turn publishes
-				// `family_accepted` and `accepted_context_id` for a reading
-				// nothing executed -- the same class of untrue field as the
-				// false `agreement=true` this boundary was cut to remove. The
-				// proposal is still disclosed: `Carried` is untouched and
-				// `carried_context_id` still names it.
-				continuation.Accepted = nil
 			}
 		}
 		continuation = compareContinuationProposal(continuation, continuationFreshProposal{
@@ -1845,6 +1910,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// carries it, with no disclosed reason either way. Name the
 	// disagreement instead: no answer is synthesized under a window
 	// commitment interpretation no longer honors.
+	//
+	// CHAOS-5582: an ESTABLISHED window-only transition never reaches this veto
+	// on a fresh axis drift -- decideContinuationAxis above executed it under
+	// the carried current axis. What still lands here is a resolved window with
+	// no such transition (no receipt, a changed or indeterminate question, a
+	// disqualified or unreadable carrier, a carrier recording another axis):
+	// there the fresh interpretation is the only reading and the disagreement
+	// is named.
 	if windowCanon.Effective != nil && clampedInterpretedTime.Axis != TemporalCurrent {
 		// CHAOS-3478/CHAOS-3813 (codex round-1 finding): this veto returns
 		// before ResolveSubjects ever runs, so it is a never-resolved

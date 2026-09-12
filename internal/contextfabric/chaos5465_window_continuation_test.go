@@ -743,6 +743,9 @@ type frameBearingInterpreter struct {
 	family     QuestionFamily
 	groupKind  SubjectKind
 	frameGroup SubjectKind
+	// timeContext is the fresh interpreted time; the zero value proposes the
+	// current axis, which is what every pre-CHAOS-5582 row relied on.
+	timeContext TimeContext
 }
 
 func (f frameBearingInterpreter) Interpret(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, QuestionFamilyOutcome, error) {
@@ -760,9 +763,13 @@ func (f frameBearingInterpreter) Interpret(context.Context, storage.Principal, I
 		},
 		Temporal: TemporalIntentCurrent,
 	}
+	timeContext := f.timeContext
+	if timeContext.Axis == "" {
+		timeContext = TimeContext{Axis: TemporalCurrent}
+	}
 	return InterpretedQuestion{
 		Shape: ShapeOpen, RequestedJudgment: "status",
-		TimeContext: TimeContext{Axis: TemporalCurrent},
+		TimeContext: timeContext,
 	}, QuestionFamilyOutcome{
 		Family:             f.family,
 		Source:             QuestionFamilySourceModel,
@@ -992,10 +999,10 @@ func TestWindowContinuation_EveryReasonIsReachedThroughTheEngine(t *testing.T) {
 				r.ExpectedKinds = []SubjectKind{contractsv1.ContextFabricSubjectProject}
 			},
 		},
-		{
-			reason:      ContinuationReasonInterpretedAxisVeto,
-			interpreter: axisMovingInterpreter{family: QuestionFamilyGroupedCohortStatus},
-		},
+		// CHAOS-5582: no `interpreted_axis_veto` driver -- the member is
+		// retired. A fresh axis drift on an admitted continuation is the
+		// diagnostic ContinuationAxisOverriddenByReceipt, pinned in
+		// chaos5582_receipt_axis_test.go.
 		{
 			reason: ContinuationReasonRequestInvalid,
 			mutate: func(r *InvestigationRequest) { r.SchemaVersion = "not-a-schema-version" },
@@ -1009,8 +1016,13 @@ func TestWindowContinuation_EveryReasonIsReachedThroughTheEngine(t *testing.T) {
 		},
 		{reason: ContinuationReasonRequestCancelled, cancel: true},
 		{
+			// CHAOS-5582: on an established window-only transition an
+			// unanswerable fresh time is overridden onto the confirmed current
+			// axis and answered, so this exit is reached by a turn whose fresh
+			// time governs -- a changed question.
 			reason:      ContinuationReasonAsOfUnresolvable,
 			interpreter: futureAsOfInterpreter{family: QuestionFamilyGroupedCohortStatus},
+			prior:       func(p InvestigationResult) InvestigationResult { p.Question = driftQuestion; return p },
 		},
 		{
 			// The carried reading is grouped and the fresh frame has no
@@ -1204,13 +1216,15 @@ func TestWindowContinuation_TheInputShapeSpace(t *testing.T) {
 			wantFrameSeen:   true,
 		},
 		{
-			name:            "interpreted axis veto",
+			// CHAOS-5582: a fresh axis drift no longer disqualifies an
+			// admitted continuation; the turn executes under the carried
+			// current axis and reaches ResolveSubjects.
+			name:            "fresh axis drift is diagnostic",
 			axisMoves:       true,
-			wantDisposition: ContinuationNotApplicable,
-			wantReason:      ContinuationReasonInterpretedAxisVeto,
-			wantCarried:     false,
-			// the turn ends at the axis-conflict veto before ResolveSubjects
-			wantFrameSeen: false,
+			wantDisposition: ContinuationApplied,
+			wantReason:      ContinuationReasonNone,
+			wantCarried:     true,
+			wantFrameSeen:   true,
 		},
 		{
 			name:            "binding failure",
@@ -1242,7 +1256,14 @@ func TestWindowContinuation_TheInputShapeSpace(t *testing.T) {
 				frameGroup: contractsv1.ContextFabricSubjectProject,
 			}
 			if tc.axisMoves {
-				interpreter = axisMovingInterpreter{family: QuestionFamilyGroupedCohortStatus}
+				// The SAME frame-bearing proposal as the admitted row, with only
+				// the fresh axis moved, so the row differs from "admitted" in
+				// exactly the input CHAOS-5582 is about.
+				interpreter = frameBearingInterpreter{
+					family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectProject,
+					frameGroup:  contractsv1.ContextFabricSubjectProject,
+					timeContext: TimeContext{Axis: TemporalValidTime, AsOf: &r2AsOf},
+				}
 			}
 			deps := EngineDependencies{
 				Graph: graph,
@@ -1294,7 +1315,7 @@ func TestWindowContinuation_TheInputShapeSpace(t *testing.T) {
 			if gotCarried != tc.wantCarried {
 				t.Errorf("served family_source carried = %v, want %v", gotCarried, tc.wantCarried)
 			}
-			if !tc.bindingFails && !tc.axisMoves {
+			if !tc.bindingFails {
 				// THE FRAME IS NEVER NIL FOR THE GRAPH CONSUMERS (r2 R2-3).
 				if graph.calls == 0 {
 					t.Errorf("ResolveSubjects was never reached; this arm cannot say anything about the frame")
@@ -1638,6 +1659,10 @@ func (s sharedFrameInterpreter) Interpret(context.Context, storage.Principal, In
 func TestWindowContinuation_R3_TheInterpretedTimeBoundErrorCarriesItsOwnReason(t *testing.T) {
 	request := continuationRequest(validInvestigationRequest().Question)
 	prior := continuationPrior(t, continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
+	// CHAOS-5582: an established transition overrides an unanswerable fresh
+	// time and answers, so the bound exit is driven by a changed question,
+	// whose fresh time governs.
+	prior.Question = driftQuestion
 	telemetry := &recordingTelemetry{}
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	fresh := validInvestigationResult()
@@ -1764,6 +1789,10 @@ func TestWindowContinuation_R3_TheRemovedReasonsAreGenuinelyUnreachable(t *testi
 // clock, which resolveTimeContext refuses.
 type futureAsOfInterpreter struct{ family QuestionFamily }
 
+// zeroInstant5582 is a PRESENT zero instant: an assertion about year 1, which
+// resolveInterpretedTimeContext refuses on every axis.
+var zeroInstant5582 = time.Time{}
+
 func (f futureAsOfInterpreter) Interpret(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, QuestionFamilyOutcome, error) {
 	// RE-DERIVED AGAINST CHAOS-5421, which landed while this branch was in
 	// review. A FUTURE as-of is no longer unanswerable -- it is CLAMPED and
@@ -1773,9 +1802,16 @@ func (f futureAsOfInterpreter) Interpret(context.Context, storage.Principal, Inv
 	// (InterpretedTimeBoundAbsentOrZero). The enumeration pin caught this,
 	// because it asserts the driver still reaches the member it is written for
 	// -- which a presence-only assertion never would.
+	//
+	// RE-DERIVED AGAIN FOR CHAOS-5582: on an established window-only
+	// transition a fresh non-current time is a diagnostic, so an absent
+	// valid-time as-of is now overridden onto the confirmed current axis and
+	// answered. The shape that still ends the turn at this exit is a fresh
+	// CURRENT axis carrying a present-zero instant: nothing overrides an axis
+	// that already agrees, and the bound itself is unanswerable.
 	return InterpretedQuestion{
 		Shape: ShapeOpen, RequestedJudgment: "status",
-		TimeContext: TimeContext{Axis: TemporalValidTime},
+		TimeContext: TimeContext{Axis: TemporalCurrent, AsOf: &zeroInstant5582},
 	}, QuestionFamilyOutcome{
 		Family: f.family, Source: QuestionFamilySourceModel,
 		WinningSampleIndex: 0,

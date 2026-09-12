@@ -1534,7 +1534,11 @@ func closedDecisionFields() []closedDecisionField {
 			Key: "family_source",
 			Token: func(d windowContinuationDecision) string {
 				source := d.AcceptedFamilySource()
-				return guard(source == "" || contractsv1.ValidContextFabricQuestionFamilySource(source), string(source))
+				// CHAOS-5582: the accept set is exactly what the derivation can
+				// produce, and exactly what ContinuationDecisionLineVocabulary
+				// declares -- a wider guard would certify a value this line
+				// can never legitimately carry.
+				return guard(source == "" || source == QuestionFamilySourceCarried, string(source))
 			},
 			// DERIVED: AcceptedFamilySource returns "" or `carried` from a
 			// pointer test, so no caller can seat a non-member here. The guard
@@ -1622,7 +1626,105 @@ func closedDecisionFields() []closedDecisionField {
 				d.RefusalBasis = contractsv1.ContextFabricRefusalBasisMemberKindUnservable
 			},
 		},
+		{
+			// CHAOS-5582. Empty is legitimate on all three axes: interpretation
+			// never ran, no carrier was loaded, the turn ended before the axis
+			// was decided. Anything else must be a temporal axis member -- the
+			// carried axis is read from a STORED result, which is exactly where
+			// a value outside the vocabulary could come from.
+			Key: "interpreted_axis",
+			Token: func(d windowContinuationDecision) string {
+				return guard(d.InterpretedAxis == "" || contractsv1.ValidContextFabricTemporalAxis(d.InterpretedAxis), string(d.InterpretedAxis))
+			},
+			Invent: func(d *windowContinuationDecision) { d.InterpretedAxis = "invented-interpreted-axis" },
+		},
+		{
+			Key: "carried_axis",
+			Token: func(d windowContinuationDecision) string {
+				return guard(d.CarriedAxis == "" || contractsv1.ValidContextFabricTemporalAxis(d.CarriedAxis), string(d.CarriedAxis))
+			},
+			Invent: func(d *windowContinuationDecision) { d.CarriedAxis = "invented-carried-axis" },
+		},
+		{
+			Key: "executed_axis",
+			Token: func(d windowContinuationDecision) string {
+				return guard(d.ExecutedAxis == "" || contractsv1.ValidContextFabricTemporalAxis(d.ExecutedAxis), string(d.ExecutedAxis))
+			},
+			Invent: func(d *windowContinuationDecision) { d.ExecutedAxis = "invented-executed-axis" },
+		},
+		{
+			Key: "interpreted_axis_outcome",
+			Token: func(d windowContinuationDecision) string {
+				return guard(ValidContinuationAxisOutcome(d.AxisOutcome), string(d.AxisOutcome))
+			},
+			Invent: func(d *windowContinuationDecision) { d.AxisOutcome = ContinuationAxisOutcome("invented-axis-outcome") },
+		},
 	}
+}
+
+// ContinuationDecisionLineVocabulary returns every value one CLOSED field of
+// the continuation decision line may carry, read from the production
+// vocabularies the emitter's own guards consult (CHAOS-5582).
+//
+// IT EXISTS SO THE EVENT SPECIFICATION DECLARES FROM PRODUCTION. eventspec
+// cannot be imported here (it imports this package), so the specification
+// calls this instead of retyping member lists -- a second list is the drift
+// this package has paid for before. The unrecognised sentinel is NEVER a
+// member: a line carrying it is a defect a certificate must refuse.
+//
+// nil for a key that is not a closed field of the line; the pin beside the
+// registry asserts every closed key returns a non-empty list and that every
+// member it returns passes that field's own guard unchanged.
+func ContinuationDecisionLineVocabulary(key string) []string {
+	// The explicit empty member goes LAST, so the first member of every list
+	// is a real value rather than the "did not apply" one.
+	optional := func(members []string) []string { return append(members, "") }
+	switch key {
+	case "seed_source":
+		return tokenStrings(carrySeedSources())
+	case "family_carried", "family_fresh", "family_accepted":
+		families := QuestionFamilyVocabulary()
+		return optional(tokenStrings(families[:]))
+	case "family_source":
+		// Derived: AcceptedFamilySource is `carried` or empty, never another
+		// source, so the vocabulary is exactly those two.
+		return optional([]string{string(QuestionFamilySourceCarried)})
+	case "continuation_disposition":
+		return tokenStrings(continuationDispositions())
+	case "decision_reason":
+		return tokenStrings(continuationDecisionReasons())
+	case "conflict_reason":
+		return tokenStrings(continuationConflictReasons())
+	case "composition_outcome":
+		return tokenStrings(compositionOutcomeVocabulary())
+	case "composition_failed_invariant":
+		invariants := []string{CompositionInvariantCarriedAxisUnexpressible}
+		for _, spec := range FrameInvariantSpecs() {
+			invariants = append(invariants, string(spec.ID))
+		}
+		return optional(invariants)
+	case "interpreted_axis", "carried_axis", "executed_axis":
+		axes := contractsv1.ContextFabricTemporalAxisVocabulary()
+		return optional(tokenStrings(axes[:]))
+	case "interpreted_axis_outcome":
+		return tokenStrings(continuationAxisOutcomes())
+	case "carrier_read":
+		return tokenStrings([]ContinuationCarrierRead{ContinuationCarrierNotRead, ContinuationCarrierReadOK, ContinuationCarrierReadFailed})
+	case "refusal_basis":
+		// The one wire member a continuation can serve, and the explicit
+		// not-refused token ObservableRefusalBasis renders.
+		return []string{string(contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable), "none"}
+	default:
+		return nil
+	}
+}
+
+func tokenStrings[T ~string](members []T) []string {
+	out := make([]string, 0, len(members))
+	for _, member := range members {
+		out = append(out, string(member))
+	}
+	return out
 }
 
 // closedDecisionToken reads ONE closed field through the registry.
@@ -1682,6 +1784,16 @@ func (t SlogEngineTelemetry) RecordWindowContinuationDecision(ctx context.Contex
 		// refusal to the result that could not be verified.
 		"referenced_result_id", SanitizeLogAttr(decision.ReferencedResultID),
 		"carrier_read", SanitizeLogAttr(closedDecisionToken("carrier_read", decision)),
+		// CHAOS-5582: the axis decision's inputs, outcome and result. The two
+		// request counts are the values the receipt conflicts veto on; the
+		// three axes are fresh (proposed), carried (recorded) and executed
+		// (served), explicitly empty when that stage never ran.
+		"window_receipt_count", decision.WindowReceiptCount,
+		"explicit_window_present", decision.ExplicitWindowPresent,
+		"interpreted_axis", SanitizeLogAttr(closedDecisionToken("interpreted_axis", decision)),
+		"carried_axis", SanitizeLogAttr(closedDecisionToken("carried_axis", decision)),
+		"executed_axis", SanitizeLogAttr(closedDecisionToken("executed_axis", decision)),
+		"interpreted_axis_outcome", SanitizeLogAttr(closedDecisionToken("interpreted_axis_outcome", decision)),
 	}
 	// requestIDLogAttrs already returns its value through SanitizeLogAttr --
 	// no second strip needed here.

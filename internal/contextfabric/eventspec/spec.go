@@ -13,6 +13,8 @@
 // are never hand-edited (regen_test.go pins that byte-for-byte).
 package eventspec
 
+import "github.com/full-chaos/dev-health-acr/internal/contextfabric"
+
 //go:generate go run ./gen
 
 // Level is the production slog level a variant is required to emit at.
@@ -951,6 +953,64 @@ var AnchorOffer = Event{
 	},
 }
 
+// WindowContinuationDecision is the once-per-REQUEST Info line
+// (telemetry.go, SlogEngineTelemetry.RecordWindowContinuationDecision) that
+// reports the CHAOS-5465 window-continuation decision for every request
+// carrying a window receipt, emitted from Investigate's single deferred site.
+//
+// CHAOS-5582 registers it here with the axis decision it now carries: the
+// receipt count and explicit-window presence the receipt conflicts veto on,
+// the fresh, carried and executed axes, and interpreted_axis_outcome. Every
+// closed vocabulary below is read from PRODUCTION
+// (contextfabric.ContinuationDecisionLineVocabulary), never retyped here: the
+// emitter's own membership guards and this declaration read one list.
+var WindowContinuationDecision = Event{
+	ID:                 "contextfabric.window_continuation_decision",
+	Msg:                "context fabric window continuation decision",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityExactlyOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "exactly one line per Investigate call whose request carries a window receipt, from the one deferred emit site; a request with no window receipt emits none (the line's denominator is receipt-bearing requests).",
+	Fields: []Field{
+		// Open: the authenticated org id and the caller-named prior result id.
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "source_result_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "seed_source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("seed_source")},
+		{Key: "family_carried", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("family_carried")},
+		{Key: "family_fresh", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("family_fresh")},
+		{Key: "family_accepted", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("family_accepted")},
+		{Key: "family_source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("family_source")},
+		{Key: "continuation_disposition", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("continuation_disposition")},
+		{Key: "decision_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("decision_reason")},
+		{Key: "comparison_evaluated", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "agreement", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "conflict_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("conflict_reason")},
+		{Key: "conflict_count", Type: FieldInt, Presence: PresenceRequired},
+		// Open at this layer: a comma-joined list whose MEMBERS the emitter
+		// checks one by one; the joined string itself has no finite
+		// vocabulary.
+		{Key: "conflict_fields", Type: FieldString, Presence: PresenceRequired},
+		// Open: relative id | frozen start | frozen end | provenance, or empty.
+		{Key: "applied_window", Type: FieldString, Presence: PresenceRequired},
+		{Key: "carried_context_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "fresh_context_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "accepted_context_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "composition_outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("composition_outcome")},
+		{Key: "composition_failed_invariant", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("composition_failed_invariant")},
+		{Key: "refusal_basis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("refusal_basis")},
+		// Open: the prior result id the window-only request names, or empty.
+		{Key: "referenced_result_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "carrier_read", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("carrier_read")},
+		{Key: "window_receipt_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "explicit_window_present", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "interpreted_axis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("interpreted_axis")},
+		{Key: "carried_axis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("carried_axis")},
+		{Key: "executed_axis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("executed_axis")},
+		{Key: "interpreted_axis_outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("interpreted_axis_outcome")},
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+	},
+}
+
 // All is every event this specification declares. Generate() and the
 // certification runner both range over exactly this slice -- neither
 // maintains a second list.
@@ -959,5 +1019,5 @@ var All = []Event{
 	Corroboration, CorroborationSummary, ReservedKindAdmitted, OfferPool, OfferPoolSummary,
 	Decision, SearchQuestion, AliasLookup, AnchorPool, KindCoverageFloor, ConfirmedKindRescue,
 	IdentityUniverse, KindHintSearch, ExactNameSearch, AnchorOffer,
-	AnchorKindWithheld, AnchorKindWithheldSummary,
+	AnchorKindWithheld, AnchorKindWithheldSummary, WindowContinuationDecision,
 }
