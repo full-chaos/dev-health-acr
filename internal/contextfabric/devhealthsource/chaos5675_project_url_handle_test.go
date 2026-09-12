@@ -48,22 +48,36 @@ func TestTheURLHandleReachesTheProjectedSearchText(t *testing.T) {
 	}
 }
 
-// Asserted over the whole batch rather than one row, so a provider added to
-// the fixture later is covered without editing this test.
+// THE PROVIDER KEY IS NEVER DISPLACED, asserted over every project in the
+// batch rather than one row, so a provider added to the fixture later is
+// covered without editing this test.
+//
+// It checks what its name says: for every project whose source row carries a
+// key, that key is present AND is the FIRST alias. A sweep that only checked
+// the list was non-empty would pass a change that replaced every key with a
+// URL handle -- the exact regression the gitlab control exists to catch for
+// one row, and the one this sweep exists to catch for all of them.
 func TestEveryProjectWithAProviderKeyKeepsItFirst(t *testing.T) {
 	t.Parallel()
 	batch := teamsProjectsBatch(t, liveShapedTeamsProjectsClient())
-	projects := 0
+	keyed := map[string]string{
+		"project.v2:gitlab:70d529e0-3c06-4597-8480-794fd02328b6%3Agitlab%3A71133891": "full.chaos/chaos-ops",
+	}
+	checked := 0
 	for _, entity := range batch.Entities {
 		if entity.Subject.Kind != contractsv1.ContextFabricSubjectProject {
 			continue
 		}
-		projects++
-		if len(entity.Aliases) == 0 {
-			t.Errorf("project %q projected with NO alias at all", entity.Subject.CanonicalID)
+		key, hasKey := keyed[entity.Subject.CanonicalID]
+		if !hasKey {
+			continue
+		}
+		checked++
+		if len(entity.Aliases) == 0 || entity.Aliases[0] != key {
+			t.Errorf("project %q aliases = %v, want its provider key %q FIRST", entity.Subject.CanonicalID, entity.Aliases, key)
 		}
 	}
-	if projects == 0 {
-		t.Fatal("no project entities in the batch -- this sweep would pass vacuously")
+	if checked != len(keyed) {
+		t.Fatalf("checked %d keyed projects, want %d -- a keyed project missing from the batch would make this sweep vacuous", checked, len(keyed))
 	}
 }
