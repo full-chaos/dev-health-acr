@@ -73,3 +73,41 @@ func cardinalityClaim(principal storage.Principal, cardinality MembershipCardina
 		},
 	}, true
 }
+
+// cardinalityAnswerSentence is the prose half: the number the claim asserts,
+// stated in the served answer.
+//
+// COMPOSED WHERE THE CLAIM IS, not in composeDeterministicAnswerFrom, even
+// though that renderer already accepts a claims slice it deliberately ignores.
+// That renderer runs over the model's DRAFT, before this claim exists -- it
+// could not read it if it wanted to. Composing both from one site is what
+// makes the sentence and the claim the same number by construction rather than
+// by two derivations agreeing.
+//
+// It states the SERVED count and, when the population was larger, says so.
+// "Fourteen of thirty-six" is the honest reading of a clamped cohort, and it is
+// the disclosure the outcome row carries in its own vocabulary.
+func cardinalityAnswerSentence(cardinality MembershipCardinality) string {
+	if !cardinality.Resolved || cardinality.Kind == "" {
+		return ""
+	}
+	noun := cardinalityNoun(cardinality.Kind, cardinality.Served)
+	if cardinality.Declared > cardinality.Served {
+		return fmt.Sprintf("Counted %d %s of %d found.", cardinality.Served, noun, cardinality.Declared)
+	}
+	return fmt.Sprintf("Counted %d %s.", cardinality.Served, noun)
+}
+
+// cardinalityNoun pluralises the counted kind for the answer sentence.
+//
+// Naive and deliberately so: every member of the subject-kind vocabulary is a
+// regular noun ("team", "project", "repository"), so an "s" is correct for all
+// of them and a table would be ceremony around one rule. A future kind with an
+// irregular plural is the thing that makes this a table, and it does not exist
+// yet.
+func cardinalityNoun(kind SubjectKind, count int) string {
+	if count == 1 {
+		return string(kind)
+	}
+	return string(kind) + "s"
+}

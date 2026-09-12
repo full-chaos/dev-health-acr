@@ -617,6 +617,13 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// when the answer has the least else to say.
 	if claim, ok := cardinalityClaim(principal, cardinality); ok {
 		result.ClaimedFacts = append(result.ClaimedFacts, claim)
+		// The prose and the claim, from one site and one value. Appended
+		// rather than substituted: the status sentence and any principal
+		// driver the answer already carries are still true, and the count is
+		// additional rather than a replacement for them.
+		if sentence := cardinalityAnswerSentence(cardinality); sentence != "" {
+			result.DeterministicAnswer = strings.TrimSpace(result.DeterministicAnswer + " " + sentence)
+		}
 	}
 	return result, synthesisAllocation, pending, cardinality, nil
 }

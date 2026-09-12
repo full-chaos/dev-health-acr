@@ -285,3 +285,51 @@ func TestTheServedDocumentCarriesExactlyOneCountAndItIsThePreSynthesisOne(t *tes
 		t.Errorf("served members = %d, want 14 -- the count and the member list must describe the same document", len(result.Cohort.Members))
 	}
 }
+
+// THE CLAIM AND THE ROW ARE THE SAME NUMBER, end to end.
+//
+// This is what grounds a claim that has no canonical fact behind it. Every
+// other minted claim is re-derived against the fact bundle by
+// validateMintedClaimsGrounded; this one asserts something the server computed,
+// so what stands in for that check is the served document agreeing with itself:
+// the claim's value, the outcome row's served count, and the member list must
+// all say the same thing, or the answer is asserting a number it cannot show.
+func TestTheCardinalityClaimAgreesWithTheRowAndTheMembers(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	frame := countingFrame(SubjectTeam)
+	engine := newCountingEngineWithPopulation(t, countingCohort(SubjectTeam, 14), 36, frame, telemetry)
+	result := runCountingRequest(t, engine, 14)
+
+	var claim *ClaimedFact
+	for i := range result.ClaimedFacts {
+		if result.ClaimedFacts[i].Kind == contractsv1.ContextFabricFactCardinality {
+			claim = &result.ClaimedFacts[i]
+			break
+		}
+	}
+	if claim == nil {
+		t.Fatal("no cardinality claim on the served document -- the computed count reached the reader as prose only")
+	}
+	if claim.Value.Integer == nil {
+		t.Fatal("cardinality claim carries no integer value")
+	}
+
+	assembled := countOutcomeRows(result, contractsv1.ContextFabricOutcomeStageAssembledResult)
+	if len(assembled) != 1 {
+		t.Fatalf("assembled count rows = %d, want exactly 1", len(assembled))
+	}
+	if got, want := *claim.Value.Integer, int64(assembled[0].Served); got != want {
+		t.Errorf("claim value = %d, outcome row served = %d -- the document asserts two different counts", got, want)
+	}
+	if got, want := *claim.Value.Integer, int64(len(result.Cohort.Members)); got != want {
+		t.Errorf("claim value = %d, member list = %d -- the count does not describe the members served beside it", got, want)
+	}
+	if claim.Subject.Kind != SubjectOrganization {
+		t.Errorf("claim subject kind = %q, want organization -- a population count is not true of any single member", claim.Subject.Kind)
+	}
+	// The prose states it too, from the same value.
+	if !strings.Contains(result.DeterministicAnswer, "Counted 14 teams of 36 found.") {
+		t.Errorf("answer prose does not state the count: %q", result.DeterministicAnswer)
+	}
+}
