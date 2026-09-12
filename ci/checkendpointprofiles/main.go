@@ -38,14 +38,21 @@
 //     line is the validator.
 //   - primary_validator anchors carry an explicit marker (the anchor's `note`
 //     field: a short, exact, literal substring of the real call/declaration)
-//     that this gate re-locates independently of the declared line number, so
-//     a later edit that shifts the declared line onto an unrelated statement
-//     is caught rather than silently passing on whatever text happens to be
-//     there. reachable_validators anchors are not yet covered this way. Like
-//     the name-match limit above, this is a TEXT match on the declared line,
-//     not proof the matched text is executable code rather than a comment or
-//     string literal that happens to repeat it there -- an edit that moves
-//     the real construct away while leaving a same-named comment behind on
+//     that this gate re-locates independently of the declared line number,
+//     checked against that declared line ALONE (never a wider line..line_end
+//     window), so a later edit that shifts the declared line onto an
+//     unrelated statement is caught rather than silently passing on whatever
+//     text happens to be there. A second, UNCLAIMED occurrence of the same
+//     marker text elsewhere in the file (one no row's own anchor accounts
+//     for) is reported rather than trusted, since a substring match cannot
+//     tell which of two occurrences is the real one; two rows that
+//     legitimately share one source line (model-config PUT/DELETE) also
+//     legitimately share one marker and are not flagged against each other.
+//     reachable_validators anchors are not yet covered this way. Like the
+//     name-match limit above, this remains a TEXT match, not proof the
+//     matched text is executable code rather than a comment or string
+//     literal that happens to repeat it -- an edit that moves the real
+//     construct away while leaving a same-named, otherwise-unique comment on
 //     the declared line is indistinguishable from a correct anchor.
 //   - Two rows whose primary_validator anchors point at the SAME source line
 //     (the model-config PUT/DELETE rows share one dispatch line) necessarily
@@ -442,6 +449,31 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 	// constraint; it's a cross-row uniqueness rule.
 	surfaceOwners := map[surfaceKey][]string{}
 
+	// Every (file, line) that SOME row's primary_validator anchor legitimately
+	// declares, collected in a pass over every row before any row's marker is
+	// checked. checkPrimaryValidatorAnchorMarker uses this to tell a genuine
+	// sibling anchor (two rows dispatching through one shared source line,
+	// therefore one shared marker -- the model-config PUT/DELETE rows) from
+	// an unexplained second occurrence of the same text that nothing in the
+	// inventory accounts for.
+	claimedAnchorLines := map[surfaceKey]bool{}
+	for _, raw := range rowsRaw {
+		row := asObject(raw)
+		pv := asObject(row["primary_validator"])
+		if pv == nil {
+			continue
+		}
+		a := asObject(pv["anchor"])
+		if a == nil {
+			continue
+		}
+		path, _ := asString(a["path"])
+		lineF, _ := a["line"].(float64)
+		if path != "" && lineF >= 1 {
+			claimedAnchorLines[surfaceKey{path, int(lineF)}] = true
+		}
+	}
+
 	for idx, raw := range rowsRaw {
 		row := asObject(raw)
 		id, _ := asString(row["id"])
@@ -550,7 +582,7 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 				}
 			} else {
 				checkAnchorExists(root, id, asObject(anchorRaw), &errs, "primary_validator anchor")
-				checkPrimaryValidatorAnchorMarker(root, id, asObject(anchorRaw), &errs)
+				checkPrimaryValidatorAnchorMarker(root, id, asObject(anchorRaw), claimedAnchorLines, &errs)
 			}
 		}
 
@@ -775,7 +807,7 @@ func checkAnchorExists(root, rowID string, anchor map[string]any, errs *[]string
 // class this fix targets is a per-route primary_validator call site, and a
 // second CHAOS ticket can extend the same mechanism there if a future
 // incident shows the need).
-func checkPrimaryValidatorAnchorMarker(root, rowID string, anchor map[string]any, errs *[]string) {
+func checkPrimaryValidatorAnchorMarker(root, rowID string, anchor map[string]any, claimedAnchorLines map[surfaceKey]bool, errs *[]string) {
 	if anchor == nil {
 		return // reported elsewhere (checkAnchorExists)
 	}
@@ -813,6 +845,38 @@ func checkPrimaryValidatorAnchorMarker(root, rowID string, anchor map[string]any
 	// passing on a marker it never actually verified was there. A single
 	// declared line has exactly one thing to verify; check that one thing.
 	if strings.Contains(lines[line-1], note) {
+		// The declared line carries the marker. Before trusting that as
+		// proof, check the REST of the file for the same marker text: a
+		// substring match can be fooled by an unrelated copy (a comment, a
+		// stale string literal) that happens to land on the declared line
+		// while the real construct sits somewhere else entirely -- exactly
+		// the shape a range-wide check let through before this line-only
+		// check existed. An extra occurrence is fine when it belongs to
+		// ANOTHER row's own legitimately declared primary_validator anchor
+		// (two rows dispatching through one shared source line share one
+		// marker on purpose -- see the model-config PUT/DELETE rows); an
+		// extra occurrence nothing in the inventory accounts for means the
+		// match just made cannot be trusted to be the real one.
+		for i, l := range lines {
+			if i+1 == line {
+				continue
+			}
+			if !strings.Contains(l, note) {
+				continue
+			}
+			if claimedAnchorLines[surfaceKey{path, i + 1}] {
+				continue
+			}
+			*errs = append(*errs, fmt.Sprintf(
+				"AMBIGUOUS ANCHOR MARKER: row %q primary_validator anchor declares %s:%d, and its "+
+					"marker %q is there, but the SAME text also appears at line %d, which no row's "+
+					"anchor claims -- a substring match cannot tell which occurrence is the real "+
+					"validator. Use a longer, more specific marker, or (if line %d is stale text left "+
+					"behind by an edit) remove it",
+				rowID, path, line, note, i+1, i+1,
+			))
+			return
+		}
 		return
 	}
 	// The declared line doesn't carry the marker -- find out whether the
