@@ -41,7 +41,12 @@
 //     that this gate re-locates independently of the declared line number, so
 //     a later edit that shifts the declared line onto an unrelated statement
 //     is caught rather than silently passing on whatever text happens to be
-//     there. reachable_validators anchors are not yet covered this way.
+//     there. reachable_validators anchors are not yet covered this way. Like
+//     the name-match limit above, this is a TEXT match on the declared line,
+//     not proof the matched text is executable code rather than a comment or
+//     string literal that happens to repeat it there -- an edit that moves
+//     the real construct away while leaving a same-named comment behind on
+//     the declared line is indistinguishable from a correct anchor.
 //   - Two rows whose primary_validator anchors point at the SAME source line
 //     (the model-config PUT/DELETE rows share one dispatch line) necessarily
 //     share one marker too. If both anchors drift onto the same wrong line at
@@ -780,10 +785,6 @@ func checkPrimaryValidatorAnchorMarker(root, rowID string, anchor map[string]any
 	if path == "" || line < 1 || !anchorPathWithinRoot(root, path) {
 		return // reported elsewhere
 	}
-	lineEnd := line
-	if endF, ok := anchor["line_end"].(float64); ok && int(endF) >= line {
-		lineEnd = int(endF)
-	}
 	note, _ := asString(anchor["note"])
 	if strings.TrimSpace(note) == "" {
 		*errs = append(*errs, fmt.Sprintf(
@@ -804,19 +805,24 @@ func checkPrimaryValidatorAnchorMarker(root, rowID string, anchor map[string]any
 	if line > len(lines) {
 		return // reported elsewhere (checkAnchorExists)
 	}
-	endIdx := lineEnd
-	if endIdx > len(lines) {
-		endIdx = len(lines)
-	}
-	declared := strings.Join(lines[line-1:endIdx], "\n")
-	if strings.Contains(declared, note) {
+	// The marker is checked against its own declared START line ONLY, never
+	// a line..line_end window: a window wide enough to admit a multi-line
+	// construct is also wide enough to keep matching after an edit inserts a
+	// line ABOVE the real construct and shifts it deeper into that same
+	// window -- the declared line itself goes stale while the check keeps
+	// passing on a marker it never actually verified was there. A single
+	// declared line has exactly one thing to verify; check that one thing.
+	if strings.Contains(lines[line-1], note) {
 		return
 	}
 	// The declared line doesn't carry the marker -- find out whether the
-	// marker still exists ANYWHERE in the file (a drifted-but-recoverable
+	// marker still exists ANYWHERE ELSE in the file (a drifted-but-recoverable
 	// anchor) or has vanished entirely (a marker naming code that no
 	// longer exists at all, e.g. a renamed function).
 	for i, l := range lines {
+		if i+1 == line {
+			continue
+		}
 		if strings.Contains(l, note) {
 			*errs = append(*errs, fmt.Sprintf(
 				"ANCHOR LINE DRIFTED: row %q primary_validator anchor declares %s:%d, but its own "+

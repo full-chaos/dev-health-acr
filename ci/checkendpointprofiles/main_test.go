@@ -1238,6 +1238,108 @@ func TestGatePassesAPrimaryValidatorAnchorWithAMatchingMarker(t *testing.T) {
 	}
 }
 
+func TestGateCatchesAPrimaryValidatorAnchorWhoseDeclaredLineWithinAWideRangeIsWrong(t *testing.T) {
+	// The marker check must verify the anchor's own declared START line,
+	// never a wider line..line_end window: a window wide enough to admit a
+	// real multi-line construct is also wide enough to keep matching after
+	// an edit inserts a line ABOVE the construct and shifts it deeper into
+	// that same window, leaving the declared line itself wrong while the
+	// marker is still "somewhere in range".
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, fixtureAppFile),
+		"package api\n"+ // 1
+			"\n"+ // 2
+			"import \"net/http\"\n"+ // 3
+			"\n"+ // 4
+			"func Handler() http.Handler {\n"+ // 5
+			"	// a line inserted above the real call, shifting it down\n"+ // 6
+			"	return protectedRuntimeHandler(handler)\n"+ // 7
+			"}\n"+ // 8
+			"\n"+
+			"func protectedRuntimeHandler(next http.Handler) http.Handler { return next }\n"+
+			"\n"+
+			"var handler http.Handler\n",
+	)
+	schemaPath, credentialClassesPath, credentialClassesSchemaPath := seedFixtureSchemaAndCredentialClasses(t, root)
+	row := minimalValidRow(map[string]any{
+		"primary_validator": map[string]any{
+			"description": "wraps itself in protectedRuntimeHandler",
+			// Declares line 6 as the start of a range wide enough to still
+			// contain the real call at line 7 -- the declared START itself
+			// is wrong, but a range-wide search would keep passing.
+			"anchor": map[string]any{
+				"path":     fixtureAppFile,
+				"line":     float64(6),
+				"line_end": float64(7),
+				"note":     "protectedRuntimeHandler(handler)",
+			},
+		},
+	})
+	inventoryPath := writeInventory(t, root, []map[string]any{row})
+	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, errs, "ANCHOR LINE DRIFTED", "primary_validator")
+}
+
+func TestGateAcceptsANonCommentTextCopyOfTheMarkerOnTheDeclaredLine_DocumentedTextMatchLimit(t *testing.T) {
+	// Documents a KNOWN, disclosed limit rather than proving a gap closed: a
+	// text match on the declared line is not proof the matched text is
+	// executable code. A string literal (not a `//` comment, so the
+	// pre-existing trivial-anchor denylist does not catch it either) that
+	// happens to repeat the marker's exact text on the row's own declared
+	// line is indistinguishable from a real anchor by this check, the same
+	// way the pre-existing issued_credential name-match cannot tell a real
+	// mint call from a same-named comment. This guards against a FUTURE
+	// tightening accidentally rejecting the legitimate case two real rows
+	// already rely on (model-config PUT/DELETE share one source line and
+	// therefore one marker).
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, fixtureAppFile),
+		"package api\n"+ // 1
+			"\n"+ // 2
+			"import \"net/http\"\n"+ // 3
+			"\n"+ // 4
+			"func Handler() http.Handler {\n"+ // 5
+			"	var historicalNote = \"protectedRuntimeHandler(handler) used to be called here\"\n"+ // 6
+			"	_ = historicalNote\n"+ // 7
+			"	mux := http.NewServeMux()\n"+ // 8
+			"	mux.HandleFunc(\"GET /healthz\", healthzHandler)\n"+ // 9
+			"	return mux\n"+ // 10
+			"}\n"+ // 11
+			"\n"+
+			"func healthzHandler(w http.ResponseWriter, r *http.Request) {}\n"+
+			"\n"+
+			"func protectedRuntimeHandler(next http.Handler) http.Handler { return next }\n",
+	)
+	schemaPath, credentialClassesPath, credentialClassesSchemaPath := seedFixtureSchemaAndCredentialClasses(t, root)
+	row := minimalValidRow(map[string]any{
+		"source": map[string]any{"file": fixtureAppFile, "line": float64(9)},
+		"primary_validator": map[string]any{
+			"description": "no longer wraps itself in protectedRuntimeHandler",
+			// Declares the string-literal line -- the real call was
+			// removed, but its name lives on in leftover text on the
+			// declared line.
+			"anchor": map[string]any{
+				"path": fixtureAppFile,
+				"line": float64(6),
+				"note": "protectedRuntimeHandler(handler)",
+			},
+		},
+	})
+	inventoryPath := writeInventory(t, root, []map[string]any{row})
+	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("expected no errors (marker is genuinely present on the declared line, even "+
+			"though it is a comment, not code -- see KNOWN LIMITS: a text match is not a proof "+
+			"of executable code), got:\n%s", strings.Join(errs, "\n"))
+	}
+}
+
 func TestGateCatchesAnIssuedCredentialAnchorWithNoExtractableFunctionName(t *testing.T) {
 	// Coordinator ruling (2026-09-01): "where [content] cannot be
 	// established, say so in the message rather than passing." An anchor
