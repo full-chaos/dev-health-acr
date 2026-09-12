@@ -90,6 +90,44 @@ func goVarName(e Event) string {
 		return "AnchorSlotDisplaced"
 	case DecisionSummary.ID:
 		return "DecisionSummary"
+	case Search.ID:
+		return "Search"
+	case KindOfferWithheld.ID:
+		return "KindOfferWithheld"
+	case Corroboration.ID:
+		return "Corroboration"
+	case CorroborationSummary.ID:
+		return "CorroborationSummary"
+	case ReservedKindAdmitted.ID:
+		return "ReservedKindAdmitted"
+	case OfferPool.ID:
+		return "OfferPool"
+	case OfferPoolSummary.ID:
+		return "OfferPoolSummary"
+	case Decision.ID:
+		return "Decision"
+	case SearchQuestion.ID:
+		return "SearchQuestion"
+	case AliasLookup.ID:
+		return "AliasLookup"
+	case AnchorPool.ID:
+		return "AnchorPool"
+	case KindCoverageFloor.ID:
+		return "KindCoverageFloor"
+	case ConfirmedKindRescue.ID:
+		return "ConfirmedKindRescue"
+	case IdentityUniverse.ID:
+		return "IdentityUniverse"
+	case KindHintSearch.ID:
+		return "KindHintSearch"
+	case ExactNameSearch.ID:
+		return "ExactNameSearch"
+	case AnchorOffer.ID:
+		return "AnchorOffer"
+	case AnchorKindWithheld.ID:
+		return "AnchorKindWithheld"
+	case AnchorKindWithheldSummary.ID:
+		return "AnchorKindWithheldSummary"
 	default:
 		panic("eventspec: goVarName has no mapping for " + e.ID + " -- add one before regenerating")
 	}
@@ -151,6 +189,8 @@ func goFieldType(t FieldType) string {
 		return "string"
 	case FieldInt:
 		return "int"
+	case FieldFloat:
+		return "float64"
 	case FieldBool:
 		return "bool"
 	case FieldStringSlice:

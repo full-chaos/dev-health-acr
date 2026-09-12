@@ -466,16 +466,24 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 	// would over-report. Each candidate lands in exactly one bucket, so the
 	// pair sums to the population, which is the identity the tests assert.
 	demotedKeys := make(map[string]bool)
+	// offerPoolDemotedForTrace (CHAOS-5517): buffered rather than traced
+	// immediately -- the offer_pool DETAIL event's own bounded-many Total
+	// spans BOTH this loop's demoted candidates AND the phase-4 exclusion
+	// loop's own excluded candidates (same Stage/Msg, distinguished only by
+	// "disposition"), and the exclusion loop runs much later in this same
+	// function, after `ordered` exists. Emitting here with a per-loop-only
+	// total would under-report; buffering and emitting both loops' lines
+	// together (at the exclusion loop, once the combined total is known)
+	// keeps Total honest without a second, incompatible event declaration
+	// under the same wire Msg.
+	var offerPoolDemotedForTrace []contextfabric.SubjectRef
 	for _, candidate := range candidatesBySubject {
 		if candidate.State == contextfabric.ResolutionCommitted && isVectorOnlyCandidate(candidate.MatchMechanisms) {
 			candidate.State = contextfabric.ResolutionProposed
 			offerPoolVectorOnlyDemoted++
 			demotedKeys[SubjectKey(candidate.Subject)] = true
 			if tracer != nil {
-				tracer.Trace(ResolutionTraceEvent{
-					RequestID: requestID, Stage: "offer_pool", Subject: candidate.Subject,
-					OfferPoolDisposition: "vector_only_demoted",
-				})
+				offerPoolDemotedForTrace = append(offerPoolDemotedForTrace, candidate.Subject)
 			}
 		}
 		candidates = append(candidates, candidate)
@@ -527,8 +535,18 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 			// transition and the distinct mechanism count.
 			tracer.Trace(ResolutionTraceEvent{
 				RequestID: requestID, Stage: "corroboration", Subject: candidates[index].Subject,
-				BaseConfidence: base, FinalConfidence: candidates[index].Confidence,
+				Pass:               pass,
+				BaseConfidence:     base,
+				FinalConfidence:    candidates[index].Confidence,
 				DistinctMechanisms: DistinctMechanismCount(candidates[index].MatchMechanisms),
+				// CHAOS-5517: this loop ranges over the WHOLE candidates
+				// slice unconditionally (every element gets a line, unlike
+				// offer_pool/reserved_kind_admitted's own filtered loops),
+				// so Total is simply the slice's own length -- the SAME
+				// length CorroborationSummary's own CorroborationCandidateCount
+				// reports below, by construction (same slice, no
+				// intervening append/removal between here and there).
+				Index: index + 1, Total: len(candidates),
 			})
 		}
 	}
@@ -538,21 +556,35 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		}
 		return candidates[i].Confidence > candidates[j].Confidence
 	})
-	if tracer != nil && len(candidates) > 0 {
-		// The once-per-PASS Info summary (mirrors
-		// RankedCutSummary's own shape exactly, see
-		// ResolutionTraceEvent.CorroborationSummary's own doc comment) --
-		// emitted HERE, after the sort above, so "top" is a real rank by
-		// FinalConfidence, not encounter order. minConfidence/maxConfidence
-		// span EVERY candidate this pass corroborated, not just the capped
-		// top set below.
-		minConfidence, maxConfidence := candidates[0].Confidence, candidates[0].Confidence
-		for _, candidate := range candidates {
-			if candidate.Confidence < minConfidence {
-				minConfidence = candidate.Confidence
-			}
-			if candidate.Confidence > maxConfidence {
-				maxConfidence = candidate.Confidence
+	if tracer != nil {
+		// The once-per-PASS Info summary (mirrors RankedCutSummary's own
+		// shape exactly, see ResolutionTraceEvent.CorroborationSummary's
+		// own doc comment) -- emitted HERE, after the sort above, so "top"
+		// is a real rank by FinalConfidence, not encounter order.
+		// minConfidence/maxConfidence span EVERY candidate this pass
+		// corroborated, not just the capped top set below.
+		//
+		// r2 class finding (CHAOS-5517): this used to be gated behind
+		// `len(candidates) > 0`, so eventspec.CorroborationSummary's own
+		// MultiplicityExactlyOnePerPass contract ("every pass produces
+		// exactly one line, explicit zero included") silently broke on
+		// every pass whose merged pool was empty -- exactly the
+		// "OfferPoolSummary fires HERE too, with explicit zeros" discipline
+		// the comment on THIS function's own next branch already applies;
+		// CorroborationSummary just above it never got the same treatment.
+		// Explicit zeros below when candidates is empty: MinConfidence/
+		// MaxConfidence at their honest zero value (there is no candidate
+		// to have a confidence at all), TopIDs an empty, non-nil slice.
+		var minConfidence, maxConfidence float64
+		if len(candidates) > 0 {
+			minConfidence, maxConfidence = candidates[0].Confidence, candidates[0].Confidence
+			for _, candidate := range candidates {
+				if candidate.Confidence < minConfidence {
+					minConfidence = candidate.Confidence
+				}
+				if candidate.Confidence > maxConfidence {
+					maxConfidence = candidate.Confidence
+				}
 			}
 		}
 		topIDs := make([]string, 0, traceSummaryIDCap)
@@ -561,6 +593,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		}
 		tracer.Trace(ResolutionTraceEvent{
 			RequestID: requestID, Stage: "corroboration", CorroborationSummary: true,
+			Pass:                        pass,
 			CorroborationCandidateCount: len(candidates), CorroborationTopIDs: topIDs,
 			CorroborationMinConfidence: minConfidence, CorroborationMaxConfidence: maxConfidence,
 		})
@@ -578,6 +611,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 			// test, which read zero summaries here.
 			tracer.Trace(ResolutionTraceEvent{
 				RequestID: requestID, Stage: "offer_pool", OfferPoolSummary: true,
+				Pass:                        pass,
 				OfferPoolVectorOnlyExcluded: 0, OfferPoolVectorOnlyDemoted: 0,
 				OfferPoolEmptiedByExclusion: false,
 			})
@@ -588,7 +622,10 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 			// decision-stage emission site this ticket's own populationBasis
 			// local (computed further down, unreached on this early return)
 			// never covered.
-			tracer.Trace(ResolutionTraceEvent{RequestID: requestID, Stage: "decision", Outcome: "no_commit", SearchTruncated: searchTruncated, SearchCandidateLimit: max, PopulationBasis: "none"})
+			tracer.Trace(ResolutionTraceEvent{
+				RequestID: requestID, Stage: "decision", Outcome: "no_commit", SearchTruncated: searchTruncated, SearchCandidateLimit: max, PopulationBasis: "none",
+				Pass: pass, Index: 1, Total: 1,
+			})
 		}
 		return resolution, bases, digests
 	}
@@ -1512,11 +1549,26 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		// so the retained count is unchanged. Traced per admission so the
 		// effect is readable from a run's own artifacts.
 		if tracer != nil {
+			// CHAOS-5517: Total is not known until every admission this
+			// pass produced has been counted -- a cheap pre-count over the
+			// SAME range/condition the emitting loop below uses, never a
+			// second, independently-derived total that could drift from
+			// what actually gets traced.
+			admittedTotal := 0
 			for i := max; i < len(ordered); i++ {
 				if keptIndex[i] {
+					admittedTotal++
+				}
+			}
+			admittedIndex := 0
+			for i := max; i < len(ordered); i++ {
+				if keptIndex[i] {
+					admittedIndex++
 					tracer.Trace(ResolutionTraceEvent{
 						RequestID: requestID, Stage: "reserved_kind_admitted",
+						Pass:    pass,
 						Subject: ordered[i].Subject, Rank: i + 1, Survived: true,
+						Index: admittedIndex, Total: admittedTotal,
 					})
 				}
 			}
@@ -1553,6 +1605,30 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 	// embeddings-off run reaches.
 	offered := make([]contextfabric.SubjectCandidate, 0, len(ordered))
 	offerPoolVectorOnlyExcluded := 0
+	// CHAOS-5517: pre-count the excluded set BEFORE emitting anything, so
+	// the offer_pool DETAIL event's own Total (demoted + excluded, the
+	// SAME two counts OfferPoolSummary reports below) is known before the
+	// first line is traced -- never a second, independently-derived total
+	// that could drift from what actually gets traced.
+	var offerPoolDetailTotal int
+	offerPoolDetailIndex := 0
+	if tracer != nil {
+		excludedPrecount := 0
+		for _, candidate := range ordered {
+			if isVectorOnlyCandidate(candidate.MatchMechanisms) && !demotedKeys[SubjectKey(candidate.Subject)] {
+				excludedPrecount++
+			}
+		}
+		offerPoolDetailTotal = len(offerPoolDemotedForTrace) + excludedPrecount
+		for _, subject := range offerPoolDemotedForTrace {
+			offerPoolDetailIndex++
+			tracer.Trace(ResolutionTraceEvent{
+				RequestID: requestID, Stage: "offer_pool", Subject: subject,
+				Pass: pass, OfferPoolDisposition: "vector_only_demoted",
+				Index: offerPoolDetailIndex, Total: offerPoolDetailTotal,
+			})
+		}
+	}
 	for _, candidate := range ordered {
 		if isVectorOnlyCandidate(candidate.MatchMechanisms) {
 			// A demoted arrival is withheld from the offer for the same
@@ -1562,9 +1638,11 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 			if !demotedKeys[SubjectKey(candidate.Subject)] {
 				offerPoolVectorOnlyExcluded++
 				if tracer != nil {
+					offerPoolDetailIndex++
 					tracer.Trace(ResolutionTraceEvent{
 						RequestID: requestID, Stage: "offer_pool", Subject: candidate.Subject,
-						OfferPoolDisposition: "vector_only_excluded",
+						Pass: pass, OfferPoolDisposition: "vector_only_excluded",
+						Index: offerPoolDetailIndex, Total: offerPoolDetailTotal,
 					})
 				}
 			}
@@ -1625,6 +1703,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		// and this is what the folded Info line reads.
 		tracer.Trace(ResolutionTraceEvent{
 			RequestID: requestID, Stage: "offer_pool", OfferPoolSummary: true,
+			Pass:                        pass,
 			OfferPoolVectorOnlyExcluded: offerPoolVectorOnlyExcluded,
 			OfferPoolVectorOnlyDemoted:  offerPoolVectorOnlyDemoted,
 			OfferPoolEmptiedByExclusion: offerPoolEmptiedByExclusion,
@@ -1670,7 +1749,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		// rest.
 		switch {
 		case len(resolution.Committed) >= 1:
-			for _, subject := range resolution.Committed {
+			for committedIndex, subject := range resolution.Committed {
 				committedKey := SubjectKey(subject)
 				winningMechanism := ""
 				for index := range candidates {
@@ -1704,6 +1783,10 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 					SearchCandidateLimit: max,
 					// CHAOS-4154: populationBasis's own doc comment above.
 					PopulationBasis: populationBasis,
+					// CHAOS-5517: bounded by resolution.Committed's own
+					// length -- the ONE decision event per committed
+					// subject this switch's own doc comment describes.
+					Pass: pass, Index: committedIndex + 1, Total: len(resolution.Committed),
 				})
 			}
 		case len(resolution.Committed) == 0 && ambiguous:
@@ -1724,12 +1807,14 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 				// uniformity so a reader never has to special-case a missing
 				// field on a non-committed decision event.
 				PopulationBasis: populationBasis,
+				Pass:            pass, Index: 1, Total: 1,
 			})
 		case len(resolution.Committed) == 0:
 			tracer.Trace(ResolutionTraceEvent{
 				RequestID: requestID, Stage: "decision", Outcome: "no_commit",
 				AliasLookupComplete: aliasIdentityComplete, IdentityTrustGateBlocked: identityTrustGateBlocked,
 				SearchTruncated: searchTruncated, TiedStatisticalTop: tiedStatisticalTop,
+				Pass: pass, Index: 1, Total: 1,
 				// CHAOS-4117: SearchCandidateLimit's own doc comment.
 				SearchCandidateLimit: max,
 				PopulationBasis:      populationBasis,

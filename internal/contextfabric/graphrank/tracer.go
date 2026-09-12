@@ -62,6 +62,9 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// kind_offer's own unconditional-and-bounded promotion (CHAOS-5222).
 		t.logger.InfoContext(ctx, "context fabric resolution trace: search",
 			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+			// CHAOS-5517: the self-carried bounded-many identity -- see
+			// ResolutionTraceEvent.Index's own doc comment.
+			"index", event.Index, "total", event.Total,
 			"term_hash", contextfabric.SanitizeLogAttr(event.TermHash), "result_count", event.SearchResultCount,
 			"truncated", event.Truncated)
 	case "search_question":
@@ -100,7 +103,12 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// own aggregate, so it stays at Debug rather than being folded.
 		t.logger.DebugContext(ctx, "context fabric resolution trace: kind hint search",
 			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
-			"term_hash", contextfabric.SanitizeLogAttr(event.TermHash), "subject_kind", contextfabric.SanitizeLogAttr(string(event.Subject.Kind)),
+			// CHAOS-5517: self-carried bounded-many identity, scoped per
+			// (request_id, term_hash) call -- see traceKindHintSearch's own
+			// doc comment (chaos4348_reachability.go).
+			"index", event.Index, "total", event.Total,
+			"term_hash", contextfabric.SanitizeLogAttr(event.TermHash), "queried_kind", contextfabric.SanitizeLogAttr(event.QueriedKind),
+			"subject_kind", contextfabric.SanitizeLogAttr(string(event.Subject.Kind)),
 			"subject_canonical_id", contextfabric.SanitizeLogAttr(event.Subject.CanonicalID))
 	case "exact_name_search":
 		// CHAOS-4348: traceExactNameSearch's own event, same convention as
@@ -113,6 +121,9 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// each of which folds into a genuine summary).
 		t.logger.DebugContext(ctx, "context fabric resolution trace: exact name search",
 			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+			// CHAOS-5517: same per-call bounded-many identity as
+			// kind_hint_search above.
+			"index", event.Index, "total", event.Total,
 			"term_hash", contextfabric.SanitizeLogAttr(event.TermHash), "subject_kind", contextfabric.SanitizeLogAttr(string(event.Subject.Kind)),
 			"subject_canonical_id", contextfabric.SanitizeLogAttr(event.Subject.CanonicalID))
 	case "corroboration":
@@ -127,6 +138,10 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		if event.CorroborationSummary {
 			t.logger.InfoContext(ctx, "context fabric resolution trace: corroboration summary",
 				"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+				// CHAOS-5517: this summary is now pass-keyed the same way
+				// ranked_cut/anchor_slot_displaced/decision_summary already
+				// are -- see ResolutionTraceEvent.Pass's own doc comment.
+				"pass", event.Pass,
 				"candidate_count", event.CorroborationCandidateCount,
 				"top_ids", contextfabric.SanitizeLogStrings(event.CorroborationTopIDs),
 				"min_confidence", event.CorroborationMinConfidence,
@@ -135,6 +150,10 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		}
 		t.logger.DebugContext(ctx, "context fabric resolution trace: corroboration",
 			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+			"pass", event.Pass,
+			// CHAOS-5517: the self-carried bounded-many identity -- see
+			// ResolutionTraceEvent.Index's own doc comment.
+			"index", event.Index, "total", event.Total,
 			"subject_kind", contextfabric.SanitizeLogAttr(string(event.Subject.Kind)), "subject_canonical_id", contextfabric.SanitizeLogAttr(event.Subject.CanonicalID),
 			"base_confidence", event.BaseConfidence, "final_confidence", event.FinalConfidence,
 			"distinct_mechanisms", event.DistinctMechanisms)
@@ -151,6 +170,13 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// ResolutionTraceEvent.DecisionSummary's own doc comment.
 		t.logger.DebugContext(ctx, "context fabric resolution trace: decision",
 			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+			"pass", event.Pass,
+			// CHAOS-5517: the self-carried bounded-many identity -- 1..N
+			// per committed subject on the "committed" outcome, 1..1 on
+			// every other outcome (ambiguous/no_commit never split across
+			// more than one line) -- see ResolutionTraceEvent.Index's own
+			// doc comment.
+			"index", event.Index, "total", event.Total,
 			"subject_kind", contextfabric.SanitizeLogAttr(string(event.Subject.Kind)), "subject_canonical_id", contextfabric.SanitizeLogAttr(event.Subject.CanonicalID),
 			"outcome", contextfabric.SanitizeLogAttr(event.Outcome), "winning_mechanism", contextfabric.SanitizeLogAttr(event.WinningMechanism), "commit_gate", contextfabric.SanitizeLogAttr(event.CommitGate),
 			"alias_identity_complete", event.AliasLookupComplete, "identity_trust_gate_blocked", event.IdentityTrustGateBlocked,
@@ -254,6 +280,9 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		if event.OfferPoolSummary {
 			t.logger.InfoContext(ctx, "context fabric resolution trace: offer pool summary",
 				"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+				// CHAOS-5517: pass-keyed the same way corroboration_summary
+				// now is -- see ResolutionTraceEvent.Pass's own doc comment.
+				"pass", event.Pass,
 				"vector_only_excluded", event.OfferPoolVectorOnlyExcluded,
 				"vector_only_demoted", event.OfferPoolVectorOnlyDemoted,
 				"emptied_by_exclusion", event.OfferPoolEmptiedByExclusion)
@@ -261,8 +290,46 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		}
 		t.logger.DebugContext(ctx, "context fabric resolution trace: offer pool",
 			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+			"pass", event.Pass,
+			// CHAOS-5517: the self-carried bounded-many identity, spanning
+			// BOTH dispositions this stage carries (vector_only_demoted AND
+			// vector_only_excluded) -- see ResolutionTraceEvent.Index's own
+			// doc comment.
+			"index", event.Index, "total", event.Total,
 			"subject_kind", contextfabric.SanitizeLogAttr(string(event.Subject.Kind)), "subject_canonical_id", contextfabric.SanitizeLogAttr(event.Subject.CanonicalID),
 			"disposition", contextfabric.SanitizeLogAttr(event.OfferPoolDisposition))
+	case "anchor_kind_withheld":
+		// r1 class fix (CHAOS-5517): split out of "offer_pool" -- this is
+		// resolve.go's contest-admission per-candidate disclosure
+		// (admission.withheldSubjects()), genuinely REQUEST-scoped (fires
+		// once per call, after every internal pass, describing the union
+		// across them all), never pass-scoped like the sibling "offer_pool"
+		// dispositions above. Self-carried index/total, same convention as
+		// search/kind_hint_search/exact_name_search -- no "pass" field.
+		// STAYS Debug: bounded by the contest set's own withheld-subject
+		// count, same "retrieval-pool-sized, not aggregate-sized" reasoning
+		// as offer_pool's own per-candidate case.
+		t.logger.DebugContext(ctx, "context fabric resolution trace: anchor kind withheld",
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+			"index", event.Index, "total", event.Total,
+			"subject_kind", contextfabric.SanitizeLogAttr(string(event.Subject.Kind)), "subject_canonical_id", contextfabric.SanitizeLogAttr(event.Subject.CanonicalID),
+			"disposition", contextfabric.SanitizeLogAttr(event.OfferPoolDisposition))
+	case "anchor_kind_withheld_summary":
+		// r1 class fix (CHAOS-5517): the once-per-call fold of the above,
+		// split into its own Stage rather than reusing "offer_pool"'s own
+		// OfferPoolSummary flag -- the two summaries carry entirely
+		// different fields, and sharing one Stage/Msg meant this content
+		// was never actually read by the "offer_pool" case below, reaching
+		// production as a decoy all-zero line. ALWAYS emitted, explicit
+		// zero included -- see ResolutionTraceEvent.OfferPoolAnchorKindWithheld's
+		// own doc comment (resolve.go).
+		t.logger.InfoContext(ctx, "context fabric resolution trace: anchor kind withheld summary",
+			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+			"anchor_kind_withheld", event.OfferPoolAnchorKindWithheld,
+			"anchor_kind_withheld_scope", contextfabric.SanitizeLogAttr(event.OfferPoolAnchorKindWithheldScope),
+			"anchor_kind_withheld_reason", contextfabric.SanitizeLogAttr(event.OfferPoolAnchorKindWithheldReason),
+			"anchor_kind_withheld_ids", contextfabric.SanitizeLogStrings(event.OfferPoolAnchorKindWithheldIDs),
+			"anchor_kind_exempted", event.OfferPoolAnchorKindExempted)
 	case "kind_coverage_floor":
 		// CHAOS-4086: the operator-visible half of CHAOS-4038's floor. The
 		// harness reads the same event off an in-process tracer to put
@@ -283,7 +350,17 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"fired", event.KindCoverageFloorFired,
 			"missing_kinds", event.KindCoverageMissingKinds,
 			"truncated", event.KindCoverageFloorTruncated,
-			"missing_kinds_list", contextfabric.SanitizeLogStrings(event.KindCoverageMissingKindsList))
+			// CHAOS-5517: a required string_slice field must never emit
+			// JSON null -- applyKindCoverageFloor (chaos4038_kind_coverage.go)
+			// returns a nil missingKindsList both when nothing is missing
+			// and when deps.SearchKind is unset, and slog's own JSON
+			// handler writes a nil []string as literal `null`, not `[]`
+			// (caught by this ticket's own certification: a required field
+			// silently reading as absence rather than a measured empty set
+			// is exactly what clause 3 forbids). emptyIfNilStrings is the
+			// one barrier; ResolutionTraceEvent's own field stays nil-able,
+			// only the wire format is guaranteed non-null.
+			"missing_kinds_list", contextfabric.SanitizeLogStrings(emptyIfNilStrings(event.KindCoverageMissingKindsList)))
 	case "confirmed_kind_rescue":
 		// CHAOS-4132: the operator-visible half of the confirmed-kind
 		// rescue -- this event's own presence in a production log already
@@ -513,6 +590,11 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// ambiguity this ticket exists to remove.
 		t.logger.InfoContext(ctx, "context fabric resolution trace: reserved kind admitted",
 			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+			// CHAOS-5517: pass-keyed (this admission belongs to the SAME
+			// pass its own ranked_cut/anchor_slot_displaced lines do) and
+			// self-carrying the bounded-many identity -- see
+			// ResolutionTraceEvent.Pass/.Index's own doc comments.
+			"pass", event.Pass, "index", event.Index, "total", event.Total,
 			"subject_kind", contextfabric.SanitizeLogAttr(string(event.Subject.Kind)), "subject_canonical_id", contextfabric.SanitizeLogAttr(event.Subject.CanonicalID),
 			"rank", event.Rank, "survived", event.Survived)
 	case "confirmed_kind_scope":
@@ -778,6 +860,24 @@ func NewSlogRawSignalObserver(logger *slog.Logger) SlogRawSignalObserver {
 		logger = slog.Default()
 	}
 	return SlogRawSignalObserver{logger: logger}
+}
+
+// emptyIfNilStrings guarantees a required string_slice trace field never
+// emits JSON null (CHAOS-5517): a nil []string passes through
+// contextfabric.SanitizeLogStrings unchanged and slog's own JSON handler
+// writes it as literal `null`, which is not the same wire shape as a
+// measured empty set -- clause 3's own "absence must never substitute for a
+// measured zero" applies to the FIELD's own container shape, not only its
+// scalar values. Callers whose own producer already guarantees non-nil
+// (e.g. chaos5393_anchor_pool.go's kindTokens/filterKindTokens, both always
+// `make([]string, 0, ...)` or a literal) do not need this -- it is for the
+// producers (subjectKindStrings, chaos4038_kind_coverage.go) that
+// legitimately return nil for "nothing to report".
+func emptyIfNilStrings(ss []string) []string {
+	if ss == nil {
+		return []string{}
+	}
+	return ss
 }
 
 func (o SlogRawSignalObserver) ObserveCandidate(ctx context.Context, subjectKey string, node CandidateNode) {

@@ -1187,6 +1187,34 @@ type ResolutionTraceEvent struct {
 	// pass numbers are always legitimate, regardless of whether their other
 	// fields happen to coincide.
 	Pass int
+	// Index/Total (CHAOS-5517): the self-carried bound a
+	// MultiplicityBoundedManyPerPass event's own detail line carries --
+	// Index is this line's 1-based position within its own scope (a
+	// request, or a request+pass for an event that also declares Pass),
+	// Total is that scope's own declared cardinality (the SAME value on
+	// every line of the scope). certify.Certify (certifyBoundedMany)
+	// asserts every line in a scope agrees on Total, that Index covers
+	// exactly 1..Total with no gap or duplicate, and that the observed
+	// line count equals Total -- the bound is carried on the lines
+	// themselves, never asserted only from a spec's own prose (chris's
+	// engineering ruling, 2026-09-11). Shared across every
+	// BoundedManyPerPass stage the same way Pass is shared across every
+	// pass-keyed one -- one notion of "which of how many" across
+	// producers, not a second field per stage.
+	Index int
+	Total int
+	// QueriedKind (stage=="kind_hint_search" ONLY; r1 finding, CHAOS-5517):
+	// the SubjectKind applyKindHintedPoolSearch's own outer loop is
+	// currently querying for -- distinct from Subject.Kind (the RESULT
+	// node's own kind, typically but not necessarily the same value).
+	// Needed because this stage runs once PER (kind, term) pair: two
+	// different kinds queried for the SAME term each independently produce
+	// their own index=1..N/total=N sequence, and without QueriedKind in
+	// eventspec.KindHintSearch's own Attribution, certify's scoping
+	// (request_id, term_hash) alone would wrongly merge the two kinds'
+	// otherwise-identical index sequences into one scope and read them as
+	// a duplicate.
+	QueriedKind string
 	// IdentityUniverseComplete (identity_universe stage; chris ruling,
 	// 2026-08-17): the RAW devhealthsource.IdentityUniverse completeness
 	// flag, BEFORE falkorgraph/reader.go folds it with graphMissing into
@@ -1350,11 +1378,23 @@ type ResolutionTraceEvent struct {
 	// and can never be read as "the gate passed".
 	DecisionFrameGate   string
 	DecisionRefuseBasis string
-	// OfferPoolDisposition (stage=="offer_pool", per-candidate) names what
-	// the offer-pool exclusion did with one candidate:
-	// `vector_only_excluded` (never offered) or `vector_only_demoted` (a
-	// pre-committed arrival stripped back to Proposed so it can clarify but
-	// not commit). Closed vocabulary; no term, no confidence.
+	// OfferPoolDisposition is shared by TWO stages, each with its OWN closed
+	// vocabulary declared independently in eventspec (the wire key,
+	// "disposition", and this Go field are shared; the two stages' Msgs, and
+	// therefore certify's own scoping, are not):
+	//   - stage=="offer_pool" (per-candidate, pass-scoped): what the
+	//     phase-4 offer-pool exclusion did with one candidate --
+	//     `vector_only_excluded` (never offered) or `vector_only_demoted` (a
+	//     pre-committed arrival stripped back to Proposed so it can clarify
+	//     but not commit).
+	//   - stage=="anchor_kind_withheld" (per-candidate, request-scoped; r1
+	//     class fix, CHAOS-5517): always `anchor_kind_withheld`
+	//     (contestSetDisposition) -- resolve.go's own contest-admission
+	//     boundary refused this candidate before retrieval ever saw it, an
+	//     unrelated reason from the vector-only pair above and never folded
+	//     into the same stage (see AnchorKindWithheld's own doc comment,
+	//     eventspec/spec.go, for why these two used to collide).
+	// No term, no confidence, either way.
 	OfferPoolDisposition string
 	// OfferPoolAnchorKindWithheld (CHAOS-5422) is how many DISTINCT subjects
 	// this question's grouping/scope axis refused the contest, on the folded
@@ -1970,6 +2010,91 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 		deps.ResolutionTracer = decisionFold
 		defer decisionFold.flush()
 	}
+	// r2 class fix (CHAOS-5517): anchor_offer and kind_coverage_floor are
+	// both declared MultiplicityExactlyOnePerRequest, but their own
+	// producer call sites sit INSIDE resolveSubjects, downstream of its
+	// caller-hint short circuit (and, for kind_coverage_floor, also gated
+	// behind `confirmedKind == nil`) -- both used to go silently missing
+	// on any exit that never reaches them. Wrapped HERE, outermost, the
+	// same way idGateFold/decisionFold already are, so BOTH known exits
+	// and any future one are covered by one mechanism instead of a
+	// per-exit patch. See exactlyOnceRequestFold's own doc comment.
+	if deps.ResolutionTracer != nil {
+		anchorOfferFold := &exactlyOnceRequestFold{
+			real: deps.ResolutionTracer, stage: "anchor_offer",
+			fallback: func() ResolutionTraceEvent {
+				return ResolutionTraceEvent{
+					RequestID: request.RequestID, Stage: "anchor_offer",
+					AnchorOfferLabelsNormalizedCount: 0,
+				}
+			},
+		}
+		deps.ResolutionTracer = anchorOfferFold
+		defer anchorOfferFold.flush()
+
+		kindCoverageFloorFold := &exactlyOnceRequestFold{
+			real: deps.ResolutionTracer, stage: "kind_coverage_floor",
+			fallback: func() ResolutionTraceEvent {
+				return ResolutionTraceEvent{
+					RequestID: request.RequestID, Stage: "kind_coverage_floor",
+					KindCoverageFloorFired: false, KindCoverageMissingKinds: 0,
+					KindCoverageFloorTruncated: false, KindCoverageMissingKindsList: []string{},
+				}
+			},
+		}
+		deps.ResolutionTracer = kindCoverageFloorFold
+		defer kindCoverageFloorFold.flush()
+
+		// AnchorPool and AnchorKindWithheldSummary are both declared
+		// MultiplicityExactlyOnePerRequest, a property of EVERY exit path of
+		// their producer, not only the happy one. AnchorPool's own emission
+		// (inside resolveSubjects) sits after the two error returns at
+		// resolveSubjects' own top; AnchorKindWithheldSummary's own emission
+		// (in THIS function, after resolveSubjects returns) is gated on
+		// `err == nil` -- so an error exit reached neither line. Wrapped
+		// HERE, same as anchorOfferFold/kindCoverageFloorFold immediately
+		// above, for the same reason: one mechanism covering every exit of
+		// resolveSubjects AND of this function's own post-call err!=nil
+		// return (see this PR's own exit-enumeration table), rather than a
+		// matching emission call at each individual exit site -- a shape a
+		// FUTURE early return could silently break again.
+		anchorPoolFold := &exactlyOnceRequestFold{
+			real: deps.ResolutionTracer, stage: "anchor_pool",
+			fallback: func() ResolutionTraceEvent {
+				return ResolutionTraceEvent{
+					RequestID: request.RequestID, Stage: "anchor_pool", AnchorPoolSummary: true,
+					// Explicit "none"/empty, not the Go zero value left bare:
+					// a resolution that returned before the filter ever ran
+					// decided no anchor kind, admitted no scope, and reserved
+					// nothing -- the exact reading orNone/nonNil already give
+					// decisionSummaryBuffer's own never-fired case below.
+					DecisionAnchorPoolKindScope:       anchorPoolKindScopeNone,
+					DecisionAnchorPoolKindScopeSource: anchorPoolKindScopeNone,
+					DecisionMemberKindConfirmed:       confirmedMemberKindToken(confirmedKind),
+					DecisionReservedKinds:             []string{},
+					DecisionFilterKinds:               []string{},
+				}
+			},
+		}
+		deps.ResolutionTracer = anchorPoolFold
+		defer anchorPoolFold.flush()
+
+		anchorKindWithheldSummaryFold := &exactlyOnceRequestFold{
+			real: deps.ResolutionTracer, stage: "anchor_kind_withheld_summary",
+			fallback: func() ResolutionTraceEvent {
+				return ResolutionTraceEvent{
+					RequestID: request.RequestID, Stage: "anchor_kind_withheld_summary",
+					OfferPoolAnchorKindWithheld:       0,
+					OfferPoolAnchorKindWithheldScope:  anchorPoolKindScopeNone,
+					OfferPoolAnchorKindWithheldReason: anchorPoolKindScopeNone,
+					OfferPoolAnchorKindWithheldIDs:    []string{},
+					OfferPoolAnchorKindExempted:       0,
+				}
+			},
+		}
+		deps.ResolutionTracer = anchorKindWithheldSummaryFold
+		defer anchorKindWithheldSummaryFold.flush()
+	}
 	// CHAOS-5422: the contest set's admission, decided ONCE for the whole call
 	// — before any retrieval arm runs, before any identity claim is recorded,
 	// and therefore before ranking, reservation and truncation can ever see a
@@ -1988,16 +2113,44 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 	// populations. The count is len() of a set keyed by subject, so "distinct
 	// across the call" is true by construction rather than by a counter someone
 	// has to keep correct.
+	//
+	// r1 class finding (CHAOS-5517): this used to reuse Stage "offer_pool"
+	// (both the detail line and its own "summary", via the shared
+	// OfferPoolSummary bool flag) -- a construction site the original sweep
+	// missed entirely, discovered only by an executed AST enumeration of
+	// every ResolutionTraceEvent{...} site in this package. Two defects,
+	// not one: (a) the detail line carried disposition=contestSetDisposition
+	// ("anchor_kind_withheld"), outside OfferPool's own declared closed
+	// vocabulary [vector_only_demoted, vector_only_excluded], with no
+	// pass/index/total at all; (b) the "summary" line set OfferPoolSummary
+	// true and populated ONLY the OfferPoolAnchorKindWithheld* fields, which
+	// tracer.go's "offer_pool"+OfferPoolSummary case never reads (it reads
+	// only the vector-only counts) -- so this line reached production logs
+	// as a DECOY "offer pool summary" with pass=0 and every vector-only
+	// field at its zero default, indistinguishable from a genuine "nothing
+	// was ever excluded" pass. Both are also genuinely REQUEST-scoped, not
+	// pass-scoped (this whole disclosure fires once per call, describing
+	// the union across however many internal passes resolveSubjects ran --
+	// tagging it with a fabricated pass number would misrepresent it as
+	// belonging to one pass it does not describe). Fixed by giving this
+	// disclosure its own two Stage strings, "anchor_kind_withheld" (detail)
+	// and "anchor_kind_withheld_summary" (summary) -- never sharing
+	// OfferPool's Msg/Stage again -- with the detail line self-carrying
+	// index/total like Search/KindHintSearch/ExactNameSearch already do
+	// (MultiplicityBoundedManyPerPass declaring no "pass" field, the same
+	// per-event choice those three already make).
 	if err == nil && deps.ResolutionTracer != nil {
-		for _, subject := range admission.withheldSubjects() {
+		withheld := admission.withheldSubjects()
+		for i, subject := range withheld {
 			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
-				RequestID: request.RequestID, Stage: "offer_pool", Subject: subject,
+				RequestID: request.RequestID, Stage: "anchor_kind_withheld", Subject: subject,
 				OfferPoolDisposition: contestSetDisposition,
+				Index:                i + 1, Total: len(withheld),
 			})
 		}
 		withheldKind, withheldSource := admission.observable()
 		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
-			RequestID: request.RequestID, Stage: "offer_pool", OfferPoolSummary: true,
+			RequestID: request.RequestID, Stage: "anchor_kind_withheld_summary",
 			OfferPoolAnchorKindWithheld:       admission.withheldCount(),
 			OfferPoolAnchorKindWithheldScope:  withheldKind,
 			OfferPoolAnchorKindWithheldReason: withheldSource,
@@ -2012,6 +2165,45 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 		return resolution, offerMaterial, make(contextfabric.CommitBasisSet), make(contextfabric.CommitDecisionDigestSet), err
 	}
 	return resolution, offerMaterial, bases, digests, nil
+}
+
+// exactlyOnceRequestFold is the r2 class ruling's own structural fix
+// (CHAOS-5517, team-lead: "a declared multiplicity is a property of EVERY
+// exit path of the producer, not of the happy path... emit from a single
+// deferred/terminal point per request... so a new early return cannot
+// skip it"): guarantees exactly one line of Stage `stage` reaches the real
+// tracer for this call, regardless of which of resolveSubjects' own exit
+// paths fires -- the ordinary path, the caller-hint short circuit, or any
+// early return added after this fix. Every event still passes through to
+// the real tracer immediately and unchanged (the SAME "forward first,
+// bookkeep second" shape identityGateSummaryBuffer/decisionSummaryBuffer
+// already use); only on flush, DEFERRED so it runs on every return
+// including a panic, does it check whether `stage` ever fired at all and
+// synthesize `fallback()`'s own line if it did not. This replaces adding a
+// matching emission call at each individual exit site the review found
+// (resolve.go's own confirmedKind!=nil branch, the caller-hint short
+// circuit) -- that shape is exactly the fragile pattern this fix retires:
+// a FUTURE early return would silently reintroduce the same gap, since
+// nothing forces every new `return` to remember the call.
+type exactlyOnceRequestFold struct {
+	real     ResolutionTracer
+	stage    string
+	fired    bool
+	fallback func() ResolutionTraceEvent
+}
+
+func (f *exactlyOnceRequestFold) Trace(event ResolutionTraceEvent) {
+	f.real.Trace(event)
+	if event.Stage == f.stage {
+		f.fired = true
+	}
+}
+
+func (f *exactlyOnceRequestFold) flush() {
+	if f.fired {
+		return
+	}
+	f.real.Trace(f.fallback())
 }
 
 // identityGateSummaryBuffer holds back every per-candidate "identity_gate"
@@ -2149,16 +2341,6 @@ func (b *decisionSummaryBuffer) Trace(event ResolutionTraceEvent) {
 	if event.Stage == "offer_pool" && event.OfferPoolSummary {
 		b.vectorOnlyExcluded += event.OfferPoolVectorOnlyExcluded
 		b.vectorOnlyDemoted += event.OfferPoolVectorOnlyDemoted
-		// Assigned rather than accumulated: this call emits exactly one
-		// offer_pool summary carrying these, after all passes, and the value is
-		// already the distinct per-call count.
-		if event.OfferPoolAnchorKindWithheldScope != "" {
-			b.anchorKindWithheld = event.OfferPoolAnchorKindWithheld
-			b.anchorKindWithheldScope = event.OfferPoolAnchorKindWithheldScope
-			b.anchorKindWithheldReason = event.OfferPoolAnchorKindWithheldReason
-			b.anchorKindWithheldIDs = event.OfferPoolAnchorKindWithheldIDs
-			b.anchorKindExempted = event.OfferPoolAnchorKindExempted
-		}
 		// OR across the call for the same reason DecisionOfferedUnderWindowGate
 		// is: the fold sees per-event facts, and "at least one pass of this
 		// resolution was emptied by the exclusion" is the only claim this
@@ -2166,6 +2348,22 @@ func (b *decisionSummaryBuffer) Trace(event ResolutionTraceEvent) {
 		if event.OfferPoolEmptiedByExclusion {
 			b.emptiedByExclusion = true
 		}
+		return
+	}
+	// r1 class fix (CHAOS-5517): this used to be folded from INSIDE the
+	// "offer_pool"+OfferPoolSummary branch above, keyed on
+	// OfferPoolAnchorKindWithheldScope != "" -- but that branch's own event
+	// never carried this content on the SAME wire shape tracer.go's
+	// "offer_pool" case actually reads (see resolve.go's own disclosure
+	// comment above this Stage's producer). Now its own distinct Stage, so
+	// no discriminating condition is needed: every "anchor_kind_withheld_
+	// summary" line IS this call's one fold.
+	if event.Stage == "anchor_kind_withheld_summary" {
+		b.anchorKindWithheld = event.OfferPoolAnchorKindWithheld
+		b.anchorKindWithheldScope = event.OfferPoolAnchorKindWithheldScope
+		b.anchorKindWithheldReason = event.OfferPoolAnchorKindWithheldReason
+		b.anchorKindWithheldIDs = event.OfferPoolAnchorKindWithheldIDs
+		b.anchorKindExempted = event.OfferPoolAnchorKindExempted
 		return
 	}
 	// The anchor-pool summary is decided once per call, so the LAST one
@@ -2521,7 +2719,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		// the load-bearing safety property regardless; this tag is the
 		// trace-side twin of it.
 		if deps.ResolutionTracer != nil {
-			for _, subject := range exactResolution.Committed {
+			for callerHintIndex, subject := range exactResolution.Committed {
 				winningMechanism := ""
 				if candidate, ok := candidatesBySubject[SubjectKey(subject)]; ok && len(candidate.MatchMechanisms) > 0 {
 					winningMechanism = string(candidate.MatchMechanisms[0])
@@ -2534,9 +2732,28 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 					SearchCandidateLimit:   request.Options.MaxSubjectCandidates,
 					PopulationBasis:        "none",
 					OfferedUnderWindowGate: offersOnly,
+					// CHAOS-5517 (r1 finding): this short circuit returns
+					// BEFORE `pass := 1` is ever declared further down in
+					// this same function -- reaching here means no other
+					// pass will ever run for this call (the short circuit's
+					// own commit is already final, per the comment below),
+					// so this IS the resolution's first and only
+					// finalization, same as the ordinary path's own pass 1.
+					Pass: 1, Index: callerHintIndex + 1, Total: len(exactResolution.Committed),
 				})
 			}
 		}
+		// r2 class finding (CHAOS-5517): this short circuit returns BEFORE
+		// EVERY other unconditional (ExactlyOnePerRequest) event this
+		// function emits later on the ordinary path -- anchor_offer and
+		// kind_coverage_floor both live structurally downstream of this
+		// return, so both used to go silently missing on every caller-hint
+		// commit, the same class of gap the decision fix above already
+		// closed for "decision". Fixed at the STRUCTURAL level instead of
+		// here: ResolveSubjectsWithCommitBasis's own exactlyOnceRequestFold
+		// wrappers (see that type's own doc comment) guarantee both fire
+		// exactly once regardless of this or any future early return, so
+		// there is nothing to emit at this specific exit any more.
 		// CHAOS-4300: this short circuit's own commit is already final
 		// (FinalizeExactResolutionWithBasis/commitBases.ResetTo above) --
 		// runShadowEvidenceRoundForResolution is called exactly once
@@ -2747,7 +2964,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// that case, so nothing new can commit on the strength of it alone).
 	identity := identityClaimants{}
 	identityTerms := identityMatchTerms{}
-	for _, term := range terms {
+	for termIndex, term := range terms {
 		results, truncated, degraded, err := deps.Search(ctx, term, request.Options.MaxSubjectCandidates)
 		if err != nil {
 			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
@@ -2766,6 +2983,11 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				// before the fold into the resolution-wide searchTruncated flag
 				// just below -- see Truncated's own doc comment.
 				Truncated: truncated,
+				// Index/Total (CHAOS-5517): this call's own 1-based position
+				// in THIS resolveSubjects call's own terms list, and that
+				// list's own length -- the self-carried bound certify's
+				// bounded-many check asserts against.
+				Index: termIndex + 1, Total: len(terms),
 			})
 		}
 		// allowExactMatch=true: term here is genuine caller-derived search
@@ -3045,6 +3267,15 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 				KindCoverageMissingKindsList: coverageMissingKindsList,
 			})
 		}
+		// r2 class finding (CHAOS-5517): when confirmedKind != nil, the
+		// floor mechanism above never runs at all -- applyKindCoverageFloor
+		// is never called -- so the "exactly one line per request" contract
+		// used to silently break on every confirmed-kind resolution. Fixed
+		// at the STRUCTURAL level: ResolveSubjectsWithCommitBasis's own
+		// exactlyOnceRequestFold for "kind_coverage_floor" (see that type's
+		// own doc comment) emits the explicit not-applicable line on flush
+		// if this branch never ran, so there is nothing to emit in an
+		// `else` here any more.
 	}
 	if traversalDegraded > 0 && deps.TraversalDegraded != nil {
 		deps.TraversalDegraded(ctx, principal.OrgID, traversalDegraded)

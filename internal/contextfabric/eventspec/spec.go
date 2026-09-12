@@ -54,6 +54,48 @@ const (
 	// (enforced by the same consistency check), and this one requires the
 	// opposite.
 	MultiplicityExactlyOnePerRequest Multiplicity = "exactly_one_per_request"
+	// MultiplicityZeroOrOnePerRequest (CHAOS-5517): the request-scoped
+	// sibling of MultiplicityZeroOrOnePerPass -- a line produced at most
+	// once per resolveSubjects CALL, gated behind its own trigger
+	// condition, with NO "pass" field (the mechanism it discloses runs at
+	// most once per call, never once per internal re-decision pass, so a
+	// pass identity would be meaningless on it -- the same "no pass
+	// concept applies" reasoning MultiplicityExactlyOnePerRequest already
+	// carries, just for the zero-or-one shape). CertifyAbsent accepts this
+	// multiplicity the same way it accepts ZeroOrOnePerPass, scoped by
+	// Attribution alone (never "pass", which this multiplicity forbids).
+	MultiplicityZeroOrOnePerRequest Multiplicity = "zero_or_one_per_request"
+	// MultiplicityBoundedManyPerPass (CHAOS-5517): a scope (request, or
+	// request+pass for an event that also declares "pass") may carry ANY
+	// number of lines, 0..N, where N is a cardinality some other part of
+	// the system bounds (a term list's length, a retrieval pool's size, a
+	// fixed enumerated list) -- clause 1's own "bounded aggregation" is
+	// what makes this a specification concern rather than an unbounded
+	// free-for-all. The bound is carried ON THE LINES, never only in
+	// BoundedAggregation's prose (chris's engineering ruling, 2026-09-11):
+	// every event of this multiplicity declares two required int fields,
+	// "index" (1-based position within its own scope) and "total" (the
+	// scope's own declared cardinality, the SAME value on every line in
+	// that scope) -- certify.Certify asserts every line in scope agrees on
+	// "total", that "index" covers exactly 1..total with no gap or
+	// duplicate, and that the observed line count equals "total". A scope
+	// with zero lines needs no such check (there is nothing to disagree)
+	// and CERTIFIES trivially -- this multiplicity's whole point is that
+	// 0..N are all legitimate shapes, so Certify never refuses an empty
+	// scope the way it refuses ExactlyOnePerPass/ExactlyOnePerRequest's
+	// own emptiness. Certify.Assertion.Want must additionally carry
+	// "index" (which of the scope's own lines is being value-asserted),
+	// the same role "pass" plays for a pass-keyed at-most-one event.
+	// Whether a BoundedManyPerPass event ALSO declares "pass" is decided
+	// PER EVENT (unlike every other Multiplicity value, whose pass-field
+	// requirement is fixed): an event emitted once per internal
+	// re-decision pass (corroboration/offer_pool/decision/
+	// reserved_kind_admitted's own per-candidate lines) declares "pass"
+	// and is grouped by (request_id, pass); an event emitted once per
+	// resolveSubjects CALL regardless of internal passes (search's own
+	// per-term lines, and the rest) declares no "pass" and is grouped by
+	// request_id alone.
+	MultiplicityBoundedManyPerPass Multiplicity = "bounded_many_per_pass"
 )
 
 // FieldPresence states whether a field is written on every line of its
@@ -86,6 +128,15 @@ const (
 	// own migration needed one (offered_under_window_gate,
 	// offer_pool_emptied_by_exclusion).
 	FieldBool FieldType = "bool"
+	// FieldFloat (CHAOS-5517): every event before Corroboration carried
+	// only integer/enum/bool/string measurements -- a candidate's
+	// confidence score is this specification's first genuinely fractional
+	// production value, so FieldInt's own "reject any non-whole number"
+	// rule (round r3's own fractional-value fix) cannot apply to it. A
+	// FieldFloat value is still refused for null/wrong-scalar-type/absent
+	// exactly like FieldInt; the ONLY difference is that a fractional JSON
+	// number is the EXPECTED shape here, not a defect.
+	FieldFloat FieldType = "float"
 )
 
 // Field is one key on one event variant's emitted line.
@@ -345,7 +396,568 @@ var DecisionSummary = Event{
 	},
 }
 
+// Search is the Info line (graphrank/tracer.go, case "search") emitted once
+// per term in a resolveSubjects call's own terms list -- CHAOS-5517's first
+// MultiplicityBoundedManyPerPass event: a resolution can search anywhere
+// from zero to several terms, bounded by that call's own terms list length,
+// with no per-pass concept (the per-term search loop runs once per
+// resolveSubjects call, before any internal re-decision pass exists).
+var Search = Event{
+	ID:                 "graphrank.search",
+	Msg:                "context fabric resolution trace: search",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityBoundedManyPerPass,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "bounded by resolveSubjects' own terms list length for this call -- Total on every line is that length, Index is this line's 1-based position in the loop that produced it.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"search"}},
+		{Key: "index", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
+		{
+			Key: "term_hash", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a SHA-256 hex digest of the search term,
+			// never the term itself.
+		},
+		{Key: "result_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "truncated", Type: FieldBool, Presence: PresenceRequired},
+	},
+}
+
+// KindOfferWithheld is the Info line (graphrank/tracer.go, case
+// "kind_offer_withheld", CHAOS-5218) emitted ONLY when the unconditional
+// kind_offer event's own offer withheld at least one frame-declared kind
+// because the full merged pool held no candidate of that kind -- a genuine
+// zero-multiplicity event (most resolutions never reach this trigger at
+// all), single-shot per resolveSubjects call (never re-derived per internal
+// pass), hence CHAOS-5517's first MultiplicityZeroOrOnePerRequest event.
+var KindOfferWithheld = Event{
+	ID:                 "graphrank.kind_offer_withheld",
+	Msg:                "context fabric resolution trace: kind offer withheld",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per resolveSubjects call -- emitted only when the offer withheld at least one frame-declared kind; CertifyAbsent asserts the (far more common) case where it never fires.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"kind_offer_withheld"}},
+		{Key: "withheld_count", Type: FieldInt, Presence: PresenceRequired},
+		{
+			Key: "withheld_kinds", Type: FieldStringSlice, Presence: PresenceRequired,
+			// Closed-vocabulary subject-kind VALUES only (never a canonical
+			// id, never candidate identity) -- the same ruled exception
+			// boundary_kinds/missing_kinds_list already carry. Left as an
+			// open string_slice here (the closed vocabulary itself lives on
+			// contextfabric.SubjectKind, outside this package's own import
+			// graph) -- same convention kind_offer's own boundary_kinds
+			// field will use once declared.
+		},
+		{Key: "declared_hint_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "distinct_kind_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "suppressed_by_cardinality", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "suppressed_by_unservable_declared_kind", Type: FieldBool, Presence: PresenceRequired},
+	},
+}
+
+// Corroboration is the Debug per-candidate line (graphrank/tracer.go, case
+// "corroboration", event.CorroborationSummary==false) emitted once per
+// candidate every corroboration pass processes, unconditionally (retrieval-
+// pool-sized -- 96 events measured on a 90-candidate crowd -- past the
+// per-pass Info ceiling, so it stays Debug; CorroborationSummary below is
+// the once-per-pass Info line an operator actually gets). CHAOS-5517's
+// second MultiplicityBoundedManyPerPass event, and the first one that also
+// declares "pass" (emitted from inside resolveFromMergedCandidatesWithAnchorSlot,
+// so a multi-pass resolution legitimately produces this shape more than
+// once per request, once per pass).
+var Corroboration = Event{
+	ID:                 "graphrank.corroboration",
+	Msg:                "context fabric resolution trace: corroboration",
+	Level:              LevelDebug,
+	Multiplicity:       MultiplicityBoundedManyPerPass,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "bounded by this pass's own candidate-set size -- Total on every line is that size, matching CorroborationSummary's own candidate_count for the SAME pass (same underlying slice, no intervening append/removal).",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "pass", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"corroboration"}},
+		{Key: "index", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_canonical_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "base_confidence", Type: FieldFloat, Presence: PresenceRequired},
+		{Key: "final_confidence", Type: FieldFloat, Presence: PresenceRequired},
+		{Key: "distinct_mechanisms", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
+// CorroborationSummary is the once-per-pass Info line (graphrank/tracer.go,
+// case "corroboration", event.CorroborationSummary==true) folding every
+// candidate Corroboration's own pass into one bounded aggregate. Now
+// pass-keyed (CHAOS-5517) the same way ranked_cut/anchor_slot_displaced/
+// decision_summary already are.
+var CorroborationSummary = Event{
+	ID:                 "graphrank.corroboration_summary",
+	Msg:                "context fabric resolution trace: corroboration summary",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityExactlyOnePerPass,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "exactly one line per corroboration pass -- the per-candidate detail this summary aggregates stays at Debug (Corroboration above).",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "pass", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"corroboration"}},
+		{Key: "candidate_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "top_ids", Type: FieldStringSlice, Presence: PresenceRequired},
+		{Key: "min_confidence", Type: FieldFloat, Presence: PresenceRequired},
+		{Key: "max_confidence", Type: FieldFloat, Presence: PresenceRequired},
+	},
+}
+
+// ReservedKindAdmitted is the Info line (graphrank/tracer.go, case
+// "reserved_kind_admitted") emitted once per candidate the CHAOS-4038 kind
+// reserve keeps past the flat cut -- CHAOS-5517's third
+// MultiplicityBoundedManyPerPass, pass-keyed event: bounded by however many
+// admissions this pass's own reserve produced (0 in the common case -- the
+// reserve is inert on most resolutions), never a fixed count, and no
+// sibling summary line exists for it (its own presence, or absence, IS the
+// operator-visible signal), so its bound is self-carried index/total only.
+var ReservedKindAdmitted = Event{
+	ID:                 "graphrank.reserved_kind_admitted",
+	Msg:                "context fabric resolution trace: reserved kind admitted",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityBoundedManyPerPass,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "bounded by this pass's own reserve-admission count (self-carried index/total) -- 0 on the common path where the reserve never fires; no sibling summary event exists for this stage.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "pass", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"reserved_kind_admitted"}},
+		{Key: "index", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_canonical_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "rank", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "survived", Type: FieldBool, Presence: PresenceRequired},
+	},
+}
+
+// OfferPool is the Debug per-candidate line (graphrank/tracer.go, case
+// "offer_pool", event.OfferPoolSummary==false) emitted for every vector-only
+// candidate the phase-4 offer-pool seam acts on -- EITHER demoted (still
+// competes for the commit decision, never offered) or excluded (withheld
+// from the offer entirely) -- distinguished by the "disposition" field, the
+// SAME wire Msg either way. CHAOS-5517's fourth MultiplicityBoundedManyPerPass
+// event: bounded by the combined demoted+excluded count for this pass, the
+// SAME two counts OfferPoolSummary reports below (its own resolution.go
+// producer computes the combined Total BEFORE emitting the first line, so
+// it is never a second, independently-derived number).
+var OfferPool = Event{
+	ID:                 "graphrank.offer_pool",
+	Msg:                "context fabric resolution trace: offer pool",
+	Level:              LevelDebug,
+	Multiplicity:       MultiplicityBoundedManyPerPass,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "bounded by this pass's own combined vector_only_demoted + vector_only_excluded count -- Total on every line is that sum, matching OfferPoolSummary's own two fields for the SAME pass.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "pass", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"offer_pool"}},
+		{Key: "index", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_canonical_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "disposition", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"vector_only_demoted", "vector_only_excluded"}},
+	},
+}
+
+// OfferPoolSummary is the once-per-pass Info line (graphrank/tracer.go, case
+// "offer_pool", event.OfferPoolSummary==true) folding the phase-4 offer-pool
+// seam's own pass into one bounded aggregate -- emitted unconditionally,
+// including on the early-return "the graph held nothing" path (explicit
+// zeros, distinguishable from a build where this seam never ran). Now
+// pass-keyed (CHAOS-5517) the same way CorroborationSummary already is.
+var OfferPoolSummary = Event{
+	ID:                 "graphrank.offer_pool_summary",
+	Msg:                "context fabric resolution trace: offer pool summary",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityExactlyOnePerPass,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "exactly one line per pass, emitted unconditionally (including explicit zeros on the early-return empty-graph path) -- the per-candidate detail this summary aggregates stays at Debug (OfferPool above).",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "pass", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"offer_pool"}},
+		{Key: "vector_only_excluded", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "vector_only_demoted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "emptied_by_exclusion", Type: FieldBool, Presence: PresenceRequired},
+	},
+}
+
+// AnchorKindWithheld is the Debug per-candidate line (graphrank/tracer.go,
+// case "anchor_kind_withheld") emitted for every subject resolve.go's
+// contest-admission boundary (CHAOS-5422, chaos5422_contest_set.go) refused
+// on the grouping/scope axis -- resolve.go's own admission.withheldSubjects().
+//
+// r1 class finding (CHAOS-5517): this used to be emitted under Stage
+// "offer_pool", the SAME wire Msg as the pass-scoped vector-only detail
+// lines (OfferPool above) -- an executed AST enumeration of every
+// ResolutionTraceEvent{...} construction site (not the original hand
+// sweep, which missed it) found it carrying disposition
+// "anchor_kind_withheld", outside OfferPool's own declared closed
+// vocabulary, with no pass/index/total at all. Genuinely REQUEST-scoped,
+// not pass-scoped: it fires once per resolveSubjects call, after every
+// internal pass has finished, describing the union of everything refused
+// across however many passes ran -- tagging it with a fabricated pass
+// number would misrepresent it as belonging to one pass it does not
+// describe. Given its own Stage/Msg so it can never again collide with
+// OfferPool's; self-carries index/total (no "pass" field declared) the
+// same way Search/KindHintSearch/ExactNameSearch already do -- a per-event
+// choice MultiplicityBoundedManyPerPass's own doc comment allows.
+var AnchorKindWithheld = Event{
+	ID:                 "graphrank.anchor_kind_withheld",
+	Msg:                "context fabric resolution trace: anchor kind withheld",
+	Level:              LevelDebug,
+	Multiplicity:       MultiplicityBoundedManyPerPass,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "bounded per request_id call by len(admission.withheldSubjects()) -- self-carried index/total, cross-checked against AnchorKindWithheldSummary's own anchor_kind_withheld count.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"anchor_kind_withheld"}},
+		{Key: "index", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_canonical_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "disposition", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"anchor_kind_withheld"}},
+	},
+}
+
+// AnchorKindWithheldSummary is the Info line (graphrank/tracer.go, case
+// "anchor_kind_withheld_summary") folding resolve.go's contest-admission
+// disclosure into one unconditional per-call line -- explicit zeros
+// included, so a question that refused nothing and a build where the
+// refusal stopped happening can never read alike.
+//
+// r1 class finding (CHAOS-5517): pre-fix this reused Stage "offer_pool"
+// with the SAME OfferPoolSummary==true flag OfferPoolSummary's own
+// pass-scoped vector-only summary uses, but populated an entirely
+// DIFFERENT field set (the anchor-kind-withheld aggregate) that
+// tracer.go's "offer_pool" case never read -- the line reached production
+// as a decoy, all vector-only fields at their zero default and pass=0,
+// with its real content silently absent from that wire shape (visible
+// only via DecisionSummary's own fold of the same producer call). Given
+// its own Stage/Msg, ExactlyOnePerRequest like AnchorPool/
+// KindCoverageFloor/AnchorOffer (no "pass" field: this fires once per
+// call, not once per internal pass).
+var AnchorKindWithheldSummary = Event{
+	ID:           "graphrank.anchor_kind_withheld_summary",
+	Msg:          "context fabric resolution trace: anchor kind withheld summary",
+	Level:        LevelInfo,
+	Multiplicity: MultiplicityExactlyOnePerRequest,
+	Attribution:  []string{"request_id"},
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"anchor_kind_withheld_summary"}},
+		{Key: "anchor_kind_withheld", Type: FieldInt, Presence: PresenceRequired},
+		{
+			Key: "anchor_kind_withheld_scope", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a SubjectKind token, or "none".
+		},
+		{
+			Key: "anchor_kind_withheld_reason", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a reason token, or "none" -- matches
+			// DecisionSummary's own offer_pool_anchor_kind_withheld_reason
+			// field for the same underlying producer value.
+		},
+		{Key: "anchor_kind_withheld_ids", Type: FieldStringSlice, Presence: PresenceRequired},
+		{Key: "anchor_kind_exempted", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
+// Decision is the Debug line (graphrank/tracer.go, case "decision") reporting
+// phase-3's own commit decision for a pass -- CHAOS-5517's fifth
+// MultiplicityBoundedManyPerPass event, and the only one whose own bound is
+// NEVER zero: every pass reaches exactly one of three mutually exclusive
+// branches (resolution.go's own switch), each unconditional -- "committed"
+// (one line per committed subject, Total=len(resolution.Committed)) or
+// "ambiguous"/"no_commit" (exactly one line, Total=1). DecisionSummary is
+// the folded per-REQUEST Info line an operator actually reads; this is its
+// own per-pass, per-outcome detail.
+var Decision = Event{
+	ID:                 "graphrank.decision",
+	Msg:                "context fabric resolution trace: decision",
+	Level:              LevelDebug,
+	Multiplicity:       MultiplicityBoundedManyPerPass,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "bounded by the pass's own outcome: one line per committed subject for a \"committed\" pass (self-carried index/total), otherwise exactly one line (index=1/total=1) -- never zero.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "pass", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"decision"}},
+		{Key: "index", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_canonical_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"committed", "ambiguous", "no_commit"}},
+		{
+			Key: "winning_mechanism", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a contextfabric.MatchMechanism token, or "".
+		},
+		{
+			Key: "commit_gate", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a commit-gate reason token, or "".
+		},
+		{Key: "alias_identity_complete", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "identity_trust_gate_blocked", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "search_truncated", Type: FieldBool, Presence: PresenceRequired},
+		{
+			Key: "commit_basis", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a contextfabric.CommitBasis token, or "".
+		},
+		{Key: "tied_statistical_top", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "search_candidate_limit", Type: FieldInt, Presence: PresenceRequired},
+		{
+			Key: "population_basis", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a population-basis token, or "none".
+		},
+	},
+}
+
+// SearchQuestion is the Info line (graphrank/tracer.go, case
+// "search_question", CHAOS-4120) emitted for the question-level
+// SearchQuestion pass -- gated on `deps.SearchQuestion != nil` (a backend
+// that does not implement it never runs this pass at all, the pre-CHAOS-4120
+// shape), so this is CHAOS-5517's second MultiplicityZeroOrOnePerRequest
+// event, not an unconditional one. Unlike Search (one line per TERM), this
+// pass has no per-term identity even when it does run.
+var SearchQuestion = Event{
+	ID:                 "graphrank.search_question",
+	Msg:                "context fabric resolution trace: search question",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per resolveSubjects call -- gated on deps.SearchQuestion != nil and a non-empty question; CertifyAbsent asserts the (far more common) case where the backend does not implement it.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"search_question"}},
+		{Key: "result_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "truncated", Type: FieldBool, Presence: PresenceRequired},
+	},
+}
+
+// AliasLookup is the Info line (graphrank/tracer.go, case "alias_lookup")
+// emitted from the single alias-lookup emission site in resolve.go -- gated
+// on `deps.AliasLookup != nil`. CORRECTED after tracing the real production
+// wiring (initial declaration wrongly claimed no composition root sets it,
+// from a grep that only matched a struct-literal `AliasLookup:` and missed
+// the real site's plain assignment): falkorgraph/reader.go wires
+// deps.AliasLookup whenever `a.config.IdentityUniverse != nil`, and
+// hosted/open.go's real buildContextFabricInvestigator ALWAYS passes
+// wireIdentityUniverse=true -- so AliasLookup IS wired in real production,
+// gated instead on `!temporal.active` (a historical-axis question skips it
+// entirely, HIGH-6's own "temporal authority stays with the graph" rule)
+// and on the identity-universe read itself finding a match. Still
+// MultiplicityZeroOrOnePerRequest: genuinely conditional, just not on
+// today's absent wiring -- CertifyAbsent covers the historical-axis /
+// no-match path, Certify covers the firing one.
+var AliasLookup = Event{
+	ID:                 "graphrank.alias_lookup",
+	Msg:                "context fabric resolution trace: alias lookup",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per resolveSubjects call -- gated on deps.AliasLookup != nil, which no production composition root sets today.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"alias_lookup"}},
+		{Key: "complete", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "matched_claimants", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
+// AnchorPool is the Info line (graphrank/tracer.go, case "anchor_pool")
+// naming the scope anchor decision phase 4 hands to retrieval and the
+// filter -- once per resolution, no per-candidate counterpart.
+var AnchorPool = Event{
+	ID:                 "graphrank.anchor_pool",
+	Msg:                "context fabric resolution trace: anchor pool kind scope",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityExactlyOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "exactly one line per resolveSubjects call -- emitted from the same statement that hands the scope to the confirmed-kind filter.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"anchor_pool"}},
+		{
+			Key: "anchor_pool_kind_scope", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a contextfabric.SubjectKind token, or "none".
+		},
+		{Key: "anchor_pool_kind_scope_source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"receipt", "confirmed_anchor", "none"}},
+		{
+			Key: "member_kind_confirmed", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a contextfabric.SubjectKind token, or "none".
+		},
+		{Key: "reserved_kinds", Type: FieldStringSlice, Presence: PresenceRequired},
+		{Key: "filter_kinds", Type: FieldStringSlice, Presence: PresenceRequired},
+	},
+}
+
+// KindCoverageFloor is the Info line (graphrank/tracer.go, case
+// "kind_coverage_floor", CHAOS-4086/CHAOS-4038) reporting the coverage
+// floor's own operator-visible half -- once per resolution.
+var KindCoverageFloor = Event{
+	ID:                 "graphrank.kind_coverage_floor",
+	Msg:                "context fabric resolution trace: kind coverage floor",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityExactlyOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "exactly one line per resolveSubjects call.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"kind_coverage_floor"}},
+		{Key: "fired", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "missing_kinds", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "truncated", Type: FieldBool, Presence: PresenceRequired},
+		{
+			Key: "missing_kinds_list", Type: FieldStringSlice, Presence: PresenceRequired,
+			// Closed-vocabulary subject-kind VALUES only (never a canonical
+			// id, never candidate identity) -- open string_slice here, same
+			// convention as KindOfferWithheld's own withheld_kinds.
+		},
+	},
+}
+
+// ConfirmedKindRescue is the Info line (graphrank/tracer.go, case
+// "confirmed_kind_rescue", CHAOS-4132) reporting the confirmed-kind
+// rescue's own operator-visible half -- once per resolution; its own
+// presence already means the rescue was attempted.
+var ConfirmedKindRescue = Event{
+	ID:                 "graphrank.confirmed_kind_rescue",
+	Msg:                "context fabric resolution trace: confirmed kind rescue",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per resolveSubjects call -- gated on confirmedKindRescueAttempted (this event's own PRESENCE already means the rescue was attempted); CertifyAbsent asserts the case where it never ran.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"confirmed_kind_rescue"}},
+		{Key: "attempted", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "fired", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "result_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "truncated", Type: FieldBool, Presence: PresenceRequired},
+	},
+}
+
+// IdentityUniverse is the Info line (falkorgraph/reader.go, case
+// "identity_universe", chris ruling 2026-08-17) -- CHAOS-5517's named
+// cross-package producer: constructed in falkorgraph, not graphrank,
+// inside the SAME deps.AliasLookup closure AliasLookup's own event fires
+// from (falkorgraph wires AliasLookup only when a.config.IdentityUniverse
+// is configured, which hosted/open.go's real production composition root
+// always does), gated further on `!temporal.active` (a historical-axis
+// question skips this mechanism entirely). Genuinely conditional in
+// production, hence MultiplicityZeroOrOnePerRequest, not unconditional.
+var IdentityUniverse = Event{
+	ID:                 "graphrank.identity_universe",
+	Msg:                "context fabric resolution trace: identity universe read",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per resolveSubjects call -- gated on the SAME AliasLookup wiring/temporal-axis condition AliasLookup's own event fires under, plus the identity-universe read itself running.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"identity_universe"}},
+		{Key: "complete", Type: FieldBool, Presence: PresenceRequired},
+	},
+}
+
+// KindHintSearch is the Debug per-node line (graphrank/tracer.go, case
+// "kind_hint_search", CHAOS-4348) emitted once per matched node from
+// traceKindHintSearch (chaos4348_reachability.go) -- CALLED MORE THAN ONCE
+// PER REQUEST (once per kind x term the coverage-floor hint loop tries),
+// each call with its own independent node set, so unlike every other
+// BoundedManyPerPass event declared so far, its Attribution includes
+// "term_hash": the bound is scoped per (request_id, term_hash) CALL, never
+// accumulated across calls that share no buffer.
+//
+// Attribution ALSO includes "queried_kind" (r1 finding, CHAOS-5517): the
+// hint loop calls traceKindHintSearch once per (kind, term) pair, so two
+// different hinted kinds queried for the SAME term each independently
+// produce their own index=1..N/total=N sequence. Without queried_kind in
+// scope, two such calls collapse into one (request_id, term_hash) group
+// and their otherwise-identical indices read as duplicates. queried_kind
+// is the loop's OWN kind for this call, distinct from subject_kind (the
+// matched node's own kind, read off the result).
+var KindHintSearch = Event{
+	ID:                 "graphrank.kind_hint_search",
+	Msg:                "context fabric resolution trace: kind hint search",
+	Level:              LevelDebug,
+	Multiplicity:       MultiplicityBoundedManyPerPass,
+	Attribution:        []string{"request_id", "term_hash", "queried_kind"},
+	BoundedAggregation: "bounded per (request_id, term_hash, queried_kind) call -- self-carried index/total, never accumulated across the multiple calls one resolution can make.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"kind_hint_search"}},
+		{Key: "index", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
+		{
+			Key: "term_hash", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a SHA-256 hex digest of the search term.
+		},
+		{Key: "queried_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_canonical_id", Type: FieldString, Presence: PresenceRequired},
+	},
+}
+
+// ExactNameSearch is the Debug per-node line (graphrank/tracer.go, case
+// "exact_name_search", CHAOS-4348) -- the same per-(request_id, term_hash)
+// call-scoped shape as KindHintSearch above, from traceExactNameSearch.
+var ExactNameSearch = Event{
+	ID:                 "graphrank.exact_name_search",
+	Msg:                "context fabric resolution trace: exact name search",
+	Level:              LevelDebug,
+	Multiplicity:       MultiplicityBoundedManyPerPass,
+	Attribution:        []string{"request_id", "term_hash"},
+	BoundedAggregation: "bounded per (request_id, term_hash) call -- self-carried index/total, never accumulated across the multiple calls one resolution can make.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"exact_name_search"}},
+		{Key: "index", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
+		{
+			Key: "term_hash", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a SHA-256 hex digest of the search term.
+		},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_canonical_id", Type: FieldString, Presence: PresenceRequired},
+	},
+}
+
+// AnchorOffer is the Info line (graphrank/tracer.go, case "anchor_offer",
+// CHAOS-4210) reporting the anchor-axis label-normalization count -- fires
+// unconditionally, once per resolveSubjects call (anchorOfferMaterial is
+// called and traced independently of kind/candidate/handle's shared site).
+var AnchorOffer = Event{
+	ID:                 "graphrank.anchor_offer",
+	Msg:                "context fabric resolution trace: anchor offer",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityExactlyOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "exactly one line per resolveSubjects call -- anchorOfferMaterial's own single call site.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"anchor_offer"}},
+		{Key: "labels_normalized_count", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
 // All is every event this specification declares. Generate() and the
 // certification runner both range over exactly this slice -- neither
 // maintains a second list.
-var All = []Event{RankedCutSummary, AnchorSlotDisplaced, DecisionSummary}
+var All = []Event{
+	RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld,
+	Corroboration, CorroborationSummary, ReservedKindAdmitted, OfferPool, OfferPoolSummary,
+	Decision, SearchQuestion, AliasLookup, AnchorPool, KindCoverageFloor, ConfirmedKindRescue,
+	IdentityUniverse, KindHintSearch, ExactNameSearch, AnchorOffer,
+	AnchorKindWithheld, AnchorKindWithheldSummary,
+}

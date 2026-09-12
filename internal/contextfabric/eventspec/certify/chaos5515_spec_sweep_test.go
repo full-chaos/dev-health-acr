@@ -88,7 +88,20 @@ func canonicalValueFor(f eventspec.Field) any {
 		}
 		return "sweep_canonical_string"
 	case eventspec.FieldInt:
+		// CHAOS-5517: "index"/"total" are the ONE pair of int fields whose
+		// own VALUES have a cross-field meaning (certifyBoundedMany asserts
+		// the observed line count equals "total", and "index" must fall in
+		// 1..total) -- a single canonical line is self-consistent only at
+		// index=1, total=1 (a bounded-many scope of exactly one line).
+		// Every other int field keeps the arbitrary, non-zero 7 the rest of
+		// this sweep already depends on to distinguish "canonical" from
+		// "zero".
+		if f.Key == "index" || f.Key == "total" {
+			return 1
+		}
 		return 7
+	case eventspec.FieldFloat:
+		return 0.5
 	case eventspec.FieldBool:
 		return true
 	case eventspec.FieldStringSlice:
@@ -117,6 +130,8 @@ func zeroValueFor(f eventspec.Field) (val any, applicable bool) {
 		return "", true
 	case eventspec.FieldInt:
 		return 0, true
+	case eventspec.FieldFloat:
+		return 0.0, true
 	case eventspec.FieldBool:
 		return false, true
 	default:
@@ -125,11 +140,13 @@ func zeroValueFor(f eventspec.Field) (val any, applicable bool) {
 }
 
 // wrongScalarTypeValueFor returns a JSON scalar shape that is NOT the
-// declared one -- applicable to every scalar type (string/int/bool).
+// declared one -- applicable to every scalar type (string/int/float/bool).
 func wrongScalarTypeValueFor(f eventspec.Field) (val any, applicable bool) {
 	switch f.Type {
 	case eventspec.FieldInt:
 		return "not-an-int", true
+	case eventspec.FieldFloat:
+		return "not-a-float", true
 	case eventspec.FieldString:
 		return 12345, true
 	case eventspec.FieldBool:
@@ -203,6 +220,28 @@ func locate(t *testing.T, line map[string]any, path []string) map[string]any {
 	return obj
 }
 
+// marshalJoinLines is the package-level form of the per-event marshalJoin
+// closure -- used by the CHAOS-5517 bounded-many/zero-or-one-per-request
+// cells, which iterate eventspec.All independently of the main
+// per-event multiplicity loop and so cannot reach that loop's own local
+// closure.
+func marshalJoinLines(t *testing.T, eventID string, lines ...map[string]any) *Log {
+	t.Helper()
+	parts := make([]string, len(lines))
+	for i, l := range lines {
+		b, err := json.Marshal(l)
+		if err != nil {
+			t.Fatalf("json.Marshal() error = %v", err)
+		}
+		parts[i] = string(b)
+	}
+	log, err := Parse([]byte(strings.Join(parts, "\n")))
+	if err != nil {
+		t.Fatalf("Parse() fixture for %s error = %v", eventID, err)
+	}
+	return log
+}
+
 func logFromLine(t *testing.T, line map[string]any) *Log {
 	t.Helper()
 	b, err := json.Marshal(line)
@@ -228,6 +267,13 @@ func attributionWant(ev eventspec.Event, base map[string]any) map[string]any {
 	}
 	if eventHasPassField(ev.Fields) {
 		w["pass"] = base["pass"]
+	}
+	if ev.Multiplicity == eventspec.MultiplicityBoundedManyPerPass {
+		// CHAOS-5517: certifyBoundedMany requires Want["index"] to select
+		// which of the scope's own lines is being value-asserted -- the
+		// canonical single-line fixture is self-consistent at index=1
+		// (canonicalValueFor's own "index"/"total" special case above).
+		w["index"] = base["index"]
 	}
 	return w
 }
@@ -305,6 +351,18 @@ func runCell(t *testing.T, ev eventspec.Event, base map[string]any, attribution 
 			if f.Key == "pass" {
 				w["pass"] = v
 			}
+			// CHAOS-5517 (hosted battery finding, G16/G18/G19 survived):
+			// mutating "index" on the fixture LINE without also updating
+			// Want["index"] makes the cell refuse for the WRONG reason (a
+			// selection mismatch: certifyBoundedMany can't find a line at
+			// the stale canonical index) rather than the guard the cell
+			// claims to exercise (verifyBoundedManyGroup's own range/
+			// duplicate/count checks) -- a vacuous pin that a mutant
+			// disabling the real guard still passes. Track it the same way
+			// "pass" already is.
+			if f.Key == "index" {
+				w["index"] = v
+			}
 		}
 		return w
 	}
@@ -327,8 +385,14 @@ func runCell(t *testing.T, ev eventspec.Event, base map[string]any, attribution 
 			return row
 		}
 		row.applicable = true
-		// A zero scalar is accepted UNLESS a closed vocabulary excludes it.
-		row.wantAccept = len(f.ClosedVocabulary) == 0
+		// A zero scalar is accepted UNLESS a closed vocabulary excludes it,
+		// or (CHAOS-5517) the field is "index"/"total" -- the one pair
+		// whose valid range is constrained by a CROSS-LINE invariant
+		// (certifyBoundedMany's own consistency check) rather than a
+		// per-field ClosedVocabulary: index=0 falls outside the declared
+		// 1..total range, and total=0 disagrees with the sweep's own
+		// single-line fixture (which always carries exactly one line).
+		row.wantAccept = len(f.ClosedVocabulary) == 0 && f.Key != "index" && f.Key != "total"
 		_, err := certifyRecovered(t, mutate(v), Assertion{Event: ev, Want: wantFor(v)})
 		row.gotAccept = err == nil
 	case "empty_container":
@@ -461,73 +525,100 @@ func TestCertifyInputDomainTable(t *testing.T) {
 		// AnchorSlotDisplaced: anchor_slot_displaced;
 		// DecisionSummary: decision_event_count), so this never silently
 		// no-ops into an identical-content line.
-		distinctContentLine := func(perturbValue int) map[string]any {
-			m := deepCopyLine(t, base)
-			perturbed := false
-			for _, f := range ev.Fields {
-				if f.Key == "pass" || f.Type != eventspec.FieldInt {
-					continue
-				}
-				isAttr := false
+		// perturbableField returns the first declared field eligible for
+		// this sweep's own content-perturbation fixtures: an int/float
+		// field is preferred (the original strategy every earlier event
+		// used); CHAOS-5517's OfferPool declares none (its only
+		// non-attribution, non-pass/index/total fields are subject_kind/
+		// subject_canonical_id/disposition, all strings) -- an
+		// open-vocabulary string field (no ClosedVocabulary; "stage" and
+		// "disposition" are closed and excluded) is the fallback, so this
+		// never silently no-ops into an identical-content line.
+		perturbableField := func() (eventspec.Field, bool) {
+			isAttr := func(key string) bool {
 				for _, ak := range ev.Attribution {
-					if ak == f.Key {
-						isAttr = true
+					if ak == key {
+						return true
 					}
 				}
-				if isAttr {
+				return false
+			}
+			for _, f := range ev.Fields {
+				if f.Key == "pass" || f.Key == "index" || f.Key == "total" || isAttr(f.Key) {
 					continue
 				}
-				m[f.Key] = perturbValue
-				perturbed = true
-				break
+				if f.Type == eventspec.FieldInt || f.Type == eventspec.FieldFloat {
+					return f, true
+				}
 			}
-			if !perturbed {
-				t.Fatalf("distinctContentLine: %s declares no non-attribution, non-pass int field to perturb -- fixture needs a new strategy", ev.ID)
+			for _, f := range ev.Fields {
+				if f.Key == "pass" || f.Key == "index" || f.Key == "total" || isAttr(f.Key) {
+					continue
+				}
+				if f.Type == eventspec.FieldString && len(f.ClosedVocabulary) == 0 {
+					return f, true
+				}
+			}
+			// CHAOS-5517: IdentityUniverse declares only request_id (attr),
+			// stage (closed vocab, excluded), and "complete" (bool) -- no
+			// int/float/open-string field at all, so bool is the last
+			// fallback.
+			for _, f := range ev.Fields {
+				if f.Key == "pass" || f.Key == "index" || f.Key == "total" || isAttr(f.Key) {
+					continue
+				}
+				if f.Type == eventspec.FieldBool {
+					return f, true
+				}
+			}
+			return eventspec.Field{}, false
+		}
+		distinctContentLine := func(perturbValue int) map[string]any {
+			m := deepCopyLine(t, base)
+			f, ok := perturbableField()
+			if !ok {
+				t.Fatalf("distinctContentLine: %s declares no non-attribution, non-pass field to perturb -- fixture needs a new strategy", ev.ID)
+			}
+			switch f.Type {
+			case eventspec.FieldInt:
+				m[f.Key] = perturbValue
+			case eventspec.FieldFloat:
+				m[f.Key] = float64(perturbValue) + 0.5
+			case eventspec.FieldString:
+				m[f.Key] = fmt.Sprintf("sweep_distinct_content_%d", perturbValue)
+			case eventspec.FieldBool:
+				// canonicalValueFor's own bool value is always true --
+				// "distinct content" is simply the other value.
+				m[f.Key] = false
 			}
 			return m
 		}
 		// malformedLine corrupts the SAME field distinctContentLine would
 		// perturb, but with a wrong SCALAR TYPE (a string in place of a
-		// declared int) -- a validateFields-catchable defect, for the
-		// "malformed earlier line" cells (round r3 finding 2).
+		// declared int/float, a number in place of a declared string) -- a
+		// validateFields-catchable defect, for the "malformed earlier line"
+		// cells (round r3 finding 2).
 		malformedLine := func(pass any) map[string]any {
 			m := deepCopyLine(t, base)
 			if pass != nil {
 				m["pass"] = pass
 			}
-			for _, f := range ev.Fields {
-				if f.Key == "pass" || f.Type != eventspec.FieldInt {
-					continue
-				}
-				isAttr := false
-				for _, ak := range ev.Attribution {
-					if ak == f.Key {
-						isAttr = true
-					}
-				}
-				if isAttr {
-					continue
-				}
-				m[f.Key] = "malformed-not-an-int"
-				return m
+			f, ok := perturbableField()
+			if !ok {
+				t.Fatalf("malformedLine: %s declares no non-attribution, non-pass field to corrupt -- fixture needs a new strategy", ev.ID)
 			}
-			t.Fatalf("malformedLine: %s declares no non-attribution, non-pass int field to corrupt -- fixture needs a new strategy", ev.ID)
-			return nil
+			switch f.Type {
+			case eventspec.FieldInt, eventspec.FieldFloat:
+				m[f.Key] = "malformed-not-a-number"
+			case eventspec.FieldString:
+				m[f.Key] = 999
+			case eventspec.FieldBool:
+				m[f.Key] = "malformed-not-a-bool"
+			}
+			return m
 		}
 		marshalJoin := func(lines ...map[string]any) *Log {
-			parts := make([]string, len(lines))
-			for i, l := range lines {
-				b, err := json.Marshal(l)
-				if err != nil {
-					t.Fatalf("json.Marshal() error = %v", err)
-				}
-				parts[i] = string(b)
-			}
-			log, err := Parse([]byte(strings.Join(parts, "\n")))
-			if err != nil {
-				t.Fatalf("Parse() fixture for %s error = %v", ev.ID, err)
-			}
-			return log
+			return marshalJoinLines(t, ev.ID, lines...)
 		}
 		record := func(dim string, wantAccept bool, log *Log, want map[string]any) {
 			_, err := certifyRecovered(t, log, Assertion{Event: ev, Want: want})
@@ -593,6 +684,97 @@ func TestCertifyInputDomainTable(t *testing.T) {
 		}
 	}
 
+	// CHAOS-5517 (hosted battery finding, run 34624597754: G17/G18/G19
+	// survived): a single-canonical-line fixture can NEVER exercise
+	// verifyBoundedManyGroup's own cross-line checks (total-agreement,
+	// duplicate-index, count-equals-total) -- with one line, "total" is
+	// read FROM that line, so count trivially equals it regardless of
+	// whether the guard runs at all. These three cells are the dedicated,
+	// deliberately MULTI-line fixtures each guard needs, generated over
+	// every BoundedManyPerPass event so a future one is swept
+	// automatically.
+	boundedManyExtraRows := 0
+	for _, ev := range eventspec.All {
+		if ev.Multiplicity != eventspec.MultiplicityBoundedManyPerPass {
+			continue
+		}
+		boundedManyExtraRows += 3
+		base := canonicalLineFor(ev)
+		attribution := attributionWant(ev, base)
+
+		// Total disagreement: two lines in the same scope, each with an
+		// index inside ITS OWN declared total's range (so the range check
+		// alone cannot also catch this), but naming a DIFFERENT total --
+		// refused regardless of which line's total is "right". lineB's
+		// index=2 sits inside 1..3 (its own total) AND inside 1..2 (the
+		// scope's total taken from lineA, i==0) -- isolating the
+		// disagreement check from the range check, which lineB's index
+		// would otherwise also trip if it were e.g. 3.
+		lineA := deepCopyLine(t, base)
+		lineA["index"], lineA["total"] = 1, 2
+		lineB := deepCopyLine(t, base)
+		lineB["index"], lineB["total"] = 2, 3
+		wantA := map[string]any{}
+		for k, v := range attribution {
+			wantA[k] = v
+		}
+		wantA["index"] = 1
+		_, err := certifyRecovered(t, marshalJoinLines(t, ev.ID, lineA, lineB), Assertion{Event: ev, Want: wantA})
+		rows = append(rows, domainRow{event: ev.ID, field: "(bounded-many)", dimension: "total_disagreement", applicable: true, wantAccept: false, gotAccept: err == nil})
+
+		// Duplicate index: two lines both claiming index=1 of a total=2
+		// scope -- count(2)==total(2) so verifyBoundedManyGroup's OTHER
+		// checks pass trivially; only the duplicate-index check itself can
+		// refuse this.
+		dupA := deepCopyLine(t, base)
+		dupA["index"], dupA["total"] = 1, 2
+		dupB := deepCopyLine(t, base)
+		dupB["index"], dupB["total"] = 1, 2
+		wantDup := map[string]any{}
+		for k, v := range attribution {
+			wantDup[k] = v
+		}
+		wantDup["index"] = 1
+		_, err = certifyRecovered(t, marshalJoinLines(t, ev.ID, dupA, dupB), Assertion{Event: ev, Want: wantDup})
+		rows = append(rows, domainRow{event: ev.ID, field: "(bounded-many)", dimension: "duplicate_index", applicable: true, wantAccept: false, gotAccept: err == nil})
+
+		// Count mismatch: ONE line self-declaring total=2 (index=1, in
+		// range, no duplicate possible with only one line) -- the scope
+		// actually holds only 1 line, so count(1) != total(2).
+		short := deepCopyLine(t, base)
+		short["index"], short["total"] = 1, 2
+		wantShort := map[string]any{}
+		for k, v := range attribution {
+			wantShort[k] = v
+		}
+		wantShort["index"] = 1
+		_, err = certifyRecovered(t, marshalJoinLines(t, ev.ID, short), Assertion{Event: ev, Want: wantShort})
+		rows = append(rows, domainRow{event: ev.ID, field: "(bounded-many)", dimension: "count_mismatch", applicable: true, wantAccept: false, gotAccept: err == nil})
+	}
+
+	// CHAOS-5517 (hosted battery finding: G20 survived): CertifyAbsent must
+	// refuse an attribution map that includes "pass" for a
+	// zero_or_one_per_request event (it has no pass concept at all) --
+	// generated over every such event.
+	zeroOrOneRequestAbsentRows := 0
+	for _, ev := range eventspec.All {
+		if ev.Multiplicity != eventspec.MultiplicityZeroOrOnePerRequest {
+			continue
+		}
+		zeroOrOneRequestAbsentRows++
+		attribution := map[string]any{}
+		for _, ak := range ev.Attribution {
+			attribution[ak] = "sweep_canonical_string"
+		}
+		withPass := map[string]any{}
+		for k, v := range attribution {
+			withPass[k] = v
+		}
+		withPass["pass"] = 1
+		err := CertifyAbsent(&Log{}, ev, withPass)
+		rows = append(rows, domainRow{event: ev.ID, field: "(multiplicity)", dimension: "absent_forbids_pass_attribution", applicable: true, wantAccept: false, gotAccept: err == nil})
+	}
+
 	// CHAOS-5516 (team-lead, after the B8 pair caught the class in
 	// internal/runtime/hosted's own fixtures): the construction-refusal
 	// guard tracer.go's "decision_summary" case added
@@ -656,10 +838,10 @@ func TestCertifyInputDomainTable(t *testing.T) {
 	// pass-keying guard, and the typed-construction refusal guard, not a
 	// silently-truncated subset.
 	const constructionRefusalRows = 1
-	wantRows := totalFieldCount*len(domainDimensions) + len(eventspec.All) + passMultiplicityRows + constructionRefusalRows
+	wantRows := totalFieldCount*len(domainDimensions) + len(eventspec.All) + passMultiplicityRows + constructionRefusalRows + boundedManyExtraRows + zeroOrOneRequestAbsentRows
 	if len(rows) != wantRows {
-		t.Errorf("census: table has %d rows, want %d (%d fields x %d dimensions + %d duplicate rows + %d pass-multiplicity rows + %d construction-refusal rows)",
-			len(rows), wantRows, totalFieldCount, len(domainDimensions), len(eventspec.All), passMultiplicityRows, constructionRefusalRows)
+		t.Errorf("census: table has %d rows, want %d (%d fields x %d dimensions + %d duplicate rows + %d pass-multiplicity rows + %d construction-refusal rows + %d bounded-many rows + %d zero-or-one-per-request absent rows)",
+			len(rows), wantRows, totalFieldCount, len(domainDimensions), len(eventspec.All), passMultiplicityRows, constructionRefusalRows, boundedManyExtraRows, zeroOrOneRequestAbsentRows)
 	}
 }
 

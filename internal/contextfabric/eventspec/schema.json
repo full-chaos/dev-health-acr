@@ -1,5 +1,228 @@
 [
   {
+    "id": "graphrank.alias_lookup",
+    "msg": "context fabric resolution trace: alias lookup",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per resolveSubjects call -- gated on deps.AliasLookup != nil, which no production composition root sets today.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "alias_lookup"
+        ]
+      },
+      {
+        "key": "complete",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "matched_claimants",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.anchor_kind_withheld",
+    "msg": "context fabric resolution trace: anchor kind withheld",
+    "level": "debug",
+    "multiplicity": "bounded_many_per_pass",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "bounded per request_id call by len(admission.withheldSubjects()) -- self-carried index/total, cross-checked against AnchorKindWithheldSummary's own anchor_kind_withheld count.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "anchor_kind_withheld"
+        ]
+      },
+      {
+        "key": "index",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_canonical_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "disposition",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "anchor_kind_withheld"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "graphrank.anchor_kind_withheld_summary",
+    "msg": "context fabric resolution trace: anchor kind withheld summary",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "anchor_kind_withheld_summary"
+        ]
+      },
+      {
+        "key": "anchor_kind_withheld",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "anchor_kind_withheld_scope",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "anchor_kind_withheld_reason",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "anchor_kind_withheld_ids",
+        "type": "string_slice",
+        "presence": "required"
+      },
+      {
+        "key": "anchor_kind_exempted",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.anchor_offer",
+    "msg": "context fabric resolution trace: anchor offer",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "exactly one line per resolveSubjects call -- anchorOfferMaterial's own single call site.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "anchor_offer"
+        ]
+      },
+      {
+        "key": "labels_normalized_count",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.anchor_pool",
+    "msg": "context fabric resolution trace: anchor pool kind scope",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "exactly one line per resolveSubjects call -- emitted from the same statement that hands the scope to the confirmed-kind filter.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "anchor_pool"
+        ]
+      },
+      {
+        "key": "anchor_pool_kind_scope",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "anchor_pool_kind_scope_source",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "receipt",
+          "confirmed_anchor",
+          "none"
+        ]
+      },
+      {
+        "key": "member_kind_confirmed",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "reserved_kinds",
+        "type": "string_slice",
+        "presence": "required"
+      },
+      {
+        "key": "filter_kinds",
+        "type": "string_slice",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "graphrank.anchor_slot_displaced",
     "msg": "context fabric resolution trace: anchor slot displaced",
     "level": "info",
@@ -60,6 +283,271 @@
       {
         "key": "pool_truncated_n",
         "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.confirmed_kind_rescue",
+    "msg": "context fabric resolution trace: confirmed kind rescue",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per resolveSubjects call -- gated on confirmedKindRescueAttempted (this event's own PRESENCE already means the rescue was attempted); CertifyAbsent asserts the case where it never ran.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "confirmed_kind_rescue"
+        ]
+      },
+      {
+        "key": "attempted",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "fired",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "result_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "truncated",
+        "type": "bool",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.corroboration",
+    "msg": "context fabric resolution trace: corroboration",
+    "level": "debug",
+    "multiplicity": "bounded_many_per_pass",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "bounded by this pass's own candidate-set size -- Total on every line is that size, matching CorroborationSummary's own candidate_count for the SAME pass (same underlying slice, no intervening append/removal).",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "pass",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "corroboration"
+        ]
+      },
+      {
+        "key": "index",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_canonical_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "base_confidence",
+        "type": "float",
+        "presence": "required"
+      },
+      {
+        "key": "final_confidence",
+        "type": "float",
+        "presence": "required"
+      },
+      {
+        "key": "distinct_mechanisms",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.corroboration_summary",
+    "msg": "context fabric resolution trace: corroboration summary",
+    "level": "info",
+    "multiplicity": "exactly_one_per_pass",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "exactly one line per corroboration pass -- the per-candidate detail this summary aggregates stays at Debug (Corroboration above).",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "pass",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "corroboration"
+        ]
+      },
+      {
+        "key": "candidate_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "top_ids",
+        "type": "string_slice",
+        "presence": "required"
+      },
+      {
+        "key": "min_confidence",
+        "type": "float",
+        "presence": "required"
+      },
+      {
+        "key": "max_confidence",
+        "type": "float",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.decision",
+    "msg": "context fabric resolution trace: decision",
+    "level": "debug",
+    "multiplicity": "bounded_many_per_pass",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "bounded by the pass's own outcome: one line per committed subject for a \"committed\" pass (self-carried index/total), otherwise exactly one line (index=1/total=1) -- never zero.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "pass",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "decision"
+        ]
+      },
+      {
+        "key": "index",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_canonical_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "committed",
+          "ambiguous",
+          "no_commit"
+        ]
+      },
+      {
+        "key": "winning_mechanism",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "commit_gate",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "alias_identity_complete",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "identity_trust_gate_blocked",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "search_truncated",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "commit_basis",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "tied_statistical_top",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "search_candidate_limit",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "population_basis",
+        "type": "string",
         "presence": "required"
       }
     ]
@@ -205,6 +693,348 @@
     ]
   },
   {
+    "id": "graphrank.exact_name_search",
+    "msg": "context fabric resolution trace: exact name search",
+    "level": "debug",
+    "multiplicity": "bounded_many_per_pass",
+    "attribution": [
+      "request_id",
+      "term_hash"
+    ],
+    "bounded_aggregation": "bounded per (request_id, term_hash) call -- self-carried index/total, never accumulated across the multiple calls one resolution can make.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "exact_name_search"
+        ]
+      },
+      {
+        "key": "index",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "term_hash",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_canonical_id",
+        "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.identity_universe",
+    "msg": "context fabric resolution trace: identity universe read",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per resolveSubjects call -- gated on the SAME AliasLookup wiring/temporal-axis condition AliasLookup's own event fires under, plus the identity-universe read itself running.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "identity_universe"
+        ]
+      },
+      {
+        "key": "complete",
+        "type": "bool",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.kind_coverage_floor",
+    "msg": "context fabric resolution trace: kind coverage floor",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "exactly one line per resolveSubjects call.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "kind_coverage_floor"
+        ]
+      },
+      {
+        "key": "fired",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "missing_kinds",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "truncated",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "missing_kinds_list",
+        "type": "string_slice",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.kind_hint_search",
+    "msg": "context fabric resolution trace: kind hint search",
+    "level": "debug",
+    "multiplicity": "bounded_many_per_pass",
+    "attribution": [
+      "request_id",
+      "term_hash",
+      "queried_kind"
+    ],
+    "bounded_aggregation": "bounded per (request_id, term_hash, queried_kind) call -- self-carried index/total, never accumulated across the multiple calls one resolution can make.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "kind_hint_search"
+        ]
+      },
+      {
+        "key": "index",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "term_hash",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "queried_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_canonical_id",
+        "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.kind_offer_withheld",
+    "msg": "context fabric resolution trace: kind offer withheld",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per resolveSubjects call -- emitted only when the offer withheld at least one frame-declared kind; CertifyAbsent asserts the (far more common) case where it never fires.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "kind_offer_withheld"
+        ]
+      },
+      {
+        "key": "withheld_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "withheld_kinds",
+        "type": "string_slice",
+        "presence": "required"
+      },
+      {
+        "key": "declared_hint_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "distinct_kind_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "suppressed_by_cardinality",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "suppressed_by_unservable_declared_kind",
+        "type": "bool",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.offer_pool",
+    "msg": "context fabric resolution trace: offer pool",
+    "level": "debug",
+    "multiplicity": "bounded_many_per_pass",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "bounded by this pass's own combined vector_only_demoted + vector_only_excluded count -- Total on every line is that sum, matching OfferPoolSummary's own two fields for the SAME pass.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "pass",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "offer_pool"
+        ]
+      },
+      {
+        "key": "index",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_canonical_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "disposition",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "vector_only_demoted",
+          "vector_only_excluded"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "graphrank.offer_pool_summary",
+    "msg": "context fabric resolution trace: offer pool summary",
+    "level": "info",
+    "multiplicity": "exactly_one_per_pass",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "exactly one line per pass, emitted unconditionally (including explicit zeros on the early-return empty-graph path) -- the per-candidate detail this summary aggregates stays at Debug (OfferPool above).",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "pass",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "offer_pool"
+        ]
+      },
+      {
+        "key": "vector_only_excluded",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "vector_only_demoted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "emptied_by_exclusion",
+        "type": "bool",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "graphrank.ranked_cut_summary",
     "msg": "context fabric resolution trace: ranked cut summary",
     "level": "info",
@@ -320,6 +1150,151 @@
             "presence": "required"
           }
         ]
+      }
+    ]
+  },
+  {
+    "id": "graphrank.reserved_kind_admitted",
+    "msg": "context fabric resolution trace: reserved kind admitted",
+    "level": "info",
+    "multiplicity": "bounded_many_per_pass",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "bounded by this pass's own reserve-admission count (self-carried index/total) -- 0 on the common path where the reserve never fires; no sibling summary event exists for this stage.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "pass",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "reserved_kind_admitted"
+        ]
+      },
+      {
+        "key": "index",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_canonical_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "rank",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "survived",
+        "type": "bool",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.search",
+    "msg": "context fabric resolution trace: search",
+    "level": "info",
+    "multiplicity": "bounded_many_per_pass",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "bounded by resolveSubjects' own terms list length for this call -- Total on every line is that length, Index is this line's 1-based position in the loop that produced it.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "search"
+        ]
+      },
+      {
+        "key": "index",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "term_hash",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "result_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "truncated",
+        "type": "bool",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.search_question",
+    "msg": "context fabric resolution trace: search question",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per resolveSubjects call -- gated on deps.SearchQuestion != nil and a non-empty question; CertifyAbsent asserts the (far more common) case where the backend does not implement it.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "search_question"
+        ]
+      },
+      {
+        "key": "result_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "truncated",
+        "type": "bool",
+        "presence": "required"
       }
     ]
   }
