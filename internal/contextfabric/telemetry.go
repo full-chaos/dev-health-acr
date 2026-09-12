@@ -1771,6 +1771,11 @@ func ContinuationDecisionLineVocabulary(key string) []string {
 		return tokenStrings(continuationAxisOutcomes())
 	case "carrier_read":
 		return tokenStrings([]ContinuationCarrierRead{ContinuationCarrierNotRead, ContinuationCarrierReadOK, ContinuationCarrierReadFailed})
+	case "carried_state_read":
+		// The store's own read statuses, plus the "admission never consulted a
+		// carrier" token the guard renders. Enumerated from the producer, so a
+		// new status joins here by existing, never by being remembered.
+		return append([]string{"not_read"}, tokenStrings(semanticStateReadStatuses())...)
 	case "refusal_basis":
 		// The one wire member a continuation can serve, and the explicit
 		// not-refused token ObservableRefusalBasis renders.

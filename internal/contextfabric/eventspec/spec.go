@@ -139,6 +139,17 @@ const (
 	// exactly like FieldInt; the ONLY difference is that a fractional JSON
 	// number is the EXPECTED shape here, not a defect.
 	FieldFloat FieldType = "float"
+	// FieldObject (CHAOS-5465 M2): a slog.Group renders as ONE nested JSON
+	// object under its own key, and until this type existed the
+	// specification could not describe one -- a group key certified as
+	// "undeclared" however carefully its contents were built. It is
+	// deliberately NOT an opaque blob: an object field declares its MEMBER
+	// fields in Field.Fields, exactly one level deep and never recursive, and
+	// the certifier walks them with the same validateFields pass a top-level
+	// field set gets. Every member therefore keeps its own declared type,
+	// presence and closed vocabulary, and an undeclared member key inside the
+	// group fails certification like an undeclared top-level key.
+	FieldObject FieldType = "object"
 )
 
 // Field is one key on one event variant's emitted line.
@@ -157,9 +168,51 @@ type Field struct {
 	// which a PresenceConditional field is written. Empty for a required
 	// field.
 	Applicability string
-	// Fields describes an object_slice field's own per-element shape. Empty
-	// for every other Type.
+	// Fields describes an object_slice field's own per-element shape, or an
+	// object field's own MEMBER shape (one level, never recursive). Empty for
+	// every other Type.
 	Fields []Field
+}
+
+// semanticStateGroupFields is the MEMBER shape of a persisted-reading group.
+// carried_state and fresh_state render through the same producer
+// (contextfabric.semanticStateLogGroup), so they declare the SAME members --
+// one list, referenced twice, never two lists that can drift.
+//
+// Only `present` is required: an absent snapshot renders present=false and
+// nothing else, which is a different fact from a snapshot whose every member
+// is zero.
+var semanticStateGroupFields = []Field{
+	{Key: "present", Type: FieldBool, Presence: PresenceRequired},
+	{Key: "format_version", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "family", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "family_source", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "family_table_version", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "group_kind", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "narrowing_basis", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "scope_anchor_kind", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "scope_anchor_term_present", Type: FieldBool, Presence: PresenceConditional, Applicability: "written when present=true; the term itself is corpus text and is never published"},
+	{Key: "frame_present", Type: FieldBool, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "frame_version", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "subject_expression_kind", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "subject_member_kind", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "subject_group_kind", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "subject_expected_kind", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "operands", Type: FieldStringSlice, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "retrieval_term_count", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when present=true; the terms themselves are corpus text and are never published"},
+	{Key: "goals", Type: FieldStringSlice, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "temporal", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "emphasis", Type: FieldStringSlice, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "dimensions", Type: FieldStringSlice, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "obligations", Type: FieldStringSlice, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "widened_obligations", Type: FieldStringSlice, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "emitted_shape", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "gate", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "roles", Type: FieldStringSlice, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "requirements_declared", Type: FieldBool, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "requirement_count", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "requirements", Type: FieldStringSlice, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "requirement_derivation_version", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
 }
 
 // Event is one canonical, named production log line: its identity, every
@@ -1045,6 +1098,14 @@ var WindowContinuationDecision = Event{
 		// Open: the prior result id the window-only request names, or empty.
 		{Key: "referenced_result_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "carrier_read", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("carrier_read")},
+		// The carrier's SNAPSHOT read, beside the carrier read itself: a
+		// carrier can read back perfectly and still carry no usable reading.
+		{Key: "carried_state_read", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("carried_state_read")},
+		// THE TWO READINGS, IN FULL. The carried one is what admission read;
+		// the fresh one is this turn's diagnostic proposal. Same member shape
+		// on both sides, so they are read against each other key by key.
+		{Key: "carried_state", Type: FieldObject, Presence: PresenceRequired, Fields: semanticStateGroupFields},
+		{Key: "fresh_state", Type: FieldObject, Presence: PresenceRequired, Fields: semanticStateGroupFields},
 		{Key: "window_receipt_count", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "explicit_window_present", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "interpreted_axis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("interpreted_axis")},

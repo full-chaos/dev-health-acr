@@ -897,6 +897,21 @@ func validateFields(fields []eventspec.Field, obj map[string]any, eventID string
 					return fmt.Errorf("certify: %s: %q[%d] = %v (%T), declared element type=string", eventID, field.Key, i, elem, elem)
 				}
 			}
+		case eventspec.FieldObject:
+			// ONE nested object, walked with the same pass its parent got, so
+			// a member key is under exactly the guards a top-level key is.
+			row, ok := got.(map[string]any)
+			if !ok {
+				return fmt.Errorf("certify: %s: %q = %v (%T), declared type=object", eventID, field.Key, got, got)
+			}
+			if err := validateFields(field.Fields, row, eventID); err != nil {
+				return fmt.Errorf("%w (inside %q)", err, field.Key)
+			}
+			for key := range row {
+				if !declaresKey(field.Fields, key) {
+					return fmt.Errorf("certify: %s: %q carries undeclared member %q -- an object field's members are declared, never open", eventID, field.Key, key)
+				}
+			}
 		case eventspec.FieldObjectSlice:
 			arr, ok := got.([]any)
 			if !ok {
@@ -963,4 +978,17 @@ func jsonEqual(want, got any) bool {
 		return false
 	}
 	return reflect.DeepEqual(wantNorm, got)
+}
+
+// declaresKey reports whether fields declares key. An object field's members
+// are a CLOSED set: validateFields alone would accept an extra member nobody
+// declared, which is the same hole "emitted key is not declared" closes at the
+// top level.
+func declaresKey(fields []eventspec.Field, key string) bool {
+	for _, f := range fields {
+		if f.Key == key {
+			return true
+		}
+	}
+	return false
 }

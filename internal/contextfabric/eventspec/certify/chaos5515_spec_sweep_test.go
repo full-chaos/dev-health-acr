@@ -121,6 +121,16 @@ func canonicalValueFor(f eventspec.Field) any {
 		return true
 	case eventspec.FieldStringSlice:
 		return []string{"sweep_elem"}
+	case eventspec.FieldObject:
+		// ONE nested object, built from its declared members exactly as an
+		// object_slice row is -- so the sweep reaches every member key and a
+		// member added to the declaration without a canonical shape here
+		// fails this control rather than passing unmeasured.
+		obj := map[string]any{}
+		for _, nf := range f.Fields {
+			obj[nf.Key] = canonicalValueFor(nf)
+		}
+		return obj
 	case eventspec.FieldObjectSlice:
 		row := map[string]any{}
 		for _, nf := range f.Fields {
@@ -175,7 +185,7 @@ func wrongScalarTypeValueFor(f eventspec.Field) (val any, applicable bool) {
 // applicable only to the two container types.
 func wrongContainerTypeValue(f eventspec.Field) (val any, applicable bool) {
 	switch f.Type {
-	case eventspec.FieldStringSlice, eventspec.FieldObjectSlice:
+	case eventspec.FieldStringSlice, eventspec.FieldObjectSlice, eventspec.FieldObject:
 		return 12345, true
 	default:
 		return nil, false

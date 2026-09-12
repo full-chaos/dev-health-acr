@@ -116,6 +116,11 @@ func compositionInvariants() []string {
 		CompositionInvariantCarriedFrameNotCanonical,
 		CompositionInvariantCarriedFrameRefused,
 		CompositionInvariantCarriedStateIncomplete,
+		// Declared, and undrivable once the frame itself is carried -- see the
+		// constant's own comment. It stays a member so the guard and the
+		// published vocabulary agree; narrowing a closed contract member is a
+		// separate decision from this change.
+		CompositionInvariantCarriedAxisUnexpressible,
 	}
 }
 
