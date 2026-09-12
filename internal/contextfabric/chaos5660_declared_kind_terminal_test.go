@@ -391,32 +391,86 @@ func TestTheTerminalSentenceIsAServiceAuthoredDisclosure(t *testing.T) {
 	}
 }
 
-// TestTheWireBasisGapIsDeclaredNotForgotten pins the tracked gap as a fact
-// rather than a comment: the basis constant is empty today, so the class is
-// countable in the log line and NOT on the wire. The moment the vocabulary
-// member lands, setting the constant is the whole change and this test is
-// what says so.
-func TestTheWireBasisGapIsDeclaredNotForgotten(t *testing.T) {
-	// Empty is the state this change ships in, and it is legal ONLY as the
-	// empty value: the wire vocabulary's own rule is that an empty basis
-	// means the turn was not refused, so this terminal discloses no refusal
-	// and the class stays uncountable on the wire. That is the tracked gap.
-	if declaredKindTerminalBasis == "" {
-		if contractsv1.ValidContextFabricRefusalBasis(declaredKindTerminalBasis) {
-			t.Fatal("the empty basis became a vocabulary member -- the gap this test tracks is no longer expressible")
+// TestTheDeclaredKindBasisOverItsWholeVocabularyDomain executes every cell of
+// the new member's own domain, on both sides of every rule that classifies a
+// basis -- the sides being the point: a member is defined as much by the
+// allow-lists it is OUT of as by the one it is in.
+//
+// It replaces a test that pinned the ABSENCE of a basis. That pin was correct
+// while no member was true of this state; it is named here rather than
+// silently dropped, because the pair is the record of the decision.
+func TestTheDeclaredKindBasisOverItsWholeVocabularyDomain(t *testing.T) {
+	basis := declaredKindTerminalBasis
+
+	t.Run("it is the member this terminal names", func(t *testing.T) {
+		if basis != contractsv1.ContextFabricRefusalBasisDeclaredKindUnmatched {
+			t.Fatalf("declaredKindTerminalBasis = %q", basis)
 		}
-		return
-	}
-	// The moment the constant is set, it must be a real member, and it must
-	// NOT be member_kind_unservable: that member claims no discovery arm
-	// serves the kind, which is false for this state -- other rows in the
-	// same measured replicate served projects.
-	if !contractsv1.ValidContextFabricRefusalBasis(declaredKindTerminalBasis) {
-		t.Fatalf("declaredKindTerminalBasis = %q is not a vocabulary member", declaredKindTerminalBasis)
-	}
-	if declaredKindTerminalBasis == contractsv1.ContextFabricRefusalBasisMemberKindUnservable {
-		t.Fatal("member_kind_unservable claims no discovery arm serves the declared kind, which is false here -- the kind is served, this subject was not found")
-	}
+	})
+	t.Run("it is a vocabulary member", func(t *testing.T) {
+		if !contractsv1.ValidContextFabricRefusalBasis(basis) {
+			t.Fatalf("%q is not a member of the closed vocabulary", basis)
+		}
+	})
+	t.Run("it appears exactly once in the declared vocabulary", func(t *testing.T) {
+		seen := 0
+		for _, member := range contractsv1.ContextFabricRefusalBasisVocabulary() {
+			if member == basis {
+				seen++
+			}
+		}
+		if seen != 1 {
+			t.Fatalf("member occurs %d times in the vocabulary, want exactly 1", seen)
+		}
+	})
+	t.Run("it is NOT a frame refusal", func(t *testing.T) {
+		// The frame validated and its gate passed; the failure is
+		// retrieval's, decided after ranking. Admitting it to the frame
+		// allow-list would let the member-kind sentence name it, and that
+		// sentence claims the service cannot enumerate a kind it serves.
+		if contractsv1.ValidContextFabricFrameRefusalBasis(basis) {
+			t.Fatalf("%q was admitted to the FRAME refusal allow-list", basis)
+		}
+	})
+	t.Run("it is not member_kind_unservable", func(t *testing.T) {
+		if basis == contractsv1.ContextFabricRefusalBasisMemberKindUnservable {
+			t.Fatal("filed under the member that claims no discovery arm serves the kind -- false here, the kind is served and this subject was not found")
+		}
+	})
+	t.Run("the empty basis is still not a member", func(t *testing.T) {
+		// The absence rule the whole field rests on: absent means "not
+		// refused", never "refused for a reason nobody recorded".
+		if contractsv1.ValidContextFabricRefusalBasis("") {
+			t.Fatal("the empty value became a vocabulary member -- absent and refused would stop being distinguishable")
+		}
+	})
+	t.Run("an out-of-vocabulary basis is still refused", func(t *testing.T) {
+		if contractsv1.ValidContextFabricRefusalBasis(contractsv1.ContextFabricRefusalBasis("declared_kind_unmatched_")) {
+			t.Fatal("a near-miss spelling was accepted")
+		}
+		if contractsv1.ValidContextFabricRefusalBasis(contractsv1.ContextFabricRefusalBasis("DECLARED_KIND_UNMATCHED")) {
+			t.Fatal("a case variant was accepted -- basis tokens are identifiers, matched case-sensitively")
+		}
+	})
+	t.Run("its sentence is service-authored and its own", func(t *testing.T) {
+		if !contractsv1.IsContextFabricServiceAuthoredLimitation(declaredKindTerminalLimitation) {
+			t.Fatalf("the sentence is not recognised as service-authored: %q", declaredKindTerminalLimitation)
+		}
+		if declaredKindTerminalLimitation == contractsv1.ContextFabricSynthesisClarificationUnavailableLimitation {
+			t.Fatal("the sentence is still the one borrowed from the synthesis decision -- two decisions cannot share one sentence and stay distinguishable")
+		}
+		if !strings.Contains(declaredKindTerminalLimitation, string(basis)) {
+			t.Fatalf("the sentence does not name its own basis, so a reader cannot correlate it with the log line: %q", declaredKindTerminalLimitation)
+		}
+	})
+	t.Run("the log renderer and the wire agree on every cell", func(t *testing.T) {
+		if got := observableRefusalBasis(basis); got != string(basis) {
+			t.Fatalf("observableRefusalBasis(%q) = %q", basis, got)
+		}
+		if got := observableRefusalBasis(""); got != "none" {
+			t.Fatalf("observableRefusalBasis(\"\") = %q, want the explicit none token", got)
+		}
+	})
 }
 
 // TestDeclaredKindsMatchesTheDerivationGraphrankReplaced is the equivalence

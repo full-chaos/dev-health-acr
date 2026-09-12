@@ -320,6 +320,20 @@ func (e *Engine) terminalResult(
 	if familyOutcome.Gate.Refuses() {
 		limitation = refusalLimitation(familyOutcome.Gate, refusalBasis)
 	}
+	// CHAOS-5660: the declared-kind terminal discloses its own basis on the
+	// same field, and the limitation it already carries is that basis's own
+	// fixed sentence (resolveTerminalStatus set it above).
+	//
+	// AFTER the gate arm, never before it, and it cannot collide with one: a
+	// refusing gate never reaches retrieval, so it has no offers to be
+	// unsatisfiable against -- decideDeclaredKind reports satisfiable for an
+	// empty offer set, which is exactly the state a refused frame is in. The
+	// ordering is belt and braces on top of that, so a future gate member
+	// that did somehow reach here keeps its own basis rather than having
+	// this one written over it.
+	if declaredKind.Unsatisfiable && status == InvestigationNoMatch && limitation == declaredKindTerminalLimitation {
+		refusalBasis = declaredKindTerminalBasis
+	}
 	// CHAOS-3888: telemetry-only -- classifies WHY this investigation
 	// reached its own subjectless terminal path, never changes status,
 	// limitation, or any other field of the result below. See
@@ -327,7 +341,15 @@ func (e *Engine) terminalResult(
 	// this change adds its seventh member to (the comment said "three-value"
 	// and had been wrong since the fourth).
 	if e.telemetry != nil {
-		e.telemetry.RecordSubjectlessTerminal(ctx, principal, subjectlessTerminalReason(familyOutcome.Gate, resolution, subjectCandidatesAuthzDropped, declaredKind), familyOutcome.Gate.ObservableRefusalBasis(), declaredKind.ObservableDeclaredKinds(), declaredKind.ObservableOfferedKinds())
+		// The basis reported here is the EFFECTIVE one, the same value the
+		// served document carries -- not the gate's. Reading the gate
+		// directly was correct while the gate was the only producer of a
+		// basis; once this file grew a second one, that read made the log
+		// line and the wire name two different decisions about one turn,
+		// which is precisely the disagreement a single decision value
+		// exists to prevent. Caught by this change's own served-document
+		// test, not by inspection.
+		e.telemetry.RecordSubjectlessTerminal(ctx, principal, subjectlessTerminalReason(familyOutcome.Gate, resolution, subjectCandidatesAuthzDropped, declaredKind), observableRefusalBasis(refusalBasis), declaredKind.ObservableDeclaredKinds(), declaredKind.ObservableOfferedKinds())
 	}
 	coverage := graphContext.Coverage
 	if coverage.Sources == nil {
@@ -674,10 +696,9 @@ func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectReso
 	// over them would rewrite prose on a path this ticket measured nothing
 	// about.
 	//
-	// The sentence is CHAOS-4098's existing one and the basis is empty
-	// today; declaredKindTerminalLimitation's own doc comment carries the
-	// whole of why, and the tracked gap that leaves the class uncountable on
-	// the wire until its vocabulary member lands.
+	// The sentence is the declared_kind_unmatched basis's own fixed one;
+	// terminalResult attaches the matching basis to the served document a few
+	// lines below, from this same decision.
 	if declaredKind.Unsatisfiable && request.Options.AllowClarification {
 		return InvestigationNoMatch, declaredKindTerminalLimitation
 	}

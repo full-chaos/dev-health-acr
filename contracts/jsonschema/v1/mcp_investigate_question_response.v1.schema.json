@@ -248,7 +248,8 @@
                 "member_kind_unservable",
                 "frame_invariant_violated",
                 "unspecified",
-                "continuation_context_unverifiable"
+                "continuation_context_unverifiable",
+                "declared_kind_unmatched"
               ],
               "description": "CHAOS-5442: names WHY the server refused to act on this question's frame, over a closed vocabulary. ABSENT on every turn that was not refused -- absence means \"not refused\", never \"refused for a reason nobody recorded\" (that state is the `unspecified` member). Orthogonal to terminal_reason, which names the CHANNEL an explanation travelled through rather than the decision taken: a refused frame carries both. `continuation_context_unverifiable` refuses a window-only continuation whose prior semantic context the server could not verify; it is not a frame refusal, and the document carries its own fixed limitation sentence."
             }
@@ -3195,7 +3196,8 @@
             "member_kind_unservable",
             "frame_invariant_violated",
             "unspecified",
-            "continuation_context_unverifiable"
+            "continuation_context_unverifiable",
+            "declared_kind_unmatched"
           ],
           "description": "CHAOS-5442: names WHY the server refused to act on this question's frame, over a closed vocabulary. ABSENT on every turn that was not refused -- absence means \"not refused\", never \"refused for a reason nobody recorded\" (that state is the `unspecified` member). Orthogonal to terminal_reason, which names the CHANNEL an explanation travelled through rather than the decision taken: a refused frame carries both. `continuation_context_unverifiable` refuses a window-only continuation whose prior semantic context the server could not verify; it is not a frame refusal, and the document carries its own fixed limitation sentence."
         }
@@ -3487,7 +3489,8 @@
                 "member_kind_unservable",
                 "frame_invariant_violated",
                 "unspecified",
-                "continuation_context_unverifiable"
+                "continuation_context_unverifiable",
+                "declared_kind_unmatched"
               ],
               "description": "CHAOS-5442: names WHY the server refused to act on this question's frame, over a closed vocabulary. ABSENT on every turn that was not refused -- absence means \"not refused\", never \"refused for a reason nobody recorded\" (that state is the `unspecified` member). Orthogonal to terminal_reason, which names the CHANNEL an explanation travelled through rather than the decision taken: a refused frame carries both. `continuation_context_unverifiable` refuses a window-only continuation whose prior semantic context the server could not verify; it is not a frame refusal, and the document carries its own fixed limitation sentence."
             }

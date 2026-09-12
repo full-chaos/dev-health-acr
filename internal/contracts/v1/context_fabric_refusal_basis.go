@@ -85,6 +85,33 @@ const (
 	// the member-kind sentence, which names a population this refusal is not
 	// about.
 	ContextFabricRefusalBasisContinuationContextUnverifiable ContextFabricRefusalBasis = "continuation_context_unverifiable"
+	// ContextFabricRefusalBasisDeclaredKindUnmatched: the question's frame
+	// declared a subject kind, retrieval ran, and NOTHING it could offer
+	// carried that kind -- no kind option, no anchor, handle or candidate
+	// option, and no subject candidate. The server stops rather than ask a
+	// question it has supplied no means of answering.
+	//
+	// IT IS NOT member_kind_unservable, and the distinction is the whole
+	// reason this member exists rather than reusing that one. That member
+	// says NO DISCOVERY ARM SERVES the kind -- a statement about the
+	// service, decided above retrieval, true of every question that names
+	// that kind. This one says this ORG'S GRAPH, for THESE TERMS, offered
+	// nothing of a kind the service serves perfectly well: measured on the
+	// 2026-09-12 corpus, three other rows in the same replicate resolved
+	// projects while the two rows this member describes could not, because
+	// the token they named matches no project identity. Filing the second
+	// under the first would tell an operator to build a discovery arm that
+	// already exists.
+	//
+	// NOT A FRAME REFUSAL either, and deliberately outside
+	// ValidContextFabricFrameRefusalBasis below for the same reason
+	// continuation_context_unverifiable is: the frame VALIDATED and its
+	// gate passed. What failed is retrieval's ability to offer anything the
+	// frame's own declaration could accept, which is decided after seventy
+	// candidates have been ranked, not before the search runs. The
+	// member-kind sentence would therefore be false of it, so it carries
+	// its own (ContextFabricDeclaredKindUnmatchedLimitation).
+	ContextFabricRefusalBasisDeclaredKindUnmatched ContextFabricRefusalBasis = "declared_kind_unmatched"
 )
 
 var contextFabricRefusalBases = [...]ContextFabricRefusalBasis{
@@ -92,6 +119,7 @@ var contextFabricRefusalBases = [...]ContextFabricRefusalBasis{
 	ContextFabricRefusalBasisFrameInvariantViolated,
 	ContextFabricRefusalBasisUnspecified,
 	ContextFabricRefusalBasisContinuationContextUnverifiable,
+	ContextFabricRefusalBasisDeclaredKindUnmatched,
 }
 
 // ValidContextFabricFrameRefusalBasis reports whether a basis is one of the

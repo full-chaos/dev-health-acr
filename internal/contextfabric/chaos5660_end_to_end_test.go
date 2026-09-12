@@ -236,12 +236,17 @@ func TestInvestigateIsUnchangedWhenTheFrameDeclaresNoKind(t *testing.T) {
 	}
 }
 
-// TestTheServedTerminalCarriesNoRefusalBasisYet executes the tracked gap at
-// the served document rather than asserting it in a comment: the class is
-// countable in the log line and NOT on the wire until the vocabulary member
-// lands. A reviewer reading only the served answer must be able to see that
-// for themselves.
-func TestTheServedTerminalCarriesNoRefusalBasisYet(t *testing.T) {
+// TestTheServedTerminalDisclosesItsBasis executes the disclosure at the
+// served document, which is where a consumer reads it: the terminal names
+// declared_kind_unmatched on the wire and carries that basis's own sentence,
+// and it does NOT claim the frame refusal it did not take.
+//
+// This test replaced one that pinned the ABSENCE of a basis. That earlier
+// pin was correct while no vocabulary member was true of this state, and it
+// is kept in the history rather than quietly deleted because the two
+// together are the record of the decision: the class was uncountable on the
+// wire, it was named as such, and then it was closed.
+func TestTheServedTerminalDisclosesItsBasis(t *testing.T) {
 	t.Parallel()
 	project := SubjectKind(contractsv1.ContextFabricSubjectProject)
 	telemetry := &recordingTelemetry{}
@@ -256,13 +261,24 @@ func TestTheServedTerminalCarriesNoRefusalBasisYet(t *testing.T) {
 	if result.Status != InvestigationNoMatch {
 		t.Fatalf("served status = %q, want no_match", result.Status)
 	}
+	if result.RefusalBasis != contractsv1.ContextFabricRefusalBasisDeclaredKindUnmatched {
+		t.Fatalf("served refusal_basis = %q, want %q -- without it the class is countable in the log and invisible to every consumer",
+			result.RefusalBasis, contractsv1.ContextFabricRefusalBasisDeclaredKindUnmatched)
+	}
+	carried := false
 	for _, limitation := range result.Limitations {
-		if strings.Contains(limitation, "refused this question's frame on the basis") {
-			t.Fatalf("the served terminal claims a frame refusal it did not take: %q", limitation)
+		if limitation == contractsv1.ContextFabricDeclaredKindUnmatchedLimitation {
+			carried = true
+		}
+		if strings.Contains(limitation, "which this service has no way to enumerate") {
+			t.Fatalf("the terminal claims the service cannot enumerate this kind, which is false: %q", limitation)
 		}
 	}
-	if want := []string{"none"}; !stringSlicesEqual(telemetry.subjectlessTerminalRefusalBases, want) {
-		t.Fatalf("emitted refusal_basis = %#v, want the explicit none token -- the wire gap is real and this is where it is visible", telemetry.subjectlessTerminalRefusalBases)
+	if !carried {
+		t.Fatalf("served limitations = %#v, want the basis's own sentence", result.Limitations)
+	}
+	if want := []string{string(contractsv1.ContextFabricRefusalBasisDeclaredKindUnmatched)}; !stringSlicesEqual(telemetry.subjectlessTerminalRefusalBases, want) {
+		t.Fatalf("emitted refusal_basis = %#v, want %#v -- the log line and the wire must name one decision", telemetry.subjectlessTerminalRefusalBases, want)
 	}
 }
 

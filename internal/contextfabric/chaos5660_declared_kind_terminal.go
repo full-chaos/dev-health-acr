@@ -79,38 +79,32 @@ import (
 // are disclosed and simply of the wrong kind.
 const declaredKindTerminalReason = "no_candidate_of_declared_kind"
 
-// declaredKindTerminalLimitation is the sentence this terminal carries.
+// declaredKindTerminalLimitation is the sentence this terminal carries: the
+// basis vocabulary's OWN fixed sentence for declared_kind_unmatched, never a
+// sentence borrowed from another decision.
 //
-// IT IS CHAOS-4098's EXISTING SENTENCE, deliberately, and this is the one
-// place the choice is recorded. The state it describes is exactly true here:
-// the question could not be answered from the evidence assembled, and no
-// clarification could be offered to narrow it further -- after this change
-// there is genuinely no clarification to offer, because every option that
-// could have been offered was of a kind the question did not ask about.
-//
-// WHAT IT DOES NOT SAY is that the turn was REFUSED on a named basis, and
-// that is a known, deliberate gap rather than an oversight. The wire's
-// refusal-basis vocabulary (contracts/v1/context_fabric_refusal_basis.go)
-// has no member that is true of this state: `member_kind_unservable` claims
-// no discovery arm serves the kind, which is false -- other rows in the same
-// replicate served projects -- and it describes a refusal taken ABOVE
-// retrieval, where this one is taken after seventy candidates were ranked.
-// Adding a member is a contract change and is tracked as its own decision.
-// Until it lands this terminal is a no_match carrying a truthful sentence
-// and no basis, which means the CLASS stays uncountable on the wire even
-// though it is countable in the log line below. See declaredKindTerminalBasis.
-const declaredKindTerminalLimitation = contractsv1.ContextFabricSynthesisClarificationUnavailableLimitation
+// IT WAS BORROWED, BRIEFLY, AND THAT IS WHY THIS SAYS SO. The first cut of
+// this file carried CHAOS-4098's synthesis sentence, because no basis member
+// was true of this state and 4098's wording happened to be true of it too.
+// A sentence already owned by another decision cannot distinguish the two
+// states for anyone reading the served answer, which is the same collapse
+// the basis vocabulary itself exists to end -- so once the member landed,
+// the sentence came with it. The pairing is now one decision, one basis, one
+// sentence, and the recogniser test below holds it.
+const declaredKindTerminalLimitation = contractsv1.ContextFabricDeclaredKindUnmatchedLimitation
 
 // declaredKindTerminalBasis is the wire refusal basis this terminal
-// discloses. EMPTY TODAY, and the emptiness is the tracked gap named in
-// declaredKindTerminalLimitation's comment above, not an accident.
+// discloses, so the class is countable by a CONSUMER and not only by an
+// operator reading the log line.
 //
-// It is a named constant rather than an inline zero value so that admitting
-// the new vocabulary member is a one-line change HERE -- set the constant,
-// and terminalResult's existing basis plumbing carries it to both surfaces
-// unchanged. A reviewer can see the whole cost of that decision by reading
-// this one declaration and its single reference.
-const declaredKindTerminalBasis contractsv1.ContextFabricRefusalBasis = ""
+// It stays a named constant with a single reference even now that it is set,
+// for the reason it was one while it was empty: the whole cost of this
+// disclosure is readable from one declaration. It is deliberately NOT a
+// frame refusal -- the frame validated and its gate passed -- so the member
+// sits outside ValidContextFabricFrameRefusalBasis and carries its own
+// sentence rather than the member-kind one, which would claim the service
+// cannot serve a kind it serves.
+const declaredKindTerminalBasis = contractsv1.ContextFabricRefusalBasisDeclaredKindUnmatched
 
 // DeclaredKinds returns the kinds THIS FRAME ITSELF declared -- what the
 // question says its subject IS (SubjectExpression.MemberKind, which reads
@@ -264,4 +258,19 @@ func observableKindList(kinds []SubjectKind) string {
 		rendered += string(kind)
 	}
 	return rendered
+}
+
+// observableRefusalBasis renders the EFFECTIVE refusal basis for the log
+// line, with the explicit "none" token when the turn was not refused.
+//
+// It exists because FrameGate.ObservableRefusalBasis answers the same
+// question for the GATE only, and a caller that has an effective basis from
+// any producer needs one rendering rule, not two that agree by coincidence.
+// The token is the same word the gate's own renderer uses, for the same
+// missing-versus-measured-zero reason.
+func observableRefusalBasis(basis contractsv1.ContextFabricRefusalBasis) string {
+	if basis == "" {
+		return "none"
+	}
+	return string(basis)
 }
