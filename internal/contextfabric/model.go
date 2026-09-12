@@ -318,8 +318,8 @@ type ProjectionWatermark = contractsv1.ContextFabricProjectionWatermark
 type ProjectionCheckpoint = contractsv1.ContextFabricProjectionCheckpoint
 
 type GraphContext struct {
-	Resolution       SubjectResolution  `json:"resolution"`
-	Cohort           *Cohort            `json:"cohort,omitempty"`
+	Resolution SubjectResolution `json:"resolution"`
+	Cohort     *Cohort           `json:"cohort,omitempty"`
 	// CohortPopulation is how many distinct, authorized members of the
 	// cohort's kind the retrieval pool held, counted BEFORE the response
 	// item budget clamped how many the answer could carry. Zero when no
@@ -334,7 +334,7 @@ type GraphContext struct {
 	// server step, which runs after synthesis and needs no help from the
 	// narration. Engine bookkeeping about what retrieval saw, never evidence
 	// the bundle carries.
-	CohortPopulation int `json:"-"`
+	CohortPopulation int                `json:"-"`
 	Paths            []RelationshipPath `json:"paths"`
 	DriverCandidates []DriverJudgment   `json:"driver_candidates"`
 	EvidenceRefIDs   []string           `json:"evidence_ref_ids"`
