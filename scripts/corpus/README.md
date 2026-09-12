@@ -134,6 +134,29 @@ count to zero, which would make a load failure read as a clean run.
 | `subject_identity.py` | committed-subject check, from raw attempts |
 | `engine_failures.py` | post-hoc attempt classes with request ids |
 | `reclassify_deadlines.py` | deadline re-run, marked in the artefact |
+| `semantic_verdict_bridge.py` | CHAOS-5625: wires ask-dev's CHAOS-5620 versioned semantic verdict (`expect_schema.py`/`semantic_verdict.py`, imported at whatever pin already supplies the real `corpus.py`) into a row's raw attempts + this repo's own scalar scorer, published beside (never in place of) the five buckets and `expectation_scoring` above |
 | `test_shard_plan.py`, `test_instrument.py` | contract tests; no rig needed |
 
 A single shard's artefact is never standalone evidence. The merge is the verdict.
+
+## Semantic verdict (CHAOS-5625)
+
+`merge_corpus.py` additionally publishes, per row, a `semantic_verdict` object
+(`rows[].semantic_verdict`) and a run-level `provenance.semantic_verdict` block,
+from ask-dev's CHAOS-5620 `expect_schema.py`/`semantic_verdict.py` -- imported
+from wherever the real `corpus.py` itself already resolves from (see "Supplying
+a corpus" above; `expect_schema.py`/`schema_shim.py`/`semantic_verdict.py` live
+beside `corpus.py` in that same ask-dev `corpus/` directory, so no second pin
+mechanism is needed). This is **additive only**: `classify()`, `BUCKETS`, and
+`expectation_scoring` are untouched, and a run with no ask-dev pin available
+degrades to "legacy buckets only" (`provenance.semantic_verdict.available:
+false`, with a named reason) rather than aborting -- every existing caller of
+this script keeps merging exactly as it always has.
+
+`provenance.semantic_verdict` (when available) carries `scorer_version` /
+`policy_version` / `schema_version` / `legacy_scorer_version` / `ask_dev_sha`
+(read from the pinned checkout's own git metadata) / `corpus_version` (the
+real `corpus.py`'s own sha256), plus the run's aggregate: `verdict_counts`,
+`family_relation_counts`, `confirmed_family_verified`, and `unscored_count` /
+`unscored_reasons`. See `semantic_verdict_bridge.py`'s own module docstring
+and `test_findings_5625.py` for the row-shape and no-drift pins.
