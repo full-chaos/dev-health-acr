@@ -24,6 +24,10 @@ import (
 // snapshot renders `present=false` and nothing else -- explicit, never an
 // omitted group that reads like a line nobody wrote.
 func semanticStateLogGroup(key string, state *PersistedSemanticState) slog.Attr {
+	// The GROUP KEY is sanitized at its own construction site like every other
+	// value on the line. It is a caller-chosen string, and the instrument reads
+	// the whole group as untraceable while it is not.
+	key = SanitizeLogAttr(key)
 	if state == nil {
 		return slog.Group(key, slog.Bool("present", false))
 	}
