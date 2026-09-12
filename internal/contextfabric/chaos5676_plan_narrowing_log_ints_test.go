@@ -124,3 +124,44 @@ func TestEveryMaxItemsLogSiteUsesTheSameBarrier(t *testing.T) {
 		t.Errorf("telemetry.go has %d max_items site(s), want the 4 this sweep enumerated -- a new one must be wired deliberately, not inherit the count", total)
 	}
 }
+
+// TestTheIntBarrierRoutesThroughTheRecognizedStringBarrier is the int-typed
+// barrier's own source-shape pin, the counterpart of the one the int64 barrier
+// already has.
+//
+// It exists because removing the sanitizer call from the int barrier is an
+// EQUIVALENT MUTANT: no digit string strconv.Itoa can produce contains a line
+// break, so a bare Itoa-then-Atoi identity returns byte-identical output on
+// every input and every behavioural test passes. The analysis does not read the
+// output; it reads which call the value passed through. So the barrier's whole
+// value is the call, and only the source can show it is still there.
+//
+// Four log lines read through this function. A silent removal would reopen the
+// log-injection finding on all of them with no test failing -- measured, not
+// argued: with the call stripped, this package's entire suite passed.
+//
+// SCOPED TO THE FUNCTION'S OWN BODY, isolated by its signature and its column-0
+// closing brace, so the text surviving in a comment elsewhere in the file while
+// the function no longer calls it cannot satisfy the pin.
+func TestTheIntBarrierRoutesThroughTheRecognizedStringBarrier(t *testing.T) {
+	src, err := os.ReadFile("telemetry.go")
+	if err != nil {
+		t.Fatalf("could not read telemetry.go: %v", err)
+	}
+	text := string(src)
+	const marker = "func requestDerivedLogInt(value int) int {"
+	start := strings.Index(text, marker)
+	if start == -1 {
+		t.Fatal("could not find `func requestDerivedLogInt(value int) int {` in telemetry.go -- has the signature changed?")
+	}
+	body := text[start:]
+	end := strings.Index(body, "\n}")
+	if end == -1 {
+		t.Fatal("could not find requestDerivedLogInt's closing brace (a line starting with `}`) in telemetry.go")
+	}
+	body = body[:end]
+	if !strings.Contains(body, "SanitizeLogAttr(strconv.Itoa(value))") {
+		t.Fatal("requestDerivedLogInt's OWN body must round-trip through SanitizeLogAttr, not merely Itoa/Atoi -- " +
+			"the call is the recognized barrier, the output is identical without it, and four log lines depend on it")
+	}
+}
