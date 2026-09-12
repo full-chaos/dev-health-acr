@@ -13,8 +13,8 @@ present=0
 declared=0
 for f in test_findings_r1.py test_findings_r2.py test_findings_r3.py test_findings_r4.py \
          test_findings_r6.py test_findings_r10.py test_findings_5430.py test_findings_5452.py \
-         test_findings_5380.py test_findings_5562.py test_findings_5625.py test_instrument.py \
-         test_shard_plan.py; do
+         test_findings_5380.py test_findings_5562.py test_findings_5625.py test_findings_5664.py \
+         test_instrument.py test_shard_plan.py; do
   declared=$((declared+1))
   if [ ! -f "$HERE/$f" ]; then
     # Review round 2: this was `|| continue`, so a DELETED pin file was a silent SKIP.
