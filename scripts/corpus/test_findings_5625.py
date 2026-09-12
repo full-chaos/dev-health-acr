@@ -16,6 +16,16 @@ corpus/test_semantic_verdict_proof.py against vendored real data, and by
 this lane's own manual replay of the 36-row/9-rep proofs of record (see
 docs/PR TEST-EVIDENCE) -- neither is reproduced here.
 
+KNOWN GAP, NOT FIXED HERE BY DESIGN (found on #515 r1): FAKE_SEMANTIC_VERDICT
+is scalar-`expect` only -- no `any_of` alternative, no real ajv/schema
+validation, and `audit_window_exchange` is a no-op stub, not a real
+family/window audit. Modeling `any_of`/ajv acceptance in acr's own fake would
+be this file re-implementing CHAOS-5620's acceptance logic one layer down --
+the exact anti-pattern this module already avoids for the scalar case -- so
+that surface stays covered ONLY by ask-dev's own suite and the manual replay
+above, never by a committed acr test. A reader chasing "is any_of covered"
+should stop here, not assume the fake grows to answer it.
+
 Run via run_pins.sh (sets PYTHONPATH=testdata_corpus, the real `corpus`
 module this file's own in-process fixture builder needs to import
 run_shard/harness), or standalone:
