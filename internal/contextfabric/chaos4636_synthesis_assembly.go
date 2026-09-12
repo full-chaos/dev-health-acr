@@ -515,7 +515,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// than serving nothing. The outcome row still states the count correctly;
 	// what is lost is the addressable field, and the loss is reported.
 	if claim, ok := cardinalityClaim(principal, cardinality); ok {
-		if len(result.ClaimedFacts) < contractsv1.ContextFabricClaimedFactsMaxCount {
+		if cardinalityClaimAdmitted(len(result.ClaimedFacts)) {
 			result.ClaimedFacts = append(result.ClaimedFacts, claim)
 		}
 	}
