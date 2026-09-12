@@ -241,3 +241,47 @@ func TestTheCardinalityCauseReachesTheEmittedLine(t *testing.T) {
 		t.Errorf("emitted line is not the narrowed outcome under test: %s", line)
 	}
 }
+
+// mustCardinality is the test-side adapter for the call sites that used to
+// hand appendMembershipCardinality its raw inputs. Production computes the
+// cardinality once, before synthesis, and passes the VALUE; a test that still
+// wants to express "the cardinality of this cohort" says so here rather than
+// each site re-deriving it differently.
+func mustCardinality(cohort *Cohort, population int, narrowing []contractsv1.ContextFabricPlanNarrowing) MembershipCardinality {
+	cardinality, _ := ComputeMembershipCardinality(cohort, population, narrowing)
+	return cardinality
+}
+
+// ONE NUMBER, AND IT REACHES THE SERVED DOCUMENT.
+//
+// The step now runs before synthesis instead of after it. That move is only
+// safe if the number still describes the member set the reader receives, and
+// if there is still exactly one of it -- a value computed early and a value
+// computed late could differ, and a document carrying two count rows could not
+// be read at all. This drives the real Engine end to end and reads the served
+// result, so it fails if the pre-synthesis value is stale, dropped, or joined
+// by a second.
+func TestTheServedDocumentCarriesExactlyOneCountAndItIsThePreSynthesisOne(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	frame := countingFrame(SubjectTeam)
+	// 14 members carried, 36 seen: the served count must say both, from one
+	// computation that happened before the model was asked anything.
+	engine := newCountingEngineWithPopulation(t, countingCohort(SubjectTeam, 14), 36, frame, telemetry)
+	result := runCountingRequest(t, engine, 14)
+
+	assembled := countOutcomeRows(result, contractsv1.ContextFabricOutcomeStageAssembledResult)
+	if len(assembled) != 1 {
+		t.Fatalf("assembled count rows = %d, want exactly 1 -- two rows means two computations, and a reader cannot tell which number the answer stands behind", len(assembled))
+	}
+	row := assembled[0]
+	if row.Served != 14 {
+		t.Errorf("served = %d, want 14 -- the count must describe the member set the document carries", row.Served)
+	}
+	if row.Declared != 36 {
+		t.Errorf("declared = %d, want 36 -- the population observed before the render clamp, carried through synthesis to the served document", row.Declared)
+	}
+	if len(result.Cohort.Members) != 14 {
+		t.Errorf("served members = %d, want 14 -- the count and the member list must describe the same document", len(result.Cohort.Members))
+	}
+}

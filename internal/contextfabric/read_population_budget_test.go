@@ -57,7 +57,7 @@ func documentWithReadRows(
 ) InvestigationResult {
 	result := baseDocument(committed, coverage)
 	result.Completeness.Outcomes = appendReadRequirementEvaluations(nil, published, coverage,
-		readPopulationEvidenceFrom(frame, result, AnswerPlan{Requirements: published}, facts, 0, nil))
+		readPopulationEvidenceFrom(frame, result, AnswerPlan{Requirements: published}, facts, MembershipCardinality{}, nil))
 	return result
 }
 

@@ -113,7 +113,7 @@ func evaluateOperandsWithAssignment(
 		SubjectResolution: contractsv1.ContextFabricSubjectResolution{Committed: committed},
 		Coverage:          coverage,
 	}
-	evidence := readPopulationEvidenceFrom(frame, result, AnswerPlan{Requirements: published}, facts, 0, assignment)
+	evidence := readPopulationEvidenceFrom(frame, result, AnswerPlan{Requirements: published}, facts, MembershipCardinality{}, assignment)
 	return appendReadRequirementEvaluations(nil, published, coverage, evidence)
 }
 
@@ -258,7 +258,7 @@ func TestASingleSubjectReadStaysKindKeyed(t *testing.T) {
 				namedOperandFrame(SubjectTeam, SubjectTeam),
 				InvestigationResult{SubjectResolution: contractsv1.ContextFabricSubjectResolution{
 					Committed: []SubjectRef{teamRef("team_alpha")}}},
-				AnswerPlan{}, factsFor(teamRef("team_alpha"), kindList(health)), 0, nil),
+				AnswerPlan{}, factsFor(teamRef("team_alpha"), kindList(health)), MembershipCardinality{}, nil),
 		},
 	} {
 		testCase := testCase
@@ -588,7 +588,7 @@ func evaluateCohort(
 	cohort *Cohort, coverage Coverage, facts CanonicalFactBundle,
 ) []RequirementOutcomeRow {
 	result := InvestigationResult{Cohort: cohort, Coverage: coverage}
-	evidence := readPopulationEvidenceFrom(nil, result, AnswerPlan{Requirements: published}, facts, 0, nil)
+	evidence := readPopulationEvidenceFrom(nil, result, AnswerPlan{Requirements: published}, facts, MembershipCardinality{}, nil)
 	return appendReadRequirementEvaluations(nil, published, coverage, evidence)
 }
 
@@ -961,7 +961,7 @@ func TestReadPopulationAgreesWithTheCohortOwnersOwnRule(t *testing.T) {
 		shape := shape
 		t.Run(shape.name, func(t *testing.T) {
 			t.Parallel()
-			population := cohortMemberPopulation(shape.cohort, 0, nil)
+			population := cohortMemberPopulation(shape.cohort, mustCardinality(shape.cohort, 0, nil))
 			if population.Census != shape.wantCensus {
 				t.Fatalf("census = %q, want %q", population.Census, shape.wantCensus)
 			}
@@ -1373,7 +1373,7 @@ func TestAnIncompleteCensusOutranksTheSamenessArm(t *testing.T) {
 		SubjectResolution: contractsv1.ContextFabricSubjectResolution{Committed: []SubjectRef{alpha, beta}},
 	}
 	frame := namedOperandFrame(SubjectTeam, contractsv1.ContextFabricSubjectProject)
-	evidence := readPopulationEvidenceFrom(frame, result, AnswerPlan{Requirements: published}, facts, 0, nil)
+	evidence := readPopulationEvidenceFrom(frame, result, AnswerPlan{Requirements: published}, facts, MembershipCardinality{}, nil)
 	rows := appendReadRequirementEvaluations(nil, published, coverage, evidence)
 
 	// The OWNER's truncation, observed, over its own counts -- not a depth loss

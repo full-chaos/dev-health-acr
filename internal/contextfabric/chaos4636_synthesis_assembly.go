@@ -253,7 +253,10 @@ func copyCohortForRetry(cohort *Cohort) *Cohort {
 // Sites: the first-pass re-derivation (keystone #3), the retry inheriting the
 // first pass's grants (keystone #4), and narration spending a re-copied local
 // (keystone #5).
-func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Principal, params synthesisAssemblyParams) (InvestigationResult, ItemAllocation, assemblyTelemetry, error) {
+// The fifth return is THE cardinality for this pass, computed before synthesis
+// and carried out so nothing downstream computes a second one. See the
+// `membership_cardinality` block below for why it is computed where it is.
+func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Principal, params synthesisAssemblyParams) (InvestigationResult, ItemAllocation, assemblyTelemetry, MembershipCardinality, error) {
 	// pending holds every per-investigation decision event this pass
 	// produces. NOTHING here emits -- see point 3 in this file's header.
 	var pending assemblyTelemetry
@@ -284,12 +287,36 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// binding of `params.Allocation` anywhere below would recreate exactly the
 	// private copy this return exists to abolish.
 	synthesisAllocation := params.Allocation
+	// THE `membership_cardinality` STEP, RUN BEFORE SYNTHESIS AND ONCE.
+	//
+	// It used to run in finalizeResult, after the model had already answered.
+	// That was right about WHICH member set it must describe -- the one the
+	// served document carries -- and it made the number unusable for anything
+	// the answer itself is built from: a value that does not exist until after
+	// synthesis cannot be handed to synthesis, and cannot be minted into the
+	// document's own claims without a second, later computation that could
+	// disagree with this one.
+	//
+	// Computing it HERE keeps the correctness argument intact rather than
+	// trading it away. The cohort this reads is `params.Graph.Cohort`, which IS
+	// the member set this pass will serve: stage 3 does not narrow a document in
+	// place, it narrows the graph and re-enters this function, so a narrowed
+	// answer is a NEW pass that recomputes against its own cohort. The number
+	// therefore always describes the document it travels with, and there is
+	// exactly one of it per pass.
+	//
+	// The second return is discarded because it now rides INSIDE the value as
+	// `Resolved` -- see that field's own doc comment for why a pair that can be
+	// carried separately across four boundaries is a pair that can be carried
+	// inconsistently. An unresolved cardinality is still an absence, never a
+	// count of zero.
+	cardinality, _ := ComputeMembershipCardinality(params.Graph.Cohort, params.Graph.CohortPopulation, params.Plan.Narrowing)
 	result, err := e.synthesizer.Synthesize(ctx, principal, SynthesisInput{
 		Allocation: synthesisAllocation,
 		Request:    request, Interpretation: interpretation, Graph: graphContext, Facts: facts,
 	})
 	if err != nil {
-		return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, stageError(StageSynthesis, fmt.Errorf("synthesize investigation: %w", err))
+		return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, MembershipCardinality{}, stageError(StageSynthesis, fmt.Errorf("synthesize investigation: %w", err))
 	}
 	result.SchemaVersion = InvestigationResultSchemaV1
 	result.ResultID = e.newResultID()
@@ -484,7 +511,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		// read) BEFORE anything is appended -- fail closed, never serve a
 		// claim that cannot be traced back to a real canonical fact.
 		if err := validateMintedClaimsGrounded(mintedClaims, facts.Facts); err != nil {
-			return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
+			return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, MembershipCardinality{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 		}
 		result.Drivers = append(result.Drivers, narrated...)
 		// CHAOS-4398 PR3b: append the claims THIS composer minted (only for
@@ -573,7 +600,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		}
 		result.SubjectResolution.CommitDecisionDigests = digests
 	}
-	return result, synthesisAllocation, pending, nil
+	return result, synthesisAllocation, pending, cardinality, nil
 }
 
 // assemblyTelemetry is every per-investigation decision event one assembly

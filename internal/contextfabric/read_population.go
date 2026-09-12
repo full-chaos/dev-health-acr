@@ -395,9 +395,8 @@ func operandPopulation(frame *QuestionFrame, committed []SubjectRef, kind Subjec
 // restates `!Complete || Truncated` -- a second copy would be a second
 // authority that could drift, and the cross-layer agreement test pins both
 // directions.
-func cohortMemberPopulation(cohort *Cohort, cohortPopulation int, narrowing []contractsv1.ContextFabricPlanNarrowing) readPopulation {
-	cardinality, resolved := ComputeMembershipCardinality(cohort, cohortPopulation, narrowing)
-	if !resolved {
+func cohortMemberPopulation(cohort *Cohort, cardinality MembershipCardinality) readPopulation {
+	if !cardinality.Resolved {
 		return readPopulation{Census: populationAbsent}
 	}
 	population := readPopulation{
@@ -505,19 +504,20 @@ func readPopulationEvidenceFrom(
 	// own doc comment. Threaded straight onto the evidence and onto every
 	// operandStandard built below, so every reader of either shares the
 	// exact same registry-state snapshot this evaluation was built from.
-	// cohortPopulation is how many members of the cohort's kind RETRIEVAL
-	// saw, before the response item budget clamped how many the answer could
-	// carry -- threaded from GraphContext rather than derived, because it is
-	// the one input here that the served document cannot reproduce. Zero when
-	// no cohort was discovered, and zero on the reuse path, where no
-	// retrieval ran to observe one.
-	cohortPopulation int,
+	// cardinality is this pass's already-computed membership_cardinality,
+	// threaded rather than derived. THE POINT IS THAT IT IS NOT RECOMPUTED
+	// HERE: this file's own header claims the cardinality owner is asked, not
+	// copied, and while this function still called ComputeMembershipCardinality
+	// itself that claim held only because the two calls happened to share
+	// inputs. Now there is one call, upstream of synthesis, and every reader
+	// of the number reads that one.
+	cardinality MembershipCardinality,
 	assignment observationKeyAssignment,
 ) readPopulationEvidence {
 	evidence := readPopulationEvidence{
 		Present:             true,
 		coverage:            subjectReadCoverage(facts),
-		memberPopulation:    cohortMemberPopulation(result.Cohort, cohortPopulation, plan.Narrowing),
+		memberPopulation:    cohortMemberPopulation(result.Cohort, cardinality),
 		groupPopulation:     cohortGroupPopulation(result.Cohort, plan.Narrowing),
 		operandPopulations:  map[SubjectKind]readPopulation{},
 		comparisonStandards: map[SubjectKind]operandStandard{},
@@ -924,7 +924,7 @@ func readRequirementPopulationEventsFrom(
 	plan AnswerPlan,
 	facts CanonicalFactBundle,
 	family QuestionFamily,
-	cohortPopulation int,
+	cardinality MembershipCardinality,
 ) []ReadRequirementPopulationEvent {
 	if result.AnswerPlan == nil {
 		return nil
@@ -933,7 +933,7 @@ func readRequirementPopulationEventsFrom(
 	// Census off the population authority (see the doc comment above) and
 	// never runs a threshold comparison, so the observation-key snapshot has
 	// nothing to affect here.
-	populations := readPopulationEvidenceFrom(frame, result, plan, facts, cohortPopulation, nil)
+	populations := readPopulationEvidenceFrom(frame, result, plan, facts, cardinality, nil)
 	byIdentity := make(map[string]contractsv1.ContextFabricPlanRequirement, len(result.AnswerPlan.Requirements))
 	for _, requirement := range result.AnswerPlan.Requirements {
 		byIdentity[requirement.Requirement] = requirement
