@@ -419,6 +419,8 @@ def run_replicate(qid, question, rep, warn=print):
     wrong_kind_flag = False
     wrong_subject_flag = False
     subject_kind_mismatch_flag = False
+    no_redeemable_offer_flag = False
+    stop_reason = None
     chain = []
 
     for turn in range(1, MAX_TURNS + 1):
@@ -473,20 +475,47 @@ def run_replicate(qid, question, rep, warn=print):
         if this_turn_mismatch:
             subject_kind_mismatch_flag = True
         if not receipts and turn > 1:
-            # No new receipt of ANY kind this turn (every need either has no
-            # offer, per above, or was already answered and left `missing`).
-            # Resend the bare question -- an identical re-ask is itself a
-            # terminal data point (the engine cannot get unstuck without the
-            # unmet need) and MAX_TURNS bounds the cost.
+            if this_turn_wrong_kind or this_turn_wrong_subject:
+                # Every offer THIS turn failed one of the two redemption rules
+                # right above (no kind option satisfies requested_kind; no
+                # candidate satisfies anchor_kind), and nothing else was
+                # offered to redeem instead (no window need this turn) --
+                # receipts is empty because the declared need cannot be met
+                # by anything on offer, not because every need was already
+                # answered. A bare re-ask cannot change that: the same
+                # unredeemable offers recur next turn (chain_depth resets to
+                # 0, no prior reference survives a bare re-ask), so
+                # continuing only repeats this turn to MAX_TURNS. Stop here.
+                no_redeemable_offer_flag = True
+                # Named for WHAT was unredeemable this turn, never a fixed
+                # string -- a subject-only mismatch (no kind offer at all
+                # this turn) previously still read "...declared_kind", which
+                # names the wrong axis for that case.
+                if this_turn_wrong_kind and this_turn_wrong_subject:
+                    stop_reason = "no_redeemable_offer_for_declared_kind_and_subject"
+                elif this_turn_wrong_kind:
+                    stop_reason = "no_redeemable_offer_for_declared_kind"
+                else:
+                    stop_reason = "no_redeemable_offer_for_declared_subject"
+                break
+            # Every need was already answered and left `missing`, offering
+            # nothing new to redeem. Resend the bare question -- an
+            # identical re-ask is itself a terminal data point (the engine
+            # cannot get unstuck without the unmet need) and MAX_TURNS
+            # bounds the cost.
             body = {"question": question}
         else:
             body = {"question": question, **receipts}
 
     # final_payload_status is always the ENGINE's own terminal outcome, never
-    # overwritten by the harness -- wrong_kind_flag is reported alongside it,
-    # never in place of it (continuing measures what the engine
-    # does with an unresolved kind need, which requires seeing its real
-    # terminal, not a harness-synthesized one).
+    # overwritten by the harness -- wrong_kind_flag/no_redeemable_offer_flag
+    # are reported alongside it, never in place of it. A no-redeemable-offer
+    # break still lands here on the SAME turn's real response (last_status/
+    # last_payload were set for that turn before the break), so this reads
+    # the engine's actual non-terminal status (e.g. "clarification_required"),
+    # never a harness-synthesized one -- the same status MAX_TURNS exhaustion
+    # would have reached on turn 5, just recorded at the turn it first became
+    # unrecoverable instead of after three more identical re-asks.
     if contract.is_success_status(last_status):
         final_status = (last_payload or {}).get("result", {}).get("status")
         if final_status == "clarification_required" and turn >= MAX_TURNS:
@@ -503,6 +532,8 @@ def run_replicate(qid, question, rep, warn=print):
         "wrong_kind_flag": wrong_kind_flag,
         "wrong_subject_flag": wrong_subject_flag,
         "subject_kind_mismatch_flag": subject_kind_mismatch_flag,
+        "no_redeemable_offer_flag": no_redeemable_offer_flag,
+        "stop_reason": stop_reason,
     }
 
 

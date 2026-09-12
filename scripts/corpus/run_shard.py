@@ -209,8 +209,11 @@ def attempt_diagnostics(outdir, qid, rep, harness_attempts=None):
 
 def detail_for(outdir, qid, row, r, dt, rep):
     """Identical field set to lane-corpus-sweep-1's sweep_runner.py, so the
-    before/after table compares like for like. Do not add or rename fields
-    without restating the baseline."""
+    before/after table compares like for like -- plus `no_redeemable_offer_flag`/
+    `stop_reason`, additive beyond that baseline (same discipline
+    merge_corpus.py's CHAOS-5620 columns use: the baseline set stays
+    byte-compatible, new diagnostics ride in NEW fields). Do not add or
+    rename fields without restating the baseline."""
     detail = {
         "corpus_id": qid,
         "section_note": row.get("note", ""),
@@ -222,6 +225,8 @@ def detail_for(outdir, qid, row, r, dt, rep):
         "wrong_kind_flag": r["wrong_kind_flag"],
         "wrong_subject_flag": r["wrong_subject_flag"],
         "subject_kind_mismatch_flag": r["subject_kind_mismatch_flag"],
+        "no_redeemable_offer_flag": r["no_redeemable_offer_flag"],
+        "stop_reason": r["stop_reason"],
         "wall_seconds": round(dt, 2),
     }
     f = last_attempt_file(outdir, qid, rep)
