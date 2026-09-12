@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -382,55 +384,167 @@ func TestEveryServingStageRefusesAnUnanswerableClarification(t *testing.T) {
 	})
 }
 
-// THE ROLLOUT CELL. Rows written by the build this ticket corrects are
-// already in the reuse store, and they are the one shape the write-side
-// structure-bearing exclusion does not catch: clarification_required, no
-// candidates, StructureNeeds nil.
+// THE ROLLOUT CELL, driven through tryReuse itself.
 //
-// Serving one after this change would turn a stale cached row into a 5xx --
-// the assertion at the chokepoint would refuse it -- on a question the engine
-// can answer by recomputing. So the reuse candidate filter rejects it as an
-// ordinary MISS, and the investigation runs fresh.
+// Rows written by the build this ticket corrects are already in the reuse
+// store, and they are the one shape the write-side structure-bearing
+// exclusion does not catch: clarification_required, no candidates,
+// StructureNeeds nil. Serving one after this change would turn a stale
+// cached row into a 5xx.
 //
-// Asserted on the ENGINE's own behaviour (status served, and that a fresh
-// resolution ran) rather than on the reuse counter alone: a test that only
-// checked the counter would pass just as well against a build that errored.
+// THE FIRST VERSION OF THIS TEST WAS VACUOUS and adversarial review proved
+// it with a coverage profile: it built the stale row locally, asserted the
+// predicate by hand, and then drove Investigate against an EMPTY store with
+// no reuse gate wired, so answer_reuse.go's filter lines reported 0
+// executions and the test stayed green with the filter deleted. It now
+// drives tryReuse -- the function the filter lives in -- with a gate that
+// actually returns the candidate, the same way this package's own
+// graph-not-projected miss test drives reuseAuthorizationStillHolds
+// directly rather than inferring it from an Investigate outcome.
 func TestAStaleUnanswerableClarificationIsNeverServedFromReuse(t *testing.T) {
 	t.Parallel()
-	stale := InvestigationResult{
-		SchemaVersion:     InvestigationResultSchemaV1,
-		ResultID:          "result_stale0001",
-		Status:            InvestigationClarificationRequired,
-		SubjectResolution: withheldPoolResolution(),
-	}
-	if resultOffersRedeemable(stale) {
-		t.Fatal("fixture defect: this stored row carries an offer, so it is not the shape under test")
-	}
-	if stale.Status != InvestigationClarificationRequired {
-		t.Fatal("fixture defect: the stored row is not a clarification")
-	}
-	// The predicate the filter uses, on the stored document, is the whole
-	// mechanism -- pinned directly so a change to either half is caught
-	// here even if the engine wiring below is refactored.
-	if err := assertAnswerableClarification(stale); !errors.Is(err, ErrUnanswerableClarification) {
-		t.Fatalf("the stored row is not recognised as unanswerable: err = %v", err)
-	}
 
-	graph := &acceptanceGraphReader{resolution: withheldPoolResolution(), context: emptyGraphContext()}
-	engine := buildWindowGateEngine(t,
-		&countingInterpreter{interpretation: bootstrapInterpretation()},
-		graph,
-		newMapResultStore())
+	for _, testCase := range []struct {
+		name      string
+		mutate    func(*InvestigationResult)
+		wantReuse bool
+	}{
+		{
+			name: "an unanswerable stored clarification misses",
+			mutate: func(candidate *InvestigationResult) {
+				candidate.Status = InvestigationClarificationRequired
+				candidate.SubjectResolution = withheldPoolResolution()
+				candidate.StructureNeeds = nil
+				candidate.WindowClarification = nil
+			},
+			wantReuse: false,
+		},
+		{
+			// THE CONTROL. The filter must reject only the UNANSWERABLE
+			// clarification, never every cached clarification. Without
+			// this arm a filter that dropped the offer test and rejected
+			// on status alone would stay green.
+			name: "an answerable stored clarification is still reusable",
+			mutate: func(candidate *InvestigationResult) {
+				candidate.Status = InvestigationClarificationRequired
+				candidate.SubjectResolution = withheldPoolResolution()
+				candidate.StructureNeeds = nil
+				candidate.WindowClarification = &contractsv1.ContextFabricWindowClarification{
+					Options: []contractsv1.ContextFabricWindowOption{{}},
+				}
+			},
+			wantReuse: true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			project, candidate := reusableCandidate()
+			testCase.mutate(&candidate)
+			if got := resultOffersRedeemable(candidate); got != testCase.wantReuse {
+				t.Fatalf("fixture defect: redeemable = %v, want %v for this arm", got, testCase.wantReuse)
+			}
 
-	result, err := engine.Investigate(context.Background(), acceptancePrincipal(),
-		validInvestigationRequestWithConfirmedWindow())
-	if err != nil {
-		t.Fatalf("Investigate() error = %v -- a stale unanswerable row must never surface as an error", err)
+			gateCalls := 0
+			engine := mustReuseTestEngine(t, EngineDependencies{
+				Graph: graphReaderStub{
+					resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+					bases:      provenCommitBases(project),
+				},
+				Results: &resultStoreStub{},
+				ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+					gateCalls++
+					return candidate, true, nil
+				}),
+			})
+
+			reused, ok := engine.tryReuse(context.Background(), reusePrincipal(), validInvestigationRequest(),
+				TimeContext{Axis: TemporalCurrent}, "", windowKeyRederivable,
+				ResolvedGraphBinding{GraphKey: "some-key", Epoch: 0})
+			if gateCalls == 0 {
+				t.Fatal("the reuse gate was never consulted, so the filter under test never ran")
+			}
+			if ok != testCase.wantReuse {
+				t.Fatalf("tryReuse hit = %v, want %v (status %q, redeemable %v)",
+					ok, testCase.wantReuse, candidate.Status, resultOffersRedeemable(candidate))
+			}
+			if ok && resultOffersRedeemable(reused) != true {
+				t.Fatal("a reuse hit served a document with no redeemable offer")
+			}
+		})
 	}
-	if result.Status == InvestigationClarificationRequired {
-		t.Fatal("a clarification was served with nothing to answer it")
-	}
-	if graph.resolveCalls == 0 {
-		t.Fatal("no fresh resolution ran; the turn did not fall through to a real investigation")
-	}
+}
+
+// THE READ SIDE. finalizeServed covers every path that COMPOSES a result; it
+// does not cover the one that hands back a row composed by an earlier build.
+// Adversarial review reproduced that through the HTTP handler. This pins the
+// repair at the unit the route calls, including the two arms that must NOT
+// fire.
+func TestALegacyUnanswerableClarificationIsRepairedOnRead(t *testing.T) {
+	t.Parallel()
+
+	t.Run("an unanswerable clarification becomes a terminal", func(t *testing.T) {
+		t.Parallel()
+		stored := InvestigationResult{
+			Status:              InvestigationClarificationRequired,
+			SubjectResolution:   withheldPoolResolution(),
+			Limitations:         []string{clarificationRequiredLimitationOne},
+			DeterministicAnswer: "Clarification is required before this question can be answered.",
+		}
+		if !RepairLegacyUnanswerableClarification(&stored) {
+			t.Fatal("the repair did not fire on the shape it exists for")
+		}
+		if stored.Status != InvestigationNoMatch {
+			t.Fatalf("status = %q, want %q", stored.Status, InvestigationNoMatch)
+		}
+		if err := assertAnswerableClarification(stored); err != nil {
+			t.Fatalf("the repaired row still violates the invariant: %v", err)
+		}
+		for _, limitation := range stored.Limitations {
+			if limitation == clarificationRequiredLimitationOne {
+				t.Fatal("the repaired row still carries the clarification limitation")
+			}
+		}
+		if stored.Limitations[0] != noMatchLimitationOfferPoolEmptied {
+			t.Fatalf("limitation = %q, want the withheld-pool prose", stored.Limitations[0])
+		}
+		if stored.SubjectResolution.ClarificationPrompt == "" {
+			t.Fatal("the repair cleared the prompt; a withheld pool is no longer distinguishable from an empty one")
+		}
+	})
+
+	t.Run("a clarification that carries an offer is untouched", func(t *testing.T) {
+		t.Parallel()
+		stored := InvestigationResult{
+			Status:            InvestigationClarificationRequired,
+			SubjectResolution: withheldPoolResolution(),
+			WindowClarification: &contractsv1.ContextFabricWindowClarification{
+				Options: []contractsv1.ContextFabricWindowOption{{}},
+			},
+		}
+		before := stored
+		if RepairLegacyUnanswerableClarification(&stored) {
+			t.Fatal("the repair fired on an answerable clarification")
+		}
+		if stored.Status != before.Status {
+			t.Fatal("an answerable clarification was mutated")
+		}
+	})
+
+	t.Run("a non-clarification is untouched", func(t *testing.T) {
+		t.Parallel()
+		stored := InvestigationResult{Status: InvestigationComplete, DeterministicAnswer: "done"}
+		if RepairLegacyUnanswerableClarification(&stored) {
+			t.Fatal("the repair fired on an answer-bearing result")
+		}
+		if stored.DeterministicAnswer != "done" {
+			t.Fatal("an answer-bearing result was rewritten")
+		}
+	})
+
+	t.Run("a nil result is a no-op", func(t *testing.T) {
+		t.Parallel()
+		if RepairLegacyUnanswerableClarification(nil) {
+			t.Fatal("the repair reported a change on a nil result")
+		}
+	})
 }

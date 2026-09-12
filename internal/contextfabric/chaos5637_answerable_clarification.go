@@ -139,6 +139,53 @@ func resultOffersRedeemable(result InvestigationResult) bool {
 		len(needs.CandidateOptions) > 0
 }
 
+// RepairLegacyUnanswerableClarification brings a STORED row composed by an
+// earlier build into current semantics, in place, and reports whether it
+// changed anything.
+//
+// THE READ SIDE OF THE INVARIANT, and it is a separate surface from the
+// write side rather than the same one reached twice. finalizeServed covers
+// every path that COMPOSES a result. It does not cover the path that hands
+// back a row composed months ago: the result-by-ID route reads a stored
+// document, admits it under the deliberately lenient stored-read validator,
+// and serves it -- and the MCP investigation_result tool forwards that same
+// canonical response. Both were outside the guard, and both would have gone
+// on serving exactly the 76-turn shape this ticket exists to end. Found by
+// adversarial review, reproduced through the HTTP handler: GET returned 200
+// with status clarification_required, zero candidates, no structure needs
+// and no window clarification.
+//
+// A REPAIR, NOT A REFUSAL. The row is real and the caller asked for it by
+// id; erroring the read would deny them a document they are entitled to
+// over a defect in how it was labelled. So the status is corrected to the
+// terminal it would be composed as today, and the clarification limitation
+// is swapped for the one that describes what actually happened. Nothing is
+// invented: every value written here is a pure function of fields the row
+// already carries, which is the same standard the route's own legacy
+// completeness backfill already meets a few lines above the call site.
+//
+// The offer channels are left exactly as they are, because there is nothing
+// to correct in them -- their emptiness IS the condition. The prompt is left
+// too, for the reason the write side leaves it: it is the only thing that
+// distinguishes a withheld pool from an empty one, and it never reaches the
+// answer sentence, which this function rewrites from the corrected status.
+func RepairLegacyUnanswerableClarification(result *InvestigationResult) bool {
+	if result == nil || result.Status != InvestigationClarificationRequired {
+		return false
+	}
+	if resultOffersRedeemable(*result) {
+		return false
+	}
+	result.Status = InvestigationNoMatch
+	for index, limitation := range result.Limitations {
+		if limitation == clarificationRequiredLimitationOne || limitation == clarificationRequiredLimitation {
+			result.Limitations[index] = noMatchLimitationOfferPoolEmptied
+		}
+	}
+	result.DeterministicAnswer = statusSentence(InvestigationNoMatch, result.SubjectResolution)
+	return true
+}
+
 // assertAnswerableClarification holds the invariant on the document a route
 // is about to serialize.
 //

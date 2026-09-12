@@ -115,6 +115,29 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 				"stored_state", string(state),
 				"outcome_rows", len(result.Completeness.Outcomes))
 		}
+		// CHAOS-5637, the READ side of the answerability invariant. Rows
+		// composed before that change can carry clarification_required with
+		// no offer on any channel -- the shape the yardstick measured 76
+		// times -- and the stored-read validator admits them by design. The
+		// serving guard sits at finalizeServed, which this route does not
+		// go through, so without this the route (and the MCP tool that
+		// forwards its response) would keep handing callers a question they
+		// cannot answer. Repaired rather than refused: the row is real and
+		// was asked for by id.
+		//
+		// BEFORE the completeness recompute below, deliberately: the repair
+		// changes Status, and terminal_status is derived from it.
+		//
+		// Logged at Info because a regression here is otherwise invisible
+		// -- this route emits no subjectless telemetry, and the count of
+		// legacy rows still being repaired is how the sunset of this arm
+		// gets measured rather than guessed, exactly like the legacy
+		// completeness line above.
+		if contextfabric.RepairLegacyUnanswerableClarification(&result) {
+			a.logger.InfoContext(r.Context(), "context fabric legacy unanswerable clarification repaired",
+				"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
+				"served_status", string(result.Status))
+		}
 		result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
 		// The consumer projection is served from THIS route, through the
 		// same answerprojection.Project the MCP tool calls (CHAOS-3746
