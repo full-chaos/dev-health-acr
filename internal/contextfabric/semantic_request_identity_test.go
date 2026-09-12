@@ -351,19 +351,26 @@ func TestSemanticState_AStoredRowIsBoundedBeforeAnyConsumerSizesFromIt(t *testin
 		}
 	})
 
-	// The clamp itself: a hint never exceeds the maximum, never goes negative,
-	// and passes a legitimate value through unchanged. Capacity is not
-	// correctness, so the CELLS here are about the arithmetic, and the
-	// consumers above are what prove nothing is lost by clamping.
-	t.Run("the capacity clamp", func(t *testing.T) {
+	// THE HINTS THEMSELVES ARE CONSTANTS, so there is no clamp to exercise and
+	// no length from a stored document reaching an allocation: the maxima are
+	// computed at compile time from the vocabularies they count. What a test
+	// CAN hold is that each constant still equals the maximum it claims -- a
+	// vocabulary that grows must grow the constant with it.
+	t.Run("each capacity constant equals the maximum it claims", func(t *testing.T) {
 		t.Parallel()
-		for _, tc := range []struct{ hint, max, want int }{
-			{0, 8, 0}, {1, 8, 1}, {8, 8, 8}, {9, 8, 8}, {1 << 40, 8, 8}, {-1, 8, 0},
-		} {
-			if got := boundedCapacity(tc.hint, tc.max); got != tc.want {
-				t.Errorf("boundedCapacity(%d, %d) = %d, want %d", tc.hint, tc.max, got, tc.want)
-			}
+		if maxRequirementCoordinates != (SemanticStateMaxOperands+2)*AnswerObligationCount {
+			t.Errorf("maxRequirementCoordinates = %d, want (%d+2)*%d", maxRequirementCoordinates, SemanticStateMaxOperands, AnswerObligationCount)
 		}
+		if maxAxisDischarges != InvestigationGoalCount+HealthDimensionCount+3 {
+			t.Errorf("maxAxisDischarges = %d, want %d+%d+3", maxAxisDischarges, InvestigationGoalCount, HealthDimensionCount)
+		}
+		if cohortRankingFormulaKindCount != len(cohortRankingFormulaKinds) {
+			t.Errorf("cohortRankingFormulaKindCount = %d, want the %d kinds the set holds", cohortRankingFormulaKindCount, len(cohortRankingFormulaKinds))
+		}
+		if maxRankingFactKinds != contractsv1.ContextFabricFactKindCount+cohortRankingFormulaKindCount {
+			t.Errorf("maxRankingFactKinds = %d, want %d+%d", maxRankingFactKinds, contractsv1.ContextFabricFactKindCount, cohortRankingFormulaKindCount)
+		}
+		t.Logf("coordinates=%d discharges=%d ranking_kinds=%d", maxRequirementCoordinates, maxAxisDischarges, maxRankingFactKinds)
 	})
 
 	// AND NOTHING IS LOST. The derivation over a real frame produces the same

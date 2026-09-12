@@ -2441,11 +2441,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// forbids.
 	var cohortRankingRequirements []FactRequirement
 	if graphContext.Cohort != nil {
-		// BOUNDED HINT: fact kinds are a closed vocabulary and the plan may
-		// have been carried from a stored result, so the hint is clamped to
-		// what the vocabulary holds rather than to the document's own count.
-		seenRankingKind := make(map[FactKind]struct{},
-			boundedCapacity(len(plan.FactKinds), contractsv1.ContextFabricFactKindCount)+len(cohortRankingFormulaKinds))
+		// A CONSTANT HINT: fact kinds are a closed vocabulary and the plan may
+		// have been carried from a stored result, so the maximum is computed at
+		// compile time rather than from the plan's own count.
+		seenRankingKind := make(map[FactKind]struct{}, maxRankingFactKinds)
 		appendRankingKind := func(kind FactKind) {
 			if kind == "" {
 				return

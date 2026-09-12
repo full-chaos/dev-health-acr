@@ -110,6 +110,12 @@ type roleSlot struct {
 // defensively (a nil pointer yields no slot rather than panicking), because
 // this function is exported through DeriveRequirementCoordinates and a
 // caller can hand it a frame that never passed invariant I1.
+// maxRequirementCoordinates is the most (slot, obligation) coordinates one
+// frame can produce: a slot per operand plus the two a grouped expression adds,
+// times the closed obligation vocabulary. A constant, so no length read from a
+// stored document reaches an allocation size.
+const maxRequirementCoordinates = (SemanticStateMaxOperands + 2) * AnswerObligationCount
+
 func frameRoleSlots(expression SubjectExpression) []roleSlot {
 	var slots []roleSlot
 	switch expression.Kind {
@@ -281,15 +287,16 @@ func DeriveRequirementCoordinates(frame QuestionFrame) []RequirementCoordinate {
 		}
 	}
 
-	// BOUNDED HINTS. One coordinate per (slot, obligation) pair is the maximum
-	// this can produce, and both factors are bounded: a frame offers at most
-	// one slot per operand plus two, and obligations are a closed vocabulary.
-	// The frame may have come back from the store, so the product is clamped
-	// rather than trusted -- a capacity hint is not a correctness input, and
-	// nothing here reserves memory in proportion to a stored number.
-	coordinateCap := boundedCapacity(len(slots), SemanticStateMaxOperands+2) * boundedCapacity(len(frame.Obligations), AnswerObligationCount)
-	seen := make(map[RequirementCoordinate]bool, coordinateCap)
-	coordinates := make([]RequirementCoordinate, 0, coordinateCap)
+	// A CONSTANT HINT, not a measured one. One coordinate per (slot,
+	// obligation) pair is the most this can produce, and both factors have
+	// fixed maxima: a frame offers at most one slot per operand plus two, and
+	// obligations are a closed vocabulary. Since the frame may have come back
+	// from the STORE, sizing from its own lengths would let a stored number
+	// decide a reservation -- so the maximum is computed at compile time and
+	// the document's lengths never reach the allocation. A capacity hint is
+	// not a correctness input: Go grows past it, so nothing is lost.
+	seen := make(map[RequirementCoordinate]bool, maxRequirementCoordinates)
+	coordinates := make([]RequirementCoordinate, 0, maxRequirementCoordinates)
 	for _, obligation := range frame.Obligations {
 		kind, known := KindOfObligation(obligation)
 		if !known || kind == ObligationKindAnswerContract {

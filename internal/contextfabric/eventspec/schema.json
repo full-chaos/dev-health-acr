@@ -79,6 +79,8 @@
           "term_bytes",
           "term_bytes_total",
           "frame_set",
+          "requirement_fact_kinds",
+          "requirement_dimensions",
           "unrecognised"
         ]
       },

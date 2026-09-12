@@ -339,13 +339,16 @@ func DeriveFrameObligations(frame QuestionFrame, modelEmitted []AnswerObligation
 // This is law L2 made enumerable, and invariant I16 is its per-frame
 // check. The fixed order matters for the same reason the telemetry rows
 // are index-ordered: two runs of one frame must produce a diffable list.
+// maxAxisDischarges is the most discharges one frame can carry: every goal,
+// every dimension, and the three an axis-bearing frame adds. A constant, for
+// the same reason maxRequirementCoordinates is one.
+const maxAxisDischarges = InvestigationGoalCount + HealthDimensionCount + 3
+
 func FrameAxisDischarges(frame QuestionFrame) []AxisDischarge {
-	// BOUNDED HINT: goals and dimensions are closed vocabularies, and the
-	// frame may have been read back from the store, so the sum is clamped to
-	// what those vocabularies can hold rather than taken from the document.
-	discharges := make([]AxisDischarge, 0,
-		boundedCapacity(len(frame.Goals), InvestigationGoalCount)+
-			boundedCapacity(len(frame.Dimensions), HealthDimensionCount)+3)
+	// A CONSTANT HINT: goals and dimensions are closed vocabularies, and the
+	// frame may have been read back from the store, so the maximum is computed
+	// at compile time rather than from the document's own lengths.
+	discharges := make([]AxisDischarge, 0, maxAxisDischarges)
 
 	for _, goal := range frame.Goals {
 		if discharge, ok := goalDischarge[goal]; ok {

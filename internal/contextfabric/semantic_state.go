@@ -936,28 +936,6 @@ func BuildSemanticState(in SemanticStateInput) *PersistedSemanticState {
 	return state
 }
 
-// boundedCapacity clamps a slice or map CAPACITY HINT to the largest value the
-// thing being counted can legitimately reach.
-//
-// A capacity hint is not a correctness input: Go grows a slice or map that
-// outruns it, so clamping changes no behaviour and loses no element. What it
-// removes is the arithmetic -- a length read from a STORED document, multiplied
-// or summed, deciding how much memory to reserve. Every collection these hints
-// count is a closed vocabulary or a bounded collection, so the maximum is known
-// at the call site, and the decode path refuses a stored document over those
-// bounds before any consumer sees it. The clamp is the second of those two
-// guards, at the allocation itself, for the case where a caller reaches one of
-// these helpers with a frame that did not come through decode.
-func boundedCapacity(hint, maximum int) int {
-	if hint < 0 {
-		return 0
-	}
-	if hint > maximum {
-		return maximum
-	}
-	return hint
-}
-
 // cloneFrame deep-copies a frame through its own encoding.
 func cloneFrame(frame QuestionFrame) QuestionFrame {
 	encoded, err := json.Marshal(frame)
