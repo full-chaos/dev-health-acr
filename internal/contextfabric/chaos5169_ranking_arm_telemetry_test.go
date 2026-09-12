@@ -189,7 +189,16 @@ func TestTheNotAPopulationArmStillFires(t *testing.T) {
 func TestTheArmsCountEveryComputedObligation(t *testing.T) {
 	t.Parallel()
 
-	kind := SubjectTeam
+	// The specimen declares an UNSERVABLE member kind. It used to declare a
+	// servable one, because at the time the organization-scope SHAPE refused
+	// whatever kind it named; that shape now resolves a servable kind's
+	// members, so the unavailable `count` row this case is about only
+	// survives on a kind no arm serves. The accounting under test is
+	// unchanged -- what produces the row moved, not what must be counted.
+	kind := SubjectWorkItem
+	if servableCohortKinds[kind] {
+		t.Fatalf("fixture kind %q became servable, so this frame no longer produces an unavailable count row", kind)
+	}
 	frame := frameWith(
 		[]InvestigationGoal{GoalCountOrAggregate},
 		orgExpression(&kind),
@@ -391,14 +400,23 @@ func TestTheArmCountersRefuseANonComputedRow(t *testing.T) {
 func TestTheArmCountersCoverEveryRoleThatCanRefuseAPopulation(t *testing.T) {
 	t.Parallel()
 
-	kind := SubjectTeam
+	// The specimen is an organization scope declaring an UNSERVABLE member
+	// kind. It used to declare a servable one, which refused because the
+	// SHAPE was not a cohort variant; that shape now resolves its member set,
+	// so the refusal this case is about had to move to the kind. The role is
+	// unchanged, which is the point: what refuses is different, where it
+	// refuses is not.
+	kind := SubjectWorkItem
+	if servableCohortKinds[kind] {
+		t.Fatalf("fixture kind %q became servable, so this case no longer exhibits a refusal at the MEMBER role", kind)
+	}
 	cases := []struct {
 		name     string
 		frame    QuestionFrame
 		wantRole SubjectRole
 	}{
 		{
-			name:     "organization scope with a member kind refuses at the MEMBER role",
+			name:     "organization scope with an unservable member kind refuses at the MEMBER role",
 			frame:    frameWith([]InvestigationGoal{GoalRankOrSurvey}, orgExpression(&kind), TemporalIntentCurrent, nil),
 			wantRole: SubjectRoleMember,
 		},

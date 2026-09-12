@@ -403,8 +403,8 @@ func deriveRequirement(coordinate RequirementCoordinate, seed ObligationSeed, ca
 		// admits `ranking/subject/<named>`, and the row was then SERVED: it
 		// named rank_cohort as its server, and `planningStageOutcomeRow`
 		// seeds a served row `satisfied`. But `IsCohortVariant` is false for
-		// `named_subject` (and for `organization_scope`), so the engine
-		// resolves no cohort, RankCohort is never invoked, and
+		// `named_subject`, so the engine resolves no cohort, RankCohort is
+		// never invoked, and
 		// ComputedStepInputReads' five declared kinds are planned as reads
 		// the fact request -- gated on the same cohort pointer -- never
 		// carries. The cell claimed an ordering that nothing computed, over
@@ -413,6 +413,16 @@ func deriveRequirement(coordinate RequirementCoordinate, seed ObligationSeed, ca
 		// are": an unavailable row is not Served, so ComputedStepInputReads
 		// plans nothing for it and the seed says `unavailable` with a named
 		// cause instead of a silent `satisfied`.
+		//
+		// `organization_scope` WAS LISTED BESIDE `named_subject` HERE and is
+		// not any more. It resolves the member set of a servable declared
+		// kind, so a computed step over that population has the cohort it
+		// needs and this guard must not refuse it. What still reaches the
+		// guard from that shape is an organization scope naming an
+		// UNSERVABLE kind -- no arm discovers it, so there is still no cohort
+		// and the row is still unavailable, for the kind rather than for the
+		// shape. The condition below is unchanged; only which frames satisfy
+		// it moved.
 		if inputs, declared := InputsForComputedStep(step); stepNeedsAResolvedMemberSet(inputs, declared) &&
 			!memberSetResolvable {
 			row.Quantifier = CompletionQuantifierNone

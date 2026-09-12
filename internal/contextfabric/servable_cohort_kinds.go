@@ -104,9 +104,23 @@ const (
 	// discovers.
 	CohortDiscoverable CohortDiscoverability = "discoverable"
 	// CohortNotACohortVariant: the expression names ONE subject
-	// (named_subject) or the organization itself, with nothing to
-	// enumerate. Discovering a cohort here would invent a set the question
-	// never asked for.
+	// (named_subject), with nothing to enumerate. Discovering a cohort here
+	// would invent a set the question never asked for.
+	//
+	// `organization_scope` USED TO BE NAMED HERE TOO and no longer is when it
+	// declares a servable member kind: that expression names a scope, not a
+	// subject, and the members of a servable kind within the organization are
+	// a set the graph can enumerate. The two were never the same shape and
+	// refusing them together answered "how many repositories are there across
+	// the organization" with a clarification loop over a population the
+	// service could have counted.
+	//
+	// It STILL lands here when the kind it declares is unservable, or when it
+	// declares none. That is deliberate and not an oversight: DecideFrameGate
+	// refuses the whole turn on `member_kind_unservable`, so routing those
+	// cases into the kind-based refusals would turn a served clarification
+	// into a hard frame refusal -- strictly worse than the behaviour the
+	// widening set out to improve.
 	//
 	// THIS CONDITION IS LOAD-BEARING AND IS NOT SUBSUMED BY THE KIND TEST
 	// BELOW, which is the trap that makes this a switch rather than a
@@ -181,6 +195,31 @@ func ValidCohortDiscoverability(value CohortDiscoverability) bool {
 // which reason a frame gets, and each reason points at a different party.
 func CohortMemberKindFor(expression SubjectExpression) (servable SubjectKind, declared SubjectKind, reason CohortDiscoverability) {
 	if !expression.IsCohortVariant() {
+		// An organization_scope frame that declares a SERVABLE member kind
+		// names a population the census arm already fetches ("how many
+		// repositories are there across the organization"), so it resolves
+		// that member set here.
+		//
+		// WIDENED ONLY ONTO THE DISCOVERABLE OUTCOME, never onto the two
+		// refusing ones, and the asymmetry is load-bearing: DecideFrameGate
+		// (frame_gate.go) REFUSES the whole turn on member_kind_unservable,
+		// so admitting organization_scope into the refusing arms too would
+		// turn "what documents exist in the organization" from a served
+		// clarification into a hard frame refusal -- strictly worse than
+		// today's answer and outside what this change is for. An
+		// organization_scope expression whose declared kind is unservable,
+		// or that declares none, therefore still reports
+		// not_a_cohort_variant, byte-identically to before.
+		//
+		// named_subject stays refused: it names ONE subject, and its
+		// MemberKind() reads ExpectedKind (frame.go) rather than a member
+		// set, so admitting it would invent a cohort from a question that
+		// asked about a single thing.
+		if expression.Kind == SubjectExpressionOrganizationScope {
+			if kind, ok := expression.MemberKind(); ok && servableCohortKinds[kind] {
+				return kind, kind, CohortDiscoverable
+			}
+		}
 		return "", "", CohortNotACohortVariant
 	}
 	kind, ok := expression.MemberKind()

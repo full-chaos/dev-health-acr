@@ -839,14 +839,25 @@ func TestEveryLossIsClassifiedByAClosedCause(t *testing.T) {
 // text would agree with the renderer by construction and could not see a
 // renderer that stopped counting.
 func TestEachAuthorityBlockingLossCountIsPinned(t *testing.T) {
-	// Authorities 1 and 5a each block on ONE cell, and the cause is
-	// `computed_population_unavailable`: the organization-scope counting
-	// frame derives a countable population that nothing discovers, so the
-	// value still reaches the reader by narration over whatever was read.
-	// Those belong to the open allocator/population ticket, not to this
-	// change, and they are pinned here so
-	// that a change which cleared authority 3 by moving a loss onto a
-	// neighbour would fail rather than read as progress.
+	// Authority 1 blocks on ONE cell and the cause is
+	// `computed_population_unavailable`: an organization-scope counting frame
+	// derives a countable population that nothing discovers, so the value
+	// still reaches the reader by narration over whatever was read. That
+	// belongs to the open allocator/population ticket, not to this change,
+	// and it is pinned here so that a change which cleared authority 3 by
+	// moving a loss onto a neighbour would fail rather than read as progress.
+	//
+	// AUTHORITY 5a FELL FROM 1 TO 0, and this is the deletion that count
+	// authorizes. Its loss cell was the SAME organization-scope frame: the
+	// declared per-cohort-kind table contributed a requirement, no cohort was
+	// ever resolved for that shape, and the requirement was dropped. The
+	// shape now resolves the member set of a servable kind, so 5a's
+	// contribution is planned and served instead of lost. The frame that
+	// still loses -- an organization scope naming an UNSERVABLE kind -- never
+	// reaches 5a at all: CohortFactRequirements has no row for such a kind,
+	// so there is nothing for it to contribute and nothing to drop. The loss
+	// did not move onto a neighbour; it stopped being a loss, and authority
+	// 1's count is unchanged beside it, which is what says so.
 	//
 	// Authority 3's own count is the whole point of this pin. It blocked on
 	// `computed_step_input_unserved` -- `operational_deficiencies` is a
@@ -858,7 +869,7 @@ func TestEachAuthorityBlockingLossCountIsPinned(t *testing.T) {
 	// model-input, post-resolution or prior-turn authority is dropped before
 	// any set is compared, so it can hold no loss cell at all. They are
 	// listed rather than skipped so the table is total over the roster.
-	want := map[string]int{"1": 1, "2": 0, "3": 0, "4": 0, "5a": 1, "5b": 0, "6": 0}
+	want := map[string]int{"1": 1, "2": 0, "3": 0, "4": 0, "5a": 0, "5b": 0, "6": 0}
 
 	blocking := map[string]int{}
 	seen := map[string]bool{}

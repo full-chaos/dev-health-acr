@@ -188,6 +188,7 @@ func traceOrg(member *contextfabric.SubjectKind) contextfabric.SubjectExpression
 // only.
 func traceFrames() []traceFrame {
 	repository := contextfabric.SubjectRepository
+	unservableMemberKind := contextfabric.SubjectWorkItem
 	return []traceFrame{
 		{"Q1", "named subject (team), assess_state",
 			traceBuildFrame([]contextfabric.InvestigationGoal{contextfabric.GoalAssessState}, traceNamed(contextfabric.SubjectTeam), contextfabric.TemporalIntentCurrent, nil, nil), true},
@@ -218,6 +219,22 @@ func traceFrames() []traceFrame {
 		// ADDED to the recorded thirteen -- see traceExplicitMixed.
 		{"C2s", "explicit_set (named team operand, SCOPED project operand), compare",
 			traceBuildFrame([]contextfabric.InvestigationGoal{contextfabric.GoalCompare}, traceExplicitMixed(), contextfabric.TemporalIntentCurrent, nil, nil), false},
+		// ADDED, and it carries the corpus's ONLY unavailable computed cell.
+		//
+		// C7 above used to be that specimen: an organization scope declaring
+		// `repository` derived an unavailable `count`, because the shape
+		// resolved no member set whatever kind it named. The shape now
+		// resolves the members of a SERVABLE kind, so C7 serves, and the
+		// one-sided-clause guard and both artifacts lost their only example of
+		// the unavailable side.
+		//
+		// The example did not stop existing, it moved: what makes the cell
+		// unavailable is now an UNSERVABLE member kind, not the scope. This
+		// frame is C7 with `work_item` in place of `repository`, so the two
+		// sit beside each other in the artifacts and the difference between
+		// them is exactly the kind.
+		{"C7u", "organization scope, count, MemberKind=work_item (unservable)",
+			traceBuildFrame([]contextfabric.InvestigationGoal{contextfabric.GoalCountOrAggregate}, traceOrg(&unservableMemberKind), contextfabric.TemporalIntentCurrent, nil, nil), false},
 	}
 }
 

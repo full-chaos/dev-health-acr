@@ -62,6 +62,17 @@ const (
 	// cohortExactNameCensusEligibility's own basis="" case) and is never
 	// reported through this basis.
 	CohortExactNameCensusBasisAlreadyCommitted CohortExactNameCensusBasis = "already_committed"
+	// CohortExactNameCensusBasisOrganizationScopeMemberKind: the expression
+	// is organization_scope and it declares a member kind a discovery arm
+	// serves, so contextfabric.CohortMemberSetResolvable admits it and
+	// DiscoveredCohort will build that member set. Admits.
+	//
+	// It needs its own basis rather than reusing cohort_expression_anchor_
+	// unset: that value says "a cohort VARIANT named no specific subject",
+	// and organization_scope is not a cohort variant. Reporting it through
+	// that row would make the gate's own record of why the census ran
+	// unreadable exactly where a new rule was added.
+	CohortExactNameCensusBasisOrganizationScopeMemberKind CohortExactNameCensusBasis = "organization_scope_member_kind"
 )
 
 // cohortExactNameCensusEligibility decides whether the exact-name org-wide
@@ -91,6 +102,19 @@ func cohortExactNameCensusEligibility(frame *contextfabric.QuestionFrame, scopeA
 	switch {
 	case expression.Kind == contextfabric.SubjectExpressionDiscoveredKind:
 		return true, CohortExactNameCensusBasisDiscoveredKind
+	// Checked BEFORE the variant test below, because organization_scope is
+	// not a variant and would otherwise fall straight into the basis=""
+	// skip. The admission reuses CohortMemberSetResolvable rather than
+	// re-testing the kind here, so this gate and the cohort builder cannot
+	// disagree about which organization_scope frames resolve a member set.
+	case expression.Kind == contextfabric.SubjectExpressionOrganizationScope:
+		if !contextfabric.CohortMemberSetResolvable(expression) {
+			return false, ""
+		}
+		if scopeAnchorResolved {
+			return false, CohortExactNameCensusBasisAnchorSet
+		}
+		return true, CohortExactNameCensusBasisOrganizationScopeMemberKind
 	case !expression.IsCohortVariant():
 		return false, ""
 	case !scopeAnchorResolved:

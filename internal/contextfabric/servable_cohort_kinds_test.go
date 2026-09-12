@@ -191,65 +191,124 @@ func TestCohortMemberKindForServesEveryKindWithAProvenArm(t *testing.T) {
 	}
 }
 
-// TestCohortMemberKindForRefusesExpressionsThatCanNeverEnumerate is the
+// TestCohortMemberKindForRefusesTheExpressionThatNamesOneSubject is the
 // condition a kind lookup alone cannot decide, and the one a naive
 // simplification of this predicate deletes.
 //
 // `SubjectExpression.MemberKind()` answers `ok` for `named_subject` -- it
 // reads ExpectedKind, so the kind-hinted pool search stops treating a named
-// subject as kindless -- and for `organization_scope`, which carries an
-// optional member kind. BOTH can declare a kind that has a proven arm, and
-// NEITHER can ever produce a cohort: `IsCohortVariant()` is false for both.
-//
-// Deciding discoverability on the declared kind alone therefore serves a
-// ranking row for "rank team X" and for "how many teams are in the
-// organization", which is exactly the defect the change before this one
-// shipped a red-at-parent proof against. This test is what stops that
+// subject as kindless. That expression names ONE subject and has no member set
+// to enumerate, so deciding discoverability on the declared kind alone would
+// serve a ranking row for "rank team X". This test is what stops that
 // simplification from looking safe.
-func TestCohortMemberKindForRefusesExpressionsThatCanNeverEnumerate(t *testing.T) {
+//
+// `organization_scope` USED TO BE PINNED HERE and is not any more. It declares
+// an optional member kind, and when that kind is servable the set it names --
+// every member of that kind in the organization -- is a real population the
+// graph can enumerate. Refusing it answered "how many repositories are there
+// across the organization" with a clarification loop over a set the service
+// could have counted. The two cases were never the same shape: one names a
+// subject, the other names a scope, and only the first has nothing to
+// enumerate. See TestOrganizationScopeDeclaringAServableKindDiscovers below.
+func TestCohortMemberKindForRefusesTheExpressionThatNamesOneSubject(t *testing.T) {
 	t.Parallel()
-	// A kind with a PROVEN ARM in every fixture, so the only thing that can
-	// refuse them is the variant test.
+	// A kind with a PROVEN ARM, so the only thing that can refuse this is
+	// the variant test.
 	kind := SubjectTeam
-	if !servableCohortKinds[kind] {
-		t.Fatalf("fixture kind %q has no proven arm, so these cases would refuse on the kind instead of the variant and prove nothing", kind)
+	expression := SubjectExpression{
+		Kind:  SubjectExpressionNamed,
+		Named: &NamedSubjectExpression{ExpectedKind: &kind},
 	}
+	// The premise: this expression DOES declare the kind. Without this the
+	// case could pass because the fixture was malformed rather than because
+	// the variant test fired.
+	if declaredKind, ok := expression.MemberKind(); !ok || declaredKind != kind {
+		t.Fatalf("fixture declares MemberKind() = (%q, %v), want (%q, true) -- this case exists to prove the variant test fires DESPITE a servable declared kind", declaredKind, ok, kind)
+	}
+	servable, declared, reason := CohortMemberKindFor(expression)
+	if reason != CohortNotACohortVariant {
+		t.Errorf("CohortMemberKindFor reason = %q, want %q", reason, CohortNotACohortVariant)
+	}
+	if servable != "" || declared != "" {
+		t.Errorf("CohortMemberKindFor = (%q, %q), want both empty: an expression that enumerates nothing has no member kind to report", servable, declared)
+	}
+	if CohortMemberSetResolvable(expression) {
+		t.Error("CohortMemberSetResolvable reported true for an expression that can never enumerate a member set")
+	}
+}
+
+// TestOrganizationScopeDeclaringAServableKindDiscovers pins the rule that
+// replaced the blanket refusal: an organization-scoped expression that names a
+// member kind names the set of that kind's members in the organization, and
+// that set is discoverable exactly when the kind is servable.
+//
+// The three cases are the whole decision, not a sample. Only the FIRST moved.
+//
+// THE WIDENING IS ONTO THE DISCOVERABLE OUTCOME ONLY, and the other two cases
+// are what pin that. An organization scope with an unservable kind, or with no
+// kind at all, still reports `not_a_cohort_variant` rather than
+// `member_kind_unservable` or `no_member_kind` -- deliberately, because
+// DecideFrameGate refuses the WHOLE TURN on `member_kind_unservable`. Routing
+// these two into the refusing outcomes would turn "what documents exist in the
+// organization" from a served clarification into a hard frame refusal, which
+// is strictly worse than the behaviour this change set out to improve. The
+// asymmetry is the design, so it is pinned here rather than left to be
+// "simplified" into consistency later.
+func TestOrganizationScopeDeclaringAServableKindDiscovers(t *testing.T) {
+	t.Parallel()
+	servableKind := SubjectTeam
+	unservableKind := SubjectWorkItem
+	if !servableCohortKinds[servableKind] {
+		t.Fatalf("fixture kind %q is not servable, so the discovering case would pass for the wrong reason", servableKind)
+	}
+	if servableCohortKinds[unservableKind] {
+		t.Fatalf("fixture kind %q became servable, so the refusing case no longer exercises a refusal", unservableKind)
+	}
+
 	for _, testCase := range []struct {
-		name       string
-		expression SubjectExpression
+		name         string
+		expression   SubjectExpression
+		wantReason   CohortDiscoverability
+		wantServable SubjectKind
+		wantDeclared SubjectKind
+		wantResolves bool
 	}{
 		{
-			name: "named_subject declaring an expected kind",
-			expression: SubjectExpression{
-				Kind:  SubjectExpressionNamed,
-				Named: &NamedSubjectExpression{ExpectedKind: &kind},
-			},
-		},
-		{
-			name: "organization_scope declaring a member kind",
+			name: "a servable member kind resolves the organization's members of that kind",
 			expression: SubjectExpression{
 				Kind: SubjectExpressionOrganizationScope,
-				Org:  &OrganizationScopeExpression{MemberKind: &kind},
+				Org:  &OrganizationScopeExpression{MemberKind: &servableKind},
 			},
+			wantReason: CohortDiscoverable, wantServable: servableKind, wantDeclared: servableKind, wantResolves: true,
+		},
+		{
+			name: "an unservable member kind stays on the non-variant refusal, never the hard frame refusal",
+			expression: SubjectExpression{
+				Kind: SubjectExpressionOrganizationScope,
+				Org:  &OrganizationScopeExpression{MemberKind: &unservableKind},
+			},
+			wantReason: CohortNotACohortVariant, wantServable: "", wantDeclared: "", wantResolves: false,
+		},
+		{
+			name: "no declared member kind stays on the non-variant refusal",
+			expression: SubjectExpression{
+				Kind: SubjectExpressionOrganizationScope,
+				Org:  &OrganizationScopeExpression{},
+			},
+			wantReason: CohortNotACohortVariant, wantServable: "", wantDeclared: "", wantResolves: false,
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			// The premise: this expression DOES declare the kind. Without
-			// this the case could pass because the fixture was malformed
-			// rather than because the variant test fired.
-			if declaredKind, ok := testCase.expression.MemberKind(); !ok || declaredKind != kind {
-				t.Fatalf("fixture declares MemberKind() = (%q, %v), want (%q, true) -- this case exists to prove the variant test fires DESPITE a servable declared kind", declaredKind, ok, kind)
-			}
 			servable, declared, reason := CohortMemberKindFor(testCase.expression)
-			if reason != CohortNotACohortVariant {
-				t.Errorf("CohortMemberKindFor reason = %q, want %q", reason, CohortNotACohortVariant)
+			if reason != testCase.wantReason {
+				t.Errorf("CohortMemberKindFor reason = %q, want %q", reason, testCase.wantReason)
 			}
-			if servable != "" || declared != "" {
-				t.Errorf("CohortMemberKindFor = (%q, %q), want both empty: an expression that enumerates nothing has no member kind to report", servable, declared)
+			if servable != testCase.wantServable || declared != testCase.wantDeclared {
+				t.Errorf("CohortMemberKindFor = (%q, %q), want (%q, %q)", servable, declared, testCase.wantServable, testCase.wantDeclared)
 			}
-			if CohortMemberSetResolvable(testCase.expression) {
-				t.Error("CohortMemberSetResolvable reported true for an expression that can never enumerate a member set")
+			if got := CohortMemberSetResolvable(testCase.expression); got != testCase.wantResolves {
+				t.Errorf("CohortMemberSetResolvable = %v, want %v", got, testCase.wantResolves)
 			}
 		})
 	}
