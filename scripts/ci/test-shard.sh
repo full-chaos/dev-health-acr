@@ -108,6 +108,25 @@ isolated_packages=(
   "github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
 
+# heavy_exceptions names a package HEAVY (see is_heavy_package below) despite
+# not carrying the package-scoped-shared-container pattern that function
+# looks for. internal/storage/postgres starts a FRESH testcontainer per test
+# (t.Cleanup, not a package-wide sync.Once + TestMain) rather than one
+# shared container -- so is_heavy_package alone does not see it -- but it is
+# still a real Postgres server under -race, measured at ~250s wall, and it
+# was the OTHER package sharing race shard 1 with devhealthfacts in both
+# incidents this fix is for. Listing it explicitly (rather than widening
+# is_heavy_package's own signal to catch it) keeps that signal narrow and
+# code-derived for the pattern it actually detects, while still making the
+# separation this fix promises literal for the pair actually observed
+# colliding, not just a side effect of how the light packages happen to
+# reshuffle. Checked for existence the same way isolated_packages is (see
+# main()): a renamed or removed package left here would otherwise silently
+# stop being separated from anything, with nothing to say so.
+heavy_exceptions=(
+  "github.com/full-chaos/dev-health-acr/internal/storage/postgres"
+)
+
 usage() {
   printf 'usage: %s [--with-isolated] <index> <total>\n' "${0##*/}" >&2
   printf '  index  1-based shard number (1 <= index <= total)\n' >&2
@@ -172,6 +191,33 @@ is_positive_int() {
   [[ "$1" =~ ^[1-9][0-9]*$ ]]
 }
 
+# Every entry of the hand list named by $1 (a nameref) must exist in
+# all_packages, or this exits loudly naming which entry and which list --
+# shared by isolated_packages (CHAOS-3974) and heavy_exceptions (CHAOS-5653)
+# so both hand lists carry the same guarantee against a rename or removal
+# silently excluding/separating nothing. Requires all_packages to already be
+# set (see compute_all_packages).
+assert_hand_list_exists() {
+  local -n _list="$1"
+  local list_name="$2"
+  local entry pkg found
+  for entry in "${_list[@]}"; do
+    found=0
+    for pkg in "${all_packages[@]}"; do
+      if [ "$pkg" = "$entry" ]; then
+        found=1
+        break
+      fi
+    done
+    if [ "$found" -eq 0 ]; then
+      # shellcheck disable=SC2016  # backticked `go list ./...` is prose, not a shell expansion
+      printf '%s: %s package not found by `go list ./...`: %s -- update %s in %s\n' \
+        "${0##*/}" "$list_name" "$entry" "$list_name" "${0##*/}" >&2
+      exit 1
+    fi
+  done
+}
+
 is_isolated() {
   local pkg="$1" candidate
   for candidate in "${isolated_packages[@]}"; do
@@ -180,14 +226,22 @@ is_isolated() {
   return 1
 }
 
-# A package is HEAVY iff it carries the CHAOS-5270 "one package-scoped
-# container for the whole run" pattern: a `TestMain(m *testing.M)` in some
-# _test.go file of the package, AND a testcontainers-go import somewhere in
-# the package (grepped separately -- the shared-container helper file
-# usually carries both, but nothing requires it to be the same file). Both
-# conditions grepped fresh from $repo_root on every call: this is never a
-# hand list, so a package that adopts or drops the pattern is picked up the
-# next time this script runs, with no second place to remember to update.
+is_heavy_exception() {
+  local pkg="$1" candidate
+  for candidate in "${heavy_exceptions[@]}"; do
+    [ "$pkg" = "$candidate" ] && return 0
+  done
+  return 1
+}
+
+# A package carries the CHAOS-5270 "one package-scoped container for the
+# whole run" pattern iff it has a `TestMain(m *testing.M)` in some _test.go
+# file AND a testcontainers-go import somewhere in the package (grepped
+# separately -- the shared-container helper file usually carries both, but
+# nothing requires it to be the same file). Both conditions grepped fresh
+# from $repo_root on every call: this is never a hand list, so a package
+# that adopts or drops the pattern is picked up the next time this script
+# runs, with no second place to remember to update.
 #
 # Deliberately narrower than "imports testcontainers-go": that matches 18
 # packages today, nearly all of which start a short-lived container PER
@@ -195,7 +249,7 @@ is_isolated() {
 # always has). Only a package that keeps ONE container alive for its whole
 # run pays the sustained-memory cost two of which colliding in one shard
 # caused (CHAOS-5653).
-is_heavy_package() {
+is_heavy_pattern() {
   local pkg="$1" dir
   dir="$repo_root/${pkg#"$module_path"/}"
   [ -d "$dir" ] || return 1
@@ -204,6 +258,20 @@ is_heavy_package() {
   # heavy", never as a grep error this script mistakes for something else.
   grep -lq 'func TestMain(m \*testing\.M)' "$dir"/*_test.go >/dev/null 2>&1 || return 1
   grep -lq 'testcontainers-go' "$dir"/*.go >/dev/null 2>&1
+}
+
+# The full HEAVY set: is_heavy_pattern's code-derived signal, UNION
+# heavy_exceptions above. The pattern alone misses a package that is
+# genuinely expensive under -race but does not share ONE container across
+# its run (internal/storage/postgres: a fresh testcontainer per test,
+# ~250s wall) -- widening the pattern itself to catch that shape would also
+# catch several of the 18 merely-imports-testcontainers-go packages it is
+# deliberately narrow to exclude, so that one package is named explicitly
+# instead (see heavy_exceptions' own comment for why, and for the existence
+# check that keeps it from silently naming nothing after a rename).
+is_heavy_package() {
+  local pkg="$1"
+  is_heavy_pattern "$pkg" || is_heavy_exception "$pkg"
 }
 
 # Every heavy package, sorted (LC_ALL=C, matching every other ordering in
@@ -224,6 +292,7 @@ main() {
 
   if [ "$#" -eq 1 ] && [ "$1" = "heavy" ]; then
     compute_all_packages
+    assert_hand_list_exists heavy_exceptions heavy_exceptions
     local -a heavy_list=()
     while IFS= read -r pkg; do
       [ -n "$pkg" ] || continue
@@ -270,22 +339,13 @@ main() {
   # exclude nothing (already caught below by round-robin as usual) while its
   # dedicated CI job also tested nothing, dropping the package from CI
   # coverage entirely without either side raising an error.
-  local isolated found
-  for isolated in "${isolated_packages[@]}"; do
-    found=0
-    for pkg in "${all_packages[@]}"; do
-      if [ "$pkg" = "$isolated" ]; then
-        found=1
-        break
-      fi
-    done
-    if [ "$found" -eq 0 ]; then
-      # shellcheck disable=SC2016  # backticked `go list ./...` is prose, not a shell expansion
-      printf '%s: isolated package not found by `go list ./...`: %s -- update isolated_packages in %s\n' \
-        "${0##*/}" "$isolated" "${0##*/}" >&2
-      exit 1
-    fi
-  done
+  assert_hand_list_exists isolated_packages isolated_packages
+
+  # CHAOS-5653: same discipline as isolated_packages, for heavy_exceptions --
+  # a renamed or removed package left there would silently stop being
+  # separated from anything, with the guarantee this fix promises quietly
+  # narrower than what its own comment claims.
+  assert_hand_list_exists heavy_exceptions heavy_exceptions
 
   # CHAOS-5653: split into HEAVY (see is_heavy_package) and everything else,
   # then shard each set with its OWN round-robin counter. A heavy package

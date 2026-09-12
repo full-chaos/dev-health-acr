@@ -201,7 +201,13 @@ package_count="$(wc -l <"$tmpdir/all.sorted" | tr -d ' ')"
 # memory/CPU under -race at the same time and take a shared ClickHouse
 # container down mid-suite (main@6e6b2022, #520@2fb2d9b7). Read from
 # test-shard.sh itself, never a second hand list here.
-mapfile -t heavy_packages < <("$repo_root/scripts/ci/test-shard.sh" heavy | tr ' ' '\n' | grep -v '^$')
+# A plain command substitution, not `< <(...)`: `set -e` does not see a
+# failure inside a process substitution (the exit code `mapfile` observes is
+# its own, not the producer's), so test-shard.sh exiting non-zero here --
+# e.g. a heavy_exceptions entry that no longer exists -- would otherwise be
+# silently swallowed as an empty list instead of failing this script.
+heavy_raw="$("$repo_root/scripts/ci/test-shard.sh" heavy)"
+mapfile -t heavy_packages < <(printf '%s\n' "$heavy_raw" | tr ' ' '\n' | grep -v '^$')
 
 for job in race unit; do
   meta="$(job_shard_union "$job" "$tmpdir/union.$job")"
