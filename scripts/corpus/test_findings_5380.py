@@ -1855,7 +1855,7 @@ def test_detail_for_reconciles_against_the_harness_count():
         out, _ = _write_turns(tmp, {1: [_attempt(504), rich_last]})
         base_r = {"final_http": 200, "final_payload_status": "complete",
                   "chain": ["t1=complete"], "wrong_kind_flag": False,
-                  "wrong_subject_flag": False, "subject_kind_mismatch_flag": False}
+                  "wrong_subject_flag": False, "subject_kind_mismatch_flag": False, "no_redeemable_offer_flag": False, "stop_reason": None}
         row = {"note": "", "family": "f"}
         RS.UNSEQUENCED.clear()
         agreeing = RS.detail_for(out, "q-a", row, {**base_r, "attempts": 2}, 1.0, 1)
@@ -2033,7 +2033,7 @@ def test_merged_row_carries_the_sequence_beside_the_bucket():
                    "final_http": 200, "final_payload_status": "complete",
                    "chain": "t1=complete", "attempts": len(attempts),
                    "wrong_kind_flag": False, "wrong_subject_flag": False,
-                   "subject_kind_mismatch_flag": False, "wall_seconds": 1.0,
+                   "subject_kind_mismatch_flag": False, "no_redeemable_offer_flag": False, "stop_reason": None, "wall_seconds": 1.0,
                    "claimed_facts_n": 1, "failure_code": None}
             RS.UNSEQUENCED.clear()
             row.update(RS.attempt_diagnostics(shard / "replicate", cid, 1,
@@ -2399,7 +2399,7 @@ def test_build_reclassified_row_preserves_original_attempt_evidence():
         row = {"note": "", "family": "f"}
         base_r = {"final_http": 200, "final_payload_status": "complete",
                   "chain": ["t1=complete"], "wrong_kind_flag": False,
-                  "wrong_subject_flag": False, "subject_kind_mismatch_flag": False}
+                  "wrong_subject_flag": False, "subject_kind_mismatch_flag": False, "no_redeemable_offer_flag": False, "stop_reason": None}
         RS.UNSEQUENCED.clear()
         before = RS.detail_for(original_out, "q-a", row, {**base_r, "attempts": 2}, 1.0, 1)
         assert before["attempt_upstream_504_n"] == 1, before  # the row IS the deadline hit
@@ -2454,7 +2454,7 @@ def test_build_reclassified_row_preserves_original_overrun_413_evidence():
         row = {"note": "", "family": "f"}
         base_r = {"final_http": 200, "final_payload_status": "complete",
                   "chain": ["t1=complete"], "wrong_kind_flag": False,
-                  "wrong_subject_flag": False, "subject_kind_mismatch_flag": False}
+                  "wrong_subject_flag": False, "subject_kind_mismatch_flag": False, "no_redeemable_offer_flag": False, "stop_reason": None}
         RS.UNSEQUENCED.clear()
         before = RS.detail_for(original_out, "q-a", row, {**base_r, "attempts": 2}, 1.0, 1)
         assert before["attempt_overrun_413_n"] == 1, before
@@ -2485,7 +2485,7 @@ def test_reconcile_attempt_totals_control_a_reconciling_run_publishes():
         row = {"note": "", "family": "f"}
         base_r = {"final_http": 200, "final_payload_status": "complete",
                   "chain": ["t1=complete"], "wrong_kind_flag": False,
-                  "wrong_subject_flag": False, "subject_kind_mismatch_flag": False}
+                  "wrong_subject_flag": False, "subject_kind_mismatch_flag": False, "no_redeemable_offer_flag": False, "stop_reason": None}
         RS.UNSEQUENCED.clear()
         detail = RS.detail_for(out, "q-a", row, {**base_r, "attempts": 2}, 1.0, 1)
         assert detail["attempt_overrun_413_n"] == 1, detail
@@ -2517,7 +2517,7 @@ def test_reconcile_attempt_totals_sums_the_original_AND_the_replays_own_count():
         row = {"note": "", "family": "f"}
         base_r = {"final_http": 200, "final_payload_status": "complete",
                   "chain": ["t1=complete"], "wrong_kind_flag": False,
-                  "wrong_subject_flag": False, "subject_kind_mismatch_flag": False}
+                  "wrong_subject_flag": False, "subject_kind_mismatch_flag": False, "no_redeemable_offer_flag": False, "stop_reason": None}
         RS.UNSEQUENCED.clear()
         before = RS.detail_for(original_out, "q-a", row, {**base_r, "attempts": 2}, 1.0, 1)
         assert before["attempt_upstream_504_n"] == 1, before
@@ -2561,7 +2561,7 @@ def test_reconcile_attempt_totals_refuses_when_the_original_never_reconciled():
         row = {"note": "", "family": "f"}
         base_r = {"final_http": 200, "final_payload_status": "complete",
                   "chain": ["t1=complete"], "wrong_kind_flag": False,
-                  "wrong_subject_flag": False, "subject_kind_mismatch_flag": False}
+                  "wrong_subject_flag": False, "subject_kind_mismatch_flag": False, "no_redeemable_offer_flag": False, "stop_reason": None}
         RS.UNSEQUENCED.clear()
         before = RS.detail_for(original_out, "q-a", row, {**base_r, "attempts": 2}, 1.0, 1)
         assert before["attempts_reconciled"] is False, before
@@ -2621,7 +2621,7 @@ def test_published_attempt_totals_include_a_reclassified_rows_original_evidence(
         row = {"note": "", "family": "f"}
         base_r = {"final_http": 200, "final_payload_status": "complete",
                   "chain": ["t1=complete"], "wrong_kind_flag": False,
-                  "wrong_subject_flag": False, "subject_kind_mismatch_flag": False}
+                  "wrong_subject_flag": False, "subject_kind_mismatch_flag": False, "no_redeemable_offer_flag": False, "stop_reason": None}
         RS.UNSEQUENCED.clear()
         before = RS.detail_for(original_out, "q-a", row, {**base_r, "attempts": 1}, 1.0, 1)
         assert before["attempt_upstream_504_n"] == 1, before
@@ -2844,7 +2844,7 @@ def test_every_published_attempt_derived_rig_diagnostics_key_moves_on_a_real_div
     row_meta = {"note": "", "family": "f"}
     base_r = {"final_http": 200, "final_payload_status": "complete",
               "chain": ["t1=complete"], "wrong_kind_flag": False,
-              "wrong_subject_flag": False, "subject_kind_mismatch_flag": False}
+              "wrong_subject_flag": False, "subject_kind_mismatch_flag": False, "no_redeemable_offer_flag": False, "stop_reason": None}
 
     with tempfile.TemporaryDirectory() as tmp:
         indir = Path(tmp) / "seq"
@@ -2983,7 +2983,7 @@ def test_a_malformed_frozen_counter_is_a_controlled_merge_abort_through_the_real
             base = {"corpus_id": cid, "family": entry.get("family"), "section_note": "",
                     "final_http": 200, "final_payload_status": "complete",
                     "chain": ["t1=complete"], "wrong_kind_flag": False,
-                    "wrong_subject_flag": False, "subject_kind_mismatch_flag": False,
+                    "wrong_subject_flag": False, "subject_kind_mismatch_flag": False, "no_redeemable_offer_flag": False, "stop_reason": None,
                     "wall_seconds": 1.0, "claimed_facts_n": 1, "failure_code": None}
             if cid == bad_id:
                 # NO attempt file written for this row -- scan_frozen_counts finds
@@ -3092,7 +3092,7 @@ def test_every_malformed_original_evidence_shape_is_a_controlled_merge_abort_thr
                 base = {"corpus_id": cid, "family": entry.get("family"), "section_note": "",
                         "final_http": 200, "final_payload_status": "complete",
                         "chain": ["t1=complete"], "wrong_kind_flag": False,
-                        "wrong_subject_flag": False, "subject_kind_mismatch_flag": False,
+                        "wrong_subject_flag": False, "subject_kind_mismatch_flag": False, "no_redeemable_offer_flag": False, "stop_reason": None,
                         "wall_seconds": 1.0, "claimed_facts_n": 1, "failure_code": None}
                 (shard / "replicate" / f"{cid}-rep1-t1-a1.json").write_text(json.dumps(_served()))
                 RS.UNSEQUENCED.clear()
@@ -3172,7 +3172,7 @@ def test_the_full_ingestion_input_domain_is_a_controlled_abort_or_a_correct_publ
                 base = {"corpus_id": cid, "family": entry.get("family"), "section_note": "",
                         "final_http": 200, "final_payload_status": "complete",
                         "chain": ["t1=complete"], "wrong_kind_flag": False,
-                        "wrong_subject_flag": False, "subject_kind_mismatch_flag": False,
+                        "wrong_subject_flag": False, "subject_kind_mismatch_flag": False, "no_redeemable_offer_flag": False, "stop_reason": None,
                         "wall_seconds": 1.0, "claimed_facts_n": 1, "failure_code": None}
                 (shard / "replicate" / f"{cid}-rep1-t1-a1.json").write_text(json.dumps(_served()))
                 RS.UNSEQUENCED.clear()

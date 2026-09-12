@@ -487,7 +487,16 @@ def run_replicate(qid, question, rep, warn=print):
                 # 0, no prior reference survives a bare re-ask), so
                 # continuing only repeats this turn to MAX_TURNS. Stop here.
                 no_redeemable_offer_flag = True
-                stop_reason = "no_redeemable_offer_for_declared_kind"
+                # Named for WHAT was unredeemable this turn, never a fixed
+                # string -- a subject-only mismatch (no kind offer at all
+                # this turn) previously still read "...declared_kind", which
+                # names the wrong axis for that case.
+                if this_turn_wrong_kind and this_turn_wrong_subject:
+                    stop_reason = "no_redeemable_offer_for_declared_kind_and_subject"
+                elif this_turn_wrong_kind:
+                    stop_reason = "no_redeemable_offer_for_declared_kind"
+                else:
+                    stop_reason = "no_redeemable_offer_for_declared_subject"
                 break
             # Every need was already answered and left `missing`, offering
             # nothing new to redeem. Resend the bare question -- an

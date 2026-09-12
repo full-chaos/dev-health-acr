@@ -521,7 +521,8 @@ def _build_fixture_indir(indir):
                                  "answer_plan": {"family": row.get("family")}})
         r = {"final_http": 200, "final_payload_status": "complete", "chain": "t1=complete",
              "attempts": 1, "wrong_kind_flag": False, "wrong_subject_flag": False,
-             "subject_kind_mismatch_flag": False}
+             "subject_kind_mismatch_flag": False, "no_redeemable_offer_flag": False,
+             "stop_reason": None}
         details.append(run_shard.detail_for(replicate, cid, row, r, 1.0, rep=1))
     summary = {"shard": 0, "shard_count": 1, "rep": 1,
                "planned_ids": [row["id"] for row in CORPUS],

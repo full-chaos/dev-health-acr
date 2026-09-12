@@ -14,9 +14,13 @@ answered with the SAME two refusals next turn, and the row spent 5 turns
 
 The fix does not change WHAT is unanswerable -- both refusals, and the
 bare-re-ask branch for every OTHER empty-receipts cause (a need already
-answered, nothing new offered), are untouched. It only stops the chain the
-turn both refusals fire together with no other offer to redeem, records
-`no_redeemable_offer_flag`/`stop_reason` on the row, and leaves
+answered, nothing new offered), are untouched. It only stops the chain the turn
+either refusal fires with no other offer to redeem, records
+`no_redeemable_offer_flag`/`stop_reason` on the row (named for WHICH
+axis -- kind, subject, or both -- actually failed that turn, and
+surfaced through `run_shard.detail_for`, the field set the real corpus
+path and `reclassify_deadlines.py` both actually emit, not just the
+intermediate `run_replicate` result), and leaves
 `final_payload_status`/`chain` exactly what the engine's own last turn
 said -- so `merge_corpus.py`'s classify() buckets the row identically
 (`clarification_needed`, via the same bare `clarification_required` value
@@ -121,7 +125,7 @@ def test_unredeemable_turn_stops_the_chain_not_a_bare_reask():
     _require(row["chain"] == "t1=clarification_required -> t2=clarification_required",
               f"chain: {row['chain']!r}")
     _require(row["no_redeemable_offer_flag"] is True, row)
-    _require(row["stop_reason"] == "no_redeemable_offer_for_declared_kind", row)
+    _require(row["stop_reason"] == "no_redeemable_offer_for_declared_kind_and_subject", row)
     _require(row["wrong_kind_flag"] is True, "the :355 refusal must still fire and be reported")
     _require(row["wrong_subject_flag"] is True, "the :402 refusal must still fire and be reported")
     # Bucket-preserving: final_payload_status is the engine's own turn-2 status,
@@ -185,6 +189,62 @@ def test_a_candidate_of_the_declared_kind_still_redeems_and_continues():
     _require(calls[2] == {"question": "fixture question text", "priorSubjectReceipts": [
         {"result_id": "r2", "receipt_id": "c1"}]}, calls[2])
     _require(row["no_redeemable_offer_flag"] is False, row)
+
+
+def test_stop_reason_names_the_axis_that_actually_failed():
+    """`stop_reason` must name WHICH redemption rule(s) failed, never a fixed
+    string regardless of cause -- a subject-only mismatch (no kind offer at
+    all that turn) must not read "...declared_kind"."""
+    kind_only = (200, {"result_id": "r2", "status": "clarification_required",
+                        "structure_needs": {"kind_options": [{"kind": "repository", "receipt_id": "k1"}]}})
+    subject_only = (200, {"result_id": "r2", "status": "clarification_required",
+                           "subject_resolution": {"candidates": [
+                               {"receipt_id": "c1", "subject": {"kind": "repository"}},
+                               {"receipt_id": "c2", "subject": {"kind": "team"}}]}})
+    both = _T2_UNREDEEMABLE
+
+    row, _ = _run([_T1_REDEEMABLE_WINDOW, kind_only])
+    _require(row["wrong_kind_flag"] is True and row["wrong_subject_flag"] is False, row)
+    _require(row["stop_reason"] == "no_redeemable_offer_for_declared_kind", row)
+
+    row, _ = _run([_T1_REDEEMABLE_WINDOW, subject_only])
+    _require(row["wrong_kind_flag"] is False and row["wrong_subject_flag"] is True, row)
+    _require(row["stop_reason"] == "no_redeemable_offer_for_declared_subject", row)
+
+    row, _ = _run([_T1_REDEEMABLE_WINDOW, both])
+    _require(row["wrong_kind_flag"] is True and row["wrong_subject_flag"] is True, row)
+    _require(row["stop_reason"] == "no_redeemable_offer_for_declared_kind_and_subject", row)
+
+
+def test_detail_for_surfaces_the_new_fields():
+    """`run_shard.detail_for` is the field set the real corpus path (and
+    reclassify_deadlines.py) actually emits -- run_replicate's row alone is
+    never what lands in a shard-summary.json. Both new fields must survive
+    that translation, not just exist on the intermediate run_replicate
+    result."""
+    import run_shard as RS
+
+    stub, calls = _stub_post([_T1_REDEEMABLE_WINDOW, _T2_UNREDEEMABLE])
+    real_post = harness.post
+    real_outdir = harness.OUTDIR
+    real_requested = dict(harness.REQUESTED_KIND)
+    real_anchor = dict(harness.ANCHOR_KIND)
+    with tempfile.TemporaryDirectory() as tmp:
+        outdir = Path(tmp)
+        harness.post = stub
+        harness.OUTDIR = outdir
+        harness.REQUESTED_KIND = {"fixture-row": "project"}
+        harness.ANCHOR_KIND = {"fixture-row": "project"}
+        try:
+            r = harness.run_replicate("fixture-row", "fixture question text", 1)
+            detail = RS.detail_for(outdir, "fixture-row", {"note": "", "family": None}, r, 0.5, 1)
+        finally:
+            harness.post = real_post
+            harness.OUTDIR = real_outdir
+            harness.REQUESTED_KIND = real_requested
+            harness.ANCHOR_KIND = real_anchor
+    _require(detail["no_redeemable_offer_flag"] is True, detail)
+    _require(detail["stop_reason"] == "no_redeemable_offer_for_declared_kind_and_subject", detail)
 
 
 def main():
