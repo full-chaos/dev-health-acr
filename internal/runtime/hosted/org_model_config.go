@@ -77,7 +77,7 @@ func wrapWithOrgModelRuntimeResolver(deploymentDefault contextfabric.ModelRuntim
 	// per-organization BYO runtime's decision line (and its attempt fields)
 	// must reach the same collected sink the deployment default's does.
 	defaults.Logger = logger
-	resolver := modelruntimeresolver.New(deploymentDefault, orgConfigs, modelruntimeresolver.NewModelProviderBuild(defaults))
+	resolver := newOrgModelRuntimeResolver(deploymentDefault, orgConfigs, modelruntimeresolver.NewModelProviderBuild(defaults), logger)
 	return resolver, resolver, nil
 }
 
@@ -213,7 +213,22 @@ func buildModelReceiptSink(postgres postgresComponents) (contextfabric.ModelRece
 // battery proved by surviving it. The comma-ok form stays because dropping it
 // entirely would panic instead of returning.
 func sampledModelRuntime(runtime contextfabric.ModelRuntime) contextfabric.SampledModelRuntime {
+	// TYPED NIL IS NOT NIL, and a plain `== nil` does not catch it: an
+	// interface holding a (*T)(nil) is non-nil, satisfies the assertion, and
+	// panics on the first call. This package already had isNilRuntime for
+	// exactly that shape and this function was written without it, so a
+	// reviewer reached the panic.
+	//
+	// ONE CHECK, AFTER the assertion, and the placement is the whole of it.
+	// A pre-assertion guard reads as more careful and is redundant: whatever
+	// the input, `sampled` here is either a nil interface (the assertion
+	// failed) or an interface holding the same nil pointer (it succeeded),
+	// and this catches both. A mutation battery proved the pre-guard
+	// unkillable, which is the same thing said in evidence.
 	sampled, _ := runtime.(contextfabric.SampledModelRuntime)
+	if sampled == nil || isNilRuntime(sampled) {
+		return nil
+	}
 	return sampled
 }
 
@@ -229,4 +244,53 @@ func interpretationEnsembleSize(configured int) int {
 		return 1
 	}
 	return configured
+}
+
+// newOrgModelRuntimeResolver constructs the resolver AND gives it everything
+// it needs of its own.
+//
+// EXTRACTED (CHAOS-5638) because the logger assignment below is the kind of
+// line that is invisible when it is missing. `defaults.Logger` and
+// `resolver.Logger` are different wires -- the first reaches the
+// per-organization runtime this resolver BUILDS, the second reaches the
+// resolver itself -- and the first was set while the second was not, which
+// sent the per-sample warning to slog.Default() where the service's collected
+// sink never sees it. A caller reading wrapWithOrgModelRuntimeResolver saw one
+// `Logger =` line and no reason to look for a second. One function now owns
+// both halves, and a test can drive it without a live Postgres store.
+func newOrgModelRuntimeResolver(
+	deploymentDefault contextfabric.ModelRuntime,
+	orgConfigs contextfabric.OrgModelConfigResolver,
+	build modelruntimeresolver.Build,
+	logger *slog.Logger,
+) *modelruntimeresolver.Resolver {
+	resolver := modelruntimeresolver.New(deploymentDefault, orgConfigs, build)
+	resolver.Logger = logger
+	return resolver
+}
+
+// newContextFabricQuestionInterpreter builds the interpreter the engine uses.
+//
+// A NAMED CONSTRUCTOR rather than a struct literal inline in the composition
+// (CHAOS-5638), so the ensemble wiring is reachable by a test. As a literal,
+// deleting `SampledRuntime` left every test green while making the ensemble
+// permanently unreachable in the built product -- the composition is exactly
+// where that kind of omission hides, because nothing downstream of it can tell
+// "not configured" from "configured and dropped on the floor".
+func newContextFabricQuestionInterpreter(
+	modelRuntime contextfabric.ModelRuntime,
+	receiptSink contextfabric.ModelReceiptSink,
+	engineTelemetry contextfabric.EngineTelemetry,
+	factRegistry contextfabric.RequirementDeriver,
+	configuredEnsembleSize int,
+) contextfabric.RuntimeQuestionInterpreter {
+	return contextfabric.RuntimeQuestionInterpreter{
+		Runtime:         modelRuntime,
+		SampledRuntime:  sampledModelRuntime(modelRuntime),
+		EnsembleSize:    interpretationEnsembleSize(configuredEnsembleSize),
+		Sink:            receiptSink,
+		FamilyTelemetry: engineTelemetry,
+		FrameTelemetry:  engineTelemetry,
+		Requirements:    factRegistry,
+	}
 }
