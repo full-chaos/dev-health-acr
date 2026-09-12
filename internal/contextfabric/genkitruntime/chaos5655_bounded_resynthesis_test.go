@@ -155,6 +155,13 @@ func TestSynthesizeAnswerResynthesizesOnRejectionUntilSuccess(t *testing.T) {
 	if want := "3:" + receipt.OutputDigest; parts[2] != want {
 		t.Fatalf("draw_output_digests' third entry = %q, want %q -- the served draw's digest must match receipt.OutputDigest exactly", parts[2], want)
 	}
+	// Each draw is its own full, separately billable model call --
+	// drawSequenceGenerator reports {20,8,28} on every call, so three draws
+	// must sum to {60,24,84}, not report only the served (third) draw's own
+	// usage. A rejected draw's real cost must not go invisible.
+	if want := (contextfabric.ModelUsage{InputTokens: 60, OutputTokens: 24, TotalTokens: 84}); receipt.Usage != want {
+		t.Fatalf("receipt.Usage = %+v, want %+v (summed across all three draws)", receipt.Usage, want)
+	}
 }
 
 // TestSynthesizeAnswerFailsClosedAfterExhaustingResynthesisBudget is the
@@ -216,6 +223,12 @@ func TestSynthesizeAnswerFailsClosedAfterExhaustingResynthesisBudget(t *testing.
 	}
 	if want := "3:" + receipt.OutputDigest; digests[2] != want {
 		t.Fatalf("draw_output_digests' third entry = %q, want %q -- the reported (last) draw's digest must match receipt.OutputDigest exactly", digests[2], want)
+	}
+	// Same accounting requirement as the success case: three rejected draws
+	// are three real billable calls, so their usage must sum, not report
+	// only the last one's.
+	if want := (contextfabric.ModelUsage{InputTokens: 60, OutputTokens: 24, TotalTokens: 84}); receipt.Usage != want {
+		t.Fatalf("receipt.Usage = %+v, want %+v (summed across all three draws)", receipt.Usage, want)
 	}
 }
 

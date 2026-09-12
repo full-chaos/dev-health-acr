@@ -1513,6 +1513,14 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	started := r.now().UTC()
 	var output synthesisOutput
 	var usage contextfabric.ModelUsage
+	// CHAOS-5655: totalUsage sums EVERY draw's token usage, including
+	// rejected ones -- each draw is its own full, separately billable model
+	// call, so a receipt that reported only the LAST draw's usage would make
+	// a rejected draw's real cost invisible. Every existing single-draw path
+	// (maxDraws==1, and the fallback leg, which never runs this loop) sums
+	// exactly one term, so this is bit-for-bit identical to the pre-5655
+	// value there.
+	var totalUsage contextfabric.ModelUsage
 	var generationErr error
 	var draft contextfabric.SynthesisDraft
 	// CHAOS-5655: maxDraws bounds the re-synthesis loop below. Every
@@ -1540,6 +1548,16 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 			})
 			return callErr
 		})
+		// CHAOS-5655: accumulated unconditionally -- a transport failure can
+		// still have consumed tokens on an earlier, already-successful
+		// attempt within this SAME draw's own withRetry call (a retryable
+		// failure followed by another retryable failure, say), and a
+		// draw that reached the provider at all may report partial usage
+		// even on its own failure. Summing a zero-value ModelUsage is a
+		// no-op, so this never double-counts or invents cost.
+		totalUsage.InputTokens += usage.InputTokens
+		totalUsage.OutputTokens += usage.OutputTokens
+		totalUsage.TotalTokens += usage.TotalTokens
 		if generationErr != nil {
 			// A TRANSPORT failure never reached a draft to judge -- withRetry
 			// already owns the transport-retry axis (MaxAttempts), so
@@ -1588,7 +1606,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	if generationErr != nil {
 		classifiedErr = classifyModelError(generationErr)
 	}
-	receipt = r.receipt(contextfabric.ModelOperationSynthesize, r.config.SynthesisPromptVersion, started, completed, attempts, encoded, nil, usage, classifiedErr)
+	receipt = r.receipt(contextfabric.ModelOperationSynthesize, r.config.SynthesisPromptVersion, started, completed, attempts, encoded, nil, totalUsage, classifiedErr)
 	// RequestID correlates the durable receipt row back to this
 	// investigation -- see the matching comment in InterpretQuestion.
 	receipt.RequestID = input.Request.RequestID
