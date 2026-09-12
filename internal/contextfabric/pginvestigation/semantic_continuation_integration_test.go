@@ -198,9 +198,20 @@ func TestSemanticContinuation_TheCarriedReadingSurvivesFreshEnginesAndARegistryC
 	if err != nil {
 		t.Fatalf("turn one Get: %v", err)
 	}
-	t.Logf("TURN ONE status=%s read=%s family=%s requirements=%d roles=%d", turnOne.Status, storedOne.SemanticStateRead, storedOne.SemanticState.Family, len(storedOne.SemanticState.Requirements), len(storedOne.SemanticState.Roles))
-	if storedOne.SemanticStateRead != contextfabric.SemanticStateReadAvailable || storedOne.SemanticState.Frame == nil || len(storedOne.SemanticState.Requirements) == 0 {
-		t.Fatalf("turn one did not persist a complete reading: read=%s", storedOne.SemanticStateRead)
+	// THE ASSERTION COMES BEFORE THE LOG, and the log reads nothing the
+	// assertion has not established. A mutant that stops the snapshot reaching
+	// the row leaves SemanticState nil here, and a log line that dereferenced
+	// it first turned a clean assertion failure into a panic -- which aborts
+	// the whole package binary, so the tests after this one never run and the
+	// arm reads as "the run did not cover the package list" instead of as the
+	// kill it is.
+	t.Logf("TURN ONE status=%s read=%s snapshot=%v", turnOne.Status, storedOne.SemanticStateRead, storedOne.SemanticState != nil)
+	if storedOne.SemanticStateRead != contextfabric.SemanticStateReadAvailable || storedOne.SemanticState == nil {
+		t.Fatalf("turn one did not persist a readable reading: read=%s snapshot=%v", storedOne.SemanticStateRead, storedOne.SemanticState != nil)
+	}
+	t.Logf("TURN ONE family=%s requirements=%d roles=%d", storedOne.SemanticState.Family, len(storedOne.SemanticState.Requirements), len(storedOne.SemanticState.Roles))
+	if storedOne.SemanticState.Frame == nil || len(storedOne.SemanticState.Requirements) == 0 {
+		t.Fatalf("turn one did not persist a complete reading: frame=%v requirements=%d", storedOne.SemanticState.Frame != nil, len(storedOne.SemanticState.Requirements))
 	}
 	persist1 := extLines(&sink1, "context fabric semantic state persistence")
 	if len(persist1) != 1 || persist1[0]["decision"] != "persisted" || persist1[0]["site"] != "window_confirmation_required" {
@@ -242,6 +253,9 @@ func TestSemanticContinuation_TheCarriedReadingSurvivesFreshEnginesAndARegistryC
 		t.Fatalf("turn two Get: %v", err)
 	}
 	// MATERIALIZED: turn two saved the carried reading as its own snapshot.
+	if storedTwo.SemanticState == nil {
+		t.Fatalf("turn two persisted no reading: read=%s", storedTwo.SemanticStateRead)
+	}
 	if storedTwo.SemanticStateRead != contextfabric.SemanticStateReadAvailable ||
 		!sameValue(storedTwo.SemanticState.Frame, storedOne.SemanticState.Frame) ||
 		!sameValue(storedTwo.SemanticState.Requirements, storedOne.SemanticState.Requirements) ||
