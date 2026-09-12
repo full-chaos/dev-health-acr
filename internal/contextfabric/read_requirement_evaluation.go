@@ -199,6 +199,28 @@ func evaluateReadRequirement(requirement contractsv1.ContextFabricPlanRequiremen
 			evidence.UndeclaredCode = detail.Code
 			continue
 		}
+		// A DISCLOSURE IS NOT A CAUSE. `carriedCause` answers "what
+		// mechanism cost this kind its evidence", and only a code that CAN
+		// degrade an answer is an answer to that question. A code the
+		// contract declares can never degrade is stating something ABOUT a
+		// read that already happened -- a prune the planner proved was
+		// correct, an unbounded validity window, one origin's state for a
+		// kind both origins reported -- and letting it land here would let
+		// the map's last writer rename the cause of a real loss after the
+		// fact. `fact_read_origin_state` made that visible: it is emitted
+		// per origin for EVERY kind, so it was the last detail written for
+		// every kind that had one, and a row narrowed by a provider failure
+		// began naming the disclosure that merely described the failure.
+		//
+		// The partition comes FROM the contract
+		// (ContextFabricCoverageDetailCodeMayDegrade) rather than from a
+		// list here, so a never-degrading code added later is excluded the
+		// day it is declared instead of the day someone remembers this
+		// site. It is applied AFTER the vocabulary gate above, because an
+		// undeclared code is undeclared whether or not it could degrade.
+		if !contractsv1.ContextFabricCoverageDetailCodeMayDegrade(detail.Code) {
+			continue
+		}
 		carriedCause[detail.FactKind] = detail.Code
 	}
 

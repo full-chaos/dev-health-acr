@@ -157,6 +157,63 @@ func TestTheSecondReadSharesTheTurnsFactBudget(t *testing.T) {
 			t.Errorf("served coverage for %s = %q, want %q -- a kind the cap did not touch must not be reported trimmed", kind, got, SourceAvailable)
 		}
 	}
+	// AND ON THE DISCLOSURE ROWS, not only on the folded source states.
+	//
+	// The checks above read `Coverage.Sources` alone, and a disclosure
+	// defect does not live there: the cap appends a SECOND observation for a
+	// kind the provider already reported, and what that does to the served
+	// rows is only visible in `Coverage.Details`. A cap test that never
+	// reads them cannot see it.
+	//
+	// ONE ROW PER (READ, KIND) is the rule: a read's state for a kind is one
+	// fact, whatever number of observations the pipeline used to arrive at it.
+	perReadKind := map[string]int{}
+	perReadKindStates := map[string][]string{}
+	for _, detail := range result.Coverage.Details {
+		if detail.Code != contractsv1.ContextFabricCoverageDetailFactReadOriginState {
+			continue
+		}
+		key := string(detail.OriginKind) + "/" + string(detail.FactKind)
+		perReadKind[key]++
+		perReadKindStates[key] = append(perReadKindStates[key], string(detail.SourceState))
+	}
+	t.Logf("served origin detail counts by (read, kind): %v states=%v", perReadKind, perReadKindStates)
+	for key, count := range perReadKind {
+		if count != 1 {
+			t.Errorf("%s carries %d origin details (states %v), want exactly 1 -- a read's state for a kind is one fact, not one per observation",
+				key, count, perReadKindStates[key])
+		}
+	}
+	// AND NO MORE THAN ONE ROW PER KIND, whatever the two reads did.
+	//
+	// In THIS fixture the two reads share no kind -- the member read
+	// observes `metrics` and the group read the other four -- so every kind
+	// has exactly one read, its state IS the served source state, and there
+	// is no second population to tell it apart from: zero rows is the
+	// correct answer here, and it is asserted as such rather than left to
+	// look like an absence of checking. The shapes where the reads DO share
+	// a kind are swept, cell by cell, in
+	// TestTheOriginDisclosureInputDomain.
+	if len(perReadKind) != 0 {
+		t.Errorf("served origin rows = %v, want none -- no kind in this fixture was read by both populations", perReadKindStates)
+	}
+	// The property that must hold on ANY turn: every served row names a
+	// state the folded source does NOT publish, which is what makes one row
+	// enough to recover both reads.
+	foldedStates := map[string]SourceState{}
+	for _, source := range result.Coverage.Sources {
+		foldedStates[source.Source] = source.State
+	}
+	for _, detail := range result.Coverage.Details {
+		if detail.Code != contractsv1.ContextFabricCoverageDetailFactReadOriginState {
+			continue
+		}
+		if folded := foldedStates[detail.Source]; folded == detail.SourceState {
+			t.Errorf("origin row %s/%s repeats the folded source state %q -- it adds nothing a reader could not already read",
+				detail.OriginKind, detail.FactKind, folded)
+		}
+	}
+
 	_, rows := servedRequirementRows(t, result, CompletionScopeEachGroup)
 	for _, row := range rows {
 		t.Logf("each_group row: outcome=%q impact=%q served=%d declared=%d cause=%q", row.Outcome, row.Impact, row.Served, row.Declared, row.CauseCoverage)

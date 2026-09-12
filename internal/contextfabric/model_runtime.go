@@ -2804,7 +2804,18 @@ func mergeCoverageDetails(all []CoverageDetail, reasons []string, orgID string) 
 		if nonDegrading[i].Code != nonDegrading[j].Code {
 			return nonDegrading[i].Code < nonDegrading[j].Code
 		}
-		return nonDegrading[i].Raw < nonDegrading[j].Raw
+		if nonDegrading[i].Raw != nonDegrading[j].Raw {
+			return nonDegrading[i].Raw < nonDegrading[j].Raw
+		}
+		// The rest of the dedupe key, so the order of rows the key now keeps
+		// apart is deterministic too, not the order they arrived in.
+		if nonDegrading[i].FactKind != nonDegrading[j].FactKind {
+			return nonDegrading[i].FactKind < nonDegrading[j].FactKind
+		}
+		if nonDegrading[i].OriginKind != nonDegrading[j].OriginKind {
+			return nonDegrading[i].OriginKind < nonDegrading[j].OriginKind
+		}
+		return nonDegrading[i].SourceState < nonDegrading[j].SourceState
 	})
 	nonDegrading = dedupeCoverageDetailsBySourceCodeRaw(nonDegrading)
 
@@ -2855,11 +2866,17 @@ func dedupeCoverageDetailsBySourceCodeRaw(details []CoverageDetail) []CoverageDe
 	if len(details) == 0 {
 		return nil
 	}
-	type key struct{ source, code, raw string }
+	// The key is the detail's IDENTITY, not just its text. Source, code and
+	// raw alone collapsed two rows that say different things about one
+	// source -- the same kind read for two populations, or the same scope gap
+	// reached from two origin kinds -- into whichever sorted first, and the
+	// served document lost the other silently. Kind, state and origin kind
+	// are the fields such rows differ in.
+	type key struct{ source, code, raw, factKind, sourceState, originKind string }
 	seen := make(map[key]struct{}, len(details))
 	out := make([]CoverageDetail, 0, len(details))
 	for _, d := range details {
-		k := key{d.Source, string(d.Code), d.Raw}
+		k := key{d.Source, string(d.Code), d.Raw, string(d.FactKind), string(d.SourceState), string(d.OriginKind)}
 		if _, ok := seen[k]; ok {
 			continue
 		}
