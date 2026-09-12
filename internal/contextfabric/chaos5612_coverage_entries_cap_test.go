@@ -88,10 +88,20 @@ func TestCapCoverageEntriesToWriteBoundBoundaryCells(t *testing.T) {
 		nonDegrading     int
 		wantOmitted      int
 		wantDetailsAfter int
+		// wantIDsUnchanged: an omitted==0 cell must leave every detail's own
+		// id exactly as the producer minted it -- NOT re-minted to "cov-NN"
+		// -- because nothing was capped. This is what an off-by-one on
+		// either entry guard (`len(details) <= bound`, or
+		// `len(nonDegrading) <= remaining`) would flip at the exact
+		// boundary: both guards would still land on omitted=0 by
+		// arithmetic, but only through the mint loop, silently rewriting
+		// every id a caller (and any downstream consumer keying on them)
+		// would have kept.
+		wantIDsUnchanged bool
 	}{
-		{"nil details", 0, 0, 0, 0},
-		{"exactly at the bound", 60, bound - 60, 0, bound},
-		{"one over the bound", 60, bound - 60 + 1, 1, bound},
+		{"nil details", 0, 0, 0, 0, true},
+		{"exactly at the bound", 60, bound - 60, 0, bound, true},
+		{"one over the bound", 60, bound - 60 + 1, 1, bound, false},
 	}
 	for _, c := range cells {
 		t.Run(c.name, func(t *testing.T) {
@@ -101,6 +111,10 @@ func TestCapCoverageEntriesToWriteBoundBoundaryCells(t *testing.T) {
 			}
 			for i := 0; i < c.nonDegrading; i++ {
 				details = append(details, syntheticNonDegradingDetail(i))
+			}
+			originalIDs := make([]string, len(details))
+			for i, d := range details {
+				originalIDs[i] = d.DetailID
 			}
 			result := &InvestigationResult{Coverage: Coverage{Details: details}}
 
@@ -113,6 +127,13 @@ func TestCapCoverageEntriesToWriteBoundBoundaryCells(t *testing.T) {
 			}
 			if got := len(result.Coverage.Details); got != c.wantDetailsAfter {
 				t.Errorf("details after cap = %d, want %d", got, c.wantDetailsAfter)
+			}
+			if c.wantIDsUnchanged {
+				for i, d := range result.Coverage.Details {
+					if d.DetailID != originalIDs[i] {
+						t.Errorf("detail %d id = %q, want unchanged %q -- omitted=0 must never re-mint ids", i, d.DetailID, originalIDs[i])
+					}
+				}
 			}
 		})
 	}
@@ -250,6 +271,92 @@ func TestCapCoverageEntriesToWriteBoundNeverDropsADegradingRowEvenAtTheBoundary(
 	for i, d := range result.Coverage.Details {
 		if !d.Degrading {
 			t.Fatalf("detail %d is non-degrading -- want every surviving row to be one of the %d degrading rows", i, contractsv1.ContextFabricCoverageEntriesMaxCount)
+		}
+	}
+}
+
+// TestCapCoverageEntriesToWriteBoundClampsRemainingWhenDegradingAloneExceedsTheBound
+// pins the remaining-capacity clamp (`remaining < 0` -> 0) for the
+// pathological cell past the boundary test above: degrading ALONE already
+// exceeds the bound before any non-degrading row is even considered.
+// Without the clamp, `remaining` goes negative and the subsequent
+// `nonDegrading[:remaining]` slice expression panics -- a mutant that
+// removes or inverts the clamp is caught here, not by any cell where
+// degrading merely fills the bound exactly (remaining lands on 0 either
+// way there, so that boundary alone cannot distinguish the two).
+//
+// This is also the one shape this cap cannot fully repair: degrading rows
+// never yield, so the served total can still exceed the bound when
+// degrading alone does. That is an accepted, documented limitation (real
+// vocabularies cannot reach it -- the maximal fixture tops out at 66
+// degrading rows) and this test pins the CURRENT behavior precisely so a
+// future change to it is a deliberate, reviewed decision, not a silent
+// side effect.
+func TestCapCoverageEntriesToWriteBoundClampsRemainingWhenDegradingAloneExceedsTheBound(t *testing.T) {
+	bound := contractsv1.ContextFabricCoverageEntriesMaxCount
+	var details []CoverageDetail
+	for i := 0; i < bound+10; i++ {
+		details = append(details, syntheticDegradingDetail(i))
+	}
+	for i := 0; i < 5; i++ {
+		details = append(details, syntheticNonDegradingDetail(i))
+	}
+	result := &InvestigationResult{Coverage: Coverage{Details: details}}
+
+	omitted := capCoverageEntriesToWriteBound(result)
+
+	if omitted != 5 {
+		t.Fatalf("omitted = %d, want 5 -- every non-degrading row yields once remaining capacity clamps to 0", omitted)
+	}
+	if got := len(result.Coverage.Details); got != bound+10 {
+		t.Fatalf("details after cap = %d, want %d -- all %d degrading rows survive uncapped (documented limitation)", got, bound+10, bound+10)
+	}
+	for i, d := range result.Coverage.Details {
+		if !d.Degrading {
+			t.Fatalf("detail %d is non-degrading -- want only the %d degrading rows to survive", i, bound+10)
+		}
+	}
+}
+
+// TestCapCoverageEntriesToWriteBoundIsANoopWhenDegradingAloneExceedsTheBoundWithNoNonDegradingRows
+// is the second half of the clamp pin above, for the cell that test cannot
+// reach: nonDegrading EMPTY. `remaining` still clamps to 0 (degrading alone
+// is already over the bound), so `len(nonDegrading) <= remaining` reads
+// `0 <= 0` -- true, same as the ordinary no-op path -- and the whole
+// function must return before ever reaching the mint loop, leaving every
+// producer-minted id untouched.
+//
+// This is the one cell that can tell "the second guard's `<=` is really
+// `<=`" apart from a `<` weakening: at every OTHER shape this test file
+// exercises, `len(nonDegrading) == remaining` forces `len(details) ==
+// bound` exactly (remaining is only ever `bound - degrading` when it is not
+// clamped), so the FIRST guard already returns before the second is ever
+// evaluated -- a `<=`-to-`<` weakening on the second guard is invisible
+// everywhere except here, where the clamp decouples `remaining` from that
+// identity.
+func TestCapCoverageEntriesToWriteBoundIsANoopWhenDegradingAloneExceedsTheBoundWithNoNonDegradingRows(t *testing.T) {
+	bound := contractsv1.ContextFabricCoverageEntriesMaxCount
+	var details []CoverageDetail
+	for i := 0; i < bound+10; i++ {
+		details = append(details, syntheticDegradingDetail(i))
+	}
+	originalIDs := make([]string, len(details))
+	for i, d := range details {
+		originalIDs[i] = d.DetailID
+	}
+	result := &InvestigationResult{Coverage: Coverage{Details: append([]CoverageDetail(nil), details...)}}
+
+	omitted := capCoverageEntriesToWriteBound(result)
+
+	if omitted != 0 {
+		t.Fatalf("omitted = %d, want 0 -- there are no non-degrading rows to yield", omitted)
+	}
+	if got := len(result.Coverage.Details); got != bound+10 {
+		t.Fatalf("details after cap = %d, want unchanged %d", got, bound+10)
+	}
+	for i, d := range result.Coverage.Details {
+		if d.DetailID != originalIDs[i] {
+			t.Errorf("detail %d id = %q, want unchanged %q -- omitted=0 must never re-mint ids", i, d.DetailID, originalIDs[i])
 		}
 	}
 }
