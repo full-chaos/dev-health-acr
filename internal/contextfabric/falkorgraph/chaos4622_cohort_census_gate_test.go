@@ -45,6 +45,19 @@ func TestCohortExactNameCensusEligibility(t *testing.T) {
 		Kind: contextfabric.SubjectExpressionOrganizationScope,
 		Org:  &contextfabric.OrganizationScopeExpression{},
 	})
+	// Frames for the rows below. organizationScopeServable declares a kind the
+	// seam admits, so its member set resolves; organizationScopeUnservable
+	// declares one it refuses, so it does not.
+	servableOrgKind := contextfabric.SubjectRepository
+	unservableOrgKind := contextfabric.SubjectWorkItem
+	organizationScopeServable := censusFrame(contextfabric.SubjectExpression{
+		Kind: contextfabric.SubjectExpressionOrganizationScope,
+		Org:  &contextfabric.OrganizationScopeExpression{MemberKind: &servableOrgKind},
+	})
+	organizationScopeUnservable := censusFrame(contextfabric.SubjectExpression{
+		Kind: contextfabric.SubjectExpressionOrganizationScope,
+		Org:  &contextfabric.OrganizationScopeExpression{MemberKind: &unservableOrgKind},
+	})
 
 	tests := []struct {
 		name                string
@@ -108,6 +121,35 @@ func TestCohortExactNameCensusEligibility(t *testing.T) {
 			name:                "organization_scope is not this gate's concern, no basis reported",
 			frame:               organizationScope,
 			scopeAnchorResolved: true,
+			wantEligible:        false,
+			wantBasis:           "",
+		},
+		{
+			// The member set an organization scope declares is a population
+			// the census fetches, so with no anchor the census runs, under
+			// its own basis rather than borrowing a cohort variant's.
+			name:                "organization_scope with a servable member kind is eligible",
+			frame:               organizationScopeServable,
+			scopeAnchorResolved: false,
+			wantEligible:        true,
+			wantBasis:           CohortExactNameCensusBasisOrganizationScopeMemberKind,
+		},
+		{
+			// The anchor half of the rule still binds: a resolved anchor
+			// means a subject was NAMED, and the org-wide census must not
+			// stand in for it.
+			name:                "organization_scope with a servable member kind and an anchor set is NOT eligible",
+			frame:               organizationScopeServable,
+			scopeAnchorResolved: true,
+			wantEligible:        false,
+			wantBasis:           CohortExactNameCensusBasisAnchorSet,
+		},
+		{
+			// An unservable declared kind resolves no member set, so this gate
+			// has nothing to say -- identical to declaring no kind at all.
+			name:                "organization_scope with an unservable member kind is not this gate's concern",
+			frame:               organizationScopeUnservable,
+			scopeAnchorResolved: false,
 			wantEligible:        false,
 			wantBasis:           "",
 		},
