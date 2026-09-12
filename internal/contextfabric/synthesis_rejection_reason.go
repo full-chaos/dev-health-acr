@@ -3,6 +3,8 @@ package contextfabric
 import (
 	"errors"
 	"fmt"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // SynthesisRejectionReason is the CLOSED vocabulary naming which rule in
@@ -228,7 +230,28 @@ type SynthesisRejection struct {
 	// telemetry seam omits the field rather than printing a default on
 	// rejections it does not describe.
 	SubjectScopeBasis SynthesisSubjectScopeBasis
-	err               error
+	// Clause is set ONLY by the three rejections that delegate to a
+	// model-minted struct's own Validate() -- driver_invalid,
+	// claim_invalid, finding_invalid -- and names WHICH clause of that
+	// Validate() refused.
+	//
+	// Those three reasons name the STRUCT and nothing else, while the
+	// validators behind them decide on twenty, twelve and ten clauses
+	// respectively. A reader of the trace could see that a driver was
+	// refused and not whether the model overran a title by two characters,
+	// named a category outside the vocabulary, or cited no evidence at all
+	// -- three defects with three different owners and three different
+	// fixes. The clause is diagnosed by the contracts package's own
+	// clause-order traversal, so it cannot disagree with the validator
+	// about which statement rejected.
+	//
+	// ContextFabricClauseNone means the rejection was not one of the three
+	// (the telemetry seam omits the field rather than printing a default on
+	// rejections it does not describe) -- or, for one of the three, that the
+	// traversal found every clause passing, which is a broken instrument
+	// rather than a diagnosis and must be visible as one.
+	Clause contractsv1.ContextFabricRejectedClause
+	err    error
 }
 
 func (e *SynthesisRejection) Error() string { return e.err.Error() }
@@ -266,6 +289,19 @@ func rejectSynthesisSubject(reason SynthesisRejectionReason, basis SynthesisSubj
 	return &SynthesisRejection{Reason: reason, SubjectScopeBasis: basis, err: fmt.Errorf(format, args...)}
 }
 
+// rejectSynthesisClause is rejectSynthesis for the three rules that
+// delegate to a model-minted struct's own Validate() -- see
+// SynthesisRejection.Clause.
+//
+// The clause is diagnosed at the rejecting statement and carried BY the
+// error, never re-derived later from the shape of the draft: the draft is
+// a consequence of the rejecting branch, not an observation of it, and
+// ValidateAgainst short-circuits, so a later re-scan can report a clause
+// belonging to an entry that was never evaluated.
+func rejectSynthesisClause(reason SynthesisRejectionReason, clause contractsv1.ContextFabricRejectedClause, format string, args ...any) error {
+	return &SynthesisRejection{Reason: reason, Clause: clause, err: fmt.Errorf(format, args...)}
+}
+
 // SynthesisSubjectScopeBasisOf returns the rejecting subject's scope basis
 // and true when err carries one, and ("", false) otherwise -- so a telemetry
 // seam can tell "not a subject-scope rejection" apart from every basis
@@ -279,6 +315,25 @@ func SynthesisSubjectScopeBasisOf(err error) (SynthesisSubjectScopeBasis, bool) 
 		}
 	}
 	return "", false
+}
+
+// SynthesisRejectionClauseOf returns the rejected clause and true when err
+// carries one, and (ContextFabricClauseNone, false) otherwise -- so a
+// telemetry seam can tell "not a clause-bearing rejection" apart from
+// every clause without reaching into the error type.
+//
+// It returns the contracts package's own TABLE constant, never
+// rejection.Clause itself, so a value that somehow escaped the closed
+// vocabulary cannot reach a log field (CodeQL go/log-injection -- the same
+// distinction SynthesisRejectionReasonOf draws, for the same reason).
+func SynthesisRejectionClauseOf(err error) (contractsv1.ContextFabricRejectedClause, bool) {
+	var rejection *SynthesisRejection
+	if errors.As(err, &rejection) {
+		if contractsv1.ValidContextFabricRejectedClause(rejection.Clause) {
+			return contractsv1.ContextFabricRejectedClauseOf(rejection.Clause), true
+		}
+	}
+	return contractsv1.ContextFabricClauseNone, false
 }
 
 // SynthesisFactGroupSizeOf returns the rejecting claim's (Kind, Subject)

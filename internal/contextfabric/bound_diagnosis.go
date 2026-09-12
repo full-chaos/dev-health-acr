@@ -210,6 +210,20 @@ func diagnoseSynthesisDraftBound(d SynthesisDraft, input SynthesisInput) (bound 
 			allowedEvidence[evidenceRefID] = struct{}{}
 		}
 	}
+	// The engine's own driver-candidate evidence. ValidateAgainst admits it and
+	// this mirror did not, so the mirror's allowed set was a strict SUBSET
+	// of the validator's: a draft citing a driver-candidate ref passed
+	// ValidateAgainst and made this mirror bail here, which reported NO
+	// bound for whatever clause actually rejected later. A subset can only
+	// ever under-report (it stops earlier than the validator, so it never
+	// names a clause the validator did not reach), which is why this was a
+	// silent completeness gap rather than a wrong name -- but the whole
+	// point of a literal mirror is that neither kind of divergence exists.
+	for _, candidate := range input.Graph.DriverCandidates {
+		for _, evidenceRefID := range candidate.EvidenceRefIDs {
+			allowedEvidence[evidenceRefID] = struct{}{}
+		}
+	}
 	for _, evidenceRefID := range d.EvidenceRefIDs {
 		if _, exists := allowedEvidence[evidenceRefID]; !exists {
 			return "", false
@@ -231,6 +245,24 @@ func diagnoseSynthesisDraftBound(d SynthesisDraft, input SynthesisInput) (bound 
 		// all, indistinguishable from any other synthesis_rejected cause.
 		if len(claim.Rows) > 0 {
 			return boundClaimedFactRowsModelAuthored, true
+		}
+		// The additive TimeSeriesRows pair, the SAME authorship rule
+		// one field over (ValidateAgainst rejects it immediately after Rows
+		// above). This mirror omitted the statement entirely, and unlike the
+		// driver-candidate gap above that omission was UNSOUND, not merely
+		// incomplete: a claim whose only fault is model-authored
+		// time_series_rows passes every clause this mirror checks, so the
+		// traversal ran on past it and could name a bound belonging to a
+		// LATER claim, driver or finding that ValidateAgainst never evaluated
+		// -- the exact "reporting a name for something the validator never
+		// rejected on" failure this file's clause-by-clause mirroring exists
+		// to make impossible.
+		//
+		// It names no bound (the registry has an entry for rows' authorship
+		// rule, not for time_series_rows'), so this returns the no-name form:
+		// stopping here is what makes every later name unreachable.
+		if len(claim.TimeSeriesRows) > 0 {
+			return "", false
 		}
 		if _, exists := claimedByID[claim.ClaimID]; exists {
 			return "", false
