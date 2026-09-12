@@ -311,12 +311,12 @@ func (e *Engine) finalizeServed(ctx context.Context, principal storage.Principal
 	// CHAOS-5637: the answerability invariant, HERE for the same reason
 	// everything else in this function is here -- this is the one point
 	// every serving path is downstream of, and a guard that holds at some
-	// exits is not a guard. The first draft of this ticket placed it at two
-	// exits by hand, which is the shape this function's own header records
-	// as already defeated: there are SEVEN callers, including the decisive
-	// path (whose status is the model's own word and may legitimately be
-	// clarification_required) and the reuse path (which serves a document
-	// composed on an earlier turn). Both were outside a two-exit guard.
+	// exits is not a guard. Placing it at individual exits is the shape this
+	// function's own header records as already defeated: there are SEVEN
+	// callers, including the decisive path (whose status is the model's own
+	// word and may legitimately be clarification_required) and the reuse
+	// path (which serves a document composed on an earlier turn), and both
+	// are easy to miss when the exits are enumerated by hand.
 	//
 	// AFTER the completeness re-derivation and BEFORE the budget assertion,
 	// so it reads the same final document the budget is measured against.

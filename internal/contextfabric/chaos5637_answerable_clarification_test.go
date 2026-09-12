@@ -333,8 +333,8 @@ func TestTheRedeemableOfferDomain(t *testing.T) {
 // THE SIBLING SWEEP, executed rather than argued.
 //
 // Every serving path funnels through finalizeServed -- seven callers, its own
-// header says so -- and this ticket's first draft guarded two of them by hand.
-// The two that a two-exit guard could never have reached are the DECISIVE path
+// header says so -- so a guard placed at individual exits is a guard with
+// holes. The two an exit-by-exit guard is likeliest to miss are the DECISIVE path
 // (status is the model's own word, and the synthesis contract admits
 // clarification_required) and the REUSE path. Both are exercised here through
 // the shared chokepoint, with the same document shape, so the claim "every
@@ -392,15 +392,16 @@ func TestEveryServingStageRefusesAnUnanswerableClarification(t *testing.T) {
 // StructureNeeds nil. Serving one after this change would turn a stale
 // cached row into a 5xx.
 //
-// THE FIRST VERSION OF THIS TEST WAS VACUOUS and adversarial review proved
-// it with a coverage profile: it built the stale row locally, asserted the
-// predicate by hand, and then drove Investigate against an EMPTY store with
-// no reuse gate wired, so answer_reuse.go's filter lines reported 0
-// executions and the test stayed green with the filter deleted. It now
-// drives tryReuse -- the function the filter lives in -- with a gate that
-// actually returns the candidate, the same way this package's own
-// graph-not-projected miss test drives reuseAuthorizationStillHolds
-// directly rather than inferring it from an Investigate outcome.
+// WHAT THIS MUST DRIVE, and why nothing weaker measures the filter. The
+// filter is a line inside tryReuse, reached only when a reuse gate actually
+// hands back a candidate. A test that asserts resultOffersRedeemable by
+// hand measures the predicate, not the filter; a test that drives
+// Investigate against an empty store with no gate wired never reaches
+// tryReuse at all, leaves the filter's lines at zero executions, and stays
+// green with the filter deleted. So this drives tryReuse directly, under a
+// gate that returns the candidate -- the same shape this package's own
+// graph-not-projected miss test uses on reuseAuthorizationStillHolds rather
+// than inferring the outcome from an Investigate result.
 func TestAStaleUnanswerableClarificationIsNeverServedFromReuse(t *testing.T) {
 	t.Parallel()
 
@@ -475,10 +476,10 @@ func TestAStaleUnanswerableClarificationIsNeverServedFromReuse(t *testing.T) {
 }
 
 // THE READ SIDE. finalizeServed covers every path that COMPOSES a result; it
-// does not cover the one that hands back a row composed by an earlier build.
-// Adversarial review reproduced that through the HTTP handler. This pins the
-// repair at the unit the route calls, including the two arms that must NOT
-// fire.
+// does not cover the one that hands back a row composed by an earlier build,
+// which the result-by-id route serves and the MCP tool forwards. This pins
+// the repair at the unit the route calls, including the arms that must NOT
+// fire -- an answerable clarification, an answer-bearing result, and nil.
 func TestALegacyUnanswerableClarificationIsRepairedOnRead(t *testing.T) {
 	t.Parallel()
 

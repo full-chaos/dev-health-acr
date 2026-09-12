@@ -150,10 +150,9 @@ func resultOffersRedeemable(result InvestigationResult) bool {
 // document, admits it under the deliberately lenient stored-read validator,
 // and serves it -- and the MCP investigation_result tool forwards that same
 // canonical response. Both were outside the guard, and both would have gone
-// on serving exactly the 76-turn shape this ticket exists to end. Found by
-// adversarial review, reproduced through the HTTP handler: GET returned 200
-// with status clarification_required, zero candidates, no structure needs
-// and no window clarification.
+// on serving exactly the 76-turn shape this ticket exists to end: a GET of
+// such a row returns 200 with status clarification_required, zero
+// candidates, no structure needs and no window clarification.
 //
 // A REPAIR, NOT A REFUSAL. The row is real and the caller asked for it by
 // id; erroring the read would deny them a document they are entitled to
