@@ -1336,6 +1336,9 @@ func (e *Engine) structureVetoResult(ctx context.Context, principal storage.Prin
 	result.Completeness = ComputeAnswerCompleteness(result)
 	// CHAOS-4690: same "own independent exit, stamp immediately before its
 	// own Validate" placement rule as Completeness above.
+	if omitted := capCoverageEntriesToWriteBound(&result); omitted > 0 && e.telemetry != nil {
+		e.telemetry.RecordCoverageEntriesCapped(ctx, principal, len(result.Coverage.Details), omitted)
+	}
 	if fallbacks := applyCoverageDisplayLabels(&result); fallbacks > 0 && e.telemetry != nil {
 		e.telemetry.RecordEvidenceLabelFallback(ctx, principal, fallbacks)
 	}

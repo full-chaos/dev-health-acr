@@ -480,6 +480,9 @@ func (e *Engine) terminalResult(
 	// own stamp point either (same reasoning as the Completeness comment
 	// immediately above), so it stamps coverage/evidence-ref display
 	// labels itself, at the same "immediately before Validate" placement.
+	if omitted := capCoverageEntriesToWriteBound(&result); omitted > 0 && e.telemetry != nil {
+		e.telemetry.RecordCoverageEntriesCapped(ctx, principal, len(result.Coverage.Details), omitted)
+	}
 	if fallbacks := applyCoverageDisplayLabels(&result); fallbacks > 0 && e.telemetry != nil {
 		e.telemetry.RecordEvidenceLabelFallback(ctx, principal, fallbacks)
 	}

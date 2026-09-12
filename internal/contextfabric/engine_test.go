@@ -458,6 +458,17 @@ type recordingTelemetry struct {
 	// outcome/phrased/total triple recorded for a given call, never
 	// merely that something fired.
 	coverageDisclosurePhrasings []coverageDisclosurePhrasingRecord
+	// coverageEntriesCapped (CHAOS-5612) mirrors the SAME list-not-count
+	// discipline: a test asserts the exact served/omitted pair recorded for
+	// a given call, never merely that something fired.
+	coverageEntriesCapped []coverageEntriesCappedRecord
+}
+
+// coverageEntriesCappedRecord (CHAOS-5612) mirrors
+// coverageDisclosurePhrasingRecord's own shape, one field pair narrower.
+type coverageEntriesCappedRecord struct {
+	served  int
+	omitted int
 }
 
 // coverageDisclosurePhrasingRecord (CHAOS-4690 Commit F) mirrors
@@ -819,6 +830,10 @@ func (r *recordingTelemetry) RecordEvidenceLabelFallback(_ context.Context, _ st
 
 func (r *recordingTelemetry) RecordCoverageDisclosurePhrasing(_ context.Context, _ storage.Principal, outcome CoverageDisclosureOutcome, violation CoverageDisclosureViolation, phrased, total int) {
 	r.coverageDisclosurePhrasings = append(r.coverageDisclosurePhrasings, coverageDisclosurePhrasingRecord{outcome: outcome, violation: violation, phrased: phrased, total: total})
+}
+
+func (r *recordingTelemetry) RecordCoverageEntriesCapped(_ context.Context, _ storage.Principal, served, omitted int) {
+	r.coverageEntriesCapped = append(r.coverageEntriesCapped, coverageEntriesCappedRecord{served: served, omitted: omitted})
 }
 
 func mustEngineForPriorReceiptTest(t *testing.T, graph GraphReader, store InvestigationResultStore, telemetry EngineTelemetry) *Engine {
