@@ -41,10 +41,11 @@ func boundaryGroupedFrame(t *testing.T, group, member SubjectKind) (QuestionFram
 func carriedStateFor(t *testing.T, family QuestionFamily, group SubjectKind, frame *QuestionFrame, gate FrameGate) *PersistedSemanticState {
 	t.Helper()
 	state := BuildSemanticState(SemanticStateInput{
-		Outcome:       QuestionFamilyOutcome{Family: family, Source: QuestionFamilySourceModel, Frame: frame, Gate: gate},
-		EmittedShape:  ShapeOpen,
-		GroupKind:     group,
-		FamilyVersion: QuestionFamilyTableVersion,
+		Outcome:         QuestionFamilyOutcome{Family: family, Source: QuestionFamilySourceModel, Frame: frame, Gate: gate},
+		EmittedShape:    ShapeOpen,
+		GroupKind:       group,
+		FamilyVersion:   QuestionFamilyTableVersion,
+		RequestIdentity: carrierRequestIdentity(validInvestigationRequest().Question),
 	})
 	if _, err := EncodeSemanticState(state); err != nil {
 		t.Fatalf("fixture defect: carrier snapshot does not validate: %v", err)
@@ -860,4 +861,75 @@ func TestBoundary_NoRequestDerivedValueCanForgeALogLine(t *testing.T) {
 	if got := strings.Count(strings.TrimRight(line, "\n"), "\n"); got != 0 {
 		t.Errorf("the emitted record spans %d extra line(s)", got)
 	}
+}
+
+// TestComposition_TheCarriedAxisIsNeverUnexpressible is the closing pin for the
+// DURABLE CARRIED FRAME: an established window-only transition can no longer
+// end at composition for want of somewhere to put the carried reading.
+//
+// The invariant it names (carried_axis_unexpressible) described a real failure
+// while the carried reading had to be substituted into THIS turn's fresh frame:
+// a fresh proposal with no grouped expression had nowhere to put a carried
+// group axis, so an already-confirmed turn was refused on the shape of a
+// reading nobody asked to execute. The snapshot carries the FRAME now, so
+// composition revalidates turn one's own frame and never reads the fresh
+// proposal's shape -- the mismatch this invariant described cannot arise.
+//
+// The token stays a declared member of the published vocabulary (narrowing a
+// closed contract member is a separate decision), so this pin is what keeps it
+// honest: it drives the exact shape that used to produce it, through the real
+// engine, over every ungrouped fresh proposal, and asserts the turn composes
+// and serves the carried reading instead.
+func TestComposition_TheCarriedAxisIsNeverUnexpressible(t *testing.T) {
+	t.Parallel()
+	question := validInvestigationRequest().Question
+	for _, carried := range []struct {
+		name  string
+		group SubjectKind
+	}{
+		{"grouped carrier", contractsv1.ContextFabricSubjectTeam},
+		{"ungrouped carrier", ""},
+	} {
+		carried := carried
+		t.Run(carried.name, func(t *testing.T) {
+			t.Parallel()
+			prior := continuationPrior(t, continuationPriorID, question, QuestionFamilyGroupedCohortStatus, carried.group)
+			h := newContinuationHarness(t,
+				&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+				// The fresh proposal that used to make the axis unexpressible:
+				// a validated frame with NO grouped expression.
+				ungroupedDriftInterpreter{family: QuestionFamilyDiscoveredCohortRanking})
+
+			result := h.investigate(t, continuationRequest(question))
+			d := h.soleDecision(t)
+			t.Logf("%s: disposition=%q reason=%q composition=%q invariant=%q | status=%q basis=%q plan_source=%q",
+				carried.name, d.Disposition, d.Reason, d.CompositionOutcome, d.CompositionFailedInvariant,
+				result.Status, result.RefusalBasis, servedPlanSource(result))
+
+			if !d.TransitionEstablished {
+				t.Fatalf("the fixture did not establish the transition, so it pins nothing")
+			}
+			if d.CompositionFailedInvariant == CompositionInvariantCarriedAxisUnexpressible {
+				t.Errorf("composition_failed_invariant = %q -- the carried frame is durable, so this invariant has no path", d.CompositionFailedInvariant)
+			}
+			if d.Disposition != ContinuationApplied {
+				t.Errorf("disposition = %q/%q, want applied -- a confirmed turn must not be withheld on the fresh proposal's shape", d.Disposition, d.Reason)
+			}
+			if result.RefusalBasis != "" {
+				t.Errorf("the confirmed turn was refused: basis=%q", result.RefusalBasis)
+			}
+			if servedPlanSource(result) != QuestionFamilySourceCarried {
+				t.Errorf("served plan source = %q, want carried", servedPlanSource(result))
+			}
+		})
+	}
+
+	// THE CONTROL FOR THE CLAIM ABOVE: the token is still a declared member of
+	// the guard's vocabulary, so "no path produces it" is a statement about the
+	// paths, not about a value that quietly stopped existing.
+	t.Run("the invariant is still declared", func(t *testing.T) {
+		if !validCompositionFailedInvariant(CompositionInvariantCarriedAxisUnexpressible) {
+			t.Errorf("%q is no longer a valid composition invariant -- this pin would then be asserting nothing", CompositionInvariantCarriedAxisUnexpressible)
+		}
+	})
 }

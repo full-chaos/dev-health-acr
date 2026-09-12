@@ -373,10 +373,17 @@ func TestCHAOS5582_EveryExitPublishesTheAxisStateItReached(t *testing.T) {
 			map[string]any{"continuation_disposition": "not_applicable", "decision_reason": "as_of_unresolvable", "interpreted_axis": "valid_time", "carried_axis": "current", "executed_axis": "", "interpreted_axis_outcome": "vetoed"}, false},
 		{"interpreter_error", nil, nil, errInterpreter5582{}, true,
 			map[string]any{"decision_reason": "fresh_context_unavailable", "interpreted_axis": "", "executed_axis": "", "interpreted_axis_outcome": "not_evaluated"}, false},
-		// The reading is withheld, the transition is not: the axis stays the
-		// confirmed one and the turn is served, never refused on the sample.
-		{"composition_refused_under_drift", nil, nil, ungroupedDriftInterpreter{family: QuestionFamilyDiscoveredCohortRanking}, false,
-			map[string]any{"continuation_disposition": "withheld", "decision_reason": "composition_invalid", "interpreted_axis": "range", "carried_axis": "current", "executed_axis": "", "interpreted_axis_outcome": "overridden_by_receipt", "refusal_basis": "continuation_context_unverifiable"}, false},
+		// FLIPPED BY THE PERSISTED READING. This cell drifts the axis AND
+		// gives the fresh proposal an ungrouped shape, which used to leave the
+		// carried group axis with nowhere to go once the reading was
+		// substituted into the fresh frame (composition_invalid). The frame is
+		// carried now, so composition runs on turn one's own validated frame
+		// and the fresh shape is not consulted: the confirmed reading is
+		// served. The axis claim this cell exists for is unchanged -- the
+		// sampled `range` never governs, `carried_axis` stays current -- and
+		// the turn now executes under it.
+		{"composition_applied_under_drift", nil, nil, ungroupedDriftInterpreter{family: QuestionFamilyDiscoveredCohortRanking}, false,
+			map[string]any{"continuation_disposition": "applied", "decision_reason": "none", "interpreted_axis": "range", "carried_axis": "current", "executed_axis": "current", "interpreted_axis_outcome": "overridden_by_receipt", "refusal_basis": "none"}, false},
 		{"version_mismatched_carrier_under_drift", func(p InvestigationResult) InvestigationResult {
 			p.AnswerPlan.FamilyVersion = "question-family.v0-not-in-force"
 			return p
@@ -456,6 +463,17 @@ func TestCHAOS5582_TheLineVocabularyIsTheGuardsVocabulary(t *testing.T) {
 		},
 		"interpreted_axis_outcome": func(d *windowContinuationDecision, m string) { d.AxisOutcome = ContinuationAxisOutcome(m) },
 		"carrier_read":             func(d *windowContinuationDecision, m string) { d.CarrierRead = ContinuationCarrierRead(m) },
+		"carried_state_read": func(d *windowContinuationDecision, m string) {
+			// "not_read" is the token the guard renders when admission never
+			// consulted a carrier, so it is seated by NOT consulting one;
+			// every other member is a status a consulted read returned.
+			if m == "not_read" {
+				d.CarriedStateConsulted = false
+				return
+			}
+			d.CarriedStateConsulted = true
+			d.CarriedStateRead = SemanticStateReadStatus(m)
+		},
 		"refusal_basis": func(d *windowContinuationDecision, m string) {
 			if m != "none" {
 				d.RefusalBasis = contractsv1.ContextFabricRefusalBasis(m)
@@ -531,12 +549,23 @@ func TestCHAOS5582_TheLineAssertsOnlyDecisionsThatHeldAtEmission(t *testing.T) {
 		wantComposition string
 		wantApplied     bool
 	}{
-		{name: "applied/no_fresh_frame -- the one cell that DID apply a window",
+		// `no_fresh_frame` is no longer a COMPOSITION outcome: it belongs to
+		// the no-continuation path (freshAcceptedContext). A continuation is
+		// composed from the carried snapshot, and a frameless carrier read
+		// beside an agreeing fresh family is `unchanged` -- the reading this
+		// turn would have produced is the one it already has.
+		{name: "applied/unchanged -- the one cell that DID apply a window",
 			interpreter:     freshAxisInterpreter{family: QuestionFamilyGroupedCohortStatus, timeContext: TimeContext{Axis: TemporalCurrent}},
-			wantDisposition: "applied", wantComposition: "no_fresh_frame", wantApplied: true},
-		{name: "withheld/invalid -- composition could not express the carried reading",
+			wantDisposition: "applied", wantComposition: "unchanged", wantApplied: true},
+		// FLIPPED BY THE PERSISTED READING: an ungrouped fresh proposal used to
+		// leave the carried axis unexpressible once the reading was substituted
+		// into the fresh frame. The frame is carried now, so the fresh shape is
+		// not consulted and the confirmed reading composes. The table keeps a
+		// withheld/not_evaluated cell below, so the "neither field is published
+		// unless the continuation applied" claim still has its negative half.
+		{name: "applied/accepted -- the carried frame composes whatever the fresh proposal's shape",
 			interpreter:     ungroupedDriftInterpreter{family: QuestionFamilyDiscoveredCohortRanking},
-			wantDisposition: "withheld", wantComposition: "invalid", wantApplied: false},
+			wantDisposition: "applied", wantComposition: "accepted", wantApplied: true},
 		{name: "withheld/not_evaluated -- version-mismatched carrier, never composed",
 			prior: func(p InvestigationResult) InvestigationResult {
 				p.AnswerPlan.FamilyVersion = "question-family.v0-not-in-force"

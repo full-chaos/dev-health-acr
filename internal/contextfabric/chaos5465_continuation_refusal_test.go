@@ -160,6 +160,20 @@ type refusalReadCounts struct {
 
 func newRefusalEngine(t *testing.T, store InvestigationResultStore, interpreter QuestionInterpreter, telemetry EngineTelemetry) (*Engine, *refusalReadCounts) {
 	t.Helper()
+	// Every carrier a production turn saves carries its persisted reading, so
+	// every fixture carrier does too -- one place, through the same producer,
+	// for both store shapes these pins use. A pin that WANTS a carrier without
+	// one (the legacy-row cells) opts out with staticResultStore.noCarrierStates.
+	switch s := store.(type) {
+	case *refusalStore:
+		if !s.staticResultStore.noCarrierStates {
+			withCarrierStates(t, s.staticResultStore)
+		}
+	case *staticResultStore:
+		if !s.noCarrierStates {
+			withCarrierStates(t, s)
+		}
+	}
 	counts := &refusalReadCounts{}
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	fresh := validInvestigationResult()
@@ -423,7 +437,14 @@ func TestContinuationRefusal_TheRefusalMatrixThroughTheEngine(t *testing.T) {
 			if cell.carrier != nil {
 				base.states = map[string]*PersistedSemanticState{prior.ResultID: cell.carrier(t, prior)}
 			}
-			if !cell.legacyCarrier {
+			if cell.legacyCarrier {
+				// A LEGACY ROW OPTS OUT ONCE, ON THE STORE. Skipping the call
+				// here is not enough: every later stamping point (the engine
+				// constructor, the axis harness) asks the store itself, and a
+				// cell that means "written before the column existed" must
+				// stay that way through all of them.
+				base.noCarrierStates = true
+			} else {
 				withCarrierStates(t, base)
 			}
 			if cell.stateRead != "" {
@@ -957,7 +978,7 @@ func TestContinuationRefusal_TheProjectionKeepsBothHalvesAtTheCap(t *testing.T) 
 // the reading cannot ride a window receipt unnoticed.
 func TestWindowContinuation_EveryRequestFieldIsDecidedByName(t *testing.T) {
 	t.Parallel()
-	const unrecordedOption = "not recorded at turn one; compared in the stacked semantic-state digest"
+	const unrecordedOption = "an answer-shaping option the public plan does not record: turn one stamped it into the snapshot's request-identity digest, and a changed value is request_identity_changed -- the fresh path, not this turn's continuation"
 	base := validInvestigationRequest().Question
 	type decided struct {
 		kind   string // key | disqualifier | exempt
@@ -1007,13 +1028,13 @@ func TestWindowContinuation_EveryRequestFieldIsDecidedByName(t *testing.T) {
 		"options.max_serialized_bytes": {"disqualifier", "the effective byte budget turn one recorded on the carrier's plan differs", func(r *InvestigationRequest) {
 			r.Options.MaxSerializedBytes = r.Options.MaxSerializedBytes / 2
 		}},
-		"options.max_subject_candidates": {"exempt", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxSubjectCandidates = 3 }},
-		"options.max_cohort_members":     {"exempt", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxCohortMembers = 7 }},
-		"options.max_relationship_paths": {"exempt", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxRelationshipPaths = 7 }},
-		"options.max_drivers":            {"exempt", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxDrivers = 3 }},
-		"options.max_evidence_refs":      {"exempt", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxEvidenceRefs = 7 }},
-		"options.allow_clarification":    {"exempt", unrecordedOption, func(r *InvestigationRequest) { r.Options.AllowClarification = false }},
-		"options.window_confirmation_mode": {"exempt", unrecordedOption, func(r *InvestigationRequest) {
+		"options.max_subject_candidates": {"disqualifier", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxSubjectCandidates = 3 }},
+		"options.max_cohort_members":     {"disqualifier", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxCohortMembers = 7 }},
+		"options.max_relationship_paths": {"disqualifier", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxRelationshipPaths = 7 }},
+		"options.max_drivers":            {"disqualifier", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxDrivers = 3 }},
+		"options.max_evidence_refs":      {"disqualifier", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxEvidenceRefs = 7 }},
+		"options.allow_clarification":    {"disqualifier", unrecordedOption, func(r *InvestigationRequest) { r.Options.AllowClarification = false }},
+		"options.window_confirmation_mode": {"disqualifier", unrecordedOption, func(r *InvestigationRequest) {
 			r.Options.WindowConfirmationMode = contractsv1.ContextFabricWindowConfirmationNudge
 		}},
 		"options.include_debug": {"exempt", "debug output only: executed, the continuation decision is unchanged", func(r *InvestigationRequest) { r.Options.IncludeDebug = true }},
