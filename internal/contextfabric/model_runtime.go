@@ -2036,9 +2036,23 @@ func (r RuntimeQuestionInterpreter) finishFamilyResolution(
 		Family: outcome.Family, Source: FamilyRoutePrecedence,
 		Disposition: FamilyRouteNoFrameObserved,
 	}
+	// A REFUSED PLURALITY IS TERMINAL (CHAOS-5638). When the ensemble found no
+	// strict majority, `unclassified` is not a gap the route may fill from the
+	// winning sample's frame -- it is the resolver's verdict that the model did
+	// not agree with itself, and the whole point of taking N samples is to be
+	// able to say so. Letting the projection overwrite it publishes a confident
+	// family for a question three samples could not agree on, and the wire then
+	// carries `source=model_plurality_rejected` beside a real family, which is a
+	// contradiction a consumer cannot resolve.
+	//
+	// The route is still COMPUTED and still recorded on the outcome, because the
+	// comparison is a measurement and suppressing it would blind the flip
+	// decision this shadow exists to inform. Only the overwrite is withheld.
 	if shadow.FrameObserved {
 		route = RouteQuestionFamily(shadow.Agreement)
-		outcome.Family = route.Family
+		if outcome.Source != QuestionFamilySourcePluralityRejected {
+			outcome.Family = route.Family
+		}
 	}
 	outcome.Route = route
 	if r.FamilyTelemetry != nil {

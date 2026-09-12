@@ -797,7 +797,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// would have. sampledModelRuntime returns nil unless that runtime
 		// really implements the port, and EnsembleSize defaults to 1, so
 		// the pair is inert until a composition asks for N>1.
-		Interpreter: contextfabric.RuntimeQuestionInterpreter{Runtime: modelRuntime, SampledRuntime: sampledModelRuntime(modelRuntime), EnsembleSize: interpretationEnsembleSize(request.options.InterpretationEnsembleSize), Sink: receiptSink, FamilyTelemetry: engineTelemetry, FrameTelemetry: engineTelemetry, Requirements: factRegistry},
+		Interpreter: newContextFabricQuestionInterpreter(modelRuntime, receiptSink, engineTelemetry, factRegistry, request.options.InterpretationEnsembleSize),
 		// The SAME factRegistry again, for the engine's own derivation of
 		// this turn's requirement rows at assembly. It is wired rather
 		// than discovered for the reason stated above, and it is wired at

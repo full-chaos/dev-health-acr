@@ -81,6 +81,17 @@ import (
 // `model` on the wire and have nothing to tell them which was true.
 var ErrEnsembleRuntimeMissing = errors.New("context fabric interpretation ensemble requires a sampled model runtime")
 
+// ErrEnsembleAllSamplesFellBack reports that every sample came back from the
+// fallback provider, so none of them may vote and there is no error to
+// surface either.
+//
+// ITS OWN SENTINEL because the operator response differs from every other
+// failure here: nothing is broken in this service, the primary model provider
+// is unreachable or refusing, and the fix is upstream. Folding it into a
+// joined sample error would describe it as N independent failures, which is
+// the opposite of what happened -- N successes that are not usable as votes.
+var ErrEnsembleAllSamplesFellBack = errors.New("context fabric interpretation ensemble: every sample was served by the fallback provider and none may vote")
+
 // SampledModelRuntime is the per-sample half of ModelRuntime: one interpret
 // call identified by a sample index, so the runtime can derive a distinct
 // decoding seed per sample.
@@ -156,17 +167,69 @@ func (r RuntimeQuestionInterpreter) interpretEnsemble(ctx context.Context, princ
 	// key so ordering does not decide the outcome, but a reproducible order
 	// makes two runs of the same question diffable -- the same reason
 	// ResolveQuestionFamilyEnsemble preserves it.
+	//
+	// A FALLBACK-SERVED SAMPLE IS NOT A VOTE. genkitruntime's own port says so
+	// on the method this calls: the sample index governs the PRIMARY attempt
+	// only, the fallback entry point takes no index at all, and "a caller
+	// doing an N-sample measurement MUST check FallbackUsed and exclude any
+	// such sample". N fallback responses are therefore ONE answer counted N
+	// times, and a majority among them is agreement that was never measured.
+	// Counted and reported, never voted.
 	succeeded := make([]interpretedSample, 0, size)
 	samples := make([]FamilySample, 0, size)
+	fallbackServed := 0
+	failed := 0
 	for index := range collected {
 		if !ok[index] {
+			failed++
+			continue
+		}
+		if collected[index].receipt.FallbackUsed {
+			fallbackServed++
 			continue
 		}
 		succeeded = append(succeeded, collected[index])
 		samples = append(samples, collected[index].sample)
 	}
+
+	// QUORUM: a strict majority of the samples that were REQUESTED, not of the
+	// ones that happened to come back. Measuring the majority against the
+	// survivors would let one surviving sample out of three be a unanimous
+	// consensus of itself, which is the degrade this rule exists to name.
+	quorum := size/2 + 1
+	quorumMet := len(succeeded) >= quorum
+	r.recordEnsembleComposition(ctx, principal, InterpretationEnsembleEvent{
+		Requested:        size,
+		PrimarySucceeded: len(succeeded),
+		FallbackServed:   fallbackServed,
+		Failed:           failed,
+		QuorumMet:        quorumMet,
+	})
+
 	if len(succeeded) == 0 {
+		// Nothing to resolve over. A joined error rather than an unclassified
+		// family: an interpretation that could not be produced is not a
+		// question the model declined to classify.
+		if failed == 0 {
+			// Every sample came back, and every one came back on the
+			// fallback. There is no error to join, and returning nil would
+			// hand the caller a zero-valued interpretation as though it
+			// were real.
+			return InterpretedQuestion{}, QuestionFamilyOutcome{}, ErrEnsembleAllSamplesFellBack
+		}
 		return InterpretedQuestion{}, QuestionFamilyOutcome{}, errors.Join(failures...)
+	}
+
+	// BELOW QUORUM THE TURN IS NOT A CONSENSUS and must not claim to be. It
+	// takes the single-sample path over the first surviving primary sample,
+	// which records source=model -- the honest label for one sample -- and the
+	// Warn event above is what tells an operator it happened. Silently
+	// resolving over the survivors would publish `model_consensus` for a vote
+	// of one or two out of three.
+	if !quorumMet {
+		winner := succeeded[0]
+		single := []FamilySample{winner.sample}
+		return winner.question, r.finishFamilyResolution(ctx, principal, ResolveQuestionFamily(single), single, winner.receipt), nil
 	}
 
 	outcome := ResolveQuestionFamily(samples)
@@ -186,4 +249,18 @@ func (r RuntimeQuestionInterpreter) interpretEnsemble(ctx context.Context, princ
 		winner = succeeded[outcome.WinningSampleIndex]
 	}
 	return winner.question, r.finishFamilyResolution(ctx, principal, outcome, samples, winner.receipt), nil
+}
+
+// recordEnsembleComposition emits the one event that makes an ensemble turn's
+// composition observable, when telemetry is wired.
+//
+// nil FamilyTelemetry still resolves the turn -- the same rule
+// recordFamilyResolution already follows, and for the same reason: gating
+// BEHAVIOUR on whether telemetry was configured would make a misconfigured
+// composition answer differently from a correct one.
+func (r RuntimeQuestionInterpreter) recordEnsembleComposition(ctx context.Context, principal storage.Principal, event InterpretationEnsembleEvent) {
+	if r.FamilyTelemetry == nil {
+		return
+	}
+	r.FamilyTelemetry.RecordInterpretationEnsemble(ctx, principal, event)
 }

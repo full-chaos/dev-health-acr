@@ -310,6 +310,7 @@ func TestNewEngineRequiresAllCoreCapabilities(t *testing.T) {
 // production code ever having a content-bearing telemetry sink to leak
 // through.
 type recordingTelemetry struct {
+	ensembleEvents []InterpretationEnsembleEvent
 	// planCarries records every applied carry verbatim -- the ONLY event
 	// that can carry family_source=carried, since the family-resolution
 	// line is sent before the carry runs.
@@ -640,6 +641,14 @@ type cohortStructureGateRecord struct {
 // the divergence count are the fields that make a split consensus
 // diagnosable, and a double that kept only the outcome would be exactly
 // the kind of test that cannot observe them going missing.
+// RecordInterpretationEnsemble (CHAOS-5638) records the ensemble-composition
+// event so a test can assert what a turn actually drew. Appending rather than
+// overwriting: an ensemble emits exactly one per turn, and a double that kept
+// only the last would hide a second emission.
+func (r *recordingTelemetry) RecordInterpretationEnsemble(_ context.Context, _ storage.Principal, event InterpretationEnsembleEvent) {
+	r.ensembleEvents = append(r.ensembleEvents, event)
+}
+
 func (r *recordingTelemetry) RecordQuestionFamilyResolution(_ context.Context, _ storage.Principal, event QuestionFamilyResolutionEvent) {
 	r.questionFamilyResolutions = append(r.questionFamilyResolutions, event)
 }

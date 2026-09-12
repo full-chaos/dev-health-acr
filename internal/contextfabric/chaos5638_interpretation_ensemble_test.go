@@ -393,3 +393,226 @@ func TestTheEnsembleSizeIsBounded(t *testing.T) {
 		t.Fatalf("samples drawn = %d, want the ceiling %d", got, QuestionFamilyEnsembleMax)
 	}
 }
+
+// ensembleTelemetrySpy captures the composition event.
+type ensembleTelemetrySpy struct {
+	mu        sync.Mutex
+	ensembles []InterpretationEnsembleEvent
+}
+
+func (s *ensembleTelemetrySpy) RecordQuestionFamilyResolution(context.Context, storage.Principal, QuestionFamilyResolutionEvent) {
+}
+
+func (s *ensembleTelemetrySpy) RecordInterpretationEnsemble(_ context.Context, _ storage.Principal, event InterpretationEnsembleEvent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ensembles = append(s.ensembles, event)
+}
+
+func (s *ensembleTelemetrySpy) only(t *testing.T) InterpretationEnsembleEvent {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.ensembles) != 1 {
+		t.Fatalf("ensemble events = %d, want exactly 1 per ensemble turn", len(s.ensembles))
+	}
+	return s.ensembles[0]
+}
+
+// fallbackReceipt is a sample that came back from the FALLBACK provider.
+func fallbackReceipt() ModelExecutionReceipt {
+	receipt := validModelReceiptFixture(ModelOperationInterpret)
+	receipt.FallbackUsed = true
+	return receipt
+}
+
+// A FALLBACK-SERVED SAMPLE IS NOT A VOTE.
+//
+// The runtime's own port documents the obligation on its caller: the sample
+// index governs the PRIMARY attempt only, the fallback entry point takes no
+// index, so N fallback responses are ONE answer counted N times. Counting them
+// reports agreement that was never measured -- and reports it as
+// `model_consensus`, which is the single word a measurement run keys on.
+func TestFallbackServedSamplesNeverVote(t *testing.T) {
+	t.Parallel()
+	spy := &ensembleTelemetrySpy{}
+	sampled := &sampledRuntimeStub{
+		perIdx: map[int]InterpretedQuestion{
+			0: ensembleQuestion(ShapeDiscoveredCohort, "fell-back"),
+			1: ensembleQuestion(ShapeSingleSubject, "primary-a"),
+			2: ensembleQuestion(ShapeSingleSubject, "primary-b"),
+		},
+		receiptIdx: map[int]ModelExecutionReceipt{0: fallbackReceipt()},
+		receipt:    validModelReceiptFixture(ModelOperationInterpret),
+	}
+	interpreter := RuntimeQuestionInterpreter{
+		SampledRuntime: sampled, Sink: &concurrentReceiptSink{}, EnsembleSize: 3, FamilyTelemetry: spy,
+	}
+
+	got, outcome, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Interpret() error = %v", err)
+	}
+	if got.RequestedJudgment == "fell-back" {
+		t.Fatal("a fallback-served sample won the vote")
+	}
+	if len(outcome.Samples) != 2 {
+		t.Fatalf("outcome carries %d votes, want 2 -- the fallback sample must not be one", len(outcome.Samples))
+	}
+	event := spy.only(t)
+	if event.FallbackServed != 1 {
+		t.Fatalf("fallback_served = %d, want 1 -- a dropped sample must still be counted", event.FallbackServed)
+	}
+	if event.PrimarySucceeded != 2 || event.Requested != 3 || event.Failed != 0 {
+		t.Fatalf("event = %+v, want requested=3 primary=2 failed=0", event)
+	}
+	if !event.QuorumMet {
+		t.Fatal("2 primary samples of 3 requested is a strict majority; quorum should be met")
+	}
+}
+
+// EVERY SAMPLE FALLING BACK IS ITS OWN OUTCOME. Nothing failed, so there is no
+// error to join, and nothing may vote, so there is no consensus to take.
+func TestAnAllFallbackEnsembleIsItsOwnNamedFailure(t *testing.T) {
+	t.Parallel()
+	spy := &ensembleTelemetrySpy{}
+	sampled := &sampledRuntimeStub{
+		perIdx: map[int]InterpretedQuestion{
+			0: ensembleQuestion(ShapeSingleSubject, "s0"),
+			1: ensembleQuestion(ShapeSingleSubject, "s1"),
+			2: ensembleQuestion(ShapeSingleSubject, "s2"),
+		},
+		receipt: fallbackReceipt(),
+	}
+	interpreter := RuntimeQuestionInterpreter{
+		SampledRuntime: sampled, Sink: &concurrentReceiptSink{}, EnsembleSize: 3, FamilyTelemetry: spy,
+	}
+
+	_, _, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
+	if !errors.Is(err, ErrEnsembleAllSamplesFellBack) {
+		t.Fatalf("err = %v, want ErrEnsembleAllSamplesFellBack", err)
+	}
+	event := spy.only(t)
+	if event.FallbackServed != 3 || event.PrimarySucceeded != 0 || event.QuorumMet {
+		t.Fatalf("event = %+v, want fallback=3 primary=0 quorum=false", event)
+	}
+}
+
+// BELOW QUORUM THE TURN IS NOT A CONSENSUS, and says so on both surfaces:
+// source=model on the outcome, and a Warn-level composition event naming what
+// was requested against what survived.
+//
+// N=5 WITH TWO AGREEING SURVIVORS IS THE CASE THAT DISCRIMINATES, and a
+// battery is what showed it. At N=3 with one survivor the quorum branch is
+// unobservable: ResolveQuestionFamily's own N==1 degrade already reports
+// source=model, so removing the branch changes nothing and the test passes
+// either way. Two survivors out of five are a strict majority OF THEMSELVES,
+// so without the quorum rule they resolve to model_consensus -- a "consensus"
+// of two samples for a turn that asked for five.
+func TestBelowQuorumTheEnsembleDegradesLoudlyToOneSample(t *testing.T) {
+	t.Parallel()
+	boom := errors.New("upstream")
+	spy := &ensembleTelemetrySpy{}
+	sampled := &sampledRuntimeStub{
+		perIdx: map[int]InterpretedQuestion{
+			3: ensembleQuestion(ShapeSingleSubject, "lived-a"),
+			4: ensembleQuestion(ShapeSingleSubject, "lived-b"),
+		},
+		errIdx:  map[int]error{0: boom, 1: boom, 2: boom},
+		receipt: validModelReceiptFixture(ModelOperationInterpret),
+	}
+	interpreter := RuntimeQuestionInterpreter{
+		SampledRuntime: sampled, Sink: &concurrentReceiptSink{}, EnsembleSize: 5, FamilyTelemetry: spy,
+	}
+
+	got, outcome, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Interpret() error = %v -- a degraded turn still answers", err)
+	}
+	if got.RequestedJudgment != "lived-a" && got.RequestedJudgment != "lived-b" {
+		t.Fatalf("question = %q, want a surviving sample's own", got.RequestedJudgment)
+	}
+	if outcome.Source == QuestionFamilySourceModelConsensus {
+		t.Fatal("2 samples of a requested 5 were reported as a consensus")
+	}
+	if outcome.Source != QuestionFamilySourceModel {
+		t.Fatalf("source = %q, want %q -- the honest label below quorum", outcome.Source, QuestionFamilySourceModel)
+	}
+	if len(outcome.Samples) != 1 {
+		t.Fatalf("outcome carries %d votes; below quorum the turn is a single sample", len(outcome.Samples))
+	}
+	event := spy.only(t)
+	if event.QuorumMet {
+		t.Fatal("quorum_met is true with 2 primary samples of 5 requested")
+	}
+	if event.Requested != 5 || event.PrimarySucceeded != 2 || event.Failed != 3 {
+		t.Fatalf("event = %+v, want requested=5 primary=2 failed=3", event)
+	}
+}
+
+// THE CONTROL: at or above quorum the same shape IS a consensus, so the rule
+// above is a threshold and not a blanket refusal.
+func TestAtQuorumTheEnsembleIsAConsensus(t *testing.T) {
+	t.Parallel()
+	boom := errors.New("upstream")
+	spy := &ensembleTelemetrySpy{}
+	sampled := &sampledRuntimeStub{
+		perIdx: map[int]InterpretedQuestion{
+			2: ensembleQuestion(ShapeSingleSubject, "lived-a"),
+			3: ensembleQuestion(ShapeSingleSubject, "lived-b"),
+			4: ensembleQuestion(ShapeSingleSubject, "lived-c"),
+		},
+		errIdx:  map[int]error{0: boom, 1: boom},
+		receipt: validModelReceiptFixture(ModelOperationInterpret),
+	}
+	interpreter := RuntimeQuestionInterpreter{
+		SampledRuntime: sampled, Sink: &concurrentReceiptSink{}, EnsembleSize: 5, FamilyTelemetry: spy,
+	}
+
+	_, outcome, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Interpret() error = %v", err)
+	}
+	if outcome.Source != QuestionFamilySourceModelConsensus {
+		t.Fatalf("source = %q, want %q -- 3 of 5 is quorum", outcome.Source, QuestionFamilySourceModelConsensus)
+	}
+	if event := spy.only(t); !event.QuorumMet {
+		t.Fatalf("quorum_met is false at 3 primary samples of 5: %+v", event)
+	}
+}
+
+// A REFUSED PLURALITY IS TERMINAL even when the winning sample carries a
+// validated frame. The route is still computed and recorded -- it is a
+// measurement -- but it may not overwrite the refusal, or the wire carries
+// `source=model_plurality_rejected` beside a confident family.
+func TestARefusedPluralityIsNotOverwrittenByTheRoute(t *testing.T) {
+	t.Parallel()
+	framed := validModelReceiptFixture(ModelOperationInterpret)
+	framed.QuestionFrame = namedSubjectFrame()
+	sampled := &sampledRuntimeStub{
+		perIdx: map[int]InterpretedQuestion{
+			0: ensembleQuestion(ShapeSingleSubject, "s0"),
+			1: ensembleQuestion(ShapeDiscoveredCohort, "s1"),
+			2: ensembleQuestion(ShapeExplicitCohort, "s2"),
+		},
+		receipt: framed,
+	}
+	interpreter := RuntimeQuestionInterpreter{SampledRuntime: sampled, Sink: &concurrentReceiptSink{}, EnsembleSize: 3}
+
+	_, outcome, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Interpret() error = %v", err)
+	}
+	if outcome.Source != QuestionFamilySourcePluralityRejected {
+		t.Fatalf("fixture defect: source = %q, want the three-way split to be refused", outcome.Source)
+	}
+	if outcome.Family != QuestionFamilyUnclassified {
+		t.Fatalf("family = %q beside source=%q -- the refusal was overwritten by the route",
+			outcome.Family, outcome.Source)
+	}
+	// The measurement itself survives: suppressing the route would blind the
+	// comparison this shadow exists to feed.
+	if outcome.Route.Family == "" && outcome.Route.Disposition == "" {
+		t.Fatal("the route decision was not recorded at all; only the overwrite should be withheld")
+	}
+}
