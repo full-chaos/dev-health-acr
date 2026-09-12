@@ -144,9 +144,16 @@ func TestSynthesizeAnswerResynthesizesOnRejectionUntilSuccess(t *testing.T) {
 		t.Fatalf("draw_output_digests = %q, want three DISTINCT digests -- identical digests would mean no real resampling occurred", digests)
 	}
 	// The final receipt's own OutputDigest must describe the SERVED (third)
-	// draw, matching the existing single-shot contract.
+	// draw EXACTLY -- not merely be non-empty. Both are computed from the
+	// same `output` value by two separate call sites (the loop's own success
+	// append, and SynthesizeAnswer's existing post-loop stamp); a mutation
+	// turning either one into a constant breaks this equality even though a
+	// mere non-empty check would not catch it.
 	if receipt.OutputDigest == "" {
 		t.Fatalf("receipt.OutputDigest is empty on a successful call")
+	}
+	if want := "3:" + receipt.OutputDigest; parts[2] != want {
+		t.Fatalf("draw_output_digests' third entry = %q, want %q -- the served draw's digest must match receipt.OutputDigest exactly", parts[2], want)
 	}
 }
 
@@ -197,6 +204,18 @@ func TestSynthesizeAnswerFailsClosedAfterExhaustingResynthesisBudget(t *testing.
 	// ValidateAgainst's own short-circuit already requires.
 	if got := attrString(t, attrs, "rejection_reason"); got != string(contextfabric.RejectionReasonDriverInvalid) {
 		t.Fatalf("rejection_reason = %q, want %q (the LAST draw's own rejection)", got, contextfabric.RejectionReasonDriverInvalid)
+	}
+	// receipt.OutputDigest and the LAST draw's own digest are both computed
+	// from the same `output` value by two separate call sites (the loop's
+	// own rejected-draw append, and SynthesizeAnswer's existing pre-5655
+	// rejected-digest stamp) -- they must match EXACTLY, not merely both be
+	// non-empty, or a mutation turning either into a constant survives.
+	digests := splitCommaList(attrString(t, attrs, "draw_output_digests"))
+	if len(digests) != 3 {
+		t.Fatalf("draw_output_digests has %d entries, want 3", len(digests))
+	}
+	if want := "3:" + receipt.OutputDigest; digests[2] != want {
+		t.Fatalf("draw_output_digests' third entry = %q, want %q -- the reported (last) draw's digest must match receipt.OutputDigest exactly", digests[2], want)
 	}
 }
 
