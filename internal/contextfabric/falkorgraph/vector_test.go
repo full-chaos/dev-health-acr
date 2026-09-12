@@ -1150,6 +1150,10 @@ type recordingTelemetry struct {
 	// cohortKindBases records every RecordCohortKindBasis call verbatim.
 	cohortKindBases []cohortKindBasisRecord
 
+	// cohortKindCensuses records every RecordCohortKindCensus call verbatim
+	// (CHAOS-5654).
+	cohortKindCensuses []cohortKindCensusRecord
+
 	// vectorFences/lexiconExpansions record every RecordVectorFence/
 	// RecordLexiconExpansion call verbatim (CHAOS-3890) -- slices, so a
 	// test can assert the exact reason/memoized or fired/batch/added/
@@ -1216,6 +1220,17 @@ type lexiconExpansionRecord struct {
 type efRuntimeMismatchRecord struct {
 	key                             string
 	policyEfRuntime, indexEfRuntime int
+}
+
+// cohortKindCensusRecord is one RecordCohortKindCensus call's arguments.
+type cohortKindCensusRecord struct {
+	orgID      string
+	decision   CohortKindCensusDecision
+	memberKind contextfabric.SubjectKind
+	kinds      []string
+	poolSize   int
+	poolBound  int
+	truncated  bool
 }
 
 // cohortExactNameCensusGateRecord is one recorded
@@ -1302,6 +1317,13 @@ func (r *recordingTelemetry) RecordCohortExactNameCensusGate(_ context.Context, 
 // caused it.
 func (r *recordingTelemetry) RecordCohortKindBasis(_ context.Context, orgID string, declaredKind contextfabric.SubjectKind, basis graphrank.CohortKindBasis, discovered bool, poolTruncation CohortPoolTruncationBasis, poolTruncationArms []CohortPoolTruncationArm) {
 	r.cohortKindBases = append(r.cohortKindBases, cohortKindBasisRecord{orgID: orgID, declaredKind: declaredKind, basis: basis, discovered: discovered, poolTruncation: poolTruncation, poolTruncationArms: poolTruncationArms})
+}
+
+func (r *recordingTelemetry) RecordCohortKindCensus(_ context.Context, orgID string, decision CohortKindCensusDecision, memberKind contextfabric.SubjectKind, kinds []string, poolSize, poolBound int, truncated bool) {
+	r.cohortKindCensuses = append(r.cohortKindCensuses, cohortKindCensusRecord{
+		orgID: orgID, decision: decision, memberKind: memberKind, kinds: append([]string(nil), kinds...),
+		poolSize: poolSize, poolBound: poolBound, truncated: truncated,
+	})
 }
 
 func (r *recordingTelemetry) RecordNeighborLookupFailed(_ context.Context, orgID, originCanonicalID, neighborUUID string, site NeighborLookupFailureSite, err error) {

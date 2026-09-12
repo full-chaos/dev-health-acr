@@ -5,9 +5,9 @@ import "strings"
 // What happened to the CANDIDATE POOL a cohort was assembled from, for one
 // DiscoverContext call, reported as TWO closed vocabularies rather than one.
 //
-// WHY TWO. There are three independent retrieval arms that can clip the pool
-// (the full-text search, the committed-origin hop walk, and the exhaustive
-// exact-name census), and an operator needs two different answers about them:
+// WHY TWO. There are independent retrieval arms that can clip the pool (the
+// full-text search, the committed-origin hop walk, and the term-free censuses),
+// and an operator needs two different answers about them:
 // "may this cohort be missing members" and "which arm cut it". A single
 // vocabulary naming arm COMBINATIONS answers both at once and grows 2^n with
 // the arms -- it is a cross-product wearing a vocabulary's clothes, and the
@@ -28,12 +28,11 @@ const (
 	// does not carry. The cohort cannot claim completeness.
 	CohortPoolTruncationTruncated CohortPoolTruncationBasis = "truncated"
 	// CohortPoolTruncationCoveredByCensus: an arm was cut, but the exhaustive
-	// org-wide kind census ran and was NOT itself cut, and that census
-	// fetches every kind a cohort can be served for (proven equal to
-	// contextfabric.ServableCohortKindsForAudit by a test in this package). A
-	// member a bounded arm dropped is therefore still in the pool via the
-	// census, so the pool is NOT truncated -- the cohort keeps its
-	// completeness claim, and the fact that the decision was made at all is
+	// kind census ran and was NOT itself cut, and that census fetches the
+	// cohort's own kind (the exact-name census for exactNameKinds, the
+	// kind-scoped census for every other servable kind). A member a bounded
+	// arm dropped is therefore still in the pool via the census, so the pool
+	// is NOT truncated -- the cohort keeps its completeness claim, and the fact that the decision was made at all is
 	// visible here rather than being indistinguishable from "nothing was
 	// cut".
 	CohortPoolTruncationCoveredByCensus CohortPoolTruncationBasis = "covered_by_census"
@@ -70,6 +69,11 @@ const (
 	// census hit its own row limit, so the census itself is not exhaustive
 	// and cannot cover anything.
 	CohortPoolTruncationArmExactNameCensus CohortPoolTruncationArm = "exact_name_census"
+	// CohortPoolTruncationArmKindCensus: CHAOS-5654's kind-scoped census, the
+	// term-free fetch of a servable member kind the exact-name census does
+	// not name, hit its row limit. That kind's population is larger than the
+	// pool holds, so the census covers nothing.
+	CohortPoolTruncationArmKindCensus CohortPoolTruncationArm = "kind_census"
 	// CohortPoolTruncationArmEndpointLookupFailed: a neighbour the walk had
 	// already reached through an admitted edge could not be READ BACK -- its
 	// bookkeeping lookup errored -- so it never entered the visited set and
@@ -115,6 +119,7 @@ func CohortPoolTruncationArmVocabulary() []CohortPoolTruncationArm {
 		CohortPoolTruncationArmFulltext,
 		CohortPoolTruncationArmHopWalk,
 		CohortPoolTruncationArmExactNameCensus,
+		CohortPoolTruncationArmKindCensus,
 		CohortPoolTruncationArmEndpointLookupFailed,
 	}
 }
@@ -128,10 +133,15 @@ func CohortPoolTruncationArmVocabulary() []CohortPoolTruncationArm {
 // WHY THE CENSUS COVERS THE OTHER TWO ARMS AND NOTHING COVERS THE CENSUS. The
 // census is a term-free `MATCH (n:Subject) WHERE kind IN (repository,
 // project, team)` fetch: when it completes it holds every candidate of every
-// servable cohort kind, so rows the bounded arms dropped are in the pool
-// anyway. When the census is skipped (a subject is already committed, or the
-// shape/anchor gate refused) the bounded arms ARE the pool. When the census
+// kind it names, so rows the bounded arms dropped are in the pool anyway. When
+// the census is skipped (a subject is already committed, or the shape/anchor
+// gate refused) the bounded arms ARE the pool. When the census
 // ran but was itself cut, it is no longer exhaustive and covers nothing.
+//
+// CHAOS-5654: a census covers only the kinds it fetches. The caller passes
+// `censusCovers` for the cohort's own kind: the exact-name census for a kind in
+// exactNameKinds, the kind-scoped census for any other servable kind. A cut
+// kind-scoped census covers nothing, the same as a cut exact-name census.
 //
 // `censusCovers` IS NOT "THE CENSUS RAN". It is the caller's answer to "did an
 // exhaustive census produce a candidate set that can contain what a bounded arm
@@ -148,7 +158,7 @@ func CohortPoolTruncationArmVocabulary() []CohortPoolTruncationArm {
 // census branch. Those combinations are still named below rather than left to
 // a default, because a classification over a closed space is an allow-list and
 // a future caller that reaches one should inherit a stated answer.
-func cohortPoolTruncation(fulltextTruncated, hopWalkTruncated, exactNameTruncated, endpointLookupFailed, censusCovers bool) (CohortPoolTruncationBasis, []CohortPoolTruncationArm, bool) {
+func cohortPoolTruncation(fulltextTruncated, hopWalkTruncated, exactNameTruncated, kindCensusTruncated, endpointLookupFailed, censusCovers bool) (CohortPoolTruncationBasis, []CohortPoolTruncationArm, bool) {
 	arms := make([]CohortPoolTruncationArm, 0, len(CohortPoolTruncationArmVocabulary()))
 	if fulltextTruncated {
 		arms = append(arms, CohortPoolTruncationArmFulltext)
@@ -159,14 +169,17 @@ func cohortPoolTruncation(fulltextTruncated, hopWalkTruncated, exactNameTruncate
 	if exactNameTruncated {
 		arms = append(arms, CohortPoolTruncationArmExactNameCensus)
 	}
+	if kindCensusTruncated {
+		arms = append(arms, CohortPoolTruncationArmKindCensus)
+	}
 	if endpointLookupFailed {
 		arms = append(arms, CohortPoolTruncationArmEndpointLookupFailed)
 	}
 	switch {
 	case len(arms) == 0:
 		return CohortPoolTruncationNone, arms, false
-	case exactNameTruncated:
-		// The census is cut, so it covers nothing -- including itself.
+	case exactNameTruncated, kindCensusTruncated:
+		// A census is cut, so it covers nothing -- including itself.
 		return CohortPoolTruncationTruncated, arms, true
 	case endpointLookupFailed:
 		// NOT coverable by the census. The census covers a BOUNDED arm -- a

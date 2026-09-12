@@ -119,6 +119,9 @@ func (f *fakeIdentityTelemetry) RecordCohortExactNameCensusGate(context.Context,
 func (f *fakeIdentityTelemetry) RecordCohortKindBasis(_ context.Context, _ string, _ contextfabric.SubjectKind, _ graphrank.CohortKindBasis, _ bool, _ falkorgraph.CohortPoolTruncationBasis, _ []falkorgraph.CohortPoolTruncationArm) {
 }
 
+func (f *fakeIdentityTelemetry) RecordCohortKindCensus(context.Context, string, falkorgraph.CohortKindCensusDecision, contextfabric.SubjectKind, []string, int, int, bool) {
+}
+
 func (f *fakeIdentityTelemetry) RecordNeighborLookupFailed(context.Context, string, string, string, falkorgraph.NeighborLookupFailureSite, error) {
 }
 

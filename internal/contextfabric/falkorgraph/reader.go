@@ -842,6 +842,46 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			cohortNodes = append(cohortNodes, n)
 		}
 	}
+	// CHAOS-5654: the declared member kind's own population, fetched term-free
+	// when the exact-name census does not fetch that kind. It runs only under
+	// the exact-name census's own admission, so a question that named its
+	// members, or a call with a committed subject, is never widened.
+	// A nil frame declares no member kind, so there is no kind for a census to
+	// fetch or cover and DiscoveredCohort refuses before reading either anyway.
+	var declaredCohortKind contextfabric.SubjectKind
+	if request.Frame != nil {
+		declaredCohortKind, _, _ = contextfabric.CohortMemberKindFor(request.Frame.SubjectExpression)
+	}
+	kindCensusDecision := cohortKindCensusDecision(censusAdmitted, declaredCohortKind)
+	kindCensusRan := kindCensusDecision == CohortKindCensusRan
+	kindCensusTruncated := false
+	kindCensusMembers := 0
+	var kindCensusKinds []string
+	if kindCensusRan {
+		kindCensusKinds = []string{string(declaredCohortKind)}
+		kindCensusNodes, truncated, kindCensusErr := a.cohortKindCensusCandidates(ctx, key, principal.OrgID, kindCensusKinds, temporal)
+		if kindCensusErr != nil {
+			return contextfabric.GraphContext{}, graphNotProjectedError(kindCensusErr)
+		}
+		kindCensusTruncated = truncated
+		kindCensusMembers = len(kindCensusNodes)
+		sortCandidateNodesBySubjectKey(kindCensusNodes)
+		for _, n := range kindCensusNodes {
+			subject, ok := graphrank.NodeSubject(n)
+			if !ok {
+				continue
+			}
+			nk := graphrank.SubjectKey(subject)
+			if seenNode[nk] {
+				continue
+			}
+			seenNode[nk] = true
+			cohortNodes = append(cohortNodes, n)
+		}
+	}
+	if censusBasis != "" && a.config.Telemetry != nil {
+		a.config.Telemetry.RecordCohortKindCensus(ctx, principal.OrgID, kindCensusDecision, declaredCohortKind, kindCensusKinds, kindCensusMembers, exactNameCandidateQueryLimit, kindCensusTruncated)
+	}
 	// CHAOS-5168: what this call's candidate POOL lost, carried into the
 	// cohort's own completeness rather than left for DiscoveredCohort to
 	// (not) infer from the length it retained. See cohortPoolTruncation for
@@ -858,15 +898,14 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// starves the rest. So a cohort of a servable kind the census does not
 	// fetch keeps the bounded arm's truncation rather than inheriting a
 	// completeness claim the census never made for that kind.
-	// A nil frame declares no member kind, so there is no kind for a census to
-	// cover and DiscoveredCohort refuses before reading this anyway.
-	var declaredCohortKind contextfabric.SubjectKind
-	if request.Frame != nil {
-		declaredCohortKind, _, _ = contextfabric.CohortMemberKindFor(request.Frame.SubjectExpression)
-	}
-	censusCoversThisCohort := censusAdmitted && censusMembers > 0 && exactNameCensusCoversKind(declaredCohortKind)
+	// CHAOS-5654: the kind-scoped census is the census for every servable kind
+	// the exact-name census does not fetch. Ran and non-empty, it covers a
+	// bounded arm for that kind; cut, it covers nothing (cohortPoolTruncation).
+	// kindCensusMembers is non-zero only when the kind-scoped census ran.
+	censusCoversThisCohort := (censusAdmitted && censusMembers > 0 && exactNameCensusCoversKind(declaredCohortKind)) ||
+		kindCensusMembers > 0
 	poolTruncationBasis, poolTruncationArms, cohortPoolTruncated := cohortPoolTruncation(
-		fulltextTruncated, hopWalkTruncated, exactNameTruncated, failedLookups > 0, censusCoversThisCohort)
+		fulltextTruncated, hopWalkTruncated, exactNameTruncated, kindCensusTruncated, failedLookups > 0, censusCoversThisCohort)
 	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis, cohortPopulation := graphrank.DiscoveredCohort(principal, request, cohortNodes, cohortPoolTruncated, isInternalSubject)
 	// SEAM 7 (CHAOS-4736): what decided the cohort kind, or what prevented
 	// a cohort. This is the I/O boundary, so the telemetry call lives here
@@ -943,7 +982,13 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// this signal stays reserved for a genuinely exhaustive, untruncated
 	// census that still came back with a kind-matching denial and nothing
 	// else.
-	cohortWhollyDeniedByAuthz := cohort == nil && cohortKindScopedAuthzDropped > 0 && ranExhaustiveCensus && !exactNameTruncated
+	// CHAOS-5654: "exhaustive" is a claim about the cohort's own kind. The
+	// exact-name census is exhaustive only for the kinds it fetches; for every
+	// other servable kind the kind-scoped census is the census, and a cut one
+	// cannot show that the denied members were all there was.
+	cohortKindCensusedExhaustively := (ranExhaustiveCensus && !exactNameTruncated && exactNameCensusCoversKind(declaredCohortKind)) ||
+		(kindCensusRan && !kindCensusTruncated)
+	cohortWhollyDeniedByAuthz := cohort == nil && cohortKindScopedAuthzDropped > 0 && cohortKindCensusedExhaustively
 	if a.config.Telemetry != nil {
 		if edgeFilters.Authz > 0 || edgeFilters.TemporalWindow > 0 || admission.DroppedSelfLoopCount > 0 {
 			a.config.Telemetry.RecordEdgesFilteredByReason(ctx, principal.OrgID, edgeFilters.Authz, edgeFilters.TemporalWindow, admission.DroppedSelfLoopCount)
