@@ -456,3 +456,57 @@ func TestDeclaredKindsMatchesTheDerivationGraphrankReplaced(t *testing.T) {
 		}
 	}
 }
+
+// THE READ-SIDE GAP, PINNED RATHER THAN LEFT TO BE DISCOVERED AGAIN.
+//
+// This change closes the WRITE side: no path that COMPOSES a result will
+// produce a clarification whose every offer is of a kind the frame did not
+// declare. It does not close the two READ sides, and r1 was right to find
+// that -- `resultOffersRedeemable` counts ANY option, so a row composed by an
+// earlier build still passes the reuse guard (answer_reuse.go), survives
+// `RepairLegacyUnanswerableClarification` unchanged, and is admitted by
+// `assertAnswerableClarification`.
+//
+// WHY IT IS NOT CLOSED HERE, measured rather than asserted: neither read site
+// can see the frame. `tryReuse` is called at engine.go:1453 and
+// `interpreter.Interpret` at engine.go:1645 -- reuse runs BEFORE
+// interpretation, so no validated frame exists yet; and the result-by-id
+// route has no question at all, only a stored document, in which a
+// clarification offering kind X is byte-identical whether the question was
+// about X or about Y. No document-only predicate separates them. The close
+// is a follow-on that rides the persisted semantic state, where the
+// validated frame's declared kinds become loadable at both sites.
+//
+// THIS TEST PINS THE GAP, which means it is SUPPOSED to fail when the
+// follow-on lands. That failure is the signal to delete it, not to weaken it:
+// a gap nobody notices closing is a gap that gets reopened.
+func TestTheReadSideGapIsPinnedUntilTheDeclaredKindIsLoadableThere(t *testing.T) {
+	wrongKind := InvestigationResult{
+		Status: InvestigationClarificationRequired,
+		StructureNeeds: &contractsv1.ContextFabricStructureNeeds{
+			Missing:     []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind},
+			KindOptions: []contractsv1.ContextFabricKindOption{chaos5660KindOption(contractsv1.ContextFabricSubjectCIRun)},
+		},
+		SubjectResolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+	}
+	// The write side refuses exactly this document for a project-declaring frame.
+	project := SubjectKind(contractsv1.ContextFabricSubjectProject)
+	write := decideDeclaredKind(chaos5660NamedFrame(&project), wrongKind.SubjectResolution, StructureOfferMaterial{
+		KindOptions: wrongKind.StructureNeeds.KindOptions,
+	})
+	if !write.Unsatisfiable {
+		t.Fatal("the fixture is no longer the wrong-kind shape on the write side -- this pin has stopped describing the gap it names")
+	}
+	// The read side still admits it. When this stops being true the gap has
+	// closed and this test has done its job.
+	if !resultOffersRedeemable(wrongKind) {
+		t.Fatal("the read-side predicate now refuses a wrong-kind clarification: the gap this test pins has CLOSED -- delete this test and the RISK-NOTES section that names it")
+	}
+	if err := assertAnswerableClarification(wrongKind); err != nil {
+		t.Fatalf("the composed-result assertion now refuses it (%v): the gap has closed -- delete this test", err)
+	}
+	repaired := wrongKind
+	if RepairLegacyUnanswerableClarification(&repaired) {
+		t.Fatal("the legacy repair now rewrites a wrong-kind clarification: the gap has closed -- delete this test")
+	}
+}

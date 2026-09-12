@@ -19,7 +19,6 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -35,7 +34,19 @@ func emitSubjectlessTerminalWithKinds(t *testing.T, reason string, refusalBasis 
 	t.Helper()
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	contextfabric.NewSlogEngineTelemetry(logger).RecordSubjectlessTerminal(
+	// THROUGH THE PRODUCTION INSTALLATION, not past it. r1's P3: constructing
+	// contextfabric.NewSlogEngineTelemetry here verified the SINK's formatting
+	// and nothing about the wiring, so this file would have stayed green if
+	// hosted stopped installing a telemetry that emits these keys at all.
+	// contextFabricEngineTelemetry (open.go) is the function every real
+	// deployment goes through -- a nil Options.EngineTelemetry override is the
+	// production case -- so the test now fails on a wiring regression and not
+	// only on a formatting one.
+	telemetry := contextFabricEngineTelemetry(Options{Logger: logger})
+	if telemetry == nil {
+		t.Fatal("the hosted installation returned no engine telemetry at all -- every subjectless terminal would be silent in production")
+	}
+	telemetry.RecordSubjectlessTerminal(
 		context.Background(), storage.Principal{OrgID: "org_5442"}, reason, refusalBasis, declaredKinds, offeredKinds)
 	if buf.Len() == 0 {
 		t.Fatal("the deployed telemetry emitted NOTHING at the production log level -- a refusal an operator cannot see is a refusal that cannot be counted")
