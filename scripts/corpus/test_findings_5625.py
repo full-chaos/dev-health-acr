@@ -22,12 +22,24 @@ run_shard/harness), or standalone:
   PYTHONPATH=testdata_corpus python3 test_findings_5625.py
 """
 import json
+import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+
+# This file's git-init controls (test_resolve_ask_dev_names_the_pin_and_versions,
+# test_resolve_ask_dev_names_a_dirty_checkout, test_git_sha_reads_the_checkouts_own_metadata)
+# run `git commit` against a throwaway repo with no signing key available.
+# `git commit` inherits this process's environment, so a machine with a
+# global/system `commit.gpgsign` (or a global `user.signingkey`) makes those
+# commits fail outright -- these controls are not testing signing, so it is
+# disabled the same way the git CLI itself documents for a config-free run,
+# not by asserting anything about the ambient git configuration.
+os.environ["GIT_CONFIG_GLOBAL"] = "/dev/null"
+os.environ["GIT_CONFIG_SYSTEM"] = "/dev/null"
 sys.path.insert(0, str(HERE))
 
 
