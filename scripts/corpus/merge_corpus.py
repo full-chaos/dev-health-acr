@@ -28,6 +28,7 @@ from pathlib import Path
 
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
+import corpus as _corpus_module  # noqa: E402  — for its own sha256, see semantic_verdict_bridge.corpus_version_of
 from corpus import CORPUS  # noqa: E402
 import attempt_classes
 import contract  # the shared producer contract; nothing here spells it
@@ -37,6 +38,11 @@ import engine_failures  # noqa: E402  — post-hoc attempt reader, deliberately 
 # verdict-arm2-sequential.json exactly. The v2 findings ride in NEW fields.
 import expectations  # noqa: E402
 import subject_identity  # noqa: E402
+# CHAOS-5625: publishes CHAOS-5620's semantic verdict beside the buckets above --
+# ADDITIVE in the identical sense: classify()/BUCKETS/expectation_scoring are
+# untouched, and this rides in new `rows[].semantic_verdict` / `provenance.semantic_verdict`
+# fields. See semantic_verdict_bridge.py's own docstring for why this is wiring only.
+import semantic_verdict_bridge as sv_bridge  # noqa: E402
 
 SERVED_STATUSES = {"complete", "partial", "degraded", "answered"}
 
@@ -618,6 +624,23 @@ def main():
             print(f"  - {p}", file=sys.stderr)
         sys.exit(1)
 
+    # CHAOS-5625: the ask-dev pin (expect_schema.py/semantic_verdict.py, CHAOS-5620) is
+    # resolved HERE, ADDITIVELY -- its absence is named LOUDLY (stderr, and in the
+    # published provenance) but never a MERGE ABORT: the five legacy buckets and
+    # expectation_scoring above are already complete and admissible without it, and
+    # every existing caller of this script (including every pin file that predates
+    # CHAOS-5625) must keep merging exactly as it always has when it has not been
+    # given a pin. A run WITH a pin available still gets the semantic verdict on
+    # every row; a run without one degrades to "legacy buckets only", named, not
+    # silently downgraded and not fatal.
+    try:
+        _sv_expect_schema, sv_module, sv_pin = sv_bridge.resolve_ask_dev()
+        sv_unavailable_reason = None
+    except sv_bridge.AskDevUnavailable as exc:
+        sv_module = sv_pin = None
+        sv_unavailable_reason = str(exc)
+        print(f"NOTE: semantic_verdict unavailable this run -- {exc}", file=sys.stderr)
+
     # INSTRUMENT V2 — subject identity, read back from the raw attempt files under
     # the SAME --in root. Applies retroactively to any arm that kept its per-attempt
     # JSON, which is why arm 2 and arm 3B can both be re-scored without re-running.
@@ -659,6 +682,55 @@ def main():
         BY_ID, {r["corpus_id"]: classify(r) for r in rows}, subs_by_id,
         states_by_id=_states, terminals_by_id=_terminals,
         disclosed_basis_by_id=_disclosed_basis)
+
+    # CHAOS-5625: the versioned semantic verdict (CHAOS-5620), one per row, fed the
+    # IDENTICAL bucket/terminal/identity/disclosed-basis inputs `_exp_table` above
+    # already computes from -- so for every row in today's all-scalar corpus (no
+    # `any_of` declared anywhere yet), semantic_verdict.verdict/reason is BYTE-IDENTICAL
+    # to expectation_verdict/why below; see test_findings_5625.py's own pin for exactly
+    # this invariant. `_rep` is the run's own single replicate tag -- read the same way
+    # subject_identity.scan() already resolved it above (a run mixing more than one tag
+    # would already have raised there), never a second guess at which rep this is.
+    if sv_module is not None:
+        _rep_tags = subject_identity.rep_from_summaries(args.indir)
+        _rep = _rep_tags[0] if _rep_tags else 1
+        _corpus_version = sv_bridge.corpus_version_of(_corpus_module)
+        _sv_by_id = {
+            r["corpus_id"]: sv_bridge.verdict_for_row(
+                BY_ID[r["corpus_id"]], args.indir, r["corpus_id"], _rep,
+                classify(r), r.get("final_payload_status"),
+                sv_module, sv_pin, _corpus_version,
+                subject_substitution=bool(subs_by_id.get(r["corpus_id"])),
+                identity_state=_states.get(r["corpus_id"], "read"),
+                disclosed_basis=_disclosed_basis.get(r["corpus_id"]),
+            )
+            for r in rows
+        }
+        # CHAOS-5625: the versioned identity of the scorer that produced the column
+        # above, plus its run-level aggregate -- so a rescore under a changed ask-dev
+        # pin, policy, schema, or legacy adapter is never mistaken for a rescore under
+        # the old one (see semantic_verdict.py's own module docstring on why every one
+        # of these is a separate, explicit version string).
+        provenance["semantic_verdict"] = {
+            "available": True,
+            "scorer_version": sv_pin["scorer_version"],
+            "policy_version": sv_pin["policy_version"],
+            "schema_version": sv_pin["schema_version"],
+            "legacy_scorer_version": sv_pin["legacy_scorer_version"],
+            "ask_dev_sha": sv_pin["ask_dev_sha"],
+            "ask_dev_root": sv_pin["ask_dev_root"],
+            "corpus_version": _corpus_version,
+            **sv_bridge.aggregate(_sv_by_id.values()),
+        }
+    else:
+        # NAMED absence, never a silent zero or an omitted key: a reader must be able
+        # to tell "no ask-dev pin this run" apart from "every row scored agree" by
+        # looking at ONE field, never by the coincidence that both leave a key out.
+        _sv_by_id = {}
+        provenance["semantic_verdict"] = {
+            "available": False,
+            "reason": sv_unavailable_reason,
+        }
 
     # codex r2 P1: `rig_diagnostics.attempt_upstream_504_n` / `attempt_overrun_413_n`
     # used to sum `r.get(key) or 0` directly, which is the REPLAY's own field only --
@@ -806,6 +878,10 @@ def main():
               "expectation": expectations.expectation_for(BY_ID[r["corpus_id"]])["expectation"],
               "expectation_verdict": next(
                   e["verdict"] for e in _exp_table if e["corpus_id"] == r["corpus_id"]),
+              # CHAOS-5625: published BESIDE expectation_verdict above, never in place
+              # of it -- see semantic_verdict_bridge.py and docs on why the two agree
+              # byte-for-byte on today's all-scalar corpus.
+              "semantic_verdict": _sv_by_id.get(r["corpus_id"]),
               # Additive flag so the deliverable can show the split
               # with and without rows the RIG's 30-item ceiling rejected (prod = 45).
               # Derived here, not in run_shard — run_shard stays frozen between the
