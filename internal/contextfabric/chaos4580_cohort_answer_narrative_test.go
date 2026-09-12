@@ -161,16 +161,20 @@ func TestEngineRecomposesCohortAnswerNarrativeAfterNarration(t *testing.T) {
 	// back in. Supersedes CHAOS-4580's "numbered summary sentence inline"
 	// expectation.
 	//
-	// The status composition now includes the server-computed cardinality
-	// sentence. The line CHAOS-4690 draws is between a SERVED FACT and
-	// NARRATION DETAIL: it reversed CHAOS-4580 because that had spliced the
-	// principal driver's scoring arithmetic -- the model's reasoning about
-	// what it read -- into the answer line. A count the server computed over
-	// the member set it served is on the other side of that line: it is not a
-	// restatement of anything, and it is the one number a counting question
-	// asked for. The discriminating half of this pin is unchanged and asserted
-	// explicitly below: driver clauses and scoring arithmetic stay out.
-	wantDeterministicAnswer := "This investigation is partial: some canonical or graph coverage was unavailable. Counted 1 team."
+	// NO COUNT SENTENCE, because this fixture asks no counting question.
+	//
+	// The count sentence is admissible in a status composition -- it is a fact
+	// the server computed, not the narration detail CHAOS-4690 excluded -- but
+	// admissible is not unconditional. It is the number a COUNTING question
+	// asked for, and this fixture builds no frame and so carries no count
+	// obligation; the row, the claim and the sentence share that one
+	// precondition, so none of the three appears here. The composition with
+	// the sentence present is pinned where the obligation exists, beside the
+	// claim it must agree with.
+	//
+	// The discriminating half of this pin is unchanged and asserted explicitly
+	// below: driver clauses and scoring arithmetic stay out.
+	wantDeterministicAnswer := "This investigation is partial: some canonical or graph coverage was unavailable."
 	if result.DeterministicAnswer != wantDeterministicAnswer {
 		t.Fatalf("result.DeterministicAnswer = %q, want %q (status composition: status sentence + served count)", result.DeterministicAnswer, wantDeterministicAnswer)
 	}

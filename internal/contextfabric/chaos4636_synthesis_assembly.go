@@ -514,9 +514,17 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// document already at the cap serves its answer without the claim rather
 	// than serving nothing. The outcome row still states the count correctly;
 	// what is lost is the addressable field, and the loss is reported.
-	if claim, ok := cardinalityClaim(principal, cardinality); ok {
-		if cardinalityClaimAdmitted(len(result.ClaimedFacts)) {
-			result.ClaimedFacts = append(result.ClaimedFacts, claim)
+	//
+	// GATED ON THE SAME QUESTION THE ROW ASKS. cardinalityOwed reads the
+	// planning rows through countRequirement, which is the row's own gate, so
+	// the claim cannot be minted for an answer that will carry no count row to
+	// reconcile it against. The three surfaces share one precondition; they
+	// used to have two.
+	if cardinalityOwedByFrame(params.Frame, e.requirements, cardinality) {
+		if claim, ok := cardinalityClaim(principal, cardinality); ok {
+			if cardinalityClaimAdmitted(len(result.ClaimedFacts)) {
+				result.ClaimedFacts = append(result.ClaimedFacts, claim)
+			}
 		}
 	}
 	if graphContext.Cohort != nil {
@@ -577,8 +585,12 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// It extends the STATUS COMPOSITION. The rule that recompose enforces
 	// excludes narration detail -- a driver's scoring arithmetic, restated --
 	// and a count the server computed over the served member set is not that.
-	if sentence := cardinalityAnswerSentence(cardinality); sentence != "" {
-		result.DeterministicAnswer = strings.TrimSpace(result.DeterministicAnswer + " " + sentence)
+	//
+	// Same precondition as the claim above, and appended through the bound-
+	// aware helper: the composer has already truncated to the contract length,
+	// so a blind append turns a valid answer into an invalid one.
+	if cardinalityOwedByFrame(params.Frame, e.requirements, cardinality) {
+		result.DeterministicAnswer = appendCardinalitySentence(result.DeterministicAnswer, cardinalityAnswerSentence(cardinality))
 	}
 	// CHAOS-4085: the post-synthesis commit-affirmation gate. Placed HERE
 	// deliberately -- after every composer that touches Limitations or

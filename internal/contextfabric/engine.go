@@ -1495,6 +1495,33 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			if backfilled, _, _ := appendMembershipCardinality(reused.Completeness.Outcomes, reusedCardinality, reusedPlanNarrowing(reused)); len(backfilled) > 0 {
 				reused.Completeness.Outcomes = backfilled
 			}
+			// THE CLAIM AND THE SENTENCE ARE RE-DERIVED HERE, NOT CARRIED.
+			//
+			// Backfilling the row alone left the other two surfaces missing on
+			// this path: a document saved before the count existed was reused
+			// with its row restored and no claim and no sentence, so the same
+			// question answered from cache served strictly less than it did
+			// fresh -- and the reader had no way to tell which they had.
+			//
+			// RE-DERIVED rather than carried because a stored document may
+			// predate the feature entirely, so there is nothing to carry; and
+			// because deriving from the row that was just backfilled is what
+			// keeps all three surfaces stating one number on this path, the
+			// same way one `cardinality` value does on the fresh path.
+			//
+			// Under the SAME precondition the fresh path uses, read from the
+			// rows as they now stand -- so a reused answer that owes no count
+			// gains no claim and no sentence, exactly as a fresh one would not.
+			if cardinalityOwed(reused.Completeness.Outcomes, reusedCardinality) {
+				if claim, ok := cardinalityClaim(principal, reusedCardinality); ok {
+					if !resultCarriesCardinalityClaim(reused) && cardinalityClaimAdmitted(len(reused.ClaimedFacts)) {
+						reused.ClaimedFacts = append(reused.ClaimedFacts, claim)
+					}
+				}
+				if sentence := cardinalityAnswerSentence(reusedCardinality); sentence != "" && !strings.Contains(reused.DeterministicAnswer, sentence) {
+					reused.DeterministicAnswer = appendCardinalitySentence(reused.DeterministicAnswer, sentence)
+				}
+			}
 			reused.Completeness = ComputeAnswerCompleteness(reused)
 			// The count reaches the OPERATOR on this path too.
 			//

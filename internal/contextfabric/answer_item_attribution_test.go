@@ -121,14 +121,26 @@ type attributionFixtureSpec struct {
 	// layer's reduction may cut -- which is what makes the fifth arm
 	// reachable at all.
 	candidates int
-	// cardinalityClaims is how many CARDINALITY claims the document carries:
-	// one whenever the fixture resolves a member set, zero otherwise.
+	// cardinalityClaims is how many CARDINALITY claims the document carries.
+	//
+	// ZERO ON EVERY FIXTURE IN THIS FILE, and that is a statement about the
+	// fixtures rather than about the claim. None of them builds a question
+	// frame, so none carries a count obligation, and the count surfaces --
+	// row, claim and sentence -- all share that one precondition. A resolved
+	// member set is not on its own a reason to assert a count nobody asked
+	// for. The charged-item accounting for a document that DOES owe a count
+	// is pinned where the obligation exists, in the cardinality tests.
+	//
+	// Kept as a field rather than folded away: it is what makes the
+	// expectation below read as "fixture items plus candidates plus whatever
+	// counts this document owes", which stays true if a fixture here ever
+	// gains an obligation.
 	//
 	// A fixture literal like every other field here, and NOT read off the line
 	// under test -- the whole point of this struct is that the expectation and
 	// the value being checked cannot share a defect. Whether the claim exists
-	// is a property of the fixture (does it have a cohort with members), which
-	// is exactly the kind of thing a literal can state.
+	// is a property of the fixture (does its frame carry a count obligation),
+	// which is exactly the kind of thing a literal can state.
 	//
 	// It charges the GLOBAL bucket: a population count is about the
 	// organization, not about any member or group, so attributing it to a
@@ -161,7 +173,7 @@ func (s attributionFixtureSpec) expect(membersMeasured, candidatesInDocument int
 
 // defaultAttributionSpec is the shape the served and refusal tests use.
 func defaultAttributionSpec() attributionFixtureSpec {
-	return attributionFixtureSpec{members: 3, globalFindings: 5, groupDrivers: 3, multiGroupDrivers: 2, memberDrivers: 1, cardinalityClaims: 1}
+	return attributionFixtureSpec{members: 3, globalFindings: 5, groupDrivers: 3, multiGroupDrivers: 2, memberDrivers: 1, cardinalityClaims: 0}
 }
 
 // attributionEngine builds an engine whose synthesis returns a result with a
@@ -512,7 +524,7 @@ func assembledResultArmCases() []assembledResultArmCase {
 		{
 			name:          "planned refusal, nothing to narrow",
 			discriminator: "retry_declined=nothing_to_narrow",
-			spec:          attributionFixtureSpec{members: 1, globalFindings: 5, groupDrivers: 3, multiGroupDrivers: 4, memberDrivers: 1, cardinalityClaims: 1},
+			spec:          attributionFixtureSpec{members: 1, globalFindings: 5, groupDrivers: 3, multiGroupDrivers: 4, memberDrivers: 1, cardinalityClaims: 0},
 			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec, cohortSizes *[]int) (InvestigationResult, bool) {
 				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(1, 0), cohortSizes)
 				if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow()); err == nil {
@@ -546,7 +558,7 @@ func assembledResultArmCases() []assembledResultArmCase {
 			name:                   "retry ran and still did not fit",
 			discriminator:          "retry_attempted=true retry_fit=false retry_failed=false",
 			measuresNarrowedCohort: true,
-			spec:                   attributionFixtureSpec{members: 3, globalFindings: 6, groupDrivers: 4, multiGroupDrivers: 5, memberDrivers: 1, cardinalityClaims: 1},
+			spec:                   attributionFixtureSpec{members: 3, globalFindings: 6, groupDrivers: 4, multiGroupDrivers: 5, memberDrivers: 1, cardinalityClaims: 0},
 			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec, cohortSizes *[]int) (InvestigationResult, bool) {
 				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(10, time.Second), cohortSizes)
 				if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow()); err == nil {
@@ -564,7 +576,7 @@ func assembledResultArmCases() []assembledResultArmCase {
 			discriminator: "outcome_reduction_applied=true",
 			spec: attributionFixtureSpec{
 				members: 1, globalFindings: 3, groupDrivers: 5, multiGroupDrivers: 6,
-				memberDrivers: 1, candidates: 7, cardinalityClaims: 1,
+				memberDrivers: 1, candidates: 7, cardinalityClaims: 0,
 			},
 			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec, cohortSizes *[]int) (InvestigationResult, bool) {
 				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(20, 0), cohortSizes)
