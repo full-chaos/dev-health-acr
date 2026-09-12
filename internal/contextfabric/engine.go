@@ -1131,12 +1131,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		if servedErr == nil && continuation.Applies() && continuation.AppliedWindow != nil && served.EffectiveEvidenceWindow == nil {
 			continuation.Disposition = ContinuationWithheld
 			continuation = continuation.withReason(ContinuationReasonWindowSuperseded)
-			continuation.AppliedWindow = nil
-			// Same rule as the composition withhold above: a withheld turn
-			// publishes no accepted context. The carried proposal stays on the
-			// event, so the reversal is still readable as "this is what would
-			// have been continued, and here is why it was not".
-			continuation.Accepted = nil
+			// The fields this reversal invalidates -- the applied window and
+			// the accepted context -- are cleared by the normalisation below,
+			// which owns that question for EVERY exit rather than for the
+			// three that remembered to ask it. The carried proposal stays on
+			// the event either way, so the reversal is still readable as
+			// "this is what would have been continued, and here is why not".
 		}
 		// A REFUSAL IS A DOCUMENT. The basis is recorded where the refusal is
 		// taken, and an error return after that point -- a failed validation
@@ -1767,18 +1767,16 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// there is no continuation to serve. Withheld with the
 				// composition's own reason -- never served under the fresh
 				// frame's gate, which certified a different object.
+				// Disposition alone stops the continuation from applying:
+				// Applies() requires ContinuationApplied, so nothing downstream
+				// executes under the admitted carrier once this is set. The
+				// fields that would otherwise still ASSERT it did -- the accepted
+				// context and the applied window -- are cleared by the exit
+				// fold, which owns that question for every exit rather than only
+				// for the ones that remembered to ask it. Two places clearing one
+				// field is two authorities for one object.
 				continuation.Disposition = ContinuationWithheld
 				continuation = continuation.withReason(ContinuationReasonCompositionInvalid)
-				// AND THE ACCEPTED CONTEXT IS CLEARED, which is the half a
-				// reviewer catches later if it is left out. `Accepted` means
-				// "this is the context the turn executed under"; leaving the
-				// admitted carrier there on a WITHHELD turn publishes
-				// `family_accepted` and `accepted_context_id` for a reading
-				// nothing executed -- the same class of untrue field as the
-				// false `agreement=true` this boundary was cut to remove. The
-				// proposal is still disclosed: `Carried` is untouched and
-				// `carried_context_id` still names it.
-				continuation.Accepted = nil
 			}
 		}
 		continuation = compareContinuationProposal(continuation, continuationFreshProposal{
