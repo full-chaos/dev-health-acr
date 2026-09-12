@@ -1288,6 +1288,13 @@ func (t SlogEngineTelemetry) RecordMembershipCardinality(ctx context.Context, pr
 	if event.Overrun != "" {
 		args = append(args, "overrun", string(validBudgetOverrunOrUnclassified(event.Overrun)))
 	}
+	// Same non-empty guard as the two above, for the same reason: a count that
+	// nothing cut emits no cut vocabulary at all. The difference is that this
+	// key is the ONLY one populated when the cut had no recorded plan step, so
+	// omitting it left that path with a narrowed outcome and no mechanism.
+	if event.Cause != "" {
+		args = append(args, "cause_coverage", SanitizeLogAttr(string(event.Cause)))
+	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric membership cardinality", args...)
 }

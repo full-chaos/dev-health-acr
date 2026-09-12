@@ -15,9 +15,14 @@ package contextfabric
 // CEILINGS, and this change still refuses to publish them as members.
 
 import (
+	"bytes"
+	"context"
+	"log/slog"
+	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 func TestCardinalityDeclaresTheRetrievalPopulationWhenItExceedsTheServedMembers(t *testing.T) {
@@ -184,5 +189,55 @@ func TestACallerBoundCohortStillNamesWhyTheCountWasCut(t *testing.T) {
 	}
 	if row.Served != 10 || row.Declared != 36 {
 		t.Errorf("served/declared = %d/%d, want 10/36", row.Served, row.Declared)
+	}
+}
+
+// THE CAUSE HAS TO REACH THE OPERATOR, NOT JUST THE DOCUMENT.
+//
+// The caller-bound path records its cause as a COVERAGE cause, because no
+// narrowing step ran to supply a basis. The event projected only basis and
+// overrun, so on that path the Info line said `outcome=narrowed served=10
+// declared=36` and named no mechanism -- a cut an operator could see and not
+// explain.
+//
+// DRIVEN THROUGH THE REAL SLOG SINK, deliberately. The document-level guard
+// beside this one uses recording telemetry and passes either way; that is
+// exactly why the omission survived it, and why asserting on the emitted line
+// is the only thing that pins the projection.
+func TestTheCardinalityCauseReachesTheEmittedLine(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	sink := SlogEngineTelemetry{logger: slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))}
+
+	// The caller-bound shape: a cut with a coverage cause and NO narrowing
+	// basis. Built through the production projection, not hand-assembled.
+	rows := []RequirementOutcomeRow{{
+		Stage:         contractsv1.ContextFabricOutcomeStageAssembledResult,
+		Requirement:   "count/member/team",
+		Obligation:    string(ObligationCount),
+		Outcome:       contractsv1.ContextFabricRequirementNarrowed,
+		Impact:        contractsv1.ContextFabricAnswerImpactScope,
+		Served:        10,
+		Declared:      36,
+		CauseCoverage: contractsv1.ContextFabricCoverageDetailPopulationTruncated,
+		CauseObserved: true,
+	}}
+	event, ok := membershipCardinalityEventFrom(
+		InvestigationResult{Completeness: AnswerCompleteness{Outcomes: rows}}, QuestionFamilyScopedCohortStatus)
+	if !ok {
+		t.Fatal("no cardinality event projected from an assembled count row")
+	}
+	if event.Basis != "" {
+		t.Fatalf("basis = %q, want empty -- if a basis is present this fixture is not the caller-bound path", event.Basis)
+	}
+
+	sink.RecordMembershipCardinality(context.Background(), storage.Principal{OrgID: "org_1"}, event)
+
+	line := buf.String()
+	if !strings.Contains(line, `"cause_coverage":"population_truncated"`) {
+		t.Errorf("emitted line carries no cause_coverage: %s", line)
+	}
+	if !strings.Contains(line, `"outcome":"narrowed"`) {
+		t.Errorf("emitted line is not the narrowed outcome under test: %s", line)
 	}
 }

@@ -407,6 +407,7 @@ func membershipCardinalityEventFrom(result InvestigationResult, family QuestionF
 			Declared:    row.Declared,
 			Basis:       row.CauseNarrowing,
 			Overrun:     row.CauseOverrun,
+			Cause:       row.CauseCoverage,
 		}
 		if result.Cohort != nil {
 			event.CohortComplete = result.Cohort.Complete
