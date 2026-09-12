@@ -645,15 +645,37 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		// buildConfirmedKindScopedSnapshot), "candidate_count" is that
 		// attempt's own isolated snapshot size (0 whenever state !=
 		// "complete").
+		//
+		// CHAOS-5636 class fix: the summary line (empty
+		// LowPopulationKindScopeKind) used to share this SAME Msg with the
+		// per-kind detail line above, discriminated only by a field VALUE
+		// (an empty "kind") rather than its own Stage/Msg the way every
+		// other detail/summary pair in this file already is (OfferPool/
+		// OfferPoolSummary, Corroboration/CorroborationSummary, identity_gate,
+		// slice_b_survivor_verdict) -- certify's own line lookup
+		// (log.linesWithMsg) matches by Msg alone, so declaring this as two
+		// eventspec.Event values sharing one Msg would have certifyBoundedMany
+		// silently mix the summary line into the detail scope's own Index/
+		// Total agreement check. Given its own Msg here, the same fix
+		// AnchorKindWithheld already needed for a different Msg collision
+		// (its own doc comment).
+		if event.LowPopulationKindScopeKind == "" {
+			t.logger.DebugContext(ctx, "context fabric resolution trace: low population kind scope summary",
+				"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
+				// outcome (CHAOS-4417): see LowPopulationKindScopeOutcome's
+				// own doc comment.
+				"outcome", contextfabric.SanitizeLogAttr(event.LowPopulationKindScopeOutcome))
+			return
+		}
 		t.logger.DebugContext(ctx, "context fabric resolution trace: low population kind scope",
 			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"kind", contextfabric.SanitizeLogAttr(event.LowPopulationKindScopeKind),
 			"state", contextfabric.SanitizeLogAttr(event.LowPopulationKindScopeState),
 			"candidate_count", event.LowPopulationKindScopeCandidateCount,
-			// outcome (codex R1 P2, CHAOS-4417): populated ONLY on the
-			// rescue's own summary event (empty "kind") -- see
-			// LowPopulationKindScopeOutcome's own doc comment.
-			"outcome", contextfabric.SanitizeLogAttr(event.LowPopulationKindScopeOutcome))
+			// index/total (CHAOS-5636): this event's self-carried
+			// MultiplicityBoundedManyPerPass bound -- see
+			// ResolutionTraceEvent.Index's own doc comment.
+			"index", event.Index, "total", event.Total)
 	case "identity_universe":
 		// Rig-visibility fix: a single emission site
 		// (falkorgraph/reader.go), once per resolution's identity read --
@@ -686,7 +708,12 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"subject_kind", contextfabric.SanitizeLogAttr(string(event.Subject.Kind)), "subject_canonical_id", contextfabric.SanitizeLogAttr(event.Subject.CanonicalID),
 			"from_keyed_identity_lookup", event.FromKeyedIdentityLookup, "eligible_kind", event.EligibleKind,
 			"alias_matched", event.AliasMatched, "provider_matched", event.ProviderMatched,
-			"gate_fired", event.GateFired, "final_confidence", event.FinalConfidence)
+			"gate_fired", event.GateFired, "final_confidence", event.FinalConfidence,
+			// index/total (CHAOS-5636): this event's self-carried
+			// MultiplicityBoundedManyPerPass bound -- stamped by
+			// identityGateSummaryBuffer.flush() (resolve.go), the one place
+			// this call's own total gate-checked population is known.
+			"index", event.Index, "total", event.Total)
 	case "evidence_round":
 		// CHAOS-3899 (design brief v5 §5/§6 Slice A): the shadow evidence
 		// round's own per-resolution outcome -- SUPPRESSED from any
@@ -742,7 +769,12 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"census_statement_count", event.CensusStatementCount, "census_rows_read", event.CensusRowsRead,
 			"census_handle_applied", event.CensusHandleApplied, "census_anchor_applied", event.CensusAnchorApplied,
 			// CHAOS-4300: same tag as the sibling evidence_round event.
-			"shadow_caller_hint_short_circuit", event.ShadowCallerHintShortCircuit)
+			"shadow_caller_hint_short_circuit", event.ShadowCallerHintShortCircuit,
+			// index/total (CHAOS-5636): this event's self-carried
+			// MultiplicityBoundedManyPerPass bound over the SAME a.Kinds
+			// slice evidence_round's own shadow_kinds_censused already
+			// counts.
+			"index", event.Index, "total", event.Total)
 	case "evidence_census_commit":
 		// CHAOS-3896 Slice C (codex xhigh review finding, confirmed and
 		// fixed: this case was missing entirely, so a LIVE
@@ -800,7 +832,12 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"source_native_grammar", contextfabric.SanitizeLogAttr(event.ShadowSourceNativeGrammar),
 			"source_native_resolved", event.ShadowSourceNativeResolved,
-			"source_native_kind", contextfabric.SanitizeLogAttr(string(event.ShadowSourceNativeKind)))
+			"source_native_kind", contextfabric.SanitizeLogAttr(string(event.ShadowSourceNativeKind)),
+			// index/total (CHAOS-5636): this event's self-carried
+			// MultiplicityBoundedManyPerPass bound over the SAME binds slice
+			// the sibling evidence_source_native event's own
+			// source_native_match_count already counts.
+			"index", event.Index, "total", event.Total)
 	case "slice_b_survivor_verdict":
 		// CHAOS-4088: SurvivorsFirstOrder's own candidateSurvivorVerdict,
 		// traced for the first time -- see ResolutionTraceEvent.SurvivorVerdict's
@@ -828,7 +865,12 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 		t.logger.DebugContext(ctx, "context fabric resolution trace: slice b survivor verdict",
 			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"subject_kind", contextfabric.SanitizeLogAttr(string(event.Subject.Kind)), "subject_canonical_id", contextfabric.SanitizeLogAttr(event.Subject.CanonicalID),
-			"survivor_verdict", contextfabric.SanitizeLogAttr(event.SurvivorVerdict))
+			"survivor_verdict", contextfabric.SanitizeLogAttr(event.SurvivorVerdict),
+			// index/total (CHAOS-5636): this event's self-carried
+			// MultiplicityBoundedManyPerPass bound over the SAME ordered
+			// slice the sibling summary's own candidate_count already
+			// counts.
+			"index", event.Index, "total", event.Total)
 	default:
 		t.logger.DebugContext(ctx, "context fabric resolution trace: unknown stage",
 			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage))

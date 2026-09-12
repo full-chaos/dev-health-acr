@@ -143,7 +143,7 @@ func applyLowPopulationKindOffers(
 		outcome = lowPopulationKindScopeOutcomeVectorConfigured
 		return nil, nil
 	}
-	for _, kind := range chaos4417LowPopulationScopedKinds {
+	for i, kind := range chaos4417LowPopulationScopedKinds {
 		scopedPool, _, _, _, _, scopeState, scopeTraversalDegraded, scopeAuthzDropped, _, scopeErr :=
 			buildConfirmedKindScopedSnapshot(ctx, principal, request, deps, terms, aliasClaimantsByTerm, aliasIdentityComplete, kind, effectiveSearchLimit,
 				// CHAOS-5422: a nil admission, and it is PROVABLE rather than
@@ -175,6 +175,11 @@ func applyLowPopulationKindOffers(
 				LowPopulationKindScopeKind:           string(kind),
 				LowPopulationKindScopeState:          scopeState,
 				LowPopulationKindScopeCandidateCount: candidateCount,
+				// Index/Total (CHAOS-5636): self-carried bound over THIS
+				// call's own chaos4417LowPopulationScopedKinds loop -- a
+				// fixed-length constant known before the loop starts, the
+				// same shape Search's own per-term loop already uses.
+				Index: i + 1, Total: len(chaos4417LowPopulationScopedKinds),
 			})
 		}
 		if scopeState != confirmedKindScopeComplete {

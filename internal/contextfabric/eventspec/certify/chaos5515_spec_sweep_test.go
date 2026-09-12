@@ -595,6 +595,23 @@ func TestCertifyInputDomainTable(t *testing.T) {
 					return f, true
 				}
 			}
+			// CHAOS-5636: LowPopulationKindScopeSummary declares only
+			// request_id (attr), stage (closed vocab, excluded, single
+			// member), and "outcome" -- a MULTI-member closed-vocab string,
+			// no int/float/open-string/bool field at all. A closed-vocab
+			// field with at least two members is still perturbable to
+			// distinct, VALID content by picking a different member (see
+			// distinctContentLine/malformedLine's own ClosedVocabulary
+			// handling below) -- this is the last fallback, after every
+			// unconstrained type has already been tried.
+			for _, f := range ev.Fields {
+				if f.Key == "pass" || f.Key == "index" || f.Key == "total" || isAttr(f.Key) {
+					continue
+				}
+				if f.Type == eventspec.FieldString && len(f.ClosedVocabulary) >= 2 {
+					return f, true
+				}
+			}
 			return eventspec.Field{}, false
 		}
 		distinctContentLine := func(perturbValue int) map[string]any {
@@ -609,6 +626,15 @@ func TestCertifyInputDomainTable(t *testing.T) {
 			case eventspec.FieldFloat:
 				m[f.Key] = float64(perturbValue) + 0.5
 			case eventspec.FieldString:
+				if len(f.ClosedVocabulary) > 0 {
+					// canonicalValueFor always seeds a closed-vocab string
+					// with ClosedVocabulary[0] -- "distinct content" that
+					// stays VALID (never outside the declared vocabulary,
+					// which would trip a different check entirely) is the
+					// next member.
+					m[f.Key] = f.ClosedVocabulary[1]
+					break
+				}
 				m[f.Key] = fmt.Sprintf("sweep_distinct_content_%d", perturbValue)
 			case eventspec.FieldBool:
 				// canonicalValueFor's own bool value is always true --

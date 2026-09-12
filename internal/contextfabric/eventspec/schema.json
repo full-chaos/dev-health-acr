@@ -637,6 +637,107 @@
     ]
   },
   {
+    "id": "graphrank.confirmed_kind_scope",
+    "msg": "context fabric resolution trace: confirmed kind scope",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per resolveSubjects call -- gated on confirmedKind != nil \u0026\u0026 resolution-wide searchTruncated \u0026\u0026 nothing committed yet (CHAOS-4039 requires it stay structurally unreachable otherwise); CertifyAbsent asserts the case where it never fires.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "confirmed_kind_scope"
+        ]
+      },
+      {
+        "key": "state",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_attempted",
+          "complete",
+          "truncated",
+          "failed",
+          "plan_incomplete"
+        ]
+      },
+      {
+        "key": "candidate_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "vector_census_state",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_attempted",
+          "complete",
+          "over_budget",
+          "malformed",
+          "incomplete_snapshot_drift",
+          "failed",
+          ""
+        ]
+      },
+      {
+        "key": "vector_census_population_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "vector_census_enumerated_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "vector_census_malformed_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "vector_census_query_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "vector_census_queries_scored",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "vector_census_comparison_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "vector_census_rival_count_above_tau",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "vector_census_snapshot_stable",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "vector_census_duration_ms",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "graphrank.corroboration",
     "msg": "context fabric resolution trace: corroboration",
     "level": "debug",
@@ -997,6 +1098,378 @@
     ]
   },
   {
+    "id": "graphrank.evidence_census_commit",
+    "msg": "context fabric resolution trace: evidence census commit",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per resolveSubjects call -- mergeCensusAttestedSatisfier's own single, unlooped call site, gated on the evidence round naming an attested satisfier; CertifyAbsent asserts the (far more common) case where it never runs.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "evidence_census_commit"
+        ]
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_canonical_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "refused",
+          "anchor_kind_withheld",
+          "merged"
+        ]
+      },
+      {
+        "key": "graph_existence_ok",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "census_commit_reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "graph_missing_satisfier",
+          "census_commit_error"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "graphrank.evidence_probe",
+    "msg": "context fabric resolution trace: evidence probe (shadow census)",
+    "level": "info",
+    "multiplicity": "bounded_many_per_pass",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "bounded per resolveSubjects call by len(a.Kinds), the SAME count EvidenceRound's own shadow_kinds_censused reports for the same call -- self-carried index/total.",
+    "fields": [
+      {
+        "key": "census_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "census_complete",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "census_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "census_read_at_unix",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "census_protocol",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "census_closure_mismatch",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "census_statement_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "census_rows_read",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "census_handle_applied",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "census_anchor_applied",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "shadow_caller_hint_short_circuit",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "evidence_probe"
+        ]
+      },
+      {
+        "key": "index",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "total",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.evidence_round",
+    "msg": "context fabric resolution trace: evidence round (shadow)",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per resolveSubjects call -- gated on deps.CensusFunc != nil and the stalled-resolution precondition (nothing committed, resolution-wide searchTruncated); CertifyAbsent asserts the (far more common) case where it never runs.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "evidence_round"
+        ]
+      },
+      {
+        "key": "shadow_outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "would_commit",
+          "would_no_match",
+          "would_clarify"
+        ]
+      },
+      {
+        "key": "shadow_reason",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "shadow_d_identity_hash",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "shadow_precondition_unproven",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "shadow_unscoped_visibility",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "shadow_non_censused_survivor",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "shadow_handle_grammar_bound",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "shadow_anchor_unique_claimant",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "shadow_anchor_receipt_confirmed",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "shadow_kinds_censused",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "shadow_kind_insensitivity_evaluated",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "shadow_kind_insensitivity_outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "commit_sound",
+          "no_match_sound",
+          "kind_sensitive_outcome",
+          "probe_error"
+        ]
+      },
+      {
+        "key": "shadow_kind_insensitivity_mode",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "narrowed",
+          "observed_no_overlap",
+          "observed_subsumed"
+        ]
+      },
+      {
+        "key": "shadow_handle_insensitivity_evaluated",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "shadow_handle_insensitivity_outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "commit_sound",
+          "no_match_sound",
+          "kind_sensitive_outcome",
+          "probe_error"
+        ]
+      },
+      {
+        "key": "shadow_caller_hint_short_circuit",
+        "type": "bool",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.evidence_source_native",
+    "msg": "context fabric resolution trace: evidence source native (shadow widening)",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per resolveSubjects call -- the SAME gating EvidenceRound's own call site carries (traceSourceNativeBinds is called from inside RunShadowEvidenceRound, past the same axis/scope gates); CertifyAbsent asserts the case where the round never reaches that point.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "evidence_source_native"
+        ]
+      },
+      {
+        "key": "source_native_match_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "source_native_any_resolved",
+        "type": "bool",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.evidence_source_native_probe",
+    "msg": "context fabric resolution trace: evidence source native probe (shadow widening)",
+    "level": "debug",
+    "multiplicity": "bounded_many_per_pass",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "bounded per resolveSubjects call by len(binds), the SAME count EvidenceSourceNative's own source_native_match_count reports for the same call -- self-carried index/total.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "evidence_source_native_probe"
+        ]
+      },
+      {
+        "key": "source_native_grammar",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "provider_qualified_name",
+          "repo_slug",
+          "branch_name_keyword",
+          "branch_name_prefix",
+          "commit_sha"
+        ]
+      },
+      {
+        "key": "source_native_resolved",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "source_native_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "index",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "total",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "graphrank.exact_name_search",
     "msg": "context fabric resolution trace: exact name search",
     "level": "debug",
@@ -1043,6 +1516,121 @@
       {
         "key": "subject_canonical_id",
         "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.identity_gate",
+    "msg": "context fabric resolution trace: identity gate",
+    "level": "debug",
+    "multiplicity": "bounded_many_per_pass",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "bounded per resolveSubjects call by however many isAliasLookupScopedKind candidates NodeCandidate builds across BOTH its own call sites -- self-carried index/total, stamped at identityGateSummaryBuffer.flush() once that total is known, matching IdentityGateSummary's own candidate_count for the same call.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "identity_gate"
+        ]
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_canonical_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "from_keyed_identity_lookup",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "eligible_kind",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "alias_matched",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "provider_matched",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "gate_fired",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "final_confidence",
+        "type": "float",
+        "presence": "required"
+      },
+      {
+        "key": "index",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "total",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.identity_gate_summary",
+    "msg": "context fabric resolution trace: identity gate summary",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per resolveSubjects call -- withheld entirely when no alias-lookup-scoped candidate reached the gate; CertifyAbsent asserts that case.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "identity_gate"
+        ]
+      },
+      {
+        "key": "candidate_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "fired_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "fired_ids",
+        "type": "string_slice",
         "presence": "required"
       }
     ]
@@ -1180,6 +1768,116 @@
     ]
   },
   {
+    "id": "graphrank.kind_offer",
+    "msg": "context fabric resolution trace: kind offer",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "exactly one line per resolveSubjects call -- kindOfferMaterial/candidateOfferMaterial/handleOfferMaterial's own unconditional call site, folded (CHAOS-5636) so an early return upstream cannot skip it.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "kind_offer"
+        ]
+      },
+      {
+        "key": "explicit_hint_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "declared_hint_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "declared_withheld_not_in_pool_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "distinct_kind_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "suppressed_by_cardinality",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "suppressed_by_unservable_declared_kind",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "candidate_offer_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "offer_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "candidate_offer_labels_normalized_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "boundary_kinds",
+        "type": "string_slice",
+        "presence": "required"
+      },
+      {
+        "key": "boundary_kinds_before_repair",
+        "type": "string_slice",
+        "presence": "required"
+      },
+      {
+        "key": "distinct_kind_count_before_repair",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "suppressed_by_cardinality_before_repair",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "handle_offer_count_before_graph_source",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "handle_offer_graph_derived_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "handle_offer_graph_derived_rejected_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "offered_under_window_gate",
+        "type": "bool",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "graphrank.kind_offer_withheld",
     "msg": "context fabric resolution trace: kind offer withheld",
     "level": "info",
@@ -1231,6 +1929,99 @@
         "key": "suppressed_by_unservable_declared_kind",
         "type": "bool",
         "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.low_population_kind_scope",
+    "msg": "context fabric resolution trace: low population kind scope",
+    "level": "debug",
+    "multiplicity": "bounded_many_per_pass",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "bounded per resolveSubjects call by len(chaos4417LowPopulationScopedKinds), a fixed constant known before the loop starts -- self-carried index/total, cross-checked against no sibling summary count (the summary shares no field with the detail line; see LowPopulationKindScopeSummary's own doc comment for why the two were split onto distinct Msg strings).",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "low_population_kind_scope"
+        ]
+      },
+      {
+        "key": "kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "state",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_attempted",
+          "complete",
+          "truncated",
+          "failed",
+          "plan_incomplete"
+        ]
+      },
+      {
+        "key": "candidate_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "index",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "total",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.low_population_kind_scope_summary",
+    "msg": "context fabric resolution trace: low population kind scope summary",
+    "level": "debug",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "exactly one line per resolveSubjects call, emitted via a plain deferred statement inside applyLowPopulationKindOffers -- including the vector-configured early return.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "low_population_kind_scope"
+        ]
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "vector_configured",
+          "offer_only",
+          "no_low_pop_candidates",
+          "error"
+        ]
       }
     ]
   },
@@ -1598,6 +2389,105 @@
       {
         "key": "truncated",
         "type": "bool",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.slice_b_survivor_verdict",
+    "msg": "context fabric resolution trace: slice b survivor verdict",
+    "level": "debug",
+    "multiplicity": "bounded_many_per_pass",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "bounded per resolveSubjects call by len(ordered), the SAME count SliceBSurvivorVerdictSummary's own candidate_count reports for the same call -- self-carried index/total; zero lines whenever attestation.Reason == ReasonBudgetExhausted (the function's own early return before either loop runs).",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "slice_b_survivor_verdict"
+        ]
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_canonical_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "survivor_verdict",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "neutral",
+          "eliminated"
+        ]
+      },
+      {
+        "key": "index",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "total",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "graphrank.slice_b_survivor_verdict_summary",
+    "msg": "context fabric resolution trace: slice b survivor verdict summary",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per resolveSubjects call -- withheld entirely when SurvivorsFirstOrder's own candidate list is empty; CertifyAbsent asserts that case.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "slice_b_survivor_verdict"
+        ]
+      },
+      {
+        "key": "candidate_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "neutral_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "eliminated_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "eliminated_ids",
+        "type": "string_slice",
         "presence": "required"
       }
     ]

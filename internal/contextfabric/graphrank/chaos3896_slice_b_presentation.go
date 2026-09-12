@@ -170,6 +170,10 @@ func SurvivorsFirstOrder(candidates []contextfabric.SubjectCandidate, attestatio
 			tracer.Trace(ResolutionTraceEvent{
 				RequestID: requestID, Stage: "slice_b_survivor_verdict",
 				Subject: candidate.Subject, SurvivorVerdict: verdictName,
+				// Index/Total (CHAOS-5636): self-carried bound over this
+				// SAME ordered slice SurvivorVerdictCandidateCount below
+				// already counts -- known before this loop starts.
+				Index: i + 1, Total: len(ordered),
 			})
 		}
 	}

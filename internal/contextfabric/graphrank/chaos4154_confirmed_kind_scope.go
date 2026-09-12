@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -132,7 +133,16 @@ import (
 //     vocabulary; see ResolutionTraceEvent's own doc comments).
 //
 // confirmedKindScopeState is the closed vocabulary
-// ConfirmedKindScopeState/PopulationBasis telemetry carries.
+// ConfirmedKindScopeState/PopulationBasis telemetry carries. CHAOS-5636:
+// these now ALIAS eventspec's own canonical declaration (spec.go) rather
+// than typing the five literals here a second time -- this vocabulary is
+// ALREADY reused, unchanged, by low_population_kind_scope's own "state"
+// field (chaos4417_low_population_kind_scope.go), so the drift risk a
+// second independently typed copy would carry is a live one, not a
+// hypothetical -- the same class the DeclaredKindRescue migration already
+// fixed once for this package. Every doc comment below describing
+// what each state MEANS stays here, at the producer; only the literal
+// string values moved.
 const (
 	// confirmedKindScopeNotAttempted: this mechanism's own trigger condition
 	// was reached (confirmed kind, resolution-wide searchTruncated, nothing
@@ -141,22 +151,22 @@ const (
 	// still fires (resolve.go's call site emits it unconditionally once the
 	// trigger fires) -- its own presence proves the mechanism was reached,
 	// this state says it had nothing to try.
-	confirmedKindScopeNotAttempted = "not_attempted"
+	confirmedKindScopeNotAttempted = eventspec.ConfirmedKindScopeNotAttempted
 	// confirmedKindScopeComplete: every exhaustive per-term SearchKind call
 	// succeeded, untruncated and non-degraded, AND no live vector mechanism
 	// exists for this deployment. The ONLY state that lets resolve.go
 	// re-evaluate the commit gate over this isolated snapshot.
-	confirmedKindScopeComplete = "complete"
+	confirmedKindScopeComplete = eventspec.ConfirmedKindScopeComplete
 	// confirmedKindScopeTruncated: at least one exhaustive SearchKind call
 	// hit its own row bound -- a genuine same-kind rival may have been cut
 	// off. The snapshot this call built is discarded; the ordinary
 	// (unscoped) ambiguous/clarification outcome stands.
-	confirmedKindScopeTruncated = "truncated"
+	confirmedKindScopeTruncated = eventspec.ConfirmedKindScopeTruncated
 	// confirmedKindScopeFailed: at least one exhaustive SearchKind call
 	// reported a retrieval mechanism unavailable (degraded) for that term.
 	// Treated exactly like truncated -- an incomplete read must not
 	// masquerade as a proof.
-	confirmedKindScopeFailed = "failed"
+	confirmedKindScopeFailed = eventspec.ConfirmedKindScopeFailed
 	// confirmedKindScopePlanIncomplete: the lexical channel WAS exhaustively
 	// covered (every term, untruncated, non-degraded), but this deployment
 	// has a live vector mechanism (deps.VectorMechanismConfigured==true), so
@@ -165,7 +175,7 @@ const (
 	// only"). The snapshot is discarded even though the lexical pass itself
 	// succeeded -- see this file's own "REJECTED" section for why the
 	// identity census cannot close this gap either.
-	confirmedKindScopePlanIncomplete = "plan_incomplete"
+	confirmedKindScopePlanIncomplete = eventspec.ConfirmedKindScopePlanIncomplete
 )
 
 // buildConfirmedKindScopedSnapshot builds the isolated, confirmed-kind-only

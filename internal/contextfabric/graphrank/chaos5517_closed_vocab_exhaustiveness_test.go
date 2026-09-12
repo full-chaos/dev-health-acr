@@ -39,9 +39,22 @@ var closedVocabGoFields = map[string]string{
 // producer nobody enumerated" -- exactly the silent-hole class this whole
 // test exists to catch. Anything reaching eventForStage's !ok branch that is
 // NOT on this list fails closed (t.Fatalf) instead.
-var explicitlyDeferredStages = map[string]string{
-	"evidence_census_commit": "PR 3b (this PR's own stacked-split disclosure, 'Events registered this PR' table: \"the remaining ~13 resolution-seam events... are PR 3b\") -- graphrank/resolve.go's mergeCensusAttestedSatisfier, registered by the next stacked PR, not this one.",
-}
+//
+// CHAOS-5636: evidence_census_commit (registered as
+// eventspec.EvidenceCensusCommit) is REMOVED from this map, not merely left
+// off it by omission -- it is now registered, so a genuine future gap on
+// this stage must fail closed like any other. Its own four literal
+// Outcome="..." assignments no longer appear in this walk's own discovered
+// site list at all (not "deferred", simply invisible to it): they were
+// folded into ONE shared call, emitEvidenceCensusCommit(resolve.go), whose
+// own ResolutionTraceEvent{...} composite literal assigns Outcome from a
+// function PARAMETER -- a value this walk's own disclosed scope boundary
+// already excludes (resolveIdentLiteral resolves locals and package consts,
+// never a parameter, the same class as "returned from a function call").
+// The real protection for this stage now lives in the runtime certify
+// suite (chaos5515_spec_sweep_test.go's own domain table, executed against
+// production output), not this static supplement.
+var explicitlyDeferredStages = map[string]string{}
 
 // resolveIdentLiteral resolves an *ast.Ident used as a value inside a
 // ResolutionTraceEvent{...} composite literal to the string it was last
