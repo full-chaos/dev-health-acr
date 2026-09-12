@@ -34,6 +34,24 @@ type Options struct {
 	// the generative stage while measuring the identical pipeline), never
 	// referenced by any production composition path.
 	ModelRuntimeOverride contextfabric.ModelRuntime
+	// InterpretationEnsembleSize (CHAOS-5638) is N for the question-family
+	// consensus: how many independent interpret samples one turn draws
+	// before the family is decided by strict majority.
+	//
+	// PRODUCTION DEFAULT IS 1, and 1 means the pre-ensemble behaviour
+	// exactly: one interpret call, the precedence table deciding alone,
+	// source recorded as `model`. The zero value reads as 1, so a caller
+	// that never sets this field is unaffected -- which is every
+	// production composition today.
+	//
+	// WIRED BUT OFF ON PURPOSE. The measurement that justifies N>1 is a
+	// 3x2 corpus run, and it belongs to the ticket that flips this, not to
+	// the one that builds it. Plumbing the field now means the whole path
+	// -- resolver delegation, sampling, consensus, winner selection -- is
+	// exercised end to end by tests against a real composition rather than
+	// only in unit isolation, while the served behaviour does not move.
+	// contextfabric.QuestionFamilyEnsembleMax bounds whatever is set here.
+	InterpretationEnsembleSize int
 	// RawSignalObserver (CHAOS-3858, measurement-only), when set, is
 	// threaded onto the graph adapter's Config.RawSignalObserver -- see
 	// that field's own doc comment and graphrank.ResolveDeps.RawSignalObserver

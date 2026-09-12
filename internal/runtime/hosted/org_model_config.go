@@ -192,3 +192,37 @@ func buildModelReceiptSink(postgres postgresComponents) (contextfabric.ModelRece
 	}
 	return store, nil
 }
+
+// sampledModelRuntime returns runtime as a contextfabric.SampledModelRuntime
+// when it can produce per-sample interpretations, and nil when it cannot
+// (CHAOS-5638).
+//
+// A NIL RETURN IS NOT A DEGRADE. The interpreter pairs this with
+// EnsembleSize: at the production default of 1 the field is never read, and
+// at N>1 a nil here surfaces as ErrEnsembleRuntimeMissing rather than as a
+// quiet fall back to one sample. So a composition can only be wrong LOUDLY --
+// which is the property the whole seam is built around.
+//
+// The assertion lives here, at the composition, rather than inside the
+// interpreter: this is the one place that knows what was actually built.
+func sampledModelRuntime(runtime contextfabric.ModelRuntime) contextfabric.SampledModelRuntime {
+	sampled, ok := runtime.(contextfabric.SampledModelRuntime)
+	if !ok {
+		return nil
+	}
+	return sampled
+}
+
+// interpretationEnsembleSize normalises the composition's requested N.
+//
+// Zero -- the field's own zero value, and every production caller today --
+// means 1: one interpret sample, the pre-ensemble path, unchanged. A negative
+// value means the same rather than an error, matching BoundEnsembleSize's own
+// treatment of a nonsensical configuration as "take the safe default" instead
+// of failing a composition over a number.
+func interpretationEnsembleSize(configured int) int {
+	if configured < 1 {
+		return 1
+	}
+	return configured
+}
