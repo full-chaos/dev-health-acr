@@ -1526,6 +1526,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 			// the only rule name in play.
 			receipt.Outcome = fallbackReceipt.Outcome
 			setDiagnostics(fallbackErr)
+			receipt = describeReportedLeg(receipt, fallbackReceipt)
 			return contextfabric.SynthesisDraft{}, receipt, fallbackErr
 		}
 		return contextfabric.SynthesisDraft{}, receipt, classifiedErr
@@ -1625,6 +1626,7 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 			// primary's stale ones.
 			receipt.Outcome = fallbackReceipt.Outcome
 			setDiagnostics(fallbackErr)
+			receipt = describeReportedLeg(receipt, fallbackReceipt)
 			return contextfabric.SynthesisDraft{}, receipt, fallbackErr
 		}
 		// CHAOS-3784 F1: this is the production ModelRuntime's OWN
@@ -2487,6 +2489,45 @@ func mergeFallbackReceipt(primary, fallback contextfabric.ModelExecutionReceipt)
 	primary.Usage.InputTokens += fallback.Usage.InputTokens
 	primary.Usage.OutputTokens += fallback.Usage.OutputTokens
 	primary.Usage.TotalTokens += fallback.Usage.TotalTokens
+	return primary
+}
+
+// describeReportedLeg makes a both-legs-failed receipt one projection of the
+// leg it reports.
+//
+// A receipt describes one leg. These branches report the fallback's outcome
+// and the fallback's rejection diagnostics, so the digest and the identity
+// belong to that leg as well: the digest names the draft that was refused and
+// the identity names the model that produced it, so a receipt pairing one
+// leg's outcome with another leg's digest names a draft, and a model, other
+// than the refusal it reports. The digest answers "the same draft on every
+// attempt, or a different one each time"; a digest belonging to the other leg
+// answers that wrongly, which is worse than carrying none.
+//
+// It is the rule the fallback-SUCCESS path follows through
+// mergeFallbackReceipt above: identity is the fallback's, and the primary's
+// survives separately in the primary_* snapshot the decision line carries.
+//
+// The digest is assigned unconditionally, unlike mergeFallbackReceipt's
+// non-empty guard. A leg that fails in transport drafts nothing, so an empty
+// digest is the truthful statement about the leg being reported, while a value
+// carried over from the other leg asserts a draft this outcome never judged.
+// The primary's failure stays observable through primaryFailureClassification
+// and the primary_* identity fields.
+//
+// Three fields stay the primary's, each pinned by its own test:
+//   - Attempts, matching mergeFallbackReceipt; the fallback's own count is
+//     reported separately as fallback_attempts_total.
+//   - FallbackUsed, which means the fallback ANSWERED; on these branches it
+//     did not.
+//   - Usage, which stays unsummed, so a both-failed call does not account for
+//     the fallback's tokens. That gap is independent of which leg the receipt
+//     describes.
+func describeReportedLeg(primary, fallback contextfabric.ModelExecutionReceipt) contextfabric.ModelExecutionReceipt {
+	primary.Provider = fallback.Provider
+	primary.Model = fallback.Model
+	primary.ModelVersion = fallback.ModelVersion
+	primary.OutputDigest = fallback.OutputDigest
 	return primary
 }
 
