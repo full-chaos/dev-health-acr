@@ -597,7 +597,14 @@ func recordComparisonPolicy(ctx context.Context, principal storage.Principal, re
 		// visible rather than silent.
 		QuestionSearchSuppressed: true,
 		EvidenceCensusSuppressed: true,
-		CandidateBudget:          request.Options.MaxSubjectCandidates,
+		// THE BUDGET THIS RUN WILL ENFORCE, never the number the caller asked
+		// for. A request may name any integer and the resolver honours none
+		// above the deployment's own cap, so the raw wire value would describe
+		// a budget no slot ever ran under -- and would put an unbounded
+		// caller-controlled integer on a log line. Derived through the SAME
+		// function every slot derives its own limit from, so the policy line
+		// and the slots cannot report two different budgets for one run.
+		CandidateBudget: enforcedCandidateBudget(request, deps),
 	})
 }
 
@@ -653,6 +660,27 @@ func recordComparisonDecision(ctx context.Context, principal storage.Principal, 
 		UnboundReceipts:    run.unboundReceipts,
 		RetrievalDegraded:  run.retrievalDegraded(),
 	})
+}
+
+// enforcedCandidateBudget is the candidate limit this run will actually honour:
+// the caller's request, bounded by the deployment's own cap.
+//
+// ONE AUTHORITY FOR ONE NUMBER. Every operand slot derives its retrieval limit
+// from this, and the policy observable reports it, so a reader of the trace and
+// the code that ran cannot disagree about the budget. It was two copies of the
+// same arithmetic before, which is how an observable drifts from the thing it
+// claims to describe.
+//
+// A CAP OF ZERO MEANS UNCAPPED, and a requested budget of zero or less means
+// "unspecified" -- both fall through to the caller's own value, which is what
+// the single-subject path has always done. The cap is server-side
+// configuration; nothing a caller sends can raise it.
+func enforcedCandidateBudget(request contextfabric.InvestigationRequest, deps ResolveDeps) int {
+	budget := request.Options.MaxSubjectCandidates
+	if deps.MaxResultsCap > 0 && (budget <= 0 || budget > deps.MaxResultsCap) {
+		return deps.MaxResultsCap
+	}
+	return budget
 }
 
 // resolveOneOperandSlot retrieves and decides ONE operand, in isolation.
@@ -714,10 +742,7 @@ func resolveOneOperandSlot(
 		// unconfigured backend on a zero-threshold auto-commit-everything gate.
 		gate = DefaultCommitGatePolicy()
 	}
-	effectiveSearchLimit := request.Options.MaxSubjectCandidates
-	if deps.MaxResultsCap > 0 && (effectiveSearchLimit <= 0 || effectiveSearchLimit > deps.MaxResultsCap) {
-		effectiveSearchLimit = deps.MaxResultsCap
-	}
+	effectiveSearchLimit := enforcedCandidateBudget(request, deps)
 
 	// aliasIdentityComplete is FALSE for a slot, deliberately and
 	// conservatively. It is a claim that a keyed identity read enumerated the
