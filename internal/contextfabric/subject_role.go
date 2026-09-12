@@ -345,3 +345,193 @@ func RenderRequirementCoordinates(label string, coordinates []RequirementCoordin
 	}
 	return out.String()
 }
+
+// ---------------------------------------------------------------------------
+// COMPARISON OPERAND CLASSIFICATION
+// ---------------------------------------------------------------------------
+//
+// PLACED BELOW frameRoleSlots DELIBERATELY, and this comment is the reason it
+// must stay there. read_population.go cites frameRoleSlots' explicit-set walk
+// by LINE RANGE ("SLOTS ARE WALKED EXACTLY AS frameRoleSlots WALKS THEM
+// (subject_role.go:128-143)"). Inserting anything above that walk silently
+// falsifies a cross-reference in a file this change does not touch, and the
+// falsification is invisible -- nothing compiles differently and no test goes
+// red. Everything this section adds goes at the END of the file.
+
+// ComparisonOperandVariant names WHICH member of the operand union a slot
+// carries. It mirrors SubjectOperandKind rather than aliasing it because the
+// two answer different questions: SubjectOperandKind is the wire
+// discriminator, this is the resolver's reading of it, and a future wire
+// member this cut does not admit must be expressible as "not one of these"
+// rather than silently arriving as a valid variant.
+type ComparisonOperandVariant string
+
+const (
+	// ComparisonOperandNamed: the operand names a subject by term.
+	ComparisonOperandNamed ComparisonOperandVariant = "named_subject"
+	// ComparisonOperandScoped: the operand is the members of a kind under an
+	// anchor. Recognised so it can be HELD, never so it can be resolved --
+	// see ClassifyComparisonOperands' own doc comment.
+	ComparisonOperandScoped ComparisonOperandVariant = "children_of_scope"
+)
+
+// ComparisonAdmission is the closed outcome vocabulary of the classifier.
+//
+// EVERY REFUSAL IS ITS OWN MEMBER. A single "not admitted" would make the
+// three reasons indistinguishable to telemetry and to the reader, and two of
+// them (a scoped operand, and an operand count outside the cut) are
+// deliberately-out-of-scope shapes rather than failures -- a distinction the
+// prompt and the logs both need to keep.
+type ComparisonAdmission string
+
+const (
+	// ComparisonNotAComparison: the frame is not an explicit set at all.
+	// Every other expression variant takes this, including the ones that are
+	// cohort-shaped.
+	ComparisonNotAComparison ComparisonAdmission = "not_a_comparison"
+	// ComparisonAdmittedNamedPair: exactly two named operands, each stating
+	// its kind. This is the cut, and the only member that resolution acts on.
+	ComparisonAdmittedNamedPair ComparisonAdmission = "admitted_named_pair"
+	// ComparisonHeldScopedOperand: the pair contains a scoped operand. Held
+	// BEFORE any operand retrieval -- admitting it would flip the whole
+	// answer to the absorbing degraded state, so a resolver limitation would
+	// reach the user as a data problem.
+	ComparisonHeldScopedOperand ComparisonAdmission = "held_scoped_operand"
+	// ComparisonOutOfCutOperandCount: an explicit set of other than two
+	// operands. Named as out of scope, not as broken.
+	ComparisonOutOfCutOperandCount ComparisonAdmission = "out_of_cut_operand_count"
+	// ComparisonOutOfCutUnstatedKind: an operand whose kind the question did
+	// not state. An absent expected kind is a WEAKER CLAIM than a guessed
+	// one (frame.go), and this cut is defined over questions that state both.
+	ComparisonOutOfCutUnstatedKind ComparisonAdmission = "out_of_cut_unstated_kind"
+)
+
+// ComparisonOperandSlot is ONE operand's structural description, in the
+// frame's own operand order.
+//
+// Position is the frame's index and is the ONLY ordering authority downstream:
+// published committed order follows it, so nothing may reconstruct operand
+// order by iterating a subject map.
+type ComparisonOperandSlot struct {
+	Position int
+	Variant  ComparisonOperandVariant
+	// Kind is the STATED kind: a named operand's ExpectedKind, or a scoped
+	// operand's MemberKind. Never inferred, never defaulted -- an operand
+	// with no stated kind puts the whole classification out of cut instead.
+	Kind SubjectKind
+	// Terms are this operand's OWN retrieval terms, and they are the reason
+	// this type exists: frameRoleSlots carries the role/kind projection but
+	// not the terms, and a slot resolved from the whole-question term bag
+	// instead of from its own terms is the defect this work removes.
+	//
+	// For a scoped operand these are the ANCHOR terms, which are retrieval
+	// POINTERS, NEVER VALUES. They are carried so the hold can name the side
+	// it is holding, never so the anchor can be resolved into an operand.
+	Terms []string
+}
+
+// ComparisonOperands is the classifier's whole answer.
+type ComparisonOperands struct {
+	Admission ComparisonAdmission
+	// Slots is populated for every explicit set, INCLUDING the out-of-cut and
+	// held ones, because the clarification has to name the sides it is
+	// declining to resolve. Empty only for ComparisonNotAComparison.
+	Slots []ComparisonOperandSlot
+}
+
+// Admitted reports whether resolution may act on this classification.
+func (c ComparisonOperands) Admitted() bool {
+	return c.Admission == ComparisonAdmittedNamedPair
+}
+
+// ClassifyComparisonOperands reads a validated frame's operand structure.
+//
+// STRUCTURAL ONLY. It performs NO identity matching, consults no graph, and
+// resolves nothing: it reports which operands the question names, in which
+// positions, of which variants, with which stated kinds and which of their own
+// terms. Deciding WHICH SUBJECT an operand denotes is resolution's job and
+// happens one layer down, per operand, against that operand's own terms.
+//
+// THE KIND PROJECTION IS frameRoleSlots', NOT A PARALLEL ONE. This function
+// walks the operands for what frameRoleSlots does not carry -- position,
+// variant, terms -- and takes role/kind from frameRoleSlots itself. That is
+// not tidiness: the declaration slice already shipped a coordinate derivation
+// whose oracle passed while a whole operand variant was never derived, and it
+// passed because the artifact was rendered by the same function that dropped
+// the variant. A second, independently-written kind walk here would be exactly
+// that shape again, and the two would drift apart silently the next time the
+// union gains a member.
+//
+// IT ALSO USES frameRoleSlots' OWN DROPPING BEHAVIOUR AS A SIGNAL. That
+// function emits no slot for an operand whose kind is unstated, so an operand
+// slot count below the operand count IS the unstated-kind case -- read off the
+// authority rather than re-tested here with a second copy of the same
+// condition.
+//
+// A nil or non-explicit-set frame is not a comparison, and says so rather than
+// returning a zero value a caller could mistake for an admitted empty pair.
+func ClassifyComparisonOperands(frame *QuestionFrame) ComparisonOperands {
+	if frame == nil || frame.SubjectExpression.Kind != SubjectExpressionExplicitSet || frame.SubjectExpression.Explicit == nil {
+		return ComparisonOperands{Admission: ComparisonNotAComparison}
+	}
+	operands := frame.SubjectExpression.Explicit.Operands
+
+	// The role/kind projection, from the single authority. Filtered to the
+	// operand role: an explicit set offers only operand slots today, and
+	// reading the role explicitly means a future variant that adds another
+	// role here cannot silently be counted as an operand.
+	var operandKinds []SubjectKind
+	for _, slot := range frameRoleSlots(frame.SubjectExpression) {
+		if slot.Role == SubjectRoleOperand {
+			operandKinds = append(operandKinds, slot.Subject)
+		}
+	}
+
+	slots := make([]ComparisonOperandSlot, 0, len(operands))
+	kindIndex := 0
+	scoped := false
+	for position, operand := range operands {
+		slot := ComparisonOperandSlot{Position: position}
+		switch {
+		case operand.Named != nil:
+			slot.Variant = ComparisonOperandNamed
+			slot.Terms = append([]string(nil), operand.Named.Terms...)
+		case operand.Scoped != nil:
+			slot.Variant = ComparisonOperandScoped
+			slot.Terms = append([]string(nil), operand.Scoped.AnchorTerms...)
+			scoped = true
+		default:
+			// Neither pointer set: a frame that never passed invariant I1.
+			// It contributes a positioned slot with no variant and no kind
+			// so the count stays honest, and the missing kind puts the
+			// classification out of cut below.
+			slots = append(slots, slot)
+			continue
+		}
+		if kindIndex < len(operandKinds) {
+			slot.Kind = operandKinds[kindIndex]
+			kindIndex++
+		}
+		slots = append(slots, slot)
+	}
+
+	switch {
+	case len(operands) != comparisonCutOperandCount:
+		return ComparisonOperands{Admission: ComparisonOutOfCutOperandCount, Slots: slots}
+	// The unstated-kind check runs BEFORE the scoped hold, deliberately. A
+	// scoped operand whose member kind is absent is out of cut for the same
+	// reason a named one is -- it is not a shape this cut can describe at all
+	// -- and reporting it as a scoped hold would claim the classifier
+	// understood a frame it did not.
+	case len(operandKinds) != len(operands):
+		return ComparisonOperands{Admission: ComparisonOutOfCutUnstatedKind, Slots: slots}
+	case scoped:
+		return ComparisonOperands{Admission: ComparisonHeldScopedOperand, Slots: slots}
+	}
+	return ComparisonOperands{Admission: ComparisonAdmittedNamedPair, Slots: slots}
+}
+
+// comparisonCutOperandCount is the operand count this cut is defined over.
+// Named rather than inlined so the two places that care -- the classifier and
+// its tests -- cannot disagree about what "the pair" means.
+const comparisonCutOperandCount = 2

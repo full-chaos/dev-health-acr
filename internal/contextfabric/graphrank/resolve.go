@@ -461,6 +461,18 @@ type ResolveDeps struct {
 	// own doc comment for the corpus-safety discipline every event field
 	// is held to.
 	ResolutionTracer ResolutionTracer
+
+	// OperandResolutionSink (turn-1 comparison work) is the INFO-level,
+	// CONTEXT-TAKING observable for comparison resolution. Optional and
+	// nil-safe: a backend that does not set it costs nothing and behaves
+	// exactly as before.
+	//
+	// It is a SEPARATE dependency from ResolutionTracer, not an extension of
+	// it, for two structural reasons: that tracer builds its own
+	// context.Background() so it cannot carry the request context these events
+	// exist to correlate by, and it emits at Debug, which is off on a
+	// production rig. See comparison_telemetry.go.
+	OperandResolutionSink OperandResolutionSink
 	// CensusFunc (CHAOS-3899, SHADOW ONLY -- design brief v5 §6 Slice A) is
 	// the shadow evidence round's census execution dependency. nil by
 	// default -- the same "not wired" convention every other optional
@@ -2582,6 +2594,38 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	if err := ctx.Err(); err != nil {
 		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
 	}
+	// COMPARISON DISPATCH -- BEFORE SubjectTerms FLATTENS THE QUESTION.
+	//
+	// This position is the fix. One line below, SubjectTerms reduces the
+	// question to a flat, deduped term bag, and at that moment which operand
+	// each term belonged to is gone: the resolver can only resolve "a" subject
+	// from a pool, so two well-posed operands become one ambiguity. Dispatching
+	// here is what lets each operand keep its own terms.
+	//
+	// ONLY THE ADMITTED PAIR AND THE SCOPED HOLD ARE TAKEN. Every other shape
+	// -- not a comparison at all, an operand count outside the cut, an operand
+	// whose kind the question did not state -- falls through to exactly the
+	// behaviour it has today. The cut is narrow deliberately, and "narrow"
+	// means the shapes outside it are untouched, not that they are refused.
+	//
+	// offersOnly is excluded: that pass exists to build StructureOfferMaterial,
+	// which this path does not produce, and the engine discards its resolution
+	// unconditionally (chaos4234_offers_only.go). Running a comparison for a
+	// resolution nobody keeps would be waste at best and a second, divergent
+	// decision path at worst.
+	if !contextfabric.OffersOnlyResolution(ctx) {
+		comparison := contextfabric.ClassifyComparisonOperands(frame)
+		switch comparison.Admission {
+		case contextfabric.ComparisonAdmittedNamedPair, contextfabric.ComparisonHeldScopedOperand:
+			resolution, bases, digests, err := resolveNamedComparison(ctx, principal, request, deps, comparison, admission)
+			if err != nil {
+				return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
+			}
+			commitBases.ResetTo(bases)
+			commitDigests.ResetTo(digests)
+			return resolution, contextfabric.StructureOfferMaterial{}, nil
+		}
+	}
 	terms := SubjectTerms(request, interpreted)
 	// offersOnly (CHAOS-4234): the class-default window gate's offers-only
 	// mode -- every commit MECHANISM below that only exists to reach a
@@ -3015,40 +3059,29 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// that case, so nothing new can commit on the strength of it alone).
 	identity := identityClaimants{}
 	identityTerms := identityMatchTerms{}
-	for termIndex, term := range terms {
-		results, truncated, degraded, err := deps.Search(ctx, term, request.Options.MaxSubjectCandidates)
-		if err != nil {
-			return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
-		}
-		if truncated {
-			searchTruncated = true
-		}
-		if degraded {
-			retrievalDegraded = true
-		}
-		if deps.ResolutionTracer != nil {
-			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
-				RequestID: request.RequestID, Stage: "search",
-				TermHash: traceTermHash(term), SearchResultCount: len(results),
-				// Truncated (CHAOS-4120): THIS term's own Search() truncation,
-				// before the fold into the resolution-wide searchTruncated flag
-				// just below -- see Truncated's own doc comment.
-				Truncated: truncated,
-				// Index/Total (CHAOS-5517): this call's own 1-based position
-				// in THIS resolveSubjects call's own terms list, and that
-				// list's own length -- the self-carried bound certify's
-				// bounded-many check asserts against.
-				Index: termIndex + 1, Total: len(terms),
-			})
-		}
-		// allowExactMatch=true: term here is genuine caller-derived search
-		// input (an interpreted subject term, or a requested-scope hint
-		// label -- see SubjectTerms), legitimately eligible to exact-match
-		// a subject's own label.
-		termTraversalDegraded, termAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, results, candidatesBySubject, observationParentKey, observationBlocked, true, vectorArmSimilarity, identity, identityTerms, admission)
-		traversalDegraded += termTraversalDegraded
-		subjectCandidatesAuthzDropped += termAuthzDropped
+	// EXTRACTED, NOT REWRITTEN (the two-operand comparison work): the per-term
+	// retrieval pass moved verbatim into retrieveCandidatesForTerms so a
+	// per-operand invocation can reuse it instead of carrying a second copy of
+	// its authorization, collision, traversal and truncation handling. The
+	// accumulation below is the same OR/`+=` this loop always did -- every flag
+	// here starts false and every counter zero before this point, so folding
+	// the helper's outcome in is byte-identical to setting them inline.
+	termRetrieval, err := retrieveCandidatesForTerms(ctx, principal, request, deps, terms,
+		candidatesBySubject, observationParentKey, observationBlocked, vectorArmSimilarity, identity, identityTerms, admission,
+		// This is the request's only `search` pass, so its bound is its own
+		// terms list length and its numbering starts at the first line.
+		0, len(terms))
+	if err != nil {
+		return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, err
 	}
+	if termRetrieval.searchTruncated {
+		searchTruncated = true
+	}
+	if termRetrieval.retrievalDegraded {
+		retrievalDegraded = true
+	}
+	traversalDegraded += termRetrieval.traversalDegraded
+	subjectCandidatesAuthzDropped += termRetrieval.authzDropped
 	// aliasIdentityComplete (CHAOS-3884): built here, between the per-term
 	// Search loop and the question pass -- LOW-12: placing the merge BEFORE
 	// the question pass means capMatchedTermsAfterMerge (below, called with
@@ -4727,4 +4760,115 @@ func hintsForbidSearchFallback(hints []contextfabric.SubjectHint) bool {
 		}
 	}
 	return true
+}
+
+// termRetrievalOutcome is what ONE retrieval pass accumulated across its terms.
+//
+// Grouped into a struct rather than returned as four bare values because the
+// caller folds them into resolution-wide state and a positional mix-up between
+// two bools and two ints would be silent -- `searchTruncated` and
+// `retrievalDegraded` mean very different things and neither reads wrong at a
+// call site.
+type termRetrievalOutcome struct {
+	// searchTruncated: at least one term's Search reported truncation. A
+	// property of the WHOLE pass, not of any one candidate -- a subject found
+	// by an untruncated call for one term can merge over a truncated call's
+	// entry for the same subject, which is exactly how the fact that
+	// truncation happened gets erased if it is not tracked separately.
+	searchTruncated bool
+	// retrievalDegraded: at least one term's Search reported a mechanism
+	// unavailable. Also a property of the whole pass: a mechanism that failed
+	// for one term leaves the pass narrower than it should have been.
+	retrievalDegraded bool
+	// traversalDegraded counts errored observation-to-entity traversals.
+	traversalDegraded int
+	// authzDropped counts candidate nodes excluded specifically because
+	// authorization denied them -- never an invalid or bookkeeping node, so
+	// this can never over-report.
+	authzDropped int
+}
+
+// retrieveCandidatesForTerms runs the per-term retrieval pass: one Search per
+// term, its own trace event, and a merge into the caller's candidate state.
+//
+// THIS IS AN EXTRACTION, NOT NEW BEHAVIOUR. The body moved here verbatim from
+// resolveSubjects, and resolveSubjects still calls it with exactly the terms
+// and maps it used to loop over itself -- so the ordinary single-subject path
+// is unchanged, term for term and event for event.
+//
+// WHY IT EXISTS. A two-named-operand comparison resolves each operand from ITS
+// OWN terms, and each operand's pass needs the same authorization, collision,
+// traversal and truncation handling this loop already does correctly. Writing
+// that a second time for operands is how the two copies drift, and drift here
+// means one operand authorizing differently from the other inside a single
+// answer. There is one implementation; comparison resolution calls it once per
+// slot with that slot's own terms and its own fresh maps.
+//
+// THE MAPS ARE THE CALLER'S, DELIBERATELY. This function accumulates into what
+// it is given and owns none of it. That is what lets a comparison give each
+// slot a SEPARATE set -- the isolation that keeps one operand's candidates,
+// identity claims and vector similarities out of the other's pool. A version
+// that allocated its own and returned them would make sharing the default and
+// isolation the special case, which is the wrong way round for this defect.
+func retrieveCandidatesForTerms(
+	ctx context.Context,
+	principal storage.Principal,
+	request contextfabric.InvestigationRequest,
+	deps ResolveDeps,
+	terms []string,
+	candidatesBySubject map[string]contextfabric.SubjectCandidate,
+	observationParentKey map[string]string,
+	observationBlocked map[string]bool,
+	vectorArmSimilarity map[string]float64,
+	identity identityClaimants,
+	identityTerms identityMatchTerms,
+	admission *contestAdmission,
+	// traceIndexBase is how many `search` lines this REQUEST has already
+	// emitted before this pass, and traceTotal the bound every one of them
+	// declares. Both are the caller's because graphrank.search carries no
+	// `pass` field: certify groups its lines by request_id alone and requires
+	// index 1..total to be unique and exhaustive ACROSS the request, so a pass
+	// that numbered its own terms from 1 would collide with the pass before it
+	// the moment a comparison ran two of them.
+	traceIndexBase int,
+	traceTotal int,
+) (termRetrievalOutcome, error) {
+	var outcome termRetrievalOutcome
+	for termOffset, term := range terms {
+		results, truncated, degraded, err := deps.Search(ctx, term, request.Options.MaxSubjectCandidates)
+		if err != nil {
+			return termRetrievalOutcome{}, err
+		}
+		if truncated {
+			outcome.searchTruncated = true
+		}
+		if degraded {
+			outcome.retrievalDegraded = true
+		}
+		if deps.ResolutionTracer != nil {
+			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+				RequestID: request.RequestID, Stage: "search",
+				TermHash: traceTermHash(term), SearchResultCount: len(results),
+				// Truncated (CHAOS-4120): THIS term's own Search() truncation,
+				// before the fold into the pass-wide searchTruncated flag just
+				// below -- see Truncated's own doc comment.
+				Truncated: truncated,
+				// Index/Total (CHAOS-5517): the request-wide self-carried
+				// bound certify's bounded-many check asserts against -- this
+				// line's own 1-based position among every search line the
+				// request emits, and that count.
+				Index: traceIndexBase + termOffset + 1, Total: traceTotal,
+			})
+		}
+		// allowExactMatch=true: term here is genuine caller-derived search
+		// input (an interpreted subject term, a requested-scope hint label --
+		// see SubjectTerms -- or, for a comparison, ONE OPERAND'S OWN terms
+		// off the validated frame), legitimately eligible to exact-match a
+		// subject's own label. It is never the whole question and never a
+		// synthetic marker; those take the question pass, which passes false.
+		termTraversalDegraded, termAuthzDropped := mergeSearchResults(ctx, principal, request, deps, term, results, candidatesBySubject, observationParentKey, observationBlocked, true, vectorArmSimilarity, identity, identityTerms, admission)
+		outcome.traversalDegraded += termTraversalDegraded
+		outcome.authzDropped += termAuthzDropped
+	}
+	return outcome, nil
 }
