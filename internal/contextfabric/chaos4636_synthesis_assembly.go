@@ -600,6 +600,24 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		}
 		result.SubjectResolution.CommitDecisionDigests = digests
 	}
+	// THE COMPUTED COUNT, MINTED AS A CLAIM.
+	//
+	// Appended here and NOT into `mintedClaims` above, because that slice is
+	// re-derived against the canonical fact bundle by
+	// validateMintedClaimsGrounded, and this claim has no canonical fact behind
+	// it by construction -- the step it comes from reads none. Handing that
+	// validator a fabricated citation would be worse than not routing the claim
+	// through it; what grounds this one instead is that its value must equal
+	// the count the same pass states on its own outcome row, which a guard
+	// asserts.
+	//
+	// Outside the `Cohort != nil` narration branch on purpose: a resolved
+	// member set has a count worth claiming whether or not any driver was
+	// narrated over it, and nesting this there would drop the claim exactly
+	// when the answer has the least else to say.
+	if claim, ok := cardinalityClaim(principal, cardinality); ok {
+		result.ClaimedFacts = append(result.ClaimedFacts, claim)
+	}
 	return result, synthesisAllocation, pending, cardinality, nil
 }
 

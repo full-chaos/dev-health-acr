@@ -355,7 +355,7 @@ func (p ContextFabricAnswerProjection) validateFacts() (map[string]struct{}, err
 	}
 	claims := make(map[string]struct{}, len(p.KeyFacts))
 	for _, fact := range p.KeyFacts {
-		if !stringLengthBetween(fact.ClaimID, 8, 256) || !validFactKind(fact.Kind) {
+		if !stringLengthBetween(fact.ClaimID, 8, 256) || !validClaimedFactKind(fact.Kind) {
 			return nil, fmt.Errorf("answer projection key fact identity violates v1 bounds")
 		}
 		if !stringLengthBetween(fact.Field, 1, ContextFabricClaimedFieldMaxLength) || strings.TrimSpace(fact.Field) != fact.Field {
