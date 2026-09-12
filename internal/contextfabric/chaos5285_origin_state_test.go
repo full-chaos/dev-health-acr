@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -560,4 +561,163 @@ func TestTheServedOrderOfOriginRowsDoesNotDependOnArrivalOrder(t *testing.T) {
 			t.Errorf("arrival order %v served %v, but %v served %v -- the served document depends on the order rows arrived in", permuted, got, kinds, first)
 		}
 	}
+}
+
+// EVERY DROP THE PRODUCER MAKES IS OBSERVABLE, AND THE REASONS ARE DISTINCT.
+//
+// The producer's two "no" answers used to be silent, and a battery proved
+// what that cost: weakening either guard changed nothing any test could see,
+// because the contract's Validate refused the rows they let through and the
+// served document came out identical. These pins assert the EMITTED lines
+// from the real producer at production levels, with non-trivial values, so a
+// guard that stops guarding is now a visible change and not a silent one.
+//
+// NOT t.Parallel(): it installs the process-global default logger.
+func TestEveryRowTheProducerDropsSaysWhyItWasDropped(t *testing.T) {
+	type line struct {
+		Msg         string `json:"msg"`
+		Level       string `json:"level"`
+		Side        string `json:"side"`
+		Reason      string `json:"reason"`
+		Source      string `json:"source"`
+		OriginKind  string `json:"origin_kind"`
+		FactKind    string `json:"fact_kind"`
+		SourceState string `json:"source_state"`
+		Error       string `json:"error"`
+		Dropped     int    `json:"observations_dropped"`
+	}
+	read := func(t *testing.T, buf *syncBuffer) []line {
+		t.Helper()
+		var out []line
+		for _, raw := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+			if raw == "" {
+				continue
+			}
+			var l line
+			if err := json.Unmarshal([]byte(raw), &l); err != nil {
+				t.Fatalf("log line is not JSON: %v (%q)", err, raw)
+			}
+			if strings.HasPrefix(l.Msg, "context fabric read origin state") {
+				out = append(out, l)
+			}
+		}
+		return out
+	}
+
+	t.Run("an unrooted read names the side and what it cost", func(t *testing.T) {
+		buf := captureDefaultJSONLogger(t)
+		member := Coverage{Sources: []SourceObservation{
+			{Source: "canonical_fact:health", State: SourceAvailable},
+			{Source: "canonical_fact:workload", State: SourceNoData},
+			{Source: "context-fabric:graph", State: SourceAvailable},
+		}}
+		got := readOriginStateCoverage(member, member, SubjectProject, "")
+		if len(got.Details) != 2 {
+			t.Fatalf("rows = %d, want 2 -- only the rooted read discloses", len(got.Details))
+		}
+		lines := read(t, buf)
+		var unrooted []line
+		for _, l := range lines {
+			if l.Reason == "unrooted_read" {
+				unrooted = append(unrooted, l)
+			}
+		}
+		if len(unrooted) != 1 {
+			t.Fatalf("unrooted_read lines = %d, want exactly 1 (the group read): %+v", len(unrooted), lines)
+		}
+		l := unrooted[0]
+		// NON-TRIVIAL VALUES: the side is the group, not the member, and the
+		// count is 3, not 0 -- a field at its zero value would pin nothing.
+		if l.Level != "WARN" {
+			t.Errorf("level = %q, want WARN -- an unrooted read is a wiring gap, not routine", l.Level)
+		}
+		if l.Side != "group" {
+			t.Errorf("side = %q, want \"group\" -- the line names the wrong read", l.Side)
+		}
+		if l.Dropped != 3 {
+			t.Errorf("observations_dropped = %d, want 3 -- the line must say what the gap cost", l.Dropped)
+		}
+	})
+
+	t.Run("a non-fact observation is dropped at Debug as not_a_fact_read", func(t *testing.T) {
+		buf := captureDefaultJSONLogger(t)
+		mixed := Coverage{Sources: []SourceObservation{
+			{Source: "canonical_fact:health", State: SourceAvailable},
+			{Source: "context-fabric:graph-validity-windows", State: SourceAvailable},
+		}}
+		if got := readOriginStateCoverage(mixed, Coverage{}, SubjectTeam, ""); len(got.Details) != 1 {
+			t.Fatalf("rows = %d, want 1", len(got.Details))
+		}
+		var skipped, other []line
+		for _, l := range read(t, buf) {
+			switch l.Reason {
+			case "not_a_fact_read":
+				skipped = append(skipped, l)
+			case "contract_refused":
+				other = append(other, l)
+			}
+		}
+		if len(skipped) != 1 {
+			t.Fatalf("not_a_fact_read lines = %d, want 1", len(skipped))
+		}
+		// AND IT IS DROPPED HERE, not carried on to be refused by the
+		// contract further down: the two reasons are different answers and
+		// a graph observation must take the routine one.
+		if len(other) != 0 {
+			t.Fatalf("a graph observation produced %d contract_refused line(s): %+v -- it was carried past the filter and refused downstream instead of dropped here", len(other), other)
+		}
+		l := skipped[0]
+		if l.Level != "DEBUG" {
+			t.Errorf("level = %q, want DEBUG -- a graph observation in fact coverage is routine", l.Level)
+		}
+		if l.Source != "context-fabric:graph-validity-windows" {
+			t.Errorf("source = %q, want the graph source -- the line does not name what was dropped", l.Source)
+		}
+		if l.OriginKind != string(SubjectTeam) {
+			t.Errorf("origin_kind = %q, want %q", l.OriginKind, SubjectTeam)
+		}
+	})
+
+	t.Run("a row the contract refuses is dropped at Warn with the error", func(t *testing.T) {
+		buf := captureDefaultJSONLogger(t)
+		refused := Coverage{Sources: []SourceObservation{
+			{Source: "canonical_fact:health", State: ""},
+			{Source: "canonical_fact:workload", State: SourceAvailable},
+		}}
+		if got := readOriginStateCoverage(refused, Coverage{}, SubjectProject, ""); len(got.Details) != 1 {
+			t.Fatalf("rows = %d, want 1", len(got.Details))
+		}
+		var refusals []line
+		for _, l := range read(t, buf) {
+			if l.Reason == "contract_refused" {
+				refusals = append(refusals, l)
+			}
+		}
+		if len(refusals) != 1 {
+			t.Fatalf("contract_refused lines = %d, want 1", len(refusals))
+		}
+		l := refusals[0]
+		if l.Level != "WARN" {
+			t.Errorf("level = %q, want WARN -- the producers mint only valid rows, so a refusal is a defect", l.Level)
+		}
+		if l.FactKind != string(FactHealth) {
+			t.Errorf("fact_kind = %q, want %q", l.FactKind, FactHealth)
+		}
+		if !strings.Contains(l.Error, "requires source_state") {
+			t.Errorf("error = %q, want the contract's own reason -- a refusal with no reason cannot be chased", l.Error)
+		}
+	})
+
+	t.Run("a turn that drops nothing says nothing", func(t *testing.T) {
+		// The discriminating control: non-execution is distinguishable from
+		// an evaluated zero. A clean grouped read emits no skip line at all.
+		buf := captureDefaultJSONLogger(t)
+		clean := Coverage{Sources: []SourceObservation{{Source: "canonical_fact:health", State: SourceAvailable}}}
+		if got := readOriginStateCoverage(clean, clean, SubjectProject, SubjectTeam); len(got.Details) != 2 {
+			t.Fatalf("rows = %d, want 2", len(got.Details))
+		}
+		if lines := read(t, buf); len(lines) != 0 {
+			t.Fatalf("a clean grouped read emitted %d skip line(s): %+v", len(lines), lines)
+		}
+	})
 }

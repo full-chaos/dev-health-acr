@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/hintsource"
@@ -673,13 +674,50 @@ func originMemberKind(plan AnswerPlan, cohort *Cohort) SubjectKind {
 // would fail the whole investigation over a disclosure.
 func readOriginStateCoverage(member, group Coverage, memberKind, groupKind SubjectKind) Coverage {
 	var details []CoverageDetail
-	add := func(coverage Coverage, origin SubjectKind) {
+	// EVERY DROP IS SAID OUT LOUD, AND THE TWO REASONS ARE DIFFERENT REASONS.
+	//
+	// This function decides, per observation, whether a disclosure row is
+	// servable, and both of its `no` answers used to be silent `continue`s.
+	// Silence made them unobservable AND untestable in the same stroke: a
+	// mutation battery weakened each guard in turn and the whole 4257-test
+	// suite stayed green, because the contract's own Validate refused the
+	// rows a weakened guard let through and the served document came out
+	// byte-identical. A guard whose removal nothing can observe is not a
+	// guard, it is a comment.
+	//
+	// So each drop names itself, and the two name different things:
+	//   * `not_a_fact_read` is ROUTINE. Graph observations ride in the same
+	//     Coverage and are not fact reads; Debug, because a normal turn has
+	//     several and an operator does not need them at Info.
+	//   * `contract_refused` is NOT routine. The producers of these
+	//     observations mint only valid ones, so a refusal means an
+	//     observation reached here in a shape nobody expected; Warn, with
+	//     the error, because that is a defect somewhere upstream and
+	//     dropping it silently would send the answer out a disclosure short
+	//     with nothing anywhere saying why.
+	//   * an UNROOTED read is a wiring gap of the same class -- the caller
+	//     could not say what population the read was rooted on -- so it is
+	//     Warn too, and it names how many observations it cost.
+	//
+	// Every value on these lines is a vocabulary token, a source name or a
+	// count -- never corpus content -- and the string-valued ones go through
+	// the log sanitiser barrier all the same.
+	add := func(coverage Coverage, origin SubjectKind, side string) {
 		if origin == "" {
+			slog.Default().Warn("context fabric read origin state skipped a whole read with no root kind",
+				"side", SanitizeLogAttr(side),
+				"reason", "unrooted_read",
+				"observations_dropped", len(coverage.Sources))
 			return
 		}
 		for _, observation := range coverage.Sources {
 			kind, ok := strings.CutPrefix(observation.Source, "canonical_fact:")
 			if !ok {
+				slog.Default().Debug("context fabric read origin state skipped an observation",
+					"side", SanitizeLogAttr(side),
+					"origin_kind", SanitizeLogAttr(string(origin)),
+					"source", SanitizeLogAttr(observation.Source),
+					"reason", "not_a_fact_read")
 				continue
 			}
 			detail := CoverageDetail{
@@ -691,14 +729,22 @@ func readOriginStateCoverage(member, group Coverage, memberKind, groupKind Subje
 				OriginKind:  origin,
 			}
 			detail.Label = contractsv1.ComposeCoverageDetailLabel(detail)
-			if detail.Validate() != nil {
+			if err := detail.Validate(); err != nil {
+				slog.Default().Warn("context fabric read origin state skipped an observation",
+					"side", SanitizeLogAttr(side),
+					"origin_kind", SanitizeLogAttr(string(origin)),
+					"source", SanitizeLogAttr(observation.Source),
+					"fact_kind", SanitizeLogAttr(kind),
+					"source_state", SanitizeLogAttr(string(observation.State)),
+					"reason", "contract_refused",
+					"error", SanitizeLogAttr(err.Error()))
 				continue
 			}
 			details = append(details, detail)
 		}
 	}
-	add(member, memberKind)
-	add(group, groupKind)
+	add(member, memberKind, "member")
+	add(group, groupKind, "group")
 	return Coverage{Details: details}
 }
 
