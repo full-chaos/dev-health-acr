@@ -616,14 +616,26 @@ func TestEveryRowTheProducerDropsSaysWhyItWasDropped(t *testing.T) {
 			t.Fatalf("rows = %d, want 2 -- only the rooted read discloses", len(got.Details))
 		}
 		lines := read(t, buf)
-		var unrooted []line
+		var unrooted, refused []line
 		for _, l := range lines {
-			if l.Reason == "unrooted_read" {
+			switch l.Reason {
+			case "unrooted_read":
 				unrooted = append(unrooted, l)
+			case "contract_refused":
+				refused = append(refused, l)
 			}
 		}
 		if len(unrooted) != 1 {
 			t.Fatalf("unrooted_read lines = %d, want exactly 1 (the group read): %+v", len(unrooted), lines)
+		}
+		// ONE LINE FOR THE WHOLE READ, NOT ONE PER OBSERVATION. An unrooted
+		// read STOPS: it does not walk its observations minting rows for the
+		// contract to refuse one at a time. That would bury a single wiring
+		// gap under a refusal per fact kind and read, at Warn, on every
+		// grouped turn -- and it is the shape a battery arm produces by
+		// deleting the return, so the count is asserted rather than assumed.
+		if len(refused) != 0 {
+			t.Fatalf("an unrooted read produced %d contract_refused line(s): %+v -- it carried on instead of stopping", len(refused), refused)
 		}
 		l := unrooted[0]
 		// NON-TRIVIAL VALUES: the side is the group, not the member, and the
