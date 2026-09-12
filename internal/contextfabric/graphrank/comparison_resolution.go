@@ -91,6 +91,14 @@ type operandSlotRun struct {
 	// one operand's degradation must be visible as that operand's, and must
 	// still propagate to the aggregate.
 	retrievalDegraded bool
+
+	// searchLimit is the retrieval bound this slot was RESOLVED UNDER, taken
+	// from the value actually handed to the resolver rather than re-derived
+	// afterwards. Carried so the slot's own observable can report it and be
+	// compared against the budget the policy line advertised: the two coming
+	// from one authority is the property, and it is only checkable if both
+	// are recorded.
+	searchLimit int
 }
 
 // state derives what happened to this operand from its own contents.
@@ -622,6 +630,7 @@ func recordOperandSlot(ctx context.Context, principal storage.Principal, request
 		Outcome:           slot.state(),
 		ReceiptBound:      slot.receiptBound,
 		RetrievalDegraded: slot.retrievalDegraded,
+		SearchLimit:       slot.searchLimit,
 	})
 }
 
@@ -783,6 +792,10 @@ func resolveOneOperandSlot(
 		digests:           digests,
 		receiptBound:      len(preCommitted) > 0,
 		retrievalDegraded: retrieval.retrievalDegraded,
+		// Recorded from the value HANDED TO the resolver, not re-derived, so
+		// the line reports the bound that ran rather than a second opinion
+		// about what it should have been.
+		searchLimit: effectiveSearchLimit,
 	}, nil
 }
 

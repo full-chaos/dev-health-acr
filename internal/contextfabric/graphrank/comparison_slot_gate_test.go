@@ -512,12 +512,17 @@ func TestEveryComparisonAdmissionSiteConsultsTheContest(t *testing.T) {
 
 // recordingPolicySink captures the policy event and nothing else, so an arm can
 // assert the VALUE a rig would read rather than the value the caller sent.
-type recordingPolicySink struct{ events []ComparisonPolicyEvent }
+type recordingPolicySink struct {
+	events []ComparisonPolicyEvent
+	slots  []OperandSlotEvent
+}
 
 func (r *recordingPolicySink) RecordComparisonPolicy(_ context.Context, event ComparisonPolicyEvent) {
 	r.events = append(r.events, event)
 }
-func (r *recordingPolicySink) RecordOperandSlot(context.Context, OperandSlotEvent) {}
+func (r *recordingPolicySink) RecordOperandSlot(_ context.Context, event OperandSlotEvent) {
+	r.slots = append(r.slots, event)
+}
 func (r *recordingPolicySink) RecordComparisonReceiptBinding(context.Context, ComparisonReceiptBindingEvent) {
 }
 func (r *recordingPolicySink) RecordComparisonDecision(context.Context, ComparisonDecisionEvent) {}
@@ -613,3 +618,68 @@ func twoNamedSlotGateFrame() *contextfabric.QuestionFrame {
 }
 
 func slotGateKindPointer(kind contextfabric.SubjectKind) *contextfabric.SubjectKind { return &kind }
+
+// TestEverySlotRunsUnderTheBudgetThePolicyLineAdvertised is the seam between
+// the two halves of the budget, and it is the one the mutation battery found
+// unpinned.
+//
+// The claim the shared helper makes is not "the policy line reports a clamped
+// number" -- a test can satisfy that while every slot quietly retrieves under
+// the raw request. The claim is that the line and the run come from ONE
+// authority. That is a statement about two values agreeing, so it takes a
+// fixture where they CAN disagree: a cap strictly below the requested budget,
+// which is exactly the case a single-authority implementation and a
+// two-authority one differ on.
+//
+// READ OFF THE OBSERVABLES, not off internals. The slot's applied bound is
+// reported on its own line precisely so this is checkable from the trace -- a
+// property provable only by reading the code would be an observability finding
+// in its own right, and the bound governs which candidates the vector-margin
+// rescue may even consider.
+func TestEverySlotRunsUnderTheBudgetThePolicyLineAdvertised(t *testing.T) {
+	t.Parallel()
+
+	const requested, cap = 500, 20
+
+	sink := &recordingPolicySink{}
+	deps := slotGateDeps(map[string][]CandidateNode{
+		"alpha": {exactMatchNode(contextfabric.SubjectTeam, "team_alpha", "alpha")},
+		"beta":  {exactMatchNode(contextfabric.SubjectTeam, "team_beta", "beta")},
+	}, &slotGateTracer{})
+	deps.OperandResolutionSink = sink
+	deps.MaxResultsCap = cap
+	request := slotGateRequest()
+	request.Options.MaxSubjectCandidates = requested
+
+	comparison := contextfabric.ClassifyComparisonOperands(twoNamedSlotGateFrame())
+	if _, _, _, err := resolveNamedComparison(context.Background(), storage.Principal{OrgID: "org-1"}, request, deps, comparison, nil); err != nil {
+		t.Fatalf("resolveNamedComparison() error = %v", err)
+	}
+
+	// FIXTURE CONTROL. The cap must actually bite, or the arm passes for a
+	// fixture in which the two authorities cannot differ.
+	if requested <= cap {
+		t.Fatalf("fixture requests %d under a cap of %d -- the two authorities agree trivially and this arm measures nothing", requested, cap)
+	}
+	if len(sink.events) != 1 {
+		t.Fatalf("captured %d policy line(s), want 1", len(sink.events))
+	}
+	if len(sink.slots) != 2 {
+		t.Fatalf("captured %d slot line(s), want one per operand -- an arm reading fewer cannot show both ran under the same bound", len(sink.slots))
+	}
+
+	advertised := sink.events[0].CandidateBudget
+	if advertised != cap {
+		t.Errorf("the policy line advertised budget %d, want the enforced %d", advertised, cap)
+	}
+	for _, slot := range sink.slots {
+		if slot.SearchLimit != advertised {
+			t.Errorf("slot %d retrieved under limit %d while the policy line advertised %d -- the slots and the line are reading two different authorities for one number, so the trace describes a run that did not happen",
+				slot.SlotPosition, slot.SearchLimit, advertised)
+		}
+		if slot.SearchLimit == requested {
+			t.Errorf("slot %d retrieved under the RAW requested %d rather than the enforced %d -- the deployment cap did not reach the slot at all",
+				slot.SlotPosition, requested, cap)
+		}
+	}
+}

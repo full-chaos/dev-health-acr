@@ -82,6 +82,20 @@ type OperandSlotEvent struct {
 	Outcome           operandSlotState
 	ReceiptBound      bool
 	RetrievalDegraded bool
+	// SearchLimit is the retrieval bound THIS SLOT actually applied.
+	//
+	// SEPARATE FROM THE POLICY LINE'S BUDGET, and the pair is the point. The
+	// policy line reports what the run decided to enforce once; this reports
+	// what each slot ran under. They must agree, and an operator can only see
+	// that they do if both are on the wire -- a slot quietly retrieving under
+	// the raw request while the policy line advertised the clamp would leave
+	// the two consistent in every served field and wrong only in the pool
+	// size, which nothing else on this path reveals.
+	//
+	// It is also the bound the vector-margin rescue's own envelope is checked
+	// against, so a slot that ran under the wrong one silently changes which
+	// candidates could be rescued.
+	SearchLimit int
 }
 
 // ComparisonReceiptBindingEvent is emitted ONCE when a comparison carried
@@ -162,6 +176,7 @@ var (
 		"TermCount": "term_count", "CandidateCount": "candidate_count",
 		"CommittedCount": "committed_count", "Outcome": "outcome",
 		"ReceiptBound": "receipt_bound", "RetrievalDegraded": "retrieval_degraded",
+		"SearchLimit": "search_limit",
 	}
 	comparisonReceiptBindingLogKeys = map[string]string{
 		"RequestID": "request_id", "OrgID": "org_id",
@@ -212,7 +227,8 @@ func (s SlogOperandResolutionSink) RecordOperandSlot(ctx context.Context, event 
 		operandSlotLogKeys["CommittedCount"], event.CommittedCount,
 		operandSlotLogKeys["Outcome"], contextfabric.SanitizeLogAttr(string(event.Outcome)),
 		operandSlotLogKeys["ReceiptBound"], event.ReceiptBound,
-		operandSlotLogKeys["RetrievalDegraded"], event.RetrievalDegraded)
+		operandSlotLogKeys["RetrievalDegraded"], event.RetrievalDegraded,
+		operandSlotLogKeys["SearchLimit"], event.SearchLimit)
 }
 
 func (s SlogOperandResolutionSink) RecordComparisonReceiptBinding(ctx context.Context, event ComparisonReceiptBindingEvent) {
