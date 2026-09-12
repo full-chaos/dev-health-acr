@@ -270,7 +270,8 @@ func TestSynthesizeAnswerResynthesisUnsetBehavesLikeSingleDraw(t *testing.T) {
 func TestSynthesizeAnswerOmitsDrawFieldsOnAPureTransportFailure(t *testing.T) {
 	t.Parallel()
 	handler, logger := newCaptureLogger()
-	runtime := mustRuntime(t, &generatorStub{synthesisErr: errors.New("503 unavailable")}, Config{Logger: logger, MaxSynthesisResynthesisAttempts: 3})
+	gen := &generatorStub{synthesisErr: errors.New("503 unavailable")}
+	runtime := mustRuntime(t, gen, Config{Logger: logger, MaxSynthesisResynthesisAttempts: 3})
 
 	_, receipt, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput())
 	if err == nil {
@@ -278,6 +279,9 @@ func TestSynthesizeAnswerOmitsDrawFieldsOnAPureTransportFailure(t *testing.T) {
 	}
 	if receipt.Outcome == "invalid_output" || receipt.Outcome == "success" {
 		t.Fatalf("receipt.Outcome = %q, want a transport classification, not a validator one", receipt.Outcome)
+	}
+	if len(gen.requests) != 1 {
+		t.Fatalf("generator saw %d requests, want exactly 1 -- the draw loop must stop on a transport failure, never re-drawing after one", len(gen.requests))
 	}
 
 	events := handler.decisionEvents()
