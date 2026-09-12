@@ -173,6 +173,27 @@ func TestContextFabricModelDefaults_fallsBackToPackageDefaults_whenUnconfigured(
 	}
 }
 
+// TestContextFabricModelDefaults_stampsResynthesisAttemptsWhenConfigured is
+// the CONFIGURED-branch counterpart to the unconfigured test above --
+// `modelprovider.ConfigFromEnv` itself never sets
+// MaxSynthesisResynthesisAttempts (see that field's own doc comment), so a
+// deployment WITH a provider configured still needs this stamped explicitly
+// onto the per-organization defaults, not only the unconfigured fallback
+// literal.
+func TestContextFabricModelDefaults_stampsResynthesisAttemptsWhenConfigured(t *testing.T) {
+	lookup := envLookup(map[string]string{
+		modelprovider.EnvAPIKey:         "sk-test",
+		EnvSynthesisResynthesisAttempts: "2",
+	})
+	defaults, err := contextFabricModelDefaults(lookup, discardLogger())
+	if err != nil {
+		t.Fatalf("contextFabricModelDefaults() = %v, want success", err)
+	}
+	if defaults.MaxSynthesisResynthesisAttempts != 2 {
+		t.Fatalf("defaults.MaxSynthesisResynthesisAttempts = %d, want 2", defaults.MaxSynthesisResynthesisAttempts)
+	}
+}
+
 // orgModelConfigResolverFunc is a fake contextfabric.OrgModelConfigResolver
 // driven by a plain function.
 type orgModelConfigResolverFunc func(context.Context, string) (contextfabric.ResolvedOrgModelConfig, bool, error)

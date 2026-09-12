@@ -259,6 +259,38 @@ func TestSynthesizeAnswerResynthesisUnsetBehavesLikeSingleDraw(t *testing.T) {
 	}
 }
 
+// TestSynthesizeAnswerOmitsDrawFieldsOnAPureTransportFailure pins
+// drawLogFields's own gating: a call whose FIRST draw never even reaches the
+// validator (a transport failure) must carry NO draws_total/draw_outcomes/
+// draw_output_digests/draw_rejected_clauses fields at all on the decision
+// line -- not zero values, which the corpus-safety convention this codebase
+// already follows (attemptsRetried's own doc comment) reserves for "reached
+// and measured zero", a different state from "never reached the draw loop's
+// judgment".
+func TestSynthesizeAnswerOmitsDrawFieldsOnAPureTransportFailure(t *testing.T) {
+	t.Parallel()
+	handler, logger := newCaptureLogger()
+	runtime := mustRuntime(t, &generatorStub{synthesisErr: errors.New("503 unavailable")}, Config{Logger: logger, MaxSynthesisResynthesisAttempts: 3})
+
+	_, receipt, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+	if err == nil {
+		t.Fatalf("SynthesizeAnswer() error = nil, want a transport failure")
+	}
+	if receipt.Outcome == "invalid_output" || receipt.Outcome == "success" {
+		t.Fatalf("receipt.Outcome = %q, want a transport classification, not a validator one", receipt.Outcome)
+	}
+
+	events := handler.decisionEvents()
+	if len(events) != 1 {
+		t.Fatalf("decision events = %d, want exactly 1", len(events))
+	}
+	for _, key := range drawLogFieldKeys {
+		if _, ok := events[0].Attrs[key]; ok {
+			t.Fatalf("decision event carries %q = %#v on a pure transport failure, want it entirely absent", key, events[0].Attrs[key])
+		}
+	}
+}
+
 // TestNewWithGeneratorSynthesisResynthesisAttemptsDomain is the construction-
 // time INPUT DOMAIN for Config.MaxSynthesisResynthesisAttempts: zero
 // (defaults), the ceiling (accepted), one past the ceiling (rejected), and a
