@@ -379,8 +379,12 @@ func TestTheServedAnswerLineSaysWhatItsChargedItemsWereAbout(t *testing.T) {
 			"something between synthesis and assembly is adding or dropping items, so the "+
 			"expectation below no longer describes this answer", got, wantDrivers)
 	}
-	if got := len(result.ClaimedFacts); got != 0 {
-		t.Fatalf("the served result carries %d claimed facts, want 0: same reason as above", got)
+	// The fixture's own declared count, not a bare zero: a resolved member set
+	// mints the cardinality claim, and that claim is a charged item the
+	// expectation below already accounts for. Hard-coding zero here would make
+	// this precondition disagree with the spec it guards.
+	if got := len(result.ClaimedFacts); got != spec.cardinalityClaims {
+		t.Fatalf("the served result carries %d claimed facts, want the %d the fixture declares: same reason as above", got, spec.cardinalityClaims)
 	}
 	want.assertPairwiseDistinct(t, "served arm")
 
