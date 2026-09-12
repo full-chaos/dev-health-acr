@@ -783,7 +783,14 @@ func servedContinuationRefusal(t *testing.T) InvestigationResult {
 func TestContinuationRefusal_TheRecognisersAndTheGateNeverSpeakForTheCarrier(t *testing.T) {
 	t.Parallel()
 	for _, basis := range contractsv1.ContextFabricRefusalBasisVocabulary() {
-		frameMember := basis != contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable
+		// WHICH members are frame refusals is read from the ONE authority
+		// that declares it, never restated here. This line used to read
+		// `basis != ContinuationContextUnverifiable`: a second expected-member
+		// list with exactly one entry, correct only while the vocabulary had
+		// exactly one non-frame member. The second one (declared_kind_unmatched)
+		// failed it on arrival -- which is the drift a restated list exists to
+		// cause.
+		frameMember := contractsv1.ValidContextFabricFrameRefusalBasis(basis)
 		sentence := contractsv1.ContextFabricRefusalBasisLimitation(contractsv1.ContextFabricSubjectTeam, basis)
 		if got := contractsv1.IsContextFabricRefusalBasisLimitation(sentence); got != frameMember {
 			t.Errorf("kind sentence with basis %q recognised=%v, want %v", basis, got, frameMember)
@@ -791,8 +798,16 @@ func TestContinuationRefusal_TheRecognisersAndTheGateNeverSpeakForTheCarrier(t *
 		if got := contractsv1.IsContextFabricServiceAuthoredLimitation(sentence); got != frameMember {
 			t.Errorf("kind sentence with basis %q service-authored=%v, want %v -- a false sentence must stay displaceable", basis, got, frameMember)
 		}
-		if got := contractsv1.ValidContextFabricFrameRefusalBasis(basis); got != frameMember {
-			t.Errorf("ValidContextFabricFrameRefusalBasis(%q)=%v, want %v", basis, got, frameMember)
+		// Reading frameMember from the allow-list makes asserting the
+		// allow-list against it a tautology, so that line is replaced by an
+		// INDEPENDENT authority that must agree with it: a member that is NOT
+		// a frame refusal carries its own fixed, service-authored sentence
+		// naming it -- because the member-kind sentence would be false of it
+		// -- and a frame member carries no such sentence of its own. Two
+		// registries, one biconditional; a member filed on the wrong side of
+		// either fails here.
+		if got := hasOwnNamingSentence(basis); got == frameMember {
+			t.Errorf("basis %q: frame member=%v but has its own naming sentence=%v -- a non-frame basis must carry its own sentence, and a frame basis must not", basis, frameMember, got)
 		}
 		// The frame gate maps only frame members; a gate basis spelling the
 		// carrier member is drift and surfaces as `unspecified`.
@@ -1136,4 +1151,15 @@ func TestWindowContinuation_TheRecordedByteBudgetIsComparedAsTheEffectiveBudget(
 			}
 		})
 	}
+}
+
+// hasOwnNamingSentence reports whether the service-authored registry holds a
+// fixed sentence that names this basis by its token.
+func hasOwnNamingSentence(basis contractsv1.ContextFabricRefusalBasis) bool {
+	for _, sentence := range contractsv1.ContextFabricServiceAuthoredLimitations() {
+		if strings.Contains(sentence, string(basis)) {
+			return true
+		}
+	}
+	return false
 }
