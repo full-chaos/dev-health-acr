@@ -109,15 +109,36 @@ def resolve_ask_dev():
 
     try:
         root = verdict_dir.parent
+        version_fields = {
+            "scorer_version": semantic_verdict.SCORER_VERSION,
+            "policy_version": semantic_verdict.POLICY_VERSION,
+            "schema_version": expect_schema.SCHEMA_VERSION,
+        }
+        # Attribute access succeeding is not the same as the attribute being
+        # a usable value -- `SCORER_VERSION = None` (or `""`) raises nothing,
+        # so a companion carrying one would otherwise publish
+        # `available=True` with invalid version metadata, the exact
+        # masquerade CHAOS-5632 exists to catch (found in review). Every
+        # version field this pin promises callers ("every version string a
+        # published verdict record must carry", this function's own
+        # docstring) must be a non-empty string.
+        bad = {k: v for k, v in version_fields.items() if not isinstance(v, str) or not v}
+        if bad:
+            raise AskDevUnavailable(
+                f"corpus/expect_schema.py and corpus/semantic_verdict.py imported from "
+                f"{verdict_dir} but carry an unusable version value: {bad!r} (expected a "
+                "non-empty string for each). A companion checkout that is present but "
+                "broken must be treated the same as a missing one."
+            )
         pin = {
             "ask_dev_root": str(root),
             "ask_dev_sha": _git_sha(root),
             "ask_dev_dirty": _git_dirty(root),
-            "scorer_version": semantic_verdict.SCORER_VERSION,
-            "policy_version": semantic_verdict.POLICY_VERSION,
-            "schema_version": expect_schema.SCHEMA_VERSION,
+            **version_fields,
             "legacy_scorer_version": LEGACY_SCORER_ADAPTER_VERSION,
         }
+    except AskDevUnavailable:
+        raise
     except Exception as exc:
         # A companion that IMPORTS but is missing a required attribute (a
         # version bump landed on one side only, a partial checkout, a stub)
@@ -155,10 +176,17 @@ def _git_sha(root):
 
 def _git_dirty(root):
     """Whether the ask-dev checkout's working tree differs from `HEAD` --
-    tracked-file edits and staged changes both count (`git status
-    --porcelain` reports either), an untracked file does not (the code that
-    actually runs is whatever HEAD plus tracked edits produce; an untracked
-    scratch file next to the checkout changes nothing that gets imported).
+    tracked-file edits, staged changes, AND untracked files all count.
+    Untracked was excluded in an earlier version of this function on the
+    theory that "an untracked file changes nothing that gets imported" --
+    false whenever a tracked module imports a NEW, not-yet-committed sibling
+    module: the untracked file is then very much part of what Python
+    actually loads, and excluding it let a checkout that imports worktree-
+    only code report `ask_dev_dirty=False` (found in review). A stray
+    unrelated untracked file elsewhere in the checkout now also counts,
+    trading a false positive there for never a false negative on the code
+    path that matters -- the same direction CHAOS-5633 already picked for
+    `ask_dev_sha` staying visible over a false "trustworthy" clean read.
 
     A dirty checkout does not stop `ask_dev_sha` from being reported --
     the sha is still a fact about the checkout -- but publishing it next to
@@ -169,7 +197,7 @@ def _git_dirty(root):
     with no git metadata."""
     try:
         proc = subprocess.run(
-            ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=no"],
+            ["git", "-C", str(root), "status", "--porcelain"],
             capture_output=True, text=True, timeout=10,
         )
     except OSError:

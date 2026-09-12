@@ -48,8 +48,19 @@ HERE = Path(__file__).resolve().parent
 # commits fail outright -- these controls are not testing signing, so it is
 # disabled the same way the git CLI itself documents for a config-free run,
 # not by asserting anything about the ambient git configuration.
+#
+# GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM only redirect the global/system config
+# FILES -- they do nothing about git's separate GIT_CONFIG_COUNT /
+# GIT_CONFIG_KEY_<n> / GIT_CONFIG_VALUE_<n> environment-variable config
+# source (found in review: a caller exporting
+# `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=true`
+# still broke these controls with the file-redirect fix alone).
+# GIT_CONFIG_COUNT=0 tells git to read ZERO such pairs, so any
+# GIT_CONFIG_KEY_*/GIT_CONFIG_VALUE_* the ambient environment already set are
+# ignored regardless of how many exist.
 os.environ["GIT_CONFIG_GLOBAL"] = "/dev/null"
 os.environ["GIT_CONFIG_SYSTEM"] = "/dev/null"
+os.environ["GIT_CONFIG_COUNT"] = "0"
 sys.path.insert(0, str(HERE))
 
 
@@ -123,6 +134,12 @@ def _write_fake_ask_dev(base):
     corpus_dir.mkdir(parents=True, exist_ok=True)
     (corpus_dir / "expect_schema.py").write_text(FAKE_EXPECT_SCHEMA)
     (corpus_dir / "semantic_verdict.py").write_text(FAKE_SEMANTIC_VERDICT)
+    # A real ask-dev checkout gitignores __pycache__/, same as this repo does
+    # -- match that here so merely IMPORTING these modules (which writes
+    # __pycache__/*.pyc as an unavoidable interpreter side effect) does not
+    # itself make _git_dirty's untracked-files check report a checkout that
+    # nothing actually edited as dirty.
+    (base / ".gitignore").write_text("__pycache__/\n*.pyc\n")
     return corpus_dir
 
 
@@ -291,6 +308,108 @@ def test_resolve_ask_dev_names_a_dirty_checkout():
         pin = json.loads(proc.stdout)
         _require(pin["ask_dev_sha"] == want_sha, "a dirty tree must not change the reported sha")
         _require(pin["ask_dev_dirty"] is True, pin)
+
+
+def test_resolve_ask_dev_names_dirty_from_an_untracked_but_imported_file():
+    """Round-1 finding: `_git_dirty` used to pass `--untracked-files=no`, on
+    the theory that an untracked file changes nothing that gets imported.
+    False whenever a tracked module imports a NEW sibling module that has
+    not been committed yet -- the untracked file IS then part of what
+    Python actually loads, and the old check reported `ask_dev_dirty=False`
+    for it. Constructing exactly that shape and confirming both that the
+    import succeeds (proving the untracked file really is on the import
+    path) and that ask_dev_dirty is now True."""
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp) / "fake-ask-dev"
+        corpus_dir = base / "corpus"
+        corpus_dir.mkdir(parents=True)
+        (corpus_dir / "expect_schema.py").write_text(
+            "import worktree_extra\n" + FAKE_EXPECT_SCHEMA)
+        (corpus_dir / "semantic_verdict.py").write_text(FAKE_SEMANTIC_VERDICT)
+        (base / ".gitignore").write_text("__pycache__/\n*.pyc\n")
+        subprocess.run(["git", "init", "-q", str(base)], check=True)
+        subprocess.run(["git", "-C", str(base), "config", "user.email", "t@example.com"], check=True)
+        subprocess.run(["git", "-C", str(base), "config", "user.name", "t"], check=True)
+        subprocess.run(["git", "-C", str(base), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(base), "commit", "-q", "-m", "x"], check=True)
+        # worktree_extra is UNTRACKED -- committed nothing about it.
+        (corpus_dir / "worktree_extra.py").write_text("X = 1\n")
+
+        code = (
+            "import sys, json; sys.path.insert(0, %r); "
+            "import semantic_verdict_bridge as svb; "
+            "_, _, pin = svb.resolve_ask_dev(); print(json.dumps(pin))"
+        ) % str(corpus_dir)
+        env = {"PATH": "/usr/bin:/bin:/usr/local/bin", "PYTHONPATH": str(corpus_dir)}
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+        _require(proc.returncode == 0, proc.stderr)
+        pin = json.loads(proc.stdout)
+        _require(pin["ask_dev_dirty"] is True,
+                  f"an untracked file the tracked module imports must count as dirty: {pin}")
+
+
+def test_git_init_controls_ignore_git_config_env_injection():
+    """Round-1 finding: GIT_CONFIG_GLOBAL=/dev/null / GIT_CONFIG_SYSTEM=/dev/null
+    only redirect the global/system config FILES -- git's separate
+    GIT_CONFIG_COUNT/GIT_CONFIG_KEY_<n>/GIT_CONFIG_VALUE_<n> environment-variable
+    config source is untouched by that, and a caller exporting
+    commit.gpgsign=true through it still broke the git-init controls with the
+    file-redirect fix alone. GIT_CONFIG_COUNT=0 (set at this module's import,
+    see above) must make that injection inert. Runs THIS module's own
+    import-time override (not a re-invocation of main(), which would recurse
+    into this very test) against a throwaway `git commit`, with the
+    injection layered on top via the subprocess env."""
+    env = dict(os.environ)
+    env.update({
+        "PATH": "/usr/bin:/bin:/usr/local/bin",
+        "GIT_CONFIG_COUNT": "2",
+        "GIT_CONFIG_KEY_0": "commit.gpgsign", "GIT_CONFIG_VALUE_0": "true",
+        "GIT_CONFIG_KEY_1": "user.signingkey", "GIT_CONFIG_VALUE_1": "DOES_NOT_EXIST",
+    })
+    code = (
+        "import sys; sys.path.insert(0, %r); "
+        "import test_findings_5625 as t; "  # re-triggers this module's own GIT_CONFIG_COUNT=0 override
+        "import subprocess, tempfile\n"
+        "with tempfile.TemporaryDirectory() as tmp:\n"
+        "    subprocess.run(['git', 'init', '-q', tmp], check=True)\n"
+        "    subprocess.run(['git', '-C', tmp, 'config', 'user.email', 't@example.com'], check=True)\n"
+        "    subprocess.run(['git', '-C', tmp, 'config', 'user.name', 't'], check=True)\n"
+        "    subprocess.run(['git', '-C', tmp, 'commit', '-q', '-m', 'x', '--allow-empty'], check=True)\n"
+        "print('OK')\n"
+    ) % str(HERE)
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+    _require(proc.returncode == 0,
+              f"an ambient GIT_CONFIG_COUNT injecting commit.gpgsign=true must not "
+              f"break this module's git-init controls:\n{proc.stdout}\n{proc.stderr}")
+    _require(proc.stdout.strip() == "OK", proc.stdout)
+
+
+def test_resolve_ask_dev_refuses_a_null_version_value():
+    """Round-1 finding: the "usable pin" guard only checked that attribute
+    ACCESS succeeded, not that the value was actually usable --
+    `SCORER_VERSION = None` raises nothing, so a companion carrying one
+    published `available=True` with `scorer_version: null`, the exact
+    masquerade this whole ticket exists to catch."""
+    code = (
+        "import sys; sys.path.insert(0, %r); "
+        "import semantic_verdict_bridge as svb\n"
+        "try:\n"
+        "    svb.resolve_ask_dev()\n"
+        "except svb.AskDevUnavailable as e:\n"
+        "    print('REFUSED:' + str(e))\n"
+        "else:\n"
+        "    print('DID NOT REFUSE')\n"
+    ) % str(HERE)
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp) / "null-version-ask-dev"
+        corpus_dir = _write_fake_ask_dev(base)
+        (corpus_dir / "semantic_verdict.py").write_text(
+            FAKE_SEMANTIC_VERDICT.replace('SCORER_VERSION = "fake-scorer-v1"', "SCORER_VERSION = None"))
+        env = {"PATH": "/usr/bin:/bin:/usr/local/bin", "PYTHONPATH": str(corpus_dir)}
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+        _require(proc.returncode == 0, proc.stderr)
+        _require(proc.stdout.startswith("REFUSED:"), proc.stdout)
+        _require("unusable version value" in proc.stdout, proc.stdout)
 
 
 def test_resolve_ask_dev_refuses_by_name_when_unimportable():
