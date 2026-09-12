@@ -239,7 +239,28 @@ func TestDiagnoseContextFabricDriverJudgmentBoundDoesNotFlagBusinessRules(t *tes
 // whatever LATER field a test case means to isolate.
 func validDiagnosisFinding() ContextFabricFinding {
 	return ContextFabricFinding{
-		FindingID: "finding_12345678", Kind: "readiness_gap", Summary: "Summary",
+		// Kind must be a member of the CLOSED driver-category vocabulary:
+		// ContextFabricFinding.validate's closedFindingKinds clause enforces
+		// validDriverCategory on it, and "readiness_gap" -- which this
+		// fixture used to carry -- is a finding-SECTION name, not a
+		// category, so this "valid" baseline was rejected by the very
+		// validator it is the baseline for ("finding kind \"readiness_gap\"
+		// is not in the closed v1 vocabulary"). Every case built by mutating
+		// it was therefore mutating an already-invalid value.
+		//
+		// DiagnoseContextFabricFindingBound could not see this, because a
+		// valid finding and an out-of-vocabulary kind both project to
+		// ("", false); the clause traversal distinguishes them, which is how
+		// this surfaced. It is the SAME defect the Value comment on
+		// validDiagnosisClaimedFact below records, on the sibling fixture, and
+		// TestDiagnoseContextFabricClauseDomain's "none" cells now pin all
+		// three baselines as honestly valid.
+		//
+		// "relationship" is chosen deliberately: it is a real category AND
+		// is absent from contextFabricDriverCategoryFactKind, so it imposes
+		// no claimed-fact requirement and leaves every existing case's own
+		// first-failing clause exactly where it was.
+		FindingID: "finding_12345678", Kind: string(ContextFabricDriverCategoryRelationship), Summary: "Summary",
 		EvidenceRefIDs: []string{"evidence_00000001"},
 	}
 }

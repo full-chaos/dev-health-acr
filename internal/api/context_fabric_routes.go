@@ -542,6 +542,26 @@ func (a *App) logContextFabricFailure(r *http.Request, err error, classification
 		if basis, ok := contextfabric.SynthesisSubjectScopeBasisOf(err); ok {
 			fields = append(fields, "subject_scope_basis", string(basis))
 		}
+		// For the three reasons that delegate to a model-minted
+		// struct's own Validate() -- driver_invalid, claim_invalid,
+		// finding_invalid -- name WHICH clause of that validator refused.
+		// Those reasons name the struct and nothing else, while the validators
+		// behind them decide on twenty, twelve and ten clauses, so the line
+		// could say a driver was refused without saying whether the model
+		// overran a title, named a category outside the vocabulary, or cited
+		// no evidence at all.
+		//
+		// A closed-vocabulary constant from the contracts package's own table,
+		// never model output, never a field's contents -- the same
+		// content-safety rule rejection_reason follows. Omitted entirely on
+		// rejections that carry no clause, so no line carries a meaningless
+		// default. It COMPLEMENTS violated_bound above rather than repeating
+		// it: the clause names the field and rule that rejected, and
+		// violated_bound (present only where that clause is a registered
+		// maximum) names the bound value behind it.
+		if clause, ok := contextfabric.SynthesisRejectionClauseOf(err); ok {
+			fields = append(fields, "rejected_clause", string(clause))
+		}
 	}
 	// The INTERPRET-side half of the same field, on the same line, for the
 	// same reason. Without it a 422 interpretation_rejected reaching this

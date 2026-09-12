@@ -280,77 +280,12 @@ func DiagnoseContextFabricFactRequirementBound(r ContextFabricFactRequirement) (
 // closure, category-requires-claim, withheld-requires-qualification) that
 // never name a bound but still must gate everything after them.
 func DiagnoseContextFabricDriverJudgmentBound(d ContextFabricDriverJudgment) (bound string, ok bool) {
-	// Statement 1.
-	if bound, ok, passed := diagnoseLengthBound(d.DriverID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength, "synthesis.driver.driver_id.max_length"); !passed {
-		return bound, ok
-	}
-	if !validDriverStanding(d.Standing) {
-		return "", false
-	}
-	if !validDriverCategory(ContextFabricDriverCategory(d.Category)) {
-		return "", false
-	}
-	if bound, ok, passed := diagnoseLengthBound(strings.TrimSpace(d.Title), 1, ContextFabricDriverTitleMaxLength, "synthesis.driver.title.max_length"); !passed {
-		return bound, ok
-	}
-	if bound, ok, passed := diagnoseLengthBound(strings.TrimSpace(d.Summary), 1, ContextFabricDriverSummaryMaxLength, "synthesis.driver.summary.max_length"); !passed {
-		return bound, ok
-	}
-	if !validDerivationMethod(d.Derivation) {
-		return "", false
-	}
-	if !validEpistemicStatus(d.EpistemicStatus) {
-		return "", false
-	}
-	if d.Confidence < 0 || d.Confidence > 1 {
-		return "", false
-	}
-	if bound, ok, passed := diagnoseLengthBound(d.Qualification, 0, ContextFabricDriverQualificationMaxLength, "synthesis.driver.qualification.max_length"); !passed {
-		return bound, ok
-	}
-	// Statement 2: affected_subjects, path_ids, evidence_ref_ids -- ONE
-	// OR-expression in Validate(), so this order (subjects, then paths,
-	// then evidence) is Validate()'s own left-to-right clause order.
-	// affected_subjects' min side (no bound) is Validate()'s own FIRST
-	// sub-clause, checked before max (the registered bound).
-	if len(d.AffectedSubjects) < ContextFabricDriverAffectedSubjectsMinCount {
-		return "", false
-	}
-	if len(d.AffectedSubjects) > ContextFabricDriverAffectedSubjectsMaxCount {
-		return "synthesis.driver.affected_subjects.max_count", true
-	}
-	if bound, ok, passed := diagnoseSubjectRefsBound(d.AffectedSubjects, "synthesis.driver.affected_subjects.item_canonical_id_max_length", "synthesis.driver.affected_subjects.item_label_max_length"); !passed {
-		return bound, ok
-	}
-	if len(d.PathIDs) > ContextFabricDriverPathIDsMaxCount {
-		return "synthesis.driver.path_ids.max_count", true
-	}
-	if bound, ok, passed := diagnoseUniqueTrimmedStringsBound(d.PathIDs, ContextFabricIdentifierRefMaxLength, "synthesis.driver.path_ids.item_max_length"); !passed {
-		return bound, ok
-	}
-	if bound, ok, passed := diagnoseBoundedEvidenceRefsBound(d.EvidenceRefIDs, ContextFabricEvidenceRefIDsMaxCount, true, "synthesis.driver.evidence_ref_ids.max_count", "synthesis.driver.evidence_ref_ids.item_max_length"); !passed {
-		return bound, ok
-	}
-	// Statement 3: claimed_fact_ids.
-	if len(d.ClaimedFactIDs) > ContextFabricDriverClaimedFactIDsMaxCount {
-		return "synthesis.driver.claimed_fact_ids.max_count", true
-	}
-	if bound, ok, passed := diagnoseUniqueTrimmedStringsBound(d.ClaimedFactIDs, ContextFabricIdentifierRefMaxLength, "synthesis.driver.claimed_fact_ids.item_max_length"); !passed {
-		return bound, ok
-	}
-	// Statements 4-6: business rules only, no bound, but each still gates
-	// what follows (there is nothing after statement 6, so this is only
-	// for fidelity/documentation).
-	if d.Standing != ContextFabricDriverWithheld && len(d.PathIDs) == 0 && len(d.EvidenceRefIDs) == 0 {
-		return "", false
-	}
-	if _, required := ContextFabricDriverCategoryRequiresClaimedFact(ContextFabricDriverCategory(d.Category)); required && len(d.ClaimedFactIDs) == 0 {
-		return "", false
-	}
-	if d.Standing == ContextFabricDriverWithheld && strings.TrimSpace(d.Qualification) == "" {
-		return "", false
-	}
-	return "", false
+	// Projection of the single clause-order traversal: the
+	// statement order lives in DiagnoseContextFabricDriverJudgmentClause and
+	// exactly once, so the bound and clause reports can never disagree about
+	// which statement rejected.
+	_, bound, ok = DiagnoseContextFabricDriverJudgmentClause(d)
+	return bound, ok
 }
 
 // DiagnoseContextFabricFindingBound mirrors ContextFabricFinding.Validate()'s
@@ -358,37 +293,14 @@ func DiagnoseContextFabricDriverJudgmentBound(d ContextFabricDriverJudgment) (bo
 // THEN claimed_fact_ids, THEN a business-only "kind requires claim"
 // statement.
 func DiagnoseContextFabricFindingBound(f ContextFabricFinding) (bound string, ok bool) {
-	// Statement 1.
-	if bound, ok, passed := diagnoseLengthBound(f.FindingID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength, "synthesis.finding.finding_id.max_length"); !passed {
-		return bound, ok
-	}
-	if bound, ok, passed := diagnoseLengthBound(strings.TrimSpace(f.Kind), 1, ContextFabricFindingKindMaxLength, "synthesis.finding.kind.max_length"); !passed {
-		return bound, ok
-	}
-	if bound, ok, passed := diagnoseLengthBound(strings.TrimSpace(f.Summary), 1, ContextFabricFindingSummaryMaxLength, "synthesis.finding.summary.max_length"); !passed {
-		return bound, ok
-	}
-	if len(f.Subjects) > ContextFabricFindingSubjectsMaxCount {
-		return "synthesis.finding.subjects.max_count", true
-	}
-	if bound, ok, passed := diagnoseSubjectRefsBound(f.Subjects, "synthesis.finding.subjects.item_canonical_id_max_length", "synthesis.finding.subjects.item_label_max_length"); !passed {
-		return bound, ok
-	}
-	if bound, ok, passed := diagnoseBoundedEvidenceRefsBound(f.EvidenceRefIDs, ContextFabricEvidenceRefIDsMaxCount, false, "synthesis.finding.evidence_ref_ids.max_count", "synthesis.finding.evidence_ref_ids.item_max_length"); !passed {
-		return bound, ok
-	}
-	// Statement 2: claimed_fact_ids.
-	if len(f.ClaimedFactIDs) > ContextFabricDriverClaimedFactIDsMaxCount {
-		return "synthesis.finding.claimed_fact_ids.max_count", true
-	}
-	if bound, ok, passed := diagnoseUniqueTrimmedStringsBound(f.ClaimedFactIDs, ContextFabricIdentifierRefMaxLength, "synthesis.finding.claimed_fact_ids.item_max_length"); !passed {
-		return bound, ok
-	}
-	// Statement 3: business rule only.
-	if _, required := ContextFabricDriverCategoryRequiresClaimedFact(ContextFabricDriverCategory(f.Kind)); required && len(f.ClaimedFactIDs) == 0 {
-		return "", false
-	}
-	return "", false
+	// Projection of DiagnoseContextFabricFindingClause -- see the matching
+	// comment on DiagnoseContextFabricDriverJudgmentBound. That traversal
+	// enumerates two statements this projection never needed (the closed
+	// finding-kind vocabulary and the kind-requires-claim rule); both sit
+	// after every bound-naming statement and name no bound, so this
+	// function's own output is unchanged by delegating.
+	_, bound, ok = DiagnoseContextFabricFindingClause(f)
+	return bound, ok
 }
 
 // DiagnoseContextFabricClaimedFactBound mirrors
@@ -396,34 +308,207 @@ func DiagnoseContextFabricFindingBound(f ContextFabricFinding) (bound string, ok
 // kind/field identity, THEN c.Subject.Validate() (a separate, later
 // statement), THEN c.Value.Validate() (later still).
 func DiagnoseContextFabricClaimedFactBound(c ContextFabricClaimedFact) (bound string, ok bool) {
+	// Projection of DiagnoseContextFabricClaimedFactClause -- see the
+	// matching comment on DiagnoseContextFabricDriverJudgmentBound. That
+	// traversal enumerates the Value business rules and the five table
+	// statements this projection never needed; all of them sit after every
+	// bound-naming statement and name no bound, so this function's own
+	// output is unchanged by delegating.
+	_, bound, ok = DiagnoseContextFabricClaimedFactClause(c)
+	return bound, ok
+}
+
+// --- Clause diagnosis ---------------------------------------------------
+//
+// The three functions below are the SAME traversals as
+// DiagnoseContextFabricDriverJudgmentBound / ...FindingBound /
+// ...ClaimedFactBound above, widened to also return WHICH clause failed
+// (ContextFabricRejectedClause). They are not second mirrors: each Bound
+// function above is now a projection of its Clause counterpart, so there
+// is exactly ONE clause-order body per struct and the "keep the mirror in
+// sync by hand" residual documented in context_fabric_model_bounds.go
+// does not double.
+//
+// The Clause traversals enumerate clauses the Bound traversals did not
+// need to: a statement whose failure names no registered bound was free to
+// fall through to ("", false) when only a bound name was wanted, but a
+// CLAUSE name must distinguish "this statement rejected" from "nothing
+// rejected" (ContextFabricClauseNone). Those additions are marked below.
+
+// DiagnoseContextFabricDriverJudgmentClause mirrors
+// ContextFabricDriverJudgment.validate's exact statement/clause order and
+// returns the clause that FIRST failed, plus the registered bound (if any)
+// that clause names. clause == ContextFabricClauseNone means every clause
+// passed.
+func DiagnoseContextFabricDriverJudgmentClause(d ContextFabricDriverJudgment) (clause ContextFabricRejectedClause, bound string, ok bool) {
+	// Statement 1.
+	if bound, ok, passed := diagnoseLengthBound(d.DriverID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength, "synthesis.driver.driver_id.max_length"); !passed {
+		return ContextFabricClauseDriverIDLength, bound, ok
+	}
+	if !validDriverStanding(d.Standing) {
+		return ContextFabricClauseDriverStanding, "", false
+	}
+	if !validDriverCategory(ContextFabricDriverCategory(d.Category)) {
+		return ContextFabricClauseDriverCategory, "", false
+	}
+	if bound, ok, passed := diagnoseLengthBound(strings.TrimSpace(d.Title), 1, ContextFabricDriverTitleMaxLength, "synthesis.driver.title.max_length"); !passed {
+		return ContextFabricClauseDriverTitle, bound, ok
+	}
+	if bound, ok, passed := diagnoseLengthBound(strings.TrimSpace(d.Summary), 1, ContextFabricDriverSummaryMaxLength, "synthesis.driver.summary.max_length"); !passed {
+		return ContextFabricClauseDriverSummary, bound, ok
+	}
+	if !validDerivationMethod(d.Derivation) {
+		return ContextFabricClauseDriverDerivation, "", false
+	}
+	if !validEpistemicStatus(d.EpistemicStatus) {
+		return ContextFabricClauseDriverEpistemicStatus, "", false
+	}
+	if d.Confidence < 0 || d.Confidence > 1 {
+		return ContextFabricClauseDriverConfidenceRange, "", false
+	}
+	if bound, ok, passed := diagnoseLengthBound(d.Qualification, 0, ContextFabricDriverQualificationMaxLength, "synthesis.driver.qualification.max_length"); !passed {
+		return ContextFabricClauseDriverQualificationSize, bound, ok
+	}
+	// Statement 2.
+	if len(d.AffectedSubjects) < ContextFabricDriverAffectedSubjectsMinCount {
+		return ContextFabricClauseDriverAffectedSubjectsBelowMinimum, "", false
+	}
+	if len(d.AffectedSubjects) > ContextFabricDriverAffectedSubjectsMaxCount {
+		return ContextFabricClauseDriverAffectedSubjectsAboveMaximum, "synthesis.driver.affected_subjects.max_count", true
+	}
+	if bound, ok, passed := diagnoseSubjectRefsBound(d.AffectedSubjects, "synthesis.driver.affected_subjects.item_canonical_id_max_length", "synthesis.driver.affected_subjects.item_label_max_length"); !passed {
+		return ContextFabricClauseDriverAffectedSubjectsShape, bound, ok
+	}
+	if len(d.PathIDs) > ContextFabricDriverPathIDsMaxCount {
+		return ContextFabricClauseDriverPathIDsAboveMaximum, "synthesis.driver.path_ids.max_count", true
+	}
+	if bound, ok, passed := diagnoseUniqueTrimmedStringsBound(d.PathIDs, ContextFabricIdentifierRefMaxLength, "synthesis.driver.path_ids.item_max_length"); !passed {
+		return ContextFabricClauseDriverPathIDsShape, bound, ok
+	}
+	if bound, ok, passed := diagnoseBoundedEvidenceRefsBound(d.EvidenceRefIDs, ContextFabricEvidenceRefIDsMaxCount, true, "synthesis.driver.evidence_ref_ids.max_count", "synthesis.driver.evidence_ref_ids.item_max_length"); !passed {
+		return ContextFabricClauseDriverEvidenceRefIDsShape, bound, ok
+	}
+	// Statement 3.
+	if len(d.ClaimedFactIDs) > ContextFabricDriverClaimedFactIDsMaxCount {
+		return ContextFabricClauseDriverClaimedFactIDsAboveMaximum, "synthesis.driver.claimed_fact_ids.max_count", true
+	}
+	if bound, ok, passed := diagnoseUniqueTrimmedStringsBound(d.ClaimedFactIDs, ContextFabricIdentifierRefMaxLength, "synthesis.driver.claimed_fact_ids.item_max_length"); !passed {
+		return ContextFabricClauseDriverClaimedFactIDsShape, bound, ok
+	}
+	// Statements 4-6: business rules, no bound.
+	if d.Standing != ContextFabricDriverWithheld && len(d.PathIDs) == 0 && len(d.EvidenceRefIDs) == 0 {
+		return ContextFabricClauseDriverEvidenceClosureAbsent, "", false
+	}
+	if _, required := ContextFabricDriverCategoryRequiresClaimedFact(ContextFabricDriverCategory(d.Category)); required && len(d.ClaimedFactIDs) == 0 {
+		return ContextFabricClauseDriverCategoryRequiresClaimedFact, "", false
+	}
+	if d.Standing == ContextFabricDriverWithheld && strings.TrimSpace(d.Qualification) == "" {
+		return ContextFabricClauseDriverWithheldRequiresQualification, "", false
+	}
+	return ContextFabricClauseNone, "", false
+}
+
+// DiagnoseContextFabricFindingClause mirrors
+// ContextFabricFinding.validate(contextFabricWriteBounds) -- the bounds
+// Validate() itself passes, so closedFindingKinds is true and the
+// finding-kind vocabulary clause below is live.
+func DiagnoseContextFabricFindingClause(f ContextFabricFinding) (clause ContextFabricRejectedClause, bound string, ok bool) {
+	// Statement 1.
+	if bound, ok, passed := diagnoseLengthBound(f.FindingID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength, "synthesis.finding.finding_id.max_length"); !passed {
+		return ContextFabricClauseFindingIDLength, bound, ok
+	}
+	if bound, ok, passed := diagnoseLengthBound(strings.TrimSpace(f.Kind), 1, ContextFabricFindingKindMaxLength, "synthesis.finding.kind.max_length"); !passed {
+		return ContextFabricClauseFindingKindLength, bound, ok
+	}
+	if bound, ok, passed := diagnoseLengthBound(strings.TrimSpace(f.Summary), 1, ContextFabricFindingSummaryMaxLength, "synthesis.finding.summary.max_length"); !passed {
+		return ContextFabricClauseFindingSummaryLength, bound, ok
+	}
+	if len(f.Subjects) > ContextFabricFindingSubjectsMaxCount {
+		return ContextFabricClauseFindingSubjectsAboveMaximum, "synthesis.finding.subjects.max_count", true
+	}
+	if bound, ok, passed := diagnoseSubjectRefsBound(f.Subjects, "synthesis.finding.subjects.item_canonical_id_max_length", "synthesis.finding.subjects.item_label_max_length"); !passed {
+		return ContextFabricClauseFindingSubjectsShape, bound, ok
+	}
+	if bound, ok, passed := diagnoseBoundedEvidenceRefsBound(f.EvidenceRefIDs, ContextFabricEvidenceRefIDsMaxCount, false, "synthesis.finding.evidence_ref_ids.max_count", "synthesis.finding.evidence_ref_ids.item_max_length"); !passed {
+		return ContextFabricClauseFindingEvidenceRefIDsShape, bound, ok
+	}
+	// Statement 2.
+	if len(f.ClaimedFactIDs) > ContextFabricDriverClaimedFactIDsMaxCount {
+		return ContextFabricClauseFindingClaimedFactIDsAboveMaximum, "synthesis.finding.claimed_fact_ids.max_count", true
+	}
+	if bound, ok, passed := diagnoseUniqueTrimmedStringsBound(f.ClaimedFactIDs, ContextFabricIdentifierRefMaxLength, "synthesis.finding.claimed_fact_ids.item_max_length"); !passed {
+		return ContextFabricClauseFindingClaimedFactIDsShape, bound, ok
+	}
+	// Statement 3 (ADDED by the clause traversal): the closed finding-kind
+	// vocabulary. DiagnoseContextFabricFindingBound omits this statement
+	// because nothing after it names a bound, so falling through cost the
+	// BOUND projection nothing; it costs the CLAUSE projection the
+	// difference between "kind is out of vocabulary" and "nothing failed".
+	if contextFabricWriteBounds.closedFindingKinds && !validDriverCategory(ContextFabricDriverCategory(f.Kind)) {
+		return ContextFabricClauseFindingKindOutOfVocabulary, "", false
+	}
+	// Statement 4: business rule only.
+	if _, required := ContextFabricDriverCategoryRequiresClaimedFact(ContextFabricDriverCategory(f.Kind)); required && len(f.ClaimedFactIDs) == 0 {
+		return ContextFabricClauseFindingKindRequiresClaimedFact, "", false
+	}
+	return ContextFabricClauseNone, "", false
+}
+
+// DiagnoseContextFabricClaimedFactClause mirrors
+// ContextFabricClaimedFact.Validate's exact statement order.
+func DiagnoseContextFabricClaimedFactClause(c ContextFabricClaimedFact) (clause ContextFabricRejectedClause, bound string, ok bool) {
+	// Statement 1.
 	if bound, ok, passed := diagnoseLengthBound(c.ClaimID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength, "synthesis.claimed_fact.claim_id.max_length"); !passed {
-		return bound, ok
+		return ContextFabricClauseClaimIDLength, bound, ok
 	}
 	if !validFactKind(c.Kind) {
-		return "", false
+		return ContextFabricClauseClaimKind, "", false
 	}
 	if bound, ok, passed := diagnoseLengthBound(c.Field, 1, ContextFabricClaimedFieldMaxLength, "synthesis.claimed_fact.field.max_length"); !passed {
-		return bound, ok
+		return ContextFabricClauseClaimFieldLength, bound, ok
 	}
 	if strings.TrimSpace(c.Field) != c.Field {
-		return "", false
+		return ContextFabricClauseClaimFieldUntrimmed, "", false
 	}
+	// Statement 2.
 	if bound, ok, passed := diagnoseSubjectRefBound(c.Subject, "synthesis.claimed_fact.subject.canonical_id_max_length", "synthesis.claimed_fact.subject.label_max_length"); !passed {
-		return bound, ok
+		return ContextFabricClauseClaimSubjectShape, bound, ok
 	}
-	// ContextFabricScalarValue.Validate(): only the String variant carries
-	// a length bound (validate_context_fabric_projection.go); Integer/
-	// Number/Boolean/Null carry none (Number is only checked for
-	// finiteness, a business rule), and "exactly one variant must be set"
-	// (Validate()'s final `set != 1` check) is a business rule too -- both
-	// need no explicit mirror here: whether Value has zero, multiple, or
-	// exactly one non-String-length-violating variant, none of those
-	// conditions is diagnosable, so this function already falls through to
-	// ok=false for all of them without checking "set" itself.
+	// Statement 3. Only the String variant carries a length bound; every
+	// other Value rejection (non-finite Number, zero or multiple variants
+	// set) is a business rule with no bound -- so unlike the BOUND
+	// projection, which could fall through for all of them, this asks
+	// Value.Validate() itself whether the statement rejected.
 	if c.Value.String != nil {
 		if bound, ok, passed := diagnoseLengthBound(*c.Value.String, 0, ContextFabricClaimedFactValueMaxLength, "synthesis.claimed_fact.value.max_length"); !passed {
-			return bound, ok
+			return ContextFabricClauseClaimValueShape, bound, ok
 		}
 	}
-	return "", false
+	if err := c.Value.Validate(); err != nil {
+		return ContextFabricClauseClaimValueShape, "", false
+	}
+	// Statements 4-8 (ADDED by the clause traversal, for the same reason as
+	// the finding-kind statement above): the two table surfaces and their
+	// combined rule. None names a registered bound, so the BOUND projection
+	// never needed them; the CLAUSE projection does, and their ORDER also
+	// matters -- ContextFabricClaimedFact.Validate evaluates Rows, then
+	// Table, then TimeSeriesRows, then TimeSeriesTable, then the combined
+	// rule, and a caller that stopped before them would misname a rejection
+	// from one of them as ContextFabricClauseNone.
+	if err := validateClaimedFactRows(c.Rows); err != nil {
+		return ContextFabricClauseClaimRowsShape, "", false
+	}
+	if err := validateClaimedFactTable(c.Table, c.Rows); err != nil {
+		return ContextFabricClauseClaimTableShape, "", false
+	}
+	if err := validateClaimedFactRows(c.TimeSeriesRows); err != nil {
+		return ContextFabricClauseClaimTimeSeriesRowsShape, "", false
+	}
+	if err := validateTimeSeriesTable(c.TimeSeriesTable, c.TimeSeriesRows); err != nil {
+		return ContextFabricClauseClaimTimeSeriesTableShape, "", false
+	}
+	if err := validateClaimedFactRowsCombined(c.Rows, c.TimeSeriesRows); err != nil {
+		return ContextFabricClauseClaimRowsCombinedShape, "", false
+	}
+	return ContextFabricClauseNone, "", false
 }

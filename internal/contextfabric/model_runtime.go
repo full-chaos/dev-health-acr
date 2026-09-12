@@ -622,7 +622,8 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 	claimedByID := make(map[string]ClaimedFact, len(d.ClaimedFacts))
 	for _, claim := range d.ClaimedFacts {
 		if err := claim.Validate(); err != nil {
-			return rejectSynthesis(RejectionReasonClaimInvalid, "claimed_facts: %w", err)
+			clause, _, _ := contractsv1.DiagnoseContextFabricClaimedFactClause(claim)
+			return rejectSynthesisClause(RejectionReasonClaimInvalid, clause, "claimed_facts: %w", err)
 		}
 		// CHAOS-4347 codex round-3, still true under CHAOS-4355: Rows
 		// (ContextFabricClaimedFact.Rows) is a producer-facing
@@ -672,7 +673,8 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 	}
 	for _, driver := range d.Drivers {
 		if err := driver.Validate(); err != nil {
-			return rejectSynthesis(RejectionReasonDriverInvalid, "driver: %w", err)
+			clause, _, _ := contractsv1.DiagnoseContextFabricDriverJudgmentClause(driver)
+			return rejectSynthesisClause(RejectionReasonDriverInvalid, clause, "driver: %w", err)
 		}
 		for _, subject := range driver.AffectedSubjects {
 			if _, ok := allowedSubjects[subjectKeyForModel(subject)]; !ok {
@@ -726,7 +728,8 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 		name, findings := section.name, section.findings
 		for _, finding := range findings {
 			if err := finding.Validate(); err != nil {
-				return rejectSynthesis(RejectionReasonFindingInvalid, "%s: %w", name, err)
+				clause, _, _ := contractsv1.DiagnoseContextFabricFindingClause(finding)
+				return rejectSynthesisClause(RejectionReasonFindingInvalid, clause, "%s: %w", name, err)
 			}
 			for _, subject := range finding.Subjects {
 				if _, ok := allowedSubjects[subjectKeyForModel(subject)]; !ok {

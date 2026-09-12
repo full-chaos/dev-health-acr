@@ -1553,6 +1553,24 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	if err != nil {
 		receipt.Outcome = "invalid_output"
 		primaryFailureClassification = receipt.Outcome
+		// Digest the REJECTED output too, not only an accepted
+		// one. The stamp below this branch fires on the success path alone, so
+		// every invalid_output receipt stored an empty output digest and the
+		// rejection had no handle to the draft that caused it at all -- the
+		// one thing a reader needs to tell "the model returned the same bad
+		// draft five times" from "it returned five different bad drafts", and
+		// the one thing no other field can supply, since the draft itself is
+		// never persisted or logged (it is model content).
+		//
+		// It digests `output`, the raw model value, exactly as the success
+		// stamp does -- so a rejected digest and an accepted digest are
+		// comparable, which is the whole point. Set BEFORE the fallback leg
+		// below: on a fallback SUCCESS mergeFallbackReceipt overwrites it with
+		// the fallback's own digest (it only keeps the primary's when the
+		// fallback has none), so the digest always describes the draft whose
+		// outcome the receipt reports.
+		rejectedBytes, _ := json.Marshal(output)
+		receipt.OutputDigest = contextfabric.DigestModelValue(rejectedBytes)
 		// CHAOS-4522: the reason and the rejecting claim's fact-group size
 		// are carried BY the error, attached at the statement that
 		// rejected -- never re-derived here from the shape of the
