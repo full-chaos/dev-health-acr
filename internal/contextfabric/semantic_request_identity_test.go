@@ -1,10 +1,13 @@
 package contextfabric
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -154,4 +157,130 @@ func TestSemanticState_TheNamedBoundsImplyTheByteCap(t *testing.T) {
 	if _, err := EncodeSemanticState(&over); err == nil || breachedSemanticStateBound(err) != SemanticStateBoundTermBytesTotal {
 		t.Errorf("one byte past the total bound gave err=%v bound=%q, want the total bound named", err, breachedSemanticStateBound(err))
 	}
+}
+
+// TestSemanticState_AnInvalidEncodingIsRefusedAndNeverRewritten is the pin the
+// UTF-8 guard was missing: the battery removed the guard and every test still
+// passed, which is exactly what "a surviving mutant is a finding" means.
+//
+// encoding/json replaces a byte sequence that is not valid UTF-8 with U+FFFD
+// rather than failing, so without the guard the stored snapshot is a DIFFERENT
+// reading from the one accepted, and a reading that merely SPELLS the
+// replacement character encodes to the same bytes -- the replay comparison
+// then cannot tell the two apart.
+func TestSemanticState_AnInvalidEncodingIsRefusedAndNeverRewritten(t *testing.T) {
+	t.Parallel()
+	const invalid = "platform\xff\xfeteam"
+	if utf8.ValidString(invalid) {
+		t.Fatalf("fixture defect: the term is valid UTF-8, so it proves nothing")
+	}
+	namedFrame := func(t testing.TB, term string) QuestionFrame {
+		t.Helper()
+		result := ValidateFrame(QuestionFrame{
+			Goals:             []InvestigationGoal{GoalAssessState},
+			SubjectExpression: SubjectExpression{Kind: SubjectExpressionNamed, Named: &NamedSubjectExpression{Terms: []string{term}}},
+			Temporal:          TemporalIntentCurrent,
+		}, nil, ShapeOpen)
+		if result.Outcome != FrameValidationOutcomeValid {
+			t.Fatalf("fixture defect: the named frame is invalid (%v)", result.Failure.Invariant)
+		}
+		return result.Frame
+	}
+	buildFrom := func(t testing.TB, frame QuestionFrame) *PersistedSemanticState {
+		t.Helper()
+		return BuildSemanticState(SemanticStateInput{
+			Outcome:       QuestionFamilyOutcome{Family: QuestionFamilySubjectInvestigation, Source: QuestionFamilySourceModel, Frame: &frame, Gate: FrameGate{Outcome: FrameGatePassed}},
+			EmittedShape:  ShapeOpen,
+			FamilyVersion: QuestionFamilyTableVersion,
+		})
+	}
+
+	// THE LAYER MATTERS, and this is what the pin is really about. A string
+	// the snapshot carries DIRECTLY (the scope anchor's term, a version stamp)
+	// reaches the encoder as the caller wrote it, so the encoder refuses it. A
+	// string inside the accepted FRAME does not: BuildSemanticState clones the
+	// frame through a JSON round trip, and that round trip already mapped the
+	// invalid bytes onto U+FFFD, so an encode-time guard sees a valid document
+	// and the snapshot quietly stores a rewritten reading. Both are refused,
+	// each at the layer that can still see the original bytes.
+	for _, tc := range []struct {
+		name  string
+		state func(testing.TB) *PersistedSemanticState
+	}{
+		{"the scope anchor term", func(t testing.TB) *PersistedSemanticState {
+			s := buildFrom(t, namedFrame(t, "platform"))
+			s.ScopeAnchor = SemanticScopeAnchor{Kind: SubjectTeam, Term: invalid}
+			return s
+		}},
+		{"a version stamp", func(t testing.TB) *PersistedSemanticState {
+			s := buildFrom(t, namedFrame(t, "platform"))
+			s.FamilyTableVersion = invalid
+			return s
+		}},
+	} {
+		tc := tc
+		t.Run("refused at encode: "+tc.name, func(t *testing.T) {
+			t.Parallel()
+			state := tc.state(t)
+			encoded, err := EncodeSemanticState(state)
+			t.Logf("%s carrying invalid UTF-8 -> encoded=%d err=%v", tc.name, len(encoded), err)
+			if err == nil {
+				t.Fatalf("the snapshot encoded to %d bytes -- an invalid encoding was accepted, so the stored reading is not the accepted one", len(encoded))
+			}
+			if !errors.Is(err, ErrSemanticStateRejected) {
+				t.Errorf("err = %v, want the rejection sentinel", err)
+			}
+			if !strings.Contains(err.Error(), "not valid UTF-8") {
+				t.Errorf("err = %v, want the refusal to name the encoding -- another guard rejecting this fixture first would make the cell vacuous", err)
+			}
+		})
+	}
+
+	// THE CLONE IS A REWRITER, executed: this is why the capture checks its
+	// INPUT rather than the snapshot it built.
+	t.Run("the frame clone substitutes, so the input is what is checked", func(t *testing.T) {
+		t.Parallel()
+		frame := namedFrame(t, invalid)
+		if got := frame.SubjectExpression.Named.Terms[0]; got != invalid {
+			t.Fatalf("validation already rewrote the term (%q) -- the cell would prove nothing", got)
+		}
+		built := buildFrom(t, frame)
+		stored := built.Frame.SubjectExpression.Named.Terms[0]
+		t.Logf("accepted term valid_utf8=%v -> stored term valid_utf8=%v equal=%v",
+			utf8.ValidString(invalid), utf8.ValidString(stored), stored == invalid)
+		if stored == invalid {
+			t.Skip("this build's clone preserved the bytes; the encode-time refusal above then covers the frame too")
+		}
+		if !bytes.Contains([]byte(stored), []byte("\ufffd")) {
+			t.Errorf("the clone changed the term to %q, which is neither the original nor the replacement character", stored)
+		}
+		// And the capture refuses it before any of that can be stored.
+		capture := captureSemanticState(SemanticStateInput{
+			Outcome:       QuestionFamilyOutcome{Family: QuestionFamilySubjectInvestigation, Source: QuestionFamilySourceModel, Frame: &frame, Gate: FrameGate{Outcome: FrameGatePassed}},
+			EmittedShape:  ShapeOpen,
+			FamilyVersion: QuestionFamilyTableVersion,
+		})
+		if capture.Write.State != nil || capture.Write.Absence != SemanticStateAbsenceSnapshotInvalid {
+			t.Errorf("capture = %+v, want the closed snapshot_invalid absence", capture)
+		}
+		if capture.InvalidPath == "" {
+			t.Errorf("the capture named no path, so an operator cannot tell WHICH value was refused")
+		}
+		t.Logf("capture refused, path=%q", capture.InvalidPath)
+	})
+
+	// The capture records the closed absence rather than a rewritten reading.
+	t.Run("the capture records the absence", func(t *testing.T) {
+		t.Parallel()
+		frame := namedFrame(t, invalid)
+		capture := captureSemanticState(SemanticStateInput{
+			Outcome:       QuestionFamilyOutcome{Family: QuestionFamilySubjectInvestigation, Source: QuestionFamilySourceModel, Frame: &frame, Gate: FrameGate{Outcome: FrameGatePassed}},
+			EmittedShape:  ShapeOpen,
+			FamilyVersion: QuestionFamilyTableVersion,
+		})
+		t.Logf("capture -> state=%v absence=%s", capture.Write.State != nil, capture.Write.Absence)
+		if capture.Write.State != nil || capture.Write.Absence != SemanticStateAbsenceSnapshotInvalid {
+			t.Errorf("capture = %+v, want no snapshot and the closed snapshot_invalid absence", capture)
+		}
+	})
 }

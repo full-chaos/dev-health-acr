@@ -423,7 +423,7 @@ func EncodeSemanticState(state *PersistedSemanticState) ([]byte, error) {
 	// readings encode to the same bytes, and the replay comparison cannot tell
 	// them apart. Refused at capture the way a NUL is, so the result is still
 	// saved with the closed absence instead of a quietly rewritten reading.
-	if path, ok := firstUnencodableString(state); !ok {
+	if path, ok := firstUnencodableString("semantic_state", state); !ok {
 		return nil, fmt.Errorf("%w: %s is not valid UTF-8, and encoding it would store a different reading than the one accepted", ErrSemanticStateRejected, path)
 	}
 	if len(encoded) > SemanticStateMaxEncodedBytes {
@@ -937,12 +937,25 @@ type semanticStateCapture struct {
 	EncodedBytes int
 	// Bound is the bound a snapshot_oversized capture breached, "" otherwise.
 	Bound SemanticStateBound
+	// InvalidPath names the value whose encoding was refused, "" otherwise. A
+	// PATH, never the value: the value is corpus text.
+	InvalidPath string
 }
 
 // captureSemanticState builds, validates and measures the snapshot. A snapshot
 // over a bound or failing validation is REJECTED: the write becomes the closed
 // absence reason that names why, and the result is saved without one.
 func captureSemanticState(in SemanticStateInput) semanticStateCapture {
+	// CHECKED ON THE INPUT, BEFORE ANYTHING COPIES IT. BuildSemanticState
+	// clones the accepted frame through a JSON round trip, and that round trip
+	// is itself a rewriter: encoding/json maps a byte sequence that is not
+	// valid UTF-8 onto U+FFFD, so by the time the snapshot exists the invalid
+	// bytes are already gone and a guard at encode sees a valid document. The
+	// reading stored would then differ from the one accepted, silently, which
+	// is the defect -- so the accepted reading is checked here, as it arrived.
+	if path, ok := firstUnencodableString("accepted_reading", in); !ok {
+		return semanticStateCapture{Write: SemanticStateAbsent(SemanticStateAbsenceSnapshotInvalid), InvalidPath: path}
+	}
 	state := BuildSemanticState(in)
 	encoded, err := EncodeSemanticState(state)
 	if err != nil {
@@ -984,8 +997,8 @@ func firstDuplicate(lists ...[]string) string {
 // decided by a human. This decides ENCODABILITY, which is a property of every
 // string without exception: a field added tomorrow must be covered by being a
 // string, not by being remembered here.
-func firstUnencodableString(state *PersistedSemanticState) (string, bool) {
-	if state == nil {
+func firstUnencodableString(root string, value any) (string, bool) {
+	if value == nil {
 		return "", true
 	}
 	var walk func(path string, v reflect.Value) (string, bool)
@@ -1031,7 +1044,7 @@ func firstUnencodableString(state *PersistedSemanticState) (string, bool) {
 		}
 		return "", true
 	}
-	return walk("semantic_state", reflect.ValueOf(state))
+	return walk(root, reflect.ValueOf(value))
 }
 
 // carriesNUL reports whether any string value in the JSON document contains a
