@@ -194,7 +194,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// single-subject investigation has no cohort, so `declined` is
 		// always nothing_to_narrow here and the refusal was reached
 		// without any content reduction ever being attempted.
-		attempt, accountingErr := e.planCandidateNarrowing(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts, &firstPass, answerPassSecond)
+		attempt, accountingErr := e.planCandidateNarrowing(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts, &firstPass, answerPassSecond, params.Graph.CohortPopulation)
 		if accountingErr != nil {
 			return InvestigationResult{}, firstPass, accountingErr
 		}
@@ -334,7 +334,14 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// They are the same "stale document at the retry" class on different
 	// axes, found independently by two lanes. Taking one without the other
 	// re-opens the half it did not fix.
-	retried = e.finalizeResult(ctx, principal, retried, *plan, params.Frame, retryParams.Facts, &retryPending, answerPassSecond)
+	// params.Graph, NOT retryParams.Graph, and the two differ on purpose. The
+	// retry re-synthesizes over a NARROWED cohort, so retryParams carries
+	// fewer members -- but how many members retrieval SAW is a fact about the
+	// pool, which a narrowing does not change. Reading the narrowed graph here
+	// would let the declared population shrink every time the answer was cut
+	// to fit, which is exactly backwards: the tighter the answer, the more
+	// there was that it could not carry.
+	retried = e.finalizeResult(ctx, principal, retried, *plan, params.Frame, retryParams.Facts, &retryPending, answerPassSecond, params.Graph.CohortPopulation)
 	// READ BACK FROM THE PRODUCER, not from the params and not from the local
 	// `retryAllocation`, and the difference is the entire lesson of this class.
 	//
@@ -370,7 +377,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	outcomeAttempt := outcomeNarrowingAttempt{Measured: retryMeasured}
 	if retryOverrun != contractsv1.ContextFabricBudgetFits {
 		var accountingErr error
-		outcomeAttempt, accountingErr = e.planCandidateNarrowing(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts, &retryPending, answerPassThird)
+		outcomeAttempt, accountingErr = e.planCandidateNarrowing(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts, &retryPending, answerPassThird, params.Graph.CohortPopulation)
 		if accountingErr != nil {
 			return InvestigationResult{}, retryPending, accountingErr
 		}

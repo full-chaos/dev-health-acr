@@ -108,7 +108,7 @@ func (m MembershipCardinality) Narrowed() bool {
 // question whose population could not be resolved and a question whose
 // population is genuinely empty are different answers, and one number
 // standing for both is the shape "missing is not healthy" forbids.
-func ComputeMembershipCardinality(cohort *Cohort, narrowing []contractsv1.ContextFabricPlanNarrowing) (MembershipCardinality, bool) {
+func ComputeMembershipCardinality(cohort *Cohort, population int, narrowing []contractsv1.ContextFabricPlanNarrowing) (MembershipCardinality, bool) {
 	if !memberSetResolved(cohort) {
 		return MembershipCardinality{}, false
 	}
@@ -130,12 +130,61 @@ func ComputeMembershipCardinality(cohort *Cohort, narrowing []contractsv1.Contex
 		// third shape that silently reads as a full census.
 		PopulationIncomplete: !cohort.Complete || cohort.Truncated,
 	}
-	if step, found := firstMemberNarrowing(narrowing); found && step.Before > cardinality.Served {
+	// THE RETRIEVAL POPULATION IS THE ONLY INPUT THAT CAN EXCEED WHAT THE
+	// ANSWER CARRIES FOR THE REASON THIS STEP CARES ABOUT. `Declared` is
+	// defined as the largest member count this turn OBSERVED, and before the
+	// pool learned to count past the render clamp there was nothing to
+	// observe: every other input here is derived from `cohort.Members`, so
+	// `Declared` could only ever equal `Served` and the two-number shape
+	// carried no information. A cohort clamped to 14 of 36 now declares 36.
+	//
+	// Guarded rather than assigned: a pool smaller than the cohort is not a
+	// thing retrieval can produce, and taking a maximum rather than trusting
+	// the input keeps a future caller that threads a stale or zero value from
+	// publishing a count SMALLER than the members it served -- which
+	// `Narrowed()` would then read as "nothing was cut".
+	if population > cardinality.Declared {
+		cardinality.Declared = population
+		// The mechanism that cut them is the pre-read clamp, whose basis is
+		// recorded on the stage-1 `cardinality` step. firstMemberNarrowing
+		// excludes that step because its BEFORE/AFTER are limits rather than
+		// members -- which is still true, and is why only the basis is read
+		// here and never the numbers.
+		if step, found := renderClampNarrowing(narrowing); found {
+			cardinality.Basis = step.Basis
+			cardinality.Overrun = step.Overrun
+		}
+	}
+	// A LATER member narrowing still wins the disclosure when it cut further:
+	// it is a second, differently-caused loss on top of the clamp, and its
+	// basis is the one a reader needs to act on.
+	if step, found := firstMemberNarrowing(narrowing); found && step.Before > cardinality.Declared {
 		cardinality.Declared = step.Before
 		cardinality.Basis = step.Basis
 		cardinality.Overrun = step.Overrun
 	}
 	return cardinality, true
+}
+
+// renderClampNarrowing finds the stage-1 `cardinality` step -- the pre-read
+// clamp of MaxCohortMembers to the response item budget.
+//
+// It is the EXACT COMPLEMENT of firstMemberNarrowing, which skips this step,
+// and the two are deliberately separate functions rather than one with a
+// flag: they are read for different things. firstMemberNarrowing is read for
+// its member COUNTS; this one is read for its BASIS alone, because the clamp's
+// own Before/After are ceilings and publishing them as members is the
+// "declared 50, served 3" defect firstMemberNarrowing's doc comment records.
+func renderClampNarrowing(narrowing []contractsv1.ContextFabricPlanNarrowing) (contractsv1.ContextFabricPlanNarrowing, bool) {
+	for _, step := range narrowing {
+		if step.Groups {
+			continue
+		}
+		if step.Stage == contractsv1.ContextFabricPlanNarrowingCardinality {
+			return step, true
+		}
+	}
+	return contractsv1.ContextFabricPlanNarrowing{}, false
 }
 
 // firstMemberNarrowing finds the earliest recorded step that narrowed
@@ -272,7 +321,7 @@ func membershipCardinalityOutcomeRow(cardinality MembershipCardinality, requirem
 //
 // Returns the rows unchanged when the frame asked for no count, when there
 // is no resolved member set, or when this requirement already has its row.
-func appendMembershipCardinality(rows []RequirementOutcomeRow, cohort *Cohort, narrowing []contractsv1.ContextFabricPlanNarrowing) ([]RequirementOutcomeRow, MembershipCardinality, bool) {
+func appendMembershipCardinality(rows []RequirementOutcomeRow, cohort *Cohort, population int, narrowing []contractsv1.ContextFabricPlanNarrowing) ([]RequirementOutcomeRow, MembershipCardinality, bool) {
 	requirement, obligation := countRequirement(rows)
 	if requirement == "" {
 		return rows, MembershipCardinality{}, false
@@ -280,7 +329,7 @@ func appendMembershipCardinality(rows []RequirementOutcomeRow, cohort *Cohort, n
 	if hasAssembledOutcome(rows, requirement, obligation) {
 		return rows, MembershipCardinality{}, false
 	}
-	cardinality, counted := ComputeMembershipCardinality(cohort, narrowing)
+	cardinality, counted := ComputeMembershipCardinality(cohort, population, narrowing)
 	if !counted {
 		// STATE the absence rather than saying nothing.
 		//

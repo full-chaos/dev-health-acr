@@ -218,7 +218,7 @@ func TestTheCountStepTreatsAContradictoryCohortAsIncomplete(t *testing.T) {
 	cohort.Complete = true
 	cohort.Truncated = true
 
-	cardinality, counted := ComputeMembershipCardinality(cohort, nil)
+	cardinality, counted := ComputeMembershipCardinality(cohort, 0, nil)
 	if !counted {
 		t.Fatal("a cohort with members reported no cardinality")
 	}
@@ -232,7 +232,7 @@ func TestTheCountStepTreatsAContradictoryCohortAsIncomplete(t *testing.T) {
 	full := countingCohort(SubjectTeam, 4)
 	full.Complete = true
 	full.Truncated = false
-	if plain, _ := ComputeMembershipCardinality(full, nil); plain.PopulationIncomplete {
+	if plain, _ := ComputeMembershipCardinality(full, 0, nil); plain.PopulationIncomplete {
 		t.Error("a complete, untruncated census was read as incomplete")
 	}
 }
@@ -372,7 +372,7 @@ func TestACountWithNoResolvedPopulationIsUnchanged(t *testing.T) {
 	if len(seed) == 0 {
 		t.Fatal("the counting frame derived no requirements; this fixture proves nothing")
 	}
-	rows, _, counted := appendMembershipCardinality(seed, nil, nil)
+	rows, _, counted := appendMembershipCardinality(seed, nil, 0, nil)
 	if counted {
 		t.Fatal("a nil cohort reported a counted cardinality")
 	}
@@ -463,7 +463,7 @@ func TestAnEmptyIncompletePopulationIsStillQualified(t *testing.T) {
 	empty.Complete = false
 	empty.Truncated = false
 
-	cardinality, counted := ComputeMembershipCardinality(empty, nil)
+	cardinality, counted := ComputeMembershipCardinality(empty, 0, nil)
 	if !counted {
 		t.Fatal("an empty cohort reported NO cardinality; empty and absent are different answers and this one " +
 			"is present with zero members, not missing")
@@ -481,7 +481,7 @@ func TestAnEmptyIncompletePopulationIsStillQualified(t *testing.T) {
 	genuine := countingCohort(SubjectTeam, 0)
 	genuine.Complete = true
 	genuine.Truncated = false
-	if plain, _ := ComputeMembershipCardinality(genuine, nil); plain.PopulationIncomplete {
+	if plain, _ := ComputeMembershipCardinality(genuine, 0, nil); plain.PopulationIncomplete {
 		t.Error("a complete census that matched nobody was reported as an incomplete population; an exact zero " +
 			"is an answer, and qualifying it would make every empty result look degraded")
 	}
@@ -502,7 +502,7 @@ func TestAOneMemberIncompletePopulationIsQualified(t *testing.T) {
 	single.Complete = false
 	single.Truncated = false
 
-	cardinality, counted := ComputeMembershipCardinality(single, nil)
+	cardinality, counted := ComputeMembershipCardinality(single, 0, nil)
 	if !counted {
 		t.Fatal("a one-member cohort reported no cardinality")
 	}
@@ -518,7 +518,7 @@ func TestAOneMemberIncompletePopulationIsQualified(t *testing.T) {
 	full := countingCohort(SubjectTeam, 1)
 	full.Complete = true
 	full.Truncated = false
-	if plain, _ := ComputeMembershipCardinality(full, nil); plain.PopulationIncomplete {
+	if plain, _ := ComputeMembershipCardinality(full, 0, nil); plain.PopulationIncomplete {
 		t.Error("a complete one-member census was read as incomplete")
 	}
 }
@@ -539,7 +539,7 @@ func TestTheEmptyIncompletePopulationReachesTheRowAndTheState(t *testing.T) {
 	empty.Complete = false
 	empty.Truncated = false
 
-	cardinality, counted := ComputeMembershipCardinality(empty, nil)
+	cardinality, counted := ComputeMembershipCardinality(empty, 0, nil)
 	if !counted {
 		t.Fatal("an empty cohort reported no cardinality")
 	}
@@ -574,7 +574,7 @@ func TestTheEmptyIncompletePopulationReachesTheRowAndTheState(t *testing.T) {
 	genuine := countingCohort(SubjectTeam, 0)
 	genuine.Complete = true
 	genuine.Truncated = false
-	plain, _ := ComputeMembershipCardinality(genuine, nil)
+	plain, _ := ComputeMembershipCardinality(genuine, 0, nil)
 	plainRow := membershipCardinalityOutcomeRow(plain, "count/member/team", string(ObligationCount))
 	if plainRow.Outcome != contractsv1.ContextFabricRequirementSatisfied {
 		t.Errorf("a complete census that matched nobody produced %q, want satisfied; an exact zero is an answer",

@@ -227,7 +227,7 @@ func TestBothMemberSetSiblingsKeyOnOnePredicate(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			_, counted := ComputeMembershipCardinality(testCase.cohort, nil)
+			_, counted := ComputeMembershipCardinality(testCase.cohort, 0, nil)
 			resolved := memberSetResolved(testCase.cohort)
 			if counted != resolved {
 				t.Fatalf("the two siblings disagree about this cohort: ComputeMembershipCardinality counted=%v, memberSetResolved=%v. "+
@@ -254,7 +254,7 @@ func TestTheTwoSiblingsEmitTheSameRowForAnAbsentMemberSet(t *testing.T) {
 		Outcome:     contractsv1.ContextFabricRequirementSatisfied,
 	}}
 
-	fromCountStep, _, _ := appendMembershipCardinality(planning, nil, nil)
+	fromCountStep, _, _ := appendMembershipCardinality(planning, nil, 0, nil)
 	fromSweep := appendUnresolvedMemberSetOutcomes(planning, nil)
 
 	countRow := assembledRowFor(t, fromCountStep, "count/member/team")

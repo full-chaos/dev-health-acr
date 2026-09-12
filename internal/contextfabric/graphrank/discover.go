@@ -296,15 +296,36 @@ func SortEdgesByRelevance(edges []CandidateEdge) []CandidateEdge {
 // acceptance criteria: "a reader must read cohort.truncated, not assume a
 // capped discovery always shows up as some group's truncated=true"), so it is
 // carried here rather than re-derived downstream.
-func DiscoveredCohort(principal storage.Principal, discovery contextfabric.GraphDiscoveryRequest, nodes []CandidateNode, poolTruncated bool, isInternal func(contextfabric.SubjectRef) bool) (*contextfabric.Cohort, int, int, contextfabric.SubjectKind, CohortKindBasis) {
+// population is how many DISTINCT, AUTHORIZED, kind-matching members the pool
+// held, counted WITHOUT the render cap -- the number a `count` obligation is
+// asking for, as opposed to `len(Members)`, which is how many the answer has
+// room to carry.
+//
+// THE TWO WERE THE SAME NUMBER AND THAT IS THE DEFECT THIS CLOSES. The cap
+// (discovery.Request.Options.MaxCohortMembers) is clamped from the RESPONSE
+// ITEM BUDGET before retrieval runs -- every cohort member costs one item
+// before a fact or driver is charged -- so it is sized for what the answer can
+// RENDER, not for what exists. Counting inside the append loop and stopping at
+// the cap therefore made the population unobservable by construction: an
+// organization with 36 projects and a 14-item allowance could only ever report
+// 14, and `Declared` (which exists to say how many were there to carry) was
+// pinned to `Served`. Counting continues past the cap and only the APPEND
+// stops, so the count is taken before the render clamp rather than after it.
+//
+// It is still bounded by what reached `nodes`: a pool the backend already cut
+// reports `poolTruncated`, and the completeness this function derives from it
+// is unchanged. This counter says "of the pool, this many matched", never "of
+// the organization".
+func DiscoveredCohort(principal storage.Principal, discovery contextfabric.GraphDiscoveryRequest, nodes []CandidateNode, poolTruncated bool, isInternal func(contextfabric.SubjectRef) bool) (*contextfabric.Cohort, int, int, contextfabric.SubjectKind, CohortKindBasis, int) {
 	kind, declaredKind, basis := cohortKindFromFrame(discovery.Frame)
 	if basis != CohortKindFromFrameMemberKind {
-		return nil, 0, 0, declaredKind, basis
+		return nil, 0, 0, declaredKind, basis, 0
 	}
 	members := make([]contextfabric.CohortMember, 0)
 	seen := make(map[string]struct{})
 	authzDropped := 0
 	kindScopedAuthzDropped := 0
+	population := 0
 	for _, node := range nodes {
 		subject, subjectOK := NodeSubject(node)
 		kindMatches := subjectOK && subject.Kind == kind && !isInternal(subject)
@@ -323,17 +344,25 @@ func DiscoveredCohort(principal storage.Principal, discovery contextfabric.Graph
 			continue
 		}
 		seen[key] = struct{}{}
+		// COUNTED BEFORE THE CAP IS CONSULTED, and deduped by the same
+		// `seen` set the members use, so a subject two arms both returned
+		// counts once here exactly as it would once there.
+		population++
+		if len(members) >= discovery.Request.Options.MaxCohortMembers {
+			// The cohort has all the members it can carry; keep walking the
+			// pool so the remainder is still counted. `continue`, not
+			// `break`: a `break` here is precisely what made the population
+			// unobservable.
+			continue
+		}
 		members = append(members, contextfabric.CohortMember{
 			Subject: subject, Rank: len(members) + 1,
 			InclusionReasons: []string{"Graph retrieval associated this subject with the requested organization-level condition."},
 			EvidenceRefIDs:   EvidenceRefs(node.Attributes),
 		})
-		if len(members) >= discovery.Request.Options.MaxCohortMembers {
-			break
-		}
 	}
 	if len(members) == 0 {
-		return nil, authzDropped, kindScopedAuthzDropped, declaredKind, basis
+		return nil, authzDropped, kindScopedAuthzDropped, declaredKind, basis, population
 	}
 	// Either loss forbids a completeness claim, and both are the same claim
 	// to a reader: members of this kind exist that this cohort does not
@@ -341,13 +370,22 @@ func DiscoveredCohort(principal storage.Principal, discovery contextfabric.Graph
 	// validator refuses a cohort that is both -- see
 	// validate_context_fabric_result.go's cohort bounds), so they are
 	// derived from one condition rather than two.
+	// DELIBERATELY STILL DERIVED FROM THE CAP, not from `population >
+	// len(members)`, even though the population is now known here. The two
+	// disagree on exactly one case -- a pool holding exactly
+	// MaxCohortMembers matches, which the cap calls truncated and the
+	// population calls complete -- and that is a completeness change, a
+	// different claim from the count this change exists to make observable.
+	// Tightening it belongs with its own before/after evidence rather than
+	// riding along here, and the conservative reading loses nothing: it
+	// over-discloses incompleteness, never under-discloses it.
 	cappedAtCohortLimit := len(members) >= discovery.Request.Options.MaxCohortMembers
 	membersMayBeMissing := cappedAtCohortLimit || poolTruncated
 	return &contextfabric.Cohort{
 		Kind: kind, Members: members, Exclusions: []contextfabric.CohortExclusion{},
 		Rationale: "Subjects were discovered from the authorized Context Fabric graph using the user's open-ended cohort question.",
 		Complete:  !membersMayBeMissing, Truncated: membersMayBeMissing,
-	}, authzDropped, kindScopedAuthzDropped, declaredKind, basis
+	}, authzDropped, kindScopedAuthzDropped, declaredKind, basis, population
 }
 
 func edgeEpistemicStatus(edge ResolvedEdge) contextfabric.EpistemicStatus {

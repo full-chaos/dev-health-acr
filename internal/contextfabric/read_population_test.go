@@ -113,7 +113,7 @@ func evaluateOperandsWithAssignment(
 		SubjectResolution: contractsv1.ContextFabricSubjectResolution{Committed: committed},
 		Coverage:          coverage,
 	}
-	evidence := readPopulationEvidenceFrom(frame, result, AnswerPlan{Requirements: published}, facts, assignment)
+	evidence := readPopulationEvidenceFrom(frame, result, AnswerPlan{Requirements: published}, facts, 0, assignment)
 	return appendReadRequirementEvaluations(nil, published, coverage, evidence)
 }
 
@@ -258,7 +258,7 @@ func TestASingleSubjectReadStaysKindKeyed(t *testing.T) {
 				namedOperandFrame(SubjectTeam, SubjectTeam),
 				InvestigationResult{SubjectResolution: contractsv1.ContextFabricSubjectResolution{
 					Committed: []SubjectRef{teamRef("team_alpha")}}},
-				AnswerPlan{}, factsFor(teamRef("team_alpha"), kindList(health)), nil),
+				AnswerPlan{}, factsFor(teamRef("team_alpha"), kindList(health)), 0, nil),
 		},
 	} {
 		testCase := testCase
@@ -588,7 +588,7 @@ func evaluateCohort(
 	cohort *Cohort, coverage Coverage, facts CanonicalFactBundle,
 ) []RequirementOutcomeRow {
 	result := InvestigationResult{Cohort: cohort, Coverage: coverage}
-	evidence := readPopulationEvidenceFrom(nil, result, AnswerPlan{Requirements: published}, facts, nil)
+	evidence := readPopulationEvidenceFrom(nil, result, AnswerPlan{Requirements: published}, facts, 0, nil)
 	return appendReadRequirementEvaluations(nil, published, coverage, evidence)
 }
 
@@ -961,13 +961,13 @@ func TestReadPopulationAgreesWithTheCohortOwnersOwnRule(t *testing.T) {
 		shape := shape
 		t.Run(shape.name, func(t *testing.T) {
 			t.Parallel()
-			population := cohortMemberPopulation(shape.cohort, nil)
+			population := cohortMemberPopulation(shape.cohort, 0, nil)
 			if population.Census != shape.wantCensus {
 				t.Fatalf("census = %q, want %q", population.Census, shape.wantCensus)
 			}
 
 			// DIRECTION 1: every field is the OWNER's own.
-			cardinality, resolved := ComputeMembershipCardinality(shape.cohort, nil)
+			cardinality, resolved := ComputeMembershipCardinality(shape.cohort, 0, nil)
 			if resolved != shape.ownerResolves {
 				t.Fatalf("the owner's second return = %v, want %v", resolved, shape.ownerResolves)
 			}
@@ -1373,7 +1373,7 @@ func TestAnIncompleteCensusOutranksTheSamenessArm(t *testing.T) {
 		SubjectResolution: contractsv1.ContextFabricSubjectResolution{Committed: []SubjectRef{alpha, beta}},
 	}
 	frame := namedOperandFrame(SubjectTeam, contractsv1.ContextFabricSubjectProject)
-	evidence := readPopulationEvidenceFrom(frame, result, AnswerPlan{Requirements: published}, facts, nil)
+	evidence := readPopulationEvidenceFrom(frame, result, AnswerPlan{Requirements: published}, facts, 0, nil)
 	rows := appendReadRequirementEvaluations(nil, published, coverage, evidence)
 
 	// The OWNER's truncation, observed, over its own counts -- not a depth loss

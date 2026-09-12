@@ -320,6 +320,21 @@ type ProjectionCheckpoint = contractsv1.ContextFabricProjectionCheckpoint
 type GraphContext struct {
 	Resolution       SubjectResolution  `json:"resolution"`
 	Cohort           *Cohort            `json:"cohort,omitempty"`
+	// CohortPopulation is how many distinct, authorized members of the
+	// cohort's kind the retrieval pool held, counted BEFORE the response
+	// item budget clamped how many the answer could carry. Zero when no
+	// cohort was discovered.
+	//
+	// `json:"-"`, like CanonicalFactRequest.Scope and for the same reason,
+	// with one extra edge this type has and that one does not: GraphContext
+	// is serialized into SynthesisInput, so a field with a JSON tag here
+	// reaches the MODEL. Feeding a second number into the prompt would be a
+	// synthesis behaviour change -- a fresh prompt version and the reuse-key
+	// trap that comes with it -- and this value exists for the `count`
+	// server step, which runs after synthesis and needs no help from the
+	// narration. Engine bookkeeping about what retrieval saw, never evidence
+	// the bundle carries.
+	CohortPopulation int `json:"-"`
 	Paths            []RelationshipPath `json:"paths"`
 	DriverCandidates []DriverJudgment   `json:"driver_candidates"`
 	EvidenceRefIDs   []string           `json:"evidence_ref_ids"`

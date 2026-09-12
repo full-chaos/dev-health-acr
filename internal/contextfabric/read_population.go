@@ -395,8 +395,8 @@ func operandPopulation(frame *QuestionFrame, committed []SubjectRef, kind Subjec
 // restates `!Complete || Truncated` -- a second copy would be a second
 // authority that could drift, and the cross-layer agreement test pins both
 // directions.
-func cohortMemberPopulation(cohort *Cohort, narrowing []contractsv1.ContextFabricPlanNarrowing) readPopulation {
-	cardinality, resolved := ComputeMembershipCardinality(cohort, narrowing)
+func cohortMemberPopulation(cohort *Cohort, cohortPopulation int, narrowing []contractsv1.ContextFabricPlanNarrowing) readPopulation {
+	cardinality, resolved := ComputeMembershipCardinality(cohort, cohortPopulation, narrowing)
 	if !resolved {
 		return readPopulation{Census: populationAbsent}
 	}
@@ -453,7 +453,12 @@ func cohortGroupPopulation(cohort *Cohort, narrowing []contractsv1.ContextFabric
 	// `Truncated` are the conjunction/disjunction over the groups), so it is
 	// ASKED rather than copied. Only `Declared` differs between the two axes,
 	// and that is taken from the group narrowing below.
-	if cardinality, resolved := ComputeMembershipCardinality(cohort, narrowing); resolved && cardinality.PopulationIncomplete {
+	// POPULATION 0 DELIBERATELY: this axis reads ONLY `PopulationIncomplete`,
+	// which folds the cohort's own Complete/Truncated and does not consult the
+	// member population at all. `Declared` for the group axis comes from the
+	// group narrowing below, so threading the member population here would
+	// hand this call a number it must not use.
+	if cardinality, resolved := ComputeMembershipCardinality(cohort, 0, narrowing); resolved && cardinality.PopulationIncomplete {
 		population.Census = populationIncomplete
 	}
 	if step, found := firstGroupNarrowing(narrowing); found && step.Before > population.Declared {
@@ -500,12 +505,19 @@ func readPopulationEvidenceFrom(
 	// own doc comment. Threaded straight onto the evidence and onto every
 	// operandStandard built below, so every reader of either shares the
 	// exact same registry-state snapshot this evaluation was built from.
+	// cohortPopulation is how many members of the cohort's kind RETRIEVAL
+	// saw, before the response item budget clamped how many the answer could
+	// carry -- threaded from GraphContext rather than derived, because it is
+	// the one input here that the served document cannot reproduce. Zero when
+	// no cohort was discovered, and zero on the reuse path, where no
+	// retrieval ran to observe one.
+	cohortPopulation int,
 	assignment observationKeyAssignment,
 ) readPopulationEvidence {
 	evidence := readPopulationEvidence{
 		Present:             true,
 		coverage:            subjectReadCoverage(facts),
-		memberPopulation:    cohortMemberPopulation(result.Cohort, plan.Narrowing),
+		memberPopulation:    cohortMemberPopulation(result.Cohort, cohortPopulation, plan.Narrowing),
 		groupPopulation:     cohortGroupPopulation(result.Cohort, plan.Narrowing),
 		operandPopulations:  map[SubjectKind]readPopulation{},
 		comparisonStandards: map[SubjectKind]operandStandard{},
@@ -912,6 +924,7 @@ func readRequirementPopulationEventsFrom(
 	plan AnswerPlan,
 	facts CanonicalFactBundle,
 	family QuestionFamily,
+	cohortPopulation int,
 ) []ReadRequirementPopulationEvent {
 	if result.AnswerPlan == nil {
 		return nil
@@ -920,7 +933,7 @@ func readRequirementPopulationEventsFrom(
 	// Census off the population authority (see the doc comment above) and
 	// never runs a threshold comparison, so the observation-key snapshot has
 	// nothing to affect here.
-	populations := readPopulationEvidenceFrom(frame, result, plan, facts, nil)
+	populations := readPopulationEvidenceFrom(frame, result, plan, facts, cohortPopulation, nil)
 	byIdentity := make(map[string]contractsv1.ContextFabricPlanRequirement, len(result.AnswerPlan.Requirements))
 	for _, requirement := range result.AnswerPlan.Requirements {
 		byIdentity[requirement.Requirement] = requirement

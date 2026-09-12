@@ -64,7 +64,7 @@ func TestGroupedProjectQuestionDiscoversProjectsNotTeams(t *testing.T) {
 		},
 	}, "status", []string{"each team", "projects"})
 
-	cohort, _, _, _, basis := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery, []CandidateNode{
+	cohort, _, _, _, basis, _ := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery, []CandidateNode{
 		candidateNode(contextfabric.SubjectProject, "project_a", "Project A", 0.9, "*"),
 		candidateNode(contextfabric.SubjectProject, "project_b", "Project B", 0.9, "*"),
 		candidateNode(contextfabric.SubjectTeam, "team_1", "Team One", 0.9, "*"),
@@ -122,7 +122,7 @@ func TestRepositoryCohortIsDiscoveredAndNeverRewrittenToTeam(t *testing.T) {
 		Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: contextfabric.SubjectRepository},
 	}, "open_incidents", []string{"repositories"})
 
-	cohort, _, _, declared, basis := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery, []CandidateNode{
+	cohort, _, _, declared, basis, _ := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery, []CandidateNode{
 		candidateNode(contextfabric.SubjectRepository, "repo_a", "Repo A", 0.9, "*"),
 		candidateNode(contextfabric.SubjectTeam, "team_1", "Team One", 0.9, "*"),
 	}, false, noInternal)
@@ -155,7 +155,7 @@ func TestNoFrameDiscoversNothingAndNamesWhy(t *testing.T) {
 	}, "teams_under_pressure", []string{"teams"})
 	discovery.Frame = nil
 
-	cohort, _, _, _, basis := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery, []CandidateNode{
+	cohort, _, _, _, basis, _ := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery, []CandidateNode{
 		candidateNode(contextfabric.SubjectTeam, "team_1", "Team One", 0.9, "*"),
 	}, false, noInternal)
 
@@ -192,7 +192,7 @@ func TestNonCohortAndMemberlessExpressionsRefuseWithTheirOwnBasis(t *testing.T) 
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			discovery := frameDiscovery(tc.expression, "status", []string{"teams"})
-			cohort, _, _, _, basis := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery, []CandidateNode{
+			cohort, _, _, _, basis, _ := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery, []CandidateNode{
 				candidateNode(contextfabric.SubjectTeam, "team_1", "Team One", 0.9, "*"),
 			}, false, noInternal)
 			if cohort != nil {
@@ -233,7 +233,7 @@ func TestUnservableCohortKindRefusesInsteadOfBuildingAnInvalidCohort(t *testing.
 				Kind:       contextfabric.SubjectExpressionDiscoveredKind,
 				Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: kind},
 			}, "status", []string{"things"})
-			cohort, _, _, declared, basis := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery,
+			cohort, _, _, declared, basis, _ := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery,
 				[]CandidateNode{candidateNode(kind, "node_a", "Node A", 0.9, "*")}, false, noInternal)
 			if cohort != nil {
 				t.Fatalf("built a %q cohort no discovery arm was proven for", kind)
@@ -262,7 +262,7 @@ func TestServableCohortKindsStillDiscover(t *testing.T) {
 				Kind:       contextfabric.SubjectExpressionDiscoveredKind,
 				Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: kind},
 			}, "status", []string{"things"})
-			cohort, _, _, _, basis := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery,
+			cohort, _, _, _, basis, _ := DiscoveredCohort(storage.Principal{OrgID: "org_1"}, discovery,
 				[]CandidateNode{candidateNode(kind, "node_a", "Node A", 0.9, "*")}, false, noInternal)
 			if basis != CohortKindFromFrameMemberKind || cohort == nil {
 				t.Fatalf("kind %q no longer discovers: basis=%q cohort=%v", kind, basis, cohort != nil)

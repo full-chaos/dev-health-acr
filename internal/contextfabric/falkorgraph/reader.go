@@ -854,7 +854,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// reader cannot resolve.
 	poolTruncationBasis, poolTruncationArms, cohortPoolTruncated := cohortPoolTruncation(
 		fulltextTruncated, hopWalkTruncated, exactNameTruncated, failedLookups > 0, censusAdmitted && censusMembers > 0)
-	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis := graphrank.DiscoveredCohort(principal, request, cohortNodes, cohortPoolTruncated, isInternalSubject)
+	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis, cohortPopulation := graphrank.DiscoveredCohort(principal, request, cohortNodes, cohortPoolTruncated, isInternalSubject)
 	// SEAM 7 (CHAOS-4736): what decided the cohort kind, or what prevented
 	// a cohort. This is the I/O boundary, so the telemetry call lives here
 	// and DiscoveredCohort stays pure -- the same split the authzDropped
@@ -1059,7 +1059,8 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		appendGraphDetail(contractsv1.ContextFabricCoverageDetailGraphValidityUnbounded, false, &unboundedCount, validityReason, "context-fabric:graph-validity-windows")
 	}
 	return contextfabric.GraphContext{
-		Resolution: request.Resolution, Cohort: cohort, Paths: admission.Paths, DriverCandidates: admission.Drivers,
+		Resolution: request.Resolution, Cohort: cohort, CohortPopulation: cohortPopulation,
+		Paths: admission.Paths, DriverCandidates: admission.Drivers,
 		EvidenceRefIDs: admission.EvidenceRefIDs, FactRequirements: factRequirements,
 		Coverage: contextfabric.Coverage{
 			Sources:         sources,
