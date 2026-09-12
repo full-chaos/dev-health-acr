@@ -172,7 +172,7 @@ func DecideFrameGate(result FrameValidationResult, hasProposal bool) FrameGate {
 	if result.Outcome != FrameValidationOutcomeValid {
 		return FrameGate{Outcome: FrameGateRejectedInvalid, FailedInvariant: result.Failure.Invariant}
 	}
-	if _, declaredKind, reason := CohortMemberKindFor(result.Frame.SubjectExpression); reason == CohortMemberKindUnservable {
+	if _, declaredKind, reason := CohortMemberKindForFrame(result.Frame); reason == CohortMemberKindUnservable {
 		// declaredKind rides out of the same call that decided the
 		// refusal. It is what makes the served disclosure actionable --
 		// the kind is the one thing the asker can change about the

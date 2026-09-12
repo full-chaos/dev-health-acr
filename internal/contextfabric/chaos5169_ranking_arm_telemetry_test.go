@@ -189,12 +189,10 @@ func TestTheNotAPopulationArmStillFires(t *testing.T) {
 func TestTheArmsCountEveryComputedObligation(t *testing.T) {
 	t.Parallel()
 
-	// The specimen declares an UNSERVABLE member kind. It used to declare a
-	// servable one, because at the time the organization-scope SHAPE refused
-	// whatever kind it named; that shape now resolves a servable kind's
-	// members, so the unavailable `count` row this case is about only
-	// survives on a kind no arm serves. The accounting under test is
-	// unchanged -- what produces the row moved, not what must be counted.
+	// The specimen declares an UNSERVABLE member kind. An organization scope
+	// counting a servable kind resolves that kind's members, so the
+	// unavailable `count` row this case is about exists only for a kind no
+	// arm serves.
 	kind := SubjectWorkItem
 	if servableCohortKinds[kind] {
 		t.Fatalf("fixture kind %q became servable, so this frame no longer produces an unavailable count row", kind)
@@ -401,11 +399,9 @@ func TestTheArmCountersCoverEveryRoleThatCanRefuseAPopulation(t *testing.T) {
 	t.Parallel()
 
 	// The specimen is an organization scope declaring an UNSERVABLE member
-	// kind. It used to declare a servable one, which refused because the
-	// SHAPE was not a cohort variant; that shape now resolves its member set,
-	// so the refusal this case is about had to move to the kind. The role is
-	// unchanged, which is the point: what refuses is different, where it
-	// refuses is not.
+	// kind. An organization scope counting a servable kind resolves its member
+	// set, so the population refusal this case is about comes from the kind:
+	// no arm serves it, whatever the scope.
 	kind := SubjectWorkItem
 	if servableCohortKinds[kind] {
 		t.Fatalf("fixture kind %q became servable, so this case no longer exhibits a refusal at the MEMBER role", kind)

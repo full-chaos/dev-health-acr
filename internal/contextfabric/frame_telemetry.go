@@ -262,7 +262,7 @@ func FrameValidationEventFrom(proposed QuestionFrame, result FrameValidationResu
 		// Read from the VALIDATED frame's expression, through the same
 		// predicate the derivation used to decide the rows summarised above,
 		// so the key and the counters describe one decision.
-		_, _, event.CohortDiscoverability = CohortMemberKindFor(result.Frame.SubjectExpression)
+		_, _, event.CohortDiscoverability = CohortMemberKindForFrame(result.Frame)
 		if divergence, diverged := ShapeAgreement(emittedShape, result.Frame.SubjectExpression); diverged {
 			event.ShapeDiverged = true
 			event.EmittedShape = divergence.Emitted

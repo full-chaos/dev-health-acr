@@ -492,24 +492,13 @@ func TestRankingTheOrganizationItselfIsUnavailable(t *testing.T) {
 		t.Errorf("an unavailable row carries quantifier %q", row.Quantifier)
 	}
 
-	// TWICE SUPERSEDED, both supersessions recorded rather than quietly
-	// rewritten, because the second one reverses the first.
-	//
-	// FIRST: this block used to assert that `organization_scope` WITH a
-	// counted member kind derives a SERVED ranking row named by rank_cohort.
-	// That was false at the time: `organization_scope` was not a cohort
-	// variant, nothing discovered that population, and `RankCohort` is
-	// invoked only when a cohort exists. The row named a server that could
-	// never run, so the assertion was inverted to expect the refusal.
-	//
-	// SECOND, and current: the shape now DOES resolve its member set. An
-	// organization scope declaring a servable member kind names the members
-	// of that kind in the organization, which is a real population, so the
-	// served claim is true again -- this time because the engine changed, not
-	// because the test was wishful. What did not change is the PARITY
-	// statement below, which is the durable part: the two computed cells on
-	// one frame must agree about whether that frame has a population. It held
-	// when both were unavailable and it holds now that both are served.
+	// An organization scope whose goals count a servable member kind names
+	// the members of that kind in the organization, a real population, so the
+	// engine resolves that cohort and ranking it is SERVED by rank_cohort --
+	// the server that runs only when a cohort exists. The PARITY statement
+	// below is the durable part: the two computed cells on one frame agree
+	// about whether that frame has a population, served together here and
+	// unavailable together on the unservable specimen that follows.
 	kind := SubjectTeam
 	orgWithMemberKind := DeriveRequirements(
 		frameWith([]InvestigationGoal{GoalRankOrSurvey, GoalCountOrAggregate}, orgExpression(&kind), TemporalIntentCurrent, nil),
@@ -524,9 +513,8 @@ func TestRankingTheOrganizationItselfIsUnavailable(t *testing.T) {
 			countRow.Served(), memberRow.Served(), countRow.Unavailable, memberRow.Unavailable)
 	}
 
-	// THE UNAVAILABLE SPECIMEN, which moved rather than disappeared. The
-	// organization-scope shape is no longer what makes a computed cell
-	// unavailable; an unservable member KIND is. This frame is the repo's
+	// THE UNAVAILABLE SPECIMEN. Under organization scope, an unservable member
+	// KIND is what makes a computed cell unavailable. This frame is the repo's
 	// specimen of an unavailable computed cell, and the parity statement is
 	// asserted on it too -- both cells unavailable, agreeing.
 	unservableKind := SubjectWorkItem

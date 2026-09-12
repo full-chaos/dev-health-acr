@@ -16,7 +16,7 @@ import (
 // one kind per query, under the same row bound and the same request-one-more
 // truncation rule, admitted by the same gate as the exact-name census.
 //
-// The kinds come from contextfabric.CohortMemberKindFor, the seam allow-list,
+// The kinds come from contextfabric.CohortMemberKindForFrame, the seam allow-list,
 // and from exactNameCensusCoversKind. This file names no kind of its own.
 
 // CohortKindCensusDecision is the closed vocabulary RecordCohortKindCensus
@@ -62,7 +62,7 @@ func CohortKindCensusDecisionVocabulary() []CohortKindCensusDecision {
 //
 // censusAdmitted is the exact-name census admission for the same call, so the
 // two term-free arms can never disagree about whether a term-free fetch is
-// allowed. servableKind is the servable kind contextfabric.CohortMemberKindFor
+// allowed. servableKind is the servable kind contextfabric.CohortMemberKindForFrame
 // returns: empty on every refusing reason, so an unservable declared kind can
 // never reach the fetch.
 func cohortKindCensusDecision(censusAdmitted bool, servableKind contextfabric.SubjectKind) CohortKindCensusDecision {

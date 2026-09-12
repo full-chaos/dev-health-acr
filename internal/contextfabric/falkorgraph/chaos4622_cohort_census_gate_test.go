@@ -54,6 +54,15 @@ func TestCohortExactNameCensusEligibility(t *testing.T) {
 		Kind: contextfabric.SubjectExpressionOrganizationScope,
 		Org:  &contextfabric.OrganizationScopeExpression{MemberKind: &servableOrgKind},
 	})
+	// The servable frame COUNTS its member kind, which is what admits an
+	// organization scope; the uncounted twin is the same expression under the
+	// goals the corpus produced for "where should we focus next?".
+	organizationScopeServable.Goals = []contextfabric.InvestigationGoal{contextfabric.GoalCountOrAggregate}
+	organizationScopeServableUncounted := censusFrame(contextfabric.SubjectExpression{
+		Kind: contextfabric.SubjectExpressionOrganizationScope,
+		Org:  &contextfabric.OrganizationScopeExpression{MemberKind: &servableOrgKind},
+	})
+	organizationScopeServableUncounted.Goals = []contextfabric.InvestigationGoal{contextfabric.GoalRankOrSurvey, contextfabric.GoalAllocateInvestment}
 	organizationScopeUnservable := censusFrame(contextfabric.SubjectExpression{
 		Kind: contextfabric.SubjectExpressionOrganizationScope,
 		Org:  &contextfabric.OrganizationScopeExpression{MemberKind: &unservableOrgKind},
@@ -143,6 +152,16 @@ func TestCohortExactNameCensusEligibility(t *testing.T) {
 			scopeAnchorResolved: true,
 			wantEligible:        false,
 			wantBasis:           CohortExactNameCensusBasisAnchorSet,
+		},
+		{
+			// A servable kind the goals do not count names no population: the
+			// census does not run, and the basis says the count goal is missing
+			// rather than going silent, because the kind alone looks admissible.
+			name:                "organization_scope with a servable member kind but no count goal is NOT eligible",
+			frame:               organizationScopeServableUncounted,
+			scopeAnchorResolved: false,
+			wantEligible:        false,
+			wantBasis:           CohortExactNameCensusBasisOrganizationScopeCountGoalAbsent,
 		},
 		{
 			// An unservable declared kind resolves no member set, so this gate

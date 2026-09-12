@@ -202,14 +202,12 @@ func TestCohortMemberKindForServesEveryKindWithAProvenArm(t *testing.T) {
 // serve a ranking row for "rank team X". This test is what stops that
 // simplification from looking safe.
 //
-// `organization_scope` USED TO BE PINNED HERE and is not any more. It declares
-// an optional member kind, and when that kind is servable the set it names --
-// every member of that kind in the organization -- is a real population the
-// graph can enumerate. Refusing it answered "how many repositories are there
-// across the organization" with a clarification loop over a set the service
-// could have counted. The two cases were never the same shape: one names a
-// subject, the other names a scope, and only the first has nothing to
-// enumerate. See TestOrganizationScopeDeclaringAServableKindDiscovers below.
+// `organization_scope` is not pinned here. It names a scope, not a subject:
+// when its goals count a servable declared kind, the set it names -- every
+// member of that kind in the organization -- is a population the graph can
+// enumerate, and that is a decision about the frame, not the expression. See
+// TestOrganizationScopeIsAdmittedOnlyWhenItsGoalsCountTheMemberKind and
+// TestTheExpressionPredicateNeverAdmitsAnOrganizationScope below.
 func TestCohortMemberKindForRefusesTheExpressionThatNamesOneSubject(t *testing.T) {
 	t.Parallel()
 	// A kind with a PROVEN ARM, so the only thing that can refuse this is
@@ -237,80 +235,82 @@ func TestCohortMemberKindForRefusesTheExpressionThatNamesOneSubject(t *testing.T
 	}
 }
 
-// TestOrganizationScopeDeclaringAServableKindDiscovers pins the rule that
-// replaced the blanket refusal: an organization-scoped expression that names a
-// member kind names the set of that kind's members in the organization, and
-// that set is discoverable exactly when the kind is servable.
+// TestOrganizationScopeIsAdmittedOnlyWhenItsGoalsCountTheMemberKind pins the
+// admission rule for an organization scope, which is a statement about the
+// FRAME and not about the expression.
 //
-// The three cases are the whole decision, not a sample. Only the FIRST moved.
+// An organization scope's member kind is the kind being COUNTED under
+// count_or_aggregate. Invariant I17 permits a member kind without a count goal,
+// so the kind alone does not make a population: "where should we focus next?"
+// arrives framed organization_scope with an interpreter-supplied member kind
+// and no subject axis. The count goal is what admits it.
 //
-// THE WIDENING IS ONTO THE DISCOVERABLE OUTCOME ONLY, and the other two cases
-// are what pin that. An organization scope with an unservable kind, or with no
-// kind at all, still reports `not_a_cohort_variant` rather than
-// `member_kind_unservable` or `no_member_kind` -- deliberately, because
-// DecideFrameGate refuses the WHOLE TURN on `member_kind_unservable`. Routing
-// these two into the refusing outcomes would turn "what documents exist in the
-// organization" from a served clarification into a hard frame refusal, which
-// is strictly worse than the behaviour this change set out to improve. The
-// asymmetry is the design, so it is pinned here rather than left to be
-// "simplified" into consistency later.
-func TestOrganizationScopeDeclaringAServableKindDiscovers(t *testing.T) {
+// The cells are the whole decision. Only count goal + servable kind moves to
+// discoverable. Everything else stays on not_a_cohort_variant rather than a
+// kind-based refusal, because DecideFrameGate refuses the whole turn on
+// member_kind_unservable.
+func TestOrganizationScopeIsAdmittedOnlyWhenItsGoalsCountTheMemberKind(t *testing.T) {
 	t.Parallel()
 	servableKind := SubjectTeam
 	unservableKind := SubjectWorkItem
 	if !servableCohortKinds[servableKind] {
-		t.Fatalf("fixture kind %q is not servable, so the discovering case would pass for the wrong reason", servableKind)
+		t.Fatalf("fixture kind %q is not servable, so the admitted cell would pass for the wrong reason", servableKind)
 	}
 	if servableCohortKinds[unservableKind] {
-		t.Fatalf("fixture kind %q became servable, so the refusing case no longer exercises a refusal", unservableKind)
+		t.Fatalf("fixture kind %q became servable, so the refusing cell no longer exercises a refusal", unservableKind)
 	}
+	orgScope := func(kind *SubjectKind) SubjectExpression {
+		return SubjectExpression{Kind: SubjectExpressionOrganizationScope, Org: &OrganizationScopeExpression{MemberKind: kind}}
+	}
+	frame := func(goals []InvestigationGoal, expression SubjectExpression) QuestionFrame {
+		return QuestionFrame{Goals: goals, SubjectExpression: expression, Temporal: TemporalIntentCurrent, Version: QuestionFrameVersion}
+	}
+	count := []InvestigationGoal{GoalCountOrAggregate}
+	vague := []InvestigationGoal{GoalRankOrSurvey, GoalAllocateInvestment}
 
 	for _, testCase := range []struct {
-		name         string
-		expression   SubjectExpression
-		wantReason   CohortDiscoverability
-		wantServable SubjectKind
-		wantDeclared SubjectKind
-		wantResolves bool
+		name            string
+		frame           QuestionFrame
+		wantReason      CohortDiscoverability
+		wantServable    SubjectKind
+		wantCountAbsent bool
 	}{
-		{
-			name: "a servable member kind resolves the organization's members of that kind",
-			expression: SubjectExpression{
-				Kind: SubjectExpressionOrganizationScope,
-				Org:  &OrganizationScopeExpression{MemberKind: &servableKind},
-			},
-			wantReason: CohortDiscoverable, wantServable: servableKind, wantDeclared: servableKind, wantResolves: true,
-		},
-		{
-			name: "an unservable member kind stays on the non-variant refusal, never the hard frame refusal",
-			expression: SubjectExpression{
-				Kind: SubjectExpressionOrganizationScope,
-				Org:  &OrganizationScopeExpression{MemberKind: &unservableKind},
-			},
-			wantReason: CohortNotACohortVariant, wantServable: "", wantDeclared: "", wantResolves: false,
-		},
-		{
-			name: "no declared member kind stays on the non-variant refusal",
-			expression: SubjectExpression{
-				Kind: SubjectExpressionOrganizationScope,
-				Org:  &OrganizationScopeExpression{},
-			},
-			wantReason: CohortNotACohortVariant, wantServable: "", wantDeclared: "", wantResolves: false,
-		},
+		{"count goal, servable kind: admitted", frame(count, orgScope(&servableKind)), CohortDiscoverable, servableKind, false},
+		{"count goal among others, servable kind: admitted", frame([]InvestigationGoal{GoalRankOrSurvey, GoalCountOrAggregate}, orgScope(&servableKind)), CohortDiscoverable, servableKind, false},
+		{"no count goal, servable kind: NOT admitted, and the missing goal is reported", frame(vague, orgScope(&servableKind)), CohortNotACohortVariant, "", true},
+		{"count goal, unservable kind: NOT admitted, nothing to report", frame(count, orgScope(&unservableKind)), CohortNotACohortVariant, "", false},
+		{"no count goal, unservable kind: NOT admitted", frame(vague, orgScope(&unservableKind)), CohortNotACohortVariant, "", false},
+		{"count goal, no declared kind: NOT admitted", frame(count, orgScope(nil)), CohortNotACohortVariant, "", false},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			servable, declared, reason := CohortMemberKindFor(testCase.expression)
-			if reason != testCase.wantReason {
-				t.Errorf("CohortMemberKindFor reason = %q, want %q", reason, testCase.wantReason)
+			servable, _, reason := CohortMemberKindForFrame(testCase.frame)
+			if reason != testCase.wantReason || servable != testCase.wantServable {
+				t.Errorf("CohortMemberKindForFrame = (%q, %q), want (%q, %q)", servable, reason, testCase.wantServable, testCase.wantReason)
 			}
-			if servable != testCase.wantServable || declared != testCase.wantDeclared {
-				t.Errorf("CohortMemberKindFor = (%q, %q), want (%q, %q)", servable, declared, testCase.wantServable, testCase.wantDeclared)
+			if got := CohortMemberSetResolvableForFrame(testCase.frame); got != (testCase.wantReason == CohortDiscoverable) {
+				t.Errorf("CohortMemberSetResolvableForFrame = %v, disagrees with the reason %q", got, reason)
 			}
-			if got := CohortMemberSetResolvable(testCase.expression); got != testCase.wantResolves {
-				t.Errorf("CohortMemberSetResolvable = %v, want %v", got, testCase.wantResolves)
+			if got := OrganizationScopeCountGoalAbsent(testCase.frame); got != testCase.wantCountAbsent {
+				t.Errorf("OrganizationScopeCountGoalAbsent = %v, want %v", got, testCase.wantCountAbsent)
 			}
 		})
+	}
+}
+
+// TestTheExpressionPredicateNeverAdmitsAnOrganizationScope pins where the
+// organization-scope admission lives. It needs the frame's goals, so a caller
+// holding only an expression must not be able to grant it -- even for a
+// servable member kind, which is exactly the case the frame-level rule admits.
+func TestTheExpressionPredicateNeverAdmitsAnOrganizationScope(t *testing.T) {
+	t.Parallel()
+	kind := SubjectTeam
+	expression := SubjectExpression{Kind: SubjectExpressionOrganizationScope, Org: &OrganizationScopeExpression{MemberKind: &kind}}
+	if _, _, reason := CohortMemberKindFor(expression); reason != CohortNotACohortVariant {
+		t.Errorf("CohortMemberKindFor(organization_scope, %q) = %q, want %q: an expression carries no goals, so it cannot say whether the kind is counted", kind, reason, CohortNotACohortVariant)
+	}
+	if CohortMemberSetResolvable(expression) {
+		t.Error("CohortMemberSetResolvable admitted an organization scope from the expression alone")
 	}
 }
 

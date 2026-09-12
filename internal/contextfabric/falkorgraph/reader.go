@@ -850,7 +850,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// fetch or cover and DiscoveredCohort refuses before reading either anyway.
 	var declaredCohortKind contextfabric.SubjectKind
 	if request.Frame != nil {
-		declaredCohortKind, _, _ = contextfabric.CohortMemberKindFor(request.Frame.SubjectExpression)
+		declaredCohortKind, _, _ = contextfabric.CohortMemberKindForFrame(*request.Frame)
 	}
 	kindCensusDecision := cohortKindCensusDecision(censusAdmitted, declaredCohortKind)
 	kindCensusRan := kindCensusDecision == CohortKindCensusRan
