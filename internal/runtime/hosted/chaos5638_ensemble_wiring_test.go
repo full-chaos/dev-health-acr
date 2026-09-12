@@ -47,11 +47,25 @@ func (notSampledRuntime) SynthesizeAnswer(_ context.Context, _ storage.Principal
 	return contextfabric.SynthesisDraft{}, contextfabric.ModelExecutionReceipt{}, nil
 }
 
-// THE COMPOSITION'S OWN ASSERTION, both ways. A runtime that cannot sample
-// yields nil rather than a non-nil interface holding a type that would panic
-// on use, and one that can is returned as itself.
+// canSampleRuntime implements the per-sample port as well as ModelRuntime.
+type canSampleRuntime struct{ notSampledRuntime }
+
+func (canSampleRuntime) InterpretQuestionForSample(_ context.Context, _ storage.Principal, _ contextfabric.InvestigationRequest, _ int) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
+	return contextfabric.InterpretedQuestion{}, contextfabric.ModelExecutionReceipt{}, nil
+}
+
+// THE COMPOSITION'S OWN ASSERTION, BOTH WAYS.
+//
+// The negative arms alone are not enough and a mutation battery said so: with
+// only "a non-sampled runtime yields nil", a build that returned nil for
+// EVERYTHING passed, and the ensemble would then be permanently unreachable
+// while every test stayed green. The positive arm is what makes the negative
+// ones mean something.
 func TestTheCompositionOnlyOffersARuntimeThatCanActuallySample(t *testing.T) {
 	t.Parallel()
+	if got := sampledModelRuntime(canSampleRuntime{}); got == nil {
+		t.Fatal("sampledModelRuntime returned nil for a runtime that CAN sample -- the ensemble would be unreachable")
+	}
 	if got := sampledModelRuntime(notSampledRuntime{}); got != nil {
 		t.Fatalf("sampledModelRuntime returned %T for a runtime with no per-sample method, want nil", got)
 	}

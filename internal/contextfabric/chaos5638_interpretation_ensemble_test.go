@@ -42,11 +42,17 @@ func (s *concurrentReceiptSink) count() int {
 // sampledRuntimeStub answers each sample index from a fixed script, and
 // records which indices it was asked for.
 type sampledRuntimeStub struct {
-	mu      sync.Mutex
-	asked   []int
-	perIdx  map[int]InterpretedQuestion
-	errIdx  map[int]error
-	receipt ModelExecutionReceipt
+	mu     sync.Mutex
+	asked  []int
+	perIdx map[int]InterpretedQuestion
+	errIdx map[int]error
+	// receipt is what every sample returns unless receiptIdx names one for
+	// that index. Per-sample receipts are what let a test tell the WINNING
+	// sample's receipt from another sample's -- with one shared receipt the
+	// two are indistinguishable, and a mutation that stamped the frame from
+	// the wrong sample survives.
+	receipt    ModelExecutionReceipt
+	receiptIdx map[int]ModelExecutionReceipt
 }
 
 func (s *sampledRuntimeStub) InterpretQuestionForSample(_ context.Context, _ storage.Principal, _ InvestigationRequest, sample int) (InterpretedQuestion, ModelExecutionReceipt, error) {
@@ -54,9 +60,16 @@ func (s *sampledRuntimeStub) InterpretQuestionForSample(_ context.Context, _ sto
 	s.asked = append(s.asked, sample)
 	s.mu.Unlock()
 	if err, ok := s.errIdx[sample]; ok {
-		return InterpretedQuestion{}, s.receipt, err
+		return InterpretedQuestion{}, s.receiptFor(sample), err
 	}
-	return s.perIdx[sample], s.receipt, nil
+	return s.perIdx[sample], s.receiptFor(sample), nil
+}
+
+func (s *sampledRuntimeStub) receiptFor(sample int) ModelExecutionReceipt {
+	if receipt, ok := s.receiptIdx[sample]; ok {
+		return receipt
+	}
+	return s.receipt
 }
 
 func (s *sampledRuntimeStub) askedIndices() []int {
@@ -298,31 +311,67 @@ func TestASplitEnsembleRefusesTheFamilyAndReturnsOneWholeSample(t *testing.T) {
 	}
 }
 
-// THE GATE IS STAMPED FROM THE WINNING SAMPLE'S RECEIPT. Every sample here
-// carries the same receipt, so this pins that the stamp happens at all on the
-// ensemble path -- without it the ensemble would return an outcome whose frame
-// verdict was never set, and the engine's refusal gate would read
-// not_evaluated on every turn.
-func TestTheEnsembleStampsTheFrameGateFromAReceipt(t *testing.T) {
+// THE GATE IS STAMPED FROM THE WINNING SAMPLE'S OWN RECEIPT.
+//
+// Every sample carries a DIFFERENT frame verdict and the majority sits away
+// from index 0, so this distinguishes three things a weaker fixture cannot:
+// that the stamp happens at all, that it comes from the winner rather than
+// from the first sample, and that it is not simply the last one to finish.
+// A shared receipt makes all three indistinguishable -- a mutant that stamped
+// from succeeded[0] survived the earlier version of this test, which is how
+// the gap was found.
+//
+// Publishing another sample's frame verdict beside the winner's family would
+// be the same field-wise mixing the winner rule exists to prevent, and the
+// engine's refusal gate reads exactly this value.
+func TestTheEnsembleStampsTheFrameGateFromTheWinningSamplesReceipt(t *testing.T) {
 	t.Parallel()
-	receipt := validModelReceiptFixture(ModelOperationInterpret)
-	receipt.FrameGateOutcome = FrameGateNotProposed
+	// THE FRAME ITSELF IS THE DISCRIMINATOR, not a pre-set gate outcome.
+	// interpretOneSample runs resolveFrame over every sample, and that
+	// OVERWRITES FrameGateOutcome from the receipt's own QuestionFrame -- so
+	// two receipts differing only in a hand-set gate value are identical by
+	// the time the stamp happens, and a mutant reading the wrong sample
+	// survives. Giving the minority a real frame and the majority none makes
+	// the two genuinely different at the point the stamp is taken.
+	minorityReceipt := validModelReceiptFixture(ModelOperationInterpret)
+	minorityReceipt.QuestionFrame = namedSubjectFrame()
+	majorityReceipt := validModelReceiptFixture(ModelOperationInterpret)
+	majorityReceipt.QuestionFrame = nil
+
 	sampled := &sampledRuntimeStub{
 		perIdx: map[int]InterpretedQuestion{
-			0: ensembleQuestion(ShapeSingleSubject, "s0"),
-			1: ensembleQuestion(ShapeSingleSubject, "s1"),
-			2: ensembleQuestion(ShapeSingleSubject, "s2"),
+			0: ensembleQuestion(ShapeDiscoveredCohort, "minority"),
+			1: ensembleQuestion(ShapeSingleSubject, "majority-a"),
+			2: ensembleQuestion(ShapeSingleSubject, "majority-b"),
 		},
-		receipt: receipt,
+		receiptIdx: map[int]ModelExecutionReceipt{
+			0: minorityReceipt,
+			1: majorityReceipt,
+			2: majorityReceipt,
+		},
+		receipt: validModelReceiptFixture(ModelOperationInterpret),
 	}
 	interpreter := RuntimeQuestionInterpreter{SampledRuntime: sampled, Sink: &concurrentReceiptSink{}, EnsembleSize: 3}
 
-	_, outcome, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
+	got, outcome, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest())
 	if err != nil {
 		t.Fatalf("Interpret() error = %v", err)
 	}
+	if outcome.Family != QuestionFamilySubjectInvestigation {
+		t.Fatalf("fixture defect: family = %q, want the 2-of-3 majority", outcome.Family)
+	}
+	if got.RequestedJudgment == "minority" {
+		t.Fatal("fixture defect: the minority question was returned, so the gate assertion proves nothing")
+	}
+	if outcome.Frame != nil {
+		t.Fatal("the frame was carried from the MINORITY sample's receipt; the winning samples proposed none")
+	}
 	if outcome.Gate.Outcome != FrameGateNotProposed {
-		t.Fatalf("gate outcome = %q, want it carried off the winning sample's receipt", outcome.Gate.Outcome)
+		t.Fatalf("gate outcome = %q, want the winning sample's own %q -- the minority's frame would have gated differently",
+			outcome.Gate.Outcome, FrameGateNotProposed)
+	}
+	if len(outcome.FrameObligations) != 0 {
+		t.Fatalf("obligations = %v, carried from a sample that did not win", outcome.FrameObligations)
 	}
 }
 

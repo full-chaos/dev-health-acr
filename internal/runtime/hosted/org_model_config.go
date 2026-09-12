@@ -205,11 +205,15 @@ func buildModelReceiptSink(postgres postgresComponents) (contextfabric.ModelRece
 //
 // The assertion lives here, at the composition, rather than inside the
 // interpreter: this is the one place that knows what was actually built.
+//
+// NO `if !ok` BRANCH, deliberately. A failed type assertion to an INTERFACE
+// type already yields that interface's zero value, which is nil, so an
+// explicit branch returning nil would be a second way of saying the same
+// thing -- and one no test can distinguish from its absence, which a mutation
+// battery proved by surviving it. The comma-ok form stays because dropping it
+// entirely would panic instead of returning.
 func sampledModelRuntime(runtime contextfabric.ModelRuntime) contextfabric.SampledModelRuntime {
-	sampled, ok := runtime.(contextfabric.SampledModelRuntime)
-	if !ok {
-		return nil
-	}
+	sampled, _ := runtime.(contextfabric.SampledModelRuntime)
 	return sampled
 }
 
