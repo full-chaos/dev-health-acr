@@ -317,9 +317,9 @@ func TestASplitEnsembleRefusesTheFamilyAndReturnsOneWholeSample(t *testing.T) {
 // from index 0, so this distinguishes three things a weaker fixture cannot:
 // that the stamp happens at all, that it comes from the winner rather than
 // from the first sample, and that it is not simply the last one to finish.
-// A shared receipt makes all three indistinguishable -- a mutant that stamped
-// from succeeded[0] survived the earlier version of this test, which is how
-// the gap was found.
+// A shared receipt makes all three indistinguishable: an implementation that
+// stamped from succeeded[0] instead of the winner would pass, because the
+// receipt it read would be byte-identical to the one it should have read.
 //
 // Publishing another sample's frame verdict beside the winner's family would
 // be the same field-wise mixing the winner rule exists to prevent, and the
@@ -502,8 +502,8 @@ func TestAnAllFallbackEnsembleIsItsOwnNamedFailure(t *testing.T) {
 // source=model on the outcome, and a Warn-level composition event naming what
 // was requested against what survived.
 //
-// N=5 WITH TWO AGREEING SURVIVORS IS THE CASE THAT DISCRIMINATES, and a
-// battery is what showed it. At N=3 with one survivor the quorum branch is
+// N=5 WITH TWO AGREEING SURVIVORS IS THE CASE THAT DISCRIMINATES. At N=3
+// with one survivor the quorum branch is
 // unobservable: ResolveQuestionFamily's own N==1 degrade already reports
 // source=model, so removing the branch changes nothing and the test passes
 // either way. Two survivors out of five are a strict majority OF THEMSELVES,

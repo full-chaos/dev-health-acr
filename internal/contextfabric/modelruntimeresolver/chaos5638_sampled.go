@@ -80,8 +80,9 @@ func (r *Resolver) InterpretQuestionForSample(ctx context.Context, principal sto
 // and clients, and formatting the value could put either in a log line.
 //
 // BOTH VALUES GO THROUGH SanitizeLogAttr AT THIS SITE, which is the rule the
-// package's whole-tree instrument enforces and which caught the first version
-// of this function. The org id is caller-supplied and the type name is
+// package's whole-tree instrument enforces: it classifies a log attribute by
+// its CONSTRUCTION SITE, not by its value. The org id is caller-supplied and
+// the type name is
 // derived from a build the composition chose, so neither is a constant this
 // file controls -- and the instrument deliberately does not care whether a
 // particular value looks safe, because "looks safe" is the judgement that

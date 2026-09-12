@@ -20,9 +20,9 @@ import (
 // the resolver itself and carries the Warn line when a resolved runtime cannot
 // sample. Setting only the first left that line going to slog.Default(), where
 // it never reaches the service's collected sink -- loud in the process and
-// invisible in the logs anyone reads. The earlier test set resolver.Logger by
-// hand and so could never have caught it; this drives the production wiring
-// function instead.
+// invisible in the logs anyone reads. A test that sets resolver.Logger itself
+// cannot observe the composition failing to, so this drives the production
+// constructor and never touches the field directly.
 func TestTheResolverIsGivenTheServiceLogger(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
@@ -38,9 +38,9 @@ func TestTheResolverIsGivenTheServiceLogger(t *testing.T) {
 		t.Fatal("resolver.Logger is nil: the per-sample warning would go to slog.Default(), never the service sink")
 	}
 
-	// Drive the real emitting path and require the line in OUR buffer. The
-	// earlier version of this test set resolver.Logger by hand, so it could
-	// not have caught the composition never setting it.
+	// Drive the real emitting path and require the line in OUR buffer: the
+	// only proof that the constructor wired the logger is the warning arriving
+	// where the service would collect it.
 	if _, _, err := resolver.InterpretQuestionForSample(context.Background(),
 		storage.Principal{OrgID: "org-wiring"}, contextfabric.InvestigationRequest{}, 0); err == nil {
 		t.Fatal("a non-sampled runtime must fail the per-sample call")
@@ -60,9 +60,10 @@ func TestTheResolverIsGivenTheServiceLogger(t *testing.T) {
 	}
 }
 
-// A TYPED NIL IS NOT NIL. An interface holding a (*T)(nil) is non-nil, passes
-// the assertion, and panics on first use. The package already had isNilRuntime
-// for exactly this and the first version of sampledModelRuntime did not use it.
+// A TYPED NIL IS NOT NIL. The input under test is a nil *typedNilRuntime
+// boxed into the ModelRuntime interface: the interface value is non-nil, the
+// pointer inside it is nil, it satisfies the per-sample assertion, and its
+// first method call panics. A plain `== nil` check passes it through.
 type typedNilRuntime struct{}
 
 func (*typedNilRuntime) InterpretQuestion(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.ModelExecutionReceipt, error) {
@@ -85,14 +86,13 @@ func TestATypedNilRuntimeIsNeverOfferedAsSampled(t *testing.T) {
 	}
 }
 
-// THE PRODUCTION SELECTOR, driven through buildContextFabricInvestigator
-// rather than through the helper it calls.
+// THE COMPOSITION CONSTRUCTOR, which open.go calls to build the interpreter.
 //
-// The earlier wiring test asserted only the helper, so deleting
-// `SampledRuntime:` from open.go left it green -- the ensemble would have been
-// permanently unreachable in the built product with every test passing. This
-// composes the real investigator and asserts the interpreter it built carries
-// both halves of the ensemble wiring.
+// Testing sampledModelRuntime alone cannot catch the composition dropping its
+// result: the helper can be correct while the struct it should populate never
+// receives it, and the ensemble is then unreachable in the built product with
+// every helper test passing. So this drives the constructor itself and asserts
+// the interpreter it returns carries both halves of the ensemble wiring.
 func TestTheCompositionConstructorWiresBothHalvesOfTheEnsemble(t *testing.T) {
 	t.Parallel()
 	interpreter := newContextFabricQuestionInterpreter(canSampleRuntime{}, nil, nil, nil, 3)

@@ -49,7 +49,7 @@ import (
 // call, validates its own interpretation, resolves its own frame and persists
 // its own receipt, so N samples touch the receipt sink and the telemetry sink
 // in parallel. Both production implementations are safe for that by
-// construction and were read before this was written: pgmodelreceipts.Store
+// construction: pgmodelreceipts.Store
 // holds a *sql.DB (safe for concurrent use by definition) and an id generator,
 // and SlogEngineTelemetry holds only a *slog.Logger. A composition that wires
 // a sink which is NOT safe would be a defect in that sink, not here -- the
