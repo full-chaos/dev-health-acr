@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // TestCaptureBoundary_TheStoredReadingIsTheServedTurnsOwn holds the rule that a
@@ -148,4 +149,127 @@ func TestCaptureBoundary_TheStoredReadingIsTheServedTurnsOwn(t *testing.T) {
 			t.Errorf("a refused evaluation persisted a PASSED reading, which the next turn would continue")
 		}
 	})
+}
+
+// TestCaptureBoundary_TheTwoLateMutationsThroughTheEngine drives the two late
+// mutations THROUGH Investigate, twice each: turn one saves, and turn two must
+// not continue a reading turn one did not serve.
+//
+// IT HAS TO BE AN ENGINE RUN. Both mutations happen AFTER the point where the
+// capture used to be taken -- the over-bound group read clears the plan's axis,
+// the plan seam turns the frame gate refused -- so the only way to observe what
+// a result actually persists is to run the turn and read the save. The seam
+// cells above prove the builder reports the values it is given; only these can
+// prove the exits reach it with the final ones, and that nothing carryable
+// survives a turn that refused.
+//
+// NOT t.Parallel(): the over-bound fixture installs the process default logger.
+func TestCaptureBoundary_TheTwoLateMutationsThroughTheEngine(t *testing.T) {
+	logs := captureEngineLogger(t)
+	facts := &groupReadRecorder{facts: func(CanonicalFactRequest) CanonicalFactBundle {
+		bundle := emptyFactBundle()
+		bundle.Facts = groupReadOverBoundMemberFacts()
+		bundle.Coverage.Sources = []SourceObservation{{Source: "canonical_fact:metrics", State: SourceAvailable}}
+		return bundle
+	}}
+
+	for _, tc := range []struct {
+		name       string
+		cohortKind SubjectKind
+		members    []CohortMember
+		why        string
+	}{
+		{
+			name: "an over-bound group read drops the axis", cohortKind: SubjectProject,
+			members: groupReadCohortMembers(251),
+			why:     "251 proposed groups are refused, not sliced, and the plan's axis is cleared AFTER planning finished",
+		},
+		{
+			name: "the plan seam collapses group onto member", cohortKind: SubjectTeam,
+			members: groupReadCohortMembers(3),
+			why:     "the cohort comes back as teams while the frame groups projects by team, so the plan's group kind equals its member kind and the gate is turned refused AFTER planning finished",
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			store := &staticResultStore{results: map[string]InvestigationResult{}}
+			engine, request := groupReadEngineFixtureConfigured(t, logs.telemetry, facts, tc.members, nil, tc.cohortKind, nil, nil,
+				func(c *groupReadFixtureConfig) { c.results = store })
+			turnOne, err := engine.Investigate(canonicalRequestContext(), storage.Principal{OrgID: "org_1"}, request)
+			if err != nil {
+				t.Fatalf("turn one: %v", err)
+			}
+			saved := store.savedSemantic
+			servedGroup := SubjectKind("")
+			if turnOne.AnswerPlan != nil {
+				servedGroup = turnOne.AnswerPlan.GroupKind
+			}
+			storedGroup, storedGate, hasState := SubjectKind(""), FrameGateOutcome(""), false
+			absence := SemanticStateAbsence("")
+			if saved != nil {
+				absence = saved.Absence
+				if saved.State != nil {
+					hasState, storedGroup, storedGate = true, saved.State.GroupKind, saved.State.Validation.GateOutcome
+				}
+			}
+			t.Logf("%s\n  served: status=%q group=%q\n  stored: state=%v group=%q gate=%q absence=%q\n  why: %s",
+				tc.name, turnOne.Status, servedGroup, hasState, storedGroup, storedGate, absence, tc.why)
+
+			// THE INVARIANT, whichever shape this cell is: what is stored
+			// describes the turn that was served, or nothing is stored.
+			if hasState && storedGroup != servedGroup {
+				t.Errorf("stored group %q but served group %q -- the persisted reading is not this turn's", storedGroup, servedGroup)
+			}
+			if hasState && turnOne.Status == InvestigationNoMatch && storedGate == FrameGatePassed {
+				t.Errorf("a refused turn persisted a PASSED reading, which a later turn would continue")
+			}
+			if !hasState && absence == "" {
+				t.Errorf("no reading and no closed absence either -- the line cannot say why")
+			}
+
+			// TURN TWO: a window-only continuation of that row must not
+			// resurrect anything turn one did not serve.
+			//
+			// THE RECEIPT HAS TO BE REDEEMABLE OR THE HALF IS VACUOUS. A
+			// fabricated id makes turn two fail admission, and a turn that
+			// never reached the carrier proves nothing about what it would
+			// have carried -- so the receipt is taken from turn one's own
+			// window offer, and the cell says so when there is none.
+			if turnOne.ResultID == "" {
+				t.Skipf("turn one minted no result id, so there is nothing to continue")
+			}
+			store.results[turnOne.ResultID] = turnOne
+			receipt := ""
+			if turnOne.WindowClarification != nil {
+				for _, option := range turnOne.WindowClarification.Options {
+					if option.ReceiptID != "" {
+						receipt = option.ReceiptID
+						break
+					}
+				}
+			}
+			if receipt == "" {
+				t.Logf("  turn two: SKIPPED -- turn one offered no redeemable window receipt, so a continuation of it cannot be driven from this fixture. What the stored side proves stands: state=%v absence=%q, so there is no reading for a later turn to carry.", hasState, absence)
+				return
+			}
+			second := request
+			second.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: turnOne.ResultID, ReceiptID: receipt}}
+			turnTwo, secondErr := engine.Investigate(canonicalRequestContext(), storage.Principal{OrgID: "org_1"}, second)
+			secondGroup := SubjectKind("")
+			source := QuestionFamilySource("")
+			if turnTwo.AnswerPlan != nil {
+				secondGroup, source = turnTwo.AnswerPlan.GroupKind, turnTwo.AnswerPlan.FamilySource
+			}
+			t.Logf("  turn two: receipt=%q err=%v status=%q group=%q plan_source=%q", receipt, secondErr != nil, turnTwo.Status, secondGroup, source)
+			if secondErr != nil {
+				t.Fatalf("turn two errored (%v) -- a cell that cannot reach the carrier cannot speak about it", secondErr)
+			}
+			if source == QuestionFamilySourceCarried && !hasState {
+				t.Errorf("turn two served a CARRIED plan from a row that persisted no reading")
+			}
+			if source == QuestionFamilySourceCarried && secondGroup != servedGroup {
+				t.Errorf("turn two resurrected group %q; turn one served %q", secondGroup, servedGroup)
+			}
+		})
+	}
 }
