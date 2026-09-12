@@ -1245,8 +1245,14 @@ func TestLogoutNamesCleanupLocation_whenFileRemovalFailsAfterRemoteRevocation(t 
 	if revocations != 1 {
 		t.Fatalf("remote revocations = %d, want 1", revocations)
 	}
-	if !strings.Contains(stderr, path) {
-		t.Fatalf("logout stderr = %q, want the exact cleanup location %q", stderr, path)
+	// The location is rendered through sidecar.SafeCredentialCleanupLocations,
+	// which quotes it and, past maxCleanupLocationBytes, truncates it -- so the
+	// raw path is only a substring of stderr when TMPDIR is short enough to
+	// keep path under that bound. Compare against the same rendering instead
+	// of the raw path, so the assertion holds at any TMPDIR length.
+	wantLocation := strings.Join(sidecar.SafeCredentialCleanupLocations(&sidecar.CredentialCleanupError{Location: path}), ", ")
+	if !strings.Contains(stderr, wantLocation) {
+		t.Fatalf("logout stderr = %q, want the rendered cleanup location %q", stderr, wantLocation)
 	}
 	if strings.Contains(stderr, token) || strings.Contains(stderr, "fcacr_") {
 		t.Fatal("logout stderr leaked credential material")
