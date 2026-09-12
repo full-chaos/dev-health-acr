@@ -20,6 +20,12 @@ func TestProjectURLHandleOverItsWholeInputDomain(t *testing.T) {
 		{"no path at all", "https://linear.app", ""},
 		{"host with a trailing slash", "https://linear.app/", ""},
 		{"not a URL, no separator", "chaos-draw", ""},
+		// A SCHEME WITHOUT A HOST is the only shape the host check alone
+		// rejects: the scheme check passes it and the path is non-empty, so
+		// without that check these publish a handle taken from a local path.
+		{"a scheme with no host: file", "file:///srv/projects/chaos-draw", ""},
+		{"a scheme with no host: mailto", "mailto:someone@example.com", ""},
+		{"a scheme with no host and one segment", "file:///chaos-draw", ""},
 
 		{"linear: slug and hex id", "https://linear.app/fullchaos/project/chaos-draw-0d9bd4168c10", "chaos-draw"},
 		{"linear: long multi-word slug", "https://linear.app/fullchaos/project/sync-observability-ux-coverage-gaps-and-usable-config-operations-c40da9b04fba", "sync-observability-ux-coverage-gaps-and-usable-config-operations"},
