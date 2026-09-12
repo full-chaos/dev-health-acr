@@ -414,6 +414,11 @@ jobs:
     # CI_RACE_RUNNER repo variable selects a larger hosted runner for the
     # race shards (memory/CPU headroom); unset, this falls back to ubuntu-latest.
     runs-on: ${{ vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    # CHAOS-5653: shard 1's devhealthfacts package drops its shared
+    # ClickHouse testcontainer mid-run on hosted runners only; the same
+    # command passes on a local host. Only this shard is non-fatal to
+    # verify until the cause is found; shards 2-4 stay fatal.
+    continue-on-error: ${{ matrix.shard == 1 }}
     env:
       # CHAOS-4855: see the identical env on the unit job above -- the race
       # shards run the same testcontainers-backed suite, partitioned.
