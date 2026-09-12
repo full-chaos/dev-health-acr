@@ -81,13 +81,46 @@ var (
 // instead of surfacing as an unexplained EOF.
 const clickHouseDeathMarker = "clickhouse_container_death"
 
+// clickHouseWatchStartedMarker and clickHouseWatchStoppedMarker answer "did
+// the instrument ever run at all" independently of whether a death ever
+// happened -- a report line's absence is otherwise ambiguous between "no
+// death occurred" and "the watcher never started".
+const (
+	clickHouseWatchStartedMarker  = "clickhouse_container_watch_started"
+	clickHouseWatchStoppedMarker  = "clickhouse_container_watch_stopped"
+	clickHouseWatchUnjoinedMarker = "clickhouse_container_watch_unjoined"
+)
+
+// sharedClickHousePackageName identifies this fixture's owning package in
+// the watch_started line; this file (and the shared container it owns) only
+// ever exists in this one package.
+const sharedClickHousePackageName = "devhealthfacts"
+
 var (
 	sharedClickHouseDeathBuf  = newDeathLogBuffer(200)
 	sharedClickHouseDeathOnce sync.Once
 	sharedClickHouseStartedAt time.Time
 	sharedClickHouseTestCount int64
 	sharedClickHouseWatchStop chan struct{}
+	// sharedClickHouseWatchDone starts pre-closed so a teardown that never
+	// launches the watcher (an early Host/MappedPort failure) never blocks
+	// waiting to join a goroutine that was never started; it is replaced
+	// with a fresh, open channel right before the watcher actually launches.
+	sharedClickHouseWatchDone = closedChan()
 )
+
+func closedChan() chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
+// watchJoinBound is how long teardown waits for the watcher to finish its
+// final probe and finish logging before giving up and proceeding anyway --
+// generous enough to cover two full deathProbeTimeout-bounded probes plus
+// the bounded container-stats follow-up with slack, never so long that a
+// genuinely hung watcher stalls the whole test binary's exit indefinitely.
+const watchJoinBound = 2*deathProbeTimeout + containerStatsBound + 2*time.Second
 
 // deathLogBuffer is a testcontainers.LogConsumer that keeps only the last
 // max lines it has seen, so a dump taken at death time carries a bounded
@@ -124,34 +157,45 @@ func (b *deathLogBuffer) tail() []string {
 
 // containerDeathReport is the plain-data shape of one death dump, kept
 // separate from how it's produced so the guard test can drive it with fake
-// data instead of a real dying container.
+// data instead of a real dying container. Every field here comes from
+// values the caller already has in hand -- no I/O -- so formatting it can
+// never be the thing that's slow or that blocks the report from being
+// written before the process exits.
 type containerDeathReport struct {
-	Trigger        string
-	DetectedAt     string
-	LastGoodAt     string
-	LogTail        []string
-	OOMKilled      bool
-	ExitCode       int
-	FinishedAt     string
-	HostFreeM      string
-	ContainerStats string
-	FixtureUptime  time.Duration
-	TestCount      int64
+	Trigger       string
+	DetectedAt    string
+	LastGoodAt    string
+	Addr          string
+	StateErr      string
+	DialErr       string
+	OOMKilled     bool
+	ExitCode      int
+	FinishedAt    string
+	FixtureUptime time.Duration
+	TestCount     int64
+	LogTail       []string
 }
 
 // formatContainerDeathReport renders a report under the clickHouseDeathMarker
 // line so it's grep-able out of a hosted CI log.
 func formatContainerDeathReport(r containerDeathReport) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s trigger=%q detected_at=%q last_good_at=%q oom_killed=%t exit_code=%d finished_at=%q fixture_uptime=%s test_count=%d\n",
-		clickHouseDeathMarker, r.Trigger, r.DetectedAt, r.LastGoodAt, r.OOMKilled, r.ExitCode, r.FinishedAt, r.FixtureUptime, r.TestCount)
-	markerBlock(&b, "host_free_m", r.HostFreeM)
-	markerBlock(&b, "container_stats", r.ContainerStats)
+	fmt.Fprintf(&b, "%s trigger=%q detected_at=%q last_good_at=%q addr=%q state_err=%q dial_err=%q oom_killed=%t exit_code=%d finished_at=%q fixture_uptime=%s test_count=%d\n",
+		clickHouseDeathMarker, r.Trigger, r.DetectedAt, r.LastGoodAt, r.Addr, r.StateErr, r.DialErr, r.OOMKilled, r.ExitCode, r.FinishedAt, r.FixtureUptime, r.TestCount)
 	fmt.Fprintf(&b, "%s log_tail lines=%d\n", clickHouseDeathMarker, len(r.LogTail))
 	for _, line := range r.LogTail {
 		fmt.Fprintf(&b, "%s log> %s\n", clickHouseDeathMarker, line)
 	}
 	return b.String()
+}
+
+// errString renders err for a report field, empty rather than "<nil>" when
+// there is none.
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // markerBlock writes a labelled, possibly multi-line block with every line
@@ -165,26 +209,27 @@ func markerBlock(b *strings.Builder, label, body string) {
 	}
 }
 
-// hostFreeM and containerMemStats shell out for the two pieces of diagnostic
-// state Go's stdlib has no portable API for; a failure to collect either is
-// itself reported rather than aborting the dump.
-func hostFreeM() string {
-	out, err := exec.Command("free", "-m").CombinedOutput()
-	if err != nil {
-		return fmt.Sprintf("free -m failed: %v", err)
-	}
-	return strings.TrimRight(string(out), "\n")
-}
+// containerStatsBound caps how long the OPTIONAL docker-stats follow-up may
+// take: it runs only after the marker line has already been written, and a
+// slow or hung docker daemon must never be the reason that line is delayed
+// or the report goroutine can't return to be joined.
+const containerStatsBound = 2 * time.Second
 
-func containerMemStats(containerID string) string {
+// containerMemStats shells out for the one piece of diagnostic state Go's
+// stdlib has no portable API for. It reports ok=false -- meaning "omit this
+// block entirely" -- on any error or on exceeding bound, rather than ever
+// blocking the caller past that bound.
+func containerMemStats(containerID string, bound time.Duration) (stats string, ok bool) {
 	if containerID == "" {
-		return "no container id available"
+		return "", false
 	}
-	out, err := exec.Command("docker", "stats", "--no-stream", "--no-trunc", containerID).CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), bound)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "docker", "stats", "--no-stream", "--no-trunc", containerID).CombinedOutput()
 	if err != nil {
-		return fmt.Sprintf("docker stats failed: %v", err)
+		return "", false
 	}
-	return strings.TrimRight(string(out), "\n")
+	return strings.TrimRight(string(out), "\n"), true
 }
 
 // reportClickHouseContainerDeath assembles and emits one death report. It
@@ -194,7 +239,15 @@ func containerMemStats(containerID string) string {
 // "teardown" from the final synchronous probe stop triggers); lastGoodAt
 // is the last time both probes reported healthy, so a reader can bound how
 // long the container had already been dead before this report fired.
-func reportClickHouseContainerDeath(logf func(string, ...any), buf *deathLogBuffer, state *dockercontainer.State, containerID string, startedAt time.Time, testCount int64, trigger, detectedAt string, lastGoodAt time.Time) {
+//
+// The marker line itself is built and logged FIRST, from values already in
+// hand (no I/O) -- a reader must never be able to observe a death that
+// happened but produced no marker because a slow diagnostic call after it
+// never got a chance to run. The container-stats block is a bounded,
+// best-effort follow-up logged separately; when it can't complete within
+// containerStatsBound it is dropped entirely rather than reported as an
+// error or allowed to delay anything else.
+func reportClickHouseContainerDeath(logf func(string, ...any), buf *deathLogBuffer, state *dockercontainer.State, containerID, addr string, startedAt time.Time, testCount int64, trigger, detectedAt string, lastGoodAt time.Time, stateErr, dialErr error) {
 	var oomKilled bool
 	var exitCode int
 	var finishedAt string
@@ -204,18 +257,24 @@ func reportClickHouseContainerDeath(logf func(string, ...any), buf *deathLogBuff
 		finishedAt = state.FinishedAt
 	}
 	logf("%s", formatContainerDeathReport(containerDeathReport{
-		Trigger:        trigger,
-		DetectedAt:     detectedAt,
-		LastGoodAt:     lastGoodAt.UTC().Format(time.RFC3339Nano),
-		LogTail:        buf.tail(),
-		OOMKilled:      oomKilled,
-		ExitCode:       exitCode,
-		FinishedAt:     finishedAt,
-		HostFreeM:      hostFreeM(),
-		ContainerStats: containerMemStats(containerID),
-		FixtureUptime:  time.Since(startedAt),
-		TestCount:      testCount,
+		Trigger:       trigger,
+		DetectedAt:    detectedAt,
+		LastGoodAt:    lastGoodAt.UTC().Format(time.RFC3339Nano),
+		Addr:          addr,
+		StateErr:      errString(stateErr),
+		DialErr:       errString(dialErr),
+		OOMKilled:     oomKilled,
+		ExitCode:      exitCode,
+		FinishedAt:    finishedAt,
+		FixtureUptime: time.Since(startedAt),
+		TestCount:     testCount,
+		LogTail:       buf.tail(),
 	}))
+	if stats, ok := containerMemStats(containerID, containerStatsBound); ok {
+		var b strings.Builder
+		markerBlock(&b, "container_stats", stats)
+		logf("%s", b.String())
+	}
 }
 
 // deathProbeTimeout bounds each tick's State inspect and TCP dial so one
@@ -264,7 +323,23 @@ const deathTickInterval = 150 * time.Millisecond
 // caught it ("in_flight" or "teardown"); lastGoodAt is the last tick where
 // both signals were healthy, so a report always bounds how long the
 // container had already been dead.
-func watchClickHouseContainerDeath(container containerStateProber, addr string, stop <-chan struct{}, buf *deathLogBuffer, startedAt time.Time, once *sync.Once, testCount func() int64, logf func(string, ...any)) {
+//
+// The watcher logs an unconditional clickHouseWatchStartedMarker line the
+// moment it starts and an unconditional clickHouseWatchStoppedMarker line
+// (carrying its verdict) the moment it returns, closing done only after
+// that verdict line is written -- so "no death marker" is never ambiguous
+// with "the watcher never ran or never got to finish", and a caller that
+// blocks on done is guaranteed the verdict is already in the log by the
+// time it unblocks.
+func watchClickHouseContainerDeath(container containerStateProber, addr, pkg string, stop <-chan struct{}, done chan<- struct{}, buf *deathLogBuffer, startedAt time.Time, once *sync.Once, testCount func() int64, logf func(string, ...any)) {
+	logf("%s container_id=%q addr=%q package=%q\n", clickHouseWatchStartedMarker, container.GetContainerID(), addr, pkg)
+
+	verdict := "clean"
+	defer func() {
+		logf("%s verdict=%q\n", clickHouseWatchStoppedMarker, verdict)
+		close(done)
+	}()
+
 	ticker := time.NewTicker(deathTickInterval)
 	defer ticker.Stop()
 	consecutiveBad := 0
@@ -285,12 +360,16 @@ func watchClickHouseContainerDeath(container containerStateProber, addr string, 
 				buf,
 				state,
 				container.GetContainerID(),
+				addr,
 				startedAt,
 				testCount(),
 				deathTrigger(stateErr, state, dialErr),
 				detectedAt,
 				lastGood,
+				stateErr,
+				dialErr,
 			)
+			verdict = fmt.Sprintf("death detected_at=%s last_good_at=%s", detectedAt, lastGood.UTC().Format(time.RFC3339Nano))
 		})
 	}
 	finalProbeOnStop := func() {
@@ -446,8 +525,21 @@ func startSharedClickHouseContainer() (*runtimeclickhouse.Client, clickhousedriv
 		return nil, nil, "", nil, fmt.Errorf("start ClickHouse container: %w", err)
 	}
 	sharedClickHouseWatchStop = make(chan struct{})
+	// terminate joins the watcher -- waiting for its verdict line to be
+	// fully written -- BEFORE calling Terminate, and Terminate happens
+	// before TestMain can reach os.Exit: a death the watcher already
+	// detected must finish being reported before this process can end,
+	// never raced against it. sharedClickHouseWatchDone starts pre-closed,
+	// so a terminate() called before the watcher launches (an early
+	// Host/MappedPort failure below) never blocks waiting on a goroutine
+	// that was never started.
 	terminate := func() {
 		close(sharedClickHouseWatchStop)
+		select {
+		case <-sharedClickHouseWatchDone:
+		case <-time.After(watchJoinBound):
+			log.Printf("%s bound=%s\n", clickHouseWatchUnjoinedMarker, watchJoinBound)
+		}
 		logCleanupErr("terminate container", container.Terminate(context.Background()))
 	}
 	host, err := container.Host(ctx)
@@ -464,7 +556,8 @@ func startSharedClickHouseContainer() (*runtimeclickhouse.Client, clickhousedriv
 	// The watcher needs addr for its own TCP probe, so it starts only once
 	// the mapped port is known -- nothing meaningful to watch before that,
 	// and a Host/MappedPort failure above never leaves an orphaned watcher.
-	go watchClickHouseContainerDeath(container, addr, sharedClickHouseWatchStop, sharedClickHouseDeathBuf, sharedClickHouseStartedAt,
+	sharedClickHouseWatchDone = make(chan struct{})
+	go watchClickHouseContainerDeath(container, addr, sharedClickHousePackageName, sharedClickHouseWatchStop, sharedClickHouseWatchDone, sharedClickHouseDeathBuf, sharedClickHouseStartedAt,
 		&sharedClickHouseDeathOnce, func() int64 { return atomic.LoadInt64(&sharedClickHouseTestCount) }, log.Printf)
 
 	direct, err := clickhousedriver.Open(&clickhousedriver.Options{

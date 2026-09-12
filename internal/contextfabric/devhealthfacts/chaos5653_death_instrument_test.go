@@ -10,6 +10,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -20,6 +21,10 @@ import (
 	dockercontainer "github.com/moby/moby/api/types/container"
 	"github.com/testcontainers/testcontainers-go"
 )
+
+// errFakeDial stands in for a real dial error in guard tests that exercise
+// reportClickHouseContainerDeath directly, without a real dying container.
+var errFakeDial = errors.New("fake dial refused")
 
 func TestDeathLogBufferKeepsOnlyItsBoundedTail(t *testing.T) {
 	buf := newDeathLogBuffer(3)
@@ -70,7 +75,7 @@ func TestClickHouseContainerDeathReportCapturesFakeDeath(t *testing.T) {
 		captured.WriteString(fmt.Sprintf(format, args...))
 	}
 
-	reportClickHouseContainerDeath(logf, buf, fakeState, "fake-container-id", startedAt, 7, "fake_death_for_guard_test", "in_flight", lastGoodAt)
+	reportClickHouseContainerDeath(logf, buf, fakeState, "fake-container-id", "127.0.0.1:9000", startedAt, 7, "fake_death_for_guard_test", "in_flight", lastGoodAt, nil, errFakeDial)
 
 	out := captured.String()
 
@@ -79,13 +84,13 @@ func TestClickHouseContainerDeathReportCapturesFakeDeath(t *testing.T) {
 		"trigger=\"fake_death_for_guard_test\"",
 		"detected_at=\"in_flight\"",
 		"last_good_at=\"2026-09-12T00:00:01Z\"",
+		`addr="127.0.0.1:9000"`,
+		`dial_err="fake dial refused"`,
 		"oom_killed=true",
 		"exit_code=137",
 		"finished_at=\"2026-09-12T00:00:00Z\"",
 		"test_count=7",
 		"fake ClickHouse stderr line before death",
-		clickHouseDeathMarker + " host_free_m:",
-		clickHouseDeathMarker + " container_stats:",
 	}
 	for _, want := range requiredSubstrings {
 		if !strings.Contains(out, want) {
@@ -166,36 +171,55 @@ func refusingAddr(t *testing.T) string {
 	return addr
 }
 
+// guardLog is a concurrency-safe sink watchClickHouseContainerDeath can log
+// into from its own goroutine while a test reads it from another, after
+// joining on done.
+type guardLog struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (g *guardLog) logf(format string, args ...any) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	fmt.Fprintf(&g.b, format, args...)
+}
+
+func (g *guardLog) String() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.b.String()
+}
+
+// startGuardWatcher launches watchClickHouseContainerDeath against a fake
+// prober, returning the log it writes into and the done channel the
+// production teardown path itself joins on -- so a guard test exercises the
+// exact same start/join shape startSharedClickHouseContainer/terminate use.
+func startGuardWatcher(prober containerStateProber, addr string, stop <-chan struct{}) (log *guardLog, done chan struct{}) {
+	log = &guardLog{}
+	done = make(chan struct{})
+	var once sync.Once
+	go watchClickHouseContainerDeath(prober, addr, "guard-test", stop, done, newDeathLogBuffer(50), time.Now(), &once, func() int64 { return 3 }, log.logf)
+	return log, done
+}
+
 // runWatcherForGuard drives watchClickHouseContainerDeath to completion (it
-// always returns after either firing once or stop closing), injecting its
-// own logf so the guard can see exactly what a fire would have written --
-// same "take the sink as a parameter" testability reportClickHouseContainerDeath
-// itself already uses. A bounded wait means a guard that regresses into an
-// infinite loop fails the test instead of hanging the suite.
+// always returns after either firing once or stop closing) and reports
+// whether the death marker is present -- never merely whether anything was
+// logged, since the watch_started/watch_stopped liveness lines are logged
+// on every run regardless of outcome. A bounded wait means a guard that
+// regresses into an infinite loop fails the test instead of hanging the
+// suite.
 func runWatcherForGuard(t *testing.T, prober containerStateProber, addr string, stop <-chan struct{}) (fired bool, report string) {
 	t.Helper()
-	buf := newDeathLogBuffer(50)
-	var once sync.Once
-	var mu sync.Mutex
-	var captured strings.Builder
-	logf := func(format string, args ...any) {
-		mu.Lock()
-		defer mu.Unlock()
-		captured.WriteString(fmt.Sprintf(format, args...))
-	}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		watchClickHouseContainerDeath(prober, addr, stop, buf, time.Now(), &once, func() int64 { return 3 }, logf)
-	}()
+	log, done := startGuardWatcher(prober, addr, stop)
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
 		t.Fatalf("watchClickHouseContainerDeath did not return within 10s -- it must always return once it fires or stop closes")
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	return captured.Len() > 0, captured.String()
+	out := log.String()
+	return strings.Contains(out, clickHouseDeathMarker), out
 }
 
 // TestWatchClickHouseContainerDeathFiresOnStateNotRunning proves the State
@@ -309,6 +333,70 @@ func TestWatchClickHouseContainerDeathHealthyControlNeverFiresEvenAtTeardown(t *
 	}
 }
 
+// TestWatchClickHouseContainerDeathReportsBeforeJoinReturns pins the
+// production sequence terminate() itself relies on: start the watcher, kill
+// both signals, close stop, then join by waiting on done exactly as
+// terminate() does -- and the death marker plus the stopped verdict must
+// already be in the log the instant that wait unblocks, with no sleep or
+// poll needed. This is what guarantees a death detected at teardown can
+// never be abandoned mid-report by a caller that proceeds to os.Exit right
+// after joining.
+func TestWatchClickHouseContainerDeathReportsBeforeJoinReturns(t *testing.T) {
+	prober := &fakeStateProber{running: false}
+	addr := refusingAddr(t)
+	stop := make(chan struct{})
+	log, done := startGuardWatcher(prober, addr, stop)
+	close(stop)
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("watcher did not join within 10s")
+	}
+
+	out := log.String()
+	for _, want := range []string{
+		clickHouseWatchStartedMarker,
+		clickHouseDeathMarker,
+		`detected_at="teardown"`,
+		clickHouseWatchStoppedMarker,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected %q already present the instant join returns; got:\n%s", want, out)
+		}
+	}
+}
+
+// TestWatchClickHouseContainerDeathHealthyControlReportsCleanVerdict is the
+// DISCRIMINATING CONTROL for the test above: a genuinely healthy container
+// still emits both liveness lines (started, and stopped with a clean
+// verdict) but never the death marker. Without this, a watcher that always
+// stamped verdict as a death regardless of the probes would pass the test
+// above too.
+func TestWatchClickHouseContainerDeathHealthyControlReportsCleanVerdict(t *testing.T) {
+	prober := &fakeStateProber{running: true}
+	addr := listenAndAccept(t)
+	stop := make(chan struct{})
+	time.AfterFunc(300*time.Millisecond, func() { close(stop) })
+	log, done := startGuardWatcher(prober, addr, stop)
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("watcher did not join within 10s")
+	}
+
+	out := log.String()
+	if strings.Contains(out, clickHouseDeathMarker) {
+		t.Fatalf("CONTROL BROKEN: death marker present for a healthy container; got:\n%s", out)
+	}
+	for _, want := range []string{clickHouseWatchStartedMarker, `verdict="clean"`} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected %q for a healthy container; got:\n%s", want, out)
+		}
+	}
+}
+
 // TestClickHouseContainerDeathReportHandlesNoInspectState covers the case
 // where docker inspect itself failed (state == nil) -- the report still
 // emits with zero-value fields rather than panicking or silently skipping
@@ -320,7 +408,7 @@ func TestClickHouseContainerDeathReportHandlesNoInspectState(t *testing.T) {
 		captured.WriteString(fmt.Sprintf(format, args...))
 	}
 
-	reportClickHouseContainerDeath(logf, buf, nil, "", time.Now(), 0, "no_inspect_state", "teardown", time.Now())
+	reportClickHouseContainerDeath(logf, buf, nil, "", "", time.Now(), 0, "no_inspect_state", "teardown", time.Now(), errors.New("inspect failed"), nil)
 
 	out := captured.String()
 	for _, want := range []string{clickHouseDeathMarker, "oom_killed=false", "exit_code=0", `finished_at=""`} {
