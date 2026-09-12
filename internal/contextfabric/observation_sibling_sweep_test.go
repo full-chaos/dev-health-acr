@@ -107,7 +107,7 @@ func TestTheSiblingSweepIsExecuted(t *testing.T) {
 	owned := readPopulationEvidenceFrom(namedOperandFrame(SubjectTeam, SubjectTeam),
 		InvestigationResult{SubjectResolution: contractsv1.ContextFabricSubjectResolution{Committed: []SubjectRef{alpha}}, Coverage: operandCoverage},
 		AnswerPlan{Requirements: []contractsv1.ContextFabricPlanRequirement{operand}},
-		factsFor(alpha, kindList(flow, health)), teamAssignment())
+		factsFor(alpha, kindList(flow, health)), 0, teamAssignment())
 	check("readRequirementOutcomeRow", "distributive with its population",
 		published(operand, operandCoverage, owned), "rows=1 lines=1 withheld=none")
 
@@ -118,7 +118,7 @@ func TestTheSiblingSweepIsExecuted(t *testing.T) {
 	pending := &assemblyTelemetry{}
 	engine.finalizeResult(context.Background(), storage.Principal{OrgID: "org_sibling"}, InvestigationResult{
 		Status: InvestigationComplete, ResultID: "result_sibling", Coverage: factCoverage(health, SourceAvailable),
-	}, AnswerPlan{Requirements: []contractsv1.ContextFabricPlanRequirement{single}}, &frame, CanonicalFactBundle{}, pending, answerPassFirst)
+	}, AnswerPlan{Requirements: []contractsv1.ContextFabricPlanRequirement{single}}, &frame, CanonicalFactBundle{}, pending, answerPassFirst, 0)
 	afterFinalize := len(sink.readRequirementObservationCovers)
 	engine.emit(context.Background(), storage.Principal{OrgID: "org_sibling"}, *pending)
 	afterEmit := len(sink.readRequirementObservationCovers)

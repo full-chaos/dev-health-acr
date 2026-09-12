@@ -269,7 +269,7 @@ func TestTheObservationCoverLineReachesTheEnginesConfiguredLoggerNotTheProcessDe
 		Status:   InvestigationComplete,
 		ResultID: "result_cover_engine_sink",
 		Coverage: coverage,
-	}, AnswerPlan{Requirements: []contractsv1.ContextFabricPlanRequirement{requirement}}, &frame, CanonicalFactBundle{}, pending, answerPassFirst)
+	}, AnswerPlan{Requirements: []contractsv1.ContextFabricPlanRequirement{requirement}}, &frame, CanonicalFactBundle{}, pending, answerPassFirst, 0)
 	engine.emit(context.Background(), principal, *pending)
 	engine.publishObservationCover(context.Background(), principal, pending.ObservationCover, true)
 

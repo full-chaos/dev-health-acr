@@ -46,7 +46,7 @@ func poolTruncationNodes() []CandidateNode {
 // by its own reasoning nothing was lost.
 func TestDiscoveredCohortOverATruncatedPoolIsNeverComplete(t *testing.T) {
 	t.Parallel()
-	cohort, _, _, _, basis := DiscoveredCohort(
+	cohort, _, _, _, basis, _ := DiscoveredCohort(
 		storage.Principal{OrgID: "org_1"}, poolTruncationDiscovery(), poolTruncationNodes(), true, noInternal)
 
 	if basis != CohortKindFromFrameMemberKind {
@@ -79,7 +79,7 @@ func TestDiscoveredCohortOverATruncatedPoolIsNeverComplete(t *testing.T) {
 // clipped, completeness intact.
 func TestDiscoveredCohortOverAWholePoolStaysComplete(t *testing.T) {
 	t.Parallel()
-	cohort, _, _, _, basis := DiscoveredCohort(
+	cohort, _, _, _, basis, _ := DiscoveredCohort(
 		storage.Principal{OrgID: "org_1"}, poolTruncationDiscovery(), poolTruncationNodes(), false, noInternal)
 
 	if basis != CohortKindFromFrameMemberKind {
@@ -111,7 +111,7 @@ func TestDiscoveredCohortAtTheMemberCapStaysTruncatedWithAWholePool(t *testing.T
 	discovery := poolTruncationDiscovery()
 	discovery.Request.Options.MaxCohortMembers = 2
 
-	cohort, _, _, _, _ := DiscoveredCohort(
+	cohort, _, _, _, _, _ := DiscoveredCohort(
 		storage.Principal{OrgID: "org_1"}, discovery, poolTruncationNodes(), false, noInternal)
 
 	if cohort == nil {
@@ -141,7 +141,7 @@ func TestDiscoveredCohortNeverClaimsBothCompleteAndTruncated(t *testing.T) {
 		for _, memberCap := range []int{2, 10} {
 			discovery := poolTruncationDiscovery()
 			discovery.Request.Options.MaxCohortMembers = memberCap
-			cohort, _, _, _, _ := DiscoveredCohort(
+			cohort, _, _, _, _, _ := DiscoveredCohort(
 				storage.Principal{OrgID: "org_1"}, discovery, poolTruncationNodes(), poolTruncated, noInternal)
 			if cohort == nil {
 				t.Fatalf("poolTruncated=%v cap=%d: cohort = nil", poolTruncated, memberCap)

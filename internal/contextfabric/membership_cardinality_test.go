@@ -110,6 +110,14 @@ func runCountingInvestigation(t *testing.T, cohortSize int, maxMembers int) (Inv
 // factored out so a test can call finalizeResult DIRECTLY -- the re-entry
 // guard is about calling it twice, which no end-to-end drive can express.
 func newCountingEngine(t *testing.T, cohort *Cohort, frame *QuestionFrame, telemetry *recordingTelemetry) *Engine {
+	return newCountingEngineWithPopulation(t, cohort, 0, frame, telemetry)
+}
+
+// newCountingEngineWithPopulation is the same fixture with the retrieval
+// population set, for the tests whose claim is that the served count differs
+// from the served member list. Zero means unset, which is what every caller
+// that does not care about the population passes.
+func newCountingEngineWithPopulation(t *testing.T, cohort *Cohort, population int, frame *QuestionFrame, telemetry *recordingTelemetry) *Engine {
 	t.Helper()
 	anchor := SubjectRef{Kind: SubjectOrganization, CanonicalID: "org_1", Label: "Org"}
 
@@ -119,7 +127,7 @@ func newCountingEngine(t *testing.T, cohort *Cohort, frame *QuestionFrame, telem
 			Committed:  []SubjectRef{anchor},
 		},
 		context: GraphContext{
-			Cohort: cohort, Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
+			Cohort: cohort, CohortPopulation: population, Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
 			FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
 			Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 		},
@@ -720,7 +728,7 @@ func TestComputeMembershipCardinalityReadsOnlyMemberNarrowings(t *testing.T) {
 	reached := 0
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			got, counted := ComputeMembershipCardinality(testCase.cohort, testCase.narrowing)
+			got, counted := ComputeMembershipCardinality(testCase.cohort, 0, testCase.narrowing)
 			if counted != testCase.wantCounted {
 				t.Fatalf("counted = %v, want %v (%s)", counted, testCase.wantCounted, testCase.why)
 			}
@@ -782,11 +790,11 @@ func TestFinalizingTwiceStatesOneCardinality(t *testing.T) {
 				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 			}
 
-			once := engine.finalizeResult(context.Background(), storage.Principal{}, result, plan, frame, CanonicalFactBundle{}, &assemblyTelemetry{}, answerPassFirst)
+			once := engine.finalizeResult(context.Background(), storage.Principal{}, result, plan, frame, CanonicalFactBundle{}, &assemblyTelemetry{}, answerPassFirst, 0)
 			if got := len(countOutcomeRows(once, contractsv1.ContextFabricOutcomeStageAssembledResult)); got != 1 {
 				t.Fatalf("after ONE finalization: %d count rows, want 1", got)
 			}
-			twice := engine.finalizeResult(context.Background(), storage.Principal{}, once, plan, frame, CanonicalFactBundle{}, &assemblyTelemetry{}, answerPassSecond)
+			twice := engine.finalizeResult(context.Background(), storage.Principal{}, once, plan, frame, CanonicalFactBundle{}, &assemblyTelemetry{}, answerPassSecond, 0)
 			rows := countOutcomeRows(twice, contractsv1.ContextFabricOutcomeStageAssembledResult)
 			if len(rows) != 1 {
 				t.Fatalf("after TWO finalizations: %d count rows, want 1 -- re-entry appended a second "+
@@ -1177,7 +1185,7 @@ func TestAnAnswerThatDerivedNoCountStatesNone(t *testing.T) {
 	cohort := countingCohort(SubjectTeam, 3)
 
 	// No requirement rows at all: the shape every terminal exit has.
-	rows, _, counted := appendMembershipCardinality(nil, cohort, nil)
+	rows, _, counted := appendMembershipCardinality(nil, cohort, 0, nil)
 	if counted || len(rows) != 0 {
 		t.Fatalf("a result with no derived requirements stated a cardinality (%d rows) -- an exit that did "+
 			"not answer the question must not claim a count of the cohort it happens to carry", len(rows))
@@ -1191,7 +1199,7 @@ func TestAnAnswerThatDerivedNoCountStatesNone(t *testing.T) {
 		Outcome:     contractsv1.ContextFabricRequirementSatisfied,
 		Impact:      contractsv1.ContextFabricAnswerImpactNone,
 	}}
-	rows, _, counted = appendMembershipCardinality(other, cohort, nil)
+	rows, _, counted = appendMembershipCardinality(other, cohort, 0, nil)
 	if counted || len(rows) != len(other) {
 		t.Fatalf("a frame that derived no `count` obligation was given a cardinality anyway (%d rows)", len(rows))
 	}
@@ -1206,7 +1214,7 @@ func TestAnAnswerThatDerivedNoCountStatesNone(t *testing.T) {
 		Outcome:     contractsv1.ContextFabricRequirementSatisfied,
 		Impact:      contractsv1.ContextFabricAnswerImpactNone,
 	}}
-	rows, cardinality, counted := appendMembershipCardinality(seeded, cohort, nil)
+	rows, cardinality, counted := appendMembershipCardinality(seeded, cohort, 0, nil)
 	if !counted || len(rows) != 2 || cardinality.Served != 3 {
 		t.Fatalf("positive control: a seeded count row produced counted=%v rows=%d served=%d, want true/2/3 -- "+
 			"without this the assertions above cannot tell a correct gate from one that never appends",
@@ -1244,7 +1252,7 @@ func TestACountThatCannotBeServedSaysSo(t *testing.T) {
 		Impact:      contractsv1.ContextFabricAnswerImpactNone,
 	}}
 
-	rows, _, counted := appendMembershipCardinality(seeded, nil, nil)
+	rows, _, counted := appendMembershipCardinality(seeded, nil, 0, nil)
 	if counted {
 		t.Fatal("a nil member set reported a counted cardinality")
 	}

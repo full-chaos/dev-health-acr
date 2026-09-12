@@ -1462,7 +1462,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// already derivable from it. The idempotence guard makes this a
 			// no-op for a row stored after the wiring, so a document can
 			// never end up stating two cardinalities.
-			if backfilled, _, _ := appendMembershipCardinality(reused.Completeness.Outcomes, reused.Cohort, reusedPlanNarrowing(reused)); len(backfilled) > 0 {
+			// POPULATION 0 ON THE REUSE PATH, and that is the honest value
+			// rather than a gap: no retrieval ran for this answer, so nothing
+			// observed a population to declare. ComputeMembershipCardinality
+			// guards on `population > Declared`, so zero leaves the backfilled
+			// count exactly as it was -- the member set the stored document
+			// carries -- instead of inventing a census the cache never saw.
+			if backfilled, _, _ := appendMembershipCardinality(reused.Completeness.Outcomes, reused.Cohort, 0, reusedPlanNarrowing(reused)); len(backfilled) > 0 {
 				reused.Completeness.Outcomes = backfilled
 			}
 			reused.Completeness = ComputeAnswerCompleteness(reused)
@@ -2900,7 +2906,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// stage 3 measures that. The retry re-runs assembly AND finalization, so
 	// the shape measured on the second pass is the shape that would be
 	// served on the second pass.
-	result = e.finalizeResult(ctx, principal, result, plan, familyOutcome.Frame, facts, &pendingTelemetry, answerPassFirst)
+	result = e.finalizeResult(ctx, principal, result, plan, familyOutcome.Frame, facts, &pendingTelemetry, answerPassFirst, graphContext.CohortPopulation)
 	cover.events = pendingTelemetry.ObservationCover
 	result, pendingTelemetry, err = e.fitAssembledResult(ctx, principal, &plan, result, consumedAllocation, pendingTelemetry, retryBase)
 	// Read BEFORE the error check: a stage-3 refusal returns the telemetry of
@@ -2956,7 +2962,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// It reads each row's numbers OFF THE SERVED DOCUMENT, never
 		// recomputing them for the log -- a telemetry value derived
 		// independently of the field it describes can disagree with it.
-		for _, event := range readRequirementPopulationEventsFrom(familyOutcome.Frame, result, plan, facts, plan.Family) {
+		for _, event := range readRequirementPopulationEventsFrom(familyOutcome.Frame, result, plan, facts, plan.Family, graphContext.CohortPopulation) {
 			e.telemetry.RecordReadRequirementPopulation(ctx, principal, event)
 		}
 	}

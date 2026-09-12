@@ -621,9 +621,26 @@ type MembershipCardinalityEvent struct {
 	Served   int
 	Declared int
 	// Basis and Overrun name the recorded mechanism that cut the set. Empty
-	// when nothing narrowed.
+	// when nothing narrowed, AND empty on a cut no plan step recorded -- see
+	// Cause.
 	Basis   contractsv1.ContextFabricNarrowingBasis
 	Overrun contractsv1.ContextFabricBudgetOverrun
+	// Cause is the row's coverage cause, for a cut that no narrowing STEP
+	// recorded.
+	//
+	// WITHOUT IT THIS EVENT CAN REPORT A CUT AND NAME NOTHING. The row has two
+	// ways to say what reduced a count: a narrowing basis, carried from a plan
+	// step, and a coverage cause, used when the loss was real but no step ran
+	// -- a caller whose own cohort cap binds before the response budget does
+	// reaches exactly that. This event projected only the first, so on that
+	// path an operator saw `outcome=narrowed served=10 declared=36` with no
+	// mechanism at all, and the decision could not be rebuilt from the trace.
+	//
+	// The sibling that already had this right is ReadRequirementPopulationEvent
+	// (read_population.go), which carries its own `Cause` and emits it as
+	// `cause_coverage`. This is the same projection, of the same row field, to
+	// the same log key.
+	Cause contractsv1.ContextFabricCoverageDetailCode
 	// CohortComplete and CohortTruncated are the cohort's OWN coverage flags,
 	// carried here because they are the difference between "this is the
 	// population" and "this is a lower bound on it". The step counts the
