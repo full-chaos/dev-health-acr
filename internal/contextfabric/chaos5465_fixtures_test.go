@@ -108,6 +108,18 @@ func continuationPrior(t testing.TB, resultID, question string, family QuestionF
 	return prior
 }
 
+// carrierRequestIdentity is the request identity TURN ONE stamped on its
+// snapshot. Turn one asked the same question through the same harness request,
+// so it is that request's identity with nothing dropped -- a fixture carrier
+// whose identity is absent would read as "the caller changed something", which
+// is a fixture defect, not the cell under test. A pin that WANTS a changed
+// identity mutates the continuing request, never this.
+func carrierRequestIdentity(question string) SemanticRequestIdentity {
+	base := validInvestigationRequest()
+	base.Question = question
+	return SemanticRequestIdentityOf(base, "")
+}
+
 // framelessCarrierState is the persisted snapshot turn one saved when its
 // interpreter proposed no frame -- the shape every frameless fixture
 // interpreter in these pins produces. It carries the plan's family, group axis
@@ -133,10 +145,11 @@ func framelessCarrierState(prior InvestigationResult) *PersistedSemanticState {
 		},
 		// Turn one read the SAME question through the same harness
 		// interpreter, so its interpretation shape is the harness's.
-		EmittedShape:   ShapeOpen,
-		GroupKind:      plan.GroupKind,
-		NarrowingBasis: plan.Budget.NarrowingBasis,
-		FamilyVersion:  version,
+		EmittedShape:    ShapeOpen,
+		GroupKind:       plan.GroupKind,
+		NarrowingBasis:  plan.Budget.NarrowingBasis,
+		FamilyVersion:   version,
+		RequestIdentity: carrierRequestIdentity(prior.Question),
 	})
 }
 
@@ -160,11 +173,12 @@ func framedCarrierState(t testing.TB, prior InvestigationResult, member SubjectK
 	}
 	frame := result.Frame
 	state := BuildSemanticState(SemanticStateInput{
-		Outcome:        QuestionFamilyOutcome{Family: plan.Family, Source: QuestionFamilySourceModel, Frame: &frame, Gate: gate},
-		EmittedShape:   ShapeOpen,
-		GroupKind:      plan.GroupKind,
-		NarrowingBasis: plan.Budget.NarrowingBasis,
-		FamilyVersion:  QuestionFamilyTableVersion,
+		Outcome:         QuestionFamilyOutcome{Family: plan.Family, Source: QuestionFamilySourceModel, Frame: &frame, Gate: gate},
+		EmittedShape:    ShapeOpen,
+		GroupKind:       plan.GroupKind,
+		NarrowingBasis:  plan.Budget.NarrowingBasis,
+		FamilyVersion:   QuestionFamilyTableVersion,
+		RequestIdentity: carrierRequestIdentity(prior.Question),
 	})
 	if _, err := EncodeSemanticState(state); err != nil {
 		t.Fatalf("fixture defect: framed carrier snapshot does not validate: %v", err)

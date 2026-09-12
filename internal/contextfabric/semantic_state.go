@@ -110,6 +110,14 @@ type PersistedSemanticState struct {
 	// expression offers, in derivation order, each with a stable slot id.
 	Roles []SemanticRoleSlot `json:"roles"`
 
+	// RequestIdentity is the TURN-ONE request identity: the digest over the
+	// answer-shaping request inputs nothing else records (the four
+	// requested_scope parts, the seven unrecorded options, and the
+	// conversation minus the referenced exchange), with the recipe version
+	// that produced it. Admission recomputes it on the continuing turn and
+	// compares; see semantic_request_identity.go.
+	RequestIdentity SemanticRequestIdentity `json:"request_identity"`
+
 	// RequirementsDeclared says whether requirement derivation ran. It is
 	// true exactly when a frame is present: no frame, no declarations. An
 	// empty Requirements with RequirementsDeclared=true is a derivation that
@@ -830,6 +838,10 @@ type SemanticStateInput struct {
 	// Requirements are the declarations given to planning -- carried ones on
 	// an applied continuation, derived ones otherwise.
 	Requirements []DerivedRequirement
+	// RequestIdentity is this turn's request identity, computed by the caller
+	// (it needs the referenced question, which the engine holds and this
+	// builder does not).
+	RequestIdentity SemanticRequestIdentity
 }
 
 // BuildSemanticState assembles a snapshot from the accepted values. It does
@@ -847,6 +859,7 @@ func BuildSemanticState(in SemanticStateInput) *PersistedSemanticState {
 		Roles:                        []SemanticRoleSlot{},
 		Requirements:                 []SemanticRequirement{},
 		RequirementDerivationVersion: RequirementDerivationVersion,
+		RequestIdentity:              in.RequestIdentity,
 		Validation: SemanticStateValidation{
 			EmittedShape:       in.EmittedShape,
 			GateOutcome:        in.Outcome.Gate.Outcome,

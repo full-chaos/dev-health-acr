@@ -268,6 +268,8 @@ var validVariantCells = map[string]string{
 	"/frame/widened_obligations absent":                 "a frame with no model widening is a valid frame",
 	"/validation/gate_outcome zero":                     "the empty gate outcome IS not_evaluated, consistent with a present frame",
 	"/scope_anchor/term out_of_vocabulary":              "an anchor term is a retrieval pointer, free text by design",
+	"/request_identity/digest out_of_vocabulary":        "a digest is data: the codec does not decide whether it MATCHES, admission does -- a different digest is a valid snapshot of a different turn-one request (request_identity_changed)",
+	"/request_identity/version out_of_vocabulary":       "a recipe version is data, like every other version string here: a snapshot stamped by a recipe not in force decodes and is refused at admission, never comparable-by-accident",
 }
 
 // TestSemanticState_EveryMutationOfTheStoredDocumentIsUnavailable is the read

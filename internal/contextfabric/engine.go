@@ -1964,13 +1964,23 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if planCarry.Outcome == PlanCarryHit && planCarry.NarrowingBasis != "" {
 		acceptedBasis = planCarry.NarrowingBasis
 	}
+	// THE IDENTITY SAVED IS THE IDENTITY COMPARED. On a continuing turn
+	// admission already computed it against the carrier's question; reuse that
+	// value rather than computing a second one here, so the two can never
+	// disagree. A turn that never reached admission references nothing, so its
+	// whole conversation is covered.
+	turnIdentity := continuation.RequestIdentity
+	if !turnIdentity.Comparable() {
+		turnIdentity = SemanticRequestIdentityOf(request, "")
+	}
 	semanticCapture := captureSemanticState(SemanticStateInput{
-		Outcome:        familyOutcome,
-		EmittedShape:   acceptedShape,
-		GroupKind:      plan.GroupKind,
-		NarrowingBasis: acceptedBasis,
-		FamilyVersion:  plan.FamilyVersion,
-		Requirements:   derivedRequirements,
+		Outcome:         familyOutcome,
+		EmittedShape:    acceptedShape,
+		GroupKind:       plan.GroupKind,
+		NarrowingBasis:  acceptedBasis,
+		FamilyVersion:   plan.FamilyVersion,
+		Requirements:    derivedRequirements,
+		RequestIdentity: turnIdentity,
 	})
 	// CHAOS-3900 W1 (codex review finding, round 1): a question_stated/
 	// clarification_confirmed window was canonicalized above against the

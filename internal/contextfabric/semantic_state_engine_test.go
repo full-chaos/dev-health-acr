@@ -150,6 +150,7 @@ func TestSemanticState_EverySnapshotKeyIsComparedOrExemptByName(t *testing.T) {
 		"requirement_derivation_version": "admission gate: a derivation not in force is context_version_mismatch before comparison",
 		"frame.version":                  "validation requires it to equal frame_version, which admission gates",
 		"family_source":                  "provenance of the family value, not a component of the reading; the family itself is compared",
+		"request_identity":               "ADMISSION GATE, not a reading component: it is the turn-one identity of the REQUEST, compared against this turn's recomputed identity before any reading is compared at all -- a difference is request_identity_changed and the turn never reaches this comparison. The fresh side has no counterpart to disagree with, so it can never be a conflict field.",
 		"narrowing_basis":                "the fresh side proposes none: it is derived inside PlanAnswer after this comparison",
 		"frame":                          "container: each frame key is decided below",
 		"validation":                     "container: each validation key is decided below",

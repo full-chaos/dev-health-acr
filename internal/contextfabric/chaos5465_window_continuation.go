@@ -223,6 +223,15 @@ const (
 	// more than the evidence window: it is not a window-only continuation, and
 	// it takes the fresh path rather than the carrier's plan.
 	ContinuationReasonAnswerBudgetChanged ContinuationDecisionReason = "answer_budget_changed"
+	// ContinuationReasonRequestIdentityChanged: this request's turn-one
+	// identity differs from the one the carrier recorded -- a requested-scope
+	// part, one of the seven answer-shaping options no other field records, or
+	// the conversation outside the referenced exchange. The question is not the
+	// one the window was confirmed for, so the turn takes the fresh path. A
+	// carrier whose identity was stamped by another recipe is not compared
+	// under today's and lands here too: an identity this build cannot verify is
+	// not an identity that matches.
+	ContinuationReasonRequestIdentityChanged ContinuationDecisionReason = "request_identity_changed"
 	// ContinuationReasonSemanticStateAbsent: the carrier read back and carries
 	// NO persisted semantic snapshot -- a row saved before the column existed,
 	// or one whose turn recorded a closed absence. The reading is
@@ -493,6 +502,12 @@ type windowContinuationDecision struct {
 	// InterpretedAxis is THIS turn's fresh interpreted axis, empty when
 	// interpretation never produced one.
 	InterpretedAxis contractsv1.ContextFabricTemporalAxis
+	// RequestIdentity is THIS turn's request identity, computed once here and
+	// reused by the capture that saves this turn's own snapshot, so the value
+	// compared and the value stored can never be two different computations.
+	// It is a digest: no corpus text reaches the decision or the line.
+	RequestIdentity SemanticRequestIdentity
+
 	// CarriedAxis is the axis the referenced carrier recorded, empty when no
 	// carrier was loaded.
 	CarriedAxis contractsv1.ContextFabricTemporalAxis
@@ -644,6 +659,7 @@ func continuationDecisionReasons() []ContinuationDecisionReason {
 		ContinuationReasonCompositionInvalid,
 		ContinuationReasonWindowSuperseded,
 		ContinuationReasonAnswerBudgetChanged,
+		ContinuationReasonRequestIdentityChanged,
 		ContinuationReasonSemanticStateAbsent,
 		ContinuationReasonSemanticStateInvalid,
 		ContinuationReasonUnspecified,
@@ -973,6 +989,19 @@ func (e *Engine) admitWindowContinuation(
 	if reason := semanticStateAdmission(stored, plan); reason != ContinuationReasonNone {
 		decision.Disposition = ContinuationWithheld
 		decision.Reason = reason
+		return decision
+	}
+	// THE TURN-ONE REQUEST IDENTITY. The plan records one answer-shaping input
+	// (the effective byte budget, compared above); the snapshot records the
+	// rest as a digest. Recompute this turn's -- with the referenced exchange
+	// dropped from the conversation, since carrying it is what a continuation
+	// legitimately does -- and compare. A difference means the caller changed
+	// something that shapes the answer, so this is not the question the window
+	// was confirmed for: NOT APPLICABLE, the fresh path, never a refusal.
+	decision.RequestIdentity = SemanticRequestIdentityOf(request, prior.Question)
+	if !decision.RequestIdentity.Equal(stored.SemanticState.RequestIdentity) {
+		decision.Disposition = ContinuationNotApplicable
+		decision.Reason = ContinuationReasonRequestIdentityChanged
 		return decision
 	}
 	decision.Carried = &continuationCarriedContext{

@@ -101,10 +101,11 @@ func TestSemanticStateContinuation_TheScopeAnchorMovesWithTheCarriedFrame(t *tes
 	prior := continuationPrior(t, continuationPriorID, request.Question, QuestionFamilyScopedCohortStatus, "")
 	turnOne := scopedAnchorInterpreter{anchorKind: SubjectTeam, anchorTerm: "the platform team"}
 	carried := BuildSemanticState(SemanticStateInput{
-		Outcome:        turnOne.outcome(scopedAnchorFrame(t)),
-		EmittedShape:   ShapeOpen,
-		NarrowingBasis: prior.AnswerPlan.Budget.NarrowingBasis,
-		FamilyVersion:  QuestionFamilyTableVersion,
+		Outcome:         turnOne.outcome(scopedAnchorFrame(t)),
+		EmittedShape:    ShapeOpen,
+		NarrowingBasis:  prior.AnswerPlan.Budget.NarrowingBasis,
+		FamilyVersion:   QuestionFamilyTableVersion,
+		RequestIdentity: carrierRequestIdentity(request.Question),
 	})
 	if _, err := EncodeSemanticState(carried); err != nil {
 		t.Fatalf("fixture defect: %v", err)

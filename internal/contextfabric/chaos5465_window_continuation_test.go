@@ -1066,6 +1066,15 @@ func TestWindowContinuation_EveryReasonIsReachedThroughTheEngine(t *testing.T) {
 			reason: ContinuationReasonAnswerBudgetChanged,
 			mutate: func(r *InvestigationRequest) { r.Options.MaxSerializedBytes = r.Options.MaxSerializedBytes / 2 },
 		},
+		{
+			// An answer-shaping option the public plan does not record: turn
+			// one stamped it into the snapshot's request-identity digest, and
+			// this turn asks with a different one. max_drivers is the cell the
+			// review round proved reaches graph discovery and truncates what
+			// the answer may say, so it is the one driven here.
+			reason: ContinuationReasonRequestIdentityChanged,
+			mutate: func(r *InvestigationRequest) { r.Options.MaxDrivers = r.Options.MaxDrivers + 1 },
+		},
 	}
 
 	// EVERY MEMBER HAS A DRIVER, and `unspecified` deliberately has none.
