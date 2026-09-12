@@ -379,3 +379,58 @@ func TestTheCardinalityClaimIsDroppedExactlyAtTheContractCap(t *testing.T) {
 		t.Fatalf("ContextFabricClaimedFactsMaxCount = %d; this test's 249/250/251 cells are about the real bound", cap)
 	}
 }
+
+// `claimed` IS EMITTED, AND IT IS DERIVED.
+//
+// Nothing else pins either property. The allow-list guard next door checks
+// only that no UNPERMITTED key appears, which a line omitting the key entirely
+// satisfies, so it constrains the field's absence and not its presence; and no
+// other reader consults the value, so a constant would serve it. A field
+// nothing asserts is a field that can quietly stop being true.
+//
+// Both directions are driven through the real Slog sink, because the claim is
+// what the operator reads.
+func TestTheCardinalityLineReportsWhetherTheCountWasClaimed(t *testing.T) {
+	t.Parallel()
+	row := RequirementOutcomeRow{
+		Stage:       contractsv1.ContextFabricOutcomeStageAssembledResult,
+		Requirement: "count/member/team",
+		Obligation:  string(ObligationCount),
+		Outcome:     contractsv1.ContextFabricRequirementSatisfied,
+		Impact:      contractsv1.ContextFabricAnswerImpactNone,
+		Served:      3,
+		Declared:    3,
+	}
+	claim, ok := cardinalityClaim(storage.Principal{OrgID: "org_1"}, MembershipCardinality{Resolved: true, Kind: SubjectTeam, Served: 3, Declared: 3})
+	if !ok {
+		t.Fatal("cardinalityClaim refused a resolved cardinality; the carried case below would be vacuous")
+	}
+
+	for _, tc := range []struct {
+		name   string
+		claims []ClaimedFact
+		want   string
+	}{
+		{"carried", []ClaimedFact{claim}, `"claimed":true`},
+		// The DISCRIMINATING half: a document with no cardinality claim -- the
+		// cap-drop case -- must report false. A hardcoded true passes the arm
+		// above and fails here, which is what makes the pair a guard rather
+		// than a restatement.
+		{"dropped", []ClaimedFact{}, `"claimed":false`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			sink := SlogEngineTelemetry{logger: slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))}
+			event, found := membershipCardinalityEventFrom(
+				InvestigationResult{Completeness: AnswerCompleteness{Outcomes: []RequirementOutcomeRow{row}}, ClaimedFacts: tc.claims},
+				QuestionFamilyScopedCohortStatus)
+			if !found {
+				t.Fatal("no cardinality event projected from an assembled count row")
+			}
+			sink.RecordMembershipCardinality(context.Background(), storage.Principal{OrgID: "org_1"}, event)
+			if line := buf.String(); !strings.Contains(line, tc.want) {
+				t.Errorf("emitted line does not carry %s: %s", tc.want, line)
+			}
+		})
+	}
+}
