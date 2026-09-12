@@ -3,6 +3,7 @@ package devhealthsource
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,6 +15,18 @@ import (
 type entityTable struct {
 	name  string
 	query func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) (rows []candidate, truncated bool, err error)
+	// subjectKinds names the ENTITY subject kinds this producer emits, and
+	// it is declared here rather than in any consumer because a consumer's
+	// copy is a second list that drifts. A relationship-only producer
+	// declares none.
+	//
+	// The declaration is not taken on trust: a pin test executes every
+	// producer in this registry against seeded rows and fails unless the
+	// kinds it actually emits are exactly the kinds declared here, in both
+	// directions. So the registry is the authority and execution is the
+	// proof; a producer added with no declaration, or with a stale one,
+	// fails that pin rather than going unasserted.
+	subjectKinds []contractsv1.ContextFabricSubjectKind
 }
 
 // devhealthschema:not-a-production-replica this is the PRODUCER REGISTRY -- it pairs each table
@@ -36,19 +49,57 @@ type entityTable struct {
 // ClickHouse table -- it self-joins work_items on parent_id, a column
 // work_item_dependencies never carries, to project the PART_OF edge type.
 var entityTables = []entityTable{
-	{name: "repos", query: queryRepositories},
-	{name: "work_items", query: queryWorkItems},
-	{name: "git_pull_requests", query: queryPullRequests},
-	{name: "deployments", query: queryDeployments},
-	{name: "operational_incidents", query: queryIncidents},
+	{name: "repos", query: queryRepositories, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectRepository}},
+	{name: "work_items", query: queryWorkItems, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectWorkItem}},
+	{name: "git_pull_requests", query: queryPullRequests, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequest}},
+	{name: "deployments", query: queryDeployments, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectDeployment}},
+	{name: "operational_incidents", query: queryIncidents, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectIncident}},
 	{name: "work_item_dependencies", query: queryWorkItemDependencies},
 	{name: "work_items_hierarchy", query: queryWorkItemHierarchy},
 	// devhealthschema:not-a-production-replica registry TAIL -- the same producer list continues here,
 	// past the reach of the marker on the declaration above. Still a
 	// table-to-query pairing that mirrors no column type, engine or sort key.
 	{name: "work_graph_deployment_incident_edges", query: queryDeploymentIncidentEdges},
-	{name: "git_pull_request_reviews", query: queryPullRequestReviews},
-	{name: "ci_pipeline_runs", query: queryCIRuns},
+	{name: "git_pull_request_reviews", query: queryPullRequestReviews, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectPullRequestReview}},
+	{name: "ci_pipeline_runs", query: queryCIRuns, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectCIRun}},
+}
+
+// ProjectedSubjectKinds returns, sorted, every entity subject kind the
+// canonical Dev Health ClickHouse projection emits -- the union of what the
+// producer registries themselves declare, never a list maintained beside
+// them.
+//
+// WHY A CONSUMER NEEDS THIS AT ALL. Whether a subject kind can be served as
+// a COHORT is two facts, and only one of them lives with the fact providers:
+// a provider declares which kinds it can read facts FOR, but nothing in that
+// declaration says the graph holds any member of that kind to read facts
+// ABOUT. A kind admitted as servable with no projected population yields an
+// answer over an empty set; a kind with a population and a declaring
+// producer that is NOT admitted is a question the service refuses while
+// holding everything needed to answer it. The seam allow-list is the
+// decision; this is the population half of the evidence for it.
+//
+// Relationship-only producers contribute nothing: they emit edges between
+// subjects other producers already project, so counting their endpoints
+// would claim a population this projection never creates on its own.
+func ProjectedSubjectKinds() []contractsv1.ContextFabricSubjectKind {
+	seen := map[contractsv1.ContextFabricSubjectKind]bool{}
+	for _, table := range entityTables {
+		for _, kind := range table.subjectKinds {
+			seen[kind] = true
+		}
+	}
+	for _, table := range teamsProjectsTables(nil, nil, nil) {
+		for _, kind := range table.subjectKinds {
+			seen[kind] = true
+		}
+	}
+	kinds := make([]contractsv1.ContextFabricSubjectKind, 0, len(seen))
+	for kind := range seen {
+		kinds = append(kinds, kind)
+	}
+	sort.Slice(kinds, func(i, j int) bool { return kinds[i] < kinds[j] })
+	return kinds
 }
 
 // sincePredicate builds the keyset-pagination predicate. rowKeyExpr MUST be

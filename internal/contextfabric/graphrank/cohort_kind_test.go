@@ -217,15 +217,15 @@ func TestNonCohortAndMemberlessExpressionsRefuseWithTheirOwnBasis(t *testing.T) 
 // into a counted, named limitation.
 func TestUnservableCohortKindRefusesInsteadOfBuildingAnInvalidCohort(t *testing.T) {
 	t.Parallel()
-	// `repository` LEFT this list in the change that proved its arm.
-	// `incident` is here on its own merit and not as a placeholder: it is
-	// the member kind "open incidents per repository" actually declares
-	// (invariant I6 forbids a grouped expression from grouping a kind by
-	// itself, so the repository noun in that question is the GROUPING AXIS),
-	// and it has no candidate pool at all -- the exact-name census fetches
-	// repository, project and team. Serving it is an incident-cohort arm.
+	// `repository` left this list in the change that proved its arm, and
+	// `incident` left it in the change that admitted incident and
+	// pull_request. What remains is chosen by the admission rule rather than
+	// by convenience: a projection emits deployments and work items, but no
+	// registered provider declares a COHORT-DERIVED fact for either kind, so
+	// a cohort of either would be ranked with nothing read about its
+	// members. That is the half of the rule these two still fail.
 	for _, kind := range []contextfabric.SubjectKind{
-		contextfabric.SubjectIncident, contextfabric.SubjectWorkItem,
+		contextfabric.SubjectDeployment, contextfabric.SubjectWorkItem,
 	} {
 		t.Run(string(kind), func(t *testing.T) {
 			t.Parallel()
@@ -291,15 +291,16 @@ func TestEveryCohortKindBasisIsReachable(t *testing.T) {
 		Kind:       contextfabric.SubjectExpressionDiscoveredKind,
 		Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: contextfabric.SubjectTeam},
 	}
-	// RE-POINTED off `repository` in the change that made repository
-	// servable. This fixture is the ONLY input in this test that reaches
-	// member_kind_unservable, so leaving it on a now-servable kind would
-	// have turned that basis into a dead label while the test stayed green
-	// on the other four. `incident` is chosen because it is genuinely
-	// unservable and expected to stay that way.
+	// This fixture is the ONLY input in this test that reaches
+	// member_kind_unservable, so it has to name a kind the allow-list still
+	// refuses, or the basis becomes a dead label while the test stays green
+	// on the other four. It was re-pointed off `repository` when repository
+	// became servable and off `incident` when incident did. `work_item` is
+	// projected but has no declaring cohort-fact producer, which is what
+	// keeps it unservable.
 	unservable := contextfabric.SubjectExpression{
 		Kind:       contextfabric.SubjectExpressionDiscoveredKind,
-		Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: contextfabric.SubjectIncident},
+		Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: contextfabric.SubjectWorkItem},
 	}
 	reached := map[CohortKindBasis]bool{}
 	for _, frame := range []*contextfabric.QuestionFrame{

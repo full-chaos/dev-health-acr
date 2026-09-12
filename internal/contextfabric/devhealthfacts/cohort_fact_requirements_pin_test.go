@@ -21,19 +21,6 @@ import (
 // pair be silently dropped, reverse alone lets a claim survive after the
 // producer that justified it stops declaring the kind.
 
-// cohortDerivedFactKinds is the set the graph adapter merges onto a
-// discovered cohort -- health and workload.
-//
-// It is stated here rather than derived from every registered FactKind
-// because the reverse direction below asks "of the kinds a cohort asks for,
-// is any missing from the table", not "does the table list every fact this
-// system can read". A cohort does not ask for deployments or reviews; that a
-// producer serves them for repositories is true and irrelevant.
-var cohortDerivedFactKinds = []contextfabric.FactKind{
-	contextfabric.FactHealth,
-	contextfabric.FactWorkload,
-}
-
 // capabilityDeclares reports whether any registered provider answers factKind
 // for subjectKind, read from the providers' own Capability() rather than from
 // any list in this file.
@@ -72,8 +59,8 @@ func TestCohortFactRequirementsClaimNothingNoProviderServes(t *testing.T) {
 	}
 	// A table that had emptied itself would pass every assertion above by
 	// having nothing to check. The floor is the measured count, not len>0.
-	if pairs < 5 {
-		t.Fatalf("the table yielded only %d (cohort kind, fact kind) pairs; team and project each declare health and workload and repository declares health, so 5 is the floor -- a smaller number means rows were dropped, not that the check passed", pairs)
+	if pairs < 7 {
+		t.Fatalf("the table yielded only %d (cohort kind, fact kind) pairs; team and project each declare health and workload, repository declares health, and incident and pull_request each declare their own producer's fact, so 7 is the floor -- a smaller number means rows were dropped, not that the check passed", pairs)
 	}
 }
 
@@ -92,7 +79,7 @@ func TestCohortFactRequirementsOmitNothingAProviderServes(t *testing.T) {
 		for _, factKind := range table[subjectKind] {
 			asked[factKind] = true
 		}
-		for _, factKind := range cohortDerivedFactKinds {
+		for _, factKind := range graphrank.CohortDerivedFactKinds() {
 			if capabilityDeclares(factKind, subjectKind) && !asked[factKind] {
 				t.Errorf("a provider declares %q for %q, but a %q cohort does not ask for it -- the answer silently loses facts it could have had", factKind, subjectKind, subjectKind)
 			}

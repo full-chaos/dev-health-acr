@@ -582,7 +582,7 @@ func TestEveryRefusalPathEmitsItsBasisThroughTheReader(t *testing.T) {
 	}
 	unservable := contextfabric.SubjectExpression{
 		Kind:       contextfabric.SubjectExpressionDiscoveredKind,
-		Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: contextfabric.SubjectIncident},
+		Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: contextfabric.SubjectWorkItem},
 	}
 
 	for _, testCase := range []struct {
@@ -598,7 +598,7 @@ func TestEveryRefusalPathEmitsItsBasisThroughTheReader(t *testing.T) {
 		// The one basis that HAS a kind to report, and the reason the key
 		// was added: a refusal that cannot name the kind it refused sends
 		// the next reader to the question text.
-		{"member kind unservable", false, unservable, graphrank.CohortKindMemberKindUnservable, contextfabric.SubjectIncident},
+		{"member kind unservable", false, unservable, graphrank.CohortKindMemberKindUnservable, contextfabric.SubjectWorkItem},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			fake := censusServingConn([]row{repositoryNodeRow("repo_acr", "dev-health-acr")})

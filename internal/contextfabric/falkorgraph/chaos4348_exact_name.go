@@ -1,5 +1,7 @@
 package falkorgraph
 
+import "github.com/full-chaos/dev-health-acr/internal/contextfabric"
+
 import (
 	"context"
 	"fmt"
@@ -16,6 +18,21 @@ import (
 // devhealthfacts' allProvidersForKindAudit already uses (chaos4099_capability_
 // kinds_test.go).
 var exactNameKinds = []string{"repository", "project", "team"}
+
+// WHY THIS IS NARROWER THAN THE SEAM ALLOW-LIST, and stays narrower when a
+// kind is admitted there. This arm fetches by NAME under one bounded query
+// (exactNameCandidateQueryLimit below), so every kind it covers competes for
+// the same rows. The trial organization holds 11 repositories, 36 projects and
+// 17 teams -- 64 rows -- against 3841 pull requests. Adding `pull_request`
+// here was measured: the census hit its cap, reported
+// pool_truncation=truncated with the census among the truncated arms, and six
+// rows that had served on repository/project/team cohorts stopped serving,
+// because the rows that identify them no longer fit.
+//
+// Admitting a kind at the seam therefore does NOT admit it here. A high-
+// population kind reaches a cohort through the arms that can bound themselves
+// per kind, not through a shared name census; a kind added here has to be one
+// whose whole population fits beside the others under the cap.
 
 // exactNameCandidateQueryLimit bounds chaos4348ExactNameCandidates' single
 // per-resolution fetch. Not a calibrated recall/cost tradeoff (this ticket
@@ -80,4 +97,23 @@ func (a *Adapter) chaos4348ExactNameCandidates(ctx context.Context, key, orgID s
 		candidates = append(candidates, toCandidateNode(n))
 	}
 	return candidates, truncated, nil
+}
+
+// exactNameCensusCoversKind reports whether a COMPLETED census holds every
+// candidate of kind -- which is true only for the kinds it actually fetches.
+//
+// This is the predicate cohortPoolTruncation's coverage decision needs. That
+// decision says "a bounded arm was cut, but the exhaustive census ran, so the
+// dropped rows are in the pool anyway", and it holds ONLY for a kind the
+// census fetched. For a servable kind the census does not name, a completed
+// census says nothing about that kind's population, and a cohort of it must
+// carry the bounded arm's truncation instead of inheriting a completeness
+// claim the census never made.
+func exactNameCensusCoversKind(kind contextfabric.SubjectKind) bool {
+	for _, censused := range exactNameKinds {
+		if censused == string(kind) {
+			return true
+		}
+	}
+	return false
 }

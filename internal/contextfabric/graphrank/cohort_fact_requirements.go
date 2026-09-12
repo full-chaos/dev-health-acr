@@ -1,6 +1,10 @@
 package graphrank
 
-import "github.com/full-chaos/dev-health-acr/internal/contextfabric"
+import (
+	"sort"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+)
 
 // The fact kinds a discovered cohort asks for, PER COHORT KIND.
 //
@@ -34,6 +38,15 @@ var cohortFactRequirements = map[contextfabric.SubjectKind][]contextfabric.FactK
 	contextfabric.SubjectTeam:       {contextfabric.FactHealth, contextfabric.FactWorkload},
 	contextfabric.SubjectProject:    {contextfabric.FactHealth, contextfabric.FactWorkload},
 	contextfabric.SubjectRepository: {contextfabric.FactHealth},
+	// An incident and a pull request each have ONE producer that reads
+	// them, and it reads them for no other kind. So the row is the whole of
+	// what a cohort of that kind can ask for -- not a narrowing of a wider
+	// set, which is why neither row names health or workload: no provider
+	// declares either fact for either kind, and a row that asked for one
+	// would produce exactly the guaranteed prune this table exists to
+	// remove.
+	contextfabric.SubjectIncident:    {contextfabric.FactIncidents},
+	contextfabric.SubjectPullRequest: {contextfabric.FactPullRequests},
 }
 
 // CohortFactRequirements returns the fact kinds a cohort of this kind asks
@@ -48,6 +61,31 @@ func CohortFactRequirements(kind contextfabric.SubjectKind) []contextfabric.Fact
 		return nil
 	}
 	return append([]contextfabric.FactKind(nil), declared...)
+}
+
+// CohortDerivedFactKinds returns, sorted, every fact kind some cohort asks
+// for -- the union of this table's own values.
+//
+// DERIVED, never declared beside the table. The set used to be written out a
+// second time in the test that pins this table, which made "what a cohort can
+// ask for" two facts that agreed only while someone remembered to edit both;
+// a fact kind added to a row and not to that copy left the reverse pin
+// quantifying over a set that no longer described the table. Reading it back
+// out of the table cannot drift, and a caller asking "is this fact kind
+// cohort-derived" gets the answer the rows actually encode.
+func CohortDerivedFactKinds() []contextfabric.FactKind {
+	seen := map[contextfabric.FactKind]bool{}
+	for _, declared := range cohortFactRequirements {
+		for _, factKind := range declared {
+			seen[factKind] = true
+		}
+	}
+	kinds := make([]contextfabric.FactKind, 0, len(seen))
+	for factKind := range seen {
+		kinds = append(kinds, factKind)
+	}
+	sort.Slice(kinds, func(i, j int) bool { return kinds[i] < kinds[j] })
+	return kinds
 }
 
 // CohortFactRequirementKinds returns the whole table, copied, so a test in a

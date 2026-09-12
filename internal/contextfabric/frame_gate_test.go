@@ -185,12 +185,19 @@ func selfGroupedFrame() *QuestionFrame {
 // The frame is otherwise VALID -- it passes every invariant -- so this pin
 // and the I6 one exercise the two refusing verdicts separately rather than
 // through one shape that could satisfy both for one reason.
+//
+// The kind it names has to be one the allow-list still refuses, or every pin
+// built on this fixture stops exercising the refusal it was written for and
+// stays green by passing. `work_item` is projected and has no declaring
+// cohort-fact producer, which is the half of the admission rule that keeps it
+// unservable; it was re-pointed here off `pull_request` when pull_request
+// gained one.
 func unservableMemberKindFrame() *QuestionFrame {
 	return &QuestionFrame{
 		Goals: []InvestigationGoal{GoalAssessState},
 		SubjectExpression: SubjectExpression{
 			Kind:       SubjectExpressionDiscoveredKind,
-			Discovered: &DiscoveredSetExpression{MemberKind: SubjectPullRequest},
+			Discovered: &DiscoveredSetExpression{MemberKind: SubjectWorkItem},
 		},
 		Temporal:    TemporalIntentCurrent,
 		Obligations: []AnswerObligation{ObligationState},

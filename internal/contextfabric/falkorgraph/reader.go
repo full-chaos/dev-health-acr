@@ -852,8 +852,21 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// already reported the failure; what was missing is that the same event is
 	// also a LOST MEMBER, and Partial beside Complete=true is a contradiction a
 	// reader cannot resolve.
+	// The census covers a bounded arm only FOR THE KINDS IT FETCHES. Its kind
+	// list is narrower than the seam allow-list, because it shares one capped
+	// query across every kind it names and a high-population kind in it
+	// starves the rest. So a cohort of a servable kind the census does not
+	// fetch keeps the bounded arm's truncation rather than inheriting a
+	// completeness claim the census never made for that kind.
+	// A nil frame declares no member kind, so there is no kind for a census to
+	// cover and DiscoveredCohort refuses before reading this anyway.
+	var declaredCohortKind contextfabric.SubjectKind
+	if request.Frame != nil {
+		declaredCohortKind, _, _ = contextfabric.CohortMemberKindFor(request.Frame.SubjectExpression)
+	}
+	censusCoversThisCohort := censusAdmitted && censusMembers > 0 && exactNameCensusCoversKind(declaredCohortKind)
 	poolTruncationBasis, poolTruncationArms, cohortPoolTruncated := cohortPoolTruncation(
-		fulltextTruncated, hopWalkTruncated, exactNameTruncated, failedLookups > 0, censusAdmitted && censusMembers > 0)
+		fulltextTruncated, hopWalkTruncated, exactNameTruncated, failedLookups > 0, censusCoversThisCohort)
 	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis, cohortPopulation := graphrank.DiscoveredCohort(principal, request, cohortNodes, cohortPoolTruncated, isInternalSubject)
 	// SEAM 7 (CHAOS-4736): what decided the cohort kind, or what prevented
 	// a cohort. This is the I/O boundary, so the telemetry call lives here

@@ -5,11 +5,20 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
 
 // TestChaos4348ExactNameCandidates_ScopesToOrgAndTheThreeKinds proves the
 // query is org-parameter-bound and filters to exactly repository/project/
-// team, never a fifth kind -- codex review item 7 (adapter test gap).
+// team, never a fourth kind.
+//
+// The set is pinned here as a literal, and deliberately NOT read from the
+// seam allow-list, because the two are not one fact: this arm shares ONE
+// capped query across every kind it names, so a high-population kind added
+// here consumes the rows the low-population kinds need. That is measured, not
+// argued -- see exactNameKinds' own comment for what admitting `pull_request`
+// here cost.
 func TestChaos4348ExactNameCandidates_ScopesToOrgAndTheThreeKinds(t *testing.T) {
 	t.Parallel()
 	var gotParams map[string]interface{}
@@ -42,6 +51,14 @@ func TestChaos4348ExactNameCandidates_ScopesToOrgAndTheThreeKinds(t *testing.T) 
 	for i, k := range want {
 		if kinds[i] != k {
 			t.Fatalf("query params[\"kinds\"] = %v, want %v", kinds, want)
+		}
+	}
+	for _, kind := range want {
+		if !contextfabric.CohortMemberSetResolvable(contextfabric.SubjectExpression{
+			Kind:       contextfabric.SubjectExpressionDiscoveredKind,
+			Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: contextfabric.SubjectKind(kind)},
+		}) {
+			t.Errorf("the census fetches %q, which the seam no longer admits as a cohort kind -- the rows can reach no cohort", kind)
 		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // EntityTableNamesForTest exposes entityTables' table names (tables.go) to
@@ -166,4 +167,23 @@ func WorkItemSubjectCanonicalIDForTest(t interface{ Fatalf(string, ...any) }, re
 
 func PullRequestSubjectCanonicalIDForTest(repoID string, number int) string {
 	return fmt.Sprintf("pull_request:%s:%d", repoID, number)
+}
+
+// EntityTableSubjectKindsForTest exposes, per table name, the entity subject
+// kinds each producer registry DECLARES (tables.go / teams_projects.go), so a
+// test can compare the declaration against what the producers actually emit.
+//
+// Exported for that comparison alone. ProjectedSubjectKinds() returns the
+// union and is what consumers read; a consumer cannot tell which producer
+// contributed a kind, and the pin has to, or a declaration moved from one
+// table to another would leave the union unchanged and the pin green.
+func EntityTableSubjectKindsForTest() map[string][]contractsv1.ContextFabricSubjectKind {
+	declared := map[string][]contractsv1.ContextFabricSubjectKind{}
+	for _, table := range entityTables {
+		declared[table.name] = append([]contractsv1.ContextFabricSubjectKind(nil), table.subjectKinds...)
+	}
+	for _, table := range teamsProjectsTables(nil, nil, nil) {
+		declared[table.name] = append([]contractsv1.ContextFabricSubjectKind(nil), table.subjectKinds...)
+	}
+	return declared
 }

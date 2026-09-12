@@ -3,7 +3,6 @@ package falkorgraph
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"testing"
 
@@ -302,34 +301,67 @@ func TestDiscoverContextClippedFulltextUnderAnEmptyCensusIsNotCovered(t *testing
 	}
 }
 
-// TestExactNameCensusCoversEveryServableCohortKind pins the coupling the
-// covered-by-census decision rests on.
+// TestCensusCoverageIsClaimedOnlyForTheKindsTheCensusFetches pins the
+// coupling the covered-by-census decision rests on.
 //
-// That decision is sound ONLY because the census fetches every kind a cohort
-// can be served for. The two sets live in different packages and neither
-// mentions the other, so today's equality is a coincidence one edit away from
-// ending -- and if it ends, a cohort of the new kind would be certified
+// That decision says a cut bounded arm is harmless because the exhaustive
+// census holds the dropped rows anyway. It is sound only FOR A KIND THE
+// CENSUS FETCHES. The census set is deliberately narrower than the seam
+// allow-list -- it shares one capped query across every kind it names, so a
+// high-population kind in it starves the low-population ones -- which means
+// the old equality between the two sets is gone and the coverage decision has
+// to ask the kind instead.
+//
+// Without this, a cohort of a servable-but-uncensused kind would be certified
 // complete over a clipped lexical pool the census never covered, silently,
-// with no test failing. This is that test.
-func TestExactNameCensusCoversEveryServableCohortKind(t *testing.T) {
+// with no test failing.
+func TestCensusCoverageIsClaimedOnlyForTheKindsTheCensusFetches(t *testing.T) {
 	t.Parallel()
 	servable := contextfabric.ServableCohortKindsForAudit()
 	if len(servable) == 0 {
 		t.Fatal("ServableCohortKindsForAudit() returned nothing -- the control this comparison needs is empty, so the comparison below cannot fail")
 	}
-	census := append([]string(nil), exactNameKinds...)
-	sort.Strings(census)
-	servableStrings := make([]string, 0, len(servable))
-	for _, kind := range servable {
-		servableStrings = append(servableStrings, string(kind))
+	censused := map[string]bool{}
+	for _, kind := range exactNameKinds {
+		censused[kind] = true
 	}
-	sort.Strings(servableStrings)
+	covered, uncovered := 0, 0
+	for _, kind := range servable {
+		if got := exactNameCensusCoversKind(kind); got != censused[string(kind)] {
+			t.Errorf("exactNameCensusCoversKind(%q) = %v, but the census kind list %v says %v -- the predicate and the query it describes disagree", kind, got, exactNameKinds, censused[string(kind)])
+		}
+		if censused[string(kind)] {
+			covered++
+			continue
+		}
+		uncovered++
+		// The whole point: a completed, non-empty census beside a cut
+		// bounded arm must NOT rescue this kind.
+		basis, _, truncated := cohortPoolTruncation(true, false, false, false, exactNameCensusCoversKind(kind))
+		if basis != CohortPoolTruncationTruncated || !truncated {
+			t.Errorf("a cohort of %q -- servable, not censused -- reported %q/truncated=%v beside a cut full-text arm; it must carry the truncation, because no census covered its population", kind, basis, truncated)
+		}
+	}
+	if covered == 0 {
+		t.Fatal("no servable kind is censused, so the agreement half of this pin asserted nothing")
+	}
+	if uncovered == 0 {
+		t.Skip("every servable kind is currently censused, so the uncovered half has nothing to exercise; this test still pins the agreement half above")
+	}
+}
 
-	if strings.Join(census, ",") != strings.Join(servableStrings, ",") {
-		t.Fatalf("exact-name census kinds %v != servable cohort kinds %v.\n"+
-			"cohortPoolTruncation treats a completed census as covering a clipped full-text arm, which holds only while the census fetches every kind a cohort can be served for.\n"+
-			"If a servable kind is NOT in the census, that kind's cohorts must carry the full-text truncation unconditionally -- change cohortPoolTruncation, do not relax this test.",
-			census, servableStrings)
+// TestCensusCoverageStillRescuesACensusedKind is the control for the test
+// above: it would pass by always refusing coverage, which would make every
+// cohort claim truncation and hide a real regression as caution.
+func TestCensusCoverageStillRescuesACensusedKind(t *testing.T) {
+	t.Parallel()
+	censusedKind := contextfabric.SubjectKind(exactNameKinds[0])
+	if !exactNameCensusCoversKind(censusedKind) {
+		t.Fatalf("exactNameCensusCoversKind(%q) = false for a kind the census itself lists", censusedKind)
+	}
+	basis, _, truncated := cohortPoolTruncation(true, false, false, false, exactNameCensusCoversKind(censusedKind))
+	if basis != CohortPoolTruncationCoveredByCensus || truncated {
+		t.Fatalf("a cohort of %q -- censused -- reported %q/truncated=%v beside a cut full-text arm; a completed census over its own kinds still covers them", censusedKind, basis, truncated)
 	}
 }
 
