@@ -621,6 +621,30 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 			return InvestigationResult{}, false
 		}
 	}
+	// CHAOS-5637: a stored clarification that offers the caller nothing is
+	// never served from the reuse store.
+	//
+	// No FRESH save can produce one any more -- the invariant refuses it at
+	// finalizeServed, the one point every serving path is downstream of. But
+	// rows written by an EARLIER deploy are already in the store, and they
+	// are exactly the shape this ticket measured 76 times: status
+	// clarification_required, no candidates, and StructureNeeds nil, which
+	// is what makes them slip past the structure-bearing reuse-source
+	// exclusion on the write side (pginvestigation/store.go's
+	// reuseColumnsFor) that catches every other non-decisive terminal.
+	//
+	// Caught HERE, and as an ordinary no-candidate MISS rather than an
+	// error, for the reason the window-key guard above already states in
+	// full: a row this Store holds for a reason this package's own write
+	// path did not itself produce -- "an earlier deploy of code a fix has
+	// since corrected" is that comment's own example -- is proved rather
+	// than trusted, and falls through to a fresh investigation. Letting it
+	// reach the assertion instead would turn a stale cached row into a 5xx
+	// on a question the engine can answer perfectly well by recomputing it.
+	if candidate.Status == InvestigationClarificationRequired && !resultOffersRedeemable(candidate) {
+		e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
+		return InvestigationResult{}, false
+	}
 	verdict := e.reuseAuthorizationStillHolds(ctx, principal, request, candidate, binding)
 	if verdict.Refused {
 		e.recordReuseOutcome(ctx, principal, verdict.Outcome)

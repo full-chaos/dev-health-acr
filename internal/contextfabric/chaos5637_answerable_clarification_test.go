@@ -381,3 +381,56 @@ func TestEveryServingStageRefusesAnUnanswerableClarification(t *testing.T) {
 		}
 	})
 }
+
+// THE ROLLOUT CELL. Rows written by the build this ticket corrects are
+// already in the reuse store, and they are the one shape the write-side
+// structure-bearing exclusion does not catch: clarification_required, no
+// candidates, StructureNeeds nil.
+//
+// Serving one after this change would turn a stale cached row into a 5xx --
+// the assertion at the chokepoint would refuse it -- on a question the engine
+// can answer by recomputing. So the reuse candidate filter rejects it as an
+// ordinary MISS, and the investigation runs fresh.
+//
+// Asserted on the ENGINE's own behaviour (status served, and that a fresh
+// resolution ran) rather than on the reuse counter alone: a test that only
+// checked the counter would pass just as well against a build that errored.
+func TestAStaleUnanswerableClarificationIsNeverServedFromReuse(t *testing.T) {
+	t.Parallel()
+	stale := InvestigationResult{
+		SchemaVersion:     InvestigationResultSchemaV1,
+		ResultID:          "result_stale0001",
+		Status:            InvestigationClarificationRequired,
+		SubjectResolution: withheldPoolResolution(),
+	}
+	if resultOffersRedeemable(stale) {
+		t.Fatal("fixture defect: this stored row carries an offer, so it is not the shape under test")
+	}
+	if stale.Status != InvestigationClarificationRequired {
+		t.Fatal("fixture defect: the stored row is not a clarification")
+	}
+	// The predicate the filter uses, on the stored document, is the whole
+	// mechanism -- pinned directly so a change to either half is caught
+	// here even if the engine wiring below is refactored.
+	if err := assertAnswerableClarification(stale); !errors.Is(err, ErrUnanswerableClarification) {
+		t.Fatalf("the stored row is not recognised as unanswerable: err = %v", err)
+	}
+
+	graph := &acceptanceGraphReader{resolution: withheldPoolResolution(), context: emptyGraphContext()}
+	engine := buildWindowGateEngine(t,
+		&countingInterpreter{interpretation: bootstrapInterpretation()},
+		graph,
+		newMapResultStore())
+
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(),
+		validInvestigationRequestWithConfirmedWindow())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v -- a stale unanswerable row must never surface as an error", err)
+	}
+	if result.Status == InvestigationClarificationRequired {
+		t.Fatal("a clarification was served with nothing to answer it")
+	}
+	if graph.resolveCalls == 0 {
+		t.Fatal("no fresh resolution ran; the turn did not fall through to a real investigation")
+	}
+}
