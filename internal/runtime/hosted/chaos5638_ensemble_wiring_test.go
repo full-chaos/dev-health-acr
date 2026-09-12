@@ -56,11 +56,10 @@ func (canSampleRuntime) InterpretQuestionForSample(_ context.Context, _ storage.
 
 // THE COMPOSITION'S OWN ASSERTION, BOTH WAYS.
 //
-// The negative arms alone are not enough and a mutation battery said so: with
-// only "a non-sampled runtime yields nil", a build that returned nil for
-// EVERYTHING passed, and the ensemble would then be permanently unreachable
-// while every test stayed green. The positive arm is what makes the negative
-// ones mean something.
+// The negative arms alone cannot pin this function: every one of them is
+// satisfied by a build that returns nil for EVERYTHING, and that build makes
+// the ensemble permanently unreachable. The positive arm is what makes the
+// negative ones mean something.
 func TestTheCompositionOnlyOffersARuntimeThatCanActuallySample(t *testing.T) {
 	t.Parallel()
 	if got := sampledModelRuntime(canSampleRuntime{}); got == nil {

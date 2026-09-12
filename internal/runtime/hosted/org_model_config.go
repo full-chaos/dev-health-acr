@@ -209,22 +209,21 @@ func buildModelReceiptSink(postgres postgresComponents) (contextfabric.ModelRece
 // NO `if !ok` BRANCH, deliberately. A failed type assertion to an INTERFACE
 // type already yields that interface's zero value, which is nil, so an
 // explicit branch returning nil would be a second way of saying the same
-// thing -- and one no test can distinguish from its absence, which a mutation
-// battery proved by surviving it. The comma-ok form stays because dropping it
-// entirely would panic instead of returning.
+// thing, and one no test can distinguish from its absence. The comma-ok form
+// stays because dropping it entirely would panic instead of returning.
 func sampledModelRuntime(runtime contextfabric.ModelRuntime) contextfabric.SampledModelRuntime {
 	// TYPED NIL IS NOT NIL, and a plain `== nil` does not catch it: an
 	// interface holding a (*T)(nil) is non-nil, satisfies the assertion, and
-	// panics on the first call. This package already had isNilRuntime for
-	// exactly that shape and this function was written without it, so a
-	// reviewer reached the panic.
+	// panics on the first call. isNilRuntime is this package's check for
+	// exactly that shape.
 	//
 	// ONE CHECK, AFTER the assertion, and the placement is the whole of it.
 	// A pre-assertion guard reads as more careful and is redundant: whatever
 	// the input, `sampled` here is either a nil interface (the assertion
 	// failed) or an interface holding the same nil pointer (it succeeded),
-	// and this catches both. A mutation battery proved the pre-guard
-	// unkillable, which is the same thing said in evidence.
+	// and this catches both. No input exists for which a pre-assertion guard
+	// would return nil where this check would not, so adding one would change
+	// no behaviour and no test could tell it was there.
 	sampled, _ := runtime.(contextfabric.SampledModelRuntime)
 	if sampled == nil || isNilRuntime(sampled) {
 		return nil
