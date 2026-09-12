@@ -80,17 +80,15 @@ import (
 const declaredKindTerminalReason = "no_candidate_of_declared_kind"
 
 // declaredKindTerminalLimitation is the sentence this terminal carries: the
-// basis vocabulary's OWN fixed sentence for declared_kind_unmatched, never a
-// sentence borrowed from another decision.
+// basis vocabulary's OWN fixed sentence for declared_kind_unmatched.
 //
-// IT WAS BORROWED, BRIEFLY, AND THAT IS WHY THIS SAYS SO. The first cut of
-// this file carried CHAOS-4098's synthesis sentence, because no basis member
-// was true of this state and 4098's wording happened to be true of it too.
-// A sentence already owned by another decision cannot distinguish the two
-// states for anyone reading the served answer, which is the same collapse
-// the basis vocabulary itself exists to end -- so once the member landed,
-// the sentence came with it. The pairing is now one decision, one basis, one
-// sentence, and the recogniser test below holds it.
+// ONE DECISION, ONE BASIS, ONE SENTENCE. A sentence already owned by another
+// decision cannot distinguish the two states for anyone reading the served
+// answer -- the reader sees one wording and cannot tell which decision
+// produced it -- and that is the same collapse the basis vocabulary itself
+// exists to end. So the sentence a terminal carries is the one its basis
+// owns, and nothing else. The service-authored registry and the domain cells
+// beside it hold the pairing.
 const declaredKindTerminalLimitation = contractsv1.ContextFabricDeclaredKindUnmatchedLimitation
 
 // declaredKindTerminalBasis is the wire refusal basis this terminal

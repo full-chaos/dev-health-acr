@@ -34,14 +34,13 @@ func emitSubjectlessTerminalWithKinds(t *testing.T, reason string, refusalBasis 
 	t.Helper()
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	// THROUGH THE PRODUCTION INSTALLATION, not past it. r1's P3: constructing
-	// contextfabric.NewSlogEngineTelemetry here verified the SINK's formatting
-	// and nothing about the wiring, so this file would have stayed green if
-	// hosted stopped installing a telemetry that emits these keys at all.
-	// contextFabricEngineTelemetry (open.go) is the function every real
-	// deployment goes through -- a nil Options.EngineTelemetry override is the
-	// production case -- so the test now fails on a wiring regression and not
-	// only on a formatting one.
+	// THROUGH THE PRODUCTION INSTALLATION, not past it. Constructing the sink
+	// directly verifies its FORMATTING and nothing about the wiring, so this
+	// file would stay green while hosted installed no telemetry that emits
+	// these keys at all. contextFabricEngineTelemetry (open.go) is the
+	// function every real deployment goes through -- a nil
+	// Options.EngineTelemetry override is the production case -- so a wiring
+	// regression fails here, not only a formatting one.
 	telemetry := contextFabricEngineTelemetry(Options{Logger: logger})
 	if telemetry == nil {
 		t.Fatal("the hosted installation returned no engine telemetry at all -- every subjectless terminal would be silent in production")

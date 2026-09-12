@@ -396,9 +396,8 @@ func TestTheTerminalSentenceIsAServiceAuthoredDisclosure(t *testing.T) {
 // basis -- the sides being the point: a member is defined as much by the
 // allow-lists it is OUT of as by the one it is in.
 //
-// It replaces a test that pinned the ABSENCE of a basis. That pin was correct
-// while no member was true of this state; it is named here rather than
-// silently dropped, because the pair is the record of the decision.
+// A member is defined as much by the allow-lists it is OUT of as by the one
+// it is in, so both sides are executed here rather than only the membership.
 func TestTheDeclaredKindBasisOverItsWholeVocabularyDomain(t *testing.T) {
 	basis := declaredKindTerminalBasis
 

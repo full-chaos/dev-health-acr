@@ -342,13 +342,15 @@ func (e *Engine) terminalResult(
 	// and had been wrong since the fourth).
 	if e.telemetry != nil {
 		// The basis reported here is the EFFECTIVE one, the same value the
-		// served document carries -- not the gate's. Reading the gate
-		// directly was correct while the gate was the only producer of a
-		// basis; once this file grew a second one, that read made the log
-		// line and the wire name two different decisions about one turn,
-		// which is precisely the disagreement a single decision value
-		// exists to prevent. Caught by this change's own served-document
-		// test, not by inspection.
+		// served document carries -- never the gate's own.
+		//
+		// The gate is ONE producer of a basis, not the only one: this file
+		// produces a second. Reading the gate here would make the log line
+		// and the wire name two different decisions about a single turn, so
+		// an operator counting the class in the logs and a consumer reading
+		// the answer would disagree about what happened. One decision value
+		// reaches both surfaces, and the served-document test asserts they
+		// agree.
 		e.telemetry.RecordSubjectlessTerminal(ctx, principal, subjectlessTerminalReason(familyOutcome.Gate, resolution, subjectCandidatesAuthzDropped, declaredKind), observableRefusalBasis(refusalBasis), declaredKind.ObservableDeclaredKinds(), declaredKind.ObservableOfferedKinds())
 	}
 	coverage := graphContext.Coverage

@@ -241,11 +241,9 @@ func TestInvestigateIsUnchangedWhenTheFrameDeclaresNoKind(t *testing.T) {
 // declared_kind_unmatched on the wire and carries that basis's own sentence,
 // and it does NOT claim the frame refusal it did not take.
 //
-// This test replaced one that pinned the ABSENCE of a basis. That earlier
-// pin was correct while no vocabulary member was true of this state, and it
-// is kept in the history rather than quietly deleted because the two
-// together are the record of the decision: the class was uncountable on the
-// wire, it was named as such, and then it was closed.
+// A basis that reaches only the log line leaves the class countable by an
+// operator and invisible to every consumer, so the wire and the log are
+// asserted together here rather than in two places that can drift apart.
 func TestTheServedTerminalDisclosesItsBasis(t *testing.T) {
 	t.Parallel()
 	project := SubjectKind(contractsv1.ContextFabricSubjectProject)

@@ -784,12 +784,11 @@ func TestContinuationRefusal_TheRecognisersAndTheGateNeverSpeakForTheCarrier(t *
 	t.Parallel()
 	for _, basis := range contractsv1.ContextFabricRefusalBasisVocabulary() {
 		// WHICH members are frame refusals is read from the ONE authority
-		// that declares it, never restated here. This line used to read
-		// `basis != ContinuationContextUnverifiable`: a second expected-member
-		// list with exactly one entry, correct only while the vocabulary had
-		// exactly one non-frame member. The second one (declared_kind_unmatched)
-		// failed it on arrival -- which is the drift a restated list exists to
-		// cause.
+		// that declares it, never restated here. A comparison against a
+		// member by name is a second expected-member list: it is correct
+		// only for the vocabulary it was written against, and it admits the
+		// next member on the wrong side without anything failing at the
+		// point the member is added.
 		frameMember := contractsv1.ValidContextFabricFrameRefusalBasis(basis)
 		sentence := contractsv1.ContextFabricRefusalBasisLimitation(contractsv1.ContextFabricSubjectTeam, basis)
 		if got := contractsv1.IsContextFabricRefusalBasisLimitation(sentence); got != frameMember {
