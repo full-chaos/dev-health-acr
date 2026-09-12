@@ -1166,6 +1166,24 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			continuation.AppliedWindow = nil
 			continuation.Accepted = nil
 		}
+		// THE SAME RULE, FOR THE FIELDS THAT DESCRIBE EXECUTION RATHER THAN
+		// THE CONTINUATION. `ExecutedAxis` is the axis the REST OF THE TURN ran
+		// under, and its own declaration says it is empty when the turn ended
+		// before the axis was decided. It is stamped once the axis verdict
+		// passes, which is above composition, planning and every retrieval --
+		// so a turn that then ended with no plan and no answer still published
+		// an axis it never executed anything under.
+		//
+		// The condition is SERVED-NOTHING, not `!Applies()`, and the difference
+		// is the whole point: a withheld continuation that goes on to serve the
+		// caller under the FRESH reading did execute an axis and must say so,
+		// while a withheld continuation that ends the turn executed nothing and
+		// must not. The served document is the only thing that can tell those
+		// apart, and it is in scope precisely here, which is why the rule lives
+		// at this fold rather than at any of the exits.
+		if servedErr != nil || served.AnswerPlan == nil {
+			continuation.ExecutedAxis = ""
+		}
 		e.telemetry.RecordWindowContinuationDecision(ctx, principal, continuation)
 	}()
 	// THE OBSERVATION-COVER LINES ARE PUBLISHED ONCE, HERE, AT THE EXIT, and

@@ -692,7 +692,15 @@ func TestCHAOS5582_AWithheldReadingOnAnEstablishedTransitionKeepsTheConfirmedAxi
 						"family_carried":           "explicit_comparison",
 						"interpreted_axis":         axis.name,
 						"carried_axis":             "current",
-						"executed_axis":            "current",
+						// EMPTY, and that is what this cell now protects. The
+						// fresh axis still does not govern -- `carried_axis` is
+						// current and the outcome is overridden_by_receipt, which
+						// is the claim in this test's name. But the turn ends on
+						// the carrier's own refusal with no plan and no answer,
+						// so nothing executed under any axis, and a populated
+						// `executed_axis` here would be the line claiming an
+						// execution that did not happen.
+						"executed_axis":            "",
 						"interpreted_axis_outcome": "overridden_by_receipt",
 						"refusal_basis":            "continuation_context_unverifiable",
 					})

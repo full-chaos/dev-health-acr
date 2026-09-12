@@ -142,10 +142,16 @@ func TestCHAOS5582_CarrierRecordedAxisDomain(t *testing.T) {
 					want["continuation_disposition"], want["decision_reason"], want["interpreted_axis_outcome"], want["executed_axis"] = "applied", "none", "agreed", "current"
 				case carrierAxis.admitted && drifted:
 					want["continuation_disposition"], want["decision_reason"], want["interpreted_axis_outcome"], want["executed_axis"] = "applied", "none", "overridden_by_receipt", "current"
+				// A non-current carrier is withheld and the turn ENDS on the
+				// continuation refusal: nothing is planned and nothing is
+				// retrieved, so `executed_axis` is empty. It is the field's
+				// own contract -- empty when the turn ended before the axis
+				// governed anything -- and the pin reads it from the served
+				// document below rather than assuming.
 				case !drifted:
-					want["continuation_disposition"], want["decision_reason"], want["interpreted_axis_outcome"], want["executed_axis"] = "withheld", "invalid_context", "agreed", "current"
+					want["continuation_disposition"], want["decision_reason"], want["interpreted_axis_outcome"], want["executed_axis"] = "withheld", "invalid_context", "agreed", ""
 				default:
-					want["continuation_disposition"], want["decision_reason"], want["interpreted_axis_outcome"], want["executed_axis"] = "withheld", "invalid_context", "vetoed", "range"
+					want["continuation_disposition"], want["decision_reason"], want["interpreted_axis_outcome"], want["executed_axis"] = "withheld", "invalid_context", "vetoed", ""
 				}
 				assertLine(t, run.soleDecisionLine(t), want)
 				servedCarried := run.result.AnswerPlan != nil && run.result.AnswerPlan.FamilySource == QuestionFamilySourceCarried
@@ -370,12 +376,12 @@ func TestCHAOS5582_EveryExitPublishesTheAxisStateItReached(t *testing.T) {
 		// The reading is withheld, the transition is not: the axis stays the
 		// confirmed one and the turn is served, never refused on the sample.
 		{"composition_refused_under_drift", nil, nil, ungroupedDriftInterpreter{family: QuestionFamilyDiscoveredCohortRanking}, false,
-			map[string]any{"continuation_disposition": "withheld", "decision_reason": "composition_invalid", "interpreted_axis": "range", "carried_axis": "current", "executed_axis": "current", "interpreted_axis_outcome": "overridden_by_receipt", "refusal_basis": "continuation_context_unverifiable"}, false},
+			map[string]any{"continuation_disposition": "withheld", "decision_reason": "composition_invalid", "interpreted_axis": "range", "carried_axis": "current", "executed_axis": "", "interpreted_axis_outcome": "overridden_by_receipt", "refusal_basis": "continuation_context_unverifiable"}, false},
 		{"version_mismatched_carrier_under_drift", func(p InvestigationResult) InvestigationResult {
 			p.AnswerPlan.FamilyVersion = "question-family.v0-not-in-force"
 			return p
 		}, nil, freshAxisInterpreter{family: QuestionFamilyDiscoveredCohortRanking, timeContext: axis5582DriftedAxes()[0].time}, false,
-			map[string]any{"continuation_disposition": "withheld", "decision_reason": "context_version_mismatch", "interpreted_axis": "range", "carried_axis": "current", "executed_axis": "current", "interpreted_axis_outcome": "overridden_by_receipt", "refusal_basis": "continuation_context_unverifiable"}, false},
+			map[string]any{"continuation_disposition": "withheld", "decision_reason": "context_version_mismatch", "interpreted_axis": "range", "carried_axis": "current", "executed_axis": "", "interpreted_axis_outcome": "overridden_by_receipt", "refusal_basis": "continuation_context_unverifiable"}, false},
 		{"carrier_without_plan_under_drift", func(p InvestigationResult) InvestigationResult {
 			p.AnswerPlan = nil
 			return p
@@ -578,6 +584,24 @@ func TestCHAOS5582_TheLineAssertsOnlyDecisionsThatHeldAtEmission(t *testing.T) {
 			if got := line["composition_outcome"]; got != tc.wantComposition {
 				t.Errorf("composition_outcome = %v, want %q", got, tc.wantComposition)
 			}
+			// `executed_axis` follows the SAME rule keyed on a different
+			// question: not "did the continuation apply" but "did this turn
+			// serve anything at all". A withheld continuation that goes on to
+			// answer under the fresh reading executed an axis and says so; one
+			// that ends the turn executed nothing and must not. The cell's
+			// class is read from the SERVED DOCUMENT rather than declared in
+			// the table, so a cell cannot be filed under the wrong half.
+			executedAxis, _ := line["executed_axis"].(string)
+			servedSomething := run.result.AnswerPlan != nil
+			t.Logf("  executed_axis=%q served_plan=%v", executedAxis, servedSomething)
+			if servedSomething {
+				if executedAxis == "" {
+					t.Errorf("executed_axis is empty on a turn that SERVED a plan -- the line cannot say which axis the answer ran under")
+				}
+			} else if executedAxis != "" {
+				t.Errorf("executed_axis = %q on a turn that served no plan at all -- the line claims an execution that did not happen", executedAxis)
+			}
+
 			// THE INVARIANT, asserted in BOTH directions so neither a always-
 			// empty nor an always-populated field can satisfy it.
 			if tc.wantApplied {
