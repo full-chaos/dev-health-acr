@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -1223,7 +1224,7 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "updated_at", rowKey) +
 		}
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject:        subject,
-			Aliases:        distinctNonEmpty(projectKey),
+			Aliases:        distinctNonEmpty(projectKey, projectURLHandle(url)),
 			ProviderIDs:    providerID(provider, id),
 			Properties:     properties,
 			Authorization:  authorization,
@@ -1332,3 +1333,62 @@ func distinctNonEmpty(values ...string) []string {
 // unpublishable rows, so it is the only one implementing the optional
 // progress capability.
 var _ contextfabric.ProjectionProgress = (*TeamsProjectsSource)(nil)
+
+// projectURLHandle returns the retrieval handle a project's own URL carries,
+// or "" when the URL carries none.
+//
+// WHY A PROJECT NEEDS ONE AT ALL. A project's only alias channel is its
+// provider key, and that key is absent for a whole provider: measured on the
+// trial org, jira supplies one for 16 of 16 projects and gitlab for 2 of 2,
+// while linear supplies none for any of 18. Those eighteen reach retrieval
+// with their display label and nothing else, so a question that names the
+// project the way its URL does -- the spelling that appears in every link
+// anyone pastes -- has no handle to match and depends on the label alone.
+//
+// THE HANDLE IS THE LAST PATH SEGMENT, with a trailing provider id removed
+// when one is present. A provider that ends the segment with an opaque id
+// (linear appends a twelve-hex suffix) would otherwise publish a handle no
+// caller would ever type; stripping it yields the readable half, which is the
+// name-shaped spelling a caller does type.
+//
+// IT IS NOT A MATCHING RULE. This adds one more exact handle to the same
+// alias channel jira and gitlab keys already use; nothing about how a term is
+// compared to a handle changes, and no kind acquires typing it did not have.
+func projectURLHandle(rawURL string) string {
+	// PARSED, NEVER STRING-SLICED. Taking the text after the last "/" reads
+	// the HOST as the handle for a URL with no path ("https://linear.app"
+	// yields "linear.app"), and a host is shared by every project on the
+	// provider -- one term would then match all of them. Requiring a scheme
+	// and a host, and reading the handle out of the PATH, is what makes the
+	// no-path case yield nothing.
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	path := strings.Trim(parsed.Path, "/")
+	if path == "" {
+		return ""
+	}
+	segment := path[strings.LastIndex(path, "/")+1:]
+	if hasHexIDSuffix(segment) {
+		// Empty when the segment was ONLY the id: a project whose URL
+		// carries no readable half has no handle, rather than one that is
+		// the opaque id a caller never types.
+		return segment[:len(segment)-13]
+	}
+	return segment
+}
+
+// hasHexIDSuffix reports whether a URL segment ends in "-" followed by exactly
+// twelve hexadecimal characters -- the shape linear appends to a project slug.
+func hasHexIDSuffix(segment string) bool {
+	if len(segment) < 13 || segment[len(segment)-13] != '-' {
+		return false
+	}
+	for _, r := range segment[len(segment)-12:] {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
+}
