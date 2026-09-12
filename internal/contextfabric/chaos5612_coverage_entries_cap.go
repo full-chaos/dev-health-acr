@@ -44,12 +44,16 @@ import (
 // EngineTelemetry.RecordCoverageEntriesCapped when it is greater than zero,
 // the same "nothing to do is not an outcome" convention every sibling
 // gated counter on EngineTelemetry already follows.
+//
+// NO SEPARATE FAST-PATH ON THE TOTAL. Whenever len(details) <= bound,
+// remaining (bound minus however many are degrading) can never be
+// negative, so it is never clamped, and it always equals AT LEAST
+// len(nonDegrading) -- the "nothing to cap" early return below is already
+// exact for that case. A guard restating it against the total would be
+// implied by this one, never a correction of it.
 func capCoverageEntriesToWriteBound(result *InvestigationResult) int {
 	bound := contractsv1.ContextFabricCoverageEntriesMaxCount
 	details := result.Coverage.Details
-	if len(details) <= bound {
-		return 0
-	}
 	degrading := make([]CoverageDetail, 0, len(details))
 	nonDegrading := make([]CoverageDetail, 0, len(details))
 	for _, d := range details {
