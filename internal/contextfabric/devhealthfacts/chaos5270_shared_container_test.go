@@ -25,8 +25,10 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,6 +37,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+	dockercontainer "github.com/moby/moby/api/types/container"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -64,6 +67,188 @@ var (
 	sharedClickHouseTerminate func()
 )
 
+// CHAOS-5653: a shared testcontainer's own death is otherwise invisible --
+// a caller only ever sees the query-side symptom (ClickHouse EOF /
+// connection refused), never the container-side cause (OOM kill, a resource
+// limit, or something else). This is a DIAGNOSTIC ONLY: no retry, no change
+// to what any test asserts or how many times it runs. It buffers the
+// container's own stdout/stderr and, the first time the shared container is
+// observed no longer running, dumps that buffered tail plus the container's
+// inspected State (OOMKilled/ExitCode/FinishedAt), the host's free memory,
+// and the container's own memory stats -- so a death names its cause
+// instead of surfacing as an unexplained EOF.
+const clickHouseDeathMarker = "clickhouse_container_death"
+
+var (
+	sharedClickHouseDeathBuf  = newDeathLogBuffer(200)
+	sharedClickHouseDeathOnce sync.Once
+	sharedClickHouseStartedAt time.Time
+	sharedClickHouseTestCount int64
+	sharedClickHouseWatchStop chan struct{}
+)
+
+// deathLogBuffer is a testcontainers.LogConsumer that keeps only the last
+// max lines it has seen, so a dump taken at death time carries a bounded
+// tail rather than the whole run's output.
+type deathLogBuffer struct {
+	mu    sync.Mutex
+	max   int
+	lines []string
+}
+
+func newDeathLogBuffer(max int) *deathLogBuffer { return &deathLogBuffer{max: max} }
+
+func (b *deathLogBuffer) Accept(l testcontainers.Log) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, line := range strings.Split(strings.TrimRight(string(l.Content), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		b.lines = append(b.lines, line)
+	}
+	if len(b.lines) > b.max {
+		b.lines = b.lines[len(b.lines)-b.max:]
+	}
+}
+
+func (b *deathLogBuffer) tail() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]string, len(b.lines))
+	copy(out, b.lines)
+	return out
+}
+
+// containerDeathReport is the plain-data shape of one death dump, kept
+// separate from how it's produced so the guard test can drive it with fake
+// data instead of a real dying container.
+type containerDeathReport struct {
+	Trigger        string
+	LogTail        []string
+	OOMKilled      bool
+	ExitCode       int
+	FinishedAt     string
+	HostFreeM      string
+	ContainerStats string
+	FixtureUptime  time.Duration
+	TestCount      int64
+}
+
+// formatContainerDeathReport renders a report under the clickHouseDeathMarker
+// line so it's grep-able out of a hosted CI log.
+func formatContainerDeathReport(r containerDeathReport) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s trigger=%q oom_killed=%t exit_code=%d finished_at=%q fixture_uptime=%s test_count=%d\n",
+		clickHouseDeathMarker, r.Trigger, r.OOMKilled, r.ExitCode, r.FinishedAt, r.FixtureUptime, r.TestCount)
+	markerBlock(&b, "host_free_m", r.HostFreeM)
+	markerBlock(&b, "container_stats", r.ContainerStats)
+	fmt.Fprintf(&b, "%s log_tail lines=%d\n", clickHouseDeathMarker, len(r.LogTail))
+	for _, line := range r.LogTail {
+		fmt.Fprintf(&b, "%s log> %s\n", clickHouseDeathMarker, line)
+	}
+	return b.String()
+}
+
+// markerBlock writes a labelled, possibly multi-line block with every line
+// -- including each line of the block's own body -- prefixed by
+// clickHouseDeathMarker, so the whole report stays grep-able by that one
+// marker out of a hosted CI log with no unmarked lines in between.
+func markerBlock(b *strings.Builder, label, body string) {
+	fmt.Fprintf(b, "%s %s:\n", clickHouseDeathMarker, label)
+	for _, line := range strings.Split(body, "\n") {
+		fmt.Fprintf(b, "%s %s> %s\n", clickHouseDeathMarker, label, line)
+	}
+}
+
+// hostFreeM and containerMemStats shell out for the two pieces of diagnostic
+// state Go's stdlib has no portable API for; a failure to collect either is
+// itself reported rather than aborting the dump.
+func hostFreeM() string {
+	out, err := exec.Command("free", "-m").CombinedOutput()
+	if err != nil {
+		return fmt.Sprintf("free -m failed: %v", err)
+	}
+	return strings.TrimRight(string(out), "\n")
+}
+
+func containerMemStats(containerID string) string {
+	if containerID == "" {
+		return "no container id available"
+	}
+	out, err := exec.Command("docker", "stats", "--no-stream", "--no-trunc", containerID).CombinedOutput()
+	if err != nil {
+		return fmt.Sprintf("docker stats failed: %v", err)
+	}
+	return strings.TrimRight(string(out), "\n")
+}
+
+// reportClickHouseContainerDeath assembles and emits one death report. It
+// takes its state as parameters rather than reaching for globals so the
+// guard test can call it directly with a fabricated death.
+func reportClickHouseContainerDeath(logf func(string, ...any), buf *deathLogBuffer, state *dockercontainer.State, containerID string, startedAt time.Time, testCount int64, trigger string) {
+	var oomKilled bool
+	var exitCode int
+	var finishedAt string
+	if state != nil {
+		oomKilled = state.OOMKilled
+		exitCode = state.ExitCode
+		finishedAt = state.FinishedAt
+	}
+	logf("%s", formatContainerDeathReport(containerDeathReport{
+		Trigger:        trigger,
+		LogTail:        buf.tail(),
+		OOMKilled:      oomKilled,
+		ExitCode:       exitCode,
+		FinishedAt:     finishedAt,
+		HostFreeM:      hostFreeM(),
+		ContainerStats: containerMemStats(containerID),
+		FixtureUptime:  time.Since(startedAt),
+		TestCount:      testCount,
+	}))
+}
+
+// watchClickHouseContainerDeath polls the shared container's own running
+// state (rather than intercepting every query call site across this
+// package's sibling tests) so the trigger stays entirely inside this fixture
+// file. The first observed non-running state reports once, then the watcher
+// exits; an intentional teardown closes stop first so a normal shutdown
+// never reports as a death.
+func watchClickHouseContainerDeath(container testcontainers.Container, stop <-chan struct{}, buf *deathLogBuffer, startedAt time.Time) {
+	ticker := time.NewTicker(750 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if container.IsRunning() {
+				continue
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			state, _ := container.State(ctx)
+			cancel()
+			sharedClickHouseDeathOnce.Do(func() {
+				reportClickHouseContainerDeath(
+					log.Printf,
+					buf,
+					state,
+					container.GetContainerID(),
+					startedAt,
+					atomic.LoadInt64(&sharedClickHouseTestCount),
+					"container_not_running",
+				)
+			})
+			return
+		}
+	}
+}
+
 // TestMain exists solely to tear the shared container down once, after
 // every test in the package has run, rather than leaving it to whichever
 // test happens to touch it first (t.Cleanup only fires when THAT test
@@ -85,6 +270,7 @@ func TestMain(m *testing.M) {
 // same blast radius as today's one-container-per-test tests.
 func sharedClickHouseFixture(t *testing.T) (query *runtimeclickhouse.Client, direct clickhousedriver.Conn) {
 	t.Helper()
+	atomic.AddInt64(&sharedClickHouseTestCount, 1)
 	sharedClickHouseOnce.Do(func() {
 		sharedClickHouseQuery, sharedClickHouseConn, sharedClickHouseAddr, sharedClickHouseTerminate, sharedClickHouseErr = startSharedClickHouseContainer()
 	})
@@ -126,18 +312,27 @@ func logCleanupErr(step string, err error) {
 
 func startSharedClickHouseContainer() (*runtimeclickhouse.Client, clickhousedriver.Conn, string, func(), error) {
 	ctx := context.Background()
+	sharedClickHouseStartedAt = time.Now()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: chfixture.Image, ExposedPorts: []string{"9000/tcp"},
 			Env:        map[string]string{"CLICKHOUSE_USER": "acr", "CLICKHOUSE_PASSWORD": "acr", "CLICKHOUSE_DB": "default"},
 			WaitingFor: wait.ForListeningPort("9000/tcp").WithStartupTimeout(2 * time.Minute),
+			LogConsumerCfg: &testcontainers.LogConsumerConfig{
+				Consumers: []testcontainers.LogConsumer{sharedClickHouseDeathBuf},
+			},
 		},
 		Started: true,
 	})
 	if err != nil {
 		return nil, nil, "", nil, fmt.Errorf("start ClickHouse container: %w", err)
 	}
-	terminate := func() { logCleanupErr("terminate container", container.Terminate(context.Background())) }
+	sharedClickHouseWatchStop = make(chan struct{})
+	go watchClickHouseContainerDeath(container, sharedClickHouseWatchStop, sharedClickHouseDeathBuf, sharedClickHouseStartedAt)
+	terminate := func() {
+		close(sharedClickHouseWatchStop)
+		logCleanupErr("terminate container", container.Terminate(context.Background()))
+	}
 	host, err := container.Host(ctx)
 	if err != nil {
 		terminate()
