@@ -635,12 +635,16 @@ func invalidCohortFrame() *contextfabric.QuestionFrame {
 
 // unservableCohortFrame declares a member kind no discovery arm serves. Valid,
 // but the gate refuses it on the basis.
+//
+// The kind has to be one the allow-list still refuses or this fixture stops
+// reaching the refusal at all: `work_item` is projected with no declaring
+// cohort-fact producer, which is the half of the admission rule it fails.
 func unservableCohortFrame() *contextfabric.QuestionFrame {
 	return &contextfabric.QuestionFrame{
 		Goals: []contextfabric.InvestigationGoal{contextfabric.GoalAssessState},
 		SubjectExpression: contextfabric.SubjectExpression{
 			Kind:       contextfabric.SubjectExpressionDiscoveredKind,
-			Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: contextfabric.SubjectPullRequest},
+			Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: contextfabric.SubjectWorkItem},
 		},
 		Temporal:    contextfabric.TemporalIntentCurrent,
 		Obligations: []contextfabric.AnswerObligation{contextfabric.ObligationState},

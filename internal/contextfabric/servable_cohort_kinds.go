@@ -58,17 +58,32 @@ import "sort"
 // NOT every question about repositories reaches this map. "Open incidents per
 // repository" declares repository as the GROUPING AXIS and `incident` as the
 // member kind -- invariant I6 refuses a grouped expression that groups a kind
-// by itself -- so it refuses here on `incident`, and serving it is an
-// incident-cohort arm with its own candidate pool, tracked separately.
+// by itself -- so it refuses on the MEMBER kind, which is why admitting
+// `incident` below is what serves that question and admitting `repository`
+// never could.
 //
-// MOVED, not rewritten. This table's membership is byte-for-byte what the
-// discovery package carried; the change that moved it proved that by keeping
-// the pin test that asserts the exact three members. A move that also widened
-// the table would have hidden a policy change inside a refactor.
+// THE RULE THE MEMBERSHIP FOLLOWS, stated once so a future kind is decided
+// rather than argued: a member kind belongs here when the projection emits a
+// population of it AND a registered provider declares a cohort-derived fact
+// for it. Both halves are load-bearing and neither is checked here -- the
+// first lives with the projection producers, the second with the fact
+// providers, and a test that reads both authorities fails when this table
+// disagrees with them in either direction. A kind with a population and no
+// producer would be ranked with nothing read about its members; a kind with a
+// producer and no population would rank the empty set and call it an answer.
+//
+// `incident` and `pull_request` satisfy both halves: the projection emits
+// them from operational_incidents and git_pull_requests, and IncidentsProvider
+// and PullRequestsProvider each declare their kind. Admitting them is a
+// widening of what this service answers, not a refactor -- the corpus rows
+// that asked for them were refused at this line with the whole graph already
+// holding the members.
 var servableCohortKinds = map[SubjectKind]bool{
-	SubjectTeam:       true,
-	SubjectProject:    true,
-	SubjectRepository: true,
+	SubjectTeam:        true,
+	SubjectProject:     true,
+	SubjectRepository:  true,
+	SubjectIncident:    true,
+	SubjectPullRequest: true,
 }
 
 // CohortDiscoverability names WHY a subject expression can or cannot produce a

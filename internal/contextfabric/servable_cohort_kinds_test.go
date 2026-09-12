@@ -19,10 +19,11 @@ import (
 // kind produced an HTTP 500.
 //
 // So the rule is: the allow-list admits exactly the kinds a discovery arm can
-// actually serve. It grows only in the same change that proves the arm, never
-// as a tidy-up to "match the contract". A future reader who sees the contract
-// admitting 15 kinds and this table admitting 3 is looking at the intended
-// state, not at drift.
+// actually serve -- a projected population and a declaring cohort-fact
+// producer, both halves. It grows only in the same change that proves the
+// arm, never as a tidy-up to "match the contract". A future reader who sees
+// the contract admitting 15 kinds and this table admitting fewer is looking
+// at the intended state, not at drift.
 //
 // THIS FILE MOVED WITH THE TABLE, in the same change. The table used to live
 // in the discovery package; the requirement derivation needed the same answer
@@ -41,7 +42,9 @@ import (
 func TestServableCohortKindsAdmitsExactlyTheProvenArms(t *testing.T) {
 	t.Parallel()
 	want := []string{
+		string(SubjectIncident),
 		string(SubjectProject),
+		string(SubjectPullRequest),
 		string(SubjectRepository),
 		string(SubjectTeam),
 	}
@@ -288,7 +291,7 @@ func TestCohortDiscoverabilityVocabularyIsClosedAndTotal(t *testing.T) {
 		{Kind: SubjectExpressionExplicitSet},
 		{Kind: SubjectExpressionDiscoveredKind, Discovered: &DiscoveredSetExpression{}},
 		{Kind: SubjectExpressionDiscoveredKind, Discovered: &DiscoveredSetExpression{MemberKind: kind}},
-		{Kind: SubjectExpressionDiscoveredKind, Discovered: &DiscoveredSetExpression{MemberKind: SubjectIncident}},
+		{Kind: SubjectExpressionDiscoveredKind, Discovered: &DiscoveredSetExpression{MemberKind: SubjectWorkItem}},
 		{Kind: SubjectExpressionChildrenOfScope, Scoped: &ScopedSetExpression{MemberKind: kind}},
 		{Kind: SubjectExpressionGroupedMembers, Grouped: &GroupedSetExpression{MemberKind: kind, GroupKind: SubjectProject}},
 	} {

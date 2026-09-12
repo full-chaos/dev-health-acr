@@ -208,8 +208,8 @@ const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v10"
 // concurrently, so a shared counter would be a race.
 func teamsProjectsTables(omissions *ambiguityLedger, presence *presenceTelemetryLedger, teamAuth *teamAuthorizationLedger) []entityTable {
 	return []entityTable{
-		{name: "teams", query: teamsQuery(teamAuth)},
-		{name: "projects", query: queryProjects},
+		{name: "teams", query: teamsQuery(teamAuth), subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam}},
+		{name: "projects", query: queryProjects, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectProject}},
 		{name: "project_membership_presence", query: subjectProjectMembershipsQuery(presence)},
 		{name: "work_item_team_attributions", query: queryWorkItemTeams},
 		{name: "team_project_ownership", query: projectTeamsQuery(omissions)},

@@ -99,10 +99,10 @@ func captureCohortKindBasisLineCount(t *testing.T, level slog.Level) int {
 // frame impossible and the real declared member kind is `incident`.
 func TestCohortKindBasisLineNamesTheRefusedKind(t *testing.T) {
 	record := captureCohortKindBasisLine(t,
-		contextfabric.SubjectIncident, graphrank.CohortKindMemberKindUnservable, false)
+		contextfabric.SubjectWorkItem, graphrank.CohortKindMemberKindUnservable, false)
 
-	if got := record["member_kind"]; got != string(contextfabric.SubjectIncident) {
-		t.Errorf("member_kind = %v, want %q -- a refusal that cannot name the kind it refused is a refusal someone will attribute by guessing", got, contextfabric.SubjectIncident)
+	if got := record["member_kind"]; got != string(contextfabric.SubjectWorkItem) {
+		t.Errorf("member_kind = %v, want %q -- a refusal that cannot name the kind it refused is a refusal someone will attribute by guessing", got, contextfabric.SubjectWorkItem)
 	}
 	if got := record["basis"]; got != string(graphrank.CohortKindMemberKindUnservable) {
 		t.Errorf("basis = %v, want %q", got, graphrank.CohortKindMemberKindUnservable)
