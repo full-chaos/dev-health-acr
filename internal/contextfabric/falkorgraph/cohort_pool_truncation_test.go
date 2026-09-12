@@ -666,3 +666,104 @@ func TestFormatCohortPoolTruncationArmsMarksAnUndeclaredArm(t *testing.T) {
 		t.Errorf("rendered %q for an all-declared input -- the marker fires on nothing", clean)
 	}
 }
+
+// TestDiscoverContextCompletedCensusDoesNotCoverAnUncensusedKind carries the
+// kind-awareness of the coverage decision AT THE CALL SITE, which is a
+// different claim from the predicate tests below it.
+//
+// exactNameCensusCoversKind can be correct in isolation while the reader
+// never asks it: dropping the call from the covered-by-census expression
+// leaves every predicate test green, because those tests call the predicate
+// and the classifier directly and never traverse DiscoverContext. This one
+// traverses it, so the coverage claim has to be refused by the engine rather
+// than by a function the engine could stop consulting.
+//
+// The fixture is the completed-census fixture with ONE variable moved: the
+// declared member kind is servable but outside the census's kind list. The
+// census is admitted, non-empty and a strict superset of what the clipped
+// lexical arm found -- every reason to claim coverage is present except the
+// kind -- so a `covered_by_census` verdict here could only come from a
+// coverage decision that stopped asking which kind it was covering.
+func TestDiscoverContextCompletedCensusDoesNotCoverAnUncensusedKind(t *testing.T) {
+	t.Parallel()
+	const uncensusedKind = contextfabric.SubjectIncident
+	servable := false
+	for _, kind := range contextfabric.ServableCohortKindsForAudit() {
+		if kind == uncensusedKind {
+			servable = true
+		}
+	}
+	if !servable {
+		t.Fatalf("%q is not servable, so this fixture cannot reach a cohort at all", uncensusedKind)
+	}
+	if exactNameCensusCoversKind(uncensusedKind) {
+		t.Skipf("%q is now censused, so it can no longer stand for the uncensused case; re-aim this test at a servable kind outside %v", uncensusedKind, exactNameKinds)
+	}
+
+	telemetry := &recordingTelemetry{}
+	fake := &fakeConn{queryFunc: func(_ context.Context, _ string, cypher string, _ map[string]interface{}, _ bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			rows := make([]row, 0, poolTruncationFulltextCollectLimit+1)
+			for i := 0; i < poolTruncationTeamCount; i++ {
+				r := fulltextRow(string(uncensusedKind), fmt.Sprintf("incident_%d", i), fmt.Sprintf("Incident %d", i), "teams struggling", nil)
+				r["node"].(*node).Properties["authorization_repositories"] = "*"
+				rows = append(rows, r)
+			}
+			for i := 0; len(rows) < poolTruncationFulltextCollectLimit+1; i++ {
+				r := fulltextRow("repository", fmt.Sprintf("repo_%d", i), fmt.Sprintf("Repo %d", i), "teams struggling", nil)
+				r["node"].(*node).Properties["authorization_repositories"] = "*"
+				rows = append(rows, r)
+			}
+			return rows, nil
+		case strings.Contains(cypher, "$kinds"):
+			// A census that is a STRICT SUPERSET of the clipped lexical arm,
+			// exactly as the covered-by-census fixture's is. If coverage were
+			// still kind-blind, this census would rescue the cohort.
+			rows := make([]row, 0, poolTruncationTeamCount+1)
+			for i := 0; i < poolTruncationTeamCount; i++ {
+				r := fakeSubjectNodeRow(string(uncensusedKind), fmt.Sprintf("incident_%d", i), fmt.Sprintf("Incident %d", i))
+				r["n"].(*node).Properties["authorization_repositories"] = "*"
+				rows = append(rows, r)
+			}
+			r := fakeSubjectNodeRow(string(uncensusedKind), "incident_census_only", "Census Only")
+			r["n"].(*node).Properties["authorization_repositories"] = "*"
+			return append(rows, r), nil
+		default:
+			return nil, nil
+		}
+	}}
+	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
+	request := cohortDiscoveryRequest(contextfabric.ShapeDiscoveredCohort)
+	request.Frame.SubjectExpression.Discovered.MemberKind = uncensusedKind
+	request.Request.Options.MaxCohortMembers = 50
+
+	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	// The two controls that make the assertion below mean something: the
+	// census RAN, and it was not empty. Without both, `truncated` would be
+	// the right answer for a reason that has nothing to do with the kind.
+	if len(telemetry.cohortExactNameCensusGates) != 1 || !telemetry.cohortExactNameCensusGates[0].admitted {
+		t.Fatalf("census gate = %+v, want exactly one ADMITTED decision -- an unadmitted census would deny coverage on its own and this fixture would prove nothing about the kind", telemetry.cohortExactNameCensusGates)
+	}
+	if result.Cohort == nil {
+		t.Fatal("Cohort = nil, want the uncensused-kind cohort the lexical arm found")
+	}
+	members := map[string]bool{}
+	for _, m := range result.Cohort.Members {
+		members[m.Subject.CanonicalID] = true
+	}
+	if !members["incident_census_only"] {
+		t.Fatalf("the census-only member is absent (%v) -- the census did not in fact reach this cohort, so denying coverage below could be the census's absence rather than its kind", members)
+	}
+	if got := telemetry.cohortKindBases[0].poolTruncation; got != CohortPoolTruncationTruncated {
+		t.Errorf("pool truncation basis = %q, want %q: the census fetches %v and never fetched %q, so it cannot certify that this cohort's clipped lexical pool lost nothing",
+			got, CohortPoolTruncationTruncated, exactNameKinds, uncensusedKind)
+	}
+	if result.Cohort.Complete || !result.Cohort.Truncated {
+		t.Errorf("Complete=%v Truncated=%v: a clipped lexical arm under a census that does not fetch this kind keeps its truncation",
+			result.Cohort.Complete, result.Cohort.Truncated)
+	}
+}
