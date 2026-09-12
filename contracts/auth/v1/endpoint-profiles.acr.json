@@ -23,7 +23,8 @@
         "anchor": {
           "path": "internal/api/app.go",
           "line": 75,
-          "line_end": 75
+          "line_end": 75,
+          "note": "mux.HandleFunc(\"GET /healthz\""
         }
       },
       "token_shape": null,
@@ -56,7 +57,8 @@
         "anchor": {
           "path": "internal/api/app.go",
           "line": 76,
-          "line_end": 76
+          "line_end": 76,
+          "note": "mux.HandleFunc(\"GET /readyz\""
         }
       },
       "token_shape": null,
@@ -95,7 +97,8 @@
         "anchor": {
           "path": "internal/api/runtime.go",
           "line": 156,
-          "line_end": 166
+          "line_end": 166,
+          "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
       "token_shape": {
@@ -149,7 +152,8 @@
         "anchor": {
           "path": "internal/api/runtime.go",
           "line": 156,
-          "line_end": 166
+          "line_end": 166,
+          "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
       "token_shape": {
@@ -205,7 +209,8 @@
         "anchor": {
           "path": "internal/api/runtime.go",
           "line": 156,
-          "line_end": 166
+          "line_end": 166,
+          "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
       "token_shape": {
@@ -258,7 +263,8 @@
         "anchor": {
           "path": "internal/api/runtime.go",
           "line": 156,
-          "line_end": 166
+          "line_end": 166,
+          "note": "func (a *App) protectedRuntimeHandler(class limits.RequestClass, scope string, entitlement"
         }
       },
       "token_shape": {
@@ -303,7 +309,8 @@
         "anchor": {
           "path": "internal/api/context_fabric_routes.go",
           "line": 158,
-          "line_end": 158
+          "line_end": 158,
+          "note": "a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead"
         }
       },
       "token_shape": {
@@ -357,7 +364,8 @@
         "anchor": {
           "path": "internal/api/context_fabric_result_routes.go",
           "line": 228,
-          "line_end": 228
+          "line_end": 228,
+          "note": "a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead"
         }
       },
       "token_shape": {
@@ -413,7 +421,8 @@
         "anchor": {
           "path": "internal/api/context_fabric_model_config_routes.go",
           "line": 98,
-          "line_end": 98
+          "line_end": 98,
+          "note": "auth.ScopeContextAdmin, true, true, handler)"
         }
       },
       "token_shape": {
@@ -468,7 +477,8 @@
         "anchor": {
           "path": "internal/api/context_fabric_model_config_routes.go",
           "line": 167,
-          "line_end": 167
+          "line_end": 167,
+          "note": "auth.ScopeContextAdmin, true, false, handler)"
         }
       },
       "token_shape": {
@@ -512,7 +522,8 @@
         "anchor": {
           "path": "internal/api/context_fabric_model_config_routes.go",
           "line": 218,
-          "line_end": 218
+          "line_end": 218,
+          "note": "auth.ScopeContextAdmin, true, false, handler)"
         }
       },
       "token_shape": {
@@ -550,7 +561,8 @@
         "anchor": {
           "path": "internal/api/device_routes.go",
           "line": 241,
-          "line_end": 246
+          "line_end": 246,
+          "note": "func (a *App) deviceRuntimeHandler(next http.Handler) http.Handler {"
         }
       },
       "token_shape": null,
@@ -604,7 +616,8 @@
         "anchor": {
           "path": "internal/api/device_routes.go",
           "line": 69,
-          "line_end": 79
+          "line_end": 79,
+          "note": "func (a *App) handleDeviceToken(w http.ResponseWriter, r *http.Request) {"
         }
       },
       "token_shape": {
@@ -678,7 +691,8 @@
         "anchor": {
           "path": "internal/api/device_routes.go",
           "line": 219,
-          "line_end": 230
+          "line_end": 230,
+          "note": "func (a *App) deviceApprovalHandler(next http.Handler) http.Handler {"
         }
       },
       "token_shape": {
@@ -732,7 +746,8 @@
         "anchor": {
           "path": "internal/api/device_routes.go",
           "line": 234,
-          "line_end": 239
+          "line_end": 239,
+          "note": "func (a *App) selfLifecycleHandler(next http.Handler) http.Handler {"
         }
       },
       "token_shape": {
@@ -774,7 +789,8 @@
         "anchor": {
           "path": "internal/api/device_routes.go",
           "line": 234,
-          "line_end": 239
+          "line_end": 239,
+          "note": "func (a *App) selfLifecycleHandler(next http.Handler) http.Handler {"
         }
       },
       "token_shape": {

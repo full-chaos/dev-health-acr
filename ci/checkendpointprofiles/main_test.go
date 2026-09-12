@@ -1146,6 +1146,98 @@ func TestGateCatchesTheRealCommittedOffByOneAnchorBug(t *testing.T) {
 	mustContain(t, errs, "TRIVIAL ANCHOR", "primary_validator")
 }
 
+func TestGateCatchesAPrimaryValidatorAnchorThatDriftedOntoAnUnrelatedLine(t *testing.T) {
+	// Reproduces the incident shape by line number alone: a later edit
+	// inserts a line above the real primary_validator call, shifting the
+	// declared line number onto an unrelated statement that is real,
+	// in-bounds, and not on the trivial-anchor denylist -- so
+	// checkAnchorExists alone accepts it. The marker (independently
+	// re-located by its own text, not by the declared line) must catch it.
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, fixtureAppFile),
+		"package api\n"+
+			"\n"+
+			"import \"net/http\"\n"+
+			"\n"+
+			"func Handler(itemCounts Counter) http.Handler {\n"+
+			"	return protectedRuntimeHandler(func(w http.ResponseWriter, r *http.Request) {\n"+
+			"		Items: int64(itemCounts.Total())\n"+
+			"		w.WriteHeader(http.StatusOK)\n"+
+			"	})\n"+
+			"}\n"+
+			"\n"+
+			"func protectedRuntimeHandler(next http.HandlerFunc) http.Handler { return next }\n"+
+			"\n"+
+			"type Counter struct{}\n"+
+			"\n"+
+			"func (Counter) Total() int64 { return 0 }\n",
+	)
+	schemaPath, credentialClassesPath, credentialClassesSchemaPath := seedFixtureSchemaAndCredentialClasses(t, root)
+	row := minimalValidRow(map[string]any{
+		"primary_validator": map[string]any{
+			"description": "wraps itself in protectedRuntimeHandler",
+			// Declares line 7 (the resource-usage literal) -- the real
+			// call moved to line 6 when the literal line was inserted
+			// above it. Declares the marker for line 6's true text, so
+			// the drift is detectable by re-locating that text.
+			"anchor": map[string]any{
+				"path": fixtureAppFile,
+				"line": float64(7),
+				"note": "protectedRuntimeHandler(func(w http.ResponseWriter",
+			},
+		},
+	})
+	inventoryPath := writeInventory(t, root, []map[string]any{row})
+	errs, err := check(root, inventoryPath, schemaPath, credentialClassesPath, credentialClassesSchemaPath, realDiscovererPath(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustContain(t, errs, "ANCHOR LINE DRIFTED", "primary_validator")
+}
+
+func TestGateCatchesAPrimaryValidatorAnchorWithNoMarker(t *testing.T) {
+	f := minimalValidFixture(t, []map[string]any{minimalValidRow(map[string]any{
+		"primary_validator": map[string]any{
+			"description": "no note supplied",
+			"anchor":      map[string]any{"path": fixtureAppFile, "line": float64(7)},
+		},
+	})})
+	errs := f.check(t)
+	mustContain(t, errs, "MISSING ANCHOR MARKER", "primary_validator")
+}
+
+func TestGateCatchesAPrimaryValidatorAnchorWhoseMarkerIsNowhereInTheFile(t *testing.T) {
+	f := minimalValidFixture(t, []map[string]any{minimalValidRow(map[string]any{
+		"primary_validator": map[string]any{
+			"description": "marker text never appears in the fixture file",
+			"anchor": map[string]any{
+				"path": fixtureAppFile,
+				"line": float64(7),
+				"note": "thisTextIsNotInTheFixtureAppFileAnywhere(",
+			},
+		},
+	})})
+	errs := f.check(t)
+	mustContain(t, errs, "ANCHOR MARKER NOT FOUND", "primary_validator")
+}
+
+func TestGatePassesAPrimaryValidatorAnchorWithAMatchingMarker(t *testing.T) {
+	f := minimalValidFixture(t, []map[string]any{minimalValidRow(map[string]any{
+		"primary_validator": map[string]any{
+			"description": "healthzHandler is the mux route target",
+			"anchor": map[string]any{
+				"path": fixtureAppFile,
+				"line": float64(7),
+				"note": "mux.HandleFunc(\"GET /healthz\"",
+			},
+		},
+	})})
+	errs := f.check(t)
+	if len(errs) != 0 {
+		t.Fatalf("expected no errors, got:\n%s", strings.Join(errs, "\n"))
+	}
+}
+
 func TestGateCatchesAnIssuedCredentialAnchorWithNoExtractableFunctionName(t *testing.T) {
 	// Coordinator ruling (2026-09-01): "where [content] cannot be
 	// established, say so in the message rather than passing." An anchor

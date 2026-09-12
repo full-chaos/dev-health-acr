@@ -36,6 +36,16 @@
 //   - Multi-mount route collapse in the discovery half: CHAOS-4760.
 //   - Anchor CONTENT verification is a name match, not a proof that the named
 //     line is the validator.
+//   - primary_validator anchors carry an explicit marker (the anchor's `note`
+//     field: a short, exact, literal substring of the real call/declaration)
+//     that this gate re-locates independently of the declared line number, so
+//     a later edit that shifts the declared line onto an unrelated statement
+//     is caught rather than silently passing on whatever text happens to be
+//     there. reachable_validators anchors are not yet covered this way.
+//   - Two rows whose primary_validator anchors point at the SAME source line
+//     (the model-config PUT/DELETE rows share one dispatch line) necessarily
+//     share one marker too. If both anchors drift onto the same wrong line at
+//     once, the marker re-location cannot tell them apart: CHAOS-5652.
 //   - The inventory's declared source_commit and credential_class_source are
 //     NOT verified by this gate: CHAOS-4765.
 //   - Two registrations on one line cannot both be profiled, because a row
@@ -535,6 +545,7 @@ func check(root, inventoryPath, schemaPath, credentialClassesPath, credentialCla
 				}
 			} else {
 				checkAnchorExists(root, id, asObject(anchorRaw), &errs, "primary_validator anchor")
+				checkPrimaryValidatorAnchorMarker(root, id, asObject(anchorRaw), &errs)
 			}
 		}
 
@@ -723,6 +734,104 @@ func checkAnchorExists(root, rowID string, anchor map[string]any, errs *[]string
 			rowID, label, path, line,
 		))
 	}
+}
+
+// checkPrimaryValidatorAnchorMarker requires a primary_validator anchor to
+// carry its own machine-checkable identity marker (anchor.note, already a
+// schema-legal free-string field) and verifies that marker is the ONE thing
+// resolving the anchor to real content -- never the declared line number by
+// itself. This is the CHAOS-5652 fix for a real, committed defect
+// isTrivialAnchorLine's own denylist approach cannot catch by construction:
+// a re-anchoring edit (CHAOS-5637, #519) shifted the real
+// `return a.protectedRuntimeHandler(...)` call for the
+// "GET /api/v1/context-fabric/investigations/{result_id}" row from line 185
+// to its new home at line 228 -- and line 185, at the time, held
+// `Items: int64(itemCounts.Total()),`, a plausible-looking resource-usage
+// struct field literal, not a comment, not blank, not in any denylist
+// shape. A human happened to re-anchor it correctly in the same PR; nothing
+// in this gate would have caught it if they had not. A denylist can only
+// rule out shapes someone already thought of (the doc comment on
+// trivialAnchorLines already states this); a marker the anchor's own author
+// commits to, and this gate independently re-locates on every run, is a
+// POSITIVE check instead -- it does not matter whether the wrong line looks
+// trivial or looks like ordinary business logic, only whether the marker
+// text is actually there.
+//
+// Scoped to primary_validator only, matching the SAME per-anchor-type
+// precision discipline checkIssuedCredentialAnchorIdentity already
+// established (its own doc comment measured why generalizing a narrative-
+// description-matching check to primary_validator/reachable_validators
+// produces a 31.3%/100% false-miss rate): a NEW, purpose-built field
+// checked by exact substring is a different, much stronger claim than
+// matching prose, and does not inherit that measurement. reachable_validators
+// is intentionally left on the existing checkAnchorExists/isTrivialAnchorLine
+// path for now (all of acr's own reachable_validators anchors point at ONE
+// shared, already-precise citation, web_assertion_middleware.go:11-16; the
+// class this fix targets is a per-route primary_validator call site, and a
+// second CHAOS ticket can extend the same mechanism there if a future
+// incident shows the need).
+func checkPrimaryValidatorAnchorMarker(root, rowID string, anchor map[string]any, errs *[]string) {
+	if anchor == nil {
+		return // reported elsewhere (checkAnchorExists)
+	}
+	path, _ := asString(anchor["path"])
+	lineF, _ := anchor["line"].(float64)
+	line := int(lineF)
+	if path == "" || line < 1 || !anchorPathWithinRoot(root, path) {
+		return // reported elsewhere
+	}
+	lineEnd := line
+	if endF, ok := anchor["line_end"].(float64); ok && int(endF) >= line {
+		lineEnd = int(endF)
+	}
+	note, _ := asString(anchor["note"])
+	if strings.TrimSpace(note) == "" {
+		*errs = append(*errs, fmt.Sprintf(
+			"MISSING ANCHOR MARKER: row %q primary_validator anchor (%s:%d) has no note -- "+
+				"every primary_validator anchor must name a short, exact, literal substring "+
+				"(a call expression, a function name) this gate re-locates independently of the "+
+				"declared line, so a future re-anchoring edit that lands on the wrong statement "+
+				"fails loudly instead of passing on whatever text happens to be there",
+			rowID, path, line,
+		))
+		return
+	}
+	raw, err := os.ReadFile(filepath.Join(root, path))
+	if err != nil {
+		return // reported elsewhere (checkAnchorExists)
+	}
+	lines := strings.Split(string(raw), "\n")
+	if line > len(lines) {
+		return // reported elsewhere (checkAnchorExists)
+	}
+	endIdx := lineEnd
+	if endIdx > len(lines) {
+		endIdx = len(lines)
+	}
+	declared := strings.Join(lines[line-1:endIdx], "\n")
+	if strings.Contains(declared, note) {
+		return
+	}
+	// The declared line doesn't carry the marker -- find out whether the
+	// marker still exists ANYWHERE in the file (a drifted-but-recoverable
+	// anchor) or has vanished entirely (a marker naming code that no
+	// longer exists at all, e.g. a renamed function).
+	for i, l := range lines {
+		if strings.Contains(l, note) {
+			*errs = append(*errs, fmt.Sprintf(
+				"ANCHOR LINE DRIFTED: row %q primary_validator anchor declares %s:%d, but its own "+
+					"marker %q is not there -- it is actually at line %d. Re-anchor to the real line "+
+					"(the marker, not the old line number, is this gate's own source of truth)",
+				rowID, path, line, note, i+1,
+			))
+			return
+		}
+	}
+	*errs = append(*errs, fmt.Sprintf(
+		"ANCHOR MARKER NOT FOUND: row %q primary_validator anchor's note %q does not appear anywhere "+
+			"in %s -- the anchor no longer resolves to anything this gate can verify",
+		rowID, note, path,
+	))
 }
 
 // anchorPathWithinRoot reports whether a repo-relative anchor path stays
