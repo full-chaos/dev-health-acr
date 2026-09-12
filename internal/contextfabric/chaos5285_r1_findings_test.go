@@ -429,9 +429,17 @@ func TestTheGroupReadLineIsTrueOnEveryExit(t *testing.T) {
 		Scope:                 CompletionScopeEachMember,
 		Quantifier:            CompletionQuantifierAtLeastOne,
 	}}}
-	twoMembers := []CohortMember{
-		{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_a", Label: "project_a"}, Rank: 1, InclusionReasons: []string{"matched"}},
-		{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_b", Label: "project_b"}, Rank: 2, InclusionReasons: []string{"matched"}},
+	// Own members per case. These subtests run sequentially (no t.Parallel()
+	// here), but Investigate ranks the cohort IN PLACE -- RankCohort writes
+	// RankingComputed, Score, AttentionRank, Drivers and the rest into every
+	// CohortMember -- so a slice shared across cases carries one case's
+	// ranking output into the next case's input. Give each case its own
+	// members before any of these cases (or a future one) adds t.Parallel().
+	twoMembers := func() []CohortMember {
+		return []CohortMember{
+			{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_a", Label: "project_a"}, Rank: 1, InclusionReasons: []string{"matched"}},
+			{Subject: SubjectRef{Kind: SubjectProject, CanonicalID: "project_b", Label: "project_b"}, Rank: 2, InclusionReasons: []string{"matched"}},
+		}
 	}
 	type exit struct {
 		name    string
@@ -457,13 +465,13 @@ func TestTheGroupReadLineIsTrueOnEveryExit(t *testing.T) {
 		}},
 		{"no_read_requirement", GroupReadRefusalNoReadRequirement, false, func(t *testing.T, tel EngineTelemetry) (*Engine, InvestigationRequest, *groupReadRecorder) {
 			recorder := groupReadServing("team_security", "team_platform")
-			engine, request := groupReadEngineFixtureConfigured(t, tel, recorder, twoMembers, nil, SubjectProject, nil, nil,
+			engine, request := groupReadEngineFixtureConfigured(t, tel, recorder, twoMembers(), nil, SubjectProject, nil, nil,
 				func(config *groupReadFixtureConfig) { config.deriver = onlyMemberRow })
 			return engine, request, recorder
 		}},
 		{"authorization_unavailable", GroupReadRefusalAuthorizationUnavailable, false, func(t *testing.T, tel EngineTelemetry) (*Engine, InvestigationRequest, *groupReadRecorder) {
 			recorder := groupReadServing("team_security", "team_platform")
-			engine, request := groupReadEngineFixtureConfigured(t, tel, recorder, twoMembers, nil, SubjectProject, nil, nil,
+			engine, request := groupReadEngineFixtureConfigured(t, tel, recorder, twoMembers(), nil, SubjectProject, nil, nil,
 				func(config *groupReadFixtureConfig) {
 					config.graph.authorizationErr = fmt.Errorf("injected: authorizer unavailable")
 				})
@@ -476,7 +484,7 @@ func TestTheGroupReadLineIsTrueOnEveryExit(t *testing.T) {
 		}},
 		{"read_failed", GroupReadRefusalReadFailed, true, func(t *testing.T, tel EngineTelemetry) (*Engine, InvestigationRequest, *groupReadRecorder) {
 			recorder := groupReadServing()
-			engine, request := groupReadEngineFixtureFull(t, tel, &groupReadFailingReader{inner: recorder}, twoMembers, nil, SubjectProject, nil, nil)
+			engine, request := groupReadEngineFixtureFull(t, tel, &groupReadFailingReader{inner: recorder}, twoMembers(), nil, SubjectProject, nil, nil)
 			return engine, request, recorder
 		}},
 		{"metadata_conflict", GroupReadRefusalMetadataConflict, true, func(t *testing.T, tel EngineTelemetry) (*Engine, InvestigationRequest, *groupReadRecorder) {

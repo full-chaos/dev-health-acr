@@ -483,11 +483,11 @@ func TestANonDegradingDisclosureNeverBecomesARequirementRowsCause(t *testing.T) 
 // read states can take, and what the document says about each.
 //
 // The rule under test has one sentence: serve one row per kind, naming the
-// read whose state the SERVED SOURCE does not publish. Every cell below is
-// executed through the producer and the merge, and each asserts the property
-// that makes the rule worth having -- from the document alone, a reader
-// recovers BOTH reads' states. A cell that serves no row must be a cell where
-// the source already answers for both.
+// read whose state the SERVED SOURCE does not publish. Every cell below calls
+// readOriginStateCoverage directly, and each asserts the property that makes
+// the rule worth having -- from the document alone, a reader recovers BOTH
+// reads' states. A cell that serves no row must be a cell where the source
+// already answers for both.
 func TestTheOriginDisclosureInputDomain(t *testing.T) {
 	const kind = "health"
 	const source = "canonical_fact:" + kind
