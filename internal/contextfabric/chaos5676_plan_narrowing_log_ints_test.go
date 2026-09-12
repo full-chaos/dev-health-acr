@@ -58,21 +58,38 @@ func TestPlanNarrowingRequestDerivedIntsAreWiredThroughTheNumericBarrier(t *test
 	}
 }
 
-// TestTheNumericLogBarrierLeavesEveryPlanNarrowingValueUnchanged is the
-// behavioural half: an operator reading the line must see the same numbers
-// they saw before the barrier was added.
+// TestBothNumericLogBarriersLeaveEveryValueUnchanged is the behavioural half:
+// an operator reading these lines must see the same numbers either way.
 //
-// It matters because the barrier is a format/parse round trip with a defined
-// failure value of zero. A regression that made it return zero for ordinary
-// inputs would silence the analysis and destroy the line at the same time,
-// and every source-shape pin above would still pass.
-func TestTheNumericLogBarrierLeavesEveryPlanNarrowingValueUnchanged(t *testing.T) {
+// BOTH BARRIERS, because both are on the path. The int64 barrier carries the
+// response-budget ceiling; the int barrier carries every value on the plan,
+// assertion, accounting and allowance lines. A pin exercising only one would
+// leave the other free to regress on exactly the lines it guards.
+//
+// It matters because each barrier is a format/parse round trip with a defined
+// failure value of zero. A regression returning zero for ordinary input would
+// silence the analysis and destroy the line at the same time, while every
+// source-shape pin in this file went on passing.
+func TestBothNumericLogBarriersLeaveEveryValueUnchanged(t *testing.T) {
 	t.Parallel()
+
+	executed := 0
 	for _, value := range []int64{0, 1, 2, 30, 45, -1, 1 << 20, 9223372036854775807, -9223372036854775808} {
 		if got := SanitizeLogInt(value); got != value {
 			t.Errorf("SanitizeLogInt(%d) = %d, want the value unchanged -- a barrier that alters the number replaces a log-injection finding with a lying log line",
 				value, got)
 		}
+		executed++
+	}
+	for _, value := range []int{0, 1, 2, 30, 45, -1, 1 << 20, int(^uint(0) >> 1), -int(^uint(0)>>1) - 1} {
+		if got := requestDerivedLogInt(value); got != value {
+			t.Errorf("requestDerivedLogInt(%d) = %d, want the value unchanged -- this is the barrier the plan-narrowing, budget-assertion, item-accounting and member-allowance lines all read through",
+				value, got)
+		}
+		executed++
+	}
+	if executed == 0 {
+		t.Fatal("no barrier input was exercised")
 	}
 }
 
