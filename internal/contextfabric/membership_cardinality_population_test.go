@@ -138,3 +138,51 @@ func TestCardinalityLetsALaterMemberNarrowingOutrankThePopulation(t *testing.T) 
 		t.Errorf("declared = %d, want 20 -- a member narrowing observed more than the population arm did, and the largest observed count is the claim", cardinality.Declared)
 	}
 }
+
+// THE CALLER-BOUND CASE: the population cuts the cohort and NO recorded step did.
+//
+// The engine records a `cardinality` narrowing step only when the response
+// budget is what clamped MaxCohortMembers. A caller whose OWN MaxCohortMembers
+// is the binding constraint therefore reaches assembly with a capped cohort, a
+// fully counted pool, and a plan that never recorded a narrowing -- so the
+// cardinality has no basis to carry.
+//
+// That combination made the outcome row `narrowed` with no cause, which the
+// outcome validator refuses, turning a previously-served answer into a 422.
+// It is invisible to every fixture that lets the budget do the clamping, which
+// is why it survived the suite, the battery and CI: the corpus always passes a
+// cap far above the allowance.
+//
+// Driven end to end through the real Engine, because the defect is in the
+// SERVED document and a unit call on the row builder would not have produced
+// one.
+func TestACallerBoundCohortStillNamesWhyTheCountWasCut(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	frame := countingFrame(SubjectTeam)
+	// Cohort 10 = the caller's own cap, below the budget allowance of 14, so
+	// no clamp is recorded. Population 36 = what retrieval saw.
+	engine := newCountingEngineWithPopulation(t, countingCohort(SubjectTeam, 10), 36, frame, telemetry)
+	result := runCountingRequest(t, engine, 10)
+
+	assembled := countOutcomeRows(result, contractsv1.ContextFabricOutcomeStageAssembledResult)
+	if len(assembled) != 1 {
+		t.Fatalf("assembled count rows = %d, want exactly 1", len(assembled))
+	}
+	row := assembled[0]
+	if row.Outcome != contractsv1.ContextFabricRequirementNarrowed {
+		t.Fatalf("outcome = %q, want %q -- 10 of 36 is a cut", row.Outcome, contractsv1.ContextFabricRequirementNarrowed)
+	}
+	if row.CauseNarrowing != "" {
+		t.Fatalf("cause_narrowing = %q, want empty -- this fixture records no narrowing step, and if it does the case under test is not being exercised", row.CauseNarrowing)
+	}
+	if row.CauseCoverage != contractsv1.ContextFabricCoverageDetailPopulationTruncated {
+		t.Errorf("cause_coverage = %q, want %q -- a narrowed row with no cause is refused by the validator", row.CauseCoverage, contractsv1.ContextFabricCoverageDetailPopulationTruncated)
+	}
+	if !row.CauseObserved {
+		t.Error("cause_observed = false, want true -- retrieval counted the members it could not carry; nothing here defaulted")
+	}
+	if row.Served != 10 || row.Declared != 36 {
+		t.Errorf("served/declared = %d/%d, want 10/36", row.Served, row.Declared)
+	}
+}

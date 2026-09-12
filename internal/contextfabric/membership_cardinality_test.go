@@ -110,6 +110,14 @@ func runCountingInvestigation(t *testing.T, cohortSize int, maxMembers int) (Inv
 // factored out so a test can call finalizeResult DIRECTLY -- the re-entry
 // guard is about calling it twice, which no end-to-end drive can express.
 func newCountingEngine(t *testing.T, cohort *Cohort, frame *QuestionFrame, telemetry *recordingTelemetry) *Engine {
+	return newCountingEngineWithPopulation(t, cohort, 0, frame, telemetry)
+}
+
+// newCountingEngineWithPopulation is the same fixture with the retrieval
+// population set, for the tests whose claim is that the served count differs
+// from the served member list. Zero means unset, which is what every caller
+// that does not care about the population passes.
+func newCountingEngineWithPopulation(t *testing.T, cohort *Cohort, population int, frame *QuestionFrame, telemetry *recordingTelemetry) *Engine {
 	t.Helper()
 	anchor := SubjectRef{Kind: SubjectOrganization, CanonicalID: "org_1", Label: "Org"}
 
@@ -119,7 +127,7 @@ func newCountingEngine(t *testing.T, cohort *Cohort, frame *QuestionFrame, telem
 			Committed:  []SubjectRef{anchor},
 		},
 		context: GraphContext{
-			Cohort: cohort, Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
+			Cohort: cohort, CohortPopulation: population, Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
 			FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
 			Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 		},

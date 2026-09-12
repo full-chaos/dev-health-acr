@@ -305,11 +305,33 @@ func membershipCardinalityOutcomeRow(cardinality MembershipCardinality, requirem
 	// Scope, not depth: the reader is shown fewer of the counted things,
 	// and the ones that remain are unchanged.
 	row.Impact = contractsv1.ContextFabricAnswerImpactScope
+	row.CauseObserved = true
+	if cardinality.Basis == "" {
+		// THE POPULATION CUT THEM AND NO RECORDED STEP DID.
+		//
+		// Until the population became observable, `Declared > Served` could
+		// arise only from a narrowing step, and a step always carries a basis
+		// -- so carrying the basis was the same thing as naming a cause. It no
+		// longer is: retrieval can now report more members than the answer
+		// carries with NO step recorded at all, because the engine records the
+		// cardinality step only when the response budget is what clamped
+		// MaxCohortMembers. A caller whose OWN MaxCohortMembers is the binding
+		// constraint reaches exactly this: the cohort is capped, the pool is
+		// counted whole, and the plan has nothing to say about it.
+		//
+		// The row would then be `narrowed` with no cause, which the outcome
+		// validator refuses outright -- turning an answer that used to serve
+		// into a 422. The cause is the same one the equal-counts branch above
+		// already uses for a loss the cohort reported itself: the population
+		// was truncated, and it was OBSERVED rather than defaulted, because
+		// retrieval counted the members it could not carry.
+		row.CauseCoverage = contractsv1.ContextFabricCoverageDetailPopulationTruncated
+		return contractsv1.ContextFabricWithReductionRefinement(row)
+	}
 	// The cause is CARRIED from the narrowing step the plan recorded, so it
 	// names the mechanism that actually ran. `CauseObserved` says so.
 	row.CauseNarrowing = cardinality.Basis
 	row.CauseOverrun = cardinality.Overrun
-	row.CauseObserved = true
 	// The reduction step, derived from the row's own counts and the causes
 	// just carried onto it, so the step and the row cannot state different
 	// things about one narrowing.
