@@ -1194,7 +1194,8 @@
                 "source_health",
                 "evidence",
                 "flow",
-                "landscape"
+                "landscape",
+                "cardinality"
               ],
               "type": "string"
             },
