@@ -125,3 +125,15 @@ func resultCarriesCardinalityClaim(result InvestigationResult) bool {
 	}
 	return false
 }
+
+// cardinalityClaimAdmitted reports whether one more claim fits.
+//
+// EXTRACTED SO THE BOUNDARY IS PINNABLE. The decision is one comparison, and
+// inline it could only be exercised by building a document with 250 claims
+// through the whole engine. The off-by-one here is the difference between an
+// answer that serves without its count field and an answer that fails
+// validation entirely, which is the kind of edge that deserves a test at 249,
+// 250 and 251 rather than at whatever number a fixture happens to produce.
+func cardinalityClaimAdmitted(existingClaims int) bool {
+	return existingClaims < contractsv1.ContextFabricClaimedFactsMaxCount
+}

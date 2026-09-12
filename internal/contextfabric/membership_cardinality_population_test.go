@@ -346,3 +346,36 @@ func cardinalityFor(result InvestigationResult, plan AnswerPlan) MembershipCardi
 	cardinality, _ := ComputeMembershipCardinality(result.Cohort, 0, plan.Narrowing)
 	return cardinality
 }
+
+// THE CLAIM CAP, AT ITS EDGE.
+//
+// A 251st claimed fact fails the contract bound and invalidates the WHOLE
+// answer -- so at the cap the count claim is dropped and the answer is served
+// without it, rather than not served at all. The count itself is unaffected:
+// it is still on the outcome row, and the Info line still reports it, with
+// `claimed` false so the loss is visible.
+//
+// Pinned at 249/250/251 because the whole decision is one comparison and the
+// only way it can be wrong is by one.
+func TestTheCardinalityClaimIsDroppedExactlyAtTheContractCap(t *testing.T) {
+	t.Parallel()
+	const cap = contractsv1.ContextFabricClaimedFactsMaxCount
+	for _, tc := range []struct {
+		existing int
+		admitted bool
+		why      string
+	}{
+		{cap - 1, true, "one slot left: the count takes it"},
+		{cap, false, "at the cap: a 251st claim invalidates the answer"},
+		{cap + 1, false, "already over: nothing to do but refuse"},
+	} {
+		if got := cardinalityClaimAdmitted(tc.existing); got != tc.admitted {
+			t.Errorf("cardinalityClaimAdmitted(%d) = %v, want %v -- %s", tc.existing, got, tc.admitted, tc.why)
+		}
+	}
+	// Non-vacuous control: the bound under test is the contract's, not a
+	// number restated here.
+	if cap != 250 {
+		t.Fatalf("ContextFabricClaimedFactsMaxCount = %d; this test's 249/250/251 cells are about the real bound", cap)
+	}
+}

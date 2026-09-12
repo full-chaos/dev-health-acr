@@ -121,6 +121,19 @@ type attributionFixtureSpec struct {
 	// layer's reduction may cut -- which is what makes the fifth arm
 	// reachable at all.
 	candidates int
+	// cardinalityClaims is how many CARDINALITY claims the document carries:
+	// one whenever the fixture resolves a member set, zero otherwise.
+	//
+	// A fixture literal like every other field here, and NOT read off the line
+	// under test -- the whole point of this struct is that the expectation and
+	// the value being checked cannot share a defect. Whether the claim exists
+	// is a property of the fixture (does it have a cohort with members), which
+	// is exactly the kind of thing a literal can state.
+	//
+	// It charges the GLOBAL bucket: a population count is about the
+	// organization, not about any member or group, so attributing it to a
+	// member would make the member bucket describe something no member has.
+	cardinalityClaims int
 }
 
 // expect is what the split must be for a document carrying membersMeasured
@@ -136,7 +149,7 @@ func (s attributionFixtureSpec) expect(membersMeasured, candidatesInDocument int
 		// reduction CUT some, the survivors are what the served document
 		// carries -- so this takes the count from the line, not from the
 		// number the resolver proposed.
-		global: s.globalFindings + candidatesInDocument,
+		global: s.globalFindings + candidatesInDocument + s.cardinalityClaims,
 		// The cohort member ROWS plus the drivers about a member. The rows
 		// are the item class the earlier design of this seam charged and
 		// never accounted for, so they are counted explicitly.
@@ -148,7 +161,7 @@ func (s attributionFixtureSpec) expect(membersMeasured, candidatesInDocument int
 
 // defaultAttributionSpec is the shape the served and refusal tests use.
 func defaultAttributionSpec() attributionFixtureSpec {
-	return attributionFixtureSpec{members: 3, globalFindings: 5, groupDrivers: 3, multiGroupDrivers: 2, memberDrivers: 1}
+	return attributionFixtureSpec{members: 3, globalFindings: 5, groupDrivers: 3, multiGroupDrivers: 2, memberDrivers: 1, cardinalityClaims: 1}
 }
 
 // attributionEngine builds an engine whose synthesis returns a result with a
@@ -495,7 +508,7 @@ func assembledResultArmCases() []assembledResultArmCase {
 		{
 			name:          "planned refusal, nothing to narrow",
 			discriminator: "retry_declined=nothing_to_narrow",
-			spec:          attributionFixtureSpec{members: 1, globalFindings: 5, groupDrivers: 3, multiGroupDrivers: 4, memberDrivers: 1},
+			spec:          attributionFixtureSpec{members: 1, globalFindings: 5, groupDrivers: 3, multiGroupDrivers: 4, memberDrivers: 1, cardinalityClaims: 1},
 			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec, cohortSizes *[]int) (InvestigationResult, bool) {
 				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(1, 0), cohortSizes)
 				if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow()); err == nil {
@@ -529,7 +542,7 @@ func assembledResultArmCases() []assembledResultArmCase {
 			name:                   "retry ran and still did not fit",
 			discriminator:          "retry_attempted=true retry_fit=false retry_failed=false",
 			measuresNarrowedCohort: true,
-			spec:                   attributionFixtureSpec{members: 3, globalFindings: 6, groupDrivers: 4, multiGroupDrivers: 5, memberDrivers: 1},
+			spec:                   attributionFixtureSpec{members: 3, globalFindings: 6, groupDrivers: 4, multiGroupDrivers: 5, memberDrivers: 1, cardinalityClaims: 1},
 			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec, cohortSizes *[]int) (InvestigationResult, bool) {
 				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(10, time.Second), cohortSizes)
 				if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow()); err == nil {
@@ -547,7 +560,7 @@ func assembledResultArmCases() []assembledResultArmCase {
 			discriminator: "outcome_reduction_applied=true",
 			spec: attributionFixtureSpec{
 				members: 1, globalFindings: 3, groupDrivers: 5, multiGroupDrivers: 6,
-				memberDrivers: 1, candidates: 7,
+				memberDrivers: 1, candidates: 7, cardinalityClaims: 1,
 			},
 			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec, cohortSizes *[]int) (InvestigationResult, bool) {
 				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(20, 0), cohortSizes)
