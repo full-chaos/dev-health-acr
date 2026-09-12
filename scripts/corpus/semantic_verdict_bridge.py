@@ -112,6 +112,7 @@ def resolve_ask_dev():
         pin = {
             "ask_dev_root": str(root),
             "ask_dev_sha": _git_sha(root),
+            "ask_dev_dirty": _git_dirty(root),
             "scorer_version": semantic_verdict.SCORER_VERSION,
             "policy_version": semantic_verdict.POLICY_VERSION,
             "schema_version": expect_schema.SCHEMA_VERSION,
@@ -150,6 +151,32 @@ def _git_sha(root):
         return None
     sha = proc.stdout.strip()
     return sha or None
+
+
+def _git_dirty(root):
+    """Whether the ask-dev checkout's working tree differs from `HEAD` --
+    tracked-file edits and staged changes both count (`git status
+    --porcelain` reports either), an untracked file does not (the code that
+    actually runs is whatever HEAD plus tracked edits produce; an untracked
+    scratch file next to the checkout changes nothing that gets imported).
+
+    A dirty checkout does not stop `ask_dev_sha` from being reported --
+    the sha is still a fact about the checkout -- but publishing it next to
+    a clean HEAD, with no signal that the code Python actually loaded may
+    differ from what that sha alone implies, is misleading in exactly the
+    way CHAOS-5633 found. None (never a bare False) when this cannot be
+    determined at all -- the same discipline `_git_sha` uses for a checkout
+    with no git metadata."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=no"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    return bool(proc.stdout.strip())
 
 
 def corpus_version_of(corpus_module):

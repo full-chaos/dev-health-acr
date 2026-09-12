@@ -226,6 +226,7 @@ def test_resolve_ask_dev_names_the_pin_and_versions():
         _require(proc.returncode == 0, proc.stderr)
         pin = json.loads(proc.stdout)
         _require(pin["ask_dev_sha"] == want_sha, pin)
+        _require(pin["ask_dev_dirty"] is False, pin)
         _require(pin["scorer_version"] == "fake-scorer-v1", pin)
         _require(pin["policy_version"] == "fake-policy-v1", pin)
         _require(pin["schema_version"] == "fake-schema-v1", pin)
@@ -235,6 +236,39 @@ def test_resolve_ask_dev_names_the_pin_and_versions():
 def svb_adapter_version():
     import semantic_verdict_bridge as svb
     return svb.LEGACY_SCORER_ADAPTER_VERSION
+
+
+def test_resolve_ask_dev_names_a_dirty_checkout():
+    """CHAOS-5633: a tracked-file edit left uncommitted after the pin's HEAD
+    sha is exactly the gap the finding named -- ask_dev_sha alone would still
+    read as a clean, trustworthy pin. ask_dev_dirty must say otherwise, and
+    the sha itself must still be HEAD's (a dirty tree does not invent a
+    different commit)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp) / "fake-ask-dev"
+        corpus_dir = _write_fake_ask_dev(base)
+        subprocess.run(["git", "init", "-q", str(base)], check=True)
+        subprocess.run(["git", "-C", str(base), "config", "user.email", "t@example.com"], check=True)
+        subprocess.run(["git", "-C", str(base), "config", "user.name", "t"], check=True)
+        subprocess.run(["git", "-C", str(base), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(base), "commit", "-q", "-m", "x"], check=True)
+        want_sha = subprocess.run(["git", "-C", str(base), "rev-parse", "HEAD"],
+                                   capture_output=True, text=True, check=True).stdout.strip()
+        # A tracked-file edit, left UNSTAGED -- the shape CHAOS-5633 named:
+        # HEAD is clean, the working tree is not.
+        (corpus_dir / "expect_schema.py").write_text(FAKE_EXPECT_SCHEMA + "\n# edited\n")
+
+        code = (
+            "import sys, json; sys.path.insert(0, %r); "
+            "import semantic_verdict_bridge as svb; "
+            "_, _, pin = svb.resolve_ask_dev(); print(json.dumps(pin))"
+        ) % str(HERE)
+        env = {"PATH": "/usr/bin:/bin:/usr/local/bin", "PYTHONPATH": str(corpus_dir)}
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+        _require(proc.returncode == 0, proc.stderr)
+        pin = json.loads(proc.stdout)
+        _require(pin["ask_dev_sha"] == want_sha, "a dirty tree must not change the reported sha")
+        _require(pin["ask_dev_dirty"] is True, pin)
 
 
 def test_resolve_ask_dev_refuses_by_name_when_unimportable():
@@ -400,7 +434,7 @@ def test_merge_publishes_semantic_verdict_without_moving_the_legacy_bucket():
         prov_sv = verdict["provenance"]["semantic_verdict"]
         _require(prov_sv["available"] is True, prov_sv)
         for key in ("scorer_version", "policy_version", "schema_version",
-                    "legacy_scorer_version", "ask_dev_sha", "ask_dev_root",
+                    "legacy_scorer_version", "ask_dev_sha", "ask_dev_dirty", "ask_dev_root",
                     "corpus_version", "verdict_counts", "family_relation_counts",
                     "confirmed_family_verified", "unscored_count", "unscored_reasons"):
             _require(key in prov_sv, f"provenance.semantic_verdict missing {key!r}: {prov_sv}")
