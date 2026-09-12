@@ -495,6 +495,30 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// one more claim per narrated driver, so the claimed-facts budget must
 	// be tracked independently of the driver budget, not assumed to always
 	// have headroom).
+	// THE COMPUTED COUNT, MINTED AS A CLAIM -- BEFORE NARRATION, ON PURPOSE.
+	//
+	// Claimed facts are CHARGED ITEMS. Narration below budgets itself against
+	// `len(result.ClaimedFacts)` and the static claim cap, so a claim appended
+	// after it is an item the allocator never saw: the document spends one
+	// nobody granted, which is the second-authority-over-one-number defect
+	// this file's own allocator comments exist to prevent. Minting here puts
+	// the count inside the same accounting as every other claim, and narration
+	// then budgets around it.
+	//
+	// It goes FIRST among the two because it is a served fact the server
+	// computed, not a narration of something already claimed: if the budget
+	// can afford exactly one more claim, the count is the one worth keeping.
+	//
+	// DROPPED, NEVER OVERFLOWED, at the contract cap. A 251st claim fails
+	// ContextFabricClaimedFact bounds and invalidates the WHOLE answer, so a
+	// document already at the cap serves its answer without the claim rather
+	// than serving nothing. The outcome row still states the count correctly;
+	// what is lost is the addressable field, and the loss is reported.
+	if claim, ok := cardinalityClaim(principal, cardinality); ok {
+		if len(result.ClaimedFacts) < contractsv1.ContextFabricClaimedFactsMaxCount {
+			result.ClaimedFacts = append(result.ClaimedFacts, claim)
+		}
+	}
 	if graphContext.Cohort != nil {
 		// synthesisAllocation, NOT a second AllocateItems call. Two
 		// derivations in one function would be two authorities over one
@@ -539,6 +563,22 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 			narrationEvent.AnswerNarrativeRecomposed = true
 		}
 		pending.CohortNarration = &narrationEvent
+	}
+	// THE PROSE, COMPOSED AFTER THE RECOMPOSE -- and the split from the mint
+	// above is deliberate, not an accident of layout.
+	//
+	// The CLAIM must be minted before narration, because claims are charged
+	// items and narration budgets against the count of them. The SENTENCE must
+	// be composed after it, because recomposeCohortAnswerNarrative REPLACES
+	// DeterministicAnswer wholesale -- a sentence appended earlier is silently
+	// discarded on exactly the cohort path this feature is for. Two placements,
+	// one `cardinality` value, so the claim and the prose still cannot disagree.
+	//
+	// It extends the STATUS COMPOSITION. The rule that recompose enforces
+	// excludes narration detail -- a driver's scoring arithmetic, restated --
+	// and a count the server computed over the served member set is not that.
+	if sentence := cardinalityAnswerSentence(cardinality); sentence != "" {
+		result.DeterministicAnswer = strings.TrimSpace(result.DeterministicAnswer + " " + sentence)
 	}
 	// CHAOS-4085: the post-synthesis commit-affirmation gate. Placed HERE
 	// deliberately -- after every composer that touches Limitations or
@@ -599,31 +639,6 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 			})
 		}
 		result.SubjectResolution.CommitDecisionDigests = digests
-	}
-	// THE COMPUTED COUNT, MINTED AS A CLAIM.
-	//
-	// Appended here and NOT into `mintedClaims` above, because that slice is
-	// re-derived against the canonical fact bundle by
-	// validateMintedClaimsGrounded, and this claim has no canonical fact behind
-	// it by construction -- the step it comes from reads none. Handing that
-	// validator a fabricated citation would be worse than not routing the claim
-	// through it; what grounds this one instead is that its value must equal
-	// the count the same pass states on its own outcome row, which a guard
-	// asserts.
-	//
-	// Outside the `Cohort != nil` narration branch on purpose: a resolved
-	// member set has a count worth claiming whether or not any driver was
-	// narrated over it, and nesting this there would drop the claim exactly
-	// when the answer has the least else to say.
-	if claim, ok := cardinalityClaim(principal, cardinality); ok {
-		result.ClaimedFacts = append(result.ClaimedFacts, claim)
-		// The prose and the claim, from one site and one value. Appended
-		// rather than substituted: the status sentence and any principal
-		// driver the answer already carries are still true, and the count is
-		// additional rather than a replacement for them.
-		if sentence := cardinalityAnswerSentence(cardinality); sentence != "" {
-			result.DeterministicAnswer = strings.TrimSpace(result.DeterministicAnswer + " " + sentence)
-		}
 	}
 	return result, synthesisAllocation, pending, cardinality, nil
 }

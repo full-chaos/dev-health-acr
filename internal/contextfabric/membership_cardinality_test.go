@@ -790,11 +790,11 @@ func TestFinalizingTwiceStatesOneCardinality(t *testing.T) {
 				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 			}
 
-			once := engine.finalizeResult(context.Background(), storage.Principal{}, result, plan, frame, CanonicalFactBundle{}, &assemblyTelemetry{}, answerPassFirst, MembershipCardinality{})
+			once := engine.finalizeResult(context.Background(), storage.Principal{}, result, plan, frame, CanonicalFactBundle{}, &assemblyTelemetry{}, answerPassFirst, cardinalityFor(result, plan))
 			if got := len(countOutcomeRows(once, contractsv1.ContextFabricOutcomeStageAssembledResult)); got != 1 {
 				t.Fatalf("after ONE finalization: %d count rows, want 1", got)
 			}
-			twice := engine.finalizeResult(context.Background(), storage.Principal{}, once, plan, frame, CanonicalFactBundle{}, &assemblyTelemetry{}, answerPassSecond, MembershipCardinality{})
+			twice := engine.finalizeResult(context.Background(), storage.Principal{}, once, plan, frame, CanonicalFactBundle{}, &assemblyTelemetry{}, answerPassSecond, cardinalityFor(once, plan))
 			rows := countOutcomeRows(twice, contractsv1.ContextFabricOutcomeStageAssembledResult)
 			if len(rows) != 1 {
 				t.Fatalf("after TWO finalizations: %d count rows, want 1 -- re-entry appended a second "+

@@ -1312,6 +1312,12 @@ func (t SlogEngineTelemetry) RecordMembershipCardinality(ctx context.Context, pr
 	if event.Cause != "" {
 		args = append(args, "cause_coverage", SanitizeLogAttr(string(event.Cause)))
 	}
+	// UNCONDITIONAL, unlike the cause keys above. Those are absent when there
+	// was no cut to describe; this one answers "did the count reach the reader
+	// as a claim", and the answer an operator needs most is the false one --
+	// emitting it only when true would make a dropped claim indistinguishable
+	// from an older build that never minted one.
+	args = append(args, "claimed", event.Claimed)
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric membership cardinality", args...)
 }

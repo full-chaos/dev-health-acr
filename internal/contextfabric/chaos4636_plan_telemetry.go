@@ -641,6 +641,19 @@ type MembershipCardinalityEvent struct {
 	// `cause_coverage`. This is the same projection, of the same row field, to
 	// the same log key.
 	Cause contractsv1.ContextFabricCoverageDetailCode
+	// Claimed reports whether the count reached the document as a CLAIM, not
+	// merely as this row.
+	//
+	// It can be false on a correct answer: claimed facts are bounded, and a
+	// document already at the contract cap serves without the claim rather
+	// than overflowing it and failing validation entirely. The count is still
+	// true and still on the outcome row; what an operator loses is the
+	// addressable field, and losing it silently is what this reports.
+	//
+	// DERIVED FROM THE SERVED DOCUMENT, not threaded from the mint site. A
+	// flag carried from where the decision was made could disagree with the
+	// document that was actually served; reading the document cannot.
+	Claimed bool
 	// CohortComplete and CohortTruncated are the cohort's OWN coverage flags,
 	// carried here because they are the difference between "this is the
 	// population" and "this is a lower bound on it". The step counts the

@@ -111,3 +111,17 @@ func cardinalityNoun(kind SubjectKind, count int) string {
 	}
 	return string(kind) + "s"
 }
+
+// resultCarriesCardinalityClaim reports whether the served document actually
+// carries the count as a claim.
+//
+// Read off the document rather than remembered from the mint, so the telemetry
+// cannot say "claimed" about an answer that does not carry one.
+func resultCarriesCardinalityClaim(result InvestigationResult) bool {
+	for _, claim := range result.ClaimedFacts {
+		if claim.Kind == contractsv1.ContextFabricFactCardinality {
+			return true
+		}
+	}
+	return false
+}
