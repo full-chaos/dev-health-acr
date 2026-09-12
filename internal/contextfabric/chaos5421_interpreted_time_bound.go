@@ -402,6 +402,9 @@ func (e *Engine) interpretedTimeBoundResult(
 	// before its own Validate -- the placement rule every other terminal
 	// exit follows.
 	result.Completeness = ComputeAnswerCompleteness(result)
+	if omitted := capCoverageEntriesToWriteBound(&result); omitted > 0 && e.telemetry != nil {
+		e.telemetry.RecordCoverageEntriesCapped(ctx, principal, len(result.Coverage.Details), omitted)
+	}
 	if fallbacks := applyCoverageDisplayLabels(&result); fallbacks > 0 && e.telemetry != nil {
 		e.telemetry.RecordEvidenceLabelFallback(ctx, principal, fallbacks)
 	}

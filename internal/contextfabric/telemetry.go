@@ -687,6 +687,23 @@ func (t SlogEngineTelemetry) RecordEvidenceLabelFallback(ctx context.Context, pr
 	t.logger.InfoContext(ctx, "context fabric evidence ref label fell back to the generic label", args...)
 }
 
+// RecordCoverageEntriesCapped implements EngineTelemetry (CHAOS-5612).
+// Content-safe: org id and two closed counts -- never a detail_id, fact
+// kind, or Raw/Label string. Info level: the cap keeps the answer servable
+// rather than refusing the write, the same "the system working" framing
+// RecordCategoryFactComposition below documents for its own Info line.
+// Called only when omitted > 0, same gated-telemetry discipline as
+// RecordEvidenceLabelFallback above it.
+func (t SlogEngineTelemetry) RecordCoverageEntriesCapped(ctx context.Context, principal storage.Principal, served, omitted int) {
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"coverage_entries_served", served,
+		"coverage_entries_omitted", omitted,
+		"coverage_entries_bound", contractsv1.ContextFabricCoverageEntriesMaxCount,
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric coverage entries capped", args...)
+}
+
 // RecordCoverageDisclosurePhrasing implements EngineTelemetry (CHAOS-4690
 // Commit F, design §4.2). Content-safe: org id, the closed outcome enum,
 // and two counts -- never a detail_id, a phrasing's text, or a Label. Info

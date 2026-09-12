@@ -300,6 +300,13 @@ const (
 	ContextFabricLimitationMaxLength = 2000
 	ContextFabricWarningsMaxCount    = 100
 	ContextFabricWarningMaxLength    = 2000
+	// ContextFabricCoverageEntriesMaxCount is the write-path coverageEntries
+	// bound (contextFabricWriteBounds.coverageEntries in
+	// validate_context_fabric_result.go, which references THIS constant
+	// rather than repeating its own literal). Exported so a producer can cap
+	// a served Coverage against the exact bound the write validator will
+	// enforce, rather than duplicate the number (CHAOS-5612).
+	ContextFabricCoverageEntriesMaxCount = 100
 	// ContextFabricClaimedFactsMaxCount bounds the synthesis draft's own
 	// top-level claimed_facts list -- the model decides how many claims to
 	// write (unlike driver/finding claimed_fact_ids, which only REFERENCE

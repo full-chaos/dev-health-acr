@@ -413,7 +413,7 @@ var contextFabricWriteBounds = contextFabricBounds{
 	cohortInclusionReasonLength:             1000,
 	narrativeCount:                          ContextFabricLimitationsMaxCount,
 	narrativeLength:                         ContextFabricLimitationMaxLength,
-	coverageEntries:                         100,
+	coverageEntries:                         ContextFabricCoverageEntriesMaxCount,
 	matchedTerms:                            32,
 	matchedTermLength:                       512,
 	matchReasons:                            32,

@@ -948,6 +948,25 @@ type EngineTelemetry interface {
 	// not an outcome" convention this file's other gated telemetry
 	// already follows (RecordModelRowsStripped's own doc comment).
 	RecordEvidenceLabelFallback(ctx context.Context, principal storage.Principal, count int)
+	// RecordCoverageEntriesCapped (CHAOS-5612) reports that
+	// capCoverageEntriesToWriteBound trimmed ONE result's Coverage.Details
+	// to fit contractsv1.ContextFabricCoverageEntriesMaxCount -- the write
+	// bound the contract validator refuses the WHOLE result over once
+	// exceeded. served is the final Details count after trimming; omitted
+	// is how many non-degrading (disclosure-only) rows the cap dropped.
+	// Never called for a result the cap left untouched, the same
+	// "nothing to do is not an outcome" convention RecordEvidenceLabelFallback
+	// above follows.
+	//
+	// Declared on THIS interface, not an optional side one, for the same
+	// CHAOS-4085/CHAOS-4089 reason every sibling method here is: a fact
+	// kind that pushes a turn past the coverage-entry bound must never
+	// degrade silently just because a telemetry implementation forgot to
+	// wire this branch.
+	//
+	// Content-safe: org id and two counts only -- never a detail_id, a
+	// fact kind, or a Raw/Label string.
+	RecordCoverageEntriesCapped(ctx context.Context, principal storage.Principal, served, omitted int)
 	// RecordCoverageDisclosurePhrasing (CHAOS-4690 Commit F, design §4.2)
 	// reports the outcome of ONE Synthesize call's coverage-disclosure
 	// guard (RuntimeAnswerSynthesizer.Synthesize, model_runtime.go) --
@@ -2977,6 +2996,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// windowConfirmationRequiredResult, structure.go's structureVetoResult)
 	// -- never on tryReuse's reuse path, which serves an immutable stored
 	// result (design §7.3's named legacy exception).
+	if omitted := capCoverageEntriesToWriteBound(&result); omitted > 0 && e.telemetry != nil {
+		e.telemetry.RecordCoverageEntriesCapped(ctx, principal, len(result.Coverage.Details), omitted)
+	}
 	if fallbacks := applyCoverageDisplayLabels(&result); fallbacks > 0 && e.telemetry != nil {
 		e.telemetry.RecordEvidenceLabelFallback(ctx, principal, fallbacks)
 	}
