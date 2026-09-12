@@ -505,3 +505,111 @@ func TestEveryComparisonAdmissionSiteConsultsTheContest(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// THE BUDGET THE POLICY LINE REPORTS
+// ---------------------------------------------------------------------------
+
+// recordingPolicySink captures the policy event and nothing else, so an arm can
+// assert the VALUE a rig would read rather than the value the caller sent.
+type recordingPolicySink struct{ events []ComparisonPolicyEvent }
+
+func (r *recordingPolicySink) RecordComparisonPolicy(_ context.Context, event ComparisonPolicyEvent) {
+	r.events = append(r.events, event)
+}
+func (r *recordingPolicySink) RecordOperandSlot(context.Context, OperandSlotEvent) {}
+func (r *recordingPolicySink) RecordComparisonReceiptBinding(context.Context, ComparisonReceiptBindingEvent) {
+}
+func (r *recordingPolicySink) RecordComparisonDecision(context.Context, ComparisonDecisionEvent) {}
+
+// TestThePolicyLineReportsTheBudgetTheRunEnforces is the clamped-request cell.
+//
+// A caller may name any integer. The resolver honours none above the
+// deployment's own cap, so a policy line echoing the request would describe a
+// budget no slot ran under -- an observable disagreeing with the run it
+// describes -- and would put an unbounded caller-controlled integer on a log
+// line, which the log-injection query correctly objects to for a value nothing
+// server-side bounds.
+//
+// THE CELLS ARE THE WHOLE SHAPE OF THE CLAMP, not just the one that motivated
+// it: over the cap, under it, exactly on it, unspecified, and no cap at all.
+// A pin that only asserted the over-cap cell would pass with the clamp applied
+// unconditionally, which would report the cap as the budget for every request.
+func TestThePolicyLineReportsTheBudgetTheRunEnforces(t *testing.T) {
+	t.Parallel()
+
+	comparison := contextfabric.ClassifyComparisonOperands(twoNamedSlotGateFrame())
+	if comparison.Admission != contextfabric.ComparisonAdmittedNamedPair {
+		t.Fatalf("fixture frame classified %q, want an admitted named pair -- the policy line only fires for a dispatched comparison", comparison.Admission)
+	}
+
+	for _, cell := range []struct {
+		name      string
+		requested int
+		cap       int
+		want      int
+		why       string
+	}{
+		{"over the cap: the cap is what runs", 500, 30, 30,
+			"the deployment's cap is server-side configuration and nothing a caller sends can raise it"},
+		{"under the cap: the request is honoured", 10, 30, 10,
+			"clamping unconditionally would report the cap for every request and hide what the caller actually asked for"},
+		{"exactly on the cap: boundary, honoured", 30, 30, 30,
+			"the cap is inclusive; a boundary request is not an over-request"},
+		{"one over the cap: boundary+1, clamped", 31, 30, 30,
+			"the cell either side of the boundary is where an off-by-one lives"},
+		{"unspecified request under a cap: the cap runs", 0, 30, 30,
+			"zero means unspecified, and an unspecified budget runs at the cap rather than at nothing"},
+		{"no cap configured: the request stands", 500, 0, 500,
+			"a cap of zero means uncapped, which is the single-subject path's own long-standing reading"},
+	} {
+		cell := cell
+		t.Run(cell.name, func(t *testing.T) {
+			t.Parallel()
+			sink := &recordingPolicySink{}
+			deps := slotGateDeps(nil, &slotGateTracer{})
+			deps.OperandResolutionSink = sink
+			deps.MaxResultsCap = cell.cap
+			request := slotGateRequest()
+			request.Options.MaxSubjectCandidates = cell.requested
+
+			recordComparisonPolicy(context.Background(), storage.Principal{OrgID: "org-1"}, request, deps, comparison)
+
+			if len(sink.events) != 1 {
+				t.Fatalf("the sink captured %d policy event(s), want exactly 1 -- an arm reading no line proves nothing about its values", len(sink.events))
+			}
+			got := sink.events[0].CandidateBudget
+			if got != cell.want {
+				t.Errorf("policy line reported candidate budget %d, want %d (requested=%d cap=%d) -- %s",
+					got, cell.want, cell.requested, cell.cap, cell.why)
+			}
+			// THE OBSERVABLE MUST AGREE WITH THE RUN. Read the same authority
+			// the slots read, so this cannot pass while the two drift apart.
+			if enforced := enforcedCandidateBudget(request, deps); got != enforced {
+				t.Errorf("policy line reported %d but the slots will enforce %d -- an observable that disagrees with the run it describes is worse than no line at all", got, enforced)
+			}
+		})
+	}
+}
+
+// twoNamedSlotGateFrame is the smallest frame this file's own comparison
+// fixtures classify as an admitted named pair.
+func twoNamedSlotGateFrame() *contextfabric.QuestionFrame {
+	frame := contextfabric.DeriveFrameObligations(contextfabric.QuestionFrame{
+		Goals: []contextfabric.InvestigationGoal{contextfabric.GoalCompare},
+		SubjectExpression: contextfabric.SubjectExpression{
+			Kind: contextfabric.SubjectExpressionExplicitSet,
+			Explicit: &contextfabric.ExplicitSetExpression{Operands: []contextfabric.SubjectOperand{
+				{Kind: contextfabric.SubjectOperandNamed, Named: &contextfabric.NamedSubjectExpression{
+					Terms: []string{"alpha"}, ExpectedKind: slotGateKindPointer(contextfabric.SubjectTeam)}},
+				{Kind: contextfabric.SubjectOperandNamed, Named: &contextfabric.NamedSubjectExpression{
+					Terms: []string{"beta"}, ExpectedKind: slotGateKindPointer(contextfabric.SubjectTeam)}},
+			}},
+		},
+		Temporal: contextfabric.TemporalIntentCurrent,
+		Version:  contextfabric.QuestionFrameVersion,
+	}, nil)
+	return &frame
+}
+
+func slotGateKindPointer(kind contextfabric.SubjectKind) *contextfabric.SubjectKind { return &kind }
