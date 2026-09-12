@@ -86,7 +86,12 @@ func TestSynthesizeAnswerResynthesizesOnRejectionUntilSuccess(t *testing.T) {
 		invalidEvidenceSynthesisOutput(), // draw 2: evidence_unknown, no clause
 		valid,                            // draw 3: validates
 	}}
-	runtime := mustRuntime(t, gen, Config{Logger: logger, MaxSynthesisResynthesisAttempts: 3})
+	// The bound (5) is deliberately WIDER than len(outputs) (3): if the loop's
+	// own success break were ever lost, drawSequenceGenerator would keep
+	// returning the clamped LAST (valid) output for draws 4-5, and gen.calls
+	// below would read 5 instead of 3 -- the loop's own upper bound alone
+	// cannot catch that mutant when the two numbers happen to coincide.
+	runtime := mustRuntime(t, gen, Config{Logger: logger, MaxSynthesisResynthesisAttempts: 5})
 
 	draft, receipt, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput())
 	if err != nil {
