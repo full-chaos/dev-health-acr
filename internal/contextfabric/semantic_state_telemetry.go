@@ -118,6 +118,14 @@ func semanticStateLogGroup(key string, state *PersistedSemanticState) slog.Attr 
 		slog.Int("requirement_count", len(state.Requirements)),
 		slog.Any("requirements", SanitizeLogStrings(requirements)),
 		slog.String("requirement_derivation_version", SanitizeLogAttr(state.RequirementDerivationVersion)),
+		// THE REQUEST IDENTITY, PUBLISHED. It was the one component of the
+		// reading that reached the store and never the trace, so a turn that
+		// took the fresh path because a RECIPE moved and one that took it
+		// because a CALLER changed an option emitted byte-identical lines. The
+		// digest is a hash, not the text it was taken over -- no conversation
+		// content, scope or option value reaches the line through it.
+		slog.String("request_identity_version", SanitizeLogAttr(state.RequestIdentity.Version)),
+		slog.String("request_identity_digest", SanitizeLogAttr(state.RequestIdentity.Digest)),
 	)
 }
 

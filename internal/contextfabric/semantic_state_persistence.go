@@ -121,3 +121,46 @@ func (e *Engine) saveResult(
 	}
 	return err
 }
+
+// SemanticStatePersistenceLineVocabulary is the persistence line's closed
+// vocabulary for one key, read from the producers rather than retyped. The
+// eventspec declaration and the emitter's own membership guards read this one
+// list, so a member cannot exist in one and not the other.
+//
+// A key with no finite vocabulary (the ids) is absent here, and the
+// specification declares it open.
+func SemanticStatePersistenceLineVocabulary(key string) []string {
+	tokens := func(values []string) []string { return append([]string{}, values...) }
+	switch key {
+	case "site":
+		out := []string{}
+		stages := BudgetAssertStageVocabulary()
+		for _, stage := range stages[:] {
+			out = append(out, string(stage))
+		}
+		return append(out, continuationTelemetryUnrecognised)
+	case "decision":
+		out := []string{}
+		for _, decision := range semanticStatePersistenceDecisions() {
+			out = append(out, string(decision))
+		}
+		return append(out, continuationTelemetryUnrecognised)
+	case "absence":
+		// "none" is the explicit token beside a snapshot: an absence key that
+		// could be empty would make "no absence" and "not written" the same
+		// reading of the line.
+		out := []string{"none"}
+		for _, absence := range semanticStateAbsences() {
+			out = append(out, string(absence))
+		}
+		return append(out, continuationTelemetryUnrecognised)
+	case "oversized_bound":
+		out := []string{"none"}
+		for _, bound := range semanticStateBounds() {
+			out = append(out, string(bound))
+		}
+		return append(out, continuationTelemetryUnrecognised)
+	default:
+		return tokens(nil)
+	}
+}

@@ -232,6 +232,13 @@ const (
 	// under today's and lands here too: an identity this build cannot verify is
 	// not an identity that matches.
 	ContinuationReasonRequestIdentityChanged ContinuationDecisionReason = "request_identity_changed"
+	// ContinuationReasonRequestIdentityUnverifiable: the carrier's identity was
+	// stamped by a recipe this build does not know, so there is nothing today's
+	// digest can be compared against. Operationally this is NOT the same event
+	// as a caller changing an option -- one is a deploy crossing a recipe
+	// version, the other is a request -- and folding them into one token made
+	// two different causes of the fresh path indistinguishable on the line.
+	ContinuationReasonRequestIdentityUnverifiable ContinuationDecisionReason = "request_identity_unverifiable"
 	// ContinuationReasonSemanticStateAbsent: the carrier read back and carries
 	// NO persisted semantic snapshot -- a row saved before the column existed,
 	// or one whose turn recorded a closed absence. The reading is
@@ -508,6 +515,19 @@ type windowContinuationDecision struct {
 	// It is a digest: no corpus text reaches the decision or the line.
 	RequestIdentity SemanticRequestIdentity
 
+	// CarriedRequestIdentity is the identity the CARRIER recorded, held beside
+	// this turn's so the line can say which of the two it is reporting on: a
+	// recipe that moved, or a caller that did.
+	CarriedRequestIdentity SemanticRequestIdentity
+
+	// RequestIdentityMatch is the comparison's OUTCOME as a closed token,
+	// decided where the comparison happens. It is a field rather than something
+	// the emitter recomputes, for the same reason every other closed field on
+	// the line is: the emitter's membership guard can then catch a value no
+	// path should have produced, and the line says `unrecognised` instead of
+	// quietly rendering a plausible one.
+	RequestIdentityMatch ContinuationRequestIdentityMatch
+
 	// CarriedAxis is the axis the referenced carrier recorded, empty when no
 	// carrier was loaded.
 	CarriedAxis contractsv1.ContextFabricTemporalAxis
@@ -515,6 +535,44 @@ type windowContinuationDecision struct {
 	// the turn ended before the axis was decided.
 	ExecutedAxis contractsv1.ContextFabricTemporalAxis
 	AxisOutcome  ContinuationAxisOutcome
+}
+
+// ContinuationRequestIdentityMatch is the closed outcome of the turn-one
+// request-identity comparison.
+type ContinuationRequestIdentityMatch string
+
+const (
+	// ContinuationRequestIdentityNotEvaluated: the turn never reached the
+	// comparison (no carrier read, or an earlier disqualifier).
+	ContinuationRequestIdentityNotEvaluated ContinuationRequestIdentityMatch = "not_evaluated"
+	// ContinuationRequestIdentityNotComparable: the carrier was stamped by a
+	// recipe this build does not know. A DEPLOY event.
+	ContinuationRequestIdentityNotComparable ContinuationRequestIdentityMatch = "not_comparable"
+	// ContinuationRequestIdentityMatched: same question, same answer-shaping
+	// inputs.
+	ContinuationRequestIdentityMatched ContinuationRequestIdentityMatch = "matched"
+	// ContinuationRequestIdentityChanged: the caller changed something the
+	// digest covers. A REQUEST event.
+	ContinuationRequestIdentityChanged ContinuationRequestIdentityMatch = "changed"
+)
+
+func continuationRequestIdentityMatches() []ContinuationRequestIdentityMatch {
+	return []ContinuationRequestIdentityMatch{
+		ContinuationRequestIdentityMatched,
+		ContinuationRequestIdentityChanged,
+		ContinuationRequestIdentityNotComparable,
+		ContinuationRequestIdentityNotEvaluated,
+	}
+}
+
+// ValidContinuationRequestIdentityMatch reports membership.
+func ValidContinuationRequestIdentityMatch(value ContinuationRequestIdentityMatch) bool {
+	for _, member := range continuationRequestIdentityMatches() {
+		if member == value {
+			return true
+		}
+	}
+	return false
 }
 
 // ContinuationCarrierRead is the CLOSED outcome of admission's carrier read.
@@ -660,6 +718,7 @@ func continuationDecisionReasons() []ContinuationDecisionReason {
 		ContinuationReasonWindowSuperseded,
 		ContinuationReasonAnswerBudgetChanged,
 		ContinuationReasonRequestIdentityChanged,
+		ContinuationReasonRequestIdentityUnverifiable,
 		ContinuationReasonSemanticStateAbsent,
 		ContinuationReasonSemanticStateInvalid,
 		ContinuationReasonUnspecified,
@@ -703,6 +762,9 @@ func newWindowContinuationDecision(request InvestigationRequest) windowContinuat
 		SeedSource:     CarrySeedNone,
 		ConflictReason: ContinuationConflictNone,
 		ConflictFields: []ContinuationConflictField{},
+		// Set here for the same reason: every exit publishes a member, and a
+		// turn that never reached the comparison says exactly that.
+		RequestIdentityMatch: ContinuationRequestIdentityNotEvaluated,
 		// SET IN THE CONSTRUCTOR, ABOVE EVERY RETURN. The composition outcome
 		// is a field on this event, so it reaches the line on every turn the
 		// event is emitted -- including the turns where no composition ran at
@@ -999,11 +1061,20 @@ func (e *Engine) admitWindowContinuation(
 	// something that shapes the answer, so this is not the question the window
 	// was confirmed for: NOT APPLICABLE, the fresh path, never a refusal.
 	decision.RequestIdentity = SemanticRequestIdentityOf(request, prior.Question)
-	if !decision.RequestIdentity.Equal(stored.SemanticState.RequestIdentity) {
+	decision.CarriedRequestIdentity = stored.SemanticState.RequestIdentity
+	switch {
+	case !stored.SemanticState.RequestIdentity.Comparable():
+		decision.RequestIdentityMatch = ContinuationRequestIdentityNotComparable
+		decision.Disposition = ContinuationNotApplicable
+		decision.Reason = ContinuationReasonRequestIdentityUnverifiable
+		return decision
+	case !decision.RequestIdentity.Equal(stored.SemanticState.RequestIdentity):
+		decision.RequestIdentityMatch = ContinuationRequestIdentityChanged
 		decision.Disposition = ContinuationNotApplicable
 		decision.Reason = ContinuationReasonRequestIdentityChanged
 		return decision
 	}
+	decision.RequestIdentityMatch = ContinuationRequestIdentityMatched
 	decision.Carried = &continuationCarriedContext{
 		Family:         plan.Family,
 		GroupKind:      plan.GroupKind,

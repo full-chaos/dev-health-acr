@@ -35,6 +35,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -64,6 +65,23 @@ const (
 	SemanticStateMaxTerms = 32
 	// SemanticStateMaxTermBytes bounds one retrieval term.
 	SemanticStateMaxTermBytes = 1024
+	// SemanticStateMaxTermBytesTotal bounds the retrieval-term bytes a
+	// snapshot carries IN TOTAL, across every term list in the frame and the
+	// scope anchor.
+	//
+	// WITHOUT IT THE NAMED BOUNDS AND THE CAP DISAGREED, and the disagreement
+	// was not academic: 16 operands, each with two 32-term lists of 1024-byte
+	// terms, is inside every per-collection bound and roughly a megabyte
+	// encoded. A snapshot in that gap is refused by the byte cap at capture,
+	// which costs the NEXT turn its continuation -- the user asks again with
+	// the window they were offered and is told the earlier reading cannot be
+	// verified, for a reason no bound named.
+	//
+	// The total is set so that a snapshot at EVERY named maximum still encodes
+	// under the cap, with room for JSON escaping, which can double a term's
+	// bytes. TestSemanticState_TheNamedBoundsImplyTheByteCap asserts exactly
+	// that at the maxima, so the two statements cannot drift apart again.
+	SemanticStateMaxTermBytesTotal = 8192
 )
 
 // PersistedSemanticState is the accepted semantic state of one result.
@@ -331,18 +349,20 @@ var errSemanticStateOversized = errors.New("semantic state exceeds a bound")
 type SemanticStateBound string
 
 const (
-	SemanticStateBoundEncodedBytes SemanticStateBound = "encoded_bytes"
-	SemanticStateBoundRequirements SemanticStateBound = "requirements"
-	SemanticStateBoundOperands     SemanticStateBound = "operands"
-	SemanticStateBoundTerms        SemanticStateBound = "terms"
-	SemanticStateBoundTermBytes    SemanticStateBound = "term_bytes"
-	SemanticStateBoundFrameSet     SemanticStateBound = "frame_set"
+	SemanticStateBoundEncodedBytes   SemanticStateBound = "encoded_bytes"
+	SemanticStateBoundRequirements   SemanticStateBound = "requirements"
+	SemanticStateBoundOperands       SemanticStateBound = "operands"
+	SemanticStateBoundTerms          SemanticStateBound = "terms"
+	SemanticStateBoundTermBytes      SemanticStateBound = "term_bytes"
+	SemanticStateBoundTermBytesTotal SemanticStateBound = "term_bytes_total"
+	SemanticStateBoundFrameSet       SemanticStateBound = "frame_set"
 )
 
 func semanticStateBounds() []SemanticStateBound {
 	return []SemanticStateBound{
 		SemanticStateBoundEncodedBytes, SemanticStateBoundRequirements,
-		SemanticStateBoundOperands, SemanticStateBoundTerms, SemanticStateBoundTermBytes, SemanticStateBoundFrameSet,
+		SemanticStateBoundOperands, SemanticStateBoundTerms, SemanticStateBoundTermBytes,
+		SemanticStateBoundTermBytesTotal, SemanticStateBoundFrameSet,
 	}
 }
 
@@ -395,6 +415,16 @@ func EncodeSemanticState(state *PersistedSemanticState) ([]byte, error) {
 	encoded, err := json.Marshal(state)
 	if err != nil {
 		return nil, fmt.Errorf("%w: encode: %v", ErrSemanticStateRejected, err)
+	}
+	// CHECKED ON THE READING, NOT ON ITS ENCODING. encoding/json replaces a
+	// byte sequence that is not valid UTF-8 with U+FFFD, silently, and the
+	// replacement is what every later check sees: the stored snapshot is then
+	// a DIFFERENT reading from the one that was accepted, two distinct
+	// readings encode to the same bytes, and the replay comparison cannot tell
+	// them apart. Refused at capture the way a NUL is, so the result is still
+	// saved with the closed absence instead of a quietly rewritten reading.
+	if path, ok := firstUnencodableString(state); !ok {
+		return nil, fmt.Errorf("%w: %s is not valid UTF-8, and encoding it would store a different reading than the one accepted", ErrSemanticStateRejected, path)
 	}
 	if len(encoded) > SemanticStateMaxEncodedBytes {
 		return nil, fmt.Errorf("%w: %w", ErrSemanticStateRejected, overBound(SemanticStateBoundEncodedBytes, "%d encoded bytes exceeds the %d-byte cap", len(encoded), SemanticStateMaxEncodedBytes))
@@ -638,6 +668,10 @@ func validInvestigationShapeMember(shape InvestigationShape) bool {
 
 func validateSemanticFrameBounds(frame QuestionFrame) error {
 	over := overBound
+	// The running total every term list contributes to. One predicate: a
+	// snapshot is bounded when it is inside every named collection bound AND
+	// inside the total that keeps those maxima encodable under the cap.
+	termBytesTotal := 0
 	if len(frame.Goals) > InvestigationGoalCount || len(frame.Emphasis) > AnswerEmphasisCount ||
 		len(frame.Dimensions) > HealthDimensionCount || len(frame.Obligations) > AnswerObligationCount ||
 		len(frame.WidenedObligations) > AnswerObligationCount {
@@ -650,6 +684,10 @@ func validateSemanticFrameBounds(frame QuestionFrame) error {
 		for _, term := range list {
 			if len(term) > SemanticStateMaxTermBytes {
 				return over(SemanticStateBoundTermBytes, "a %d-byte retrieval term exceeds %d", len(term), SemanticStateMaxTermBytes)
+			}
+			termBytesTotal += len(term)
+			if termBytesTotal > SemanticStateMaxTermBytesTotal {
+				return over(SemanticStateBoundTermBytesTotal, "%d retrieval-term bytes in total exceeds %d", termBytesTotal, SemanticStateMaxTermBytesTotal)
 			}
 		}
 		return nil
@@ -934,6 +972,66 @@ func firstDuplicate(lists ...[]string) string {
 		}
 	}
 	return ""
+}
+
+// firstUnencodableString walks every string this snapshot carries -- struct
+// fields, slice elements, map keys and values, through pointers -- and reports
+// the first that cannot survive the round trip byte for byte. It returns
+// ("", true) when every string is encodable.
+//
+// THE WALK IS REFLECTIVE ON PURPOSE, unlike the request-identity document. That
+// document decides MEANING, so it names its fields and a new field must be
+// decided by a human. This decides ENCODABILITY, which is a property of every
+// string without exception: a field added tomorrow must be covered by being a
+// string, not by being remembered here.
+func firstUnencodableString(state *PersistedSemanticState) (string, bool) {
+	if state == nil {
+		return "", true
+	}
+	var walk func(path string, v reflect.Value) (string, bool)
+	walk = func(path string, v reflect.Value) (string, bool) {
+		switch v.Kind() {
+		case reflect.String:
+			if !utf8.ValidString(v.String()) {
+				return path + " (invalid UTF-8)", false
+			}
+		case reflect.Pointer, reflect.Interface:
+			if !v.IsNil() {
+				return walk(path, v.Elem())
+			}
+		case reflect.Slice, reflect.Array:
+			for i := 0; i < v.Len(); i++ {
+				if p, ok := walk(fmt.Sprintf("%s[%d]", path, i), v.Index(i)); !ok {
+					return p, false
+				}
+			}
+		case reflect.Map:
+			for _, key := range v.MapKeys() {
+				if p, ok := walk(path+".<key>", key); !ok {
+					return p, false
+				}
+				if p, ok := walk(path+"."+fmt.Sprint(key.Interface()), v.MapIndex(key)); !ok {
+					return p, false
+				}
+			}
+		case reflect.Struct:
+			t := v.Type()
+			for i := 0; i < v.NumField(); i++ {
+				if !t.Field(i).IsExported() {
+					continue
+				}
+				name := strings.Split(t.Field(i).Tag.Get("json"), ",")[0]
+				if name == "" {
+					name = t.Field(i).Name
+				}
+				if p, ok := walk(path+"."+name, v.Field(i)); !ok {
+					return p, false
+				}
+			}
+		}
+		return "", true
+	}
+	return walk("semantic_state", reflect.ValueOf(state))
 }
 
 // carriesNUL reports whether any string value in the JSON document contains a

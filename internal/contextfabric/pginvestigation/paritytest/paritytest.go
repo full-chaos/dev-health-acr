@@ -630,6 +630,34 @@ func SemanticStateFixture(group, member contextfabric.SubjectKind) *contextfabri
 // SizedSemanticState builds a valid snapshot whose canonical encoding is
 // EXACTLY target bytes, for the cap cells. It fails the test rather than
 // guessing when the target is unreachable.
+// VersionPaddedSemanticState builds a snapshot of EXACTLY target encoded bytes
+// by padding the family table stamp -- a field no collection bound covers.
+//
+// SizedSemanticState pads with retrieval terms, and the total term-bytes bound
+// now stops that padding well short of the byte cap: a cap cell built that way
+// measures the term bound instead of the cap. The cap's own cells are driven
+// through the one open field so they measure what they claim to.
+func VersionPaddedSemanticState(t testing.TB, target int) *contextfabric.PersistedSemanticState {
+	t.Helper()
+	state := SizedSemanticState(t, 4000)
+	size := func(s *contextfabric.PersistedSemanticState) int {
+		encoded, err := json.Marshal(s)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return len(encoded)
+	}
+	delta := target - size(state)
+	if delta < 0 {
+		t.Fatalf("fixture defect: the base snapshot is already %d bytes, over the %d-byte target", size(state), target)
+	}
+	state.FamilyTableVersion += strings.Repeat("v", delta)
+	if got := size(state); got != target {
+		t.Fatalf("fixture defect: padded to %d bytes, want %d", got, target)
+	}
+	return state
+}
+
 func SizedSemanticState(t testing.TB, target int) *contextfabric.PersistedSemanticState {
 	t.Helper()
 	kind := contextfabric.SubjectRepository
@@ -829,7 +857,7 @@ func RunSemanticStateCapSuite(t *testing.T, newStore func(t *testing.T) contextf
 	}{{contextfabric.SemanticStateMaxEncodedBytes - 1, true}, {contextfabric.SemanticStateMaxEncodedBytes, true}, {contextfabric.SemanticStateMaxEncodedBytes + 1, false}} {
 		t.Run(fmt.Sprint(tc.bytes), func(t *testing.T) {
 			store := newStore(t)
-			state := SizedSemanticState(t, tc.bytes)
+			state := VersionPaddedSemanticState(t, tc.bytes)
 			row := result(fmt.Sprintf("result-id-semantic-cap-%d", tc.bytes), "how large may a reading be?")
 			err := store.Save(context.Background(), orgA, row, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateOf(state))
 			stored, getErr := store.Get(context.Background(), orgA, row.ResultID)

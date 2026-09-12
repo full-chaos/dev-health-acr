@@ -1075,6 +1075,17 @@ func TestWindowContinuation_EveryReasonIsReachedThroughTheEngine(t *testing.T) {
 			reason: ContinuationReasonRequestIdentityChanged,
 			mutate: func(r *InvestigationRequest) { r.Options.MaxDrivers = r.Options.MaxDrivers + 1 },
 		},
+		{
+			// A carrier stamped by a recipe this build does not know: nothing
+			// today's digest can be compared against. A DEPLOY event, not a
+			// request one, which is why it is its own member.
+			reason: ContinuationReasonRequestIdentityUnverifiable,
+			carrier: func(t testing.TB, prior InvestigationResult) *PersistedSemanticState {
+				state := framelessCarrierState(prior)
+				state.RequestIdentity.Version = "request-identity.v0-not-in-force"
+				return state
+			},
+		},
 	}
 
 	// EVERY MEMBER HAS A DRIVER, and `unspecified` deliberately has none.

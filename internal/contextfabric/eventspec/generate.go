@@ -156,6 +156,8 @@ func goVarName(e Event) string {
 		return "SliceBSurvivorVerdict"
 	case SliceBSurvivorVerdictSummary.ID:
 		return "SliceBSurvivorVerdictSummary"
+	case SemanticStatePersistence.ID:
+		return "SemanticStatePersistence"
 	default:
 		panic("eventspec: goVarName has no mapping for " + e.ID + " -- add one before regenerating")
 	}

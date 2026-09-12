@@ -1960,10 +1960,16 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if continuation.Applies() {
 		acceptedShape = continuation.Accepted.State.Validation.EmittedShape
 	}
-	acceptedBasis := plan.Budget.NarrowingBasis
+	// ONE SITE DECIDES THE NARROWING BASIS, and it is this one -- above every
+	// exit that saves. A carried basis used to be applied to the PLAN much
+	// further down, while the snapshot captured its own copy up here: an exit
+	// that saved in between wrote a reading whose basis the plan then changed,
+	// so the stored reading and the served plan disagreed about how the answer
+	// was narrowed. Decided once, into the plan, and read from the plan.
 	if planCarry.Outcome == PlanCarryHit && planCarry.NarrowingBasis != "" {
-		acceptedBasis = planCarry.NarrowingBasis
+		plan.Budget.NarrowingBasis = planCarry.NarrowingBasis
 	}
+	acceptedBasis := plan.Budget.NarrowingBasis
 	// THE IDENTITY SAVED IS THE IDENTITY COMPARED. On a continuing turn
 	// admission already computed it against the carrier's question; reuse that
 	// value rather than computing a second one here, so the two can never
@@ -2335,12 +2341,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	//
 	// Before/After are the CAPS, not a known population: how many members
 	// exist is precisely what has not been read yet.
-	// A carried narrowing basis keeps two turns of one conversation
-	// narrowing the same way. A follow-up that silently changed basis would
-	// make the two answers incomparable while looking like a refinement.
-	if planCarry.Outcome == PlanCarryHit && planCarry.NarrowingBasis != "" {
-		plan.Budget.NarrowingBasis = planCarry.NarrowingBasis
-	}
+	// The carried narrowing basis was applied ABOVE, once, before any exit
+	// that saves -- a carried basis keeps two turns of one conversation
+	// narrowing the same way, and deciding it twice let the stored reading and
+	// the served plan disagree.
 	if clamped := plan.Budget.MaxMembers; clamped > 0 && (graphRequest.Options.MaxCohortMembers <= 0 || clamped < graphRequest.Options.MaxCohortMembers) {
 		e.recordPlanNarrowingStep(&plan, PlanNarrowing{
 			Stage:  contractsv1.ContextFabricPlanNarrowingCardinality,

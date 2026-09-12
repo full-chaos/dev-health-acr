@@ -413,6 +413,37 @@ func TestSemanticState_EachCrossFieldAgreementIsCheckedOnItsOwn(t *testing.T) {
 
 // sizedSemanticState builds a valid snapshot whose canonical encoding is EXACTLY
 // target bytes, by filling an explicit set's operands with retrieval terms.
+// versionPaddedSemanticState builds a snapshot of EXACTLY target encoded bytes
+// by padding the family table stamp -- a string no collection bound covers.
+//
+// The retrieval-term padding sizedSemanticState uses cannot reach the byte cap
+// any more: the total term-bytes bound now stops well short of it, which is the
+// whole point of that bound. The cap's own boundary cells still have to be
+// driven at the boundary, so they are driven through the one field the
+// collection bounds leave open, and they measure the cap rather than a
+// collection.
+func versionPaddedSemanticState(t testing.TB, target int) *PersistedSemanticState {
+	t.Helper()
+	state := sizedSemanticState(t, 4000)
+	size := func(s *PersistedSemanticState) int {
+		encoded, err := json.Marshal(s)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return len(encoded)
+	}
+	base := state.FamilyTableVersion
+	delta := target - size(state)
+	if delta < 0 {
+		t.Fatalf("fixture defect: the base snapshot is already %d bytes, over the %d-byte target", size(state), target)
+	}
+	state.FamilyTableVersion = base + strings.Repeat("v", delta)
+	if got := size(state); got != target {
+		t.Fatalf("fixture defect: padded to %d bytes, want %d", got, target)
+	}
+	return state
+}
+
 func sizedSemanticState(t testing.TB, target int) *PersistedSemanticState {
 	t.Helper()
 	build := func(terms [][]string) *PersistedSemanticState {
@@ -487,7 +518,7 @@ func TestSemanticState_TheEncodedCapIsExactly65536Bytes(t *testing.T) {
 		accept bool
 	}{{65535, true}, {65536, true}, {65537, false}} {
 		t.Run(fmt.Sprint(tc.bytes), func(t *testing.T) {
-			state := sizedSemanticState(t, tc.bytes)
+			state := versionPaddedSemanticState(t, tc.bytes)
 			encoded, err := EncodeSemanticState(state)
 			raw, _ := json.Marshal(state)
 			_, status := DecodeSemanticState(raw)
@@ -692,7 +723,10 @@ func TestSemanticState_ReplayEqualityIncludesPresenceAndEveryComponent(t *testin
 // absence that names why, and its measured size is kept for the trace.
 func TestSemanticState_CaptureRejectsExplicitlyAndNeverTruncates(t *testing.T) {
 	t.Parallel()
-	over := sizedSemanticState(t, SemanticStateMaxEncodedBytes+1)
+	// Padded through the version stamp, not through terms: the total
+	// retrieval-term bound now stops term padding long before the cap, so a
+	// term-padded fixture would measure that bound instead of this one.
+	over := versionPaddedSemanticState(t, SemanticStateMaxEncodedBytes+1)
 	in := SemanticStateInput{
 		Outcome:       QuestionFamilyOutcome{Family: over.Family, Source: over.FamilySource, Frame: over.Frame, Gate: FrameGate{Outcome: FrameGatePassed}},
 		EmittedShape:  over.Validation.EmittedShape,
@@ -708,7 +742,7 @@ func TestSemanticState_CaptureRejectsExplicitlyAndNeverTruncates(t *testing.T) {
 	if invalid.Write.State != nil || invalid.Write.Absence != SemanticStateAbsenceSnapshotInvalid {
 		t.Errorf("invalid capture = %+v, want absence snapshot_invalid", invalid)
 	}
-	fit := sizedSemanticState(t, SemanticStateMaxEncodedBytes)
+	fit := versionPaddedSemanticState(t, SemanticStateMaxEncodedBytes)
 	in = SemanticStateInput{
 		Outcome:       QuestionFamilyOutcome{Family: fit.Family, Source: fit.FamilySource, Frame: fit.Frame, Gate: FrameGate{Outcome: FrameGatePassed}},
 		EmittedShape:  fit.Validation.EmittedShape,
@@ -834,7 +868,19 @@ func TestSemanticState_AnOversizedCaptureNamesItsBoundOnTheLine(t *testing.T) {
 	}
 	drivers := map[SemanticStateBound]func(t *testing.T) SemanticStateInput{
 		SemanticStateBoundEncodedBytes: func(t *testing.T) SemanticStateInput {
-			return inputOf(sizedSemanticState(t, SemanticStateMaxEncodedBytes+1))
+			// THE CAP IS THE LAST-RESORT GUARD, and after the total
+			// retrieval-term bound it can no longer be reached through the
+			// free text the collection bounds cover -- padding with terms now
+			// breaches term_bytes_total first, which is the point of that
+			// bound. It is still reachable through a field NO collection bound
+			// names, and this cell drives exactly that: an over-long version
+			// stamp. Production writes a constant there, so this is the guard
+			// standing behind a field that cannot breach it today rather than
+			// a live failure mode -- and a cell proving the guard still fires
+			// is what keeps it from rotting into a member nothing can produce.
+			in := inputOf(sizedSemanticState(t, 4000))
+			in.FamilyVersion = strings.Repeat("v", SemanticStateMaxEncodedBytes+1)
+			return in
 		},
 		SemanticStateBoundRequirements: func(t *testing.T) SemanticStateInput {
 			goals := richestValidGoalSet()
@@ -848,6 +894,21 @@ func TestSemanticState_AnOversizedCaptureNamesItsBoundOnTheLine(t *testing.T) {
 		SemanticStateBoundTerms:    func(t *testing.T) SemanticStateInput { return explicit(t, 2, manyTerms) },
 		SemanticStateBoundTermBytes: func(t *testing.T) SemanticStateInput {
 			return explicit(t, 2, []string{strings.Repeat("x", SemanticStateMaxTermBytes+1)})
+		},
+		SemanticStateBoundTermBytesTotal: func(t *testing.T) SemanticStateInput {
+			// Every term inside the per-term bound, and one byte past the
+			// total across them: the cell the per-collection bounds all pass
+			// and the cap used to catch far too late.
+			// Half the per-term bound each, so the helper's own "-00" suffix
+			// on the first term cannot breach term_bytes and mask this cell,
+			// and one term more than the total allows.
+			each := SemanticStateMaxTermBytes / 2
+			count := SemanticStateMaxTermBytesTotal/each + 1
+			list := make([]string, 0, count)
+			for i := 0; i < count; i++ {
+				list = append(list, strings.Repeat("x", each))
+			}
+			return explicit(t, 1, list)
 		},
 		SemanticStateBoundFrameSet: func(t *testing.T) SemanticStateInput {
 			in := inputOf(sizedSemanticState(t, 4000))

@@ -77,35 +77,63 @@ type requestIdentityDocument struct {
 	AllowClarification     bool                                            `json:"allow_clarification"`
 	WindowConfirmationMode contractsv1.ContextFabricWindowConfirmationMode `json:"window_confirmation_mode"`
 
-	Conversation []contractsv1.ContextFabricConversationTurn `json:"conversation"`
+	// Conversation is PROJECTED, never the transport type. Embedding the
+	// contract struct put turn_id and created_at into the identity without
+	// naming them, so a re-issued id or a "+02:00" spelling of the same
+	// instant moved the digest and took a legitimate continuation off the
+	// carried path. What the interpreter reads is who spoke and what they
+	// said, in order; that is what is compared.
+	Conversation []conversationIdentityTurn `json:"conversation"`
 }
 
-// conversationWithoutReferencedExchange drops the exchange the continuing turn
-// is continuing: a user turn whose content is the referenced question byte for
-// byte, and the assistant turn immediately following it. referencedQuestion
-// empty (a turn that references nothing) drops nothing.
+// conversationIdentityTurn is the named projection of one conversation turn.
+type conversationIdentityTurn struct {
+	Role    contractsv1.ContextFabricConversationRole `json:"role"`
+	Content string                                    `json:"content"`
+}
+
+// conversationWithoutReferencedExchange drops the ONE exchange the continuing
+// turn is continuing, and projects what is left.
+//
+// EXACTLY ONE PAIR, ANCHORED AT THE END. The referenced exchange is the LAST
+// user turn whose content is the referenced question byte for byte, plus the
+// assistant turn immediately after it -- the answer that was served. Everything
+// else stays in the comparison, including an EARLIER turn that asked the same
+// question: that one was part of what turn one itself was asked under, and it
+// is not what this turn references.
+//
+// Dropping every content match instead was a hole, not a nicety: a caller could
+// append `{user: <the question, verbatim>}, {assistant: <anything>}` and the
+// digest did not move, so an instruction the user never confirmed rode into the
+// fresh interpretation under a window confirmed for other bytes. It also had a
+// mirror image -- a user who genuinely asked the same question twice lost the
+// continuation, because turn one's own history was swallowed too.
 //
 // The rule is stated on CONTENT because a conversation turn carries no result
-// id to join on. It is deliberately narrow: only an exact-byte user turn is
-// dropped, so a caller who rephrases the earlier question keeps it in the
-// comparison and gets the fresh path.
-func conversationWithoutReferencedExchange(turns []contractsv1.ContextFabricConversationTurn, referencedQuestion string) []contractsv1.ContextFabricConversationTurn {
-	kept := make([]contractsv1.ContextFabricConversationTurn, 0, len(turns))
-	if referencedQuestion == "" {
-		return append(kept, turns...)
+// id to join on, and it is bounded to one pair so that "what the caller added
+// since" is everything the rule does not name.
+//
+// referencedQuestion empty (a turn that references nothing) drops nothing.
+func conversationWithoutReferencedExchange(turns []contractsv1.ContextFabricConversationTurn, referencedQuestion string) []conversationIdentityTurn {
+	drop := map[int]bool{}
+	if referencedQuestion != "" {
+		for i := len(turns) - 1; i >= 0; i-- {
+			if turns[i].Role != contractsv1.ContextFabricConversationUser || turns[i].Content != referencedQuestion {
+				continue
+			}
+			drop[i] = true
+			if i+1 < len(turns) && turns[i+1].Role == contractsv1.ContextFabricConversationAssistant {
+				drop[i+1] = true
+			}
+			break
+		}
 	}
-	skipAssistant := false
-	for _, turn := range turns {
-		if turn.Role == contractsv1.ContextFabricConversationUser && turn.Content == referencedQuestion {
-			skipAssistant = true
+	kept := make([]conversationIdentityTurn, 0, len(turns))
+	for i, turn := range turns {
+		if drop[i] {
 			continue
 		}
-		if skipAssistant && turn.Role == contractsv1.ContextFabricConversationAssistant {
-			skipAssistant = false
-			continue
-		}
-		skipAssistant = false
-		kept = append(kept, turn)
+		kept = append(kept, conversationIdentityTurn{Role: turn.Role, Content: turn.Content})
 	}
 	return kept
 }

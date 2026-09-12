@@ -463,6 +463,9 @@ func TestCHAOS5582_TheLineVocabularyIsTheGuardsVocabulary(t *testing.T) {
 		},
 		"interpreted_axis_outcome": func(d *windowContinuationDecision, m string) { d.AxisOutcome = ContinuationAxisOutcome(m) },
 		"carrier_read":             func(d *windowContinuationDecision, m string) { d.CarrierRead = ContinuationCarrierRead(m) },
+		"request_identity_match": func(d *windowContinuationDecision, m string) {
+			d.RequestIdentityMatch = ContinuationRequestIdentityMatch(m)
+		},
 		"carried_state_read": func(d *windowContinuationDecision, m string) {
 			// "not_read" is the token the guard renders when admission never
 			// consulted a carrier, so it is seated by NOT consulting one;

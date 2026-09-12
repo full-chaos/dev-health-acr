@@ -213,6 +213,8 @@ var semanticStateGroupFields = []Field{
 	{Key: "requirement_count", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when present=true"},
 	{Key: "requirements", Type: FieldStringSlice, Presence: PresenceConditional, Applicability: "written when present=true"},
 	{Key: "requirement_derivation_version", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "request_identity_version", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true; the recipe that produced the digest, empty on a snapshot written before one existed"},
+	{Key: "request_identity_digest", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true; a hash, never the inputs it was taken over"},
 }
 
 // Event is one canonical, named production log line: its identity, every
@@ -1101,6 +1103,7 @@ var WindowContinuationDecision = Event{
 		// The carrier's SNAPSHOT read, beside the carrier read itself: a
 		// carrier can read back perfectly and still carry no usable reading.
 		{Key: "carried_state_read", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("carried_state_read")},
+		{Key: "request_identity_match", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.ContinuationDecisionLineVocabulary("request_identity_match")},
 		// THE TWO READINGS, IN FULL. The carried one is what admission read;
 		// the fresh one is this turn's diagnostic proposal. Same member shape
 		// on both sides, so they are read against each other key by key.
@@ -1618,6 +1621,38 @@ var SliceBSurvivorVerdictSummary = Event{
 // All is every event this specification declares. Generate() and the
 // certification runner both range over exactly this slice -- neither
 // maintains a second list.
+// SemanticStatePersistence is the Save-site decision about one result's
+// persisted reading: whether a snapshot was written, and when it was not, the
+// closed reason and the bound it breached.
+//
+// Declared HERE and not only emitted, because the certifier is what makes a
+// line's shape a promise rather than a habit: the 30-member `state` group
+// carries the whole reading, and it is declared against the SAME member list
+// the continuation decision's two readings use, so the three groups cannot
+// drift apart.
+var SemanticStatePersistence = Event{
+	ID:                 "contextfabric.semantic_state_persistence",
+	Msg:                "context fabric semantic state persistence",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityExactlyOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "exactly one line per Save, from the engine's single save site; a request that never reaches Save emits none.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "result_id", Type: FieldString, Presence: PresenceRequired},
+		// Open: the ancestry parent, or empty on a first turn.
+		{Key: "parent_result_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "site", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SemanticStatePersistenceLineVocabulary("site")},
+		{Key: "decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SemanticStatePersistenceLineVocabulary("decision")},
+		{Key: "absence", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SemanticStatePersistenceLineVocabulary("absence")},
+		{Key: "oversized_bound", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.SemanticStatePersistenceLineVocabulary("oversized_bound")},
+		{Key: "encoded_bytes", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "encoded_cap", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "state", Type: FieldObject, Presence: PresenceRequired, Fields: semanticStateGroupFields},
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+	},
+}
+
 var All = []Event{
 	RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld,
 	Corroboration, CorroborationSummary, ReservedKindAdmitted, OfferPool, OfferPoolSummary,
@@ -1635,4 +1670,5 @@ var All = []Event{
 	IdentityGate, IdentityGateSummary,
 	EvidenceRound, EvidenceProbe, EvidenceCensusCommit, EvidenceSourceNative, EvidenceSourceNativeProbe,
 	SliceBSurvivorVerdict, SliceBSurvivorVerdictSummary,
+	SemanticStatePersistence,
 }

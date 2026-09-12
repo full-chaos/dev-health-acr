@@ -170,8 +170,18 @@ func (s *staticResultStore) Get(_ context.Context, _ storage.Principal, resultID
 	}
 	stored := StoredInvestigationResult{Result: result, GraphEpoch: epoch, SemanticStateRead: SemanticStateReadAbsent}
 	if state, ok := s.states[resultID]; ok && state != nil {
-		stored.SemanticState = cloneSemanticState(state)
-		stored.SemanticStateRead = SemanticStateReadAvailable
+		// THROUGH THE CODEC, exactly as both real stores do. Handing back the
+		// in-memory value skipped encode and decode entirely, so this double
+		// could serve a carrier no production row could hold -- one that
+		// encode would have refused, or that decode would have reported
+		// unavailable -- and every pin over it, and the mutation battery over
+		// those pins, measured a carrier production cannot produce.
+		column, err := SemanticStateOf(state).EncodedColumn()
+		if err != nil {
+			return StoredInvestigationResult{}, fmt.Errorf("fixture defect: the registered carrier snapshot for %q does not encode: %w", resultID, err)
+		}
+		decoded, status := DecodeSemanticState(column)
+		stored.SemanticState, stored.SemanticStateRead = decoded, status
 	}
 	if status, ok := s.stateReads[resultID]; ok {
 		stored.SemanticStateRead = status
