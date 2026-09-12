@@ -127,6 +127,8 @@ func (b *deathLogBuffer) tail() []string {
 // data instead of a real dying container.
 type containerDeathReport struct {
 	Trigger        string
+	DetectedAt     string
+	LastGoodAt     string
 	LogTail        []string
 	OOMKilled      bool
 	ExitCode       int
@@ -141,8 +143,8 @@ type containerDeathReport struct {
 // line so it's grep-able out of a hosted CI log.
 func formatContainerDeathReport(r containerDeathReport) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s trigger=%q oom_killed=%t exit_code=%d finished_at=%q fixture_uptime=%s test_count=%d\n",
-		clickHouseDeathMarker, r.Trigger, r.OOMKilled, r.ExitCode, r.FinishedAt, r.FixtureUptime, r.TestCount)
+	fmt.Fprintf(&b, "%s trigger=%q detected_at=%q last_good_at=%q oom_killed=%t exit_code=%d finished_at=%q fixture_uptime=%s test_count=%d\n",
+		clickHouseDeathMarker, r.Trigger, r.DetectedAt, r.LastGoodAt, r.OOMKilled, r.ExitCode, r.FinishedAt, r.FixtureUptime, r.TestCount)
 	markerBlock(&b, "host_free_m", r.HostFreeM)
 	markerBlock(&b, "container_stats", r.ContainerStats)
 	fmt.Fprintf(&b, "%s log_tail lines=%d\n", clickHouseDeathMarker, len(r.LogTail))
@@ -187,8 +189,12 @@ func containerMemStats(containerID string) string {
 
 // reportClickHouseContainerDeath assembles and emits one death report. It
 // takes its state as parameters rather than reaching for globals so the
-// guard test can call it directly with a fabricated death.
-func reportClickHouseContainerDeath(logf func(string, ...any), buf *deathLogBuffer, state *dockercontainer.State, containerID string, startedAt time.Time, testCount int64, trigger string) {
+// guard test can call it directly with a fabricated death. detectedAt
+// names WHICH check caught the death ("in_flight" during a regular tick,
+// "teardown" from the final synchronous probe stop triggers); lastGoodAt
+// is the last time both probes reported healthy, so a reader can bound how
+// long the container had already been dead before this report fired.
+func reportClickHouseContainerDeath(logf func(string, ...any), buf *deathLogBuffer, state *dockercontainer.State, containerID string, startedAt time.Time, testCount int64, trigger, detectedAt string, lastGoodAt time.Time) {
 	var oomKilled bool
 	var exitCode int
 	var finishedAt string
@@ -199,6 +205,8 @@ func reportClickHouseContainerDeath(logf func(string, ...any), buf *deathLogBuff
 	}
 	logf("%s", formatContainerDeathReport(containerDeathReport{
 		Trigger:        trigger,
+		DetectedAt:     detectedAt,
+		LastGoodAt:     lastGoodAt.UTC().Format(time.RFC3339Nano),
 		LogTail:        buf.tail(),
 		OOMKilled:      oomKilled,
 		ExitCode:       exitCode,
@@ -223,6 +231,15 @@ type containerStateProber interface {
 	GetContainerID() string
 }
 
+// deathTickInterval is deliberately short: the watcher must beat a package
+// that fails fast and tears its fixture down quickly after the container
+// actually dies (a real hosted death was measured racing ahead of a 750ms
+// x2 debounce and winning -- the package finished and closed stop before
+// the watcher ever accumulated two bad ticks). 150ms x2 leaves a wide
+// margin against that race while still comfortably outlasting a single
+// momentary inspect/dial blip under host load.
+const deathTickInterval = 150 * time.Millisecond
+
 // watchClickHouseContainerDeath probes the shared container's ACTUAL state
 // every tick -- a real docker inspect (container.State, which calls docker
 // inspect live, testcontainers-go@v0.43.0 docker.go:479-485) AND a raw TCP
@@ -234,50 +251,79 @@ type containerStateProber interface {
 // state and a TCP dial are both signals that DO reflect what actually
 // happened, independent of anything this process called.
 //
-// Either signal going bad on TWO CONSECUTIVE ticks reports the death once;
-// a single bad tick is a transient blip (host contention, a slow inspect
-// under load), not evidence of death, so momentary pressure never
-// false-fires. An intentional teardown closes stop first, so a normal
-// shutdown never reports as a death.
+// Either signal going bad on TWO CONSECUTIVE in-flight ticks reports the
+// death once; a single bad tick is a transient blip (host contention, a
+// slow inspect under load), not evidence of death, so momentary pressure
+// never false-fires.
+//
+// The watcher must never exit without a verdict. On stop -- an intentional
+// teardown -- it runs ONE FINAL SYNCHRONOUS PROBE of both signals before
+// returning: a death that happened just before teardown must still be
+// reported, never silently read as a clean shutdown just because the
+// caller closed stop first. detectedAt on the report names which path
+// caught it ("in_flight" or "teardown"); lastGoodAt is the last tick where
+// both signals were healthy, so a report always bounds how long the
+// container had already been dead.
 func watchClickHouseContainerDeath(container containerStateProber, addr string, stop <-chan struct{}, buf *deathLogBuffer, startedAt time.Time, once *sync.Once, testCount func() int64, logf func(string, ...any)) {
-	ticker := time.NewTicker(750 * time.Millisecond)
+	ticker := time.NewTicker(deathTickInterval)
 	defer ticker.Stop()
 	consecutiveBad := 0
+	lastGoodAt := time.Now()
+
+	probe := func() (stateErr error, state *dockercontainer.State, dialErr error, bad bool) {
+		ctx, cancel := context.WithTimeout(context.Background(), deathProbeTimeout)
+		state, stateErr = container.State(ctx)
+		cancel()
+		dialErr = probeTCPDial(addr, deathProbeTimeout)
+		bad = stateErr != nil || !state.Running || isConnectionRefused(dialErr)
+		return stateErr, state, dialErr, bad
+	}
+	report := func(state *dockercontainer.State, stateErr, dialErr error, detectedAt string, lastGood time.Time) {
+		once.Do(func() {
+			reportClickHouseContainerDeath(
+				logf,
+				buf,
+				state,
+				container.GetContainerID(),
+				startedAt,
+				testCount(),
+				deathTrigger(stateErr, state, dialErr),
+				detectedAt,
+				lastGood,
+			)
+		})
+	}
+	finalProbeOnStop := func() {
+		stateErr, state, dialErr, bad := probe()
+		if bad {
+			report(state, stateErr, dialErr, "teardown", lastGoodAt)
+		}
+	}
+
 	for {
 		select {
 		case <-stop:
+			finalProbeOnStop()
 			return
 		case <-ticker.C:
 			select {
 			case <-stop:
+				finalProbeOnStop()
 				return
 			default:
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), deathProbeTimeout)
-			state, stateErr := container.State(ctx)
-			cancel()
-			dialErr := probeTCPDial(addr, deathProbeTimeout)
-
-			if stateErr == nil && state.Running && !isConnectionRefused(dialErr) {
+			stateErr, state, dialErr, bad := probe()
+			if !bad {
 				consecutiveBad = 0
+				lastGoodAt = time.Now()
 				continue
 			}
 			consecutiveBad++
 			if consecutiveBad < 2 {
 				continue
 			}
-			once.Do(func() {
-				reportClickHouseContainerDeath(
-					logf,
-					buf,
-					state,
-					container.GetContainerID(),
-					startedAt,
-					testCount(),
-					deathTrigger(stateErr, state, dialErr),
-				)
-			})
+			report(state, stateErr, dialErr, "in_flight", lastGoodAt)
 			return
 		}
 	}

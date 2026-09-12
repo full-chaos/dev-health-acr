@@ -63,19 +63,22 @@ func TestClickHouseContainerDeathReportCapturesFakeDeath(t *testing.T) {
 		FinishedAt: "2026-09-12T00:00:00Z",
 	}
 	startedAt := time.Now().Add(-42 * time.Second)
+	lastGoodAt := time.Date(2026, 9, 12, 0, 0, 1, 0, time.UTC)
 
 	var captured strings.Builder
 	logf := func(format string, args ...any) {
 		captured.WriteString(fmt.Sprintf(format, args...))
 	}
 
-	reportClickHouseContainerDeath(logf, buf, fakeState, "fake-container-id", startedAt, 7, "fake_death_for_guard_test")
+	reportClickHouseContainerDeath(logf, buf, fakeState, "fake-container-id", startedAt, 7, "fake_death_for_guard_test", "in_flight", lastGoodAt)
 
 	out := captured.String()
 
 	requiredSubstrings := []string{
 		clickHouseDeathMarker,
 		"trigger=\"fake_death_for_guard_test\"",
+		"detected_at=\"in_flight\"",
+		"last_good_at=\"2026-09-12T00:00:01Z\"",
 		"oom_killed=true",
 		"exit_code=137",
 		"finished_at=\"2026-09-12T00:00:00Z\"",
@@ -247,18 +250,62 @@ func TestWatchClickHouseContainerDeathControlNeverFiresOnALiveContainer(t *testi
 	}
 }
 
-// TestWatchClickHouseContainerDeathHonoursTeardownStopChannel keeps the
-// pre-existing exclusion intact: closing stop BEFORE the debounce completes
-// must return without ever reporting, even though every probe would
-// otherwise be bad -- an intentional teardown must never read as a death.
-func TestWatchClickHouseContainerDeathHonoursTeardownStopChannel(t *testing.T) {
-	prober := &fakeStateProber{running: false}
-	addr := refusingAddr(t)
+// TestWatchClickHouseContainerDeathAlwaysFiresBeforeStopRegardlessOfTiming
+// pins the "never exits without a verdict" invariant: a death must be
+// reported whether it's caught by the in-flight debounce or only by the
+// final synchronous probe stop triggers, at every timing shape that
+// matters -- including the exact shape a real hosted death demonstrated
+// (a package finishing and closing stop before the in-flight debounce
+// could complete). Ticks are 150ms; 0ms/100ms both land before the first
+// tick (a *time.Ticker never fires early, so this is deterministic, not
+// a race), forcing the teardown path; 600ms/5s both land well after the
+// in-flight debounce would already have fired at ~300ms.
+func TestWatchClickHouseContainerDeathAlwaysFiresBeforeStopRegardlessOfTiming(t *testing.T) {
+	cases := []struct {
+		name           string
+		stopDelay      time.Duration
+		wantDetectedAt string
+	}{
+		{"stop immediately", 0, "teardown"},
+		{"stop before the first tick", 100 * time.Millisecond, "teardown"},
+		{"stop after the in-flight debounce already fired", 600 * time.Millisecond, "in_flight"},
+		{"stop long after", 5 * time.Second, "in_flight"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			prober := &fakeStateProber{running: false}
+			addr := refusingAddr(t)
+			stop := make(chan struct{})
+			time.AfterFunc(c.stopDelay, func() { close(stop) })
+			fired, report := runWatcherForGuard(t, prober, addr, stop)
+			if !fired {
+				t.Fatalf("watcher never fired with stop at %s -- a death must never be read as a clean shutdown regardless of teardown timing", c.stopDelay)
+			}
+			wantDetectedAt := fmt.Sprintf("detected_at=%q", c.wantDetectedAt)
+			if !strings.Contains(report, wantDetectedAt) {
+				t.Fatalf("report missing %s at stop delay %s; got:\n%s", wantDetectedAt, c.stopDelay, report)
+			}
+			if !strings.Contains(report, "last_good_at=") {
+				t.Fatalf("report missing last_good_at; got:\n%s", report)
+			}
+		})
+	}
+}
+
+// TestWatchClickHouseContainerDeathHealthyControlNeverFiresEvenAtTeardown is
+// the companion DISCRIMINATING CONTROL for the table above: a genuinely
+// healthy container, with stop closing mid-run, must never fire -- the new
+// final-synchronous-probe-on-stop path must not itself become a
+// false-positive source. Without this, a watcher that always fires on stop
+// regardless of the probe result would pass every case above too.
+func TestWatchClickHouseContainerDeathHealthyControlNeverFiresEvenAtTeardown(t *testing.T) {
+	prober := &fakeStateProber{running: true}
+	addr := listenAndAccept(t)
 	stop := make(chan struct{})
-	close(stop) // already closed: the watcher must return on its very first select
+	time.AfterFunc(600*time.Millisecond, func() { close(stop) })
 	fired, report := runWatcherForGuard(t, prober, addr, stop)
 	if fired {
-		t.Fatalf("watcher reported a death after stop was already closed; report:\n%s", report)
+		t.Fatalf("CONTROL BROKEN: watcher fired on a live container with an open port at teardown; report:\n%s", report)
 	}
 }
 
@@ -273,7 +320,7 @@ func TestClickHouseContainerDeathReportHandlesNoInspectState(t *testing.T) {
 		captured.WriteString(fmt.Sprintf(format, args...))
 	}
 
-	reportClickHouseContainerDeath(logf, buf, nil, "", time.Now(), 0, "no_inspect_state")
+	reportClickHouseContainerDeath(logf, buf, nil, "", time.Now(), 0, "no_inspect_state", "teardown", time.Now())
 
 	out := captured.String()
 	for _, want := range []string{clickHouseDeathMarker, "oom_killed=false", "exit_code=0", `finished_at=""`} {
