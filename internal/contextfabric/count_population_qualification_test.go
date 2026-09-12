@@ -372,7 +372,7 @@ func TestACountWithNoResolvedPopulationIsUnchanged(t *testing.T) {
 	if len(seed) == 0 {
 		t.Fatal("the counting frame derived no requirements; this fixture proves nothing")
 	}
-	rows, _, counted := appendMembershipCardinality(seed, nil, 0, nil)
+	rows, _, counted := appendMembershipCardinality(seed, mustCardinality(nil, 0, nil), nil)
 	if counted {
 		t.Fatal("a nil cohort reported a counted cardinality")
 	}

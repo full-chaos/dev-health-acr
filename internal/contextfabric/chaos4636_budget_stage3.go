@@ -97,7 +97,12 @@ func (r AnswerBudgetRefusal) Unwrap() error { return ErrAnswerExceedsBudget }
 // spent, as RETURNED by synthesizeAndAssemble -- rather than reading
 // params.Allocation. Same invariant as the retry below: the guard measures what
 // the producer returned, never the caller's own copy of what it was handed.
-func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Principal, plan *AnswerPlan, result InvestigationResult, consumed ItemAllocation, firstPass assemblyTelemetry, params synthesisAssemblyParams) (InvestigationResult, assemblyTelemetry, error) {
+// cardinality is the FIRST pass's count, carried in because this stage can
+// re-finalize the first pass's document (a candidate narrowing) without
+// re-synthesizing it -- and a document that was not re-synthesized has the
+// member set, and therefore the count, it already had. The retry path below
+// computes its own, from its own pass.
+func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Principal, plan *AnswerPlan, result InvestigationResult, consumed ItemAllocation, firstPass assemblyTelemetry, params synthesisAssemblyParams, cardinality MembershipCardinality) (InvestigationResult, assemblyTelemetry, error) {
 	budget := ResponseBudget{MaxItems: plan.Budget.MaxItems, MaxSerializedBytes: plan.Budget.MaxSerializedBytes}
 	if budget.MaxItems <= 0 && budget.MaxSerializedBytes <= 0 {
 		// Nothing to measure against. An engine composed without either
@@ -194,7 +199,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// single-subject investigation has no cohort, so `declined` is
 		// always nothing_to_narrow here and the refusal was reached
 		// without any content reduction ever being attempted.
-		attempt, accountingErr := e.planCandidateNarrowing(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts, &firstPass, answerPassSecond, params.Graph.CohortPopulation)
+		attempt, accountingErr := e.planCandidateNarrowing(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts, &firstPass, answerPassSecond, cardinality)
 		if accountingErr != nil {
 			return InvestigationResult{}, firstPass, accountingErr
 		}
@@ -268,7 +273,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// caller's copy: equal on every honest input, and blind to any fault the
 	// producer applied to its own, which is the defect keystone #5 found in
 	// narration.
-	retried, consumedRetryAllocation, retryPending, retryErr := e.synthesizeAndAssemble(ctx, principal, retryParams)
+	retried, consumedRetryAllocation, retryPending, retryCardinality, retryErr := e.synthesizeAndAssemble(ctx, principal, retryParams)
 	if retryErr != nil {
 		// PROPAGATE the retry's own error. An earlier revision discarded it
 		// and returned a budget refusal, so a transient ErrModelUnavailable
@@ -341,7 +346,11 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// would let the declared population shrink every time the answer was cut
 	// to fit, which is exactly backwards: the tighter the answer, the more
 	// there was that it could not carry.
-	retried = e.finalizeResult(ctx, principal, retried, *plan, params.Frame, retryParams.Facts, &retryPending, answerPassSecond, params.Graph.CohortPopulation)
+	// retryCardinality, NOT the first pass's: the retry re-synthesized over a
+	// NARROWED cohort, and the number must describe the document that will be
+	// served. This is the recomputation the pre-synthesis move preserves --
+	// one per pass, each against its own member set.
+	retried = e.finalizeResult(ctx, principal, retried, *plan, params.Frame, retryParams.Facts, &retryPending, answerPassSecond, retryCardinality)
 	// READ BACK FROM THE PRODUCER, not from the params and not from the local
 	// `retryAllocation`, and the difference is the entire lesson of this class.
 	//
@@ -377,7 +386,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	outcomeAttempt := outcomeNarrowingAttempt{Measured: retryMeasured}
 	if retryOverrun != contractsv1.ContextFabricBudgetFits {
 		var accountingErr error
-		outcomeAttempt, accountingErr = e.planCandidateNarrowing(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts, &retryPending, answerPassThird, params.Graph.CohortPopulation)
+		outcomeAttempt, accountingErr = e.planCandidateNarrowing(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts, &retryPending, answerPassThird, retryCardinality)
 		if accountingErr != nil {
 			return InvestigationResult{}, retryPending, accountingErr
 		}

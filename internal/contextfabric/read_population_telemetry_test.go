@@ -127,11 +127,11 @@ func TestTheTelemetryUnitsAndCensusCannotLie(t *testing.T) {
 		}
 		plan := AnswerPlan{Requirements: published}
 		result.Completeness.Outcomes = appendReadRequirementEvaluations(nil, published, coverage,
-			readPopulationEvidenceFrom(frame, result, plan, facts, 0, nil))
+			readPopulationEvidenceFrom(frame, result, plan, facts, MembershipCardinality{}, nil))
 		stamped := plan
 		result.AnswerPlan = &stamped
 
-		events := readRequirementPopulationEventsFrom(frame, result, plan, facts, QuestionFamilyScopedCohortStatus, 0)
+		events := readRequirementPopulationEventsFrom(frame, result, plan, facts, QuestionFamilyScopedCohortStatus, MembershipCardinality{})
 		if len(events) == 0 {
 			t.Fatal("no population events for a document carrying distributive read rows")
 		}
@@ -177,7 +177,7 @@ func TestTheTelemetryUnitsAndCensusCannotLie(t *testing.T) {
 		result := InvestigationResult{Cohort: cohort, Coverage: coverage}
 		plan := AnswerPlan{Requirements: published}
 		result.Completeness.Outcomes = appendReadRequirementEvaluations(nil, published, coverage,
-			readPopulationEvidenceFrom(nil, result, plan, facts, 0, nil))
+			readPopulationEvidenceFrom(nil, result, plan, facts, MembershipCardinality{}, nil))
 		stamped := plan
 		result.AnswerPlan = &stamped
 
@@ -186,7 +186,7 @@ func TestTheTelemetryUnitsAndCensusCannotLie(t *testing.T) {
 			t.Fatalf("the premise moved: the row's cause is the census code, so this arm no longer "+
 				"distinguishes the authority from the cause (row %+v)", row)
 		}
-		events := readRequirementPopulationEventsFrom(nil, result, plan, facts, QuestionFamilyScopedCohortStatus, 0)
+		events := readRequirementPopulationEventsFrom(nil, result, plan, facts, QuestionFamilyScopedCohortStatus, MembershipCardinality{})
 		if len(events) != 1 {
 			t.Fatalf("population events = %d, want 1", len(events))
 		}
@@ -323,11 +323,11 @@ func TestTheEventBuilderCarriesTheCohortFlagsFromTheDocument(t *testing.T) {
 	result := InvestigationResult{Cohort: cohort, Coverage: coverage}
 	plan := AnswerPlan{Requirements: published}
 	result.Completeness.Outcomes = appendReadRequirementEvaluations(nil, published, coverage,
-		readPopulationEvidenceFrom(nil, result, plan, facts, 0, nil))
+		readPopulationEvidenceFrom(nil, result, plan, facts, MembershipCardinality{}, nil))
 	stamped := plan
 	result.AnswerPlan = &stamped
 
-	events := readRequirementPopulationEventsFrom(nil, result, plan, facts, QuestionFamilyScopedCohortStatus, 0)
+	events := readRequirementPopulationEventsFrom(nil, result, plan, facts, QuestionFamilyScopedCohortStatus, MembershipCardinality{})
 	if len(events) != 1 {
 		t.Fatalf("population events = %d, want 1", len(events))
 	}
