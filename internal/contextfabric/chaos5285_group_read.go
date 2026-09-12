@@ -653,63 +653,59 @@ func originMemberKind(plan AnswerPlan, cohort *Cohort) SubjectKind {
 	return ""
 }
 
-// readOriginStateCoverage carries both reads' per-kind states onto the SERVED
-// document, one fact_read_origin_state detail per canonical-fact observation
-// of each read, named by the kind of population that read was rooted on.
+// readOriginStateCoverage names, per fact kind, the read whose state DIFFERS
+// from the one the served document already publishes.
 //
-// The fold that composes the two reads keeps the WORSE state per source name,
-// and both reads report under the same `canonical_fact:<kind>` names. So after
-// the fold a served `unavailable` cannot say whether the members' evidence or
-// the groups' was the gap -- the pre-fold trace line could, and nothing a
-// reader of the document holds could. These rows are that line's served half:
-// the same observations, taken at the same moment, before the fold.
+// THE PROBLEM. A grouped answer reads each kind twice, for the members and
+// for the groups, and both report under the same `canonical_fact:<kind>`
+// source. The fold keeps the WORSE of the two, so a served `unavailable`
+// cannot say which population's read was the gap. The pre-fold trace line
+// could; nothing a reader of the document held could.
+//
+// WHAT IS SERVED, AND WHY IT IS ONE ROW. The source state the document will
+// carry is passed in as `served`, and it IS one of the two reads' states. So
+// the only fact the document is missing is the OTHER read's, and naming it,
+// with the population it was rooted on, is enough for a reader to reconstruct
+// both: the named read is what the row says, and the other read is the served
+// state. Two reads, one row.
+//
+// `served` IS PASSED, NEVER ASSUMED TO BE THE WORSE OF THE TWO. On the
+// composed path it is the post-merge fold, which is the worse. On the FAILED
+// path the group bundle is never composed, so the served source is the
+// member read's alone and the state the document lacks is the group's -- the
+// opposite row. Deriving `served` here instead of reading it served the
+// member's state twice and said nothing about the read that failed, which is
+// the one case this disclosure exists for.
+//
+// When the two reads agree there is nothing to name: the folded state is
+// both of them, and a row would repeat what the source already says. When a
+// kind was read by only one population, its state IS the folded state and
+// there is no second population to tell it apart from.
+//
+// THE BOUND IS WHY THIS SHAPE AND NOT THE OBVIOUS ONE. A row per read per
+// kind is bounded by reads x kinds; measured at the vocabulary maximum,
+// against a document the fact cap has already taken to 71 of its 100
+// coverage entries, that shape came to 115 and `Investigate` REFUSED a legal
+// full-vocabulary grouped request. One row per kind is bounded by the kind
+// vocabulary alone -- 66 + 22 + 5 = 93 -- and no amount of extra reading or
+// extra observation can raise it.
+//
+// EACH READ IS FOLDED FIRST, worst state wins, exactly as the coverage fold
+// resolves one source observed twice. It has to be: the combined fact cap
+// appends a SECOND `canonical_fact:<kind>` observation, `truncated`, for a
+// kind whose provider already reported `available`, and a producer that took
+// them one at a time served the state that was no longer true alongside the
+// one that was.
 //
 // Every row is a disclosure, never a degradation: the folded source and its
 // own detail already carry whatever degraded the answer, and a second
 // degrading row for the same gap would count it twice.
-//
-// An observation that does not name a canonical fact kind, or a row the
-// contract would refuse, is skipped rather than served: the producers of these
-// observations mint only valid ones, and a refused row on the served document
-// would fail the whole investigation over a disclosure.
-func readOriginStateCoverage(member, group Coverage, memberKind, groupKind SubjectKind) Coverage {
-	var details []CoverageDetail
-	// EVERY DROP IS SAID OUT LOUD, AND THE TWO REASONS ARE DIFFERENT REASONS.
-	//
-	// This function decides, per observation, whether a disclosure row is
-	// servable, and both of its `no` answers used to be silent `continue`s.
-	// Silence made them unobservable AND untestable in the same stroke: a
-	// mutation battery weakened each guard in turn and the whole 4257-test
-	// suite stayed green, because the contract's own Validate refused the
-	// rows a weakened guard let through and the served document came out
-	// byte-identical. A guard whose removal nothing can observe is not a
-	// guard, it is a comment.
-	//
-	// So each drop names itself, and the two name different things:
-	//   * `not_a_fact_read` is ROUTINE. Graph observations ride in the same
-	//     Coverage and are not fact reads; Debug, because a normal turn has
-	//     several and an operator does not need them at Info.
-	//   * `contract_refused` is NOT routine. The producers of these
-	//     observations mint only valid ones, so a refusal means an
-	//     observation reached here in a shape nobody expected; Warn, with
-	//     the error, because that is a defect somewhere upstream and
-	//     dropping it silently would send the answer out a disclosure short
-	//     with nothing anywhere saying why.
-	//   * an UNROOTED read is a wiring gap of the same class -- the caller
-	//     could not say what population the read was rooted on -- so it is
-	//     Warn too, and it names how many observations it cost.
-	//
-	// Every value on these lines is a vocabulary token, a source name or a
-	// count -- never corpus content -- and the string-valued ones go through
-	// the log sanitiser barrier all the same.
-	add := func(coverage Coverage, origin SubjectKind, side string) {
-		if origin == "" {
-			slog.Default().Warn("context fabric read origin state skipped a whole read with no root kind",
-				"side", SanitizeLogAttr(side),
-				"reason", "unrooted_read",
-				"observations_dropped", len(coverage.Sources))
-			return
-		}
+func readOriginStateCoverage(served, member, group Coverage, memberKind, groupKind SubjectKind) Coverage {
+	// foldRead reduces one read's observations to one state per kind, worst
+	// wins, and remembers first-seen order so the served rows are stable.
+	foldRead := func(coverage Coverage, origin SubjectKind, side string) (map[string]SourceState, []string) {
+		states := map[string]SourceState{}
+		var order []string
 		for _, observation := range coverage.Sources {
 			kind, ok := strings.CutPrefix(observation.Source, "canonical_fact:")
 			if !ok {
@@ -720,31 +716,99 @@ func readOriginStateCoverage(member, group Coverage, memberKind, groupKind Subje
 					"reason", "not_a_fact_read")
 				continue
 			}
-			detail := CoverageDetail{
-				DetailID:    fmt.Sprintf("cov-origin-%02d", len(details)+1),
-				Source:      observation.Source,
-				Code:        contractsv1.ContextFabricCoverageDetailFactReadOriginState,
-				FactKind:    FactKind(kind),
-				SourceState: observation.State,
-				OriginKind:  origin,
-			}
-			detail.Label = contractsv1.ComposeCoverageDetailLabel(detail)
-			if err := detail.Validate(); err != nil {
-				slog.Default().Warn("context fabric read origin state skipped an observation",
-					"side", SanitizeLogAttr(side),
-					"origin_kind", SanitizeLogAttr(string(origin)),
-					"source", SanitizeLogAttr(observation.Source),
-					"fact_kind", SanitizeLogAttr(kind),
-					"source_state", SanitizeLogAttr(string(observation.State)),
-					"reason", "contract_refused",
-					"error", SanitizeLogAttr(err.Error()))
+			previous, seen := states[kind]
+			if !seen {
+				order = append(order, kind)
+				states[kind] = observation.State
 				continue
 			}
-			details = append(details, detail)
+			if sourceStateSeverity(observation.State) > sourceStateSeverity(previous) {
+				states[kind] = observation.State
+			}
+		}
+		return states, order
+	}
+
+	memberStates, memberOrder := foldRead(member, memberKind, "member")
+	groupStates, groupOrder := foldRead(group, groupKind, "group")
+
+	// Kinds in first-seen order, member read first, then any the group read
+	// alone observed.
+	var kinds []string
+	seen := map[string]bool{}
+	for _, kind := range append(append([]string{}, memberOrder...), groupOrder...) {
+		if !seen[kind] {
+			seen[kind] = true
+			kinds = append(kinds, kind)
 		}
 	}
-	add(member, memberKind, "member")
-	add(group, groupKind, "group")
+
+	servedStates := map[string]SourceState{}
+	for _, observation := range served.Sources {
+		if kind, ok := strings.CutPrefix(observation.Source, "canonical_fact:"); ok {
+			if previous, seen := servedStates[kind]; !seen || sourceStateSeverity(observation.State) > sourceStateSeverity(previous) {
+				servedStates[kind] = observation.State
+			}
+		}
+	}
+
+	var details []CoverageDetail
+	for _, kind := range kinds {
+		memberState, inMember := memberStates[kind]
+		groupState, inGroup := groupStates[kind]
+		if !inMember || !inGroup {
+			// One population read this kind. Its state IS the served state,
+			// and there is no second read to tell it apart from.
+			continue
+		}
+		if memberState == groupState {
+			// The reads agree; the source already says so for both.
+			continue
+		}
+		servedState, published := servedStates[kind]
+		if !published {
+			// The document publishes no source for this kind, so neither
+			// read's state is recoverable from it and a single row could not
+			// say which was which. Nothing is served rather than half of it.
+			slog.Default().Warn("context fabric read origin state has no served source to differ from",
+				"fact_kind", SanitizeLogAttr(kind),
+				"reason", "no_served_source")
+			continue
+		}
+		// Name the read the served source does NOT publish.
+		origin, state := memberKind, memberState
+		if memberState == servedState {
+			origin, state = groupKind, groupState
+		}
+		if origin == "" {
+			slog.Default().Warn("context fabric read origin state could not name the read that differs",
+				"fact_kind", SanitizeLogAttr(kind),
+				"source_state", SanitizeLogAttr(string(state)),
+				"reason", "unrooted_read")
+			continue
+		}
+		detail := CoverageDetail{
+			DetailID:    fmt.Sprintf("cov-origin-%02d", len(details)+1),
+			Source:      "canonical_fact:" + kind,
+			Code:        contractsv1.ContextFabricCoverageDetailFactReadOriginState,
+			FactKind:    FactKind(kind),
+			SourceState: state,
+			OriginKind:  origin,
+		}
+		detail.Label = contractsv1.ComposeCoverageDetailLabel(detail)
+		if err := detail.Validate(); err != nil {
+			slog.Default().Warn("context fabric read origin state skipped an observation",
+				"side", SanitizeLogAttr(string(origin)),
+				"origin_kind", SanitizeLogAttr(string(origin)),
+				"source", SanitizeLogAttr(detail.Source),
+				"fact_kind", SanitizeLogAttr(kind),
+				"source_state", SanitizeLogAttr(string(state)),
+				"reason", "contract_refused",
+				"error", SanitizeLogAttr(err.Error()))
+			continue
+		}
+		details = append(details, detail)
+	}
 	return Coverage{Details: details}
 }
 

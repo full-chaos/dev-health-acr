@@ -74,32 +74,45 @@ func TestEachReadsStateReachesTheServedDocumentByPopulation(t *testing.T) {
 			t.Logf("served detail %s label=%q", d.DetailID, d.Label)
 		}
 	}
+	// ONE ROW PER KIND, naming the read the folded source does NOT publish.
+	// The member read is `available` for both kinds and the group read is
+	// worse for both, so the fold carries the group's state and the rows
+	// carry the member's.
 	want := []originRow{
 		{"canonical_fact:health", string(SourceAvailable), string(SubjectProject), false},
-		{"canonical_fact:health", string(SourceNoData), string(SubjectTeam), false},
 		{"canonical_fact:workload", string(SourceAvailable), string(SubjectProject), false},
-		{"canonical_fact:workload", string(SourceStale), string(SubjectTeam), false},
 	}
 	sort.Slice(want, func(i, j int) bool { return fmt.Sprint(want[i]) < fmt.Sprint(want[j]) })
 	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Fatalf("served origin rows = %v, want %v -- each read's state for each kind, named by its population", got, want)
+		t.Fatalf("served origin rows = %v, want %v -- one row per kind, naming the read whose state the fold does not publish", got, want)
 	}
 
-	// THE JOIN: the served rows are the pre-fold line's observations, one for
-	// one. A row the trace does not show, or a trace observation the document
-	// does not carry, is a disagreement between the two places a reader looks.
-	fromTrace := make([]originRow, 0, len(telemetry.groupReadCoverageStates))
+	// THE JOIN, AND IT IS THE WHOLE POINT: served rows + folded source states
+	// RECONSTRUCT both reads, exactly as the pre-fold trace line recorded
+	// them. Nothing the trace saw is missing from the document, and nothing
+	// on the document is absent from the trace.
+	folded := map[string]SourceState{}
+	for _, source := range result.Coverage.Sources {
+		folded[source.Source] = source.State
+	}
+	named := map[string]originRow{}
+	for _, row := range got {
+		named[row.source+"|"+row.origin] = row
+	}
 	for _, event := range telemetry.groupReadCoverageStates {
 		origin := string(SubjectProject)
 		if event.Read == GroupReadArmGroup {
 			origin = string(event.GroupKind)
 		}
-		fromTrace = append(fromTrace, originRow{event.Source, string(event.State), origin, false})
-	}
-	sort.Slice(fromTrace, func(i, j int) bool { return fmt.Sprint(fromTrace[i]) < fmt.Sprint(fromTrace[j]) })
-	t.Logf("pre-fold trace observations: %v", fromTrace)
-	if fmt.Sprint(fromTrace) != fmt.Sprint(got) {
-		t.Errorf("served rows %v do not equal the pre-fold line's observations %v", got, fromTrace)
+		reconstructed := string(folded[event.Source])
+		if row, ok := named[event.Source+"|"+origin]; ok {
+			reconstructed = row.state
+		}
+		t.Logf("reconstruct %s/%s: trace=%s document=%s", origin, event.Source, event.State, reconstructed)
+		if reconstructed != string(event.State) {
+			t.Errorf("%s/%s reconstructs to %q from the document, but the read was %q -- a reader cannot recover this read's state",
+				origin, event.Source, reconstructed, event.State)
+		}
 	}
 
 	// The fold still folds: the served SOURCE for health reads the worse state,
@@ -136,12 +149,28 @@ func TestAFailedGroupReadDisclosesItsOwnStateByPopulation(t *testing.T) {
 	}
 	got := originRowsOf(result.Coverage)
 	t.Logf("served origin rows after a failed group read: %v", got)
+	// THE FAILED READ IS THE ONE THE DOCUMENT LACKS. Its bundle is never
+	// composed, so nothing of it reaches the served source -- which stays
+	// the member read's own `available`. The row is therefore the GROUP's,
+	// and it is the only place the failure is readable. (On the COMPOSED
+	// path the same rule names the other read, because there the fold
+	// publishes the worse state; the rule is "name the read the served
+	// source does not", not "name the group".)
 	want := fmt.Sprint([]originRow{
-		{"canonical_fact:health", string(SourceAvailable), string(SubjectProject), false},
 		{"canonical_fact:health", string(SourceUnavailable), string(SubjectTeam), false},
 	})
 	if fmt.Sprint(got) != want {
 		t.Fatalf("served origin rows = %v, want %s", got, want)
+	}
+	var servedHealth SourceState
+	for _, source := range result.Coverage.Sources {
+		if source.Source == "canonical_fact:health" {
+			servedHealth = source.State
+		}
+	}
+	t.Logf("served health source = %q, group row = %q -> both reads recoverable", servedHealth, got[0].state)
+	if servedHealth != SourceAvailable {
+		t.Fatalf("served health source = %q, want %q -- the member read's own state, since the failed bundle was not composed", servedHealth, SourceAvailable)
 	}
 }
 
@@ -239,7 +268,9 @@ func TestTheNonDegradingDedupeKeyKeepsRowsThatSayDifferentThings(t *testing.T) {
 	// lost that way. A helper asserts, and the failure stays local.
 	originRowFor := func(state SourceState, origin SubjectKind) CoverageDetail {
 		t.Helper()
-		rows := readOriginStateCoverage(Coverage{Sources: []SourceObservation{{Source: "canonical_fact:health", State: state}}}, Coverage{}, origin, "").Details
+		member := Coverage{Sources: []SourceObservation{{Source: "canonical_fact:health", State: state}}}
+		group := Coverage{Sources: []SourceObservation{{Source: "canonical_fact:health", State: SourceUnconfigured}}}
+		rows := readOriginStateCoverage(group, member, group, origin, SubjectRepository).Details
 		if len(rows) != 1 {
 			t.Fatalf("the producer served %d rows for one canonical observation rooted on %q in state %q, want 1", len(rows), origin, state)
 		}
@@ -295,6 +326,20 @@ func TestTheOriginRowsFitTheCoverageBoundAtTheVocabularyMaximum(t *testing.T) {
 		appendFactCoverage(&member, FactKind(kind), SourceNoData, nil, "", "member read returned no_data", coverageDetailSpec{})
 		appendFactCoverage(&group, FactKind(kind), SourceStale, nil, "", "group read returned stale", coverageDetailSpec{})
 	}
+	// AND THE COMBINED CAP'S SECOND OBSERVATION, on every kind of the group
+	// read. This is the shape r1 P1-2 found: the cap appends a `truncated`
+	// observation for a kind the provider already reported, so a producer
+	// that emitted per OBSERVATION served two rows per kind per read -- 88
+	// origin details instead of 44 -- and a LEGAL full-vocabulary grouped
+	// request came to 110 coverage details against a bound of 100. It was
+	// not a near miss on the ceiling; `Investigate` refused to serve an
+	// answer it should have served. The maximal fixture carries the doubling
+	// so the bound is measured against the worst shape the pipeline can
+	// actually produce, not the tidiest one.
+	for _, kind := range contractsv1.ContextFabricFactKindVocabulary() {
+		appendFactCoverage(&group, FactKind(kind), SourceTruncated, nil, "",
+			fmt.Sprintf("%s (omitted %d)", groupFactsCapReason, 1), coverageDetailSpec{})
+	}
 	graph := Coverage{}
 	for i, code := range []contractsv1.ContextFabricCoverageDetailCode{
 		contractsv1.ContextFabricCoverageDetailGraphEndpointLookupFailed,
@@ -315,7 +360,11 @@ func TestTheOriginRowsFitTheCoverageBoundAtTheVocabularyMaximum(t *testing.T) {
 			graph.DegradedReasons = append(graph.DegradedReasons, d.Raw)
 		}
 	}
-	origins := readOriginStateCoverage(member.Coverage, group.Coverage, SubjectProject, SubjectTeam)
+	// The SERVED source states are the fold of the two reads -- exactly what
+	// the document will carry -- so the rows are taken against the real
+	// thing rather than against a derived guess.
+	folded := MergeCoverage("org_1", member.Coverage, group.Coverage)
+	origins := readOriginStateCoverage(folded, member.Coverage, group.Coverage, SubjectProject, SubjectTeam)
 	served := MergeCoverage("org_1", member.Coverage, group.Coverage, graph, origins)
 
 	byCode := map[contractsv1.ContextFabricCoverageDetailCode]int{}
@@ -330,8 +379,30 @@ func TestTheOriginRowsFitTheCoverageBoundAtTheVocabularyMaximum(t *testing.T) {
 	const bound = 100 // contextFabricWriteBounds.coverageEntries; the served write below is the authority
 	t.Logf("vocabulary-maximal grouped coverage: %d fact kinds, %d details served (%s), bound %d",
 		contractsv1.ContextFabricFactKindCount, len(served.Details), strings.Join(codes, " "), bound)
-	if want := 2 * contractsv1.ContextFabricFactKindCount; byCode[contractsv1.ContextFabricCoverageDetailFactReadOriginState] != want {
-		t.Fatalf("origin rows = %d, want %d (every kind on both reads)", byCode[contractsv1.ContextFabricCoverageDetailFactReadOriginState], want)
+	// KINDS, NOT READS x KINDS. This is the number the bound is safe
+	// against: at most one row per kind, whatever the two reads did and
+	// however many observations each took. A row per read per kind measured
+	// 115 here and `Investigate` refused a legal request.
+	origin := byCode[contractsv1.ContextFabricCoverageDetailFactReadOriginState]
+	if origin > contractsv1.ContextFabricFactKindCount {
+		t.Fatalf("origin rows = %d, want at most %d (one per kind)", origin, contractsv1.ContextFabricFactKindCount)
+	}
+	// Non-vacuous: the two reads differ on every kind here, so every kind
+	// must carry its row.
+	if origin != contractsv1.ContextFabricFactKindCount {
+		t.Fatalf("origin rows = %d, want %d -- the reads differ on every kind, so every kind owes a row", origin, contractsv1.ContextFabricFactKindCount)
+	}
+	// The group read is `truncated` after the cap, worse than the member's
+	// `no_data`, so the SERVED source is the group's and the rows name the
+	// member read.
+	for _, d := range served.Details {
+		if d.Code != contractsv1.ContextFabricCoverageDetailFactReadOriginState {
+			continue
+		}
+		if d.OriginKind != SubjectProject || d.SourceState != SourceNoData {
+			t.Fatalf("row for %s is %s/%s, want %s/%s -- the row names the read the folded source does not publish",
+				d.FactKind, d.OriginKind, d.SourceState, SubjectProject, SourceNoData)
+		}
 	}
 	if len(served.Details) > bound {
 		t.Fatalf("%d details exceed the coverage entry bound %d -- a grouped turn at the vocabulary maximum would fail its write", len(served.Details), bound)
@@ -403,90 +474,285 @@ func TestANonDegradingDisclosureNeverBecomesARequirementRowsCause(t *testing.T) 
 	}
 }
 
-// WHAT THE PRODUCER REFUSES TO SERVE.
+// THE INPUT DOMAIN OF THE DISCLOSURE: every shape a (member, group) pair of
+// read states can take, and what the document says about each.
 //
-// readOriginStateCoverage mints rows for the served document, and a row it
-// should not mint is worse than a missing one: an unrooted read would name an
-// empty population, a graph observation would be disclosed as if it were a
-// fact kind, and a row the contract refuses would fail the WHOLE
-// investigation over a disclosure. Each clause here is a separate guard in
-// that function, executed on its own.
-func TestTheProducerServesOnlyRowsItCanStandBehind(t *testing.T) {
-	canonical := Coverage{Sources: []SourceObservation{
-		{Source: "canonical_fact:health", State: SourceAvailable},
-		{Source: "canonical_fact:workload", State: SourceNoData},
-	}}
+// The rule under test has one sentence: serve one row per kind, naming the
+// read whose state the SERVED SOURCE does not publish. Every cell below is
+// executed through the producer and the merge, and each asserts the property
+// that makes the rule worth having -- from the document alone, a reader
+// recovers BOTH reads' states. A cell that serves no row must be a cell where
+// the source already answers for both.
+func TestTheOriginDisclosureInputDomain(t *testing.T) {
+	const kind = "health"
+	const source = "canonical_fact:" + kind
+	cov := func(states ...SourceState) Coverage {
+		c := Coverage{}
+		for _, state := range states {
+			c.Sources = append(c.Sources, SourceObservation{Source: source, State: state, Reason: "fixture"})
+		}
+		return c
+	}
+	worst := func(a, b SourceState) SourceState {
+		if sourceStateSeverity(b) > sourceStateSeverity(a) {
+			return b
+		}
+		return a
+	}
 
-	t.Run("a read with no root kind serves nothing", func(t *testing.T) {
-		// Both origins empty: the member read has no plan member kind and no
-		// cohort kind, the group read no requested group kind. Rows would
-		// carry origin_kind="", which the contract refuses -- so the guard
-		// returns before minting any.
-		got := readOriginStateCoverage(canonical, canonical, "", "")
+	cases := []struct {
+		name          string
+		member, group Coverage
+		served        Coverage
+		memberKind    SubjectKind
+		groupKind     SubjectKind
+		wantRows      int
+		wantOrigin    SubjectKind
+		wantState     SourceState
+		recoverMember SourceState
+		recoverGroup  SourceState
+	}{
+		{
+			name: "both reads equal", member: cov(SourceAvailable), group: cov(SourceAvailable),
+			served: cov(SourceAvailable), memberKind: SubjectProject, groupKind: SubjectTeam,
+			wantRows: 0, recoverMember: SourceAvailable, recoverGroup: SourceAvailable,
+		},
+		{
+			name: "member worse", member: cov(SourceUnavailable), group: cov(SourceAvailable),
+			served: cov(SourceUnavailable), memberKind: SubjectProject, groupKind: SubjectTeam,
+			wantRows: 1, wantOrigin: SubjectTeam, wantState: SourceAvailable,
+			recoverMember: SourceUnavailable, recoverGroup: SourceAvailable,
+		},
+		{
+			name: "group worse", member: cov(SourceAvailable), group: cov(SourceNoData),
+			served: cov(SourceNoData), memberKind: SubjectProject, groupKind: SubjectTeam,
+			wantRows: 1, wantOrigin: SubjectProject, wantState: SourceAvailable,
+			recoverMember: SourceAvailable, recoverGroup: SourceNoData,
+		},
+		{
+			name: "group read absent for this kind", member: cov(SourceAvailable), group: Coverage{},
+			served: cov(SourceAvailable), memberKind: SubjectProject, groupKind: SubjectTeam,
+			wantRows: 0, recoverMember: SourceAvailable, recoverGroup: "",
+		},
+		{
+			name: "member read absent for this kind", member: Coverage{}, group: cov(SourceStale),
+			served: cov(SourceStale), memberKind: SubjectProject, groupKind: SubjectTeam,
+			wantRows: 0, recoverMember: "", recoverGroup: SourceStale,
+		},
+		{
+			// The combined fact cap's shape: the group read is observed twice
+			// for one kind, `available` then `truncated`. Its own state is the
+			// worse of the two, and the row must not be the stale first one.
+			name: "cap truncated the group read", member: cov(SourceAvailable), group: cov(SourceAvailable, SourceTruncated),
+			served: cov(SourceTruncated), memberKind: SubjectProject, groupKind: SubjectTeam,
+			wantRows: 1, wantOrigin: SubjectProject, wantState: SourceAvailable,
+			recoverMember: SourceAvailable, recoverGroup: SourceTruncated,
+		},
+		{
+			// The contract requires an origin kind; an unrooted read cannot
+			// be named, so the row is refused rather than served empty.
+			name: "the differing read is unrooted", member: cov(SourceAvailable), group: cov(SourceNoData),
+			served: cov(SourceNoData), memberKind: "", groupKind: SubjectTeam,
+			wantRows: 0, recoverMember: "", recoverGroup: SourceNoData,
+		},
+	}
+
+	for _, c := range cases {
+		got := readOriginStateCoverage(c.served, c.member, c.group, c.memberKind, c.groupKind)
+		rows := got.Details
+		var shape string
+		if len(rows) == 1 {
+			shape = fmt.Sprintf("%s=%s", rows[0].OriginKind, rows[0].SourceState)
+		}
+		t.Logf("CELL %-34s -> %d row(s) %s", c.name, len(rows), shape)
+		if len(rows) != c.wantRows {
+			t.Errorf("%s: %d row(s), want %d (%v)", c.name, len(rows), c.wantRows, rows)
+			continue
+		}
+		if c.wantRows == 1 {
+			if rows[0].OriginKind != c.wantOrigin || rows[0].SourceState != c.wantState {
+				t.Errorf("%s: row = %s/%s, want %s/%s", c.name, rows[0].OriginKind, rows[0].SourceState, c.wantOrigin, c.wantState)
+			}
+			if err := rows[0].Validate(); err != nil {
+				t.Errorf("%s: served row fails the contract: %v", c.name, err)
+			}
+		}
+		// THE PROPERTY: reconstruct both reads from the document alone.
+		servedState := c.served.Sources[0].State
+		recover := func(origin SubjectKind) SourceState {
+			for _, row := range rows {
+				if row.OriginKind == origin {
+					return row.SourceState
+				}
+			}
+			return servedState
+		}
+		if c.recoverMember != "" && c.memberKind != "" {
+			if got := recover(c.memberKind); got != c.recoverMember {
+				t.Errorf("%s: the member read reconstructs to %q, but it was %q", c.name, got, c.recoverMember)
+			}
+		}
+		if c.recoverGroup != "" && c.groupKind != "" && c.memberKind != c.groupKind {
+			if got := recover(c.groupKind); got != c.recoverGroup {
+				t.Errorf("%s: the group read reconstructs to %q, but it was %q", c.name, got, c.recoverGroup)
+			}
+		}
+		// And the served state is itself one of the two reads, which is what
+		// makes the single row sufficient.
+		if c.recoverMember != "" && c.recoverGroup != "" {
+			if servedState != worst(c.recoverMember, c.recoverGroup) {
+				t.Errorf("%s: served source %q is not the worse of the two reads (%q, %q) -- the fixture does not model the fold",
+					c.name, servedState, c.recoverMember, c.recoverGroup)
+			}
+		}
+	}
+}
+
+// WHAT THE PRODUCER REFUSES TO SERVE, and says it refused.
+//
+// A row it should not mint is worse than a missing one: an unrooted read
+// would name an empty population, a graph observation would be disclosed as
+// if it were a fact kind, and a row the contract refuses would fail the WHOLE
+// investigation over a disclosure. Each clause is a separate guard, executed
+// on its own, and each drop is asserted on the EMITTED line -- silence made
+// these guards unobservable and, for the same reason, unpinnable: a battery
+// weakened each in turn and nothing any test could see changed.
+//
+// NOT t.Parallel(): it installs the process-global default logger.
+func TestEveryRowTheProducerDropsSaysWhyItWasDropped(t *testing.T) {
+	type line struct {
+		Msg         string `json:"msg"`
+		Level       string `json:"level"`
+		Reason      string `json:"reason"`
+		Source      string `json:"source"`
+		OriginKind  string `json:"origin_kind"`
+		FactKind    string `json:"fact_kind"`
+		SourceState string `json:"source_state"`
+		Error       string `json:"error"`
+	}
+	read := func(t *testing.T, buf *syncBuffer) []line {
+		t.Helper()
+		var out []line
+		for _, raw := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+			if raw == "" {
+				continue
+			}
+			var l line
+			if err := json.Unmarshal([]byte(raw), &l); err != nil {
+				t.Fatalf("log line is not JSON: %v (%q)", err, raw)
+			}
+			if strings.HasPrefix(l.Msg, "context fabric read origin state") {
+				out = append(out, l)
+			}
+		}
+		return out
+	}
+	reasons := func(lines []line, reason string) []line {
+		var out []line
+		for _, l := range lines {
+			if l.Reason == reason {
+				out = append(out, l)
+			}
+		}
+		return out
+	}
+	differing := func(memberState, groupState SourceState) (served, member, group Coverage) {
+		member = Coverage{Sources: []SourceObservation{{Source: "canonical_fact:health", State: memberState}}}
+		group = Coverage{Sources: []SourceObservation{{Source: "canonical_fact:health", State: groupState}}}
+		served = group
+		return served, member, group
+	}
+
+	t.Run("an unrooted differing read is named, not served empty", func(t *testing.T) {
+		buf := captureDefaultJSONLogger(t)
+		served, member, group := differing(SourceAvailable, SourceNoData)
+		// The member read differs from the served source and has no root
+		// kind, so it cannot be named and no row is served.
+		got := readOriginStateCoverage(served, member, group, "", SubjectTeam)
 		if len(got.Details) != 0 {
-			t.Fatalf("rows = %d, want 0 -- an unrooted read must disclose nothing, not a row with an empty population", len(got.Details))
+			t.Fatalf("rows = %d, want 0 -- an unrooted read must not be served with an empty population", len(got.Details))
 		}
-		// And one-sided: only the rooted read discloses.
-		half := readOriginStateCoverage(canonical, canonical, SubjectProject, "")
-		if len(half.Details) != 2 {
-			t.Fatalf("rooted-member-only rows = %d, want 2 (the member read's two observations, and none from the unrooted group read)", len(half.Details))
+		lines := reasons(read(t, buf), "unrooted_read")
+		if len(lines) != 1 {
+			t.Fatalf("unrooted_read lines = %d, want 1: %+v", len(lines), read(t, buf))
 		}
-		for _, d := range half.Details {
-			if d.OriginKind != SubjectProject {
-				t.Errorf("row %s carries origin %q, want %q -- the unrooted read leaked a row", d.DetailID, d.OriginKind, SubjectProject)
-			}
+		if lines[0].Level != "WARN" {
+			t.Errorf("level = %q, want WARN -- a read that cannot be named is a wiring gap", lines[0].Level)
+		}
+		if lines[0].FactKind != "health" || lines[0].SourceState != string(SourceAvailable) {
+			t.Errorf("line = kind %q state %q, want health/available -- it must say what was lost", lines[0].FactKind, lines[0].SourceState)
 		}
 	})
 
-	t.Run("an observation that names no fact kind is skipped", func(t *testing.T) {
-		mixed := Coverage{Sources: []SourceObservation{
+	t.Run("a non-fact observation is dropped at Debug as not_a_fact_read", func(t *testing.T) {
+		buf := captureDefaultJSONLogger(t)
+		member := Coverage{Sources: []SourceObservation{
 			{Source: "canonical_fact:health", State: SourceAvailable},
-			{Source: "context-fabric:graph", State: SourceUnavailable},
 			{Source: "context-fabric:graph-validity-windows", State: SourceAvailable},
-			{Source: "canonical_fact:", State: SourceAvailable},
 		}}
-		got := readOriginStateCoverage(mixed, Coverage{}, SubjectProject, "")
-		if len(got.Details) != 1 {
-			t.Fatalf("rows = %d, want 1 -- only the canonical-fact observation is a fact read", len(got.Details))
+		group := Coverage{Sources: []SourceObservation{{Source: "canonical_fact:health", State: SourceNoData}}}
+		if got := readOriginStateCoverage(group, member, group, SubjectProject, SubjectTeam); len(got.Details) != 1 {
+			t.Fatalf("rows = %d, want 1 (health only)", len(got.Details))
 		}
-		if got.Details[0].FactKind != FactHealth {
-			t.Errorf("row fact kind = %q, want %q -- a graph observation was disclosed as a fact kind", got.Details[0].FactKind, FactHealth)
+		skipped := reasons(read(t, buf), "not_a_fact_read")
+		if len(skipped) != 1 {
+			t.Fatalf("not_a_fact_read lines = %d, want 1", len(skipped))
+		}
+		if skipped[0].Level != "DEBUG" {
+			t.Errorf("level = %q, want DEBUG -- a graph observation in fact coverage is routine", skipped[0].Level)
+		}
+		if skipped[0].Source != "context-fabric:graph-validity-windows" {
+			t.Errorf("source = %q, want the graph source", skipped[0].Source)
+		}
+		// AND IT IS DROPPED HERE, not carried on to be refused downstream.
+		if other := reasons(read(t, buf), "contract_refused"); len(other) != 0 {
+			t.Fatalf("a graph observation produced %d contract_refused line(s): %+v", len(other), other)
 		}
 	})
 
-	t.Run("a row the contract would refuse is skipped, not served", func(t *testing.T) {
-		// An observation with no state. The code requires source_state, so
-		// the minted row fails Validate and must be dropped -- serving it
-		// would make the investigation's own write fail.
-		refused := Coverage{Sources: []SourceObservation{
-			{Source: "canonical_fact:health", State: ""},
-			{Source: "canonical_fact:workload", State: SourceAvailable},
-		}}
-		got := readOriginStateCoverage(refused, Coverage{}, SubjectProject, "")
-		if len(got.Details) != 1 {
-			t.Fatalf("rows = %d, want 1 -- the stateless observation must be skipped", len(got.Details))
+	t.Run("a row the contract refuses is dropped at Warn with the error", func(t *testing.T) {
+		buf := captureDefaultJSONLogger(t)
+		// An empty state on the read that differs: the code requires
+		// source_state, so the minted row fails Validate.
+		member := Coverage{Sources: []SourceObservation{{Source: "canonical_fact:health", State: ""}}}
+		group := Coverage{Sources: []SourceObservation{{Source: "canonical_fact:health", State: SourceNoData}}}
+		if got := readOriginStateCoverage(group, member, group, SubjectProject, SubjectTeam); len(got.Details) != 0 {
+			t.Fatalf("rows = %d, want 0 -- the refused row must not be served", len(got.Details))
 		}
-		if got.Details[0].FactKind != FactWorkload {
-			t.Errorf("surviving row is %q, want the workload row", got.Details[0].FactKind)
+		refusals := reasons(read(t, buf), "contract_refused")
+		if len(refusals) != 1 {
+			t.Fatalf("contract_refused lines = %d, want 1: %+v", len(refusals), read(t, buf))
 		}
-		for _, d := range got.Details {
-			if err := d.Validate(); err != nil {
-				t.Errorf("row %s reached the document and fails the contract: %v", d.DetailID, err)
-			}
+		if refusals[0].Level != "WARN" {
+			t.Errorf("level = %q, want WARN -- the producers mint only valid rows, so a refusal is a defect", refusals[0].Level)
+		}
+		if !strings.Contains(refusals[0].Error, "requires source_state") {
+			t.Errorf("error = %q, want the contract's own reason", refusals[0].Error)
 		}
 	})
 
-	t.Run("every row carries its own detail id", func(t *testing.T) {
-		got := readOriginStateCoverage(canonical, canonical, SubjectProject, SubjectTeam)
-		if len(got.Details) != 4 {
-			t.Fatalf("rows = %d, want 4 (two observations on each of two reads)", len(got.Details))
+	t.Run("a kind with no served source serves nothing and says so", func(t *testing.T) {
+		buf := captureDefaultJSONLogger(t)
+		_, member, group := differing(SourceAvailable, SourceNoData)
+		got := readOriginStateCoverage(Coverage{}, member, group, SubjectProject, SubjectTeam)
+		if len(got.Details) != 0 {
+			t.Fatalf("rows = %d, want 0 -- with no served source a single row cannot say which read is which", len(got.Details))
 		}
-		seen := map[string]int{}
-		for _, d := range got.Details {
-			seen[d.DetailID]++
+		if lines := reasons(read(t, buf), "no_served_source"); len(lines) != 1 {
+			t.Fatalf("no_served_source lines = %d, want 1: %+v", len(lines), read(t, buf))
 		}
-		if len(seen) != len(got.Details) {
-			t.Fatalf("detail ids %v over %d rows -- ids collide, so a disclosure or a phrasing write lands on the wrong row", seen, len(got.Details))
+	})
+
+	t.Run("a turn that drops nothing says nothing", func(t *testing.T) {
+		// The discriminating control: non-execution is distinguishable from
+		// an evaluated zero.
+		buf := captureDefaultJSONLogger(t)
+		served, member, group := differing(SourceAvailable, SourceNoData)
+		if got := readOriginStateCoverage(served, member, group, SubjectProject, SubjectTeam); len(got.Details) != 1 {
+			t.Fatalf("rows = %d, want 1", len(got.Details))
+		}
+		if lines := read(t, buf); len(lines) != 0 {
+			t.Fatalf("a clean grouped read emitted %d skip line(s): %+v", len(lines), lines)
 		}
 	})
 }
@@ -553,7 +819,6 @@ func TestTheServedOrderOfOriginRowsDoesNotDependOnArrivalOrder(t *testing.T) {
 		t.Fatalf("merged %d rows from %d that differ in fact kind -- the key collapsed rows it must keep apart: %v", len(first), len(kinds), first)
 	}
 	t.Logf("served order: %v", first)
-	// Every rotation of the same evidence must serve the same order.
 	for shift := 1; shift < len(kinds); shift++ {
 		permuted := append(append([]FactKind(nil), kinds[shift:]...), kinds[:shift]...)
 		got := order(permuted)
@@ -561,175 +826,4 @@ func TestTheServedOrderOfOriginRowsDoesNotDependOnArrivalOrder(t *testing.T) {
 			t.Errorf("arrival order %v served %v, but %v served %v -- the served document depends on the order rows arrived in", permuted, got, kinds, first)
 		}
 	}
-}
-
-// EVERY DROP THE PRODUCER MAKES IS OBSERVABLE, AND THE REASONS ARE DISTINCT.
-//
-// The producer's two "no" answers used to be silent, and a battery proved
-// what that cost: weakening either guard changed nothing any test could see,
-// because the contract's Validate refused the rows they let through and the
-// served document came out identical. These pins assert the EMITTED lines
-// from the real producer at production levels, with non-trivial values, so a
-// guard that stops guarding is now a visible change and not a silent one.
-//
-// NOT t.Parallel(): it installs the process-global default logger.
-func TestEveryRowTheProducerDropsSaysWhyItWasDropped(t *testing.T) {
-	type line struct {
-		Msg         string `json:"msg"`
-		Level       string `json:"level"`
-		Side        string `json:"side"`
-		Reason      string `json:"reason"`
-		Source      string `json:"source"`
-		OriginKind  string `json:"origin_kind"`
-		FactKind    string `json:"fact_kind"`
-		SourceState string `json:"source_state"`
-		Error       string `json:"error"`
-		Dropped     int    `json:"observations_dropped"`
-	}
-	read := func(t *testing.T, buf *syncBuffer) []line {
-		t.Helper()
-		var out []line
-		for _, raw := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
-			if raw == "" {
-				continue
-			}
-			var l line
-			if err := json.Unmarshal([]byte(raw), &l); err != nil {
-				t.Fatalf("log line is not JSON: %v (%q)", err, raw)
-			}
-			if strings.HasPrefix(l.Msg, "context fabric read origin state") {
-				out = append(out, l)
-			}
-		}
-		return out
-	}
-
-	t.Run("an unrooted read names the side and what it cost", func(t *testing.T) {
-		buf := captureDefaultJSONLogger(t)
-		member := Coverage{Sources: []SourceObservation{
-			{Source: "canonical_fact:health", State: SourceAvailable},
-			{Source: "canonical_fact:workload", State: SourceNoData},
-			{Source: "context-fabric:graph", State: SourceAvailable},
-		}}
-		got := readOriginStateCoverage(member, member, SubjectProject, "")
-		if len(got.Details) != 2 {
-			t.Fatalf("rows = %d, want 2 -- only the rooted read discloses", len(got.Details))
-		}
-		lines := read(t, buf)
-		var unrooted, refused []line
-		for _, l := range lines {
-			switch l.Reason {
-			case "unrooted_read":
-				unrooted = append(unrooted, l)
-			case "contract_refused":
-				refused = append(refused, l)
-			}
-		}
-		if len(unrooted) != 1 {
-			t.Fatalf("unrooted_read lines = %d, want exactly 1 (the group read): %+v", len(unrooted), lines)
-		}
-		// ONE LINE FOR THE WHOLE READ, NOT ONE PER OBSERVATION. An unrooted
-		// read STOPS: it does not walk its observations minting rows for the
-		// contract to refuse one at a time. That would bury a single wiring
-		// gap under a refusal per fact kind and read, at Warn, on every
-		// grouped turn -- and it is the shape a battery arm produces by
-		// deleting the return, so the count is asserted rather than assumed.
-		if len(refused) != 0 {
-			t.Fatalf("an unrooted read produced %d contract_refused line(s): %+v -- it carried on instead of stopping", len(refused), refused)
-		}
-		l := unrooted[0]
-		// NON-TRIVIAL VALUES: the side is the group, not the member, and the
-		// count is 3, not 0 -- a field at its zero value would pin nothing.
-		if l.Level != "WARN" {
-			t.Errorf("level = %q, want WARN -- an unrooted read is a wiring gap, not routine", l.Level)
-		}
-		if l.Side != "group" {
-			t.Errorf("side = %q, want \"group\" -- the line names the wrong read", l.Side)
-		}
-		if l.Dropped != 3 {
-			t.Errorf("observations_dropped = %d, want 3 -- the line must say what the gap cost", l.Dropped)
-		}
-	})
-
-	t.Run("a non-fact observation is dropped at Debug as not_a_fact_read", func(t *testing.T) {
-		buf := captureDefaultJSONLogger(t)
-		mixed := Coverage{Sources: []SourceObservation{
-			{Source: "canonical_fact:health", State: SourceAvailable},
-			{Source: "context-fabric:graph-validity-windows", State: SourceAvailable},
-		}}
-		if got := readOriginStateCoverage(mixed, Coverage{}, SubjectTeam, ""); len(got.Details) != 1 {
-			t.Fatalf("rows = %d, want 1", len(got.Details))
-		}
-		var skipped, other []line
-		for _, l := range read(t, buf) {
-			switch l.Reason {
-			case "not_a_fact_read":
-				skipped = append(skipped, l)
-			case "contract_refused":
-				other = append(other, l)
-			}
-		}
-		if len(skipped) != 1 {
-			t.Fatalf("not_a_fact_read lines = %d, want 1", len(skipped))
-		}
-		// AND IT IS DROPPED HERE, not carried on to be refused by the
-		// contract further down: the two reasons are different answers and
-		// a graph observation must take the routine one.
-		if len(other) != 0 {
-			t.Fatalf("a graph observation produced %d contract_refused line(s): %+v -- it was carried past the filter and refused downstream instead of dropped here", len(other), other)
-		}
-		l := skipped[0]
-		if l.Level != "DEBUG" {
-			t.Errorf("level = %q, want DEBUG -- a graph observation in fact coverage is routine", l.Level)
-		}
-		if l.Source != "context-fabric:graph-validity-windows" {
-			t.Errorf("source = %q, want the graph source -- the line does not name what was dropped", l.Source)
-		}
-		if l.OriginKind != string(SubjectTeam) {
-			t.Errorf("origin_kind = %q, want %q", l.OriginKind, SubjectTeam)
-		}
-	})
-
-	t.Run("a row the contract refuses is dropped at Warn with the error", func(t *testing.T) {
-		buf := captureDefaultJSONLogger(t)
-		refused := Coverage{Sources: []SourceObservation{
-			{Source: "canonical_fact:health", State: ""},
-			{Source: "canonical_fact:workload", State: SourceAvailable},
-		}}
-		if got := readOriginStateCoverage(refused, Coverage{}, SubjectProject, ""); len(got.Details) != 1 {
-			t.Fatalf("rows = %d, want 1", len(got.Details))
-		}
-		var refusals []line
-		for _, l := range read(t, buf) {
-			if l.Reason == "contract_refused" {
-				refusals = append(refusals, l)
-			}
-		}
-		if len(refusals) != 1 {
-			t.Fatalf("contract_refused lines = %d, want 1", len(refusals))
-		}
-		l := refusals[0]
-		if l.Level != "WARN" {
-			t.Errorf("level = %q, want WARN -- the producers mint only valid rows, so a refusal is a defect", l.Level)
-		}
-		if l.FactKind != string(FactHealth) {
-			t.Errorf("fact_kind = %q, want %q", l.FactKind, FactHealth)
-		}
-		if !strings.Contains(l.Error, "requires source_state") {
-			t.Errorf("error = %q, want the contract's own reason -- a refusal with no reason cannot be chased", l.Error)
-		}
-	})
-
-	t.Run("a turn that drops nothing says nothing", func(t *testing.T) {
-		// The discriminating control: non-execution is distinguishable from
-		// an evaluated zero. A clean grouped read emits no skip line at all.
-		buf := captureDefaultJSONLogger(t)
-		clean := Coverage{Sources: []SourceObservation{{Source: "canonical_fact:health", State: SourceAvailable}}}
-		if got := readOriginStateCoverage(clean, clean, SubjectProject, SubjectTeam); len(got.Details) != 2 {
-			t.Fatalf("rows = %d, want 2", len(got.Details))
-		}
-		if lines := read(t, buf); len(lines) != 0 {
-			t.Fatalf("a clean grouped read emitted %d skip line(s): %+v", len(lines), lines)
-		}
-	})
 }

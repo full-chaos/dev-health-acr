@@ -2618,8 +2618,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				e.recordGroupReadCoverageStates(ctx, principal, plan.Family, requestedGroupKind, facts.Coverage, groupBundle.Coverage)
 				// The same observations on the SERVED document, so the failed
 				// read's population is readable there too, not only on the
-				// trace. The member read's own coverage is untouched.
-				facts.Coverage = MergeCoverage(principal.OrgID, facts.Coverage, readOriginStateCoverage(facts.Coverage, groupBundle.Coverage, originMemberKind(plan, &cohort), requestedGroupKind))
+				// trace. The member read's own coverage is untouched, so it
+				// is BOTH the member read and the served source here: the
+				// failed group bundle is never composed, and the state the
+				// document lacks is the group's.
+				facts.Coverage = MergeCoverage(principal.OrgID, facts.Coverage, readOriginStateCoverage(facts.Coverage, facts.Coverage, groupBundle.Coverage, originMemberKind(plan, &cohort), requestedGroupKind))
 			}
 			if groupOutcome.Read && groupErr == nil {
 				// THE TURN'S ONE FACT BUDGET, before anything else sees the
@@ -2637,7 +2640,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// coverages, and attached only if the merge composes: a group
 				// read refused at reconcile served none of its evidence, so the
 				// document must not describe that read as if it had.
-				originStates := readOriginStateCoverage(facts.Coverage, groupBundle.Coverage, originMemberKind(plan, &cohort), requestedGroupKind)
+				// Snapshot the member read's own coverage BEFORE the merge:
+				// afterwards `facts.Coverage` is the fold, which is the
+				// served source the rows are taken against.
+				memberCoverage := facts.Coverage
 				if mergeGroupBundle(&facts, groupBundle, principal.OrgID) {
 					// Refused at RECONCILE, after the request went out. `Read`
 					// stays true for the same reason it stays true on a failed
@@ -2648,7 +2654,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 					groupOutcome.Refused, groupOutcome.Reason = true, GroupReadRefusalMetadataConflict
 				} else {
 					groupFactsMerged = len(groupBundle.Facts)
-					facts.Coverage = MergeCoverage(principal.OrgID, facts.Coverage, originStates)
+					facts.Coverage = MergeCoverage(principal.OrgID, facts.Coverage,
+						readOriginStateCoverage(facts.Coverage, memberCoverage, groupBundle.Coverage, originMemberKind(plan, &cohort), requestedGroupKind))
 				}
 			}
 			groupsWithFacts := 0

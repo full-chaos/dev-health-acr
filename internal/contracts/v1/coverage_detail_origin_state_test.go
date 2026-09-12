@@ -1,6 +1,9 @@
 package v1
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -178,5 +181,72 @@ func TestOriginKindOutsideTheQuartetIsOnlyForTheCodeThatRequiresIt(t *testing.T)
 		if err == nil || !strings.Contains(err.Error(), "forbids scope fields") {
 			t.Errorf("%s: origin_kind alone accepted or refused for the wrong reason: %v", code, err)
 		}
+	}
+}
+
+// THE GOLDEN FIXTURE IS THE SHAPE, NOT A SAMPLE OF IT.
+//
+// contracts/examples/v1 is what a consumer vendors to learn the wire shape,
+// and a new coverage-detail code that ships without one leaves every consumer
+// to infer it from prose. This pin reads the fixture from disk and asserts
+// that it carries BOTH directions of the disclosure -- the case where the
+// member read is the one the served source does not publish, and the case
+// where the group read is -- because a fixture with only one direction would
+// let a consumer conclude the row always names the same population.
+//
+// It also asserts the property the row exists for: for each of the two kinds,
+// the row's state and the served source state are DIFFERENT, so a reader who
+// has both recovers both reads.
+func TestTheGoldenExampleCarriesBothDirectionsOfTheOriginDisclosure(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "contracts", "examples", "v1",
+		"context_fabric_investigation_result_origin_state.v1.json"))
+	if err != nil {
+		t.Fatalf("the golden example for %s is missing: %v", ContextFabricCoverageDetailFactReadOriginState, err)
+	}
+	var doc struct {
+		Coverage struct {
+			Sources []struct {
+				Source string `json:"source"`
+				State  string `json:"state"`
+			} `json:"sources"`
+			Details []ContextFabricCoverageDetail `json:"details"`
+		} `json:"coverage"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("the golden example does not decode: %v", err)
+	}
+	served := map[string]string{}
+	for _, source := range doc.Coverage.Sources {
+		served[source.Source] = source.State
+	}
+	origins := map[ContextFabricSubjectKind]ContextFabricCoverageDetail{}
+	for _, detail := range doc.Coverage.Details {
+		if detail.Code != ContextFabricCoverageDetailFactReadOriginState {
+			continue
+		}
+		if err := detail.Validate(); err != nil {
+			t.Errorf("golden row %s fails the contract it is meant to demonstrate: %v", detail.DetailID, err)
+		}
+		if detail.Degrading {
+			t.Errorf("golden row %s is degrading; this code never degrades", detail.DetailID)
+		}
+		if got := served[detail.Source]; got == string(detail.SourceState) {
+			t.Errorf("golden row %s repeats the served source state %q -- the fixture does not demonstrate what the row is for",
+				detail.DetailID, got)
+		}
+		t.Logf("golden row %s: %s read %s = %q, served source = %q",
+			detail.DetailID, detail.OriginKind, detail.FactKind, detail.SourceState, served[detail.Source])
+		origins[detail.OriginKind] = detail
+	}
+	// BOTH DIRECTIONS. A member-rooted row and a group-rooted row: the rule
+	// names whichever read the source does not publish, and a consumer must
+	// see that it can be either.
+	for _, want := range []ContextFabricSubjectKind{ContextFabricSubjectProject, ContextFabricSubjectTeam} {
+		if _, ok := origins[want]; !ok {
+			t.Errorf("the golden example carries no row rooted on %q -- a consumer could conclude the row always names one population", want)
+		}
+	}
+	if len(origins) < 2 {
+		t.Fatalf("golden origin rows by population = %v, want both directions", origins)
 	}
 }
