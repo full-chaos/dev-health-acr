@@ -84,6 +84,39 @@ func TestCardinalityIgnoresAPopulationThatDoesNotExceedTheServedMembers(t *testi
 	}
 }
 
+func TestCardinalityLeavesTheBasisEmptyWhenThePopulationCutNothing(t *testing.T) {
+	t.Parallel()
+	// population EQUAL to served, with a clamp step present. The clamp ran
+	// (it always records a step) but it cut nothing, so there is no loss to
+	// attribute and the basis must stay empty.
+	//
+	// THIS IS THE CELL THAT SEPARATES `>` FROM `>=`. Every other fixture
+	// here passes a population either above or below the served count, and
+	// both operators agree on those. Weakened to `>=`, this cell publishes a
+	// cut mechanism for a cohort that lost nothing -- a disclosure a reader
+	// would act on and that never happened.
+	cardinality, counted := ComputeMembershipCardinality(
+		countingCohort(SubjectProject, 14), 14,
+		[]contractsv1.ContextFabricPlanNarrowing{{
+			Stage:  contractsv1.ContextFabricPlanNarrowingCardinality,
+			Basis:  contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical,
+			Before: 50, After: 14,
+		}})
+
+	if !counted {
+		t.Fatal("counted = false, want true")
+	}
+	if cardinality.Declared != 14 || cardinality.Served != 14 {
+		t.Errorf("served/declared = %d/%d, want 14/14 -- nothing was cut", cardinality.Served, cardinality.Declared)
+	}
+	if cardinality.Basis != "" {
+		t.Errorf("basis = %q, want empty -- naming a mechanism for a cut that did not happen is a false disclosure", cardinality.Basis)
+	}
+	if cardinality.Narrowed() {
+		t.Error("Narrowed() = true, want false")
+	}
+}
+
 func TestCardinalityLetsALaterMemberNarrowingOutrankThePopulation(t *testing.T) {
 	t.Parallel()
 	// Two losses on one turn: the clamp cut the population to what could be
