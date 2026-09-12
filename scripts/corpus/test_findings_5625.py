@@ -255,6 +255,69 @@ def test_resolve_ask_dev_refuses_by_name_when_unimportable():
     _require("corpus/expect_schema.py" in proc.stdout, proc.stdout)
 
 
+def test_resolve_ask_dev_refuses_a_present_but_broken_companion():
+    """CHAOS-5632: import succeeding is not enough -- a companion missing a
+    required version attribute (a partial checkout, a version bump landed on
+    one side only) must refuse the SAME way an unimportable one does
+    (AskDevUnavailable, never an uncaught AttributeError that would abort
+    merge_corpus.py's merge instead of degrading it to legacy-only)."""
+    code = (
+        "import sys; sys.path.insert(0, %r); "
+        "import semantic_verdict_bridge as svb\n"
+        "try:\n"
+        "    svb.resolve_ask_dev()\n"
+        "except svb.AskDevUnavailable as e:\n"
+        "    print('REFUSED:' + str(e))\n"
+        "else:\n"
+        "    print('DID NOT REFUSE')\n"
+    ) % str(HERE)
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp) / "broken-ask-dev"
+        corpus_dir = _write_fake_ask_dev(base)
+        # SCORER_VERSION is exactly what resolve_ask_dev reads to build the
+        # pin -- delete it so the import succeeds and the attribute read
+        # does not.
+        (corpus_dir / "semantic_verdict.py").write_text(
+            FAKE_SEMANTIC_VERDICT.replace('SCORER_VERSION = "fake-scorer-v1"\n', ""))
+        env = {"PATH": "/usr/bin:/bin:/usr/local/bin", "PYTHONPATH": str(corpus_dir)}
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+        _require(proc.returncode == 0, proc.stderr)
+        _require(proc.stdout.startswith("REFUSED:"), proc.stdout)
+        _require("broken" in proc.stdout, proc.stdout)
+
+
+def test_resolve_ask_dev_refuses_a_mixed_companion():
+    """CHAOS-5632's other observed shape: expect_schema and semantic_verdict
+    resolving from two DIFFERENT checkouts (each on sys.path, each supplying
+    only one of the two module names) was seen to succeed silently, naming
+    one root while actually scoring with code from two. Building each half
+    in its own directory and putting both on sys.path reproduces exactly
+    that shape."""
+    code = (
+        "import sys; sys.path.insert(0, %r); "
+        "import semantic_verdict_bridge as svb\n"
+        "try:\n"
+        "    svb.resolve_ask_dev()\n"
+        "except svb.AskDevUnavailable as e:\n"
+        "    print('REFUSED:' + str(e))\n"
+        "else:\n"
+        "    print('DID NOT REFUSE')\n"
+    ) % str(HERE)
+    with tempfile.TemporaryDirectory() as tmp:
+        base_a = Path(tmp) / "ask-dev-a"
+        base_b = Path(tmp) / "ask-dev-b"
+        corpus_a = _write_fake_ask_dev(base_a)
+        corpus_b = _write_fake_ask_dev(base_b)
+        (corpus_a / "semantic_verdict.py").unlink()
+        (corpus_b / "expect_schema.py").unlink()
+        env = {"PATH": "/usr/bin:/bin:/usr/local/bin",
+               "PYTHONPATH": f"{corpus_a}:{corpus_b}"}
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+        _require(proc.returncode == 0, proc.stderr)
+        _require(proc.stdout.startswith("REFUSED:"), proc.stdout)
+        _require("mixed" in proc.stdout, proc.stdout)
+
+
 # ---------------------------------------------------------------------------
 # Merge-level integration: run the REAL merge_corpus.py end to end against a
 # tiny synthetic shard, the fake ask-dev pin, and the testdata_corpus example
