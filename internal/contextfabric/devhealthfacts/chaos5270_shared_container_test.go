@@ -21,6 +21,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -29,6 +30,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -208,15 +210,39 @@ func reportClickHouseContainerDeath(logf func(string, ...any), buf *deathLogBuff
 	}))
 }
 
-// watchClickHouseContainerDeath polls the shared container's own running
-// state (rather than intercepting every query call site across this
-// package's sibling tests) so the trigger stays entirely inside this fixture
-// file. The first observed non-running state reports once, then the watcher
-// exits; an intentional teardown closes stop first so a normal shutdown
-// never reports as a death.
-func watchClickHouseContainerDeath(container testcontainers.Container, stop <-chan struct{}, buf *deathLogBuffer, startedAt time.Time) {
+// deathProbeTimeout bounds each tick's State inspect and TCP dial so one
+// slow probe can never stall the watcher past its next tick.
+const deathProbeTimeout = 3 * time.Second
+
+// containerStateProber is the narrow slice of testcontainers.Container the
+// watcher actually calls -- real *testcontainers.DockerContainer satisfies
+// it structurally, and a small fake satisfies it in tests instead of
+// stubbing the whole 20-method Container interface.
+type containerStateProber interface {
+	State(ctx context.Context) (*dockercontainer.State, error)
+	GetContainerID() string
+}
+
+// watchClickHouseContainerDeath probes the shared container's ACTUAL state
+// every tick -- a real docker inspect (container.State, which calls docker
+// inspect live, testcontainers-go@v0.43.0 docker.go:479-485) AND a raw TCP
+// dial to the mapped ClickHouse port -- rather than
+// testcontainers.Container.IsRunning(), which is a cached atomic bool
+// (docker.go:119-121) cleared ONLY by this process's own Stop()/Terminate()
+// calls (docker.go:308, :366): nothing updates it when the container dies
+// on its own, so it can never observe an out-of-band death. Live inspect
+// state and a TCP dial are both signals that DO reflect what actually
+// happened, independent of anything this process called.
+//
+// Either signal going bad on TWO CONSECUTIVE ticks reports the death once;
+// a single bad tick is a transient blip (host contention, a slow inspect
+// under load), not evidence of death, so momentary pressure never
+// false-fires. An intentional teardown closes stop first, so a normal
+// shutdown never reports as a death.
+func watchClickHouseContainerDeath(container containerStateProber, addr string, stop <-chan struct{}, buf *deathLogBuffer, startedAt time.Time, once *sync.Once, testCount func() int64, logf func(string, ...any)) {
 	ticker := time.NewTicker(750 * time.Millisecond)
 	defer ticker.Stop()
+	consecutiveBad := 0
 	for {
 		select {
 		case <-stop:
@@ -227,25 +253,71 @@ func watchClickHouseContainerDeath(container testcontainers.Container, stop <-ch
 				return
 			default:
 			}
-			if container.IsRunning() {
+
+			ctx, cancel := context.WithTimeout(context.Background(), deathProbeTimeout)
+			state, stateErr := container.State(ctx)
+			cancel()
+			dialErr := probeTCPDial(addr, deathProbeTimeout)
+
+			if stateErr == nil && state.Running && !isConnectionRefused(dialErr) {
+				consecutiveBad = 0
 				continue
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			state, _ := container.State(ctx)
-			cancel()
-			sharedClickHouseDeathOnce.Do(func() {
+			consecutiveBad++
+			if consecutiveBad < 2 {
+				continue
+			}
+			once.Do(func() {
 				reportClickHouseContainerDeath(
-					log.Printf,
+					logf,
 					buf,
 					state,
 					container.GetContainerID(),
 					startedAt,
-					atomic.LoadInt64(&sharedClickHouseTestCount),
-					"container_not_running",
+					testCount(),
+					deathTrigger(stateErr, state, dialErr),
 				)
 			})
 			return
 		}
+	}
+}
+
+// probeTCPDial reports whether addr refused (or otherwise failed) a live
+// TCP connection attempt, closing the connection immediately on success --
+// this is a liveness probe only, never a real client.
+func probeTCPDial(addr string, timeout time.Duration) error {
+	conn, err := net.DialTimeout("tcp", addr, timeout)
+	if err != nil {
+		return err
+	}
+	return conn.Close()
+}
+
+// isConnectionRefused reports whether err is shaped like nothing is
+// listening on the port anymore -- the exact signature every observed
+// hosted-CI death has carried ("connect: connection refused") -- rather
+// than a generic dial error a merely slow, still-alive host could also
+// produce (a timeout under load), which the 2-consecutive-ticks debounce
+// above already guards against separately.
+func isConnectionRefused(err error) bool {
+	return err != nil && (errors.Is(err, syscall.ECONNREFUSED) || strings.Contains(err.Error(), "connection refused"))
+}
+
+// deathTrigger names which probe actually caught the death, so a reader of
+// the dump knows whether the container itself stopped running or only its
+// ClickHouse server/port went unreachable while docker still reports the
+// container as running.
+func deathTrigger(stateErr error, state *dockercontainer.State, dialErr error) string {
+	switch {
+	case stateErr != nil:
+		return "container_state_inspect_failed"
+	case state != nil && !state.Running:
+		return "container_not_running"
+	case isConnectionRefused(dialErr):
+		return "clickhouse_port_refused"
+	default:
+		return "unknown"
 	}
 }
 
@@ -328,7 +400,6 @@ func startSharedClickHouseContainer() (*runtimeclickhouse.Client, clickhousedriv
 		return nil, nil, "", nil, fmt.Errorf("start ClickHouse container: %w", err)
 	}
 	sharedClickHouseWatchStop = make(chan struct{})
-	go watchClickHouseContainerDeath(container, sharedClickHouseWatchStop, sharedClickHouseDeathBuf, sharedClickHouseStartedAt)
 	terminate := func() {
 		close(sharedClickHouseWatchStop)
 		logCleanupErr("terminate container", container.Terminate(context.Background()))
@@ -344,6 +415,11 @@ func startSharedClickHouseContainer() (*runtimeclickhouse.Client, clickhousedriv
 		return nil, nil, "", nil, err
 	}
 	addr := net.JoinHostPort(host, port.Port())
+	// The watcher needs addr for its own TCP probe, so it starts only once
+	// the mapped port is known -- nothing meaningful to watch before that,
+	// and a Host/MappedPort failure above never leaves an orphaned watcher.
+	go watchClickHouseContainerDeath(container, addr, sharedClickHouseWatchStop, sharedClickHouseDeathBuf, sharedClickHouseStartedAt,
+		&sharedClickHouseDeathOnce, func() int64 { return atomic.LoadInt64(&sharedClickHouseTestCount) }, log.Printf)
 
 	direct, err := clickhousedriver.Open(&clickhousedriver.Options{
 		Addr: []string{addr}, Auth: clickhousedriver.Auth{Database: "default", Username: "acr", Password: "acr"}, DialTimeout: 10 * time.Second,

@@ -9,8 +9,11 @@ package devhealthfacts_test
 // needing an actual container to die.
 
 import (
+	"context"
 	"fmt"
+	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -95,6 +98,167 @@ func TestClickHouseContainerDeathReportCapturesFakeDeath(t *testing.T) {
 		if !strings.HasPrefix(line, clickHouseDeathMarker) {
 			t.Fatalf("every line of a death report must carry the marker so it's grep-able; offending line: %q\nfull report:\n%s", line, out)
 		}
+	}
+}
+
+// fakeStateProber is a containerStateProber test double that reports
+// whatever running/error state the test configures -- a genuinely settable
+// state, not a fixed one, since the signal under test must never be a
+// cached flag.
+type fakeStateProber struct {
+	mu      sync.Mutex
+	running bool
+	err     error
+}
+
+func (f *fakeStateProber) State(context.Context) (*dockercontainer.State, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &dockercontainer.State{Running: f.running}, nil
+}
+
+func (f *fakeStateProber) GetContainerID() string { return "fake-container-id" }
+
+// listenAndAccept starts a real TCP listener that accepts and immediately
+// closes every connection -- the CONTROL's "genuinely alive" port, as
+// opposed to a fabricated Running=true that the watcher's OWN dial probe
+// would otherwise catch as a lie.
+func listenAndAccept(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+	return ln.Addr().String()
+}
+
+// refusingAddr returns an address nothing is listening on: bind a real
+// listener to claim a genuinely free port, then close it immediately --
+// unlike a random guessed port, this can never collide with something
+// else already listening, and a dial against a closed loopback listener
+// reliably refuses rather than timing out.
+func refusingAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	return addr
+}
+
+// runWatcherForGuard drives watchClickHouseContainerDeath to completion (it
+// always returns after either firing once or stop closing), injecting its
+// own logf so the guard can see exactly what a fire would have written --
+// same "take the sink as a parameter" testability reportClickHouseContainerDeath
+// itself already uses. A bounded wait means a guard that regresses into an
+// infinite loop fails the test instead of hanging the suite.
+func runWatcherForGuard(t *testing.T, prober containerStateProber, addr string, stop <-chan struct{}) (fired bool, report string) {
+	t.Helper()
+	buf := newDeathLogBuffer(50)
+	var once sync.Once
+	var mu sync.Mutex
+	var captured strings.Builder
+	logf := func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		captured.WriteString(fmt.Sprintf(format, args...))
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		watchClickHouseContainerDeath(prober, addr, stop, buf, time.Now(), &once, func() int64 { return 3 }, logf)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("watchClickHouseContainerDeath did not return within 10s -- it must always return once it fires or stop closes")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	return captured.Len() > 0, captured.String()
+}
+
+// TestWatchClickHouseContainerDeathFiresOnStateNotRunning proves the State
+// signal is independently sufficient: a live docker inspect (never a
+// cached flag) says the container is not running, on two consecutive
+// ticks, with a genuinely open port (so the dial probe alone could never
+// explain a fire).
+func TestWatchClickHouseContainerDeathFiresOnStateNotRunning(t *testing.T) {
+	prober := &fakeStateProber{running: false}
+	addr := listenAndAccept(t) // port is fine; State says not-running regardless
+	fired, report := runWatcherForGuard(t, prober, addr, make(chan struct{}))
+	if !fired {
+		t.Fatalf("watcher never fired on a container State reporting not-running")
+	}
+	if !strings.Contains(report, clickHouseDeathMarker) || !strings.Contains(report, `trigger="container_not_running"`) {
+		t.Fatalf("report missing the marker or the container_not_running trigger; got:\n%s", report)
+	}
+}
+
+// TestWatchClickHouseContainerDeathFiresOnPortRefused proves the TCP probe
+// is independently sufficient: docker's State reports the container as
+// Running (a live container whose ClickHouse process/port has died is
+// exactly the shape a cached IsRunning flag could never catch), but the
+// mapped port refuses every dial, on two consecutive ticks.
+func TestWatchClickHouseContainerDeathFiresOnPortRefused(t *testing.T) {
+	prober := &fakeStateProber{running: true}
+	addr := refusingAddr(t)
+	fired, report := runWatcherForGuard(t, prober, addr, make(chan struct{}))
+	if !fired {
+		t.Fatalf("watcher never fired on a refused ClickHouse port with a live-reporting container")
+	}
+	if !strings.Contains(report, clickHouseDeathMarker) || !strings.Contains(report, `trigger="clickhouse_port_refused"`) {
+		t.Fatalf("report missing the marker or the clickhouse_port_refused trigger; got:\n%s", report)
+	}
+}
+
+// TestWatchClickHouseContainerDeathControlNeverFiresOnALiveContainer is the
+// DISCRIMINATING CONTROL every finding above needs: a container reporting
+// Running=true with a genuinely open, accepting port must never fire, no
+// matter how many ticks pass. Without this, a watcher that always fires
+// (e.g. an inverted condition) would pass both tests above too.
+func TestWatchClickHouseContainerDeathControlNeverFiresOnALiveContainer(t *testing.T) {
+	prober := &fakeStateProber{running: true}
+	addr := listenAndAccept(t)
+	stop := make(chan struct{})
+	// Long enough to cover several ticks (750ms cadence, 2-consecutive-bad
+	// debounce) with margin, short enough to keep the suite fast.
+	time.AfterFunc(3*time.Second, func() { close(stop) })
+	fired, report := runWatcherForGuard(t, prober, addr, stop)
+	if fired {
+		t.Fatalf("CONTROL BROKEN: watcher fired on a live container with an open port; report:\n%s", report)
+	}
+}
+
+// TestWatchClickHouseContainerDeathHonoursTeardownStopChannel keeps the
+// pre-existing exclusion intact: closing stop BEFORE the debounce completes
+// must return without ever reporting, even though every probe would
+// otherwise be bad -- an intentional teardown must never read as a death.
+func TestWatchClickHouseContainerDeathHonoursTeardownStopChannel(t *testing.T) {
+	prober := &fakeStateProber{running: false}
+	addr := refusingAddr(t)
+	stop := make(chan struct{})
+	close(stop) // already closed: the watcher must return on its very first select
+	fired, report := runWatcherForGuard(t, prober, addr, stop)
+	if fired {
+		t.Fatalf("watcher reported a death after stop was already closed; report:\n%s", report)
 	}
 }
 
