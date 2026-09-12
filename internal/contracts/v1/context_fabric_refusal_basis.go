@@ -1,7 +1,8 @@
 package v1
 
 // CHAOS-5442: the closed vocabulary naming WHY the server refused to act on
-// a question's frame.
+// a question's frame -- and, since the continuation member, on the prior
+// context a window-only continuation would have carried.
 //
 // WHY THIS IS NOT ContextFabricTerminalReason. That vocabulary names the
 // CHANNEL a non-complete result explained itself through -- limitation,
@@ -62,12 +63,60 @@ const (
 	// than disappearing. Reaching it in production means a gate member was
 	// added without a line here.
 	ContextFabricRefusalBasisUnspecified ContextFabricRefusalBasis = "unspecified"
+	// ContextFabricRefusalBasisContinuationContextUnverifiable: the request
+	// was a window-only continuation -- the same question, one redeemed
+	// window offer and nothing else changed -- and the server could not
+	// verify the prior turn's semantic context it would continue. The prior
+	// result could not be read, was built on a different graph epoch, was
+	// recorded under a different definition standard, or its reading could
+	// not be expressed as a valid frame for this turn.
+	//
+	// A REFUSAL, NOT A FRESH READING. Answering under a new interpretation
+	// would serve a reading the caller never confirmed, beside a window the
+	// caller confirmed for a different reading. So the server stops above
+	// retrieval, reads no canonical fact, and states that a fresh
+	// investigation is required.
+	//
+	// NOT A FRAME REFUSAL. The question's own frame was not refused and no
+	// frame invariant was judged against the question the caller asked. The
+	// member describes the CARRIER, so neither of the two frame members above
+	// is true of it, and it has its own fixed sentence
+	// (ContextFabricContinuationContextUnverifiableLimitation) rather than
+	// the member-kind sentence, which names a population this refusal is not
+	// about.
+	ContextFabricRefusalBasisContinuationContextUnverifiable ContextFabricRefusalBasis = "continuation_context_unverifiable"
 )
 
 var contextFabricRefusalBases = [...]ContextFabricRefusalBasis{
 	ContextFabricRefusalBasisMemberKindUnservable,
 	ContextFabricRefusalBasisFrameInvariantViolated,
 	ContextFabricRefusalBasisUnspecified,
+	ContextFabricRefusalBasisContinuationContextUnverifiable,
+}
+
+// ValidContextFabricFrameRefusalBasis reports whether a basis is one of the
+// members that describe a refusal of the QUESTION'S OWN FRAME -- the members
+// the frame gate can produce and the member-kind refusal sentence
+// (ContextFabricRefusalBasisLimitation) may name.
+//
+// AN ALLOW-LIST OF THE FRAME MEMBERS. The member-kind sentence says the
+// question "asked about a population of <kind>, which this service has no way
+// to enumerate" -- a statement about the question's frame -- and the frame gate
+// maps only its own verdicts. The continuation member refuses for a different
+// reason: a kind sentence naming it would be false, and if the recogniser
+// accepted that sentence it would be classified as a service disclosure that
+// nothing may displace; a gate that produced it would claim a frame refusal
+// that no frame decision took. A member added later is excluded until someone
+// decides it describes the frame.
+func ValidContextFabricFrameRefusalBasis(value ContextFabricRefusalBasis) bool {
+	switch value {
+	case ContextFabricRefusalBasisMemberKindUnservable,
+		ContextFabricRefusalBasisFrameInvariantViolated,
+		ContextFabricRefusalBasisUnspecified:
+		return true
+	default:
+		return false
+	}
 }
 
 // ContextFabricRefusalBasisCount is the closed vocabulary's size.

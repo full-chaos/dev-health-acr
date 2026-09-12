@@ -47,15 +47,12 @@ package contextfabric
 //     answer plan carriablePlan already reads: family, group kind and declared
 //     narrowing basis.
 //
-//   - THERE IS NO REFUSAL PATH HERE. D-b refuses when a carrier cannot be
-//     established at all. That refusal needs BOTH a ContextFabricRefusalBasis
-//     member and a new fixed service-authored limitation, and both are wire
-//     contract tokens. ContextFabricRefusalBasisLimitation composes its
-//     sentence from a declared MEMBER KIND, which this condition has none of,
-//     so reusing it would state something false. Until those tokens are ruled,
-//     an unestablishable carrier is reported as `withheld` with its own reason
-//     and the turn proceeds exactly as it does today -- no regression, and the
-//     condition is now visible, which it was not before.
+//   - THE REFUSAL IS NOT DECIDED HERE. A carrier that cannot be established
+//     is reported as `withheld` with its own reason, and the turn it ends is
+//     refused by chaos5465_continuation_refusal.go through its own terminal,
+//     with the wire basis `continuation_context_unverifiable` and a fixed
+//     sentence. ContextFabricRefusalBasisLimitation is NOT used for it: that
+//     sentence names a declared member kind, which this condition has none of.
 //
 // The comparison this file performs is therefore COMPLETE with respect to the
 // context it accepts: the accepted context is the plan, and every component of
@@ -213,6 +210,12 @@ const (
 	// result it was applied to. The decision is not final until save; an event
 	// left reporting `applied` here describes a turn that did not happen.
 	ContinuationReasonWindowSuperseded ContinuationDecisionReason = "window_superseded"
+	// ContinuationReasonAnswerBudgetChanged: this request's effective response
+	// byte budget differs from the one the carrier's plan recorded. The budget
+	// shapes what the answer may contain, so a turn that changes it has changed
+	// more than the evidence window: it is not a window-only continuation, and
+	// it takes the fresh path rather than the carrier's plan.
+	ContinuationReasonAnswerBudgetChanged ContinuationDecisionReason = "answer_budget_changed"
 	// ContinuationReasonUnspecified: a decision site reached a return without
 	// recording a reason. Loud by construction, and NEVER expected to reach the
 	// emitter -- TestWindowContinuation_EveryReasonIsAssignedBySomePath
@@ -351,6 +354,53 @@ type windowContinuationDecision struct {
 	// invariant refused the composition rather than only that one did.
 	CompositionOutcome         CompositionOutcome
 	CompositionFailedInvariant string
+
+	// RefusalBasis is the wire refusal basis this decision SERVED, empty when
+	// it served none. Set only where the continuation refusal is taken, and
+	// cleared again at the exit when that refusal produced no document -- so
+	// the line never claims a refusal the caller did not receive.
+	RefusalBasis contractsv1.ContextFabricRefusalBasis
+
+	// ReferencedResultID is the prior result the window-only request names,
+	// set as soon as the shape is recognised and BEFORE admission, so every
+	// withheld decision -- including one refused before a carrier was
+	// admitted, when Carried is still nil -- names the carrier it is about.
+	ReferencedResultID string
+	// CarrierRead is what admission's read of that carrier returned: an
+	// operator must be able to tell "could not read the carrier" from "read it
+	// and proved it invalid" (a stale epoch), which share decision_reason.
+	CarrierRead ContinuationCarrierRead
+}
+
+// ContinuationCarrierRead is the CLOSED outcome of admission's carrier read.
+type ContinuationCarrierRead string
+
+const (
+	// ContinuationCarrierNotRead: admission ended before reading (the shape
+	// was disqualified, or there is no store). The zero value reads as this.
+	ContinuationCarrierNotRead ContinuationCarrierRead = "not_read"
+	// ContinuationCarrierReadOK: the carrier was read (from the per-request
+	// memo when window-receipt redemption already read it).
+	ContinuationCarrierReadOK ContinuationCarrierRead = "read"
+	// ContinuationCarrierReadFailed: the store returned an error.
+	ContinuationCarrierReadFailed ContinuationCarrierRead = "failed"
+)
+
+// ValidContinuationCarrierRead reports membership.
+func ValidContinuationCarrierRead(value ContinuationCarrierRead) bool {
+	switch value {
+	case ContinuationCarrierNotRead, ContinuationCarrierReadOK, ContinuationCarrierReadFailed:
+		return true
+	}
+	return false
+}
+
+// ObservableCarrierRead is the token the decision line carries.
+func (d windowContinuationDecision) ObservableCarrierRead() ContinuationCarrierRead {
+	if d.CarrierRead == "" {
+		return ContinuationCarrierNotRead
+	}
+	return d.CarrierRead
 }
 
 // Applies reports whether the carried context is authoritative for this turn.
@@ -458,6 +508,7 @@ func continuationDecisionReasons() []ContinuationDecisionReason {
 		ContinuationReasonAsOfUnresolvable,
 		ContinuationReasonCompositionInvalid,
 		ContinuationReasonWindowSuperseded,
+		ContinuationReasonAnswerBudgetChanged,
 		ContinuationReasonUnspecified,
 	}
 }
@@ -652,11 +703,14 @@ func (e *Engine) admitWindowContinuation(
 		decision.Reason = ContinuationReasonNotWindowOnly
 		return decision
 	}
-	// DISQUALIFIER (R2-1). An explicit expected kind or subject handle is the
-	// caller stating structure on THIS turn. It is not a receipt, so the
-	// receipt-field scan above cannot see it, and it is exactly the semantic
-	// change that makes this NOT a window-only continuation.
-	if len(request.ExpectedKinds) > 0 || len(request.SubjectHandles) > 0 {
+	decision.ReferencedResultID = referenced
+	// DISQUALIFIER (R2-1). A caller stating structure on THIS turn -- an
+	// expected kind, a subject handle, or any requested scope (repositories,
+	// projects, teams, subject hints) -- is not a receipt, so the receipt-field
+	// scan above cannot see it, and it is exactly the semantic change that
+	// makes this NOT a window-only continuation. Every request field is decided
+	// by name in TestWindowContinuation_EveryRequestFieldIsDecidedByName.
+	if requestStatesStructure(request) {
 		decision.Reason = ContinuationReasonExplicitStructureHint
 		return decision
 	}
@@ -674,12 +728,20 @@ func (e *Engine) admitWindowContinuation(
 		return decision
 	}
 
+	// Normally a memo hit: window-receipt redemption read this carrier
+	// successfully moments ago in the same request (engine.go, carryCtx), and
+	// a request whose redemption read FAILED never reaches admission -- it
+	// ends on the retryable window veto. A failure here is therefore reached
+	// only by a caller without the memo, and it is published as its own
+	// carrier_read value rather than folded silently into invalid_context.
 	stored, err := carryLoadResult(ctx, e.results, principal, referenced)
 	if err != nil {
+		decision.CarrierRead = ContinuationCarrierReadFailed
 		decision.Disposition = ContinuationWithheld
 		decision.Reason = ContinuationReasonInvalidContext
 		return decision
 	}
+	decision.CarrierRead = ContinuationCarrierReadOK
 	// The SAME CHAOS-3898 ingress taint gate every other carrier check
 	// applies, and it is applied here even for a preloaded entry's id,
 	// because this decision is about semantic authority rather than about a
@@ -711,10 +773,29 @@ func (e *Engine) admitWindowContinuation(
 		decision.Reason = ContinuationReasonMissingContext
 		return decision
 	}
+	// THE ANSWER-SHAPING OPTION TURN ONE RECORDED. Every consumer sends every
+	// option on every request, so an option cannot disqualify by being
+	// present -- only by DIFFERING from turn one. The one turn one recorded is
+	// the effective response byte budget (service ceiling narrowed by the
+	// caller's max_serialized_bytes), stamped on the carrier's plan. Compared
+	// as the EFFECTIVE value on both sides, byte for byte: the raw option is
+	// not what shaped either answer. The other answer-shaping options are not
+	// recorded at turn one; the stacked semantic-state change compares them.
+	if e.effectiveResponseBudget(request).MaxSerializedBytes != plan.Budget.MaxSerializedBytes {
+		decision.Disposition = ContinuationNotApplicable
+		decision.Reason = ContinuationReasonAnswerBudgetChanged
+		return decision
+	}
 	// D-a: revalidate under the RECORDED standard. A carrier stamped by a
 	// different family definition table is not reinterpreted under today's;
 	// an unsupported version is an admission failure.
-	if strings.TrimSpace(plan.FamilyVersion) != "" && plan.FamilyVersion != QuestionFamilyTableVersion {
+	//
+	// EXACT, AND NO "ABSENT" ALLOWANCE. The stamp is compared byte for byte:
+	// a blank, whitespace-only or padded stamp names no table this build can
+	// verify, so it is a mismatch like any other. (The contract already
+	// requires a non-empty family_version, so an allowance for "no stamp"
+	// admitted only whitespace -- a stamp that is not the table in force.)
+	if plan.FamilyVersion != QuestionFamilyTableVersion {
 		decision.Disposition = ContinuationWithheld
 		decision.Reason = ContinuationReasonContextVersionMismatch
 		return decision
@@ -1042,4 +1123,12 @@ func (e *Engine) applyAndRecordContinuation(ctx context.Context, principal stora
 		})
 	}
 	return carried
+}
+
+// requestStatesStructure reports whether the request states subject structure
+// of its own: an expected kind, a subject handle, or any requested scope.
+func requestStatesStructure(request InvestigationRequest) bool {
+	scope := request.RequestedScope
+	return len(request.ExpectedKinds) > 0 || len(request.SubjectHandles) > 0 ||
+		len(scope.RepositorySlugs) > 0 || len(scope.ProjectIDs) > 0 || len(scope.TeamIDs) > 0 || len(scope.SubjectHints) > 0
 }

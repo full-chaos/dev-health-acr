@@ -1138,6 +1138,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// have been continued, and here is why it was not".
 			continuation.Accepted = nil
 		}
+		// A REFUSAL IS A DOCUMENT. The basis is recorded where the refusal is
+		// taken, and an error return after that point -- a failed validation
+		// or save of the refusal itself -- served nothing, so the line must not
+		// claim the caller received a refusal.
+		if servedErr != nil {
+			continuation.RefusalBasis = ""
+		}
 		e.telemetry.RecordWindowContinuationDecision(ctx, principal, continuation)
 	}()
 	// THE OBSERVATION-COVER LINES ARE PUBLISHED ONCE, HERE, AT THE EXIT, and
@@ -1217,7 +1224,21 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// means the request must short-circuit HERE: no reuse lookup, no
 	// interpretation, no inference substituted -- windowVetoResult composes
 	// and persists the no_match terminal directly.
-	windowCanon := e.canonicalizeEvidenceWindow(ctx, principal, request)
+	//
+	// carryCtx carries ONE per-request memo of prior-result loads, shared by
+	// window-receipt redemption here, by prior-subject-hint resolution and by
+	// every carry axis below (withCarryResultCache, structure_axis_carry.go).
+	// Installed BEFORE receipt redemption so a window-only continuation reads
+	// its carrier ONCE: the redemption's successful read is the read
+	// admission uses. Two independent reads of one carrier let a transient
+	// failure between them turn a carrier that was just read into a persisted
+	// "cannot verify" refusal, while the same failure on the first read is a
+	// retryable window veto -- one failure, two opposite instructions.
+	// Without the memo, a turn that resolves hints AND attempts both carries
+	// also loads the same prior result three times -- and that turn is
+	// precisely the one a struggling clarification chain keeps landing on.
+	carryCtx := withCarryResultCache(ctx)
+	windowCanon := e.canonicalizeEvidenceWindow(carryCtx, principal, request)
 	if windowCanon.Veto != windowVetoNone {
 		// D-e: a window veto is CHAOS-5271's mechanism, not this one.
 		continuation = continuation.withReason(ContinuationReasonWindowVeto)
@@ -1485,13 +1506,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// `interpretation`. Interpret below now receives ONLY the receipts
 	// resolvePriorSubjectHints itself validated (priorValidatedReceipts).
 	graphRequest := request
-	// carryCtx carries ONE per-request memo of prior-result loads, shared by
-	// prior-subject-hint resolution and by every carry axis below
-	// (withCarryResultCache, structure_axis_carry.go). Without it, a turn
-	// that resolves hints AND attempts both carries loads the same prior
-	// result three times -- and that turn is precisely the one a struggling
-	// clarification chain keeps landing on.
-	carryCtx := withCarryResultCache(ctx)
+	// carryCtx (installed above, before window-receipt redemption) is the
+	// per-request memo every prior-result load below shares.
 	var priorHints []SubjectHint
 	var priorValidatedReceipts []BoundSubjectReceipt
 	var priorOutcomes []priorSubjectReceiptOutcome
@@ -1722,6 +1738,26 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			GroupKind: freshEffectiveGroup,
 		})
 		familyOutcome = e.applyAndRecordContinuation(ctx, principal, familyOutcome, continuation, accepted)
+		// A WITHHELD CONTINUATION ENDS THE TURN HERE, above the planning stage
+		// and above every retrieval: the carrier could not be established, and
+		// answering under the fresh reading would serve a reading the caller
+		// never confirmed beside a window confirmed for a different one. The
+		// fresh gate is consulted first because a turn it already refused
+		// keeps that refusal and its own basis -- see refusesTurn.
+		if continuation.refusesTurn(familyOutcome.Gate) {
+			continuation.RefusalBasis = contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable
+			refusalDispositions := composePriorSubjectReceiptDispositions(priorOutcomes, SubjectResolution{})
+			if len(refusalDispositions) > 0 {
+				e.recordPriorSubjectReceiptSkips(ctx, principal, refusalDispositions, priorHintsStaleGraphEpochDelta)
+			}
+			// The refused carrier is NOT recorded as this result's parent. It
+			// is a reference this turn proved unusable, and ancestryRoot's own
+			// rule is that such a reference is laundering material for the
+			// next turn rather than history.
+			refusedCarrier, _ := windowOnlyReferencedResultID(request)
+			return e.continuationRefusalResult(ctx, principal, request, binding, refusalDispositions, nil,
+				ancestryRoot(request, receiptsValidated(priorValidatedReceipts), refusedCarrier))
+		}
 	}
 	// CHAOS-4636 -- the PLANNING STAGE (design §6.1). Deterministic, no
 	// model call, no I/O, placed between interpretation and discovery

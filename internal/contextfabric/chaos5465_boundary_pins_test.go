@@ -132,7 +132,7 @@ func TestBoundary_ARefusedTurnWithNoFrameIsNotAContinuation(t *testing.T) {
 	d := h.soleDecision(t)
 	t.Logf("disposition=%q reason=%q composition=%q accepted=%v | status=%q plan_source=%q plan_family=%q plan_group=%q",
 		d.Disposition, d.Reason, d.CompositionOutcome, d.Accepted != nil,
-		result.Status, result.AnswerPlan.FamilySource, result.AnswerPlan.Family, result.AnswerPlan.GroupKind)
+		result.Status, servedPlanSource(result), servedPlanFamily(result), servedPlanGroup(result))
 
 	if d.Disposition == ContinuationApplied {
 		t.Fatalf("the fresh gate REFUSED and the continuation was applied anyway (composition=%q)", d.CompositionOutcome)
@@ -143,9 +143,9 @@ func TestBoundary_ARefusedTurnWithNoFrameIsNotAContinuation(t *testing.T) {
 	if d.Accepted != nil {
 		t.Errorf("a withheld turn published an accepted context")
 	}
-	if result.AnswerPlan.FamilySource == QuestionFamilySourceCarried {
+	if servedPlanSource(result) == QuestionFamilySourceCarried {
 		t.Errorf("the refused turn served the carried family anyway (family=%q group=%q)",
-			result.AnswerPlan.Family, result.AnswerPlan.GroupKind)
+			servedPlanFamily(result), servedPlanGroup(result))
 	}
 }
 
@@ -358,13 +358,17 @@ func TestBoundary_AGroupedFamilyIsNeverServedWithoutItsAxis(t *testing.T) {
 
 	result := h.investigate(t, req)
 	d := h.soleDecision(t)
-	t.Logf("disposition=%q reason=%q composition=%q invariant=%q accepted_group=%q plan_family=%q plan_group=%q",
+	planFamily, _, planGroup := servedPlanAxes(result)
+	t.Logf("disposition=%q reason=%q composition=%q invariant=%q accepted_group=%q plan_family=%q plan_group=%q refusal_basis=%q",
 		d.Disposition, d.Reason, d.CompositionOutcome, d.CompositionFailedInvariant,
-		d.AcceptedGroupKind(), result.AnswerPlan.Family, result.AnswerPlan.GroupKind)
+		d.AcceptedGroupKind(), planFamily, planGroup, result.RefusalBasis)
 
-	if result.AnswerPlan.Family == QuestionFamilyGroupedCohortStatus && result.AnswerPlan.GroupKind == "" {
+	if planFamily == QuestionFamilyGroupedCohortStatus && planGroup == "" {
 		t.Fatalf("a grouped family was served with NO grouping axis -- the carried family moved and its axis did not")
 	}
+	// The composition could not be honoured, so the turn refuses rather than
+	// answering under the fresh reading the caller never confirmed.
+	assertContinuationRefused(t, result)
 	if d.Disposition != ContinuationWithheld {
 		t.Errorf("disposition=%q, want %q: the carried axis cannot be expressed by a non-grouped frame",
 			d.Disposition, ContinuationWithheld)
@@ -710,7 +714,7 @@ func TestBoundary_ARefusedWindowOnlyCarrierIsServedByNothing(t *testing.T) {
 			d := h.soleDecision(t)
 			t.Logf("disposition=%q reason=%q window_only=%v blocks_legacy=%v | SERVED family=%q family_source=%q group=%q",
 				d.Disposition, d.Reason, d.WindowOnlyShape, d.BlocksLegacyCarry(),
-				result.AnswerPlan.Family, result.AnswerPlan.FamilySource, result.AnswerPlan.GroupKind)
+				servedPlanFamily(result), servedPlanSource(result), servedPlanGroup(result))
 			for _, o := range h.telemetry.planCarryOutcomes {
 				t.Logf("plan carry: outcome=%q source=%q seed=%q", o.outcome, o.sourceResultID, o.seedSource)
 			}
@@ -724,9 +728,9 @@ func TestBoundary_ARefusedWindowOnlyCarrierIsServedByNothing(t *testing.T) {
 			if !d.BlocksLegacyCarry() {
 				t.Errorf("blocks_legacy=false on a refused window-only carrier")
 			}
-			if result.AnswerPlan.FamilySource == QuestionFamilySourceCarried {
+			if servedPlanSource(result) == QuestionFamilySourceCarried {
 				t.Errorf("the continuation was REFUSED and the legacy carry served the same carrier anyway (family=%q group=%q)",
-					result.AnswerPlan.Family, result.AnswerPlan.GroupKind)
+					servedPlanFamily(result), servedPlanGroup(result))
 			}
 		})
 	}
@@ -780,6 +784,8 @@ func TestBoundary_NoRequestDerivedValueCanForgeALogLine(t *testing.T) {
 		Family: QuestionFamilyGroupedCohortStatus, GroupKind: contractsv1.ContextFabricSubjectTeam,
 		SourceResultID: carriage,
 	}
+	// The receipt's own result id, published on every window-only decision.
+	d.ReferencedResultID = "result_5465\nlevel=ERROR msg=\"forged referenced id\""
 
 	principal := acceptancePrincipal()
 	principal.OrgID = "org\nlevel=ERROR msg=\"forged org line\""
@@ -801,7 +807,7 @@ func TestBoundary_NoRequestDerivedValueCanForgeALogLine(t *testing.T) {
 		}
 	}
 	// And the value stays USEFUL: the id survives, minus the control bytes.
-	if strings.Count(line, "result_5465") < 2 {
+	if strings.Count(line, "result_5465") < 3 {
 		t.Errorf("the sanitised ids no longer carry the caller's value: %s", strings.TrimSpace(line))
 	}
 	// Secondary, and true either way: the record is still one line.

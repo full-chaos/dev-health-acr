@@ -1021,6 +1021,57 @@ both before and after). Both safety invariants held in the GREEN run too
 committed, reproduced from this doc's own numbers):
 `.remember/trial-results/gen-trial-chaos4360_nturn-20260827T221125Z-17687.json`.
 
+### 6a — Window-only continuation: admission, composition, and the refusal basis
+
+A turn that repeats the prior question byte for byte and redeems exactly one
+window offer, with no other prior reference or typed selection, is a
+CONTINUATION of that prior turn's reading. The engine admits the carrier,
+composes the carried reading into a frame and validates the composition, and
+only then lets a semantic value reach planning or retrieval. A carrier that
+cannot be established is WITHHELD, and a withheld continuation now ends the
+turn above retrieval with the wire refusal basis
+`continuation_context_unverifiable` and its fixed sentence
+(`ContextFabricContinuationContextUnverifiableLimitation`). It never answers
+under the fresh reading. A fresh frame the gate already refused keeps its own
+refusal and basis. The decision line (`context fabric window continuation
+decision`, Info) carries `continuation_disposition`, `decision_reason` and
+`refusal_basis` (`none` when nothing was refused).
+
+```mermaid
+flowchart TD
+  REQ["request carries a window receipt"] --> SHAPE{"window-only shape?<br/>one receipt, same bytes,<br/>no other reference"}
+  SHAPE -->|"no"| NA1["not_applicable / not_window_only<br/>the other transition governs"]
+  SHAPE -->|"yes"| ADMIT{"admitWindowContinuation<br/>store read, epoch, identity,<br/>family-table version"}
+  ADMIT -->|"changed question,<br/>indeterminate identity,<br/>nothing recorded"| NA2["not_applicable<br/>fresh path"]
+  ADMIT -->|"unreadable, other epoch,<br/>version not in force"| WH["withheld"]
+  ADMIT -->|"admitted"| COMP{"composeAcceptedContext<br/>validate the composition"}
+  COMP -->|"usable"| APPLIED["applied<br/>family_source=carried"]
+  COMP -->|"invalid composition"| WH
+  WH --> GATE{"fresh gate<br/>already refuses?"}
+  GATE -->|"yes"| FRAME["frame refusal stands<br/>refusal_basis = frame member"]
+  GATE -->|"no"| REFUSE["continuationRefusalResult<br/>no_match, limitation_disclosed,<br/>refusal_basis=continuation_context_unverifiable<br/>no plan, no resolution, no fact read"]
+  class APPLIED fixed
+  class REFUSE,FRAME refuse
+  classDef fixed fill:#14532d,stroke:#22c55e,color:#ffffff
+  classDef refuse fill:#7f1d1d,stroke:#ef4444,color:#ffffff
+```
+
+Anchors: `internal/contextfabric/engine.go:1694` (admission), `:1699`
+(composition), `:1747` (the refusal branch), `:2075` (the frame-gate refusal
+it defers to); `chaos5465_continuation_refusal.go:59` (`refusesTurn`, four
+conjuncts), `:95` (`continuationRefusalResult`);
+`internal/contracts/v1/context_fabric_refusal_basis.go`
+(`ContextFabricRefusalBasisContinuationContextUnverifiable`,
+`ValidContextFabricFrameRefusalBasis` — the member-kind sentence and the frame
+gate name frame members only). The result validator requires the member to
+carry its fixed sentence; the sentence alone is an ordinary caveat, because a
+model can echo it and a validator cannot tell who wrote a string. The carrier
+is read ONCE per request: window-receipt redemption's successful read is the
+read admission uses (the per-request memo), so a store failure is the
+retryable window veto, never a persisted refusal. The decision line names the
+carrier (`referenced_result_id`) and what admission's read returned
+(`carrier_read`: `not_read` / `read` / `failed`).
+
 ---
 
 ## 7 — Cohort ranking (CHAOS-4398, PR1+PR2)

@@ -170,6 +170,7 @@ REFUSAL_BASIS_VOCABULARY = {
     "member_kind_unservable",
     "frame_invariant_violated",
     "unspecified",
+    "continuation_context_unverifiable",
 }
 
 

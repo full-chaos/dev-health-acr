@@ -72,14 +72,14 @@ func TestWindowContinuation_ForcedFamilyConflictServesTheCarriedContext(t *testi
 			if result.AnswerPlan == nil {
 				t.Fatalf("no answer plan served")
 			}
-			if result.AnswerPlan.Family != tc.carriedFamily {
-				t.Errorf("served family = %q, want the CARRIED %q -- a window-only confirmation continues the reading whose window offer it redeems", result.AnswerPlan.Family, tc.carriedFamily)
+			if servedPlanFamily(result) != tc.carriedFamily {
+				t.Errorf("served family = %q, want the CARRIED %q -- a window-only confirmation continues the reading whose window offer it redeems", servedPlanFamily(result), tc.carriedFamily)
 			}
-			if result.AnswerPlan.FamilySource != QuestionFamilySourceCarried {
-				t.Errorf("served family_source = %q, want %q", result.AnswerPlan.FamilySource, QuestionFamilySourceCarried)
+			if servedPlanSource(result) != QuestionFamilySourceCarried {
+				t.Errorf("served family_source = %q, want %q", servedPlanSource(result), QuestionFamilySourceCarried)
 			}
-			if result.AnswerPlan.GroupKind != tc.carriedGroup {
-				t.Errorf("served group_kind = %q, want the CARRIED %q -- carrying a family while keeping the fresh group axis is the same-family substitution this pin exists for", result.AnswerPlan.GroupKind, tc.carriedGroup)
+			if servedPlanGroup(result) != tc.carriedGroup {
+				t.Errorf("served group_kind = %q, want the CARRIED %q -- carrying a family while keeping the fresh group axis is the same-family substitution this pin exists for", servedPlanGroup(result), tc.carriedGroup)
 			}
 
 			decision := harness.soleDecision(t)
@@ -142,11 +142,11 @@ func TestWindowContinuation_SameFamilySubjectExpressionConflictStillServesTheCar
 		forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectProject})
 
 	result := harness.investigate(t, request)
-	if result.AnswerPlan.GroupKind != contractsv1.ContextFabricSubjectTeam {
-		t.Errorf("served group_kind = %q, want the carried %q", result.AnswerPlan.GroupKind, contractsv1.ContextFabricSubjectTeam)
+	if servedPlanGroup(result) != contractsv1.ContextFabricSubjectTeam {
+		t.Errorf("served group_kind = %q, want the carried %q", servedPlanGroup(result), contractsv1.ContextFabricSubjectTeam)
 	}
-	if result.AnswerPlan.FamilySource != QuestionFamilySourceCarried {
-		t.Errorf("served family_source = %q, want %q", result.AnswerPlan.FamilySource, QuestionFamilySourceCarried)
+	if servedPlanSource(result) != QuestionFamilySourceCarried {
+		t.Errorf("served family_source = %q, want %q", servedPlanSource(result), QuestionFamilySourceCarried)
 	}
 
 	decision := harness.soleDecision(t)
@@ -180,8 +180,8 @@ func TestWindowContinuation_AnAgreeingProposalStillReportsCarried(t *testing.T) 
 	// THE PROVENANCE IS NOT AN OPINION ABOUT WHO AGREED. A build that reported
 	// `model` whenever the two happened to agree would make the applied-carry
 	// rate a function of sampler luck.
-	if result.AnswerPlan.FamilySource != QuestionFamilySourceCarried {
-		t.Errorf("served family_source = %q, want %q even on agreement", result.AnswerPlan.FamilySource, QuestionFamilySourceCarried)
+	if servedPlanSource(result) != QuestionFamilySourceCarried {
+		t.Errorf("served family_source = %q, want %q even on agreement", servedPlanSource(result), QuestionFamilySourceCarried)
 	}
 
 	decision := harness.soleDecision(t)
@@ -209,9 +209,12 @@ func TestWindowContinuation_AVersionMismatchedCarrierIsWithheldNotReinterpreted(
 
 	result := harness.investigate(t, request)
 	// NOT reinterpreted under today's tables, and not silently carried either.
-	if result.AnswerPlan.FamilySource == QuestionFamilySourceCarried {
+	if result.AnswerPlan != nil && servedPlanSource(result) == QuestionFamilySourceCarried {
 		t.Errorf("served family_source = carried on a carrier stamped by a version not in force")
 	}
+	// And not answered under the fresh reading: a carrier that cannot be
+	// established refuses the turn.
+	assertContinuationRefused(t, result)
 
 	decision := harness.soleDecision(t)
 	if decision.Disposition != ContinuationWithheld {
@@ -399,7 +402,7 @@ func TestWindowContinuation_ContainmentRefusesEverythingThatIsNotTheTransition(t
 			}
 
 			if tc.wantLegacyCarryBlocked {
-				if result.AnswerPlan != nil && result.AnswerPlan.FamilySource == QuestionFamilySourceCarried {
+				if result.AnswerPlan != nil && servedPlanSource(result) == QuestionFamilySourceCarried {
 					t.Errorf("the OLD family-only carry applied a context the continuation gate refused -- this is the fall-through the design names: a window receipt whose referenced turn answered a different question must not import that reading by another route")
 				}
 				if len(harness.telemetry.planCarries) != 0 {
@@ -418,7 +421,7 @@ func TestWindowContinuation_ContainmentRefusesEverythingThatIsNotTheTransition(t
 			}
 			// IMMEDIATE CARRIER ONLY, asserted on every arm: no arm may be
 			// rescued by the usable older ancestor in the store.
-			if result.AnswerPlan != nil && result.AnswerPlan.FamilySource == QuestionFamilySourceCarried &&
+			if result.AnswerPlan != nil && servedPlanSource(result) == QuestionFamilySourceCarried &&
 				harness.telemetry.windowContinuationDecisions != nil &&
 				len(harness.telemetry.windowContinuationDecisions) == 1 &&
 				harness.telemetry.windowContinuationDecisions[0].AcceptedContextID() == continuationOlderID {
@@ -546,18 +549,21 @@ func TestWindowContinuation_TheDecisionJoinsToTheServedDocument(t *testing.T) {
 	if result.AnswerPlan == nil {
 		t.Fatalf("no answer plan served")
 	}
-	if QuestionFamily(result.AnswerPlan.Family) != decision.FamilyAccepted() {
+	if QuestionFamily(servedPlanFamily(result)) != decision.FamilyAccepted() {
 		t.Errorf("served family %q != decision family_accepted %q -- the decision was logged and a different value was executed",
-			result.AnswerPlan.Family, decision.FamilyAccepted())
+			servedPlanFamily(result), decision.FamilyAccepted())
 	}
-	if result.AnswerPlan.GroupKind != decision.AcceptedGroupKind() {
-		t.Errorf("served group_kind %q != accepted group_kind %q", result.AnswerPlan.GroupKind, decision.AcceptedGroupKind())
+	if servedPlanGroup(result) != decision.AcceptedGroupKind() {
+		t.Errorf("served group_kind %q != accepted group_kind %q", servedPlanGroup(result), decision.AcceptedGroupKind())
 	}
-	if string(result.AnswerPlan.FamilySource) != string(decision.AcceptedFamilySource()) {
-		t.Errorf("served family_source %q != decision family_source %q", result.AnswerPlan.FamilySource, decision.AcceptedFamilySource())
+	if string(servedPlanSource(result)) != string(decision.AcceptedFamilySource()) {
+		t.Errorf("served family_source %q != decision family_source %q", servedPlanSource(result), decision.AcceptedFamilySource())
 	}
 	// The narrowing basis the earlier turn declared reaches the plan, so two
 	// turns of one conversation narrow the same way.
+	if result.AnswerPlan == nil {
+		t.Fatalf("the served document has no plan, so the carried narrowing basis cannot be read")
+	}
 	if result.AnswerPlan.Budget.NarrowingBasis != contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical {
 		t.Errorf("served narrowing_basis = %q, want the carried %q",
 			result.AnswerPlan.Budget.NarrowingBasis, contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical)
@@ -783,10 +789,10 @@ func TestWindowContinuation_R1_TheServedGroupAxisIsTheAcceptedOneNotTheFreshFram
 	result := harness.investigate(t, request)
 	decision := harness.soleDecision(t)
 	t.Logf("R1-1: decision=%q accepted_group_kind=%q served_group_kind=%q",
-		decision.Disposition, decision.AcceptedGroupKind(), result.AnswerPlan.GroupKind)
-	if result.AnswerPlan.GroupKind != decision.AcceptedGroupKind() {
+		decision.Disposition, decision.AcceptedGroupKind(), servedPlanGroup(result))
+	if servedPlanGroup(result) != decision.AcceptedGroupKind() {
 		t.Fatalf("R1-1 REGRESSION: served group_kind=%q but the logged accepted context says %q -- the decision was logged and a different value executed",
-			result.AnswerPlan.GroupKind, decision.AcceptedGroupKind())
+			servedPlanGroup(result), decision.AcceptedGroupKind())
 	}
 }
 
@@ -812,12 +818,14 @@ func TestWindowContinuation_R1_AWithheldCarrierCannotBeServedByTheLegacyCarry(t 
 	if len(harness.telemetry.planCarryOutcomes) > 0 {
 		outcome = string(harness.telemetry.planCarryOutcomes[0].outcome)
 	}
-	t.Logf("R1-2: decision=%q/%q plan_carry_outcome=%q served_family=%q served_family_source=%q",
-		decision.Disposition, decision.Reason, outcome, result.AnswerPlan.Family, result.AnswerPlan.FamilySource)
-	if result.AnswerPlan.FamilySource == QuestionFamilySourceCarried {
+	family, source, _ := servedPlanAxes(result)
+	t.Logf("R1-2: decision=%q/%q plan_carry_outcome=%q served_family=%q served_family_source=%q refusal_basis=%q",
+		decision.Disposition, decision.Reason, outcome, family, source, result.RefusalBasis)
+	if source == QuestionFamilySourceCarried {
 		t.Fatalf("R1-2 REGRESSION: the continuation was %q for %q, yet the legacy carry served family=%q with family_source=carried from the SAME refused carrier",
-			decision.Disposition, decision.Reason, result.AnswerPlan.Family)
+			decision.Disposition, decision.Reason, family)
 	}
+	assertContinuationRefused(t, result)
 }
 
 // R1-3: a window-receipt request that fails graph binding emits no decision
@@ -1021,6 +1029,11 @@ func TestWindowContinuation_EveryReasonIsReachedThroughTheEngine(t *testing.T) {
 					conflictMembers:   []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedWindow},
 				}
 			},
+		},
+		{
+			// The effective byte budget differs from the one turn one recorded.
+			reason: ContinuationReasonAnswerBudgetChanged,
+			mutate: func(r *InvestigationRequest) { r.Options.MaxSerializedBytes = r.Options.MaxSerializedBytes / 2 },
 		},
 	}
 
@@ -1265,7 +1278,7 @@ func TestWindowContinuation_TheInputShapeSpace(t *testing.T) {
 					if result.AnswerPlan == nil {
 						return "<none>"
 					}
-					return string(result.AnswerPlan.FamilySource)
+					return string(servedPlanSource(result))
 				}(), graph.lastFrameNonNil)
 
 			if d.Disposition != tc.wantDisposition {
@@ -1277,7 +1290,7 @@ func TestWindowContinuation_TheInputShapeSpace(t *testing.T) {
 			if d.Reason == ContinuationReasonUnspecified {
 				t.Errorf("decision_reason reached the emitter as `unspecified` -- the fail-closed member must never describe a real path")
 			}
-			gotCarried := result.AnswerPlan != nil && result.AnswerPlan.FamilySource == QuestionFamilySourceCarried
+			gotCarried := result.AnswerPlan != nil && servedPlanSource(result) == QuestionFamilySourceCarried
 			if gotCarried != tc.wantCarried {
 				t.Errorf("served family_source carried = %v, want %v", gotCarried, tc.wantCarried)
 			}
@@ -1319,7 +1332,7 @@ func TestWindowContinuation_R2_AnExplicitStructureHintDisqualifiesTheContinuatio
 	result := harness.investigate(t, request)
 	decision := harness.soleDecision(t)
 	t.Logf("R2-1: explicit ExpectedKinds=%v -> disposition=%q reason=%q served_family_source=%q",
-		request.ExpectedKinds, decision.Disposition, decision.Reason, result.AnswerPlan.FamilySource)
+		request.ExpectedKinds, decision.Disposition, decision.Reason, servedPlanSource(result))
 	if decision.Disposition == ContinuationApplied {
 		t.Fatalf("R2-1 REGRESSION: a request that ALSO states an explicit expected kind admitted as a window-only continuation (%q/%q) -- the shape check enumerates receipt fields and parent_result_id only, so an explicit structure hint walks past it",
 			decision.Disposition, decision.Reason)
@@ -1517,7 +1530,7 @@ func TestWindowContinuation_AResolvableTypedReceiptBesideAWindowReceiptIsNotACon
 	decision := harness.soleDecision(t)
 	servedSource := "<no plan>"
 	if result.AnswerPlan != nil {
-		servedSource = string(result.AnswerPlan.FamilySource)
+		servedSource = string(servedPlanSource(result))
 	}
 	t.Logf("resolvable typed receipt + window receipt -> disposition=%q reason=%q served_source=%s",
 		decision.Disposition, decision.Reason, servedSource)
@@ -1576,14 +1589,14 @@ func TestWindowContinuation_TheAcceptedFrameIsACopyAndLeavesTheProposedFrameInta
 		t.Fatalf("fixture defect: wanted an applied continuation, got %q/%q", decision.Disposition, decision.Reason)
 	}
 	t.Logf("proposed frame group_kind after the turn = %q; served group_kind = %q",
-		shared.SubjectExpression.Grouped.GroupKind, result.AnswerPlan.GroupKind)
+		shared.SubjectExpression.Grouped.GroupKind, servedPlanGroup(result))
 
 	if shared.SubjectExpression.Grouped.GroupKind != contractsv1.ContextFabricSubjectProject {
 		t.Errorf("the interpreter's OWN frame was mutated to %q -- admission must copy the frame and substitute into the copy, never rewrite the object every other holder shares",
 			shared.SubjectExpression.Grouped.GroupKind)
 	}
-	if result.AnswerPlan.GroupKind != contractsv1.ContextFabricSubjectTeam {
-		t.Errorf("served group_kind = %q, want the carried %q", result.AnswerPlan.GroupKind, contractsv1.ContextFabricSubjectTeam)
+	if servedPlanGroup(result) != contractsv1.ContextFabricSubjectTeam {
+		t.Errorf("served group_kind = %q, want the carried %q", servedPlanGroup(result), contractsv1.ContextFabricSubjectTeam)
 	}
 }
 

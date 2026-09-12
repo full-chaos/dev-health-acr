@@ -1600,6 +1600,28 @@ func closedDecisionFields() []closedDecisionField {
 			},
 			Invent: func(d *windowContinuationDecision) { d.CompositionFailedInvariant = "invented-invariant" },
 		},
+		{
+			Key: "carrier_read",
+			Token: func(d windowContinuationDecision) string {
+				return guard(ValidContinuationCarrierRead(d.ObservableCarrierRead()), string(d.ObservableCarrierRead()))
+			},
+			Invent: func(d *windowContinuationDecision) { d.CarrierRead = ContinuationCarrierRead("invented-read") },
+		},
+		{
+			Key: "refusal_basis",
+			// The WIRE vocabulary, and only the member this decision can
+			// serve: a continuation refuses on its carrier, never on a frame,
+			// so a frame member here is as wrong as an invented one. "none"
+			// is the explicit not-refused token.
+			Token: func(d windowContinuationDecision) string {
+				valid := d.RefusalBasis == "" ||
+					d.RefusalBasis == contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable
+				return guard(valid, d.ObservableRefusalBasis())
+			},
+			Invent: func(d *windowContinuationDecision) {
+				d.RefusalBasis = contractsv1.ContextFabricRefusalBasisMemberKindUnservable
+			},
+		},
 	}
 }
 
@@ -1655,6 +1677,11 @@ func (t SlogEngineTelemetry) RecordWindowContinuationDecision(ctx context.Contex
 		"accepted_context_id", SanitizeLogAttr(decision.AcceptedContextID()),
 		"composition_outcome", SanitizeLogAttr(closedDecisionToken("composition_outcome", decision)),
 		"composition_failed_invariant", SanitizeLogAttr(closedDecisionToken("composition_failed_invariant", decision)),
+		"refusal_basis", SanitizeLogAttr(closedDecisionToken("refusal_basis", decision)),
+		// The carrier the request names, on every decision -- the join from a
+		// refusal to the result that could not be verified.
+		"referenced_result_id", SanitizeLogAttr(decision.ReferencedResultID),
+		"carrier_read", SanitizeLogAttr(closedDecisionToken("carrier_read", decision)),
 	}
 	// requestIDLogAttrs already returns its value through SanitizeLogAttr --
 	// no second strip needed here.

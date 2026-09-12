@@ -53,6 +53,15 @@ func (f forcedFamilyInterpreter) Interpret(context.Context, storage.Principal, I
 	}, nil
 }
 
+// continuationCarrierBudgetBytes is the effective response byte budget a turn
+// one asked through the harness engine recorded on its plan: the harness
+// engine sets no service ceiling, so it is the request's own
+// max_serialized_bytes. A carrier recording any other budget is a turn two
+// that changed an answer-shaping option.
+func continuationCarrierBudgetBytes() int64 {
+	return int64(validInvestigationRequest().Options.MaxSerializedBytes)
+}
+
 // continuationPrior builds a turn one that classified `family` and offers a
 // real window receipt for turn two to redeem.
 func continuationPrior(t testing.TB, resultID, question string, family QuestionFamily, groupKind SubjectKind) InvestigationResult {
@@ -68,7 +77,10 @@ func continuationPrior(t testing.TB, resultID, question string, family QuestionF
 		FamilySource:  QuestionFamilySourceModel,
 		GroupKind:     groupKind,
 		FamilyVersion: QuestionFamilyTableVersion,
-		Budget:        contractsv1.ContextFabricAnswerPlanBudget{NarrowingBasis: contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical},
+		Budget: contractsv1.ContextFabricAnswerPlanBudget{
+			MaxSerializedBytes: continuationCarrierBudgetBytes(),
+			NarrowingBasis:     contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical,
+		},
 	}
 	prior.WindowClarification = &WindowClarification{Options: []WindowOption{{
 		ReceiptID:  continuationReceiptID,

@@ -490,6 +490,30 @@ func TestEveryFreshResultExitAssertsTheBudget(t *testing.T) {
 		seen[BudgetAssertInterpretedTimeBound] = true
 	})
 
+	// The continuation refusal: a window-only continuation whose carrier was
+	// built on another graph epoch. It refuses before planning, resolution,
+	// facts and synthesis, so the same fail-if-reached doubles as the window
+	// gate apply.
+	t.Run("continuation_refusal", func(t *testing.T) {
+		telemetry := &recordingTelemetry{}
+		question := validInvestigationRequest().Question
+		prior := continuationPrior(t, continuationPriorID, question, QuestionFamilyDiscoveredCohortRanking, "")
+		stale := int64(97)
+		store := &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}, graphEpoch: &stale}
+		interpreter := forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: SubjectTeam}
+		graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext()}
+		engine := buildWindowGateEngineWithBudget(t, interpreter, graph, store, maxItems, telemetry)
+		result, err := engine.Investigate(context.Background(), acceptancePrincipal(), continuationRequest(question))
+		if err != nil {
+			t.Fatalf("Investigate() error = %v", err)
+		}
+		if result.RefusalBasis != contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable {
+			t.Fatalf("refusal_basis = %q (sanity check: the intended exit was not taken, so this subtest proves nothing)", result.RefusalBasis)
+		}
+		assertStageRecorded(t, telemetry, BudgetAssertContinuationRefusal)
+		seen[BudgetAssertContinuationRefusal] = true
+	})
+
 	t.Run("reuse", func(t *testing.T) {
 		telemetry := &recordingTelemetry{}
 		project, candidate := reusableCandidate()

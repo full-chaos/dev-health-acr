@@ -265,7 +265,12 @@ func (g FrameGate) RefusalBasis() contractsv1.ContextFabricRefusalBasis {
 		// vocabulary drift, and disclosing `unspecified` is how that
 		// drift becomes visible instead of shipping an unrecognised
 		// string to every consumer.
-		if basis := contractsv1.ContextFabricRefusalBasis(g.RefuseBasis); contractsv1.ValidContextFabricRefusalBasis(basis) {
+		//
+		// FRAME MEMBERS ONLY. The wire vocabulary also names a refusal of a
+		// continuation's CARRIER, which no frame decision can take; a gate
+		// basis spelling that member is drift of exactly the kind this
+		// validation exists to surface, so it maps to `unspecified` too.
+		if basis := contractsv1.ContextFabricRefusalBasis(g.RefuseBasis); contractsv1.ValidContextFabricFrameRefusalBasis(basis) {
 			return basis
 		}
 		return contractsv1.ContextFabricRefusalBasisUnspecified
