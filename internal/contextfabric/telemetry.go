@@ -1074,8 +1074,14 @@ func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal 
 		// order named actually ran, and the same ticket is the proof that
 		// assumption is unsafe.
 		"basis_observed", event.BasisObserved,
-		"before", event.Before,
-		"after", event.After,
+		// before/after carry the cohort-member counts either side of the
+		// narrowing, and both derive from the caller's own
+		// Options.MaxCohortMembers. Every request-derived integer on this
+		// line goes through the numeric log barrier, not only the one
+		// whose flow was traced first: the analysis reports the LINE, so a
+		// single unwired value is enough to make the whole line a finding.
+		"before", requestDerivedLogInt(event.Before),
+		"after", requestDerivedLogInt(event.After),
 		"groups", event.Groups,
 		"overrun", SanitizeLogAttr(string(validBudgetOverrunOrUnclassified(event.Overrun))),
 		"measured_items", event.MeasuredItems,
@@ -1101,7 +1107,7 @@ func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal 
 		"attribution_group", event.Attribution.Group,
 		"attribution_multi_group", event.Attribution.MultiGroup,
 		"measured_bytes", event.MeasuredBytes,
-		"max_items", event.MaxItems,
+		"max_items", requestDerivedLogInt(event.MaxItems),
 		"max_serialized_bytes", SanitizeLogInt(event.MaxSerializedBytes),
 		"retry_attempted", event.RetryAttempted,
 		"retry_fit", event.RetryFit,
@@ -1332,7 +1338,7 @@ func (t SlogEngineTelemetry) RecordBudgetAssertion(ctx context.Context, principa
 		"overrun", SanitizeLogAttr(string(validBudgetOverrunOrUnclassified(event.Overrun))),
 		"measured_items", event.MeasuredItems,
 		"measured_bytes_post_label", event.MeasuredBytesPostLabel,
-		"max_items", event.MaxItems,
+		"max_items", requestDerivedLogInt(event.MaxItems),
 		"max_serialized_bytes", SanitizeLogInt(event.MaxSerializedBytes),
 		// The FINISHED document's own account and the ledger-backed
 		// capacity verdict. `fits` and `certified_fit` are both here on
@@ -1366,7 +1372,7 @@ func (t SlogEngineTelemetry) RecordItemAccounting(ctx context.Context, principal
 		"ledger_disagreement", SanitizeLogAttr(event.Disagreement),
 		"ledger_debits", event.Debits,
 		"budgeted_items", event.Budgeted,
-		"max_items", event.MaxItems,
+		"max_items", requestDerivedLogInt(event.MaxItems),
 		// The ALLOCATOR's own verdict, as its own key. Empty when the grants
 		// agree, which is the ordinary case even on a ledger disagreement --
 		// the two checks fail independently and a reader must be able to tell

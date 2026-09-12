@@ -828,7 +828,13 @@ func MarshalContextFabricResponse(payload any) (encoded []byte, measuredBytes in
 // much as on a 413.
 func contextFabricResponseBudgetFields(maxItems int, measuredBytes, maximumBytes, estimatedTokens int64, counts contextFabricItemCounts) []any {
 	return []any{
-		"measured_bytes", measuredBytes, "max_serialized_bytes", maximumBytes,
+		// max_serialized_bytes is the ONE value on this line that derives
+		// from the request (min of the server ceiling and the caller's own
+		// Options.MaxSerializedBytes), so it is the one that needs the
+		// numeric log barrier -- see contextfabric.SanitizeLogInt. Every
+		// other number here is measured from the encoded response or read
+		// from server configuration.
+		"measured_bytes", measuredBytes, "max_serialized_bytes", contextfabric.SanitizeLogInt(maximumBytes),
 		// measured_items is the TRUTHFUL total (counts.Total(), Paths
 		// included) -- the same value recorded as usage.Items -- not the
 		// budgeted() subset the gate actually compares against; that
