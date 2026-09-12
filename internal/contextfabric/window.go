@@ -1615,6 +1615,17 @@ func (e *Engine) windowConfirmationRequiredResult(
 	if err != nil {
 		return InvestigationResult{}, err
 	}
+	// CHAOS-5637: the answerability invariant, on the document the route
+	// will serialize, at the SAME "immediately before Validate" placement
+	// the budget assertion above and the completeness/display-label stamps
+	// before it already use. A clarification that reaches here with no
+	// redeemable offer is the defect this ticket closed at its source, so
+	// nothing produces one today -- the assertion is what keeps that a
+	// checked claim rather than a comment. See
+	// chaos5637_answerable_clarification.go.
+	if err := assertAnswerableClarification(result); err != nil {
+		return InvestigationResult{}, stageError(StageValidation, err)
+	}
 	if err := ValidateResult(result); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}

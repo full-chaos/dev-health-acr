@@ -146,6 +146,26 @@ const (
 	// content -- it is operational status, not a fact about any specific
 	// subject -- so surfacing it here is not the same class of leak.
 	noMatchLimitationGraphNotProjected = "This organization's graph has not been projected yet, so no canonical facts were read. This is not a search result: retrieval did not run, and once the organization's data has been synced, the same question may answer differently."
+	// noMatchLimitationOfferPoolEmptied is the terminal prose for a pool
+	// emptied by the vector-only exclusion on a turn with nothing else to
+	// offer (CHAOS-5637).
+	//
+	// It cannot borrow noMatchLimitationUnproven's wording, which is the
+	// whole reason it exists: that sentence says retrieval "found no
+	// candidate", and here retrieval found candidates and withheld every
+	// one of them. Reporting a withheld pool as an empty one states the
+	// opposite of what happened -- the same conflation
+	// subjectlessTerminalReason's own offer_pool_emptied_by_exclusion arm
+	// was added to end on the telemetry side.
+	//
+	// It names no subject and no term, and it cannot: every candidate it
+	// speaks about was withheld precisely because naming it would hand back
+	// the guess the exclusion exists to withhold. Same constraint
+	// OfferPoolEmptiedClarificationPrompt records for the prompt whose
+	// place this takes, and it keeps the caller's own next move -- name the
+	// subject, or rephrase -- which is the one thing that was worth saying
+	// on the turn this replaces.
+	noMatchLimitationOfferPoolEmptied = "Retrieval matched one or more subjects only by semantic similarity, which is not enough to identify a subject, so none could be offered and no canonical facts were read. Name the subject you mean, or rephrase the question so it names one."
 	// The ambiguous-and-clarification-unavailable pair (CHAOS-3810 codex
 	// round-1 P2): a no_match result reached WITH candidates attached must
 	// not claim nothing matched while the candidates it names sit in the
@@ -242,7 +262,45 @@ func (e *Engine) terminalResult(
 	// silently drop a validated prior-subject receipt on exactly the paths
 	// where one exists.
 	ancestryParent string) (InvestigationResult, error) {
-	status, limitation := resolveTerminalStatus(request, &resolution)
+	// CHAOS-4634 (subsumes CHAOS-4579/CHAOS-4531's §1.3 class-conditional
+	// gate): applied HERE, at the top, before ANY reader of
+	// structureMaterial below -- both the schemaVersion dispatch
+	// (AnchorOptionsRequireV2) and composeStructureNeeds must see the
+	// same, already-gated material, or a discovered_cohort result could be
+	// promoted to the v2 semantic major by anchor options that were then
+	// removed from its own disclosure. See GateOffersByFamily's own doc
+	// comment (chaos4579_cohort_structure_gate.go) for why the Missing
+	// rows and their option lists are one decision.
+	//
+	// CHAOS-5637 moved this, the result id, and the window clarification
+	// ABOVE resolveTerminalStatus, which now needs to know what this turn
+	// can actually offer before it can decide whether a clarification is
+	// answerable. The three are pure with respect to the status -- the gate
+	// reads material and family, the id is minted, the window offer is
+	// derived from the effective window -- so the reorder changes their own
+	// inputs not at all. Ordering them AFTER the decision was what let the
+	// status be chosen without reference to the offers it describes.
+	structureMaterial, cohortGateOutcome := GateOffersByFamily(structureMaterial, familyOutcome)
+	recordCohortStructureGate(ctx, e.telemetry, principal, cohortGateOutcome, interpretation.Shape)
+	// Hoisted so composeStructureNeeds below can mint deterministic offer
+	// ids from the SAME ResultID this result is actually saved under
+	// (CHAOS-3900 P1.C) -- calling e.newResultID() a second time inside
+	// the literal would mint a result identity StructureNeeds' own
+	// receipts were never keyed against.
+	resultID := e.newResultID()
+	// CHAOS-3900 W1: a subjectless terminal still discloses the window it
+	// would have read evidence against, exactly like any other result --
+	// composeEffectiveWindow's own precedence rules apply identically
+	// regardless of whether a subject was ultimately committed.
+	// effectiveWindow: computed ONCE by the caller (CHAOS-4040 fix, codex
+	// xhigh review round 1) -- reused unchanged, never recomputed.
+	// CHAOS-3900 W2: same fresh-disclosure/nudge wiring as the decisive
+	// path (engine.go) -- a terminal that stalled on structure is
+	// EXACTLY the case a window nudge (when requested) matters most, an
+	// agent reading a refusal benefits from every disclosure available.
+	windowClarification := composeWindowClarification(effectiveWindow, resultID, e.now())
+	status, limitation := resolveTerminalStatus(request, &resolution,
+		clarificationOffersRedeemable(resolution, structureMaterial, windowClarification))
 	// CHAOS-5442: a frame the gate refused gets its own disclosure, on
 	// both surfaces, decided from the ONE value that already holds the
 	// verdict.
@@ -256,17 +314,6 @@ func (e *Engine) terminalResult(
 	if familyOutcome.Gate.Refuses() {
 		limitation = refusalLimitation(familyOutcome.Gate, refusalBasis)
 	}
-	// CHAOS-4634 (subsumes CHAOS-4579/CHAOS-4531's §1.3 class-conditional
-	// gate): applied HERE, at the top, before ANY reader of
-	// structureMaterial below -- both the schemaVersion dispatch
-	// (AnchorOptionsRequireV2) and composeStructureNeeds must see the
-	// same, already-gated material, or a discovered_cohort result could be
-	// promoted to the v2 semantic major by anchor options that were then
-	// removed from its own disclosure. See GateOffersByFamily's own doc
-	// comment (chaos4579_cohort_structure_gate.go) for why the Missing
-	// rows and their option lists are one decision.
-	structureMaterial, cohortGateOutcome := GateOffersByFamily(structureMaterial, familyOutcome)
-	recordCohortStructureGate(ctx, e.telemetry, principal, cohortGateOutcome, interpretation.Shape)
 	// CHAOS-3888: telemetry-only -- classifies WHY this investigation
 	// reached its own subjectless terminal path, never changes status,
 	// limitation, or any other field of the result below. See
@@ -320,33 +367,6 @@ func (e *Engine) terminalResult(
 	if status == InvestigationClarificationRequired && resolution.ClarificationPrompt != "" {
 		answer += " " + resolution.ClarificationPrompt
 	}
-	// Hoisted so composeStructureNeeds below can mint deterministic offer
-	// ids from the SAME ResultID this result is actually saved under
-	// (CHAOS-3900 P1.C) -- calling e.newResultID() a second time inside
-	// the literal would mint a result identity StructureNeeds' own
-	// receipts were never keyed against.
-	resultID := e.newResultID()
-	// CHAOS-3900 W1: a subjectless terminal still discloses the window it
-	// would have read evidence against, exactly like any other result --
-	// composeEffectiveWindow's own precedence rules apply identically
-	// regardless of whether a subject was ultimately committed.
-	// effectiveWindow: computed ONCE by the caller (CHAOS-4040 fix, codex
-	// xhigh review round 1, confirmed: this function used to recompute it
-	// here via its own resolveWindowPriorProposal call -- harmless before
-	// CHAOS-4040, when Investigate's own composeEffectiveWindow call sat
-	// AFTER the subjects-empty check and so was simply never reached on
-	// this path; CHAOS-4040 moved that computation BEFORE subject
-	// resolution so gate 2 can fire pre-resolution, which means it now
-	// ALWAYS runs before this function is ever reached, making a second,
-	// independent call here a genuine double-count of
-	// resolveWindowPriorProposal's own cf_prior_consulted telemetry
-	// (RecordPriorConsulted), not just wasted CPU) -- reused unchanged,
-	// never recomputed.
-	// CHAOS-3900 W2: same fresh-disclosure/nudge wiring as the decisive
-	// path (engine.go) -- a terminal that stalled on structure is
-	// EXACTLY the case a window nudge (when requested) matters most, an
-	// agent reading a refusal benefits from every disclosure available.
-	windowClarification := composeWindowClarification(effectiveWindow, resultID, e.now())
 	terminalWarnings := []string{}
 	if windowClarification != nil && request.Options.WindowConfirmationMode == contractsv1.ContextFabricWindowConfirmationNudge {
 		terminalWarnings = appendUniqueWarning(terminalWarnings, windowConfirmationNudgeSentence)
@@ -473,6 +493,17 @@ func (e *Engine) terminalResult(
 	if err != nil {
 		return InvestigationResult{}, err
 	}
+	// CHAOS-5637: the answerability invariant, on the document the route
+	// will serialize, at the SAME "immediately before Validate" placement
+	// the budget assertion above and the completeness/display-label stamps
+	// before it already use. A clarification that reaches here with no
+	// redeemable offer is the defect this ticket closed at its source, so
+	// nothing produces one today -- the assertion is what keeps that a
+	// checked claim rather than a comment. See
+	// chaos5637_answerable_clarification.go.
+	if err := assertAnswerableClarification(result); err != nil {
+		return InvestigationResult{}, stageError(StageValidation, err)
+	}
 	if err := ValidateResult(result); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}
@@ -597,7 +628,15 @@ func subjectlessTerminalReason(gate FrameGate, resolution SubjectResolution, sub
 	return "empty_pool"
 }
 
-func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectResolution) (InvestigationStatus, string) {
+// otherOffersRedeemable (CHAOS-5637) is whether THIS turn carries a
+// redeemable offer on some channel other than the candidate list -- a
+// structure option or a window option. Passed in rather than derived here
+// because both live outside SubjectResolution, and because the caller has
+// already gated the structure material by family (GateOffersByFamily) at
+// the point it asks: a predicate computed here, from ungated material,
+// would count an offer the caller is about to remove from the very
+// document this status describes.
+func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectResolution, otherOffersRedeemable bool) (InvestigationStatus, string) {
 	if len(resolution.Candidates) == 0 {
 		// AN OFFER POOL EMPTIED BY THE VECTOR-ONLY EXCLUSION IS NOT AN
 		// EMPTY GRAPH. Retrieval found candidates and withheld every one of
@@ -620,8 +659,41 @@ func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectReso
 		// AllowClarification is honoured here exactly as it is below: a
 		// caller who will not accept a clarification gets the terminal it
 		// asked for, not one invented for it.
-		if request.Options.AllowClarification && strings.TrimSpace(resolution.ClarificationPrompt) != "" {
-			return InvestigationClarificationRequired, clarificationRequiredLimitationOne
+		//
+		// CHAOS-5637: and so is ANSWERABILITY. The paragraph above is right
+		// that the caller is owed the question rather than a flat "nothing
+		// matched" -- but only when the turn hands them something to answer
+		// it WITH. Measured on the 2026-09-12 yardstick, this branch fired
+		// 76 times across 13 rows and 3 replicates with every offer channel
+		// empty, and each one cost four further turns of an exchange that
+		// could not converge (see chaos5637_answerable_clarification.go for
+		// the counts and the one producer). A clarification with no
+		// redeemable offer is not the question being asked; it is the
+		// conversation stopping without saying so.
+		//
+		// The prompt is deliberately LEFT ON the resolution when this
+		// downgrades. It is the carrier subjectlessTerminalReason reads to
+		// report offer_pool_emptied_by_exclusion (below), so clearing it
+		// would collapse a withheld pool back into empty_pool in the
+		// telemetry -- the exact distinction that arm exists to keep -- and
+		// a no_match carrying a prompt is already a reachable, accepted
+		// state on the AllowClarification=false branch two lines up. It
+		// does NOT reach DeterministicAnswer: terminalResult appends the
+		// prompt to the answer sentence only for clarification_required.
+		//
+		// THE WITHHELD POOL KEEPS ITS OWN PROSE ON BOTH TERMINAL ARMS, not
+		// only on the one this ticket added. A caller that declined
+		// clarification was already being told retrieval "found no
+		// candidate" for a pool that found several and withheld them --
+		// the same false sentence, reached by the older branch, and caught
+		// by this ticket's own test rather than by inspection. The two
+		// arms differ in STATUS for two different reasons; they never
+		// differed in what actually happened to the pool.
+		if strings.TrimSpace(resolution.ClarificationPrompt) != "" && !resolution.GraphNotProjected {
+			if request.Options.AllowClarification && otherOffersRedeemable {
+				return InvestigationClarificationRequired, clarificationRequiredLimitationOne
+			}
+			return InvestigationNoMatch, noMatchLimitationOfferPoolEmptied
 		}
 		return InvestigationNoMatch, noMatchLimitationForEmptyPool(resolution)
 	}

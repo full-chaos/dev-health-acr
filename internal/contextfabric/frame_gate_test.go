@@ -488,24 +488,51 @@ func TestFrameGateReachesTheProductionFrameValidationLine(t *testing.T) {
 // because nothing above read that state as different from an empty graph.
 //
 // Red at 9c3ed3dc: the withheld-pool arm returns no_match.
-func TestAWithheldOfferPoolClarifiesInsteadOfNoMatch(t *testing.T) {
+//
+// CHAOS-5637 added the second dimension, and it is the one that makes the
+// first claim true rather than merely well-meant. "Clarify rather than
+// collapse" is only a kindness to the caller if the turn hands them
+// something to clarify WITH. Measured on the 2026-09-12 yardstick, the
+// withheld-pool arm fired 76 times across 13 rows and 3 replicates with every
+// offer channel empty; each of those turns asked a question it had supplied
+// no means of answering, and the caller's only move -- re-ask the bare
+// question -- discarded the needs already satisfied, so the exchange
+// alternated to the turn cap. So the arm now requires a redeemable offer
+// somewhere on the turn, and terminates honestly when there is none.
+func TestAWithheldOfferPoolClarifiesOnlyWhenTheTurnCanBeAnswered(t *testing.T) {
 	t.Parallel()
 	for _, testCase := range []struct {
-		name       string
-		resolution SubjectResolution
-		allow      bool
-		want       InvestigationStatus
+		name        string
+		resolution  SubjectResolution
+		allow       bool
+		otherOffers bool
+		want        InvestigationStatus
 	}{
 		{
 			// Retrieval found candidates and may offer none of them. The
 			// pairing -- zero candidates, a prompt -- is what graphrank
-			// emits for a pool emptied by the vector-only exclusion.
-			name: "a pool emptied by the exclusion clarifies",
+			// emits for a pool emptied by the vector-only exclusion. The
+			// turn still carries a window or structure offer, so the
+			// caller has a move and the conversation can continue.
+			name: "a pool emptied by the exclusion clarifies when the turn offers something else",
 			resolution: SubjectResolution{
 				Candidates: []SubjectCandidate{}, Committed: []SubjectRef{},
 				ClarificationPrompt: OfferPoolEmptiedClarificationPrompt,
 			},
-			allow: true, want: InvestigationClarificationRequired,
+			allow: true, otherOffers: true, want: InvestigationClarificationRequired,
+		},
+		{
+			// THE ARM CHAOS-5637 ADDED, and the one the yardstick measured
+			// 76 times. Same withheld pool, same prompt -- and no offer
+			// anywhere on the turn. There is nothing for the caller to
+			// send back, so the honest outcome is a terminal, not a
+			// question that cannot be answered.
+			name: "a pool emptied by the exclusion terminates when the turn offers nothing",
+			resolution: SubjectResolution{
+				Candidates: []SubjectCandidate{}, Committed: []SubjectRef{},
+				ClarificationPrompt: OfferPoolEmptiedClarificationPrompt,
+			},
+			allow: true, otherOffers: false, want: InvestigationNoMatch,
 		},
 		{
 			// THE CONTROL. A graph that genuinely found nothing keeps its
@@ -514,29 +541,48 @@ func TestAWithheldOfferPoolClarifiesInsteadOfNoMatch(t *testing.T) {
 			// clarification.
 			name:       "a genuinely empty pool still reports no_match",
 			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
-			allow:      true, want: InvestigationNoMatch,
+			allow:      true, otherOffers: false, want: InvestigationNoMatch,
+		},
+		{
+			// THE SECOND CONTROL, on the new dimension: an offer elsewhere
+			// on the turn must not by itself manufacture a clarification.
+			// Only a WITHHELD pool -- the prompt is the signal -- earns
+			// one. Without this arm, a change that dropped the prompt test
+			// and clarified on the offer flag alone would stay green.
+			name:       "an offer elsewhere does not clarify a genuinely empty pool",
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+			allow:      true, otherOffers: true, want: InvestigationNoMatch,
 		},
 		{
 			// A caller that will not accept a clarification gets the
-			// terminal it asked for, not one invented for it.
+			// terminal it asked for, not one invented for it -- and that
+			// stays true however much this turn had to offer.
 			name: "clarification refused by the caller stays no_match",
 			resolution: SubjectResolution{
 				Candidates: []SubjectCandidate{}, Committed: []SubjectRef{},
 				ClarificationPrompt: OfferPoolEmptiedClarificationPrompt,
 			},
-			allow: false, want: InvestigationNoMatch,
+			allow: false, otherOffers: true, want: InvestigationNoMatch,
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			resolution := testCase.resolution
 			request := InvestigationRequest{Options: InvestigationOptions{AllowClarification: testCase.allow}}
-			got, limitation := resolveTerminalStatus(request, &resolution)
+			got, limitation := resolveTerminalStatus(request, &resolution, testCase.otherOffers)
 			if got != testCase.want {
 				t.Fatalf("status = %q, want %q", got, testCase.want)
 			}
 			if strings.TrimSpace(limitation) == "" {
 				t.Fatal("the terminal carries no limitation; a caller must be told why nothing was resolved")
+			}
+			// The withheld pool must never borrow the empty pool's prose.
+			// That sentence says retrieval "found no candidate", which is
+			// the opposite of what happened here, and it is the same
+			// conflation the telemetry arm below exists to end.
+			if strings.TrimSpace(resolution.ClarificationPrompt) != "" && got == InvestigationNoMatch &&
+				limitation == noMatchLimitationUnproven {
+				t.Fatal("a withheld pool reported the unproven-absence limitation; it found candidates and withheld them")
 			}
 		})
 	}

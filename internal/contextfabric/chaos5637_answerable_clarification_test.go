@@ -1,0 +1,252 @@
+package contextfabric
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+)
+
+// withheldPoolResolution is the resolution graphrank emits for a candidate
+// pool emptied by the vector-only exclusion: zero candidates, and the prompt
+// that says so. It is the ONE producer of an offer-less clarification
+// (chaos5637_answerable_clarification.go), so every pin in this file starts
+// from it rather than from a hand-built approximation.
+func withheldPoolResolution() SubjectResolution {
+	return SubjectResolution{
+		Candidates:          []SubjectCandidate{},
+		Committed:           []SubjectRef{},
+		ClarificationPrompt: OfferPoolEmptiedClarificationPrompt,
+	}
+}
+
+// A Missing row is not an offer. StructureNeedsWouldDisclose says yes to
+// material carrying a Missing member and no options, by the standing
+// zero-candidates ruling -- so a predicate that reused it would admit
+// exactly the turn this invariant forbids.
+func TestAMissingRowWithNoOptionsIsNotARedeemableOffer(t *testing.T) {
+	t.Parallel()
+	material := StructureOfferMaterial{
+		Missing: []contractsv1.ContextFabricStructureNeedKind{
+			contractsv1.ContextFabricStructureNeedSubjectAnchor,
+		},
+	}
+	if !StructureNeedsWouldDisclose(material) {
+		t.Fatal("fixture defect: this material is meant to be disclosable, which is the whole trap")
+	}
+	if offerMaterialRedeemable(material) {
+		t.Fatal("a Missing row with no options counted as redeemable; a caller has nothing to send back for it")
+	}
+}
+
+// Each channel ALONE is enough. Asserted per channel rather than in one
+// composite case: a predicate that had dropped a single channel would still
+// pass a test that set them all.
+func TestAnyOneOfferChannelMakesAClarificationAnswerable(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name       string
+		resolution SubjectResolution
+		material   StructureOfferMaterial
+		window     *contractsv1.ContextFabricWindowClarification
+	}{
+		{
+			name:       "a subject candidate",
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{{}}, Committed: []SubjectRef{}},
+		},
+		{
+			name:       "a kind option",
+			resolution: withheldPoolResolution(),
+			material:   StructureOfferMaterial{KindOptions: []contractsv1.ContextFabricKindOption{{}}},
+		},
+		{
+			name:       "an anchor option",
+			resolution: withheldPoolResolution(),
+			material:   StructureOfferMaterial{AnchorOptions: []contractsv1.ContextFabricAnchorOption{{}}},
+		},
+		{
+			name:       "a handle option",
+			resolution: withheldPoolResolution(),
+			material:   StructureOfferMaterial{HandleOptions: []contractsv1.ContextFabricHandleOption{{}}},
+		},
+		{
+			name:       "a candidate option",
+			resolution: withheldPoolResolution(),
+			material:   StructureOfferMaterial{CandidateOptions: []contractsv1.ContextFabricCandidateOption{{}}},
+		},
+		{
+			name:       "a window option",
+			resolution: withheldPoolResolution(),
+			window:     &contractsv1.ContextFabricWindowClarification{Options: []contractsv1.ContextFabricWindowOption{{}}},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if !clarificationOffersRedeemable(testCase.resolution, testCase.material, testCase.window) {
+				t.Fatal("this channel alone did not count as an offer; a caller reading it has a move and the predicate says they do not")
+			}
+		})
+	}
+	t.Run("and nothing at all does not", func(t *testing.T) {
+		t.Parallel()
+		if clarificationOffersRedeemable(withheldPoolResolution(), StructureOfferMaterial{}, nil) {
+			t.Fatal("an empty turn counted as answerable -- the control; without it every arm above passes vacuously")
+		}
+	})
+	t.Run("nor does an empty window options list", func(t *testing.T) {
+		t.Parallel()
+		empty := &contractsv1.ContextFabricWindowClarification{Options: []contractsv1.ContextFabricWindowOption{}}
+		if clarificationOffersRedeemable(withheldPoolResolution(), StructureOfferMaterial{}, empty) {
+			t.Fatal("a non-nil window clarification with zero options counted as an offer")
+		}
+	})
+}
+
+// THE ASSERTION, on the shape of document it actually guards.
+func TestTheAnswerabilityAssertionFiresOnlyOnAnUnanswerableClarification(t *testing.T) {
+	t.Parallel()
+	offered := &contractsv1.ContextFabricStructureNeeds{
+		WindowOptions: []contractsv1.ContextFabricWindowOption{{}},
+	}
+	for _, testCase := range []struct {
+		name    string
+		result  InvestigationResult
+		wantErr bool
+	}{
+		{
+			name: "a clarification with no offer anywhere",
+			result: InvestigationResult{
+				Status:            InvestigationClarificationRequired,
+				SubjectResolution: withheldPoolResolution(),
+			},
+			wantErr: true,
+		},
+		{
+			name: "a clarification that offers a window",
+			result: InvestigationResult{
+				Status:            InvestigationClarificationRequired,
+				SubjectResolution: withheldPoolResolution(),
+				StructureNeeds:    offered,
+			},
+		},
+		{
+			// THE CONTROL on the status test. A terminal owes no offer,
+			// and an assertion that ignored the status would turn every
+			// honest no_match into a stage error.
+			name: "a no_match with no offer",
+			result: InvestigationResult{
+				Status:            InvestigationNoMatch,
+				SubjectResolution: withheldPoolResolution(),
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			err := assertAnswerableClarification(testCase.result)
+			if testCase.wantErr && !errors.Is(err, ErrUnanswerableClarification) {
+				t.Fatalf("err = %v, want %v", err, ErrUnanswerableClarification)
+			}
+			if !testCase.wantErr && err != nil {
+				t.Fatalf("err = %v, want nil", err)
+			}
+		})
+	}
+}
+
+// THE WHOLE CLAIM, driven through the production entry point, because that
+// is the only place the status and the offers are decided by the same pass.
+//
+// The unit pins above prove the predicate and the assertion each answer
+// correctly. Neither proves the ENGINE consults them: the yardstick defect
+// was precisely that the resolution already carried the right state and the
+// terminal was chosen without reference to it. This drives Investigate with
+// a withheld pool, an already-confirmed window (so no window offer is
+// composed to rescue the turn) and empty offer material, and requires the
+// served document to be a terminal.
+//
+// Red before this ticket: status is clarification_required, with six empty
+// offer channels -- the shape measured 76 times on the 2026-09-12 yardstick.
+func TestAWithheldPoolWithNothingToOfferTerminatesInOneTurn(t *testing.T) {
+	t.Parallel()
+	graph := &acceptanceGraphReader{
+		resolution: withheldPoolResolution(),
+		context:    emptyGraphContext(),
+	}
+	engine := buildWindowGateEngine(t,
+		&countingInterpreter{interpretation: bootstrapInterpretation()},
+		graph,
+		newMapResultStore())
+
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(),
+		validInvestigationRequestWithConfirmedWindow())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if graph.resolveCalls == 0 {
+		t.Fatal("the fixture never reached ResolveSubjects, so it proves nothing about the withheld pool")
+	}
+	if result.Status == InvestigationClarificationRequired {
+		t.Fatalf("the turn asked for clarification while offering nothing: candidates=%d structure_needs=%v window=%v",
+			len(result.SubjectResolution.Candidates), result.StructureNeeds, result.WindowClarification)
+	}
+	if result.Status != InvestigationNoMatch {
+		t.Fatalf("status = %q, want %q", result.Status, InvestigationNoMatch)
+	}
+	if resultOffersRedeemable(result) {
+		t.Fatal("fixture defect: this turn DID carry an offer, so it never exercised the unanswerable case")
+	}
+	// The prompt survives the downgrade. It is what
+	// subjectlessTerminalReason reads to report the withheld pool apart
+	// from an empty one, and clearing it would trade a wire defect for a
+	// telemetry one.
+	if result.SubjectResolution.ClarificationPrompt == "" {
+		t.Fatal("the downgrade cleared the prompt; the withheld pool is no longer distinguishable from an empty graph")
+	}
+	if got := subjectlessTerminalReason(FrameGate{}, result.SubjectResolution, 0); got != "offer_pool_emptied_by_exclusion" {
+		t.Fatalf("terminal reason = %q, want %q", got, "offer_pool_emptied_by_exclusion")
+	}
+	// And it never reaches the answer sentence: a caller reading the
+	// deterministic answer of a terminal must not be handed an ask.
+	for _, limitation := range result.Limitations {
+		if limitation == noMatchLimitationUnproven {
+			t.Fatal("the withheld pool reported the unproven-absence limitation; retrieval found candidates and withheld them")
+		}
+	}
+}
+
+// THE CONTROL for the pin above, and the one that keeps this ticket from
+// having simply deleted a feature: a withheld pool that DOES have something
+// to offer still clarifies. Same fixture, same resolution -- the only
+// difference is offer material the engine can put on the wire.
+func TestAWithheldPoolThatCanOfferSomethingStillClarifies(t *testing.T) {
+	t.Parallel()
+	graph := &acceptanceGraphReader{
+		resolution: withheldPoolResolution(),
+		context:    emptyGraphContext(),
+		material: StructureOfferMaterial{
+			Missing: []contractsv1.ContextFabricStructureNeedKind{
+				contractsv1.ContextFabricStructureNeedExpectedKind,
+			},
+			KindOptions: []contractsv1.ContextFabricKindOption{
+				{Kind: SubjectPullRequest, Label: "a pull request", OfferSource: contractsv1.ContextFabricStructureOfferEngine},
+			},
+		},
+	}
+	engine := buildWindowGateEngine(t,
+		&countingInterpreter{interpretation: bootstrapInterpretation()},
+		graph,
+		newMapResultStore())
+
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(),
+		validInvestigationRequestWithConfirmedWindow())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationClarificationRequired {
+		t.Fatalf("status = %q, want %q -- a withheld pool with a real offer must still ask", result.Status, InvestigationClarificationRequired)
+	}
+	if !resultOffersRedeemable(result) {
+		t.Fatal("the clarification carried no redeemable offer, which is the state this ticket forbids")
+	}
+}
