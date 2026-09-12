@@ -183,7 +183,12 @@ func TestAGroupReadRefusedAtReconcileServesNoOriginRows(t *testing.T) {
 		for _, subject := range request.Subjects {
 			if subject.Kind == SubjectTeam {
 				bundle.Versions = map[FactKind]string{FactHealth: "health-v4"}
-				bundle.Coverage.Sources = []SourceObservation{{Source: "canonical_fact:health", State: SourceAvailable}}
+				// DELIBERATELY DIFFERENT from the member read's state: if the
+				// two reads agreed, this fixture could not tell a turn that
+				// served no rows from one that served none BECAUSE the reads
+				// happened to match, and an engine that disclosed a refused
+				// read would pass it.
+				bundle.Coverage.Sources = []SourceObservation{{Source: "canonical_fact:health", State: SourceStale, Reason: "the group read returned stale"}}
 				return bundle
 			}
 		}
@@ -708,17 +713,28 @@ func TestEveryRowTheProducerDropsSaysWhyItWasDropped(t *testing.T) {
 
 	t.Run("a non-fact observation is dropped at Debug as not_a_fact_read", func(t *testing.T) {
 		buf := captureDefaultJSONLogger(t)
+		// BOTH reads carry the graph observation. If only one did, the
+		// "one population read this kind" guard would swallow it before the
+		// filter under test was reached, and a filter that stopped filtering
+		// would be invisible.
 		member := Coverage{Sources: []SourceObservation{
 			{Source: "canonical_fact:health", State: SourceAvailable},
 			{Source: "context-fabric:graph-validity-windows", State: SourceAvailable},
 		}}
-		group := Coverage{Sources: []SourceObservation{{Source: "canonical_fact:health", State: SourceNoData}}}
-		if got := readOriginStateCoverage(group, member, group, SubjectProject, SubjectTeam); len(got.Details) != 1 {
-			t.Fatalf("rows = %d, want 1 (health only)", len(got.Details))
+		group := Coverage{Sources: []SourceObservation{
+			{Source: "canonical_fact:health", State: SourceNoData},
+			{Source: "context-fabric:graph-validity-windows", State: SourceNoData},
+		}}
+		got := readOriginStateCoverage(group, member, group, SubjectProject, SubjectTeam)
+		if len(got.Details) != 1 {
+			t.Fatalf("rows = %d, want 1 (health only): %+v", len(got.Details), got.Details)
+		}
+		if got.Details[0].FactKind != FactHealth {
+			t.Fatalf("row is for %q, want health -- a graph observation was disclosed as a fact kind", got.Details[0].FactKind)
 		}
 		skipped := reasons(read(t, buf), "not_a_fact_read")
-		if len(skipped) != 1 {
-			t.Fatalf("not_a_fact_read lines = %d, want 1", len(skipped))
+		if len(skipped) != 2 {
+			t.Fatalf("not_a_fact_read lines = %d, want 2 (one per read)", len(skipped))
 		}
 		if skipped[0].Level != "DEBUG" {
 			t.Errorf("level = %q, want DEBUG -- a graph observation in fact coverage is routine", skipped[0].Level)
@@ -782,6 +798,30 @@ func TestEveryRowTheProducerDropsSaysWhyItWasDropped(t *testing.T) {
 		}
 		if lines := read(t, buf); len(lines) != 0 {
 			t.Fatalf("a turn whose reads planned different kinds emitted %d line(s): %+v -- an ordinary turn is not a defect", len(lines), lines)
+		}
+	})
+
+	t.Run("every served row carries its own detail id", func(t *testing.T) {
+		// More than one row, so a hardcoded id is visible. Two kinds, both
+		// read by both populations, both differing.
+		member := Coverage{Sources: []SourceObservation{
+			{Source: "canonical_fact:health", State: SourceAvailable},
+			{Source: "canonical_fact:workload", State: SourceAvailable},
+		}}
+		group := Coverage{Sources: []SourceObservation{
+			{Source: "canonical_fact:health", State: SourceNoData, Reason: "no data"},
+			{Source: "canonical_fact:workload", State: SourceStale, Reason: "stale"},
+		}}
+		got := readOriginStateCoverage(group, member, group, SubjectProject, SubjectTeam)
+		if len(got.Details) != 2 {
+			t.Fatalf("rows = %d, want 2 (both kinds differ): %+v", len(got.Details), got.Details)
+		}
+		ids := map[string]int{}
+		for _, d := range got.Details {
+			ids[d.DetailID]++
+		}
+		if len(ids) != len(got.Details) {
+			t.Fatalf("detail ids %v over %d rows -- ids collide, so a disclosure or a phrasing write lands on the wrong row", ids, len(got.Details))
 		}
 	})
 
