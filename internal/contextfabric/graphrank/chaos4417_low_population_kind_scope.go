@@ -156,6 +156,39 @@ func applyLowPopulationKindOffers(
 				nil)
 		if scopeErr != nil {
 			outcome = lowPopulationKindScopeOutcomeError
+			// This loop's own detail line self-carries
+			// Total==len(chaos4417LowPopulationScopedKinds) (a FIXED bound,
+			// declared once, the same on every line of the scope) -- an
+			// early return here that skips tracing the erroring kind and
+			// any kind after it leaves the scope with fewer observed lines
+			// than its own declared Total, exactly the "observed count !=
+			// declared bound" defect certifyBoundedMany exists to catch.
+			// Every kind
+			// from THIS one (i) through the end still gets its own line, so
+			// the scope's own observed line count always equals its own
+			// declared Total, on every exit, not only the happy one. The
+			// erroring kind itself (i) is honestly confirmedKindScopeFailed
+			// -- it WAS attempted, and that attempt is what failed; every
+			// kind strictly after it never ran at all, so it carries
+			// confirmedKindScopeNotAttempted, the SAME vocabulary member
+			// this rescue already uses for "reached this point but had
+			// nothing to try".
+			if deps.ResolutionTracer != nil {
+				for j := i; j < len(chaos4417LowPopulationScopedKinds); j++ {
+					state := confirmedKindScopeNotAttempted
+					if j == i {
+						state = confirmedKindScopeFailed
+					}
+					deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+						RequestID:                   request.RequestID,
+						Stage:                       "low_population_kind_scope",
+						LowPopulationKindScopeKind:  string(chaos4417LowPopulationScopedKinds[j]),
+						LowPopulationKindScopeState: state,
+						Index:                       j + 1,
+						Total:                       len(chaos4417LowPopulationScopedKinds),
+					})
+				}
+			}
 			return nil, scopeErr
 		}
 		if scopeTraversalDegraded > 0 && deps.TraversalDegraded != nil {

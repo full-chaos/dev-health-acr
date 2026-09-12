@@ -446,8 +446,15 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			// (ResolutionTraceEvent) for why this must be diagnosable from
 			// the run's own artifacts, not just applied silently.
 			"candidate_offer_labels_normalized_count", event.KindOfferCandidateOfferLabelsNormalizedCount,
-			"boundary_kinds", contextfabric.SanitizeLogStrings(event.KindOfferBoundaryKinds),
-			"boundary_kinds_before_repair", contextfabric.SanitizeLogStrings(event.KindOfferBoundaryKindsBeforeRepair),
+			// emptyIfNilStrings: an ordinary EMPTY pool leaves
+			// both of these producer-side nil (distinctCandidateKinds'
+			// own "nothing to report" return), which SanitizeLogStrings
+			// passes straight through as nil -- slog's JSON handler then
+			// writes literal `null`, not the measured empty set this
+			// REQUIRED string_slice field's own contract promises. See
+			// this function's own doc comment for the class.
+			"boundary_kinds", contextfabric.SanitizeLogStrings(emptyIfNilStrings(event.KindOfferBoundaryKinds)),
+			"boundary_kinds_before_repair", contextfabric.SanitizeLogStrings(emptyIfNilStrings(event.KindOfferBoundaryKindsBeforeRepair)),
 			"distinct_kind_count_before_repair", event.KindOfferDistinctKindCountBeforeRepair,
 			"suppressed_by_cardinality_before_repair", event.KindOfferSuppressedByCardinalityBeforeRepair,
 			// CHAOS-4119: handleOfferMaterial's own graph-derived-source
@@ -700,7 +707,12 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 				"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 				"candidate_count", event.IdentityGateCandidateCount,
 				"fired_count", event.IdentityGateFiredCount,
-				"fired_ids", contextfabric.SanitizeLogStrings(event.IdentityGateFiredIDs))
+				// emptyIfNilStrings: a valid, common summary --
+				// candidates checked, none of them fired the gate -- leaves
+				// firedIDs nil (identityGateSummaryBuffer never appends to
+				// it), which SanitizeLogStrings passes through unchanged;
+				// this REQUIRED string_slice field must never emit `null`.
+				"fired_ids", contextfabric.SanitizeLogStrings(emptyIfNilStrings(event.IdentityGateFiredIDs)))
 			return
 		}
 		t.logger.DebugContext(ctx, "context fabric resolution trace: identity gate",

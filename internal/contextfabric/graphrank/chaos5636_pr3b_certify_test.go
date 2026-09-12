@@ -506,3 +506,165 @@ func TestCertifyEvidenceSourceNativeProbeCertifiesTheSelfCarriedBound(t *testing
 		t.Errorf("certify EvidenceSourceNativeProbe(index=2): %v", err)
 	}
 }
+
+// TestCertifyKindOfferEmptyPoolNeverEmitsNullBoundarySlices pins an ordinary
+// EMPTY pool (no search results, no exact hint): KindOfferBoundaryKinds/
+// KindOfferBoundaryKindsBeforeRepair are nil at their producer
+// (distinctCandidateKinds' own "nothing to report" return), so both REQUIRED
+// string_slice fields must still certify as an explicit empty set, never
+// JSON `null` -- the same emptyIfNilStrings wrap (tracer.go) this event's
+// own field doc comment already documents.
+func TestCertifyKindOfferEmptyPoolNeverEmitsNullBoundarySlices(t *testing.T) {
+	t.Parallel()
+	backend := &fakeGraphBackend{}
+	var buf bytes.Buffer
+	deps := backend.deps()
+	deps.ResolutionTracer = NewSlogResolutionTracer(
+		slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	req := testRequest()
+	if _, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(),
+		storage.Principal{OrgID: "org_1"}, req, testInterpreted(), deps,
+		nil, nil, nil, ""); err != nil {
+		t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+	}
+
+	log, perr := certify.Parse(buf.Bytes())
+	if perr != nil {
+		t.Fatalf("certify.Parse() error = %v", perr)
+	}
+	if _, err := certify.Certify(log, certify.Assertion{
+		Event: eventspec.KindOffer,
+		Want: map[string]any{
+			"request_id": req.RequestID,
+			// The Want values below are the whole point of this test: a
+			// null would FAIL a []string-typed equality check against []
+			// (Certify's own value comparison is JSON-normalized), proving
+			// the wire line is a measured empty set, not an omission.
+			"boundary_kinds": []string{}, "boundary_kinds_before_repair": []string{},
+		},
+	}); err != nil {
+		t.Errorf("certify KindOffer (empty pool): %v", err)
+	}
+}
+
+// TestCertifyIdentityGateSummaryZeroFiredNeverEmitsNullFiredIDs pins a valid,
+// common summary shape -- alias-lookup-scoped candidates were checked, none
+// of them fired the gate. IdentityGateFiredIDs is nil at its producer
+// (identityGateSummaryBuffer never appends to it when GateFired is always
+// false), so this REQUIRED string_slice field must still certify as an
+// explicit empty set, never JSON `null` -- the same emptyIfNilStrings wrap
+// KindOffer's own boundary fields use. Drives a repository candidate found
+// by ORDINARY search (not alias, not an exact label match, not
+// FromKeyedIdentityLookup) so NodeCandidate reaches identity_gate with
+// GateFired=false but the candidate still counts toward candidate_count.
+func TestCertifyIdentityGateSummaryZeroFiredNeverEmitsNullFiredIDs(t *testing.T) {
+	t.Parallel()
+	// "some repo" never equality-matches the node's own label or name, and
+	// this is a plain (non-alias) search result, so matched/aliasMatched/
+	// identityTrusted are all false -- GateFired=false at the real gate.
+	node := candidateNode(contextfabric.SubjectRepository, "r1", "owner/dev-health-acr", 0.6, "*")
+	backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{"some repo": {node}}}
+	var buf bytes.Buffer
+	deps := backend.deps()
+	deps.ResolutionTracer = NewSlogResolutionTracer(
+		slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	req := testRequest()
+	if _, _, err := ResolveSubjects(context.Background(), storage.Principal{OrgID: "org_1"}, req, testInterpreted("some repo"), deps, nil, nil); err != nil {
+		t.Fatalf("ResolveSubjects() error = %v", err)
+	}
+
+	log, perr := certify.Parse(buf.Bytes())
+	if perr != nil {
+		t.Fatalf("certify.Parse() error = %v", perr)
+	}
+	if _, err := certify.Certify(log, certify.Assertion{
+		Event: eventspec.IdentityGate,
+		Want:  map[string]any{"request_id": req.RequestID, "index": 1, "total": 1, "gate_fired": false},
+	}); err != nil {
+		t.Fatalf("certify IdentityGate (zero-fired detail): %v", err)
+	}
+	if _, err := certify.Certify(log, certify.Assertion{
+		Event: eventspec.IdentityGateSummary,
+		Want: map[string]any{
+			"request_id": req.RequestID, "candidate_count": 1, "fired_count": 0,
+			"fired_ids": []string{},
+		},
+	}); err != nil {
+		t.Errorf("certify IdentityGateSummary (zero-fired): %v", err)
+	}
+}
+
+// TestCertifyLowPopulationKindScopePartialErrorStillCertifiesTheFullBound
+// pins the error path: buildConfirmedKindScopedSnapshot erroring on
+// one of chaos4417LowPopulationScopedKinds' three members used to abort
+// applyLowPopulationKindOffers immediately, leaving the scope with FEWER
+// observed lines than its own self-carried Total -- e.g. an error on the
+// very first kind left ZERO detail lines while Total was never even
+// written, and an error on a later kind left however many kinds ran before
+// it, each still declaring Total=3, with certifyBoundedMany correctly
+// refusing "observed count != Total". Fixed: the error path now traces
+// every remaining kind (the erroring one as confirmedKindScopeFailed, every
+// kind after it as confirmedKindScopeNotAttempted) before returning, so the
+// scope's own observed line count always equals its declared Total.
+func TestCertifyLowPopulationKindScopePartialErrorStillCertifiesTheFullBound(t *testing.T) {
+	t.Parallel()
+	// Direct call to applyLowPopulationKindOffers -- the same "call the
+	// unexported producer itself" convention this file's own
+	// TestApplyLowPopulationKindOffers_* siblings already use -- so the
+	// SearchKind fixture can target ONLY this rescue's own three kinds
+	// without also tripping CHAOS-4038's kind_coverage_floor (which shares
+	// deps.SearchKind and queries project/repository, colliding with any
+	// fixture built through the full ResolveSubjects orchestration).
+	// chaos4417LowPopulationScopedKinds' own order is project(1)/repository(2)/
+	// team(3) (sortedKinds(aliasLookupScopedKinds)): project succeeds (a
+	// real completed line, index=1), repository errors (index=2), team is
+	// never reached (index=3).
+	const term = "acr"
+	var buf bytes.Buffer
+	deps := ResolveDeps{
+		IsInternal: noInternalSubjects,
+		SearchKind: func(ctx context.Context, searchTerm string, kind contextfabric.SubjectKind, limit int) ([]CandidateNode, bool, bool, error) {
+			if kind == contextfabric.SubjectRepository {
+				return nil, false, false, errors.New("boom")
+			}
+			return nil, false, false, nil
+		},
+		ResolutionTracer: NewSlogResolutionTracer(
+			slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))),
+	}
+	request := testRequest()
+	_, err := applyLowPopulationKindOffers(context.Background(), storage.Principal{OrgID: "org_1"}, request, deps, []string{term}, nil, false, request.Options.MaxSubjectCandidates)
+	if err == nil {
+		t.Fatalf("applyLowPopulationKindOffers() error = nil, want the forced repository-kind SearchKind fault to propagate -- this test's whole claim depends on genuinely erroring mid-scope, after the first kind already succeeded")
+	}
+
+	log, perr := certify.Parse(buf.Bytes())
+	if perr != nil {
+		t.Fatalf("certify.Parse() error = %v", perr)
+	}
+	count, cerr := certify.CertifyBoundedManyCount(log, eventspec.LowPopulationKindScope, map[string]any{"request_id": request.RequestID})
+	if cerr != nil {
+		t.Fatalf("CertifyBoundedManyCount(LowPopulationKindScope) error = %v", cerr)
+	}
+	if count != 3 {
+		t.Fatalf("CertifyBoundedManyCount(LowPopulationKindScope) = %d, want 3 (every kind gets a line even when a later one errors)", count)
+	}
+	if _, err := certify.Certify(log, certify.Assertion{
+		Event: eventspec.LowPopulationKindScope,
+		Want:  map[string]any{"request_id": request.RequestID, "index": 1, "total": 3, "kind": string(contextfabric.SubjectProject), "state": eventspec.ConfirmedKindScopeComplete},
+	}); err != nil {
+		t.Errorf("certify LowPopulationKindScope(index=1, completed before the fault): %v", err)
+	}
+	if _, err := certify.Certify(log, certify.Assertion{
+		Event: eventspec.LowPopulationKindScope,
+		Want:  map[string]any{"request_id": request.RequestID, "index": 2, "total": 3, "kind": string(contextfabric.SubjectRepository), "state": eventspec.ConfirmedKindScopeFailed},
+	}); err != nil {
+		t.Errorf("certify LowPopulationKindScope(index=2, failed): %v", err)
+	}
+	if _, err := certify.Certify(log, certify.Assertion{
+		Event: eventspec.LowPopulationKindScope,
+		Want:  map[string]any{"request_id": request.RequestID, "index": 3, "total": 3, "kind": string(contextfabric.SubjectTeam), "state": eventspec.ConfirmedKindScopeNotAttempted},
+	}); err != nil {
+		t.Errorf("certify LowPopulationKindScope(index=3, not attempted): %v", err)
+	}
+}
