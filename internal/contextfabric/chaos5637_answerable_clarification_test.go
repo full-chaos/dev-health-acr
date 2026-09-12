@@ -250,3 +250,134 @@ func TestAWithheldPoolThatCanOfferSomethingStillClarifies(t *testing.T) {
 		t.Fatal("the clarification carried no redeemable offer, which is the state this ticket forbids")
 	}
 }
+
+// THE INPUT DOMAIN OF THE GUARD, executed in one pass and printed as a table.
+//
+// resultOffersRedeemable is the predicate the assertion reads, and its input
+// domain is six channels x {absent, empty container, populated} plus the
+// container that holds five of them (StructureNeeds) being nil. Enumerated
+// rather than sampled: a predicate that had dropped one channel, or that
+// counted an empty slice as an offer, passes any test that sets the channels
+// it happens to check.
+func TestTheRedeemableOfferDomain(t *testing.T) {
+	t.Parallel()
+	populatedNeeds := func(mutate func(*contractsv1.ContextFabricStructureNeeds)) *contractsv1.ContextFabricStructureNeeds {
+		needs := &contractsv1.ContextFabricStructureNeeds{}
+		mutate(needs)
+		return needs
+	}
+	for _, testCase := range []struct {
+		cell   string
+		result InvestigationResult
+		want   bool
+	}{
+		{cell: "everything absent", result: InvestigationResult{}, want: false},
+		{cell: "structure_needs nil", result: InvestigationResult{StructureNeeds: nil}, want: false},
+		{cell: "structure_needs present, every list absent",
+			result: InvestigationResult{StructureNeeds: &contractsv1.ContextFabricStructureNeeds{}}, want: false},
+		{cell: "candidates empty container",
+			result: InvestigationResult{SubjectResolution: SubjectResolution{Candidates: []SubjectCandidate{}}}, want: false},
+		{cell: "candidates populated",
+			result: InvestigationResult{SubjectResolution: SubjectResolution{Candidates: []SubjectCandidate{{}}}}, want: true},
+		{cell: "window_clarification nil",
+			result: InvestigationResult{WindowClarification: nil}, want: false},
+		{cell: "window_clarification empty options",
+			result: InvestigationResult{WindowClarification: &contractsv1.ContextFabricWindowClarification{Options: []contractsv1.ContextFabricWindowOption{}}}, want: false},
+		{cell: "window_clarification populated",
+			result: InvestigationResult{WindowClarification: &contractsv1.ContextFabricWindowClarification{Options: []contractsv1.ContextFabricWindowOption{{}}}}, want: true},
+		{cell: "needs.window_options empty", result: InvestigationResult{StructureNeeds: populatedNeeds(func(n *contractsv1.ContextFabricStructureNeeds) {
+			n.WindowOptions = []contractsv1.ContextFabricWindowOption{}
+		})}, want: false},
+		{cell: "needs.window_options populated", result: InvestigationResult{StructureNeeds: populatedNeeds(func(n *contractsv1.ContextFabricStructureNeeds) {
+			n.WindowOptions = []contractsv1.ContextFabricWindowOption{{}}
+		})}, want: true},
+		{cell: "needs.kind_options empty", result: InvestigationResult{StructureNeeds: populatedNeeds(func(n *contractsv1.ContextFabricStructureNeeds) {
+			n.KindOptions = []contractsv1.ContextFabricKindOption{}
+		})}, want: false},
+		{cell: "needs.kind_options populated", result: InvestigationResult{StructureNeeds: populatedNeeds(func(n *contractsv1.ContextFabricStructureNeeds) {
+			n.KindOptions = []contractsv1.ContextFabricKindOption{{}}
+		})}, want: true},
+		{cell: "needs.anchor_options empty", result: InvestigationResult{StructureNeeds: populatedNeeds(func(n *contractsv1.ContextFabricStructureNeeds) {
+			n.AnchorOptions = []contractsv1.ContextFabricAnchorOption{}
+		})}, want: false},
+		{cell: "needs.anchor_options populated", result: InvestigationResult{StructureNeeds: populatedNeeds(func(n *contractsv1.ContextFabricStructureNeeds) {
+			n.AnchorOptions = []contractsv1.ContextFabricAnchorOption{{}}
+		})}, want: true},
+		{cell: "needs.handle_options empty", result: InvestigationResult{StructureNeeds: populatedNeeds(func(n *contractsv1.ContextFabricStructureNeeds) {
+			n.HandleOptions = []contractsv1.ContextFabricHandleOption{}
+		})}, want: false},
+		{cell: "needs.handle_options populated", result: InvestigationResult{StructureNeeds: populatedNeeds(func(n *contractsv1.ContextFabricStructureNeeds) {
+			n.HandleOptions = []contractsv1.ContextFabricHandleOption{{}}
+		})}, want: true},
+		{cell: "needs.candidate_options empty", result: InvestigationResult{StructureNeeds: populatedNeeds(func(n *contractsv1.ContextFabricStructureNeeds) {
+			n.CandidateOptions = []contractsv1.ContextFabricCandidateOption{}
+		})}, want: false},
+		{cell: "needs.candidate_options populated", result: InvestigationResult{StructureNeeds: populatedNeeds(func(n *contractsv1.ContextFabricStructureNeeds) {
+			n.CandidateOptions = []contractsv1.ContextFabricCandidateOption{{}}
+		})}, want: true},
+		{cell: "needs.missing populated, every option list absent", result: InvestigationResult{StructureNeeds: populatedNeeds(func(n *contractsv1.ContextFabricStructureNeeds) {
+			n.Missing = []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor}
+		})}, want: false},
+	} {
+		got := resultOffersRedeemable(testCase.result)
+		t.Logf("| %-52s | redeemable=%-5v | want=%-5v | %s |", testCase.cell, got, testCase.want,
+			map[bool]string{true: "ok", false: "MISMATCH"}[got == testCase.want])
+		if got != testCase.want {
+			t.Errorf("cell %q: redeemable = %v, want %v", testCase.cell, got, testCase.want)
+		}
+	}
+}
+
+// THE SIBLING SWEEP, executed rather than argued.
+//
+// Every serving path funnels through finalizeServed -- seven callers, its own
+// header says so -- and this ticket's first draft guarded two of them by hand.
+// The two that a two-exit guard could never have reached are the DECISIVE path
+// (status is the model's own word, and the synthesis contract admits
+// clarification_required) and the REUSE path. Both are exercised here through
+// the shared chokepoint, with the same document shape, so the claim "every
+// exit is covered" rests on an executed cell per stage rather than on the call
+// graph being read correctly.
+func TestEveryServingStageRefusesAnUnanswerableClarification(t *testing.T) {
+	t.Parallel()
+	// The fact reader and synthesizer are the shared fixture's own
+	// t.Fatal stubs: this test calls finalizeServed directly, so neither is
+	// reachable, and a stub that fails loudly if that ever stops being true
+	// is the honest double.
+	engine := buildWindowGateEngine(t,
+		&countingInterpreter{interpretation: bootstrapInterpretation()},
+		&acceptanceGraphReader{resolution: withheldPoolResolution(), context: emptyGraphContext()},
+		newMapResultStore())
+	unanswerable := InvestigationResult{
+		Status:            InvestigationClarificationRequired,
+		SubjectResolution: withheldPoolResolution(),
+	}
+	for _, stage := range []BudgetAssertStage{
+		BudgetAssertDecisive,
+		BudgetAssertReuse,
+		BudgetAssertSubjectlessTerminal,
+		BudgetAssertWindowConfirmationRequired,
+		BudgetAssertWindowVeto,
+		BudgetAssertStructureVeto,
+		BudgetAssertContinuationRefusal,
+		BudgetAssertInterpretedTimeBound,
+	} {
+		t.Run(string(stage), func(t *testing.T) {
+			_, err := engine.finalizeServed(context.Background(), acceptancePrincipal(), stage, unanswerable, nil, ResponseBudget{})
+			t.Logf("| stage=%-34s | err=%v |", stage, err)
+			if !errors.Is(err, ErrUnanswerableClarification) {
+				t.Fatalf("stage %q served an unanswerable clarification: err = %v", stage, err)
+			}
+		})
+	}
+	t.Run("and an answerable one passes at every stage", func(t *testing.T) {
+		answerable := unanswerable
+		answerable.WindowClarification = &contractsv1.ContextFabricWindowClarification{
+			Options: []contractsv1.ContextFabricWindowOption{{}},
+		}
+		if _, err := engine.finalizeServed(context.Background(), acceptancePrincipal(),
+			BudgetAssertDecisive, answerable, nil, ResponseBudget{}); errors.Is(err, ErrUnanswerableClarification) {
+			t.Fatal("the guard refused a clarification that carried a window offer -- it is not discriminating")
+		}
+	})
+}

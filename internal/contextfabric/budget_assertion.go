@@ -308,6 +308,22 @@ func (e *Engine) finalizeServed(ctx context.Context, principal storage.Principal
 	// pure and idempotent, so a second pass over an already-complete set
 	// returns the same set.
 	result.Completeness = ComputeAnswerCompleteness(result)
+	// CHAOS-5637: the answerability invariant, HERE for the same reason
+	// everything else in this function is here -- this is the one point
+	// every serving path is downstream of, and a guard that holds at some
+	// exits is not a guard. The first draft of this ticket placed it at two
+	// exits by hand, which is the shape this function's own header records
+	// as already defeated: there are SEVEN callers, including the decisive
+	// path (whose status is the model's own word and may legitimately be
+	// clarification_required) and the reuse path (which serves a document
+	// composed on an earlier turn). Both were outside a two-exit guard.
+	//
+	// AFTER the completeness re-derivation and BEFORE the budget assertion,
+	// so it reads the same final document the budget is measured against.
+	// See chaos5637_answerable_clarification.go.
+	if err := assertAnswerableClarification(result); err != nil {
+		return InvestigationResult{}, stageError(StageValidation, err)
+	}
 	if err := e.assertFitsBudget(ctx, principal, stage, result, budget); err != nil {
 		return InvestigationResult{}, err
 	}
