@@ -1518,6 +1518,24 @@ type ModelRuntime interface {
 type RuntimeQuestionInterpreter struct {
 	Runtime ModelRuntime
 	Sink    ModelReceiptSink
+	// SampledRuntime and EnsembleSize (CHAOS-5638) turn the family
+	// resolution from one sample into a consensus over N. Both are
+	// required together: EnsembleSize > 1 with no SampledRuntime is a
+	// misconfiguration and fails loudly with ErrEnsembleRuntimeMissing,
+	// never a silent degrade to N=1 -- see
+	// chaos5638_interpretation_ensemble.go for why that rule exists and
+	// what the corpus measured to justify turning this on.
+	//
+	// EXPLICIT, WIRED FIELDS, for the identical reason FamilyTelemetry
+	// below is one: an optional interface discovered by type assertion on
+	// Runtime is how CommitAffirmationTelemetry vanished from production
+	// with every test still green.
+	//
+	// Left unset, this interpreter runs exactly as it did before that
+	// ticket: one interpret call, the precedence table deciding alone, and
+	// ResolveQuestionFamily recording source=model.
+	SampledRuntime SampledModelRuntime
+	EnsembleSize   int
 	// FamilyTelemetry (CHAOS-4632, SHADOW ONLY) receives one
 	// QuestionFamilyResolutionEvent per Interpret call that produced a
 	// usable interpretation.
@@ -1802,10 +1820,63 @@ func backfillNamedSubjectExpectedKind(frame QuestionFrame, receipt *ModelExecuti
 // an absence. Add it when a corpus shows N=1 failing.
 
 func (r RuntimeQuestionInterpreter) Interpret(ctx context.Context, principal storage.Principal, request InvestigationRequest) (InterpretedQuestion, QuestionFamilyOutcome, error) {
+	if r.ensembleEnabled() {
+		// CHAOS-5638. Checked BEFORE r.Runtime, because an ensemble draws
+		// every sample from SampledRuntime and never touches Runtime --
+		// refusing here for a missing Runtime would reject a correctly
+		// configured ensemble.
+		return r.interpretEnsemble(ctx, principal, request)
+	}
 	if r.Runtime == nil {
 		return InterpretedQuestion{}, QuestionFamilyOutcome{}, ErrModelUnavailable
 	}
-	question, receipt, err := r.Runtime.InterpretQuestion(ctx, principal, request)
+	question, receipt, err := r.interpretOneSample(ctx, principal, request, func() (InterpretedQuestion, ModelExecutionReceipt, error) {
+		return r.Runtime.InterpretQuestion(ctx, principal, request)
+	})
+	if err != nil {
+		return InterpretedQuestion{}, QuestionFamilyOutcome{}, err
+	}
+	// CHAOS-4632/CHAOS-4634: resolve the question family from the signals
+	// this interpretation actually produced, report it, and -- as of S4 --
+	// RETURN it too, so the caller (Engine) can gate offer composition on
+	// it. S2 shipped this same resolution shadow-only (telemetered,
+	// discarded); S4 is the slice where the family first affects an
+	// answer, so it must reach past this function's own return.
+	//
+	// Placed AFTER every error return, so the event fires exactly when an
+	// interpretation was produced -- which makes the denominator
+	// "investigations that reached interpretation", the same denominator
+	// every other per-interpretation signal already has. An answer served
+	// from the reuse store never reaches here, and it never reaches
+	// Interpret at all, so the two agree.
+	//
+	// `question` itself is returned unchanged whatever the family resolves
+	// to -- the family is a SEPARATE return value, never folded onto the
+	// wire InterpretedQuestion.
+	outcome := r.recordFamilyResolution(ctx, principal, question, receipt)
+	return question, outcome, nil
+}
+
+// interpretOneSample is ONE interpret call and everything that must happen to
+// it before it can be a sample: validation, rejection classification, frame
+// resolution, and the durable receipt.
+//
+// Extracted (CHAOS-5638) so the N=1 path and each of the N ensemble samples
+// run the IDENTICAL pipeline. A second copy for the ensemble is how the two
+// would drift -- and the drift would be invisible, because both produce an
+// InterpretedQuestion either way and only the receipt's classification would
+// disagree.
+//
+// `call` is the one thing that differs: the single-sample path calls
+// ModelRuntime.InterpretQuestion, an ensemble sample calls
+// SampledModelRuntime.InterpretQuestionForSample with its own index.
+func (r RuntimeQuestionInterpreter) interpretOneSample(
+	ctx context.Context,
+	principal storage.Principal,
+	request InvestigationRequest,
+	call func() (InterpretedQuestion, ModelExecutionReceipt, error),
+) (InterpretedQuestion, ModelExecutionReceipt, error) {
+	question, receipt, err := call()
 	if err == nil {
 		if validateErr := question.Validate(); validateErr != nil {
 			receipt.Outcome = "invalid_output"
@@ -1851,32 +1922,14 @@ func (r RuntimeQuestionInterpreter) Interpret(ctx context.Context, principal sto
 		// rejection. errors.Join preserves errors.Is(err, ErrModelOutput)
 		// for callers that only check the classification.
 		if err == nil {
-			return InterpretedQuestion{}, QuestionFamilyOutcome{}, sinkErr
+			return InterpretedQuestion{}, ModelExecutionReceipt{}, sinkErr
 		}
 		err = errors.Join(err, sinkErr)
 	}
 	if err != nil {
-		return InterpretedQuestion{}, QuestionFamilyOutcome{}, err
+		return InterpretedQuestion{}, ModelExecutionReceipt{}, err
 	}
-	// CHAOS-4632/CHAOS-4634: resolve the question family from the signals
-	// this interpretation actually produced, report it, and -- as of S4 --
-	// RETURN it too, so the caller (Engine) can gate offer composition on
-	// it. S2 shipped this same resolution shadow-only (telemetered,
-	// discarded); S4 is the slice where the family first affects an
-	// answer, so it must reach past this function's own return.
-	//
-	// Placed AFTER every error return, so the event fires exactly when an
-	// interpretation was produced -- which makes the denominator
-	// "investigations that reached interpretation", the same denominator
-	// every other per-interpretation signal already has. An answer served
-	// from the reuse store never reaches here, and it never reaches
-	// Interpret at all, so the two agree.
-	//
-	// `question` itself is returned unchanged whatever the family resolves
-	// to -- the family is a SEPARATE return value, never folded onto the
-	// wire InterpretedQuestion.
-	outcome := r.recordFamilyResolution(ctx, principal, question, receipt)
-	return question, outcome, nil
+	return question, receipt, nil
 }
 
 // recordFamilyResolution builds the §4.2 sample from one interpretation's
@@ -1896,7 +1949,33 @@ func (r RuntimeQuestionInterpreter) Interpret(ctx context.Context, principal sto
 // call in this package is.
 func (r RuntimeQuestionInterpreter) recordFamilyResolution(ctx context.Context, principal storage.Principal, interpreted InterpretedQuestion, receipt ModelExecutionReceipt) QuestionFamilyOutcome {
 	samples := []FamilySample{familySampleFrom(interpreted, receipt)}
-	outcome := ResolveQuestionFamily(samples)
+	return r.finishFamilyResolution(ctx, principal, ResolveQuestionFamily(samples), samples, receipt)
+}
+
+// finishFamilyResolution stamps the frame verdict, runs the shadow
+// comparison, applies the route and emits the event, for an outcome the
+// caller has already resolved.
+//
+// SPLIT OUT OF recordFamilyResolution (CHAOS-5638) because the aggregation
+// and the stamping have different inputs the moment N > 1: the outcome is
+// resolved over EVERY sample, while everything below is read from the ONE
+// receipt the winning sample produced. Folding them together forced the
+// single-sample assumption -- `samples` and `receipt` came from the same
+// call, so nothing distinguished "the sample set" from "the winner". They
+// are separate parameters here, and the ensemble is the caller that makes
+// the distinction load-bearing.
+//
+// `receipt` is therefore ALWAYS the winning sample's own. Stamping the gate
+// from one sample and the family from another would publish a frame verdict
+// for an interpretation the outcome did not select -- the same field-wise
+// mixing selectWinningSample refuses one level up.
+func (r RuntimeQuestionInterpreter) finishFamilyResolution(
+	ctx context.Context,
+	principal storage.Principal,
+	outcome QuestionFamilyOutcome,
+	samples []FamilySample,
+	receipt ModelExecutionReceipt,
+) QuestionFamilyOutcome {
 	// THE SHADOW COMPARISON, and its placement is the substantive part.
 	//
 	// It runs HERE because this is the one point where both readings of a

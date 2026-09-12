@@ -791,7 +791,13 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// rather than a counter on an unreachable function -- the
 		// disposition recorded when the declaration slice shipped without
 		// telemetry.
-		Interpreter: contextfabric.RuntimeQuestionInterpreter{Runtime: modelRuntime, Sink: receiptSink, FamilyTelemetry: engineTelemetry, FrameTelemetry: engineTelemetry, Requirements: factRegistry},
+		// CHAOS-5638: SampledRuntime is the SAME resolved runtime the
+		// single-sample path uses, so an ensemble can never read a
+		// different per-organization runtime than an ordinary interpret
+		// would have. sampledModelRuntime returns nil unless that runtime
+		// really implements the port, and EnsembleSize defaults to 1, so
+		// the pair is inert until a composition asks for N>1.
+		Interpreter: contextfabric.RuntimeQuestionInterpreter{Runtime: modelRuntime, SampledRuntime: sampledModelRuntime(modelRuntime), EnsembleSize: interpretationEnsembleSize(request.options.InterpretationEnsembleSize), Sink: receiptSink, FamilyTelemetry: engineTelemetry, FrameTelemetry: engineTelemetry, Requirements: factRegistry},
 		// The SAME factRegistry again, for the engine's own derivation of
 		// this turn's requirement rows at assembly. It is wired rather
 		// than discovered for the reason stated above, and it is wired at

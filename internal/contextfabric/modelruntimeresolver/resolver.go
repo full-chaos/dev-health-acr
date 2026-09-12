@@ -74,6 +74,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"sync"
 
@@ -108,6 +109,12 @@ type Resolver struct {
 	Default contextfabric.ModelRuntime
 	Configs contextfabric.OrgModelConfigResolver
 	Build   Build
+	// Logger (CHAOS-5638) carries the one Warn line a failed per-sample
+	// assertion emits -- see chaos5638_sampled.go. Optional: nil falls back
+	// to slog.Default(), the same convention NewSlogEngineTelemetry uses,
+	// so a composition that never sets it still gets the line rather than
+	// losing it.
+	Logger *slog.Logger
 
 	mu sync.Mutex
 	// cache holds only entries currently considered valid to SERVE. A
