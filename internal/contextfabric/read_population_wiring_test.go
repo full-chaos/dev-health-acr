@@ -84,7 +84,11 @@ func TestTheRetryAllocationIsBoundToWhatTheProducerConsumed(t *testing.T) {
 			"under the grants it is later MEASURED against, or the measurement describes a shape " +
 			"nobody synthesized")
 	}
-	if !strings.Contains(source, "retried, consumedRetryAllocation, retryPending, retryErr := e.synthesizeAndAssemble(ctx, principal, retryParams)") {
+	// The arity grew when the cardinality became a returned value; the CLAIM
+	// this guard makes is unchanged and still discriminating -- that
+	// `consumedRetryAllocation` is bound from the PRODUCER's return and not
+	// from any caller-side copy, which is what the measurement below reads.
+	if !strings.Contains(source, "retried, consumedRetryAllocation, retryPending, retryCardinality, retryErr := e.synthesizeAndAssemble(ctx, principal, retryParams)") {
 		t.Error("the retry producer does not RETURN what it consumed; without that return value the " +
 			"guard below has nothing to read but the caller's own copy")
 	}

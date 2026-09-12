@@ -113,7 +113,7 @@ func evaluateOperandsWithAssignment(
 		SubjectResolution: contractsv1.ContextFabricSubjectResolution{Committed: committed},
 		Coverage:          coverage,
 	}
-	evidence := readPopulationEvidenceFrom(frame, result, AnswerPlan{Requirements: published}, facts, MembershipCardinality{}, assignment)
+	evidence := readPopulationEvidenceFrom(frame, result, AnswerPlan{Requirements: published}, facts, cardinalityFor(result, AnswerPlan{Requirements: published}), assignment)
 	return appendReadRequirementEvaluations(nil, published, coverage, evidence)
 }
 
@@ -588,7 +588,7 @@ func evaluateCohort(
 	cohort *Cohort, coverage Coverage, facts CanonicalFactBundle,
 ) []RequirementOutcomeRow {
 	result := InvestigationResult{Cohort: cohort, Coverage: coverage}
-	evidence := readPopulationEvidenceFrom(nil, result, AnswerPlan{Requirements: published}, facts, MembershipCardinality{}, nil)
+	evidence := readPopulationEvidenceFrom(nil, result, AnswerPlan{Requirements: published}, facts, cardinalityFor(result, AnswerPlan{Requirements: published}), nil)
 	return appendReadRequirementEvaluations(nil, published, coverage, evidence)
 }
 
@@ -1373,7 +1373,7 @@ func TestAnIncompleteCensusOutranksTheSamenessArm(t *testing.T) {
 		SubjectResolution: contractsv1.ContextFabricSubjectResolution{Committed: []SubjectRef{alpha, beta}},
 	}
 	frame := namedOperandFrame(SubjectTeam, contractsv1.ContextFabricSubjectProject)
-	evidence := readPopulationEvidenceFrom(frame, result, AnswerPlan{Requirements: published}, facts, MembershipCardinality{}, nil)
+	evidence := readPopulationEvidenceFrom(frame, result, AnswerPlan{Requirements: published}, facts, cardinalityFor(result, AnswerPlan{Requirements: published}), nil)
 	rows := appendReadRequirementEvaluations(nil, published, coverage, evidence)
 
 	// The OWNER's truncation, observed, over its own counts -- not a depth loss

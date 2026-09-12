@@ -333,3 +333,16 @@ func TestTheCardinalityClaimAgreesWithTheRowAndTheMembers(t *testing.T) {
 		t.Errorf("answer prose does not state the count: %q", result.DeterministicAnswer)
 	}
 }
+
+// cardinalityFor is the test-side stand-in for what production threads.
+//
+// Production computes the cardinality once per pass, before synthesis, and
+// hands the VALUE to every consumer. A test that passes a zero value is not
+// exercising the same code path -- an unresolved cardinality makes the read
+// row state an absence, which is a different assertion from the one most of
+// these tests are making. Derived from the result's own cohort so the value a
+// test threads describes the document that test is about.
+func cardinalityFor(result InvestigationResult, plan AnswerPlan) MembershipCardinality {
+	cardinality, _ := ComputeMembershipCardinality(result.Cohort, 0, plan.Narrowing)
+	return cardinality
+}

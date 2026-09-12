@@ -262,6 +262,17 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// already spent the first pass's grants and only the measurement saw these.
 	retryAllocation := AllocateItems(*plan, groupCountOf(narrowed.Graph.Cohort), cohortMemberCount(narrowed.Graph.Cohort))
 	retryParams := params.forRetry(narrowed.Graph, narrowed.Facts, retryAllocation)
+	// REFRESH THE CARRIED PLAN FROM THE LIVE ONE.
+	//
+	// `params.Plan` is a VALUE copied when these params were built, which was
+	// before this stage recorded its own narrowing step above. The retry pass
+	// computes its cardinality from `params.Plan.Narrowing` before synthesis,
+	// so without this it would read a narrowing list that predates the very
+	// narrowing it is a retry OF -- and declare a population smaller than the
+	// one the plan asked for. A carried copy that has since gone stale is the
+	// defect class this file's allocator comments already record; this is the
+	// same shape, on the plan.
+	retryParams.Plan = *plan
 	// The re-rank's citations MUST travel with the re-ranked cohort:
 	// narrateCohortDriverJudgments resolves them per member, so citations
 	// computed against the wider member set would narrate against members the

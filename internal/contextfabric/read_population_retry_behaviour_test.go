@@ -236,7 +236,7 @@ func TestTheDenominatorIsTheCohortNotTheReturnedOrInvokedSet(t *testing.T) {
 			result.ClaimedFacts = append(result.ClaimedFacts, ClaimedFact{ClaimID: "claim_" + subject.CanonicalID, Kind: health, Subject: subject, Field: "status"})
 		}
 		published := []contractsv1.ContextFabricPlanRequirement{requirement}
-		evidence := readPopulationEvidenceFrom(nil, result, AnswerPlan{Requirements: published}, bundle, MembershipCardinality{}, nil)
+		evidence := readPopulationEvidenceFrom(nil, result, AnswerPlan{Requirements: published}, bundle, cardinalityFor(result, AnswerPlan{Requirements: published}), nil)
 		for _, row := range appendReadRequirementEvaluations(nil, published, coverage, evidence) {
 			if row.Requirement == requirement.Requirement && row.Stage == contractsv1.ContextFabricOutcomeStageAssembledResult {
 				return string(row.Outcome) + " " + strconv.Itoa(row.Served) + "/" + strconv.Itoa(row.Declared)
