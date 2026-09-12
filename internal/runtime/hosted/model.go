@@ -4,10 +4,58 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/genkitruntime"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelprovider"
 )
+
+// EnvSynthesisResynthesisAttempts (CHAOS-5655) bounds how many times
+// SynthesizeAnswer re-samples the SAME synthesis prompt after the validator
+// rejects a draft, before falling through to the fallback leg (if any) and
+// the existing fail-closed 422 -- see
+// genkitruntime.Config.MaxSynthesisResynthesisAttempts's own doc comment for
+// the mechanism.
+//
+// It lives here, in hosted composition, rather than as an
+// ACR_CONTEXT_FABRIC_MODEL_* variable read by modelprovider.ConfigFromEnv,
+// and deliberately does NOT follow that function's fail-composition-on-
+// malformed contract (see envInt in modelprovider/config.go): this knob
+// tunes SynthesizeAnswer's OWN re-sampling policy, not which provider or
+// model composition talks to, so a malformed value should never be able to
+// take the whole model runtime down at startup. A missing or malformed
+// value instead falls back to the documented default and (for a malformed
+// one) logs exactly one startup WARN naming the bad value, mirroring the
+// "an operator who mis-set a tuning-only variable still finds out" posture
+// newContextFabricModelRuntime already applies to an unconfigured provider.
+const EnvSynthesisResynthesisAttempts = "ACR_CONTEXT_FABRIC_SYNTHESIS_MAX_RESYNTHESIS_ATTEMPTS"
+
+// synthesisResynthesisAttemptsFromEnv reads EnvSynthesisResynthesisAttempts.
+// Absent or blank returns the default silently (an operator who never
+// touched this knob gets no line about it, matching every other
+// zero-value-defaults-silently knob in this composition). Present but not a
+// positive integer within genkitruntime's own construction-time ceiling
+// returns the default too, but logs one WARN -- an operator who set the
+// variable and got the value wrong must find out, even though the service
+// still starts.
+func synthesisResynthesisAttemptsFromEnv(lookup func(string) (string, bool), logger *slog.Logger) int {
+	raw, ok := lookup(EnvSynthesisResynthesisAttempts)
+	value := strings.TrimSpace(raw)
+	if !ok || value == "" {
+		return genkitruntime.DefaultMaxSynthesisResynthesisAttempts
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 1 || parsed > genkitruntime.MaxSynthesisResynthesisAttemptsCeiling {
+		logger.Warn("context fabric synthesis resynthesis attempts malformed, using default",
+			"variable", EnvSynthesisResynthesisAttempts,
+			"value", contextfabric.SanitizeLogAttr(value),
+			"default", genkitruntime.DefaultMaxSynthesisResynthesisAttempts)
+		return genkitruntime.DefaultMaxSynthesisResynthesisAttempts
+	}
+	return parsed
+}
 
 // newContextFabricModelRuntime builds the Context Fabric model runtime from
 // the environment, or returns (nil, nil) when no model provider is
@@ -66,6 +114,11 @@ func contextFabricModelConfigFromEnv(lookup func(string) (string, bool), telemet
 	}
 	modelConfig.Telemetry = telemetry
 	modelConfig.Logger = logger
+	// CHAOS-5655: read here rather than inside modelprovider.ConfigFromEnv --
+	// see EnvSynthesisResynthesisAttempts's own doc comment for why this
+	// knob's malformed-value policy deliberately differs from every
+	// ACR_CONTEXT_FABRIC_MODEL_* variable that function owns.
+	modelConfig.MaxSynthesisResynthesisAttempts = synthesisResynthesisAttemptsFromEnv(lookup, logger)
 	return modelConfig, nil
 }
 

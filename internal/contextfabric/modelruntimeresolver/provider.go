@@ -11,9 +11,10 @@ import (
 // runtime through modelprovider.New -- the only place in this repository
 // that builds a production genkit.Genkit instance (TRD §19.3.6). An
 // organization's Provider/BaseURL/Model/FallbackModel/Credential come from
-// its own stored configuration; Timeout/MaxAttempts/MaxTransportRetries are
-// inherited from defaults (the deployment-default surface's tuning) since
-// §19.3.2 does not put those knobs in the per-organization contract.
+// its own stored configuration; Timeout/MaxAttempts/MaxTransportRetries/
+// MaxSynthesisResynthesisAttempts are inherited from defaults (the
+// deployment-default surface's tuning) since §19.3.2 does not put those
+// knobs in the per-organization contract.
 // AllowInsecureBaseURL is always false here: an organization-supplied base
 // URL always leaves ACR's trust boundary, and
 // ContextFabricOrgModelConfigWriteRequest.Validate() already rejected
@@ -43,6 +44,11 @@ func orgModelProviderConfig(defaults modelprovider.Config, resolved contextfabri
 		MaxAttempts:          defaults.MaxAttempts,
 		MaxTransportRetries:  defaults.MaxTransportRetries,
 		AllowInsecureBaseURL: false,
+		// CHAOS-5655: inherited from defaults, same as the other tuning
+		// knobs above -- see contextFabricModelDefaults's own doc comment
+		// (internal/runtime/hosted) for why this one is not part of the
+		// per-organization contract either.
+		MaxSynthesisResynthesisAttempts: defaults.MaxSynthesisResynthesisAttempts,
 		// CHAOS-4355 follow-up: inherited from defaults, same as the
 		// tuning knobs above, so a per-organization BYO runtime reports
 		// RecordModelRowsStripped through the SAME sink the

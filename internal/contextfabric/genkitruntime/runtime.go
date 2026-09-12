@@ -448,6 +448,21 @@ const (
 	// this call happens (see composeStructureNeeds's own callers), so
 	// there is no reuse-eligible row this version could ever need to key.
 	DefaultPhrasingPromptVersion = "context-fabric-offer-phrasing.v1"
+
+	// DefaultMaxSynthesisResynthesisAttempts (CHAOS-5655) is the
+	// operator-facing default for Config.MaxSynthesisResynthesisAttempts --
+	// applied by hosted composition (internal/runtime/hosted), never by
+	// this package's own zero-value default below, which stays 1 (today's
+	// unbounded-single-draft behavior) so every existing caller and test
+	// that does not set the field is unaffected byte for byte.
+	DefaultMaxSynthesisResynthesisAttempts = 3
+	// MaxSynthesisResynthesisAttemptsCeiling bounds
+	// Config.MaxSynthesisResynthesisAttempts the same way MaxAttempts is
+	// bounded to [1,3] below: a hard construction-time invariant, not the
+	// soft default-on-malformed policy hosted composition applies to its
+	// own environment variable. Each resynthesis draw is a full, separately
+	// billable model call, so the ceiling stays low.
+	MaxSynthesisResynthesisAttemptsCeiling = 5
 )
 
 type Config struct {
@@ -485,7 +500,27 @@ type Config struct {
 	Timeout               time.Duration
 	MaxAttempts           int
 	MaxInputBytes         int
-	Fallback              contextfabric.ModelRuntime
+	// MaxSynthesisResynthesisAttempts (CHAOS-5655) bounds SynthesizeAnswer's
+	// own re-sampling loop: when the model returns output that
+	// draft.ValidateAgainst rejects, the SAME synthesis prompt is re-sent
+	// up to this many times TOTAL (the rejecting draw counts toward the
+	// bound) before falling through to the fallback leg (if configured)
+	// and, after that, the existing fail-closed 422 -- ADR 0008's "invalid
+	// output fails closed" invariant is unchanged, only the number of
+	// draws a rejection gets before that invariant applies.
+	//
+	// This is a DIFFERENT axis from MaxAttempts above: MaxAttempts bounds
+	// withRetry's TRANSPORT retries for one generation call (a call that
+	// never reached the provider), while this bounds how many VALIDATED
+	// drafts get judged. Zero defaults to 1 -- today's behavior, a single
+	// draw with no re-sampling -- so every existing caller and test that
+	// leaves this field unset is unaffected. Wired only onto the PRIMARY
+	// runtime (see modelprovider.runtimeConfigWithPhrasing): the fallback
+	// runtime keeps its existing single-draw behavior, per the ratified
+	// ordering (primary re-samples first, fallback runs once after the
+	// bound is exhausted).
+	MaxSynthesisResynthesisAttempts int
+	Fallback                        contextfabric.ModelRuntime
 	// Logger receives the ACR-owned decision-event log line CHAOS-3889 emits
 	// once per model call (see logInterpretDecision/logSynthesizeDecision).
 	// Defaults to slog.Default() when nil, matching every other
@@ -758,6 +793,12 @@ func newWithGenerator(config Config, gen generator) (*Runtime, error) {
 	}
 	if config.MaxAttempts < 1 || config.MaxAttempts > 3 {
 		return nil, errors.New("model attempts must be between one and three")
+	}
+	if config.MaxSynthesisResynthesisAttempts == 0 {
+		config.MaxSynthesisResynthesisAttempts = 1
+	}
+	if config.MaxSynthesisResynthesisAttempts < 1 || config.MaxSynthesisResynthesisAttempts > MaxSynthesisResynthesisAttemptsCeiling {
+		return nil, fmt.Errorf("synthesis resynthesis attempts must be between one and %d", MaxSynthesisResynthesisAttemptsCeiling)
 	}
 	if config.MaxInputBytes == 0 {
 		config.MaxInputBytes = 512 << 10
@@ -1423,9 +1464,15 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		// with the fallback's. See the matching field in InterpretQuestion
 		// for the full rationale.
 		primaryProvider, primaryModel, primaryModelVersion string
+		// draws (CHAOS-5655): one entry per synthesis draft the bounded
+		// re-synthesis loop below actually judged. Declared in this same var
+		// block so the hoisted defer can read its final state even on a path
+		// that returns before the loop appends anything (empty on every
+		// pre-loop return and on a pure transport failure).
+		draws []synthesisDraw
 	)
 	defer func() {
-		r.logSynthesizeDecision(ctx, principal.OrgID, input.Request.RequestID, receipt, primaryFailureClassification, grounding, rejectionReason, factGroupSize, groundedBeyondFirst, attemptOutcomes, fallbackAttempts, primaryProvider, primaryModel, primaryModelVersion)
+		r.logSynthesizeDecision(ctx, principal.OrgID, input.Request.RequestID, receipt, primaryFailureClassification, grounding, rejectionReason, factGroupSize, groundedBeyondFirst, attemptOutcomes, fallbackAttempts, primaryProvider, primaryModel, primaryModelVersion, draws)
 	}()
 
 	if strings.TrimSpace(principal.OrgID) == "" {
@@ -1467,13 +1514,74 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	var output synthesisOutput
 	var usage contextfabric.ModelUsage
 	var generationErr error
-	attemptOutcomes, generationErr = r.withRetry(ctx, func(callCtx context.Context) error {
-		var err error
-		output, usage, err = r.generator.Synthesize(callCtx, generationRequest{
-			Model: r.config.ModelRef, System: synthesisSystemPrompt, Prompt: string(encoded),
+	var draft contextfabric.SynthesisDraft
+	// CHAOS-5655: maxDraws bounds the re-synthesis loop below. Every
+	// production Runtime is built through newWithGenerator, which already
+	// defaults a zero Config.MaxSynthesisResynthesisAttempts to 1, so this
+	// guard only protects a test double that sets the field to a negative
+	// value directly -- the loop always runs at least once either way.
+	maxDraws := r.config.MaxSynthesisResynthesisAttempts
+	if maxDraws < 1 {
+		maxDraws = 1
+	}
+	// CHAOS-5655: the loop re-sends the SAME `encoded` prompt (computed once,
+	// above) up to maxDraws times, stopping the moment a draw validates or a
+	// generation call fails in transport. draws records one entry per draw
+	// this call actually judged, so the decision line can show every
+	// rejected draft's digest and clause, not only the last one -- see
+	// synthesisDraw's own doc comment for why this is a separate axis from
+	// attemptOutcomes/receipt.Attempts below (transport retries within ONE
+	// draw, versus how many draws were drawn).
+	for draw := 1; draw <= maxDraws; draw++ {
+		attemptOutcomes, generationErr = r.withRetry(ctx, func(callCtx context.Context) error {
+			var callErr error
+			output, usage, callErr = r.generator.Synthesize(callCtx, generationRequest{
+				Model: r.config.ModelRef, System: synthesisSystemPrompt, Prompt: string(encoded),
+			})
+			return callErr
 		})
-		return err
-	})
+		if generationErr != nil {
+			// A TRANSPORT failure never reached a draft to judge -- withRetry
+			// already owns the transport-retry axis (MaxAttempts), so
+			// resending the same prompt again here would just be a second,
+			// uncoordinated retry loop over the identical failure. Stop
+			// drawing and fall through to the existing transport-failure
+			// handling below.
+			break
+		}
+		draft, err = output.toDomain()
+		if err == nil {
+			// CHAOS-4355 follow-up (tolerance): this is the production
+			// ModelRuntime's OWN ValidateAgainst call -- the actual live 422
+			// source (see the matching comment on the classification below) --
+			// so the strip belongs HERE, before that call, not only in
+			// RuntimeAnswerSynthesizer.Synthesize's defensive re-check, which
+			// never even runs when this call already rejects. Rows are
+			// attached server-side from the SAME canonical fact a claim
+			// cites (contextfabric.attachCanonicalRows), never from the
+			// model, so a model-authored Rows array here is pure noise: never
+			// a reason to reject an otherwise-valid answer, and never
+			// content this receipt/log line should reflect either way.
+			var stripped int
+			draft.ClaimedFacts, stripped = contextfabric.StripModelAuthoredClaimedFactTableContent(draft.ClaimedFacts)
+			if stripped > 0 && r.config.Telemetry != nil {
+				r.config.Telemetry.RecordModelRowsStripped(ctx, principal, stripped)
+			}
+			err = draft.ValidateAgainst(input)
+		}
+		if err == nil {
+			outputBytes, _ := json.Marshal(output)
+			draws = append(draws, synthesisDraw{Index: draw, Outcome: "success", OutputDigest: contextfabric.DigestModelValue(outputBytes), Clause: contractsv1.ContextFabricClauseNone})
+			break
+		}
+		// This draw's draft was rejected: record its digest and clause
+		// (ContextFabricClauseNone when the rejection does not carry one)
+		// before deciding whether another draw remains, so every rejected
+		// draw is visible, not only the one this call ultimately reports.
+		rejectedBytes, _ := json.Marshal(output)
+		clause, _ := contextfabric.SynthesisRejectionClauseOf(err)
+		draws = append(draws, synthesisDraw{Index: draw, Outcome: "invalid_output", OutputDigest: contextfabric.DigestModelValue(rejectedBytes), Clause: clause})
+	}
 	completed := r.now().UTC()
 	attempts := len(attemptOutcomes)
 	var classifiedErr error
@@ -1531,26 +1639,10 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		}
 		return contextfabric.SynthesisDraft{}, receipt, classifiedErr
 	}
-	draft, err := output.toDomain()
-	if err == nil {
-		// CHAOS-4355 follow-up (tolerance): this is the production
-		// ModelRuntime's OWN ValidateAgainst call -- the actual live 422
-		// source (see the matching comment on the classification below) --
-		// so the strip belongs HERE, before that call, not only in
-		// RuntimeAnswerSynthesizer.Synthesize's defensive re-check, which
-		// never even runs when this call already rejects. Rows are
-		// attached server-side from the SAME canonical fact a claim
-		// cites (contextfabric.attachCanonicalRows), never from the
-		// model, so a model-authored Rows array here is pure noise: never
-		// a reason to reject an otherwise-valid answer, and never
-		// content this receipt/log line should reflect either way.
-		var stripped int
-		draft.ClaimedFacts, stripped = contextfabric.StripModelAuthoredClaimedFactTableContent(draft.ClaimedFacts)
-		if stripped > 0 && r.config.Telemetry != nil {
-			r.config.Telemetry.RecordModelRowsStripped(ctx, principal, stripped)
-		}
-		err = draft.ValidateAgainst(input)
-	}
+	// CHAOS-5655: draft/err here are whichever draw's the loop above last
+	// produced -- the successful one if the loop broke early, or the final
+	// rejected one if maxDraws was exhausted. toDomain/strip/ValidateAgainst
+	// already ran on every draw inside the loop, so they are not repeated.
 	if err != nil {
 		receipt.Outcome = "invalid_output"
 		primaryFailureClassification = receipt.Outcome
@@ -1889,6 +1981,108 @@ func attemptLogFields(outcomes []attemptOutcome) []any {
 	return fields
 }
 
+// synthesisDraw (CHAOS-5655) is ONE pass through SynthesizeAnswer's bounded
+// re-synthesis loop: which draw it was, whether it validated, the digest of
+// the raw model output it produced, and -- for a rejected draw -- which
+// clause of a model-minted struct's own Validate() refused it.
+//
+// This is a DIFFERENT axis from attemptOutcome above: attemptOutcome
+// describes ONE generation call's own TRANSPORT retries (withRetry's axis,
+// bounded by Config.MaxAttempts), while synthesisDraw describes one full
+// draft-and-validate pass (bounded by Config.MaxSynthesisResynthesisAttempts)
+// -- a single draw can itself contain several attemptOutcomes underneath it.
+// The two must never be merged into one list: doing so would make "the
+// transport retried" and "the model was re-sampled after a rejection"
+// indistinguishable, which is exactly the distinction 5650's OutputDigest
+// stamp and this loop both exist to preserve.
+type synthesisDraw struct {
+	// Index is 1-based, matching attemptOutcome.Index's own convention.
+	Index int
+	// Outcome is "success" or "invalid_output" -- the only two outcomes a
+	// draw can reach (a transport failure never produces a draw at all; see
+	// the loop's own doc comment in SynthesizeAnswer).
+	Outcome string
+	// OutputDigest is contextfabric.DigestModelValue of this draw's raw
+	// model output, comparable across draws (and across a rejected and an
+	// accepted draw alike) the same way receipt.OutputDigest already is.
+	// This is the measurement instrument for whether re-sampling is real:
+	// distinct digests across rejected draws prove the model drew a
+	// genuinely different output each time; identical digests would prove
+	// the extra draw bought nothing.
+	OutputDigest string
+	// Clause is ContextFabricClauseNone for a successful draw or a rejection
+	// that does not delegate to a model-minted struct's own Validate() --
+	// see SynthesisRejection.Clause's own doc comment for which three
+	// reasons carry one.
+	Clause contractsv1.ContextFabricRejectedClause
+}
+
+// formatSynthesisDraws renders the sequence as "1:invalid_output,2:success",
+// mirroring formatAttemptOutcomes's own shape at draw granularity. Bounded
+// by MaxSynthesisResynthesisAttemptsCeiling, so this can never grow
+// unbounded, and every component is a digit or a closed-vocabulary word.
+func formatSynthesisDraws(draws []synthesisDraw) string {
+	parts := make([]string, 0, len(draws))
+	for _, draw := range draws {
+		parts = append(parts, fmt.Sprintf("%d:%s", draw.Index, draw.Outcome))
+	}
+	return strings.Join(parts, ",")
+}
+
+// formatSynthesisDrawDigests renders "1:<64 hex>,2:<64 hex>", index-aligned
+// with formatSynthesisDraws. A digest is a fixed-length hex string, never
+// model content, so this carries no corpus text.
+func formatSynthesisDrawDigests(draws []synthesisDraw) string {
+	parts := make([]string, 0, len(draws))
+	for _, draw := range draws {
+		parts = append(parts, fmt.Sprintf("%d:%s", draw.Index, draw.OutputDigest))
+	}
+	return strings.Join(parts, ",")
+}
+
+// formatSynthesisDrawClauses renders "1:driver_evidence_unknown,2:none",
+// index-aligned with formatSynthesisDraws. ContextFabricClauseNone is
+// spelled out for every non-clause-bearing draw rather than omitted, so the
+// three per-draw lists always stay index-aligned without a join key.
+func formatSynthesisDrawClauses(draws []synthesisDraw) string {
+	parts := make([]string, 0, len(draws))
+	for _, draw := range draws {
+		parts = append(parts, fmt.Sprintf("%d:%s", draw.Index, string(draw.Clause)))
+	}
+	return strings.Join(parts, ",")
+}
+
+// drawsRetried mirrors attemptsRetried at draw granularity: the count of
+// draws BEYOND the first.
+func drawsRetried(draws []synthesisDraw) int {
+	if len(draws) == 0 {
+		return 0
+	}
+	return len(draws) - 1
+}
+
+// drawLogFieldKeys mirrors attemptLogFieldKeys's own single-declaration
+// discipline -- see that var's doc comment for why a pin must reference this
+// directly rather than a hand-typed key list or a call to drawLogFields.
+var drawLogFieldKeys = []string{"draws_total", "draws_retried", "draw_outcomes", "draw_output_digests", "draw_rejected_clauses"}
+
+// drawLogFields renders the draw sequence onto the synthesize decision line,
+// mirroring attemptLogFields's shape and emission discipline. It is
+// APPENDED only when len(draws) > 0 -- a pure transport failure never
+// produces a draw, and that "never reached the draw loop's judgment" state
+// must stay distinguishable from "reached it and drew exactly one", the same
+// distinction attemptLogFields already draws for the transport axis by being
+// unconditional there (a synthesize call always attempts a generation call,
+// but does not always reach a draft to judge).
+func drawLogFields(draws []synthesisDraw) []any {
+	values := []any{len(draws), drawsRetried(draws), contextfabric.SanitizeLogAttr(formatSynthesisDraws(draws)), contextfabric.SanitizeLogAttr(formatSynthesisDrawDigests(draws)), contextfabric.SanitizeLogAttr(formatSynthesisDrawClauses(draws))}
+	fields := make([]any, 0, len(drawLogFieldKeys)*2)
+	for i, key := range drawLogFieldKeys {
+		fields = append(fields, key, values[i])
+	}
+	return fields
+}
+
 func (r *Runtime) withRetry(ctx context.Context, fn func(context.Context) error) ([]attemptOutcome, error) {
 	var last error
 	outcomes := make([]attemptOutcome, 0, r.config.MaxAttempts)
@@ -2218,7 +2412,7 @@ func groundingCountsFrom(draft contextfabric.SynthesisDraft) synthesisGroundingC
 // counterpart (H7/H8). See logInterpretDecision's doc comment for the
 // corpus-safety and log-level-gating rationale, which applies identically
 // here.
-func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification string, grounding synthesisGroundingCounts, rejectionReason string, factGroupSize, groundedBeyondFirst int, attemptOutcomes []attemptOutcome, fallbackAttempts int, primaryProvider, primaryModel, primaryModelVersion string) {
+func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification string, grounding synthesisGroundingCounts, rejectionReason string, factGroupSize, groundedBeyondFirst int, attemptOutcomes []attemptOutcome, fallbackAttempts int, primaryProvider, primaryModel, primaryModelVersion string, draws []synthesisDraw) {
 	fields := []any{
 		"request_id", contextfabric.SanitizeLogAttr(requestID),
 		"org_id_hash", contextfabric.SanitizeLogAttr(decisionOrgIDHash(orgID)),
@@ -2251,6 +2445,12 @@ func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID st
 	// from model_id/model_version above -- see logInterpretDecision's
 	// matching comment for the full rationale.
 	fields = append(fields, "primary_provider", contextfabric.SanitizeLogAttr(primaryProvider), "primary_model_id", contextfabric.SanitizeLogAttr(primaryModel), "primary_model_version", contextfabric.SanitizeLogAttr(primaryModelVersion))
+	// CHAOS-5655: appended only when the draw loop actually judged a draft --
+	// see drawLogFields's own doc comment for why a pure transport failure
+	// must not carry these fields at all.
+	if len(draws) > 0 {
+		fields = append(fields, drawLogFields(draws)...)
+	}
 	// CHAOS-4522: appended, never unconditional, so a successful or
 	// transport-failed call's line stays byte-identical to its pre-4522
 	// shape and only a rejection carries the two new fields. Both values

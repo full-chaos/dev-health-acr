@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/genkitruntime"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelconfigcrypto"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelprovider"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -159,12 +160,16 @@ func TestWrapWithOrgModelRuntimeResolver_returnsAUsableEvictor_whenOrgStoreIsCon
 // tuning defaults must still resolve to sane values, not an error, when the
 // deployment-default provider itself was never configured.
 func TestContextFabricModelDefaults_fallsBackToPackageDefaults_whenUnconfigured(t *testing.T) {
-	defaults, err := contextFabricModelDefaults(envLookup(nil))
+	defaults, err := contextFabricModelDefaults(envLookup(nil), discardLogger())
 	if err != nil {
 		t.Fatalf("contextFabricModelDefaults() = %v, want success", err)
 	}
 	if defaults.Timeout != modelprovider.DefaultTimeout || defaults.MaxAttempts != modelprovider.DefaultMaxAttempts || defaults.MaxTransportRetries != modelprovider.DefaultMaxTransportRetries {
 		t.Fatalf("defaults = %+v, want the package defaults", defaults)
+	}
+	// CHAOS-5655: inherited the same way as the tuning knobs above.
+	if defaults.MaxSynthesisResynthesisAttempts != genkitruntime.DefaultMaxSynthesisResynthesisAttempts {
+		t.Fatalf("defaults.MaxSynthesisResynthesisAttempts = %d, want the package default %d", defaults.MaxSynthesisResynthesisAttempts, genkitruntime.DefaultMaxSynthesisResynthesisAttempts)
 	}
 }
 
