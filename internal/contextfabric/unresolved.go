@@ -299,8 +299,14 @@ func (e *Engine) terminalResult(
 	// EXACTLY the case a window nudge (when requested) matters most, an
 	// agent reading a refusal benefits from every disclosure available.
 	windowClarification := composeWindowClarification(effectiveWindow, resultID, e.now())
+	// CHAOS-5660: taken ONCE, here, from the SAME gated material the status
+	// and the disclosure are composed from -- and handed to the predicate,
+	// the status decision and the log line below. Deriving it separately at
+	// any of those three would let a turn be reported under one reading and
+	// answered under another.
+	declaredKind := decideDeclaredKind(familyOutcome.Frame, resolution, structureMaterial)
 	status, limitation := resolveTerminalStatus(request, &resolution,
-		clarificationOffersRedeemable(resolution, structureMaterial, windowClarification))
+		clarificationOffersRedeemable(resolution, structureMaterial, windowClarification, declaredKind), declaredKind)
 	// CHAOS-5442: a frame the gate refused gets its own disclosure, on
 	// both surfaces, decided from the ONE value that already holds the
 	// verdict.
@@ -317,10 +323,11 @@ func (e *Engine) terminalResult(
 	// CHAOS-3888: telemetry-only -- classifies WHY this investigation
 	// reached its own subjectless terminal path, never changes status,
 	// limitation, or any other field of the result below. See
-	// subjectlessTerminalReason's own doc comment for the three-value
-	// vocabulary.
+	// subjectlessTerminalReason's own doc comment for the vocabulary, which
+	// this change adds its seventh member to (the comment said "three-value"
+	// and had been wrong since the fourth).
 	if e.telemetry != nil {
-		e.telemetry.RecordSubjectlessTerminal(ctx, principal, subjectlessTerminalReason(familyOutcome.Gate, resolution, subjectCandidatesAuthzDropped), familyOutcome.Gate.ObservableRefusalBasis())
+		e.telemetry.RecordSubjectlessTerminal(ctx, principal, subjectlessTerminalReason(familyOutcome.Gate, resolution, subjectCandidatesAuthzDropped, declaredKind), familyOutcome.Gate.ObservableRefusalBasis(), declaredKind.ObservableDeclaredKinds(), declaredKind.ObservableOfferedKinds())
 	}
 	coverage := graphContext.Coverage
 	if coverage.Sources == nil {
@@ -580,11 +587,21 @@ func (e *Engine) terminalResult(
 //     RecordSubjectCandidatesAuthzDropped) that it excluded at least one
 //     candidate purely on authorization grounds -- structurally distinct
 //     from empty_pool: something existed, and authorization hid it.
+//   - "no_candidate_of_declared_kind" (CHAOS-5660): this turn's frame
+//     declared a kind, this turn offered at least one option, and NONE of
+//     the options -- across all four structure channels and the candidate
+//     list -- carried a declared kind. Checked BEFORE "ambiguous" for the
+//     same reason offer_pool_emptied_by_exclusion is checked before
+//     empty_pool: both are true of the pool, and this one is the more
+//     specific claim about the DECISION. A pool of seven ci_pipeline_runs
+//     offered against a question about a project reported `ambiguous`
+//     before this member existed, which named a choice the caller did not
+//     have. See chaos5660_declared_kind_terminal.go.
 //   - "ambiguous": the candidate pool was non-empty (one or more
 //     uncommitted candidates) -- the clarification_required / no_match
 //     "more than one matched, or one matched but did not clear the commit
 //     gate" branch, regardless of AllowClarification.
-func subjectlessTerminalReason(gate FrameGate, resolution SubjectResolution, subjectCandidatesAuthzDropped int) string {
+func subjectlessTerminalReason(gate FrameGate, resolution SubjectResolution, subjectCandidatesAuthzDropped int, declaredKind declaredKindDecision) string {
 	// CHECKED FIRST, ahead of every arm below, because it is the only one
 	// that describes a decision taken BEFORE retrieval. The four arms that
 	// follow all describe what retrieval found or declined to offer, and a
@@ -598,6 +615,16 @@ func subjectlessTerminalReason(gate FrameGate, resolution SubjectResolution, sub
 	// which is the operator-side half of CHAOS-5442.
 	if gate.Refuses() {
 		return "frame_gate_refused"
+	}
+	// CHAOS-5660, ordered ahead of `ambiguous` deliberately: both are true
+	// of a non-empty pool, and this one names what the engine DECIDED where
+	// `ambiguous` names only what retrieval found. It is also checked ahead
+	// of the empty-pool arms below because the decision does not depend on
+	// the candidate list being non-empty -- a turn can offer handle and
+	// candidate options of the wrong kind with no subject candidate at all,
+	// which is exactly what the measured rows did on their odd turns.
+	if declaredKind.Unsatisfiable {
+		return declaredKindTerminalReason
 	}
 	if len(resolution.Candidates) > 0 {
 		return "ambiguous"
@@ -628,7 +655,32 @@ func subjectlessTerminalReason(gate FrameGate, resolution SubjectResolution, sub
 // the point it asks: a predicate computed here, from ungated material,
 // would count an offer the caller is about to remove from the very
 // document this status describes.
-func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectResolution, otherOffersRedeemable bool) (InvestigationStatus, string) {
+func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectResolution, otherOffersRedeemable bool, declaredKind declaredKindDecision) (InvestigationStatus, string) {
+	// CHAOS-5660, FIRST, ahead of both branches below.
+	//
+	// It is first because it is the only arm that describes a turn no
+	// further exchange can advance: the caller was handed options and not
+	// one of them can answer the question their own frame declared. Both
+	// branches below decide between a clarification and a terminal on
+	// whether an offer EXISTS; reaching either one first would compose the
+	// clarification this arm exists to stop, or reach a terminal carrying a
+	// sentence about the pool when the finding is about the kind.
+	//
+	// SCOPED TO THE CLARIFICATION PATH, deliberately. A caller that declined
+	// clarification already terminates below, and the sentences it gets --
+	// the offer-pool-emptied one, or the ambiguous-no-clarification pair --
+	// are accurate for it: they describe what happened to the pool for a
+	// caller who was never going to be asked anything. Widening this arm
+	// over them would rewrite prose on a path this ticket measured nothing
+	// about.
+	//
+	// The sentence is CHAOS-4098's existing one and the basis is empty
+	// today; declaredKindTerminalLimitation's own doc comment carries the
+	// whole of why, and the tracked gap that leaves the class uncountable on
+	// the wire until its vocabulary member lands.
+	if declaredKind.Unsatisfiable && request.Options.AllowClarification {
+		return InvestigationNoMatch, declaredKindTerminalLimitation
+	}
 	if len(resolution.Candidates) == 0 {
 		// AN OFFER POOL EMPTIED BY THE VECTOR-ONLY EXCLUSION IS NOT AN
 		// EMPTY GRAPH. Retrieval found candidates and withheld every one of

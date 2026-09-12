@@ -2,7 +2,6 @@ package graphrank
 
 import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
-	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // The cohort kind, and the kind hints, read off the QuestionFrame.
@@ -263,24 +262,16 @@ func cohortKindFromFrame(frame *contextfabric.QuestionFrame) (servable contextfa
 // iterating the result never depends on Go's randomized map order -- the same
 // guarantee the deleted matcher documented, kept for the same reason.
 func frameKindHints(frame *contextfabric.QuestionFrame) []contextfabric.SubjectKind {
-	if frame == nil {
-		return nil
-	}
-	declared := make(map[contextfabric.SubjectKind]bool, 2)
-	if kind, ok := frame.SubjectExpression.MemberKind(); ok {
-		declared[kind] = true
-	}
-	if kind, ok := frame.SubjectExpression.GroupKind(); ok {
-		declared[kind] = true
-	}
-	if len(declared) == 0 {
-		return nil
-	}
-	var hints []contextfabric.SubjectKind
-	for _, kind := range contractsv1.ContextFabricSubjectKindVocabulary() {
-		if declared[contextfabric.SubjectKind(kind)] {
-			hints = append(hints, contextfabric.SubjectKind(kind))
-		}
-	}
-	return hints
+	// CHAOS-5660 moved the derivation itself onto QuestionFrame, beside the
+	// union it reads, because a SECOND reader now asks the same question of
+	// the same frame: the answerability decision
+	// (contextfabric/chaos5660_declared_kind_terminal.go) must ask whether an
+	// offer carries one of EXACTLY the kinds phase 4 reserved slots for. Two
+	// copies of this derivation would be two authorities on what the frame
+	// declared, and they would disagree the first time the union grew a
+	// variant. Every property this comment claims -- no hint from a kindless
+	// frame, both axes of a grouped expression, vocabulary order -- is now
+	// claimed and tested on DeclaredKinds, and this function is the same
+	// values under the name phase 4 already calls them by.
+	return frame.DeclaredKinds()
 }

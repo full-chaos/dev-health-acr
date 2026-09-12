@@ -102,11 +102,31 @@ func windowOfferRedeemable(clarification *contractsv1.ContextFabricWindowClarifi
 // about one call site's control flow, and a predicate that answered
 // correctly only under its caller's precondition would be wrong the first
 // time a second caller asked it.
+// CHAOS-5660 EXTENDS IT FROM "AN OPTION" TO "A SATISFYING OPTION", and the
+// extension is a second conjunct rather than a rewrite: a turn is answerable
+// only if it carries a redeemable offer AND -- when its frame declared a kind
+// -- at least one offered option carries that kind. The first conjunct is
+// CHAOS-5637's, unchanged, and it still decides every turn whose frame
+// declared nothing; the second decides the turns that offered five candidate
+// options and twenty handle options against a question about a project and
+// carried no project among any of them. See
+// chaos5660_declared_kind_terminal.go for what was measured, and for why a
+// window option cannot satisfy a declared KIND need.
+//
+// THE DECISION IS PASSED IN, already taken, rather than derived here. The
+// caller takes it once and hands the SAME value to this predicate and to the
+// log line that reports it, so the status and the line can never describe two
+// different turns -- the same discipline that already makes the caller, not
+// this file, the authority on gated material.
 func clarificationOffersRedeemable(
 	resolution SubjectResolution,
 	material StructureOfferMaterial,
 	windowClarification *contractsv1.ContextFabricWindowClarification,
+	declaredKind declaredKindDecision,
 ) bool {
+	if declaredKind.Unsatisfiable {
+		return false
+	}
 	return len(resolution.Candidates) > 0 ||
 		offerMaterialRedeemable(material) ||
 		windowOfferRedeemable(windowClarification)

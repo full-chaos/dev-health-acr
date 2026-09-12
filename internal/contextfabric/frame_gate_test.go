@@ -569,7 +569,7 @@ func TestAWithheldOfferPoolClarifiesOnlyWhenTheTurnCanBeAnswered(t *testing.T) {
 			t.Parallel()
 			resolution := testCase.resolution
 			request := InvestigationRequest{Options: InvestigationOptions{AllowClarification: testCase.allow}}
-			got, limitation := resolveTerminalStatus(request, &resolution, testCase.otherOffers)
+			got, limitation := resolveTerminalStatus(request, &resolution, testCase.otherOffers, declaredKindDecision{})
 			if got != testCase.want {
 				t.Fatalf("status = %q, want %q", got, testCase.want)
 			}
@@ -597,11 +597,11 @@ func TestTheWithheldPoolHasItsOwnTerminalReason(t *testing.T) {
 		Candidates: []SubjectCandidate{}, Committed: []SubjectRef{},
 		ClarificationPrompt: OfferPoolEmptiedClarificationPrompt,
 	}
-	if got := subjectlessTerminalReason(FrameGate{}, withheld, 0); got != "offer_pool_emptied_by_exclusion" {
+	if got := subjectlessTerminalReason(FrameGate{}, withheld, 0, declaredKindDecision{}); got != "offer_pool_emptied_by_exclusion" {
 		t.Errorf("terminal reason = %q, want %q", got, "offer_pool_emptied_by_exclusion")
 	}
 	empty := SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}
-	if got := subjectlessTerminalReason(FrameGate{}, empty, 0); got != "empty_pool" {
+	if got := subjectlessTerminalReason(FrameGate{}, empty, 0, declaredKindDecision{}); got != "empty_pool" {
 		t.Errorf("terminal reason for a genuinely empty pool = %q, want %q -- the control", got, "empty_pool")
 	}
 }
