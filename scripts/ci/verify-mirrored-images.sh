@@ -26,6 +26,51 @@ set -euo pipefail
 # resolver's output to a real file FIRST, under `set -o pipefail`-independent
 # sequencing (a plain command, not a substitution), so its exit status is
 # checked directly before anything reads the file.
+#
+# `inspect_with_retry` (CHAOS-5624): a single `imagetools inspect` miss used
+# to be reported as MISSING immediately, even though nothing had removed the
+# image -- the org audit log carries zero package-version-delete events at
+# either incident time this covers, and both packages' versions are
+# untouched since the mirror last wrote them. GHCR has already shown
+# read-after-write lag on this exact registry/action pair once before (see
+# promote-main-image-aliases.yml's own comments on that prior incident), and
+# is the only remaining explanation once deletion and a cleanup workflow are
+# both ruled out. This retries a bounded number of times with capped
+# exponential backoff before giving up, so a transient read failure no
+# longer reads as a missing image; a genuinely absent image still fails
+# after the last attempt with the same MISSING message as before.
+#
+# Sourceable for tests: everything past this point that touches the
+# network or process arguments is guarded so `source`-ing this file (to unit
+# test inspect_with_retry against a fake `docker`) runs no I/O.
+mirror_inspect_max_attempts="${MIRROR_INSPECT_MAX_ATTEMPTS:-6}"
+mirror_inspect_initial_delay="${MIRROR_INSPECT_INITIAL_DELAY:-5}"
+mirror_inspect_max_delay="${MIRROR_INSPECT_MAX_DELAY:-60}"
+
+inspect_with_retry() {
+  local dest="$1" attempt=1 delay="$mirror_inspect_initial_delay" digest
+  while :; do
+    printf 'inspecting %s (attempt %d/%d)\n' "$dest" "$attempt" "$mirror_inspect_max_attempts" >&2
+    digest="$(docker buildx imagetools inspect "$dest" --format '{{ .Manifest.Digest }}' 2>/dev/null || true)"
+    if [ -n "$digest" ]; then
+      printf '%s\n' "$digest"
+      return 0
+    fi
+    if [ "$attempt" -ge "$mirror_inspect_max_attempts" ]; then
+      return 1
+    fi
+    sleep "$delay"
+    delay=$(( delay * 2 ))
+    if [ "$delay" -gt "$mirror_inspect_max_delay" ]; then
+      delay="$mirror_inspect_max_delay"
+    fi
+    attempt=$(( attempt + 1 ))
+  done
+}
+
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+  return 0
+fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 repo="${1:?usage: verify-mirrored-images.sh <owner/repo, e.g. \$GITHUB_REPOSITORY> [dispatch-ref]}"
@@ -73,7 +118,7 @@ while IFS=$'\t' read -r image dest_tag; do
   ref_repo="${image%%@*}"
   ref_repo="${ref_repo%%:*}"
   dest="ghcr.io/${repo}/${ref_repo}:${dest_tag}"
-  mirrored="$(docker buildx imagetools inspect "$dest" --format '{{ .Manifest.Digest }}' 2>/dev/null || true)"
+  mirrored="$(inspect_with_retry "$dest" || true)"
   if [ -z "$mirrored" ]; then
     printf '::error::MISSING %-40s -> %s -- %s\n' \
       "$image" "$dest" "$dispatch_hint"

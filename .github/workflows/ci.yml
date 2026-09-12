@@ -151,6 +151,13 @@ jobs:
       # not both digest-pinned and present in the mirror list.
       - name: Verify every testcontainers image is pinned and mirrored
         run: scripts/ci/test-testcontainers-image-pins.sh
+      # verify-mirrored-images.sh's mirror-preflight retries a transient
+      # registry read before reporting an image missing; this proves the
+      # retry loop itself against a fake docker (bounded attempts, stops on
+      # success, fails after exactly the configured count) without touching
+      # a real registry.
+      - name: Verify the mirror-image inspect retry stops on success and gives up after its budget
+        run: scripts/ci/test-verify-mirrored-images-retry.sh
       # A Go file whose NAME ends in a GOOS/GOARCH token is compiled only on
       # that platform, whether or not the author meant it, and nothing reports
       # it: the file simply moves into IgnoredGoFiles and `go build`/`go test`
