@@ -115,14 +115,14 @@ def resolve_ask_dev():
             "schema_version": expect_schema.SCHEMA_VERSION,
         }
         # Attribute access succeeding is not the same as the attribute being
-        # a usable value -- `SCORER_VERSION = None` (or `""`) raises nothing,
-        # so a companion carrying one would otherwise publish
-        # `available=True` with invalid version metadata, the exact
-        # masquerade CHAOS-5632 exists to catch (found in review). Every
-        # version field this pin promises callers ("every version string a
-        # published verdict record must carry", this function's own
-        # docstring) must be a non-empty string.
-        bad = {k: v for k, v in version_fields.items() if not isinstance(v, str) or not v}
+        # a usable value -- `SCORER_VERSION = None`, `""`, or a whitespace-only
+        # string all raise nothing, so a companion carrying one would
+        # otherwise publish `available=True` with invalid version metadata,
+        # the exact masquerade CHAOS-5632 exists to catch. Every version
+        # field this pin promises callers ("every version string a published
+        # verdict record must carry", this function's own docstring) must be
+        # a string with non-whitespace content.
+        bad = {k: v for k, v in version_fields.items() if not isinstance(v, str) or not v.strip()}
         if bad:
             raise AskDevUnavailable(
                 f"corpus/expect_schema.py and corpus/semantic_verdict.py imported from "
@@ -176,17 +176,16 @@ def _git_sha(root):
 
 def _git_dirty(root):
     """Whether the ask-dev checkout's working tree differs from `HEAD` --
-    tracked-file edits, staged changes, AND untracked files all count.
-    Untracked was excluded in an earlier version of this function on the
-    theory that "an untracked file changes nothing that gets imported" --
-    false whenever a tracked module imports a NEW, not-yet-committed sibling
-    module: the untracked file is then very much part of what Python
-    actually loads, and excluding it let a checkout that imports worktree-
-    only code report `ask_dev_dirty=False` (found in review). A stray
-    unrelated untracked file elsewhere in the checkout now also counts,
-    trading a false positive there for never a false negative on the code
-    path that matters -- the same direction CHAOS-5633 already picked for
-    `ask_dev_sha` staying visible over a false "trustworthy" clean read.
+    tracked-file edits, staged changes, AND untracked files all count. A
+    tracked module can import a NEW, not-yet-committed sibling module, and
+    that sibling is then very much part of what Python actually loads even
+    though it is untracked -- so an untracked-files exclusion here would
+    miss exactly the checkouts most likely to differ from HEAD. A stray
+    unrelated untracked file elsewhere in the checkout also counts under
+    this rule, trading a false positive there for never a false negative on
+    the code path that matters -- the same direction CHAOS-5633 already
+    picked for `ask_dev_sha` staying visible over a false "trustworthy"
+    clean read.
 
     A dirty checkout does not stop `ask_dev_sha` from being reported --
     the sha is still a fact about the checkout -- but publishing it next to

@@ -52,12 +52,10 @@ HERE = Path(__file__).resolve().parent
 # GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM only redirect the global/system config
 # FILES -- they do nothing about git's separate GIT_CONFIG_COUNT /
 # GIT_CONFIG_KEY_<n> / GIT_CONFIG_VALUE_<n> environment-variable config
-# source (found in review: a caller exporting
-# `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=commit.gpgsign GIT_CONFIG_VALUE_0=true`
-# still broke these controls with the file-redirect fix alone).
-# GIT_CONFIG_COUNT=0 tells git to read ZERO such pairs, so any
-# GIT_CONFIG_KEY_*/GIT_CONFIG_VALUE_* the ambient environment already set are
-# ignored regardless of how many exist.
+# source, which a caller can use to set `commit.gpgsign=true` (or any other
+# key) with no config file involved at all. GIT_CONFIG_COUNT=0 tells git to
+# read ZERO such pairs, so any GIT_CONFIG_KEY_*/GIT_CONFIG_VALUE_* the
+# ambient environment already set are ignored regardless of how many exist.
 os.environ["GIT_CONFIG_GLOBAL"] = "/dev/null"
 os.environ["GIT_CONFIG_SYSTEM"] = "/dev/null"
 os.environ["GIT_CONFIG_COUNT"] = "0"
@@ -311,14 +309,11 @@ def test_resolve_ask_dev_names_a_dirty_checkout():
 
 
 def test_resolve_ask_dev_names_dirty_from_an_untracked_but_imported_file():
-    """Round-1 finding: `_git_dirty` used to pass `--untracked-files=no`, on
-    the theory that an untracked file changes nothing that gets imported.
-    False whenever a tracked module imports a NEW sibling module that has
-    not been committed yet -- the untracked file IS then part of what
-    Python actually loads, and the old check reported `ask_dev_dirty=False`
-    for it. Constructing exactly that shape and confirming both that the
+    """A tracked module can import a NEW sibling module that has not been
+    committed yet, so the untracked file is part of what Python actually
+    loads. Constructing exactly that shape and confirming both that the
     import succeeds (proving the untracked file really is on the import
-    path) and that ask_dev_dirty is now True."""
+    path) and that ask_dev_dirty is True."""
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp) / "fake-ask-dev"
         corpus_dir = base / "corpus"
@@ -349,15 +344,13 @@ def test_resolve_ask_dev_names_dirty_from_an_untracked_but_imported_file():
 
 
 def test_git_init_controls_ignore_git_config_env_injection():
-    """Round-1 finding: GIT_CONFIG_GLOBAL=/dev/null / GIT_CONFIG_SYSTEM=/dev/null
-    only redirect the global/system config FILES -- git's separate
-    GIT_CONFIG_COUNT/GIT_CONFIG_KEY_<n>/GIT_CONFIG_VALUE_<n> environment-variable
-    config source is untouched by that, and a caller exporting
-    commit.gpgsign=true through it still broke the git-init controls with the
-    file-redirect fix alone. GIT_CONFIG_COUNT=0 (set at this module's import,
-    see above) must make that injection inert. Runs THIS module's own
-    import-time override (not a re-invocation of main(), which would recurse
-    into this very test) against a throwaway `git commit`, with the
+    """GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM redirect only the global/system
+    config FILES; a caller can still set `commit.gpgsign=true` (or any other
+    key) via GIT_CONFIG_COUNT/GIT_CONFIG_KEY_<n>/GIT_CONFIG_VALUE_<n> with no
+    config file involved at all. GIT_CONFIG_COUNT=0 (set at this module's
+    import, see above) must make that injection inert. Runs THIS module's
+    own import-time override (not a re-invocation of main(), which would
+    recurse into this very test) against a throwaway `git commit`, with the
     injection layered on top via the subprocess env."""
     env = dict(os.environ)
     env.update({
@@ -384,12 +377,12 @@ def test_git_init_controls_ignore_git_config_env_injection():
     _require(proc.stdout.strip() == "OK", proc.stdout)
 
 
-def test_resolve_ask_dev_refuses_a_null_version_value():
-    """Round-1 finding: the "usable pin" guard only checked that attribute
-    ACCESS succeeded, not that the value was actually usable --
-    `SCORER_VERSION = None` raises nothing, so a companion carrying one
-    published `available=True` with `scorer_version: null`, the exact
-    masquerade this whole ticket exists to catch."""
+def test_resolve_ask_dev_refuses_an_unusable_version_value():
+    """Attribute ACCESS succeeding is not the same as the value being
+    usable: `None`, `""`, and a whitespace-only string all raise nothing on
+    access, so a companion carrying one would otherwise publish
+    `available=True` with invalid version metadata, the exact masquerade
+    this whole ticket exists to catch. Every cell of that shape, executed."""
     code = (
         "import sys; sys.path.insert(0, %r); "
         "import semantic_verdict_bridge as svb\n"
@@ -400,16 +393,21 @@ def test_resolve_ask_dev_refuses_a_null_version_value():
         "else:\n"
         "    print('DID NOT REFUSE')\n"
     ) % str(HERE)
-    with tempfile.TemporaryDirectory() as tmp:
-        base = Path(tmp) / "null-version-ask-dev"
-        corpus_dir = _write_fake_ask_dev(base)
-        (corpus_dir / "semantic_verdict.py").write_text(
-            FAKE_SEMANTIC_VERDICT.replace('SCORER_VERSION = "fake-scorer-v1"', "SCORER_VERSION = None"))
-        env = {"PATH": "/usr/bin:/bin:/usr/local/bin", "PYTHONPATH": str(corpus_dir)}
-        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
-        _require(proc.returncode == 0, proc.stderr)
-        _require(proc.stdout.startswith("REFUSED:"), proc.stdout)
-        _require("unusable version value" in proc.stdout, proc.stdout)
+    for cell, replacement in (
+        ("None", "SCORER_VERSION = None"),
+        ("empty string", 'SCORER_VERSION = ""'),
+        ("whitespace-only string", 'SCORER_VERSION = "   \\t"'),
+    ):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "bad-version-ask-dev"
+            corpus_dir = _write_fake_ask_dev(base)
+            (corpus_dir / "semantic_verdict.py").write_text(
+                FAKE_SEMANTIC_VERDICT.replace('SCORER_VERSION = "fake-scorer-v1"', replacement))
+            env = {"PATH": "/usr/bin:/bin:/usr/local/bin", "PYTHONPATH": str(corpus_dir)}
+            proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+            _require(proc.returncode == 0, (cell, proc.stderr))
+            _require(proc.stdout.startswith("REFUSED:"), (cell, proc.stdout))
+            _require("unusable version value" in proc.stdout, (cell, proc.stdout))
 
 
 def test_resolve_ask_dev_refuses_by_name_when_unimportable():
