@@ -665,7 +665,7 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 		// BY PREFIX, not by the individual ids. A kind added later inherits the
 		// reservation without anyone remembering to extend a list.
 		if strings.HasPrefix(claim.ClaimID, cardinalityClaimIDPrefix) {
-			return rejectSynthesis(RejectionReasonClaimIDDuplicate, "claimed fact %q uses the reserved server claim namespace %q -- these ids are minted by the server, never model-authored", claim.ClaimID, cardinalityClaimIDPrefix)
+			return rejectSynthesis(RejectionReasonClaimIDReservedNamespace, "claimed fact %q uses the reserved server claim namespace %q -- these ids are minted by the server, never model-authored", claim.ClaimID, cardinalityClaimIDPrefix)
 		}
 		if _, exists := claimedByID[claim.ClaimID]; exists {
 			return rejectSynthesis(RejectionReasonClaimIDDuplicate, "claimed fact IDs must be unique")

@@ -146,11 +146,35 @@ func TestTheServerClaimNamespaceIsRefusedForModelAuthoredClaims(t *testing.T) {
 				t.Errorf("draft with claim id %q refused for the reserved namespace = %t, want %t -- %s (err=%v)",
 					cell.claimID, gotRefused, cell.refused, cell.why, err)
 			}
-			if cell.refused && SynthesisRejectionReasonOf(err) == RejectionReasonUnclassified {
-				t.Errorf("the refusal carries no classified rejection reason -- an operator reading the decision line could not tell why the draft was rejected")
+			if cell.refused {
+				if got := SynthesisRejectionReasonOf(err); got != RejectionReasonClaimIDReservedNamespace {
+					t.Errorf("rejection reason = %q, want %q -- a reserved-namespace collision must read differently from a model repeating its own id, or the decision line cannot tell the two apart", got, RejectionReasonClaimIDReservedNamespace)
+				}
 			}
 		})
 	}
+
+	// THE OTHER REASON STAYS WHERE IT BELONGS. A model genuinely reusing an id
+	// of its own is still claim_id_duplicate. Without this arm, a change that
+	// routed every id rejection through the new reason would pass the arms
+	// above while erasing the distinction the new reason exists to draw.
+	t.Run("a genuinely reused model id is still a duplicate", func(t *testing.T) {
+		t.Parallel()
+		input, draft := closureFixture()
+		if len(draft.ClaimedFacts) == 0 {
+			t.Fatal("fixture drift: the closure fixture carries no claim to duplicate")
+		}
+		reused := draft.ClaimedFacts[0]
+		draft.ClaimedFacts = append(draft.ClaimedFacts, reused)
+
+		err := draft.ValidateAgainst(input)
+		if err == nil {
+			t.Fatal("a draft carrying the same model-authored claim id twice was admitted")
+		}
+		if got := SynthesisRejectionReasonOf(err); got != RejectionReasonClaimIDDuplicate {
+			t.Errorf("rejection reason = %q, want %q -- a model repeating its own id is not a reserved-namespace collision", got, RejectionReasonClaimIDDuplicate)
+		}
+	})
 
 	// The namespace must be visibly the server's. A prefix a model could reach
 	// for by accident would make the reservation a trap rather than a rule.

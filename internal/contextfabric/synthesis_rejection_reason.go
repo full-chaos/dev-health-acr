@@ -50,11 +50,22 @@ const (
 	// row fields the model actually set.
 	RejectionReasonClaimTimeSeriesRowsModelAuthored SynthesisRejectionReason = "claim_time_series_rows_model_authored"
 	RejectionReasonClaimIDDuplicate                 SynthesisRejectionReason = "claim_id_duplicate"
-	RejectionReasonClaimSubjectOutOfScope           SynthesisRejectionReason = "claim_subject_out_of_scope"
-	RejectionReasonClaimSubjectLabelMismatch        SynthesisRejectionReason = "claim_subject_label_mismatch"
-	RejectionReasonClaimNoCanonicalFact             SynthesisRejectionReason = "claim_no_canonical_fact"
-	RejectionReasonClaimFieldUnobserved             SynthesisRejectionReason = "claim_field_unobserved"
-	RejectionReasonClaimValueContradicts            SynthesisRejectionReason = "claim_value_contradicts_canonical"
+	// RejectionReasonClaimIDReservedNamespace: a model-authored claim used an
+	// id in the namespace the server mints its own claims under.
+	//
+	// A distinct reason, not a reuse of claim_id_duplicate, because the two
+	// call for different readings. A duplicate id is the model repeating
+	// itself within one draft; a reserved-namespace id is the model reaching
+	// for an identity that belongs to the server. Collapsing them would leave
+	// an operator reading the decision line unable to tell a sloppy draft from
+	// one that collided with a server-computed claim -- and only the second
+	// would have taken the assembled answer down if it had got through.
+	RejectionReasonClaimIDReservedNamespace  SynthesisRejectionReason = "claim_id_reserved_namespace"
+	RejectionReasonClaimSubjectOutOfScope    SynthesisRejectionReason = "claim_subject_out_of_scope"
+	RejectionReasonClaimSubjectLabelMismatch SynthesisRejectionReason = "claim_subject_label_mismatch"
+	RejectionReasonClaimNoCanonicalFact      SynthesisRejectionReason = "claim_no_canonical_fact"
+	RejectionReasonClaimFieldUnobserved      SynthesisRejectionReason = "claim_field_unobserved"
+	RejectionReasonClaimValueContradicts     SynthesisRejectionReason = "claim_value_contradicts_canonical"
 
 	// Drivers.
 	RejectionReasonDriverInvalid              SynthesisRejectionReason = "driver_invalid"
@@ -115,6 +126,7 @@ var canonicalSynthesisRejectionReasons = map[SynthesisRejectionReason]SynthesisR
 	RejectionReasonClaimRowsModelAuthored:           RejectionReasonClaimRowsModelAuthored,
 	RejectionReasonClaimTimeSeriesRowsModelAuthored: RejectionReasonClaimTimeSeriesRowsModelAuthored,
 	RejectionReasonClaimIDDuplicate:                 RejectionReasonClaimIDDuplicate,
+	RejectionReasonClaimIDReservedNamespace:         RejectionReasonClaimIDReservedNamespace,
 	RejectionReasonClaimSubjectOutOfScope:           RejectionReasonClaimSubjectOutOfScope,
 	RejectionReasonClaimSubjectLabelMismatch:        RejectionReasonClaimSubjectLabelMismatch,
 	RejectionReasonClaimNoCanonicalFact:             RejectionReasonClaimNoCanonicalFact,
