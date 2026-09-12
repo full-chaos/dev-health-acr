@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 
 	"github.com/full-chaos/dev-health-acr/internal/api"
 	"github.com/full-chaos/dev-health-acr/internal/auth"
@@ -77,7 +78,14 @@ func applicationDependencies(ctx context.Context, request serverBuildRequest) (a
 		if request.openRuntime == nil {
 			return api.Dependencies{}, nil, errors.New("hosted runtime opener is required")
 		}
-		runtime, err := request.openRuntime(ctx, hosted.Options{ServiceVersion: request.serviceVersion, Logger: request.logger})
+		// CHAOS-5638: read at the composition root, beside every other
+		// option this command hands the hosted runtime. Unset -- every
+		// deployment today -- reads as 1, which is the pre-ensemble path.
+		runtime, err := request.openRuntime(ctx, hosted.Options{
+			ServiceVersion:             request.serviceVersion,
+			Logger:                     request.logger,
+			InterpretationEnsembleSize: hosted.InterpretationEnsembleSizeFromEnv(os.LookupEnv, request.logger),
+		})
 		if err != nil {
 			return api.Dependencies{}, nil, fmt.Errorf("initialize hosted runtime: %w", err)
 		}
