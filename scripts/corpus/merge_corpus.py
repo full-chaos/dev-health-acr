@@ -640,6 +640,16 @@ def main():
         sv_module = sv_pin = None
         sv_unavailable_reason = str(exc)
         print(f"NOTE: semantic_verdict unavailable this run -- {exc}", file=sys.stderr)
+    else:
+        # ask_dev_sha is read from the checkout's HEAD, which can be clean
+        # while the working tree that Python actually imported from is not
+        # -- named here too, not only in the pin, so a run that scores
+        # against uncommitted ask-dev code is visible on the terminal, not
+        # only to a reader who later inspects provenance.json.
+        if sv_pin.get("ask_dev_dirty"):
+            print(f"NOTE: ask-dev checkout at {sv_pin['ask_dev_root']} is dirty -- "
+                  f"ask_dev_sha {sv_pin['ask_dev_sha']} names HEAD, not the working "
+                  "tree this run actually scored with", file=sys.stderr)
 
     # INSTRUMENT V2 — subject identity, read back from the raw attempt files under
     # the SAME --in root. Applies retroactively to any arm that kept its per-attempt
@@ -718,6 +728,7 @@ def main():
             "schema_version": sv_pin["schema_version"],
             "legacy_scorer_version": sv_pin["legacy_scorer_version"],
             "ask_dev_sha": sv_pin["ask_dev_sha"],
+            "ask_dev_dirty": sv_pin["ask_dev_dirty"],
             "ask_dev_root": sv_pin["ask_dev_root"],
             "corpus_version": _corpus_version,
             **sv_bridge.aggregate(_sv_by_id.values()),

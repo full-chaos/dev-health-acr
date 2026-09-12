@@ -16,18 +16,49 @@ corpus/test_semantic_verdict_proof.py against vendored real data, and by
 this lane's own manual replay of the 36-row/9-rep proofs of record (see
 docs/PR TEST-EVIDENCE) -- neither is reproduced here.
 
+KNOWN GAP, NOT FIXED HERE BY DESIGN (found on #515 r1): FAKE_SEMANTIC_VERDICT
+is scalar-`expect` only -- no `any_of` alternative, no real ajv/schema
+validation, and `audit_window_exchange` is a no-op stub, not a real
+family/window audit. Modeling `any_of`/ajv acceptance in acr's own fake would
+be this file re-implementing CHAOS-5620's acceptance logic one layer down --
+the exact anti-pattern this module already avoids for the scalar case -- so
+that surface stays covered ONLY by ask-dev's own suite and the manual replay
+above, never by a committed acr test. A reader chasing "is any_of covered"
+should stop here, not assume the fake grows to answer it.
+
 Run via run_pins.sh (sets PYTHONPATH=testdata_corpus, the real `corpus`
 module this file's own in-process fixture builder needs to import
 run_shard/harness), or standalone:
   PYTHONPATH=testdata_corpus python3 test_findings_5625.py
 """
 import json
+import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+
+# This file's git-init controls (test_resolve_ask_dev_names_the_pin_and_versions,
+# test_resolve_ask_dev_names_a_dirty_checkout, test_git_sha_reads_the_checkouts_own_metadata)
+# run `git commit` against a throwaway repo with no signing key available.
+# `git commit` inherits this process's environment, so a machine with a
+# global/system `commit.gpgsign` (or a global `user.signingkey`) makes those
+# commits fail outright -- these controls are not testing signing, so it is
+# disabled the same way the git CLI itself documents for a config-free run,
+# not by asserting anything about the ambient git configuration.
+#
+# GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM only redirect the global/system config
+# FILES -- they do nothing about git's separate GIT_CONFIG_COUNT /
+# GIT_CONFIG_KEY_<n> / GIT_CONFIG_VALUE_<n> environment-variable config
+# source, which a caller can use to set `commit.gpgsign=true` (or any other
+# key) with no config file involved at all. GIT_CONFIG_COUNT=0 tells git to
+# read ZERO such pairs, so any GIT_CONFIG_KEY_*/GIT_CONFIG_VALUE_* the
+# ambient environment already set are ignored regardless of how many exist.
+os.environ["GIT_CONFIG_GLOBAL"] = "/dev/null"
+os.environ["GIT_CONFIG_SYSTEM"] = "/dev/null"
+os.environ["GIT_CONFIG_COUNT"] = "0"
 sys.path.insert(0, str(HERE))
 
 
@@ -101,6 +132,12 @@ def _write_fake_ask_dev(base):
     corpus_dir.mkdir(parents=True, exist_ok=True)
     (corpus_dir / "expect_schema.py").write_text(FAKE_EXPECT_SCHEMA)
     (corpus_dir / "semantic_verdict.py").write_text(FAKE_SEMANTIC_VERDICT)
+    # A real ask-dev checkout gitignores __pycache__/, same as this repo does
+    # -- match that here so merely IMPORTING these modules (which writes
+    # __pycache__/*.pyc as an unavoidable interpreter side effect) does not
+    # itself make _git_dirty's untracked-files check report a checkout that
+    # nothing actually edited as dirty.
+    (base / ".gitignore").write_text("__pycache__/\n*.pyc\n")
     return corpus_dir
 
 
@@ -226,6 +263,7 @@ def test_resolve_ask_dev_names_the_pin_and_versions():
         _require(proc.returncode == 0, proc.stderr)
         pin = json.loads(proc.stdout)
         _require(pin["ask_dev_sha"] == want_sha, pin)
+        _require(pin["ask_dev_dirty"] is False, pin)
         _require(pin["scorer_version"] == "fake-scorer-v1", pin)
         _require(pin["policy_version"] == "fake-policy-v1", pin)
         _require(pin["schema_version"] == "fake-schema-v1", pin)
@@ -235,6 +273,141 @@ def test_resolve_ask_dev_names_the_pin_and_versions():
 def svb_adapter_version():
     import semantic_verdict_bridge as svb
     return svb.LEGACY_SCORER_ADAPTER_VERSION
+
+
+def test_resolve_ask_dev_names_a_dirty_checkout():
+    """CHAOS-5633: a tracked-file edit left uncommitted after the pin's HEAD
+    sha is exactly the gap the finding named -- ask_dev_sha alone would still
+    read as a clean, trustworthy pin. ask_dev_dirty must say otherwise, and
+    the sha itself must still be HEAD's (a dirty tree does not invent a
+    different commit)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp) / "fake-ask-dev"
+        corpus_dir = _write_fake_ask_dev(base)
+        subprocess.run(["git", "init", "-q", str(base)], check=True)
+        subprocess.run(["git", "-C", str(base), "config", "user.email", "t@example.com"], check=True)
+        subprocess.run(["git", "-C", str(base), "config", "user.name", "t"], check=True)
+        subprocess.run(["git", "-C", str(base), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(base), "commit", "-q", "-m", "x"], check=True)
+        want_sha = subprocess.run(["git", "-C", str(base), "rev-parse", "HEAD"],
+                                   capture_output=True, text=True, check=True).stdout.strip()
+        # A tracked-file edit, left UNSTAGED -- the shape CHAOS-5633 named:
+        # HEAD is clean, the working tree is not.
+        (corpus_dir / "expect_schema.py").write_text(FAKE_EXPECT_SCHEMA + "\n# edited\n")
+
+        code = (
+            "import sys, json; sys.path.insert(0, %r); "
+            "import semantic_verdict_bridge as svb; "
+            "_, _, pin = svb.resolve_ask_dev(); print(json.dumps(pin))"
+        ) % str(HERE)
+        env = {"PATH": "/usr/bin:/bin:/usr/local/bin", "PYTHONPATH": str(corpus_dir)}
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+        _require(proc.returncode == 0, proc.stderr)
+        pin = json.loads(proc.stdout)
+        _require(pin["ask_dev_sha"] == want_sha, "a dirty tree must not change the reported sha")
+        _require(pin["ask_dev_dirty"] is True, pin)
+
+
+def test_resolve_ask_dev_names_dirty_from_an_untracked_but_imported_file():
+    """A tracked module can import a NEW sibling module that has not been
+    committed yet, so the untracked file is part of what Python actually
+    loads. Constructing exactly that shape and confirming both that the
+    import succeeds (proving the untracked file really is on the import
+    path) and that ask_dev_dirty is True."""
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp) / "fake-ask-dev"
+        corpus_dir = base / "corpus"
+        corpus_dir.mkdir(parents=True)
+        (corpus_dir / "expect_schema.py").write_text(
+            "import worktree_extra\n" + FAKE_EXPECT_SCHEMA)
+        (corpus_dir / "semantic_verdict.py").write_text(FAKE_SEMANTIC_VERDICT)
+        (base / ".gitignore").write_text("__pycache__/\n*.pyc\n")
+        subprocess.run(["git", "init", "-q", str(base)], check=True)
+        subprocess.run(["git", "-C", str(base), "config", "user.email", "t@example.com"], check=True)
+        subprocess.run(["git", "-C", str(base), "config", "user.name", "t"], check=True)
+        subprocess.run(["git", "-C", str(base), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(base), "commit", "-q", "-m", "x"], check=True)
+        # worktree_extra is UNTRACKED -- committed nothing about it.
+        (corpus_dir / "worktree_extra.py").write_text("X = 1\n")
+
+        code = (
+            "import sys, json; sys.path.insert(0, %r); "
+            "import semantic_verdict_bridge as svb; "
+            "_, _, pin = svb.resolve_ask_dev(); print(json.dumps(pin))"
+        ) % str(corpus_dir)
+        env = {"PATH": "/usr/bin:/bin:/usr/local/bin", "PYTHONPATH": str(corpus_dir)}
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+        _require(proc.returncode == 0, proc.stderr)
+        pin = json.loads(proc.stdout)
+        _require(pin["ask_dev_dirty"] is True,
+                  f"an untracked file the tracked module imports must count as dirty: {pin}")
+
+
+def test_git_init_controls_ignore_git_config_env_injection():
+    """GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM redirect only the global/system
+    config FILES; a caller can still set `commit.gpgsign=true` (or any other
+    key) via GIT_CONFIG_COUNT/GIT_CONFIG_KEY_<n>/GIT_CONFIG_VALUE_<n> with no
+    config file involved at all. GIT_CONFIG_COUNT=0 (set at this module's
+    import, see above) must make that injection inert. Runs THIS module's
+    own import-time override (not a re-invocation of main(), which would
+    recurse into this very test) against a throwaway `git commit`, with the
+    injection layered on top via the subprocess env."""
+    env = dict(os.environ)
+    env.update({
+        "PATH": "/usr/bin:/bin:/usr/local/bin",
+        "GIT_CONFIG_COUNT": "2",
+        "GIT_CONFIG_KEY_0": "commit.gpgsign", "GIT_CONFIG_VALUE_0": "true",
+        "GIT_CONFIG_KEY_1": "user.signingkey", "GIT_CONFIG_VALUE_1": "DOES_NOT_EXIST",
+    })
+    code = (
+        "import sys; sys.path.insert(0, %r); "
+        "import test_findings_5625 as t; "  # re-triggers this module's own GIT_CONFIG_COUNT=0 override
+        "import subprocess, tempfile\n"
+        "with tempfile.TemporaryDirectory() as tmp:\n"
+        "    subprocess.run(['git', 'init', '-q', tmp], check=True)\n"
+        "    subprocess.run(['git', '-C', tmp, 'config', 'user.email', 't@example.com'], check=True)\n"
+        "    subprocess.run(['git', '-C', tmp, 'config', 'user.name', 't'], check=True)\n"
+        "    subprocess.run(['git', '-C', tmp, 'commit', '-q', '-m', 'x', '--allow-empty'], check=True)\n"
+        "print('OK')\n"
+    ) % str(HERE)
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+    _require(proc.returncode == 0,
+              f"an ambient GIT_CONFIG_COUNT injecting commit.gpgsign=true must not "
+              f"break this module's git-init controls:\n{proc.stdout}\n{proc.stderr}")
+    _require(proc.stdout.strip() == "OK", proc.stdout)
+
+
+def test_resolve_ask_dev_refuses_an_unusable_version_value():
+    """Attribute ACCESS succeeding is not the same as the value being
+    usable: `None`, `""`, and a whitespace-only string all raise nothing on
+    access, so a companion carrying one would otherwise publish
+    `available=True` with invalid version metadata, the exact masquerade
+    this whole ticket exists to catch. Every cell of that shape, executed."""
+    code = (
+        "import sys; sys.path.insert(0, %r); "
+        "import semantic_verdict_bridge as svb\n"
+        "try:\n"
+        "    svb.resolve_ask_dev()\n"
+        "except svb.AskDevUnavailable as e:\n"
+        "    print('REFUSED:' + str(e))\n"
+        "else:\n"
+        "    print('DID NOT REFUSE')\n"
+    ) % str(HERE)
+    for cell, replacement in (
+        ("None", "SCORER_VERSION = None"),
+        ("empty string", 'SCORER_VERSION = ""'),
+        ("whitespace-only string", 'SCORER_VERSION = "   \\t"'),
+    ):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "bad-version-ask-dev"
+            corpus_dir = _write_fake_ask_dev(base)
+            (corpus_dir / "semantic_verdict.py").write_text(
+                FAKE_SEMANTIC_VERDICT.replace('SCORER_VERSION = "fake-scorer-v1"', replacement))
+            env = {"PATH": "/usr/bin:/bin:/usr/local/bin", "PYTHONPATH": str(corpus_dir)}
+            proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+            _require(proc.returncode == 0, (cell, proc.stderr))
+            _require(proc.stdout.startswith("REFUSED:"), (cell, proc.stdout))
+            _require("unusable version value" in proc.stdout, (cell, proc.stdout))
 
 
 def test_resolve_ask_dev_refuses_by_name_when_unimportable():
@@ -253,6 +426,69 @@ def test_resolve_ask_dev_refuses_by_name_when_unimportable():
     _require(proc.returncode == 0, proc.stderr)
     _require(proc.stdout.startswith("REFUSED:"), proc.stdout)
     _require("corpus/expect_schema.py" in proc.stdout, proc.stdout)
+
+
+def test_resolve_ask_dev_refuses_a_present_but_broken_companion():
+    """CHAOS-5632: import succeeding is not enough -- a companion missing a
+    required version attribute (a partial checkout, a version bump landed on
+    one side only) must refuse the SAME way an unimportable one does
+    (AskDevUnavailable, never an uncaught AttributeError that would abort
+    merge_corpus.py's merge instead of degrading it to legacy-only)."""
+    code = (
+        "import sys; sys.path.insert(0, %r); "
+        "import semantic_verdict_bridge as svb\n"
+        "try:\n"
+        "    svb.resolve_ask_dev()\n"
+        "except svb.AskDevUnavailable as e:\n"
+        "    print('REFUSED:' + str(e))\n"
+        "else:\n"
+        "    print('DID NOT REFUSE')\n"
+    ) % str(HERE)
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp) / "broken-ask-dev"
+        corpus_dir = _write_fake_ask_dev(base)
+        # SCORER_VERSION is exactly what resolve_ask_dev reads to build the
+        # pin -- delete it so the import succeeds and the attribute read
+        # does not.
+        (corpus_dir / "semantic_verdict.py").write_text(
+            FAKE_SEMANTIC_VERDICT.replace('SCORER_VERSION = "fake-scorer-v1"\n', ""))
+        env = {"PATH": "/usr/bin:/bin:/usr/local/bin", "PYTHONPATH": str(corpus_dir)}
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+        _require(proc.returncode == 0, proc.stderr)
+        _require(proc.stdout.startswith("REFUSED:"), proc.stdout)
+        _require("broken" in proc.stdout, proc.stdout)
+
+
+def test_resolve_ask_dev_refuses_a_mixed_companion():
+    """CHAOS-5632's other observed shape: expect_schema and semantic_verdict
+    resolving from two DIFFERENT checkouts (each on sys.path, each supplying
+    only one of the two module names) was seen to succeed silently, naming
+    one root while actually scoring with code from two. Building each half
+    in its own directory and putting both on sys.path reproduces exactly
+    that shape."""
+    code = (
+        "import sys; sys.path.insert(0, %r); "
+        "import semantic_verdict_bridge as svb\n"
+        "try:\n"
+        "    svb.resolve_ask_dev()\n"
+        "except svb.AskDevUnavailable as e:\n"
+        "    print('REFUSED:' + str(e))\n"
+        "else:\n"
+        "    print('DID NOT REFUSE')\n"
+    ) % str(HERE)
+    with tempfile.TemporaryDirectory() as tmp:
+        base_a = Path(tmp) / "ask-dev-a"
+        base_b = Path(tmp) / "ask-dev-b"
+        corpus_a = _write_fake_ask_dev(base_a)
+        corpus_b = _write_fake_ask_dev(base_b)
+        (corpus_a / "semantic_verdict.py").unlink()
+        (corpus_b / "expect_schema.py").unlink()
+        env = {"PATH": "/usr/bin:/bin:/usr/local/bin",
+               "PYTHONPATH": f"{corpus_a}:{corpus_b}"}
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+        _require(proc.returncode == 0, proc.stderr)
+        _require(proc.stdout.startswith("REFUSED:"), proc.stdout)
+        _require("mixed" in proc.stdout, proc.stdout)
 
 
 # ---------------------------------------------------------------------------
@@ -337,7 +573,7 @@ def test_merge_publishes_semantic_verdict_without_moving_the_legacy_bucket():
         prov_sv = verdict["provenance"]["semantic_verdict"]
         _require(prov_sv["available"] is True, prov_sv)
         for key in ("scorer_version", "policy_version", "schema_version",
-                    "legacy_scorer_version", "ask_dev_sha", "ask_dev_root",
+                    "legacy_scorer_version", "ask_dev_sha", "ask_dev_dirty", "ask_dev_root",
                     "corpus_version", "verdict_counts", "family_relation_counts",
                     "confirmed_family_verified", "unscored_count", "unscored_reasons"):
             _require(key in prov_sv, f"provenance.semantic_verdict missing {key!r}: {prov_sv}")

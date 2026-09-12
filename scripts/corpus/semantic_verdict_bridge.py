@@ -65,7 +65,12 @@ class AskDevUnavailable(Exception):
 
 def resolve_ask_dev():
     """Import ask-dev's CHAOS-5620 modules and identify the pin actually in
-    use. Raises AskDevUnavailable when they are not importable.
+    use. Raises AskDevUnavailable when they are not importable, OR when they
+    import but are not a coherent, usable checkout -- a PRESENT but BROKEN
+    companion must degrade to legacy-only exactly like a MISSING one (see
+    merge_corpus.py's own try/except around this call): a merge that aborts
+    on a broken companion instead of degrading is the one thing this
+    function exists to prevent.
 
     Returns (expect_schema, semantic_verdict, pin) where `pin` carries
     `ask_dev_root`/`ask_dev_sha` (read from the checkout's OWN git metadata,
@@ -86,15 +91,65 @@ def resolve_ask_dev():
             "and expect_schema.py resolves src/contracts/schemas/, both relative to "
             "the ask-dev repo root). See corpus/README.md \"## Supplying a corpus\"."
         ) from exc
-    root = Path(semantic_verdict.__file__).resolve().parent.parent
-    pin = {
-        "ask_dev_root": str(root),
-        "ask_dev_sha": _git_sha(root),
-        "scorer_version": semantic_verdict.SCORER_VERSION,
-        "policy_version": semantic_verdict.POLICY_VERSION,
-        "schema_version": expect_schema.SCHEMA_VERSION,
-        "legacy_scorer_version": LEGACY_SCORER_ADAPTER_VERSION,
-    }
+
+    # A MIXED companion -- expect_schema resolved from one checkout and
+    # semantic_verdict from another -- is possible whenever sys.path carries
+    # more than one candidate corpus/ directory (each module name resolves
+    # independently), and would otherwise publish a pin naming ONE root while
+    # actually scoring with code from two. Both modules must resolve under
+    # the SAME corpus/ directory before either is trusted.
+    schema_dir = Path(expect_schema.__file__).resolve().parent
+    verdict_dir = Path(semantic_verdict.__file__).resolve().parent
+    if schema_dir != verdict_dir:
+        raise AskDevUnavailable(
+            f"corpus/expect_schema.py resolved from {schema_dir} but "
+            f"corpus/semantic_verdict.py resolved from {verdict_dir} -- a mixed "
+            "companion (two different checkouts on sys.path) is not a usable pin."
+        )
+
+    try:
+        root = verdict_dir.parent
+        version_fields = {
+            "scorer_version": semantic_verdict.SCORER_VERSION,
+            "policy_version": semantic_verdict.POLICY_VERSION,
+            "schema_version": expect_schema.SCHEMA_VERSION,
+        }
+        # Attribute access succeeding is not the same as the attribute being
+        # a usable value -- `SCORER_VERSION = None`, `""`, or a whitespace-only
+        # string all raise nothing, so a companion carrying one would
+        # otherwise publish `available=True` with invalid version metadata,
+        # the exact masquerade CHAOS-5632 exists to catch. Every version
+        # field this pin promises callers ("every version string a published
+        # verdict record must carry", this function's own docstring) must be
+        # a string with non-whitespace content.
+        bad = {k: v for k, v in version_fields.items() if not isinstance(v, str) or not v.strip()}
+        if bad:
+            raise AskDevUnavailable(
+                f"corpus/expect_schema.py and corpus/semantic_verdict.py imported from "
+                f"{verdict_dir} but carry an unusable version value: {bad!r} (expected a "
+                "non-empty string for each). A companion checkout that is present but "
+                "broken must be treated the same as a missing one."
+            )
+        pin = {
+            "ask_dev_root": str(root),
+            "ask_dev_sha": _git_sha(root),
+            "ask_dev_dirty": _git_dirty(root),
+            **version_fields,
+            "legacy_scorer_version": LEGACY_SCORER_ADAPTER_VERSION,
+        }
+    except AskDevUnavailable:
+        raise
+    except Exception as exc:
+        # A companion that IMPORTS but is missing a required attribute (a
+        # version bump landed on one side only, a partial checkout, a stub)
+        # or whose attribute access itself raises is exactly as unusable as
+        # one that does not import at all, and must be named and degraded
+        # the same way, not left to crash merge_corpus.py's caller.
+        raise AskDevUnavailable(
+            f"corpus/expect_schema.py and corpus/semantic_verdict.py imported from "
+            f"{verdict_dir} but are not a usable pin: {exc!r}. A companion checkout "
+            "that is present but broken must be treated the same as a missing one."
+        ) from exc
     return expect_schema, semantic_verdict, pin
 
 
@@ -117,6 +172,38 @@ def _git_sha(root):
         return None
     sha = proc.stdout.strip()
     return sha or None
+
+
+def _git_dirty(root):
+    """Whether the ask-dev checkout's working tree differs from `HEAD` --
+    tracked-file edits, staged changes, AND untracked files all count. A
+    tracked module can import a NEW, not-yet-committed sibling module, and
+    that sibling is then very much part of what Python actually loads even
+    though it is untracked -- so an untracked-files exclusion here would
+    miss exactly the checkouts most likely to differ from HEAD. A stray
+    unrelated untracked file elsewhere in the checkout also counts under
+    this rule, trading a false positive there for never a false negative on
+    the code path that matters -- the same direction CHAOS-5633 already
+    picked for `ask_dev_sha` staying visible over a false "trustworthy"
+    clean read.
+
+    A dirty checkout does not stop `ask_dev_sha` from being reported --
+    the sha is still a fact about the checkout -- but publishing it next to
+    a clean HEAD, with no signal that the code Python actually loaded may
+    differ from what that sha alone implies, is misleading in exactly the
+    way CHAOS-5633 found. None (never a bare False) when this cannot be
+    determined at all -- the same discipline `_git_sha` uses for a checkout
+    with no git metadata."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    return bool(proc.stdout.strip())
 
 
 def corpus_version_of(corpus_module):
