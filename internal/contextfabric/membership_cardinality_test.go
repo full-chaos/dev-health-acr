@@ -557,6 +557,11 @@ func TestMembershipCardinalityLineCarriesNoKeyOutsideItsAllowList(t *testing.T) 
 		"org_id": true, "family": true, "requirement": true, "outcome": true,
 		"served": true, "declared": true, "cohort_complete": true,
 		"cohort_truncated": true, "basis": true, "overrun": true,
+		// cause_coverage names a cut no plan step recorded; claimed says
+		// whether the count reached the document as a claim. Both are closed
+		// values or a bool -- no identifier, no label, no free text -- which
+		// is the property this allow-list exists to hold.
+		"cause_coverage": true, "claimed": true,
 	}
 	for key := range records[0] {
 		if !allowed[key] {
