@@ -249,6 +249,17 @@ type Config struct {
 	// own doc comments for the event vocabulary and the corpus-safety
 	// discipline every event field is held to.
 	ResolutionTracer graphrank.ResolutionTracer
+
+	// OperandResolutionSink (turn-1 comparison work) is the INFO-level,
+	// context-taking observable for comparison resolution -- see
+	// graphrank/comparison_telemetry.go for what each event makes visible and
+	// which regression would otherwise be invisible on a rig.
+	//
+	// A SEPARATE FIELD FROM ResolutionTracer ABOVE, deliberately. That tracer
+	// builds its own background context and emits at Debug; these events must
+	// carry the request context and be readable at the level a production rig
+	// runs at, and one field cannot be both. Optional and nil-safe.
+	OperandResolutionSink graphrank.OperandResolutionSink
 	// CensusFunc (CHAOS-3899; CONSUMED LIVE in the commit decision as of
 	// CHAOS-3896 Slice C, design brief v6 §1.4) is optional (nil-safe),
 	// same convention as RawSignalObserver/ResolutionTracer above: the

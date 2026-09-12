@@ -1,0 +1,938 @@
+package graphrank
+
+// TURN-1 RESOLUTION OF A TWO-NAMED-OPERAND COMPARISON -- the resolver-local
+// working state, and the single place it becomes a published resolution.
+//
+// NOTHING IN THIS FILE IS EVER SERIALIZED. Not persisted, not embedded in a
+// contract DTO, not reconstructed by a consumer. That is a hard constraint
+// rather than a preference: contextfabric.SubjectResolution is a TYPE ALIAS to
+// the contracts type and is embedded with a JSON tag in two published places,
+// so a field added to it is a WIRE CHANGE. The operand structure this file
+// works in therefore lives here, dies here, and reaches the wire only through
+// the existing fields publishComparisonResolution writes.
+//
+// GraphReader.ResolveSubjects keeps its existing return signature.
+//
+// WHAT THIS FILE DOES NOT DO. It does not retrieve. Each slot's candidates
+// arrive already authorized, collision-checked, truncated and proof-carrying
+// from the retrieval work resolve.go owns -- extracted there and reused here
+// rather than duplicated, because a second copy of those rules is a second
+// place for them to be wrong. This file decides, and publishes.
+
+import (
+	"context"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
+)
+
+// operandSlotState is the closed vocabulary for what happened to ONE operand.
+//
+// CLOSED, AND IT NEVER NAMES A COMBINATION. An ambiguous operand beside a
+// resolved one is two slot states and one aggregate hold, never a single
+// "partially resolved" token -- the same discipline the telemetry vocabulary
+// carries, for the same reason: a combination token cannot be counted, and the
+// moment one exists every new pairing needs another.
+type operandSlotState string
+
+const (
+	// operandSlotResolved: exactly one winner, of this slot's stated kind.
+	operandSlotResolved operandSlotState = "resolved"
+	// operandSlotNoCandidate: retrieval found nothing for this operand's own
+	// terms. The user is asked to RESTATE this side, not to choose.
+	operandSlotNoCandidate operandSlotState = "no_candidate"
+	// operandSlotAmbiguous: more than one candidate and no unique winner.
+	operandSlotAmbiguous operandSlotState = "ambiguous"
+	// operandSlotWrongKind: a winner was found but its subject kind is not
+	// the kind the question stated for this operand.
+	operandSlotWrongKind operandSlotState = "wrong_kind"
+	// operandSlotOverCommitted: more than one subject bound to this one slot.
+	// Admissible cardinality here is ZERO OR ONE; more is refused rather than
+	// narrowed, because choosing between them is the guess this design exists
+	// to avoid.
+	operandSlotOverCommitted operandSlotState = "over_committed"
+	// operandSlotScoped: a scoped operand. Never resolved in this cut -- the
+	// state exists so the hold can describe the side it is holding.
+	operandSlotScoped operandSlotState = "scoped"
+)
+
+// operandSlotRun is ONE operand's run: what was retrieved for its own terms,
+// what was bound to it, and the decision that follows.
+type operandSlotRun struct {
+	// slot is the structural description, straight from the classifier. Its
+	// Position is the ordering authority for everything published.
+	slot contextfabric.ComparisonOperandSlot
+
+	// candidates are the authorized candidates retrieved for THIS SLOT'S OWN
+	// TERMS. Neither the whole-question term bag nor another slot's terms may
+	// contribute to this list -- that isolation IS the fix.
+	candidates []contextfabric.SubjectCandidate
+
+	// committed holds this slot's winner. ADMISSIBLE CARDINALITY IS ZERO OR
+	// ONE. A slot handed more than one subject is over-committed and refused;
+	// it is never silently narrowed to the first, because "the first" is a
+	// property of iteration order, not of evidence.
+	committed []contextfabric.SubjectRef
+
+	// bases and digests are this slot's own commit proofs, kept per slot so
+	// the union at publication can be first-writer-wins by subject key rather
+	// than letting the second slot overwrite the first's.
+	bases   contextfabric.CommitBasisSet
+	digests contextfabric.CommitDecisionDigestSet
+
+	// receiptBound records that this slot's winner arrived from a carried
+	// receipt rather than from this turn's retrieval. It changes no decision
+	// here; it is carried for telemetry and for the prompt's wording.
+	receiptBound bool
+
+	// retrievalDegraded is THIS SLOT'S retrieval health. Kept per slot because
+	// one operand's degradation must be visible as that operand's, and must
+	// still propagate to the aggregate.
+	retrievalDegraded bool
+}
+
+// state derives what happened to this operand from its own contents.
+//
+// DERIVED, NEVER ASSIGNED. A stored state field would be a second authority
+// that could disagree with the candidates and the committed set it claims to
+// summarize, and every reader would then have to guess which one was right.
+func (s operandSlotRun) state() operandSlotState {
+	if s.slot.Variant == contextfabric.ComparisonOperandScoped {
+		return operandSlotScoped
+	}
+	switch {
+	case len(s.committed) > 1:
+		return operandSlotOverCommitted
+	case len(s.committed) == 1:
+		if s.committed[0].Kind != s.slot.Kind {
+			return operandSlotWrongKind
+		}
+		return operandSlotResolved
+	case len(s.candidates) == 0:
+		return operandSlotNoCandidate
+	}
+	return operandSlotAmbiguous
+}
+
+// resolved reports whether this slot may contribute a published subject.
+func (s operandSlotRun) resolved() bool { return s.state() == operandSlotResolved }
+
+// comparisonResolutionRun owns the ordered operand runs and the aggregate
+// publication decision.
+type comparisonResolutionRun struct {
+	// admission is the classifier's verdict, carried so publication can
+	// distinguish a held scoped pair from a pair that simply did not resolve.
+	admission contextfabric.ComparisonAdmission
+
+	// slots are ordered by the validated frame's operand position. NEVER
+	// assembled by iterating a subject map: published committed order follows
+	// this order, and a map walk is not an order at all.
+	slots []operandSlotRun
+
+	// unboundReceipts counts carried selections that matched no operand, or
+	// both. Either way they are UNBOUND rather than guessed, and either way
+	// they hold the comparison -- a selection the server could not associate
+	// with exactly one operand has completed neither.
+	unboundReceipts int
+}
+
+// retrievalDegraded reports the AGGREGATE retrieval health.
+//
+// Any slot's degradation is the comparison's degradation. A comparison is one
+// answer over two operands, so evidence missing from either side is missing
+// from the answer, and reporting otherwise would let a half-degraded
+// comparison read as fully evidenced.
+func (r comparisonResolutionRun) retrievalDegraded() bool {
+	for _, slot := range r.slots {
+		if slot.retrievalDegraded {
+			return true
+		}
+	}
+	return false
+}
+
+// publishable is ruling 1A, in one place.
+//
+// Committed subjects are released ONLY when every condition holds: the pair
+// was admitted, every slot has exactly one winner of its own stated kind, the
+// winners are distinct subjects, and no carried selection remains ambiguously
+// bound. Anything less holds the WHOLE comparison -- there is no half-answer,
+// because a half-answer cannot be completed: the shared projection drops a
+// clarification unless the answer status is the clarification-required one, so
+// the resolved side would arrive without the action that finishes it.
+func (r comparisonResolutionRun) publishable() bool {
+	if r.admission != contextfabric.ComparisonAdmittedNamedPair {
+		return false
+	}
+	if r.unboundReceipts > 0 {
+		return false
+	}
+	if len(r.slots) != comparisonSlotCount {
+		return false
+	}
+	seen := make(map[string]struct{}, len(r.slots))
+	for _, slot := range r.slots {
+		if !slot.resolved() {
+			return false
+		}
+		key := SubjectKey(slot.committed[0])
+		if _, duplicate := seen[key]; duplicate {
+			// ONE SUBJECT CANNOT BE BOTH OPERANDS. Publishing it twice would
+			// present a comparison of a thing with itself as a completed
+			// answer; dropping one side would silently turn a two-operand
+			// question into a one-operand one.
+			return false
+		}
+		seen[key] = struct{}{}
+	}
+	return true
+}
+
+// comparisonSlotCount is the operand count this cut publishes. It mirrors the
+// classifier's own cut constant; both are checked because they are reached by
+// different callers and a run can be assembled by a caller that never ran the
+// classifier.
+const comparisonSlotCount = 2
+
+// publishComparisonResolution is the SOLE conversion from this internal run to
+// the existing published resolution fields. There is no other writer, so there
+// is no second place for the hold to be forgotten.
+//
+// ON A HOLD it publishes an EMPTY committed set and NO committed-subject
+// digests, while preserving the authorized candidates and their real receipt
+// identities -- the candidates are what a user selects from, and inventing or
+// dropping receipt ids would break the follow-up that completes the answer.
+func publishComparisonResolution(run comparisonResolutionRun, budget int) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet) {
+	resolution := contextfabric.SubjectResolution{
+		Candidates: combineSlotCandidates(run, budget),
+		Committed:  []contextfabric.SubjectRef{},
+	}
+	bases := contextfabric.CommitBasisSet{}
+	digests := contextfabric.CommitDecisionDigestSet{}
+
+	if !run.publishable() {
+		// THE HOLD. One clarification, naming both operands, in the EXISTING
+		// prompt field -- no new field, no new token.
+		resolution.ClarificationPrompt = comparisonClarificationPrompt(run)
+		return resolution, bases, digests
+	}
+
+	for _, slot := range run.slots {
+		subject := slot.committed[0]
+		resolution.Committed = append(resolution.Committed, subject)
+		// FIRST WRITER WINS, BY SUBJECT KEY. The union is what stops the
+		// second slot's proof map overwriting the first's for a subject both
+		// happened to see; the published basis must describe the commit that
+		// actually released the subject.
+		key := contextfabric.SubjectMapKey(subject)
+		if _, exists := bases[key]; !exists {
+			bases.Record(subject, slot.bases.For(subject))
+		}
+		if _, exists := digests[key]; !exists {
+			digests.Record(subject, slot.digests.For(subject))
+		}
+	}
+	return resolution, bases, digests
+}
+
+// combineSlotCandidates flattens the per-slot candidate lists into the single
+// published list, in SLOT ORDER, under the existing global candidate budget.
+//
+// THE BUDGET IS SPENT FAIRLY, ROUND-ROBIN ACROSS SLOTS, not first-slot-first.
+// A first slot with many rivals would otherwise consume the whole budget and
+// leave the second operand with no candidates at all -- and the user would be
+// asked to choose for one side of a comparison whose other side had silently
+// vanished from the offer.
+//
+// Within a slot the existing confidence/key total order is retained: this
+// function never re-sorts a slot's list, it only interleaves them.
+func combineSlotCandidates(run comparisonResolutionRun, budget int) []contextfabric.SubjectCandidate {
+	combined := make([]contextfabric.SubjectCandidate, 0)
+	if len(run.slots) == 0 {
+		return combined
+	}
+	seen := make(map[string]struct{})
+	longest := 0
+	for _, slot := range run.slots {
+		if len(slot.candidates) > longest {
+			longest = len(slot.candidates)
+		}
+	}
+	for depth := 0; depth < longest; depth++ {
+		for _, slot := range run.slots {
+			if depth >= len(slot.candidates) {
+				continue
+			}
+			candidate := slot.candidates[depth]
+			key := SubjectKey(candidate.Subject)
+			if _, duplicate := seen[key]; duplicate {
+				// One subject proposed by both slots appears ONCE. It is the
+				// same subject and the same receipt identity; listing it twice
+				// would offer the user the same choice under two entries.
+				continue
+			}
+			seen[key] = struct{}{}
+			combined = append(combined, candidate)
+			if budget > 0 && len(combined) == budget {
+				return combined
+			}
+		}
+	}
+	return combined
+}
+
+// ---------------------------------------------------------------------------
+// THE CLARIFICATION
+// ---------------------------------------------------------------------------
+
+// comparisonPromptMaxRunes mirrors the EXISTING published bound on
+// SubjectResolution.ClarificationPrompt, which the contract validates in RUNES
+// (utf8.RuneCountInString), not bytes. This work does not widen it.
+//
+// Stated in runes here for the same reason the validator counts them: a
+// byte-budgeted prompt would truncate a multibyte label mid-rune and produce a
+// string the validator then rejects for a reason that looks unrelated.
+const comparisonPromptMaxRunes = 2000
+
+// comparisonOperandNameMaxRunes bounds ONE operand's name inside the prompt.
+//
+// Bounded per NAME, not just in total, and this is the load-bearing half. The
+// action and both descriptions have to survive together; budgeting only the
+// whole string would let one very long label consume the room the second
+// operand's description and the action need, and the user would be shown half
+// a question that fits.
+const comparisonOperandNameMaxRunes = 120
+
+// comparisonClarificationPrompt renders ONE clarification naming BOTH operands.
+//
+// A TEMPLATE, NOT FIXED PROSE. It names operand one and operand two, each with
+// one bounded name -- a resolved side by its authorized canonical label, an
+// unresolved side by its own current frame term -- each side's state, and the
+// action required to complete the comparison. Where a side has no candidate at
+// all the selection instruction becomes a RESTATE instruction, because there is
+// nothing to select from and asking someone to choose from an empty set is
+// worse than asking them to say it again.
+//
+// SPACE FOR BOTH DESCRIPTIONS AND THE ACTION IS RESERVED FIRST. Any optional
+// explanation is appended only if it still fits, so the part that lets the user
+// finish is never the part that gets truncated.
+//
+// THERE IS NO MACHINE-READABLE SLOT-TO-CANDIDATE MAPPING PROMISED HERE, and
+// none is added: operand identity reaches the human through these descriptions.
+// A consumer that needed to know which candidate belongs to which operand would
+// need a wire change, which this work does not make.
+func comparisonClarificationPrompt(run comparisonResolutionRun) string {
+	descriptions := make([]string, 0, len(run.slots))
+	for index, slot := range run.slots {
+		descriptions = append(descriptions, comparisonSlotDescription(index, slot))
+	}
+
+	action := comparisonPromptAction(run)
+	prompt := strings.TrimSpace(strings.Join(descriptions, " ") + " " + action)
+
+	// The optional explanation, appended ONLY if the required part left room.
+	if run.unboundReceipts > 0 {
+		explanation := "Your previous selection could not be associated with exactly one of these, so it has not completed either."
+		if utf8.RuneCountInString(prompt)+1+utf8.RuneCountInString(explanation) <= comparisonPromptMaxRunes {
+			prompt = prompt + " " + explanation
+		}
+	}
+	return truncateRunes(prompt, comparisonPromptMaxRunes)
+}
+
+// comparisonSlotDescription renders ONE operand: its ordinal, its one bounded
+// name, and its state.
+func comparisonSlotDescription(index int, slot operandSlotRun) string {
+	ordinal := "The first"
+	if index > 0 {
+		ordinal = "The second"
+	}
+	name := comparisonSlotName(slot)
+	switch slot.state() {
+	case operandSlotResolved:
+		return ordinal + " is " + name + "."
+	case operandSlotScoped:
+		return ordinal + " asks for a group under " + name + ", which cannot be compared in this form."
+	case operandSlotNoCandidate:
+		return ordinal + ", " + name + ", matched nothing."
+	case operandSlotWrongKind:
+		return ordinal + ", " + name + ", matched a subject of a different kind than the question asked for."
+	case operandSlotOverCommitted:
+		return ordinal + ", " + name + ", matched more than one subject at once."
+	}
+	return ordinal + ", " + name + ", matches more than one subject."
+}
+
+// comparisonSlotName is the ONE bounded name a side is described by: its
+// authorized canonical label when it resolved, its own current frame term
+// otherwise.
+//
+// NEVER THE WHOLE QUESTION, and never another slot's term. A description
+// assembled from the question text would put provenance the slot never had
+// into the sentence that names it.
+func comparisonSlotName(slot operandSlotRun) string {
+	if len(slot.committed) == 1 && strings.TrimSpace(slot.committed[0].Label) != "" {
+		return quoteBounded(slot.committed[0].Label)
+	}
+	for _, term := range slot.slot.Terms {
+		if strings.TrimSpace(term) != "" {
+			return quoteBounded(term)
+		}
+	}
+	return "the unnamed side"
+}
+
+// comparisonPromptAction is the required action, chosen deterministically from
+// the slot states rather than from the first interesting one found.
+func comparisonPromptAction(run comparisonResolutionRun) string {
+	var states []operandSlotState
+	for _, slot := range run.slots {
+		states = append(states, slot.state())
+	}
+	has := func(want operandSlotState) bool {
+		for _, state := range states {
+			if state == want {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has(operandSlotScoped):
+		return "Name a single subject for that side, or ask about the group on its own."
+	case has(operandSlotNoCandidate):
+		// RESTATE, not select: there is nothing to select from.
+		return "Restate that side and ask again."
+	case has(operandSlotWrongKind):
+		return "Name a subject of the kind the question asks about, and ask again."
+	case has(operandSlotAmbiguous), has(operandSlotOverCommitted):
+		return "Say which one you mean for that side, and both will be compared together."
+	}
+	return "Ask again naming both subjects."
+}
+
+// quoteBounded renders one name, bounded, in quotes.
+func quoteBounded(value string) string {
+	return `"` + truncateRunes(strings.TrimSpace(value), comparisonOperandNameMaxRunes) + `"`
+}
+
+// truncateRunes cuts to a RUNE budget, never a byte budget, so a multibyte
+// label cannot be split mid-rune into a string the contract validator then
+// rejects.
+func truncateRunes(value string, limit int) string {
+	if utf8.RuneCountInString(value) <= limit {
+		return value
+	}
+	runes := []rune(value)
+	return strings.TrimSpace(string(runes[:limit]))
+}
+
+// resolveNamedComparison resolves an admitted operand pair, each operand from
+// ITS OWN terms, and decides whether publication may proceed.
+//
+// SLOT ISOLATION IS THE WHOLE MECHANISM. Every slot gets its own candidate
+// map, its own observation maps, its own vector-similarity side map and its own
+// identity-claim recorders. Nothing crosses: neither the whole-question term
+// bag nor the other operand's terms can enter a slot's identity pool, which is
+// exactly what stops two well-posed operands collapsing into one ambiguity.
+//
+// THE SIX SINGLETON COMMIT GATES STAY SINGLETON. This function does not widen
+// them, delete them, or turn their assignments into appends. It calls the
+// existing gate ONCE PER OPERAND, on that operand's own pool -- so each
+// invocation still decides about exactly one subject, with every guard it has
+// today intact, and the pair-ness lives out here instead of being pushed down
+// into a gate that was never asked to hold two.
+//
+// NO READS HAPPEN HERE. The evidence round and the census callbacks are simply
+// never invoked on this path, and that absence IS the no-read hold: a
+// comparison that cannot publish must not have read anything to publish about.
+func resolveNamedComparison(
+	ctx context.Context,
+	principal storage.Principal,
+	request contextfabric.InvestigationRequest,
+	deps ResolveDeps,
+	comparison contextfabric.ComparisonOperands,
+	// contest is the CHAOS-5422 contest admission decided once for the whole
+	// call, threaded through rather than re-derived or dropped. It refuses
+	// nothing for a comparison today -- decideContestScope only narrows a
+	// children_of_scope frame, and this path requires an explicit set -- but
+	// 5422's rule is that the property belongs where the candidate set is
+	// BUILT, so every site here that admits a candidate consults it and a
+	// future widening of either seam inherits the refusal instead of needing
+	// to remember it.
+	contest *contestAdmission,
+) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
+	run := comparisonResolutionRun{admission: comparison.Admission}
+
+	// THE SCOPED HOLD FIRES BEFORE ANY RETRIEVAL. Not after a failed attempt to
+	// resolve the anchor, and not after reading anything: the pair is refused
+	// on its VARIANT, which is knowable from the frame alone. Admitting it
+	// would flip the whole answer into the absorbing degraded state, so a
+	// limitation this resolver introduced would reach the user looking like a
+	// data problem.
+	if comparison.Admission == contextfabric.ComparisonHeldScopedOperand {
+		for _, slot := range comparison.Slots {
+			slotRun := operandSlotRun{slot: slot}
+			// THE SCOPED HOLD IS STILL OBSERVED. It resolves nothing, and a
+			// hold that emitted no slot lines would be indistinguishable in
+			// the logs from a dispatch that never happened -- the two failures
+			// this telemetry most needs to tell apart.
+			recordOperandSlot(ctx, principal, request, deps, slotRun)
+			run.slots = append(run.slots, slotRun)
+		}
+		// THE SCOPED HOLD OWES THE BINDING LINE TOO, as a measured zero. It
+		// returns before receipt binding runs, so without this an operator
+		// could not tell a scoped hold from a comparison whose binding step
+		// crashed before emitting -- the absence would look identical.
+		recordComparisonReceiptBinding(ctx, principal, request, deps, 0, nil, 0)
+		resolution, bases, digests := publishComparisonResolution(run, request.Options.MaxSubjectCandidates)
+		recordComparisonDecision(ctx, principal, request, deps, run, resolution)
+		return resolution, bases, digests, nil
+	}
+
+	// THE POLICY LINE FIRES AT DISPATCH, before anything can fail. If it is
+	// absent from a rig's logs for a question that should be a comparison,
+	// the dispatch did not happen -- which is the one regression that leaves
+	// no other trace, because the flat pooled path serves a perfectly
+	// well-formed answer.
+	recordComparisonPolicy(ctx, principal, request, deps, comparison)
+
+	// RECEIPTS BIND BEFORE ANY SLOT RESOLVES. The binding decision is about
+	// the current question's operand terms, and it must be complete before a
+	// slot's own retrieval can influence it -- otherwise a slot that happened
+	// to retrieve the selected subject anyway would look like a binding.
+	preCommitted, unbound, err := bindReceiptsToSlots(ctx, principal, request, deps, comparison.Slots, contest)
+	if err != nil {
+		return contextfabric.SubjectResolution{}, nil, nil, err
+	}
+	run.unboundReceipts = unbound
+	// EMITTED UNCONDITIONALLY FOR AN ADMITTED COMPARISON -- NOT only when
+	// receipts were carried.
+	//
+	// A MEASURED ZERO IS NOT A MISSING MEASUREMENT, and this line is where
+	// that distinction lives. Firing only when hints exist would make
+	// `receipts_considered=0` and "the binding path never ran" the same
+	// observation: both would be the ABSENCE of a line, and an operator
+	// staring at a comparison that ignored a selection could not tell whether
+	// the selection was considered and refused, or never looked at. So the
+	// line always fires for an admitted pair; `receipts_considered=0` is a
+	// fact the system measured, and only its ABSENCE means binding was never
+	// reached at all.
+	positions := make([]int, 0, len(preCommitted))
+	boundCount := 0
+	for index := range comparison.Slots {
+		if candidates := preCommitted[index]; len(candidates) > 0 {
+			positions = append(positions, index)
+			boundCount += len(candidates)
+		}
+	}
+	recordComparisonReceiptBinding(ctx, principal, request, deps, boundCount, positions, unbound)
+
+	// THE REQUEST-WIDE SEARCH BOUND, summed before the first slot runs.
+	// graphrank.search carries no `pass` field, so certify groups every search
+	// line in the request together and requires index 1..total to be unique
+	// and exhaustive over that one group -- a per-slot bound would have each
+	// slot restart at index 1 and declare a different total.
+	searchTermTotal := 0
+	for _, slot := range comparison.Slots {
+		searchTermTotal += len(slot.Terms)
+	}
+	searchIndexBase := 0
+	for index, slot := range comparison.Slots {
+		if err := ctx.Err(); err != nil {
+			return contextfabric.SubjectResolution{}, nil, nil, err
+		}
+		// ONLY THIS SLOT'S OWN BOUND SELECTIONS. An unbound hint reaches no
+		// slot at all: it is never appended to another operand's term bag or
+		// committed set, which is the difference between "we could not tell"
+		// and a guess.
+		//
+		// EACH SLOT IS ITS OWN TRACE PASS, 1-based in slot order. `pass` is
+		// "which finalization of the caller's own resolution this call is",
+		// and two operands are two finalizations: without distinct numbers the
+		// pair's two ranked_cut/corroboration/offer_pool summaries -- each
+		// declared ExactlyOnePerPass -- would land in one group and the
+		// per-candidate decision lines would collide on index.
+		slotRun, err := resolveOneOperandSlot(ctx, principal, request, deps, slot, preCommitted[index],
+			contest, index+1, searchIndexBase, searchTermTotal)
+		searchIndexBase += len(slot.Terms)
+		if err != nil {
+			return contextfabric.SubjectResolution{}, nil, nil, err
+		}
+		recordOperandSlot(ctx, principal, request, deps, slotRun)
+		run.slots = append(run.slots, slotRun)
+	}
+
+	// A LAST CANCELLATION CHECK BEFORE PUBLICATION. A context cancelled after
+	// the final slot resolved but before anything was published must publish
+	// NOTHING -- a partially assembled comparison escaping on a cancelled
+	// request is the one outcome that would be both wrong and hard to see.
+	if err := ctx.Err(); err != nil {
+		return contextfabric.SubjectResolution{}, nil, nil, err
+	}
+
+	resolution, bases, digests := publishComparisonResolution(run, request.Options.MaxSubjectCandidates)
+	recordComparisonDecision(ctx, principal, request, deps, run, resolution)
+	return resolution, bases, digests, nil
+}
+
+// ---------------------------------------------------------------------------
+// EMISSION HELPERS -- one per event, nil-sink-safe
+// ---------------------------------------------------------------------------
+
+func recordComparisonPolicy(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, comparison contextfabric.ComparisonOperands) {
+	if deps.OperandResolutionSink == nil {
+		return
+	}
+	deps.OperandResolutionSink.RecordComparisonPolicy(ctx, ComparisonPolicyEvent{
+		RequestID: request.RequestID, OrgID: principal.OrgID,
+		Admission: comparison.Admission,
+		SlotCount: len(comparison.Slots),
+		// BOTH SUPPRESSIONS ARE REPORTED AS FACTS OF THIS PATH, not read back
+		// from a flag. Comparison resolution never wires the question pass or
+		// the census -- that absence IS the no-read hold -- so these are true
+		// by construction here, and the line exists so their lapsing would be
+		// visible rather than silent.
+		QuestionSearchSuppressed: true,
+		EvidenceCensusSuppressed: true,
+		// THE BUDGET THIS RUN WILL ENFORCE, never the number the caller asked
+		// for. A request may name any integer and the resolver honours none
+		// above the deployment's own cap, so the raw wire value would describe
+		// a budget no slot ever ran under -- and would put an unbounded
+		// caller-controlled integer on a log line. Derived through the SAME
+		// function every slot derives its own limit from, so the policy line
+		// and the slots cannot report two different budgets for one run.
+		CandidateBudget: enforcedCandidateBudget(request, deps),
+	})
+}
+
+func recordOperandSlot(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, slot operandSlotRun) {
+	if deps.OperandResolutionSink == nil {
+		return
+	}
+	deps.OperandResolutionSink.RecordOperandSlot(ctx, OperandSlotEvent{
+		RequestID: request.RequestID, OrgID: principal.OrgID,
+		SlotPosition:      slot.slot.Position,
+		SlotKind:          slot.slot.Kind,
+		TermCount:         len(slot.slot.Terms),
+		CandidateCount:    len(slot.candidates),
+		CommittedCount:    len(slot.committed),
+		Outcome:           slot.state(),
+		ReceiptBound:      slot.receiptBound,
+		RetrievalDegraded: slot.retrievalDegraded,
+	})
+}
+
+func recordComparisonReceiptBinding(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, boundCount int, positions []int, unbound int) {
+	if deps.OperandResolutionSink == nil {
+		return
+	}
+	if positions == nil {
+		positions = []int{}
+	}
+	deps.OperandResolutionSink.RecordComparisonReceiptBinding(ctx, ComparisonReceiptBindingEvent{
+		RequestID: request.RequestID, OrgID: principal.OrgID,
+		ReceiptsConsidered: len(request.RequestedScope.SubjectHints),
+		BoundCount:         boundCount,
+		UnboundCount:       unbound,
+		BoundSlotPositions: positions,
+	})
+}
+
+func recordComparisonDecision(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, run comparisonResolutionRun, resolution contextfabric.SubjectResolution) {
+	if deps.OperandResolutionSink == nil {
+		return
+	}
+	decision := comparisonDecisionHeld
+	if run.publishable() {
+		decision = comparisonDecisionPublished
+	}
+	deps.OperandResolutionSink.RecordComparisonDecision(ctx, ComparisonDecisionEvent{
+		RequestID: request.RequestID, OrgID: principal.OrgID,
+		Decision: decision,
+		// The count PUBLISHED, read back off the resolution that is actually
+		// returned rather than from the run's own opinion of it -- a decision
+		// line disagreeing with the document it describes would be worse than
+		// no line at all.
+		PublishedCommitted: len(resolution.Committed),
+		UnboundReceipts:    run.unboundReceipts,
+		RetrievalDegraded:  run.retrievalDegraded(),
+	})
+}
+
+// enforcedCandidateBudget is the candidate limit this run will actually honour:
+// the caller's request, bounded by the deployment's own cap.
+//
+// ONE AUTHORITY FOR ONE NUMBER. Every operand slot derives its retrieval limit
+// from this, and the policy observable reports it, so a reader of the trace and
+// the code that ran cannot disagree about the budget. It was two copies of the
+// same arithmetic before, which is how an observable drifts from the thing it
+// claims to describe.
+//
+// A CAP OF ZERO MEANS UNCAPPED, and a requested budget of zero or less means
+// "unspecified" -- both fall through to the caller's own value, which is what
+// the single-subject path has always done. The cap is server-side
+// configuration; nothing a caller sends can raise it.
+func enforcedCandidateBudget(request contextfabric.InvestigationRequest, deps ResolveDeps) int {
+	budget := request.Options.MaxSubjectCandidates
+	if deps.MaxResultsCap > 0 && (budget <= 0 || budget > deps.MaxResultsCap) {
+		return deps.MaxResultsCap
+	}
+	return budget
+}
+
+// resolveOneOperandSlot retrieves and decides ONE operand, in isolation.
+func resolveOneOperandSlot(
+	ctx context.Context,
+	principal storage.Principal,
+	request contextfabric.InvestigationRequest,
+	deps ResolveDeps,
+	slot contextfabric.ComparisonOperandSlot,
+	preCommitted []contextfabric.SubjectCandidate,
+	contest *contestAdmission,
+	// pass is this slot's own trace pass number, 1-based in slot order. See
+	// the call site for why two operands cannot share one.
+	pass int,
+	// searchIndexBase/searchTermTotal are the request-wide `search` bound this
+	// slot's own retrieval numbers itself within.
+	searchIndexBase int,
+	searchTermTotal int,
+) (operandSlotRun, error) {
+	// FRESH STATE, PER SLOT. Allocated here rather than passed in, so there is
+	// no way for a caller to accidentally share one operand's pool with the
+	// other's -- the isolation is structural, not a convention someone has to
+	// remember at the call site.
+	candidatesBySubject := make(map[string]contextfabric.SubjectCandidate)
+	observationParentKey := make(map[string]string)
+	observationBlocked := make(map[string]bool)
+	vectorArmSimilarity := make(map[string]float64)
+	identity := identityClaimants{}
+	identityTerms := identityMatchTerms{}
+
+	// THIS SLOT'S OWN BOUND SELECTIONS, seeded before retrieval so the gate's
+	// existing pre-committed tier sees them exactly as it does on the
+	// single-subject hint path.
+	//
+	// THIS IS WHERE CONSTRAINT (3.2) IS MET WITHOUT DELETING ANYTHING. The
+	// ordinary commit gates run only when nothing is pre-committed -- so a
+	// selection bound HERE suppresses the gates for THIS SLOT, which is
+	// correct because the user's selection IS this slot's decision, while the
+	// other slot's invocation starts empty and runs every ordinary gate it
+	// always has. The suppression that used to swallow the second operand is
+	// now scoped to the operand the selection actually answered.
+	for _, candidate := range preCommitted {
+		candidatesBySubject[SubjectKey(candidate.Subject)] = candidate
+	}
+
+	// THIS SLOT'S OWN TERMS. Never SubjectTerms(request, interpreted) -- that
+	// is the flat bag whose existence is the defect.
+	retrieval, err := retrieveCandidatesForTerms(ctx, principal, request, deps, slot.Terms,
+		candidatesBySubject, observationParentKey, observationBlocked, vectorArmSimilarity, identity, identityTerms,
+		contest, searchIndexBase, searchTermTotal)
+	if err != nil {
+		return operandSlotRun{}, err
+	}
+
+	gate := deps.CommitGatePolicy
+	if gate == (CommitGatePolicy{}) {
+		// Same reasoning as the single-subject path: a zero-valued policy means
+		// "not overridden", and passing it straight through would run an
+		// unconfigured backend on a zero-threshold auto-commit-everything gate.
+		gate = DefaultCommitGatePolicy()
+	}
+	effectiveSearchLimit := enforcedCandidateBudget(request, deps)
+
+	// aliasIdentityComplete is FALSE for a slot, deliberately and
+	// conservatively. It is a claim that a keyed identity read enumerated the
+	// whole population, and no such read has run for this operand's terms on
+	// this path. False cannot make anything commit that otherwise would not --
+	// it only withholds the identity fast path's completeness bump, which is
+	// the safe direction for a claim nobody has proven here.
+	//
+	// evidenceCensusAttestedKey is "" and the census is never invoked: that is
+	// the no-read hold, stated as an absence rather than a flag.
+	//
+	// reservedKinds is THIS SLOT'S OWN stated kind. The question stated it, so
+	// a candidate of that kind must not vanish from this operand's own list
+	// under truncation -- reserving the pair's other kind here would be
+	// meaningless, since the other operand has its own invocation.
+	//
+	// THE UNEXPORTED FORM, for `pass` alone. The exported wrapper hardcodes
+	// pass=1 because every one of its other callers is single-shot; a
+	// comparison is not, and two slots finalizing at pass=1 would put two
+	// ExactlyOnePerPass summaries in one group. No anchor slot and no rescue
+	// ledger: neither ran on this path, and a nil ledger is the honest
+	// reading for a call with no retrieval phase of its own.
+	resolution, bases, digests := resolveFromMergedCandidatesWithAnchorSlot(
+		candidatesBySubject, observationParentKey, observationBlocked,
+		request.Options.MaxSubjectCandidates, request.Options.AllowClarification,
+		retrieval.searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold,
+		retrieval.retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK,
+		unscopedVisibilityFor(principal, request), gate, identity, identityTerms,
+		false, deps.ResolutionTracer, request.RequestID, "", false, false,
+		[]contextfabric.SubjectKind{slot.Kind}, anchorReservedSlot{}, nil, pass,
+	)
+
+	return operandSlotRun{
+		slot:              slot,
+		candidates:        resolution.Candidates,
+		committed:         resolution.Committed,
+		bases:             bases,
+		digests:           digests,
+		receiptBound:      len(preCommitted) > 0,
+		retrievalDegraded: retrieval.retrievalDegraded,
+	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// RECEIPT BINDING -- server-side, from the CURRENT question
+// ---------------------------------------------------------------------------
+
+// bindReceiptsToSlots decides which operand, if any, each carried selection
+// answers. It returns the per-slot pre-commits and the count of selections that
+// could not be associated with exactly one operand.
+//
+// NO NEW REQUEST FIELD, AND NONE IS NEEDED. Which operand a follow-up answers
+// is DERIVED from the current question's own operand terms, not declared by the
+// client. The wire carries no slot index and this work does not add one.
+//
+// ALL MATCHING SLOTS ARE DETERMINED BEFORE ANY RECEIPT IS ASSIGNED. Assigning
+// as we go would make the outcome depend on receipt order and on slot order --
+// the first slot to match would win a subject that also matched the second, and
+// nobody would ever see the ambiguity. Exactly one match binds; ZERO OR TWO
+// leave the selection UNBOUND, which holds the comparison. Two is exactly as
+// unbindable as zero: a selection the server cannot associate with one operand
+// has completed neither, and guessing between them is the behaviour this design
+// exists to refuse.
+//
+// THE MATCH REQUIRES AN IDENTITY-CLASS WITNESS FROM THAT SLOT'S OWN TERMS, and
+// it gets one by running the EXISTING identity machinery (NodeCandidate) with
+// the slot's term -- never a new matcher written beside it. A fuzzy retrieval
+// hit, a confidence value, a whole-question hit, the receipt's prior position
+// and the order the receipts arrived in are ALL insufficient, and they are
+// insufficient by construction here: only a genuine label, alias or
+// provider-key match sets one of the three mechanisms this function accepts.
+func bindReceiptsToSlots(
+	ctx context.Context,
+	principal storage.Principal,
+	request contextfabric.InvestigationRequest,
+	deps ResolveDeps,
+	slots []contextfabric.ComparisonOperandSlot,
+	contest *contestAdmission,
+) (map[int][]contextfabric.SubjectCandidate, int, error) {
+	bound := make(map[int][]contextfabric.SubjectCandidate, len(slots))
+	unbound := 0
+	if deps.ExactHint == nil {
+		return bound, 0, nil
+	}
+	// seenInSlot deduplicates repeated selections of the SAME canonical
+	// identity within one slot. Two receipts naming one subject are one
+	// selection said twice, not an over-commit -- counting them as two would
+	// hold a comparison the user has actually answered unambiguously.
+	seenInSlot := make(map[int]map[string]struct{}, len(slots))
+
+	for _, hint := range request.RequestedScope.SubjectHints {
+		if strings.TrimSpace(hint.ID) == "" || hint.Kind == "" {
+			continue
+		}
+		subject := contextfabric.SubjectRef{
+			Kind: hint.Kind, CanonicalID: strings.TrimSpace(hint.ID), Label: strings.TrimSpace(hint.Label),
+		}
+		if subject.Label == "" {
+			subject.Label = subject.CanonicalID
+		}
+		// RE-READ AND RE-AUTHORIZED under THIS principal, scope and binding.
+		// A carried selection is a caller-supplied reference, never a proof
+		// that the subject is still there or still visible to this caller.
+		node, ok, err := deps.ExactHint(ctx, subject)
+		if err != nil {
+			return nil, 0, err
+		}
+		if !ok {
+			// Unloadable or no longer visible. The existing receipt
+			// disposition vocabulary already reports this outcome; it is not
+			// an ambiguous binding, so it is not counted as one.
+			continue
+		}
+
+		matches := matchingSlotsForReceipt(principal, request, deps, slots, subject, node)
+		if len(matches) != 1 {
+			unbound++
+			continue
+		}
+		index := matches[0]
+		if seenInSlot[index] == nil {
+			seenInSlot[index] = make(map[string]struct{}, 2)
+		}
+		key := SubjectKey(subject)
+		if _, repeated := seenInSlot[index][key]; repeated {
+			continue
+		}
+		seenInSlot[index][key] = struct{}{}
+
+		candidate, admitted := NodeCandidate(principal, request.RequestedScope, subject.Label, node, deps.IsInternal, true, deps.ResolutionTracer, request.RequestID)
+		if !admitted {
+			continue
+		}
+		// THE CONTEST BOUNDARY, asked here for the same reason the flat path
+		// asks it at its own hint insert: this is where a receipt-carried
+		// candidate ENTERS a pool, and 5422's whole finding is that a refusal
+		// enforced anywhere downstream of the insert leaks through a side
+		// channel. Refused subjects are recorded, never silently dropped.
+		if !contest.admits(candidate.Subject, hintCandidateSource(hint.Source)) {
+			contest.refuse(candidate.Subject)
+			continue
+		}
+		// The SAME arrival state the single-subject hint path stamps, so the
+		// existing gate's pre-committed tier recognises it unchanged.
+		candidate.Confidence = 1
+		candidate.State = contextfabric.ResolutionCommitted
+		candidate.MatchReasons = []string{"Exact canonical subject hint matched the organization graph."}
+		candidate.MatchMechanisms = MergeMechanisms(candidate.MatchMechanisms, []contextfabric.MatchMechanism{contextfabric.MatchExact})
+		bound[index] = append(bound[index], candidate)
+	}
+	return bound, unbound, nil
+}
+
+// matchingSlotsForReceipt returns EVERY slot this selection has identity
+// evidence in. Every one, not the first -- the count is the decision.
+func matchingSlotsForReceipt(
+	principal storage.Principal,
+	request contextfabric.InvestigationRequest,
+	deps ResolveDeps,
+	slots []contextfabric.ComparisonOperandSlot,
+	subject contextfabric.SubjectRef,
+	node CandidateNode,
+) []int {
+	var matches []int
+	for index, slot := range slots {
+		// THE STATED KIND IS A REQUIREMENT, not a preference. The question
+		// said what kind this operand is; a selection of another kind answers
+		// a question that was not asked.
+		if subject.Kind != slot.Kind {
+			continue
+		}
+		for _, term := range slot.Terms {
+			if strings.TrimSpace(term) == "" {
+				continue
+			}
+			// The EXISTING identity machinery, asked about THIS SLOT'S term.
+			// Tracer deliberately nil: this is a matching probe, not a
+			// retrieval, and emitting identity-gate events for probes would
+			// put decisions in the trace that no resolution ever made.
+			candidate, ok := NodeCandidate(principal, request.RequestedScope, term, node, deps.IsInternal, true, nil, request.RequestID)
+			if !ok {
+				continue
+			}
+			if HasMechanism(candidate.MatchMechanisms, contextfabric.MatchExact) ||
+				HasMechanism(candidate.MatchMechanisms, contextfabric.MatchAlias) ||
+				HasMechanism(candidate.MatchMechanisms, contextfabric.MatchProviderKey) {
+				matches = append(matches, index)
+				break
+			}
+		}
+	}
+	return matches
+}

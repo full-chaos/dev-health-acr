@@ -2316,7 +2316,7 @@
     "attribution": [
       "request_id"
     ],
-    "bounded_aggregation": "bounded by resolveSubjects' own terms list length for this call -- Total on every line is that length, Index is this line's 1-based position in the loop that produced it.",
+    "bounded_aggregation": "bounded by the number of terms this REQUEST searches -- its own flat terms list for a single-subject resolution, the sum over the operand slots for a comparison. Total on every line is that number, Index is this line's 1-based position among every search line the request emits.",
     "fields": [
       {
         "key": "request_id",

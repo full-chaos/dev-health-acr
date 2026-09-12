@@ -569,7 +569,7 @@ func TestAWithheldOfferPoolClarifiesOnlyWhenTheTurnCanBeAnswered(t *testing.T) {
 			t.Parallel()
 			resolution := testCase.resolution
 			request := InvestigationRequest{Options: InvestigationOptions{AllowClarification: testCase.allow}}
-			got, limitation := resolveTerminalStatus(request, &resolution, testCase.otherOffers)
+			got, limitation := resolveTerminalStatus(request, &resolution, nil, testCase.otherOffers)
 			if got != testCase.want {
 				t.Fatalf("status = %q, want %q", got, testCase.want)
 			}

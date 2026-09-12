@@ -443,18 +443,25 @@ var DecisionSummary = Event{
 }
 
 // Search is the Info line (graphrank/tracer.go, case "search") emitted once
-// per term in a resolveSubjects call's own terms list -- CHAOS-5517's first
+// per term searched in a resolveSubjects call -- CHAOS-5517's first
 // MultiplicityBoundedManyPerPass event: a resolution can search anywhere
-// from zero to several terms, bounded by that call's own terms list length,
-// with no per-pass concept (the per-term search loop runs once per
-// resolveSubjects call, before any internal re-decision pass exists).
+// from zero to several terms, bounded by the number of terms THAT REQUEST
+// searches.
+//
+// The bound is REQUEST-WIDE, not per-pass, and this event declares no "pass"
+// field to make it otherwise: certify groups its lines by request_id alone.
+// A single-subject resolution searches its own flat terms list once, so the
+// bound is that list's length. A two-operand comparison searches each
+// operand's terms in its own pass, so the bound is the sum over the operand
+// slots and each pass numbers itself from where the previous one stopped --
+// a pass restarting at index 1 would collide with the pass before it.
 var Search = Event{
 	ID:                 "graphrank.search",
 	Msg:                "context fabric resolution trace: search",
 	Level:              LevelInfo,
 	Multiplicity:       MultiplicityBoundedManyPerPass,
 	Attribution:        []string{"request_id"},
-	BoundedAggregation: "bounded by resolveSubjects' own terms list length for this call -- Total on every line is that length, Index is this line's 1-based position in the loop that produced it.",
+	BoundedAggregation: "bounded by the number of terms this REQUEST searches -- its own flat terms list for a single-subject resolution, the sum over the operand slots for a comparison. Total on every line is that number, Index is this line's 1-based position among every search line the request emits.",
 	Fields: []Field{
 		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"search"}},

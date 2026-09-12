@@ -135,6 +135,32 @@ const (
 	// qualified slug, then repository basename). See
 	// noMatchLimitationForEmptyPool, the seam that branch will extend.
 	noMatchLimitationUnproven = "Retrieval found no candidate for this question in this organization's graph, so no canonical facts were read. This search is not exhaustive, so it does not confirm that no matching subject exists."
+
+	// COMPARISON-SPECIFIC PROSE, deliberately NOT the single-subject wording.
+	//
+	// A held comparison is not "more than one authorized subject matched" and
+	// it is not "retrieval found no candidate": it is a two-subject question
+	// where the pair could not be bound as a pair, which is a third thing.
+	// Borrowing either existing sentence would tell the reader something
+	// false about their own question -- the single-subject wording in
+	// particular would describe an ambiguity between candidates that this
+	// outcome may not have at all.
+	comparisonHeldLimitation = "This question compares two subjects, and both must be confirmed together before any canonical facts are read. The comparison is described in the clarification, and no facts were read for either side."
+
+	// The clarification-disabled twin. No-match is PRESERVED for this case
+	// (the caller refused clarification, so there is no question to ask), but
+	// the prose still says what actually happened rather than claiming
+	// retrieval found nothing.
+	comparisonHeldNoClarificationLimitation = "This question compares two subjects and the pair could not be confirmed together. This request did not allow clarification, so neither side was confirmed and no canonical facts were read."
+
+	// The third arm, and it is a DIFFERENT fact from the one above. The
+	// caller allowed clarification and would have been asked -- but this
+	// turn holds nothing they could send back to answer with: no candidate,
+	// no structure option, no window option. CHAOS-5637 rules that shape a
+	// no_match rather than a question nobody can answer, and the prose has
+	// to say which of the two reasons applied or an operator reading the
+	// terminal cannot tell a refused clarification from an empty one.
+	comparisonHeldUnanswerableLimitation = "This question compares two subjects and the pair could not be confirmed together. Neither side could be offered as a choice, so there was nothing to ask about, and no canonical facts were read."
 	// noMatchLimitationGraphNotProjected (CHAOS-4077, codex xhigh review
 	// round 2, confirmed real LOW finding): noMatchLimitationUnproven's own
 	// text claims retrieval ran "in this organization's graph" -- false for
@@ -299,7 +325,7 @@ func (e *Engine) terminalResult(
 	// EXACTLY the case a window nudge (when requested) matters most, an
 	// agent reading a refusal benefits from every disclosure available.
 	windowClarification := composeWindowClarification(effectiveWindow, resultID, e.now())
-	status, limitation := resolveTerminalStatus(request, &resolution,
+	status, limitation := resolveTerminalStatus(request, &resolution, familyOutcome.Frame,
 		clarificationOffersRedeemable(resolution, structureMaterial, windowClarification))
 	// CHAOS-5442: a frame the gate refused gets its own disclosure, on
 	// both surfaces, decided from the ONE value that already holds the
@@ -620,6 +646,33 @@ func subjectlessTerminalReason(gate FrameGate, resolution SubjectResolution, sub
 	return "empty_pool"
 }
 
+// comparisonHeldWithoutCandidates reports whether an EMPTY candidate pool is a
+// held comparison rather than an ordinary empty pool.
+//
+// KEYED OFF THE FRAME, which is the only thing that can tell the two apart. An
+// empty pool means "retrieval found nothing" for every other shape, and that
+// is what the existing no-match branch correctly says about it. For a
+// comparison the pool can be empty for a completely different reason: a scoped
+// pair is HELD BEFORE ANY RETRIEVAL RUNS, deliberately, so there was never
+// anything to find. Reporting that as "retrieval found no candidate" would
+// describe a search that did not happen.
+//
+// The prompt is required as well as the frame. Publication writes one for
+// every hold, so its presence is the evidence that this empty pool came from
+// the comparison path and not from some other route that happens to be running
+// under a comparison frame. Frame alone would be a claim about which code ran;
+// frame plus prompt is a fact about what it produced.
+func comparisonHeldWithoutCandidates(frame *QuestionFrame, resolution *SubjectResolution) bool {
+	if resolution == nil || strings.TrimSpace(resolution.ClarificationPrompt) == "" {
+		return false
+	}
+	switch ClassifyComparisonOperands(frame).Admission {
+	case ComparisonAdmittedNamedPair, ComparisonHeldScopedOperand:
+		return true
+	}
+	return false
+}
+
 // otherOffersRedeemable (CHAOS-5637) is whether THIS turn carries a
 // redeemable offer on some channel other than the candidate list -- a
 // structure option or a window option. Passed in rather than derived here
@@ -628,8 +681,34 @@ func subjectlessTerminalReason(gate FrameGate, resolution SubjectResolution, sub
 // the point it asks: a predicate computed here, from ungated material,
 // would count an offer the caller is about to remove from the very
 // document this status describes.
-func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectResolution, otherOffersRedeemable bool) (InvestigationStatus, string) {
+//
+// frame is the question frame this turn already produced -- carried, never
+// reconstructed here from the interpretation or the shape. It is what tells
+// a held comparison's empty pool apart from an ordinary one.
+func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectResolution, frame *QuestionFrame, otherOffersRedeemable bool) (InvestigationStatus, string) {
 	if len(resolution.Candidates) == 0 {
+		// THE COMPARISON-ONLY BRANCH, checked before the exclusion arm below
+		// because it is the more specific claim about WHY this pool is empty.
+		// Every other empty-pool outcome is unchanged.
+		//
+		// A HELD COMPARISON IS SUBJECT TO CHAOS-5637 LIKE EVERY OTHER
+		// CLARIFICATION. It publishes no structure material at all, so when
+		// its own candidate list is empty too the turn has nothing for the
+		// caller to redeem, and clarification_required there is the
+		// unanswerable ask 5637 exists to end -- assertAnswerableClarification
+		// would refuse the document outright. The clarification is offered
+		// only when some other channel can carry the answer; otherwise the
+		// terminal is no_match, with prose that still says what happened to
+		// the pair rather than claiming retrieval found nothing.
+		if comparisonHeldWithoutCandidates(frame, resolution) {
+			if !request.Options.AllowClarification {
+				return InvestigationNoMatch, comparisonHeldNoClarificationLimitation
+			}
+			if !otherOffersRedeemable {
+				return InvestigationNoMatch, comparisonHeldUnanswerableLimitation
+			}
+			return InvestigationClarificationRequired, comparisonHeldLimitation
+		}
 		// AN OFFER POOL EMPTIED BY THE VECTOR-ONLY EXCLUSION IS NOT AN
 		// EMPTY GRAPH. Retrieval found candidates and withheld every one of
 		// them because identifying a subject by semantic similarity alone
