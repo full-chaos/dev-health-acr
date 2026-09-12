@@ -2045,6 +2045,38 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 		deps.ResolutionTracer = kindCoverageFloorFold
 		defer kindCoverageFloorFold.flush()
 
+		// CHAOS-5636 class fix: kind_offer is declared
+		// MultiplicityExactlyOnePerRequest, the SAME class anchor_offer/
+		// kind_coverage_floor immediately above already needed this fix
+		// for -- kindOfferMaterial's own call site sits deep inside
+		// resolveSubjects, downstream of several early returns (the
+		// confirmed-kind scoped-snapshot error return chief among them)
+		// that skip past it without ever reaching its emission site.
+		// Wrapped here, same mechanism, same reasoning.
+		//
+		// confirmed_kind_scope is deliberately NOT folded the same way,
+		// despite looking like the same class at a glance: it is
+		// MultiplicityZeroOrOnePerRequest, not ExactlyOnePerRequest --
+		// TestResolveSubjects_ConfirmedKindScope_NilConfirmedKindNeverTriggers
+		// (chaos4154_confirmed_kind_scope_test.go) pins a CHAOS-4039
+		// non-interference requirement that this mechanism stay
+		// STRUCTURALLY UNREACHABLE for a confirmedKind==nil resolution --
+		// a synthetic "never attempted" fallback line on every such
+		// resolution would violate that guarantee by making the stage
+		// fire unconditionally where the ticket that owns it requires
+		// silence.
+		kindOfferFold := &exactlyOnceRequestFold{
+			real: deps.ResolutionTracer, stage: "kind_offer",
+			fallback: func() ResolutionTraceEvent {
+				return ResolutionTraceEvent{
+					RequestID: request.RequestID, Stage: "kind_offer",
+					KindOfferBoundaryKinds: []string{}, KindOfferBoundaryKindsBeforeRepair: []string{},
+				}
+			},
+		}
+		deps.ResolutionTracer = kindOfferFold
+		defer kindOfferFold.flush()
+
 		// AnchorPool and AnchorKindWithheldSummary are both declared
 		// MultiplicityExactlyOnePerRequest, a property of EVERY exit path of
 		// their producer, not only the happy one. AnchorPool's own emission
@@ -2206,30 +2238,43 @@ func (f *exactlyOnceRequestFold) flush() {
 	f.real.Trace(f.fallback())
 }
 
-// identityGateSummaryBuffer holds back every per-candidate "identity_gate"
-// event traced during ONE ResolveSubjectsWithCommitBasis call and, once
-// that call returns, forwards ONE additional Info-level summary event
-// folding them all: how many alias-lookup-scoped candidates were gate-
-// checked, how many the gate actually fired for, and which of those
+// identityGateSummaryBuffer holds back EVERY "identity_gate" event traced
+// during ONE ResolveSubjectsWithCommitBasis call -- both the per-candidate
+// detail lines and its own folded summary -- and replays them all at flush,
+// once that call returns: how many alias-lookup-scoped candidates were
+// gate-checked, how many the gate actually fired for, and which of those
 // (capped at traceSummaryIDCap, in the order encountered -- identity_gate
-// has no natural "rank" the way ranked_cut's cut does). Every per-candidate
-// event still passes through to the real tracer immediately, unchanged --
-// only the new summary is held back, exactly mirroring RankedCutSummary's
-// own "per-candidate stays live, one extra folded event at the end" shape.
+// has no natural "rank" the way ranked_cut's cut does).
+//
+// CHAOS-5636: unlike every other per-event fold in this file, the DETAIL
+// lines are now held back too, not forwarded immediately. This event is
+// MultiplicityBoundedManyPerPass and its own Index/Total bound (chris's
+// engineering ruling, CHAOS-5517) must be self-carried on every line -- but
+// NodeCandidate (candidate.go) fires this stage from TWO separate call
+// sites in resolve.go, each its own loop with no shared upfront count, so
+// the total gate-checked population is not known until the LAST one has
+// run. Search/KindHintSearch/ExactNameSearch/etc. can stamp Index/Total at
+// the moment they call Trace because their own bound (a term list's
+// length, a fixed constant) is known before their single loop starts;
+// identity_gate has no such single bound to read in advance. Buffering
+// every detail line here and stamping Index/Total at flush -- immediately
+// before replaying the existing summary -- is the one place this file
+// departs from its usual "forward first, bookkeep second" shape, precisely
+// because forwarding first is what makes the bound impossible to attach.
 type identityGateSummaryBuffer struct {
-	real           ResolutionTracer
-	requestID      string
-	candidateCount int
-	firedCount     int
-	firedIDs       []string
+	real       ResolutionTracer
+	requestID  string
+	events     []ResolutionTraceEvent
+	firedCount int
+	firedIDs   []string
 }
 
 func (b *identityGateSummaryBuffer) Trace(event ResolutionTraceEvent) {
-	b.real.Trace(event)
 	if event.Stage != "identity_gate" {
+		b.real.Trace(event)
 		return
 	}
-	b.candidateCount++
+	b.events = append(b.events, event)
 	if event.GateFired {
 		b.firedCount++
 		if len(b.firedIDs) < traceSummaryIDCap {
@@ -2239,7 +2284,7 @@ func (b *identityGateSummaryBuffer) Trace(event ResolutionTraceEvent) {
 }
 
 func (b *identityGateSummaryBuffer) flush() {
-	if b.candidateCount == 0 {
+	if len(b.events) == 0 {
 		// No alias-lookup-scoped candidate reached the gate at all this
 		// call -- an empty summary would be pure noise on every ordinary
 		// resolution whose pool never touches Repository/Project/Team
@@ -2248,9 +2293,15 @@ func (b *identityGateSummaryBuffer) flush() {
 		// stages already use (see SurvivorVerdict's own doc comment).
 		return
 	}
+	total := len(b.events)
+	for i, event := range b.events {
+		event.Index = i + 1
+		event.Total = total
+		b.real.Trace(event)
+	}
 	b.real.Trace(ResolutionTraceEvent{
 		RequestID: b.requestID, Stage: "identity_gate", IdentityGateSummary: true,
-		IdentityGateCandidateCount: b.candidateCount, IdentityGateFiredCount: b.firedCount,
+		IdentityGateCandidateCount: total, IdentityGateFiredCount: b.firedCount,
 		IdentityGateFiredIDs: b.firedIDs,
 	})
 }
@@ -4116,6 +4167,34 @@ const censusCommitErrorReason = "census_commit_error"
 //     dedicated reason token exists for this case (§4's vocabulary has
 //     none), so CensusCommitReason stays empty; GraphExistenceOK=true
 //     alone distinguishes it from the two absence/error cases above.
+//
+// emitEvidenceCensusCommit is mergeCensusAttestedSatisfier's ONE emission
+// point for its own "evidence_census_commit" stage (CHAOS-5636 fold): all
+// four of that function's own mutually exclusive outcomes -- graph-missing-
+// satisfier refusal, unauthorized/invalid-node refusal, contest-admission
+// refusal, and a genuine merge -- route through this one call instead of
+// four independent ResolutionTraceEvent{...} literals scattered through the
+// function body. A future AST-based enumeration (or a human reviewer) then
+// has exactly one site to check against this event's own declared closed
+// vocabulary, never four to keep in sync by hand: a closed-vocab
+// exhaustiveness walk that only matches string LITERALS misses a site
+// that instead assigns a named const (contestSetDisposition) to its
+// Outcome value, exactly the shape one of this stage's own four raw call
+// sites used to have. This event is MultiplicityZeroOrOnePerRequest; folding the SITE
+// count from four to one does not change that -- mergeCensusAttestedSatisfier
+// still has exactly one, unlooped call site (resolveSubjects), so at most
+// one of these four outcomes can still fire per request.
+func emitEvidenceCensusCommit(tracer ResolutionTracer, requestID string, subject contextfabric.SubjectRef, outcome string, graphExistenceOK bool, reason string) {
+	if tracer == nil {
+		return
+	}
+	tracer.Trace(ResolutionTraceEvent{
+		RequestID: requestID, Stage: "evidence_census_commit",
+		Subject: subject, Outcome: outcome, GraphExistenceOK: graphExistenceOK,
+		CensusCommitReason: reason,
+	})
+}
+
 func mergeCensusAttestedSatisfier(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, attestation Attestation, candidatesBySubject map[string]contextfabric.SubjectCandidate, observationParentKey map[string]string, observationBlocked map[string]bool, identity identityClaimants, identityTerms identityMatchTerms, admission *contestAdmission) (string, bool) {
 	kind, canonicalID, found := attestedSatisfier(attestation)
 	if !found {
@@ -4156,13 +4235,7 @@ func mergeCensusAttestedSatisfier(ctx context.Context, principal storage.Princip
 		if err != nil {
 			reason = censusCommitErrorReason
 		}
-		if deps.ResolutionTracer != nil {
-			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
-				RequestID: request.RequestID, Stage: "evidence_census_commit",
-				Subject: subject, Outcome: "refused", GraphExistenceOK: false,
-				CensusCommitReason: reason,
-			})
-		}
+		emitEvidenceCensusCommit(deps.ResolutionTracer, request.RequestID, subject, "refused", false, reason)
 		return "", false
 	}
 	// accepted (codex xhigh review finding, confirmed): mirrors
@@ -4187,12 +4260,7 @@ func mergeCensusAttestedSatisfier(ctx context.Context, principal storage.Princip
 		}
 	}
 	if !accepted {
-		if deps.ResolutionTracer != nil {
-			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
-				RequestID: request.RequestID, Stage: "evidence_census_commit",
-				Subject: subject, Outcome: "refused", GraphExistenceOK: true,
-			})
-		}
+		emitEvidenceCensusCommit(deps.ResolutionTracer, request.RequestID, subject, "refused", true, "")
 		return "", false
 	}
 	// censusProvenanceMarker: a synthetic, non-caller-typed provenance
@@ -4225,20 +4293,10 @@ func mergeCensusAttestedSatisfier(ctx context.Context, principal storage.Princip
 	// the refusal rather than a merge that did not happen. Without this the
 	// caller is handed a key naming a subject the pool does not contain.
 	if admission.refused(subject) {
-		if deps.ResolutionTracer != nil {
-			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
-				RequestID: request.RequestID, Stage: "evidence_census_commit",
-				Subject: subject, Outcome: contestSetDisposition, GraphExistenceOK: true,
-			})
-		}
+		emitEvidenceCensusCommit(deps.ResolutionTracer, request.RequestID, subject, contestSetDisposition, true, "")
 		return "", false
 	}
-	if deps.ResolutionTracer != nil {
-		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
-			RequestID: request.RequestID, Stage: "evidence_census_commit",
-			Subject: subject, Outcome: "merged", GraphExistenceOK: true,
-		})
-	}
+	emitEvidenceCensusCommit(deps.ResolutionTracer, request.RequestID, subject, "merged", true, "")
 	return key, true
 }
 

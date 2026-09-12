@@ -487,7 +487,7 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 				// doc comment.
 				ShadowCallerHintShortCircuit: input.CallerHintShortCircuit,
 			})
-			for _, k := range a.Kinds {
+			for i, k := range a.Kinds {
 				// readAtUnix stays 0 (never time.Time{}.Unix()'s large
 				// negative sentinel) for an incomplete/errored kind, which
 				// never populated k.CensusReadAt in the first place
@@ -504,6 +504,10 @@ func RunShadowEvidenceRound(ctx context.Context, input ShadowEvidenceRoundInput,
 					CensusReadAtUnix: readAtUnix, CensusProtocol: k.Protocol,
 					CensusClosureMismatch: k.ClosureMismatch, CensusStatementCount: k.StatementCount,
 					CensusRowsRead: k.RowsRead, CensusHandleApplied: k.HandleApplied, CensusAnchorApplied: k.AnchorApplied,
+					// Index/Total (CHAOS-5636): self-carried bound over this
+					// SAME a.Kinds slice ShadowKindsCensused already counts
+					// above -- known before this loop starts.
+					Index: i + 1, Total: len(a.Kinds),
 					// CHAOS-4300: same tag as the sibling evidence_round
 					// event above, mirrored per-kind for the same reason
 					// every other evidence_round-level fact on this event
@@ -956,10 +960,14 @@ func traceSourceNativeBinds(tracer ResolutionTracer, requestID string, binds []S
 		RequestID: requestID, Stage: "evidence_source_native",
 		ShadowSourceNativeMatchCount: len(binds), ShadowSourceNativeAnyResolved: anyResolved,
 	})
-	for _, b := range binds {
+	for i, b := range binds {
 		event := ResolutionTraceEvent{
 			RequestID: requestID, Stage: "evidence_source_native_probe",
 			ShadowSourceNativeGrammar: b.Grammar, ShadowSourceNativeResolved: b.Resolved,
+			// Index/Total (CHAOS-5636): self-carried bound over this SAME
+			// binds slice ShadowSourceNativeMatchCount already counts above
+			// -- known before this loop starts.
+			Index: i + 1, Total: len(binds),
 		}
 		if b.Resolved {
 			event.ShadowSourceNativeKind = b.Kind

@@ -106,14 +106,19 @@ func TestSlogResolutionTracer_RevertedStagesStayDebug(t *testing.T) {
 // for the panic-safety fix an adversarial review round's own attack found:
 // the buffer's flush was originally a bare statement placed right after
 // the resolveSubjects(...) call in ResolveSubjectsWithCommitBasis, which a
-// panic anywhere inside that call skips entirely -- the already-observed
-// per-candidate identity_gate events still reach the real tracer (Trace
-// forwards them immediately, unconditionally), but the aggregate summary
-// silently never fires. Fixed by deferring the flush instead. This test
+// panic anywhere inside that call skips entirely, silently dropping the
+// aggregate summary. Fixed by deferring the flush instead. This test
 // exercises identityGateSummaryBuffer directly (not through a full
 // resolution, which would need a genuinely panicking backend) --
 // confirming the buffer itself correctly flushes from within a deferred
 // call even when the goroutine is already unwinding a panic.
+//
+// CHAOS-5636: the per-candidate identity_gate events are now HELD by the
+// buffer too (not forwarded immediately, unlike this file's other folds --
+// see identityGateSummaryBuffer's own doc comment for why), so this test's
+// deferred flush() is what makes them reach the tracer at all, panic or
+// not -- the same deferred call that already carried the summary now
+// carries the buffered detail line too.
 func TestIdentityGateSummaryBuffer_FlushSurvivesAPanic(t *testing.T) {
 	tracer := &recordingTracer{}
 	func() {

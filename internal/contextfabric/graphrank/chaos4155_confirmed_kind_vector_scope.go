@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 )
 
 // CHAOS-4155 Phase 1: kind-scoped vector completeness census, SHADOW ONLY.
@@ -93,44 +94,50 @@ import (
 //     isolated pool, or any gate in THIS change.
 
 // ConfirmedKindVectorScope* is the closed vocabulary
-// ResolutionTraceEvent.ConfirmedKindVectorScopeState carries.
+// ResolutionTraceEvent.ConfirmedKindVectorScopeState carries. CHAOS-5636:
+// these now ALIAS eventspec's own canonical declaration (spec.go) rather
+// than typing the six literals here a second time -- the same
+// DeclaredKindRescue*-style migration this package already made once,
+// for the same "a second, independently typed list is exactly how the two
+// drifted" reason. Every doc comment below describing what each state
+// MEANS stays here, at the producer; only the literal string values moved.
 const (
 	// ConfirmedKindVectorScopeNotAttempted: deps.ConfirmedKindVectorCensus
 	// is nil (the deployment default), the term list was empty, or this
 	// resolution never reached the one branch
 	// (buildConfirmedKindScopedSnapshot's confirmedKindScopePlanIncomplete
 	// case) that invokes this shadow arm at all.
-	ConfirmedKindVectorScopeNotAttempted = "not_attempted"
+	ConfirmedKindVectorScopeNotAttempted = eventspec.ConfirmedKindVectorScopeNotAttempted
 	// ConfirmedKindVectorScopeComplete: the enumeration's own count(n)
 	// closed exactly against the assembled corpus, zero malformed rows,
 	// the before/after watermark snapshot was stable, and every query term
 	// was scored against the full enumerated population. See this file's
 	// own "SCOPE REDUCTION" note for why this is a provisional, not a
 	// gate-grade, label in Phase 1.
-	ConfirmedKindVectorScopeComplete = "complete"
+	ConfirmedKindVectorScopeComplete = eventspec.ConfirmedKindVectorScopeComplete
 	// ConfirmedKindVectorScopeOverBudget: population*queryCount exceeded
 	// ACR_CONTEXT_FABRIC_CONFIRMED_KIND_VECTOR_CENSUS_MAX_COMPARISONS --
 	// the census never ran (a correctness-safe refusal, never a partial
 	// or sampled attempt reported as complete).
-	ConfirmedKindVectorScopeOverBudget = "over_budget"
+	ConfirmedKindVectorScopeOverBudget = eventspec.ConfirmedKindVectorScopeOverBudget
 	// ConfirmedKindVectorScopeMalformed: at least one enumerated row could
 	// not be decoded (missing canonical ID or embedding), or the
 	// assembled corpus size disagreed with the independent count(n)
 	// check. Fail-closed -- see this file's own "hardened per sol's note"
 	// comment above; unlike oracle.go's measurement-only corpus fetch,
 	// this path never skips-and-reconciles.
-	ConfirmedKindVectorScopeMalformed = "malformed"
+	ConfirmedKindVectorScopeMalformed = eventspec.ConfirmedKindVectorScopeMalformed
 	// ConfirmedKindVectorScopeDrift: the org's _AcrWatermark set (scoped
 	// to this resolution's own GraphKey) differed between the read taken
 	// before the census and the one taken after count-closure -- a
 	// projection write landed mid-scan. See this file's own
 	// "STABLE-SNAPSHOT CHECK" note.
-	ConfirmedKindVectorScopeDrift = "incomplete_snapshot_drift"
+	ConfirmedKindVectorScopeDrift = eventspec.ConfirmedKindVectorScopeDrift
 	// ConfirmedKindVectorScopeFailed: a genuine dependency error (query
 	// failure, embed failure) occurred. Captured here rather than
 	// propagated -- see ResolveDeps.ConfirmedKindVectorCensus's own doc
 	// comment for why this shadow arm never fails the resolution.
-	ConfirmedKindVectorScopeFailed = "failed"
+	ConfirmedKindVectorScopeFailed = eventspec.ConfirmedKindVectorScopeFailed
 )
 
 // ConfirmedKindVectorCensusOutcome is ResolveDeps.ConfirmedKindVectorCensus's

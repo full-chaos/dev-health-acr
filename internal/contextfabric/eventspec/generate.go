@@ -77,11 +77,11 @@ func generateGo() ([]byte, error) {
 }
 
 // goVarName maps an event's stable ID back to the exported var this package
-// declares it under in spec.go. Every variable generation touches
-// (RankedCutSummary, AnchorSlotDisplaced, DecisionSummary) is named here
-// explicitly so a spec.go addition that forgets to extend this map fails
-// generation loudly (panic on ByID build) rather than silently omitting the
-// event.
+// declares it under in spec.go. Every event generation touches is named
+// here explicitly (starting with the CHAOS-5515 pilot pair, RankedCutSummary/
+// AnchorSlotDisplaced, and grown by every ticket since) so a spec.go
+// addition that forgets to extend this map fails generation loudly (panic
+// on ByID build) rather than silently omitting the event.
 func goVarName(e Event) string {
 	switch e.ID {
 	case RankedCutSummary.ID:
@@ -130,6 +130,32 @@ func goVarName(e Event) string {
 		return "AnchorKindWithheldSummary"
 	case WindowContinuationDecision.ID:
 		return "WindowContinuationDecision"
+	case KindOffer.ID:
+		return "KindOffer"
+	case ConfirmedKindScope.ID:
+		return "ConfirmedKindScope"
+	case LowPopulationKindScope.ID:
+		return "LowPopulationKindScope"
+	case LowPopulationKindScopeSummary.ID:
+		return "LowPopulationKindScopeSummary"
+	case IdentityGate.ID:
+		return "IdentityGate"
+	case IdentityGateSummary.ID:
+		return "IdentityGateSummary"
+	case EvidenceRound.ID:
+		return "EvidenceRound"
+	case EvidenceProbe.ID:
+		return "EvidenceProbe"
+	case EvidenceCensusCommit.ID:
+		return "EvidenceCensusCommit"
+	case EvidenceSourceNative.ID:
+		return "EvidenceSourceNative"
+	case EvidenceSourceNativeProbe.ID:
+		return "EvidenceSourceNativeProbe"
+	case SliceBSurvivorVerdict.ID:
+		return "SliceBSurvivorVerdict"
+	case SliceBSurvivorVerdictSummary.ID:
+		return "SliceBSurvivorVerdictSummary"
 	default:
 		panic("eventspec: goVarName has no mapping for " + e.ID + " -- add one before regenerating")
 	}

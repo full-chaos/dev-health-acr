@@ -19,29 +19,42 @@ func FieldKeys(e Event) []string {
 // ByID is the generated lookup from Event.ID to its declaration -- generated
 // rather than hand-maintained so it can never drift from All.
 var ByID = map[string]Event{
-	"contextfabric.window_continuation_decision": WindowContinuationDecision,
-	"graphrank.alias_lookup":                     AliasLookup,
-	"graphrank.anchor_kind_withheld":             AnchorKindWithheld,
-	"graphrank.anchor_kind_withheld_summary":     AnchorKindWithheldSummary,
-	"graphrank.anchor_offer":                     AnchorOffer,
-	"graphrank.anchor_pool":                      AnchorPool,
-	"graphrank.anchor_slot_displaced":            AnchorSlotDisplaced,
-	"graphrank.confirmed_kind_rescue":            ConfirmedKindRescue,
-	"graphrank.corroboration":                    Corroboration,
-	"graphrank.corroboration_summary":            CorroborationSummary,
-	"graphrank.decision":                         Decision,
-	"graphrank.decision_summary":                 DecisionSummary,
-	"graphrank.exact_name_search":                ExactNameSearch,
-	"graphrank.identity_universe":                IdentityUniverse,
-	"graphrank.kind_coverage_floor":              KindCoverageFloor,
-	"graphrank.kind_hint_search":                 KindHintSearch,
-	"graphrank.kind_offer_withheld":              KindOfferWithheld,
-	"graphrank.offer_pool":                       OfferPool,
-	"graphrank.offer_pool_summary":               OfferPoolSummary,
-	"graphrank.ranked_cut_summary":               RankedCutSummary,
-	"graphrank.reserved_kind_admitted":           ReservedKindAdmitted,
-	"graphrank.search":                           Search,
-	"graphrank.search_question":                  SearchQuestion,
+	"contextfabric.window_continuation_decision":  WindowContinuationDecision,
+	"graphrank.alias_lookup":                      AliasLookup,
+	"graphrank.anchor_kind_withheld":              AnchorKindWithheld,
+	"graphrank.anchor_kind_withheld_summary":      AnchorKindWithheldSummary,
+	"graphrank.anchor_offer":                      AnchorOffer,
+	"graphrank.anchor_pool":                       AnchorPool,
+	"graphrank.anchor_slot_displaced":             AnchorSlotDisplaced,
+	"graphrank.confirmed_kind_rescue":             ConfirmedKindRescue,
+	"graphrank.confirmed_kind_scope":              ConfirmedKindScope,
+	"graphrank.corroboration":                     Corroboration,
+	"graphrank.corroboration_summary":             CorroborationSummary,
+	"graphrank.decision":                          Decision,
+	"graphrank.decision_summary":                  DecisionSummary,
+	"graphrank.evidence_census_commit":            EvidenceCensusCommit,
+	"graphrank.evidence_probe":                    EvidenceProbe,
+	"graphrank.evidence_round":                    EvidenceRound,
+	"graphrank.evidence_source_native":            EvidenceSourceNative,
+	"graphrank.evidence_source_native_probe":      EvidenceSourceNativeProbe,
+	"graphrank.exact_name_search":                 ExactNameSearch,
+	"graphrank.identity_gate":                     IdentityGate,
+	"graphrank.identity_gate_summary":             IdentityGateSummary,
+	"graphrank.identity_universe":                 IdentityUniverse,
+	"graphrank.kind_coverage_floor":               KindCoverageFloor,
+	"graphrank.kind_hint_search":                  KindHintSearch,
+	"graphrank.kind_offer":                        KindOffer,
+	"graphrank.kind_offer_withheld":               KindOfferWithheld,
+	"graphrank.low_population_kind_scope":         LowPopulationKindScope,
+	"graphrank.low_population_kind_scope_summary": LowPopulationKindScopeSummary,
+	"graphrank.offer_pool":                        OfferPool,
+	"graphrank.offer_pool_summary":                OfferPoolSummary,
+	"graphrank.ranked_cut_summary":                RankedCutSummary,
+	"graphrank.reserved_kind_admitted":            ReservedKindAdmitted,
+	"graphrank.search":                            Search,
+	"graphrank.search_question":                   SearchQuestion,
+	"graphrank.slice_b_survivor_verdict":          SliceBSurvivorVerdict,
+	"graphrank.slice_b_survivor_verdict_summary":  SliceBSurvivorVerdictSummary,
 }
 
 // WindowContinuationDecisionFields is contextfabric.window_continuation_decision's generated typed construction interface
@@ -564,6 +577,84 @@ func (f ConfirmedKindRescueFields) SlogArgs() []any {
 	}
 }
 
+// ConfirmedKindScopeFields is graphrank.confirmed_kind_scope's generated typed construction interface
+// (CHAOS-5516): one Go field per Field ConfirmedKindScope.Fields declares in spec.go.
+type ConfirmedKindScopeFields struct {
+	RequestID                      string
+	State                          string
+	CandidateCount                 int
+	VectorCensusState              string
+	VectorCensusPopulationCount    int
+	VectorCensusEnumeratedCount    int
+	VectorCensusMalformedCount     int
+	VectorCensusQueryCount         int
+	VectorCensusQueriesScored      int
+	VectorCensusComparisonCount    int
+	VectorCensusRivalCountAboveTau int
+	VectorCensusSnapshotStable     bool
+	VectorCensusDurationMs         int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every ConfirmedKindScopeFields uniformly, set ONLY by NewConfirmedKindScopeFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewConfirmedKindScopeFields is the generated constructor for ConfirmedKindScopeFields -- every
+// field ConfirmedKindScope.Fields declares is a required parameter.
+func NewConfirmedKindScopeFields(requestID string, state string, candidateCount int, vectorCensusState string, vectorCensusPopulationCount int, vectorCensusEnumeratedCount int, vectorCensusMalformedCount int, vectorCensusQueryCount int, vectorCensusQueriesScored int, vectorCensusComparisonCount int, vectorCensusRivalCountAboveTau int, vectorCensusSnapshotStable bool, vectorCensusDurationMs int) ConfirmedKindScopeFields {
+	return ConfirmedKindScopeFields{
+		RequestID:                      requestID,
+		State:                          state,
+		CandidateCount:                 candidateCount,
+		VectorCensusState:              vectorCensusState,
+		VectorCensusPopulationCount:    vectorCensusPopulationCount,
+		VectorCensusEnumeratedCount:    vectorCensusEnumeratedCount,
+		VectorCensusMalformedCount:     vectorCensusMalformedCount,
+		VectorCensusQueryCount:         vectorCensusQueryCount,
+		VectorCensusQueriesScored:      vectorCensusQueriesScored,
+		VectorCensusComparisonCount:    vectorCensusComparisonCount,
+		VectorCensusRivalCountAboveTau: vectorCensusRivalCountAboveTau,
+		VectorCensusSnapshotStable:     vectorCensusSnapshotStable,
+		VectorCensusDurationMs:         vectorCensusDurationMs,
+		constructed:                    true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewConfirmedKindScopeFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f ConfirmedKindScopeFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns ConfirmedKindScope's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f ConfirmedKindScopeFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "confirmed_kind_scope",
+		"state", contextfabric.SanitizeLogAttr(f.State),
+		"candidate_count", f.CandidateCount,
+		"vector_census_state", contextfabric.SanitizeLogAttr(f.VectorCensusState),
+		"vector_census_population_count", f.VectorCensusPopulationCount,
+		"vector_census_enumerated_count", f.VectorCensusEnumeratedCount,
+		"vector_census_malformed_count", f.VectorCensusMalformedCount,
+		"vector_census_query_count", f.VectorCensusQueryCount,
+		"vector_census_queries_scored", f.VectorCensusQueriesScored,
+		"vector_census_comparison_count", f.VectorCensusComparisonCount,
+		"vector_census_rival_count_above_tau", f.VectorCensusRivalCountAboveTau,
+		"vector_census_snapshot_stable", f.VectorCensusSnapshotStable,
+		"vector_census_duration_ms", f.VectorCensusDurationMs,
+	}
+}
+
 // CorroborationFields is graphrank.corroboration's generated typed construction interface
 // (CHAOS-5516): one Go field per Field Corroboration.Fields declares in spec.go.
 type CorroborationFields struct {
@@ -908,6 +999,339 @@ func (f DecisionSummaryFields) SlogArgs() []any {
 	}
 }
 
+// EvidenceCensusCommitFields is graphrank.evidence_census_commit's generated typed construction interface
+// (CHAOS-5516): one Go field per Field EvidenceCensusCommit.Fields declares in spec.go.
+type EvidenceCensusCommitFields struct {
+	RequestID          string
+	SubjectKind        string
+	SubjectCanonicalID string
+	Outcome            string
+	GraphExistenceOk   bool
+	CensusCommitReason string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every EvidenceCensusCommitFields uniformly, set ONLY by NewEvidenceCensusCommitFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewEvidenceCensusCommitFields is the generated constructor for EvidenceCensusCommitFields -- every
+// field EvidenceCensusCommit.Fields declares is a required parameter.
+func NewEvidenceCensusCommitFields(requestID string, subjectKind string, subjectCanonicalID string, outcome string, graphExistenceOk bool, censusCommitReason string) EvidenceCensusCommitFields {
+	return EvidenceCensusCommitFields{
+		RequestID:          requestID,
+		SubjectKind:        subjectKind,
+		SubjectCanonicalID: subjectCanonicalID,
+		Outcome:            outcome,
+		GraphExistenceOk:   graphExistenceOk,
+		CensusCommitReason: censusCommitReason,
+		constructed:        true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewEvidenceCensusCommitFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f EvidenceCensusCommitFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns EvidenceCensusCommit's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f EvidenceCensusCommitFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "evidence_census_commit",
+		"subject_kind", contextfabric.SanitizeLogAttr(f.SubjectKind),
+		"subject_canonical_id", contextfabric.SanitizeLogAttr(f.SubjectCanonicalID),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"graph_existence_ok", f.GraphExistenceOk,
+		"census_commit_reason", contextfabric.SanitizeLogAttr(f.CensusCommitReason),
+	}
+}
+
+// EvidenceProbeFields is graphrank.evidence_probe's generated typed construction interface
+// (CHAOS-5516): one Go field per Field EvidenceProbe.Fields declares in spec.go.
+type EvidenceProbeFields struct {
+	CensusKind                   string
+	CensusComplete               bool
+	CensusCount                  int
+	CensusReadAtUnix             int
+	CensusProtocol               string
+	CensusClosureMismatch        bool
+	CensusStatementCount         int
+	CensusRowsRead               int
+	CensusHandleApplied          bool
+	CensusAnchorApplied          bool
+	ShadowCallerHintShortCircuit bool
+	RequestID                    string
+	Index                        int
+	Total                        int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every EvidenceProbeFields uniformly, set ONLY by NewEvidenceProbeFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewEvidenceProbeFields is the generated constructor for EvidenceProbeFields -- every
+// field EvidenceProbe.Fields declares is a required parameter.
+func NewEvidenceProbeFields(censusKind string, censusComplete bool, censusCount int, censusReadAtUnix int, censusProtocol string, censusClosureMismatch bool, censusStatementCount int, censusRowsRead int, censusHandleApplied bool, censusAnchorApplied bool, shadowCallerHintShortCircuit bool, requestID string, index int, total int) EvidenceProbeFields {
+	return EvidenceProbeFields{
+		CensusKind:                   censusKind,
+		CensusComplete:               censusComplete,
+		CensusCount:                  censusCount,
+		CensusReadAtUnix:             censusReadAtUnix,
+		CensusProtocol:               censusProtocol,
+		CensusClosureMismatch:        censusClosureMismatch,
+		CensusStatementCount:         censusStatementCount,
+		CensusRowsRead:               censusRowsRead,
+		CensusHandleApplied:          censusHandleApplied,
+		CensusAnchorApplied:          censusAnchorApplied,
+		ShadowCallerHintShortCircuit: shadowCallerHintShortCircuit,
+		RequestID:                    requestID,
+		Index:                        index,
+		Total:                        total,
+		constructed:                  true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewEvidenceProbeFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f EvidenceProbeFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns EvidenceProbe's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f EvidenceProbeFields) SlogArgs() []any {
+	return []any{
+		"census_kind", contextfabric.SanitizeLogAttr(f.CensusKind),
+		"census_complete", f.CensusComplete,
+		"census_count", f.CensusCount,
+		"census_read_at_unix", f.CensusReadAtUnix,
+		"census_protocol", contextfabric.SanitizeLogAttr(f.CensusProtocol),
+		"census_closure_mismatch", f.CensusClosureMismatch,
+		"census_statement_count", f.CensusStatementCount,
+		"census_rows_read", f.CensusRowsRead,
+		"census_handle_applied", f.CensusHandleApplied,
+		"census_anchor_applied", f.CensusAnchorApplied,
+		"shadow_caller_hint_short_circuit", f.ShadowCallerHintShortCircuit,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "evidence_probe",
+		"index", f.Index,
+		"total", f.Total,
+	}
+}
+
+// EvidenceRoundFields is graphrank.evidence_round's generated typed construction interface
+// (CHAOS-5516): one Go field per Field EvidenceRound.Fields declares in spec.go.
+type EvidenceRoundFields struct {
+	RequestID                          string
+	ShadowOutcome                      string
+	ShadowReason                       string
+	ShadowDIdentityHash                string
+	ShadowPreconditionUnproven         bool
+	ShadowUnscopedVisibility           bool
+	ShadowNonCensusedSurvivor          bool
+	ShadowHandleGrammarBound           bool
+	ShadowAnchorUniqueClaimant         bool
+	ShadowAnchorReceiptConfirmed       bool
+	ShadowKindsCensused                int
+	ShadowKindInsensitivityEvaluated   bool
+	ShadowKindInsensitivityOutcome     string
+	ShadowKindInsensitivityMode        string
+	ShadowHandleInsensitivityEvaluated bool
+	ShadowHandleInsensitivityOutcome   string
+	ShadowCallerHintShortCircuit       bool
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every EvidenceRoundFields uniformly, set ONLY by NewEvidenceRoundFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewEvidenceRoundFields is the generated constructor for EvidenceRoundFields -- every
+// field EvidenceRound.Fields declares is a required parameter.
+func NewEvidenceRoundFields(requestID string, shadowOutcome string, shadowReason string, shadowDIdentityHash string, shadowPreconditionUnproven bool, shadowUnscopedVisibility bool, shadowNonCensusedSurvivor bool, shadowHandleGrammarBound bool, shadowAnchorUniqueClaimant bool, shadowAnchorReceiptConfirmed bool, shadowKindsCensused int, shadowKindInsensitivityEvaluated bool, shadowKindInsensitivityOutcome string, shadowKindInsensitivityMode string, shadowHandleInsensitivityEvaluated bool, shadowHandleInsensitivityOutcome string, shadowCallerHintShortCircuit bool) EvidenceRoundFields {
+	return EvidenceRoundFields{
+		RequestID:                          requestID,
+		ShadowOutcome:                      shadowOutcome,
+		ShadowReason:                       shadowReason,
+		ShadowDIdentityHash:                shadowDIdentityHash,
+		ShadowPreconditionUnproven:         shadowPreconditionUnproven,
+		ShadowUnscopedVisibility:           shadowUnscopedVisibility,
+		ShadowNonCensusedSurvivor:          shadowNonCensusedSurvivor,
+		ShadowHandleGrammarBound:           shadowHandleGrammarBound,
+		ShadowAnchorUniqueClaimant:         shadowAnchorUniqueClaimant,
+		ShadowAnchorReceiptConfirmed:       shadowAnchorReceiptConfirmed,
+		ShadowKindsCensused:                shadowKindsCensused,
+		ShadowKindInsensitivityEvaluated:   shadowKindInsensitivityEvaluated,
+		ShadowKindInsensitivityOutcome:     shadowKindInsensitivityOutcome,
+		ShadowKindInsensitivityMode:        shadowKindInsensitivityMode,
+		ShadowHandleInsensitivityEvaluated: shadowHandleInsensitivityEvaluated,
+		ShadowHandleInsensitivityOutcome:   shadowHandleInsensitivityOutcome,
+		ShadowCallerHintShortCircuit:       shadowCallerHintShortCircuit,
+		constructed:                        true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewEvidenceRoundFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f EvidenceRoundFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns EvidenceRound's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f EvidenceRoundFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "evidence_round",
+		"shadow_outcome", contextfabric.SanitizeLogAttr(f.ShadowOutcome),
+		"shadow_reason", contextfabric.SanitizeLogAttr(f.ShadowReason),
+		"shadow_d_identity_hash", contextfabric.SanitizeLogAttr(f.ShadowDIdentityHash),
+		"shadow_precondition_unproven", f.ShadowPreconditionUnproven,
+		"shadow_unscoped_visibility", f.ShadowUnscopedVisibility,
+		"shadow_non_censused_survivor", f.ShadowNonCensusedSurvivor,
+		"shadow_handle_grammar_bound", f.ShadowHandleGrammarBound,
+		"shadow_anchor_unique_claimant", f.ShadowAnchorUniqueClaimant,
+		"shadow_anchor_receipt_confirmed", f.ShadowAnchorReceiptConfirmed,
+		"shadow_kinds_censused", f.ShadowKindsCensused,
+		"shadow_kind_insensitivity_evaluated", f.ShadowKindInsensitivityEvaluated,
+		"shadow_kind_insensitivity_outcome", contextfabric.SanitizeLogAttr(f.ShadowKindInsensitivityOutcome),
+		"shadow_kind_insensitivity_mode", contextfabric.SanitizeLogAttr(f.ShadowKindInsensitivityMode),
+		"shadow_handle_insensitivity_evaluated", f.ShadowHandleInsensitivityEvaluated,
+		"shadow_handle_insensitivity_outcome", contextfabric.SanitizeLogAttr(f.ShadowHandleInsensitivityOutcome),
+		"shadow_caller_hint_short_circuit", f.ShadowCallerHintShortCircuit,
+	}
+}
+
+// EvidenceSourceNativeFields is graphrank.evidence_source_native's generated typed construction interface
+// (CHAOS-5516): one Go field per Field EvidenceSourceNative.Fields declares in spec.go.
+type EvidenceSourceNativeFields struct {
+	RequestID               string
+	SourceNativeMatchCount  int
+	SourceNativeAnyResolved bool
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every EvidenceSourceNativeFields uniformly, set ONLY by NewEvidenceSourceNativeFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewEvidenceSourceNativeFields is the generated constructor for EvidenceSourceNativeFields -- every
+// field EvidenceSourceNative.Fields declares is a required parameter.
+func NewEvidenceSourceNativeFields(requestID string, sourceNativeMatchCount int, sourceNativeAnyResolved bool) EvidenceSourceNativeFields {
+	return EvidenceSourceNativeFields{
+		RequestID:               requestID,
+		SourceNativeMatchCount:  sourceNativeMatchCount,
+		SourceNativeAnyResolved: sourceNativeAnyResolved,
+		constructed:             true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewEvidenceSourceNativeFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f EvidenceSourceNativeFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns EvidenceSourceNative's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f EvidenceSourceNativeFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "evidence_source_native",
+		"source_native_match_count", f.SourceNativeMatchCount,
+		"source_native_any_resolved", f.SourceNativeAnyResolved,
+	}
+}
+
+// EvidenceSourceNativeProbeFields is graphrank.evidence_source_native_probe's generated typed construction interface
+// (CHAOS-5516): one Go field per Field EvidenceSourceNativeProbe.Fields declares in spec.go.
+type EvidenceSourceNativeProbeFields struct {
+	RequestID            string
+	SourceNativeGrammar  string
+	SourceNativeResolved bool
+	SourceNativeKind     string
+	Index                int
+	Total                int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every EvidenceSourceNativeProbeFields uniformly, set ONLY by NewEvidenceSourceNativeProbeFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewEvidenceSourceNativeProbeFields is the generated constructor for EvidenceSourceNativeProbeFields -- every
+// field EvidenceSourceNativeProbe.Fields declares is a required parameter.
+func NewEvidenceSourceNativeProbeFields(requestID string, sourceNativeGrammar string, sourceNativeResolved bool, sourceNativeKind string, index int, total int) EvidenceSourceNativeProbeFields {
+	return EvidenceSourceNativeProbeFields{
+		RequestID:            requestID,
+		SourceNativeGrammar:  sourceNativeGrammar,
+		SourceNativeResolved: sourceNativeResolved,
+		SourceNativeKind:     sourceNativeKind,
+		Index:                index,
+		Total:                total,
+		constructed:          true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewEvidenceSourceNativeProbeFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f EvidenceSourceNativeProbeFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns EvidenceSourceNativeProbe's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f EvidenceSourceNativeProbeFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "evidence_source_native_probe",
+		"source_native_grammar", contextfabric.SanitizeLogAttr(f.SourceNativeGrammar),
+		"source_native_resolved", f.SourceNativeResolved,
+		"source_native_kind", contextfabric.SanitizeLogAttr(f.SourceNativeKind),
+		"index", f.Index,
+		"total", f.Total,
+	}
+}
+
 // ExactNameSearchFields is graphrank.exact_name_search's generated typed construction interface
 // (CHAOS-5516): one Go field per Field ExactNameSearch.Fields declares in spec.go.
 type ExactNameSearchFields struct {
@@ -962,6 +1386,133 @@ func (f ExactNameSearchFields) SlogArgs() []any {
 		"term_hash", contextfabric.SanitizeLogAttr(f.TermHash),
 		"subject_kind", contextfabric.SanitizeLogAttr(f.SubjectKind),
 		"subject_canonical_id", contextfabric.SanitizeLogAttr(f.SubjectCanonicalID),
+	}
+}
+
+// IdentityGateFields is graphrank.identity_gate's generated typed construction interface
+// (CHAOS-5516): one Go field per Field IdentityGate.Fields declares in spec.go.
+type IdentityGateFields struct {
+	RequestID               string
+	SubjectKind             string
+	SubjectCanonicalID      string
+	FromKeyedIdentityLookup bool
+	EligibleKind            bool
+	AliasMatched            bool
+	ProviderMatched         bool
+	GateFired               bool
+	FinalConfidence         float64
+	Index                   int
+	Total                   int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every IdentityGateFields uniformly, set ONLY by NewIdentityGateFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewIdentityGateFields is the generated constructor for IdentityGateFields -- every
+// field IdentityGate.Fields declares is a required parameter.
+func NewIdentityGateFields(requestID string, subjectKind string, subjectCanonicalID string, fromKeyedIdentityLookup bool, eligibleKind bool, aliasMatched bool, providerMatched bool, gateFired bool, finalConfidence float64, index int, total int) IdentityGateFields {
+	return IdentityGateFields{
+		RequestID:               requestID,
+		SubjectKind:             subjectKind,
+		SubjectCanonicalID:      subjectCanonicalID,
+		FromKeyedIdentityLookup: fromKeyedIdentityLookup,
+		EligibleKind:            eligibleKind,
+		AliasMatched:            aliasMatched,
+		ProviderMatched:         providerMatched,
+		GateFired:               gateFired,
+		FinalConfidence:         finalConfidence,
+		Index:                   index,
+		Total:                   total,
+		constructed:             true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewIdentityGateFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f IdentityGateFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns IdentityGate's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f IdentityGateFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "identity_gate",
+		"subject_kind", contextfabric.SanitizeLogAttr(f.SubjectKind),
+		"subject_canonical_id", contextfabric.SanitizeLogAttr(f.SubjectCanonicalID),
+		"from_keyed_identity_lookup", f.FromKeyedIdentityLookup,
+		"eligible_kind", f.EligibleKind,
+		"alias_matched", f.AliasMatched,
+		"provider_matched", f.ProviderMatched,
+		"gate_fired", f.GateFired,
+		"final_confidence", f.FinalConfidence,
+		"index", f.Index,
+		"total", f.Total,
+	}
+}
+
+// IdentityGateSummaryFields is graphrank.identity_gate_summary's generated typed construction interface
+// (CHAOS-5516): one Go field per Field IdentityGateSummary.Fields declares in spec.go.
+type IdentityGateSummaryFields struct {
+	RequestID      string
+	CandidateCount int
+	FiredCount     int
+	FiredIDs       []string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every IdentityGateSummaryFields uniformly, set ONLY by NewIdentityGateSummaryFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewIdentityGateSummaryFields is the generated constructor for IdentityGateSummaryFields -- every
+// field IdentityGateSummary.Fields declares is a required parameter.
+func NewIdentityGateSummaryFields(requestID string, candidateCount int, firedCount int, firedIDs []string) IdentityGateSummaryFields {
+	valid := true
+	if firedIDs == nil {
+		valid = false
+	}
+	return IdentityGateSummaryFields{
+		RequestID:      requestID,
+		CandidateCount: candidateCount,
+		FiredCount:     firedCount,
+		FiredIDs:       firedIDs,
+		constructed:    valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewIdentityGateSummaryFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f IdentityGateSummaryFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns IdentityGateSummary's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f IdentityGateSummaryFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "identity_gate",
+		"candidate_count", f.CandidateCount,
+		"fired_count", f.FiredCount,
+		"fired_ids", contextfabric.SanitizeLogStrings(f.FiredIDs),
 	}
 }
 
@@ -1128,6 +1679,106 @@ func (f KindHintSearchFields) SlogArgs() []any {
 	}
 }
 
+// KindOfferFields is graphrank.kind_offer's generated typed construction interface
+// (CHAOS-5516): one Go field per Field KindOffer.Fields declares in spec.go.
+type KindOfferFields struct {
+	RequestID                            string
+	ExplicitHintCount                    int
+	DeclaredHintCount                    int
+	DeclaredWithheldNotInPoolCount       int
+	DistinctKindCount                    int
+	SuppressedByCardinality              bool
+	SuppressedByUnservableDeclaredKind   bool
+	CandidateOfferCount                  int
+	OfferKind                            string
+	CandidateOfferLabelsNormalizedCount  int
+	BoundaryKinds                        []string
+	BoundaryKindsBeforeRepair            []string
+	DistinctKindCountBeforeRepair        int
+	SuppressedByCardinalityBeforeRepair  bool
+	HandleOfferCountBeforeGraphSource    int
+	HandleOfferGraphDerivedCount         int
+	HandleOfferGraphDerivedRejectedCount int
+	OfferedUnderWindowGate               bool
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every KindOfferFields uniformly, set ONLY by NewKindOfferFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewKindOfferFields is the generated constructor for KindOfferFields -- every
+// field KindOffer.Fields declares is a required parameter.
+func NewKindOfferFields(requestID string, explicitHintCount int, declaredHintCount int, declaredWithheldNotInPoolCount int, distinctKindCount int, suppressedByCardinality bool, suppressedByUnservableDeclaredKind bool, candidateOfferCount int, offerKind string, candidateOfferLabelsNormalizedCount int, boundaryKinds []string, boundaryKindsBeforeRepair []string, distinctKindCountBeforeRepair int, suppressedByCardinalityBeforeRepair bool, handleOfferCountBeforeGraphSource int, handleOfferGraphDerivedCount int, handleOfferGraphDerivedRejectedCount int, offeredUnderWindowGate bool) KindOfferFields {
+	valid := true
+	if boundaryKinds == nil {
+		valid = false
+	}
+	if boundaryKindsBeforeRepair == nil {
+		valid = false
+	}
+	return KindOfferFields{
+		RequestID:                            requestID,
+		ExplicitHintCount:                    explicitHintCount,
+		DeclaredHintCount:                    declaredHintCount,
+		DeclaredWithheldNotInPoolCount:       declaredWithheldNotInPoolCount,
+		DistinctKindCount:                    distinctKindCount,
+		SuppressedByCardinality:              suppressedByCardinality,
+		SuppressedByUnservableDeclaredKind:   suppressedByUnservableDeclaredKind,
+		CandidateOfferCount:                  candidateOfferCount,
+		OfferKind:                            offerKind,
+		CandidateOfferLabelsNormalizedCount:  candidateOfferLabelsNormalizedCount,
+		BoundaryKinds:                        boundaryKinds,
+		BoundaryKindsBeforeRepair:            boundaryKindsBeforeRepair,
+		DistinctKindCountBeforeRepair:        distinctKindCountBeforeRepair,
+		SuppressedByCardinalityBeforeRepair:  suppressedByCardinalityBeforeRepair,
+		HandleOfferCountBeforeGraphSource:    handleOfferCountBeforeGraphSource,
+		HandleOfferGraphDerivedCount:         handleOfferGraphDerivedCount,
+		HandleOfferGraphDerivedRejectedCount: handleOfferGraphDerivedRejectedCount,
+		OfferedUnderWindowGate:               offeredUnderWindowGate,
+		constructed:                          valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewKindOfferFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f KindOfferFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns KindOffer's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f KindOfferFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "kind_offer",
+		"explicit_hint_count", f.ExplicitHintCount,
+		"declared_hint_count", f.DeclaredHintCount,
+		"declared_withheld_not_in_pool_count", f.DeclaredWithheldNotInPoolCount,
+		"distinct_kind_count", f.DistinctKindCount,
+		"suppressed_by_cardinality", f.SuppressedByCardinality,
+		"suppressed_by_unservable_declared_kind", f.SuppressedByUnservableDeclaredKind,
+		"candidate_offer_count", f.CandidateOfferCount,
+		"offer_kind", contextfabric.SanitizeLogAttr(f.OfferKind),
+		"candidate_offer_labels_normalized_count", f.CandidateOfferLabelsNormalizedCount,
+		"boundary_kinds", contextfabric.SanitizeLogStrings(f.BoundaryKinds),
+		"boundary_kinds_before_repair", contextfabric.SanitizeLogStrings(f.BoundaryKindsBeforeRepair),
+		"distinct_kind_count_before_repair", f.DistinctKindCountBeforeRepair,
+		"suppressed_by_cardinality_before_repair", f.SuppressedByCardinalityBeforeRepair,
+		"handle_offer_count_before_graph_source", f.HandleOfferCountBeforeGraphSource,
+		"handle_offer_graph_derived_count", f.HandleOfferGraphDerivedCount,
+		"handle_offer_graph_derived_rejected_count", f.HandleOfferGraphDerivedRejectedCount,
+		"offered_under_window_gate", f.OfferedUnderWindowGate,
+	}
+}
+
 // KindOfferWithheldFields is graphrank.kind_offer_withheld's generated typed construction interface
 // (CHAOS-5516): one Go field per Field KindOfferWithheld.Fields declares in spec.go.
 type KindOfferWithheldFields struct {
@@ -1189,6 +1840,108 @@ func (f KindOfferWithheldFields) SlogArgs() []any {
 		"distinct_kind_count", f.DistinctKindCount,
 		"suppressed_by_cardinality", f.SuppressedByCardinality,
 		"suppressed_by_unservable_declared_kind", f.SuppressedByUnservableDeclaredKind,
+	}
+}
+
+// LowPopulationKindScopeFields is graphrank.low_population_kind_scope's generated typed construction interface
+// (CHAOS-5516): one Go field per Field LowPopulationKindScope.Fields declares in spec.go.
+type LowPopulationKindScopeFields struct {
+	RequestID      string
+	Kind           string
+	State          string
+	CandidateCount int
+	Index          int
+	Total          int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every LowPopulationKindScopeFields uniformly, set ONLY by NewLowPopulationKindScopeFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewLowPopulationKindScopeFields is the generated constructor for LowPopulationKindScopeFields -- every
+// field LowPopulationKindScope.Fields declares is a required parameter.
+func NewLowPopulationKindScopeFields(requestID string, kind string, state string, candidateCount int, index int, total int) LowPopulationKindScopeFields {
+	return LowPopulationKindScopeFields{
+		RequestID:      requestID,
+		Kind:           kind,
+		State:          state,
+		CandidateCount: candidateCount,
+		Index:          index,
+		Total:          total,
+		constructed:    true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewLowPopulationKindScopeFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f LowPopulationKindScopeFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns LowPopulationKindScope's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f LowPopulationKindScopeFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "low_population_kind_scope",
+		"kind", contextfabric.SanitizeLogAttr(f.Kind),
+		"state", contextfabric.SanitizeLogAttr(f.State),
+		"candidate_count", f.CandidateCount,
+		"index", f.Index,
+		"total", f.Total,
+	}
+}
+
+// LowPopulationKindScopeSummaryFields is graphrank.low_population_kind_scope_summary's generated typed construction interface
+// (CHAOS-5516): one Go field per Field LowPopulationKindScopeSummary.Fields declares in spec.go.
+type LowPopulationKindScopeSummaryFields struct {
+	RequestID string
+	Outcome   string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every LowPopulationKindScopeSummaryFields uniformly, set ONLY by NewLowPopulationKindScopeSummaryFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewLowPopulationKindScopeSummaryFields is the generated constructor for LowPopulationKindScopeSummaryFields -- every
+// field LowPopulationKindScopeSummary.Fields declares is a required parameter.
+func NewLowPopulationKindScopeSummaryFields(requestID string, outcome string) LowPopulationKindScopeSummaryFields {
+	return LowPopulationKindScopeSummaryFields{
+		RequestID:   requestID,
+		Outcome:     outcome,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewLowPopulationKindScopeSummaryFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f LowPopulationKindScopeSummaryFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns LowPopulationKindScopeSummary's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f LowPopulationKindScopeSummaryFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "low_population_kind_scope",
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
 	}
 }
 
@@ -1550,5 +2303,120 @@ func (f SearchQuestionFields) SlogArgs() []any {
 		"stage", "search_question",
 		"result_count", f.ResultCount,
 		"truncated", f.Truncated,
+	}
+}
+
+// SliceBSurvivorVerdictFields is graphrank.slice_b_survivor_verdict's generated typed construction interface
+// (CHAOS-5516): one Go field per Field SliceBSurvivorVerdict.Fields declares in spec.go.
+type SliceBSurvivorVerdictFields struct {
+	RequestID          string
+	SubjectKind        string
+	SubjectCanonicalID string
+	SurvivorVerdict    string
+	Index              int
+	Total              int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every SliceBSurvivorVerdictFields uniformly, set ONLY by NewSliceBSurvivorVerdictFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewSliceBSurvivorVerdictFields is the generated constructor for SliceBSurvivorVerdictFields -- every
+// field SliceBSurvivorVerdict.Fields declares is a required parameter.
+func NewSliceBSurvivorVerdictFields(requestID string, subjectKind string, subjectCanonicalID string, survivorVerdict string, index int, total int) SliceBSurvivorVerdictFields {
+	return SliceBSurvivorVerdictFields{
+		RequestID:          requestID,
+		SubjectKind:        subjectKind,
+		SubjectCanonicalID: subjectCanonicalID,
+		SurvivorVerdict:    survivorVerdict,
+		Index:              index,
+		Total:              total,
+		constructed:        true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewSliceBSurvivorVerdictFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f SliceBSurvivorVerdictFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns SliceBSurvivorVerdict's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f SliceBSurvivorVerdictFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "slice_b_survivor_verdict",
+		"subject_kind", contextfabric.SanitizeLogAttr(f.SubjectKind),
+		"subject_canonical_id", contextfabric.SanitizeLogAttr(f.SubjectCanonicalID),
+		"survivor_verdict", contextfabric.SanitizeLogAttr(f.SurvivorVerdict),
+		"index", f.Index,
+		"total", f.Total,
+	}
+}
+
+// SliceBSurvivorVerdictSummaryFields is graphrank.slice_b_survivor_verdict_summary's generated typed construction interface
+// (CHAOS-5516): one Go field per Field SliceBSurvivorVerdictSummary.Fields declares in spec.go.
+type SliceBSurvivorVerdictSummaryFields struct {
+	RequestID       string
+	CandidateCount  int
+	NeutralCount    int
+	EliminatedCount int
+	EliminatedIDs   []string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every SliceBSurvivorVerdictSummaryFields uniformly, set ONLY by NewSliceBSurvivorVerdictSummaryFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewSliceBSurvivorVerdictSummaryFields is the generated constructor for SliceBSurvivorVerdictSummaryFields -- every
+// field SliceBSurvivorVerdictSummary.Fields declares is a required parameter.
+func NewSliceBSurvivorVerdictSummaryFields(requestID string, candidateCount int, neutralCount int, eliminatedCount int, eliminatedIDs []string) SliceBSurvivorVerdictSummaryFields {
+	valid := true
+	if eliminatedIDs == nil {
+		valid = false
+	}
+	return SliceBSurvivorVerdictSummaryFields{
+		RequestID:       requestID,
+		CandidateCount:  candidateCount,
+		NeutralCount:    neutralCount,
+		EliminatedCount: eliminatedCount,
+		EliminatedIDs:   eliminatedIDs,
+		constructed:     valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewSliceBSurvivorVerdictSummaryFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f SliceBSurvivorVerdictSummaryFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns SliceBSurvivorVerdictSummary's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f SliceBSurvivorVerdictSummaryFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"stage", "slice_b_survivor_verdict",
+		"candidate_count", f.CandidateCount,
+		"neutral_count", f.NeutralCount,
+		"eliminated_count", f.EliminatedCount,
+		"eliminated_ids", contextfabric.SanitizeLogStrings(f.EliminatedIDs),
 	}
 }

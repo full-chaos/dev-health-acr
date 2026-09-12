@@ -216,6 +216,50 @@ var declaredKindRescueState = []string{
 	DeclaredKindRescueMatchedSurvived,
 }
 
+// ConfirmedKindScope* are the FIVE values chaos4154_confirmed_kind_scope.go's
+// "state" field (also reused, unchanged, by low_population_kind_scope's own
+// "state" field -- see LowPopulationKindScope's own doc comment) ships.
+// CHAOS-5636: centralized here, the same DeclaredKindRescue* migration this
+// package already made -- a second, independently typed copy of a closed
+// vocabulary is exactly how two copies drift apart, and this one is
+// ALREADY shared by two producers (confirmed_kind_scope,
+// low_population_kind_scope) rather than one, making the drift risk this
+// migration removes a live one, not a hypothetical. graphrank's own
+// confirmedKindScope* constants (chaos4154_confirmed_kind_scope.go) now
+// alias these rather than retyping the five literals a second time.
+const (
+	ConfirmedKindScopeNotAttempted   = "not_attempted"
+	ConfirmedKindScopeComplete       = "complete"
+	ConfirmedKindScopeTruncated      = "truncated"
+	ConfirmedKindScopeFailed         = "failed"
+	ConfirmedKindScopePlanIncomplete = "plan_incomplete"
+)
+
+var confirmedKindScopeState = []string{
+	ConfirmedKindScopeNotAttempted, ConfirmedKindScopeComplete, ConfirmedKindScopeTruncated,
+	ConfirmedKindScopeFailed, ConfirmedKindScopePlanIncomplete,
+}
+
+// ConfirmedKindVectorScope* are the SIX values
+// chaos4155_confirmed_kind_vector_scope.go's own vector-census outcome
+// carries, ridden by confirmed_kind_scope's own "vector_census_state"
+// field. Centralized here for the same reason as ConfirmedKindScope*
+// immediately above -- graphrank's own ConfirmedKindVectorScope* constants
+// (chaos4155_confirmed_kind_vector_scope.go) now alias these.
+const (
+	ConfirmedKindVectorScopeNotAttempted = "not_attempted"
+	ConfirmedKindVectorScopeComplete     = "complete"
+	ConfirmedKindVectorScopeOverBudget   = "over_budget"
+	ConfirmedKindVectorScopeMalformed    = "malformed"
+	ConfirmedKindVectorScopeDrift        = "incomplete_snapshot_drift"
+	ConfirmedKindVectorScopeFailed       = "failed"
+)
+
+var confirmedKindVectorScopeState = []string{
+	ConfirmedKindVectorScopeNotAttempted, ConfirmedKindVectorScopeComplete, ConfirmedKindVectorScopeOverBudget,
+	ConfirmedKindVectorScopeMalformed, ConfirmedKindVectorScopeDrift, ConfirmedKindVectorScopeFailed,
+}
+
 // RankedCutSummary is the once-per-pass Info line
 // (graphrank/tracer.go, case "ranked_cut" with event.RankedCutSummary==true)
 // that reports phase 4's ranked-cut decision for a resolution pass, including
@@ -1011,6 +1055,505 @@ var WindowContinuationDecision = Event{
 	},
 }
 
+// KindOffer is the Info line (graphrank/tracer.go, case "kind_offer",
+// CHAOS-4012) reporting kindOfferMaterial/candidateOfferMaterial/
+// handleOfferMaterial's own combined per-resolution offer bookkeeping --
+// UNCONDITIONAL: these three run on every resolution, never gated behind a
+// "still missing" precondition, so this stage fires every time a tracer is
+// wired. CHAOS-5636: folded (kindOfferFold, resolve.go) the same way
+// anchor_offer/kind_coverage_floor already are -- the mechanism's own
+// business trigger is unconditional, but the call site sits deep inside
+// resolveSubjects, downstream of several early returns that would
+// otherwise skip it silently.
+var KindOffer = Event{
+	ID:                 "graphrank.kind_offer",
+	Msg:                "context fabric resolution trace: kind offer",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityExactlyOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "exactly one line per resolveSubjects call -- kindOfferMaterial/candidateOfferMaterial/handleOfferMaterial's own unconditional call site, folded (CHAOS-5636) so an early return upstream cannot skip it.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"kind_offer"}},
+		{Key: "explicit_hint_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "declared_hint_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "declared_withheld_not_in_pool_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "distinct_kind_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "suppressed_by_cardinality", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "suppressed_by_unservable_declared_kind", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "candidate_offer_count", Type: FieldInt, Presence: PresenceRequired},
+		{
+			Key: "offer_kind", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary in THIS package's own sense (the field is
+			// actually a small fixed set -- "kind"/"candidate"/"both"/"" --
+			// but graphrank's own resolve.go computes it inline rather than
+			// through a named, exported constant list this package could
+			// read without retyping it, so it is left undeclared here
+			// rather than risking a third, drifted copy).
+		},
+		{Key: "candidate_offer_labels_normalized_count", Type: FieldInt, Presence: PresenceRequired},
+		{
+			Key: "boundary_kinds", Type: FieldStringSlice, Presence: PresenceRequired,
+			// Closed-vocabulary subject-kind VALUES only (never a canonical
+			// id, never candidate identity) -- open string_slice here, the
+			// same convention KindOfferWithheld's own withheld_kinds and
+			// KindCoverageFloor's own missing_kinds_list already use.
+		},
+		{Key: "boundary_kinds_before_repair", Type: FieldStringSlice, Presence: PresenceRequired},
+		{Key: "distinct_kind_count_before_repair", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "suppressed_by_cardinality_before_repair", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "handle_offer_count_before_graph_source", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "handle_offer_graph_derived_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "handle_offer_graph_derived_rejected_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "offered_under_window_gate", Type: FieldBool, Presence: PresenceRequired},
+	},
+}
+
+// ConfirmedKindScope is the Info line (graphrank/tracer.go, case
+// "confirmed_kind_scope", CHAOS-4154/CHAOS-4155) reporting the
+// confirmed-kind truncation-scoping mechanism's own operator-visible half,
+// including the CHAOS-4155 Phase 1 shadow vector census riding the same
+// line. Genuinely MultiplicityZeroOrOnePerRequest, NOT ExactlyOnePerRequest
+// despite looking like the same "fold it unconditional" class as
+// KindOffer/AnchorOffer/KindCoverageFloor at a glance:
+// TestResolveSubjects_ConfirmedKindScope_NilConfirmedKindNeverTriggers
+// (chaos4154_confirmed_kind_scope_test.go) pins a CHAOS-4039
+// non-interference requirement that this mechanism stay STRUCTURALLY
+// UNREACHABLE for a confirmedKind==nil resolution -- a synthetic "never
+// attempted" fallback line on every such resolution would violate that
+// guarantee by making the stage fire where the ticket that owns it
+// requires silence. CertifyAbsent asserts the (far more common) case where
+// it never fires.
+var ConfirmedKindScope = Event{
+	ID:                 "graphrank.confirmed_kind_scope",
+	Msg:                "context fabric resolution trace: confirmed kind scope",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per resolveSubjects call -- gated on confirmedKind != nil && resolution-wide searchTruncated && nothing committed yet (CHAOS-4039 requires it stay structurally unreachable otherwise); CertifyAbsent asserts the case where it never fires.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"confirmed_kind_scope"}},
+		{Key: "state", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: confirmedKindScopeState},
+		{Key: "candidate_count", Type: FieldInt, Presence: PresenceRequired},
+		{
+			Key: "vector_census_state", Type: FieldString, Presence: PresenceRequired,
+			// Not always populated: zero-value "" on every state other than
+			// confirmedKindScopePlanIncomplete, the only case that invokes
+			// the CHAOS-4155 shadow arm at all. Declared PresenceRequired
+			// (always WRITTEN, explicit zero/empty when not applicable) --
+			// see clause 3's own "absence must never substitute for a
+			// measured zero" -- so "" is a legitimate, closed-vocabulary
+			// member here, not an omission.
+			ClosedVocabulary: append(append([]string{}, confirmedKindVectorScopeState...), ""),
+		},
+		{Key: "vector_census_population_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "vector_census_enumerated_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "vector_census_malformed_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "vector_census_query_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "vector_census_queries_scored", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "vector_census_comparison_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "vector_census_rival_count_above_tau", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "vector_census_snapshot_stable", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "vector_census_duration_ms", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
+// lowPopulationKindScopeOutcome is the closed vocabulary
+// LowPopulationKindScope's own summary line reports on
+// LowPopulationKindScopeOutcome -- the four values
+// chaos4417_low_population_kind_scope.go's own lowPopulationKindScopeOutcome*
+// constants carry.
+var lowPopulationKindScopeOutcome = []string{"vector_configured", "offer_only", "no_low_pop_candidates", "error"}
+
+// LowPopulationKindScope is the Debug per-kind line (graphrank/tracer.go,
+// case "low_population_kind_scope", CHAOS-4417) emitted once per
+// chaos4417LowPopulationScopedKinds member attempted this resolution --
+// this specification's sixth MultiplicityBoundedManyPerPass event, bounded
+// by that fixed-length constant, self-carrying Index/Total (CHAOS-5636)
+// the same way Search/KindHintSearch/ExactNameSearch already do.
+var LowPopulationKindScope = Event{
+	ID:                 "graphrank.low_population_kind_scope",
+	Msg:                "context fabric resolution trace: low population kind scope",
+	Level:              LevelDebug,
+	Multiplicity:       MultiplicityBoundedManyPerPass,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "bounded per resolveSubjects call by len(chaos4417LowPopulationScopedKinds), a fixed constant known before the loop starts -- self-carried index/total, cross-checked against no sibling summary count (the summary shares no field with the detail line; see LowPopulationKindScopeSummary's own doc comment for why the two were split onto distinct Msg strings).",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"low_population_kind_scope"}},
+		{
+			Key: "kind", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a contextfabric.SubjectKind token, always
+			// one of chaos4417LowPopulationScopedKinds' own three members
+			// on this variant (never empty -- empty is the summary's own
+			// discriminator, which is why the two now carry distinct Msg
+			// strings rather than sharing this one).
+		},
+		{Key: "state", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: confirmedKindScopeState},
+		{Key: "candidate_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "index", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
+// LowPopulationKindScopeSummary is the Debug once-per-request line
+// (graphrank/tracer.go, case "low_population_kind_scope", empty
+// LowPopulationKindScopeKind) folding applyLowPopulationKindOffers' own
+// call into one outcome token -- fired exactly once per call via a plain
+// deferred statement (chaos4417_low_population_kind_scope.go), regardless
+// of outcome, INCLUDING the vector-configured early return, so this is
+// MultiplicityExactlyOnePerRequest, not conditional the way the sibling
+// per-kind detail line is.
+//
+// CHAOS-5636 class fix: this used to share ITS OWN Msg with the per-kind
+// detail line above (discriminated only by an empty "kind" field value,
+// not by Stage/Msg the way every other detail/summary pair in this
+// package already is) -- certify's own line lookup matches by Msg alone,
+// so declaring these as two Events sharing one Msg would have
+// certifyBoundedMany silently mix this line into the detail scope's own
+// Index/Total agreement check. Given its own Msg here, the same fix
+// AnchorKindWithheld already needed for a different Msg collision (its
+// own doc comment).
+var LowPopulationKindScopeSummary = Event{
+	ID:                 "graphrank.low_population_kind_scope_summary",
+	Msg:                "context fabric resolution trace: low population kind scope summary",
+	Level:              LevelDebug,
+	Multiplicity:       MultiplicityExactlyOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "exactly one line per resolveSubjects call, emitted via a plain deferred statement inside applyLowPopulationKindOffers -- including the vector-configured early return.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"low_population_kind_scope"}},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: lowPopulationKindScopeOutcome},
+	},
+}
+
+// IdentityGate is the Debug per-candidate line (graphrank/tracer.go, case
+// "identity_gate", CHAOS-3884) emitted from NodeCandidate (candidate.go)
+// for every isAliasLookupScopedKind candidate -- this specification's
+// seventh MultiplicityBoundedManyPerPass event, and the one whose own
+// Index/Total (CHAOS-5636) cannot be stamped at the Trace call itself:
+// NodeCandidate fires from TWO separate call sites in resolve.go, each its
+// own loop with no shared upfront bound. identityGateSummaryBuffer
+// (resolve.go) now buffers every detail line (not only counts) and stamps
+// Index/Total at flush, once the call's own total gate-checked population
+// is finally known -- see that buffer's own doc comment for the full
+// mechanism and why it is the one deliberate exception to this package's
+// "forward first, bookkeep second" fold shape.
+var IdentityGate = Event{
+	ID:                 "graphrank.identity_gate",
+	Msg:                "context fabric resolution trace: identity gate",
+	Level:              LevelDebug,
+	Multiplicity:       MultiplicityBoundedManyPerPass,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "bounded per resolveSubjects call by however many isAliasLookupScopedKind candidates NodeCandidate builds across BOTH its own call sites -- self-carried index/total, stamped at identityGateSummaryBuffer.flush() once that total is known, matching IdentityGateSummary's own candidate_count for the same call.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"identity_gate"}},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_canonical_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "from_keyed_identity_lookup", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "eligible_kind", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "alias_matched", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "provider_matched", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "gate_fired", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "final_confidence", Type: FieldFloat, Presence: PresenceRequired},
+		{Key: "index", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
+// IdentityGateSummary is the Info once-per-call line (graphrank/tracer.go,
+// case "identity_gate", IdentityGateSummary==true) folding IdentityGate's
+// own call into one aggregate -- emitted by identityGateSummaryBuffer.flush()
+// ONLY when at least one candidate reached the gate (candidateCount==0
+// withholds the summary entirely: "silence means never reached", the same
+// convention SurvivorVerdictSummary's own doc comment uses), hence
+// MultiplicityZeroOrOnePerRequest rather than Exactly.
+var IdentityGateSummary = Event{
+	ID:                 "graphrank.identity_gate_summary",
+	Msg:                "context fabric resolution trace: identity gate summary",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per resolveSubjects call -- withheld entirely when no alias-lookup-scoped candidate reached the gate; CertifyAbsent asserts that case.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"identity_gate"}},
+		{Key: "candidate_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "fired_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "fired_ids", Type: FieldStringSlice, Presence: PresenceRequired},
+	},
+}
+
+// shadowOutcome is the closed vocabulary ShadowOutcome (chaos3899_evidence_round.go's
+// own ShadowOutcome type) carries.
+var shadowOutcome = []string{"would_commit", "would_no_match", "would_clarify"}
+
+// kindInsensitivityOutcome is the closed vocabulary
+// chaos3900_structure_offers.go's own kindInsensitivityOutcome type carries
+// (four fixed values), reused by BOTH ShadowKindInsensitivityOutcome and
+// ShadowHandleInsensitivityOutcome -- plus the empty string, the zero value
+// written whenever the respective *InsensitivityEvaluated bool is false
+// (the probe never ran).
+var kindInsensitivityOutcome = []string{"", "commit_sound", "no_match_sound", "kind_sensitive_outcome", "probe_error"}
+
+// explicitKindNarrowingMode is the closed vocabulary
+// chaos3900_structure_offers.go's own explicitKindNarrowingMode type
+// carries (including its own zero value ""), ridden by
+// ShadowKindInsensitivityMode.
+var explicitKindNarrowingMode = []string{"", "narrowed", "observed_no_overlap", "observed_subsumed"}
+
+// EvidenceRound is the Info line (graphrank/tracer.go, case
+// "evidence_round", CHAOS-3899 design brief v5 Slice A) reporting the
+// shadow evidence round's own per-resolution outcome, SUPPRESSED from any
+// commit-path decision -- measurement only. Fires on every call that
+// reaches past the axis/scope gates INCLUDING a refused one (design brief
+// §6/§7's own non-vacuity bar: "the round ran but found nothing" and "the
+// round never ran" must be structurally distinguishable), gated on
+// deps.CensusFunc != nil and the stalled-resolution precondition
+// (resolve.go's own call site), hence MultiplicityZeroOrOnePerRequest.
+var EvidenceRound = Event{
+	ID:                 "graphrank.evidence_round",
+	Msg:                "context fabric resolution trace: evidence round (shadow)",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per resolveSubjects call -- gated on deps.CensusFunc != nil and the stalled-resolution precondition (nothing committed, resolution-wide searchTruncated); CertifyAbsent asserts the (far more common) case where it never runs.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"evidence_round"}},
+		{Key: "shadow_outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: shadowOutcome},
+		{
+			Key: "shadow_reason", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a DegradationReason token (chaos3899_handle_grammar.go),
+			// a large cross-cutting enum this package leaves open rather
+			// than retype, the same convention DecisionSummary's own
+			// commit_gate/refuse_basis fields already use for their own
+			// cross-package reason tokens.
+		},
+		{
+			Key: "shadow_d_identity_hash", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a SHA-256 hex digest, or "".
+		},
+		{Key: "shadow_precondition_unproven", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "shadow_unscoped_visibility", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "shadow_non_censused_survivor", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "shadow_handle_grammar_bound", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "shadow_anchor_unique_claimant", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "shadow_anchor_receipt_confirmed", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "shadow_kinds_censused", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "shadow_kind_insensitivity_evaluated", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "shadow_kind_insensitivity_outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: kindInsensitivityOutcome},
+		{Key: "shadow_kind_insensitivity_mode", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: explicitKindNarrowingMode},
+		{Key: "shadow_handle_insensitivity_evaluated", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "shadow_handle_insensitivity_outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: kindInsensitivityOutcome},
+		{Key: "shadow_caller_hint_short_circuit", Type: FieldBool, Presence: PresenceRequired},
+	},
+}
+
+// EvidenceProbe is the Info per-kind line (graphrank/tracer.go, case
+// "evidence_probe", CHAOS-3899 design brief §1.3(3)) -- ONE per-kind census
+// receipt, never aggregated across kinds. This specification's eighth
+// MultiplicityBoundedManyPerPass event: bounded per call by len(a.Kinds),
+// known before its own loop starts (the SAME slice EvidenceRound's own
+// shadow_kinds_censused already counts), self-carrying Index/Total
+// (CHAOS-5636).
+var EvidenceProbe = Event{
+	ID:                 "graphrank.evidence_probe",
+	Msg:                "context fabric resolution trace: evidence probe (shadow census)",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityBoundedManyPerPass,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "bounded per resolveSubjects call by len(a.Kinds), the SAME count EvidenceRound's own shadow_kinds_censused reports for the same call -- self-carried index/total.",
+	Fields: []Field{
+		{
+			Key: "census_kind", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a contextfabric.SubjectKind token.
+		},
+		{Key: "census_complete", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "census_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "census_read_at_unix", Type: FieldInt, Presence: PresenceRequired},
+		{
+			Key: "census_protocol", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: caller-supplied via deps.CensusFunc
+			// (CensusOutcome.Protocol), not a closed set this package
+			// itself owns.
+		},
+		{Key: "census_closure_mismatch", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "census_statement_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "census_rows_read", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "census_handle_applied", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "census_anchor_applied", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "shadow_caller_hint_short_circuit", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"evidence_probe"}},
+		{Key: "index", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
+// evidenceCensusCommitOutcome is the closed vocabulary
+// emitEvidenceCensusCommit's own "outcome" argument (resolve.go, CHAOS-5636
+// fold) carries: "refused" (graph-missing-satisfier or unauthorized/invalid
+// node), the contest-admission disposition token graphrank's own
+// contestSetDisposition constant carries ("anchor_kind_withheld" --
+// AnchorKindWithheld's own doc comment), or "merged".
+var evidenceCensusCommitOutcome = []string{"refused", "anchor_kind_withheld", "merged"}
+
+// evidenceCensusCommitReason is the closed vocabulary
+// EvidenceCensusCommit's own "census_commit_reason" field carries: empty
+// (every outcome but the graph-missing-satisfier refusal never sets it),
+// the ReasonGraphMissingSatisfier token (chaos3899_handle_grammar.go), or
+// resolve.go's own censusCommitErrorReason constant.
+var evidenceCensusCommitReason = []string{"", "graph_missing_satisfier", "census_commit_error"}
+
+// EvidenceCensusCommit is the Info line (graphrank/tracer.go, case
+// "evidence_census_commit", CHAOS-3896 Slice C) reporting
+// mergeCensusAttestedSatisfier's own commit-gate outcome for the shadow
+// evidence round's own attested satisfier. CHAOS-5636: this function's
+// four internal Trace call sites now route through ONE shared emission
+// point (emitEvidenceCensusCommit, resolve.go) rather than four
+// independent ResolutionTraceEvent{...} literals -- see that helper's own
+// doc comment for why. MultiplicityZeroOrOnePerRequest: mergeCensusAttestedSatisfier
+// has exactly one, unlooped call site, itself gated on the evidence round
+// having named an attested satisfier -- folding the site count from four
+// to one does not change that a genuine backend fault/absence legitimately
+// produces zero lines.
+var EvidenceCensusCommit = Event{
+	ID:                 "graphrank.evidence_census_commit",
+	Msg:                "context fabric resolution trace: evidence census commit",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per resolveSubjects call -- mergeCensusAttestedSatisfier's own single, unlooped call site, gated on the evidence round naming an attested satisfier; CertifyAbsent asserts the (far more common) case where it never runs.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"evidence_census_commit"}},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_canonical_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: evidenceCensusCommitOutcome},
+		{Key: "graph_existence_ok", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "census_commit_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: evidenceCensusCommitReason},
+	},
+}
+
+// EvidenceSourceNative is the Info line (graphrank/tracer.go, case
+// "evidence_source_native", CHAOS-3918/CHAOS-3899 widening measurement)
+// reporting traceSourceNativeBinds' own aggregate bind count -- fires
+// unconditionally once the shadow round reaches past its own axis/scope
+// gates (mirrors EvidenceRound's own non-vacuity proof), so it is
+// MultiplicityZeroOrOnePerRequest with the SAME gating as EvidenceRound,
+// never a second independent condition.
+var EvidenceSourceNative = Event{
+	ID:                 "graphrank.evidence_source_native",
+	Msg:                "context fabric resolution trace: evidence source native (shadow widening)",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per resolveSubjects call -- the SAME gating EvidenceRound's own call site carries (traceSourceNativeBinds is called from inside RunShadowEvidenceRound, past the same axis/scope gates); CertifyAbsent asserts the case where the round never reaches that point.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"evidence_source_native"}},
+		{Key: "source_native_match_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "source_native_any_resolved", Type: FieldBool, Presence: PresenceRequired},
+	},
+}
+
+// sourceNativeGrammar is the closed vocabulary ShadowSourceNativeGrammar
+// carries -- the five FIXED grammar names
+// chaos3899_source_native_grammar.go's own sourceNativeGrammarRegistry
+// declares (Grammar is always `entry.name`, never a matched literal).
+var sourceNativeGrammar = []string{
+	"provider_qualified_name", "repo_slug", "branch_name_keyword", "branch_name_prefix", "commit_sha",
+}
+
+// EvidenceSourceNativeProbe is the Debug per-match line (graphrank/tracer.go,
+// case "evidence_source_native_probe", CHAOS-3918) -- ONE per-match
+// receipt, mirroring EvidenceProbe's own "per-kind, never aggregated"
+// cardinality one level down to "per grammar match". This specification's
+// ninth MultiplicityBoundedManyPerPass event: bounded per call by
+// len(binds), the SAME slice EvidenceSourceNative's own
+// source_native_match_count already counts, self-carrying Index/Total
+// (CHAOS-5636).
+var EvidenceSourceNativeProbe = Event{
+	ID:                 "graphrank.evidence_source_native_probe",
+	Msg:                "context fabric resolution trace: evidence source native probe (shadow widening)",
+	Level:              LevelDebug,
+	Multiplicity:       MultiplicityBoundedManyPerPass,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "bounded per resolveSubjects call by len(binds), the SAME count EvidenceSourceNative's own source_native_match_count reports for the same call -- self-carried index/total.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"evidence_source_native_probe"}},
+		{Key: "source_native_grammar", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: sourceNativeGrammar},
+		{Key: "source_native_resolved", Type: FieldBool, Presence: PresenceRequired},
+		{
+			Key: "source_native_kind", Type: FieldString, Presence: PresenceRequired,
+			// Open vocabulary: a contextfabric.SubjectKind token, or "" when
+			// source_native_resolved is false.
+		},
+		{Key: "index", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
+// survivorVerdict is the closed vocabulary SurvivorVerdict carries --
+// chaos3896_slice_b_presentation.go's own two verdict names.
+var survivorVerdict = []string{"neutral", "eliminated"}
+
+// SliceBSurvivorVerdict is the Debug per-candidate line
+// (graphrank/tracer.go, case "slice_b_survivor_verdict", CHAOS-4088)
+// reporting SurvivorsFirstOrder's own candidateSurvivorVerdict for each
+// candidate in the FINAL list -- this specification's tenth
+// MultiplicityBoundedManyPerPass event, bounded by len(ordered) (known
+// before its own loop starts, the SAME count the sibling summary's own
+// candidate_count reports), self-carrying Index/Total (CHAOS-5636).
+var SliceBSurvivorVerdict = Event{
+	ID:                 "graphrank.slice_b_survivor_verdict",
+	Msg:                "context fabric resolution trace: slice b survivor verdict",
+	Level:              LevelDebug,
+	Multiplicity:       MultiplicityBoundedManyPerPass,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "bounded per resolveSubjects call by len(ordered), the SAME count SliceBSurvivorVerdictSummary's own candidate_count reports for the same call -- self-carried index/total; zero lines whenever attestation.Reason == ReasonBudgetExhausted (the function's own early return before either loop runs).",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"slice_b_survivor_verdict"}},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_canonical_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "survivor_verdict", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: survivorVerdict},
+		{Key: "index", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
+// SliceBSurvivorVerdictSummary is the Info once-per-call line
+// (graphrank/tracer.go, case "slice_b_survivor_verdict",
+// SurvivorVerdictSummary==true) folding SurvivorsFirstOrder's own call
+// into one aggregate -- emitted only when len(ordered) > 0 ("silence means
+// never reached", the same convention IdentityGateSummary's own doc
+// comment uses), hence MultiplicityZeroOrOnePerRequest.
+var SliceBSurvivorVerdictSummary = Event{
+	ID:                 "graphrank.slice_b_survivor_verdict_summary",
+	Msg:                "context fabric resolution trace: slice b survivor verdict summary",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per resolveSubjects call -- withheld entirely when SurvivorsFirstOrder's own candidate list is empty; CertifyAbsent asserts that case.",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"slice_b_survivor_verdict"}},
+		{Key: "candidate_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "neutral_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "eliminated_count", Type: FieldInt, Presence: PresenceRequired},
+		{
+			Key: "eliminated_ids", Type: FieldStringSlice, Presence: PresenceRequired,
+			// Open vocabulary: canonical ids, capped at traceSummaryIDCap.
+		},
+	},
+}
+
 // All is every event this specification declares. Generate() and the
 // certification runner both range over exactly this slice -- neither
 // maintains a second list.
@@ -1020,4 +1563,15 @@ var All = []Event{
 	Decision, SearchQuestion, AliasLookup, AnchorPool, KindCoverageFloor, ConfirmedKindRescue,
 	IdentityUniverse, KindHintSearch, ExactNameSearch, AnchorOffer,
 	AnchorKindWithheld, AnchorKindWithheldSummary, WindowContinuationDecision,
+	// CHAOS-5636: KindOffer/ConfirmedKindScope
+	// close out the two remaining "(only)" events; LowPopulationKindScope/
+	// IdentityGate/SliceBSurvivorVerdict each contribute a detail+summary
+	// pair; the evidence_census family (EvidenceRound/EvidenceProbe/
+	// EvidenceCensusCommit/EvidenceSourceNative/EvidenceSourceNativeProbe)
+	// closes CHAOS-3899/CHAOS-3896's own remaining trace surface.
+	KindOffer, ConfirmedKindScope,
+	LowPopulationKindScope, LowPopulationKindScopeSummary,
+	IdentityGate, IdentityGateSummary,
+	EvidenceRound, EvidenceProbe, EvidenceCensusCommit, EvidenceSourceNative, EvidenceSourceNativeProbe,
+	SliceBSurvivorVerdict, SliceBSurvivorVerdictSummary,
 }
