@@ -71,6 +71,25 @@ func diagnoseLengthBound(value string, minimum, maximum int, boundName string) (
 	return "", false, false
 }
 
+// diagnoseBoundedTextBound mirrors boundedText(value, minimum, maximum,
+// contextFabricWriteBounds) -- the form every Validate() in this package
+// actually calls, where rawTextLength is true.
+//
+// It checks the RAW value's length FIRST and only then the trimmed value's,
+// because that is boundedText's own order. diagnoseLengthBound alone
+// measures only what it is handed, so a mirror that handed it
+// strings.TrimSpace(value) silently disagreed with the validator for any
+// value whose raw length exceeds the maximum but whose trimmed length does
+// not -- e.g. a title padded with trailing spaces. Validate() rejects that
+// and the mirror passed it, walking on to name a LATER clause the validator
+// never reached, which is the one failure mode this file exists to prevent.
+func diagnoseBoundedTextBound(value string, minimum, maximum int, boundName string) (bound string, ok bool, passed bool) {
+	if utf8.RuneCountInString(value) > maximum {
+		return boundName, true, false
+	}
+	return diagnoseLengthBound(strings.TrimSpace(value), minimum, maximum, boundName)
+}
+
 // diagnoseUniqueTrimmedStringsBound mirrors uniqueTrimmedStrings(values,
 // maximum)'s exact per-item clause order (validate_context_fabric_helpers.go):
 // for each item, in slice order, trim FIRST, then length [1,maximum],
@@ -185,7 +204,7 @@ func DiagnoseContextFabricInterpretedQuestionBound(q ContextFabricInterpretedQue
 	if !validInvestigationShape(q.Shape) {
 		return "", false
 	}
-	if bound, ok, passed := diagnoseLengthBound(strings.TrimSpace(q.RequestedJudgment), 1, ContextFabricRequestedJudgmentMaxLength, "interpretation.requested_judgment.max_length"); !passed {
+	if bound, ok, passed := diagnoseBoundedTextBound(q.RequestedJudgment, 1, ContextFabricRequestedJudgmentMaxLength, "interpretation.requested_judgment.max_length"); !passed {
 		return bound, ok
 	}
 	if len(q.SubjectTerms) > ContextFabricSubjectTermsMaxCount {
@@ -351,10 +370,10 @@ func DiagnoseContextFabricDriverJudgmentClause(d ContextFabricDriverJudgment) (c
 	if !validDriverCategory(ContextFabricDriverCategory(d.Category)) {
 		return ContextFabricClauseDriverCategory, "", false
 	}
-	if bound, ok, passed := diagnoseLengthBound(strings.TrimSpace(d.Title), 1, ContextFabricDriverTitleMaxLength, "synthesis.driver.title.max_length"); !passed {
+	if bound, ok, passed := diagnoseBoundedTextBound(d.Title, 1, ContextFabricDriverTitleMaxLength, "synthesis.driver.title.max_length"); !passed {
 		return ContextFabricClauseDriverTitle, bound, ok
 	}
-	if bound, ok, passed := diagnoseLengthBound(strings.TrimSpace(d.Summary), 1, ContextFabricDriverSummaryMaxLength, "synthesis.driver.summary.max_length"); !passed {
+	if bound, ok, passed := diagnoseBoundedTextBound(d.Summary, 1, ContextFabricDriverSummaryMaxLength, "synthesis.driver.summary.max_length"); !passed {
 		return ContextFabricClauseDriverSummary, bound, ok
 	}
 	if !validDerivationMethod(d.Derivation) {
@@ -385,7 +404,14 @@ func DiagnoseContextFabricDriverJudgmentClause(d ContextFabricDriverJudgment) (c
 	if bound, ok, passed := diagnoseUniqueTrimmedStringsBound(d.PathIDs, ContextFabricIdentifierRefMaxLength, "synthesis.driver.path_ids.item_max_length"); !passed {
 		return ContextFabricClauseDriverPathIDsShape, bound, ok
 	}
-	if bound, ok, passed := diagnoseBoundedEvidenceRefsBound(d.EvidenceRefIDs, ContextFabricEvidenceRefIDsMaxCount, true, "synthesis.driver.evidence_ref_ids.max_count", "synthesis.driver.evidence_ref_ids.item_max_length"); !passed {
+	// bounds.nestedEvidenceRefs, NOT ContextFabricEvidenceRefIDsMaxCount:
+	// Validate() passes the NESTED cap here (200 under write bounds), while
+	// the 500 constant is the TOP-LEVEL document cap. The mirror used the
+	// larger one, so a driver carrying 201-500 refs was rejected by the
+	// validator and waved through by the mirror, which then named a later
+	// clause the validator never evaluated -- and reported the count bound at
+	// the wrong threshold when it did fire.
+	if bound, ok, passed := diagnoseBoundedEvidenceRefsBound(d.EvidenceRefIDs, contextFabricWriteBounds.nestedEvidenceRefs, true, "synthesis.driver.evidence_ref_ids.max_count", "synthesis.driver.evidence_ref_ids.item_max_length"); !passed {
 		return ContextFabricClauseDriverEvidenceRefIDsShape, bound, ok
 	}
 	// Statement 3.
@@ -417,10 +443,10 @@ func DiagnoseContextFabricFindingClause(f ContextFabricFinding) (clause ContextF
 	if bound, ok, passed := diagnoseLengthBound(f.FindingID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength, "synthesis.finding.finding_id.max_length"); !passed {
 		return ContextFabricClauseFindingIDLength, bound, ok
 	}
-	if bound, ok, passed := diagnoseLengthBound(strings.TrimSpace(f.Kind), 1, ContextFabricFindingKindMaxLength, "synthesis.finding.kind.max_length"); !passed {
+	if bound, ok, passed := diagnoseBoundedTextBound(f.Kind, 1, ContextFabricFindingKindMaxLength, "synthesis.finding.kind.max_length"); !passed {
 		return ContextFabricClauseFindingKindLength, bound, ok
 	}
-	if bound, ok, passed := diagnoseLengthBound(strings.TrimSpace(f.Summary), 1, ContextFabricFindingSummaryMaxLength, "synthesis.finding.summary.max_length"); !passed {
+	if bound, ok, passed := diagnoseBoundedTextBound(f.Summary, 1, ContextFabricFindingSummaryMaxLength, "synthesis.finding.summary.max_length"); !passed {
 		return ContextFabricClauseFindingSummaryLength, bound, ok
 	}
 	if len(f.Subjects) > ContextFabricFindingSubjectsMaxCount {
@@ -429,7 +455,8 @@ func DiagnoseContextFabricFindingClause(f ContextFabricFinding) (clause ContextF
 	if bound, ok, passed := diagnoseSubjectRefsBound(f.Subjects, "synthesis.finding.subjects.item_canonical_id_max_length", "synthesis.finding.subjects.item_label_max_length"); !passed {
 		return ContextFabricClauseFindingSubjectsShape, bound, ok
 	}
-	if bound, ok, passed := diagnoseBoundedEvidenceRefsBound(f.EvidenceRefIDs, ContextFabricEvidenceRefIDsMaxCount, false, "synthesis.finding.evidence_ref_ids.max_count", "synthesis.finding.evidence_ref_ids.item_max_length"); !passed {
+	// The nested cap, for the same reason as the driver traversal above.
+	if bound, ok, passed := diagnoseBoundedEvidenceRefsBound(f.EvidenceRefIDs, contextFabricWriteBounds.nestedEvidenceRefs, false, "synthesis.finding.evidence_ref_ids.max_count", "synthesis.finding.evidence_ref_ids.item_max_length"); !passed {
 		return ContextFabricClauseFindingEvidenceRefIDsShape, bound, ok
 	}
 	// Statement 2.
