@@ -555,6 +555,17 @@ func TestTheOriginDisclosureInputDomain(t *testing.T) {
 			served: cov(SourceNoData), memberKind: "", groupKind: SubjectTeam,
 			wantRows: 0, recoverMember: "", recoverGroup: SourceNoData,
 		},
+		{
+			// THE SERVED SOURCE ITSELF OBSERVED TWICE. The document's own
+			// coverage carries both the pre-cap and post-cap observations,
+			// and the state it PUBLISHES is the worse. Joining against the
+			// first one instead would match the wrong read and name the
+			// population the source already publishes.
+			name: "the served source is observed twice", member: cov(SourceAvailable), group: cov(SourceNoData),
+			served: cov(SourceAvailable, SourceNoData), memberKind: SubjectProject, groupKind: SubjectTeam,
+			wantRows: 1, wantOrigin: SubjectProject, wantState: SourceAvailable,
+			recoverMember: SourceAvailable, recoverGroup: SourceNoData,
+		},
 	}
 
 	for _, c := range cases {
@@ -579,6 +590,11 @@ func TestTheOriginDisclosureInputDomain(t *testing.T) {
 		}
 		// THE PROPERTY: reconstruct both reads from the document alone.
 		servedState := c.served.Sources[0].State
+		for _, observation := range c.served.Sources {
+			if sourceStateSeverity(observation.State) > sourceStateSeverity(servedState) {
+				servedState = observation.State
+			}
+		}
 		recover := func(origin SubjectKind) SourceState {
 			for _, row := range rows {
 				if row.OriginKind == origin {
@@ -676,6 +692,12 @@ func TestEveryRowTheProducerDropsSaysWhyItWasDropped(t *testing.T) {
 		if len(lines) != 1 {
 			t.Fatalf("unrooted_read lines = %d, want 1: %+v", len(lines), read(t, buf))
 		}
+		// AND IT STOPS THERE. Carrying on to mint a row with an empty
+		// origin, for the contract to refuse a line later, reports a wiring
+		// gap as a contract violation and buries the real reason.
+		if refused := reasons(read(t, buf), "contract_refused"); len(refused) != 0 {
+			t.Fatalf("an unnameable read produced %d contract_refused line(s): %+v -- it carried on instead of stopping", len(refused), refused)
+		}
 		if lines[0].Level != "WARN" {
 			t.Errorf("level = %q, want WARN -- a read that cannot be named is a wiring gap", lines[0].Level)
 		}
@@ -740,6 +762,26 @@ func TestEveryRowTheProducerDropsSaysWhyItWasDropped(t *testing.T) {
 		}
 		if lines := reasons(read(t, buf), "no_served_source"); len(lines) != 1 {
 			t.Fatalf("no_served_source lines = %d, want 1: %+v", len(lines), read(t, buf))
+		}
+	})
+
+	t.Run("a kind only one population read is dropped, never refused", func(t *testing.T) {
+		// The other read has NO observation for this kind, so its state is
+		// the zero value. Treating that as a state to compare against would
+		// mint a row with an empty source_state for the contract to refuse
+		// -- a Warn on every ordinary turn where the two reads planned
+		// different kinds. The guard is "one of them did not read it", and
+		// the drop is silent because it is not a defect.
+		buf := captureDefaultJSONLogger(t)
+		member := Coverage{Sources: []SourceObservation{{Source: "canonical_fact:health", State: SourceAvailable}}}
+		group := Coverage{Sources: []SourceObservation{{Source: "canonical_fact:workload", State: SourceNoData}}}
+		served := MergeCoverage("org_1", member, group)
+		got := readOriginStateCoverage(served, member, group, SubjectProject, SubjectTeam)
+		if len(got.Details) != 0 {
+			t.Fatalf("rows = %d, want 0 -- neither kind was read by both populations: %+v", len(got.Details), got.Details)
+		}
+		if lines := read(t, buf); len(lines) != 0 {
+			t.Fatalf("a turn whose reads planned different kinds emitted %d line(s): %+v -- an ordinary turn is not a defect", len(lines), lines)
 		}
 	})
 
