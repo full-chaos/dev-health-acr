@@ -110,3 +110,133 @@ func TestInvestigateTermFreeSurveyServesTheDeclaredKindsCohort(t *testing.T) {
 		})
 	}
 }
+
+// ambiguousCandidateGraphReader wraps the real *Adapter (so DiscoverContext,
+// the census gate, the kind-scoped census and cohort assembly all run
+// production code exactly like subjectlessGraphReader above) but reports TWO
+// uncommitted, ambiguous subject candidates from ResolveSubjects -- driving
+// engine.Investigate to a clarification_required terminal (resolveTerminalStatus,
+// unresolved.go: non-empty Candidates + AllowClarification=true) instead of a
+// served cohort answer.
+type ambiguousCandidateGraphReader struct {
+	*Adapter
+	// candidateKind matches the frame's declared cohort member kind: CHAOS-5660
+	// requires at least one offered option to carry the declared kind or the
+	// turn is unsatisfiable (no_match) before resolveTerminalStatus ever
+	// reaches its non-empty-Candidates clarification branch.
+	candidateKind contextfabric.SubjectKind
+}
+
+func (a ambiguousCandidateGraphReader) ResolveSubjects(
+	_ context.Context, _ storage.Principal, _ contextfabric.InvestigationRequest, _ contextfabric.InterpretedQuestion,
+	_ contextfabric.ResolvedGraphBinding, _ *contextfabric.ConfirmedExpectedKind, _ *contextfabric.ConfirmedAnchorSelection,
+	_ *contextfabric.QuestionFrame, _ contextfabric.SubjectKind,
+) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
+	candidate := func(id, label string) contextfabric.SubjectCandidate {
+		return contextfabric.SubjectCandidate{
+			ReceiptID: "receipt_" + id,
+			Subject:   contextfabric.SubjectRef{Kind: a.candidateKind, CanonicalID: string(a.candidateKind) + ":" + id, Label: label},
+			State:     contextfabric.ResolutionProposed, MatchReasons: []string{"Fuzzy name match."},
+			Confidence: 0.4, MatchedTerms: []string{label}, EvidenceRefIDs: []string{},
+		}
+	}
+	return contextfabric.SubjectResolution{
+			Candidates: []contextfabric.SubjectCandidate{candidate("a", "Candidate A"), candidate("b", "Candidate B")},
+			Committed:  []contextfabric.SubjectRef{},
+		},
+		contextfabric.StructureOfferMaterial{}, nil, nil, nil
+}
+
+// TestInvestigateKindCensusTruncatedOnClarificationTerminal drives a whole
+// investigation, through engine.Investigate at the production level, that
+// ends in clarification_required rather than a served cohort: subject
+// resolution is ambiguous (two uncommitted candidates), and every candidate
+// of the census's declared kind is denied by authorization so no cohort is
+// ever assembled (investigationSubjects returns empty, routing through
+// terminalResult, unresolved.go -- the SAME subjectless path a clarification
+// takes). CHAOS-5732 (D47): the kind census still ran and was cut, and the
+// row must reach the CLARIFICATION terminal's own Coverage.Details -- not
+// only a fully-served terminal, and not conditioned on a Cohort existing.
+func TestInvestigateKindCensusTruncatedOnClarificationTerminal(t *testing.T) {
+	t.Parallel()
+	kind := uncensusedServableKinds(t)[0]
+	store := &kindCensusStore{
+		population:  map[string]int{string(kind): exactNameCandidateQueryLimit + 1, "team": 1},
+		deniedKinds: map[string]bool{string(kind): true},
+	}
+	adapter := newFakeAdapterWithTelemetry(t, store.conn(t), &recordingTelemetry{})
+	derived := contextfabric.DeriveFrameObligations(contextfabric.QuestionFrame{
+		Goals: []contextfabric.InvestigationGoal{contextfabric.GoalAssessState},
+		SubjectExpression: contextfabric.SubjectExpression{
+			Kind:       contextfabric.SubjectExpressionDiscoveredKind,
+			Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: kind},
+		},
+		Temporal: contextfabric.TemporalIntentCurrent,
+		Version:  contextfabric.QuestionFrameVersion,
+	}, nil)
+	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
+		Interpreter: framedInterpreter{
+			interpreted: contextfabric.InterpretedQuestion{
+				Shape: contextfabric.ShapeDiscoveredCohort, RequestedJudgment: "attention",
+				TimeContext:      contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+				FactRequirements: []contextfabric.FactRequirement{},
+			},
+			frame: &derived,
+		},
+		Graph:        ambiguousCandidateGraphReader{Adapter: adapter, candidateKind: kind},
+		Facts:        emptyFactReader{},
+		Synthesizer:  countingSynthesizer{},
+		Results:      discardingResultStore{},
+		Requirements: productionRequirementDeriver{},
+	}, contextfabric.EngineOptions{
+		ServiceVersion: "acr-test",
+		NewResultID:    func() string { return "result_57320002" },
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+	request := contextfabric.InvestigationRequest{
+		SchemaVersion: contextfabric.InvestigationRequestSchemaV1, RequestID: "request_57320002",
+		Question: "which team is struggling",
+		TimeContext: contextfabric.TimeContext{
+			Axis:           contextfabric.TemporalCurrent,
+			EvidenceWindow: &contextfabric.RequestedEvidenceWindow{RelativeID: contextfabric.RelativeWindowTrailing90D},
+		},
+		Options: contextfabric.InvestigationOptions{
+			MaxSubjectCandidates: 10, MaxCohortMembers: 25, MaxRelationshipPaths: 50,
+			MaxDrivers: 10, MaxEvidenceRefs: 100, MaxSerializedBytes: 262144, AllowClarification: true,
+		},
+		Consumer: contextfabric.ConsumerInfo{Name: "test", Version: "v1", Surface: "test"},
+	}
+
+	// A principal with a non-wildcard RepositoryScopes is required for the
+	// deniedKinds authorization check to actually deny -- the same principal
+	// TestDiscoverContextWhollyDeniedClaimNeedsTheCohortKindsOwnCensus uses.
+	principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"repo-allowed"}}
+	result, err := engine.Investigate(context.Background(), principal, request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != contextfabric.InvestigationClarificationRequired {
+		t.Fatalf("status = %q, want %q (offers: %d candidates)", result.Status, contextfabric.InvestigationClarificationRequired, len(result.SubjectResolution.Candidates))
+	}
+	if result.Cohort != nil {
+		t.Fatalf("Cohort = %+v, want nil -- every %s member is denied", result.Cohort, kind)
+	}
+	detail, found := kindCensusTruncatedDetail(result.Coverage.Details)
+	if !found {
+		t.Fatalf("clarification result.Coverage.Details = %+v, want a kind_census_truncated row beside the offered candidates", result.Coverage.Details)
+	}
+	if detail.Kind != kind {
+		t.Errorf("detail kind = %q, want %q", detail.Kind, kind)
+	}
+	if detail.Declared == nil || *detail.Declared != exactNameCandidateQueryLimit {
+		t.Errorf("detail declared = %v, want %d", detail.Declared, exactNameCandidateQueryLimit)
+	}
+	if detail.Served == nil || *detail.Served != 0 {
+		t.Errorf("detail served = %v, want 0 -- no cohort of this kind was served", detail.Served)
+	}
+	if !result.Coverage.Partial {
+		t.Error("clarification result Coverage.Partial = false, want true")
+	}
+}

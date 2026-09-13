@@ -211,6 +211,18 @@ func countPhrase(count *int, singular, plural string) string {
 	return fmt.Sprintf("%d %s", *count, plural)
 }
 
+// coverageDetailIntOrZero reads a pointer field for label composition. Only
+// ContextFabricCoverageDetailKindCensusTruncated's field rule requires
+// Declared/Served together, so a nil here is unreachable on a validated
+// detail -- zero is the safe floor for an unvalidated caller (this
+// function's own caller, ComposeCoverageDetailLabel, runs BEFORE Validate).
+func coverageDetailIntOrZero(v *int) int {
+	if v == nil {
+		return 0
+	}
+	return *v
+}
+
 // ComposeCoverageDetailLabel composes the deterministic terse label for one
 // coverage detail from its own structured fields. Pure; the engine stamps
 // its result into ContextFabricCoverageDetail.Label before validation.
@@ -285,6 +297,12 @@ func ComposeCoverageDetailLabel(d ContextFabricCoverageDetail) string {
 		// is a disclosure of one read's outcome, and the folded source's own
 		// detail is what says whether that outcome degraded the answer.
 		label = kindClause(kind) + " facts, read for each " + humanizeVocabularyToken(string(d.OriginKind)) + ": " + ContextFabricSourceStateLabel(d.SourceState)
+	case ContextFabricCoverageDetailKindCensusTruncated:
+		// Names the KIND the census counted and both numbers, phrased as a
+		// floor rather than a total -- the same "at least" reading
+		// `population_truncated`'s own label uses, for the same reason: the
+		// number this label states is one nothing measured past.
+		label = fmt.Sprintf("At least %d %s found; %d included", coverageDetailIntOrZero(d.Declared), humanizeVocabularyToken(string(d.Kind)), coverageDetailIntOrZero(d.Served))
 	default:
 		label = "Coverage was limited"
 	}

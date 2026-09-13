@@ -99,6 +99,57 @@ func TestChaos4690_MergeCoverage_GoldenGraphOnly(t *testing.T) {
 	}
 }
 
+// TestChaos4690_MergeCoverage_KindCensusTruncatedSurvivesTheFold pins
+// CHAOS-5732 (D47) through the SAME normalizer every served document's
+// Coverage is composed by: a graph-only kind_census_truncated detail
+// (Kind/Declared/Served set) must reach the merged, served document
+// unchanged but for its re-minted DetailID -- the same guarantee
+// GoldenGraphOnly pins for graph_endpoint_lookup_failed above.
+func TestChaos4690_MergeCoverage_KindCensusTruncatedSurvivesTheFold(t *testing.T) {
+	t.Parallel()
+	raw := "kind_census_truncated:team:2000:25"
+	declared, served := 2000, 25
+	graph := Coverage{
+		Sources:         []SourceObservation{},
+		Partial:         true,
+		DegradedReasons: []string{raw},
+		Details: []CoverageDetail{detailFixture(contractsv1.ContextFabricCoverageDetailKindCensusTruncated, "context-fabric:graph", true, raw, func(d *CoverageDetail) {
+			d.Kind = SubjectTeam
+			d.Declared = &declared
+			d.Served = &served
+		})},
+	}
+	facts := Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}
+
+	merged := MergeCoverage("org_test", graph, facts)
+
+	if !merged.Partial {
+		t.Fatal("merged.Partial = false, want true")
+	}
+	if got := merged.DegradedReasons; len(got) != 1 || got[0] != raw {
+		t.Fatalf("DegradedReasons = %#v, want exactly [%q]", got, raw)
+	}
+	if len(merged.Details) != 1 {
+		t.Fatalf("Details = %#v, want exactly one merged detail", merged.Details)
+	}
+	got := merged.Details[0]
+	if got.DetailID != "cov-01" || got.Code != contractsv1.ContextFabricCoverageDetailKindCensusTruncated {
+		t.Fatalf("merged detail = %#v, want cov-01/kind_census_truncated", got)
+	}
+	if got.Kind != SubjectTeam {
+		t.Errorf("merged detail Kind = %q, want %q", got.Kind, SubjectTeam)
+	}
+	if got.Declared == nil || *got.Declared != declared {
+		t.Errorf("merged detail Declared = %v, want %d", got.Declared, declared)
+	}
+	if got.Served == nil || *got.Served != served {
+		t.Errorf("merged detail Served = %v, want %d", got.Served, served)
+	}
+	if err := got.Validate(); err != nil {
+		t.Fatalf("merged detail fails contract Validate: %v", err)
+	}
+}
+
 // --- Golden fixture class 3: mixed graph+fact ---
 
 func TestChaos4690_MergeCoverage_GoldenMixedGraphAndFact(t *testing.T) {

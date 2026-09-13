@@ -2534,7 +2534,8 @@
                 "population_truncated",
                 "requirement_read_not_planned",
                 "read_population_unverified",
-                "fact_read_origin_state"
+                "fact_read_origin_state",
+                "kind_census_truncated"
               ],
               "type": "string"
             },
@@ -2599,6 +2600,17 @@
               },
               "maxItems": 32,
               "type": "array"
+            },
+            "kind": {
+              "type": "string"
+            },
+            "declared": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "served": {
+              "type": "integer",
+              "minimum": 0
             }
           },
           "required": [

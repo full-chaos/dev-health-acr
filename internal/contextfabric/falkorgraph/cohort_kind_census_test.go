@@ -308,8 +308,44 @@ func TestDiscoverContextKindCensusPastItsBoundTruncatesTheCohort(t *testing.T) {
 			if result.Cohort.Truncated != tc.truncated || result.Cohort.Complete == tc.truncated {
 				t.Errorf("Complete=%v Truncated=%v, want Truncated=%v", result.Cohort.Complete, result.Cohort.Truncated, tc.truncated)
 			}
+			// CHAOS-5732 (D47): a cut kind census emits its own coverage
+			// detail row, additive to Cohort.Truncated -- present exactly
+			// when the census is cut, never on an uncut census (the
+			// "exactly_the_bound" control).
+			detail, found := kindCensusTruncatedDetail(result.Coverage.Details)
+			if found != tc.truncated {
+				t.Fatalf("kind_census_truncated detail present = %v, want %v (details: %+v)", found, tc.truncated, result.Coverage.Details)
+			}
+			if tc.truncated {
+				if detail.Kind != kind {
+					t.Errorf("detail kind = %q, want %q", detail.Kind, kind)
+				}
+				if detail.Declared == nil || *detail.Declared != exactNameCandidateQueryLimit {
+					t.Errorf("detail declared = %v, want %d", detail.Declared, exactNameCandidateQueryLimit)
+				}
+				if detail.Served == nil || *detail.Served != len(result.Cohort.Members) {
+					t.Errorf("detail served = %v, want %d", detail.Served, len(result.Cohort.Members))
+				}
+				if !detail.Degrading {
+					t.Error("kind_census_truncated detail must be degrading")
+				}
+				if !result.Coverage.Partial {
+					t.Error("Coverage.Partial = false, want true when the kind census is cut")
+				}
+			}
 		})
 	}
+}
+
+// kindCensusTruncatedDetail finds the (at most one) kind_census_truncated
+// detail on a coverage's Details, and reports whether one was found.
+func kindCensusTruncatedDetail(details []contextfabric.CoverageDetail) (contextfabric.CoverageDetail, bool) {
+	for _, d := range details {
+		if d.Code == contractsv1.ContextFabricCoverageDetailKindCensusTruncated {
+			return d, true
+		}
+	}
+	return contextfabric.CoverageDetail{}, false
 }
 
 // kindCensusClippedLexicalRows is a full-text result one row past the collect
@@ -591,6 +627,27 @@ func TestDiscoverContextWhollyDeniedClaimNeedsTheCohortKindsOwnCensus(t *testing
 			}
 			if hasReason != (tc.wantDeniedReported > 0) {
 				t.Errorf("degraded reasons %v, want %q present=%v", result.Coverage.DegradedReasons, deniedReason, tc.wantDeniedReported > 0)
+			}
+			// CHAOS-5732 (D47): "kind_census_cut" denies every member, so
+			// Cohort is nil (asserted above) -- the coverage detail must
+			// still be present, proving the disclosure does not depend on a
+			// served Cohort existing. Served is 0 here: nothing of this
+			// kind survived authorization into any cohort.
+			wantCensusCut := tc.kindPopulation > exactNameCandidateQueryLimit
+			detail, found := kindCensusTruncatedDetail(result.Coverage.Details)
+			if found != wantCensusCut {
+				t.Fatalf("kind_census_truncated detail present = %v, want %v (details: %+v)", found, wantCensusCut, result.Coverage.Details)
+			}
+			if wantCensusCut {
+				if detail.Kind != kind {
+					t.Errorf("detail kind = %q, want %q", detail.Kind, kind)
+				}
+				if detail.Declared == nil || *detail.Declared != exactNameCandidateQueryLimit {
+					t.Errorf("detail declared = %v, want %d", detail.Declared, exactNameCandidateQueryLimit)
+				}
+				if detail.Served == nil || *detail.Served != 0 {
+					t.Errorf("detail served = %v, want 0 -- no cohort of this kind was served", detail.Served)
+				}
 			}
 		})
 	}
