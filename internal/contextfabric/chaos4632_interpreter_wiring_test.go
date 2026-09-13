@@ -18,7 +18,16 @@ import (
 
 // familyTelemetrySpy records every event, verbatim.
 type familyTelemetrySpy struct {
-	events []QuestionFamilyResolutionEvent
+	ensembleEvents []InterpretationEnsembleEvent
+	events         []QuestionFamilyResolutionEvent
+}
+
+// RecordInterpretationEnsemble (CHAOS-5638) records the ensemble-composition
+// event so a test can assert what a turn actually drew. Appending rather than
+// overwriting: an ensemble emits exactly one per turn, and a double that kept
+// only the last would hide a second emission.
+func (s *familyTelemetrySpy) RecordInterpretationEnsemble(_ context.Context, _ storage.Principal, event InterpretationEnsembleEvent) {
+	s.ensembleEvents = append(s.ensembleEvents, event)
 }
 
 func (s *familyTelemetrySpy) RecordQuestionFamilyResolution(_ context.Context, _ storage.Principal, event QuestionFamilyResolutionEvent) {

@@ -153,6 +153,47 @@ type QuestionFamilyTelemetry interface {
 	// including when the outcome is unclassified and including when the
 	// ensemble was rejected for having no majority.
 	RecordQuestionFamilyResolution(ctx context.Context, principal storage.Principal, event QuestionFamilyResolutionEvent)
+	// RecordInterpretationEnsemble reports what an ENSEMBLE turn actually
+	// drew (CHAOS-5638). Fired once per ensemble turn and never on the
+	// single-sample path, which draws nothing to report.
+	//
+	// SEPARATE FROM THE RESOLUTION EVENT because it answers a different
+	// question. That one says which family won; this one says how many
+	// independent primary samples the vote was taken over, which is the only
+	// thing that distinguishes a real consensus from one sample wearing the
+	// word. A turn that requested 3, had 2 fail and served the survivor is
+	// indistinguishable on the resolution event alone from a turn that was
+	// never an ensemble at all -- both read source=model, ensemble_size=1.
+	RecordInterpretationEnsemble(ctx context.Context, principal storage.Principal, event InterpretationEnsembleEvent)
+}
+
+// InterpretationEnsembleEvent is the composition of ONE ensemble turn
+// (CHAOS-5638): what was asked for, what came back, and what was allowed to
+// vote.
+//
+// COUNTS ONLY -- no question text, no family, no subject, no model identity.
+// Everything here is an integer or a bool, so the event cannot carry content
+// and needs no sanitiser at its emission sites.
+type InterpretationEnsembleEvent struct {
+	// Requested is N as the composition configured it, AFTER the ceiling is
+	// applied. Recorded even when nothing succeeded, because "we asked for 3"
+	// is the fact that makes every other number here mean something.
+	Requested int
+	// PrimarySucceeded is how many samples returned a usable interpretation
+	// on their OWN derived seed -- the only samples entitled to vote.
+	PrimarySucceeded int
+	// FallbackServed is how many samples came back from the fallback
+	// provider. They are NOT votes: the fallback entry point takes no sample
+	// index, so N fallback responses are one answer counted N times, and
+	// counting them would report agreement that was never measured. The
+	// runtime's own port documents this obligation on its caller.
+	FallbackServed int
+	// Failed is how many samples returned an error.
+	Failed int
+	// QuorumMet is whether PrimarySucceeded reached a strict majority of
+	// Requested. False means the turn took the single-sample path and its
+	// family is NOT a consensus, whatever the sample count might suggest.
+	QuorumMet bool
 }
 
 // sortedFamilyDistribution renders SampleFamilies as a stable, sorted

@@ -77,7 +77,7 @@ func wrapWithOrgModelRuntimeResolver(deploymentDefault contextfabric.ModelRuntim
 	// per-organization BYO runtime's decision line (and its attempt fields)
 	// must reach the same collected sink the deployment default's does.
 	defaults.Logger = logger
-	resolver := modelruntimeresolver.New(deploymentDefault, orgConfigs, modelruntimeresolver.NewModelProviderBuild(defaults))
+	resolver := newOrgModelRuntimeResolver(deploymentDefault, orgConfigs, modelruntimeresolver.NewModelProviderBuild(defaults), logger)
 	return resolver, resolver, nil
 }
 
@@ -191,4 +191,105 @@ func buildModelReceiptSink(postgres postgresComponents) (contextfabric.ModelRece
 		return nil, fmt.Errorf("initialize context fabric model receipt sink: %w", err)
 	}
 	return store, nil
+}
+
+// sampledModelRuntime returns runtime as a contextfabric.SampledModelRuntime
+// when it can produce per-sample interpretations, and nil when it cannot
+// (CHAOS-5638).
+//
+// A NIL RETURN IS NOT A DEGRADE. The interpreter pairs this with
+// EnsembleSize: at the production default of 1 the field is never read, and
+// at N>1 a nil here surfaces as ErrEnsembleRuntimeMissing rather than as a
+// quiet fall back to one sample. So a composition can only be wrong LOUDLY --
+// which is the property the whole seam is built around.
+//
+// The assertion lives here, at the composition, rather than inside the
+// interpreter: this is the one place that knows what was actually built.
+//
+// NO `if !ok` BRANCH, deliberately. A failed type assertion to an INTERFACE
+// type already yields that interface's zero value, which is nil, so an
+// explicit branch returning nil would be a second way of saying the same
+// thing, and one no test can distinguish from its absence. The comma-ok form
+// stays because dropping it entirely would panic instead of returning.
+func sampledModelRuntime(runtime contextfabric.ModelRuntime) contextfabric.SampledModelRuntime {
+	// TYPED NIL IS NOT NIL, and a plain `== nil` does not catch it: an
+	// interface holding a (*T)(nil) is non-nil, satisfies the assertion, and
+	// panics on the first call. isNilRuntime is this package's check for
+	// exactly that shape.
+	//
+	// ONE CHECK, AFTER the assertion, and the placement is the whole of it.
+	// A pre-assertion guard reads as more careful and is redundant: whatever
+	// the input, `sampled` here is either a nil interface (the assertion
+	// failed) or an interface holding the same nil pointer (it succeeded),
+	// and this catches both. No input exists for which a pre-assertion guard
+	// would return nil where this check would not, so adding one would change
+	// no behaviour and no test could tell it was there.
+	sampled, _ := runtime.(contextfabric.SampledModelRuntime)
+	if sampled == nil || isNilRuntime(sampled) {
+		return nil
+	}
+	return sampled
+}
+
+// interpretationEnsembleSize normalises the composition's requested N.
+//
+// Zero -- the field's own zero value, and every production caller today --
+// means 1: one interpret sample, the pre-ensemble path, unchanged. A negative
+// value means the same rather than an error, matching BoundEnsembleSize's own
+// treatment of a nonsensical configuration as "take the safe default" instead
+// of failing a composition over a number.
+func interpretationEnsembleSize(configured int) int {
+	if configured < 1 {
+		return 1
+	}
+	return configured
+}
+
+// newOrgModelRuntimeResolver constructs the resolver AND gives it everything
+// it needs of its own.
+//
+// EXTRACTED (CHAOS-5638) because the logger assignment below is the kind of
+// line that is invisible when it is missing. `defaults.Logger` and
+// `resolver.Logger` are different wires -- the first reaches the
+// per-organization runtime this resolver BUILDS, the second reaches the
+// resolver itself -- and the first was set while the second was not, which
+// sent the per-sample warning to slog.Default() where the service's collected
+// sink never sees it. A caller reading wrapWithOrgModelRuntimeResolver saw one
+// `Logger =` line and no reason to look for a second. One function now owns
+// both halves, and a test can drive it without a live Postgres store.
+func newOrgModelRuntimeResolver(
+	deploymentDefault contextfabric.ModelRuntime,
+	orgConfigs contextfabric.OrgModelConfigResolver,
+	build modelruntimeresolver.Build,
+	logger *slog.Logger,
+) *modelruntimeresolver.Resolver {
+	resolver := modelruntimeresolver.New(deploymentDefault, orgConfigs, build)
+	resolver.Logger = logger
+	return resolver
+}
+
+// newContextFabricQuestionInterpreter builds the interpreter the engine uses.
+//
+// A NAMED CONSTRUCTOR rather than a struct literal inline in the composition
+// (CHAOS-5638), so the ensemble wiring is reachable by a test. As a literal,
+// deleting `SampledRuntime` left every test green while making the ensemble
+// permanently unreachable in the built product -- the composition is exactly
+// where that kind of omission hides, because nothing downstream of it can tell
+// "not configured" from "configured and dropped on the floor".
+func newContextFabricQuestionInterpreter(
+	modelRuntime contextfabric.ModelRuntime,
+	receiptSink contextfabric.ModelReceiptSink,
+	engineTelemetry contextfabric.EngineTelemetry,
+	factRegistry contextfabric.RequirementDeriver,
+	configuredEnsembleSize int,
+) contextfabric.RuntimeQuestionInterpreter {
+	return contextfabric.RuntimeQuestionInterpreter{
+		Runtime:         modelRuntime,
+		SampledRuntime:  sampledModelRuntime(modelRuntime),
+		EnsembleSize:    interpretationEnsembleSize(configuredEnsembleSize),
+		Sink:            receiptSink,
+		FamilyTelemetry: engineTelemetry,
+		FrameTelemetry:  engineTelemetry,
+		Requirements:    factRegistry,
+	}
 }
