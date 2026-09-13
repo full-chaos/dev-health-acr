@@ -951,7 +951,7 @@ func (f ContextFabricFinding) validate(bounds contextFabricBounds) error {
 }
 
 func (c ContextFabricClaimedFact) Validate() error {
-	if !stringLengthBetween(c.ClaimID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength) || !validFactKind(c.Kind) || !stringLengthBetween(c.Field, 1, ContextFabricClaimedFieldMaxLength) || strings.TrimSpace(c.Field) != c.Field {
+	if !stringLengthBetween(c.ClaimID, ContextFabricModelMintedIDMinLength, ContextFabricModelMintedIDMaxLength) || !validClaimedFactKind(c.Kind) || !stringLengthBetween(c.Field, 1, ContextFabricClaimedFieldMaxLength) || strings.TrimSpace(c.Field) != c.Field {
 		return fmt.Errorf("claimed fact identity violates v1 bounds")
 	}
 	if err := c.Subject.Validate(); err != nil {

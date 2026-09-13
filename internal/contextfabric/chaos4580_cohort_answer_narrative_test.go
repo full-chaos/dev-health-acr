@@ -156,15 +156,34 @@ func TestEngineRecomposesCohortAnswerNarrativeAfterNarration(t *testing.T) {
 		t.Fatalf("result.DeterministicAnswer = %q, must never restate the raw facts list CurrentState already carries", result.DeterministicAnswer)
 	}
 
-	// CHAOS-4690: DeterministicAnswer is the bare status sentence, same as
-	// DirectJudgment -- no driver clause, no scoring arithmetic ("(weight ",
-	// "attention points") spliced back in. Supersedes CHAOS-4580's
-	// "numbered summary sentence inline" expectation.
+	// CHAOS-4690: DeterministicAnswer is the STATUS COMPOSITION -- no driver
+	// clause, no scoring arithmetic ("(weight ", "attention points") spliced
+	// back in. Supersedes CHAOS-4580's "numbered summary sentence inline"
+	// expectation.
+	//
+	// NO COUNT SENTENCE, because this fixture asks no counting question.
+	//
+	// The count sentence is admissible in a status composition -- it is a fact
+	// the server computed, not the narration detail CHAOS-4690 excluded -- but
+	// admissible is not unconditional. It is the number a COUNTING question
+	// asked for, and this fixture builds no frame and so carries no count
+	// obligation; the row, the claim and the sentence share that one
+	// precondition, so none of the three appears here. The composition with
+	// the sentence present is pinned where the obligation exists, beside the
+	// claim it must agree with.
+	//
+	// The discriminating half of this pin is unchanged and asserted explicitly
+	// below: driver clauses and scoring arithmetic stay out.
 	wantDeterministicAnswer := "This investigation is partial: some canonical or graph coverage was unavailable."
 	if result.DeterministicAnswer != wantDeterministicAnswer {
-		t.Fatalf("result.DeterministicAnswer = %q, want %q (status sentence alone)", result.DeterministicAnswer, wantDeterministicAnswer)
+		t.Fatalf("result.DeterministicAnswer = %q, want %q (status composition: status sentence + served count)", result.DeterministicAnswer, wantDeterministicAnswer)
 	}
-	if strings.Contains(result.DeterministicAnswer, "(weight ") || strings.Contains(result.DeterministicAnswer, "attention points") {
-		t.Fatalf("result.DeterministicAnswer = %q, must never carry scoring arithmetic", result.DeterministicAnswer)
+	// THE DISCRIMINATING CONTROL. Admitting the count sentence must not admit
+	// narration detail with it; these are the exact strings CHAOS-4690
+	// excluded, and they stay excluded.
+	for _, forbidden := range []string{"(weight ", "attention points", "Principal driver"} {
+		if strings.Contains(result.DeterministicAnswer, forbidden) {
+			t.Fatalf("result.DeterministicAnswer = %q, must never carry narration detail (%q)", result.DeterministicAnswer, forbidden)
+		}
 	}
 }

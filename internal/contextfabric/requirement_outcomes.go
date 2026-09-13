@@ -563,11 +563,11 @@ func (e *Engine) planCandidateNarrowing(
 	// caller's own pass number. See finalizeResult's doc comment.
 	pending *assemblyTelemetry,
 	pass int,
-	// cohortPopulation threads straight through to finalizeResult, for the
-	// reason that function's own parameter states: the narrowing this stage
-	// performs cuts what the answer CARRIES and says nothing about what
-	// retrieval found, so the population must survive it unchanged.
-	cohortPopulation int,
+	// cardinality threads straight through to finalizeResult. The narrowing
+	// this stage performs cuts CANDIDATES, not cohort members, so the count
+	// this pass computed before synthesis still describes the member set the
+	// narrowed document carries and must survive unchanged.
+	cardinality MembershipCardinality,
 ) (outcomeNarrowingAttempt, error) {
 	narrowedResult, narrowing, declined := narrowCandidatesToBudget(result, budget, measured.Allocation, measured.Measurement, measured.Overrun)
 	if !narrowing.Narrowed {
@@ -581,7 +581,7 @@ func (e *Engine) planCandidateNarrowing(
 	requirement, obligation := subjectScopeRequirement(narrowedResult.Completeness.Outcomes)
 	row := candidateNarrowingOutcomeRow(narrowing, measured.Overrun, requirement, obligation)
 	narrowedResult.Completeness.Outcomes = appendOutcomeRows(narrowedResult.Completeness.Outcomes, row)
-	narrowedResult = e.finalizeResult(ctx, principal, narrowedResult, *plan, frame, facts, pending, pass, cohortPopulation)
+	narrowedResult = e.finalizeResult(ctx, principal, narrowedResult, *plan, frame, facts, pending, pass, cardinality)
 
 	// Measure what will actually be served. If the reduction did not
 	// deliver a fitting document the refusal stands -- serving an answer

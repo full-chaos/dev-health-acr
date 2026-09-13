@@ -557,6 +557,11 @@ func TestMembershipCardinalityLineCarriesNoKeyOutsideItsAllowList(t *testing.T) 
 		"org_id": true, "family": true, "requirement": true, "outcome": true,
 		"served": true, "declared": true, "cohort_complete": true,
 		"cohort_truncated": true, "basis": true, "overrun": true,
+		// cause_coverage names a cut no plan step recorded; claimed says
+		// whether the count reached the document as a claim. Both are closed
+		// values or a bool -- no identifier, no label, no free text -- which
+		// is the property this allow-list exists to hold.
+		"cause_coverage": true, "claimed": true,
 	}
 	for key := range records[0] {
 		if !allowed[key] {
@@ -790,11 +795,11 @@ func TestFinalizingTwiceStatesOneCardinality(t *testing.T) {
 				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 			}
 
-			once := engine.finalizeResult(context.Background(), storage.Principal{}, result, plan, frame, CanonicalFactBundle{}, &assemblyTelemetry{}, answerPassFirst, 0)
+			once := engine.finalizeResult(context.Background(), storage.Principal{}, result, plan, frame, CanonicalFactBundle{}, &assemblyTelemetry{}, answerPassFirst, cardinalityFor(result, plan))
 			if got := len(countOutcomeRows(once, contractsv1.ContextFabricOutcomeStageAssembledResult)); got != 1 {
 				t.Fatalf("after ONE finalization: %d count rows, want 1", got)
 			}
-			twice := engine.finalizeResult(context.Background(), storage.Principal{}, once, plan, frame, CanonicalFactBundle{}, &assemblyTelemetry{}, answerPassSecond, 0)
+			twice := engine.finalizeResult(context.Background(), storage.Principal{}, once, plan, frame, CanonicalFactBundle{}, &assemblyTelemetry{}, answerPassSecond, cardinalityFor(once, plan))
 			rows := countOutcomeRows(twice, contractsv1.ContextFabricOutcomeStageAssembledResult)
 			if len(rows) != 1 {
 				t.Fatalf("after TWO finalizations: %d count rows, want 1 -- re-entry appended a second "+
@@ -1185,7 +1190,7 @@ func TestAnAnswerThatDerivedNoCountStatesNone(t *testing.T) {
 	cohort := countingCohort(SubjectTeam, 3)
 
 	// No requirement rows at all: the shape every terminal exit has.
-	rows, _, counted := appendMembershipCardinality(nil, cohort, 0, nil)
+	rows, _, counted := appendMembershipCardinality(nil, mustCardinality(cohort, 0, nil), nil)
 	if counted || len(rows) != 0 {
 		t.Fatalf("a result with no derived requirements stated a cardinality (%d rows) -- an exit that did "+
 			"not answer the question must not claim a count of the cohort it happens to carry", len(rows))
@@ -1199,7 +1204,7 @@ func TestAnAnswerThatDerivedNoCountStatesNone(t *testing.T) {
 		Outcome:     contractsv1.ContextFabricRequirementSatisfied,
 		Impact:      contractsv1.ContextFabricAnswerImpactNone,
 	}}
-	rows, _, counted = appendMembershipCardinality(other, cohort, 0, nil)
+	rows, _, counted = appendMembershipCardinality(other, mustCardinality(cohort, 0, nil), nil)
 	if counted || len(rows) != len(other) {
 		t.Fatalf("a frame that derived no `count` obligation was given a cardinality anyway (%d rows)", len(rows))
 	}
@@ -1214,7 +1219,7 @@ func TestAnAnswerThatDerivedNoCountStatesNone(t *testing.T) {
 		Outcome:     contractsv1.ContextFabricRequirementSatisfied,
 		Impact:      contractsv1.ContextFabricAnswerImpactNone,
 	}}
-	rows, cardinality, counted := appendMembershipCardinality(seeded, cohort, 0, nil)
+	rows, cardinality, counted := appendMembershipCardinality(seeded, mustCardinality(cohort, 0, nil), nil)
 	if !counted || len(rows) != 2 || cardinality.Served != 3 {
 		t.Fatalf("positive control: a seeded count row produced counted=%v rows=%d served=%d, want true/2/3 -- "+
 			"without this the assertions above cannot tell a correct gate from one that never appends",
@@ -1252,7 +1257,7 @@ func TestACountThatCannotBeServedSaysSo(t *testing.T) {
 		Impact:      contractsv1.ContextFabricAnswerImpactNone,
 	}}
 
-	rows, _, counted := appendMembershipCardinality(seeded, nil, 0, nil)
+	rows, _, counted := appendMembershipCardinality(seeded, mustCardinality(nil, 0, nil), nil)
 	if counted {
 		t.Fatal("a nil member set reported a counted cardinality")
 	}

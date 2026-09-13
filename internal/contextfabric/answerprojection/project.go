@@ -419,6 +419,50 @@ func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds 
 			AffectedSubjects: append([]contractsv1.ContextFabricSubjectRef(nil), driver.AffectedSubjects...),
 		})
 	}
+	// THE SERVER-COMPUTED CLAIMS, CARRIED BY AN EXPLICIT ALLOW-LIST.
+	//
+	// Everything above copies a claim only because some retained DRIVER cites
+	// it, which is right for the claims this projection is about: a claim is
+	// evidence for a judgment, and a judgment nobody kept needs no evidence.
+	//
+	// A server-computed claim has no driver and never will. It asserts
+	// something the server measured over the served member set rather than
+	// something a producer read, so there is nothing for a driver to cite it
+	// from -- and under the citation rule alone it was silently dropped from
+	// the surface every ordinary caller reads, while the canonical result
+	// carried it. The count reached the API and not the answer.
+	//
+	// An ALLOW-LIST by claim kind, not a widening of the citation rule. The
+	// rule is correct for producer-read claims and stays exactly as it is;
+	// this names the one kind that is exempt because the server minted it, so
+	// a future uncited model claim cannot ride in behind it. Bounded by
+	// MaxFacts like everything else, and deduplicated against what the drivers
+	// already brought, so a claim some driver did happen to cite is carried
+	// once.
+	for _, claim := range result.ClaimedFacts {
+		if !projectionCarriesUncited(claim.Kind) {
+			continue
+		}
+		if _, retained := retainedClaims[claim.ClaimID]; retained {
+			continue
+		}
+		if len(facts) >= bounds.MaxFacts {
+			break
+		}
+		retainedClaims[claim.ClaimID] = struct{}{}
+		facts = append(facts, contractsv1.ContextFabricProjectedFact{
+			ClaimID: claim.ClaimID,
+			Kind:    claim.Kind,
+			Subject: claim.Subject,
+			Field:   claim.Field,
+			Value:   claim.Value,
+			Rows:    claim.Rows,
+			Table:   claim.Table,
+
+			TimeSeriesRows:  claim.TimeSeriesRows,
+			TimeSeriesTable: claim.TimeSeriesTable,
+		})
+	}
 	// Claimed facts the canonical result carried but no retained driver
 	// cites are not "omitted" in the sense that matters -- they were never
 	// part of what this projection asserts. Only facts a dropped driver
@@ -1186,4 +1230,17 @@ func retainPastTheCut(kept, dropped []clampedNarrative, retain func(string) bool
 		return append(rescued, entry)
 	}
 	return kept
+}
+
+// projectionCarriesUncited is the allow-list: which claim kinds this projection
+// carries even though no driver cites them.
+//
+// ONE MEMBER, and it is a list rather than a boolean on the claim so that
+// adding a second server-computed kind is a one-line change here instead of a
+// new rule at the copy site. A kind is on this list only when the SERVER mints
+// it -- a model-authored claim reaches the answer by being cited, which is the
+// rule that keeps an uncited assertion out of a document that cannot show its
+// workings.
+func projectionCarriesUncited(kind contractsv1.ContextFabricFactKind) bool {
+	return kind == contractsv1.ContextFabricFactCardinality
 }

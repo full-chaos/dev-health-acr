@@ -987,6 +987,17 @@ func validSourceState(value ContextFabricSourceState) bool {
 // validFactKind derives from contextFabricFactKinds rather than restating
 // the vocabulary in a second switch, so the accepted set and the declared
 // set cannot drift apart.
+// validClaimedFactKind is validFactKind PLUS the server-minted claim kinds.
+//
+// A CLAIM and a REQUIREMENT are different things and this is where they stop
+// sharing a vocabulary. Everything a producer reads may be both; a value the
+// server COMPUTED may only ever be claimed, because there is no producer to
+// ask for it. Keeping the requirement side on validFactKind is what refuses a
+// model that asks for `cardinality` as if it were readable.
+func validClaimedFactKind(value ContextFabricFactKind) bool {
+	return validFactKind(value) || value == ContextFabricFactCardinality
+}
+
 func validFactKind(value ContextFabricFactKind) bool {
 	for _, kind := range contextFabricFactKinds {
 		if kind == value {

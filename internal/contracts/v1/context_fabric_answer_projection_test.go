@@ -117,10 +117,16 @@ func TestAnswerProjectionVocabulariesMatchTheCanonicalOnes(t *testing.T) {
 			acceptedBy: func(v string) bool { return validDriverCategory(ContextFabricDriverCategory(v)) },
 		},
 		{
-			name:       "fact_kind",
-			projected:  schemaEnumAt(t, projection, "$defs", "ProjectedFact", "properties", "kind"),
-			canonical:  schemaEnumAt(t, common, "$defs", "ClaimedFact", "properties", "kind"),
-			acceptedBy: func(v string) bool { return validFactKind(ContextFabricFactKind(v)) },
+			name:      "fact_kind",
+			projected: schemaEnumAt(t, projection, "$defs", "ProjectedFact", "properties", "kind"),
+			canonical: schemaEnumAt(t, common, "$defs", "ClaimedFact", "properties", "kind"),
+			// validClaimedFactKind, not validFactKind: BOTH sides of this pair
+			// are CLAIM kinds -- a projected fact is a claimed fact carried
+			// onto the projection -- and the claim vocabulary is the wider of
+			// the two. Validating a claim enum with the requirement validator
+			// asserts that claims may only carry what a producer can be asked
+			// for, which is the thing `cardinality` exists to contradict.
+			acceptedBy: func(v string) bool { return validClaimedFactKind(ContextFabricFactKind(v)) },
 		},
 		{
 			name:       "source_state",

@@ -781,7 +781,7 @@ func TestFinalizingAServedTurnEvaluatesItsReadRequirements(t *testing.T) {
 		Coverage: factCoverage(
 			contractsv1.ContextFabricFactHealth, SourceAvailable,
 			contractsv1.ContextFabricFactWorkload, SourceAvailable),
-	}, AnswerPlan{Requirements: published}, &frame, CanonicalFactBundle{}, &assemblyTelemetry{}, answerPassFirst, 0)
+	}, AnswerPlan{Requirements: published}, &frame, CanonicalFactBundle{}, &assemblyTelemetry{}, answerPassFirst, MembershipCardinality{})
 
 	evaluated, seeded := 0, 0
 	for _, row := range served.Completeness.Outcomes {
@@ -886,7 +886,7 @@ func TestUnservableAndComputedRequirementsAreNotEvaluated(t *testing.T) {
 		AnswerPlan{},
 		CanonicalFactBundle{Facts: []CanonicalFact{
 			{Kind: contractsv1.ContextFabricFactHealth, Subject: member, SourceState: SourceAvailable},
-		}}, 0, nil)
+		}}, MembershipCardinality{}, nil)
 
 	unservable := readRequirement(CompletionQuantifierAtLeastOne)
 	unservable.Unavailable = string(RequirementReasonNoDeclaringProducer)

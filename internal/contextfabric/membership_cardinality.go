@@ -68,6 +68,19 @@ import (
 // carry that distinction, and a single number plus a boolean would leave the
 // reader unable to say how much was lost.
 type MembershipCardinality struct {
+	// Resolved reports whether the step RAN -- whether there was a member set
+	// to count at all.
+	//
+	// It rides INSIDE the value rather than beside it as a second return,
+	// because the two now travel together across four function boundaries and
+	// a pair that can be carried separately is a pair that can be carried
+	// inconsistently. A zero value is therefore unambiguously "no member set",
+	// and no caller has to remember which bool went with which struct.
+	//
+	// It is NOT derivable from the other fields: a genuinely empty population
+	// and an unresolved one are different answers (see this type's own doc
+	// comment), and both would read as zeros.
+	Resolved bool
 	// Kind is the subject kind that was counted.
 	Kind SubjectKind
 	// Served is the cardinality of the member set the answer carries.
@@ -113,6 +126,7 @@ func ComputeMembershipCardinality(cohort *Cohort, population int, narrowing []co
 		return MembershipCardinality{}, false
 	}
 	cardinality := MembershipCardinality{
+		Resolved: true,
 		Kind:     cohort.Kind,
 		Served:   len(cohort.Members),
 		Declared: len(cohort.Members),
@@ -343,7 +357,17 @@ func membershipCardinalityOutcomeRow(cardinality MembershipCardinality, requirem
 //
 // Returns the rows unchanged when the frame asked for no count, when there
 // is no resolved member set, or when this requirement already has its row.
-func appendMembershipCardinality(rows []RequirementOutcomeRow, cohort *Cohort, population int, narrowing []contractsv1.ContextFabricPlanNarrowing) ([]RequirementOutcomeRow, MembershipCardinality, bool) {
+// appendMembershipCardinality states an ALREADY-COMPUTED cardinality on the
+// outcome rows.
+//
+// IT NO LONGER COMPUTES. The step runs once per pass, before synthesis, in
+// synthesizeAndAssemble -- see that call site for why. This function's job is
+// the row, and taking the value rather than the inputs is what makes "one
+// number per served document" a property of the code instead of a property of
+// the current call graph: there is no second place left that could derive a
+// different one.
+func appendMembershipCardinality(rows []RequirementOutcomeRow, cardinality MembershipCardinality, narrowing []contractsv1.ContextFabricPlanNarrowing) ([]RequirementOutcomeRow, MembershipCardinality, bool) {
+	counted := cardinality.Resolved
 	requirement, obligation := countRequirement(rows)
 	if requirement == "" {
 		return rows, MembershipCardinality{}, false
@@ -351,7 +375,6 @@ func appendMembershipCardinality(rows []RequirementOutcomeRow, cohort *Cohort, p
 	if hasAssembledOutcome(rows, requirement, obligation) {
 		return rows, MembershipCardinality{}, false
 	}
-	cardinality, counted := ComputeMembershipCardinality(cohort, population, narrowing)
 	if !counted {
 		// STATE the absence rather than saying nothing.
 		//
@@ -408,6 +431,7 @@ func membershipCardinalityEventFrom(result InvestigationResult, family QuestionF
 			Basis:       row.CauseNarrowing,
 			Overrun:     row.CauseOverrun,
 			Cause:       row.CauseCoverage,
+			Claimed:     resultCarriesCardinalityClaim(result),
 		}
 		if result.Cohort != nil {
 			event.CohortComplete = result.Cohort.Complete

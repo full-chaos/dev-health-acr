@@ -253,7 +253,10 @@ func copyCohortForRetry(cohort *Cohort) *Cohort {
 // Sites: the first-pass re-derivation (keystone #3), the retry inheriting the
 // first pass's grants (keystone #4), and narration spending a re-copied local
 // (keystone #5).
-func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Principal, params synthesisAssemblyParams) (InvestigationResult, ItemAllocation, assemblyTelemetry, error) {
+// The fifth return is THE cardinality for this pass, computed before synthesis
+// and carried out so nothing downstream computes a second one. See the
+// `membership_cardinality` block below for why it is computed where it is.
+func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Principal, params synthesisAssemblyParams) (InvestigationResult, ItemAllocation, assemblyTelemetry, MembershipCardinality, error) {
 	// pending holds every per-investigation decision event this pass
 	// produces. NOTHING here emits -- see point 3 in this file's header.
 	var pending assemblyTelemetry
@@ -284,12 +287,34 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// binding of `params.Allocation` anywhere below would recreate exactly the
 	// private copy this return exists to abolish.
 	synthesisAllocation := params.Allocation
+	// THE `membership_cardinality` STEP, RUN BEFORE SYNTHESIS AND ONCE.
+	//
+	// It must describe the member set the served document carries, and it
+	// must exist before synthesis, because the answer is built from it: a
+	// value that does not exist until after synthesis cannot be handed to
+	// synthesis, and cannot be minted into the document's own claims without a
+	// second, later computation that could disagree with this one.
+	//
+	// Computing it HERE keeps the correctness argument intact rather than
+	// trading it away. The cohort this reads is `params.Graph.Cohort`, which IS
+	// the member set this pass will serve: stage 3 does not narrow a document in
+	// place, it narrows the graph and re-enters this function, so a narrowed
+	// answer is a NEW pass that recomputes against its own cohort. The number
+	// therefore always describes the document it travels with, and there is
+	// exactly one of it per pass.
+	//
+	// The second return is discarded because it now rides INSIDE the value as
+	// `Resolved` -- see that field's own doc comment for why a pair that can be
+	// carried separately across four boundaries is a pair that can be carried
+	// inconsistently. An unresolved cardinality is still an absence, never a
+	// count of zero.
+	cardinality, _ := ComputeMembershipCardinality(params.Graph.Cohort, params.Graph.CohortPopulation, params.Plan.Narrowing)
 	result, err := e.synthesizer.Synthesize(ctx, principal, SynthesisInput{
 		Allocation: synthesisAllocation,
 		Request:    request, Interpretation: interpretation, Graph: graphContext, Facts: facts,
 	})
 	if err != nil {
-		return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, stageError(StageSynthesis, fmt.Errorf("synthesize investigation: %w", err))
+		return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, MembershipCardinality{}, stageError(StageSynthesis, fmt.Errorf("synthesize investigation: %w", err))
 	}
 	result.SchemaVersion = InvestigationResultSchemaV1
 	result.ResultID = e.newResultID()
@@ -468,6 +493,38 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// one more claim per narrated driver, so the claimed-facts budget must
 	// be tracked independently of the driver budget, not assumed to always
 	// have headroom).
+	// THE COMPUTED COUNT, MINTED AS A CLAIM -- BEFORE NARRATION, ON PURPOSE.
+	//
+	// Claimed facts are CHARGED ITEMS. Narration below budgets itself against
+	// `len(result.ClaimedFacts)` and the static claim cap, so a claim appended
+	// after it is an item the allocator never saw: the document spends one
+	// nobody granted, which is the second-authority-over-one-number defect
+	// this file's own allocator comments exist to prevent. Minting here puts
+	// the count inside the same accounting as every other claim, and narration
+	// then budgets around it.
+	//
+	// It goes FIRST among the two because it is a served fact the server
+	// computed, not a narration of something already claimed: if the budget
+	// can afford exactly one more claim, the count is the one worth keeping.
+	//
+	// DROPPED, NEVER OVERFLOWED, at the contract cap. A 251st claim fails
+	// ContextFabricClaimedFact bounds and invalidates the WHOLE answer, so a
+	// document already at the cap serves its answer without the claim rather
+	// than serving nothing. The outcome row still states the count correctly;
+	// what is lost is the addressable field, and the loss is reported.
+	//
+	// GATED ON THE SAME QUESTION THE ROW ASKS. cardinalityOwed reads the
+	// planning rows through countRequirement, which is the row's own gate, so
+	// the claim cannot be minted for an answer that will carry no count row to
+	// reconcile it against. The three surfaces share one precondition, so
+	// none of them can appear where the others do not.
+	if cardinalityOwedByFrame(params.Frame, e.requirements, cardinality) {
+		if claim, ok := cardinalityClaim(principal, cardinality); ok {
+			if cardinalityClaimAdmitted(len(result.ClaimedFacts)) {
+				result.ClaimedFacts = append(result.ClaimedFacts, claim)
+			}
+		}
+	}
 	if graphContext.Cohort != nil {
 		// synthesisAllocation, NOT a second AllocateItems call. Two
 		// derivations in one function would be two authorities over one
@@ -484,7 +541,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		// read) BEFORE anything is appended -- fail closed, never serve a
 		// claim that cannot be traced back to a real canonical fact.
 		if err := validateMintedClaimsGrounded(mintedClaims, facts.Facts); err != nil {
-			return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
+			return InvestigationResult{}, synthesisAllocation, assemblyTelemetry{}, MembershipCardinality{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 		}
 		result.Drivers = append(result.Drivers, narrated...)
 		// CHAOS-4398 PR3b: append the claims THIS composer minted (only for
@@ -512,6 +569,26 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 			narrationEvent.AnswerNarrativeRecomposed = true
 		}
 		pending.CohortNarration = &narrationEvent
+	}
+	// THE PROSE, COMPOSED AFTER THE RECOMPOSE -- and the split from the mint
+	// above is deliberate, not an accident of layout.
+	//
+	// The CLAIM must be minted before narration, because claims are charged
+	// items and narration budgets against the count of them. The SENTENCE must
+	// be composed after it, because recomposeCohortAnswerNarrative REPLACES
+	// DeterministicAnswer wholesale -- a sentence appended earlier is silently
+	// discarded on exactly the cohort path this feature is for. Two placements,
+	// one `cardinality` value, so the claim and the prose still cannot disagree.
+	//
+	// It extends the STATUS COMPOSITION. The rule that recompose enforces
+	// excludes narration detail -- a driver's scoring arithmetic, restated --
+	// and a count the server computed over the served member set is not that.
+	//
+	// Same precondition as the claim above, and appended through the bound-
+	// aware helper: the composer has already truncated to the contract length,
+	// so a blind append turns a valid answer into an invalid one.
+	if cardinalityOwedByFrame(params.Frame, e.requirements, cardinality) {
+		result.DeterministicAnswer = appendCardinalitySentence(result.DeterministicAnswer, cardinalityAnswerSentence(cardinality))
 	}
 	// CHAOS-4085: the post-synthesis commit-affirmation gate. Placed HERE
 	// deliberately -- after every composer that touches Limitations or
@@ -573,7 +650,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		}
 		result.SubjectResolution.CommitDecisionDigests = digests
 	}
-	return result, synthesisAllocation, pending, nil
+	return result, synthesisAllocation, pending, cardinality, nil
 }
 
 // assemblyTelemetry is every per-investigation decision event one assembly

@@ -375,6 +375,30 @@ const (
 	ContextFabricFactLandscape ContextFabricFactKind = "landscape"
 )
 
+// ContextFabricFactCardinality is a CLAIM kind and NOT a requestable one, and
+// the distinction is the whole reason it is declared here instead of inside
+// contextFabricFactKinds below.
+//
+// Every other member of this type names something a PRODUCER READS. This one
+// names something the SERVER COMPUTED: the `membership_cardinality` step's
+// result, minted as a claim so the count an answer states is a field a reader
+// can address rather than a number in prose. It has no producer by
+// construction -- the step "consumes the resolved member set and reads no fact
+// at all" -- so it can never be served as a fact requirement.
+//
+// IT IS DELIBERATELY ABSENT FROM contextFabricFactKinds, and that absence is
+// load-bearing twice over. That array is rendered verbatim as the
+// interpretation prompt's closed set, so adding this to it would advertise to
+// the model a kind it may REQUEST and nothing can serve -- manufacturing the
+// exact `no_declaring_producer` shape that vocabulary exists to let us report.
+// And the prompt's version is a hardcoded literal that the answer-reuse key
+// depends on, so changing the prompt's content without bumping it would reuse
+// answers produced under a prompt that no longer exists.
+//
+// Admitted by validClaimedFactKind, refused by validFactKind. Both directions
+// are pinned; neither is an accident of where the constant sits.
+const ContextFabricFactCardinality ContextFabricFactKind = "cardinality"
+
 // contextFabricFactKinds is the closed fact-kind vocabulary in published
 // order -- the SINGLE declaration every other check derives from:
 // validFactKind, the fact_requirements count bound, the interpretation

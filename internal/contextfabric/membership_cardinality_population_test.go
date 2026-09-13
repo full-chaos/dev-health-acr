@@ -241,3 +241,196 @@ func TestTheCardinalityCauseReachesTheEmittedLine(t *testing.T) {
 		t.Errorf("emitted line is not the narrowed outcome under test: %s", line)
 	}
 }
+
+// mustCardinality is the test-side adapter for call sites that express a
+// cardinality by its raw inputs. Production computes the
+// cardinality once, before synthesis, and passes the VALUE; a test that still
+// wants to express "the cardinality of this cohort" says so here rather than
+// each site re-deriving it differently.
+func mustCardinality(cohort *Cohort, population int, narrowing []contractsv1.ContextFabricPlanNarrowing) MembershipCardinality {
+	cardinality, _ := ComputeMembershipCardinality(cohort, population, narrowing)
+	return cardinality
+}
+
+// ONE NUMBER, AND IT REACHES THE SERVED DOCUMENT.
+//
+// The step now runs before synthesis instead of after it. That move is only
+// safe if the number still describes the member set the reader receives, and
+// if there is still exactly one of it -- a value computed early and a value
+// computed late could differ, and a document carrying two count rows could not
+// be read at all. This drives the real Engine end to end and reads the served
+// result, so it fails if the pre-synthesis value is stale, dropped, or joined
+// by a second.
+func TestTheServedDocumentCarriesExactlyOneCountAndItIsThePreSynthesisOne(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	frame := countingFrame(SubjectTeam)
+	// 14 members carried, 36 seen: the served count must say both, from one
+	// computation that happened before the model was asked anything.
+	engine := newCountingEngineWithPopulation(t, countingCohort(SubjectTeam, 14), 36, frame, telemetry)
+	result := runCountingRequest(t, engine, 14)
+
+	assembled := countOutcomeRows(result, contractsv1.ContextFabricOutcomeStageAssembledResult)
+	if len(assembled) != 1 {
+		t.Fatalf("assembled count rows = %d, want exactly 1 -- two rows means two computations, and a reader cannot tell which number the answer stands behind", len(assembled))
+	}
+	row := assembled[0]
+	if row.Served != 14 {
+		t.Errorf("served = %d, want 14 -- the count must describe the member set the document carries", row.Served)
+	}
+	if row.Declared != 36 {
+		t.Errorf("declared = %d, want 36 -- the population observed before the render clamp, carried through synthesis to the served document", row.Declared)
+	}
+	if len(result.Cohort.Members) != 14 {
+		t.Errorf("served members = %d, want 14 -- the count and the member list must describe the same document", len(result.Cohort.Members))
+	}
+}
+
+// THE CLAIM AND THE ROW ARE THE SAME NUMBER, end to end.
+//
+// This is what grounds a claim that has no canonical fact behind it. Every
+// other minted claim is re-derived against the fact bundle by
+// validateMintedClaimsGrounded; this one asserts something the server computed,
+// so what stands in for that check is the served document agreeing with itself:
+// the claim's value, the outcome row's served count, and the member list must
+// all say the same thing, or the answer is asserting a number it cannot show.
+func TestTheCardinalityClaimAgreesWithTheRowAndTheMembers(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	frame := countingFrame(SubjectTeam)
+	engine := newCountingEngineWithPopulation(t, countingCohort(SubjectTeam, 14), 36, frame, telemetry)
+	result := runCountingRequest(t, engine, 14)
+
+	var claim *ClaimedFact
+	for i := range result.ClaimedFacts {
+		if result.ClaimedFacts[i].Kind == contractsv1.ContextFabricFactCardinality {
+			claim = &result.ClaimedFacts[i]
+			break
+		}
+	}
+	if claim == nil {
+		t.Fatal("no cardinality claim on the served document -- the computed count reached the reader as prose only")
+	}
+	if claim.Value.Integer == nil {
+		t.Fatal("cardinality claim carries no integer value")
+	}
+
+	assembled := countOutcomeRows(result, contractsv1.ContextFabricOutcomeStageAssembledResult)
+	if len(assembled) != 1 {
+		t.Fatalf("assembled count rows = %d, want exactly 1", len(assembled))
+	}
+	if got, want := *claim.Value.Integer, int64(assembled[0].Served); got != want {
+		t.Errorf("claim value = %d, outcome row served = %d -- the document asserts two different counts", got, want)
+	}
+	if got, want := *claim.Value.Integer, int64(len(result.Cohort.Members)); got != want {
+		t.Errorf("claim value = %d, member list = %d -- the count does not describe the members served beside it", got, want)
+	}
+	if claim.Subject.Kind != SubjectOrganization {
+		t.Errorf("claim subject kind = %q, want organization -- a population count is not true of any single member", claim.Subject.Kind)
+	}
+	// The prose states it too, from the same value.
+	if !strings.Contains(result.DeterministicAnswer, "Counted 14 teams of 36 found.") {
+		t.Errorf("answer prose does not state the count: %q", result.DeterministicAnswer)
+	}
+}
+
+// cardinalityFor is the test-side stand-in for what production threads.
+//
+// Production computes the cardinality once per pass, before synthesis, and
+// hands the VALUE to every consumer. A test that passes a zero value is not
+// exercising the same code path -- an unresolved cardinality makes the read
+// row state an absence, which is a different assertion from the one most of
+// these tests are making. Derived from the result's own cohort so the value a
+// test threads describes the document that test is about.
+func cardinalityFor(result InvestigationResult, plan AnswerPlan) MembershipCardinality {
+	cardinality, _ := ComputeMembershipCardinality(result.Cohort, 0, plan.Narrowing)
+	return cardinality
+}
+
+// THE CLAIM CAP, AT ITS EDGE.
+//
+// A 251st claimed fact fails the contract bound and invalidates the WHOLE
+// answer -- so at the cap the count claim is dropped and the answer is served
+// without it, rather than not served at all. The count itself is unaffected:
+// it is still on the outcome row, and the Info line still reports it, with
+// `claimed` false so the loss is visible.
+//
+// Pinned at 249/250/251 because the whole decision is one comparison and the
+// only way it can be wrong is by one.
+func TestTheCardinalityClaimIsDroppedExactlyAtTheContractCap(t *testing.T) {
+	t.Parallel()
+	const cap = contractsv1.ContextFabricClaimedFactsMaxCount
+	for _, tc := range []struct {
+		existing int
+		admitted bool
+		why      string
+	}{
+		{cap - 1, true, "one slot left: the count takes it"},
+		{cap, false, "at the cap: a 251st claim invalidates the answer"},
+		{cap + 1, false, "already over: nothing to do but refuse"},
+	} {
+		if got := cardinalityClaimAdmitted(tc.existing); got != tc.admitted {
+			t.Errorf("cardinalityClaimAdmitted(%d) = %v, want %v -- %s", tc.existing, got, tc.admitted, tc.why)
+		}
+	}
+	// Non-vacuous control: the bound under test is the contract's, not a
+	// number restated here.
+	if cap != 250 {
+		t.Fatalf("ContextFabricClaimedFactsMaxCount = %d; this test's 249/250/251 cells are about the real bound", cap)
+	}
+}
+
+// `claimed` IS EMITTED, AND IT IS DERIVED.
+//
+// Nothing else pins either property. The allow-list guard next door checks
+// only that no UNPERMITTED key appears, which a line omitting the key entirely
+// satisfies, so it constrains the field's absence and not its presence; and no
+// other reader consults the value, so a constant would serve it. A field
+// nothing asserts is a field that can quietly stop being true.
+//
+// Both directions are driven through the real Slog sink, because the claim is
+// what the operator reads.
+func TestTheCardinalityLineReportsWhetherTheCountWasClaimed(t *testing.T) {
+	t.Parallel()
+	row := RequirementOutcomeRow{
+		Stage:       contractsv1.ContextFabricOutcomeStageAssembledResult,
+		Requirement: "count/member/team",
+		Obligation:  string(ObligationCount),
+		Outcome:     contractsv1.ContextFabricRequirementSatisfied,
+		Impact:      contractsv1.ContextFabricAnswerImpactNone,
+		Served:      3,
+		Declared:    3,
+	}
+	claim, ok := cardinalityClaim(storage.Principal{OrgID: "org_1"}, MembershipCardinality{Resolved: true, Kind: SubjectTeam, Served: 3, Declared: 3})
+	if !ok {
+		t.Fatal("cardinalityClaim refused a resolved cardinality; the carried case below would be vacuous")
+	}
+
+	for _, tc := range []struct {
+		name   string
+		claims []ClaimedFact
+		want   string
+	}{
+		{"carried", []ClaimedFact{claim}, `"claimed":true`},
+		// The DISCRIMINATING half: a document with no cardinality claim -- the
+		// cap-drop case -- must report false. A hardcoded true passes the arm
+		// above and fails here, which is what makes the pair a guard rather
+		// than a restatement.
+		{"dropped", []ClaimedFact{}, `"claimed":false`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			sink := SlogEngineTelemetry{logger: slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))}
+			event, found := membershipCardinalityEventFrom(
+				InvestigationResult{Completeness: AnswerCompleteness{Outcomes: []RequirementOutcomeRow{row}}, ClaimedFacts: tc.claims},
+				QuestionFamilyScopedCohortStatus)
+			if !found {
+				t.Fatal("no cardinality event projected from an assembled count row")
+			}
+			sink.RecordMembershipCardinality(context.Background(), storage.Principal{OrgID: "org_1"}, event)
+			if line := buf.String(); !strings.Contains(line, tc.want) {
+				t.Errorf("emitted line does not carry %s: %s", tc.want, line)
+			}
+		})
+	}
+}

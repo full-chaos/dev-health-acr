@@ -503,8 +503,10 @@ func (e *Engine) finalizeResult(
 	// pass is which attempt this call is, for the events this call produces
 	// -- see the answerPass* constants above.
 	pass int,
-	// cohortPopulation is how many members of the cohort's kind RETRIEVAL saw,
-	// before the response item budget clamped how many this answer can carry.
+	// cardinality is THIS PASS's membership_cardinality, computed before
+	// synthesis in synthesizeAndAssemble and carried here rather than derived
+	// again. `counted` is false when no member set resolved -- an absence, not
+	// a count of zero.
 	//
 	// A SECOND CARRIER, WHICH THE `facts` PARAGRAPH ABOVE ARGUES AGAINST, and
 	// the difference is that its premise does not hold for this value. That
@@ -515,7 +517,7 @@ func (e *Engine) finalizeResult(
 	// cohort reaching this scope has already lost the members it could not
 	// render, and neither `result` nor `plan` can say how many there were.
 	// Deriving it here is not possible; carrying it is the only option.
-	cohortPopulation int,
+	cardinality MembershipCardinality,
 ) InvestigationResult {
 	stamped := plan
 	result.AnswerPlan = &stamped
@@ -544,7 +546,7 @@ func (e *Engine) finalizeResult(
 	// AFTER the seed, because the step's own requirement identity is read
 	// off the seeded rows rather than minted here, and appended through
 	// appendOutcomeRows like every other stage's row.
-	rows, _, _ := appendMembershipCardinality(result.Completeness.Outcomes, result.Cohort, cohortPopulation, plan.Narrowing)
+	rows, _, _ := appendMembershipCardinality(result.Completeness.Outcomes, cardinality, plan.Narrowing)
 	result.Completeness.Outcomes = rows
 	// State every OTHER computed requirement whose server step runs over the
 	// resolved member set, on a document that resolved none.
@@ -613,7 +615,7 @@ func (e *Engine) finalizeResult(
 	}
 	rows, coverEvents, carried := appendReadRequirementEvaluationsWithCover(
 		result.Completeness.Outcomes, stamped.Requirements, result.Coverage,
-		readPopulationEvidenceFrom(frame, result, stamped, facts, cohortPopulation, observationKeys))
+		readPopulationEvidenceFrom(frame, result, stamped, facts, cardinality, observationKeys))
 	result.Completeness.Outcomes = rows
 	// THE ONE EXCEPTION this function's own doc comment names: APPENDED here
 	// onto the pending telemetry, tagged with this call's pass, for

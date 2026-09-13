@@ -651,6 +651,22 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 		if len(claim.TimeSeriesRows) > 0 {
 			return rejectSynthesis(RejectionReasonClaimTimeSeriesRowsModelAuthored, "claimed fact %q sets time_series_rows directly -- time_series_rows are attached from the cited canonical fact, never model-authored", claim.ClaimID)
 		}
+		// THE SERVER'S OWN CLAIM NAMESPACE IS RESERVED, refused here rather
+		// than caught at final validation.
+		//
+		// The cardinality claim the server mints carries a fixed id per kind.
+		// A model emitting that same string produces two claims with one id,
+		// and whole-result validation then rejects the assembled answer --
+		// taking the server's own claim, and the answer, down with it. Refused
+		// at the boundary where model output is admitted, the collision cannot
+		// form: the draft is rejected and re-drafted, which is what every other
+		// model-authored-field rule on this loop already does.
+		//
+		// BY PREFIX, not by the individual ids. A kind added later inherits the
+		// reservation without anyone remembering to extend a list.
+		if strings.HasPrefix(claim.ClaimID, cardinalityClaimIDPrefix) {
+			return rejectSynthesis(RejectionReasonClaimIDReservedNamespace, "claimed fact %q uses the reserved server claim namespace %q -- these ids are minted by the server, never model-authored", claim.ClaimID, cardinalityClaimIDPrefix)
+		}
 		if _, exists := claimedByID[claim.ClaimID]; exists {
 			return rejectSynthesis(RejectionReasonClaimIDDuplicate, "claimed fact IDs must be unique")
 		}

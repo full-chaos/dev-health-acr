@@ -1536,8 +1536,40 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// guards on `population > Declared`, so zero leaves the backfilled
 			// count exactly as it was -- the member set the stored document
 			// carries -- instead of inventing a census the cache never saw.
-			if backfilled, _, _ := appendMembershipCardinality(reused.Completeness.Outcomes, reused.Cohort, 0, reusedPlanNarrowing(reused)); len(backfilled) > 0 {
+			// The reuse path COMPUTES its own, and that is the one place left
+			// that may: no retrieval ran for a cached answer, so there is no
+			// pass-scoped cardinality to carry -- population 0, for the reason
+			// the guard in ComputeMembershipCardinality states.
+			reusedCardinality, _ := ComputeMembershipCardinality(reused.Cohort, 0, reusedPlanNarrowing(reused))
+			if backfilled, _, _ := appendMembershipCardinality(reused.Completeness.Outcomes, reusedCardinality, reusedPlanNarrowing(reused)); len(backfilled) > 0 {
 				reused.Completeness.Outcomes = backfilled
+			}
+			// THE CLAIM AND THE SENTENCE ARE RE-DERIVED HERE, NOT CARRIED.
+			//
+			// Backfilling the row alone would leave the other two surfaces
+			// missing on this path: a stored document that owes a count would
+			// be reused with its row restored and no claim and no sentence, so
+			// the same question answered from cache would serve strictly less
+			// than it does fresh -- with nothing telling the reader which.
+			//
+			// RE-DERIVED rather than carried because a stored document may
+			// predate the feature entirely, so there is nothing to carry; and
+			// because deriving from the row that was just backfilled is what
+			// keeps all three surfaces stating one number on this path, the
+			// same way one `cardinality` value does on the fresh path.
+			//
+			// Under the SAME precondition the fresh path uses, read from the
+			// rows as they now stand -- so a reused answer that owes no count
+			// gains no claim and no sentence, exactly as a fresh one would not.
+			if cardinalityOwed(reused.Completeness.Outcomes, reusedCardinality) {
+				if claim, ok := cardinalityClaim(principal, reusedCardinality); ok {
+					if !resultCarriesCardinalityClaim(reused) && cardinalityClaimAdmitted(len(reused.ClaimedFacts)) {
+						reused.ClaimedFacts = append(reused.ClaimedFacts, claim)
+					}
+				}
+				if sentence := cardinalityAnswerSentence(reusedCardinality); sentence != "" && !strings.Contains(reused.DeterministicAnswer, sentence) {
+					reused.DeterministicAnswer = appendCardinalitySentence(reused.DeterministicAnswer, sentence)
+				}
 			}
 			reused.Completeness = ComputeAnswerCompleteness(reused)
 			// The count reaches the OPERATOR on this path too.
@@ -2990,7 +3022,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// synthesisAssemblyParams.snapshot for the two fields and why ordering,
 	// not the existence of a copy, was the defect.
 	retryBase := assemblyParams.snapshot()
-	result, consumedAllocation, pendingTelemetry, err := e.synthesizeAndAssemble(ctx, principal, assemblyParams)
+	result, consumedAllocation, pendingTelemetry, cardinality, err := e.synthesizeAndAssemble(ctx, principal, assemblyParams)
 	if err != nil {
 		// CHAOS-4726: attach the narrowing state as of THIS call site --
 		// stage 1 and (if it ran) stage 2 are the only stages that can have
@@ -3024,9 +3056,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// stage 3 measures that. The retry re-runs assembly AND finalization, so
 	// the shape measured on the second pass is the shape that would be
 	// served on the second pass.
-	result = e.finalizeResult(ctx, principal, result, plan, familyOutcome.Frame, facts, &pendingTelemetry, answerPassFirst, graphContext.CohortPopulation)
+	result = e.finalizeResult(ctx, principal, result, plan, familyOutcome.Frame, facts, &pendingTelemetry, answerPassFirst, cardinality)
 	cover.events = pendingTelemetry.ObservationCover
-	result, pendingTelemetry, err = e.fitAssembledResult(ctx, principal, &plan, result, consumedAllocation, pendingTelemetry, retryBase)
+	result, pendingTelemetry, err = e.fitAssembledResult(ctx, principal, &plan, result, consumedAllocation, pendingTelemetry, retryBase, cardinality)
 	// Read BEFORE the error check: a stage-3 refusal returns the telemetry of
 	// the passes it evaluated, so a refused answer still shows every decision
 	// it made (published with AnswerWithheld by the deferred publisher).
@@ -3080,7 +3112,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// It reads each row's numbers OFF THE SERVED DOCUMENT, never
 		// recomputing them for the log -- a telemetry value derived
 		// independently of the field it describes can disagree with it.
-		for _, event := range readRequirementPopulationEventsFrom(familyOutcome.Frame, result, plan, facts, plan.Family, graphContext.CohortPopulation) {
+		for _, event := range readRequirementPopulationEventsFrom(familyOutcome.Frame, result, plan, facts, plan.Family, cardinality) {
 			e.telemetry.RecordReadRequirementPopulation(ctx, principal, event)
 		}
 	}

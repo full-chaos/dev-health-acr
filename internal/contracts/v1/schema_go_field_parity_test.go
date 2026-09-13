@@ -317,6 +317,35 @@ var enumNarrowings = map[string]enumNarrowing{
 	},
 }
 
+// cardinalityIsClaimableNotRequestable is the reason shared by every
+// requirement-side narrowing below.
+//
+// ContextFabricFactCardinality is a member of the Go ContextFabricFactKind
+// type but NOT of contextFabricFactKinds, the requestable vocabulary. It names
+// a value the SERVER COMPUTED rather than one a producer reads, so no producer
+// can be asked for it: a requirement carrying it could only ever be unserved.
+// The requestable vocabulary is also rendered verbatim into the interpretation
+// prompt's closed set, so admitting it on the request side would advertise to
+// the model a kind nothing can answer. validFactKind is the validator that
+// rejects it, and it is proven to below rather than merely named.
+const cardinalityIsClaimableNotRequestable = "cardinality is a CLAIM kind, not a requestable one: it names a server-computed value with no producer, so a fact requirement carrying it could only ever be unserved -- and the requestable vocabulary is rendered into the interpretation prompt's closed set, so admitting it there would offer the model a kind nothing can answer. Rejected by validFactKind; admitted on the claim side by validClaimedFactKind."
+
+func init() {
+	requirementSideFactKindFields := []string{
+		"context_fabric_common.v1.schema.json#FactRequirement.kind",
+		"context_fabric_common.v1.schema.json#AnswerPlan.fact_kinds",
+		"context_fabric_common.v1.schema.json#PlanRequirement.fact_kinds",
+		"context_fabric_common.v1.schema.json#PlanRequirement.input_fact_kinds",
+	}
+	for _, field := range requirementSideFactKindFields {
+		enumNarrowings[field] = enumNarrowing{
+			excluded: []string{string(ContextFabricFactCardinality)},
+			why:      cardinalityIsClaimableNotRequestable,
+			accepts:  func(value string) bool { return validFactKind(ContextFabricFactKind(value)) },
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // JSON key set, by encoding/json's own rules
 // ---------------------------------------------------------------------------

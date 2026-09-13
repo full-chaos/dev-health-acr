@@ -254,7 +254,7 @@ func TestTheTwoSiblingsEmitTheSameRowForAnAbsentMemberSet(t *testing.T) {
 		Outcome:     contractsv1.ContextFabricRequirementSatisfied,
 	}}
 
-	fromCountStep, _, _ := appendMembershipCardinality(planning, nil, 0, nil)
+	fromCountStep, _, _ := appendMembershipCardinality(planning, mustCardinality(nil, 0, nil), nil)
 	fromSweep := appendUnresolvedMemberSetOutcomes(planning, nil)
 
 	countRow := assembledRowFor(t, fromCountStep, "count/member/team")
