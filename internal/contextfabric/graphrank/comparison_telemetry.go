@@ -209,35 +209,35 @@ func (s SlogOperandResolutionSink) RecordComparisonPolicy(ctx context.Context, e
 		comparisonPolicyLogKeys["RequestID"], contextfabric.SanitizeLogAttr(event.RequestID),
 		comparisonPolicyLogKeys["OrgID"], contextfabric.SanitizeLogAttr(event.OrgID),
 		comparisonPolicyLogKeys["Admission"], contextfabric.SanitizeLogAttr(string(event.Admission)),
-		comparisonPolicyLogKeys["SlotCount"], event.SlotCount,
+		comparisonPolicyLogKeys["SlotCount"], contextfabric.SanitizeLogInt(int64(event.SlotCount)),
 		comparisonPolicyLogKeys["QuestionSearchSuppressed"], event.QuestionSearchSuppressed,
 		comparisonPolicyLogKeys["EvidenceCensusSuppressed"], event.EvidenceCensusSuppressed,
-		comparisonPolicyLogKeys["CandidateBudget"], event.CandidateBudget)
+		comparisonPolicyLogKeys["CandidateBudget"], contextfabric.SanitizeLogInt(int64(event.CandidateBudget)))
 }
 
 func (s SlogOperandResolutionSink) RecordOperandSlot(ctx context.Context, event OperandSlotEvent) {
 	s.logger.InfoContext(ctx, "context fabric operand slot resolution",
 		operandSlotLogKeys["RequestID"], contextfabric.SanitizeLogAttr(event.RequestID),
 		operandSlotLogKeys["OrgID"], contextfabric.SanitizeLogAttr(event.OrgID),
-		operandSlotLogKeys["SlotPosition"], event.SlotPosition,
+		operandSlotLogKeys["SlotPosition"], contextfabric.SanitizeLogInt(int64(event.SlotPosition)),
 		operandSlotLogKeys["SlotKind"], contextfabric.SanitizeLogAttr(string(event.SlotKind)),
-		operandSlotLogKeys["TermCount"], event.TermCount,
-		operandSlotLogKeys["CandidateCount"], event.CandidateCount,
-		operandSlotLogKeys["CommittedCount"], event.CommittedCount,
+		operandSlotLogKeys["TermCount"], contextfabric.SanitizeLogInt(int64(event.TermCount)),
+		operandSlotLogKeys["CandidateCount"], contextfabric.SanitizeLogInt(int64(event.CandidateCount)),
+		operandSlotLogKeys["CommittedCount"], contextfabric.SanitizeLogInt(int64(event.CommittedCount)),
 		operandSlotLogKeys["Outcome"], contextfabric.SanitizeLogAttr(string(event.Outcome)),
 		operandSlotLogKeys["ReceiptBound"], event.ReceiptBound,
 		operandSlotLogKeys["RetrievalDegraded"], event.RetrievalDegraded,
-		operandSlotLogKeys["SearchLimit"], event.SearchLimit)
+		operandSlotLogKeys["SearchLimit"], contextfabric.SanitizeLogInt(int64(event.SearchLimit)))
 }
 
 func (s SlogOperandResolutionSink) RecordComparisonReceiptBinding(ctx context.Context, event ComparisonReceiptBindingEvent) {
 	s.logger.InfoContext(ctx, "context fabric comparison receipt binding",
 		comparisonReceiptBindingLogKeys["RequestID"], contextfabric.SanitizeLogAttr(event.RequestID),
 		comparisonReceiptBindingLogKeys["OrgID"], contextfabric.SanitizeLogAttr(event.OrgID),
-		comparisonReceiptBindingLogKeys["ReceiptsConsidered"], event.ReceiptsConsidered,
-		comparisonReceiptBindingLogKeys["BoundCount"], event.BoundCount,
-		comparisonReceiptBindingLogKeys["UnboundCount"], event.UnboundCount,
-		comparisonReceiptBindingLogKeys["BoundSlotPositions"], event.BoundSlotPositions)
+		comparisonReceiptBindingLogKeys["ReceiptsConsidered"], contextfabric.SanitizeLogInt(int64(event.ReceiptsConsidered)),
+		comparisonReceiptBindingLogKeys["BoundCount"], contextfabric.SanitizeLogInt(int64(event.BoundCount)),
+		comparisonReceiptBindingLogKeys["UnboundCount"], contextfabric.SanitizeLogInt(int64(event.UnboundCount)),
+		comparisonReceiptBindingLogKeys["BoundSlotPositions"], sanitizedLogInts(event.BoundSlotPositions))
 }
 
 func (s SlogOperandResolutionSink) RecordComparisonDecision(ctx context.Context, event ComparisonDecisionEvent) {
@@ -245,7 +245,21 @@ func (s SlogOperandResolutionSink) RecordComparisonDecision(ctx context.Context,
 		comparisonDecisionLogKeys["RequestID"], contextfabric.SanitizeLogAttr(event.RequestID),
 		comparisonDecisionLogKeys["OrgID"], contextfabric.SanitizeLogAttr(event.OrgID),
 		comparisonDecisionLogKeys["Decision"], contextfabric.SanitizeLogAttr(string(event.Decision)),
-		comparisonDecisionLogKeys["PublishedCommitted"], event.PublishedCommitted,
-		comparisonDecisionLogKeys["UnboundReceipts"], event.UnboundReceipts,
+		comparisonDecisionLogKeys["PublishedCommitted"], contextfabric.SanitizeLogInt(int64(event.PublishedCommitted)),
+		comparisonDecisionLogKeys["UnboundReceipts"], contextfabric.SanitizeLogInt(int64(event.UnboundReceipts)),
 		comparisonDecisionLogKeys["RetrievalDegraded"], event.RetrievalDegraded)
+}
+
+// sanitizedLogInts applies the numeric log barrier to each element of an
+// integer slice attribute. A nil slice stays nil, so the emitted value is
+// identical to the unsanitized one for every input.
+func sanitizedLogInts(values []int) []int64 {
+	if values == nil {
+		return nil
+	}
+	sanitized := make([]int64, len(values))
+	for index, value := range values {
+		sanitized[index] = contextfabric.SanitizeLogInt(int64(value))
+	}
+	return sanitized
 }
