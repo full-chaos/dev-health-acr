@@ -112,6 +112,25 @@ const (
 	// member-kind sentence would therefore be false of it, so it carries
 	// its own (ContextFabricDeclaredKindUnmatchedLimitation).
 	ContextFabricRefusalBasisDeclaredKindUnmatched ContextFabricRefusalBasis = "declared_kind_unmatched"
+	// ContextFabricRefusalBasisOrganizationScopeUnsupported: the question's
+	// frame made the organization itself the subject and asked for something
+	// other than a count -- its state, health or drivers -- and ended without
+	// a committed subject. Organization-wide analysis of that kind is not a
+	// capability this service has; organization-wide counts of one kind of
+	// subject are (the organization-scope member set is served for a counting
+	// goal only).
+	//
+	// IT IS NOT declared_kind_unmatched. That member says retrieval offered
+	// nothing of a kind the frame declared, which invites renaming the
+	// subject. Nothing retrieval could offer makes an organization-wide
+	// health question answerable here: the organization is fixed by the
+	// caller, never a candidate, so the honest statement is about the
+	// capability, and it says what IS supported.
+	//
+	// NOT A FRAME REFUSAL either: the frame validated and its gate passed, so
+	// it stays outside ValidContextFabricFrameRefusalBasis and carries its own
+	// sentence (ContextFabricOrganizationScopeUnsupportedLimitation).
+	ContextFabricRefusalBasisOrganizationScopeUnsupported ContextFabricRefusalBasis = "organization_scope_unsupported"
 )
 
 var contextFabricRefusalBases = [...]ContextFabricRefusalBasis{
@@ -120,6 +139,7 @@ var contextFabricRefusalBases = [...]ContextFabricRefusalBasis{
 	ContextFabricRefusalBasisUnspecified,
 	ContextFabricRefusalBasisContinuationContextUnverifiable,
 	ContextFabricRefusalBasisDeclaredKindUnmatched,
+	ContextFabricRefusalBasisOrganizationScopeUnsupported,
 }
 
 // ValidContextFabricFrameRefusalBasis reports whether a basis is one of the

@@ -324,8 +324,33 @@ func decideAnswerability(reading answerabilityReading, offers []answerabilityOff
 		}
 	}
 	decision.Unsatisfiable = len(decision.Roles) > 0 && decision.OffersEvaluated > 0 && decision.OffersAdvancing == 0
+	decision.OrganizationScopeUnsupported = organizationScopeUnsupported(reading.Frame)
 	return decision
 }
+
+// organizationScopeUnsupported reports whether a reading makes the
+// organization itself the subject and counts nothing.
+//
+// CHAOS-5720 (chris, D48). The organization-scope member set is served for a
+// counting goal only (D46); every other organization-scope question -- its
+// state, health or drivers -- has no capability behind it. Such a question
+// that ends without a committed subject is refused on its own basis, whatever
+// retrieval offered: no offer can make it answerable, because the subject is
+// the caller's own organization and is never a candidate. A counting question
+// that ends there keeps the role decision, because "counts are supported" is
+// true of it.
+func organizationScopeUnsupported(frame *QuestionFrame) bool {
+	return frame != nil && frame.SubjectExpression.Kind == SubjectExpressionOrganizationScope && !frame.HasGoal(GoalCountOrAggregate)
+}
+
+// The organization-scope terminal: its reason token, its sentence, and its
+// wire basis. One decision, one basis, one sentence -- the pairing the
+// declared-kind terminal keeps (chaos5660_declared_kind_terminal.go).
+const (
+	organizationScopeTerminalReason     = "organization_scope_unsupported"
+	organizationScopeTerminalLimitation = contractsv1.ContextFabricOrganizationScopeUnsupportedLimitation
+	organizationScopeTerminalBasis      = contractsv1.ContextFabricRefusalBasisOrganizationScopeUnsupported
+)
 
 // SubjectlessTerminalAnswerability is the role half of the subjectless
 // terminal line: which roles the decision evaluated, which role the winning

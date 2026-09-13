@@ -311,7 +311,6 @@ func TestTheScopedAnchorTurnClarifiesAndTheRedeemedAnchorServes(t *testing.T) {
 // decision naming the roles it evaluated and no advanced role.
 func TestOffersNoPickDecidesAreRefused(t *testing.T) {
 	t.Parallel()
-	organization := SubjectOrganization
 	project := SubjectProject
 	for _, testCase := range []struct {
 		cell       string
@@ -370,18 +369,6 @@ func TestOffersNoPickDecidesAreRefused(t *testing.T) {
 				roleCandidate("subr_role_project_c", SubjectProject, "project:c"),
 			}, Committed: []SubjectRef{}},
 			roles: "anchor:undeclared:open,member:project:population",
-		},
-		{
-			// corpus row cv-b5-org-health, turn 2 of replicates 2 and 3 at
-			// 0af9fa84: an organization-scope frame whose pool held reviews,
-			// CI runs and projects.
-			cell: "organization scope: subject offers of other kinds", frame: roleOrgFrame(&organization),
-			resolution: SubjectResolution{Candidates: []SubjectCandidate{
-				roleCandidate("subr_role_review", contractsv1.ContextFabricSubjectPullRequestReview, "pull_request_review:1"),
-				roleCandidate("subr_role_ci", contractsv1.ContextFabricSubjectCIRun, "ci_pipeline_run:1"),
-				roleCandidate("subr_role_project", SubjectProject, "project:1"),
-			}, Committed: []SubjectRef{}},
-			roles: "subject:organization:resolved,member:organization:population",
 		},
 		{
 			cell:       "explicit set: no offer of either operand's kind",
@@ -547,4 +534,130 @@ func TestTheEmittedTerminalLineCarriesTheRoleDecision(t *testing.T) {
 			}
 		})
 	}
+}
+
+// roleOrgFrameWithGoals is an organization_scope frame with the given goals.
+func roleOrgFrameWithGoals(member *SubjectKind, goals ...InvestigationGoal) *QuestionFrame {
+	frame := roleOrgFrame(member)
+	frame.Goals = goals
+	return frame
+}
+
+// TestOrganizationScopeQuestionsRefuseOnTheirOwnBasis pins the D48 terminal by
+// the corpus rows it names (ids only): an organization-scope question that
+// counts nothing is refused on organization_scope_unsupported, with that
+// basis's own sentence, on every turn shape the rows produced -- with offers,
+// without offers, and for a caller that declined clarification. A counting
+// question keeps the role decision, and a refusing frame gate keeps its own
+// basis.
+func TestOrganizationScopeQuestionsRefuseOnTheirOwnBasis(t *testing.T) {
+	t.Parallel()
+	organization := SubjectOrganization
+	project := SubjectProject
+	mixedPool := SubjectResolution{Candidates: []SubjectCandidate{
+		roleCandidate("subr_role_review", contractsv1.ContextFabricSubjectPullRequestReview, "pull_request_review:1"),
+		roleCandidate("subr_role_ci", contractsv1.ContextFabricSubjectCIRun, "ci_pipeline_run:1"),
+		roleCandidate("subr_role_project", SubjectProject, "project:1"),
+	}, Committed: []SubjectRef{}}
+	for _, testCase := range []struct {
+		cell               string
+		frame              *QuestionFrame
+		gate               FrameGate
+		resolution         SubjectResolution
+		allowClarification bool
+		basis              contractsv1.ContextFabricRefusalBasis
+		limitation         string
+		reason             string
+	}{
+		{
+			// corpus row cv-b5-org-health, turn 2 of replicates 2 and 3 at
+			// 0af9fa84: an organization member kind and a pool of reviews, CI
+			// runs and projects.
+			cell: "cv-b5-org-health: offers of other kinds", frame: roleOrgFrameWithGoals(&organization, GoalAssessState),
+			resolution: mixedPool, allowClarification: true,
+			basis: organizationScopeTerminalBasis, limitation: organizationScopeTerminalLimitation, reason: organizationScopeTerminalReason,
+		},
+		{
+			// corpus row cv-b5-org-health, replicate 1 at 0af9fa84: no member
+			// kind, the offer pool emptied by the vector-only exclusion.
+			cell: "cv-b5-org-health: offer pool emptied", frame: roleOrgFrameWithGoals(nil, GoalAssessState),
+			resolution:         SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}, ClarificationPrompt: OfferPoolEmptiedClarificationPrompt},
+			allowClarification: true,
+			basis:              organizationScopeTerminalBasis, limitation: organizationScopeTerminalLimitation, reason: organizationScopeTerminalReason,
+		},
+		{
+			// corpus row cv-c7-org-drivers: an organization-scope drivers
+			// question.
+			cell: "cv-c7-org-drivers: offers of other kinds", frame: roleOrgFrameWithGoals(nil, GoalExplainDrivers),
+			resolution: mixedPool, allowClarification: true,
+			basis: organizationScopeTerminalBasis, limitation: organizationScopeTerminalLimitation, reason: organizationScopeTerminalReason,
+		},
+		{
+			cell: "a caller that declined clarification is refused the same way", frame: roleOrgFrameWithGoals(nil, GoalAssessState),
+			resolution: mixedPool, allowClarification: false,
+			basis: organizationScopeTerminalBasis, limitation: organizationScopeTerminalLimitation, reason: organizationScopeTerminalReason,
+		},
+		{
+			// The control: counts ARE supported, so a counting question keeps
+			// the role decision and its declared-kind basis.
+			cell: "a counting question keeps the role decision", frame: roleOrgFrameWithGoals(&project, GoalCountOrAggregate),
+			resolution: mixedPool, allowClarification: true,
+			basis: declaredKindTerminalBasis, limitation: declaredKindTerminalLimitation, reason: declaredKindTerminalReason,
+		},
+		{
+			cell: "a refusing frame gate keeps its own basis", frame: roleOrgFrameWithGoals(nil, GoalAssessState),
+			gate:       FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable},
+			resolution: mixedPool, allowClarification: true,
+			basis: contractsv1.ContextFabricRefusalBasisMemberKindUnservable, limitation: contractsv1.ContextFabricFrameInvariantRefusalLimitation, reason: "frame_gate_refused",
+		},
+	} {
+		t.Run(testCase.cell, func(t *testing.T) {
+			t.Parallel()
+			telemetry := &recordingTelemetry{}
+			factReads := 0
+			interpreter := roleGateInterpreter{roleInterpreter: roleInterpreter{frame: testCase.frame}, gate: testCase.gate}
+			engine := roleEngine(t, interpreter, &roleGraph{first: testCase.resolution}, newMapResultStore(), telemetry, &factReads)
+			request := validInvestigationRequestWithConfirmedWindow()
+			request.Options.AllowClarification = testCase.allowClarification
+			result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_role"}, request)
+			if err != nil {
+				t.Fatalf("Investigate() error = %v", err)
+			}
+			if result.Status != InvestigationNoMatch || result.RefusalBasis != testCase.basis {
+				t.Fatalf("status/basis = %q/%q, want no_match/%q", result.Status, result.RefusalBasis, testCase.basis)
+			}
+			if result.Completeness.RefusalBasis != testCase.basis {
+				t.Fatalf("completeness.refusal_basis = %q, want %q", result.Completeness.RefusalBasis, testCase.basis)
+			}
+			if !roleContains(result.Limitations, testCase.limitation) {
+				t.Fatalf("limitations = %#v, want %q", result.Limitations, testCase.limitation)
+			}
+			if testCase.basis != organizationScopeTerminalBasis && roleContains(result.Limitations, organizationScopeTerminalLimitation) {
+				t.Fatalf("limitations = %#v carry the organization-scope sentence on a turn refused on %q", result.Limitations, testCase.basis)
+			}
+			if want := []string{testCase.reason}; !stringSlicesEqual(telemetry.subjectlessTerminalReasons, want) {
+				t.Fatalf("emitted reasons = %#v, want %#v", telemetry.subjectlessTerminalReasons, want)
+			}
+			if want := []string{string(testCase.basis)}; !stringSlicesEqual(telemetry.subjectlessTerminalRefusalBases, want) {
+				t.Fatalf("emitted refusal_basis = %#v, want %#v", telemetry.subjectlessTerminalRefusalBases, want)
+			}
+			if factReads != 0 {
+				t.Fatalf("a refused turn read facts %d times", factReads)
+			}
+		})
+	}
+}
+
+// roleGateInterpreter is roleInterpreter with an explicit frame gate.
+type roleGateInterpreter struct {
+	roleInterpreter
+	gate FrameGate
+}
+
+func (i roleGateInterpreter) Interpret(ctx context.Context, principal storage.Principal, request InvestigationRequest) (InterpretedQuestion, QuestionFamilyOutcome, error) {
+	interpretation, outcome, err := i.roleInterpreter.Interpret(ctx, principal, request)
+	if i.gate.Outcome != "" {
+		outcome.Gate = i.gate
+	}
+	return interpretation, outcome, err
 }

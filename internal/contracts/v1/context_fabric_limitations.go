@@ -523,6 +523,16 @@ const ContextFabricContinuationContextUnverifiableLimitation = "This request con
 // they meant a different kind.
 const ContextFabricDeclaredKindUnmatchedLimitation = "This question was read as being about a subject of a particular kind, and nothing that matched the terms it named was of that kind, so no subject was confirmed and no canonical facts were read. Naming the subject differently, or saying which kind of thing it is, may answer it. The server refused this question on the basis declared_kind_unmatched."
 
+// ContextFabricOrganizationScopeUnsupportedLimitation is the sentence an
+// organization-scope question that counts nothing carries when it is refused
+// (ContextFabricRefusalBasisOrganizationScopeUnsupported).
+//
+// It says what is not supported AND what is: organization-wide analysis of
+// status, health or drivers is not a capability, and organization-wide counts
+// of one kind of subject are. The second half is the one the asker can act on.
+// It names no subject, because the subject is the caller's own organization.
+const ContextFabricOrganizationScopeUnsupportedLimitation = "This question was read as being about the organization as a whole. Organization-wide analysis of status, health or drivers is not supported; organization-wide counts of one kind of subject, such as how many repositories or teams there are, are supported. No canonical facts were read. The server refused this question on the basis organization_scope_unsupported."
+
 // ContextFabricServiceAuthoredLimitations returns every disclosure this
 // service composes for itself, in no significant order.
 //
@@ -554,6 +564,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricFrameInvariantRefusalLimitation,
 		ContextFabricContinuationContextUnverifiableLimitation,
 		ContextFabricDeclaredKindUnmatchedLimitation,
+		ContextFabricOrganizationScopeUnsupportedLimitation,
 	}
 }
 

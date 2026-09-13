@@ -187,6 +187,11 @@ type declaredKindDecision struct {
 	// predicate, and reporting it here too would give one state two names in
 	// two log lines.
 	Unsatisfiable bool
+	// OrganizationScopeUnsupported is true when the reading makes the
+	// organization itself the subject and counts nothing
+	// (organizationScopeUnsupported, role_answerability.go). It is decided
+	// before Unsatisfiable is read and independently of the offers.
+	OrganizationScopeUnsupported bool
 }
 
 // decideDeclaredKind takes the decision for one COMPOSING turn: the reading is

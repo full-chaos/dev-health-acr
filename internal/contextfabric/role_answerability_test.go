@@ -1,6 +1,7 @@
 package contextfabric
 
 import (
+	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -321,5 +322,89 @@ func TestEveryAnswerabilityTokenHasAProductionDriver(t *testing.T) {
 		if !channels[channel] {
 			t.Errorf("channel %q never carries a winning offer", channel)
 		}
+	}
+}
+
+// TestOrganizationScopeUnsupportedOverItsWholeDomain executes the D48 predicate
+// over every variant and every goal-set cell that decides it.
+func TestOrganizationScopeUnsupportedOverItsWholeDomain(t *testing.T) {
+	t.Parallel()
+	project := SubjectProject
+	withGoals := func(frame *QuestionFrame, goals ...InvestigationGoal) *QuestionFrame {
+		frame.Goals = goals
+		return frame
+	}
+	for _, testCase := range []struct {
+		cell  string
+		frame *QuestionFrame
+		want  bool
+	}{
+		{"frame absent", nil, false},
+		{"org, goals absent", withGoals(roleOrgFrame(nil)), true},
+		{"org, assess_state", withGoals(roleOrgFrame(nil), GoalAssessState), true},
+		{"org, explain_drivers", withGoals(roleOrgFrame(nil), GoalExplainDrivers), true},
+		{"org, count_or_aggregate", withGoals(roleOrgFrame(&project), GoalCountOrAggregate), false},
+		{"org, count_or_aggregate beside assess_state", withGoals(roleOrgFrame(&project), GoalAssessState, GoalCountOrAggregate), false},
+		{"org, pointer absent, assess_state", withGoals(&QuestionFrame{SubjectExpression: SubjectExpression{Kind: SubjectExpressionOrganizationScope}}, GoalAssessState), true},
+		{"named, assess_state", withGoals(chaos5660NamedFrame(&project), GoalAssessState), false},
+		{"discovered, assess_state", withGoals(roleDiscoveredFrame(SubjectTeam), GoalAssessState), false},
+		{"scoped, assess_state", withGoals(roleScopedFrame(SubjectProject), GoalAssessState), false},
+		{"grouped, assess_state", withGoals(roleGroupedFrame(SubjectProject, SubjectTeam), GoalAssessState), false},
+		{"explicit, assess_state", withGoals(roleExplicitFrame(roleNamedOperand(&project)), GoalAssessState), false},
+		{"variant out of vocabulary", withGoals(&QuestionFrame{SubjectExpression: SubjectExpression{Kind: SubjectExpressionKind("not_a_variant")}}, GoalAssessState), false},
+	} {
+		t.Run(testCase.cell, func(t *testing.T) {
+			t.Parallel()
+			if got := organizationScopeUnsupported(testCase.frame); got != testCase.want {
+				t.Fatalf("organizationScopeUnsupported = %v, want %v", got, testCase.want)
+			}
+			if got := decideAnswerability(answerabilityReadingOf(testCase.frame, ""), nil).OrganizationScopeUnsupported; got != testCase.want {
+				t.Fatalf("decision.OrganizationScopeUnsupported = %v, want %v -- the decision must carry the predicate it is taken on", got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestTheOrganizationScopeBasisOverItsWholeVocabularyDomain executes the new
+// member's own domain on both sides of every rule that classifies a basis.
+func TestTheOrganizationScopeBasisOverItsWholeVocabularyDomain(t *testing.T) {
+	t.Parallel()
+	basis := organizationScopeTerminalBasis
+	if basis != contractsv1.ContextFabricRefusalBasisOrganizationScopeUnsupported || string(basis) != "organization_scope_unsupported" {
+		t.Fatalf("organizationScopeTerminalBasis = %q", basis)
+	}
+	if !contractsv1.ValidContextFabricRefusalBasis(basis) {
+		t.Fatalf("%q is not a vocabulary member", basis)
+	}
+	seen := 0
+	for _, member := range contractsv1.ContextFabricRefusalBasisVocabulary() {
+		if member == basis {
+			seen++
+		}
+	}
+	if seen != 1 {
+		t.Fatalf("member occurs %d times in the vocabulary, want exactly 1", seen)
+	}
+	if contractsv1.ValidContextFabricFrameRefusalBasis(basis) {
+		t.Fatal("admitted to the FRAME refusal allow-list: the frame validated and its gate passed")
+	}
+	if basis == contractsv1.ContextFabricRefusalBasisDeclaredKindUnmatched || organizationScopeTerminalLimitation == declaredKindTerminalLimitation {
+		t.Fatal("shares a basis or a sentence with declared_kind_unmatched -- two decisions would read alike")
+	}
+	for _, nearMiss := range []contractsv1.ContextFabricRefusalBasis{"organization_scope_unsupported_", "ORGANIZATION_SCOPE_UNSUPPORTED", "organization_scope", ""} {
+		if contractsv1.ValidContextFabricRefusalBasis(nearMiss) {
+			t.Fatalf("near miss %q was accepted", nearMiss)
+		}
+	}
+	if !contractsv1.IsContextFabricServiceAuthoredLimitation(organizationScopeTerminalLimitation) {
+		t.Fatalf("the sentence is not service-authored: %q", organizationScopeTerminalLimitation)
+	}
+	for _, fragment := range []string{string(basis), "not supported", "counts"} {
+		if !strings.Contains(organizationScopeTerminalLimitation, fragment) {
+			t.Fatalf("the sentence lacks %q: it must name its basis, what is not supported, and what is", fragment)
+		}
+	}
+	if observableRefusalBasis(basis) != string(basis) {
+		t.Fatal("the log renderer and the wire disagree")
 	}
 }
