@@ -393,6 +393,11 @@ func TestOffersNoPickDecidesAreRefused(t *testing.T) {
 			if !roleContains(result.Limitations, declaredKindTerminalLimitation) {
 				t.Fatalf("limitations = %#v, want the basis's own sentence", result.Limitations)
 			}
+			for _, limitation := range result.Limitations {
+				if strings.Contains(limitation, "nothing that matched the terms it named was of that kind") {
+					t.Fatalf("limitation %q claims the declared kind was absent, which is false when a refused offer carries it", limitation)
+				}
+			}
 			if want := []string{declaredKindTerminalReason}; !stringSlicesEqual(telemetry.subjectlessTerminalReasons, want) {
 				t.Fatalf("emitted reasons = %#v, want %#v", telemetry.subjectlessTerminalReasons, want)
 			}

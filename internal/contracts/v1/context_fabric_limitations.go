@@ -512,16 +512,16 @@ func IsContextFabricRefusalBasisLimitation(limitation string) bool {
 const ContextFabricContinuationContextUnverifiableLimitation = "This request continued an earlier answer by confirming only its evidence window, and the server could not verify the earlier answer's reading of the question, so it did not answer under a different reading and no canonical facts were read. Ask the question again without the earlier answer's window offer to start a fresh investigation. The server refused this continuation on the basis continuation_context_unverifiable."
 
 // ContextFabricDeclaredKindUnmatchedLimitation is the sentence a turn carries
-// when its frame declared a subject kind and nothing retrieval could offer
-// carried that kind.
+// when retrieval offered options and none of them advances a role of the
+// accepted reading that a caller's choice decides.
 //
-// It names the KIND and it names no subject, because there is no subject to
-// name: every candidate retrieval found was of some other kind, and naming one
-// of those would hand back the wrong-kind guess the whole decision exists to
-// withhold. It tells the asker the one thing they can act on -- the kind the
-// question was read as being about -- so they can rename the subject or say
-// they meant a different kind.
-const ContextFabricDeclaredKindUnmatchedLimitation = "This question was read as being about a subject of a particular kind, and nothing that matched the terms it named was of that kind, so no subject was confirmed and no canonical facts were read. Naming the subject differently, or saying which kind of thing it is, may answer it. The server refused this question on the basis declared_kind_unmatched."
+// It is true of every state that basis covers: a named subject whose offers
+// are all of another kind, and a question whose offers match a declared kind
+// only on a role no choice decides (a grouped question's member and group, a
+// scoped question's members). So it names no kind, no role and no subject:
+// naming the declared kind would claim it was absent when it was offered, and
+// naming a candidate would hand back the guess the decision withholds.
+const ContextFabricDeclaredKindUnmatchedLimitation = "No option found for this question could be chosen to answer it, so no subject was confirmed and no canonical facts were read. Rewording the question may let it be answered. The server refused this question on the basis declared_kind_unmatched."
 
 // ContextFabricOrganizationScopeUnsupportedLimitation is the sentence an
 // organization-scope question that counts nothing carries when it is refused
