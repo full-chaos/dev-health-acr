@@ -448,8 +448,14 @@ func TestEveryFreshResultExitAssertsTheBudget(t *testing.T) {
 				t.Fatalf("Status = %q, want %q (sanity check: the intended exit was not taken, so this subtest proves nothing)", result.Status, tc.status)
 			}
 			assertStageRecorded(t, telemetry, tc.stage)
-			// Both vetoes here fire before interpretation: nothing was read.
-			assertSemanticPersistence(t, telemetry, tc.stage, semanticAbsent, SemanticStateAbsenceTurnEndedBeforeInterpretation)
+			// CHAOS-5639: both vetoes here fire before interpretation and
+			// read nothing new, but they DO persist a minimal snapshot
+			// (request identity + whatever per-need ledger this turn
+			// inherited, empty here since neither fixture names a parent) --
+			// captureConfirmedNeedLedgerOnly's own doc comment states why an
+			// absent state at exactly these gates breaks the ledger's ONE
+			// HOP rule for the very next turn.
+			assertSemanticPersistence(t, telemetry, tc.stage, semanticPresent, "")
 			seen[tc.stage] = true
 		})
 	}
@@ -470,7 +476,9 @@ func TestEveryFreshResultExitAssertsTheBudget(t *testing.T) {
 			t.Fatalf("Status = %q, want clarification_required (sanity check on the gate path taken)", result.Status)
 		}
 		assertStageRecorded(t, telemetry, BudgetAssertWindowConfirmationRequired)
-		assertSemanticPersistence(t, telemetry, BudgetAssertWindowConfirmationRequired, semanticAbsent, SemanticStateAbsenceTurnEndedBeforeInterpretation)
+		// CHAOS-5639: see the window_veto/structure_veto subtest above --
+		// this gate persists a minimal snapshot too, for the same reason.
+		assertSemanticPersistence(t, telemetry, BudgetAssertWindowConfirmationRequired, semanticPresent, "")
 		seen[BudgetAssertWindowConfirmationRequired] = true
 	})
 

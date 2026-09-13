@@ -96,6 +96,13 @@ type confirmedStructureMember struct {
 	OfferSource    contractsv1.ContextFabricStructureOfferSource
 	PriorVersionID string
 	PriorEntryID   string
+	// MatchedTermHash (CHAOS-5639) is the redeemed offer's own term hash,
+	// populated for subject_anchor only (matchedTermHashFor's own doc
+	// comment) -- carried so a per-need confirmation ledger entry persisted
+	// from this member can be reverified later through the SAME choke point
+	// (reverifyAnchorClaim) a fresh ancr_ redemption already goes through,
+	// rather than trusting a stored value with nothing left to re-check.
+	MatchedTermHash string
 }
 
 // explicitStructureMember is one member's EXPLICIT (non-receipt) value
@@ -324,6 +331,39 @@ type AnchorVerifier func(ctx context.Context, orgID string, kind contractsv1.Con
 // implementation: internal/runtime/hosted/open.go.
 type AnchorMembershipVerifier func(ctx context.Context, principal storage.Principal, scope RequestedScope, binding ResolvedGraphBinding, kind contractsv1.ContextFabricSubjectKind, canonicalID, matchedTermHash string) (bool, AnchorVerificationReason)
 
+// reverifyAnchorClaim is the ONE dispatch canonicalizeStructure's own ancr_
+// redemption reverify closure and CHAOS-5639's remembered-anchor consult
+// (resolveConfirmedNeedLedger, chaos5639_confirmed_need.go) BOTH call --
+// dispatch on the ISSUING STORED result's OWN schema_version (CHAOS-4042
+// sol-max ruling: never on this request's own structure material, never on
+// any other signal), fail-closed on any other schema_version. A
+// truthy-but-wrong-reason verifier response is never trusted: the reason
+// must be the closed vocabulary's own Valid member, not just a truthy bool,
+// since a misconfigured verifier returning (true, AnchorVerificationClaimLost)
+// (or any non-Valid reason) must not open admission. A single choke point
+// here means a fresh receipt and a remembered value can never be held to two
+// different standards by construction, the same reason
+// carryOriginSameQuestionVerdict is the ONE same-question check every carry
+// axis in this package uses.
+func (e *Engine) reverifyAnchorClaim(ctx context.Context, principal storage.Principal, scope RequestedScope, binding ResolvedGraphBinding, schemaVersion string, kind contractsv1.ContextFabricSubjectKind, canonicalID, matchedTermHash string) bool {
+	switch schemaVersion {
+	case InvestigationResultSchemaV1:
+		if e.anchorVerifier == nil {
+			return false
+		}
+		ok, reason := e.anchorVerifier(ctx, principal.OrgID, kind, canonicalID, matchedTermHash)
+		return ok && reason == AnchorVerificationValid
+	case InvestigationResultSchemaV2:
+		if e.anchorMembershipVerifier == nil {
+			return false
+		}
+		ok, reason := e.anchorMembershipVerifier(ctx, principal, scope, binding, kind, canonicalID, matchedTermHash)
+		return ok && reason == AnchorVerificationValid
+	default:
+		return false
+	}
+}
+
 // CandidateVerificationReason is the closed vocabulary Engine's candidate
 // re-verification dependency reports (CHAOS-4012). Deliberately a SMALLER
 // vocabulary than AnchorVerificationReason: a candidate offer claims no
@@ -415,6 +455,13 @@ type structureReceiptMember struct {
 	// this to a non-nil closure over Engine.anchorVerifier/handleVerifier
 	// respectively.
 	reverify func(ctx context.Context, principal storage.Principal, stored InvestigationResult, receiptID string) bool
+	// matchedTermHashFor (CHAOS-5639) returns the redeemed offer's own
+	// matched_term_hash, when this member's reverify needs one to replay
+	// later (subject_anchor only -- reverifyAnchorClaim's own third
+	// argument). nil for every other member: expected_kind's reverify is
+	// unwired entirely (this type's own doc comment above), and
+	// subject_handle's HandleVerifier takes no term hash at all.
+	matchedTermHashFor func(stored InvestigationResult, receiptID string) string
 	// offerSnapshot (P1.G) echoes EVERY offer in stored's own offer list
 	// for this member (not just the redeemed one) as
 	// ContextFabricStructureOfferSnapshotEntry rows, Rank = the offer's
@@ -516,6 +563,17 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 				}
 				return anchorOptionsOffered(stored.StructureNeeds.AnchorOptions)
 			},
+			matchedTermHashFor: func(stored InvestigationResult, receiptID string) string {
+				if stored.StructureNeeds == nil {
+					return ""
+				}
+				for _, opt := range stored.StructureNeeds.AnchorOptions {
+					if opt.ReceiptID == receiptID {
+						return opt.MatchedTermHash
+					}
+				}
+				return ""
+			},
 			// reverify (P1.E, team-lead ruling on the matched_term_hash
 			// contract change): an ancr_ redemption re-proves the offer's
 			// per-TERM claimant uniqueness still holds -- (kind,
@@ -542,29 +600,7 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 					if opt.ReceiptID != receiptID {
 						continue
 					}
-					switch stored.SchemaVersion {
-					case InvestigationResultSchemaV1:
-						if e.anchorVerifier == nil {
-							return false
-						}
-						// Codex xhigh review (chaos-pivot-p1, first round),
-						// finding 2: ok alone is not trustworthy -- a
-						// misconfigured AnchorVerifier returning
-						// (true, AnchorVerificationClaimLost) (or any
-						// non-Valid reason) must not open redemption.
-						// Require the reason to be the closed vocabulary's
-						// own Valid member too, not just a truthy bool.
-						ok, reason := e.anchorVerifier(ctx, principal.OrgID, opt.Kind, opt.CanonicalID, opt.MatchedTermHash)
-						return ok && reason == AnchorVerificationValid
-					case InvestigationResultSchemaV2:
-						if e.anchorMembershipVerifier == nil {
-							return false
-						}
-						ok, reason := e.anchorMembershipVerifier(ctx, principal, request.RequestedScope, binding, opt.Kind, opt.CanonicalID, opt.MatchedTermHash)
-						return ok && reason == AnchorVerificationValid
-					default:
-						return false
-					}
+					return e.reverifyAnchorClaim(ctx, principal, request.RequestedScope, binding, stored.SchemaVersion, opt.Kind, opt.CanonicalID, opt.MatchedTermHash)
 				}
 				return false
 			},
@@ -749,9 +785,14 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 				return requestStructureCanonicalization{Veto: structureVetoStaleSupersededOffer, StaleMembers: []contractsv1.ContextFabricConfirmedStructureEntry{stale}}
 			}
 		}
+		var matchedTermHash string
+		if m.matchedTermHashFor != nil {
+			matchedTermHash = m.matchedTermHashFor(stored.Result, receiptID)
+		}
 		confirmed = append(confirmed, confirmedStructureMember{
 			Member: m.member, AppliedValue: value, AppliedKind: kind, PriorResultID: resultID, ReceiptID: receiptID,
 			OfferSource: offerSource, PriorVersionID: priorVersionID, PriorEntryID: priorEntryID,
+			MatchedTermHash: matchedTermHash,
 		})
 		if m.offerSnapshot != nil {
 			offerSnapshot = append(offerSnapshot, m.offerSnapshot(stored.Result)...)
@@ -1753,7 +1794,10 @@ func confirmedExpectedKind(confirmed []confirmedStructureMember) *ConfirmedExpec
 // excludes an entry this turn's own receipt for the SAME member overrides,
 // and an entry with no value, so this function trusts its presence in the
 // map without re-deriving either check -- a second, independent check here
-// could disagree with the map's own answer.
+// could disagree with the map's own answer. A remembered subject_anchor
+// reaching this map has ALREADY been reverified through reverifyAnchorClaim
+// (resolveConfirmedNeedLedger, chaos5639_confirmed_need.go) -- this function
+// never re-checks that, exactly as it never re-derives the other two.
 func confirmedAnchorSelection(confirmed []confirmedStructureMember, applied map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember) *ConfirmedAnchorSelection {
 	for _, c := range confirmed {
 		if c.Member == contractsv1.ContextFabricStructureNeedSubjectAnchor {

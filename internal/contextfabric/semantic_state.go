@@ -176,6 +176,15 @@ type ConfirmedNeedEntry struct {
 	Member       contractsv1.ContextFabricStructureNeedKind `json:"member"`
 	AppliedKind  contractsv1.ContextFabricSubjectKind       `json:"applied_kind"`
 	AppliedValue string                                     `json:"applied_value"`
+	// MatchedTermHash (CHAOS-5639) is populated for subject_anchor only,
+	// copied from confirmedStructureMember.MatchedTermHash: the redemption-
+	// time reverify a fresh ancr_ receipt must pass (reverifyAnchorClaim,
+	// structure.go) needs it to replay the SAME check against a remembered
+	// value -- without it, admitting a remembered anchor could only ever
+	// mean trusting the stored offer unverified, which canonicalizeStructure's
+	// own P1.E discipline forbids for this member. Empty for every other
+	// member.
+	MatchedTermHash string `json:"matched_term_hash,omitempty"`
 }
 
 // SemanticScopeAnchor is the scope anchor a reading resolved its subject under.
@@ -664,6 +673,15 @@ func validateSemanticState(s PersistedSemanticState) error {
 		}
 		if len(entry.AppliedValue) > SemanticStateMaxTermBytes {
 			return oversized(SemanticStateBoundTermBytes, "confirmed_needs[%d].applied_value is %d bytes, exceeds %d", i, len(entry.AppliedValue), SemanticStateMaxTermBytes)
+		}
+		// MatchedTermHash is meaningful for subject_anchor only
+		// (reverifyAnchorClaim's own third argument) -- carried on any other
+		// member is a document this codec did not write.
+		if entry.MatchedTermHash != "" && entry.Member != contractsv1.ContextFabricStructureNeedSubjectAnchor {
+			return reject("confirmed_needs[%d].matched_term_hash is set for member %q, only subject_anchor carries one", i, entry.Member)
+		}
+		if len(entry.MatchedTermHash) > SemanticStateMaxTermBytes {
+			return oversized(SemanticStateBoundTermBytes, "confirmed_needs[%d].matched_term_hash is %d bytes, exceeds %d", i, len(entry.MatchedTermHash), SemanticStateMaxTermBytes)
 		}
 	}
 	var expectedRoles []SemanticRoleSlot

@@ -39,11 +39,23 @@ package contextfabric
 // of them can report a different answer than the others: telemetry can never
 // say "none" while a resolution parameter applies a value anyway.
 //
-// A remembered subject_anchor is threaded into confirmedAnchorSelection
-// ALONGSIDE (never merged into) structureCanon.Confirmed -- that slice is
-// what reuseBypassReason (answer_reuse.go) keys the tryReuse bypass on
-// (design brief DP11), and a turn carrying only a remembered need, with no
-// receipt of its own, must not take that bypass.
+// ONLY expected_kind AND subject_anchor ARE APPLIED (subject_handle,
+// subject_candidate and window are persisted for completeness -- nothing
+// consults them yet). BOTH are admitted through exactly the checks a fresh
+// carry or receipt already passes, never a ledger-specific substitute:
+// expected_kind carries no live tampering vector, so a stale-epoch-checked,
+// same-question, identity-equal remembered value is exactly as trustworthy
+// as a receipt (canonicalizeStructure's own reverify-field doc comment,
+// structure.go -- "the confirmed kind only narrows a pool, it never stands
+// in for a fact"). subject_anchor is different -- a rival can gain the same
+// alias, or lose membership, between the offer and any later turn -- so
+// resolveConfirmedNeedLedger reverifies it through reverifyAnchorClaim, the
+// SAME dispatch (AnchorVerifier v1 / AnchorMembershipVerifier v2, on the
+// carrier's OWN schema_version) canonicalizeStructure's own ancr_ redemption
+// already uses, carrying the redeemed offer's own matched_term_hash forward
+// in ConfirmedNeedEntry for exactly that replay. A claim that fails or
+// cannot be reverified is dropped from the ledger -- never the whole
+// ledger, only that member.
 //
 // A remembered expected_kind is NOT threaded into effectiveConfirmedKind the
 // same way. It is checked FIRST inside Engine.resolveCarriedKind itself
@@ -105,8 +117,18 @@ const (
 	// digest covers. The ledger is dropped whole; a changed question earns a
 	// fresh need, not a partially-remembered one.
 	ConfirmedNeedLedgerDroppedIdentityChanged ConfirmedNeedLedgerOutcome = "dropped_identity_changed"
+	// ConfirmedNeedLedgerDroppedStaleGraphEpoch: the parent loaded and its
+	// ledger is non-empty, but the parent carries a DIFFERENT graph epoch (or
+	// none at all) than THIS turn's own binding -- the SAME CHAOS-3898 §2.2
+	// ingress taint gate walkCarriedKind applies to the legacy chain walk,
+	// reused here rather than re-implemented: a rebuild between turns can
+	// change what a remembered kind or anchor even denotes, so a carrier from
+	// another epoch is refused outright, exactly like every other carry axis
+	// in this package.
+	ConfirmedNeedLedgerDroppedStaleGraphEpoch ConfirmedNeedLedgerOutcome = "dropped_stale_graph_epoch"
 	// ConfirmedNeedLedgerHit: the same question, with a comparable and equal
-	// identity. The ledger's entries are available to this turn.
+	// identity, at the SAME graph epoch. The ledger's entries are available
+	// to this turn.
 	ConfirmedNeedLedgerHit ConfirmedNeedLedgerOutcome = "hit"
 )
 
@@ -115,7 +137,8 @@ func confirmedNeedLedgerOutcomes() []ConfirmedNeedLedgerOutcome {
 		ConfirmedNeedLedgerMissNoReference, ConfirmedNeedLedgerMissUnloadable,
 		ConfirmedNeedLedgerMissEmpty, ConfirmedNeedLedgerDroppedQuestionIndeterminate,
 		ConfirmedNeedLedgerDroppedQuestionChanged, ConfirmedNeedLedgerDroppedIdentityIncomparable,
-		ConfirmedNeedLedgerDroppedIdentityChanged, ConfirmedNeedLedgerHit,
+		ConfirmedNeedLedgerDroppedIdentityChanged, ConfirmedNeedLedgerDroppedStaleGraphEpoch,
+		ConfirmedNeedLedgerHit,
 	}
 }
 
@@ -142,18 +165,19 @@ type confirmedNeedLedgerResult struct {
 // resolveConfirmedNeedLedger is CHAOS-5639's own need-gate admission. It
 // reads the ONE parent this request names (request.ParentResultID -- the
 // general "this turn continues that one" bearer field, D-d's own phrase),
-// and admits its ledger only when (a) this turn asks the SAME question the
-// parent answered, and (b) this turn's recomputed request identity
-// (SemanticRequestIdentityOf, the referenced exchange dropped exactly as
-// D-a's own comparison drops it) equals the identity the parent's own
-// snapshot recorded.
+// and admits its ledger only when (a) the parent's snapshot decoded cleanly,
+// (b) the parent was saved at THIS turn's own graph epoch, (c) this turn asks
+// the SAME question the parent answered, and (d) this turn's recomputed
+// request identity (SemanticRequestIdentityOf, the referenced exchange
+// dropped exactly as D-a's own comparison drops it) equals the identity the
+// parent's own snapshot recorded.
 //
 // Uses carryLoadResult (chaos4360_carry.go) so a call already made for the
 // SAME result id within this Investigate call costs no second store round
 // trip; window-only continuations name a DIFFERENT id (D-d requires
 // ParentResultID empty for that shape), so the two mechanisms never share a
 // cache hit, only the cache itself.
-func (e *Engine) resolveConfirmedNeedLedger(ctx context.Context, principal storage.Principal, request InvestigationRequest) confirmedNeedLedgerResult {
+func (e *Engine) resolveConfirmedNeedLedger(ctx context.Context, principal storage.Principal, request InvestigationRequest, binding ResolvedGraphBinding) confirmedNeedLedgerResult {
 	parent := carryParentSeed(request)
 	if parent == "" {
 		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerMissNoReference}
@@ -165,8 +189,24 @@ func (e *Engine) resolveConfirmedNeedLedger(ctx context.Context, principal stora
 	if err != nil {
 		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerMissUnloadable}
 	}
-	if stored.SemanticStateRead != SemanticStateReadAvailable || stored.SemanticState == nil || len(stored.SemanticState.ConfirmedNeeds) == 0 {
+	// UNLOADABLE (malformed/oversized/unsupported/unreported) is a DIFFERENT
+	// fact than EMPTY (a clean read that simply has no ledger): an operator
+	// who can only see "empty" for both cannot tell a live storage/decode
+	// defect apart from the ordinary "nothing confirmed yet" case. Only a
+	// clean, available read falls through to the empty check below.
+	if stored.SemanticStateRead != SemanticStateReadAvailable {
+		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerMissUnloadable}
+	}
+	if stored.SemanticState == nil || len(stored.SemanticState.ConfirmedNeeds) == 0 {
 		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerMissEmpty}
+	}
+	// CHAOS-3898 §2.2 ingress taint gate -- IDENTICAL check walkCarriedKind
+	// applies to the legacy chain walk (structure_axis_carry.go). A rebuild
+	// between turns can change what a remembered kind or anchor even
+	// denotes, so a carrier from another epoch is refused outright rather
+	// than trusted partially.
+	if stored.GraphEpoch == nil || *stored.GraphEpoch != binding.Epoch {
+		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerDroppedStaleGraphEpoch}
 	}
 	// THE SAME-QUESTION CONTAINMENT: the digest below never covers
 	// request.Question, so equal digests prove nothing about whether this is
@@ -195,8 +235,23 @@ func (e *Engine) resolveConfirmedNeedLedger(ctx context.Context, principal stora
 	}
 	entries := make([]confirmedStructureMember, 0, len(stored.SemanticState.ConfirmedNeeds))
 	for _, entry := range stored.SemanticState.ConfirmedNeeds {
+		// SUBJECT_ANCHOR REDEMPTION-TIME REVERIFY: a remembered anchor gets
+		// no other check the way a fresh ancr_ receipt gets one from
+		// canonicalizeStructure's own reverify wiring -- this IS that check,
+		// replayed through the SAME reverifyAnchorClaim dispatch (structure.go)
+		// on the SAME (kind, canonical_id, matched_term_hash) triple, against
+		// the carrier's OWN schema_version. A claim that fails, or that this
+		// deployment has no verifier wired for, is dropped from the ledger --
+		// never the whole ledger, only this one member, exactly as a fresh
+		// redemption's own failure vetoes only its own member.
+		if entry.Member == contractsv1.ContextFabricStructureNeedSubjectAnchor {
+			if !e.reverifyAnchorClaim(ctx, principal, request.RequestedScope, binding, stored.Result.SchemaVersion, entry.AppliedKind, entry.AppliedValue, entry.MatchedTermHash) {
+				continue
+			}
+		}
 		entries = append(entries, confirmedStructureMember{
 			Member: entry.Member, AppliedKind: entry.AppliedKind, AppliedValue: entry.AppliedValue,
+			MatchedTermHash: entry.MatchedTermHash,
 		})
 	}
 	return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerHit, Entries: entries, SourceResultID: parent}
@@ -216,6 +271,17 @@ func (e *Engine) resolveConfirmedNeedLedger(ctx context.Context, principal stora
 // consults them yet); it carries a non-empty value; and this turn's OWN
 // receipts (confirmedThisTurn) did not already confirm that member -- a real
 // receipt this turn always wins and is never argued with.
+//
+// BOTH members are safe to admit here because BOTH already passed every
+// check a fresh carry or receipt passes before ever reaching `remembered`:
+// resolveConfirmedNeedLedger (this file) drops a stale-epoch entry outright,
+// and reverifies subject_anchor specifically through reverifyAnchorClaim --
+// the SAME verifier dispatch canonicalizeStructure's own ancr_ redemption
+// uses -- dropping it alone (never the whole ledger) on a failed or
+// unverifiable claim. expected_kind needs no such reverify: it carries no
+// live tampering vector (canonicalizeStructure's own reverify-field doc
+// comment, structure.go -- "the confirmed kind only narrows a pool, it never
+// stands in for a fact").
 func appliedNeedLedgerEntries(remembered []confirmedStructureMember, confirmedThisTurn []confirmedStructureMember) map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember {
 	thisTurn := map[contractsv1.ContextFabricStructureNeedKind]bool{}
 	for _, c := range confirmedThisTurn {
@@ -260,10 +326,10 @@ func appliedNeedLedgerMembers(applied map[contractsv1.ContextFabricStructureNeed
 func mergeConfirmedNeedsLedger(remembered []confirmedStructureMember, confirmedThisTurn []confirmedStructureMember) []ConfirmedNeedEntry {
 	byMember := map[contractsv1.ContextFabricStructureNeedKind]ConfirmedNeedEntry{}
 	for _, r := range remembered {
-		byMember[r.Member] = ConfirmedNeedEntry{Member: r.Member, AppliedKind: r.AppliedKind, AppliedValue: r.AppliedValue}
+		byMember[r.Member] = ConfirmedNeedEntry{Member: r.Member, AppliedKind: r.AppliedKind, AppliedValue: r.AppliedValue, MatchedTermHash: r.MatchedTermHash}
 	}
 	for _, c := range confirmedThisTurn {
-		byMember[c.Member] = ConfirmedNeedEntry{Member: c.Member, AppliedKind: c.AppliedKind, AppliedValue: c.AppliedValue}
+		byMember[c.Member] = ConfirmedNeedEntry{Member: c.Member, AppliedKind: c.AppliedKind, AppliedValue: c.AppliedValue, MatchedTermHash: c.MatchedTermHash}
 	}
 	var out []ConfirmedNeedEntry
 	for _, member := range contractsv1.ContextFabricStructureNeedKindVocabulary() {
@@ -272,6 +338,74 @@ func mergeConfirmedNeedsLedger(remembered []confirmedStructureMember, confirmedT
 		}
 	}
 	return out
+}
+
+// withoutSupersededConfirmedNeeds drops every member the atomic (org,
+// prior_result_id, member) supersession claim just REFUSED (CHAOS-3927 P4:
+// ErrStructureOfferSuperseded.Members, ports.go) from the ledger about to be
+// captured onto the veto terminal Save persists instead.
+//
+// WHY THIS EXISTS. confirmedNeedsForCapture is computed once, before Save is
+// even attempted, from structureCanon.Confirmed -- the members this turn's
+// OWN receipts claimed. When Save's atomic claim on one of those members
+// loses the race, structureSupersessionVetoResult persists the SAME
+// captureAcceptedReading value the decisive path would have: recordStructureConfirmationOutcome's
+// own doc comment states the invariant this must not violate --
+// "structureCanon.Confirmed genuinely won its claim" is proved ONLY by Save
+// succeeding. A receipt whose claim just lost is caller authority nothing won;
+// persisting it into the ledger unchanged would let a LATER turn, naming this
+// veto result as parent, admit expected_kind (or subject_anchor) as if the
+// claim it was refused for had actually been confirmed.
+func withoutSupersededConfirmedNeeds(entries []ConfirmedNeedEntry, superseded []contractsv1.ContextFabricStructureNeedKind) []ConfirmedNeedEntry {
+	if len(superseded) == 0 {
+		return entries
+	}
+	drop := map[contractsv1.ContextFabricStructureNeedKind]bool{}
+	for _, member := range superseded {
+		drop[member] = true
+	}
+	var out []ConfirmedNeedEntry
+	for _, entry := range entries {
+		if drop[entry.Member] {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+// captureConfirmedNeedLedgerOnly builds the semantic-state capture for a
+// turn that ends BEFORE Interpret (a window veto, the explicit-window
+// confirmation-required gate, or a structure veto): a minimal snapshot
+// carrying this turn's own request identity and outgoing per-need ledger,
+// so a later turn naming one of THESE exits as its direct parent -- the
+// ordinary shape for a window-confirmation redemption -- still finds a
+// ledger to inherit, exactly as it would naming any other parent.
+//
+// WHY THIS EXISTS. resolveConfirmedNeedLedger's own ONE HOP rule (this
+// file's header comment) requires the DIRECT parent to carry an available
+// semantic state; a parent whose own state is absent gives the next turn
+// nothing to inherit, whatever it once confirmed. A mechanical
+// window-confirmation step is not a new question -- persisting only an
+// absence there would break the chain on a turn the caller never changed
+// anything about.
+//
+// WHY THIS IS SAFE UNDER CHAOS-4040. Family=QuestionFamilyUnclassified,
+// Source=QuestionFamilySourceNone is the SAME zero-cost, honest "nothing was
+// classified" value the package already persists for a turn that ran no
+// real interpretation (carriablePlan's own doc comment, chaos4636_plan_carry.go,
+// treats an unclassified family exactly as "nothing to carry") -- building
+// it here does none of the interpreter/graph/fact/synthesis work CHAOS-4040's
+// own run-3 acceptance bar forbids at these three gates: it is a request-shape
+// computation (SemanticRequestIdentityOf) and a slice merge
+// (mergeConfirmedNeedsLedger), nothing more.
+func (e *Engine) captureConfirmedNeedLedgerOnly(request InvestigationRequest, remembered []confirmedStructureMember, confirmedThisTurn []confirmedStructureMember) semanticStateCapture {
+	return captureSemanticState(SemanticStateInput{
+		Outcome:         QuestionFamilyOutcome{Family: QuestionFamilyUnclassified, Source: QuestionFamilySourceNone},
+		FamilyVersion:   QuestionFamilyTableVersion,
+		RequestIdentity: SemanticRequestIdentityOf(request, ""),
+		ConfirmedNeeds:  mergeConfirmedNeedsLedger(remembered, confirmedThisTurn),
+	})
 }
 
 // composeCarriedNeedEntry composes the wire disclosure for a remembered

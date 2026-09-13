@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -73,7 +74,7 @@ func TestResolveConfirmedNeedLedger_HitsWhenIdentityMatches(t *testing.T) {
 	parentResult, parentState, childRequest := parentAndChildForLedgerTest(t)
 	engine := buildCarryTestEngine(t, ledgerTestStore(parentResult, parentState))
 
-	got := engine.resolveConfirmedNeedLedger(context.Background(), acceptancePrincipal(), childRequest)
+	got := engine.resolveConfirmedNeedLedger(context.Background(), acceptancePrincipal(), childRequest, ResolvedGraphBinding{})
 	if got.Outcome != ConfirmedNeedLedgerHit {
 		t.Fatalf("Outcome = %q, want %q", got.Outcome, ConfirmedNeedLedgerHit)
 	}
@@ -92,7 +93,7 @@ func TestResolveConfirmedNeedLedger_DropsOnIdentityChange(t *testing.T) {
 	childRequest.RequestedScope.RepositorySlugs = []string{"full-chaos/dev-health-acr"}
 	engine := buildCarryTestEngine(t, ledgerTestStore(parentResult, parentState))
 
-	got := engine.resolveConfirmedNeedLedger(context.Background(), acceptancePrincipal(), childRequest)
+	got := engine.resolveConfirmedNeedLedger(context.Background(), acceptancePrincipal(), childRequest, ResolvedGraphBinding{})
 	if got.Outcome != ConfirmedNeedLedgerDroppedIdentityChanged {
 		t.Fatalf("Outcome = %q, want %q", got.Outcome, ConfirmedNeedLedgerDroppedIdentityChanged)
 	}
@@ -107,7 +108,7 @@ func TestResolveConfirmedNeedLedger_MissNoReference(t *testing.T) {
 	childRequest.ParentResultID = ""
 	engine := buildCarryTestEngine(t, ledgerTestStore(parentResult, parentState))
 
-	got := engine.resolveConfirmedNeedLedger(context.Background(), acceptancePrincipal(), childRequest)
+	got := engine.resolveConfirmedNeedLedger(context.Background(), acceptancePrincipal(), childRequest, ResolvedGraphBinding{})
 	if got.Outcome != ConfirmedNeedLedgerMissNoReference {
 		t.Fatalf("Outcome = %q, want %q", got.Outcome, ConfirmedNeedLedgerMissNoReference)
 	}
@@ -119,7 +120,7 @@ func TestResolveConfirmedNeedLedger_MissUnloadable(t *testing.T) {
 	request := validInvestigationRequest()
 	request.ParentResultID = "result_does_not_exist"
 
-	got := engine.resolveConfirmedNeedLedger(context.Background(), acceptancePrincipal(), request)
+	got := engine.resolveConfirmedNeedLedger(context.Background(), acceptancePrincipal(), request, ResolvedGraphBinding{})
 	if got.Outcome != ConfirmedNeedLedgerMissUnloadable {
 		t.Fatalf("Outcome = %q, want %q", got.Outcome, ConfirmedNeedLedgerMissUnloadable)
 	}
@@ -154,7 +155,7 @@ func TestResolveConfirmedNeedLedger_MissUnloadableWhenResultsUnconfigured(t *tes
 	request := validInvestigationRequest()
 	request.ParentResultID = "result_turn_two"
 
-	got := engine.resolveConfirmedNeedLedger(context.Background(), acceptancePrincipal(), request)
+	got := engine.resolveConfirmedNeedLedger(context.Background(), acceptancePrincipal(), request, ResolvedGraphBinding{})
 	if got.Outcome != ConfirmedNeedLedgerMissUnloadable {
 		t.Fatalf("Outcome = %q, want %q: a named parent with no Results dependency cannot be a \"no reference\" miss", got.Outcome, ConfirmedNeedLedgerMissUnloadable)
 	}
@@ -191,7 +192,7 @@ func TestResolveConfirmedNeedLedger_DropsOnDifferentQuestion(t *testing.T) {
 	childRequest.Conversation = nil
 	engine := buildCarryTestEngine(t, ledgerTestStore(parentResult, parentState))
 
-	got := engine.resolveConfirmedNeedLedger(context.Background(), acceptancePrincipal(), childRequest)
+	got := engine.resolveConfirmedNeedLedger(context.Background(), acceptancePrincipal(), childRequest, ResolvedGraphBinding{})
 	if got.Outcome != ConfirmedNeedLedgerDroppedQuestionChanged {
 		t.Fatalf("Outcome = %q, want %q: an unrelated question naming the same parent must never inherit its ledger", got.Outcome, ConfirmedNeedLedgerDroppedQuestionChanged)
 	}
@@ -213,7 +214,7 @@ func TestResolveConfirmedNeedLedger_DropsOnIndeterminateQuestion(t *testing.T) {
 	childRequest.Conversation = nil
 	engine := buildCarryTestEngine(t, ledgerTestStore(parentResult, parentState))
 
-	got := engine.resolveConfirmedNeedLedger(context.Background(), acceptancePrincipal(), childRequest)
+	got := engine.resolveConfirmedNeedLedger(context.Background(), acceptancePrincipal(), childRequest, ResolvedGraphBinding{})
 	if got.Outcome != ConfirmedNeedLedgerDroppedQuestionIndeterminate {
 		t.Fatalf("Outcome = %q, want %q", got.Outcome, ConfirmedNeedLedgerDroppedQuestionIndeterminate)
 	}
@@ -225,7 +226,7 @@ func TestResolveConfirmedNeedLedger_MissEmpty(t *testing.T) {
 	parentState.ConfirmedNeeds = []ConfirmedNeedEntry{}
 	engine := buildCarryTestEngine(t, ledgerTestStore(parentResult, parentState))
 
-	got := engine.resolveConfirmedNeedLedger(context.Background(), acceptancePrincipal(), childRequest)
+	got := engine.resolveConfirmedNeedLedger(context.Background(), acceptancePrincipal(), childRequest, ResolvedGraphBinding{})
 	if got.Outcome != ConfirmedNeedLedgerMissEmpty {
 		t.Fatalf("Outcome = %q, want %q", got.Outcome, ConfirmedNeedLedgerMissEmpty)
 	}
@@ -241,21 +242,20 @@ func TestResolveConfirmedNeedLedger_DroppedIncomparable(t *testing.T) {
 	parentState.RequestIdentity = SemanticRequestIdentity{}
 	engine := buildCarryTestEngine(t, ledgerTestStore(parentResult, parentState))
 
-	got := engine.resolveConfirmedNeedLedger(context.Background(), acceptancePrincipal(), childRequest)
+	got := engine.resolveConfirmedNeedLedger(context.Background(), acceptancePrincipal(), childRequest, ResolvedGraphBinding{})
 	if got.Outcome != ConfirmedNeedLedgerDroppedIdentityIncomparable {
 		t.Fatalf("Outcome = %q, want %q", got.Outcome, ConfirmedNeedLedgerDroppedIdentityIncomparable)
 	}
 }
 
 // TestAppliedNeedLedgerEntries_ExcludesWhatThisTurnAlreadyConfirmed pins the
-// single authority every consumer reads: a real receipt this turn for a
-// member always wins and the ledger's own entry for that member never
+// single authority every consumer reads: a real receipt this turn for
+// expected_kind always wins and the ledger's own entry for that member never
 // applies, regardless of value.
 func TestAppliedNeedLedgerEntries_ExcludesWhatThisTurnAlreadyConfirmed(t *testing.T) {
 	t.Parallel()
 	remembered := []confirmedStructureMember{
 		{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectTeam)},
-		{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: contractsv1.ContextFabricSubjectTeam, AppliedValue: "team_remembered"},
 	}
 	confirmedThisTurn := []confirmedStructureMember{
 		{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectProject)},
@@ -264,8 +264,117 @@ func TestAppliedNeedLedgerEntries_ExcludesWhatThisTurnAlreadyConfirmed(t *testin
 	if _, ok := got[contractsv1.ContextFabricStructureNeedExpectedKind]; ok {
 		t.Fatalf("applied = %#v, expected_kind must be excluded: this turn's own receipt already confirmed it", got)
 	}
-	if entry, ok := got[contractsv1.ContextFabricStructureNeedSubjectAnchor]; !ok || entry.AppliedValue != "team_remembered" {
-		t.Fatalf("applied = %#v, want subject_anchor=team_remembered (untouched this turn)", got)
+}
+
+// TestAppliedNeedLedgerEntries_AppliesSubjectAnchor pins the other half of
+// TestAppliedNeedLedgerEntries_ExcludesWhatThisTurnAlreadyConfirmed: a
+// remembered subject_anchor DOES apply once it reaches this map -- by the
+// time it does, resolveConfirmedNeedLedger has already reverified it through
+// reverifyAnchorClaim (this file's own header comment), so
+// appliedNeedLedgerEntries trusts it exactly as it trusts expected_kind,
+// without re-deriving that check.
+func TestAppliedNeedLedgerEntries_AppliesSubjectAnchor(t *testing.T) {
+	t.Parallel()
+	remembered := []confirmedStructureMember{
+		{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: contractsv1.ContextFabricSubjectTeam, AppliedValue: "team_remembered"},
+	}
+	got := appliedNeedLedgerEntries(remembered, nil)
+	entry, ok := got[contractsv1.ContextFabricStructureNeedSubjectAnchor]
+	if !ok || entry.AppliedValue != "team_remembered" {
+		t.Fatalf("applied = %#v, want subject_anchor=team_remembered", got)
+	}
+}
+
+// TestResolveConfirmedNeedLedger_DropsUnreverifiableAnchorKeepsOtherMembers
+// pins the security boundary: a remembered subject_anchor is reverified
+// through the SAME choke point (reverifyAnchorClaim) a fresh ancr_ receipt
+// redemption already goes through, on the carrier's OWN
+// schema_version -- an unwired verifier (the fail-closed default,
+// AnchorVerifier's own doc comment) drops JUST that member, never the whole
+// ledger: expected_kind survives untouched beside it.
+func TestResolveConfirmedNeedLedger_DropsUnreverifiableAnchorKeepsOtherMembers(t *testing.T) {
+	t.Parallel()
+	parentResult, parentState, childRequest := parentAndChildForLedgerTest(t)
+	parentState.ConfirmedNeeds = append(parentState.ConfirmedNeeds, ConfirmedNeedEntry{
+		Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: contractsv1.ContextFabricSubjectTeam,
+		AppliedValue: "team_stale", MatchedTermHash: "hash_abc123",
+	})
+	engine := buildCarryTestEngine(t, ledgerTestStore(parentResult, parentState))
+	// buildCarryTestEngine wires no anchorVerifier/anchorMembershipVerifier --
+	// the fail-closed default every reverify dependency in this package uses.
+
+	got := engine.resolveConfirmedNeedLedger(context.Background(), acceptancePrincipal(), childRequest, ResolvedGraphBinding{})
+	if got.Outcome != ConfirmedNeedLedgerHit {
+		t.Fatalf("Outcome = %q, want %q: an unreverifiable anchor drops only itself, not the whole ledger", got.Outcome, ConfirmedNeedLedgerHit)
+	}
+	for _, entry := range got.Entries {
+		if entry.Member == contractsv1.ContextFabricStructureNeedSubjectAnchor {
+			t.Fatalf("Entries = %#v, want subject_anchor dropped: no verifier is wired to reverify it", got.Entries)
+		}
+	}
+	want := []confirmedStructureMember{{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectTeam)}}
+	if !reflect.DeepEqual(got.Entries, want) {
+		t.Fatalf("Entries = %#v, want %#v", got.Entries, want)
+	}
+}
+
+// TestResolveConfirmedNeedLedger_AdmitsAnchorWhenTheVerifierConfirmsIt is the
+// positive control: a wired AnchorVerifier that reports the claim still
+// valid lets the remembered subject_anchor through, carrying the SAME
+// matched_term_hash the resolver replayed to it.
+func TestResolveConfirmedNeedLedger_AdmitsAnchorWhenTheVerifierConfirmsIt(t *testing.T) {
+	t.Parallel()
+	parentResult, parentState, childRequest := parentAndChildForLedgerTest(t)
+	parentResult.SchemaVersion = InvestigationResultSchemaV1
+	parentState.ConfirmedNeeds = append(parentState.ConfirmedNeeds, ConfirmedNeedEntry{
+		Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: contractsv1.ContextFabricSubjectTeam,
+		AppliedValue: "team_confirmed", MatchedTermHash: "hash_abc123",
+	})
+	store := ledgerTestStore(parentResult, parentState)
+	var gotOrgID, gotCanonicalID, gotMatchedTermHash string
+	var gotKind contractsv1.ContextFabricSubjectKind
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			t.Fatal("Interpret must not be called by a direct resolveConfirmedNeedLedger test")
+			return InterpretedQuestion{}, nil
+		}),
+		Graph: neverProjectedGraphReader{t: t},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			t.Fatal("ReadFacts must not be called by a direct resolveConfirmedNeedLedger test")
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			t.Fatal("Synthesize must not be called by a direct resolveConfirmedNeedLedger test")
+			return InvestigationResult{}, nil
+		}),
+		Results: store,
+		AnchorVerifier: func(ctx context.Context, orgID string, kind contractsv1.ContextFabricSubjectKind, canonicalID, matchedTermHash string) (bool, AnchorVerificationReason) {
+			gotOrgID, gotKind, gotCanonicalID, gotMatchedTermHash = orgID, kind, canonicalID, matchedTermHash
+			return true, AnchorVerificationValid
+		},
+	}, EngineOptions{ServiceVersion: "chaos-5639-unit-test", Now: func() time.Time { return time.Unix(400, 0).UTC() }, NewResultID: func() string { return "result_chaos_5639_unit_test" }})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+
+	got := engine.resolveConfirmedNeedLedger(context.Background(), acceptancePrincipal(), childRequest, ResolvedGraphBinding{})
+	if got.Outcome != ConfirmedNeedLedgerHit {
+		t.Fatalf("Outcome = %q, want %q", got.Outcome, ConfirmedNeedLedgerHit)
+	}
+	found := false
+	for _, entry := range got.Entries {
+		if entry.Member == contractsv1.ContextFabricStructureNeedSubjectAnchor {
+			found = true
+			if entry.AppliedValue != "team_confirmed" || entry.AppliedKind != contractsv1.ContextFabricSubjectTeam {
+				t.Fatalf("anchor entry = %#v, want the confirmed value/kind through unchanged", entry)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("Entries = %#v, want subject_anchor admitted: the verifier confirmed the claim", got.Entries)
+	}
+	if gotOrgID != acceptancePrincipal().OrgID || gotKind != contractsv1.ContextFabricSubjectTeam || gotCanonicalID != "team_confirmed" || gotMatchedTermHash != "hash_abc123" {
+		t.Fatalf("AnchorVerifier called with (org=%q kind=%q canonical_id=%q matched_term_hash=%q), want the ledger's own persisted values replayed exactly", gotOrgID, gotKind, gotCanonicalID, gotMatchedTermHash)
 	}
 }
 
@@ -277,12 +386,12 @@ func TestAppliedNeedLedgerEntries_ExcludesWhatThisTurnAlreadyConfirmed(t *testin
 func TestAppliedNeedLedgerEntries_ExcludesEmptyValuesAndUnappliableMembers(t *testing.T) {
 	t.Parallel()
 	remembered := []confirmedStructureMember{
-		{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: contractsv1.ContextFabricSubjectTeam, AppliedValue: ""},
+		{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: ""},
 		{Member: contractsv1.ContextFabricStructureNeedSubjectHandle, AppliedKind: contractsv1.ContextFabricSubjectPullRequest, AppliedValue: "42"},
 	}
 	got := appliedNeedLedgerEntries(remembered, nil)
 	if len(got) != 0 {
-		t.Fatalf("applied = %#v, want empty: an empty-valued anchor and an unappliable member must both be excluded", got)
+		t.Fatalf("applied = %#v, want empty: an empty-valued kind and an unappliable member must both be excluded", got)
 	}
 }
 
@@ -506,4 +615,183 @@ func TestRecordConfirmedNeedLedger_ForwardsSourceAndAppliedKinds(t *testing.T) {
 	if len(got.appliedMembers) != 2 {
 		t.Fatalf("appliedMembers = %v, want both members reported", got.appliedMembers)
 	}
+}
+
+// TestResolveConfirmedNeedLedger_DropsOnStaleGraphEpoch pins the CHAOS-3898
+// §2.2 ingress taint gate applied to the ledger: a parent saved at a
+// DIFFERENT graph epoch than this turn's own binding must never
+// admit its ledger, exactly as walkCarriedKind already refuses a stale-epoch
+// carrier for the legacy chain walk (structure_axis_carry.go).
+func TestResolveConfirmedNeedLedger_DropsOnStaleGraphEpoch(t *testing.T) {
+	t.Parallel()
+	parentResult, parentState, childRequest := parentAndChildForLedgerTest(t)
+	store := ledgerTestStore(parentResult, parentState)
+	staleEpoch := int64(7)
+	store.graphEpoch = &staleEpoch
+	engine := buildCarryTestEngine(t, store)
+
+	got := engine.resolveConfirmedNeedLedger(context.Background(), acceptancePrincipal(), childRequest, ResolvedGraphBinding{Epoch: 8})
+	if got.Outcome != ConfirmedNeedLedgerDroppedStaleGraphEpoch {
+		t.Fatalf("Outcome = %q, want %q: a parent from a different graph epoch must never admit its ledger", got.Outcome, ConfirmedNeedLedgerDroppedStaleGraphEpoch)
+	}
+	if got.Entries != nil {
+		t.Fatalf("Entries = %#v, want nil on a stale-epoch drop", got.Entries)
+	}
+	// Same epoch on both sides -- the ordinary case every other test in this
+	// file exercises -- must still hit.
+	if got := engine.resolveConfirmedNeedLedger(context.Background(), acceptancePrincipal(), childRequest, ResolvedGraphBinding{Epoch: 7}); got.Outcome != ConfirmedNeedLedgerHit {
+		t.Fatalf("Outcome = %q, want %q when the epochs agree", got.Outcome, ConfirmedNeedLedgerHit)
+	}
+}
+
+// TestResolveConfirmedNeedLedger_MissUnloadableForMalformedSnapshot pins the
+// distinction Info telemetry must preserve: an unreadable snapshot
+// (malformed, oversized, unsupported-version, or unreported) is a DIFFERENT
+// fact than a clean read that simply has no ledger -- miss_unloadable, never
+// miss_empty.
+func TestResolveConfirmedNeedLedger_MissUnloadableForMalformedSnapshot(t *testing.T) {
+	t.Parallel()
+	for _, status := range []SemanticStateReadStatus{
+		SemanticStateReadMalformed, SemanticStateReadOversized, SemanticStateReadUnsupportedVersion,
+	} {
+		status := status
+		t.Run(string(status), func(t *testing.T) {
+			t.Parallel()
+			parentResult, parentState, childRequest := parentAndChildForLedgerTest(t)
+			store := ledgerTestStore(parentResult, parentState)
+			store.stateReads = map[string]SemanticStateReadStatus{parentResult.ResultID: status}
+			engine := buildCarryTestEngine(t, store)
+
+			got := engine.resolveConfirmedNeedLedger(context.Background(), acceptancePrincipal(), childRequest, ResolvedGraphBinding{})
+			if got.Outcome != ConfirmedNeedLedgerMissUnloadable {
+				t.Fatalf("Outcome = %q, want %q for a %s snapshot -- not miss_empty, which means a CLEAN read with nothing confirmed", got.Outcome, ConfirmedNeedLedgerMissUnloadable, status)
+			}
+		})
+	}
+}
+
+// TestWithoutSupersededConfirmedNeeds_DropsOnlyTheRefusedMember pins the
+// invariant: a receipt whose atomic supersession claim just lost the race
+// must never reach the veto result's own persisted
+// ledger, or a later turn naming that veto result as parent would admit a
+// confirmation this exact Save call refused. Every OTHER member survives
+// untouched.
+func TestWithoutSupersededConfirmedNeeds_DropsOnlyTheRefusedMember(t *testing.T) {
+	t.Parallel()
+	entries := []ConfirmedNeedEntry{
+		{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectTeam)},
+		{Member: contractsv1.ContextFabricStructureNeedSubjectHandle, AppliedKind: contractsv1.ContextFabricSubjectPullRequest, AppliedValue: "42"},
+	}
+	got := withoutSupersededConfirmedNeeds(entries, []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind})
+	want := []ConfirmedNeedEntry{{Member: contractsv1.ContextFabricStructureNeedSubjectHandle, AppliedKind: contractsv1.ContextFabricSubjectPullRequest, AppliedValue: "42"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("withoutSupersededConfirmedNeeds() = %#v, want %#v", got, want)
+	}
+	if got := withoutSupersededConfirmedNeeds(entries, nil); !reflect.DeepEqual(got, entries) {
+		t.Fatalf("withoutSupersededConfirmedNeeds(nil) = %#v, want the input unchanged: %#v", got, entries)
+	}
+}
+
+// capturingKindGraphReader is graphReaderStub's own shape plus the ONE thing
+// it discards (engine_test.go's own graphReaderStub.ResolveSubjects takes
+// *ConfirmedExpectedKind as `_`): the confirmed kind actually threaded into
+// ResolveSubjects, so a test can prove a remembered kind reached the real
+// resolution parameter, not merely that some internal helper computed one.
+type capturingKindGraphReader struct {
+	resolution      SubjectResolution
+	bases           CommitBasisSet
+	confirmedKinds  []*contractsv1.ContextFabricSubjectKind
+	confirmedKindsN int
+}
+
+func (g *capturingKindGraphReader) ResolveInvestigationBinding(context.Context, storage.Principal) (ResolvedGraphBinding, error) {
+	return ResolvedGraphBinding{GraphKey: "capturing-kind-key", Epoch: 0}, nil
+}
+
+func (g *capturingKindGraphReader) ResolveSubjects(_ context.Context, _ storage.Principal, _ InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding, confirmedKind *ConfirmedExpectedKind, _ *ConfirmedAnchorSelection, _ *QuestionFrame, _ SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+	g.confirmedKindsN++
+	if confirmedKind != nil {
+		kind := confirmedKind.Kind
+		g.confirmedKinds = append(g.confirmedKinds, &kind)
+	} else {
+		g.confirmedKinds = append(g.confirmedKinds, nil)
+	}
+	return g.resolution, StructureOfferMaterial{}, g.bases, nil, nil
+}
+
+func (g *capturingKindGraphReader) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {
+	return emptyGraphContext(), nil
+}
+
+// TestInvestigate_ConfirmedNeedLedgerAppliesThroughThePublicEntryPoint closes
+// a gap every other test in this file leaves open: they call
+// resolveConfirmedNeedLedger/appliedNeedLedgerEntries/confirmedAnchorSelection
+// directly, so a defect in how Investigate WIRES them together (an argument
+// swapped, a gate ordered wrong, a value dropped between the ledger consult
+// and the real ResolveSubjects call) could pass the whole package suite
+// while the feature does nothing for a real caller. This test drives the
+// SAME turn-two-confirms/turn-three-continues scenario
+// TestResolveConfirmedNeedLedger_HitsWhenIdentityMatches pins, but through
+// Engine.Investigate itself: turn three sends NO receipt at all, and the
+// remembered expected_kind=team must reach graph.ResolveSubjects's own
+// confirmed-kind parameter.
+func TestInvestigate_ConfirmedNeedLedgerAppliesThroughThePublicEntryPoint(t *testing.T) {
+	t.Parallel()
+	parentResult, parentState, childRequest := parentAndChildForLedgerTest(t)
+	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+	store := ledgerTestStore(parentResult, parentState)
+	graph := &capturingKindGraphReader{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}},
+		bases:      provenCommitBases(project),
+	}
+	fresh := validInvestigationResult()
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+		}),
+		Graph: graph,
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{}}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return fresh, nil
+		}),
+		Results: store,
+	}, EngineOptions{
+		ServiceVersion: "chaos-5639-e2e-test",
+		Now:            func() time.Time { return time.Unix(500, 0).UTC() },
+		NewResultID:    func() string { return "result_turn_three" },
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+
+	// request.Validate() (called from Investigate, never from a direct
+	// resolveConfirmedNeedLedger call the way every other test in this file
+	// exercises it) requires each conversation turn to carry a turn id and a
+	// timestamp -- parentAndChildForLedgerTest's fixture omits both because
+	// none of its other callers reach Validate.
+	for i := range childRequest.Conversation {
+		childRequest.Conversation[i].TurnID = fmt.Sprintf("turn_%d", i)
+		childRequest.Conversation[i].CreatedAt = time.Unix(int64(490+i), 0).UTC()
+	}
+
+	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), childRequest)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if graph.confirmedKindsN != 1 {
+		t.Fatalf("ResolveSubjects called %d times, want exactly 1", graph.confirmedKindsN)
+	}
+	if got := graph.confirmedKinds[0]; got == nil || *got != contractsv1.ContextFabricSubjectTeam {
+		t.Fatalf("ResolveSubjects saw confirmed kind %v, want team -- the remembered ledger from turn two must reach the real resolution call with NO receipt redeemed on turn three", got)
+	}
+	if store.savedSemantic == nil || store.savedSemantic.State == nil {
+		t.Fatalf("fixture defect: turn three must have saved a semantic state")
+	}
+	wantSaved := []ConfirmedNeedEntry{{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectTeam)}}
+	if !reflect.DeepEqual(store.savedSemantic.State.ConfirmedNeeds, wantSaved) {
+		t.Fatalf("saved ConfirmedNeeds = %#v, want %#v: the ledger must carry forward for a turn four to consult", store.savedSemantic.State.ConfirmedNeeds, wantSaved)
+	}
+	_ = result
 }

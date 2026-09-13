@@ -1364,6 +1364,19 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// also loads the same prior result three times -- and that turn is
 	// precisely the one a struggling clarification chain keeps landing on.
 	carryCtx := withCarryResultCache(ctx)
+	// CHAOS-5639: the per-need confirmation ledger, resolved ONCE per
+	// Investigate call, here -- before every gate that can end the turn
+	// early, not just before the ones that call ResolveSubjects, so every
+	// exit below can capture it forward (captureConfirmedNeedLedgerOnly)
+	// rather than only the decisive path. It costs none of the
+	// interpreter/graph/fact/synthesis work CHAOS-4040's own run-3
+	// acceptance bar forbids at the two window gates immediately below:
+	// resolveConfirmedNeedLedger only reads the ONE parent this request
+	// names through the store, through the SAME choke points
+	// (carryLoadResult's memo, carryOriginSameQuestionVerdict) every other
+	// carry axis in this package already pays for at this exact point.
+	confirmedNeedLedger := e.resolveConfirmedNeedLedger(carryCtx, principal, request, binding)
+	remembered := confirmedNeedLedger.Entries
 	windowCanon := e.canonicalizeEvidenceWindow(carryCtx, principal, request)
 	if windowCanon.Veto != windowVetoNone {
 		// D-e: a window veto is CHAOS-5271's mechanism, not this one.
@@ -1379,7 +1392,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// extra (structureCanon itself, which DOES need the store for a
 		// receipt-carrying request, still has not run and is not attempted
 		// here).
-		return e.windowVetoResult(ctx, principal, request, windowCanon.Veto, nil, windowCanon.StaleEntry, binding, nil, e.preInterpretExplicitStructure(request), nil, ancestryRoot(request, receiptsNotYetValidated(), vetoingWindowReceiptID(request, windowCanon.Veto)), absentSemanticState(SemanticStateAbsenceTurnEndedBeforeInterpretation))
+		return e.windowVetoResult(ctx, principal, request, windowCanon.Veto, nil, windowCanon.StaleEntry, binding, nil, e.preInterpretExplicitStructure(request), nil, ancestryRoot(request, receiptsNotYetValidated(), vetoingWindowReceiptID(request, windowCanon.Veto)), e.captureConfirmedNeedLedgerOnly(request, remembered, nil))
 	}
 	// CHAOS-4040 (sol-max ruling 2026-08-21, "GATE ALL INFERRED WINDOWS
 	// out of decisive terminals"): an MCP bare explicit evidence_window
@@ -1405,7 +1418,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// "unavailable"; the tier-ordering fact composeWindowExpandOption
 		// needs (pickWindowExpandTarget) is available from windowCanon.Effective
 		// alone, unlike gate 2's own offers-only read.
-		return e.windowConfirmationRequiredResult(ctx, principal, request, nil, *windowCanon.Effective, nil, WindowCanonicalizationGatedExplicitUnconfirmed, binding, StructureOfferMaterial{}, false, nil, nil, nil, ancestryRoot(request, receiptsNotYetValidated()), absentSemanticState(SemanticStateAbsenceTurnEndedBeforeInterpretation))
+		return e.windowConfirmationRequiredResult(ctx, principal, request, nil, *windowCanon.Effective, nil, WindowCanonicalizationGatedExplicitUnconfirmed, binding, StructureOfferMaterial{}, false, nil, nil, nil, ancestryRoot(request, receiptsNotYetValidated()), e.captureConfirmedNeedLedgerOnly(request, remembered, nil))
 	}
 
 	// CHAOS-3900 P1 (pivot-intent design brief §2.1): canonicalize
@@ -1460,29 +1473,24 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// refuses the receipt its own veto DISPROVED and this path did not.
 		// Same shape, one member over -- recording a disproved receipt as
 		// ancestry guarantees the next turn's walk stops at miss_unloadable.
-		return e.structureVetoResult(ctx, principal, request, structureCanon.Veto, echoEntries, binding, nil, nil, ancestryRoot(request, receiptsNotYetValidated(), vetoingStructureReceiptID(request, structureCanon.Veto)), absentSemanticState(SemanticStateAbsenceTurnEndedBeforeInterpretation))
+		return e.structureVetoResult(ctx, principal, request, structureCanon.Veto, echoEntries, binding, nil, nil, ancestryRoot(request, receiptsNotYetValidated(), vetoingStructureReceiptID(request, structureCanon.Veto)), e.captureConfirmedNeedLedgerOnly(request, remembered, structureCanon.Confirmed))
 	}
 
-	// CHAOS-5639: the per-need confirmation ledger, resolved once per
-	// Investigate call, ahead of everything that could apply it (the
-	// CHAOS-4234 gate below, and the decisive ResolveSubjects call further
-	// down both read `appliedNeeds`). Computed from structureCanon.Confirmed
-	// alone, never joined into it -- see chaos5639_confirmed_need.go's own
-	// header comment for why: DP11's reuse bypass (reuseBypassReason, right
-	// below) keys on that exact slice, and a turn carrying only a remembered
-	// need must not take it.
-	confirmedNeedLedger := e.resolveConfirmedNeedLedger(carryCtx, principal, request)
-	remembered := confirmedNeedLedger.Entries
-	// appliedNeeds is the SINGLE authority for "does this remembered entry
-	// apply this turn" -- every consumer below reads it rather than
-	// re-deriving the check, so none of them can disagree about what applied
-	// (chaos5639_confirmed_need.go's own doc comment).
+	// CHAOS-5639: confirmedNeedLedger/remembered were already resolved above,
+	// before the two window gates -- see that call site's own comment. What
+	// depends on structureCanon.Confirmed (not known until just above) is
+	// computed here instead. appliedNeeds is the SINGLE authority for "does
+	// this remembered entry apply this turn" -- every consumer below reads
+	// it rather than re-deriving the check, so none of them can disagree
+	// about what applied (chaos5639_confirmed_need.go's own doc comment).
 	appliedNeeds := appliedNeedLedgerEntries(remembered, structureCanon.Confirmed)
 	e.recordConfirmedNeedLedger(ctx, principal, confirmedNeedLedger, appliedNeeds)
 	// The OUTGOING ledger for whatever result this turn saves: this turn's
 	// own confirmations over whatever remembered still admits. Computed once
-	// so every captureAcceptedReading call site (and the pre-interpretation
-	// exits, which use absentSemanticState and so never need it) agrees.
+	// so every captureAcceptedReading call site from here on agrees; the
+	// three pre-interpretation exits above compute their own version through
+	// captureConfirmedNeedLedgerOnly instead, since structureCanon.Confirmed
+	// does not exist yet at two of them.
 	confirmedNeedsForCapture := mergeConfirmedNeedsLedger(remembered, structureCanon.Confirmed)
 
 	// CHAOS-3782 answer reuse. This MUST run before Interpret -- that
@@ -3246,7 +3254,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// Investigate rather than by fixing the two that were
 				// reported -- which is the whole point of doing this as a
 				// sweep: the class was "post-plan exits", never "this exit".
-				superseding, supersededErr := e.structureSupersessionVetoResult(ctx, principal, request, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture))
+				// CHAOS-5639: the members named in superseded.Members just
+				// lost their atomic claim -- never capture them into the
+				// veto result's own ledger, or a later turn naming THIS
+				// result as parent would admit a confirmation this exact
+				// Save call just refused (withoutSupersededConfirmedNeeds's
+				// own doc comment, chaos5639_confirmed_need.go).
+				superseding, supersededErr := e.structureSupersessionVetoResult(ctx, principal, request, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, withoutSupersededConfirmedNeeds(confirmedNeedsForCapture, superseded.Members)))
 				return superseding, supersededErr
 			}
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
