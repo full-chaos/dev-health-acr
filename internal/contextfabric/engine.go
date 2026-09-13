@@ -1475,9 +1475,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	remembered := confirmedNeedLedger.Entries
 	// appliedNeeds is the SINGLE authority for "does this remembered entry
 	// apply this turn" -- every consumer below reads it rather than
-	// re-deriving the check (chaos5639_confirmed_need.go's own doc comment
-	// on why a second, independent check is the defect an adversarial
-	// review found).
+	// re-deriving the check, so none of them can disagree about what applied
+	// (chaos5639_confirmed_need.go's own doc comment).
 	appliedNeeds := appliedNeedLedgerEntries(remembered, structureCanon.Confirmed)
 	e.recordConfirmedNeedLedger(ctx, principal, confirmedNeedLedger, appliedNeeds)
 	// The OUTGOING ledger for whatever result this turn saves: this turn's
@@ -2211,8 +2210,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// CHAOS-5639: appliedNeeds/confirmedNeedLedger.SourceResultID thread
 		// the per-need confirmation ledger into the SAME gated producer the
 		// legacy walk uses -- resolveCarriedKind checks the ledger first,
-		// inside itself, never in a separate helper (its own doc comment
-		// names the adversarial finding this closes).
+		// inside itself, never in a separate helper, so the value it returns
+		// always passes through statedExpectedKindThisTurn and applyCarryDrop
+		// (resolveCarriedKind's own doc comment).
 		kindCarry = e.resolveCarriedKind(carryCtx, principal, request, priorValidatedReceipts, binding, appliedNeeds, confirmedNeedLedger.SourceResultID)
 		// Compare and drop BEFORE the disclosure is composed and before the
 		// outcome is recorded, so all three views agree.

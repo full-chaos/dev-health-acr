@@ -176,18 +176,18 @@ func TestValidConfirmedNeedLedgerOutcome_Membership(t *testing.T) {
 	}
 }
 
-// TestResolveConfirmedNeedLedger_DropsOnDifferentQuestion is the direct
-// regression pin for an adversarial review's P1-1: the request-identity
-// digest never covers request.Question, so a same-question check is
-// required BESIDE it, not implied by it. Without this check, a turn naming
-// a parent result but asking something else entirely would inherit that
-// parent's confirmed need.
+// TestResolveConfirmedNeedLedger_DropsOnDifferentQuestion pins the
+// same-question containment directly: the request-identity digest never
+// covers request.Question, so a same-question check is required BESIDE it,
+// not implied by it. Without this check, a turn naming a parent result but
+// asking something else entirely would inherit that parent's confirmed need.
 func TestResolveConfirmedNeedLedger_DropsOnDifferentQuestion(t *testing.T) {
 	t.Parallel()
 	parentResult, parentState, childRequest := parentAndChildForLedgerTest(t)
 	childRequest.Question = "Which repositories does the Platform team own?"
-	// No conversation at all -- the API shape the review proved was worst
-	// affected: a caller that passes only parent_result_id.
+	// No conversation at all -- an ordinary shape for a turn that only names
+	// a parent, and the one that reduces the digest to scope and options
+	// alone with nothing else to disambiguate the question by.
 	childRequest.Conversation = nil
 	engine := buildCarryTestEngine(t, ledgerTestStore(parentResult, parentState))
 
@@ -270,11 +270,10 @@ func TestAppliedNeedLedgerEntries_ExcludesWhatThisTurnAlreadyConfirmed(t *testin
 }
 
 // TestAppliedNeedLedgerEntries_ExcludesEmptyValuesAndUnappliableMembers pins
-// two adversarial-review findings at once: an entry with no value never
-// applies (P2-1: confirmedAnchorSelection must never see an empty-but-non-nil
-// selection), and a member with no resolution parameter to reach
-// (subject_handle here) is never reported as applied even though the ledger
-// may still store it.
+// two invariants at once: an entry with no value never applies (a resolution
+// parameter must never receive an empty-but-non-nil selection), and a member
+// with no resolution parameter to reach (subject_handle here) is never
+// reported as applied even though the ledger may still store it.
 func TestAppliedNeedLedgerEntries_ExcludesEmptyValuesAndUnappliableMembers(t *testing.T) {
 	t.Parallel()
 	remembered := []confirmedStructureMember{
@@ -292,10 +291,8 @@ func TestAppliedNeedLedgerEntries_ExcludesEmptyValuesAndUnappliableMembers(t *te
 // more precise, identity-verified mechanism M2 built to replace it for a
 // directly-referenced parent, and it is checked FIRST, inside the SAME gated
 // producer TestCarryGateClosure_EveryHitIsConstructedInsideAGatedProducer
-// requires. An earlier version of this file built a separate helper instead;
-// an adversarial review proved that let a remembered kind override the
-// caller's own explicit statement and survive a disagreement the legacy walk
-// would have dropped -- see resolveCarriedKind's own doc comment.
+// requires -- see resolveCarriedKind's own doc comment for why the ledger
+// consult has to live there rather than in a separate helper.
 func TestResolveCarriedKind_ARememberedEntryWinsOverAnExistingLegacyCarryHit(t *testing.T) {
 	t.Parallel()
 	applied := map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember{
@@ -313,11 +310,11 @@ func TestResolveCarriedKind_ARememberedEntryWinsOverAnExistingLegacyCarryHit(t *
 }
 
 // TestKindCarryGates_ARememberedKindNeverArguesWithTheCallersOwnStatement
-// reproduces an adversarial review's P1-2/P1-3 findings directly against the
-// gates a remembered kind must flow through in engine.go: it never overrides
-// what the caller stated THIS turn (statedExpectedKindThisTurn), and a
-// subject-axis receipt naming a different kind still stands it down
-// (applyCarryDrop) exactly as it would a legacy-walk value.
+// pins the two gates a remembered kind must flow through in engine.go: it
+// never overrides what the caller stated THIS turn
+// (statedExpectedKindThisTurn), and a subject-axis receipt naming a
+// different kind still stands it down (applyCarryDrop) exactly as it would a
+// legacy-walk value.
 func TestKindCarryGates_ARememberedKindNeverArguesWithTheCallersOwnStatement(t *testing.T) {
 	t.Parallel()
 	applied := map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember{
@@ -437,5 +434,76 @@ func TestReuseBypassReason_ARememberedNeedNeverReportsAsConfirmedStructure(t *te
 	got := reuseBypassReason(request, canon)
 	if got != AnswerReuseBypassPriorResultReference {
 		t.Fatalf("reuseBypassReason() = %q, want %q: a remembered-only turn must never report the confirmed-structure bypass", got, AnswerReuseBypassPriorResultReference)
+	}
+}
+
+// TestComposeCarriedNeedEntry_DisclosesAnAppliedAnchorNeverASilentOne pins the
+// anchor-axis disclosure directly: present in applied -> a valid, carried
+// entry; absent -> nil, never a guessed one.
+func TestComposeCarriedNeedEntry_DisclosesAnAppliedAnchorNeverASilentOne(t *testing.T) {
+	t.Parallel()
+	applied := map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember{
+		contractsv1.ContextFabricStructureNeedSubjectAnchor: {Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedValue: "team_remembered"},
+	}
+	got := composeCarriedNeedEntry(contractsv1.ContextFabricStructureNeedSubjectAnchor, applied, "result_parent")
+	want := &contractsv1.ContextFabricConfirmedStructureEntry{
+		Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedValue: "team_remembered",
+		Source: contractsv1.ContextFabricStructureSourceCarried, PriorResultID: "result_parent",
+		Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionApplied,
+	}
+	if got == nil || *got != *want {
+		t.Fatalf("composeCarriedNeedEntry() = %#v, want %#v", got, want)
+	}
+	if err := got.Validate(); err != nil {
+		t.Fatalf("composeCarriedNeedEntry().Validate() = %v, want nil", err)
+	}
+	if got := composeCarriedNeedEntry(contractsv1.ContextFabricStructureNeedSubjectAnchor, nil, "result_parent"); got != nil {
+		t.Fatalf("composeCarriedNeedEntry(no applied entry) = %#v, want nil", got)
+	}
+}
+
+// TestObservableAppliedNeedMembers pins the log-line rendering: "none" for
+// zero applied members (never an empty, key-shaped string), a comma join
+// otherwise.
+func TestObservableAppliedNeedMembers(t *testing.T) {
+	t.Parallel()
+	if got := observableAppliedNeedMembers(nil); got != "none" {
+		t.Fatalf("observableAppliedNeedMembers(nil) = %q, want %q", got, "none")
+	}
+	got := observableAppliedNeedMembers([]contractsv1.ContextFabricStructureNeedKind{
+		contractsv1.ContextFabricStructureNeedExpectedKind, contractsv1.ContextFabricStructureNeedSubjectAnchor,
+	})
+	if want := "expected_kind,subject_anchor"; got != want {
+		t.Fatalf("observableAppliedNeedMembers() = %q, want %q", got, want)
+	}
+}
+
+// TestRecordConfirmedNeedLedger_ForwardsSourceAndAppliedKinds pins the
+// telemetry line's own content end to end: outcome, source_result_id and
+// both applied kind values reach the sink exactly as computed.
+func TestRecordConfirmedNeedLedger_ForwardsSourceAndAppliedKinds(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Results:   &staticResultStore{results: map[string]InvestigationResult{}},
+		Telemetry: telemetry,
+	})
+	applied := map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember{
+		contractsv1.ContextFabricStructureNeedExpectedKind:  {Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectTeam)},
+		contractsv1.ContextFabricStructureNeedSubjectAnchor: {Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: contractsv1.ContextFabricSubjectProject, AppliedValue: "p"},
+	}
+	ledger := confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerHit, SourceResultID: "result_parent"}
+	engine.recordConfirmedNeedLedger(context.Background(), acceptancePrincipal(), ledger, applied)
+
+	if len(telemetry.confirmedNeedLedgers) != 1 {
+		t.Fatalf("confirmedNeedLedgers = %#v, want exactly one record", telemetry.confirmedNeedLedgers)
+	}
+	got := telemetry.confirmedNeedLedgers[0]
+	if got.outcome != ConfirmedNeedLedgerHit || got.sourceResultID != "result_parent" ||
+		got.appliedExpectedKind != contractsv1.ContextFabricSubjectTeam || got.appliedAnchorKind != contractsv1.ContextFabricSubjectProject {
+		t.Fatalf("recorded = %#v, want outcome=hit source=result_parent expected_kind=team anchor_kind=project", got)
+	}
+	if len(got.appliedMembers) != 2 {
+		t.Fatalf("appliedMembers = %v, want both members reported", got.appliedMembers)
 	}
 }

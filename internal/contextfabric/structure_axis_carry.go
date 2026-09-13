@@ -170,9 +170,7 @@ type kindCarryResult struct {
 // Constructed HERE, inside this function, deliberately: this is the ONE
 // producer TestCarryGateClosure_EveryHitIsConstructedInsideAGatedProducer
 // requires every KindCarryHit to be reachable from, and a hit minted in a
-// separate helper is exactly the shape that test exists to catch (an
-// adversarial review found precisely this when an earlier version of this
-// change built a parallel path instead).
+// separate helper is exactly the shape that test exists to catch.
 func (e *Engine) resolveCarriedKind(ctx context.Context, principal storage.Principal, request InvestigationRequest, validatedSubjectReceipts []BoundSubjectReceipt, binding ResolvedGraphBinding, appliedNeeds map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember, ledgerSourceResultID string) kindCarryResult {
 	if e.results == nil {
 		return kindCarryResult{Outcome: KindCarryMissNoReference}
@@ -547,12 +545,12 @@ func subjectAxisRedeemedKinds(confirmed []confirmedStructureMember) []contractsv
 // own receipt (confirmed) if any, else whatever carry holds.
 //
 // CHAOS-5639's per-need confirmation ledger does NOT plug in here as a third
-// source: an adversarial review proved that a parallel "remembered" input at
-// this level argues with the caller's own EXPLICIT (non-receipt) kind this
-// turn (statedExpectedKindThisTurn checks more than confirmed alone) and
-// skips applyCarryDrop's own disagreement rule. Instead, a remembered kind is
-// checked FIRST, inside resolveCarriedKind itself (its own doc comment), so it
-// flows through the EXACT SAME gates a legacy-walk value does: the caller
+// source: a parallel "remembered" input at this level would argue with the
+// caller's own EXPLICIT (non-receipt) kind this turn (statedExpectedKindThisTurn
+// checks more than confirmed alone) and skip applyCarryDrop's own disagreement
+// rule. Instead, a remembered kind is checked FIRST, inside resolveCarriedKind
+// itself (its own doc comment), so it flows through the EXACT SAME gates a
+// legacy-walk value does: the caller
 // gates the whole computation behind statedExpectedKindThisTurn (a stated
 // kind this turn is never argued with), and applyCarryDrop runs on whatever
 // carry holds by the time it reaches here. By the time carry reaches this

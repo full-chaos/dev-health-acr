@@ -1040,6 +1040,9 @@ func TestSemanticState_ConfirmedNeedsValidation(t *testing.T) {
 		{"out-of-vocabulary applied_kind", []ConfirmedNeedEntry{
 			{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: "not_a_kind", AppliedValue: "x"},
 		}, false},
+		{"out-of-vocabulary applied_value for expected_kind (the value IS the kind)", []ConfirmedNeedEntry{
+			{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: "not_a_subject_kind"},
+		}, false},
 		{"oversized applied_value", []ConfirmedNeedEntry{
 			{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: strings.Repeat("x", SemanticStateMaxTermBytes+1)},
 		}, false},

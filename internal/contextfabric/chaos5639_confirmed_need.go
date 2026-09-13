@@ -21,9 +21,10 @@ package contextfabric
 // in this package enforces (continuationQuestionIdentity,
 // carryOriginSameQuestionVerdict) -- the digest alone covers scope, the seven
 // answer-shaping options and the conversation, but never request.Question
-// itself, and an adversarial review proved a digest-only admission lets an
-// UNRELATED question inherit a confirmation whenever the caller passes no
-// conversation at all (the very API shape this feature exists for). This
+// itself, so an equal digest alone proves nothing about whether this is the
+// same question: a caller that passes no conversation array at all (an
+// ordinary shape for a turn that only names a parent) reduces the digest to
+// scope and options alone, which any result in the org could share. This
 // mechanism applies to a different, broader set of turns than M2's own
 // continuation: any turn that names a parent result via
 // request.ParentResultID.
@@ -34,10 +35,9 @@ package contextfabric
 // HOW A REMEMBERED CONFIRMATION TAKES EFFECT, and how it does NOT.
 // appliedNeedLedgerEntries is the ONE function that decides what actually
 // applies -- every consumer (telemetry, resolution, wire disclosure) reads
-// its output rather than re-deriving "does this apply" independently, which
-// is what let an earlier version of this file report a member as unapplied
-// (telemetry) while a resolution parameter applied it anyway (an
-// adversarial review's own P2-1).
+// its output rather than re-deriving "does this apply" independently, so none
+// of them can report a different answer than the others: telemetry can never
+// say "none" while a resolution parameter applies a value anyway.
 //
 // A remembered subject_anchor is threaded into confirmedAnchorSelection
 // ALONGSIDE (never merged into) structureCanon.Confirmed -- that slice is
@@ -53,12 +53,12 @@ package contextfabric
 // receipt or explicitly, is never argued with, checked by resolveCarriedKind's
 // caller before resolveCarriedKind is even invoked) and applyCarryDrop (a
 // subject-axis receipt naming a different kind stands a carried value down,
-// applied uniformly to whatever resolveCarriedKind returns). An earlier
-// version of this file gave the ledger its own parallel precedence rule ahead
-// of both gates, in a separate helper outside resolveCarriedKind; an
-// adversarial review proved that let a remembered kind override the
-// caller's own explicit statement THIS turn, survive a disagreement the
-// legacy carry mechanism would have dropped.
+// applied uniformly to whatever resolveCarriedKind returns). A parallel
+// precedence rule ahead of both gates, in a helper outside resolveCarriedKind,
+// would let a remembered kind override the caller's own explicit statement
+// THIS turn and survive a disagreement the legacy carry mechanism would
+// otherwise drop -- checking the ledger inside resolveCarriedKind itself is
+// what keeps that impossible.
 
 import (
 	"context"
@@ -206,9 +206,9 @@ func (e *Engine) resolveConfirmedNeedLedger(ctx context.Context, principal stora
 // remembered entry actually apply this turn" -- every consumer
 // (Engine.resolveCarriedKind, confirmedAnchorSelection, composeCarriedNeedEntry,
 // telemetry) reads this map rather than re-deriving the check, so none of
-// them can disagree about what applied (an adversarial review's own P2-1,
-// where a separate, looser check reported "none" while a resolution
-// parameter applied a value anyway).
+// them can disagree about what applied: a member excluded here is excluded
+// everywhere, including telemetry, and one included here is included in
+// whatever narrows resolution.
 //
 // An entry applies when: it names one of the two members with a resolution
 // parameter to reach (expected_kind, subject_anchor -- subject_handle,

@@ -1752,8 +1752,8 @@ func confirmedExpectedKind(confirmed []confirmedStructureMember) *ConfirmedExpec
 // applies (appliedNeedLedgerEntries, chaos5639_confirmed_need.go): it already
 // excludes an entry this turn's own receipt for the SAME member overrides,
 // and an entry with no value, so this function trusts its presence in the
-// map without re-deriving either check -- the class of bug an adversarial
-// review found when the two lived as separate, disagreeing checks.
+// map without re-deriving either check -- a second, independent check here
+// could disagree with the map's own answer.
 func confirmedAnchorSelection(confirmed []confirmedStructureMember, applied map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember) *ConfirmedAnchorSelection {
 	for _, c := range confirmed {
 		if c.Member == contractsv1.ContextFabricStructureNeedSubjectAnchor {
