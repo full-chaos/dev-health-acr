@@ -167,7 +167,7 @@ func decideStoredAnswerability(result InvestigationResult, state *PersistedSeman
 	}
 	decision := decideAnswerability(answerabilityReadingOf(state.Frame, state.ScopeAnchor.Kind), offers)
 	determination := StoredAnswerabilityAnswerable
-	if decision.Unsatisfiable {
+	if decision.Unsatisfiable || decision.OrganizationScopeUnsupported {
 		determination = StoredAnswerabilityUnanswerable
 	}
 	return StoredAnswerability{Determination: determination, Reading: reading, decision: decision}
@@ -208,24 +208,28 @@ func RepairStoredClarification(result *InvestigationResult, state *PersistedSema
 	if answerability.Determination != StoredAnswerabilityUnanswerable {
 		return answerability
 	}
-	limitations := make([]string, 0, len(result.Limitations)+1)
+	basis, sentence := declaredKindTerminalBasis, declaredKindTerminalLimitation
+	if answerability.decision.OrganizationScopeUnsupported {
+		basis, sentence = organizationScopeTerminalBasis, organizationScopeTerminalLimitation
+	}
+	// In place, the way the offer-less repair replaces its sentence: the copy
+	// served is decoded per read, and a replacement keeps the list's length,
+	// so the limitation bound cannot move. A row carrying no clarification
+	// sentence gains the basis sentence through the bounded appender.
 	replaced := false
-	for _, limitation := range result.Limitations {
+	for index, limitation := range result.Limitations {
 		if limitation == clarificationRequiredLimitationOne || limitation == clarificationRequiredLimitation {
-			if !replaced {
-				limitations = append(limitations, declaredKindTerminalLimitation)
-				replaced = true
-			}
-			continue
+			result.Limitations[index] = sentence
+			replaced = true
 		}
-		limitations = append(limitations, limitation)
 	}
 	if !replaced {
-		limitations = append([]string{declaredKindTerminalLimitation}, limitations...)
+		composed, displaced := appendBoundedLimitations(result.Limitations, []string{sentence})
+		result.Limitations = composed
+		result.LimitationsDisplaced += displaced
 	}
-	result.Limitations = limitations
 	result.Status = InvestigationNoMatch
-	result.RefusalBasis = declaredKindTerminalBasis
+	result.RefusalBasis = basis
 	result.DeterministicAnswer = statusSentence(InvestigationNoMatch, result.SubjectResolution)
 	answerability.Repaired = true
 	return answerability

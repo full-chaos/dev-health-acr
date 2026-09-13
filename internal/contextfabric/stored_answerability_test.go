@@ -142,7 +142,6 @@ func TestStoredAnswerabilityOverTheWholeReadDomain(t *testing.T) {
 func TestTheReadAdapterAndTheComposingAdapterTakeOneDecision(t *testing.T) {
 	t.Parallel()
 	project := SubjectProject
-	organization := SubjectOrganization
 	for _, testCase := range []struct {
 		cell       string
 		frame      *QuestionFrame
@@ -156,7 +155,7 @@ func TestTheReadAdapterAndTheComposingAdapterTakeOneDecision(t *testing.T) {
 		{"grouped: group-kind candidates", roleGroupedFrame(SubjectProject, SubjectTeam), "", SubjectResolution{Candidates: roleTwoTeamAnchors(), Committed: []SubjectRef{}}, StructureOfferMaterial{}, true},
 		{"named: wrong kinds across channels", chaos5660NamedFrame(&project), "", SubjectResolution{Candidates: chaos5660CIRunCandidates(2), Committed: []SubjectRef{}}, chaos5660MeasuredOffers(), true},
 		{"named: a declared-kind candidate", chaos5660NamedFrame(&project), "", SubjectResolution{Candidates: append(chaos5660CIRunCandidates(1), roleCandidate("subr_role_parity_q", SubjectProject, "project:q")), Committed: []SubjectRef{}}, chaos5660MeasuredOffers(), false},
-		{"organization scope", roleOrgFrame(&organization), "", SubjectResolution{Candidates: chaos5660CIRunCandidates(1), Committed: []SubjectRef{}}, StructureOfferMaterial{}, true},
+		{"organization scope", roleOrgFrameWithGoals(nil, GoalAssessState), "", SubjectResolution{Candidates: chaos5660CIRunCandidates(1), Committed: []SubjectRef{}}, StructureOfferMaterial{}, true},
 	} {
 		t.Run(testCase.cell, func(t *testing.T) {
 			t.Parallel()
@@ -174,7 +173,7 @@ func TestTheReadAdapterAndTheComposingAdapterTakeOneDecision(t *testing.T) {
 			state, read := storedStateFor(t, testCase.frame, testCase.anchorKind), SemanticStateReadAvailable
 			stored := *store.saved
 			if testCase.refused {
-				if stored.Status != InvestigationNoMatch || stored.RefusalBasis != declaredKindTerminalBasis {
+				if stored.Status != InvestigationNoMatch || (stored.RefusalBasis != declaredKindTerminalBasis && stored.RefusalBasis != organizationScopeTerminalBasis) {
 					t.Fatalf("fixture defect: fresh status/basis = %q/%q, want the declared-kind refusal", stored.Status, stored.RefusalBasis)
 				}
 				stored.Status = InvestigationClarificationRequired
@@ -211,6 +210,7 @@ func TestAStoredClarificationIsRepairedOnReadOnlyWhenItsReadingRefusesIt(t *test
 		stored.SubjectResolution.ClarificationPrompt = "Which subject did you mean?"
 		original := append([]string(nil), stored.Limitations...)
 		served := stored
+		served.Limitations = append([]string(nil), stored.Limitations...)
 		got := RepairStoredClarification(&served, named, SemanticStateReadAvailable)
 		if got.Determination != StoredAnswerabilityUnanswerable || !got.Repaired {
 			t.Fatalf("determination/repaired = %q/%v, want unanswerable/true", got.Determination, got.Repaired)
@@ -227,8 +227,17 @@ func TestAStoredClarificationIsRepairedOnReadOnlyWhenItsReadingRefusesIt(t *test
 		if served.SubjectResolution.ClarificationPrompt == "" || len(served.SubjectResolution.Candidates) != 2 {
 			t.Fatal("the repair removed the stored prompt or candidates")
 		}
-		if stored.Limitations[1] != clarificationRequiredLimitation {
-			t.Fatal("the repair wrote through to the stored row's limitation array")
+	})
+	t.Run("an organization-scope reading that counts nothing is repaired on its own basis", func(t *testing.T) {
+		t.Parallel()
+		orgReading := storedStateFor(t, roleOrgFrameWithGoals(nil, GoalAssessState), "")
+		served := storedClarification(storedCIRunCandidates()...)
+		got := RepairStoredClarification(&served, orgReading, SemanticStateReadAvailable)
+		if got.Determination != StoredAnswerabilityUnanswerable || !got.Repaired {
+			t.Fatalf("determination/repaired = %q/%v, want unanswerable/true", got.Determination, got.Repaired)
+		}
+		if served.RefusalBasis != organizationScopeTerminalBasis || !roleContains(served.Limitations, organizationScopeTerminalLimitation) || roleContains(served.Limitations, declaredKindTerminalLimitation) {
+			t.Fatalf("served basis/limitations = %q/%#v, want organization_scope_unsupported with its own sentence only", served.RefusalBasis, served.Limitations)
 		}
 	})
 	t.Run("unanswerable with no clarification sentence: the basis sentence is added", func(t *testing.T) {
