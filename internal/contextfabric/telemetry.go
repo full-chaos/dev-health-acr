@@ -222,7 +222,7 @@ func (t SlogEngineTelemetry) RecordAnswerReuseContainment(ctx context.Context, p
 // (empty_pool/authz_filtered_to_empty/ambiguous) is diagnostic detail about
 // an already-ordinary outcome (no_match/clarification_required), never a
 // sign anything is broken.
-func (t SlogEngineTelemetry) RecordSubjectlessTerminal(ctx context.Context, principal storage.Principal, reason string, refusalBasis string, declaredKinds string, offeredKinds string) {
+func (t SlogEngineTelemetry) RecordSubjectlessTerminal(ctx context.Context, principal storage.Principal, reason string, refusalBasis string, declaredKinds string, offeredKinds string, answerability SubjectlessTerminalAnswerability) {
 	// refusal_basis is emitted on EVERY subjectless terminal, carrying the
 	// explicit token "none" when the turn was not refused -- never omitted
 	// on the ordinary path. A key that appeared only on refusals would be
@@ -252,7 +252,26 @@ func (t SlogEngineTelemetry) RecordSubjectlessTerminal(ctx context.Context, prin
 	// Composed by the CALLER from the one decision value, for the reason
 	// refusal_basis is: a default substituted in this sink would make it a
 	// second authority on what a turn declared.
-	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "reason", SanitizeLogAttr(reason), "refusal_basis", SanitizeLogAttr(refusalBasis), "declared_kinds", SanitizeLogAttr(declaredKinds), "offered_kinds", SanitizeLogAttr(offeredKinds)}, requestIDLogAttrs(ctx)...)
+	//
+	// evaluated_roles/advanced_role/advancing_channel/offers_evaluated/
+	// offers_advancing are the role half of the same decision,
+	// on every subjectless terminal, with the same explicit "none" for a
+	// decision that evaluated no role or advanced none. declared/offered
+	// alone cannot say whether a team offer was refused on a question whose
+	// open role IS a team anchor; the role pair can. The counts are request
+	// derived and go through SanitizeLogInt.
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"reason", SanitizeLogAttr(reason),
+		"refusal_basis", SanitizeLogAttr(refusalBasis),
+		"declared_kinds", SanitizeLogAttr(declaredKinds),
+		"offered_kinds", SanitizeLogAttr(offeredKinds),
+		"evaluated_roles", SanitizeLogAttr(answerability.EvaluatedRoles),
+		"advanced_role", SanitizeLogAttr(answerability.AdvancedRole),
+		"advancing_channel", SanitizeLogAttr(answerability.AdvancingChannel),
+		"offers_evaluated", SanitizeLogInt(int64(answerability.OffersEvaluated)),
+		"offers_advancing", SanitizeLogInt(int64(answerability.OffersAdvancing)),
+	}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric subjectless terminal", args...)
 }
 

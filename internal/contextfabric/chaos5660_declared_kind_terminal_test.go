@@ -63,7 +63,7 @@ func TestTheMeasuredOddTurnShapeTerminates(t *testing.T) {
 		},
 	}
 	resolution := SubjectResolution{ClarificationPrompt: OfferPoolEmptiedClarificationPrompt}
-	decision := decideDeclaredKind(chaos5660NamedFrame(&project), resolution, material)
+	decision := decideDeclaredKind(chaos5660NamedFrame(&project), "", resolution, material)
 	if !decision.Unsatisfiable {
 		t.Fatalf("Unsatisfiable = false for the measured odd-turn shape (declared %v, offered %v) -- this is the exact document that looped five turns",
 			decision.DeclaredKinds, decision.OfferedKinds)
@@ -113,7 +113,7 @@ func TestTheMeasuredEvenTurnShapeTerminates(t *testing.T) {
 		candidates = append(candidates, chaos5660SubjectCandidate(contractsv1.ContextFabricSubjectCIRun))
 	}
 	resolution := SubjectResolution{Candidates: candidates}
-	decision := decideDeclaredKind(chaos5660NamedFrame(&project), resolution, material)
+	decision := decideDeclaredKind(chaos5660NamedFrame(&project), "", resolution, material)
 	if !decision.Unsatisfiable {
 		t.Fatalf("Unsatisfiable = false for the measured even-turn shape (offered %v)", decision.OfferedKinds)
 	}
@@ -150,7 +150,7 @@ func TestAControlCandidateOfTheDeclaredKindStillClarifies(t *testing.T) {
 		chaos5660SubjectCandidate(contractsv1.ContextFabricSubjectCIRun),
 		chaos5660SubjectCandidate(contractsv1.ContextFabricSubjectProject),
 	}}
-	decision := decideDeclaredKind(chaos5660NamedFrame(&project), resolution, material)
+	decision := decideDeclaredKind(chaos5660NamedFrame(&project), "", resolution, material)
 	if decision.Unsatisfiable {
 		t.Fatalf("Unsatisfiable = true with a project candidate in the pool (offered %v) -- this conversation can converge and must not be terminated", decision.OfferedKinds)
 	}
@@ -188,7 +188,7 @@ func TestEveryChannelCanSatisfyTheDeclaredKind(t *testing.T) {
 		{"subject_candidates", StructureOfferMaterial{KindOptions: []contractsv1.ContextFabricKindOption{chaos5660KindOption(wrong)}}, SubjectResolution{Candidates: []contractsv1.ContextFabricSubjectCandidate{chaos5660SubjectCandidate(right)}}},
 	} {
 		t.Run(testCase.channel, func(t *testing.T) {
-			decision := decideDeclaredKind(chaos5660NamedFrame(&project), testCase.resolution, testCase.material)
+			decision := decideDeclaredKind(chaos5660NamedFrame(&project), "", testCase.resolution, testCase.material)
 			if decision.Unsatisfiable {
 				t.Fatalf("%s carrying the declared kind did not satisfy it (offered %v)", testCase.channel, decision.OfferedKinds)
 			}
@@ -240,9 +240,19 @@ func TestTheDeclaredKindGuardOverItsWholeInputDomain(t *testing.T) {
 				// unsatisfiable, whatever is offered: absent is a weaker
 				// claim than declared.
 				if len(testCase.want) == 0 {
-					decision := decideDeclaredKind(testCase.frame, SubjectResolution{}, StructureOfferMaterial{
+					decision := decideDeclaredKind(testCase.frame, "", SubjectResolution{}, StructureOfferMaterial{
 						KindOptions: []contractsv1.ContextFabricKindOption{chaos5660KindOption(contractsv1.ContextFabricSubjectCIRun)},
 					})
+					// organization_scope is the one variant whose subject the
+					// reading fixes by construction: it declares no kind in this
+					// union, and still no subject offer advances any role of it
+					// (role_answerability.go).
+					if testCase.frame != nil && testCase.frame.SubjectExpression.Kind == SubjectExpressionOrganizationScope {
+						if !decision.Unsatisfiable {
+							t.Fatal("an organization-scope frame's subject is the caller's organization, fixed by the reading -- a subject offer advances no role of it, so the turn must be unanswerable")
+						}
+						return
+					}
 					if decision.Unsatisfiable {
 						t.Fatal("a frame declaring no kind made a turn unsatisfiable -- a question that constrained nothing cannot be unanswerable for constraining the wrong thing")
 					}
@@ -288,7 +298,7 @@ func TestTheDeclaredKindGuardOverItsWholeInputDomain(t *testing.T) {
 			}, false},
 		} {
 			t.Run(testCase.cell, func(t *testing.T) {
-				decision := decideDeclaredKind(chaos5660NamedFrame(&project), SubjectResolution{}, testCase.material)
+				decision := decideDeclaredKind(chaos5660NamedFrame(&project), "", SubjectResolution{}, testCase.material)
 				if decision.Unsatisfiable != testCase.want {
 					t.Fatalf("Unsatisfiable = %v, want %v (declared %v, offered %v)",
 						decision.Unsatisfiable, testCase.want, decision.DeclaredKinds, decision.OfferedKinds)
@@ -298,7 +308,7 @@ func TestTheDeclaredKindGuardOverItsWholeInputDomain(t *testing.T) {
 	})
 
 	t.Run("an empty offer set is CHAOS-5637's condition, not this one", func(t *testing.T) {
-		decision := decideDeclaredKind(chaos5660NamedFrame(&project), SubjectResolution{}, StructureOfferMaterial{})
+		decision := decideDeclaredKind(chaos5660NamedFrame(&project), "", SubjectResolution{}, StructureOfferMaterial{})
 		if decision.Unsatisfiable {
 			t.Fatal("a turn with NO offers reported unsatisfiable here -- that state is CHAOS-5637's, and giving it two names in two log lines is the collapse both vocabularies exist to avoid")
 		}
@@ -308,7 +318,7 @@ func TestTheDeclaredKindGuardOverItsWholeInputDomain(t *testing.T) {
 	})
 
 	t.Run("a duplicate kind is emitted once, in first-seen order", func(t *testing.T) {
-		decision := decideDeclaredKind(chaos5660NamedFrame(&project), SubjectResolution{
+		decision := decideDeclaredKind(chaos5660NamedFrame(&project), "", SubjectResolution{
 			Candidates: []contractsv1.ContextFabricSubjectCandidate{chaos5660SubjectCandidate(contractsv1.ContextFabricSubjectCIRun)},
 		}, StructureOfferMaterial{
 			KindOptions:   []contractsv1.ContextFabricKindOption{chaos5660KindOption(contractsv1.ContextFabricSubjectPullRequest), chaos5660KindOption(contractsv1.ContextFabricSubjectCIRun)},
@@ -324,13 +334,13 @@ func TestTheDeclaredKindGuardOverItsWholeInputDomain(t *testing.T) {
 // rule on the two new log values: an empty rendering is indistinguishable
 // from a key nobody wrote.
 func TestTheObservableTokensAreNeverEmpty(t *testing.T) {
-	decision := decideDeclaredKind(nil, SubjectResolution{}, StructureOfferMaterial{})
+	decision := decideDeclaredKind(nil, "", SubjectResolution{}, StructureOfferMaterial{})
 	if decision.ObservableDeclaredKinds() != "none" || decision.ObservableOfferedKinds() != "none" {
 		t.Fatalf("declared/offered = %q/%q, want the explicit none token on both",
 			decision.ObservableDeclaredKinds(), decision.ObservableOfferedKinds())
 	}
 	project := SubjectKind(contractsv1.ContextFabricSubjectProject)
-	set := decideDeclaredKind(chaos5660NamedFrame(&project), SubjectResolution{}, StructureOfferMaterial{
+	set := decideDeclaredKind(chaos5660NamedFrame(&project), "", SubjectResolution{}, StructureOfferMaterial{
 		KindOptions: []contractsv1.ContextFabricKindOption{chaos5660KindOption(contractsv1.ContextFabricSubjectCIRun)},
 	})
 	if set.ObservableDeclaredKinds() != "project" || set.ObservableOfferedKinds() != "ci_pipeline_run" {
@@ -343,7 +353,7 @@ func TestTheObservableTokensAreNeverEmpty(t *testing.T) {
 // be reported as a finding about what retrieval offered.
 func TestAFrameGateRefusalStillWinsTheReason(t *testing.T) {
 	project := SubjectKind(contractsv1.ContextFabricSubjectProject)
-	decision := decideDeclaredKind(chaos5660NamedFrame(&project), SubjectResolution{}, StructureOfferMaterial{
+	decision := decideDeclaredKind(chaos5660NamedFrame(&project), "", SubjectResolution{}, StructureOfferMaterial{
 		KindOptions: []contractsv1.ContextFabricKindOption{chaos5660KindOption(contractsv1.ContextFabricSubjectCIRun)},
 	})
 	if !decision.Unsatisfiable {
@@ -365,7 +375,7 @@ func TestACallerThatDeclinedClarificationKeepsItsOwnSentences(t *testing.T) {
 		chaos5660SubjectCandidate(contractsv1.ContextFabricSubjectCIRun),
 		chaos5660SubjectCandidate(contractsv1.ContextFabricSubjectCIRun),
 	}}
-	decision := decideDeclaredKind(chaos5660NamedFrame(&project), resolution, StructureOfferMaterial{})
+	decision := decideDeclaredKind(chaos5660NamedFrame(&project), "", resolution, StructureOfferMaterial{})
 	if !decision.Unsatisfiable {
 		t.Fatal("fixture did not reach the unsatisfiable state")
 	}
@@ -458,8 +468,8 @@ func TestTheDeclaredKindBasisOverItsWholeVocabularyDomain(t *testing.T) {
 		if declaredKindTerminalLimitation == contractsv1.ContextFabricSynthesisClarificationUnavailableLimitation {
 			t.Fatal("the sentence is still the one borrowed from the synthesis decision -- two decisions cannot share one sentence and stay distinguishable")
 		}
-		if !strings.Contains(declaredKindTerminalLimitation, string(basis)) {
-			t.Fatalf("the sentence does not name its own basis, so a reader cannot correlate it with the log line: %q", declaredKindTerminalLimitation)
+		if strings.Contains(declaredKindTerminalLimitation, string(basis)) {
+			t.Fatalf("the sentence carries its basis token, which a person cannot read -- the basis belongs on refusal_basis and the log line: %q", declaredKindTerminalLimitation)
 		}
 	})
 	t.Run("the log renderer and the wire agree on every cell", func(t *testing.T) {
@@ -544,7 +554,7 @@ func TestTheReadSideGapIsPinnedUntilTheDeclaredKindIsLoadableThere(t *testing.T)
 	}
 	// The write side refuses exactly this document for a project-declaring frame.
 	project := SubjectKind(contractsv1.ContextFabricSubjectProject)
-	write := decideDeclaredKind(chaos5660NamedFrame(&project), wrongKind.SubjectResolution, StructureOfferMaterial{
+	write := decideDeclaredKind(chaos5660NamedFrame(&project), "", wrongKind.SubjectResolution, StructureOfferMaterial{
 		KindOptions: wrongKind.StructureNeeds.KindOptions,
 	})
 	if !write.Unsatisfiable {

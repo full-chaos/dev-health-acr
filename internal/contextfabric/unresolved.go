@@ -336,7 +336,11 @@ func (e *Engine) terminalResult(
 	// the status decision and the log line below. Deriving it separately at
 	// any of those three would let a turn be reported under one reading and
 	// answered under another.
-	declaredKind := decideDeclaredKind(familyOutcome.Frame, resolution, structureMaterial)
+	// The anchor kind is the winning sample's, the same value
+	// ResolveSubjects is hinted with through ScopeAnchorRetrievalKind -- on a
+	// carried continuation it is the carried anchor -- so the anchor the
+	// decision admits is the anchor retrieval searched for.
+	declaredKind := decideDeclaredKind(familyOutcome.Frame, familyOutcome.WinningSample.ScopeAnchorKind, resolution, structureMaterial)
 	// The frame is carried from the family outcome this turn already
 	// produced, never reconstructed here; it is what tells a held
 	// comparison's empty pool apart from an ordinary one.
@@ -369,6 +373,12 @@ func (e *Engine) terminalResult(
 	if declaredKind.Unsatisfiable && status == InvestigationNoMatch && limitation == declaredKindTerminalLimitation {
 		refusalBasis = declaredKindTerminalBasis
 	}
+	// D48: the organization-scope terminal discloses its own
+	// basis, under the same after-the-gate rule: a refusing gate replaced the
+	// limitation above, so its basis is never written over.
+	if declaredKind.OrganizationScopeUnsupported && status == InvestigationNoMatch && limitation == organizationScopeTerminalLimitation {
+		refusalBasis = organizationScopeTerminalBasis
+	}
 	// CHAOS-3888: telemetry-only -- classifies WHY this investigation
 	// reached its own subjectless terminal path, never changes status,
 	// limitation, or any other field of the result below. See
@@ -386,7 +396,7 @@ func (e *Engine) terminalResult(
 		// the answer would disagree about what happened. One decision value
 		// reaches both surfaces, and the served-document test asserts they
 		// agree.
-		e.telemetry.RecordSubjectlessTerminal(ctx, principal, subjectlessTerminalReason(familyOutcome.Gate, resolution, subjectCandidatesAuthzDropped, declaredKind), observableRefusalBasis(refusalBasis), declaredKind.ObservableDeclaredKinds(), declaredKind.ObservableOfferedKinds())
+		e.telemetry.RecordSubjectlessTerminal(ctx, principal, subjectlessTerminalReason(familyOutcome.Gate, resolution, subjectCandidatesAuthzDropped, declaredKind), observableRefusalBasis(refusalBasis), declaredKind.ObservableDeclaredKinds(), declaredKind.ObservableOfferedKinds(), declaredKind.ObservableAnswerability())
 	}
 	coverage := graphContext.Coverage
 	if coverage.Sources == nil {
@@ -682,6 +692,11 @@ func subjectlessTerminalReason(gate FrameGate, resolution SubjectResolution, sub
 	// the candidate list being non-empty -- a turn can offer handle and
 	// candidate options of the wrong kind with no subject candidate at all,
 	// which is exactly what the measured rows did on their odd turns.
+	// D48: ahead of the declared-kind arm, because it is the
+	// decision the status and basis were taken on for such a turn.
+	if declaredKind.OrganizationScopeUnsupported {
+		return organizationScopeTerminalReason
+	}
 	if declaredKind.Unsatisfiable {
 		return declaredKindTerminalReason
 	}
@@ -767,6 +782,14 @@ func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectReso
 	// The sentence is the declared_kind_unmatched basis's own fixed one;
 	// terminalResult attaches the matching basis to the served document a few
 	// lines below, from this same decision.
+	// D48, AHEAD of the declared-kind arm and of
+	// AllowClarification: an organization-scope question that counts nothing
+	// has no capability behind it, so no exchange can advance it and a
+	// caller who declined clarification is refused the same way. The
+	// sentence is the organization_scope_unsupported basis's own.
+	if declaredKind.OrganizationScopeUnsupported {
+		return InvestigationNoMatch, organizationScopeTerminalLimitation
+	}
 	if declaredKind.Unsatisfiable && request.Options.AllowClarification {
 		return InvestigationNoMatch, declaredKindTerminalLimitation
 	}

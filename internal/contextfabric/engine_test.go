@@ -381,6 +381,7 @@ type recordingTelemetry struct {
 	subjectlessTerminalRefusalBases  []string
 	subjectlessTerminalDeclaredKinds []string
 	subjectlessTerminalOfferedKinds  []string
+	subjectlessTerminalAnswerability []SubjectlessTerminalAnswerability
 	// factScopeExpansions (CHAOS-4099) records every scope-expansion event
 	// verbatim, same list-not-count discipline as the fields around it: a
 	// test asserts the EXACT closed-vocabulary outcome and the exact counts,
@@ -622,7 +623,8 @@ func (r *recordingTelemetry) RecordPriorSubjectReceiptsSkipped(_ context.Context
 	r.priorSubjectReceiptsSkipped = append(r.priorSubjectReceiptsSkipped, skipped)
 }
 
-func (r *recordingTelemetry) RecordSubjectlessTerminal(_ context.Context, _ storage.Principal, reason string, refusalBasis string, declaredKinds string, offeredKinds string) {
+func (r *recordingTelemetry) RecordSubjectlessTerminal(_ context.Context, _ storage.Principal, reason string, refusalBasis string, declaredKinds string, offeredKinds string, answerability SubjectlessTerminalAnswerability) {
+	r.subjectlessTerminalAnswerability = append(r.subjectlessTerminalAnswerability, answerability)
 	r.subjectlessTerminalReasons = append(r.subjectlessTerminalReasons, reason)
 	r.subjectlessTerminalRefusalBases = append(r.subjectlessTerminalRefusalBases, refusalBasis)
 	r.subjectlessTerminalDeclaredKinds = append(r.subjectlessTerminalDeclaredKinds, declaredKinds)

@@ -1229,9 +1229,23 @@ func TestWindowContinuation_TheRecordedByteBudgetIsComparedAsTheEffectiveBudget(
 	}
 }
 
-// hasOwnNamingSentence reports whether the service-authored registry holds a
-// fixed sentence that names this basis by its token.
+// hasOwnNamingSentence reports whether this basis has a fixed, service-authored
+// sentence of its own: a registry sentence that names it by its token, or the
+// sentence a subjectless terminal pairs with it through that terminal's own
+// basis and sentence constants. The terminals' sentences carry no token,
+// because a person reads them.
 func hasOwnNamingSentence(basis contractsv1.ContextFabricRefusalBasis) bool {
+	for _, terminal := range []struct {
+		basis    contractsv1.ContextFabricRefusalBasis
+		sentence string
+	}{
+		{declaredKindTerminalBasis, declaredKindTerminalLimitation},
+		{organizationScopeTerminalBasis, organizationScopeTerminalLimitation},
+	} {
+		if terminal.basis == basis && contractsv1.IsContextFabricServiceAuthoredLimitation(terminal.sentence) {
+			return true
+		}
+	}
 	for _, sentence := range contractsv1.ContextFabricServiceAuthoredLimitations() {
 		if strings.Contains(sentence, string(basis)) {
 			return true

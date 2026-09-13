@@ -172,6 +172,7 @@ REFUSAL_BASIS_VOCABULARY = {
     "unspecified",
     "continuation_context_unverifiable",
     "declared_kind_unmatched",
+    "organization_scope_unsupported",
 }
 
 
