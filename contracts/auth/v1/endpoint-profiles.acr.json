@@ -363,8 +363,8 @@
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=true), applied at the end of ContextFabricInvestigationResultHandler.",
         "anchor": {
           "path": "internal/api/context_fabric_result_routes.go",
-          "line": 251,
-          "line_end": 251,
+          "line": 274,
+          "line_end": 274,
           "note": "a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead"
         }
       },
