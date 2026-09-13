@@ -154,6 +154,17 @@ type Config struct {
 	// request can mint a v2 (membership-verify) ambiguous-claimant anchor
 	// offer -- byte-identical to pre-CHAOS-4042 behavior.
 	AnchorMembershipOffersEnabled bool
+	// ServerCompletenessAuthorityEnabled (CHAOS-5640,
+	// ACR_CONTEXT_FABRIC_SERVER_COMPLETENESS_AUTHORITY_ENABLED) is the
+	// gated FLIP's master switch -- default OFF, same "ships dark"
+	// convention StructurePriorsEnabled documents above. The measurement
+	// (contextfabric.DeriveCompletenessAuthority, reported through
+	// EngineTelemetry.RecordCompletenessAuthority) runs and is recorded
+	// unconditionally either way; this flag gates only whether the
+	// outcome-derivation authority's correction is also SERVED. See
+	// contextfabric.EngineOptions.ServerCompletenessAuthorityEnabled's own
+	// doc comment for the mechanism itself.
+	ServerCompletenessAuthorityEnabled bool
 	// AnswerReuseMaxAge (CHAOS-3782, ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE)
 	// is the staleness window TRD §19.7.3 condition 4 enforces: a stored
 	// investigation result older than this is never reused, regardless of

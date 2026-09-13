@@ -487,7 +487,10 @@ type recordingTelemetry struct {
 	// cohortRanked (CHAOS-4398) mirrors the SAME list-not-count discipline.
 	renderShapeSelections []RenderShapeSelectionEvent
 	serverStatusShadows   []ServerStatusShadow
-	cohortRanked          []CohortRankedEvent
+	// completenessAuthorities mirrors serverStatusShadows' own
+	// list-not-count discipline immediately above.
+	completenessAuthorities []CompletenessAuthorityObservation
+	cohortRanked            []CohortRankedEvent
 	// cohortDriverNarrations (CHAOS-4398 PR3b) mirrors the SAME
 	// list-not-count discipline.
 	cohortDriverNarrations []CohortDriverNarrationEvent
@@ -866,6 +869,10 @@ func (r *recordingTelemetry) RecordRenderShapeSelection(_ context.Context, _ sto
 
 func (r *recordingTelemetry) RecordServerStatusShadow(_ context.Context, _ storage.Principal, event ServerStatusShadow) {
 	r.serverStatusShadows = append(r.serverStatusShadows, event)
+}
+
+func (r *recordingTelemetry) RecordCompletenessAuthority(_ context.Context, _ storage.Principal, event CompletenessAuthorityObservation) {
+	r.completenessAuthorities = append(r.completenessAuthorities, event)
 }
 
 func (r *recordingTelemetry) RecordPlanCarry(_ context.Context, _ storage.Principal, event PlanCarryEvent) {

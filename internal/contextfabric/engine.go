@@ -117,6 +117,22 @@ type EngineOptions struct {
 	// genkitruntime.DefaultSchemaVersion), same reasoning and same
 	// fail-closed convention as ReusePromptVersions immediately above.
 	ReuseVersionAuthorities ReuseVersionAuthorities
+	// ServerCompletenessAuthorityEnabled turns ON the gated FLIP in
+	// applyServerCompletenessAuthority: when true, the outcome-derivation
+	// authority may DOWNGRADE a model-claimed `complete` to
+	// `partial`/`degraded`, never the reverse and never a non-answer
+	// disposition. See that function's own doc comment for the two
+	// guardrails.
+	//
+	// ZERO VALUE = DISABLED, same "ships dark" convention as
+	// RegimeAOffersDisabled above and Config.StructurePriorsEnabled: the
+	// measurement (DeriveCompletenessAuthority, reported through
+	// EngineTelemetry.RecordCompletenessAuthority) runs and is recorded
+	// unconditionally either way, restarting the shadow series
+	// status_shadow.go's ServerStatusShadowVersion started under a new
+	// version -- this field gates ONLY whether the measured correction is
+	// also served.
+	ServerCompletenessAuthorityEnabled bool
 }
 
 type EngineDependencies struct {
@@ -819,6 +835,27 @@ type EngineTelemetry interface {
 	// Content-safe by construction: ServerStatusShadow carries two status
 	// enums, one closed basis token, two booleans and a version constant.
 	RecordServerStatusShadow(ctx context.Context, principal storage.Principal, event ServerStatusShadow)
+	// RecordCompletenessAuthority reports the OUTCOME-DERIVATION authority's
+	// own completeness observation beside the model-authored status,
+	// restarting the shadow series RecordServerStatusShadow started under a
+	// NEW version: that gate reads a frame-obligations proxy stated as such
+	// in its own header; this one reads the requirement-outcome derivation
+	// itself (DeriveContextFabricAnswerCompletenessState over the served
+	// result's own outcome rows). Fires once per investigation that reaches
+	// assembly with a plan -- the same denominator RecordServerStatusShadow
+	// uses, for the same reason: a terminal exit with no plan has no
+	// outcome rows to derive from.
+	//
+	// REPORTS UNCONDITIONALLY, independent of
+	// EngineOptions.ServerCompletenessAuthorityEnabled: the measurement
+	// must exist whether or not the flip is live, so a disagreement rate
+	// can be read before the flip is ever turned on.
+	//
+	// Content-safe by construction: CompletenessAuthorityObservation
+	// carries two closed status/disposition enums, one closed basis token,
+	// two booleans and a version constant -- no free text, so no numeric or
+	// string sanitization applies to this sink.
+	RecordCompletenessAuthority(ctx context.Context, principal storage.Principal, event CompletenessAuthorityObservation)
 	// RecordPlanCarry (CHAOS-4736, seam 7) reports the ONE point where a
 	// prior turn's family replaces this turn's, which is the only place a
 	// carried route is observable.
@@ -1064,39 +1101,40 @@ type CohortRankedEvent struct {
 // Engine coordinates one open-ended investigation. It deliberately composes
 // capabilities rather than matching the question against a route/plan table.
 type Engine struct {
-	interpreter                QuestionInterpreter
-	graph                      GraphReader
-	facts                      CanonicalFactReader
-	synthesizer                AnswerSynthesizer
-	results                    InvestigationResultStore
-	telemetry                  EngineTelemetry
-	reuseGate                  AnswerReuseGate
-	reuseSnapshotter           SourceWatermarkSnapshotter
-	reuseEpochSnapshotter      RebuildEpochSnapshotter
-	reuseModelIdentityResolver ReuseModelIdentityResolver
-	reuseProjectionVersion     string
-	reuseModelIdentities       []string
-	reuseRetrievalIdentity     ReuseRetrievalIdentity
-	reusePromptVersions        ReusePromptVersions
-	reuseVersionAuthorities    ReuseVersionAuthorities
-	clarificationSelectionSink ClarificationSelectionSink
-	structureSelectionSink     StructureSelectionSink
-	handleVerifier             HandleVerifier
-	anchorVerifier             AnchorVerifier
-	anchorMembershipVerifier   AnchorMembershipVerifier
-	candidateVerifier          CandidateVerifier
-	priorConsultant            PriorConsultant
-	priorHandleGrammarChecker  HandleGrammarChecker
-	offerPhraser               OfferPhraser
-	requirements               RequirementDeriver
-	observationKeys            ObservationKeyDeclarer
-	regimeAOffersDisabled      bool
-	maxItems                   int
-	maxSerializedBytes         int64
-	synthesisDeadlineReserve   time.Duration
-	serviceVersion             string
-	now                        func() time.Time
-	newResultID                func() string
+	interpreter                        QuestionInterpreter
+	graph                              GraphReader
+	facts                              CanonicalFactReader
+	synthesizer                        AnswerSynthesizer
+	results                            InvestigationResultStore
+	telemetry                          EngineTelemetry
+	reuseGate                          AnswerReuseGate
+	reuseSnapshotter                   SourceWatermarkSnapshotter
+	reuseEpochSnapshotter              RebuildEpochSnapshotter
+	reuseModelIdentityResolver         ReuseModelIdentityResolver
+	reuseProjectionVersion             string
+	reuseModelIdentities               []string
+	reuseRetrievalIdentity             ReuseRetrievalIdentity
+	reusePromptVersions                ReusePromptVersions
+	reuseVersionAuthorities            ReuseVersionAuthorities
+	clarificationSelectionSink         ClarificationSelectionSink
+	structureSelectionSink             StructureSelectionSink
+	handleVerifier                     HandleVerifier
+	anchorVerifier                     AnchorVerifier
+	anchorMembershipVerifier           AnchorMembershipVerifier
+	candidateVerifier                  CandidateVerifier
+	priorConsultant                    PriorConsultant
+	priorHandleGrammarChecker          HandleGrammarChecker
+	offerPhraser                       OfferPhraser
+	requirements                       RequirementDeriver
+	observationKeys                    ObservationKeyDeclarer
+	regimeAOffersDisabled              bool
+	serverCompletenessAuthorityEnabled bool
+	maxItems                           int
+	maxSerializedBytes                 int64
+	synthesisDeadlineReserve           time.Duration
+	serviceVersion                     string
+	now                                func() time.Time
+	newResultID                        func() string
 }
 
 func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine, error) {
@@ -1130,14 +1168,15 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		requirements:               dependencies.Requirements,
 		observationKeys:            dependencies.ObservationKeys,
 		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
-		reuseRetrievalIdentity:   options.ReuseRetrievalIdentity,
-		reusePromptVersions:      options.ReusePromptVersions,
-		reuseVersionAuthorities:  options.ReuseVersionAuthorities,
-		regimeAOffersDisabled:    options.RegimeAOffersDisabled,
-		maxItems:                 options.MaxItems,
-		maxSerializedBytes:       options.MaxSerializedBytes,
-		synthesisDeadlineReserve: options.SynthesisDeadlineReserve,
-		serviceVersion:           options.ServiceVersion, now: options.Now, newResultID: options.NewResultID,
+		reuseRetrievalIdentity:             options.ReuseRetrievalIdentity,
+		reusePromptVersions:                options.ReusePromptVersions,
+		reuseVersionAuthorities:            options.ReuseVersionAuthorities,
+		regimeAOffersDisabled:              options.RegimeAOffersDisabled,
+		serverCompletenessAuthorityEnabled: options.ServerCompletenessAuthorityEnabled,
+		maxItems:                           options.MaxItems,
+		maxSerializedBytes:                 options.MaxSerializedBytes,
+		synthesisDeadlineReserve:           options.SynthesisDeadlineReserve,
+		serviceVersion:                     options.ServiceVersion, now: options.Now, newResultID: options.NewResultID,
 	}, nil
 }
 
@@ -3136,6 +3175,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// double-counted every one of them -- see assemblyTelemetry for why this
 	// is a class rule rather than a fix to one emitter.
 	e.emit(ctx, principal, pendingTelemetry)
+	// Taken ONCE here for the identical once-per-served-result reason as
+	// the block below, and BEFORE it: RecordCompletenessAuthority must
+	// report what the outcome-derivation authority found against the
+	// status the served document ACTUALLY carried, and
+	// applyServerCompletenessAuthority below can change that status -- so
+	// the observation is taken first and handed to both.
+	completenessAuthority := DeriveCompletenessAuthority(result)
 	// Render-shape telemetry fires ONCE, for the result actually served --
 	// selection itself is pure and was already run by finalizeResult, but a
 	// retry would otherwise double-count a decision an operator counts.
@@ -3150,6 +3196,19 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// the demands it holds the answer against are the ones the served
 		// plan actually states.
 		e.telemetry.RecordServerStatusShadow(ctx, principal, DeriveServerStatus(result, familyOutcome.FrameObligations))
+		// The outcome-derivation authority, from the SAME
+		// once-per-served-result point and for the same reason: the
+		// derivation reads result.Completeness.Outcomes, which
+		// finalizeResult can still be asked to change on a retry, and a
+		// disagreement counted twice would be wrong the same way
+		// RecordServerStatusShadow's would be.
+		//
+		// AFTER RecordServerStatusShadow, deliberately: that gate's own
+		// ModelStatus is the status the served document actually carried
+		// BEFORE any authority correction, and taking this observation any
+		// earlier would let an enabled flip retroactively change what B8's
+		// shadow believes the model said.
+		e.telemetry.RecordCompletenessAuthority(ctx, principal, completenessAuthority)
 		// The `membership_cardinality` step's result, from the SAME
 		// once-per-served-result point and for the same reason: the step
 		// runs inside finalizeResult, which runs again on a retry, and a
@@ -3175,6 +3234,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			e.telemetry.RecordReadRequirementPopulation(ctx, principal, event)
 		}
 	}
+	// The gated flip, applied AFTER the measurement above is
+	// recorded so the telemetry always reports the true pre-correction
+	// observation regardless of whether the knob is on, and unconditional
+	// on e.telemetry so the served status can be corrected in a composition
+	// that runs with no telemetry sink at all. See
+	// applyServerCompletenessAuthority's own doc comment for the two
+	// guardrails (downgrade-only, answer-disposition-only) that bound it.
+	result = applyServerCompletenessAuthority(result, e.serverCompletenessAuthorityEnabled, completenessAuthority)
 	// CHAOS-4690: the SINGLE stamp point for the decisive path -- AFTER
 	// finalizeResult/fitAssembledResult (fitAssembledResult can re-run
 	// assembly, so composing labels any earlier could stamp a Coverage/
