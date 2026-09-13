@@ -654,6 +654,14 @@ func validateSemanticState(s PersistedSemanticState) error {
 		if entry.AppliedKind != "" && !contractsv1.ValidContextFabricSubjectKind(entry.AppliedKind) {
 			return reject("confirmed_needs[%d].applied_kind %q is not a vocabulary member", i, entry.AppliedKind)
 		}
+		// expected_kind's AppliedValue IS the kind (confirmedStructureMember's
+		// own doc comment, structure.go), so IT is what a subject-kind
+		// vocabulary check must read for this member -- AppliedKind stays
+		// empty for it (mirrors the receipt shape exactly).
+		if entry.Member == contractsv1.ContextFabricStructureNeedExpectedKind && entry.AppliedValue != "" &&
+			!contractsv1.ValidContextFabricSubjectKind(contractsv1.ContextFabricSubjectKind(entry.AppliedValue)) {
+			return reject("confirmed_needs[%d].applied_value %q is not a subject-kind vocabulary member", i, entry.AppliedValue)
+		}
 		if len(entry.AppliedValue) > SemanticStateMaxTermBytes {
 			return oversized(SemanticStateBoundTermBytes, "confirmed_needs[%d].applied_value is %d bytes, exceeds %d", i, len(entry.AppliedValue), SemanticStateMaxTermBytes)
 		}

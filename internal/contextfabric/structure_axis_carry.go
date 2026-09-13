@@ -159,9 +159,26 @@ type kindCarryResult struct {
 // producer instead of on the edges. Everything said there is true here; only
 // WHERE the confirmation lives differs (a window rides
 // EffectiveEvidenceWindow, a kind rides a ConfirmedStructure entry).
-func (e *Engine) resolveCarriedKind(ctx context.Context, principal storage.Principal, request InvestigationRequest, validatedSubjectReceipts []BoundSubjectReceipt, binding ResolvedGraphBinding) kindCarryResult {
+//
+// appliedNeeds/ledgerSourceResultID are CHAOS-5639's own per-need
+// confirmation ledger, already admitted by the caller
+// (Engine.resolveConfirmedNeedLedger) through THIS SAME choke point
+// (carryOriginSameQuestionVerdict) before ever reaching here. A remembered
+// kind is checked FIRST and, when present, returned WITHOUT running the
+// legacy multi-hop walk below -- it is the more precise, identity-verified
+// mechanism M2 built to replace that walk for a directly-referenced parent.
+// Constructed HERE, inside this function, deliberately: this is the ONE
+// producer TestCarryGateClosure_EveryHitIsConstructedInsideAGatedProducer
+// requires every KindCarryHit to be reachable from, and a hit minted in a
+// separate helper is exactly the shape that test exists to catch (an
+// adversarial review found precisely this when an earlier version of this
+// change built a parallel path instead).
+func (e *Engine) resolveCarriedKind(ctx context.Context, principal storage.Principal, request InvestigationRequest, validatedSubjectReceipts []BoundSubjectReceipt, binding ResolvedGraphBinding, appliedNeeds map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember, ledgerSourceResultID string) kindCarryResult {
 	if e.results == nil {
 		return kindCarryResult{Outcome: KindCarryMissNoReference}
+	}
+	if entry, ok := appliedNeeds[contractsv1.ContextFabricStructureNeedExpectedKind]; ok {
+		return kindCarryResult{Kind: contractsv1.ContextFabricSubjectKind(entry.AppliedValue), Outcome: KindCarryHit, SourceResultID: ledgerSourceResultID}
 	}
 	receiptSeeds := carryReferencedResultIDs(request, validatedSubjectReceipts)
 	parent := carryParentSeed(request)
@@ -526,19 +543,25 @@ func subjectAxisRedeemedKinds(confirmed []confirmedStructureMember) []contractsv
 	return kinds
 }
 
-// effectiveConfirmedKind decides the kind resolution narrows to, in
-// precedence order: this turn's own receipt (confirmed), then CHAOS-5639's
-// per-need confirmation ledger (remembered), then the legacy same-conversation
-// carry walk (carry). A real receipt this turn always wins over a remembered
-// or carried value; remembered wins over the older, multi-hop carry walk
-// because it is the more precise, identity-verified mechanism M2 built to
-// replace it for a directly-referenced parent.
-func effectiveConfirmedKind(confirmed []confirmedStructureMember, remembered []confirmedStructureMember, carry kindCarryResult) *ConfirmedExpectedKind {
+// effectiveConfirmedKind decides the kind resolution narrows to: this turn's
+// own receipt (confirmed) if any, else whatever carry holds.
+//
+// CHAOS-5639's per-need confirmation ledger does NOT plug in here as a third
+// source: an adversarial review proved that a parallel "remembered" input at
+// this level argues with the caller's own EXPLICIT (non-receipt) kind this
+// turn (statedExpectedKindThisTurn checks more than confirmed alone) and
+// skips applyCarryDrop's own disagreement rule. Instead, a remembered kind is
+// checked FIRST, inside resolveCarriedKind itself (its own doc comment), so it
+// flows through the EXACT SAME gates a legacy-walk value does: the caller
+// gates the whole computation behind statedExpectedKindThisTurn (a stated
+// kind this turn is never argued with), and applyCarryDrop runs on whatever
+// carry holds by the time it reaches here. By the time carry reaches this
+// function, a remembered value and a legacy-walk value are indistinguishable,
+// which is the point: whichever produced it already survived the one gate
+// that matters.
+func effectiveConfirmedKind(confirmed []confirmedStructureMember, carry kindCarryResult) *ConfirmedExpectedKind {
 	if own := confirmedExpectedKind(confirmed); own != nil {
 		return own
-	}
-	if r := rememberedMember(remembered, contractsv1.ContextFabricStructureNeedExpectedKind); r != nil && r.AppliedValue != "" {
-		return &ConfirmedExpectedKind{Kind: contractsv1.ContextFabricSubjectKind(r.AppliedValue)}
 	}
 	if carry.Outcome != KindCarryHit || carry.Kind == "" {
 		return nil

@@ -541,8 +541,11 @@ type kindCarryRecord struct {
 }
 
 type confirmedNeedLedgerRecord struct {
-	outcome        ConfirmedNeedLedgerOutcome
-	appliedMembers []contractsv1.ContextFabricStructureNeedKind
+	outcome             ConfirmedNeedLedgerOutcome
+	sourceResultID      string
+	appliedMembers      []contractsv1.ContextFabricStructureNeedKind
+	appliedExpectedKind contractsv1.ContextFabricSubjectKind
+	appliedAnchorKind   contractsv1.ContextFabricSubjectKind
 }
 
 // planCarryOutcomeRecord (CHAOS-5003) is the plan axis's counterpart to
@@ -670,8 +673,8 @@ func (r *recordingTelemetry) RecordStructureNeedsDisclosed(_ context.Context, _ 
 	r.structureNeedsDisclosed = append(r.structureNeedsDisclosed, member)
 }
 
-func (r *recordingTelemetry) RecordConfirmedNeedLedger(_ context.Context, _ storage.Principal, outcome ConfirmedNeedLedgerOutcome, appliedMembers []contractsv1.ContextFabricStructureNeedKind) {
-	r.confirmedNeedLedgers = append(r.confirmedNeedLedgers, confirmedNeedLedgerRecord{outcome, appliedMembers})
+func (r *recordingTelemetry) RecordConfirmedNeedLedger(_ context.Context, _ storage.Principal, outcome ConfirmedNeedLedgerOutcome, sourceResultID string, appliedMembers []contractsv1.ContextFabricStructureNeedKind, appliedExpectedKind, appliedAnchorKind contractsv1.ContextFabricSubjectKind) {
+	r.confirmedNeedLedgers = append(r.confirmedNeedLedgers, confirmedNeedLedgerRecord{outcome, sourceResultID, appliedMembers, appliedExpectedKind, appliedAnchorKind})
 }
 
 func (r *recordingTelemetry) RecordGatedOfferResolution(_ context.Context, _ storage.Principal, outcome GatedOfferResolutionOutcome) {

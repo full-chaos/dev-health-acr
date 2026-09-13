@@ -1745,17 +1745,23 @@ func confirmedExpectedKind(confirmed []confirmedStructureMember) *ConfirmedExpec
 // does not re-derive anything.
 // confirmedAnchorSelection decides the anchor resolution narrows to: this
 // turn's own receipt (confirmed) first, then CHAOS-5639's per-need
-// confirmation ledger (remembered) -- see effectiveConfirmedKind's own doc
-// comment for the precedence rationale (there is no legacy carry walk for
-// this member).
-func confirmedAnchorSelection(confirmed []confirmedStructureMember, remembered []confirmedStructureMember) *ConfirmedAnchorSelection {
+// confirmation ledger (applied) -- there is no legacy carry walk for this
+// member, unlike expected_kind (effectiveConfirmedKind's own doc comment).
+//
+// applied is CHAOS-5639's own single source of truth for what actually
+// applies (appliedNeedLedgerEntries, chaos5639_confirmed_need.go): it already
+// excludes an entry this turn's own receipt for the SAME member overrides,
+// and an entry with no value, so this function trusts its presence in the
+// map without re-deriving either check -- the class of bug an adversarial
+// review found when the two lived as separate, disagreeing checks.
+func confirmedAnchorSelection(confirmed []confirmedStructureMember, applied map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember) *ConfirmedAnchorSelection {
 	for _, c := range confirmed {
 		if c.Member == contractsv1.ContextFabricStructureNeedSubjectAnchor {
 			return &ConfirmedAnchorSelection{Kind: c.AppliedKind, CanonicalID: c.AppliedValue}
 		}
 	}
-	if r := rememberedMember(remembered, contractsv1.ContextFabricStructureNeedSubjectAnchor); r != nil {
-		return &ConfirmedAnchorSelection{Kind: r.AppliedKind, CanonicalID: r.AppliedValue}
+	if entry, ok := applied[contractsv1.ContextFabricStructureNeedSubjectAnchor]; ok {
+		return &ConfirmedAnchorSelection{Kind: entry.AppliedKind, CanonicalID: entry.AppliedValue}
 	}
 	return nil
 }

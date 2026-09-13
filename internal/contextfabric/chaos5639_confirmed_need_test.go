@@ -4,8 +4,10 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // parentAndChildForLedgerTest builds a parent result (turn two, which
@@ -123,6 +125,100 @@ func TestResolveConfirmedNeedLedger_MissUnloadable(t *testing.T) {
 	}
 }
 
+// TestResolveConfirmedNeedLedger_MissUnloadableWhenResultsUnconfigured pins
+// the DISTINCT reason an unset Results dependency reports: not
+// miss_no_reference (a false basis -- the request DID name a parent, the
+// engine simply cannot read anything), but the same miss_unloadable a read
+// failure reports.
+func TestResolveConfirmedNeedLedger_MissUnloadableWhenResultsUnconfigured(t *testing.T) {
+	t.Parallel()
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+			t.Fatal("Interpret must not be called by a direct resolveConfirmedNeedLedger test")
+			return InterpretedQuestion{}, nil
+		}),
+		Graph: neverProjectedGraphReader{t: t},
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			t.Fatal("ReadFacts must not be called by a direct resolveConfirmedNeedLedger test")
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			t.Fatal("Synthesize must not be called by a direct resolveConfirmedNeedLedger test")
+			return InvestigationResult{}, nil
+		}),
+		// Results deliberately unset.
+	}, EngineOptions{ServiceVersion: "chaos-5639-unit-test", Now: func() time.Time { return time.Unix(400, 0).UTC() }, NewResultID: func() string { return "result_chaos_5639_unit_test" }})
+	if err != nil {
+		t.Fatalf("NewEngine: %v", err)
+	}
+	request := validInvestigationRequest()
+	request.ParentResultID = "result_turn_two"
+
+	got := engine.resolveConfirmedNeedLedger(context.Background(), acceptancePrincipal(), request)
+	if got.Outcome != ConfirmedNeedLedgerMissUnloadable {
+		t.Fatalf("Outcome = %q, want %q: a named parent with no Results dependency cannot be a \"no reference\" miss", got.Outcome, ConfirmedNeedLedgerMissUnloadable)
+	}
+}
+
+// TestValidConfirmedNeedLedgerOutcome_Membership pins the closed vocabulary:
+// every declared member reports valid, and nothing else does.
+func TestValidConfirmedNeedLedgerOutcome_Membership(t *testing.T) {
+	t.Parallel()
+	for _, member := range confirmedNeedLedgerOutcomes() {
+		if !ValidConfirmedNeedLedgerOutcome(member) {
+			t.Errorf("ValidConfirmedNeedLedgerOutcome(%q) = false, want true", member)
+		}
+	}
+	for _, bad := range []ConfirmedNeedLedgerOutcome{"", "not_a_member", "HIT"} {
+		if ValidConfirmedNeedLedgerOutcome(bad) {
+			t.Errorf("ValidConfirmedNeedLedgerOutcome(%q) = true, want false", bad)
+		}
+	}
+}
+
+// TestResolveConfirmedNeedLedger_DropsOnDifferentQuestion is the direct
+// regression pin for an adversarial review's P1-1: the request-identity
+// digest never covers request.Question, so a same-question check is
+// required BESIDE it, not implied by it. Without this check, a turn naming
+// a parent result but asking something else entirely would inherit that
+// parent's confirmed need.
+func TestResolveConfirmedNeedLedger_DropsOnDifferentQuestion(t *testing.T) {
+	t.Parallel()
+	parentResult, parentState, childRequest := parentAndChildForLedgerTest(t)
+	childRequest.Question = "Which repositories does the Platform team own?"
+	// No conversation at all -- the API shape the review proved was worst
+	// affected: a caller that passes only parent_result_id.
+	childRequest.Conversation = nil
+	engine := buildCarryTestEngine(t, ledgerTestStore(parentResult, parentState))
+
+	got := engine.resolveConfirmedNeedLedger(context.Background(), acceptancePrincipal(), childRequest)
+	if got.Outcome != ConfirmedNeedLedgerDroppedQuestionChanged {
+		t.Fatalf("Outcome = %q, want %q: an unrelated question naming the same parent must never inherit its ledger", got.Outcome, ConfirmedNeedLedgerDroppedQuestionChanged)
+	}
+	if got.Entries != nil {
+		t.Fatalf("Entries = %#v, want nil on a dropped ledger", got.Entries)
+	}
+}
+
+// TestResolveConfirmedNeedLedger_DropsOnIndeterminateQuestion pins the third
+// state carryOriginSameQuestionVerdict's own sibling check distinguishes:
+// a question consisting only of terminal punctuation canonicalizes to the
+// empty string, so equal hashes there prove nothing -- neither same nor
+// different, dropped either way.
+func TestResolveConfirmedNeedLedger_DropsOnIndeterminateQuestion(t *testing.T) {
+	t.Parallel()
+	parentResult, parentState, childRequest := parentAndChildForLedgerTest(t)
+	parentResult.Question = "?"
+	childRequest.Question = "?"
+	childRequest.Conversation = nil
+	engine := buildCarryTestEngine(t, ledgerTestStore(parentResult, parentState))
+
+	got := engine.resolveConfirmedNeedLedger(context.Background(), acceptancePrincipal(), childRequest)
+	if got.Outcome != ConfirmedNeedLedgerDroppedQuestionIndeterminate {
+		t.Fatalf("Outcome = %q, want %q", got.Outcome, ConfirmedNeedLedgerDroppedQuestionIndeterminate)
+	}
+}
+
 func TestResolveConfirmedNeedLedger_MissEmpty(t *testing.T) {
 	t.Parallel()
 	parentResult, parentState, childRequest := parentAndChildForLedgerTest(t)
@@ -151,41 +247,132 @@ func TestResolveConfirmedNeedLedger_DroppedIncomparable(t *testing.T) {
 	}
 }
 
-// TestEffectiveConfirmedKind_Precedence pins the three-way precedence
-// effectiveConfirmedKind's own doc comment states: this turn's own receipt,
-// then the CHAOS-5639 ledger, then the legacy carry walk.
-func TestEffectiveConfirmedKind_Precedence(t *testing.T) {
+// TestAppliedNeedLedgerEntries_ExcludesWhatThisTurnAlreadyConfirmed pins the
+// single authority every consumer reads: a real receipt this turn for a
+// member always wins and the ledger's own entry for that member never
+// applies, regardless of value.
+func TestAppliedNeedLedgerEntries_ExcludesWhatThisTurnAlreadyConfirmed(t *testing.T) {
 	t.Parallel()
-	own := []confirmedStructureMember{{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectProject)}}
-	remembered := []confirmedStructureMember{{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectTeam)}}
-	legacyCarry := kindCarryResult{Outcome: KindCarryHit, Kind: contractsv1.ContextFabricSubjectRepository}
-
-	if got := effectiveConfirmedKind(own, remembered, legacyCarry); got == nil || got.Kind != contractsv1.ContextFabricSubjectProject {
-		t.Fatalf("own wins: effectiveConfirmedKind() = %#v, want project", got)
+	remembered := []confirmedStructureMember{
+		{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectTeam)},
+		{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: contractsv1.ContextFabricSubjectTeam, AppliedValue: "team_remembered"},
 	}
-	if got := effectiveConfirmedKind(nil, remembered, legacyCarry); got == nil || got.Kind != contractsv1.ContextFabricSubjectTeam {
-		t.Fatalf("remembered wins over legacy carry: effectiveConfirmedKind() = %#v, want team", got)
+	confirmedThisTurn := []confirmedStructureMember{
+		{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectProject)},
 	}
-	if got := effectiveConfirmedKind(nil, nil, legacyCarry); got == nil || got.Kind != contractsv1.ContextFabricSubjectRepository {
-		t.Fatalf("legacy carry still applies with no ledger entry: effectiveConfirmedKind() = %#v, want repository", got)
+	got := appliedNeedLedgerEntries(remembered, confirmedThisTurn)
+	if _, ok := got[contractsv1.ContextFabricStructureNeedExpectedKind]; ok {
+		t.Fatalf("applied = %#v, expected_kind must be excluded: this turn's own receipt already confirmed it", got)
 	}
-	if got := effectiveConfirmedKind(nil, nil, kindCarryResult{}); got != nil {
-		t.Fatalf("nothing confirmed anywhere: effectiveConfirmedKind() = %#v, want nil", got)
+	if entry, ok := got[contractsv1.ContextFabricStructureNeedSubjectAnchor]; !ok || entry.AppliedValue != "team_remembered" {
+		t.Fatalf("applied = %#v, want subject_anchor=team_remembered (untouched this turn)", got)
 	}
 }
 
-// TestConfirmedAnchorSelection_Precedence is TestEffectiveConfirmedKind_Precedence's
-// own sibling for subject_anchor (no legacy carry for this member).
-func TestConfirmedAnchorSelection_Precedence(t *testing.T) {
+// TestAppliedNeedLedgerEntries_ExcludesEmptyValuesAndUnappliableMembers pins
+// two adversarial-review findings at once: an entry with no value never
+// applies (P2-1: confirmedAnchorSelection must never see an empty-but-non-nil
+// selection), and a member with no resolution parameter to reach
+// (subject_handle here) is never reported as applied even though the ledger
+// may still store it.
+func TestAppliedNeedLedgerEntries_ExcludesEmptyValuesAndUnappliableMembers(t *testing.T) {
+	t.Parallel()
+	remembered := []confirmedStructureMember{
+		{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: contractsv1.ContextFabricSubjectTeam, AppliedValue: ""},
+		{Member: contractsv1.ContextFabricStructureNeedSubjectHandle, AppliedKind: contractsv1.ContextFabricSubjectPullRequest, AppliedValue: "42"},
+	}
+	got := appliedNeedLedgerEntries(remembered, nil)
+	if len(got) != 0 {
+		t.Fatalf("applied = %#v, want empty: an empty-valued anchor and an unappliable member must both be excluded", got)
+	}
+}
+
+// TestResolveCarriedKind_ARememberedEntryWinsOverAnExistingLegacyCarryHit pins
+// the ledger's own precedence over the older, multi-hop carry walk: it is the
+// more precise, identity-verified mechanism M2 built to replace it for a
+// directly-referenced parent, and it is checked FIRST, inside the SAME gated
+// producer TestCarryGateClosure_EveryHitIsConstructedInsideAGatedProducer
+// requires. An earlier version of this file built a separate helper instead;
+// an adversarial review proved that let a remembered kind override the
+// caller's own explicit statement and survive a disagreement the legacy walk
+// would have dropped -- see resolveCarriedKind's own doc comment.
+func TestResolveCarriedKind_ARememberedEntryWinsOverAnExistingLegacyCarryHit(t *testing.T) {
+	t.Parallel()
+	applied := map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember{
+		contractsv1.ContextFabricStructureNeedExpectedKind: {Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectTeam)},
+	}
+	engine := buildCarryTestEngine(t, &staticResultStore{results: map[string]InvestigationResult{}})
+	request := validInvestigationRequest() // no receipt/parent seeds at all -- the legacy walk would miss on its own
+	got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{}, applied, "result_parent")
+	if got.Outcome != KindCarryHit || got.Kind != contractsv1.ContextFabricSubjectTeam || got.SourceResultID != "result_parent" {
+		t.Fatalf("resolveCarriedKind() = %#v, want a hit for team sourced from result_parent", got)
+	}
+	if got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{}, nil, "result_parent"); got.Outcome != KindCarryMissNoReference {
+		t.Fatalf("resolveCarriedKind() with no applied entry and no legacy reference = %#v, want %q", got, KindCarryMissNoReference)
+	}
+}
+
+// TestKindCarryGates_ARememberedKindNeverArguesWithTheCallersOwnStatement
+// reproduces an adversarial review's P1-2/P1-3 findings directly against the
+// gates a remembered kind must flow through in engine.go: it never overrides
+// what the caller stated THIS turn (statedExpectedKindThisTurn), and a
+// subject-axis receipt naming a different kind still stands it down
+// (applyCarryDrop) exactly as it would a legacy-walk value.
+func TestKindCarryGates_ARememberedKindNeverArguesWithTheCallersOwnStatement(t *testing.T) {
+	t.Parallel()
+	applied := map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember{
+		contractsv1.ContextFabricStructureNeedExpectedKind: {Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectTeam)},
+	}
+	t.Run("caller stated an explicit kind this turn", func(t *testing.T) {
+		t.Parallel()
+		request := validInvestigationRequest()
+		request.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectRepository}
+		canon := requestStructureCanonicalization{}
+		if !statedExpectedKindThisTurn(request, canon) {
+			t.Fatal("fixture defect: statedExpectedKindThisTurn must be true for an explicit kind")
+		}
+		// engine.go's own gate: resolveCarriedKind (and so the ledger check
+		// inside it) is never even called when this is true, so
+		// effectiveConfirmedKind sees only confirmed (empty here) and a
+		// zero-value kindCarry -- applied is never consulted regardless of
+		// what it holds.
+		if got := effectiveConfirmedKind(canon.Confirmed, kindCarryResult{}); got != nil {
+			t.Fatalf("effectiveConfirmedKind() = %#v, want nil: an explicit kind this turn must never be overridden by a remembered one", got)
+		}
+	})
+	t.Run("a subject-axis receipt this turn redeemed a different kind", func(t *testing.T) {
+		t.Parallel()
+		confirmedThisTurn := []confirmedStructureMember{
+			{Member: contractsv1.ContextFabricStructureNeedSubjectCandidate, AppliedKind: contractsv1.ContextFabricSubjectRepository},
+		}
+		engine := buildCarryTestEngine(t, &staticResultStore{results: map[string]InvestigationResult{}})
+		remembered := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), validInvestigationRequest(), nil, ResolvedGraphBinding{}, applied, "result_parent")
+		dropped := applyCarryDrop(confirmedThisTurn, remembered)
+		if dropped.Outcome != KindCarryDroppedRedeemedKindDiffers {
+			t.Fatalf("applyCarryDrop(remembered) outcome = %q, want %q: a redeemed candidate naming repository must stand the remembered team down", dropped.Outcome, KindCarryDroppedRedeemedKindDiffers)
+		}
+		if got := effectiveConfirmedKind(nil, dropped); got != nil {
+			t.Fatalf("effectiveConfirmedKind(dropped) = %#v, want nil", got)
+		}
+	})
+}
+
+// TestConfirmedAnchorSelection_AppliedMapPrecedence is
+// TestKindCarryGates_ARememberedKindNeverArguesWithTheCallersOwnStatement's
+// own sibling for subject_anchor (no legacy carry, no drop rule for this
+// member -- own receipt then the applied map is the whole precedence).
+func TestConfirmedAnchorSelection_AppliedMapPrecedence(t *testing.T) {
 	t.Parallel()
 	own := []confirmedStructureMember{{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: contractsv1.ContextFabricSubjectProject, AppliedValue: "project_own"}}
-	remembered := []confirmedStructureMember{{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: contractsv1.ContextFabricSubjectTeam, AppliedValue: "team_remembered"}}
+	applied := map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember{
+		contractsv1.ContextFabricStructureNeedSubjectAnchor: {Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: contractsv1.ContextFabricSubjectTeam, AppliedValue: "team_remembered"},
+	}
 
-	if got := confirmedAnchorSelection(own, remembered); got == nil || got.CanonicalID != "project_own" {
+	if got := confirmedAnchorSelection(own, applied); got == nil || got.CanonicalID != "project_own" {
 		t.Fatalf("own wins: confirmedAnchorSelection() = %#v, want project_own", got)
 	}
-	if got := confirmedAnchorSelection(nil, remembered); got == nil || got.CanonicalID != "team_remembered" {
-		t.Fatalf("remembered applies with no own receipt: confirmedAnchorSelection() = %#v, want team_remembered", got)
+	if got := confirmedAnchorSelection(nil, applied); got == nil || got.CanonicalID != "team_remembered" {
+		t.Fatalf("applied entry used with no own receipt: confirmedAnchorSelection() = %#v, want team_remembered", got)
 	}
 	if got := confirmedAnchorSelection(nil, nil); got != nil {
 		t.Fatalf("nothing confirmed anywhere: confirmedAnchorSelection() = %#v, want nil", got)

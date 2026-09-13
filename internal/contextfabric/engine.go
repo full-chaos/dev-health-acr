@@ -575,11 +575,19 @@ type EngineTelemetry interface {
 	// confirmation ledger's own gate decision -- called at most once per
 	// Investigate call, from resolveConfirmedNeedLedger's own outcome
 	// (chaos5639_confirmed_need.go). outcome is the closed
-	// ConfirmedNeedLedgerOutcome vocabulary; appliedMembers is non-empty
-	// only on a hit, and only for the members that actually applied to this
-	// turn's resolution (a real receipt for the same member this turn always
-	// wins over a remembered one).
-	RecordConfirmedNeedLedger(ctx context.Context, principal storage.Principal, outcome ConfirmedNeedLedgerOutcome, appliedMembers []contractsv1.ContextFabricStructureNeedKind)
+	// ConfirmedNeedLedgerOutcome vocabulary; sourceResultID is the parent
+	// result consulted (empty when none was named), the same correlation
+	// handle RecordWindowContinuationDecision already discloses for its own
+	// referenced result. appliedMembers is non-empty only on a hit, and only
+	// for the members that actually applied to this turn's resolution (a
+	// real receipt for the same member this turn always wins over a
+	// remembered one). appliedExpectedKind/appliedAnchorKind are the closed
+	// subject-kind values actually applied for those two members (empty when
+	// that member did not apply) -- both content-safe by construction, the
+	// same discipline RecordKindCarry's own carried_kind/redeemed_kind pair
+	// holds: a drop reported without the value is a decision an operator
+	// cannot check.
+	RecordConfirmedNeedLedger(ctx context.Context, principal storage.Principal, outcome ConfirmedNeedLedgerOutcome, sourceResultID string, appliedMembers []contractsv1.ContextFabricStructureNeedKind, appliedExpectedKind, appliedAnchorKind contractsv1.ContextFabricSubjectKind)
 	// RecordStructureNeedsDisclosed (CHAOS-3900 P1.F, design brief §2.1's
 	// cf_structure_needs_disclosed{member}) reports one member appearing
 	// in a composed StructureNeeds.Missing -- called once per member,
@@ -1458,14 +1466,20 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// CHAOS-5639: the per-need confirmation ledger, resolved once per
 	// Investigate call, ahead of everything that could apply it (the
 	// CHAOS-4234 gate below, and the decisive ResolveSubjects call further
-	// down both read `remembered`). Computed from structureCanon.Confirmed
+	// down both read `appliedNeeds`). Computed from structureCanon.Confirmed
 	// alone, never joined into it -- see chaos5639_confirmed_need.go's own
 	// header comment for why: DP11's reuse bypass (reuseBypassReason, right
 	// below) keys on that exact slice, and a turn carrying only a remembered
 	// need must not take it.
 	confirmedNeedLedger := e.resolveConfirmedNeedLedger(carryCtx, principal, request)
 	remembered := confirmedNeedLedger.Entries
-	e.recordConfirmedNeedLedger(ctx, principal, confirmedNeedLedger, appliedRememberedMembers(remembered, structureCanon.Confirmed))
+	// appliedNeeds is the SINGLE authority for "does this remembered entry
+	// apply this turn" -- every consumer below reads it rather than
+	// re-deriving the check (chaos5639_confirmed_need.go's own doc comment
+	// on why a second, independent check is the defect an adversarial
+	// review found).
+	appliedNeeds := appliedNeedLedgerEntries(remembered, structureCanon.Confirmed)
+	e.recordConfirmedNeedLedger(ctx, principal, confirmedNeedLedger, appliedNeeds)
 	// The OUTGOING ledger for whatever result this turn saves: this turn's
 	// own confirmations over whatever remembered still admits. Computed once
 	// so every captureAcceptedReading call site (and the pre-interpretation
@@ -2194,7 +2208,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// carry miss must not suppress a kind carry hit.
 	var kindCarry kindCarryResult
 	if !statedExpectedKindThisTurn(request, structureCanon) {
-		kindCarry = e.resolveCarriedKind(carryCtx, principal, request, priorValidatedReceipts, binding)
+		// CHAOS-5639: appliedNeeds/confirmedNeedLedger.SourceResultID thread
+		// the per-need confirmation ledger into the SAME gated producer the
+		// legacy walk uses -- resolveCarriedKind checks the ledger first,
+		// inside itself, never in a separate helper (its own doc comment
+		// names the adversarial finding this closes).
+		kindCarry = e.resolveCarriedKind(carryCtx, principal, request, priorValidatedReceipts, binding, appliedNeeds, confirmedNeedLedger.SourceResultID)
 		// Compare and drop BEFORE the disclosure is composed and before the
 		// outcome is recorded, so all three views agree.
 		kindCarry = applyCarryDrop(structureCanon.Confirmed, kindCarry)
@@ -2217,6 +2236,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	carriedStructureEntries := []*contractsv1.ContextFabricConfirmedStructureEntry{
 		composeCarriedWindowEntry(windowCarry),
 		composeCarriedKindEntry(kindCarry),
+		// CHAOS-5639: a remembered subject_anchor has no legacy carry to ride
+		// through (unlike expected_kind, just above), so it needs its own
+		// disclosure -- never silent, the same discipline the other two hold.
+		composeCarriedNeedEntry(contractsv1.ContextFabricStructureNeedSubjectAnchor, appliedNeeds, confirmedNeedLedger.SourceResultID),
 	}
 	if effectiveWindow != nil && effectiveWindow.Provenance == WindowInferredDefault {
 		// CHAOS-4234: the gate still fires HERE, before anything decisive,
@@ -2224,7 +2247,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// offers-only resolution whose commit-bearing outputs are discarded
 		// -- see chaos4234_offers_only.go for the ruling and the two
 		// safety layers.
-		gatedMaterial, gatedMaterialWindowExpandUnavailable := e.gatedOfferMaterial(ctx, principal, request, graphRequest, interpretation, familyOutcome, binding, structureCanon, kindCarry, remembered, priorEntries)
+		gatedMaterial, gatedMaterialWindowExpandUnavailable := e.gatedOfferMaterial(ctx, principal, request, graphRequest, interpretation, familyOutcome, binding, structureCanon, kindCarry, appliedNeeds, priorEntries)
 		// CHAOS-3478/CHAOS-4234: priorOutcomes was already computed above
 		// (resolvePriorSubjectHints runs before Interpret, this gate fires
 		// after) but this gate's own resolution is offers-only and
@@ -2345,7 +2368,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 		return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, gateResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, gateMaterial, effectiveWindow, windowCarry.Outcome == WindowCarryHit, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture))
 	}
-	resolution, structureMaterial, commitBases, commitDigests, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, effectiveConfirmedKind(structureCanon.Confirmed, remembered, kindCarry), confirmedAnchorSelection(structureCanon.Confirmed, remembered), familyOutcome.Frame, ScopeAnchorRetrievalKind(familyOutcome.Frame, familyOutcome.WinningSample.ScopeAnchorKind))
+	resolution, structureMaterial, commitBases, commitDigests, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, effectiveConfirmedKind(structureCanon.Confirmed, kindCarry), confirmedAnchorSelection(structureCanon.Confirmed, appliedNeeds), familyOutcome.Frame, ScopeAnchorRetrievalKind(familyOutcome.Frame, familyOutcome.WinningSample.ScopeAnchorKind))
 	if err != nil {
 		// CHAOS-4077: a never-projected org (ResolveSubjects queried a
 		// graph key that has never been created) degrades to the SAME
