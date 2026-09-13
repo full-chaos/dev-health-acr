@@ -476,3 +476,36 @@ func TestTheWireDisclosureIsPresentExactlyWhenTheDeterminationIsUnavailable(t *t
 		}
 	}
 }
+
+// TestAnOrganizationScopeReadingIsRefusedOnBothSidesWhateverItsRoles holds the
+// one reading where the organization-scope predicate and the role decision can
+// disagree: an organization_scope frame whose pointer is absent derives no
+// role, so no offer can make the role decision unsatisfiable, and still the
+// question counts nothing. Fresh composition refuses it on its own basis
+// (resolveTerminalStatus consults the predicate first); the read side must
+// refuse the stored clarification the same way, or reuse and result-by-id
+// would serve a clarification fresh composition never composes.
+func TestAnOrganizationScopeReadingIsRefusedOnBothSidesWhateverItsRoles(t *testing.T) {
+	t.Parallel()
+	frame := &QuestionFrame{Goals: []InvestigationGoal{GoalAssessState}, SubjectExpression: SubjectExpression{Kind: SubjectExpressionOrganizationScope}}
+	resolution := SubjectResolution{Candidates: storedCIRunCandidates(), Committed: []SubjectRef{}}
+
+	fresh := decideDeclaredKind(frame, "", resolution, StructureOfferMaterial{})
+	if fresh.Unsatisfiable || !fresh.OrganizationScopeUnsupported {
+		t.Fatalf("fixture defect: fresh unsatisfiable/org = %v/%v, want false/true -- the reading must derive no role", fresh.Unsatisfiable, fresh.OrganizationScopeUnsupported)
+	}
+	request := InvestigationRequest{Options: InvestigationOptions{AllowClarification: true}}
+	if status, limitation := resolveTerminalStatus(request, &resolution, frame, true, fresh); status != InvestigationNoMatch || limitation != organizationScopeTerminalLimitation {
+		t.Fatalf("fresh status/limitation = %q/%q, want the organization-scope refusal", status, limitation)
+	}
+
+	state := &PersistedSemanticState{FramePresent: true, Frame: frame}
+	stored := storedClarification(storedCIRunCandidates()...)
+	if got := DecideStoredAnswerability(stored, state, SemanticStateReadAvailable); got.Determination != StoredAnswerabilityUnanswerable {
+		t.Fatalf("read-side determination = %q, want unanswerable, the refusal fresh composition takes", got.Determination)
+	}
+	served := storedClarification(storedCIRunCandidates()...)
+	if got := RepairStoredClarification(&served, state, SemanticStateReadAvailable); !got.Repaired || served.RefusalBasis != organizationScopeTerminalBasis {
+		t.Fatalf("repaired/basis = %v/%q, want true/organization_scope_unsupported", got.Repaired, served.RefusalBasis)
+	}
+}
