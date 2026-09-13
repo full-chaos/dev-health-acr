@@ -37,8 +37,31 @@ never a bare ImportError) when the pin is missing -- its caller
 ABORT there, because the five legacy buckets are already complete and
 admissible without this feature, and every caller that predates CHAOS-5625
 must keep merging exactly as it always has when it carries no pin.
+
+CHAOS-5722: the ask-dev scorer's `persisted_semantic_state(result_id)`
+adapter parameter (semantic_verdict.build_verdict/score/score_branch) is
+built and supplied FROM HERE, never from ask-dev -- ask-dev has no
+connection of its own to acr's trial store, by design (see
+semantic_verdict.py's own module docstring). `make_persisted_semantic_state_adapter`
+reads the SAME trial-postgres CONNECTION recipe scripts/trial/common.sh
+actually exports (ACR_TEST_TRIAL_PG_HOST/PORT/USER/PASSWORD -- common.sh
+exports no database-name variable at all; see `_trial_pg_database()`) and
+shells out to `psql`, the same read-only-query mechanism scripts/trial/common.sh
+itself already uses for a trial-store check (AGENTS.md's Python anti-pattern is why
+this is `psql` via subprocess, never a new Python postgres driver
+dependency -- there is no Python package manifest in this repo to declare
+one in). When the env recipe is not fully present (any hosted CI run that
+does not carry a trial-store binding) the adapter is not built at all --
+`merge_corpus.py` passes `persisted_semantic_state=None`, the exact
+adapter-omitted path semantic_verdict.py already defines, so a run with no
+trial-store binding scores `unscored`/`semantic_state_absent` on every
+`any_of` serve branch, exactly as it did before this ticket, never a merge
+abort.
 """
 import hashlib
+import inspect
+import json
+import os
 import subprocess
 from collections import Counter
 from pathlib import Path
@@ -237,6 +260,135 @@ def legacy_score(row, bucket, status, subject_substitution=False,
     )
 
 
+# CHAOS-5722: the standing trial-postgres env recipe scripts/trial/common.sh
+# actually EXPORTS (`trial_wire_common_env`, common.sh:486-489) -- HOST/PORT/
+# USER/PASSWORD only. There is no `ACR_TEST_TRIAL_PG_DB`: common.sh's own
+# database-name variable is the differently-named, differently-shaped
+# `ACR_TRIAL_PG_DATABASE` (common.sh:451-477), which common.sh itself never
+# exports either (a bare `: "${ACR_TRIAL_PG_DATABASE:=acr}"` default-assigns
+# it in common.sh's OWN shell scope only -- invisible to this adapter's
+# subprocess unless some caller upstream of common.sh already exported it).
+# See `_trial_pg_database()` below for the separately-resolved database name.
+_TRIAL_PG_ENV_VARS = (
+    "ACR_TEST_TRIAL_PG_HOST", "ACR_TEST_TRIAL_PG_PORT", "ACR_TEST_TRIAL_PG_USER",
+    "ACR_TEST_TRIAL_PG_PASSWORD",
+)
+
+# The standing k3s `acr-trial-data` trial-postgres instance's ACTUAL database
+# (verified live, read-only: `psql -l` on that instance lists exactly
+# `postgres` and `acr_kiac_askdev` -- there is no database named `acr` on
+# this store at all, so common.sh's own `:=acr` default is NOT a usable
+# fallback here; it defaults a DIFFERENT, differently-provisioned local
+# cluster common.sh also targets). `ACR_TRIAL_PG_DATABASE` is read first, so
+# a caller that already exports it (e.g. having sourced common.sh with it
+# set) is honored unchanged; this default applies only when neither is set.
+_DEFAULT_TRIAL_PG_DATABASE = "acr_kiac_askdev"
+
+
+def _trial_pg_database():
+    return os.environ.get("ACR_TRIAL_PG_DATABASE") or _DEFAULT_TRIAL_PG_DATABASE
+
+# acr internal/contextfabric/semantic_state.go: SemanticStateMaxEncodedBytes.
+# A persisted row over this bound is something the engine's OWN writer would
+# have refused at capture (Save refuses an oversized snapshot -- see that
+# file's "HOW IT IS BOUNDED" doc comment) -- if this query ever returns more
+# than that, the row cannot be a real accepted snapshot and this adapter
+# must not hand it to the scorer as if it were one.
+_MAX_PERSISTED_STATE_BYTES = 65536
+
+
+def trial_postgres_env_present():
+    """Whether the FULL standing trial-postgres CONNECTION recipe
+    (host/port/user/password -- see `_TRIAL_PG_ENV_VARS` above for exactly
+    which four, and why there is no fifth) is present -- partial
+    credentials (e.g. host+port but no password) are refused the same as
+    none at all, never a best-effort connection attempt with whatever
+    happens to be set. The database name is a SEPARATE question (see
+    `_trial_pg_database()`): it always resolves to something (an env
+    override or the standing default), so it is never part of this
+    presence check."""
+    return all(os.environ.get(name) for name in _TRIAL_PG_ENV_VARS)
+
+
+def make_persisted_semantic_state_adapter(semantic_verdict_module, run=subprocess.run):
+    """Build the `persisted_semantic_state(result_id) -> dict | None` adapter
+    `semantic_verdict.build_verdict()` takes (CHAOS-5722), reading acr's OWN
+    trial-postgres row for `result_id` via a read-only `psql` query -- see
+    this module's own docstring for why `psql` (subprocess), never a new
+    Python postgres driver dependency.
+
+    Returns `None` (never partially configured) when
+    `trial_postgres_env_present()` is false -- the caller
+    (merge_corpus.py) is expected to pass that `None` straight through to
+    `semantic_verdict.build_verdict(persisted_semantic_state=...)`, which
+    already treats "no adapter" as "no persisted row", never a crash.
+
+    The returned adapter callable NEVER raises anything but
+    `semantic_verdict_module.PersistedSemanticStateUnreadable` -- a `psql`
+    invocation failure, a non-zero exit, an oversized result, or a body
+    that does not decode as a JSON object are all "this row's persisted
+    state cannot be trusted right now", the identical bucket the row being
+    genuinely corrupt falls into, per this module's own "fails CLOSED,
+    never raises past its caller" discipline. `result_id` itself is passed
+    to `psql` ONLY via a `-v` bind variable substituted through `:'name'`
+    (`psql`'s own literal-quoting substitution, not string interpolation),
+    so it is never concatenated into the SQL text.
+    """
+    if not trial_postgres_env_present():
+        return None
+
+    host = os.environ["ACR_TEST_TRIAL_PG_HOST"]
+    port = os.environ["ACR_TEST_TRIAL_PG_PORT"]
+    user = os.environ["ACR_TEST_TRIAL_PG_USER"]
+    password = os.environ["ACR_TEST_TRIAL_PG_PASSWORD"]
+    db = _trial_pg_database()
+
+    def persisted_semantic_state(result_id):
+        if not isinstance(result_id, str) or not result_id:
+            # The scorer itself already guards this (see
+            # semantic_verdict._score_persisted_family_confirmation) -- this
+            # is defense in depth, never relied on as the only guard.
+            return None
+        env = {**os.environ, "PGPASSWORD": password,
+               "PGCONNECT_TIMEOUT": os.environ.get("PGCONNECT_TIMEOUT", "15")}
+        query = ("select semantic_state::text from acr.context_fabric_investigation_results "
+                 "where result_id = :'result_id'")
+        try:
+            proc = run(
+                ["psql", "-h", host, "-p", port, "-U", user, "-d", db,
+                 "-v", f"result_id={result_id}", "-At", "-c", query],
+                capture_output=True, text=True, timeout=15, env=env,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise semantic_verdict_module.PersistedSemanticStateUnreadable(
+                f"{result_id}: psql invocation failed: {exc}") from exc
+        if proc.returncode != 0:
+            raise semantic_verdict_module.PersistedSemanticStateUnreadable(
+                f"{result_id}: psql exited {proc.returncode}: {proc.stderr.strip()}")
+        raw = proc.stdout.strip()
+        if not raw:
+            # NULL semantic_state (the common case -- most rows predate M2,
+            # or ended before interpretation) and "no row for this
+            # result_id at all" both read the same way through `-At`: both
+            # are ABSENT, never unreadable.
+            return None
+        if len(raw.encode("utf-8")) > _MAX_PERSISTED_STATE_BYTES:
+            raise semantic_verdict_module.PersistedSemanticStateUnreadable(
+                f"{result_id}: persisted semantic_state is {len(raw.encode('utf-8'))} bytes, "
+                f"over the {_MAX_PERSISTED_STATE_BYTES}-byte bound")
+        try:
+            decoded = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise semantic_verdict_module.PersistedSemanticStateUnreadable(
+                f"{result_id}: semantic_state did not decode as JSON: {exc}") from exc
+        if not isinstance(decoded, dict):
+            raise semantic_verdict_module.PersistedSemanticStateUnreadable(
+                f"{result_id}: semantic_state decoded to {type(decoded).__name__}, not an object")
+        return decoded
+
+    return persisted_semantic_state
+
+
 def attempts_for(root, corpus_id, rep):
     """Every recorded attempt for one row/rep under `root`, in the harness's
     own numeric attempt order -- the SAME glob/order convention
@@ -268,12 +420,19 @@ def attempts_for(root, corpus_id, rep):
 def verdict_for_row(row, root, corpus_id, rep, bucket, status,
                      semantic_verdict, pin, corpus_version,
                      subject_substitution=False, identity_state="read",
-                     disclosed_basis=None):
+                     disclosed_basis=None, persisted_semantic_state=None):
     """The published semantic_verdict record for one row/rep. NEVER RAISES:
     a scan-level gap (no artefact, unreadable file) is folded into the
     SAME `unscored`/named-reason shape semantic_verdict.py's own audit uses
     for a malformed exchange, so a caller can publish it exactly like any
-    other row without a second branch for "the scan itself failed"."""
+    other row without a second branch for "the scan itself failed".
+
+    `persisted_semantic_state` (CHAOS-5722, optional) is forwarded to
+    `semantic_verdict.build_verdict()` unchanged -- the caller
+    (merge_corpus.py) builds it once per run via
+    `make_persisted_semantic_state_adapter` and passes the SAME adapter (or
+    `None`) to every row, never a new one per row.
+    """
     ok, attempts, reason = attempts_for(root, corpus_id, rep)
     if not ok:
         audit = {"family_relation": "unknown", "window_binding": "unknown",
@@ -288,12 +447,24 @@ def verdict_for_row(row, root, corpus_id, rep, bucket, status,
         # dict `final` as `family_unavailable`, never a crash.
         final = (attempts[-1].get("response") or {}).get("result")
 
-    return semantic_verdict.build_verdict(
-        row, bucket, status, final, audit, legacy_score,
-        corpus_version, pin["legacy_scorer_version"],
+    build_kwargs = dict(
         subject_substitution=subject_substitution,
         identity_state=identity_state,
         disclosed_basis=disclosed_basis,
+    )
+    # CHAOS-5722: forward the adapter ONLY when the resolved ask-dev pin's
+    # own `build_verdict` actually declares the parameter. A pin from
+    # before this ticket has no named `persisted_semantic_state` parameter
+    # to catch it -- it would fall into that `build_verdict`'s own
+    # `**identity` catch-all instead and be forwarded straight into
+    # `legacy_score`, which does not accept it either (a mixed-version pin
+    # otherwise crashes every row, not just degrades this one feature).
+    if "persisted_semantic_state" in inspect.signature(semantic_verdict.build_verdict).parameters:
+        build_kwargs["persisted_semantic_state"] = persisted_semantic_state
+    return semantic_verdict.build_verdict(
+        row, bucket, status, final, audit, legacy_score,
+        corpus_version, pin["legacy_scorer_version"],
+        **build_kwargs,
     )
 
 

@@ -212,6 +212,15 @@ def test_load_attempt_is_the_only_decoder_of_attempt_artefacts():
         ("subject_identity.py", "rep_from_summaries"):
             "shard summaries only, to read the run's replicate tag; attempt artefacts "
             "still go through load_attempt",
+        # CHAOS-5722. Decodes the trial-postgres `semantic_state` column
+        # value this adapter itself queries -- an M2 persisted snapshot,
+        # never a harness attempt artefact. `attempts_for`/`verdict_for_row`
+        # in this same file still read every attempt file exclusively
+        # through `validators.load_attempt`; this is a second, unrelated
+        # document kind this module also decodes, named explicitly rather
+        # than widening an attempt-artefact exemption to cover it.
+        ("semantic_verdict_bridge.py", "persisted_semantic_state"):
+            "the persisted M2 semantic_state column value, never an attempt artefact",
     }
     offenders = []
     for f in sorted(HERE.glob("*.py")):
