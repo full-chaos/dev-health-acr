@@ -333,11 +333,27 @@ func decideAnswerability(reading answerabilityReading, offers []answerabilityOff
 // state, health or drivers -- has no capability behind it. Such a question
 // that ends without a committed subject is refused on its own basis, whatever
 // retrieval offered: no offer can make it answerable, because the subject is
-// the caller's own organization and is never a candidate. A counting question
-// that ends there keeps the role decision, because "counts are supported" is
-// true of it.
+// the caller's own organization and is never a candidate. A goal set that asks
+// for anything besides a count is outside the served envelope even when a
+// count sits beside it, and its non-count goal is the part the sentence names
+// as unsupported. Only a frame whose every goal is a count keeps the role
+// decision, because "counts are supported" is true of it alone.
 func organizationScopeUnsupported(frame *QuestionFrame) bool {
-	return frame != nil && frame.SubjectExpression.Kind == SubjectExpressionOrganizationScope && !frame.HasGoal(GoalCountOrAggregate)
+	return frame != nil && frame.SubjectExpression.Kind == SubjectExpressionOrganizationScope && !countsOnly(frame.Goals)
+}
+
+// countsOnly reports whether goals is a non-empty set whose every member is
+// the count goal: the one organization-scope goal set that is served.
+func countsOnly(goals []InvestigationGoal) bool {
+	if len(goals) == 0 {
+		return false
+	}
+	for _, goal := range goals {
+		if goal != GoalCountOrAggregate {
+			return false
+		}
+	}
+	return true
 }
 
 // The organization-scope terminal: its reason token, its sentence, and its

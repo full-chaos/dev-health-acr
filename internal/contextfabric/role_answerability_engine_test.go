@@ -604,6 +604,13 @@ func TestOrganizationScopeQuestionsRefuseOnTheirOwnBasis(t *testing.T) {
 			basis: declaredKindTerminalBasis, limitation: declaredKindTerminalLimitation, reason: declaredKindTerminalReason,
 		},
 		{
+			// A count beside a non-count goal is outside the served envelope:
+			// the non-count goal is the unsupported part the sentence names.
+			cell: "a count beside an assessment is refused on the organization basis", frame: roleOrgFrameWithGoals(&project, GoalCountOrAggregate, GoalAssessState),
+			resolution: mixedPool, allowClarification: true,
+			basis: organizationScopeTerminalBasis, limitation: organizationScopeTerminalLimitation, reason: organizationScopeTerminalReason,
+		},
+		{
 			cell: "a refusing frame gate keeps its own basis", frame: roleOrgFrameWithGoals(nil, GoalAssessState),
 			gate:       FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable},
 			resolution: mixedPool, allowClarification: true,
