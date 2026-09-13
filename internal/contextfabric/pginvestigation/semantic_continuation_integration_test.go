@@ -291,7 +291,7 @@ func TestSemanticContinuation_TheCarriedReadingSurvivesFreshEnginesAndARegistryC
 		wantReason string
 	}{
 		{"legacy row with no snapshot", nil, "absent", "semantic_state_absent"},
-		{"malformed snapshot", `{"format_version":"semantic-state.v2","family":"not-a-family"}`, "malformed", "semantic_state_invalid"},
+		{"malformed snapshot", `{"format_version":"semantic-state.v1","family":"not-a-family"}`, "malformed", "semantic_state_invalid"},
 		{"unsupported snapshot format", `{"format_version":"semantic-state.v9"}`, "unsupported_version", "context_version_mismatch"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

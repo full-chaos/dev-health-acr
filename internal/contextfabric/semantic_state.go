@@ -42,13 +42,7 @@ import (
 
 // SemanticStateFormatVersion is the internal format this build writes and the
 // only one it reads. A stored snapshot naming any other format is unavailable.
-//
-// BUMPED TO v2 (CHAOS-5639): ConfirmedNeeds joined the shape as a required,
-// never-null field. Every field in a format is required with no omitempty
-// (this file's own header comment), so a v1 row -- written before the field
-// existed -- cannot re-encode to the same bytes it was stored as, and reads
-// back correctly as unsupported_version rather than incorrectly as malformed.
-const SemanticStateFormatVersion = "semantic-state.v2"
+const SemanticStateFormatVersion = "semantic-state.v1"
 
 // SemanticStateMaxEncodedBytes is the cap on one encoded snapshot, in bytes
 // of this package's canonical encoding.
@@ -155,13 +149,20 @@ type PersistedSemanticState struct {
 	// ConfirmedNeeds is the per-need confirmation ledger (CHAOS-5639): one
 	// entry per StructureNeedKind this conversation has confirmed by receipt,
 	// carried forward so a later turn under the SAME request identity is not
-	// re-raised for it without the receipt being redeemed again. Never null;
-	// empty means nothing confirmed yet. Consulted only by its own
-	// identity-keyed admission (chaos5639_confirmed_need.go), never by the
-	// D-b/D-c continuation comparison -- see
+	// re-raised for it without the receipt being redeemed again.
+	//
+	// ADDITIVE, unlike every other field in this format: "absent" and "empty"
+	// are the SAME fact for a confirmation ledger (no need has been
+	// confirmed), so there is no presence/absence distinction here worth a
+	// format bump to preserve -- omitempty on both the struct tag and every
+	// write this codec produces (nil and a zero-length slice both omit the
+	// key), so a v1 row saved before this field existed reads back with an
+	// empty ledger, not unavailable. Consulted only by its own identity-keyed
+	// admission (chaos5639_confirmed_need.go), never by the D-b/D-c
+	// continuation comparison -- see
 	// TestSemanticState_EverySnapshotKeyIsComparedOrExemptByName's own exempt
 	// entry for why.
-	ConfirmedNeeds []ConfirmedNeedEntry `json:"confirmed_needs"`
+	ConfirmedNeeds []ConfirmedNeedEntry `json:"confirmed_needs,omitempty"`
 }
 
 // ConfirmedNeedEntry is one structure need's remembered confirmation
@@ -634,9 +635,10 @@ func validateSemanticState(s PersistedSemanticState) error {
 	if err := validateSemanticValidation(s.Validation, s.FramePresent); err != nil {
 		return reject("validation: %v", err)
 	}
-	if s.ConfirmedNeeds == nil {
-		return reject("confirmed_needs must be an array, never null")
-	}
+	// NO NIL CHECK, unlike Roles/Requirements above: ConfirmedNeeds is
+	// additive (this type's own doc comment) -- nil is the ordinary, expected
+	// value for a v1 row saved before this field existed, or for any turn
+	// with nothing confirmed yet, not a document this codec did not write.
 	if len(s.ConfirmedNeeds) > contractsv1.ContextFabricStructureNeedKindCount {
 		return oversized(SemanticStateBoundConfirmedNeeds, "%d confirmed needs exceeds the %d the vocabulary holds", len(s.ConfirmedNeeds), contractsv1.ContextFabricStructureNeedKindCount)
 	}
@@ -968,10 +970,6 @@ type SemanticStateInput struct {
 // BuildSemanticState assembles a snapshot from the accepted values. It does
 // not validate; captureSemanticState does.
 func BuildSemanticState(in SemanticStateInput) *PersistedSemanticState {
-	confirmedNeeds := in.ConfirmedNeeds
-	if confirmedNeeds == nil {
-		confirmedNeeds = []ConfirmedNeedEntry{}
-	}
 	state := &PersistedSemanticState{
 		FormatVersion:                SemanticStateFormatVersion,
 		Family:                       in.Outcome.Family,
@@ -985,7 +983,7 @@ func BuildSemanticState(in SemanticStateInput) *PersistedSemanticState {
 		Requirements:                 []SemanticRequirement{},
 		RequirementDerivationVersion: RequirementDerivationVersion,
 		RequestIdentity:              in.RequestIdentity,
-		ConfirmedNeeds:               confirmedNeeds,
+		ConfirmedNeeds:               in.ConfirmedNeeds,
 		Validation: SemanticStateValidation{
 			EmittedShape:       in.EmittedShape,
 			GateOutcome:        in.Outcome.Gate.Outcome,

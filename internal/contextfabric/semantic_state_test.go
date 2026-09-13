@@ -326,15 +326,24 @@ func TestSemanticState_EveryMutationOfTheStoredDocumentIsUnavailable(t *testing.
 	}
 	t.Logf("%d cells: %v", len(cells), counts)
 	// A future format is UNSUPPORTED, not malformed, even when its shape moved.
-	if _, status := DecodeSemanticState([]byte(`{"format_version":"semantic-state.v3","anything":[1,2]}`)); status != SemanticStateReadUnsupportedVersion {
-		t.Errorf("a v3 document with a new shape -> %s, want unsupported_version", status)
+	if _, status := DecodeSemanticState([]byte(`{"format_version":"semantic-state.v2","anything":[1,2]}`)); status != SemanticStateReadUnsupportedVersion {
+		t.Errorf("a v2 document with a new shape -> %s, want unsupported_version", status)
 	}
-	// A v1 document -- written before CHAOS-5639 added confirmed_needs -- is
-	// UNSUPPORTED, not malformed: the format bump (not a shape-only change) is
-	// exactly what lets an old row degrade to "cannot verify" rather than
-	// being misread as a document this build wrote.
-	if _, status := DecodeSemanticState([]byte(`{"format_version":"semantic-state.v1","family":"","family_source":"","family_table_version":"x","group_kind":"","narrowing_basis":"","scope_anchor":{"kind":"","term":""},"frame_present":false,"frame":null,"frame_version":"x","validation":{"emitted_shape":"","gate_outcome":"not_evaluated","failed_invariant":"","refuse_basis":"","declared_member_kind":""},"roles":[],"request_identity":{"version":"","digest":""},"requirements_declared":false,"requirements":[],"requirement_derivation_version":"x"}`)); status != SemanticStateReadUnsupportedVersion {
-		t.Errorf("a pre-CHAOS-5639 v1 document -> %s, want unsupported_version", status)
+	// CHAOS-5639: ConfirmedNeeds is additive. A row with nothing confirmed --
+	// which is what every row saved before this field existed also reads as
+	// -- omits the key entirely (this codec's own writer never emits an empty
+	// ledger) and decodes back AVAILABLE with an empty ledger, never
+	// malformed or unsupported.
+	noLedger := semanticFixture(t)
+	noLedgerEncoded, err := EncodeSemanticState(noLedger)
+	if err != nil {
+		t.Fatalf("encode a fixture with no confirmed needs: %v", err)
+	}
+	if strings.Contains(string(noLedgerEncoded), "confirmed_needs") {
+		t.Errorf("an empty ledger encoded with the confirmed_needs key present: %s", noLedgerEncoded)
+	}
+	if state, status := DecodeSemanticState(noLedgerEncoded); status != SemanticStateReadAvailable || len(state.ConfirmedNeeds) != 0 {
+		t.Errorf("a row with no confirmed_needs key -> status=%s confirmed_needs=%#v, want available with an empty ledger", status, state)
 	}
 	// A FIELD THE CODEC NEVER WROTE is malformed, whichever guard gets there
 	// first: the decoder refuses unknown fields, and the canonical re-encode
@@ -354,7 +363,7 @@ func TestSemanticState_EveryMutationOfTheStoredDocumentIsUnavailable(t *testing.
 // an unsupported version by a turn that can no longer do anything about it.
 func TestSemanticState_TheEncoderRefusesAFormatItDidNotWrite(t *testing.T) {
 	t.Parallel()
-	for _, version := range []string{"", "semantic-state.v0", "semantic-state.v3", "SEMANTIC-STATE.V2", " semantic-state.v2"} {
+	for _, version := range []string{"", "semantic-state.v0", "semantic-state.v2", "SEMANTIC-STATE.V1", " semantic-state.v1"} {
 		state := sizedSemanticState(t, 4000)
 		state.FormatVersion = version
 		_, err := EncodeSemanticState(state)
@@ -996,6 +1005,58 @@ func TestSemanticState_AnOversizedCaptureNamesItsBoundOnTheLine(t *testing.T) {
 			t.Errorf("an in-bounds capture = %+v, want a snapshot and no bound", capture)
 		}
 	})
+}
+
+// TestSemanticState_ConfirmedNeedsValidation drives EncodeSemanticState's own
+// input domain for the per-need confirmation ledger (CHAOS-5639): a valid
+// non-empty entry accepts, and every malformed shape is refused BY NAME
+// (never silently accepted, never conflated with a different rejection).
+func TestSemanticState_ConfirmedNeedsValidation(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		entries []ConfirmedNeedEntry
+		accept  bool
+	}{
+		{"nil (additive default)", nil, true},
+		{"one valid kind entry", []ConfirmedNeedEntry{
+			{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectTeam)},
+		}, true},
+		{"one valid anchor entry with a kind", []ConfirmedNeedEntry{
+			{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: contractsv1.ContextFabricSubjectProject, AppliedValue: "project_ask_dev"},
+		}, true},
+		{"every member, once each", []ConfirmedNeedEntry{
+			{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectTeam)},
+			{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: contractsv1.ContextFabricSubjectProject, AppliedValue: "p"},
+			{Member: contractsv1.ContextFabricStructureNeedSubjectHandle, AppliedKind: contractsv1.ContextFabricSubjectPullRequest, AppliedValue: "42"},
+			{Member: contractsv1.ContextFabricStructureNeedWindow, AppliedValue: "trailing_30d"},
+			{Member: contractsv1.ContextFabricStructureNeedSubjectCandidate, AppliedKind: contractsv1.ContextFabricSubjectWorkItem, AppliedValue: "wi_1"},
+		}, true},
+		{"unknown member string", []ConfirmedNeedEntry{{Member: "not_a_member", AppliedValue: "x"}}, false},
+		{"duplicate member", []ConfirmedNeedEntry{
+			{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectTeam)},
+			{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectProject)},
+		}, false},
+		{"out-of-vocabulary applied_kind", []ConfirmedNeedEntry{
+			{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: "not_a_kind", AppliedValue: "x"},
+		}, false},
+		{"oversized applied_value", []ConfirmedNeedEntry{
+			{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: strings.Repeat("x", SemanticStateMaxTermBytes+1)},
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			state := semanticFixture(t)
+			state.ConfirmedNeeds = tc.entries
+			_, err := EncodeSemanticState(state)
+			if tc.accept && err != nil {
+				t.Errorf("EncodeSemanticState() = %v, want accepted", err)
+			}
+			if !tc.accept && (err == nil || !errors.Is(err, ErrSemanticStateRejected)) {
+				t.Errorf("EncodeSemanticState() = %v, want %v", err, ErrSemanticStateRejected)
+			}
+		})
+	}
 }
 
 // TestSemanticState_TheScopeAnchorTermIsBoundedLikeEveryTerm: the anchor term

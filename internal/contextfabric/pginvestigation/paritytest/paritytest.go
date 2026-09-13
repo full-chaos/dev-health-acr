@@ -909,7 +909,7 @@ func RunSemanticStateReadSuite(t *testing.T, newStore func(t *testing.T) (contex
 	}{
 		{"canonical, keys reordered", reordered, contextfabric.SemanticStateReadAvailable},
 		{"an unsupported format", []byte(`{"format_version":"semantic-state.v9","anything":true}`), contextfabric.SemanticStateReadUnsupportedVersion},
-		{"a malformed document", []byte(`{"format_version":"semantic-state.v2","family":"not-a-family"}`), contextfabric.SemanticStateReadMalformed},
+		{"a malformed document", []byte(`{"format_version":"semantic-state.v1","family":"not-a-family"}`), contextfabric.SemanticStateReadMalformed},
 		{"a canonical document missing one key", missingKey, contextfabric.SemanticStateReadMalformed},
 		{"an oversized document", oversized, contextfabric.SemanticStateReadOversized},
 	} {
