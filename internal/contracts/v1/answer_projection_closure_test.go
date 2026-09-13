@@ -330,7 +330,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// verbatim rather than narrowing it. All six are SERVER-DERIVED
 		// closed tokens the resolver mints from its own vocabularies; none is
 		// model-authorable, so none joins the untrusted set.
-		// CHAOS-5672: 235 -> 237 and 347 -> 349, +2 on BOTH surfaces --
+		// semantic_reading: 235 -> 237 and 347 -> 349, +2 on BOTH surfaces --
 		// semantic_reading.status and semantic_reading.reason, two closed
 		// vocabularies a read sets from the stored reading's read status,
 		// never model prose. Equal on the two surfaces because the
@@ -448,7 +448,7 @@ func countMatching(values []string, predicate func(string) bool) int {
 // service-issued version tokens, and digests. Each pattern is a positive
 // claim that the value's shape is constrained by the contract itself.
 func trustedBecauseClosed(path string) bool {
-	// CHAOS-5672: semantic_reading.reason is ContextFabricSemanticReadingReason,
+	// semantic_reading.reason is ContextFabricSemanticReadingReason,
 	// a two-member closed vocabulary set by the result-by-id read from the
 	// stored reading's read status. Matched on its full suffix rather than on
 	// the bare leaf "reason", which other shapes in this contract use for

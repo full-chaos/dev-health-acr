@@ -1860,7 +1860,7 @@ type ContextFabricInvestigationResult struct {
 	// correct value, because none of them was refused by a gate that did
 	// not yet exist.
 	RefusalBasis ContextFabricRefusalBasis `json:"refusal_basis,omitempty"`
-	// SemanticReading (CHAOS-5672) is present only on a READ of a stored
+	// SemanticReading is present only on a READ of a stored
 	// clarification whose answerability needed the stored accepted reading
 	// and could not load it. See context_fabric_semantic_reading.go.
 	SemanticReading *ContextFabricSemanticReading `json:"semantic_reading,omitempty"`

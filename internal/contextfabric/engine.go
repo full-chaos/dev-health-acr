@@ -410,7 +410,7 @@ type EngineTelemetry interface {
 	// decision: the roles evaluated, the role the winning offer advanced and
 	// its channel, and the offer counts.
 	RecordSubjectlessTerminal(ctx context.Context, principal storage.Principal, reason string, refusalBasis string, declaredKinds string, offeredKinds string, answerability SubjectlessTerminalAnswerability)
-	// RecordStoredAnswerability (CHAOS-5672) reports the answerability
+	// RecordStoredAnswerability reports the answerability
 	// determination a READ surface took on a stored clarification: the
 	// surface, the determination (answerable / unanswerable / unavailable),
 	// the persisted reading's read status, the role half of the decision,

@@ -2,7 +2,7 @@ package v1
 
 import "fmt"
 
-// CHAOS-5672 (chris, D49): the disclosure a stored result carries on a read
+// CHAOS-5672 (D49): the disclosure a stored result carries on a read
 // when the accepted reading it was produced under cannot be loaded and the
 // read needed it.
 //

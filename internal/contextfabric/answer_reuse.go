@@ -645,7 +645,7 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 		e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
 		return InvestigationResult{}, false
 	}
-	// CHAOS-5672: a stored clarification is served from the reuse store only
+	// A stored clarification is served from the reuse store only
 	// when its persisted accepted reading shows that one of its offers
 	// advances a role of that reading -- the predicate fresh composition
 	// applies (role_answerability.go). The reuse lookup runs before

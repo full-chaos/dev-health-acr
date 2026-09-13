@@ -139,7 +139,7 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 				"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
 				"served_status", string(result.Status))
 		}
-		// CHAOS-5672, the read side of ROLE answerability. A stored
+		// The read side of ROLE answerability. A stored
 		// clarification whose persisted accepted reading shows no offer
 		// advancing any role of that reading is served as the terminal fresh
 		// composition takes today; one whose reading is unavailable is served
