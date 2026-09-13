@@ -835,14 +835,18 @@ func (t SlogEngineTelemetry) RecordRenderShapeSelection(ctx context.Context, pri
 // between those two states legible. Above quorum the same line rides at Info
 // so the fallback-dropped count is still countable.
 func (t SlogEngineTelemetry) RecordInterpretationEnsemble(ctx context.Context, principal storage.Principal, event InterpretationEnsembleEvent) {
-	args := []any{
+	// request_id rides on the same terms as every other line in this file:
+	// a below-quorum Warn names a turn that served a degraded answer, and
+	// without the id an operator can see that it happened but not to which
+	// request.
+	args := append([]any{
 		"org_id", SanitizeLogAttr(principal.OrgID),
 		"requested", event.Requested,
 		"primary_succeeded", event.PrimarySucceeded,
 		"fallback_served", event.FallbackServed,
 		"failed", event.Failed,
 		"quorum_met", event.QuorumMet,
-	}
+	}, requestIDLogAttrs(ctx)...)
 	if !event.QuorumMet {
 		t.logger.WarnContext(ctx, "context fabric interpretation ensemble did not reach quorum", args...)
 		return

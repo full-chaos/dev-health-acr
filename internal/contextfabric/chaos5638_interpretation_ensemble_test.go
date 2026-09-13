@@ -1,9 +1,13 @@
 package contextfabric
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-acr/internal/observability"
+	"log/slog"
 	"sort"
 	"sync"
 	"testing"
@@ -614,5 +618,83 @@ func TestARefusedPluralityIsNotOverwrittenByTheRoute(t *testing.T) {
 	// comparison this shadow exists to feed.
 	if outcome.Route.Family == "" && outcome.Route.Disposition == "" {
 		t.Fatal("the route decision was not recorded at all; only the overwrite should be withheld")
+	}
+}
+
+// A REFUSED PLURALITY IS NOT FILLED BY THE PRIOR TURN'S PLAN.
+//
+// Plan carry exists to give a turn that produced no reading of its own the
+// reading the conversation already has, and it keys on family=unclassified to
+// recognise one. A refused plurality reports that same family value -- but it
+// is a reading: the model's samples disagreed, and the source says so. Carrying
+// over it serves the previous turn's family for a question this turn declined
+// to classify, and erases the only signal that it did.
+//
+// Driven through Engine.applyAndRecordCarry, the method the engine calls at the
+// point it applies a carry, so the pin covers the engine's own path rather than
+// the pure helper beneath it.
+func TestARefusedPluralityIsNotFilledByAPlanCarry(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	engine := &Engine{telemetry: telemetry}
+	refused := QuestionFamilyOutcome{
+		Family: QuestionFamilyUnclassified,
+		Source: QuestionFamilySourcePluralityRejected,
+	}
+	carry := planCarryResult{
+		Outcome: PlanCarryHit, Family: QuestionFamilyGroupedCohortStatus,
+		GroupKind: SubjectTeam, SourceResultID: "result_prior_turn",
+	}
+
+	got := engine.applyAndRecordCarry(context.Background(), storage.Principal{OrgID: "org_1"}, refused, carry)
+
+	if got.Family != QuestionFamilyUnclassified {
+		t.Fatalf("family = %q, want the refusal kept -- the prior turn's plan filled a turn that declined to classify", got.Family)
+	}
+	if got.Source != QuestionFamilySourcePluralityRejected {
+		t.Fatalf("source = %q, want %q -- the carry erased the signal that the samples disagreed",
+			got.Source, QuestionFamilySourcePluralityRejected)
+	}
+	if len(telemetry.planCarries) != 0 {
+		t.Fatalf("got %d plan-carry events for a refusal the carry must not apply to", len(telemetry.planCarries))
+	}
+}
+
+// THE CONTROL beside it: the same carry still fills a turn that genuinely
+// produced nothing. Without this, a guard that refused EVERY unclassified turn
+// would pass the pin above while breaking plan carry for everyone.
+func TestAPlanCarryStillFillsATurnThatClassifiedNothing(t *testing.T) {
+	t.Parallel()
+	engine := &Engine{telemetry: &recordingTelemetry{}}
+	nothing := QuestionFamilyOutcome{Family: QuestionFamilyUnclassified, Source: QuestionFamilySourceModel}
+	carry := planCarryResult{Outcome: PlanCarryHit, Family: QuestionFamilyGroupedCohortStatus, GroupKind: SubjectTeam}
+
+	got := engine.applyAndRecordCarry(context.Background(), storage.Principal{OrgID: "org_1"}, nothing, carry)
+	if got.Family != QuestionFamilyGroupedCohortStatus || got.Source != QuestionFamilySourceCarried {
+		t.Fatalf("got family=%q source=%q, want the carry applied to a turn with no reading of its own", got.Family, got.Source)
+	}
+}
+
+// THE COMPOSITION EVENT CARRIES THE REQUEST ID, on the same terms as every
+// other line the production telemetry emits. A below-quorum Warn names a turn
+// that served a degraded answer; without the id it cannot be tied to the request
+// it degraded. Asserted on the production sink's own bytes, not on a double.
+func TestTheEnsembleCompositionEventCarriesTheRequestID(t *testing.T) {
+	t.Parallel()
+	const requestID = "req_0123456789abcdef0123456789abcdef"
+	for _, quorumMet := range []bool{false, true} {
+		var buf bytes.Buffer
+		telemetry := NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&buf, nil)))
+		ctx := observability.WithRequestID(context.Background(), requestID)
+		telemetry.RecordInterpretationEnsemble(ctx, storage.Principal{OrgID: "org_1"},
+			InterpretationEnsembleEvent{Requested: 3, PrimarySucceeded: 2, Failed: 1, QuorumMet: quorumMet})
+		var line map[string]any
+		if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &line); err != nil {
+			t.Fatalf("quorum_met=%v: not one JSON line: %v (%q)", quorumMet, err, buf.String())
+		}
+		if line["request_id"] != requestID {
+			t.Fatalf("quorum_met=%v: request_id = %v, want %q -- both the Warn and the Info branch must carry it",
+				quorumMet, line["request_id"], requestID)
+		}
 	}
 }

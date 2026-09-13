@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/memorymodelconfig"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelruntimeresolver"
+	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -116,4 +117,31 @@ func TestAResolvedRuntimeThatCanSampleIsDelegatedTo(t *testing.T) {
 // it straight into RuntimeQuestionInterpreter.SampledRuntime.
 func TestTheResolverSatisfiesTheSampledPort(t *testing.T) {
 	var _ contextfabric.SampledModelRuntime = (*modelruntimeresolver.Resolver)(nil)
+}
+
+// THE PER-SAMPLE WARNING CARRIES THE REQUEST ID. It fires on the turn that
+// tried to sample, so it belongs to a request; the engine's own telemetry
+// attaches request_id to every such line, and a warning that cannot be tied to
+// its request cannot show whether a path ran for it.
+func TestTheNotSampledWarningCarriesTheRequestID(t *testing.T) {
+	const requestID = "req_0123456789abcdef0123456789abcdef"
+	var buf bytes.Buffer
+	resolver := modelruntimeresolver.New(&fakeRuntime{name: "not-sampled"}, memorymodelconfig.NewStore(nil),
+		func(context.Context, contextfabric.ResolvedOrgModelConfig) (contextfabric.ModelRuntime, error) {
+			t.Fatal("Build should not be called for an unconfigured organization")
+			return nil, nil
+		})
+	resolver.Logger = slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	ctx := observability.WithRequestID(context.Background(), requestID)
+	if _, _, err := resolver.InterpretQuestionForSample(ctx, storage.Principal{OrgID: "org-rid"}, contextfabric.InvestigationRequest{}, 0); err == nil {
+		t.Fatal("a non-sampled runtime must fail the per-sample call")
+	}
+	var line map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &line); err != nil {
+		t.Fatalf("warning is not one JSON line: %v (%q)", err, buf.String())
+	}
+	if line["request_id"] != requestID {
+		t.Fatalf("request_id = %v, want %q", line["request_id"], requestID)
+	}
 }

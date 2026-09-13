@@ -275,6 +275,18 @@ func applyCarriedPlan(outcome QuestionFamilyOutcome, carry planCarryResult) (Que
 	if outcome.Family != "" && outcome.Family != QuestionFamilyUnclassified {
 		return outcome, false
 	}
+	// A REFUSED PLURALITY IS NOT "CLASSIFIED NOTHING" (CHAOS-5638). The rule
+	// above lets a carry fill a turn that produced no reading of its own. An
+	// ensemble whose samples could not agree DID produce a reading -- that
+	// the question is not classifiable from this turn -- and it reports that
+	// as family=unclassified with source=model_plurality_rejected. The family
+	// value alone cannot tell the two apart, so the source decides: filling
+	// a refusal with the previous turn's family would serve a confident
+	// answer to a question the model just declined to classify, and would
+	// erase the one signal that says so.
+	if outcome.Source == QuestionFamilySourcePluralityRejected {
+		return outcome, false
+	}
 	preCarryFamily := outcome.Family
 	outcome.Family = carry.Family
 	outcome.Source = QuestionFamilySourceCarried

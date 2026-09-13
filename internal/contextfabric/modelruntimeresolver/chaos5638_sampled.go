@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/observability"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -93,7 +94,24 @@ func (r *Resolver) logNotSampled(ctx context.Context, orgID string, runtime cont
 		logger = slog.Default()
 	}
 	logger.WarnContext(ctx, "context fabric model runtime does not support per-sample interpretation",
-		"org_id", contextfabric.SanitizeLogAttr(orgID),
-		"runtime_type", contextfabric.SanitizeLogAttr(fmt.Sprintf("%T", runtime)),
+		append([]any{
+			"org_id", contextfabric.SanitizeLogAttr(orgID),
+			"runtime_type", contextfabric.SanitizeLogAttr(fmt.Sprintf("%T", runtime)),
+		}, resolverRequestIDLogAttrs(ctx)...)...,
 	)
+}
+
+// resolverRequestIDLogAttrs attaches the investigation's request id to a line
+// this resolver emits, in the same shape the engine's telemetry uses.
+//
+// The warning fires per turn, on the request that tried to sample, so it has a
+// request to belong to -- and a line that cannot be tied to its request cannot
+// be used to show a path did or did not run for that request. Local rather than
+// shared because the engine's own helper is unexported; falkorgraph resolves the
+// same need the same way.
+func resolverRequestIDLogAttrs(ctx context.Context) []any {
+	if requestID, ok := observability.RequestIDFromContext(ctx); ok {
+		return []any{"request_id", contextfabric.SanitizeLogAttr(string(requestID))}
+	}
+	return nil
 }
