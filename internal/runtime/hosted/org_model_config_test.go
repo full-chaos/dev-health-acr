@@ -1,11 +1,15 @@
 package hosted
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/genkitruntime"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelconfigcrypto"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/modelprovider"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -159,12 +163,70 @@ func TestWrapWithOrgModelRuntimeResolver_returnsAUsableEvictor_whenOrgStoreIsCon
 // tuning defaults must still resolve to sane values, not an error, when the
 // deployment-default provider itself was never configured.
 func TestContextFabricModelDefaults_fallsBackToPackageDefaults_whenUnconfigured(t *testing.T) {
-	defaults, err := contextFabricModelDefaults(envLookup(nil))
+	defaults, err := contextFabricModelDefaults(envLookup(nil), discardLogger())
 	if err != nil {
 		t.Fatalf("contextFabricModelDefaults() = %v, want success", err)
 	}
 	if defaults.Timeout != modelprovider.DefaultTimeout || defaults.MaxAttempts != modelprovider.DefaultMaxAttempts || defaults.MaxTransportRetries != modelprovider.DefaultMaxTransportRetries {
 		t.Fatalf("defaults = %+v, want the package defaults", defaults)
+	}
+	// CHAOS-5655: inherited the same way as the tuning knobs above.
+	if defaults.MaxSynthesisResynthesisAttempts != genkitruntime.DefaultMaxSynthesisResynthesisAttempts {
+		t.Fatalf("defaults.MaxSynthesisResynthesisAttempts = %d, want the package default %d", defaults.MaxSynthesisResynthesisAttempts, genkitruntime.DefaultMaxSynthesisResynthesisAttempts)
+	}
+}
+
+// TestContextFabricModelDefaults_stampsResynthesisAttemptsWhenConfigured is
+// the CONFIGURED-branch counterpart to the unconfigured test above --
+// `modelprovider.ConfigFromEnv` itself never sets
+// MaxSynthesisResynthesisAttempts (see that field's own doc comment), so a
+// deployment WITH a provider configured still needs this stamped explicitly
+// onto the per-organization defaults, not only the unconfigured fallback
+// literal.
+func TestContextFabricModelDefaults_stampsResynthesisAttemptsWhenConfigured(t *testing.T) {
+	lookup := envLookup(map[string]string{
+		modelprovider.EnvAPIKey:         "sk-test",
+		EnvSynthesisResynthesisAttempts: "2",
+	})
+	defaults, err := contextFabricModelDefaults(lookup, discardLogger())
+	if err != nil {
+		t.Fatalf("contextFabricModelDefaults() = %v, want success", err)
+	}
+	if defaults.MaxSynthesisResynthesisAttempts != 2 {
+		t.Fatalf("defaults.MaxSynthesisResynthesisAttempts = %d, want 2", defaults.MaxSynthesisResynthesisAttempts)
+	}
+}
+
+// TestMalformedResynthesisAttemptsWarnsOncePerCompositionPath is codex round
+// 1's P3 finding (2026-09-13), reproduced as a pin: a deployment with BOTH a
+// configured provider AND a per-organization model-config store resolves
+// EnvSynthesisResynthesisAttempts through two independent composition paths
+// -- contextFabricModelConfigFromEnv (the deployment default) and
+// contextFabricModelDefaults (the per-organization defaults) -- so a
+// malformed value logs the WARN twice, not once. Both lines name the
+// identical variable and value (see EnvSynthesisResynthesisAttempts's own
+// doc comment for why this is accepted, not deduplicated); this test pins
+// the count so a future change that silently drops one of the two
+// composition paths' visibility is caught, and one that starts producing a
+// THIRD or DIFFERING line is caught too.
+func TestMalformedResynthesisAttemptsWarnsOncePerCompositionPath(t *testing.T) {
+	lookup := envLookup(map[string]string{
+		modelprovider.EnvAPIKey:         "sk-test",
+		EnvSynthesisResynthesisAttempts: "0",
+	})
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+
+	if _, err := contextFabricModelConfigFromEnv(lookup, nil, logger); err != nil {
+		t.Fatalf("contextFabricModelConfigFromEnv() error = %v", err)
+	}
+	if _, err := contextFabricModelDefaults(lookup, logger); err != nil {
+		t.Fatalf("contextFabricModelDefaults() error = %v", err)
+	}
+
+	got := strings.Count(logs.String(), EnvSynthesisResynthesisAttempts)
+	if got != 2 {
+		t.Fatalf("startup log names %s %d time(s), want exactly 2 (once per composition path): %q", EnvSynthesisResynthesisAttempts, got, logs.String())
 	}
 }
 

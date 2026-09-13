@@ -131,6 +131,12 @@ func runtimeConfigWithPhrasing(instance *genkit.Genkit, cfg Config, model string
 		config.PhrasingModel = cfg.PhrasingModel
 		config.PhrasingModelRef = api.NewName(cfg.Provider, cfg.PhrasingModel)
 	}
+	// CHAOS-5655: wired here, not in the shared runtimeConfig above, because
+	// this function builds ONLY the primary runtime (the fallback runtime is
+	// built through the plain runtimeConfig call in newPrimaryRuntime) --
+	// see MaxSynthesisResynthesisAttempts's own doc comment on Config for why
+	// the fallback leg must not inherit it.
+	config.MaxSynthesisResynthesisAttempts = cfg.MaxSynthesisResynthesisAttempts
 	return config
 }
 
