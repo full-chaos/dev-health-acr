@@ -353,6 +353,25 @@ func TestOffersNoPickDecidesAreRefused(t *testing.T) {
 			roles: "anchor:team:open,member:project:population",
 		},
 		{
+			// The anchor kind the sample stated is what separates these two
+			// offers from an answerable anchor: neither is the member kind,
+			// and neither is a team.
+			cell: "scope anchor: offers of neither the anchor nor the member kind", frame: roleScopedFrame(SubjectProject), anchorKind: SubjectTeam,
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{
+				roleCandidate("subr_role_pr_a", contractsv1.ContextFabricSubjectPullRequest, "pull_request:a"),
+				roleCandidate("subr_role_repo_x", SubjectRepository, "repository:x"),
+			}, Committed: []SubjectRef{}},
+			roles: "anchor:team:open,member:project:population",
+		},
+		{
+			// With no anchor kind stated, I11 still excludes the member kind.
+			cell: "scope anchor of unstated kind: member-kind candidates only", frame: roleScopedFrame(SubjectProject), anchorKind: "",
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{
+				roleCandidate("subr_role_project_c", SubjectProject, "project:c"),
+			}, Committed: []SubjectRef{}},
+			roles: "anchor:undeclared:open,member:project:population",
+		},
+		{
 			// corpus row cv-b5-org-health, turn 2 of replicates 2 and 3 at
 			// 0af9fa84: an organization-scope frame whose pool held reviews,
 			// CI runs and projects.
