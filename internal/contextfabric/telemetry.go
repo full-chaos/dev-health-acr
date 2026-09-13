@@ -824,6 +824,36 @@ func (t SlogEngineTelemetry) RecordRenderShapeSelection(ctx context.Context, pri
 // indexed keys rather than a nested object because slog's JSON handler has
 // no group-per-element form, and an operator greppng
 // `cf_family_sample_0_row` needs a key that exists.
+// RecordInterpretationEnsemble emits the ensemble-composition line
+// (CHAOS-5638).
+//
+// WARN WHEN QUORUM WAS NOT MET, Info otherwise. A degraded ensemble is a
+// turn that was configured to measure agreement and did not: it still serves
+// an answer, so it is not an error, but an operator who never learns it
+// happened will read `source=model` on a deployment they believe is running
+// N=3 and conclude the flag never took. Warn is what makes the difference
+// between those two states legible. Above quorum the same line rides at Info
+// so the fallback-dropped count is still countable.
+func (t SlogEngineTelemetry) RecordInterpretationEnsemble(ctx context.Context, principal storage.Principal, event InterpretationEnsembleEvent) {
+	// request_id rides on the same terms as every other line in this file:
+	// a below-quorum Warn names a turn that served a degraded answer, and
+	// without the id an operator can see that it happened but not to which
+	// request.
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"requested", event.Requested,
+		"primary_succeeded", event.PrimarySucceeded,
+		"fallback_served", event.FallbackServed,
+		"failed", event.Failed,
+		"quorum_met", event.QuorumMet,
+	}, requestIDLogAttrs(ctx)...)
+	if !event.QuorumMet {
+		t.logger.WarnContext(ctx, "context fabric interpretation ensemble did not reach quorum", args...)
+		return
+	}
+	t.logger.InfoContext(ctx, "context fabric interpretation ensemble resolved", args...)
+}
+
 func (t SlogEngineTelemetry) RecordQuestionFamilyResolution(ctx context.Context, principal storage.Principal, event QuestionFamilyResolutionEvent) {
 	args := []any{
 		"org_id", SanitizeLogAttr(principal.OrgID),
@@ -1459,6 +1489,7 @@ func (t SlogEngineTelemetry) RecordPlanCarry(ctx context.Context, principal stor
 	args := []any{
 		"org_id", SanitizeLogAttr(principal.OrgID),
 		"family_replaced", SanitizeLogAttr(string(event.FamilyReplaced)),
+		"source_replaced", SanitizeLogAttr(string(event.SourceReplaced)),
 		"family_carried", SanitizeLogAttr(string(event.FamilyCarried)),
 		"source_result_id", SanitizeLogAttr(event.SourceResultID),
 		"family_source", SanitizeLogAttr(string(event.Route.Source)),
