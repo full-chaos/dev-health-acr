@@ -468,8 +468,8 @@ func TestTheDeclaredKindBasisOverItsWholeVocabularyDomain(t *testing.T) {
 		if declaredKindTerminalLimitation == contractsv1.ContextFabricSynthesisClarificationUnavailableLimitation {
 			t.Fatal("the sentence is still the one borrowed from the synthesis decision -- two decisions cannot share one sentence and stay distinguishable")
 		}
-		if !strings.Contains(declaredKindTerminalLimitation, string(basis)) {
-			t.Fatalf("the sentence does not name its own basis, so a reader cannot correlate it with the log line: %q", declaredKindTerminalLimitation)
+		if strings.Contains(declaredKindTerminalLimitation, string(basis)) {
+			t.Fatalf("the sentence carries its basis token, which a person cannot read -- the basis belongs on refusal_basis and the log line: %q", declaredKindTerminalLimitation)
 		}
 	})
 	t.Run("the log renderer and the wire agree on every cell", func(t *testing.T) {

@@ -401,10 +401,13 @@ func TestTheOrganizationScopeBasisOverItsWholeVocabularyDomain(t *testing.T) {
 	if !contractsv1.IsContextFabricServiceAuthoredLimitation(organizationScopeTerminalLimitation) {
 		t.Fatalf("the sentence is not service-authored: %q", organizationScopeTerminalLimitation)
 	}
-	for _, fragment := range []string{string(basis), "not supported", "counts"} {
+	for _, fragment := range []string{"not supported", "counts"} {
 		if !strings.Contains(organizationScopeTerminalLimitation, fragment) {
-			t.Fatalf("the sentence lacks %q: it must name its basis, what is not supported, and what is", fragment)
+			t.Fatalf("the sentence lacks %q: it must name what is not supported, and what is", fragment)
 		}
+	}
+	if strings.Contains(organizationScopeTerminalLimitation, string(basis)) {
+		t.Fatalf("the sentence carries its basis token, which a person cannot read -- the basis belongs on refusal_basis and the log line: %q", organizationScopeTerminalLimitation)
 	}
 	if observableRefusalBasis(basis) != string(basis) {
 		t.Fatal("the log renderer and the wire disagree")
