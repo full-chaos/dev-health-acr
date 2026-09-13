@@ -337,7 +337,7 @@ func TestCensusCoverageIsClaimedOnlyForTheKindsTheCensusFetches(t *testing.T) {
 		uncovered++
 		// The whole point: a completed, non-empty census beside a cut
 		// bounded arm must NOT rescue this kind.
-		basis, _, truncated := cohortPoolTruncation(true, false, false, false, exactNameCensusCoversKind(kind))
+		basis, _, truncated := cohortPoolTruncation(true, false, false, false, false, exactNameCensusCoversKind(kind))
 		if basis != CohortPoolTruncationTruncated || !truncated {
 			t.Errorf("a cohort of %q -- servable, not censused -- reported %q/truncated=%v beside a cut full-text arm; it must carry the truncation, because no census covered its population", kind, basis, truncated)
 		}
@@ -359,7 +359,7 @@ func TestCensusCoverageStillRescuesACensusedKind(t *testing.T) {
 	if !exactNameCensusCoversKind(censusedKind) {
 		t.Fatalf("exactNameCensusCoversKind(%q) = false for a kind the census itself lists", censusedKind)
 	}
-	basis, _, truncated := cohortPoolTruncation(true, false, false, false, exactNameCensusCoversKind(censusedKind))
+	basis, _, truncated := cohortPoolTruncation(true, false, false, false, false, exactNameCensusCoversKind(censusedKind))
 	if basis != CohortPoolTruncationCoveredByCensus || truncated {
 		t.Fatalf("a cohort of %q -- censused -- reported %q/truncated=%v beside a cut full-text arm; a completed census over its own kinds still covers them", censusedKind, basis, truncated)
 	}
@@ -368,7 +368,7 @@ func TestCensusCoverageStillRescuesACensusedKind(t *testing.T) {
 // TestCohortPoolTruncationClassifiesEveryInput quantifies over the whole
 // closed input space rather than over the rows someone remembered.
 //
-// THIRTY-TWO rows, not sixteen and not eight: each new cause doubles the space,
+// SIXTY-FOUR rows, not thirty-two and not sixteen: each new cause doubles the space,
 // which is exactly why the expectation is derived rather than transcribed. A
 // classification over a closed space is an allow-list naming every member's
 // class, so an input that reached the classifier's default arm without being
@@ -389,16 +389,17 @@ func TestCensusCoverageStillRescuesACensusedKind(t *testing.T) {
 // The two closing assertions carry two DIFFERENT properties and are labelled as
 // such below: the row count is ENUMERATION (the loop spanned the whole space),
 // the seenBases sweep is REACHABILITY (no declared decision is dead). Neither
-// implies the other -- a loop could span all 32 rows while a decision stayed
+// implies the other -- a loop could span all 64 rows while a decision stayed
 // unreachable, and a decision could be reached by a loop covering half the
 // space.
 func TestCohortPoolTruncationClassifiesEveryInput(t *testing.T) {
 	t.Parallel()
-	type input struct{ fulltext, hopWalk, exactName, lookupFailed, censusCovers bool }
+	type input struct{ fulltext, hopWalk, exactName, kindCensus, lookupFailed, censusCovers bool }
 	const (
 		ft   = "fulltext"
 		hw   = "hop_walk"
 		enc  = "exact_name_census"
+		kc   = "kind_census"
 		elf  = "endpoint_lookup_failed"
 		none = ""
 	)
@@ -413,6 +414,7 @@ func TestCohortPoolTruncationClassifiesEveryInput(t *testing.T) {
 	//               census COVERS: it ran, was not itself cut, and returned at
 	//               least one row. "Ran" alone is not enough -- an empty census
 	//               is a superset of nothing but the empty set.
+	//   a cut census (exact-name or kind-scoped) covers nothing
 	//   a failed lookup is NEVER covered: the census returns a subject only if
 	//               its own read succeeds, and this arm reports a read that
 	//               did not
@@ -427,6 +429,9 @@ func TestCohortPoolTruncationClassifiesEveryInput(t *testing.T) {
 		if in.exactName {
 			arms = append(arms, enc)
 		}
+		if in.kindCensus {
+			arms = append(arms, kc)
+		}
 		if in.lookupFailed {
 			arms = append(arms, elf)
 		}
@@ -434,7 +439,7 @@ func TestCohortPoolTruncationClassifiesEveryInput(t *testing.T) {
 		switch {
 		case len(arms) == 0:
 			return CohortPoolTruncationNone, none, false
-		case in.exactName, in.lookupFailed:
+		case in.exactName, in.kindCensus, in.lookupFailed:
 			return CohortPoolTruncationTruncated, joined, true
 		case in.censusCovers:
 			return CohortPoolTruncationCoveredByCensus, joined, false
@@ -448,18 +453,20 @@ func TestCohortPoolTruncationClassifiesEveryInput(t *testing.T) {
 	for _, fulltext := range []bool{false, true} {
 		for _, hopWalk := range []bool{false, true} {
 			for _, exactName := range []bool{false, true} {
-				for _, lookupFailed := range []bool{false, true} {
-					for _, censusCovers := range []bool{false, true} {
-						rows++
-						in := input{fulltext, hopWalk, exactName, lookupFailed, censusCovers}
-						wantBasis, wantArms, wantTrunc := expected(in)
-						basis, arms, truncated := cohortPoolTruncation(fulltext, hopWalk, exactName, lookupFailed, censusCovers)
-						got := formatCohortPoolTruncationArms(arms)
-						if basis != wantBasis || truncated != wantTrunc || got != wantArms {
-							t.Errorf("cohortPoolTruncation(%+v) = (%q, %q, %v), want (%q, %q, %v)",
-								in, basis, got, truncated, wantBasis, wantArms, wantTrunc)
+				for _, kindCensus := range []bool{false, true} {
+					for _, lookupFailed := range []bool{false, true} {
+						for _, censusCovers := range []bool{false, true} {
+							rows++
+							in := input{fulltext, hopWalk, exactName, kindCensus, lookupFailed, censusCovers}
+							wantBasis, wantArms, wantTrunc := expected(in)
+							basis, arms, truncated := cohortPoolTruncation(fulltext, hopWalk, exactName, kindCensus, lookupFailed, censusCovers)
+							got := formatCohortPoolTruncationArms(arms)
+							if basis != wantBasis || truncated != wantTrunc || got != wantArms {
+								t.Errorf("cohortPoolTruncation(%+v) = (%q, %q, %v), want (%q, %q, %v)",
+									in, basis, got, truncated, wantBasis, wantArms, wantTrunc)
+							}
+							seenBases[basis] = true
 						}
-						seenBases[basis] = true
 					}
 				}
 			}
@@ -468,8 +475,8 @@ func TestCohortPoolTruncationClassifiesEveryInput(t *testing.T) {
 	// PROPERTY 1 of 2 -- ENUMERATION. The loop above spanned the ENTIRE input
 	// space, not a subset of it. Without this the rows that ran would still all
 	// have agreed with the expectation while a whole dimension went unvisited.
-	if rows != 32 {
-		t.Fatalf("ENUMERATION: covered %d rows, want 32 (2^5) -- the loop must span the whole input space or it is a sample", rows)
+	if rows != 64 {
+		t.Fatalf("ENUMERATION: covered %d rows, want 64 (2^6) -- the loop must span the whole input space or it is a sample", rows)
 	}
 	// PROPERTY 2 of 2 -- REACHABILITY. Every declared decision is actually
 	// produced somewhere in that space. A member the producer can never emit is
@@ -493,7 +500,7 @@ func TestCohortPoolTruncationClassifiesEveryInput(t *testing.T) {
 // turn a backend fault into a completeness claim.
 func TestCohortPoolTruncationNeverCoversAFailedLookup(t *testing.T) {
 	t.Parallel()
-	basis, arms, truncated := cohortPoolTruncation(false, false, false, true, true)
+	basis, arms, truncated := cohortPoolTruncation(false, false, false, false, true, true)
 	if basis == CohortPoolTruncationCoveredByCensus || !truncated {
 		t.Errorf("a failed lookup under an admitted census classified as (%q, %v) -- a backend fault must never read as covered", basis, truncated)
 	}
@@ -503,7 +510,7 @@ func TestCohortPoolTruncationNeverCoversAFailedLookup(t *testing.T) {
 	// The complement: the same census DOES cover a bounded arm, or the
 	// assertion above would hold trivially for a classifier that never covers
 	// anything.
-	if b, _, tr := cohortPoolTruncation(true, false, false, false, true); b != CohortPoolTruncationCoveredByCensus || tr {
+	if b, _, tr := cohortPoolTruncation(true, false, false, false, false, true); b != CohortPoolTruncationCoveredByCensus || tr {
 		t.Errorf("a bounded arm under the same census classified as (%q, %v), want covered -- without this the test above proves nothing", b, tr)
 	}
 }
@@ -514,19 +521,20 @@ func TestCohortPoolTruncationNeverCoversAFailedLookup(t *testing.T) {
 func TestCohortPoolTruncationReportsEveryCutArm(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		arm                                                CohortPoolTruncationArm
-		fulltext, hopWalk, exactName, lookupFailed, census bool
+		arm                                                            CohortPoolTruncationArm
+		fulltext, hopWalk, exactName, kindCensus, lookupFailed, census bool
 	}{
-		{CohortPoolTruncationArmFulltext, true, false, false, false, false},
-		{CohortPoolTruncationArmHopWalk, false, true, false, false, false},
-		{CohortPoolTruncationArmExactNameCensus, false, false, true, false, true},
-		{CohortPoolTruncationArmEndpointLookupFailed, false, false, false, true, false},
+		{CohortPoolTruncationArmFulltext, true, false, false, false, false, false},
+		{CohortPoolTruncationArmHopWalk, false, true, false, false, false, false},
+		{CohortPoolTruncationArmExactNameCensus, false, false, true, false, false, true},
+		{CohortPoolTruncationArmKindCensus, false, false, false, true, false, true},
+		{CohortPoolTruncationArmEndpointLookupFailed, false, false, false, false, true, false},
 	}
 	if len(cases) != len(CohortPoolTruncationArmVocabulary()) {
 		t.Fatalf("%d cases for %d declared arms -- an arm with no case is unmeasured", len(cases), len(CohortPoolTruncationArmVocabulary()))
 	}
 	for _, tc := range cases {
-		_, arms, truncated := cohortPoolTruncation(tc.fulltext, tc.hopWalk, tc.exactName, tc.lookupFailed, tc.census)
+		_, arms, truncated := cohortPoolTruncation(tc.fulltext, tc.hopWalk, tc.exactName, tc.kindCensus, tc.lookupFailed, tc.census)
 		if got := formatCohortPoolTruncationArms(arms); got != string(tc.arm) {
 			t.Errorf("arm %q alone reported as %q", tc.arm, got)
 		}
@@ -685,8 +693,12 @@ func TestFormatCohortPoolTruncationArmsMarksAnUndeclaredArm(t *testing.T) {
 // the call site while modelling a census that cannot exist, so it would have
 // stayed green if exactNameKinds lost a kind entirely. Reading the bound
 // parameter means the fake can only ever return what the real query would,
-// and the incident cohort below gets NO census rows for exactly the reason
-// production gives none.
+// and the incident cohort below gets NO exact-name census rows for exactly the
+// reason production gives none.
+//
+// CHAOS-5654: the kind-scoped census also runs for `incident`, and here it
+// returns no rows. An empty census covers nothing, so the exact-name census is
+// the only census that could claim coverage for this cohort.
 //
 // So the coverage-claiming pressure comes from the CENSUSED kinds: the census
 // runs org-wide over [repository project team], returns team rows, and is
@@ -698,9 +710,8 @@ func TestFormatCohortPoolTruncationArmsMarksAnUndeclaredArm(t *testing.T) {
 //
 // What this pins is ADMISSION plus honest truncation, never retrieval: an
 // incident cohort reached through the lexical arm keeps its truncation. The
-// term-free case -- an incident survey with no term to match, which reaches no
-// cohort at all because the census does not fetch incidents -- is the tracked
-// follow-on, and is deliberately NOT claimed here.
+// term-free case -- an incident survey with no term to match -- is pinned by
+// the kind-scoped census tests in cohort_kind_census_test.go.
 func TestDiscoverContextCompletedCensusDoesNotCoverAnUncensusedKind(t *testing.T) {
 	t.Parallel()
 	const uncensusedKind = contextfabric.SubjectIncident
@@ -717,7 +728,7 @@ func TestDiscoverContextCompletedCensusDoesNotCoverAnUncensusedKind(t *testing.T
 		t.Skipf("%q is now censused, so it can no longer stand for the uncensused case; re-aim this test at a servable kind outside %v", uncensusedKind, exactNameKinds)
 	}
 
-	var censusKindsAsked []string
+	var censusKindsAsked, kindCensusKindsAsked []string
 	telemetry := &recordingTelemetry{}
 	fake := &fakeConn{queryFunc: func(_ context.Context, _ string, cypher string, params map[string]interface{}, _ bool) ([]row, error) {
 		switch {
@@ -741,6 +752,11 @@ func TestDiscoverContextCompletedCensusDoesNotCoverAnUncensusedKind(t *testing.T
 			// real census does. Recorded as well as honoured, so the assertion
 			// below can state what was asked rather than assume it.
 			asked, _ := params["kinds"].([]string)
+			if len(asked) == 1 && asked[0] == string(uncensusedKind) {
+				// The kind-scoped census of the cohort's own kind finds no row.
+				kindCensusKindsAsked = append([]string(nil), asked...)
+				return nil, nil
+			}
 			censusKindsAsked = append([]string(nil), asked...)
 			rows := make([]row, 0, len(asked))
 			for _, kind := range asked {
@@ -778,6 +794,14 @@ func TestDiscoverContextCompletedCensusDoesNotCoverAnUncensusedKind(t *testing.T
 		if asked == string(uncensusedKind) {
 			t.Fatalf("the census asked for %q (bound kinds %v), so it is not the uncensused case this test exists for", uncensusedKind, censusKindsAsked)
 		}
+	}
+	// CONTROL 2b: the kind-scoped census ran for the cohort's kind and returned
+	// no row, so it cannot be the census that covers this cohort.
+	if len(kindCensusKindsAsked) != 1 || kindCensusKindsAsked[0] != string(uncensusedKind) {
+		t.Fatalf("kind-scoped census bound %v, want exactly [%s]", kindCensusKindsAsked, uncensusedKind)
+	}
+	if len(telemetry.cohortKindCensuses) != 1 || telemetry.cohortKindCensuses[0].decision != CohortKindCensusRan || telemetry.cohortKindCensuses[0].poolSize != 0 {
+		t.Fatalf("kind census = %+v, want exactly one %q decision with pool_size 0", telemetry.cohortKindCensuses, CohortKindCensusRan)
 	}
 	// CONTROL 3: the census returned MEMBERS. `censusAdmitted && censusMembers > 0`
 	// is therefore true, and the kind check is the only remaining reason to
