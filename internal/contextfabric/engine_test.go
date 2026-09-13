@@ -340,8 +340,10 @@ type recordingTelemetry struct {
 	// arguments verbatim, mirroring falkorgraph's own recordingTelemetry
 	// (vector_test.go) -- a slice/struct list, not just a count, so a test
 	// can assert the EXACT reason/id values reported.
-	subjectlessTerminalReasons      []string
-	subjectlessTerminalRefusalBases []string
+	subjectlessTerminalReasons       []string
+	subjectlessTerminalRefusalBases  []string
+	subjectlessTerminalDeclaredKinds []string
+	subjectlessTerminalOfferedKinds  []string
 	// factScopeExpansions (CHAOS-4099) records every scope-expansion event
 	// verbatim, same list-not-count discipline as the fields around it: a
 	// test asserts the EXACT closed-vocabulary outcome and the exact counts,
@@ -572,9 +574,11 @@ func (r *recordingTelemetry) RecordPriorSubjectReceiptsSkipped(_ context.Context
 	r.priorSubjectReceiptsSkipped = append(r.priorSubjectReceiptsSkipped, skipped)
 }
 
-func (r *recordingTelemetry) RecordSubjectlessTerminal(_ context.Context, _ storage.Principal, reason string, refusalBasis string) {
+func (r *recordingTelemetry) RecordSubjectlessTerminal(_ context.Context, _ storage.Principal, reason string, refusalBasis string, declaredKinds string, offeredKinds string) {
 	r.subjectlessTerminalReasons = append(r.subjectlessTerminalReasons, reason)
 	r.subjectlessTerminalRefusalBases = append(r.subjectlessTerminalRefusalBases, refusalBasis)
+	r.subjectlessTerminalDeclaredKinds = append(r.subjectlessTerminalDeclaredKinds, declaredKinds)
+	r.subjectlessTerminalOfferedKinds = append(r.subjectlessTerminalOfferedKinds, offeredKinds)
 }
 
 func (r *recordingTelemetry) RecordSynthesisStatusOverride(_ context.Context, _ storage.Principal, outcome SynthesisStatusOverrideOutcome) {

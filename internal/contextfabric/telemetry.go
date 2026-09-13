@@ -222,7 +222,7 @@ func (t SlogEngineTelemetry) RecordAnswerReuseContainment(ctx context.Context, p
 // (empty_pool/authz_filtered_to_empty/ambiguous) is diagnostic detail about
 // an already-ordinary outcome (no_match/clarification_required), never a
 // sign anything is broken.
-func (t SlogEngineTelemetry) RecordSubjectlessTerminal(ctx context.Context, principal storage.Principal, reason string, refusalBasis string) {
+func (t SlogEngineTelemetry) RecordSubjectlessTerminal(ctx context.Context, principal storage.Principal, reason string, refusalBasis string, declaredKinds string, offeredKinds string) {
 	// refusal_basis is emitted on EVERY subjectless terminal, carrying the
 	// explicit token "none" when the turn was not refused -- never omitted
 	// on the ordinary path. A key that appeared only on refusals would be
@@ -235,7 +235,24 @@ func (t SlogEngineTelemetry) RecordSubjectlessTerminal(ctx context.Context, prin
 	// make it the second authority on what an unrefused turn reports, and
 	// would keep this one line looking correct while every other recorder
 	// implementation emitted an empty value.
-	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "reason", SanitizeLogAttr(reason), "refusal_basis", SanitizeLogAttr(refusalBasis)}, requestIDLogAttrs(ctx)...)
+	// declared_kinds/offered_kinds (CHAOS-5660) are emitted on EVERY
+	// subjectless terminal, carrying the explicit token "none" when the
+	// frame declared nothing or the turn offered nothing -- the same
+	// missing-versus-measured-zero rule refusal_basis above is written to,
+	// applied to the pair that makes the no_candidate_of_declared_kind
+	// reason auditable.
+	//
+	// THE TWO TOGETHER ARE THE FINDING. Reading them as one line -- declared
+	// project, offered ci_pipeline_run,pull_request -- rebuilds the decision
+	// without the served document beside it, which is what it took to
+	// diagnose this class the first time: the kinds the caller was offered
+	// were in the harness's own warning and in no engine line at all, so the
+	// three facts (declared kind, whether it was offerable, what was offered
+	// instead) had to be joined by hand across two logs and the store.
+	// Composed by the CALLER from the one decision value, for the reason
+	// refusal_basis is: a default substituted in this sink would make it a
+	// second authority on what a turn declared.
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "reason", SanitizeLogAttr(reason), "refusal_basis", SanitizeLogAttr(refusalBasis), "declared_kinds", SanitizeLogAttr(declaredKinds), "offered_kinds", SanitizeLogAttr(offeredKinds)}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric subjectless terminal", args...)
 }
 

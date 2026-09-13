@@ -19,18 +19,34 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // emitSubjectlessTerminal drives one subjectless-terminal record through the
 // telemetry the deployed runtime constructs and returns the decoded line.
 func emitSubjectlessTerminal(t *testing.T, reason string, refusalBasis string) map[string]any {
+	return emitSubjectlessTerminalWithKinds(t, reason, refusalBasis, "none", "none")
+}
+
+// emitSubjectlessTerminalWithKinds is the same drive with CHAOS-5660's two
+// declared/offered kind values supplied explicitly.
+func emitSubjectlessTerminalWithKinds(t *testing.T, reason string, refusalBasis string, declaredKinds string, offeredKinds string) map[string]any {
 	t.Helper()
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	contextfabric.NewSlogEngineTelemetry(logger).RecordSubjectlessTerminal(
-		context.Background(), storage.Principal{OrgID: "org_5442"}, reason, refusalBasis)
+	// THROUGH THE PRODUCTION INSTALLATION, not past it. Constructing the sink
+	// directly verifies its FORMATTING and nothing about the wiring, so this
+	// file would stay green while hosted installed no telemetry that emits
+	// these keys at all. contextFabricEngineTelemetry (open.go) is the
+	// function every real deployment goes through -- a nil
+	// Options.EngineTelemetry override is the production case -- so a wiring
+	// regression fails here, not only a formatting one.
+	telemetry := contextFabricEngineTelemetry(Options{Logger: logger})
+	if telemetry == nil {
+		t.Fatal("the hosted installation returned no engine telemetry at all -- every subjectless terminal would be silent in production")
+	}
+	telemetry.RecordSubjectlessTerminal(
+		context.Background(), storage.Principal{OrgID: "org_5442"}, reason, refusalBasis, declaredKinds, offeredKinds)
 	if buf.Len() == 0 {
 		t.Fatal("the deployed telemetry emitted NOTHING at the production log level -- a refusal an operator cannot see is a refusal that cannot be counted")
 	}
@@ -75,5 +91,45 @@ func TestTheDeployedSubjectlessTerminalCarriesAnExplicitNoneBasis(t *testing.T) 
 	}
 	if got != "none" {
 		t.Errorf("refusal_basis = %q, want the explicit token \"none\", never an empty value", got)
+	}
+}
+
+// THE DECLARED-KIND LINE (CHAOS-5660). The reason alone says a turn offered
+// nothing that could satisfy the kind its frame declared; it does not say
+// WHICH kind was declared or what was offered instead, and those two are the
+// whole finding. Diagnosing this class the first time required joining the
+// declared kind, the withheld kind and the offered kinds by hand across the
+// engine log, the harness's own warning and the store -- because only the
+// first of the three was ever emitted here.
+func TestTheDeployedSubjectlessTerminalNamesTheDeclaredAndOfferedKinds(t *testing.T) {
+	t.Parallel()
+	rec := emitSubjectlessTerminalWithKinds(t, "no_candidate_of_declared_kind", "none", "project", "ci_pipeline_run,pull_request")
+	if got, _ := rec["reason"].(string); got != "no_candidate_of_declared_kind" {
+		t.Errorf("reason = %q, want \"no_candidate_of_declared_kind\"", got)
+	}
+	if got, _ := rec["declared_kinds"].(string); got != "project" {
+		t.Errorf("declared_kinds = %q, want \"project\" -- the kind the question named is the first half of the finding", got)
+	}
+	if got, _ := rec["offered_kinds"].(string); got != "ci_pipeline_run,pull_request" {
+		t.Errorf("offered_kinds = %q, want the kinds actually offered -- without them the reason cannot be audited from the line alone", got)
+	}
+}
+
+// THE ORDINARY ARM for the same pair, holding the missing-versus-measured-zero
+// rule the refusal_basis key above already holds: both keys are present with
+// the explicit "none" token on a turn that declared or offered nothing.
+func TestTheDeployedSubjectlessTerminalCarriesExplicitNoneKinds(t *testing.T) {
+	t.Parallel()
+	rec := emitSubjectlessTerminal(t, "empty_pool", "none")
+	declared, ok := rec["declared_kinds"].(string)
+	if !ok {
+		t.Fatalf("the emitted line carries no declared_kinds key at all; line: %v", rec)
+	}
+	offered, ok := rec["offered_kinds"].(string)
+	if !ok {
+		t.Fatalf("the emitted line carries no offered_kinds key at all; line: %v", rec)
+	}
+	if declared != "none" || offered != "none" {
+		t.Errorf("declared/offered = %q/%q, want the explicit token \"none\" on both, never an empty value", declared, offered)
 	}
 }

@@ -322,8 +322,8 @@ func TestTheRefusalArmOutranksEveryLaterTerminalReason(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			if got := subjectlessTerminalReason(refusing, testCase.resolution, testCase.dropped); got != "frame_gate_refused" {
-				t.Fatalf("subjectlessTerminalReason() = %q, want %q -- the gate refused above retrieval, so reporting %q would describe a search that never happened and would make the refusing class uncountable in the collected logs", got, "frame_gate_refused", got)
+			if got := subjectlessTerminalReason(refusing, testCase.resolution, testCase.dropped, declaredKindDecision{}); got != "frame_gate_refused" {
+				t.Fatalf("subjectlessTerminalReason(, declaredKindDecision{}) = %q, want %q -- the gate refused above retrieval, so reporting %q would describe a search that never happened and would make the refusing class uncountable in the collected logs", got, "frame_gate_refused", got)
 			}
 		})
 	}

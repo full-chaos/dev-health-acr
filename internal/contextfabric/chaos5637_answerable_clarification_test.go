@@ -85,21 +85,21 @@ func TestAnyOneOfferChannelMakesAClarificationAnswerable(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			if !clarificationOffersRedeemable(testCase.resolution, testCase.material, testCase.window) {
+			if !clarificationOffersRedeemable(testCase.resolution, testCase.material, testCase.window, declaredKindDecision{}) {
 				t.Fatal("this channel alone did not count as an offer; a caller reading it has a move and the predicate says they do not")
 			}
 		})
 	}
 	t.Run("and nothing at all does not", func(t *testing.T) {
 		t.Parallel()
-		if clarificationOffersRedeemable(withheldPoolResolution(), StructureOfferMaterial{}, nil) {
+		if clarificationOffersRedeemable(withheldPoolResolution(), StructureOfferMaterial{}, nil, declaredKindDecision{}) {
 			t.Fatal("an empty turn counted as answerable -- the control; without it every arm above passes vacuously")
 		}
 	})
 	t.Run("nor does an empty window options list", func(t *testing.T) {
 		t.Parallel()
 		empty := &contractsv1.ContextFabricWindowClarification{Options: []contractsv1.ContextFabricWindowOption{}}
-		if clarificationOffersRedeemable(withheldPoolResolution(), StructureOfferMaterial{}, empty) {
+		if clarificationOffersRedeemable(withheldPoolResolution(), StructureOfferMaterial{}, empty, declaredKindDecision{}) {
 			t.Fatal("a non-nil window clarification with zero options counted as an offer")
 		}
 	})
@@ -205,7 +205,7 @@ func TestAWithheldPoolWithNothingToOfferTerminatesInOneTurn(t *testing.T) {
 	if result.SubjectResolution.ClarificationPrompt == "" {
 		t.Fatal("the downgrade cleared the prompt; the withheld pool is no longer distinguishable from an empty graph")
 	}
-	if got := subjectlessTerminalReason(FrameGate{}, result.SubjectResolution, 0); got != "offer_pool_emptied_by_exclusion" {
+	if got := subjectlessTerminalReason(FrameGate{}, result.SubjectResolution, 0, declaredKindDecision{}); got != "offer_pool_emptied_by_exclusion" {
 		t.Fatalf("terminal reason = %q, want %q", got, "offer_pool_emptied_by_exclusion")
 	}
 	// And it never reaches the answer sentence: a caller reading the

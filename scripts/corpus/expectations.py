@@ -171,6 +171,7 @@ REFUSAL_BASIS_VOCABULARY = {
     "frame_invariant_violated",
     "unspecified",
     "continuation_context_unverifiable",
+    "declared_kind_unmatched",
 }
 
 
