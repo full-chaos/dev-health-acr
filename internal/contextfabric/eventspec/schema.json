@@ -497,7 +497,6 @@
         "type": "string",
         "presence": "required",
         "closed_vocabulary": [
-          "carried_axis_unexpressible",
           "i1",
           "i17",
           "i2",

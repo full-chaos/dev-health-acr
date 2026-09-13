@@ -1895,7 +1895,7 @@ func ContinuationDecisionLineVocabulary(key string) []string {
 	case "composition_outcome":
 		return tokenStrings(compositionOutcomeVocabulary())
 	case "composition_failed_invariant":
-		invariants := []string{CompositionInvariantCarriedAxisUnexpressible}
+		var invariants []string
 		for _, spec := range FrameInvariantSpecs() {
 			invariants = append(invariants, string(spec.ID))
 		}

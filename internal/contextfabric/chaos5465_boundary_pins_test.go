@@ -867,19 +867,16 @@ func TestBoundary_NoRequestDerivedValueCanForgeALogLine(t *testing.T) {
 // DURABLE CARRIED FRAME: an established window-only transition can no longer
 // end at composition for want of somewhere to put the carried reading.
 //
-// The invariant it names (carried_axis_unexpressible) described a real failure
-// while the carried reading had to be substituted into THIS turn's fresh frame:
-// a fresh proposal with no grouped expression had nowhere to put a carried
-// group axis, so an already-confirmed turn was refused on the shape of a
-// reading nobody asked to execute. The snapshot carries the FRAME now, so
-// composition revalidates turn one's own frame and never reads the fresh
-// proposal's shape -- the mismatch this invariant described cannot arise.
-//
-// The token stays a declared member of the published vocabulary (narrowing a
-// closed contract member is a separate decision), so this pin is what keeps it
-// honest: it drives the exact shape that used to produce it, through the real
-// engine, over every ungrouped fresh proposal, and asserts the turn composes
-// and serves the carried reading instead.
+// `carried_axis_unexpressible` described a real failure while the carried
+// reading had to be substituted into THIS turn's fresh frame: a fresh
+// proposal with no grouped expression had nowhere to put a carried group
+// axis, so an already-confirmed turn was refused on the shape of a reading
+// nobody asked to execute. The snapshot carries the FRAME now, so composition
+// revalidates turn one's own frame and never reads the fresh proposal's shape
+// -- the mismatch that invariant described cannot arise, and CHAOS-5733
+// removed the token: this pin drives the exact shape that used to produce it,
+// through the real engine, over every ungrouped fresh proposal, and asserts
+// the turn composes and serves the carried reading instead of failing.
 func TestComposition_TheCarriedAxisIsNeverUnexpressible(t *testing.T) {
 	t.Parallel()
 	question := validInvestigationRequest().Question
@@ -909,8 +906,8 @@ func TestComposition_TheCarriedAxisIsNeverUnexpressible(t *testing.T) {
 			if !d.TransitionEstablished {
 				t.Fatalf("the fixture did not establish the transition, so it pins nothing")
 			}
-			if d.CompositionFailedInvariant == CompositionInvariantCarriedAxisUnexpressible {
-				t.Errorf("composition_failed_invariant = %q -- the carried frame is durable, so this invariant has no path", d.CompositionFailedInvariant)
+			if d.CompositionFailedInvariant != "" {
+				t.Errorf("composition_failed_invariant = %q, want none -- the carried frame is durable, so composition must not fail here", d.CompositionFailedInvariant)
 			}
 			if d.Disposition != ContinuationApplied {
 				t.Errorf("disposition = %q/%q, want applied -- a confirmed turn must not be withheld on the fresh proposal's shape", d.Disposition, d.Reason)
@@ -924,12 +921,46 @@ func TestComposition_TheCarriedAxisIsNeverUnexpressible(t *testing.T) {
 		})
 	}
 
-	// THE CONTROL FOR THE CLAIM ABOVE: the token is still a declared member of
-	// the guard's vocabulary, so "no path produces it" is a statement about the
-	// paths, not about a value that quietly stopped existing.
-	t.Run("the invariant is still declared", func(t *testing.T) {
-		if !validCompositionFailedInvariant(CompositionInvariantCarriedAxisUnexpressible) {
-			t.Errorf("%q is no longer a valid composition invariant -- this pin would then be asserting nothing", CompositionInvariantCarriedAxisUnexpressible)
+	// THE CONTROL FOR THE CLAIM ABOVE: the removed token is gone from the
+	// vocabulary entirely, not merely unproduced by these fixtures.
+	t.Run("the removed token is no longer a valid composition invariant", func(t *testing.T) {
+		const removed = "carried_axis_unexpressible"
+		if validCompositionFailedInvariant(removed) {
+			t.Errorf("%q still validates as a composition invariant -- CHAOS-5733 removed it", removed)
+		}
+		for _, member := range compositionInvariants() {
+			if member == removed {
+				t.Errorf("compositionInvariants() still carries %q", removed)
+			}
+		}
+	})
+
+	// THE COMPOSITION BOUNDARY'S INVARIANT SET IS EXACTLY THE REMAINING
+	// MEMBERS, enumerated from the producer rather than a hand list of
+	// strings: every member compositionInvariants() returns is one of the
+	// three named constants, every named constant is present, and none
+	// repeats.
+	t.Run("the invariant set is exactly the remaining members", func(t *testing.T) {
+		want := map[string]bool{
+			CompositionInvariantCarriedFrameNotCanonical: true,
+			CompositionInvariantCarriedFrameRefused:      true,
+			CompositionInvariantCarriedStateIncomplete:   true,
+		}
+		got := compositionInvariants()
+		seen := make(map[string]bool, len(got))
+		for _, member := range got {
+			if seen[member] {
+				t.Errorf("compositionInvariants() repeats %q", member)
+			}
+			seen[member] = true
+			if !want[member] {
+				t.Errorf("compositionInvariants() carries unexpected member %q", member)
+			}
+		}
+		for member := range want {
+			if !seen[member] {
+				t.Errorf("compositionInvariants() is missing %q", member)
+			}
 		}
 	})
 }
