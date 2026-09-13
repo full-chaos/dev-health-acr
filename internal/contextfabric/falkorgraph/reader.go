@@ -861,6 +861,11 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		kindCensusKinds = []string{string(declaredCohortKind)}
 		kindCensusNodes, truncated, kindCensusErr := a.cohortKindCensusCandidates(ctx, key, principal.OrgID, kindCensusKinds, temporal)
 		if kindCensusErr != nil {
+			// CHAOS-5654: the attempted fetch is reported before the call fails,
+			// so a failed census read is a decision on the trace, not a gap.
+			if a.config.Telemetry != nil {
+				a.config.Telemetry.RecordCohortKindCensus(ctx, principal.OrgID, CohortKindCensusReadFailed, declaredCohortKind, kindCensusKinds, 0, exactNameCandidateQueryLimit, false, kindCensusErr)
+			}
 			return contextfabric.GraphContext{}, graphNotProjectedError(kindCensusErr)
 		}
 		kindCensusTruncated = truncated
@@ -880,7 +885,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		}
 	}
 	if censusBasis != "" && a.config.Telemetry != nil {
-		a.config.Telemetry.RecordCohortKindCensus(ctx, principal.OrgID, kindCensusDecision, declaredCohortKind, kindCensusKinds, kindCensusMembers, exactNameCandidateQueryLimit, kindCensusTruncated)
+		a.config.Telemetry.RecordCohortKindCensus(ctx, principal.OrgID, kindCensusDecision, declaredCohortKind, kindCensusKinds, kindCensusMembers, exactNameCandidateQueryLimit, kindCensusTruncated, nil)
 	}
 	// CHAOS-5168: what this call's candidate POOL lost, carried into the
 	// cohort's own completeness rather than left for DiscoveredCohort to
@@ -904,8 +909,12 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// kindCensusMembers is non-zero only when the kind-scoped census ran.
 	censusCoversThisCohort := (censusAdmitted && censusMembers > 0 && exactNameCensusCoversKind(declaredCohortKind)) ||
 		kindCensusMembers > 0
+	// CHAOS-5654: a cut exact-name census removes rows only of the kinds it
+	// fetches. When the kind-scoped census ran, the cohort's kind came from that
+	// census, so the exact-name cut is not a loss from this cohort's pool.
+	exactNameCutThisCohort := exactNameTruncated && !kindCensusRan
 	poolTruncationBasis, poolTruncationArms, cohortPoolTruncated := cohortPoolTruncation(
-		fulltextTruncated, hopWalkTruncated, exactNameTruncated, kindCensusTruncated, failedLookups > 0, censusCoversThisCohort)
+		fulltextTruncated, hopWalkTruncated, exactNameCutThisCohort, kindCensusTruncated, failedLookups > 0, censusCoversThisCohort)
 	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis, cohortPopulation := graphrank.DiscoveredCohort(principal, request, cohortNodes, cohortPoolTruncated, isInternalSubject)
 	// SEAM 7 (CHAOS-4736): what decided the cohort kind, or what prevented
 	// a cohort. This is the I/O boundary, so the telemetry call lives here

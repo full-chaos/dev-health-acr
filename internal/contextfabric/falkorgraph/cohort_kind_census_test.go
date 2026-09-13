@@ -387,7 +387,13 @@ func TestKindCensusDecisionIsReachedThroughDiscoverContext(t *testing.T) {
 		decision   CohortKindCensusDecision
 		memberKind contextfabric.SubjectKind
 		fetched    contextfabric.SubjectKind
+		failRead   bool
 	}{
+		{
+			name:     "uncensused_servable_kind_read_fails",
+			build:    func() contextfabric.GraphDiscoveryRequest { return kindCensusSurveyRequest(uncensused, 10) },
+			decision: CohortKindCensusReadFailed, memberKind: uncensused, fetched: uncensused, failRead: true,
+		},
 		{
 			name:     "uncensused_servable_kind",
 			build:    func() contextfabric.GraphDiscoveryRequest { return kindCensusSurveyRequest(uncensused, 10) },
@@ -434,10 +440,13 @@ func TestKindCensusDecisionIsReachedThroughDiscoverContext(t *testing.T) {
 	seen := map[CohortKindCensusDecision]bool{}
 	for _, tc := range cases {
 		store := &kindCensusStore{population: map[string]int{string(uncensused): 2, string(censused): 2, string(unservable): 2}}
+		if tc.failRead {
+			store.failFor = string(uncensused)
+		}
 		telemetry := &recordingTelemetry{}
 		adapter := newFakeAdapterWithTelemetry(t, store.conn(t), telemetry)
-		if _, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, tc.build()); err != nil {
-			t.Fatalf("%s: DiscoverContext() error = %v", tc.name, err)
+		if _, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, tc.build()); (err != nil) != tc.failRead {
+			t.Fatalf("%s: DiscoverContext() error = %v, want error=%v", tc.name, err, tc.failRead)
 		}
 		if len(telemetry.cohortKindCensuses) != 1 {
 			t.Fatalf("%s: kind census lines = %+v, want exactly 1", tc.name, telemetry.cohortKindCensuses)
@@ -615,7 +624,7 @@ func TestCohortKindCensusLineCarriesTheFetchOnARanDecision(t *testing.T) {
 	const canonicalRequestID = "req_0123456789abcdef0123456789abcdef"
 	ctx := observability.WithRequestID(context.Background(), canonicalRequestID)
 	records := captureCohortKindCensusLines(t, productionSinkLevel, func(sink SlogTelemetry) {
-		sink.RecordCohortKindCensus(ctx, "org_sink_test", CohortKindCensusRan, contextfabric.SubjectIncident, []string{"alpha_kind", "beta_kind"}, 37, 2000, true)
+		sink.RecordCohortKindCensus(ctx, "org_sink_test", CohortKindCensusRan, contextfabric.SubjectIncident, []string{"alpha_kind", "beta_kind"}, 37, 2000, true, nil)
 	})
 	if len(records) != 1 {
 		t.Fatalf("got %d lines, want 1", len(records))
@@ -645,12 +654,12 @@ func TestCohortKindCensusLineOmitsFetchFieldsWhenTheCensusDidNotRun(t *testing.T
 	t.Parallel()
 	notRun := 0
 	for _, decision := range CohortKindCensusDecisionVocabulary() {
-		if decision == CohortKindCensusRan {
+		if decision == CohortKindCensusRan || decision == CohortKindCensusReadFailed {
 			continue
 		}
 		notRun++
 		records := captureCohortKindCensusLines(t, productionSinkLevel, func(sink SlogTelemetry) {
-			sink.RecordCohortKindCensus(context.Background(), "org_sink_test", decision, contextfabric.SubjectTeam, []string{"team"}, 9, 2000, true)
+			sink.RecordCohortKindCensus(context.Background(), "org_sink_test", decision, contextfabric.SubjectTeam, []string{"team"}, 9, 2000, true, errKindCensusStore)
 		})
 		if len(records) != 1 {
 			t.Fatalf("%s: got %d lines, want 1", decision, len(records))
@@ -658,7 +667,7 @@ func TestCohortKindCensusLineOmitsFetchFieldsWhenTheCensusDidNotRun(t *testing.T
 		if records[0]["decision"] != string(decision) || records[0]["member_kind"] != "team" {
 			t.Errorf("%s: decision=%v member_kind=%v", decision, records[0]["decision"], records[0]["member_kind"])
 		}
-		for _, key := range []string{"kinds", "pool_size", "pool_bound", "truncated"} {
+		for _, key := range []string{"kinds", "pool_size", "pool_bound", "truncated", "error"} {
 			if _, present := records[0][key]; present {
 				t.Errorf("%s: key %q present on a census that did not run", decision, key)
 			}
@@ -674,7 +683,7 @@ func TestCohortKindCensusLineOmitsFetchFieldsWhenTheCensusDidNotRun(t *testing.T
 func TestCohortKindCensusLineIsEmittedAtTheProductionLevel(t *testing.T) {
 	t.Parallel()
 	emit := func(sink SlogTelemetry) {
-		sink.RecordCohortKindCensus(context.Background(), "org_sink_test", CohortKindCensusRan, contextfabric.SubjectIncident, []string{"incident"}, 3, 2000, false)
+		sink.RecordCohortKindCensus(context.Background(), "org_sink_test", CohortKindCensusRan, contextfabric.SubjectIncident, []string{"incident"}, 3, 2000, false, nil)
 	}
 	if got := len(captureCohortKindCensusLines(t, productionSinkLevel, emit)); got != 1 {
 		t.Errorf("an Info handler admitted %d lines, want 1", got)
@@ -771,7 +780,8 @@ func TestDiscoverContextKindCensusReadFailureFailsTheCall(t *testing.T) {
 	t.Parallel()
 	kind := uncensusedServableKinds(t)[0]
 	store := &kindCensusStore{population: map[string]int{string(kind): 2, "team": 1}, failFor: string(kind)}
-	adapter := newFakeAdapterWithTelemetry(t, store.conn(t), &recordingTelemetry{})
+	telemetry := &recordingTelemetry{}
+	adapter := newFakeAdapterWithTelemetry(t, store.conn(t), telemetry)
 
 	result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, kindCensusSurveyRequest(kind, 10))
 	if err == nil {
@@ -779,6 +789,14 @@ func TestDiscoverContextKindCensusReadFailureFailsTheCall(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "read kind census candidates") {
 		t.Errorf("error = %v, want it to name the kind census read", err)
+	}
+	if len(telemetry.cohortKindCensuses) != 1 {
+		t.Fatalf("kind census lines = %+v, want exactly 1 for the failed read", telemetry.cohortKindCensuses)
+	}
+	line := telemetry.cohortKindCensuses[0]
+	if line.decision != CohortKindCensusReadFailed || line.memberKind != kind || strings.Join(line.kinds, ",") != string(kind) ||
+		line.poolBound != exactNameCandidateQueryLimit || line.readErr == nil || !strings.Contains(line.readErr.Error(), "read kind census candidates") {
+		t.Errorf("kind census line = %+v, want decision=%q member_kind=%q kinds=[%s] pool_bound=%d and the read error", line, CohortKindCensusReadFailed, kind, kind, exactNameCandidateQueryLimit)
 	}
 }
 
@@ -805,5 +823,94 @@ func TestDiscoverContextEmitsNoKindCensusLineForANamedSubject(t *testing.T) {
 	}
 	if got := len(store.singleKindQueries(kind)); got != 0 {
 		t.Errorf("%d kind-scoped queries for a named subject, want 0", got)
+	}
+}
+
+// TestCohortKindCensusLineReportsAFailedRead asserts the failed-read line
+// through the production sink: Warn, the attempted fetch and the error, and
+// no result field.
+func TestCohortKindCensusLineReportsAFailedRead(t *testing.T) {
+	t.Parallel()
+	const canonicalRequestID = "req_0123456789abcdef0123456789abcdef"
+	ctx := observability.WithRequestID(context.Background(), canonicalRequestID)
+	emit := func(sink SlogTelemetry) {
+		sink.RecordCohortKindCensus(ctx, "org_sink_test", CohortKindCensusReadFailed, contextfabric.SubjectIncident, []string{"alpha_kind"}, 37, 2000, true, errors.New("read kind census candidates: store gone\nforged=1"))
+	}
+	records := captureCohortKindCensusLines(t, productionSinkLevel, emit)
+	if len(records) != 1 {
+		t.Fatalf("got %d lines, want 1", len(records))
+	}
+	record := records[0]
+	want := map[string]any{
+		"level": "WARN", "msg": kindCensusLineMsg, "org_id": "org_sink_test", "request_id": canonicalRequestID,
+		"decision": "read_failed", "member_kind": "incident", "kinds": "alpha_kind", "pool_bound": float64(2000),
+	}
+	for key, value := range want {
+		if record[key] != value {
+			t.Errorf("%s = %#v, want %#v", key, record[key], value)
+		}
+	}
+	errText, _ := record["error"].(string)
+	if !strings.Contains(errText, "read kind census candidates") || strings.Contains(errText, "\n") {
+		t.Errorf("error = %q, want the read error with line breaks sanitised", errText)
+	}
+	for key := range record {
+		if _, ok := want[key]; !ok && key != "time" && key != "error" {
+			t.Errorf("unexpected key %q on a failed-read line", key)
+		}
+	}
+	if got := len(captureCohortKindCensusLines(t, slog.LevelError, emit)); got != 0 {
+		t.Errorf("an Error handler admitted %d failed-read lines, want 0 -- the line must sit at Warn, not above it", got)
+	}
+	if got := len(captureCohortKindCensusLines(t, slog.LevelWarn, emit)); got != 1 {
+		t.Errorf("a Warn handler admitted %d failed-read lines, want 1", got)
+	}
+}
+
+// TestDiscoverContextExactNameCutTruncatesOnlyTheKindsItFetches: a cut
+// exact-name census loses rows of the kinds it fetches only. A cohort of a
+// kind the kind-scoped census fetched whole keeps its completeness claim; a
+// cohort of a kind the exact-name census fetches carries the cut.
+func TestDiscoverContextExactNameCutTruncatesOnlyTheKindsItFetches(t *testing.T) {
+	t.Parallel()
+	uncensused := uncensusedServableKinds(t)[0]
+	censused := contextfabric.SubjectKind(exactNameKinds[0])
+	for _, tc := range []struct {
+		kind          contextfabric.SubjectKind
+		wantBasis     CohortPoolTruncationBasis
+		wantArms      string
+		wantTruncated bool
+	}{
+		{kind: uncensused, wantBasis: CohortPoolTruncationNone, wantArms: "", wantTruncated: false},
+		{kind: censused, wantBasis: CohortPoolTruncationTruncated, wantArms: string(CohortPoolTruncationArmExactNameCensus), wantTruncated: true},
+	} {
+		tc := tc
+		t.Run(string(tc.kind), func(t *testing.T) {
+			t.Parallel()
+			// The exact-name census binds its kinds in list order and the fake
+			// fills its LIMIT from the first, so the censused kind alone is
+			// enough to cut it.
+			store := &kindCensusStore{population: map[string]int{string(uncensused): 3, string(censused): exactNameCandidateQueryLimit + 1}}
+			telemetry := &recordingTelemetry{}
+			adapter := newFakeAdapterWithTelemetry(t, store.conn(t), telemetry)
+
+			result, err := adapter.DiscoverContext(context.Background(), storage.Principal{OrgID: "org-1"}, kindCensusSurveyRequest(tc.kind, exactNameCandidateQueryLimit+2))
+			if err != nil {
+				t.Fatalf("DiscoverContext() error = %v", err)
+			}
+			if !result.Coverage.Partial {
+				t.Fatalf("Coverage.Partial = false -- the exact-name census was not cut, so this fixture measures nothing (reasons %v)", result.Coverage.DegradedReasons)
+			}
+			if result.Cohort == nil {
+				t.Fatalf("Cohort = nil for %s", tc.kind)
+			}
+			basis := telemetry.cohortKindBases[0]
+			if basis.poolTruncation != tc.wantBasis || formatCohortPoolTruncationArms(basis.poolTruncationArms) != tc.wantArms {
+				t.Errorf("pool truncation = %q arms %q, want %q arms %q", basis.poolTruncation, formatCohortPoolTruncationArms(basis.poolTruncationArms), tc.wantBasis, tc.wantArms)
+			}
+			if result.Cohort.Truncated != tc.wantTruncated || result.Cohort.Complete == tc.wantTruncated {
+				t.Errorf("Complete=%v Truncated=%v, want Truncated=%v", result.Cohort.Complete, result.Cohort.Truncated, tc.wantTruncated)
+			}
+		})
 	}
 }

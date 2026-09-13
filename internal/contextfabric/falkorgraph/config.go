@@ -532,11 +532,13 @@ type GraphTelemetry interface {
 	// kind-scoped census decision, on every call the census gate reports:
 	// whether the term-free fetch of the declared member kind ran and, when it
 	// did not, which condition stopped it. memberKind is the servable kind the
-	// seam returned (empty when none). kinds, poolSize, poolBound and
-	// truncated describe the fetch that ran and are meaningful only when
-	// decision is CohortKindCensusRan; the pool truncation that follows from
-	// them is reported on RecordCohortKindBasis for the same call.
-	RecordCohortKindCensus(ctx context.Context, orgID string, decision CohortKindCensusDecision, memberKind contextfabric.SubjectKind, kinds []string, poolSize, poolBound int, truncated bool)
+	// seam returned (empty when none). kinds and poolBound describe an
+	// attempted fetch (CohortKindCensusRan or CohortKindCensusReadFailed);
+	// poolSize and truncated describe a fetch that returned
+	// (CohortKindCensusRan); readErr is the failed read
+	// (CohortKindCensusReadFailed). The pool truncation that follows from a
+	// fetch is reported on RecordCohortKindBasis for the same call.
+	RecordCohortKindCensus(ctx context.Context, orgID string, decision CohortKindCensusDecision, memberKind contextfabric.SubjectKind, kinds []string, poolSize, poolBound int, truncated bool, readErr error)
 	// RecordNeighborLookupFailed reports ONE neighbour the hop walk reached
 	// through an admitted edge and then could not read back.
 	//
@@ -618,7 +620,7 @@ func (NoopTelemetry) RecordCohortExactNameCensusGate(context.Context, string, bo
 }
 func (NoopTelemetry) RecordCohortKindBasis(context.Context, string, contextfabric.SubjectKind, graphrank.CohortKindBasis, bool, CohortPoolTruncationBasis, []CohortPoolTruncationArm) {
 }
-func (NoopTelemetry) RecordCohortKindCensus(context.Context, string, CohortKindCensusDecision, contextfabric.SubjectKind, []string, int, int, bool) {
+func (NoopTelemetry) RecordCohortKindCensus(context.Context, string, CohortKindCensusDecision, contextfabric.SubjectKind, []string, int, int, bool, error) {
 }
 
 func (NoopTelemetry) RecordNeighborLookupFailed(context.Context, string, string, string, NeighborLookupFailureSite, error) {
@@ -842,18 +844,29 @@ func (t SlogTelemetry) RecordCohortKindBasis(ctx context.Context, orgID string, 
 	t.logger().Info("context_fabric: cohort kind basis", append(args, graphRequestIDLogAttrs(ctx)...)...)
 }
 
-// RecordCohortKindCensus logs at Info: every decision is an ordinary outcome of
-// a correct gate. The fetch fields ride only on a census that ran, so a
-// census that did not run never carries a pool size that reads as a measured
-// zero.
-func (t SlogTelemetry) RecordCohortKindCensus(ctx context.Context, orgID string, decision CohortKindCensusDecision, memberKind contextfabric.SubjectKind, kinds []string, poolSize, poolBound int, truncated bool) {
+// RecordCohortKindCensus logs a gate decision at Info and a failed census read
+// at Warn, on one message. The fetch fields ride only on a fetch that was
+// attempted, and the result fields only on a fetch that returned, so a census
+// that did not run, or whose read failed, never carries a pool size that reads
+// as a measured zero.
+func (t SlogTelemetry) RecordCohortKindCensus(ctx context.Context, orgID string, decision CohortKindCensusDecision, memberKind contextfabric.SubjectKind, kinds []string, poolSize, poolBound int, truncated bool, readErr error) {
 	args := []any{"org_id", contextfabric.SanitizeLogAttr(orgID), "decision", contextfabric.SanitizeLogAttr(string(decision)), "member_kind", contextfabric.SanitizeLogAttr(string(memberKind))}
-	if decision == CohortKindCensusRan {
+	switch decision {
+	case CohortKindCensusRan:
 		args = append(args,
 			"kinds", contextfabric.SanitizeLogAttr(strings.Join(kinds, ",")),
 			"pool_size", contextfabric.SanitizeLogInt(int64(poolSize)),
 			"pool_bound", contextfabric.SanitizeLogInt(int64(poolBound)),
 			"truncated", truncated)
+	case CohortKindCensusReadFailed:
+		args = append(args,
+			"kinds", contextfabric.SanitizeLogAttr(strings.Join(kinds, ",")),
+			"pool_bound", contextfabric.SanitizeLogInt(int64(poolBound)))
+		if readErr != nil {
+			args = append(args, "error", contextfabric.SanitizeLogAttr(readErr.Error()))
+		}
+		t.logger().Warn("context_fabric: cohort kind census", append(args, graphRequestIDLogAttrs(ctx)...)...)
+		return
 	}
 	t.logger().Info("context_fabric: cohort kind census", append(args, graphRequestIDLogAttrs(ctx)...)...)
 }

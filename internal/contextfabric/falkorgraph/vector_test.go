@@ -1231,6 +1231,7 @@ type cohortKindCensusRecord struct {
 	poolSize   int
 	poolBound  int
 	truncated  bool
+	readErr    error
 }
 
 // cohortExactNameCensusGateRecord is one recorded
@@ -1319,10 +1320,10 @@ func (r *recordingTelemetry) RecordCohortKindBasis(_ context.Context, orgID stri
 	r.cohortKindBases = append(r.cohortKindBases, cohortKindBasisRecord{orgID: orgID, declaredKind: declaredKind, basis: basis, discovered: discovered, poolTruncation: poolTruncation, poolTruncationArms: poolTruncationArms})
 }
 
-func (r *recordingTelemetry) RecordCohortKindCensus(_ context.Context, orgID string, decision CohortKindCensusDecision, memberKind contextfabric.SubjectKind, kinds []string, poolSize, poolBound int, truncated bool) {
+func (r *recordingTelemetry) RecordCohortKindCensus(_ context.Context, orgID string, decision CohortKindCensusDecision, memberKind contextfabric.SubjectKind, kinds []string, poolSize, poolBound int, truncated bool, readErr error) {
 	r.cohortKindCensuses = append(r.cohortKindCensuses, cohortKindCensusRecord{
 		orgID: orgID, decision: decision, memberKind: memberKind, kinds: append([]string(nil), kinds...),
-		poolSize: poolSize, poolBound: poolBound, truncated: truncated,
+		poolSize: poolSize, poolBound: poolBound, truncated: truncated, readErr: readErr,
 	})
 }
 

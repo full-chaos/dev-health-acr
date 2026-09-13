@@ -40,6 +40,10 @@ const (
 	// CohortKindCensusKindInExactNameCensus: the exact-name census already
 	// fetches the declared kind, so a second fetch of it adds nothing.
 	CohortKindCensusKindInExactNameCensus CohortKindCensusDecision = "kind_in_exact_name_census"
+	// CohortKindCensusReadFailed: the kind-scoped census was attempted and the
+	// store read failed, so DiscoverContext returns the error. Reported by the
+	// reader, never by cohortKindCensusDecision, which decides before the read.
+	CohortKindCensusReadFailed CohortKindCensusDecision = "read_failed"
 )
 
 // CohortKindCensusDecisionVocabulary returns every declared decision, in
@@ -50,6 +54,7 @@ func CohortKindCensusDecisionVocabulary() []CohortKindCensusDecision {
 		CohortKindCensusNotAdmitted,
 		CohortKindCensusNoServableMemberKind,
 		CohortKindCensusKindInExactNameCensus,
+		CohortKindCensusReadFailed,
 	}
 }
 
