@@ -1497,11 +1497,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			}
 			// THE CLAIM AND THE SENTENCE ARE RE-DERIVED HERE, NOT CARRIED.
 			//
-			// Backfilling the row alone left the other two surfaces missing on
-			// this path: a document saved before the count existed was reused
-			// with its row restored and no claim and no sentence, so the same
-			// question answered from cache served strictly less than it did
-			// fresh -- and the reader had no way to tell which they had.
+			// Backfilling the row alone would leave the other two surfaces
+			// missing on this path: a stored document that owes a count would
+			// be reused with its row restored and no claim and no sentence, so
+			// the same question answered from cache would serve strictly less
+			// than it does fresh -- with nothing telling the reader which.
 			//
 			// RE-DERIVED rather than carried because a stored document may
 			// predate the feature entirely, so there is nothing to carry; and

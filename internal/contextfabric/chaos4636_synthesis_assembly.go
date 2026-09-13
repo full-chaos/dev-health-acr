@@ -289,13 +289,11 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	synthesisAllocation := params.Allocation
 	// THE `membership_cardinality` STEP, RUN BEFORE SYNTHESIS AND ONCE.
 	//
-	// It used to run in finalizeResult, after the model had already answered.
-	// That was right about WHICH member set it must describe -- the one the
-	// served document carries -- and it made the number unusable for anything
-	// the answer itself is built from: a value that does not exist until after
-	// synthesis cannot be handed to synthesis, and cannot be minted into the
-	// document's own claims without a second, later computation that could
-	// disagree with this one.
+	// It must describe the member set the served document carries, and it
+	// must exist before synthesis, because the answer is built from it: a
+	// value that does not exist until after synthesis cannot be handed to
+	// synthesis, and cannot be minted into the document's own claims without a
+	// second, later computation that could disagree with this one.
 	//
 	// Computing it HERE keeps the correctness argument intact rather than
 	// trading it away. The cohort this reads is `params.Graph.Cohort`, which IS
@@ -518,8 +516,8 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// GATED ON THE SAME QUESTION THE ROW ASKS. cardinalityOwed reads the
 	// planning rows through countRequirement, which is the row's own gate, so
 	// the claim cannot be minted for an answer that will carry no count row to
-	// reconcile it against. The three surfaces share one precondition; they
-	// used to have two.
+	// reconcile it against. The three surfaces share one precondition, so
+	// none of them can appear where the others do not.
 	if cardinalityOwedByFrame(params.Frame, e.requirements, cardinality) {
 		if claim, ok := cardinalityClaim(principal, cardinality); ok {
 			if cardinalityClaimAdmitted(len(result.ClaimedFacts)) {

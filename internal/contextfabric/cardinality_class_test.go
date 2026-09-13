@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // cardinalityClaimOf returns the served cardinality claim, or nil.
@@ -128,10 +129,9 @@ func TestTheServerClaimNamespaceIsRefusedForModelAuthoredClaims(t *testing.T) {
 		t.Run(cell.name, func(t *testing.T) {
 			t.Parallel()
 			// THE REAL VALIDATOR, not a restatement of the prefix rule. An
-			// earlier version of this arm asserted strings.HasPrefix over the
-			// literal and passed with the production refusal deleted -- it was
-			// testing the standard library. Driving ValidateAgainst is what
-			// makes deleting the refusal fail here.
+			// assertion over the prefix literal would hold whether or not any
+			// validator refuses anything -- it tests the standard library.
+			// Driving ValidateAgainst is what makes a missing refusal fail.
 			input, draft := closureFixture()
 			draft.ClaimedFacts[0].ClaimID = cell.claimID
 			for i := range draft.Drivers {
@@ -248,10 +248,10 @@ func TestTheCountSentenceStandsWithinTheContractBound(t *testing.T) {
 func TestReuseRederivesTheCountRatherThanCarryingIt(t *testing.T) {
 	t.Parallel()
 
-	// A STORED DOCUMENT IN THE PRE-CHANGE SHAPE: it owes a count -- its
-	// planning rows carry the obligation and it carries a member set -- and it
-	// carries none of the three count surfaces, which is exactly what a cache
-	// written before the count existed holds.
+	// A STORED DOCUMENT THAT OWES A COUNT AND CARRIES NONE OF ITS SURFACES:
+	// its planning rows carry the obligation and it carries a member set, but
+	// no row, claim or sentence. That is the shape of any document stored by a
+	// build that did not mint the count, and reuse must restore all three.
 	stored := storedResultWithCandidateEvidence()
 	// A cohort of the fixture's OWN subject, so the reuse recheck can still
 	// see every member. A cohort of unrelated members makes the recheck refuse
@@ -281,10 +281,10 @@ func TestReuseRederivesTheCountRatherThanCarryingIt(t *testing.T) {
 		t.Fatal("the stored fixture already carries a count surface -- a re-derivation cannot be observed against it")
 	}
 
-	// THROUGH THE ENGINE'S OWN REUSE PATH. An earlier version of this arm
-	// called the cardinality helpers directly and passed with the engine
-	// wiring deleted -- it proved the helpers worked, not that reuse used
-	// them. Serving a real hit is what makes deleting the wiring fail here.
+	// THROUGH THE ENGINE'S OWN REUSE PATH. Calling the cardinality helpers
+	// directly would prove the helpers work, not that reuse uses them, and it
+	// would hold with the engine wiring absent. Serving a real hit is what
+	// makes missing wiring fail here.
 	engine := reuseDegradeEngine(t, stored,
 		productionShapedGraphContext([]string{reuseCitationRef}, []string{reuseNodeRef}), &recordingTelemetry{})
 	result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
@@ -329,4 +329,82 @@ func nonCountingFrame(memberKind SubjectKind) *QuestionFrame {
 		nil,
 	)
 	return &frame
+}
+
+// ---------------------------------------------------------------------------
+// THE CAP DECISION AT THE MINT, ON A QUESTION THAT OWES THE COUNT
+// ---------------------------------------------------------------------------
+
+// countingGroupReadDeriver is the group-read derivation plus one count
+// obligation at the member role, taken from the production derivation.
+//
+// THE MINT'S CAP DECISION IS REACHABLE ONLY ON A QUESTION THAT OWES THE COUNT.
+// The count claim is minted only under a count obligation, and the claimed-
+// facts cap is reached only on a document large enough to fill it. The plain
+// group-read fixture fills the document -- 250 groups -- but derives state
+// obligations alone, so it owes no count and never reaches the mint's cap
+// check. This deriver keeps that document and adds the obligation, so the cap
+// decision at the call site is the thing under test. The 249/250/251 pin tests
+// the helper beside it, which a call site that stopped consulting the helper
+// would never disturb.
+type countingGroupReadDeriver struct{}
+
+func (countingGroupReadDeriver) DeriveRequirements(frame QuestionFrame) []DerivedRequirement {
+	// The count row comes from the PRODUCTION derivation of a counting
+	// question, never hand-built. A hand-built row is a second authority over
+	// scope and quantifier, and plan validation refuses an incomplete one --
+	// which would measure the fixture instead of the cap.
+	rows := groupReadRequirementDeriver{}.DeriveRequirements(frame)
+	for _, derived := range (registryDeriver{}).DeriveRequirements(*countingFrame(SubjectProject)) {
+		if derived.Obligation == ObligationCount {
+			rows = append(rows, derived)
+		}
+	}
+	return rows
+}
+
+// TestTheCardinalityClaimYieldsToTheContractCapWhenTheCountIsOwed pins the cap
+// decision at the mint site itself, not the helper beside it.
+//
+// A 251st claim fails the claimed-facts bound and invalidates the WHOLE answer.
+// So on a document already at the cap, an owed count claim must be dropped --
+// the answer serves without the addressable field rather than serving nothing.
+// The helper's boundary is pinned separately at 249/250/251; this is the arm
+// that fails if the mint stops consulting it, which that unit test cannot see.
+//
+// THE CONTROLS ARE WHAT MAKE THE ABSENCE MEAN SOMETHING. A missing claim on its
+// own is exactly what a question that owes no count produces, so the arm first
+// proves the count WAS owed and the document WAS full -- only then is the
+// absence the cap's decision rather than the precondition's.
+func TestTheCardinalityClaimYieldsToTheContractCapWhenTheCountIsOwed(t *testing.T) {
+	t.Parallel()
+	const groups = 250
+
+	logs := captureEngineLogger(t)
+	recorder := servingGroupCohort(groups)
+	engine, request := groupReadEngineFixtureConfigured(t, logs.telemetry, recorder, groupReadCohortMembers(groups), nil, SubjectProject, nil, nil,
+		func(config *groupReadFixtureConfig) { config.deriver = countingGroupReadDeriver{} })
+
+	result, err := engine.Investigate(canonicalRequestContext(), storage.Principal{OrgID: "org_1"}, request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v -- an owed count claim pushed past the contract cap invalidates the whole answer, which is exactly the failure the cap decision exists to prevent", err)
+	}
+
+	// CONTROL 1: the count was owed. Without it, an absent claim is the
+	// precondition speaking, not the cap.
+	if rows := countOutcomeRows(result, contractsv1.ContextFabricOutcomeStageAssembledResult); len(rows) == 0 {
+		t.Fatal("the fixture produced no count outcome row, so the count was never owed and this arm cannot distinguish the cap from the precondition")
+	}
+	// CONTROL 2: the document is actually at the cap, so the decision was live.
+	if got := len(result.ClaimedFacts); got < contractsv1.ContextFabricClaimedFactsMaxCount {
+		t.Fatalf("the served document carries %d claims, below the %d cap -- the cap decision was never reached, so nothing here measures it", got, contractsv1.ContextFabricClaimedFactsMaxCount)
+	}
+
+	// THE PROPERTY.
+	if got := len(result.ClaimedFacts); got > contractsv1.ContextFabricClaimedFactsMaxCount {
+		t.Errorf("the served document carries %d claims, over the %d contract cap", got, contractsv1.ContextFabricClaimedFactsMaxCount)
+	}
+	if claim := cardinalityClaimOf(result); claim != nil {
+		t.Error("the count claim was minted into a document already at the claim cap -- the mint is not consulting the cap decision")
+	}
 }

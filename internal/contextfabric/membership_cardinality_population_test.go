@@ -242,8 +242,8 @@ func TestTheCardinalityCauseReachesTheEmittedLine(t *testing.T) {
 	}
 }
 
-// mustCardinality is the test-side adapter for the call sites that used to
-// hand appendMembershipCardinality its raw inputs. Production computes the
+// mustCardinality is the test-side adapter for call sites that express a
+// cardinality by its raw inputs. Production computes the
 // cardinality once, before synthesis, and passes the VALUE; a test that still
 // wants to express "the cardinality of this cohort" says so here rather than
 // each site re-deriving it differently.
