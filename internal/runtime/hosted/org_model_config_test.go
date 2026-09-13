@@ -1,8 +1,11 @@
 package hosted
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -191,6 +194,39 @@ func TestContextFabricModelDefaults_stampsResynthesisAttemptsWhenConfigured(t *t
 	}
 	if defaults.MaxSynthesisResynthesisAttempts != 2 {
 		t.Fatalf("defaults.MaxSynthesisResynthesisAttempts = %d, want 2", defaults.MaxSynthesisResynthesisAttempts)
+	}
+}
+
+// TestMalformedResynthesisAttemptsWarnsOncePerCompositionPath is codex round
+// 1's P3 finding (2026-09-13), reproduced as a pin: a deployment with BOTH a
+// configured provider AND a per-organization model-config store resolves
+// EnvSynthesisResynthesisAttempts through two independent composition paths
+// -- contextFabricModelConfigFromEnv (the deployment default) and
+// contextFabricModelDefaults (the per-organization defaults) -- so a
+// malformed value logs the WARN twice, not once. Both lines name the
+// identical variable and value (see EnvSynthesisResynthesisAttempts's own
+// doc comment for why this is accepted, not deduplicated); this test pins
+// the count so a future change that silently drops one of the two
+// composition paths' visibility is caught, and one that starts producing a
+// THIRD or DIFFERING line is caught too.
+func TestMalformedResynthesisAttemptsWarnsOncePerCompositionPath(t *testing.T) {
+	lookup := envLookup(map[string]string{
+		modelprovider.EnvAPIKey:         "sk-test",
+		EnvSynthesisResynthesisAttempts: "0",
+	})
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+
+	if _, err := contextFabricModelConfigFromEnv(lookup, nil, logger); err != nil {
+		t.Fatalf("contextFabricModelConfigFromEnv() error = %v", err)
+	}
+	if _, err := contextFabricModelDefaults(lookup, logger); err != nil {
+		t.Fatalf("contextFabricModelDefaults() error = %v", err)
+	}
+
+	got := strings.Count(logs.String(), EnvSynthesisResynthesisAttempts)
+	if got != 2 {
+		t.Fatalf("startup log names %s %d time(s), want exactly 2 (once per composition path): %q", EnvSynthesisResynthesisAttempts, got, logs.String())
 	}
 }
 

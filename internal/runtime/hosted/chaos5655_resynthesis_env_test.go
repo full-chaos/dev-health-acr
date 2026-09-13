@@ -3,6 +3,7 @@ package hosted
 import (
 	"bytes"
 	"log/slog"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -33,14 +34,14 @@ func TestSynthesisResynthesisAttemptsFromEnvDomain(t *testing.T) {
 		{name: "blank defaults silently", present: true, value: "", want: genkitruntime.DefaultMaxSynthesisResynthesisAttempts},
 		{name: "whitespace-only defaults silently", present: true, value: "   ", want: genkitruntime.DefaultMaxSynthesisResynthesisAttempts},
 		{name: "whitespace-padded valid value parses", present: true, value: " 2 ", want: 2},
-		{name: "the documented default as a literal", present: true, value: "3", want: 3},
+		{name: "the documented default as a literal", present: true, value: strconv.Itoa(genkitruntime.DefaultMaxSynthesisResynthesisAttempts), want: genkitruntime.DefaultMaxSynthesisResynthesisAttempts},
 		{name: "one is the minimum, accepted", present: true, value: "1", want: 1},
-		{name: "the ceiling itself is accepted", present: true, value: "5", want: genkitruntime.MaxSynthesisResynthesisAttemptsCeiling},
+		{name: "the ceiling itself is accepted", present: true, value: strconv.Itoa(genkitruntime.MaxSynthesisResynthesisAttemptsCeiling), want: genkitruntime.MaxSynthesisResynthesisAttemptsCeiling},
 		{name: "zero is malformed, warns and defaults", present: true, value: "0", want: genkitruntime.DefaultMaxSynthesisResynthesisAttempts, wantWarn: true, wantValue: "0"},
 		{name: "negative is malformed, warns and defaults", present: true, value: "-1", want: genkitruntime.DefaultMaxSynthesisResynthesisAttempts, wantWarn: true, wantValue: "-1"},
 		{name: "fractional is malformed, warns and defaults", present: true, value: "1.5", want: genkitruntime.DefaultMaxSynthesisResynthesisAttempts, wantWarn: true, wantValue: "1.5"},
 		{name: "non-numeric is malformed, warns and defaults", present: true, value: "many", want: genkitruntime.DefaultMaxSynthesisResynthesisAttempts, wantWarn: true, wantValue: "many"},
-		{name: "one past the ceiling is malformed, warns and defaults", present: true, value: "6", want: genkitruntime.DefaultMaxSynthesisResynthesisAttempts, wantWarn: true, wantValue: "6"},
+		{name: "one past the ceiling is malformed, warns and defaults", present: true, value: strconv.Itoa(genkitruntime.MaxSynthesisResynthesisAttemptsCeiling + 1), want: genkitruntime.DefaultMaxSynthesisResynthesisAttempts, wantWarn: true, wantValue: strconv.Itoa(genkitruntime.MaxSynthesisResynthesisAttemptsCeiling + 1)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

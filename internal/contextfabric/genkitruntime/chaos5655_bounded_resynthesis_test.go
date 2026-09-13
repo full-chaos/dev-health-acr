@@ -3,7 +3,9 @@ package genkitruntime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -21,13 +23,20 @@ import (
 type drawSequenceGenerator struct {
 	outputs []synthesisOutput
 	calls   int
+	// requests (codex r1 finding 4) records every Synthesize call's own
+	// generationRequest, so a test can assert the SAME prompt was sent on
+	// every draw -- CHAOS-5655's own invariant ("re-sends the SAME encoded
+	// synthesis prompt") was previously asserted only by reading the loop's
+	// source, never by a generator that could see whether it held.
+	requests []generationRequest
 }
 
 func (g *drawSequenceGenerator) Interpret(context.Context, generationRequest) (interpretationOutput, contextfabric.ModelUsage, error) {
 	return interpretationOutput{}, contextfabric.ModelUsage{}, errors.New("drawSequenceGenerator.Interpret is unused")
 }
 
-func (g *drawSequenceGenerator) Synthesize(context.Context, generationRequest) (synthesisOutput, contextfabric.ModelUsage, error) {
+func (g *drawSequenceGenerator) Synthesize(_ context.Context, request generationRequest) (synthesisOutput, contextfabric.ModelUsage, error) {
+	g.requests = append(g.requests, request)
 	index := g.calls
 	if index >= len(g.outputs) {
 		index = len(g.outputs) - 1
@@ -49,6 +58,12 @@ func (g *drawSequenceGenerator) Phrase(context.Context, generationRequest) (phra
 func invalidTitleSynthesisOutput() synthesisOutput {
 	output := validSynthesisOutput()
 	output.Drivers[0].Title = stringsRepeatA(513)
+	// codex r1 finding 4: validSynthesisOutput's DirectJudgment is a fixed
+	// literal, identical across every variant built from it -- a test
+	// asserting "the served draft is draw N's, not an earlier one" by
+	// comparing DirectJudgment alone could not actually distinguish them.
+	// Marked per-variant so that comparison is genuinely discriminating.
+	output.DirectJudgment = "draw-1-rejected: title overrun"
 	return output
 }
 
@@ -60,6 +75,7 @@ func invalidTitleSynthesisOutput() synthesisOutput {
 func invalidEvidenceSynthesisOutput() synthesisOutput {
 	output := validSynthesisOutput()
 	output.EvidenceRefIDs = []string{"evidence_not_in_input"}
+	output.DirectJudgment = "draw-2-rejected: invented evidence"
 	return output
 }
 
@@ -86,12 +102,14 @@ func TestSynthesizeAnswerResynthesizesOnRejectionUntilSuccess(t *testing.T) {
 		invalidEvidenceSynthesisOutput(), // draw 2: evidence_unknown, no clause
 		valid,                            // draw 3: validates
 	}}
-	// The bound (5) is deliberately WIDER than len(outputs) (3): if the loop's
-	// own success break were ever lost, drawSequenceGenerator would keep
-	// returning the clamped LAST (valid) output for draws 4-5, and gen.calls
-	// below would read 5 instead of 3 -- the loop's own upper bound alone
-	// cannot catch that mutant when the two numbers happen to coincide.
-	runtime := mustRuntime(t, gen, Config{Logger: logger, MaxSynthesisResynthesisAttempts: 5})
+	// MaxSynthesisResynthesisAttempts is exactly the ceiling (3): the
+	// dedicated success-break kill-check
+	// (TestSynthesizeAnswerStopsDrawingImmediatelyOnSuccess, below) uses a
+	// bound WIDER than its own fixture to catch a missing break by call
+	// count; this test's own 3-output fixture already spans the whole
+	// ceiling, so it cannot also do that here (see the ceiling's own doc
+	// comment on why 3 is a hard limit, not merely "low").
+	runtime := mustRuntime(t, gen, Config{Logger: logger, MaxSynthesisResynthesisAttempts: 3})
 
 	draft, receipt, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput())
 	if err != nil {
@@ -103,6 +121,18 @@ func TestSynthesizeAnswerResynthesizesOnRejectionUntilSuccess(t *testing.T) {
 	if gen.calls != 3 {
 		t.Fatalf("generator.calls = %d, want exactly 3 -- the loop must stop the moment a draw validates, never drawing a fourth time", gen.calls)
 	}
+	// codex r1 finding 4: every draw must see the IDENTICAL encoded prompt --
+	// CHAOS-5655 re-sends the same synthesis prompt, it never re-assembles
+	// one per draw. Asserted structurally here, not only by reading the
+	// loop's source.
+	if len(gen.requests) != 3 {
+		t.Fatalf("generator saw %d requests, want 3", len(gen.requests))
+	}
+	for i, req := range gen.requests[1:] {
+		if req.Prompt != gen.requests[0].Prompt || req.System != gen.requests[0].System || req.Model != gen.requests[0].Model {
+			t.Fatalf("draw %d's request = %+v, want byte-identical to draw 1's %+v -- CHAOS-5655 must never re-assemble the prompt per draw", i+2, req, gen.requests[0])
+		}
+	}
 	// The SERVED draft must be the third (valid) draw's, never one of the two
 	// rejected drafts -- the ADR 0008 invariant this whole feature exists to
 	// preserve ("one model sample is not the verdict", but a REJECTED sample
@@ -110,6 +140,14 @@ func TestSynthesizeAnswerResynthesizesOnRejectionUntilSuccess(t *testing.T) {
 	wantDraft, _ := valid.toDomain()
 	if draft.DirectJudgment != wantDraft.DirectJudgment {
 		t.Fatalf("draft.DirectJudgment = %q, want the THIRD draw's own content %q -- a rejected earlier draft must never be served", draft.DirectJudgment, wantDraft.DirectJudgment)
+	}
+	// codex r1 finding 4: DirectJudgment now differs on every one of the
+	// three outputs (see invalidTitleSynthesisOutput/
+	// invalidEvidenceSynthesisOutput), so this is a genuinely discriminating
+	// negative check, not merely the same value compared to itself three
+	// ways.
+	if draft.DirectJudgment == "draw-1-rejected: title overrun" || draft.DirectJudgment == "draw-2-rejected: invented evidence" {
+		t.Fatalf("draft.DirectJudgment = %q, a REJECTED draw's own content was served", draft.DirectJudgment)
 	}
 
 	events := handler.decisionEvents()
@@ -161,6 +199,34 @@ func TestSynthesizeAnswerResynthesizesOnRejectionUntilSuccess(t *testing.T) {
 	// usage. A rejected draw's real cost must not go invisible.
 	if want := (contextfabric.ModelUsage{InputTokens: 60, OutputTokens: 24, TotalTokens: 84}); receipt.Usage != want {
 		t.Fatalf("receipt.Usage = %+v, want %+v (summed across all three draws)", receipt.Usage, want)
+	}
+}
+
+// TestSynthesizeAnswerStopsDrawingImmediatelyOnSuccess isolates the loop's
+// own success-break, split out from
+// TestSynthesizeAnswerResynthesizesOnRejectionUntilSuccess because that
+// test's own fixture already spans the whole ceiling (3) and so cannot also
+// prove the bound is wider than the fixture. Here the bound (3) IS wider
+// than the fixture (2 outputs): if the success break were ever lost,
+// drawSequenceGenerator would keep returning the clamped LAST (valid)
+// output for a third draw, and gen.calls would read 3 instead of 2.
+func TestSynthesizeAnswerStopsDrawingImmediatelyOnSuccess(t *testing.T) {
+	t.Parallel()
+	gen := &drawSequenceGenerator{outputs: []synthesisOutput{
+		invalidTitleSynthesisOutput(),
+		validSynthesisOutput(),
+	}}
+	runtime := mustRuntime(t, gen, Config{MaxSynthesisResynthesisAttempts: MaxSynthesisResynthesisAttemptsCeiling})
+
+	_, receipt, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+	if err != nil {
+		t.Fatalf("SynthesizeAnswer() error = %v, want success on the second draw", err)
+	}
+	if receipt.Outcome != "success" {
+		t.Fatalf("receipt.Outcome = %q, want success", receipt.Outcome)
+	}
+	if gen.calls != 2 {
+		t.Fatalf("generator.calls = %d, want exactly 2 -- the loop must stop the instant a draw validates, never drawing a third time even though the bound (%d) allows it", gen.calls, MaxSynthesisResynthesisAttemptsCeiling)
 	}
 }
 
@@ -262,6 +328,90 @@ func TestSynthesizeAnswerFallbackRunsOnceAfterResynthesisBudgetExhausted(t *test
 	}
 	if receipt.Outcome != "invalid_output" {
 		t.Fatalf("receipt.Outcome = %q, want the fallback leg's own outcome", receipt.Outcome)
+	}
+}
+
+// rejectThenBlockUntilCanceledGenerator (codex r1 finding 2, 2026-09-13) is
+// the generator for TestBoundedResynthesisCanSuppressAConfiguredFallback:
+// draw 1 rejects immediately (a real, fast validator rejection, ctx still
+// alive); draw 2 blocks until the caller's ctx is done, simulating a draw
+// that runs into the caller's own request deadline mid-flight, then reports
+// ctx.Err() -- exactly the shape a slow model call takes when it is still
+// running as the deadline lands.
+type rejectThenBlockUntilCanceledGenerator struct {
+	calls   int
+	started chan struct{}
+}
+
+func (g *rejectThenBlockUntilCanceledGenerator) Interpret(context.Context, generationRequest) (interpretationOutput, contextfabric.ModelUsage, error) {
+	return interpretationOutput{}, contextfabric.ModelUsage{}, errors.New("rejectThenBlockUntilCanceledGenerator.Interpret is unused")
+}
+
+func (g *rejectThenBlockUntilCanceledGenerator) Synthesize(ctx context.Context, _ generationRequest) (synthesisOutput, contextfabric.ModelUsage, error) {
+	g.calls++
+	if g.calls == 1 {
+		return invalidTitleSynthesisOutput(), contextfabric.ModelUsage{InputTokens: 20, OutputTokens: 8, TotalTokens: 28}, nil
+	}
+	close(g.started)
+	<-ctx.Done()
+	return synthesisOutput{}, contextfabric.ModelUsage{}, ctx.Err()
+}
+
+func (g *rejectThenBlockUntilCanceledGenerator) Phrase(context.Context, generationRequest) (phrasingOutput, contextfabric.ModelUsage, error) {
+	return phrasingOutput{}, contextfabric.ModelUsage{}, errors.New("rejectThenBlockUntilCanceledGenerator.Phrase is unused")
+}
+
+// TestBoundedResynthesisCanSuppressAConfiguredFallback is codex round 1's P1
+// finding (2026-09-13), reproduced as a permanent regression pin, not fixed:
+// no code change makes this safe, because BOTH pieces of behavior it
+// composes are independently correct -- fallbackWouldSeeADeadContext
+// deliberately refuses to place a fallback call against an already-dead
+// context (CHAOS-5577), and this ticket's own loop deliberately keeps
+// drawing on a validator rejection. Their COMPOSITION means: at
+// MaxSynthesisResynthesisAttempts=1 (pre-CHAOS-5655 behavior), a quick
+// draw-1 rejection leaves the caller's context very much alive, so a
+// configured fallback gets its full remaining budget and can succeed. At
+// N>1, if a LATER draw's own call is still in flight when the caller's
+// context deadline lands, that draw's own failure IS the context dying --
+// and the fallback that would have succeeded at N=1 is now correctly, but
+// consequentially, never even attempted. This is the sharper mechanism
+// behind the RISK-NOTES latency/cost composition already disclosed in the
+// PR body; see there for the operational mitigation (size the deployment's
+// request timeout for N draws PLUS one fallback attempt).
+func TestBoundedResynthesisCanSuppressAConfiguredFallback(t *testing.T) {
+	t.Parallel()
+	gen := &rejectThenBlockUntilCanceledGenerator{started: make(chan struct{})}
+	fallback := &trackedErroringFallback{
+		err:     errors.New("fallback was never supposed to be reachable in this repro"),
+		receipt: validReceipt(contextfabric.ModelOperationSynthesize),
+	}
+	runtime := mustRuntime(t, gen, Config{MaxAttempts: 1, MaxSynthesisResynthesisAttempts: MaxSynthesisResynthesisAttemptsCeiling, Fallback: fallback})
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	var err error
+	go func() {
+		_, _, err = runtime.SynthesizeAnswer(ctx, storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+		close(done)
+	}()
+	select {
+	case <-gen.started:
+		// draw 2 is now in flight -- this is the moment a real deployment's
+		// request-timeout middleware would fire. Cancel to simulate it.
+		cancel()
+	case <-time.After(5 * time.Second):
+		t.Fatal("draw 2 was never reached -- cannot exercise the in-flight-cancellation case")
+	}
+	<-done
+
+	if err == nil {
+		t.Fatal("SynthesizeAnswer() error = nil, want the primary's own in-flight cancellation surfaced")
+	}
+	if gen.calls != 2 {
+		t.Fatalf("generator.calls = %d, want exactly 2 (draw 1 rejected, draw 2 in flight when canceled)", gen.calls)
+	}
+	if fallback.calls != 0 {
+		t.Fatalf("fallback.calls = %d, want 0 -- draw 2 genuinely contacted the provider before the in-flight cancellation, so fallbackWouldSeeADeadContext correctly refuses to place a doomed fallback call. This is the documented composition risk, not a bug to fix here.", fallback.calls)
 	}
 }
 
@@ -394,6 +544,60 @@ func TestSynthesisDrawClauseOmittedFieldsSpellNoneNotBlank(t *testing.T) {
 	}
 	if got := drawsRetried(nil); got != 0 {
 		t.Fatalf("drawsRetried(nil) = %d, want 0", got)
+	}
+}
+
+// TestFormatSynthesisDrawDigestsFitsTheLogSanitizerBudget is codex round 1's
+// own P1 finding (2026-09-13), reproduced as a permanent pin rather than a
+// one-off probe: contextfabric.SanitizeLogAttr truncates every decision-line
+// field at 256 RUNES, and draw_output_digests is the one field whose
+// per-entry cost (a 64-hex-char digest) makes that bound reachable. At
+// MaxSynthesisResynthesisAttemptsCeiling+1 draws the rendered string would
+// already be truncated mid-digest; AT the ceiling it must not be. This is
+// why the ceiling is 3, not merely "low" -- see its own doc comment.
+func TestFormatSynthesisDrawDigestsFitsTheLogSanitizerBudget(t *testing.T) {
+	t.Parallel()
+	digest := func(b byte) string {
+		out := make([]byte, 64)
+		for i := range out {
+			out[i] = b
+		}
+		return string(out)
+	}
+	drawsN := func(n int) []synthesisDraw {
+		draws := make([]synthesisDraw, n)
+		for i := range draws {
+			draws[i] = synthesisDraw{Index: i + 1, Outcome: "invalid_output", OutputDigest: digest(byte('a' + i)), Clause: contractsv1.ContextFabricClauseNone}
+		}
+		return draws
+	}
+
+	// AT the ceiling: sanitizing must be a no-op -- every digest survives
+	// whole, at its full 64-char length, untruncated.
+	rendered := formatSynthesisDrawDigests(drawsN(MaxSynthesisResynthesisAttemptsCeiling))
+	sanitized := contextfabric.SanitizeLogAttr(rendered)
+	if sanitized != rendered {
+		t.Fatalf("at the ceiling (%d draws): sanitized = %q, want it UNTRUNCATED (identical to the unsanitized render) %q", MaxSynthesisResynthesisAttemptsCeiling, sanitized, rendered)
+	}
+	parts := splitCommaList(sanitized)
+	if len(parts) != MaxSynthesisResynthesisAttemptsCeiling {
+		t.Fatalf("at the ceiling: got %d comma-separated entries, want %d", len(parts), MaxSynthesisResynthesisAttemptsCeiling)
+	}
+	for i, part := range parts {
+		want := fmt.Sprintf("%d:%s", i+1, digest(byte('a'+i)))
+		if part != want {
+			t.Fatalf("draw %d's rendered entry = %q, want %q -- the full 64-char digest must survive untruncated", i+1, part, want)
+		}
+	}
+
+	// One past the ceiling is exactly the shape the finding named: this
+	// documents the failure mode as a REGRESSION TEST for the ceiling
+	// itself, not a claim about production behavior (construction already
+	// refuses a value above the ceiling; nothing in production can reach
+	// this many draws).
+	overCeiling := contextfabric.SanitizeLogAttr(formatSynthesisDrawDigests(drawsN(MaxSynthesisResynthesisAttemptsCeiling + 1)))
+	if len([]rune(overCeiling)) != 256 {
+		t.Fatalf("one past the ceiling: sanitized length = %d, want exactly 256 (truncated) -- if this ever stops truncating, the ceiling may be safe to raise", len([]rune(overCeiling)))
 	}
 }
 

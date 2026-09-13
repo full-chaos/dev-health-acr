@@ -460,9 +460,19 @@ const (
 	// Config.MaxSynthesisResynthesisAttempts the same way MaxAttempts is
 	// bounded to [1,3] below: a hard construction-time invariant, not the
 	// soft default-on-malformed policy hosted composition applies to its
-	// own environment variable. Each resynthesis draw is a full, separately
-	// billable model call, so the ceiling stays low.
-	MaxSynthesisResynthesisAttemptsCeiling = 5
+	// own environment variable.
+	//
+	// 3, not merely "low", is load-bearing: codex round 1 (2026-09-13) found
+	// that draw_output_digests (formatSynthesisDrawDigests) renders as
+	// "N:<64-hex-char digest>" per draw, comma-joined, and every decision-
+	// line field is sanitized through contextfabric.SanitizeLogAttr, which
+	// truncates at 256 RUNES. Four single-digit-indexed digests already need
+	// 4*66 + 3 = 267 runes -- over the limit -- silently dropping the fourth
+	// draw's digest entirely and truncating the third. Three digests need
+	// 3*66 + 2 = 200, comfortably under 256. A ceiling above 3 would let an
+	// operator configure a value this package itself cannot observe
+	// correctly; measured directly (TestFormatSynthesisDrawDigestsFitsTheLogSanitizerBudget).
+	MaxSynthesisResynthesisAttemptsCeiling = 3
 )
 
 type Config struct {

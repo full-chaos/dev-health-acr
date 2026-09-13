@@ -27,9 +27,22 @@ import (
 // model composition talks to, so a malformed value should never be able to
 // take the whole model runtime down at startup. A missing or malformed
 // value instead falls back to the documented default and (for a malformed
-// one) logs exactly one startup WARN naming the bad value, mirroring the
-// "an operator who mis-set a tuning-only variable still finds out" posture
+// one) logs a startup WARN naming the bad value, mirroring the "an operator
+// who mis-set a tuning-only variable still finds out" posture
 // newContextFabricModelRuntime already applies to an unconfigured provider.
+//
+// codex round 1 (2026-09-13): this function is called from BOTH
+// contextFabricModelConfigFromEnv (the deployment-default path) and, when a
+// per-organization model-config store is also configured,
+// contextFabricModelDefaults (internal/runtime/hosted/org_model_config.go) --
+// a malformed value therefore logs the SAME warning TWICE in that
+// configuration, once per composition path that resolves it, not once
+// per process. Both lines name the identical variable and value (this
+// function has no state to deduplicate across calls, and none is added:
+// see contextFabricModelDefaults's own doc comment for why re-reading the
+// environment a second time here is deliberate, side-effect-free
+// composition, not a duplicated failure surface). Never a silent miss, and
+// never two DIFFERENT diagnoses for the same misconfiguration.
 const EnvSynthesisResynthesisAttempts = "ACR_CONTEXT_FABRIC_SYNTHESIS_MAX_RESYNTHESIS_ATTEMPTS"
 
 // synthesisResynthesisAttemptsFromEnv reads EnvSynthesisResynthesisAttempts.
