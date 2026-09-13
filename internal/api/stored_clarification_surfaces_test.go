@@ -43,13 +43,27 @@ import (
 // composition and reuse, the hosted App over TLS for result-by-id, and the
 // real MCP server bootstrapped against that App for investigation_result.
 
-type surfaceInterpreter struct{ frame *contextfabric.QuestionFrame }
+// surfaceInterpreter accepts one frame. A status question infers no window;
+// drivers asks a status-and-drivers question read as a trend assessment,
+// which the window class table gives a default window, so a request with no
+// window of its own meets the window gate.
+type surfaceInterpreter struct {
+	frame   *contextfabric.QuestionFrame
+	drivers bool
+}
 
 func (i surfaceInterpreter) Interpret(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.QuestionFamilyOutcome, error) {
-	return contextfabric.InterpretedQuestion{
+	interpreted := contextfabric.InterpretedQuestion{
 		Shape: contextfabric.ShapeOpen, RequestedJudgment: "status", TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 		FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
-	}, contextfabric.QuestionFamilyOutcome{
+	}
+	if i.drivers {
+		interpreted.RequestedJudgment = "status_and_drivers"
+		interpreted.FactRequirements = []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}, {Kind: contextfabric.FactReadiness}}
+		interpreted.WindowClass = contextfabric.WindowClassTrendAssessment
+		interpreted.WindowConfidence = contextfabric.WindowConfidenceHigh
+	}
+	return interpreted, contextfabric.QuestionFamilyOutcome{
 		Family: contextfabric.QuestionFamilyUnclassified, Source: contextfabric.QuestionFamilySourceModel,
 		Frame: i.frame, Gate: contextfabric.FrameGate{Outcome: contextfabric.FrameGatePassed},
 	}, nil
@@ -57,6 +71,7 @@ func (i surfaceInterpreter) Interpret(context.Context, storage.Principal, contex
 
 type surfaceGraph struct {
 	resolution contextfabric.SubjectResolution
+	material   contextfabric.StructureOfferMaterial
 }
 
 func (g surfaceGraph) ResolveInvestigationBinding(context.Context, storage.Principal) (contextfabric.ResolvedGraphBinding, error) {
@@ -75,7 +90,7 @@ func (g surfaceGraph) ResolveSubjects(_ context.Context, _ storage.Principal, re
 		}
 		return contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{}, Committed: committed}, contextfabric.StructureOfferMaterial{}, nil, nil, nil
 	}
-	return g.resolution, contextfabric.StructureOfferMaterial{}, nil, nil, nil
+	return g.resolution, g.material, nil, nil, nil
 }
 
 func (g surfaceGraph) DiscoverContext(context.Context, storage.Principal, contextfabric.GraphDiscoveryRequest) (contextfabric.GraphContext, error) {
@@ -108,13 +123,18 @@ func (g surfaceReuseGate) FindReusable(context.Context, storage.Principal, conte
 
 func surfaceEngine(t *testing.T, label string, frame *contextfabric.QuestionFrame, pool []contextfabric.SubjectCandidate, results contextfabric.InvestigationResultStore, gate contextfabric.AnswerReuseGate) *contextfabric.Engine {
 	t.Helper()
+	return surfaceEngineWith(t, label, surfaceInterpreter{frame: frame}, pool, contextfabric.StructureOfferMaterial{}, results, gate)
+}
+
+func surfaceEngineWith(t *testing.T, label string, interpreter surfaceInterpreter, pool []contextfabric.SubjectCandidate, material contextfabric.StructureOfferMaterial, results contextfabric.InvestigationResultStore, gate contextfabric.AnswerReuseGate) *contextfabric.Engine {
+	t.Helper()
 	var mu sync.Mutex
 	next := 0
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
-		Interpreter: surfaceInterpreter{frame: frame},
+		Interpreter: interpreter,
 		Graph: surfaceGraph{resolution: contextfabric.SubjectResolution{
 			Candidates: pool, Committed: []contextfabric.SubjectRef{}, ClarificationPrompt: "Which subject did you mean: Candidate A, Candidate B?",
-		}},
+		}, material: material},
 		Facts: surfaceFacts{t: t}, Synthesizer: surfaceSynthesizer{t: t},
 		Results: results, ReuseGate: gate,
 	}, contextfabric.EngineOptions{
@@ -391,7 +411,7 @@ func TestAStoredClarificationIsHandledAlikeOnEveryServingSurface(t *testing.T) {
 				t.Fatalf("stored-answerability lines = %d, want one per read (result-by-id, then the MCP forward); log: %s", len(lines), logs.String()[offset:])
 			}
 			for _, line := range lines {
-				if line["surface"] != "result_by_id" || line["determination"] != row.determination || line["semantic_state"] != row.semanticReadAs ||
+				if line["surface"] != "result_by_id" || line["determination"] != row.determination || line["decided_by"] != "role" || line["semantic_state"] != row.semanticReadAs ||
 					line["stored_status"] != "clarification_required" || line["served_status"] != string(row.read) || line["level"] != "INFO" {
 					t.Fatalf("stored-answerability line = %v, want surface result_by_id, determination %q, semantic_state %q, served %q", line, row.determination, row.semanticReadAs, row.read)
 				}
@@ -403,6 +423,152 @@ func TestAStoredClarificationIsHandledAlikeOnEveryServingSurface(t *testing.T) {
 				projection := getRealAPIProjection(t, server, token, row.row.ResultID, 3, 1, 10)
 				if projection.SemanticReading == nil || projection.SemanticReading.Reason != contractsv1.ContextFabricSemanticReadingStateAbsent {
 					t.Fatalf("projection semantic_reading = %+v, want the same disclosure the canonical view carries", projection.SemanticReading)
+				}
+			}
+		})
+	}
+}
+
+// TestTheWindowGateAndOfferLessRowsAreHandledAlikeOnEveryServingSurface holds
+// the precedence steps the role rows above do not reach, on every serving
+// surface: the window gate's own clarification (named and organization-scope
+// readings) is served as fresh composition serves it, and an offer-less row
+// with an organization-scope reading is refused on that basis.
+func TestTheWindowGateAndOfferLessRowsAreHandledAlikeOnEveryServingSurface(t *testing.T) {
+	project := contextfabric.SubjectProject
+	ciRun := contractsv1.ContextFabricSubjectCIRun
+	namedFrame := contextfabric.QuestionFrame{
+		Goals:             []contextfabric.InvestigationGoal{contextfabric.GoalAssessState},
+		SubjectExpression: contextfabric.SubjectExpression{Kind: contextfabric.SubjectExpressionNamed, Named: &contextfabric.NamedSubjectExpression{Terms: []string{"named-project"}, ExpectedKind: &project}},
+		Temporal:          contextfabric.TemporalIntentCurrent,
+	}
+	orgFrame := contextfabric.QuestionFrame{
+		Goals:             []contextfabric.InvestigationGoal{contextfabric.GoalAssessState},
+		SubjectExpression: contextfabric.SubjectExpression{Kind: contextfabric.SubjectExpressionOrganizationScope, Org: &contextfabric.OrganizationScopeExpression{}},
+		Temporal:          contextfabric.TemporalIntentCurrent,
+	}
+	unconfirmed := func(requestID string) contextfabric.InvestigationRequest {
+		request := surfaceRequest(requestID)
+		request.TimeContext.EvidenceWindow = nil
+		return request
+	}
+	// The gate's offers-only resolve returns options of kinds neither reading
+	// admits, so the stored gate row carries offers a terminal would refuse:
+	// only the window-gate step can serve it.
+	wrongKindOffers := contextfabric.StructureOfferMaterial{
+		Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectCandidate},
+		HandleOptions: []contractsv1.ContextFabricHandleOption{
+			{ReceiptID: "handr_surface_gate_a", OptionID: "opt_handle_gate_a", Label: "CI run 29213415002", Kind: ciRun, PatternID: "pr_number", Value: "29213415002", SourceColumn: "ci_pipeline_runs.run_id", OfferSource: contractsv1.ContextFabricStructureOfferEngine},
+		},
+		CandidateOptions: []contractsv1.ContextFabricCandidateOption{
+			{ReceiptID: "candr_surface_gate_a", OptionID: "opt_cand_gate_a", Label: "CI run 29213415002", Kind: ciRun, CanonicalID: "ci_pipeline_run.v2:x:29213415002", OfferSource: contractsv1.ContextFabricStructureOfferEngine},
+		},
+	}
+	type cell struct {
+		name          string
+		drivers       bool
+		material      contextfabric.StructureOfferMaterial
+		reading       *contextfabric.PersistedSemanticState
+		pool          []contextfabric.SubjectCandidate
+		request       func(string) contextfabric.InvestigationRequest
+		row           contextfabric.InvestigationResult
+		fresh         contextfabric.InvestigationStatus
+		basis         contractsv1.ContextFabricRefusalBasis
+		step          string
+		determination string
+		semanticState string
+	}
+	var cells []cell
+	for _, gate := range []struct {
+		name  string
+		frame contextfabric.QuestionFrame
+	}{{"window_gate_named", namedFrame}, {"window_gate_organization", orgFrame}} {
+		reading := surfaceReading(t, gate.frame)
+		pool := surfacePool(ciRun, ciRun)
+		composed, err := surfaceEngineWith(t, "compose_"+gate.name, surfaceInterpreter{frame: reading.Frame, drivers: true}, pool, wrongKindOffers, memoryinvestigation.NewStore(), nil).Investigate(context.Background(), storage.Principal{OrgID: callerOrgID}, unconfirmed("request_compose_"+gate.name))
+		if err != nil {
+			t.Fatalf("compose %s: %v", gate.name, err)
+		}
+		if composed.Status != contextfabric.InvestigationClarificationRequired || composed.StructureNeeds == nil || len(composed.StructureNeeds.WindowOptions) == 0 {
+			t.Fatalf("fixture defect: %s composed status %q without structure window options; the window gate did not run", gate.name, composed.Status)
+		}
+		if len(composed.StructureNeeds.HandleOptions)+len(composed.StructureNeeds.CandidateOptions) == 0 {
+			t.Fatalf("fixture defect: %s gate row carries no subject-kind option, so no step but the window gate is excluded", gate.name)
+		}
+		composed.ResultID = "result_surface_" + gate.name
+		cells = append(cells, cell{gate.name, true, wrongKindOffers, reading, pool, unconfirmed, composed, contextfabric.InvestigationClarificationRequired, "", "window_gate", "answerable", "not_read"})
+	}
+	orgReading := surfaceReading(t, orgFrame)
+	cells = append(cells, cell{"offer_less_organization", false, contextfabric.StructureOfferMaterial{}, orgReading, []contextfabric.SubjectCandidate{}, surfaceRequest,
+		legacyUnanswerableClarificationRow(t, "result_surface_offer_less_org"), contextfabric.InvestigationNoMatch,
+		contractsv1.ContextFabricRefusalBasisOrganizationScopeUnsupported, "organization_scope", "unanswerable", "available"})
+
+	store := memoryinvestigation.NewStore()
+	for _, c := range cells {
+		saveSurfaceRow(t, store, c.row, contextfabric.SemanticStateOf(c.reading))
+	}
+	logs := &bytes.Buffer{}
+	app, token := newParityHostedAppWithLogs(t, surfaceEngine(t, "app_gate", orgReading.Frame, nil, store, nil), store,
+		limits.ResourceBudget{MaxItems: 500, MaxTokens: 500_000, MaxBytes: 8 << 20}, logs)
+	server := httptest.NewTLSServer(app.Handler())
+	t.Cleanup(server.Close)
+	configureSidecarEnvironment(t, server, token)
+	boot, err := acrmcp.NewBootstrap(context.Background(), "1.2.5")
+	if err != nil {
+		t.Fatalf("sidecar bootstrap: %v", err)
+	}
+
+	for _, c := range cells {
+		t.Run(c.name, func(t *testing.T) {
+			fresh, err := surfaceEngineWith(t, "fresh_"+c.name, surfaceInterpreter{frame: c.reading.Frame, drivers: c.drivers}, c.pool, c.material, memoryinvestigation.NewStore(), nil).Investigate(context.Background(), storage.Principal{OrgID: callerOrgID}, c.request("request_fresh_"+c.name))
+			if err != nil {
+				t.Fatalf("fresh composition: %v", err)
+			}
+			if fresh.Status != c.fresh || fresh.RefusalBasis != c.basis {
+				t.Fatalf("fresh composition status/basis = %q/%q, want %q/%q", fresh.Status, fresh.RefusalBasis, c.fresh, c.basis)
+			}
+			stored, err := store.Get(context.Background(), storage.Principal{OrgID: callerOrgID}, c.row.ResultID)
+			if err != nil {
+				t.Fatalf("read the stored row: %v", err)
+			}
+			reused, err := surfaceEngineWith(t, "reuse_"+c.name, surfaceInterpreter{frame: c.reading.Frame, drivers: c.drivers}, c.pool, c.material, store, surfaceReuseGate{candidate: stored.Result}).Investigate(context.Background(), storage.Principal{OrgID: callerOrgID}, c.request("request_reuse_"+c.name))
+			if err != nil {
+				t.Fatalf("reuse: %v", err)
+			}
+			if reused.Status != fresh.Status || reused.RefusalBasis != fresh.RefusalBasis {
+				t.Fatalf("reuse served %q/%q (reused=%v), fresh composition %q/%q", reused.Status, reused.RefusalBasis, reused.Reused, fresh.Status, fresh.RefusalBasis)
+			}
+
+			offset := logs.Len()
+			byID := getRealAPIResult(t, server, token, c.row.ResultID)
+			if byID.Status != fresh.Status || byID.RefusalBasis != fresh.RefusalBasis {
+				t.Fatalf("result-by-id status/basis = %q/%q, fresh composition %q/%q", byID.Status, byID.RefusalBasis, fresh.Status, fresh.RefusalBasis)
+			}
+			if c.basis == contractsv1.ContextFabricRefusalBasisOrganizationScopeUnsupported {
+				found := false
+				for _, limitation := range byID.Limitations {
+					found = found || limitation == contractsv1.ContextFabricOrganizationScopeUnsupportedLimitation
+				}
+				if !found {
+					t.Fatalf("result-by-id limitations = %#v, want the organization-scope sentence", byID.Limitations)
+				}
+			}
+			viaMCP := callRealMCPInvestigationResult(t, boot, c.row.ResultID)
+			if viaMCP.Status != byID.Status || viaMCP.RefusalBasis != byID.RefusalBasis || viaMCP.DeterministicAnswer != byID.DeterministicAnswer {
+				t.Fatalf("MCP investigation_result %q/%q/%q, result-by-id %q/%q/%q", viaMCP.Status, viaMCP.RefusalBasis, viaMCP.DeterministicAnswer, byID.Status, byID.RefusalBasis, byID.DeterministicAnswer)
+			}
+			if byID.SemanticReading != nil || viaMCP.SemanticReading != nil {
+				t.Fatalf("semantic_reading = %+v / %+v on a row whose determination was taken", byID.SemanticReading, viaMCP.SemanticReading)
+			}
+			lines := storedAnswerabilityLines(t, logs, offset)
+			if len(lines) != 2 {
+				t.Fatalf("stored-answerability lines = %d, want one per read (result-by-id, then the MCP forward); log: %s", len(lines), logs.String()[offset:])
+			}
+			for _, line := range lines {
+				repaired, _ := line["repaired"].(bool)
+				if line["determination"] != c.determination || line["decided_by"] != c.step || line["semantic_state"] != c.semanticState ||
+					line["served_status"] != string(fresh.Status) || repaired != (c.fresh == contextfabric.InvestigationNoMatch) {
+					t.Fatalf("stored-answerability line = %v, want %s/%s, semantic_state %s, served %s", line, c.determination, c.step, c.semanticState, fresh.Status)
 				}
 			}
 		})

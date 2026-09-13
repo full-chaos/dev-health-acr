@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -30,6 +31,25 @@ import (
 // legacy row, never a malformed-response artefact.
 func seedLegacyUnanswerableClarification(t *testing.T, store *memoryinvestigation.Store, resultID string) contractsv1.ContextFabricInvestigationResult {
 	t.Helper()
+	result := legacyUnanswerableClarificationRow(t, resultID)
+	if err := store.Save(context.Background(), storage.Principal{OrgID: callerOrgID}, result,
+		contextfabric.SourceWatermarkSnapshot{}, nil,
+		contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}),
+		contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{},
+		contextfabric.ReuseVersionAuthorities{}, 0, "",
+		// A seeded row's turn ended before interpretation, so it carries the
+		// closed absence rather than a reading -- the same shape every other
+		// route fixture in this package seeds.
+		contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)); err != nil {
+		t.Fatalf("seed result: %v", err)
+	}
+	return result
+}
+
+// legacyUnanswerableClarificationRow is a stored clarification that offers
+// nothing on any channel, valid under the stored-read validator.
+func legacyUnanswerableClarificationRow(t *testing.T, resultID string) contractsv1.ContextFabricInvestigationResult {
+	t.Helper()
 	result := validContextFabricInvestigationResult()
 	result.ResultID = resultID
 	result.Status = contractsv1.ContextFabricInvestigationClarificationRequired
@@ -51,24 +71,13 @@ func seedLegacyUnanswerableClarification(t *testing.T, store *memoryinvestigatio
 	if err := contractsv1.ValidateStoredResult(result); err != nil {
 		t.Fatalf("fixture is not a valid legacy stored row, so this test would prove nothing about real rows: %v", err)
 	}
-	if err := store.Save(context.Background(), storage.Principal{OrgID: callerOrgID}, result,
-		contextfabric.SourceWatermarkSnapshot{}, nil,
-		contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}),
-		contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{},
-		contextfabric.ReuseVersionAuthorities{}, 0, "",
-		// A seeded row's turn ended before interpretation, so it carries the
-		// closed absence rather than a reading -- the same shape every other
-		// route fixture in this package seeds.
-		contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)); err != nil {
-		t.Fatalf("seed result: %v", err)
-	}
 	return result
 }
 
 func TestResultRouteNeverServesAnUnanswerableClarification(t *testing.T) {
 	store := memoryinvestigation.NewStore()
 	seeded := seedLegacyUnanswerableClarification(t, store, "result_legacy_unans1")
-	app, token := newContextFabricTestAppWithResults(t, nil, store)
+	app, token, logs := newContextFabricTestAppWithResultsAndLogs(t, nil, store)
 
 	recorder := httptest.NewRecorder()
 	app.Handler().ServeHTTP(recorder, investigationResultRequest(t, token, seeded.ResultID))
@@ -96,6 +105,34 @@ func TestResultRouteNeverServesAnUnanswerableClarification(t *testing.T) {
 	// empty graph, and the repair corrects the label, not the evidence.
 	if got.SubjectResolution.ClarificationPrompt == "" {
 		t.Error("the repair cleared the prompt on the served row")
+	}
+	// The row has no reading, so no basis can be taken: the served copy is
+	// exactly the offer-less repair's, with no basis and no basis sentence.
+	want := seeded
+	want.Limitations = append([]string(nil), seeded.Limitations...)
+	if !contextfabric.RepairLegacyUnanswerableClarification(&want) {
+		t.Fatal("fixture defect: the offer-less repair does not apply to the seeded row")
+	}
+	if got.RefusalBasis != "" || got.DeterministicAnswer != want.DeterministicAnswer || strings.Join(got.Limitations, "|") != strings.Join(want.Limitations, "|") {
+		t.Fatalf("served basis/answer/limitations = %q/%q/%#v, want no basis and the offer-less repair's %q/%#v", got.RefusalBasis, got.DeterministicAnswer, got.Limitations, want.DeterministicAnswer, want.Limitations)
+	}
+	for _, sentence := range []string{contractsv1.ContextFabricDeclaredKindUnmatchedLimitation, contractsv1.ContextFabricOrganizationScopeUnsupportedLimitation} {
+		for _, limitation := range got.Limitations {
+			if limitation == sentence {
+				t.Fatalf("served limitations %#v carry a basis sentence on a row repaired with no basis", got.Limitations)
+			}
+		}
+	}
+	lines := storedAnswerabilityLines(t, logs, 0)
+	if len(lines) != 1 {
+		t.Fatalf("stored-answerability lines = %d, want 1 for the read; log: %s", len(lines), logs.String())
+	}
+	if line := lines[0]; line["determination"] != "unanswerable" || line["decided_by"] != "offer_less" || line["repaired"] != true ||
+		line["semantic_state"] != "not_read" || line["stored_status"] != "clarification_required" || line["served_status"] != "no_match" {
+		t.Fatalf("stored-answerability line = %v, want unanswerable/offer_less, repaired, clarification_required -> no_match", line)
+	}
+	if count := strings.Count(logs.String(), "context fabric legacy unanswerable clarification repaired"); count != 1 {
+		t.Fatalf("legacy repair lines = %d, want 1: the offer-less arm's sunset count must keep its own line", count)
 	}
 }
 

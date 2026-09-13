@@ -395,7 +395,7 @@ func TestTheStoredAnswerabilityLineThroughTheProductionSink(t *testing.T) {
 	}
 	want := map[string]any{
 		"msg": StoredAnswerabilityLogMessage, "level": "INFO", "org_id": "org_stored",
-		"surface": "reuse", "determination": "answerable", "semantic_state": "available", "repaired": false,
+		"surface": "reuse", "determination": "answerable", "decided_by": "role", "semantic_state": "available", "repaired": false,
 		"stored_status": "clarification_required", "served_status": "clarification_required",
 		"evaluated_roles": "subject:project:open", "advanced_role": "subject:project", "advancing_channel": "subject_candidate",
 		"offers_evaluated": float64(4), "offers_advancing": float64(2),
@@ -414,7 +414,7 @@ func TestTheStoredAnswerabilityLineThroughTheProductionSink(t *testing.T) {
 		}
 		rendered += " "
 	}
-	for _, fragment := range []string{"surface=result_by_id", "determination=unavailable", "semantic_state=absent", "served_status=none", "evaluated_roles=none", "advanced_role=none"} {
+	for _, fragment := range []string{"surface=result_by_id", "determination=unavailable", "decided_by=none", "semantic_state=absent", "served_status=none", "evaluated_roles=none", "advanced_role=none"} {
 		if !strings.Contains(rendered, fragment) {
 			t.Errorf("unavailable line %q lacks %q", rendered, fragment)
 		}
@@ -507,5 +507,270 @@ func TestAnOrganizationScopeReadingIsRefusedOnBothSidesWhateverItsRoles(t *testi
 	served := storedClarification(storedCIRunCandidates()...)
 	if got := RepairStoredClarification(&served, state, SemanticStateReadAvailable); !got.Repaired || served.RefusalBasis != organizationScopeTerminalBasis {
 		t.Fatalf("repaired/basis = %v/%q, want true/organization_scope_unsupported", got.Repaired, served.RefusalBasis)
+	}
+}
+
+// TestStoredAnswerabilityTakesFreshCompositionsPrecedence executes every step
+// of the read side's precedence, in order, with the cells that separate each
+// step from the one after it: a window-gate row carrying a refusing reading, an
+// organization-scope reading with and without offers, a subjectless-terminal
+// clarification that carries a window clarification, and the offer-less rows.
+func TestStoredAnswerabilityTakesFreshCompositionsPrecedence(t *testing.T) {
+	t.Parallel()
+	project := SubjectProject
+	named := storedStateFor(t, chaos5660NamedFrame(&project), "")
+	organization := storedStateFor(t, roleOrgFrameWithGoals(nil, GoalAssessState), "")
+	counting := storedStateFor(t, roleOrgFrameWithGoals(&project, GoalCountOrAggregate), "")
+	gate := func(result InvestigationResult) InvestigationResult {
+		result.StructureNeeds = &contractsv1.ContextFabricStructureNeeds{
+			Missing:       []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedWindow, contractsv1.ContextFabricStructureNeedSubjectHandle},
+			WindowOptions: []contractsv1.ContextFabricWindowOption{{}},
+			HandleOptions: []contractsv1.ContextFabricHandleOption{chaos5660HandleOption(contractsv1.ContextFabricSubjectCIRun)},
+		}
+		return result
+	}
+	nudged := func(result InvestigationResult) InvestigationResult {
+		result.WindowClarification = &contractsv1.ContextFabricWindowClarification{Options: []contractsv1.ContextFabricWindowOption{{}}}
+		return result
+	}
+	offerLess := storedClarification()
+	for _, testCase := range []struct {
+		cell          string
+		result        InvestigationResult
+		state         *PersistedSemanticState
+		read          SemanticStateReadStatus
+		determination StoredAnswerabilityDetermination
+		step          StoredAnswerabilityStep
+		reading       string
+	}{
+		{"not a clarification", InvestigationResult{Status: InvestigationNoMatch}, organization, SemanticStateReadAvailable, StoredAnswerabilityNotApplicable, StoredAnswerabilityStepNone, "not_read"},
+		{"window gate, named reading its offers refuse", gate(storedClarification()), named, SemanticStateReadAvailable, StoredAnswerabilityAnswerable, StoredAnswerabilityStepWindowGate, "not_read"},
+		{"window gate, organization-scope reading", gate(storedClarification(storedCIRunCandidates()...)), organization, SemanticStateReadAvailable, StoredAnswerabilityAnswerable, StoredAnswerabilityStepWindowGate, "not_read"},
+		{"window gate, no reading", gate(storedClarification(storedCIRunCandidates()...)), nil, SemanticStateReadAbsent, StoredAnswerabilityAnswerable, StoredAnswerabilityStepWindowGate, "not_read"},
+		{"organization scope, wrong-kind offers", storedClarification(storedCIRunCandidates()...), organization, SemanticStateReadAvailable, StoredAnswerabilityUnanswerable, StoredAnswerabilityStepOrganizationScope, "available"},
+		{"organization scope, no offer at all", offerLess, organization, SemanticStateReadAvailable, StoredAnswerabilityUnanswerable, StoredAnswerabilityStepOrganizationScope, "available"},
+		{"organization scope, window clarification only", nudged(storedClarification()), organization, SemanticStateReadAvailable, StoredAnswerabilityUnanswerable, StoredAnswerabilityStepOrganizationScope, "available"},
+		{"organization count, wrong-kind offers: the role decides", storedClarification(storedCIRunCandidates()...), counting, SemanticStateReadAvailable, StoredAnswerabilityUnanswerable, StoredAnswerabilityStepRole, "available"},
+		{"terminal clarification carrying a window clarification: the role decides", nudged(storedClarification(storedCIRunCandidates()...)), named, SemanticStateReadAvailable, StoredAnswerabilityUnanswerable, StoredAnswerabilityStepRole, "available"},
+		{"role, declared-kind offer", storedClarification(roleCandidate("subr_project", SubjectProject, "project:1")), named, SemanticStateReadAvailable, StoredAnswerabilityAnswerable, StoredAnswerabilityStepRole, "available"},
+		{"role, no reading", storedClarification(storedCIRunCandidates()...), nil, SemanticStateReadAbsent, StoredAnswerabilityUnavailable, StoredAnswerabilityStepRole, "absent"},
+		{"no subject offer, window clarification only, no reading", nudged(storedClarification()), nil, SemanticStateReadAbsent, StoredAnswerabilityAnswerable, StoredAnswerabilityStepNoSubjectOffer, "not_read"},
+		{"no subject offer, named reading", nudged(storedClarification()), named, SemanticStateReadAvailable, StoredAnswerabilityAnswerable, StoredAnswerabilityStepNoSubjectOffer, "not_read"},
+		{"offer-less, no reading", offerLess, nil, SemanticStateReadAbsent, StoredAnswerabilityUnanswerable, StoredAnswerabilityStepOfferLess, "not_read"},
+		{"offer-less, named reading", offerLess, named, SemanticStateReadAvailable, StoredAnswerabilityUnanswerable, StoredAnswerabilityStepOfferLess, "not_read"},
+	} {
+		t.Run(testCase.cell, func(t *testing.T) {
+			t.Parallel()
+			got := DecideStoredAnswerability(testCase.result, testCase.state, testCase.read)
+			if got.Determination != testCase.determination || got.Step != testCase.step || got.Reading != testCase.reading {
+				t.Fatalf("determination/step/reading = %q/%q/%q, want %q/%q/%q", got.Determination, got.Step, got.Reading, testCase.determination, testCase.step, testCase.reading)
+			}
+		})
+	}
+}
+
+// TestTheRepairTakesTheBasisOfTheStepThatRefused holds what the served copy
+// becomes at each refusing step, and that a window-gate row is untouched even
+// when its reading would refuse a terminal clarification.
+func TestTheRepairTakesTheBasisOfTheStepThatRefused(t *testing.T) {
+	t.Parallel()
+	project := SubjectProject
+	named := storedStateFor(t, chaos5660NamedFrame(&project), "")
+	organization := storedStateFor(t, roleOrgFrameWithGoals(nil, GoalAssessState), "")
+	t.Run("an offer-less row with an organization-scope reading takes the organization basis", func(t *testing.T) {
+		t.Parallel()
+		served := storedClarification()
+		got := RepairStoredClarification(&served, organization, SemanticStateReadAvailable)
+		if got.Step != StoredAnswerabilityStepOrganizationScope || !got.Repaired {
+			t.Fatalf("step/repaired = %q/%v, want organization_scope/true", got.Step, got.Repaired)
+		}
+		if served.Status != InvestigationNoMatch || served.RefusalBasis != organizationScopeTerminalBasis || !roleContains(served.Limitations, organizationScopeTerminalLimitation) {
+			t.Fatalf("served status/basis/limitations = %q/%q/%#v, want no_match/organization_scope_unsupported with its sentence", served.Status, served.RefusalBasis, served.Limitations)
+		}
+		if roleContains(served.Limitations, noMatchLimitationOfferPoolEmptied) {
+			t.Fatalf("served limitations = %#v carry the offer-less sentence on an organization-scope refusal", served.Limitations)
+		}
+	})
+	t.Run("an offer-less row with no reading is repaired with no basis", func(t *testing.T) {
+		t.Parallel()
+		served := storedClarification()
+		got := RepairStoredClarification(&served, nil, SemanticStateReadAbsent)
+		if got.Step != StoredAnswerabilityStepOfferLess || got.Determination != StoredAnswerabilityUnanswerable || !got.Repaired {
+			t.Fatalf("step/determination/repaired = %q/%q/%v, want offer_less/unanswerable/true", got.Step, got.Determination, got.Repaired)
+		}
+		if served.Status != InvestigationNoMatch || served.RefusalBasis != "" || !roleContains(served.Limitations, noMatchLimitationOfferPoolEmptied) {
+			t.Fatalf("served status/basis/limitations = %q/%q/%#v, want no_match, no basis, the offer-pool sentence", served.Status, served.RefusalBasis, served.Limitations)
+		}
+	})
+	for _, reading := range []struct {
+		name  string
+		state *PersistedSemanticState
+	}{{"named", named}, {"organization scope", organization}} {
+		t.Run("a window-gate row with a "+reading.name+" reading is untouched", func(t *testing.T) {
+			t.Parallel()
+			served := storedClarification(storedCIRunCandidates()...)
+			served.StructureNeeds = &contractsv1.ContextFabricStructureNeeds{
+				Missing:       []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedWindow},
+				WindowOptions: []contractsv1.ContextFabricWindowOption{{}},
+			}
+			before, _ := json.Marshal(served)
+			got := RepairStoredClarification(&served, reading.state, SemanticStateReadAvailable)
+			after, _ := json.Marshal(served)
+			if got.Step != StoredAnswerabilityStepWindowGate || got.Repaired || !bytes.Equal(before, after) {
+				t.Fatalf("step/repaired = %q/%v, document changed = %v; want window_gate, untouched", got.Step, got.Repaired, !bytes.Equal(before, after))
+			}
+		})
+	}
+}
+
+// TestEveryStoredAnswerabilityStepHasAProductionDriver enumerates the step
+// vocabulary from its declaration and requires the production decision to
+// reach every member.
+func TestEveryStoredAnswerabilityStepHasAProductionDriver(t *testing.T) {
+	t.Parallel()
+	project := SubjectProject
+	named := storedStateFor(t, chaos5660NamedFrame(&project), "")
+	organization := storedStateFor(t, roleOrgFrameWithGoals(nil, GoalAssessState), "")
+	gateRow := storedClarification()
+	gateRow.StructureNeeds = &contractsv1.ContextFabricStructureNeeds{Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedWindow}, WindowOptions: []contractsv1.ContextFabricWindowOption{{}}}
+	windowOnly := storedClarification()
+	windowOnly.WindowClarification = &contractsv1.ContextFabricWindowClarification{Options: []contractsv1.ContextFabricWindowOption{{}}}
+	seen := map[StoredAnswerabilityStep]bool{}
+	for _, drive := range []StoredAnswerability{
+		DecideStoredAnswerability(InvestigationResult{Status: InvestigationComplete}, nil, SemanticStateReadAbsent),
+		DecideStoredAnswerability(gateRow, named, SemanticStateReadAvailable),
+		DecideStoredAnswerability(storedClarification(storedCIRunCandidates()...), organization, SemanticStateReadAvailable),
+		DecideStoredAnswerability(storedClarification(storedCIRunCandidates()...), named, SemanticStateReadAvailable),
+		DecideStoredAnswerability(windowOnly, nil, SemanticStateReadAbsent),
+		DecideStoredAnswerability(storedClarification(), nil, SemanticStateReadAbsent),
+	} {
+		seen[drive.Step] = true
+	}
+	for _, member := range StoredAnswerabilitySteps() {
+		if !seen[member] {
+			t.Errorf("step %q has no production driver", member)
+		}
+	}
+}
+
+// TestReuseTakesFreshCompositionsPrecedence drives tryReuse over the steps the
+// role-only filter did not separate: the window gate's clarification is served
+// whatever its reading, and an organization-scope or offer-less row is
+// declined with its determination recorded exactly once.
+func TestReuseTakesFreshCompositionsPrecedence(t *testing.T) {
+	t.Parallel()
+	organization := storedStateFor(t, roleOrgFrameWithGoals(nil, GoalAssessState), "")
+	// The gate row offers only window options, so the authorization recheck
+	// after the filter has no subject to re-prove: a miss would be the
+	// filter's.
+	gateNeeds := func(candidate *InvestigationResult) {
+		candidate.SubjectResolution = withheldPoolResolution()
+		candidate.StructureNeeds = &contractsv1.ContextFabricStructureNeeds{
+			Missing:       []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedWindow},
+			WindowOptions: []contractsv1.ContextFabricWindowOption{{}},
+		}
+	}
+	offerLess := func(candidate *InvestigationResult) {
+		candidate.SubjectResolution = withheldPoolResolution()
+		candidate.WindowClarification = nil
+	}
+	for _, testCase := range []struct {
+		cell       string
+		candidates []SubjectCandidate
+		mutate     func(*InvestigationResult)
+		store      *storedAnswerabilityStore
+		wantReuse  bool
+		step       StoredAnswerabilityStep
+	}{
+		{"window gate, organization-scope reading: served", nil, gateNeeds, &storedAnswerabilityStore{state: organization, read: SemanticStateReadAvailable}, true, StoredAnswerabilityStepWindowGate},
+		{"organization scope, wrong-kind offers: declined", storedCIRunCandidates(), nil, &storedAnswerabilityStore{state: organization, read: SemanticStateReadAvailable}, false, StoredAnswerabilityStepOrganizationScope},
+		{"organization scope, no offer at all: declined", nil, offerLess, &storedAnswerabilityStore{state: organization, read: SemanticStateReadAvailable}, false, StoredAnswerabilityStepOrganizationScope},
+		{"offer-less, no reading: declined", nil, offerLess, &storedAnswerabilityStore{read: SemanticStateReadAbsent}, false, StoredAnswerabilityStepOfferLess},
+	} {
+		t.Run(testCase.cell, func(t *testing.T) {
+			t.Parallel()
+			project, candidate := reusableCandidate()
+			candidate.Status = InvestigationClarificationRequired
+			candidate.StructureNeeds = nil
+			candidate.SubjectResolution = SubjectResolution{Candidates: testCase.candidates, Committed: []SubjectRef{}}
+			if testCase.mutate != nil {
+				testCase.mutate(&candidate)
+			}
+			telemetry := &recordingTelemetry{}
+			engine := mustReuseTestEngine(t, EngineDependencies{
+				Graph:     graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}, bases: provenCommitBases(project)},
+				Telemetry: telemetry,
+				Results:   testCase.store,
+				ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+					return candidate, true, nil
+				}),
+			})
+			_, ok := engine.tryReuse(context.Background(), reusePrincipal(), validInvestigationRequest(),
+				TimeContext{Axis: TemporalCurrent}, "", windowKeyRederivable, ResolvedGraphBinding{GraphKey: "some-key", Epoch: 0})
+			if ok != testCase.wantReuse {
+				t.Fatalf("tryReuse hit = %v, want %v", ok, testCase.wantReuse)
+			}
+			if len(telemetry.storedAnswerability) != 1 {
+				t.Fatalf("stored answerability records = %d, want exactly 1", len(telemetry.storedAnswerability))
+			}
+			if record := telemetry.storedAnswerability[0]; record.answerability.Step != testCase.step {
+				t.Fatalf("recorded step = %q, want %q", record.answerability.Step, testCase.step)
+			}
+		})
+	}
+}
+
+// TestOnlyTheWindowGateComposesStructureWindowOptions keeps the read side's
+// window-gate discriminator honest by driving every other producer of a
+// clarification: the subjectless terminal, with and without the window
+// nudge, must never populate StructureNeeds.WindowOptions. The gate itself is
+// the positive control. A producer that starts writing them fails here before
+// the read side can serve its clarification as the gate's.
+func TestOnlyTheWindowGateComposesStructureWindowOptions(t *testing.T) {
+	t.Parallel()
+	project := SubjectKind(contractsv1.ContextFabricSubjectProject)
+	gateInterpreter := &countingInterpreter{
+		interpretation: bootstrapInterpretation(),
+		family:         QuestionFamilyOutcome{Family: QuestionFamilyUnclassified, Source: QuestionFamilySourceNone, Frame: chaos5660NamedFrame(&project), Gate: FrameGate{Outcome: FrameGatePassed}},
+	}
+	gateGraph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext(), material: chaos5660MeasuredOffers()}
+	gated, err := buildWindowGateEngine(t, gateInterpreter, gateGraph, newMapResultStore()).Investigate(context.Background(), acceptancePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("gate Investigate: %v", err)
+	}
+	if gated.Status != InvestigationClarificationRequired || !windowGateClarification(gated) {
+		t.Fatalf("positive control: the gate's clarification status=%q carries no structure window options", gated.Status)
+	}
+
+	for _, mode := range []contractsv1.ContextFabricWindowConfirmationMode{"", contractsv1.ContextFabricWindowConfirmationNudge} {
+		t.Run("subjectless terminal, window confirmation mode "+string(mode), func(t *testing.T) {
+			t.Parallel()
+			factReads := 0
+			engine := roleEngine(t, roleInterpreter{frame: roleScopedFrame(SubjectProject), anchorKind: SubjectTeam}, &roleGraph{first: SubjectResolution{Candidates: roleTwoTeamAnchors(), Committed: []SubjectRef{}}}, newMapResultStore(), &recordingTelemetry{}, &factReads)
+			request := validInvestigationRequestWithConfirmedWindow()
+			request.Options.WindowConfirmationMode = mode
+			result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_role"}, request)
+			if err != nil {
+				t.Fatalf("Investigate: %v", err)
+			}
+			if result.Status != InvestigationClarificationRequired {
+				t.Fatalf("fixture defect: the subjectless terminal status = %q, want clarification_required", result.Status)
+			}
+			if windowGateClarification(result) {
+				t.Fatalf("the subjectless terminal composed structure window options %#v -- the read side would serve its clarification as the window gate's", result.StructureNeeds.WindowOptions)
+			}
+			// Every inferred window is gated or replaced by its carry before
+			// the terminal runs (engine.go), and the terminal composes a window
+			// clarification only for an inferred window, so in either mode it
+			// carries none. The day one reaches it, the read side must still
+			// take it at the role step, which the check below holds.
+			if result.WindowClarification != nil {
+				t.Logf("the subjectless terminal now carries a window clarification (%d options)", len(result.WindowClarification.Options))
+			}
+			scoped := storedStateFor(t, roleScopedFrame(SubjectProject), SubjectTeam)
+			if got := DecideStoredAnswerability(result, scoped, SemanticStateReadAvailable); got.Step != StoredAnswerabilityStepRole {
+				t.Fatalf("the read side took the terminal's clarification at step %q, want role", got.Step)
+			}
+		})
 	}
 }

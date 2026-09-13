@@ -115,44 +115,33 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 				"stored_state", string(state),
 				"outcome_rows", len(result.Completeness.Outcomes))
 		}
-		// CHAOS-5637, the READ side of the answerability invariant. Rows
-		// composed before that change can carry clarification_required with
-		// no offer on any channel -- the shape the yardstick measured 76
-		// times -- and the stored-read validator admits them by design. The
-		// serving guard sits at finalizeServed, which this route does not
-		// go through, so without this the route (and the MCP tool that
-		// forwards its response) would keep handing callers a question they
-		// cannot answer. Repaired rather than refused: the row is real and
-		// was asked for by id.
+		// The read side of answerability, in fresh composition's precedence
+		// (stored_answerability.go): the window gate, the organization scope,
+		// the role decision, a clarification offering no subject, and the
+		// offer-less rows the stored-read validator admits by design (the
+		// shape the yardstick measured 76 times). A stored clarification that
+		// is unanswerable is served as the terminal fresh composition takes
+		// today; one whose reading is unavailable is served as stored -- a
+		// history read never runs an investigation. The MCP
+		// investigation_result tool forwards this response, so both read
+		// surfaces take the one determination. Repaired rather than refused:
+		// the row is real and was asked for by id.
 		//
 		// BEFORE the completeness recompute below, deliberately: the repair
-		// changes Status, and terminal_status is derived from it.
+		// changes Status and the refusal basis, and completeness mirrors both.
 		//
-		// Logged at Info because a regression here is otherwise invisible
-		// -- this route emits no subjectless telemetry, and the count of
-		// legacy rows still being repaired is how the sunset of this arm
-		// gets measured rather than guessed, exactly like the legacy
-		// completeness line above.
+		// Logged at Info for every stored clarification, because this route
+		// emits no subjectless telemetry and a regression here is otherwise
+		// invisible. The offer-less repair keeps its own line as well: the
+		// count of earlier rows still being repaired is how that arm's sunset
+		// gets measured rather than guessed.
 		storedStatus := result.Status
-		if contextfabric.RepairLegacyUnanswerableClarification(&result) {
-			a.logger.InfoContext(r.Context(), "context fabric legacy unanswerable clarification repaired",
-				"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
-				"served_status", string(result.Status))
-		}
-		// The read side of ROLE answerability. A stored
-		// clarification whose persisted accepted reading shows no offer
-		// advancing any role of that reading is served as the terminal fresh
-		// composition takes today; one whose reading is unavailable is served
-		// as stored -- a history read never runs an investigation -- and the
-		// unavailable determination is logged. The MCP investigation_result
-		// tool forwards this response, so both read surfaces take the one
-		// determination.
-		//
-		// AFTER the offer-less repair above, which it cannot collide with: a
-		// row that repair rewrote is no longer a clarification. BEFORE the
-		// completeness recompute below, because it can change Status and the
-		// refusal basis completeness mirrors.
 		if answerability := contextfabric.RepairStoredClarification(&result, stored.SemanticState, stored.SemanticStateRead); answerability.Determination != contextfabric.StoredAnswerabilityNotApplicable {
+			if answerability.Step == contextfabric.StoredAnswerabilityStepOfferLess && answerability.Repaired {
+				a.logger.InfoContext(r.Context(), "context fabric legacy unanswerable clarification repaired",
+					"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
+					"served_status", string(result.Status))
+			}
 			// D49: an unavailable determination is disclosed on the wire as
 			// well as on the line, so a consumer can tell a clarification the
 			// server could not check from one it checked.

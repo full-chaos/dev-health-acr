@@ -621,42 +621,29 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 			return InvestigationResult{}, false
 		}
 	}
-	// CHAOS-5637: a stored clarification that offers the caller nothing is
-	// never served from the reuse store.
+	// A stored clarification is served from the reuse store only when fresh
+	// composition's precedence, taken over the row and the accepted reading
+	// persisted beside it, finds it answerable (stored_answerability.go): the
+	// window gate's clarification, or offers that advance a role of the
+	// reading, or offers that carry no subject kind. The reuse lookup runs
+	// before interpretation, so the reading is the one persisted beside the
+	// row, loaded by the row's own id through the same org-scoped Get.
 	//
-	// No FRESH save can produce one any more -- the invariant refuses it at
-	// finalizeServed, the one point every serving path is downstream of. But
-	// rows written by an EARLIER deploy are already in the store, and they
-	// are exactly the shape this ticket measured 76 times: status
-	// clarification_required, no candidates, and StructureNeeds nil, which
-	// is what makes them slip past the structure-bearing reuse-source
-	// exclusion on the write side (pginvestigation/store.go's
-	// reuseColumnsFor) that catches every other non-decisive terminal.
+	// Every other determination is a MISS, never an error, and falls through
+	// to a fresh investigation: an unanswerable row (refused organization
+	// scope, no offer advancing a role, or no offer at all) and an
+	// UNAVAILABLE one (no persisted reading, one that did not decode, or a
+	// load that failed).
 	//
-	// Caught HERE, and as an ordinary no-candidate MISS rather than an
-	// error, for the reason the window-key guard above already states in
-	// full: a row this Store holds for a reason this package's own write
-	// path did not itself produce -- "an earlier deploy of code a fix has
-	// since corrected" is that comment's own example -- is proved rather
-	// than trusted, and falls through to a fresh investigation. Letting it
-	// reach the assertion instead would turn a stale cached row into a 5xx
-	// on a question the engine can answer perfectly well by recomputing it.
-	if candidate.Status == InvestigationClarificationRequired && !resultOffersRedeemable(candidate) {
-		e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
-		return InvestigationResult{}, false
-	}
-	// A stored clarification is served from the reuse store only
-	// when its persisted accepted reading shows that one of its offers
-	// advances a role of that reading -- the predicate fresh composition
-	// applies (role_answerability.go). The reuse lookup runs before
-	// interpretation, so the reading is the one persisted beside the row,
-	// loaded by the row's own id through the same org-scoped Get.
-	//
-	// A row whose determination is UNAVAILABLE -- no persisted reading, one
-	// that did not decode, or a load that failed -- is declined and falls
-	// through to a fresh investigation. Serving it would serve a
-	// clarification this build may refuse on the fresh path, and nothing on
-	// the row can say which.
+	// Offer-less rows are ones an EARLIER deploy wrote: no fresh save can
+	// produce one, because finalizeServed refuses it. They carry
+	// clarification_required, no candidates and StructureNeeds nil, which is
+	// what lets them slip past the structure-bearing reuse-source exclusion on
+	// the write side (pginvestigation/store.go's reuseColumnsFor). Serving one
+	// would turn a stale cached row into a 5xx at the serving assertion on a
+	// question the engine can answer by recomputing it. Serving an
+	// unavailable row would serve a clarification this build may refuse on
+	// the fresh path, and nothing on the row can say which.
 	if candidate.Status == InvestigationClarificationRequired {
 		answerability := e.storedClarificationAnswerability(ctx, principal, candidate)
 		if answerability.Determination != StoredAnswerabilityAnswerable {

@@ -35,9 +35,26 @@ import (
 // logs the unavailable determination. No reading is reconstructed from the
 // payload, and no stored row is rewritten.
 //
-// A clarification whose offers carry no subject kind at all (window options
-// only) does not depend on the reading: the role decision cannot refuse a turn
-// that offered no subject. It is answerable without one.
+// THE PRECEDENCE IS FRESH COMPOSITION'S, IN ITS ORDER. Fresh composition
+// reaches a clarification through one of these steps, and the read side takes
+// them in the same order so that a stored row is served as fresh composition
+// would serve it today:
+//
+//  1. The window gate. A clarification whose structure needs carry window
+//     options is the gate's (only composeGatedStructureNeeds writes them). The
+//     gate raises the window need before any terminal runs, so fresh
+//     composition serves it whatever the reading and whatever other options
+//     its offers-only material added. It is answerable as stored.
+//  2. The organization scope. An available reading of an organization-scope
+//     question that asks for anything besides a count is refused on
+//     organization_scope_unsupported whatever the document offers (D48).
+//  3. The role decision. Offers that carry a subject kind are judged against
+//     the reading's roles; with no reading the determination is unavailable.
+//  4. No subject offer. A clarification whose offers carry no subject kind is
+//     answerable without the reading when it still offers something.
+//  5. Offer-less. A clarification that offers nothing on any channel is
+//     unanswerable on its offers alone, and is repaired the way every earlier
+//     offer-less row is (chaos5637_answerable_clarification.go).
 
 // StoredAnswerabilitySurface names the read surface that took a determination.
 type StoredAnswerabilitySurface string
@@ -66,8 +83,9 @@ const (
 	// StoredAnswerabilityAnswerable: an offer advances a role of the
 	// persisted reading, or no offer carries a subject kind.
 	StoredAnswerabilityAnswerable StoredAnswerabilityDetermination = "answerable"
-	// StoredAnswerabilityUnanswerable: the persisted reading has a role, an
-	// offer carries a kind, and no offer advances any role.
+	// StoredAnswerabilityUnanswerable: the persisted reading refuses the
+	// organization-scope question, or it has a role, an offer carries a kind
+	// and no offer advances any role, or the clarification offers nothing.
 	StoredAnswerabilityUnanswerable StoredAnswerabilityDetermination = "unanswerable"
 	// StoredAnswerabilityUnavailable: the decision depends on the reading and
 	// the reading is not available.
@@ -80,6 +98,34 @@ func StoredAnswerabilityDeterminations() []StoredAnswerabilityDetermination {
 	return []StoredAnswerabilityDetermination{
 		StoredAnswerabilityNotApplicable, StoredAnswerabilityAnswerable,
 		StoredAnswerabilityUnanswerable, StoredAnswerabilityUnavailable,
+	}
+}
+
+// StoredAnswerabilityStep names the step of fresh composition's precedence
+// that took a stored result's determination.
+type StoredAnswerabilityStep string
+
+const (
+	// StoredAnswerabilityStepNone: the stored result is not a clarification.
+	StoredAnswerabilityStepNone StoredAnswerabilityStep = "none"
+	// StoredAnswerabilityStepWindowGate: the window gate's clarification.
+	StoredAnswerabilityStepWindowGate StoredAnswerabilityStep = "window_gate"
+	// StoredAnswerabilityStepOrganizationScope: the organization-scope check.
+	StoredAnswerabilityStepOrganizationScope StoredAnswerabilityStep = "organization_scope"
+	// StoredAnswerabilityStepRole: the role decision over subject-kind offers.
+	StoredAnswerabilityStepRole StoredAnswerabilityStep = "role"
+	// StoredAnswerabilityStepNoSubjectOffer: offers that carry no subject kind.
+	StoredAnswerabilityStepNoSubjectOffer StoredAnswerabilityStep = "no_subject_offer"
+	// StoredAnswerabilityStepOfferLess: no offer on any channel.
+	StoredAnswerabilityStepOfferLess StoredAnswerabilityStep = "offer_less"
+)
+
+// StoredAnswerabilitySteps returns the closed step vocabulary, in precedence
+// order after the not-a-clarification member.
+func StoredAnswerabilitySteps() []StoredAnswerabilityStep {
+	return []StoredAnswerabilityStep{
+		StoredAnswerabilityStepNone, StoredAnswerabilityStepWindowGate, StoredAnswerabilityStepOrganizationScope,
+		StoredAnswerabilityStepRole, StoredAnswerabilityStepNoSubjectOffer, StoredAnswerabilityStepOfferLess,
 	}
 }
 
@@ -104,6 +150,8 @@ type StoredAnswerability struct {
 	// SemanticStateReadStatus member, or not_read / load_failed /
 	// store_unconfigured / unreported.
 	Reading string
+	// Step is the precedence step that took the determination.
+	Step StoredAnswerabilityStep
 	// Repaired reports that RepairStoredClarification rewrote the served
 	// copy of an unanswerable clarification.
 	Repaired bool
@@ -153,25 +201,45 @@ func DecideStoredAnswerability(result InvestigationResult, state *PersistedSeman
 
 func decideStoredAnswerability(result InvestigationResult, state *PersistedSemanticState, reading string) StoredAnswerability {
 	if result.Status != InvestigationClarificationRequired {
-		return StoredAnswerability{Determination: StoredAnswerabilityNotApplicable, Reading: storedReadingNotRead}
+		return StoredAnswerability{Determination: StoredAnswerabilityNotApplicable, Reading: storedReadingNotRead, Step: StoredAnswerabilityStepNone}
 	}
 	offers := answerabilityOffersOfResult(result)
 	withoutReading := decideAnswerability(answerabilityReading{}, offers)
-	if withoutReading.OffersEvaluated == 0 {
-		return StoredAnswerability{Determination: StoredAnswerabilityAnswerable, Reading: storedReadingNotRead, decision: withoutReading}
+	if windowGateClarification(result) {
+		return StoredAnswerability{Determination: StoredAnswerabilityAnswerable, Reading: storedReadingNotRead, Step: StoredAnswerabilityStepWindowGate, decision: withoutReading}
 	}
-	if reading != string(SemanticStateReadAvailable) || state == nil {
-		if reading == string(SemanticStateReadAvailable) {
-			reading = storedReadingUnreported
+	available := reading == string(SemanticStateReadAvailable) && state != nil
+	if available && organizationScopeUnsupported(state.Frame) {
+		decision := decideAnswerability(answerabilityReadingOf(state.Frame, state.ScopeAnchor.Kind), offers)
+		return StoredAnswerability{Determination: StoredAnswerabilityUnanswerable, Reading: reading, Step: StoredAnswerabilityStepOrganizationScope, decision: decision}
+	}
+	if withoutReading.OffersEvaluated > 0 {
+		if !available {
+			if reading == string(SemanticStateReadAvailable) {
+				reading = storedReadingUnreported
+			}
+			return StoredAnswerability{Determination: StoredAnswerabilityUnavailable, Reading: reading, Step: StoredAnswerabilityStepRole, decision: withoutReading}
 		}
-		return StoredAnswerability{Determination: StoredAnswerabilityUnavailable, Reading: reading, decision: withoutReading}
+		decision := decideAnswerability(answerabilityReadingOf(state.Frame, state.ScopeAnchor.Kind), offers)
+		determination := StoredAnswerabilityAnswerable
+		if decision.Unsatisfiable {
+			determination = StoredAnswerabilityUnanswerable
+		}
+		return StoredAnswerability{Determination: determination, Reading: reading, Step: StoredAnswerabilityStepRole, decision: decision}
 	}
-	decision := decideAnswerability(answerabilityReadingOf(state.Frame, state.ScopeAnchor.Kind), offers)
-	determination := StoredAnswerabilityAnswerable
-	if decision.Unsatisfiable || decision.OrganizationScopeUnsupported {
-		determination = StoredAnswerabilityUnanswerable
+	if !resultOffersRedeemable(result) {
+		return StoredAnswerability{Determination: StoredAnswerabilityUnanswerable, Reading: storedReadingNotRead, Step: StoredAnswerabilityStepOfferLess, decision: withoutReading}
 	}
-	return StoredAnswerability{Determination: determination, Reading: reading, decision: decision}
+	return StoredAnswerability{Determination: StoredAnswerabilityAnswerable, Reading: storedReadingNotRead, Step: StoredAnswerabilityStepNoSubjectOffer, decision: withoutReading}
+}
+
+// windowGateClarification reports whether a stored clarification is the
+// window gate's. Its structure needs carry window options, which only
+// composeGatedStructureNeeds writes and only windowConfirmationRequiredResult
+// calls. A window clarification alone does not mark the gate: the subjectless
+// terminal and synthesis attach one too.
+func windowGateClarification(result InvestigationResult) bool {
+	return result.StructureNeeds != nil && len(result.StructureNeeds.WindowOptions) > 0
 }
 
 // WireSemanticReading is the read's wire disclosure (D49): present exactly
@@ -212,10 +280,13 @@ func (e *Engine) storedClarificationAnswerability(ctx context.Context, principal
 // and reports the determination either way.
 //
 // The copy is rewritten to the terminal fresh composition takes for the same
-// reading and offers: no_match, the declared_kind_unmatched basis, that
-// basis's own sentence in place of the clarification sentence, and the status
-// sentence recomposed. Offers, candidates and the prompt are left as stored.
-// The stored row itself is never touched: result is the caller's copy.
+// reading and offers: no_match, the basis of the step that refused it
+// (organization_scope_unsupported or declared_kind_unmatched), that basis's
+// own sentence in place of the clarification sentence, and the status
+// sentence recomposed. An offer-less clarification is repaired the way every
+// earlier offer-less row is, with no basis. Offers, candidates and the prompt
+// are left as stored. The stored row itself is never touched: result is the
+// caller's copy.
 //
 // An answerable, unavailable or not-applicable determination changes nothing;
 // the caller serves the row as stored and logs the determination.
@@ -227,8 +298,12 @@ func RepairStoredClarification(result *InvestigationResult, state *PersistedSema
 	if answerability.Determination != StoredAnswerabilityUnanswerable {
 		return answerability
 	}
+	if answerability.Step == StoredAnswerabilityStepOfferLess {
+		answerability.Repaired = RepairLegacyUnanswerableClarification(result)
+		return answerability
+	}
 	basis, sentence := declaredKindTerminalBasis, declaredKindTerminalLimitation
-	if answerability.decision.OrganizationScopeUnsupported {
+	if answerability.Step == StoredAnswerabilityStepOrganizationScope {
 		basis, sentence = organizationScopeTerminalBasis, organizationScopeTerminalLimitation
 	}
 	// In place, the way the offer-less repair replaces its sentence: the copy
@@ -254,6 +329,14 @@ func RepairStoredClarification(result *InvestigationResult, state *PersistedSema
 	return answerability
 }
 
+// stepOrNone renders an unset step as "none".
+func stepOrNone(step StoredAnswerabilityStep) StoredAnswerabilityStep {
+	if step == "" {
+		return StoredAnswerabilityStepNone
+	}
+	return step
+}
+
 // StoredAnswerabilityLogMessage is the message of the stored-answerability
 // line, shared by the engine sink and the result-by-id route.
 const StoredAnswerabilityLogMessage = "context fabric stored clarification answerability"
@@ -270,6 +353,7 @@ func StoredAnswerabilityLogArgs(surface StoredAnswerabilitySurface, answerabilit
 	return []any{
 		"surface", SanitizeLogAttr(string(surface)),
 		"determination", SanitizeLogAttr(string(answerability.Determination)),
+		"decided_by", SanitizeLogAttr(string(stepOrNone(answerability.Step))),
 		"semantic_state", SanitizeLogAttr(answerability.Reading),
 		"repaired", answerability.Repaired,
 		"stored_status", SanitizeLogAttr(string(storedStatus)),
