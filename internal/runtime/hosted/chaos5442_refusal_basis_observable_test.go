@@ -38,8 +38,8 @@ func emitSubjectlessTerminalWithKinds(t *testing.T, reason string, refusalBasis 
 	})
 }
 
-// emitSubjectlessTerminalWithAnswerability is the same drive with CHAOS-5720's
-// role half of the decision supplied explicitly.
+// emitSubjectlessTerminalWithAnswerability is the same drive with the role
+// half of the decision supplied explicitly.
 func emitSubjectlessTerminalWithAnswerability(t *testing.T, reason string, refusalBasis string, declaredKinds string, offeredKinds string, answerability contextfabric.SubjectlessTerminalAnswerability) map[string]any {
 	t.Helper()
 	var buf bytes.Buffer
@@ -144,7 +144,7 @@ func TestTheDeployedSubjectlessTerminalCarriesExplicitNoneKinds(t *testing.T) {
 	}
 }
 
-// THE ROLE LINE (CHAOS-5720). declared_kinds and offered_kinds cannot say
+// THE ROLE LINE. declared_kinds and offered_kinds cannot say
 // whether a team offer was refused on a question whose open role IS a team
 // anchor; the role pair can. Every value here differs from every other, so an
 // emitter that swapped two keys, or wrote one count into both, fails.

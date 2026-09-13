@@ -192,9 +192,9 @@ func TestTheScopedAnchorTurnClarifiesAndTheRedeemedAnchorServes(t *testing.T) {
 		channel    string
 	}{
 		{
-			// corpus row cv-scoped-projects-by-team-bounded, turn 3 of every
-			// replicate at 0af9fa84 (req_dadb2420): window confirmed, two team
-			// anchor candidates, subject_anchor missing with no option list.
+			// corpus row cv-scoped-projects-by-team-bounded, terminal turn:
+			// window confirmed, two team anchor candidates, subject_anchor
+			// missing with no option list.
 			cell: "cv-scoped-projects-by-team-bounded terminal turn", frame: roleScopedFrame(SubjectProject), anchorKind: SubjectTeam,
 			resolution: SubjectResolution{Candidates: roleTwoTeamAnchors(), Committed: []SubjectRef{}, ClarificationPrompt: "Which subject did you mean: team:anchor-a, team:anchor-b?"},
 			material:   StructureOfferMaterial{Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor}},
@@ -202,8 +202,8 @@ func TestTheScopedAnchorTurnClarifiesAndTheRedeemedAnchorServes(t *testing.T) {
 			roles:      "anchor:team:open,member:project:population", advanced: "anchor:team", channel: "subject_candidate",
 		},
 		{
-			// corpus row qb-scoped, turn 2 of replicate 2 at 0af9fa84
-			// (req_b9a36a0e): the same anchor pool after a kind receipt.
+			// corpus row qb-scoped, terminal turn: the same anchor pool after a
+			// kind receipt.
 			cell: "qb-scoped refused turn", frame: roleScopedFrame(SubjectProject), anchorKind: SubjectTeam,
 			resolution: SubjectResolution{Candidates: roleTwoTeamAnchors(), Committed: []SubjectRef{}},
 			material:   StructureOfferMaterial{Missing: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor}},
@@ -570,16 +570,15 @@ func TestOrganizationScopeQuestionsRefuseOnTheirOwnBasis(t *testing.T) {
 		reason             string
 	}{
 		{
-			// corpus row cv-b5-org-health, turn 2 of replicates 2 and 3 at
-			// 0af9fa84: an organization member kind and a pool of reviews, CI
-			// runs and projects.
+			// corpus row cv-b5-org-health, second turn: an organization member
+			// kind and a pool of reviews, CI runs and projects.
 			cell: "cv-b5-org-health: offers of other kinds", frame: roleOrgFrameWithGoals(&organization, GoalAssessState),
 			resolution: mixedPool, allowClarification: true,
 			basis: organizationScopeTerminalBasis, limitation: organizationScopeTerminalLimitation, reason: organizationScopeTerminalReason,
 		},
 		{
-			// corpus row cv-b5-org-health, replicate 1 at 0af9fa84: no member
-			// kind, the offer pool emptied by the vector-only exclusion.
+			// corpus row cv-b5-org-health, first turn: no member kind, the
+			// offer pool emptied by the vector-only exclusion.
 			cell: "cv-b5-org-health: offer pool emptied", frame: roleOrgFrameWithGoals(nil, GoalAssessState),
 			resolution:         SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}, ClarificationPrompt: OfferPoolEmptiedClarificationPrompt},
 			allowClarification: true,

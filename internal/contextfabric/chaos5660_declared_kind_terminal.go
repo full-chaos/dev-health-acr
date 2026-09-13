@@ -152,9 +152,8 @@ func (f *QuestionFrame) DeclaredKinds() []SubjectKind {
 // carries can advance its accepted reading, carried to the status decision and
 // to the log line as ONE value so the two cannot disagree about a turn.
 //
-// The name is the wire basis's (declared_kind_unmatched). CHAOS-5720 moved the
-// decision itself from a flat kind comparison to a per-role one:
-// decideAnswerability (role_answerability.go) takes it.
+// The name is the wire basis's (declared_kind_unmatched). The decision itself
+// is taken per role, by decideAnswerability (role_answerability.go).
 type declaredKindDecision struct {
 	// DeclaredKinds is the frame's own declared set (QuestionFrame.DeclaredKinds),
 	// empty when the frame declared none. Reported on the log line; the

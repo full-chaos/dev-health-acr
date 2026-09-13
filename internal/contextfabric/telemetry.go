@@ -254,7 +254,7 @@ func (t SlogEngineTelemetry) RecordSubjectlessTerminal(ctx context.Context, prin
 	// second authority on what a turn declared.
 	//
 	// evaluated_roles/advanced_role/advancing_channel/offers_evaluated/
-	// offers_advancing (CHAOS-5720) are the role half of the same decision,
+	// offers_advancing are the role half of the same decision,
 	// on every subjectless terminal, with the same explicit "none" for a
 	// decision that evaluated no role or advanced none. declared/offered
 	// alone cannot say whether a team offer was refused on a question whose

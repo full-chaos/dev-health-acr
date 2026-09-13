@@ -336,7 +336,7 @@ func (e *Engine) terminalResult(
 	// the status decision and the log line below. Deriving it separately at
 	// any of those three would let a turn be reported under one reading and
 	// answered under another.
-	// CHAOS-5720: the anchor kind is the winning sample's, the same value
+	// The anchor kind is the winning sample's, the same value
 	// ResolveSubjects is hinted with through ScopeAnchorRetrievalKind -- on a
 	// carried continuation it is the carried anchor -- so the anchor the
 	// decision admits is the anchor retrieval searched for.
@@ -373,7 +373,7 @@ func (e *Engine) terminalResult(
 	if declaredKind.Unsatisfiable && status == InvestigationNoMatch && limitation == declaredKindTerminalLimitation {
 		refusalBasis = declaredKindTerminalBasis
 	}
-	// CHAOS-5720 (D48): the organization-scope terminal discloses its own
+	// D48: the organization-scope terminal discloses its own
 	// basis, under the same after-the-gate rule: a refusing gate replaced the
 	// limitation above, so its basis is never written over.
 	if declaredKind.OrganizationScopeUnsupported && status == InvestigationNoMatch && limitation == organizationScopeTerminalLimitation {
@@ -692,7 +692,7 @@ func subjectlessTerminalReason(gate FrameGate, resolution SubjectResolution, sub
 	// the candidate list being non-empty -- a turn can offer handle and
 	// candidate options of the wrong kind with no subject candidate at all,
 	// which is exactly what the measured rows did on their odd turns.
-	// CHAOS-5720 (D48): ahead of the declared-kind arm, because it is the
+	// D48: ahead of the declared-kind arm, because it is the
 	// decision the status and basis were taken on for such a turn.
 	if declaredKind.OrganizationScopeUnsupported {
 		return organizationScopeTerminalReason
@@ -782,7 +782,7 @@ func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectReso
 	// The sentence is the declared_kind_unmatched basis's own fixed one;
 	// terminalResult attaches the matching basis to the served document a few
 	// lines below, from this same decision.
-	// CHAOS-5720 (D48), AHEAD of the declared-kind arm and of
+	// D48, AHEAD of the declared-kind arm and of
 	// AllowClarification: an organization-scope question that counts nothing
 	// has no capability behind it, so no exchange can advance it and a
 	// caller who declined clarification is refused the same way. The

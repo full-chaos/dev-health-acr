@@ -8,23 +8,20 @@ import (
 
 // CHAOS-5720: answerability is decided per ROLE of the accepted reading.
 //
-// THE COMPARISON THIS REPLACES. The declared-kind terminal (CHAOS-5660)
-// compared one flat set -- the frame's member kind united with its group kind
-// -- against every kind any offer channel carried. That comparison is wrong in
-// both directions as soon as a frame has more than one role:
+// WHY ROLES AND NOT A KIND UNION. A single set -- the frame's member kind
+// united with its group kind -- compared against every kind any offer channel
+// carries is wrong in both directions as soon as a frame has more than one
+// role:
 //
 //   - A children_of_scope question asks for the members of a kind under an
 //     ANCHOR, and the anchor must be committed before a single member can be
 //     discovered. The anchor's kind is never the member kind (vol. 2 phase-B
 //     invariant I11), and the flat set held only the member kind -- so a turn
 //     that offered exactly the anchor candidates the question needed was
-//     refused as declared_kind_unmatched. Measured on the yardstick archive
-//     ~/.cache/acr-kiac-askdev/proofs/2026-09-13-main-0af9fa84: corpus rows
-//     cv-scoped-projects-by-team-bounded (3 of 3 replicates) and qb-scoped
-//     (2 of 3) logged declared_kinds=project offered_kinds=team on
-//     children_of_scope frames (req_dadb2420, req_b9a36a0e), while qb-scoped's
-//     first replicate redeemed the same team candidate on its next turn and
-//     served the scoped document with that team committed.
+//     refused as declared_kind_unmatched, although redeeming one of those
+//     candidates commits the anchor and serves the scoped document. The
+//     corpus rows cv-scoped-projects-by-team-bounded and qb-scoped have this
+//     shape: declared kind project, offered kind team.
 //   - A grouped_members question declares two kinds, and the flat set counted
 //     an offer of EITHER as useful. Neither axis is decided by a caller picking
 //     one subject: the partition is discovered by the server. Finding some
@@ -331,7 +328,7 @@ func decideAnswerability(reading answerabilityReading, offers []answerabilityOff
 // organizationScopeUnsupported reports whether a reading makes the
 // organization itself the subject and counts nothing.
 //
-// CHAOS-5720 (chris, D48). The organization-scope member set is served for a
+// D48. The organization-scope member set is served for a
 // counting goal only (D46); every other organization-scope question -- its
 // state, health or drivers -- has no capability behind it. Such a question
 // that ends without a committed subject is refused on its own basis, whatever
