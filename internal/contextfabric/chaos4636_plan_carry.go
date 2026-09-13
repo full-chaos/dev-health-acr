@@ -275,18 +275,16 @@ func applyCarriedPlan(outcome QuestionFamilyOutcome, carry planCarryResult) (Que
 	if outcome.Family != "" && outcome.Family != QuestionFamilyUnclassified {
 		return outcome, false
 	}
-	// A REFUSED PLURALITY IS NOT "CLASSIFIED NOTHING" (CHAOS-5638). The rule
-	// above lets a carry fill a turn that produced no reading of its own. An
-	// ensemble whose samples could not agree DID produce a reading -- that
-	// the question is not classifiable from this turn -- and it reports that
-	// as family=unclassified with source=model_plurality_rejected. The family
-	// value alone cannot tell the two apart, so the source decides: filling
-	// a refusal with the previous turn's family would serve a confident
-	// answer to a question the model just declined to classify, and would
-	// erase the one signal that says so.
-	if outcome.Source == QuestionFamilySourcePluralityRejected {
-		return outcome, false
-	}
+	// A REFUSED PLURALITY IS CARRIED OVER, deliberately (CHAOS-5638). An
+	// ensemble whose samples could not agree reports family=unclassified with
+	// source=model_plurality_rejected. That is a FAILED FRESH PROPOSAL, and a
+	// failed fresh proposal cannot replace or invalidate an independently
+	// admitted carried context: the admitted carrier is selected whether the
+	// fresh proposal agrees, disagrees or failed, and the failure is disclosed
+	// rather than acted on (vol. 2 5465 D-b). So the carry applies here exactly
+	// as it does for a turn with no reading at all, and the carry event records
+	// the source it replaced -- which is where model_plurality_rejected stays
+	// visible as the reason the comparison was not evaluated.
 	preCarryFamily := outcome.Family
 	outcome.Family = carry.Family
 	outcome.Source = QuestionFamilySourceCarried
@@ -329,6 +327,13 @@ type PlanCarryEvent struct {
 	// applies only when it is empty or `unclassified`, and recording it is
 	// what makes Switched checkable rather than asserted.
 	FamilyReplaced QuestionFamily
+	// SourceReplaced is the source of the reading this carry replaced
+	// (CHAOS-5638). When it is model_plurality_rejected, this turn's own
+	// ensemble could not agree and the carried context was selected over that
+	// failed fresh proposal: the comparison was NOT evaluated, and this field
+	// is the reason. Without it a carry over a refused plurality and a carry
+	// over a turn that produced nothing at all are the same line.
+	SourceReplaced QuestionFamilySource
 	// FamilyCarried is the prior turn's family, now served.
 	FamilyCarried QuestionFamily
 	// SourceResultID is the prior result the family came from -- the join
@@ -342,9 +347,10 @@ type PlanCarryEvent struct {
 // PlanCarryEventFrom builds the event for an applied carry. Pure: the caller
 // at the I/O boundary emits it, the same split DiscoveredCohort's own
 // authzDropped counters use, so this file stays free of telemetry calls.
-func PlanCarryEventFrom(replaced QuestionFamily, carried QuestionFamilyOutcome, carry planCarryResult) PlanCarryEvent {
+func PlanCarryEventFrom(replaced QuestionFamilyOutcome, carried QuestionFamilyOutcome, carry planCarryResult) PlanCarryEvent {
 	return PlanCarryEvent{
-		FamilyReplaced: replaced,
+		FamilyReplaced: replaced.Family,
+		SourceReplaced: replaced.Source,
 		FamilyCarried:  carried.Family,
 		SourceResultID: carry.SourceResultID,
 		Route:          carried.Route,
@@ -382,7 +388,7 @@ func (e *Engine) applyAndRecordCarry(ctx context.Context, principal storage.Prin
 	if e.telemetry != nil {
 		// outcome.Family is still the PRE-carry value here -- the whole
 		// point of emitting before the assignment below.
-		e.telemetry.RecordPlanCarry(ctx, principal, PlanCarryEventFrom(outcome.Family, carried, carry))
+		e.telemetry.RecordPlanCarry(ctx, principal, PlanCarryEventFrom(outcome, carried, carry))
 	}
 	return carried
 }

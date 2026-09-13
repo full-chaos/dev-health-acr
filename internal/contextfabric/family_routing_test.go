@@ -343,7 +343,7 @@ func TestPlanCarryEventCarriesTheRouteToTheSink(t *testing.T) {
 	if !applied {
 		t.Fatal("the carry did not apply; this test proves nothing")
 	}
-	event := PlanCarryEventFrom(QuestionFamilyUnclassified, carried, carry)
+	event := PlanCarryEventFrom(QuestionFamilyOutcome{Family: QuestionFamilyUnclassified}, carried, carry)
 
 	if event.FamilyReplaced != QuestionFamilyUnclassified {
 		t.Fatalf("FamilyReplaced = %q, want the family the carry displaced", event.FamilyReplaced)

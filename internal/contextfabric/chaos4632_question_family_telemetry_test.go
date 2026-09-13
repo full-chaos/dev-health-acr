@@ -273,6 +273,7 @@ func TestPlanCarryTelemetryLeaksNoContent(t *testing.T) {
 			ctx, storage.Principal{OrgID: "org_sink_test"},
 			PlanCarryEvent{
 				FamilyReplaced: QuestionFamilyUnclassified,
+				SourceReplaced: QuestionFamilySourcePluralityRejected,
 				FamilyCarried:  QuestionFamilyGroupedCohortStatus,
 				SourceResultID: "result_prior_turn",
 				Route: FamilyRouteDecision{
@@ -285,13 +286,14 @@ func TestPlanCarryTelemetryLeaksNoContent(t *testing.T) {
 		t.Fatalf("got %d records, want exactly 1 per applied carry", len(records))
 	}
 	// ALLOW-LIST, not a denylist. Every member is a closed-vocabulary value,
-	// a server-generated id, or a boolean: two families, one source, one
-	// class, one disposition, one bool, a prior result id. No question text,
+	// a server-generated id, or a boolean: two families, two sources (the one
+	// carried and the one it replaced), one class, one disposition, one bool,
+	// a prior result id. No question text,
 	// no subject term, no member list -- the member list in particular would
 	// carry an authorization decision.
 	allowed := map[string]bool{
 		"time": true, "level": true, "msg": true, "request_id": true,
-		"org_id": true, "family_replaced": true, "family_carried": true,
+		"org_id": true, "family_replaced": true, "source_replaced": true, "family_carried": true,
 		"source_result_id": true, "family_source": true, "route_class": true,
 		"route_disposition": true, "route_switched": true,
 	}

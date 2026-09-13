@@ -1489,6 +1489,7 @@ func (t SlogEngineTelemetry) RecordPlanCarry(ctx context.Context, principal stor
 	args := []any{
 		"org_id", SanitizeLogAttr(principal.OrgID),
 		"family_replaced", SanitizeLogAttr(string(event.FamilyReplaced)),
+		"source_replaced", SanitizeLogAttr(string(event.SourceReplaced)),
 		"family_carried", SanitizeLogAttr(string(event.FamilyCarried)),
 		"source_result_id", SanitizeLogAttr(event.SourceResultID),
 		"family_source", SanitizeLogAttr(string(event.Route.Source)),

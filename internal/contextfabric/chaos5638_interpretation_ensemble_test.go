@@ -621,19 +621,21 @@ func TestARefusedPluralityIsNotOverwrittenByTheRoute(t *testing.T) {
 	}
 }
 
-// A REFUSED PLURALITY IS NOT FILLED BY THE PRIOR TURN'S PLAN.
+// AN ADMITTED CARRIED PLAN WINS OVER A REFUSED PLURALITY, and says why.
 //
-// Plan carry exists to give a turn that produced no reading of its own the
-// reading the conversation already has, and it keys on family=unclassified to
-// recognise one. A refused plurality reports that same family value -- but it
-// is a reading: the model's samples disagreed, and the source says so. Carrying
-// over it serves the previous turn's family for a question this turn declined
-// to classify, and erases the only signal that it did.
+// A refused plurality -- family=unclassified, source=model_plurality_rejected --
+// is this turn's FAILED FRESH PROPOSAL. An independently admitted carried
+// context is selected whether the fresh proposal agrees, disagrees or failed;
+// the failure is disclosed, never acted on (vol. 2 5465 D-b). So the carry
+// applies, and the carry event records the source it replaced: that field is
+// the reason the comparison was not evaluated, and without it a carry over a
+// refused plurality is indistinguishable from a carry over a turn that produced
+// nothing at all.
 //
 // Driven through Engine.applyAndRecordCarry, the method the engine calls at the
 // point it applies a carry, so the pin covers the engine's own path rather than
 // the pure helper beneath it.
-func TestARefusedPluralityIsNotFilledByAPlanCarry(t *testing.T) {
+func TestAnAdmittedCarriedPlanWinsOverARefusedPluralityAndRecordsWhy(t *testing.T) {
 	t.Parallel()
 	telemetry := &recordingTelemetry{}
 	engine := &Engine{telemetry: telemetry}
@@ -648,15 +650,22 @@ func TestARefusedPluralityIsNotFilledByAPlanCarry(t *testing.T) {
 
 	got := engine.applyAndRecordCarry(context.Background(), storage.Principal{OrgID: "org_1"}, refused, carry)
 
-	if got.Family != QuestionFamilyUnclassified {
-		t.Fatalf("family = %q, want the refusal kept -- the prior turn's plan filled a turn that declined to classify", got.Family)
+	if got.Family != QuestionFamilyGroupedCohortStatus {
+		t.Fatalf("family = %q, want the admitted carried family -- a failed fresh proposal cannot replace an admitted carrier", got.Family)
 	}
-	if got.Source != QuestionFamilySourcePluralityRejected {
-		t.Fatalf("source = %q, want %q -- the carry erased the signal that the samples disagreed",
-			got.Source, QuestionFamilySourcePluralityRejected)
+	if got.Source != QuestionFamilySourceCarried {
+		t.Fatalf("source = %q, want %q", got.Source, QuestionFamilySourceCarried)
 	}
-	if len(telemetry.planCarries) != 0 {
-		t.Fatalf("got %d plan-carry events for a refusal the carry must not apply to", len(telemetry.planCarries))
+	if len(telemetry.planCarries) != 1 {
+		t.Fatalf("got %d plan-carry events, want exactly 1 -- the carry must be disclosed", len(telemetry.planCarries))
+	}
+	event := telemetry.planCarries[0]
+	if event.SourceReplaced != QuestionFamilySourcePluralityRejected {
+		t.Fatalf("source_replaced = %q, want %q -- the event must say the fresh proposal was a refused plurality",
+			event.SourceReplaced, QuestionFamilySourcePluralityRejected)
+	}
+	if event.FamilyReplaced != QuestionFamilyUnclassified || event.FamilyCarried != QuestionFamilyGroupedCohortStatus {
+		t.Fatalf("event = %+v, want unclassified replaced by the carried family", event)
 	}
 }
 
@@ -695,6 +704,60 @@ func TestTheEnsembleCompositionEventCarriesTheRequestID(t *testing.T) {
 		if line["request_id"] != requestID {
 			t.Fatalf("quorum_met=%v: request_id = %v, want %q -- both the Warn and the Info branch must carry it",
 				quorumMet, line["request_id"], requestID)
+		}
+	}
+}
+
+// THE CARRY LINE NAMES THE REPLACED SOURCE, on the production sink's own bytes.
+// This is the disclosure D-b requires in place of a refusal: an operator reading
+// a carry over a refused plurality must be able to see that the fresh proposal
+// failed, not merely that a carry happened.
+func TestThePlanCarryLineNamesTheReplacedSource(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	telemetry := NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&buf, nil)))
+	telemetry.RecordPlanCarry(context.Background(), storage.Principal{OrgID: "org_1"}, PlanCarryEvent{
+		FamilyReplaced: QuestionFamilyUnclassified,
+		SourceReplaced: QuestionFamilySourcePluralityRejected,
+		FamilyCarried:  QuestionFamilyGroupedCohortStatus,
+	})
+	var line map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &line); err != nil {
+		t.Fatalf("not one JSON line: %v (%q)", err, buf.String())
+	}
+	if line["source_replaced"] != string(QuestionFamilySourcePluralityRejected) {
+		t.Fatalf("source_replaced = %v, want %q", line["source_replaced"], QuestionFamilySourcePluralityRejected)
+	}
+}
+
+// THE ENSEMBLE COMPOSITION LINE LEAKS NO CONTENT, held to the same allow-list
+// discipline as the plan-carry and family-resolution lines beside it. Every
+// member is an integer count, a boolean, the org id or the request id: nothing
+// from the question, no family, no subject, no model identity. An allow-list,
+// not a denylist, so a field added later must be admitted deliberately.
+func TestInterpretationEnsembleTelemetryLeaksNoContent(t *testing.T) {
+	ctx := observability.WithRequestID(context.Background(), "req_0123456789abcdef0123456789abcdef")
+	for _, quorumMet := range []bool{false, true} {
+		records := captureSlogJSON(t, func(logger *slog.Logger) {
+			NewSlogEngineTelemetry(logger).RecordInterpretationEnsemble(ctx, storage.Principal{OrgID: "org_sink_test"},
+				InterpretationEnsembleEvent{Requested: 3, PrimarySucceeded: 2, FallbackServed: 0, Failed: 1, QuorumMet: quorumMet})
+		})
+		if len(records) != 1 {
+			t.Fatalf("quorum_met=%v: got %d records, want exactly 1 per ensemble turn", quorumMet, len(records))
+		}
+		allowed := map[string]bool{
+			"time": true, "level": true, "msg": true, "request_id": true, "org_id": true,
+			"requested": true, "primary_succeeded": true, "fallback_served": true, "failed": true, "quorum_met": true,
+		}
+		for key := range records[0] {
+			if !allowed[key] {
+				t.Errorf("quorum_met=%v: unexpected key %q on the ensemble composition line", quorumMet, key)
+			}
+		}
+		for key := range allowed {
+			if _, ok := records[0][key]; !ok {
+				t.Errorf("quorum_met=%v: key %q is missing from the ensemble composition line", quorumMet, key)
+			}
 		}
 	}
 }
