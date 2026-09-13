@@ -446,3 +446,33 @@ func TestEveryStoredAnswerabilityTokenHasAProductionDriver(t *testing.T) {
 		t.Fatalf("surface vocabulary = %v, want reuse and result_by_id; a new surface needs its own driver here", surfaces)
 	}
 }
+
+// TestTheWireDisclosureIsPresentExactlyWhenTheDeterminationIsUnavailable
+// executes the D49 mapping over every determination and every reading token
+// an unavailable determination can carry.
+func TestTheWireDisclosureIsPresentExactlyWhenTheDeterminationIsUnavailable(t *testing.T) {
+	t.Parallel()
+	for _, determination := range StoredAnswerabilityDeterminations() {
+		if determination == StoredAnswerabilityUnavailable {
+			continue
+		}
+		if got := (StoredAnswerability{Determination: determination, Reading: "absent"}).WireSemanticReading(); got != nil {
+			t.Fatalf("determination %q disclosed %+v, want nothing", determination, got)
+		}
+	}
+	for reading, want := range map[string]contractsv1.ContextFabricSemanticReadingReason{
+		string(SemanticStateReadAbsent):             contractsv1.ContextFabricSemanticReadingStateAbsent,
+		storedReadingUnreported:                     contractsv1.ContextFabricSemanticReadingStateAbsent,
+		string(SemanticStateReadMalformed):          contractsv1.ContextFabricSemanticReadingStateUnreadable,
+		string(SemanticStateReadOversized):          contractsv1.ContextFabricSemanticReadingStateUnreadable,
+		string(SemanticStateReadUnsupportedVersion): contractsv1.ContextFabricSemanticReadingStateUnreadable,
+	} {
+		got := (StoredAnswerability{Determination: StoredAnswerabilityUnavailable, Reading: reading}).WireSemanticReading()
+		if got == nil || got.Status != contractsv1.ContextFabricSemanticReadingUnavailable || got.Reason != want {
+			t.Fatalf("reading %q disclosed %+v, want unavailable/%q", reading, got, want)
+		}
+		if err := got.Validate(); err != nil {
+			t.Fatalf("reading %q disclosed an invalid document: %v", reading, err)
+		}
+	}
+}

@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"context"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -171,6 +172,24 @@ func decideStoredAnswerability(result InvestigationResult, state *PersistedSeman
 		determination = StoredAnswerabilityUnanswerable
 	}
 	return StoredAnswerability{Determination: determination, Reading: reading, decision: decision}
+}
+
+// WireSemanticReading is the read's wire disclosure (D49): present exactly
+// when the determination is unavailable, with the reason the stored reading
+// could not be had. A row with no reading reports absent; a reading that did
+// not decode, exceeded a bound, or names an unsupported format reports
+// unreadable. A store that reported no status at all reports absent: it
+// returned no reading, and nothing says one exists.
+func (a StoredAnswerability) WireSemanticReading() *contractsv1.ContextFabricSemanticReading {
+	if a.Determination != StoredAnswerabilityUnavailable {
+		return nil
+	}
+	reason := contractsv1.ContextFabricSemanticReadingStateUnreadable
+	switch a.Reading {
+	case string(SemanticStateReadAbsent), storedReadingUnreported:
+		reason = contractsv1.ContextFabricSemanticReadingStateAbsent
+	}
+	return &contractsv1.ContextFabricSemanticReading{Status: contractsv1.ContextFabricSemanticReadingUnavailable, Reason: reason}
 }
 
 // storedClarificationAnswerability loads the persisted reading of a reuse

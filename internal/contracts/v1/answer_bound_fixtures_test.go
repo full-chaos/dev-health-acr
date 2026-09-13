@@ -55,6 +55,12 @@ func answerBoundTable() []answerBound {
 				r.RefusalBasis = ContextFabricRefusalBasisMemberKindUnservable
 				r.Completeness.RefusalBasis = ContextFabricRefusalBasisMemberKindUnservable
 			}},
+		{Field: "SemanticReading", Why: "optional disclosure a READ of a stored clarification carries when its stored accepted reading could not be loaded; on a SERVED fixture its only legal value is absent, because validateSemanticReadingOnResult refuses it beside any status but clarification_required. Min and max are both nil, and PastMax names a disclosure on this served answer, which the validator must reject",
+			Min: func(r *ContextFabricInvestigationResult) { r.SemanticReading = nil },
+			Max: func(r *ContextFabricInvestigationResult) { r.SemanticReading = nil },
+			PastMax: func(r *ContextFabricInvestigationResult) {
+				r.SemanticReading = &ContextFabricSemanticReading{Status: ContextFabricSemanticReadingUnavailable, Reason: ContextFabricSemanticReadingStateUnreadable}
+			}},
 		{Field: "Reused", Why: "bool; `true` encodes ONE BYTE SHORTER than `false`, so the byte-minimal value is true -- minimal means smallest serialized, not smallest-looking",
 			Min: func(r *ContextFabricInvestigationResult) { r.Reused = true },
 			Max: func(r *ContextFabricInvestigationResult) { r.Reused = false }},
@@ -738,6 +744,7 @@ var expectedRejection = map[string]string{
 	// phrase was satisfied by either clause and a battery arm deleting the
 	// served-answer clause survived on its neighbour's message.
 	"RefusalBasis":            "cannot accompany status",
+	"SemanticReading":         "semantic_reading cannot accompany status",
 	"Cohort":                  "cohort violates v1 bounds",
 	"Completeness":            "outcomes exceeds v1 bounds",
 	"EvidenceRefLabels":       "names no evidence ref on the result",

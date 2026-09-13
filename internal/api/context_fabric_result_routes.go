@@ -153,6 +153,10 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 		// completeness recompute below, because it can change Status and the
 		// refusal basis completeness mirrors.
 		if answerability := contextfabric.RepairStoredClarification(&result, stored.SemanticState, stored.SemanticStateRead); answerability.Determination != contextfabric.StoredAnswerabilityNotApplicable {
+			// D49: an unavailable determination is disclosed on the wire as
+			// well as on the line, so a consumer can tell a clarification the
+			// server could not check from one it checked.
+			result.SemanticReading = answerability.WireSemanticReading()
 			args := contextfabric.StoredAnswerabilityLogArgs(contextfabric.StoredAnswerabilitySurfaceResultByID, answerability, storedStatus, result.Status)
 			args = append(args, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())))
 			a.logger.InfoContext(r.Context(), contextfabric.StoredAnswerabilityLogMessage, args...)

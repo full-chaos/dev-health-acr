@@ -373,6 +373,15 @@ func TestAStoredClarificationIsHandledAlikeOnEveryServingSurface(t *testing.T) {
 			if viaMCP.Status != byID.Status || viaMCP.RefusalBasis != byID.RefusalBasis || viaMCP.DeterministicAnswer != byID.DeterministicAnswer {
 				t.Fatalf("MCP investigation_result status/basis/answer = %q/%q/%q, result-by-id served %q/%q/%q", viaMCP.Status, viaMCP.RefusalBasis, viaMCP.DeterministicAnswer, byID.Status, byID.RefusalBasis, byID.DeterministicAnswer)
 			}
+			for surface, served := range map[string]*contractsv1.ContextFabricSemanticReading{"result-by-id": byID.SemanticReading, "MCP investigation_result": viaMCP.SemanticReading} {
+				if row.name == "legacy" {
+					if served == nil || served.Status != contractsv1.ContextFabricSemanticReadingUnavailable || served.Reason != contractsv1.ContextFabricSemanticReadingStateAbsent {
+						t.Fatalf("%s semantic_reading = %+v, want unavailable/semantic_state_absent on a row with no stored reading", surface, served)
+					}
+				} else if served != nil {
+					t.Fatalf("%s semantic_reading = %+v on a row whose reading was available", surface, served)
+				}
+			}
 			if row.read == contextfabric.InvestigationNoMatch && row.fresh == contextfabric.InvestigationNoMatch && byID.DeterministicAnswer != fresh.DeterministicAnswer {
 				t.Fatalf("result-by-id answer %q differs from fresh composition's %q for the same offers", byID.DeterministicAnswer, fresh.DeterministicAnswer)
 			}
@@ -388,6 +397,12 @@ func TestAStoredClarificationIsHandledAlikeOnEveryServingSurface(t *testing.T) {
 				}
 				if repaired, _ := line["repaired"].(bool); repaired != (row.read == contextfabric.InvestigationNoMatch) {
 					t.Fatalf("repaired = %v on %s", line["repaired"], row.name)
+				}
+			}
+			if row.name == "legacy" {
+				projection := getRealAPIProjection(t, server, token, row.row.ResultID, 3, 1, 10)
+				if projection.SemanticReading == nil || projection.SemanticReading.Reason != contractsv1.ContextFabricSemanticReadingStateAbsent {
+					t.Fatalf("projection semantic_reading = %+v, want the same disclosure the canonical view carries", projection.SemanticReading)
 				}
 			}
 		})

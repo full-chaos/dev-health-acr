@@ -2707,6 +2707,30 @@
           "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/AnswerCompleteness",
           "description": "CHAOS-4413: mirrors the canonical result's field verbatim -- claimed_facts_count/rows_count are the UN-CLAMPED canonical totals, not a count of this projection's own budget-clamped key_facts."
         },
+        "semantic_reading": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "reason"
+          ],
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "unavailable"
+              ]
+            },
+            "reason": {
+              "type": "string",
+              "enum": [
+                "semantic_state_absent",
+                "semantic_state_unreadable"
+              ]
+            }
+          },
+          "description": "CHAOS-5672: present only on a read of a stored clarification whose answerability needed the stored accepted reading and could not load it. Absent means the read did not need the reading or had it. semantic_state_absent: the row carries no reading; semantic_state_unreadable: the row carries a reading this build cannot read. Fresh composition never sets it."
+        },
         "confirmed_structure": {
           "items": {
             "$ref": "#/$defs/context_fabric_answer_projection.v1/$defs/ConfirmedStructureEntry"
@@ -3203,6 +3227,30 @@
             "organization_scope_unsupported"
           ],
           "description": "CHAOS-5442: names WHY the server refused to act on this question's frame, over a closed vocabulary. ABSENT on every turn that was not refused -- absence means \"not refused\", never \"refused for a reason nobody recorded\" (that state is the `unspecified` member). Orthogonal to terminal_reason, which names the CHANNEL an explanation travelled through rather than the decision taken: a refused frame carries both. `continuation_context_unverifiable` refuses a window-only continuation whose prior semantic context the server could not verify; it is not a frame refusal, and the document carries its own fixed limitation sentence."
+        },
+        "semantic_reading": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "reason"
+          ],
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "unavailable"
+              ]
+            },
+            "reason": {
+              "type": "string",
+              "enum": [
+                "semantic_state_absent",
+                "semantic_state_unreadable"
+              ]
+            }
+          },
+          "description": "CHAOS-5672: present only on a read of a stored clarification whose answerability needed the stored accepted reading and could not load it. Absent means the read did not need the reading or had it. semantic_state_absent: the row carries no reading; semantic_state_unreadable: the row carries a reading this build cannot read. Fresh composition never sets it."
         }
       },
       "required": [
