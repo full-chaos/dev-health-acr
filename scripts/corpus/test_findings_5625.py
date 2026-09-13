@@ -646,6 +646,61 @@ def test_merge_degrades_gracefully_when_ask_dev_pin_is_missing():
         prov_sv = verdict["provenance"]["semantic_verdict"]
         _require(prov_sv["available"] is False, prov_sv)
         _require("expect_schema.py and corpus/semantic_verdict.py" in prov_sv["reason"], prov_sv)
+        _require(prov_sv["persisted_semantic_state_available"] is False, prov_sv)
+
+
+def test_merge_reports_persisted_semantic_state_availability_via_provenance():
+    """CHAOS-5722, end-to-end through merge_corpus.py's own subprocess entry
+    point (not a hand-built verdict_for_row() call): with the trial-postgres
+    env recipe fully present, `provenance.semantic_verdict.persisted_semantic_state_available`
+    is True even against the FAKE (pre-CHAOS-5722) ask-dev pin -- proving the
+    availability decision and the forward-compat guard both run correctly
+    through the real merge pipeline, not only in isolation. The FAKE pin's
+    `build_verdict` never actually gets the adapter forwarded (see
+    verdict_for_row's own compat guard, exercised directly in
+    test_findings_5722.py) -- this fixture has no `any_of` row anyway, so the
+    adapter is never invoked, and the run must still complete without a
+    crash or a merge abort."""
+    with tempfile.TemporaryDirectory() as tmp:
+        indir = Path(tmp) / "seq"
+        _build_fixture_indir(indir)
+        base = Path(tmp) / "fake-ask-dev"
+        corpus_dir = _write_fake_ask_dev(base)
+        out = Path(tmp) / "verdict.json"
+
+        env_corpus = f"{HERE / 'testdata_corpus'}"
+        env = {"PATH": "/usr/bin:/bin:/usr/local/bin",
+               "PYTHONPATH": f"{corpus_dir}:{env_corpus}",
+               # A fake but FULLY PRESENT recipe -- no `psql` call is ever
+               # reached for this all-scalar fixture, so no real trial store
+               # is needed to prove the availability decision itself.
+               "ACR_TEST_TRIAL_PG_HOST": "10.0.0.1", "ACR_TEST_TRIAL_PG_PORT": "30500",
+               "ACR_TEST_TRIAL_PG_USER": "devhealth", "ACR_TEST_TRIAL_PG_PASSWORD": "s3cret",
+               "ACR_TEST_TRIAL_PG_DB": "acr_kiac_askdev"}
+        proc = subprocess.run(
+            [sys.executable, str(HERE / "merge_corpus.py"), "--shape", "sequential",
+             "--in", str(indir), "--out", str(out)],
+            capture_output=True, text=True, env=env, cwd=str(HERE))
+        _require(proc.returncode == 0, proc.stdout + proc.stderr)
+        verdict = json.loads(out.read_text())
+        prov_sv = verdict["provenance"]["semantic_verdict"]
+        _require(prov_sv["available"] is True, prov_sv)
+        _require(prov_sv["persisted_semantic_state_available"] is True, prov_sv)
+
+        # Negative control: with the recipe only PARTIALLY present (one var
+        # missing), availability must be False, not a best-effort True.
+        env2 = {**env}
+        del env2["ACR_TEST_TRIAL_PG_PASSWORD"]
+        out2 = Path(tmp) / "verdict2.json"
+        proc2 = subprocess.run(
+            [sys.executable, str(HERE / "merge_corpus.py"), "--shape", "sequential",
+             "--in", str(indir), "--out", str(out2)],
+            capture_output=True, text=True, env=env2, cwd=str(HERE))
+        _require(proc2.returncode == 0, proc2.stdout + proc2.stderr)
+        verdict2 = json.loads(out2.read_text())
+        _require(verdict2["provenance"]["semantic_verdict"]["persisted_semantic_state_available"] is False,
+                 verdict2["provenance"]["semantic_verdict"])
+        _require("trial-postgres env recipe" in proc2.stderr, proc2.stderr)
 
 
 def main():
