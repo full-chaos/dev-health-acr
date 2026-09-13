@@ -13,6 +13,21 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/runtime/hosted"
 )
 
+// TestAppConfig_PassesThroughServerCompletenessAuthorityEnabled pins the
+// one field this ticket adds to the config.Config -> api.AppConfig
+// translation: the by-id route reads it live from api.AppConfig, so a
+// dropped or inverted pass-through here would silently disable (or
+// silently always-enable) the flip regardless of the deployed
+// configuration.
+func TestAppConfig_PassesThroughServerCompletenessAuthorityEnabled(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		got := appConfig(config.Config{ServerCompletenessAuthorityEnabled: enabled}, "test-version")
+		if got.ServerCompletenessAuthorityEnabled != enabled {
+			t.Fatalf("appConfig(...).ServerCompletenessAuthorityEnabled = %v, want %v", got.ServerCompletenessAuthorityEnabled, enabled)
+		}
+	}
+}
+
 func TestPrepareServer_does_not_create_server_when_runtime_open_fails(t *testing.T) {
 	// Given
 	cfg := validServeConfig(t)

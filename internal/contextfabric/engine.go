@@ -118,7 +118,7 @@ type EngineOptions struct {
 	// fail-closed convention as ReusePromptVersions immediately above.
 	ReuseVersionAuthorities ReuseVersionAuthorities
 	// ServerCompletenessAuthorityEnabled turns ON the gated FLIP in
-	// applyServerCompletenessAuthority: when true, the outcome-derivation
+	// ApplyServerCompletenessAuthority: when true, the outcome-derivation
 	// authority may DOWNGRADE a model-claimed `complete` to
 	// `partial`/`degraded`, never the reverse and never a non-answer
 	// disposition. See that function's own doc comment for the two
@@ -841,10 +841,13 @@ type EngineTelemetry interface {
 	// NEW version: that gate reads a frame-obligations proxy stated as such
 	// in its own header; this one reads the requirement-outcome derivation
 	// itself (DeriveContextFabricAnswerCompletenessState over the served
-	// result's own outcome rows). Fires once per investigation that reaches
-	// assembly with a plan -- the same denominator RecordServerStatusShadow
-	// uses, for the same reason: a terminal exit with no plan has no
-	// outcome rows to derive from.
+	// result's own outcome rows).
+	//
+	// Fires from finalizeServed (budget_assertion.go), the ONE point every
+	// serving path is downstream of -- the decisive path, every veto/
+	// refusal/clarification exit, AND the reuse path, once each per served
+	// result, for the same reason its own header already gives for the
+	// budget assertion it wraps.
 	//
 	// REPORTS UNCONDITIONALLY, independent of
 	// EngineOptions.ServerCompletenessAuthorityEnabled: the measurement
@@ -3175,13 +3178,6 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// double-counted every one of them -- see assemblyTelemetry for why this
 	// is a class rule rather than a fix to one emitter.
 	e.emit(ctx, principal, pendingTelemetry)
-	// Taken ONCE here for the identical once-per-served-result reason as
-	// the block below, and BEFORE it: RecordCompletenessAuthority must
-	// report what the outcome-derivation authority found against the
-	// status the served document ACTUALLY carried, and
-	// applyServerCompletenessAuthority below can change that status -- so
-	// the observation is taken first and handed to both.
-	completenessAuthority := DeriveCompletenessAuthority(result)
 	// Render-shape telemetry fires ONCE, for the result actually served --
 	// selection itself is pure and was already run by finalizeResult, but a
 	// retry would otherwise double-count a decision an operator counts.
@@ -3196,19 +3192,6 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// the demands it holds the answer against are the ones the served
 		// plan actually states.
 		e.telemetry.RecordServerStatusShadow(ctx, principal, DeriveServerStatus(result, familyOutcome.FrameObligations))
-		// The outcome-derivation authority, from the SAME
-		// once-per-served-result point and for the same reason: the
-		// derivation reads result.Completeness.Outcomes, which
-		// finalizeResult can still be asked to change on a retry, and a
-		// disagreement counted twice would be wrong the same way
-		// RecordServerStatusShadow's would be.
-		//
-		// AFTER RecordServerStatusShadow, deliberately: that gate's own
-		// ModelStatus is the status the served document actually carried
-		// BEFORE any authority correction, and taking this observation any
-		// earlier would let an enabled flip retroactively change what B8's
-		// shadow believes the model said.
-		e.telemetry.RecordCompletenessAuthority(ctx, principal, completenessAuthority)
 		// The `membership_cardinality` step's result, from the SAME
 		// once-per-served-result point and for the same reason: the step
 		// runs inside finalizeResult, which runs again on a retry, and a
@@ -3234,14 +3217,6 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			e.telemetry.RecordReadRequirementPopulation(ctx, principal, event)
 		}
 	}
-	// The gated flip, applied AFTER the measurement above is
-	// recorded so the telemetry always reports the true pre-correction
-	// observation regardless of whether the knob is on, and unconditional
-	// on e.telemetry so the served status can be corrected in a composition
-	// that runs with no telemetry sink at all. See
-	// applyServerCompletenessAuthority's own doc comment for the two
-	// guardrails (downgrade-only, answer-disposition-only) that bound it.
-	result = applyServerCompletenessAuthority(result, e.serverCompletenessAuthorityEnabled, completenessAuthority)
 	// CHAOS-4690: the SINGLE stamp point for the decisive path -- AFTER
 	// finalizeResult/fitAssembledResult (fitAssembledResult can re-run
 	// assembly, so composing labels any earlier could stamp a Coverage/

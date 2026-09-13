@@ -308,6 +308,31 @@ func (e *Engine) finalizeServed(ctx context.Context, principal storage.Principal
 	// pure and idempotent, so a second pass over an already-complete set
 	// returns the same set.
 	result.Completeness = ComputeAnswerCompleteness(result)
+	// The outcome-derivation completeness authority, HERE and not at any
+	// individual exit, for the identical reason the answerability invariant
+	// two paragraphs below is here: this is the one point every serving
+	// path is downstream of, INCLUDING the reuse path (a stored document
+	// carries its own outcome rows and deserves the same measurement a
+	// fresh one gets) and every veto/refusal/clarification exit (each of
+	// which must report `not_an_answer` rather than silently never being
+	// asked). See completeness_authority.go's own header for what the
+	// derivation itself does and does not touch.
+	//
+	// BEFORE the budget assertion below, not because of its position
+	// relative to the completeness re-derivation immediately above (a
+	// non-answer disposition never reads Outcomes at all, and an answer
+	// disposition's Outcomes are already fully accounted for by the stage
+	// that ran before this function, so DeriveCompletenessAuthority's own
+	// answer is the same either way): a flip changes result.Status, which
+	// changes the terminal reason ComputeAnswerCompleteness derives from
+	// it, which is bytes in the served document -- the budget below must
+	// measure the document actually served, not the one before this
+	// correction.
+	completenessAuthority := DeriveCompletenessAuthority(result)
+	if e.telemetry != nil {
+		e.telemetry.RecordCompletenessAuthority(ctx, principal, completenessAuthority)
+	}
+	result = ApplyServerCompletenessAuthority(result, e.serverCompletenessAuthorityEnabled, completenessAuthority)
 	// CHAOS-5637: the answerability invariant, HERE for the same reason
 	// everything else in this function is here -- this is the one point
 	// every serving path is downstream of, and a guard that holds at some

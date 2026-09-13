@@ -342,7 +342,7 @@ func TestApplyServerCompletenessAuthority_DisabledIsANoOp(t *testing.T) {
 	}
 	result := InvestigationResult{Status: InvestigationComplete, DirectJudgment: "x", Completeness: contractsv1.ContextFabricAnswerCompleteness{Outcomes: rows, TerminalStatus: InvestigationComplete}}
 	observation := DeriveCompletenessAuthority(result)
-	got := applyServerCompletenessAuthority(result, false, observation)
+	got := ApplyServerCompletenessAuthority(result, false, observation)
 	if got.Status != InvestigationComplete {
 		t.Fatalf("disabled flip changed Status to %q, want it left at complete", got.Status)
 	}
@@ -357,7 +357,7 @@ func TestApplyServerCompletenessAuthority_DowngradesCompleteToPartial(t *testing
 	}
 	result := InvestigationResult{Status: InvestigationComplete, DirectJudgment: "x", Completeness: contractsv1.ContextFabricAnswerCompleteness{Outcomes: rows}}
 	observation := DeriveCompletenessAuthority(result)
-	got := applyServerCompletenessAuthority(result, true, observation)
+	got := ApplyServerCompletenessAuthority(result, true, observation)
 	if got.Status != InvestigationPartial {
 		t.Fatalf("Status = %q, want partial", got.Status)
 	}
@@ -376,7 +376,7 @@ func TestApplyServerCompletenessAuthority_DowngradesCompleteToDegraded(t *testin
 	}
 	result := InvestigationResult{Status: InvestigationComplete, DirectJudgment: "x", Completeness: contractsv1.ContextFabricAnswerCompleteness{Outcomes: rows}}
 	observation := DeriveCompletenessAuthority(result)
-	got := applyServerCompletenessAuthority(result, true, observation)
+	got := ApplyServerCompletenessAuthority(result, true, observation)
 	if got.Status != InvestigationDegraded {
 		t.Fatalf("Status = %q, want degraded", got.Status)
 	}
@@ -394,7 +394,7 @@ func TestApplyServerCompletenessAuthority_NeverUpgrades(t *testing.T) {
 	for _, modelStatus := range []InvestigationStatus{InvestigationPartial, InvestigationDegraded} {
 		result := InvestigationResult{Status: modelStatus, DirectJudgment: "x", Completeness: contractsv1.ContextFabricAnswerCompleteness{Outcomes: rows}}
 		observation := DeriveCompletenessAuthority(result)
-		got := applyServerCompletenessAuthority(result, true, observation)
+		got := ApplyServerCompletenessAuthority(result, true, observation)
 		if got.Status != modelStatus {
 			t.Fatalf("model status %q with all-satisfied outcomes: flip changed Status to %q, want it left at %q (never upgrade)", modelStatus, got.Status, modelStatus)
 		}
@@ -422,7 +422,7 @@ func TestApplyServerCompletenessAuthority_NeverTouchesNonAnswerDispositions(t *t
 			t.Parallel()
 			result := InvestigationResult{Status: testCase.status, RefusalBasis: testCase.refusalBasis, Completeness: contractsv1.ContextFabricAnswerCompleteness{Outcomes: degradingRows}}
 			observation := DeriveCompletenessAuthority(result)
-			got := applyServerCompletenessAuthority(result, true, observation)
+			got := ApplyServerCompletenessAuthority(result, true, observation)
 			if got.Status != testCase.status {
 				t.Fatalf("Status changed from %q to %q; a non-answer disposition must never be touched", testCase.status, got.Status)
 			}
@@ -430,12 +430,12 @@ func TestApplyServerCompletenessAuthority_NeverTouchesNonAnswerDispositions(t *t
 	}
 }
 
-// TestApplyServerCompletenessAuthority_NeverAppliesAStaleObservation guards
-// the call-site contract: passing an observation that does not match
-// result's own outcomes must never be trusted over a fresh derivation this
-// function could have taken itself -- so the function is exercised here
-// exactly as engine.go calls it, from an observation taken from the SAME
-// result, never a hand-built one that disagrees with it.
+// TestApplyServerCompletenessAuthority_ObservationMatchesResult guards the
+// call-site contract every production caller (finalizeServed, the by-id
+// route) actually follows: the observation handed in is always taken FROM
+// the same result, in the same call, never a stale or hand-built one --
+// so this exercises the function exactly that way and checks the OUTCOME
+// the flip produces, not merely the observation it was handed.
 func TestApplyServerCompletenessAuthority_ObservationMatchesResult(t *testing.T) {
 	t.Parallel()
 	rows := []RequirementOutcomeRow{
@@ -446,6 +446,19 @@ func TestApplyServerCompletenessAuthority_ObservationMatchesResult(t *testing.T)
 	if !fresh.Derived || fresh.ServerState != contractsv1.ContextFabricAnswerCompletenessDegraded {
 		t.Fatalf("setup: expected a derived degraded observation, got %+v", fresh)
 	}
+	got := ApplyServerCompletenessAuthority(result, true, fresh)
+	if got.Status != InvestigationDegraded {
+		t.Fatalf("Status = %q, want degraded -- a matching, freshly-taken observation must correct the result", got.Status)
+	}
+	if got.Completeness.TerminalStatus != got.Status {
+		t.Fatalf("Completeness.TerminalStatus = %q, must equal Status %q", got.Completeness.TerminalStatus, got.Status)
+	}
+	// Recomputing from the (unchanged) outcome rows independently must
+	// agree with what the flip just wrote -- the same rows cannot describe
+	// two different states depending on which function read them.
+	if want := contractsv1.DeriveContextFabricAnswerCompletenessState(got.Completeness.Outcomes); got.Completeness.State != want {
+		t.Fatalf("Completeness.State = %q, want %q (re-derived from the same outcome rows)", got.Completeness.State, want)
+	}
 }
 
 // TestApplyServerCompletenessAuthority_RefusesAnObservationThatDoesNotMap
@@ -455,7 +468,7 @@ func TestApplyServerCompletenessAuthority_ObservationMatchesResult(t *testing.T)
 // actually maps -- the guard a caller cannot reach through the paired
 // DeriveCompletenessAuthority (that function only ever sets Derived=true
 // alongside a ServerState it already confirmed maps), but which
-// applyServerCompletenessAuthority still must not skip: a status is never
+// ApplyServerCompletenessAuthority still must not skip: a status is never
 // written from an unmapped value.
 func TestApplyServerCompletenessAuthority_RefusesAnObservationThatDoesNotMap(t *testing.T) {
 	t.Parallel()
@@ -465,7 +478,7 @@ func TestApplyServerCompletenessAuthority_RefusesAnObservationThatDoesNotMap(t *
 		ServerState: contractsv1.ContextFabricAnswerCompletenessState("not_a_real_state"),
 		Derived:     true,
 	}
-	got := applyServerCompletenessAuthority(result, true, inconsistent)
+	got := ApplyServerCompletenessAuthority(result, true, inconsistent)
 	if got.Status != InvestigationComplete {
 		t.Fatalf("Status = %q, want it left at complete (an unmapped ServerState must never be written)", got.Status)
 	}
@@ -518,5 +531,44 @@ func TestCompletenessAuthority_ProductionTelemetryEmitsEveryField(t *testing.T) 
 		if got, ok := record[key]; !ok || got != want {
 			t.Fatalf("record[%q] = %v (present=%v), want %v -- an operator greps for this key", key, got, ok, want)
 		}
+	}
+}
+
+// -- Vocabulary membership --
+
+// TestAnswerDispositionVocabulary_MembershipIsExact pins
+// AnswerDispositionVocabulary/ValidAnswerDisposition together: every
+// vocabulary member validates, and a value outside it does not.
+func TestAnswerDispositionVocabulary_MembershipIsExact(t *testing.T) {
+	t.Parallel()
+	vocabulary := AnswerDispositionVocabulary()
+	if len(vocabulary) != AnswerDispositionCount {
+		t.Fatalf("len(vocabulary) = %d, want AnswerDispositionCount %d", len(vocabulary), AnswerDispositionCount)
+	}
+	for _, member := range vocabulary {
+		if !ValidAnswerDisposition(member) {
+			t.Errorf("ValidAnswerDisposition(%q) = false, want true (a vocabulary member)", member)
+		}
+	}
+	if ValidAnswerDisposition(AnswerDisposition("not_a_real_disposition")) {
+		t.Error("ValidAnswerDisposition(\"not_a_real_disposition\") = true, want false")
+	}
+}
+
+// TestCompletenessAuthorityBasisVocabulary_MembershipIsExact is the same
+// pin for CompletenessAuthorityBasisVocabulary/ValidCompletenessAuthorityBasis.
+func TestCompletenessAuthorityBasisVocabulary_MembershipIsExact(t *testing.T) {
+	t.Parallel()
+	vocabulary := CompletenessAuthorityBasisVocabulary()
+	if len(vocabulary) != CompletenessAuthorityBasisCount {
+		t.Fatalf("len(vocabulary) = %d, want CompletenessAuthorityBasisCount %d", len(vocabulary), CompletenessAuthorityBasisCount)
+	}
+	for _, member := range vocabulary {
+		if !ValidCompletenessAuthorityBasis(member) {
+			t.Errorf("ValidCompletenessAuthorityBasis(%q) = false, want true (a vocabulary member)", member)
+		}
+	}
+	if ValidCompletenessAuthorityBasis(CompletenessAuthorityBasis("not_a_real_basis")) {
+		t.Error("ValidCompletenessAuthorityBasis(\"not_a_real_basis\") = true, want false")
 	}
 }

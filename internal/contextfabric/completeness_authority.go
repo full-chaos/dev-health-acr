@@ -216,7 +216,7 @@ type CompletenessAuthorityObservation struct {
 	// This field reads true for THAT case too: distinguishing partial from
 	// degraded requires comparing against all three answer labels, not
 	// only the strongest one. The
-	// asymmetry survives only in the FLIP (applyServerCompletenessAuthority),
+	// asymmetry survives only in the FLIP (ApplyServerCompletenessAuthority),
 	// which has a safety reason of its own to keep it -- see that
 	// function's doc comment.
 	Disagreed bool
@@ -292,7 +292,7 @@ func answerCompletenessStateToStatus(state contractsv1.ContextFabricAnswerComple
 	}
 }
 
-// applyServerCompletenessAuthority is the gated FLIP: when enabled, the
+// ApplyServerCompletenessAuthority is the gated FLIP: when enabled, the
 // server's own outcome-derived completeness state may CORRECT the served
 // status -- never route, never widen a contract, and default OFF
 // (EngineOptions.ServerCompletenessAuthorityEnabled's own doc comment).
@@ -318,7 +318,14 @@ func answerCompletenessStateToStatus(state contractsv1.ContextFabricAnswerComple
 // exactly (validateCompleteness), and ComputeAnswerCompleteness is the one
 // place that invariant is produced -- see that function's own doc comment
 // for why it must never be bypassed.
-func applyServerCompletenessAuthority(result InvestigationResult, enabled bool, observation CompletenessAuthorityObservation) InvestigationResult {
+//
+// EXPORTED, and called from two kinds of surface: budget_assertion.go's
+// finalizeServed (every Engine-served result, fresh or reused), and a
+// stored-result READ surface outside the engine entirely (the by-id route)
+// that re-evaluates a persisted row's own outcome rows against whatever
+// the knob says NOW -- a row saved before the flip was ever turned on must
+// not carry a stale answer forever just because Save already ran once.
+func ApplyServerCompletenessAuthority(result InvestigationResult, enabled bool, observation CompletenessAuthorityObservation) InvestigationResult {
 	if !enabled || !observation.Derived {
 		return result
 	}
