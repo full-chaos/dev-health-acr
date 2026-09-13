@@ -326,8 +326,15 @@ func TestSemanticState_EveryMutationOfTheStoredDocumentIsUnavailable(t *testing.
 	}
 	t.Logf("%d cells: %v", len(cells), counts)
 	// A future format is UNSUPPORTED, not malformed, even when its shape moved.
-	if _, status := DecodeSemanticState([]byte(`{"format_version":"semantic-state.v2","anything":[1,2]}`)); status != SemanticStateReadUnsupportedVersion {
-		t.Errorf("a v2 document with a new shape -> %s, want unsupported_version", status)
+	if _, status := DecodeSemanticState([]byte(`{"format_version":"semantic-state.v3","anything":[1,2]}`)); status != SemanticStateReadUnsupportedVersion {
+		t.Errorf("a v3 document with a new shape -> %s, want unsupported_version", status)
+	}
+	// A v1 document -- written before CHAOS-5639 added confirmed_needs -- is
+	// UNSUPPORTED, not malformed: the format bump (not a shape-only change) is
+	// exactly what lets an old row degrade to "cannot verify" rather than
+	// being misread as a document this build wrote.
+	if _, status := DecodeSemanticState([]byte(`{"format_version":"semantic-state.v1","family":"","family_source":"","family_table_version":"x","group_kind":"","narrowing_basis":"","scope_anchor":{"kind":"","term":""},"frame_present":false,"frame":null,"frame_version":"x","validation":{"emitted_shape":"","gate_outcome":"not_evaluated","failed_invariant":"","refuse_basis":"","declared_member_kind":""},"roles":[],"request_identity":{"version":"","digest":""},"requirements_declared":false,"requirements":[],"requirement_derivation_version":"x"}`)); status != SemanticStateReadUnsupportedVersion {
+		t.Errorf("a pre-CHAOS-5639 v1 document -> %s, want unsupported_version", status)
 	}
 	// A FIELD THE CODEC NEVER WROTE is malformed, whichever guard gets there
 	// first: the decoder refuses unknown fields, and the canonical re-encode
@@ -347,7 +354,7 @@ func TestSemanticState_EveryMutationOfTheStoredDocumentIsUnavailable(t *testing.
 // an unsupported version by a turn that can no longer do anything about it.
 func TestSemanticState_TheEncoderRefusesAFormatItDidNotWrite(t *testing.T) {
 	t.Parallel()
-	for _, version := range []string{"", "semantic-state.v0", "semantic-state.v2", "SEMANTIC-STATE.V1", " semantic-state.v1"} {
+	for _, version := range []string{"", "semantic-state.v0", "semantic-state.v3", "SEMANTIC-STATE.V2", " semantic-state.v2"} {
 		state := sizedSemanticState(t, 4000)
 		state.FormatVersion = version
 		_, err := EncodeSemanticState(state)
@@ -937,6 +944,15 @@ func TestSemanticState_AnOversizedCaptureNamesItsBoundOnTheLine(t *testing.T) {
 				frame.Goals = append(frame.Goals, GoalCompare)
 			}
 			in.Outcome.Frame = &frame
+			return in
+		},
+		SemanticStateBoundConfirmedNeeds: func(t *testing.T) SemanticStateInput {
+			in := inputOf(sizedSemanticState(t, 4000))
+			entries := make([]ConfirmedNeedEntry, 0, contractsv1.ContextFabricStructureNeedKindCount+1)
+			for i := 0; i <= contractsv1.ContextFabricStructureNeedKindCount; i++ {
+				entries = append(entries, ConfirmedNeedEntry{Member: contractsv1.ContextFabricStructureNeedKind(fmt.Sprintf("synthetic_need_%02d", i))})
+			}
+			in.ConfirmedNeeds = entries
 			return in
 		},
 	}

@@ -345,6 +345,15 @@ func (t SlogEngineTelemetry) RecordKindCarry(ctx context.Context, principal stor
 	t.logger.InfoContext(ctx, "context fabric kind carry", args...)
 }
 
+// RecordConfirmedNeedLedger (CHAOS-5639) logs at Info: outcome is a closed
+// vocabulary, applied_members a comma-joined list of closed StructureNeedKind
+// values (or "none") -- content-safe by construction, never question text,
+// a subject identifier, or a carried value.
+func (t SlogEngineTelemetry) RecordConfirmedNeedLedger(ctx context.Context, principal storage.Principal, outcome ConfirmedNeedLedgerOutcome, appliedMembers []contractsv1.ContextFabricStructureNeedKind) {
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome)), "applied_members", SanitizeLogAttr(observableAppliedNeedMembers(appliedMembers))}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric confirmed need ledger", args...)
+}
+
 // RecordStructureNeedsDisclosed (CHAOS-3900 P1.F). member is a closed
 // StructureNeedKind enum value -- content-safe by construction, never
 // question text or a subject identifier.

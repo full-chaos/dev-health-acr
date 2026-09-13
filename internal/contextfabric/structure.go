@@ -1743,11 +1743,19 @@ func confirmedExpectedKind(confirmed []confirmedStructureMember) *ConfirmedExpec
 // AppliedKind/AppliedValue with the redeemed AnchorOption's own Kind/
 // CanonicalID for the subject_anchor member -- this reads that back, it
 // does not re-derive anything.
-func confirmedAnchorSelection(confirmed []confirmedStructureMember) *ConfirmedAnchorSelection {
+// confirmedAnchorSelection decides the anchor resolution narrows to: this
+// turn's own receipt (confirmed) first, then CHAOS-5639's per-need
+// confirmation ledger (remembered) -- see effectiveConfirmedKind's own doc
+// comment for the precedence rationale (there is no legacy carry walk for
+// this member).
+func confirmedAnchorSelection(confirmed []confirmedStructureMember, remembered []confirmedStructureMember) *ConfirmedAnchorSelection {
 	for _, c := range confirmed {
 		if c.Member == contractsv1.ContextFabricStructureNeedSubjectAnchor {
 			return &ConfirmedAnchorSelection{Kind: c.AppliedKind, CanonicalID: c.AppliedValue}
 		}
+	}
+	if r := rememberedMember(remembered, contractsv1.ContextFabricStructureNeedSubjectAnchor); r != nil {
+		return &ConfirmedAnchorSelection{Kind: r.AppliedKind, CanonicalID: r.AppliedValue}
 	}
 	return nil
 }

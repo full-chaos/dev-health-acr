@@ -154,6 +154,7 @@ func TestSemanticState_EverySnapshotKeyIsComparedOrExemptByName(t *testing.T) {
 		"narrowing_basis":                "the fresh side proposes none: it is derived inside PlanAnswer after this comparison",
 		"frame":                          "container: each frame key is decided below",
 		"validation":                     "container: each validation key is decided below",
+		"confirmed_needs":                "CHAOS-5639: the per-need confirmation ledger, not a component of the reading itself -- it is read and extended by its own identity-keyed admission (chaos5639_confirmed_need.go), independent of this comparison, and the fresh side has no ledger of its own to disagree with.",
 	}
 	keys := func(prefix string, typ reflect.Type) []string {
 		out := []string{}

@@ -240,7 +240,7 @@ func TestKindCarry_AReceiptThatStatesAKindThisTurnBlocksTheCarry(t *testing.T) {
 	if dropped.Outcome != KindCarryDroppedRedeemedKindDiffers {
 		t.Fatalf("applyCarryDrop = %#v, want the carry dropped: the caller picked a TEAM this turn and the chain offers PROJECT, so the inherited value must stand down", dropped)
 	}
-	if got := effectiveConfirmedKind(candidatePick.Confirmed, dropped); got != nil {
+	if got := effectiveConfirmedKind(candidatePick.Confirmed, nil, dropped); got != nil {
 		t.Fatalf("effectiveConfirmedKind = %#v, want nil: a dropped carry must not reach resolution and filter the caller's own pick out of the pool", got)
 	}
 	// And the drop must not be disclosed as an applied carry.

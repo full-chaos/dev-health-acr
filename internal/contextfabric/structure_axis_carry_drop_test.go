@@ -47,7 +47,7 @@ func TestCarryDrop_AgreeingCandidateKeepsTheCarry(t *testing.T) {
 	if statedExpectedKindThisTurn(InvestigationRequest{}, canon) {
 		t.Fatal("a candidate receipt must no longer BLOCK the walk outright -- it is a comparator, not a gate")
 	}
-	got := effectiveConfirmedKind(canon.Confirmed, applyCarryDrop(canon.Confirmed, carry))
+	got := effectiveConfirmedKind(canon.Confirmed, nil, applyCarryDrop(canon.Confirmed, carry))
 	if got == nil || got.Kind != contractsv1.ContextFabricSubjectRepository {
 		t.Fatalf("effectiveConfirmedKind = %#v, want the carried repository kept: the caller picked a candidate of the SAME kind, so nothing disagrees and the loop must stay closed", got)
 	}
@@ -69,7 +69,7 @@ func TestCarryDrop_DifferingSubjectAxisMemberDropsTheCarry(t *testing.T) {
 			t.Parallel()
 			canon := kindCarryDropCanon(member(tc.member, contractsv1.ContextFabricSubjectTeam))
 			carry := kindCarryResult{Kind: contractsv1.ContextFabricSubjectRepository, SourceResultID: "result_origin", Outcome: KindCarryHit}
-			if got := effectiveConfirmedKind(canon.Confirmed, applyCarryDrop(canon.Confirmed, carry)); got != nil {
+			if got := effectiveConfirmedKind(canon.Confirmed, nil, applyCarryDrop(canon.Confirmed, carry)); got != nil {
 				t.Fatalf("effectiveConfirmedKind = %#v, want nil: this turn's own %s names team, so an inherited repository must stand down rather than filter the caller's pick out of the pool", got, tc.name)
 			}
 		})
@@ -87,7 +87,7 @@ func TestCarryDrop_AnchorIsNotAComparator(t *testing.T) {
 	canon := kindCarryDropCanon(member(contractsv1.ContextFabricStructureNeedSubjectAnchor, contractsv1.ContextFabricSubjectTeam))
 	carry := kindCarryResult{Kind: contractsv1.ContextFabricSubjectRepository, SourceResultID: "result_origin", Outcome: KindCarryHit}
 
-	got := effectiveConfirmedKind(canon.Confirmed, applyCarryDrop(canon.Confirmed, carry))
+	got := effectiveConfirmedKind(canon.Confirmed, nil, applyCarryDrop(canon.Confirmed, carry))
 	if got == nil || got.Kind != contractsv1.ContextFabricSubjectRepository {
 		t.Fatalf("effectiveConfirmedKind = %#v, want the carried repository KEPT: a team ANCHOR and a repository sought-kind are two axes, not a disagreement", got)
 	}
@@ -103,7 +103,7 @@ func TestCarryDrop_SubjectAxisTieDropsTheCarry(t *testing.T) {
 		member(contractsv1.ContextFabricStructureNeedSubjectHandle, contractsv1.ContextFabricSubjectTeam),
 	)
 	carry := kindCarryResult{Kind: contractsv1.ContextFabricSubjectRepository, SourceResultID: "result_origin", Outcome: KindCarryHit}
-	if got := effectiveConfirmedKind(canon.Confirmed, applyCarryDrop(canon.Confirmed, carry)); got != nil {
+	if got := effectiveConfirmedKind(canon.Confirmed, nil, applyCarryDrop(canon.Confirmed, carry)); got != nil {
 		t.Fatalf("effectiveConfirmedKind = %#v, want nil: this turn's own receipts disagree with each other, so an inherited value has no business picking the winner even though it matches one of them", got)
 	}
 }
@@ -138,11 +138,11 @@ func TestCarryDrop_RegressionPinsThatMustNotMove(t *testing.T) {
 	if !statedExpectedKindThisTurn(InvestigationRequest{}, own) {
 		t.Fatal("a same-turn expected_kind receipt must still block the carry outright")
 	}
-	if got := effectiveConfirmedKind(own.Confirmed, kindCarryResult{Kind: contractsv1.ContextFabricSubjectTeam, Outcome: KindCarryHit}); got == nil || got.Kind != contractsv1.ContextFabricSubjectProject {
+	if got := effectiveConfirmedKind(own.Confirmed, nil, kindCarryResult{Kind: contractsv1.ContextFabricSubjectTeam, Outcome: KindCarryHit}); got == nil || got.Kind != contractsv1.ContextFabricSubjectProject {
 		t.Fatalf("effectiveConfirmedKind = %#v, want this turn's own project", got)
 	}
 	// A miss still yields nothing, and discloses nothing.
-	if got := effectiveConfirmedKind(nil, kindCarryResult{Outcome: KindCarryMissNoReference}); got != nil {
+	if got := effectiveConfirmedKind(nil, nil, kindCarryResult{Outcome: KindCarryMissNoReference}); got != nil {
 		t.Fatalf("effectiveConfirmedKind(miss) = %#v, want nil", got)
 	}
 	_ = context.Background()

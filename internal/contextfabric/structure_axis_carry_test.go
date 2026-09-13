@@ -436,14 +436,14 @@ func TestKindCarry_ThisTurnsOwnReceiptWinsOverACarriedKind(t *testing.T) {
 	}}
 	carry := kindCarryResult{Kind: contractsv1.ContextFabricSubjectTeam, SourceResultID: "result_turn_a", Outcome: KindCarryHit}
 
-	got := effectiveConfirmedKind(own, carry)
+	got := effectiveConfirmedKind(own, nil, carry)
 	if got == nil || got.Kind != contractsv1.ContextFabricSubjectProject {
 		t.Fatalf("effectiveConfirmedKind(own=project, carried=team) = %#v, want project: this turn's own receipt wins", got)
 	}
-	if got := effectiveConfirmedKind(nil, carry); got == nil || got.Kind != contractsv1.ContextFabricSubjectTeam {
+	if got := effectiveConfirmedKind(nil, nil, carry); got == nil || got.Kind != contractsv1.ContextFabricSubjectTeam {
 		t.Fatalf("effectiveConfirmedKind(no own receipt, carried=team) = %#v, want team", got)
 	}
-	if got := effectiveConfirmedKind(nil, kindCarryResult{Outcome: KindCarryMissNoReference}); got != nil {
+	if got := effectiveConfirmedKind(nil, nil, kindCarryResult{Outcome: KindCarryMissNoReference}); got != nil {
 		t.Fatalf("effectiveConfirmedKind(no own receipt, miss) = %#v, want nil", got)
 	}
 }

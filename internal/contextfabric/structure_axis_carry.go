@@ -526,9 +526,19 @@ func subjectAxisRedeemedKinds(confirmed []confirmedStructureMember) []contractsv
 	return kinds
 }
 
-func effectiveConfirmedKind(confirmed []confirmedStructureMember, carry kindCarryResult) *ConfirmedExpectedKind {
+// effectiveConfirmedKind decides the kind resolution narrows to, in
+// precedence order: this turn's own receipt (confirmed), then CHAOS-5639's
+// per-need confirmation ledger (remembered), then the legacy same-conversation
+// carry walk (carry). A real receipt this turn always wins over a remembered
+// or carried value; remembered wins over the older, multi-hop carry walk
+// because it is the more precise, identity-verified mechanism M2 built to
+// replace it for a directly-referenced parent.
+func effectiveConfirmedKind(confirmed []confirmedStructureMember, remembered []confirmedStructureMember, carry kindCarryResult) *ConfirmedExpectedKind {
 	if own := confirmedExpectedKind(confirmed); own != nil {
 		return own
+	}
+	if r := rememberedMember(remembered, contractsv1.ContextFabricStructureNeedExpectedKind); r != nil && r.AppliedValue != "" {
+		return &ConfirmedExpectedKind{Kind: contractsv1.ContextFabricSubjectKind(r.AppliedValue)}
 	}
 	if carry.Outcome != KindCarryHit || carry.Kind == "" {
 		return nil

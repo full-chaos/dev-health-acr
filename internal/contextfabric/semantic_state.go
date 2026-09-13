@@ -42,7 +42,13 @@ import (
 
 // SemanticStateFormatVersion is the internal format this build writes and the
 // only one it reads. A stored snapshot naming any other format is unavailable.
-const SemanticStateFormatVersion = "semantic-state.v1"
+//
+// BUMPED TO v2 (CHAOS-5639): ConfirmedNeeds joined the shape as a required,
+// never-null field. Every field in a format is required with no omitempty
+// (this file's own header comment), so a v1 row -- written before the field
+// existed -- cannot re-encode to the same bytes it was stored as, and reads
+// back correctly as unsupported_version rather than incorrectly as malformed.
+const SemanticStateFormatVersion = "semantic-state.v2"
 
 // SemanticStateMaxEncodedBytes is the cap on one encoded snapshot, in bytes
 // of this package's canonical encoding.
@@ -145,6 +151,30 @@ type PersistedSemanticState struct {
 	// RequirementDerivationVersion is the requirement derivation version in
 	// force when the declarations were produced.
 	RequirementDerivationVersion string `json:"requirement_derivation_version"`
+
+	// ConfirmedNeeds is the per-need confirmation ledger (CHAOS-5639): one
+	// entry per StructureNeedKind this conversation has confirmed by receipt,
+	// carried forward so a later turn under the SAME request identity is not
+	// re-raised for it without the receipt being redeemed again. Never null;
+	// empty means nothing confirmed yet. Consulted only by its own
+	// identity-keyed admission (chaos5639_confirmed_need.go), never by the
+	// D-b/D-c continuation comparison -- see
+	// TestSemanticState_EverySnapshotKeyIsComparedOrExemptByName's own exempt
+	// entry for why.
+	ConfirmedNeeds []ConfirmedNeedEntry `json:"confirmed_needs"`
+}
+
+// ConfirmedNeedEntry is one structure need's remembered confirmation
+// (CHAOS-5639): the value a receipt confirmed for one StructureNeedKind
+// member, in the same shape a redeemed receipt produces
+// (confirmedStructureMember, structure.go) so a remembered entry can be
+// applied exactly where a fresh confirmation would be. One entry per member --
+// the vocabulary's own closed set is the key, so a later confirmation for the
+// same member replaces its entry rather than appending a second one.
+type ConfirmedNeedEntry struct {
+	Member       contractsv1.ContextFabricStructureNeedKind `json:"member"`
+	AppliedKind  contractsv1.ContextFabricSubjectKind       `json:"applied_kind"`
+	AppliedValue string                                     `json:"applied_value"`
 }
 
 // SemanticScopeAnchor is the scope anchor a reading resolved its subject under.
@@ -358,6 +388,10 @@ const (
 	SemanticStateBoundRequirementFactKinds  SemanticStateBound = "requirement_fact_kinds"
 	SemanticStateBoundRequirementDimensions SemanticStateBound = "requirement_dimensions"
 	SemanticStateBoundFrameSet              SemanticStateBound = "frame_set"
+	// SemanticStateBoundConfirmedNeeds bounds the per-need confirmation
+	// ledger at the StructureNeedKind vocabulary's own size -- one entry per
+	// member is the most a closed-set ledger can ever hold.
+	SemanticStateBoundConfirmedNeeds SemanticStateBound = "confirmed_needs"
 )
 
 func semanticStateBounds() []SemanticStateBound {
@@ -366,6 +400,7 @@ func semanticStateBounds() []SemanticStateBound {
 		SemanticStateBoundOperands, SemanticStateBoundTerms, SemanticStateBoundTermBytes,
 		SemanticStateBoundTermBytesTotal, SemanticStateBoundFrameSet,
 		SemanticStateBoundRequirementFactKinds, SemanticStateBoundRequirementDimensions,
+		SemanticStateBoundConfirmedNeeds,
 	}
 }
 
@@ -598,6 +633,28 @@ func validateSemanticState(s PersistedSemanticState) error {
 	}
 	if err := validateSemanticValidation(s.Validation, s.FramePresent); err != nil {
 		return reject("validation: %v", err)
+	}
+	if s.ConfirmedNeeds == nil {
+		return reject("confirmed_needs must be an array, never null")
+	}
+	if len(s.ConfirmedNeeds) > contractsv1.ContextFabricStructureNeedKindCount {
+		return oversized(SemanticStateBoundConfirmedNeeds, "%d confirmed needs exceeds the %d the vocabulary holds", len(s.ConfirmedNeeds), contractsv1.ContextFabricStructureNeedKindCount)
+	}
+	seenNeedMembers := map[contractsv1.ContextFabricStructureNeedKind]bool{}
+	for i, entry := range s.ConfirmedNeeds {
+		if !contractsv1.ValidContextFabricStructureNeedKind(entry.Member) {
+			return reject("confirmed_needs[%d].member %q is not a vocabulary member", i, entry.Member)
+		}
+		if seenNeedMembers[entry.Member] {
+			return reject("confirmed_needs carries member %q twice", entry.Member)
+		}
+		seenNeedMembers[entry.Member] = true
+		if entry.AppliedKind != "" && !contractsv1.ValidContextFabricSubjectKind(entry.AppliedKind) {
+			return reject("confirmed_needs[%d].applied_kind %q is not a vocabulary member", i, entry.AppliedKind)
+		}
+		if len(entry.AppliedValue) > SemanticStateMaxTermBytes {
+			return oversized(SemanticStateBoundTermBytes, "confirmed_needs[%d].applied_value is %d bytes, exceeds %d", i, len(entry.AppliedValue), SemanticStateMaxTermBytes)
+		}
 	}
 	var expectedRoles []SemanticRoleSlot
 	if s.Frame != nil {
@@ -899,11 +956,22 @@ type SemanticStateInput struct {
 	// (it needs the referenced question, which the engine holds and this
 	// builder does not).
 	RequestIdentity SemanticRequestIdentity
+	// ConfirmedNeeds is the per-need confirmation ledger to persist on this
+	// result (CHAOS-5639): this turn's own receipt-confirmed structure
+	// members merged over whatever the referenced result's own ledger still
+	// admits. Computed by the caller (mergeConfirmedNeedsLedger,
+	// chaos5639_confirmed_need.go); never re-derived here. nil is treated as
+	// empty.
+	ConfirmedNeeds []ConfirmedNeedEntry
 }
 
 // BuildSemanticState assembles a snapshot from the accepted values. It does
 // not validate; captureSemanticState does.
 func BuildSemanticState(in SemanticStateInput) *PersistedSemanticState {
+	confirmedNeeds := in.ConfirmedNeeds
+	if confirmedNeeds == nil {
+		confirmedNeeds = []ConfirmedNeedEntry{}
+	}
 	state := &PersistedSemanticState{
 		FormatVersion:                SemanticStateFormatVersion,
 		Family:                       in.Outcome.Family,
@@ -917,6 +985,7 @@ func BuildSemanticState(in SemanticStateInput) *PersistedSemanticState {
 		Requirements:                 []SemanticRequirement{},
 		RequirementDerivationVersion: RequirementDerivationVersion,
 		RequestIdentity:              in.RequestIdentity,
+		ConfirmedNeeds:               confirmedNeeds,
 		Validation: SemanticStateValidation{
 			EmittedShape:       in.EmittedShape,
 			GateOutcome:        in.Outcome.Gate.Outcome,

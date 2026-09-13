@@ -473,6 +473,9 @@ type recordingTelemetry struct {
 	windowCarries     []windowCarryRecord
 	kindCarries       []kindCarryRecord
 	planCarryOutcomes []planCarryOutcomeRecord
+	// confirmedNeedLedgers (CHAOS-5639) mirrors the SAME list-not-count
+	// discipline.
+	confirmedNeedLedgers []confirmedNeedLedgerRecord
 	// modelRowsStripped (CHAOS-4355 follow-up) mirrors the SAME
 	// list-not-count discipline.
 	modelRowsStripped []int
@@ -535,6 +538,11 @@ type kindCarryRecord struct {
 	redeemedKind      contractsv1.ContextFabricSubjectKind
 	seedSource        CarrySeedSource
 	viaStoredAncestry bool
+}
+
+type confirmedNeedLedgerRecord struct {
+	outcome        ConfirmedNeedLedgerOutcome
+	appliedMembers []contractsv1.ContextFabricStructureNeedKind
 }
 
 // planCarryOutcomeRecord (CHAOS-5003) is the plan axis's counterpart to
@@ -660,6 +668,10 @@ func (r *recordingTelemetry) RecordKindCarry(_ context.Context, _ storage.Princi
 
 func (r *recordingTelemetry) RecordStructureNeedsDisclosed(_ context.Context, _ storage.Principal, member contractsv1.ContextFabricStructureNeedKind) {
 	r.structureNeedsDisclosed = append(r.structureNeedsDisclosed, member)
+}
+
+func (r *recordingTelemetry) RecordConfirmedNeedLedger(_ context.Context, _ storage.Principal, outcome ConfirmedNeedLedgerOutcome, appliedMembers []contractsv1.ContextFabricStructureNeedKind) {
+	r.confirmedNeedLedgers = append(r.confirmedNeedLedgers, confirmedNeedLedgerRecord{outcome, appliedMembers})
 }
 
 func (r *recordingTelemetry) RecordGatedOfferResolution(_ context.Context, _ storage.Principal, outcome GatedOfferResolutionOutcome) {

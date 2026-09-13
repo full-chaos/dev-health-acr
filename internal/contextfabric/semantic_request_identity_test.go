@@ -130,6 +130,7 @@ func TestSemanticState_TheNamedBoundsImplyTheByteCap(t *testing.T) {
 		FrameVersion:       QuestionFrameVersion,
 		RequestIdentity:    SemanticRequestIdentityOf(validInvestigationRequest(), ""),
 		Roles:              []SemanticRoleSlot{},
+		ConfirmedNeeds:     []ConfirmedNeedEntry{},
 		Validation:         SemanticStateValidation{EmittedShape: ShapeOpen, GateOutcome: FrameGatePassed},
 	}
 	for i := 0; i < SemanticStateMaxRequirements; i++ {
