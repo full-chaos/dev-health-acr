@@ -382,6 +382,7 @@ type recordingTelemetry struct {
 	subjectlessTerminalDeclaredKinds []string
 	subjectlessTerminalOfferedKinds  []string
 	subjectlessTerminalAnswerability []SubjectlessTerminalAnswerability
+	storedAnswerability              []storedAnswerabilityRecord
 	// factScopeExpansions (CHAOS-4099) records every scope-expansion event
 	// verbatim, same list-not-count discipline as the fields around it: a
 	// test asserts the EXACT closed-vocabulary outcome and the exact counts,
@@ -605,6 +606,13 @@ type projectedRowsCountRecord struct {
 	truncated bool
 }
 
+type storedAnswerabilityRecord struct {
+	surface       StoredAnswerabilitySurface
+	answerability StoredAnswerability
+	storedStatus  InvestigationStatus
+	servedStatus  InvestigationStatus
+}
+
 type dualTableFactsRecord struct {
 	dualTableClaims    int
 	secondaryRowsBytes int
@@ -632,6 +640,10 @@ func (r *recordingTelemetry) RecordSubjectlessTerminal(_ context.Context, _ stor
 	r.subjectlessTerminalRefusalBases = append(r.subjectlessTerminalRefusalBases, refusalBasis)
 	r.subjectlessTerminalDeclaredKinds = append(r.subjectlessTerminalDeclaredKinds, declaredKinds)
 	r.subjectlessTerminalOfferedKinds = append(r.subjectlessTerminalOfferedKinds, offeredKinds)
+}
+
+func (r *recordingTelemetry) RecordStoredAnswerability(_ context.Context, _ storage.Principal, surface StoredAnswerabilitySurface, answerability StoredAnswerability, storedStatus InvestigationStatus, servedStatus InvestigationStatus) {
+	r.storedAnswerability = append(r.storedAnswerability, storedAnswerabilityRecord{surface: surface, answerability: answerability, storedStatus: storedStatus, servedStatus: servedStatus})
 }
 
 func (r *recordingTelemetry) RecordSynthesisStatusOverride(_ context.Context, _ storage.Principal, outcome SynthesisStatusOverrideOutcome) {

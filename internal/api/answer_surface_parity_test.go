@@ -287,6 +287,13 @@ func newParityHostedApp(t *testing.T, investigator contextfabric.Investigator, r
 // test rather than exercise it).
 func newParityHostedAppWithBudget(t *testing.T, investigator contextfabric.Investigator, results contextfabric.InvestigationResultStore, resources limits.ResourceBudget) (*App, string) {
 	t.Helper()
+	return newParityHostedAppWithLogs(t, investigator, results, resources, &bytes.Buffer{})
+}
+
+// newParityHostedAppWithLogs is newParityHostedAppWithBudget writing the App's
+// log lines into logs, for a test that reads a line a route emitted.
+func newParityHostedAppWithLogs(t *testing.T, investigator contextfabric.Investigator, results contextfabric.InvestigationResultStore, resources limits.ResourceBudget, logs *bytes.Buffer) (*App, string) {
+	t.Helper()
 	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
 	audit := memory.NewAuditStore()
 	credentials := newMemoryCredentialLifecycle(t, audit, now)
@@ -317,7 +324,7 @@ func newParityHostedAppWithBudget(t *testing.T, investigator contextfabric.Inves
 			Investigator:               investigator,
 			InvestigationResults:       results,
 		},
-	}, testLogger(&bytes.Buffer{}))
+	}, testLogger(logs))
 	if err != nil {
 		t.Fatal(err)
 	}

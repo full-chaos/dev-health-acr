@@ -645,6 +645,31 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 		e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
 		return InvestigationResult{}, false
 	}
+	// CHAOS-5672: a stored clarification is served from the reuse store only
+	// when its persisted accepted reading shows that one of its offers
+	// advances a role of that reading -- the predicate fresh composition
+	// applies (role_answerability.go). The reuse lookup runs before
+	// interpretation, so the reading is the one persisted beside the row,
+	// loaded by the row's own id through the same org-scoped Get.
+	//
+	// A row whose determination is UNAVAILABLE -- no persisted reading, one
+	// that did not decode, or a load that failed -- is declined and falls
+	// through to a fresh investigation. Serving it would serve a
+	// clarification this build may refuse on the fresh path, and nothing on
+	// the row can say which.
+	if candidate.Status == InvestigationClarificationRequired {
+		answerability := e.storedClarificationAnswerability(ctx, principal, candidate)
+		if answerability.Determination != StoredAnswerabilityAnswerable {
+			if e.telemetry != nil {
+				e.telemetry.RecordStoredAnswerability(ctx, principal, StoredAnswerabilitySurfaceReuse, answerability, candidate.Status, "")
+			}
+			e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
+			return InvestigationResult{}, false
+		}
+		if e.telemetry != nil {
+			e.telemetry.RecordStoredAnswerability(ctx, principal, StoredAnswerabilitySurfaceReuse, answerability, candidate.Status, candidate.Status)
+		}
+	}
 	verdict := e.reuseAuthorizationStillHolds(ctx, principal, request, candidate, binding)
 	if verdict.Refused {
 		e.recordReuseOutcome(ctx, principal, verdict.Outcome)
