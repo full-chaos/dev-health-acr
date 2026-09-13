@@ -44,12 +44,14 @@ def _require(cond, msg):
 _require(__debug__, "refusing to run under python -O / PYTHONOPTIMIZE=1: "
          "assert-stripping optimizations would silently weaken this guard")
 
+# Exactly the four vars scripts/trial/common.sh's `trial_wire_common_env`
+# actually exports (common.sh:486-489). The database name is resolved
+# separately -- see `test_trial_pg_database_*` below.
 _ALL_PG_ENV = {
     "ACR_TEST_TRIAL_PG_HOST": "10.0.0.1",
     "ACR_TEST_TRIAL_PG_PORT": "30500",
     "ACR_TEST_TRIAL_PG_USER": "devhealth",
     "ACR_TEST_TRIAL_PG_PASSWORD": "s3cret",
-    "ACR_TEST_TRIAL_PG_DB": "acr_kiac_askdev",
 }
 
 
@@ -77,7 +79,7 @@ def _fake_run(stdout="", returncode=0, stderr="", raises=None):
     return run
 
 
-def test_env_present_requires_every_one_of_the_five_variables(monkeypatch=None):
+def test_env_present_requires_every_one_of_the_four_variables(monkeypatch=None):
     import os
     saved = {k: os.environ.pop(k, None) for k in _ALL_PG_ENV}
     try:
@@ -113,20 +115,54 @@ def test_adapter_is_none_when_env_recipe_is_not_fully_present():
                 os.environ[k] = v
 
 
-def _with_env(fn):
-    """Run `fn()` with the full trial-postgres env recipe set, restoring
-    whatever was there before."""
+def _with_env(fn, database=None):
+    """Run `fn()` with the full trial-postgres CONNECTION recipe set,
+    restoring whatever was there before. `ACR_TRIAL_PG_DATABASE` is always
+    explicitly cleared first (never left over from the ambient environment)
+    and set only when `database` is given -- so a test that omits it
+    deterministically exercises the standing default, never an accidental
+    leftover value."""
     import os
-    saved = {k: os.environ.pop(k, None) for k in _ALL_PG_ENV}
+    keys = (*_ALL_PG_ENV, "ACR_TRIAL_PG_DATABASE")
+    saved = {k: os.environ.pop(k, None) for k in keys}
     os.environ.update(_ALL_PG_ENV)
+    if database is not None:
+        os.environ["ACR_TRIAL_PG_DATABASE"] = database
     try:
         return fn()
     finally:
-        for k in _ALL_PG_ENV:
+        for k in keys:
             os.environ.pop(k, None)
         for k, v in saved.items():
             if v is not None:
                 os.environ[k] = v
+
+
+def test_trial_pg_database_defaults_to_the_standing_k3s_database():
+    def go():
+        _require(sv_bridge._trial_pg_database() == "acr_kiac_askdev", sv_bridge._trial_pg_database())
+    _with_env(go)
+
+
+def test_trial_pg_database_honors_an_explicit_override():
+    def go():
+        _require(sv_bridge._trial_pg_database() == "some_other_db", sv_bridge._trial_pg_database())
+    _with_env(go, database="some_other_db")
+
+
+def test_adapter_connects_to_the_resolved_database_not_a_hardcoded_one():
+    captured = {}
+
+    def spying_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    def go():
+        adapter = sv_bridge.make_persisted_semantic_state_adapter(_FakeSemanticVerdictModule, run=spying_run)
+        adapter("result_x")
+        cmd = captured["cmd"]
+        _require(cmd[cmd.index("-d") + 1] == "some_other_db", cmd)
+    _with_env(go, database="some_other_db")
 
 
 def test_adapter_returns_the_decoded_row():

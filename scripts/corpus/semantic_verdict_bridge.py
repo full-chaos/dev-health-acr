@@ -43,10 +43,11 @@ adapter parameter (semantic_verdict.build_verdict/score/score_branch) is
 built and supplied FROM HERE, never from ask-dev -- ask-dev has no
 connection of its own to acr's trial store, by design (see
 semantic_verdict.py's own module docstring). `make_persisted_semantic_state_adapter`
-reads the SAME trial-postgres env recipe scripts/trial/common.sh already
-establishes (ACR_TEST_TRIAL_PG_HOST/PORT/USER/PASSWORD/DB) and shells out to
-`psql`, the same read-only-query mechanism scripts/trial/common.sh itself
-already uses for a trial-store check (AGENTS.md's Python anti-pattern is why
+reads the SAME trial-postgres CONNECTION recipe scripts/trial/common.sh
+actually exports (ACR_TEST_TRIAL_PG_HOST/PORT/USER/PASSWORD -- common.sh
+exports no database-name variable at all; see `_trial_pg_database()`) and
+shells out to `psql`, the same read-only-query mechanism scripts/trial/common.sh
+itself already uses for a trial-store check (AGENTS.md's Python anti-pattern is why
 this is `psql` via subprocess, never a new Python postgres driver
 dependency -- there is no Python package manifest in this repo to declare
 one in). When the env recipe is not fully present (any hosted CI run that
@@ -260,13 +261,32 @@ def legacy_score(row, bucket, status, subject_substitution=False,
 
 
 # CHAOS-5722: the standing trial-postgres env recipe scripts/trial/common.sh
-# already establishes and exports (see that file's `_kiac_env_PG_*`
-# handling and deploy/local/trial-data.sh's `dsn --env` output) -- reused
-# here verbatim, never a second env-var naming for the same fact.
+# actually EXPORTS (`trial_wire_common_env`, common.sh:486-489) -- HOST/PORT/
+# USER/PASSWORD only. There is no `ACR_TEST_TRIAL_PG_DB`: common.sh's own
+# database-name variable is the differently-named, differently-shaped
+# `ACR_TRIAL_PG_DATABASE` (common.sh:451-477), which common.sh itself never
+# exports either (a bare `: "${ACR_TRIAL_PG_DATABASE:=acr}"` default-assigns
+# it in common.sh's OWN shell scope only -- invisible to this adapter's
+# subprocess unless some caller upstream of common.sh already exported it).
+# See `_trial_pg_database()` below for the separately-resolved database name.
 _TRIAL_PG_ENV_VARS = (
     "ACR_TEST_TRIAL_PG_HOST", "ACR_TEST_TRIAL_PG_PORT", "ACR_TEST_TRIAL_PG_USER",
-    "ACR_TEST_TRIAL_PG_PASSWORD", "ACR_TEST_TRIAL_PG_DB",
+    "ACR_TEST_TRIAL_PG_PASSWORD",
 )
+
+# The standing k3s `acr-trial-data` trial-postgres instance's ACTUAL database
+# (verified live, read-only: `psql -l` on that instance lists exactly
+# `postgres` and `acr_kiac_askdev` -- there is no database named `acr` on
+# this store at all, so common.sh's own `:=acr` default is NOT a usable
+# fallback here; it defaults a DIFFERENT, differently-provisioned local
+# cluster common.sh also targets). `ACR_TRIAL_PG_DATABASE` is read first, so
+# a caller that already exports it (e.g. having sourced common.sh with it
+# set) is honored unchanged; this default applies only when neither is set.
+_DEFAULT_TRIAL_PG_DATABASE = "acr_kiac_askdev"
+
+
+def _trial_pg_database():
+    return os.environ.get("ACR_TRIAL_PG_DATABASE") or _DEFAULT_TRIAL_PG_DATABASE
 
 # acr internal/contextfabric/semantic_state.go: SemanticStateMaxEncodedBytes.
 # A persisted row over this bound is something the engine's OWN writer would
@@ -278,10 +298,15 @@ _MAX_PERSISTED_STATE_BYTES = 65536
 
 
 def trial_postgres_env_present():
-    """Whether the FULL standing trial-postgres env recipe is present --
-    partial credentials (e.g. host+port but no password) are refused the
-    same as none at all, never a best-effort connection attempt with
-    whatever happens to be set."""
+    """Whether the FULL standing trial-postgres CONNECTION recipe
+    (host/port/user/password -- see `_TRIAL_PG_ENV_VARS` above for exactly
+    which four, and why there is no fifth) is present -- partial
+    credentials (e.g. host+port but no password) are refused the same as
+    none at all, never a best-effort connection attempt with whatever
+    happens to be set. The database name is a SEPARATE question (see
+    `_trial_pg_database()`): it always resolves to something (an env
+    override or the standing default), so it is never part of this
+    presence check."""
     return all(os.environ.get(name) for name in _TRIAL_PG_ENV_VARS)
 
 
@@ -316,7 +341,7 @@ def make_persisted_semantic_state_adapter(semantic_verdict_module, run=subproces
     port = os.environ["ACR_TEST_TRIAL_PG_PORT"]
     user = os.environ["ACR_TEST_TRIAL_PG_USER"]
     password = os.environ["ACR_TEST_TRIAL_PG_PASSWORD"]
-    db = os.environ["ACR_TEST_TRIAL_PG_DB"]
+    db = _trial_pg_database()
 
     def persisted_semantic_state(result_id):
         if not isinstance(result_id, str) or not result_id:
