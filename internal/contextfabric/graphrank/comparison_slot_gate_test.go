@@ -620,8 +620,8 @@ func twoNamedSlotGateFrame() *contextfabric.QuestionFrame {
 func slotGateKindPointer(kind contextfabric.SubjectKind) *contextfabric.SubjectKind { return &kind }
 
 // TestEverySlotRunsUnderTheBudgetThePolicyLineAdvertised is the seam between
-// the two halves of the budget, and it is the one the mutation battery found
-// unpinned.
+// the two halves of the budget: the number the policy line advertises and the
+// bound each operand slot actually retrieves under.
 //
 // The claim the shared helper makes is not "the policy line reports a clamped
 // number" -- a test can satisfy that while every slot quietly retrieves under
