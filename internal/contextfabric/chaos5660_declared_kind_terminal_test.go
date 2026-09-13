@@ -75,7 +75,7 @@ func TestTheMeasuredOddTurnShapeTerminates(t *testing.T) {
 		t.Fatal("the predicate still calls this turn answerable -- CHAOS-5637's conjunct passes here (options exist), so the whole fix is the declared-kind conjunct")
 	}
 	request := InvestigationRequest{Options: InvestigationOptions{AllowClarification: true}}
-	status, limitation := resolveTerminalStatus(request, &resolution, false, decision)
+	status, limitation := resolveTerminalStatus(request, &resolution, nil, false, decision)
 	if status != InvestigationNoMatch {
 		t.Fatalf("status = %q, want no_match on turn ONE", status)
 	}
@@ -118,7 +118,7 @@ func TestTheMeasuredEvenTurnShapeTerminates(t *testing.T) {
 		t.Fatalf("Unsatisfiable = false for the measured even-turn shape (offered %v)", decision.OfferedKinds)
 	}
 	request := InvestigationRequest{Options: InvestigationOptions{AllowClarification: true}}
-	status, limitation := resolveTerminalStatus(request, &resolution, true, decision)
+	status, limitation := resolveTerminalStatus(request, &resolution, nil, true, decision)
 	if status != InvestigationNoMatch || limitation != declaredKindTerminalLimitation {
 		t.Fatalf("status/limitation = %q/%q, want no_match with the declared-kind sentence -- a non-empty pool of the WRONG kind is not an ambiguity the caller can resolve", status, limitation)
 	}
@@ -158,7 +158,7 @@ func TestAControlCandidateOfTheDeclaredKindStillClarifies(t *testing.T) {
 		t.Fatal("the predicate refuses a turn that carries a candidate of the declared kind")
 	}
 	request := InvestigationRequest{Options: InvestigationOptions{AllowClarification: true}}
-	status, _ := resolveTerminalStatus(request, &resolution, true, decision)
+	status, _ := resolveTerminalStatus(request, &resolution, nil, true, decision)
 	if status != InvestigationClarificationRequired {
 		t.Fatalf("status = %q, want clarification_required", status)
 	}
@@ -370,7 +370,7 @@ func TestACallerThatDeclinedClarificationKeepsItsOwnSentences(t *testing.T) {
 		t.Fatal("fixture did not reach the unsatisfiable state")
 	}
 	request := InvestigationRequest{Options: InvestigationOptions{AllowClarification: false}}
-	status, limitation := resolveTerminalStatus(request, &resolution, false, decision)
+	status, limitation := resolveTerminalStatus(request, &resolution, nil, false, decision)
 	if status != InvestigationNoMatch {
 		t.Fatalf("status = %q, want no_match", status)
 	}
