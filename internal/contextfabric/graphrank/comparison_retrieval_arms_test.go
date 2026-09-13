@@ -141,20 +141,24 @@ func TestEveryOperandSlotRetrievesThroughEveryPerTermArm(t *testing.T) {
 }
 
 type orderedComparisonSink struct {
-	lines []string
+	lines     []string
+	outcomes  []operandSlotState
+	decisions []string
 }
 
 func (s *orderedComparisonSink) RecordComparisonPolicy(context.Context, ComparisonPolicyEvent) {
 	s.lines = append(s.lines, "policy")
 }
-func (s *orderedComparisonSink) RecordOperandSlot(context.Context, OperandSlotEvent) {
+func (s *orderedComparisonSink) RecordOperandSlot(_ context.Context, event OperandSlotEvent) {
 	s.lines = append(s.lines, "slot")
+	s.outcomes = append(s.outcomes, event.Outcome)
 }
 func (s *orderedComparisonSink) RecordComparisonReceiptBinding(context.Context, ComparisonReceiptBindingEvent) {
 	s.lines = append(s.lines, "binding")
 }
-func (s *orderedComparisonSink) RecordComparisonDecision(context.Context, ComparisonDecisionEvent) {
+func (s *orderedComparisonSink) RecordComparisonDecision(_ context.Context, event ComparisonDecisionEvent) {
 	s.lines = append(s.lines, "decision")
+	s.decisions = append(s.decisions, event.Decision)
 }
 
 func scopedSlotGateFrame() *contextfabric.QuestionFrame {
@@ -175,44 +179,148 @@ func scopedSlotGateFrame() *contextfabric.QuestionFrame {
 	return &frame
 }
 
-func TestThePolicyLineIsTheFirstLineOnEveryComparisonDispatch(t *testing.T) {
+func slotGateHint(subject contextfabric.SubjectRef) contextfabric.SubjectHint {
+	return contextfabric.SubjectHint{Kind: subject.Kind, ID: subject.CanonicalID, Label: subject.Label, Source: "candidate"}
+}
+
+// TestThePolicyLineOpensEveryComparisonDecisionPath enumerates every way a
+// comparison is decided -- each hold reason publishable() and state() can
+// produce, and the published pair -- and requires the policy line first and
+// exactly once on each. A slot count other than two is not a cell: the
+// classifier admits only a pair, so no dispatch can reach it.
+func TestThePolicyLineOpensEveryComparisonDecisionPath(t *testing.T) {
 	t.Parallel()
 
+	alpha := exactMatchNode(contextfabric.SubjectTeam, "team_alpha", "alpha")
+	beta := exactMatchNode(contextfabric.SubjectTeam, "team_beta", "beta")
+	alphaSubject := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team_alpha", Label: "alpha"}
+	twinSubject := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team_alpha_twin", Label: "alpha"}
+	gammaSubject := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team_gamma", Label: "gamma"}
+
 	cells := []struct {
-		name          string
-		frame         *contextfabric.QuestionFrame
-		wantAdmission contextfabric.ComparisonAdmission
-		wantLines     []string
+		name         string
+		frame        *contextfabric.QuestionFrame
+		backend      func() *fakeGraphBackend
+		hints        []contextfabric.SubjectHint
+		wantDecision string
+		// wantOutcome is a slot outcome the fixture must actually produce, so
+		// the cell cannot pass on a hold it did not construct.
+		wantOutcome operandSlotState
 	}{
-		{"admitted named pair", twoNamedSlotGateFrame(), contextfabric.ComparisonAdmittedNamedPair,
-			[]string{"policy", "binding", "slot", "slot", "decision"}},
-		{"scoped hold, before any retrieval", scopedSlotGateFrame(), contextfabric.ComparisonHeldScopedOperand,
-			[]string{"policy", "slot", "slot", "binding", "decision"}},
+		{
+			name: "published pair", frame: twoNamedSlotGateFrame(),
+			backend: func() *fakeGraphBackend {
+				return &fakeGraphBackend{searchResults: map[string][]CandidateNode{"alpha": {alpha}, "beta": {beta}}}
+			},
+			wantDecision: comparisonDecisionPublished, wantOutcome: operandSlotResolved,
+		},
+		{
+			name: "hold: scoped operand, before any retrieval", frame: scopedSlotGateFrame(),
+			backend: func() *fakeGraphBackend {
+				return &fakeGraphBackend{searchResults: map[string][]CandidateNode{"alpha": {alpha}}}
+			},
+			wantDecision: comparisonDecisionHeld, wantOutcome: operandSlotScoped,
+		},
+		{
+			name: "hold: an operand with no candidate", frame: twoNamedSlotGateFrame(),
+			backend: func() *fakeGraphBackend {
+				return &fakeGraphBackend{searchResults: map[string][]CandidateNode{"beta": {beta}}}
+			},
+			wantDecision: comparisonDecisionHeld, wantOutcome: operandSlotNoCandidate,
+		},
+		{
+			name: "hold: an ambiguous operand", frame: twoNamedSlotGateFrame(),
+			backend: func() *fakeGraphBackend {
+				return &fakeGraphBackend{searchResults: map[string][]CandidateNode{
+					"alpha": {
+						candidateNode(contextfabric.SubjectTeam, "team_alpha_one", "Alpha One", 0.5, "*"),
+						candidateNode(contextfabric.SubjectTeam, "team_alpha_two", "Alpha Two", 0.5, "*"),
+					},
+					"beta": {beta},
+				}}
+			},
+			wantDecision: comparisonDecisionHeld, wantOutcome: operandSlotAmbiguous,
+		},
+		{
+			name: "hold: an over-committed operand", frame: twoNamedSlotGateFrame(),
+			backend: func() *fakeGraphBackend {
+				twin := exactMatchNode(contextfabric.SubjectTeam, "team_alpha_twin", "alpha")
+				return &fakeGraphBackend{
+					searchResults: map[string][]CandidateNode{"alpha": {alpha, twin}, "beta": {beta}},
+					exactHints:    map[string]CandidateNode{SubjectKey(alphaSubject): alpha, SubjectKey(twinSubject): twin},
+				}
+			},
+			hints:        []contextfabric.SubjectHint{slotGateHint(alphaSubject), slotGateHint(twinSubject)},
+			wantDecision: comparisonDecisionHeld, wantOutcome: operandSlotOverCommitted,
+		},
+		{
+			name: "hold: an operand committed to another kind", frame: twoNamedSlotGateFrame(),
+			backend: func() *fakeGraphBackend {
+				return &fakeGraphBackend{searchResults: map[string][]CandidateNode{
+					"alpha": {exactMatchNode(contextfabric.SubjectProject, "project_alpha", "alpha")},
+					"beta":  {beta},
+				}}
+			},
+			wantDecision: comparisonDecisionHeld, wantOutcome: operandSlotWrongKind,
+		},
+		{
+			name: "hold: one subject answering both operands", frame: twoNamedSlotGateFrame(),
+			backend: func() *fakeGraphBackend {
+				shared := candidateNode(contextfabric.SubjectTeam, "team_shared", "Shared Team", 1, "*")
+				shared.Mechanism = contextfabric.MatchAlias
+				shared.FromKeyedIdentityLookup = true
+				return &fakeGraphBackend{
+					enableAliasLookup:    true,
+					aliasLookupClaimants: map[string][]CandidateNode{"alpha": {shared}, "beta": {shared}},
+					aliasLookupComplete:  true,
+				}
+			},
+			wantDecision: comparisonDecisionHeld, wantOutcome: operandSlotResolved,
+		},
+		{
+			name: "hold: a selection bound to neither operand", frame: twoNamedSlotGateFrame(),
+			backend: func() *fakeGraphBackend {
+				return &fakeGraphBackend{
+					searchResults: map[string][]CandidateNode{"alpha": {alpha}, "beta": {beta}},
+					exactHints:    map[string]CandidateNode{SubjectKey(gammaSubject): exactMatchNode(contextfabric.SubjectTeam, "team_gamma", "gamma")},
+				}
+			},
+			hints:        []contextfabric.SubjectHint{slotGateHint(gammaSubject)},
+			wantDecision: comparisonDecisionHeld, wantOutcome: operandSlotResolved,
+		},
 	}
 	for _, cell := range cells {
 		t.Run(cell.name, func(t *testing.T) {
 			t.Parallel()
-			if got := contextfabric.ClassifyComparisonOperands(cell.frame).Admission; got != cell.wantAdmission {
-				t.Fatalf("fixture admission = %q, want %q", got, cell.wantAdmission)
-			}
 			sink := &orderedComparisonSink{}
-			backend := &fakeGraphBackend{searchResults: map[string][]CandidateNode{
-				"alpha": {exactMatchNode(contextfabric.SubjectTeam, "team_alpha", "alpha")},
-				"beta":  {exactMatchNode(contextfabric.SubjectTeam, "team_beta", "beta")},
-			}}
-			deps := backend.deps()
+			deps := cell.backend().deps()
 			deps.OperandResolutionSink = sink
+			request := slotGateRequest()
+			request.RequestedScope.SubjectHints = cell.hints
 			if _, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org-1"},
-				slotGateRequest(), testInterpreted("alpha", "beta"), deps, nil, nil, cell.frame, ""); err != nil {
+				request, testInterpreted("alpha", "beta"), deps, nil, nil, cell.frame, ""); err != nil {
 				t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
 			}
-			if len(sink.lines) != len(cell.wantLines) {
-				t.Fatalf("emitted %v, want %v", sink.lines, cell.wantLines)
+			if len(sink.decisions) != 1 || sink.decisions[0] != cell.wantDecision {
+				t.Fatalf("decisions = %v, want [%s] -- the fixture did not reach this decision path", sink.decisions, cell.wantDecision)
 			}
-			for index := range cell.wantLines {
-				if sink.lines[index] != cell.wantLines[index] {
-					t.Errorf("line %d = %q, want %q (emitted %v) -- the policy line must open every dispatch, or a dispatch that never ran is indistinguishable from one that held", index, sink.lines[index], cell.wantLines[index], sink.lines)
+			reached := false
+			for _, outcome := range sink.outcomes {
+				if outcome == cell.wantOutcome {
+					reached = true
 				}
+			}
+			if !reached {
+				t.Fatalf("slot outcomes = %v, want one %q -- the fixture did not construct this hold", sink.outcomes, cell.wantOutcome)
+			}
+			policies := 0
+			for _, line := range sink.lines {
+				if line == "policy" {
+					policies++
+				}
+			}
+			if len(sink.lines) == 0 || sink.lines[0] != "policy" || policies != 1 {
+				t.Errorf("lines = %v, want the policy line first and exactly once -- a decision path without it is indistinguishable from a dispatch that never ran", sink.lines)
 			}
 		})
 	}
