@@ -994,6 +994,44 @@ func (t SlogEngineTelemetry) RecordServerStatusShadow(ctx context.Context, princ
 	t.logger.InfoContext(ctx, "context fabric server status shadow", args...)
 }
 
+// RecordCompletenessAuthority logs at Info, once per investigation that
+// reaches assembly with a plan -- the same denominator
+// RecordServerStatusShadow uses, immediately above.
+//
+// EVERY field on the event reaches this line, per the CHAOS-4085 sink
+// discipline RecordServerStatusShadow already follows. `disposition` is on
+// every line even though `server_state`/`derived` only ever carry a real
+// value for the `answer` disposition: without it, "this turn was not an
+// answer" and "this turn was an answer with no semantic state" both read as
+// server_state="" derived=false, and the two are different facts a reader of
+// the series needs to tell apart.
+//
+// `version` is its own series identifier, distinct from
+// ServerStatusShadowVersion: this derivation reads the outcome-derivation
+// authority the design record names, not that gate's frame-obligations
+// proxy, so the two series must never be spliced together -- see
+// CompletenessAuthorityVersion's own doc comment.
+//
+// SanitizeLogAttr covers every string field here, the same sink discipline
+// this file already applies to RecordServerStatusShadow; there is no
+// numeric field on this event; content-safe by construction (closed
+// enums and booleans only), per CompletenessAuthorityObservation's own doc
+// comment.
+func (t SlogEngineTelemetry) RecordCompletenessAuthority(ctx context.Context, principal storage.Principal, event CompletenessAuthorityObservation) {
+	args := []any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"model_status", SanitizeLogAttr(string(event.ModelStatus)),
+		"disposition", SanitizeLogAttr(string(event.Disposition)),
+		"basis", SanitizeLogAttr(string(event.Basis)),
+		"server_state", SanitizeLogAttr(string(event.ServerState)),
+		"derived", event.Derived,
+		"disagreed", event.Disagreed,
+		"version", SanitizeLogAttr(event.Version),
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric completeness authority", args...)
+}
+
 // RecordFrameValidation (CHAOS-4452 stage 2, §13.6) logs at Info, once per
 // frame that reaches validation -- INCLUDING VALID ONES, because the
 // denominator has to be countable. An event that fires only on failure

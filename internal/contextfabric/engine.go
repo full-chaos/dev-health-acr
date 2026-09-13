@@ -117,6 +117,22 @@ type EngineOptions struct {
 	// genkitruntime.DefaultSchemaVersion), same reasoning and same
 	// fail-closed convention as ReusePromptVersions immediately above.
 	ReuseVersionAuthorities ReuseVersionAuthorities
+	// ServerCompletenessAuthorityEnabled turns ON the gated FLIP in
+	// ApplyServerCompletenessAuthority: when true, the outcome-derivation
+	// authority may DOWNGRADE a model-claimed `complete` to
+	// `partial`/`degraded`, never the reverse and never a non-answer
+	// disposition. See that function's own doc comment for the two
+	// guardrails.
+	//
+	// ZERO VALUE = DISABLED, same "ships dark" convention as
+	// RegimeAOffersDisabled above and Config.StructurePriorsEnabled: the
+	// measurement (DeriveCompletenessAuthority, reported through
+	// EngineTelemetry.RecordCompletenessAuthority) runs and is recorded
+	// unconditionally either way, restarting the shadow series
+	// status_shadow.go's ServerStatusShadowVersion started under a new
+	// version -- this field gates ONLY whether the measured correction is
+	// also served.
+	ServerCompletenessAuthorityEnabled bool
 }
 
 type EngineDependencies struct {
@@ -822,6 +838,30 @@ type EngineTelemetry interface {
 	// Content-safe by construction: ServerStatusShadow carries two status
 	// enums, one closed basis token, two booleans and a version constant.
 	RecordServerStatusShadow(ctx context.Context, principal storage.Principal, event ServerStatusShadow)
+	// RecordCompletenessAuthority reports the OUTCOME-DERIVATION authority's
+	// own completeness observation beside the model-authored status,
+	// restarting the shadow series RecordServerStatusShadow started under a
+	// NEW version: that gate reads a frame-obligations proxy stated as such
+	// in its own header; this one reads the requirement-outcome derivation
+	// itself (DeriveContextFabricAnswerCompletenessState over the served
+	// result's own outcome rows).
+	//
+	// Fires from finalizeServed (budget_assertion.go), the ONE point every
+	// serving path is downstream of -- the decisive path, every veto/
+	// refusal/clarification exit, AND the reuse path, once each per served
+	// result, for the same reason its own header already gives for the
+	// budget assertion it wraps.
+	//
+	// REPORTS UNCONDITIONALLY, independent of
+	// EngineOptions.ServerCompletenessAuthorityEnabled: the measurement
+	// must exist whether or not the flip is live, so a disagreement rate
+	// can be read before the flip is ever turned on.
+	//
+	// Content-safe by construction: CompletenessAuthorityObservation
+	// carries two closed status/disposition enums, one closed basis token,
+	// two booleans and a version constant -- no free text, so no numeric or
+	// string sanitization applies to this sink.
+	RecordCompletenessAuthority(ctx context.Context, principal storage.Principal, event CompletenessAuthorityObservation)
 	// RecordPlanCarry (CHAOS-4736, seam 7) reports the ONE point where a
 	// prior turn's family replaces this turn's, which is the only place a
 	// carried route is observable.
@@ -1067,39 +1107,40 @@ type CohortRankedEvent struct {
 // Engine coordinates one open-ended investigation. It deliberately composes
 // capabilities rather than matching the question against a route/plan table.
 type Engine struct {
-	interpreter                QuestionInterpreter
-	graph                      GraphReader
-	facts                      CanonicalFactReader
-	synthesizer                AnswerSynthesizer
-	results                    InvestigationResultStore
-	telemetry                  EngineTelemetry
-	reuseGate                  AnswerReuseGate
-	reuseSnapshotter           SourceWatermarkSnapshotter
-	reuseEpochSnapshotter      RebuildEpochSnapshotter
-	reuseModelIdentityResolver ReuseModelIdentityResolver
-	reuseProjectionVersion     string
-	reuseModelIdentities       []string
-	reuseRetrievalIdentity     ReuseRetrievalIdentity
-	reusePromptVersions        ReusePromptVersions
-	reuseVersionAuthorities    ReuseVersionAuthorities
-	clarificationSelectionSink ClarificationSelectionSink
-	structureSelectionSink     StructureSelectionSink
-	handleVerifier             HandleVerifier
-	anchorVerifier             AnchorVerifier
-	anchorMembershipVerifier   AnchorMembershipVerifier
-	candidateVerifier          CandidateVerifier
-	priorConsultant            PriorConsultant
-	priorHandleGrammarChecker  HandleGrammarChecker
-	offerPhraser               OfferPhraser
-	requirements               RequirementDeriver
-	observationKeys            ObservationKeyDeclarer
-	regimeAOffersDisabled      bool
-	maxItems                   int
-	maxSerializedBytes         int64
-	synthesisDeadlineReserve   time.Duration
-	serviceVersion             string
-	now                        func() time.Time
-	newResultID                func() string
+	interpreter                        QuestionInterpreter
+	graph                              GraphReader
+	facts                              CanonicalFactReader
+	synthesizer                        AnswerSynthesizer
+	results                            InvestigationResultStore
+	telemetry                          EngineTelemetry
+	reuseGate                          AnswerReuseGate
+	reuseSnapshotter                   SourceWatermarkSnapshotter
+	reuseEpochSnapshotter              RebuildEpochSnapshotter
+	reuseModelIdentityResolver         ReuseModelIdentityResolver
+	reuseProjectionVersion             string
+	reuseModelIdentities               []string
+	reuseRetrievalIdentity             ReuseRetrievalIdentity
+	reusePromptVersions                ReusePromptVersions
+	reuseVersionAuthorities            ReuseVersionAuthorities
+	clarificationSelectionSink         ClarificationSelectionSink
+	structureSelectionSink             StructureSelectionSink
+	handleVerifier                     HandleVerifier
+	anchorVerifier                     AnchorVerifier
+	anchorMembershipVerifier           AnchorMembershipVerifier
+	candidateVerifier                  CandidateVerifier
+	priorConsultant                    PriorConsultant
+	priorHandleGrammarChecker          HandleGrammarChecker
+	offerPhraser                       OfferPhraser
+	requirements                       RequirementDeriver
+	observationKeys                    ObservationKeyDeclarer
+	regimeAOffersDisabled              bool
+	serverCompletenessAuthorityEnabled bool
+	maxItems                           int
+	maxSerializedBytes                 int64
+	synthesisDeadlineReserve           time.Duration
+	serviceVersion                     string
+	now                                func() time.Time
+	newResultID                        func() string
 }
 
 func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine, error) {
@@ -1133,14 +1174,15 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		requirements:               dependencies.Requirements,
 		observationKeys:            dependencies.ObservationKeys,
 		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
-		reuseRetrievalIdentity:   options.ReuseRetrievalIdentity,
-		reusePromptVersions:      options.ReusePromptVersions,
-		reuseVersionAuthorities:  options.ReuseVersionAuthorities,
-		regimeAOffersDisabled:    options.RegimeAOffersDisabled,
-		maxItems:                 options.MaxItems,
-		maxSerializedBytes:       options.MaxSerializedBytes,
-		synthesisDeadlineReserve: options.SynthesisDeadlineReserve,
-		serviceVersion:           options.ServiceVersion, now: options.Now, newResultID: options.NewResultID,
+		reuseRetrievalIdentity:             options.ReuseRetrievalIdentity,
+		reusePromptVersions:                options.ReusePromptVersions,
+		reuseVersionAuthorities:            options.ReuseVersionAuthorities,
+		regimeAOffersDisabled:              options.RegimeAOffersDisabled,
+		serverCompletenessAuthorityEnabled: options.ServerCompletenessAuthorityEnabled,
+		maxItems:                           options.MaxItems,
+		maxSerializedBytes:                 options.MaxSerializedBytes,
+		synthesisDeadlineReserve:           options.SynthesisDeadlineReserve,
+		serviceVersion:                     options.ServiceVersion, now: options.Now, newResultID: options.NewResultID,
 	}, nil
 }
 

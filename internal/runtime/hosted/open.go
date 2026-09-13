@@ -910,6 +910,8 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// from request.config so the two can never be configured apart.
 		MaxItems:           request.config.MaxItems,
 		MaxSerializedBytes: int64(request.config.MaxSerializedBytes),
+		// See Config.ServerCompletenessAuthorityEnabled's own doc comment.
+		ServerCompletenessAuthorityEnabled: request.config.ServerCompletenessAuthorityEnabled,
 		// The reserved synthesis deadline (decision D5, "non-negotiable
 		// under any option"). DERIVED from the request timeout rather than
 		// configured beside it: the whole request shares that one timeout,

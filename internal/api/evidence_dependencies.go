@@ -24,6 +24,11 @@ type AppConfig struct {
 	MaxOutputTokens          int
 	MaxSerializedBytes       int
 	RevokedClientVersions    []string
+	// ServerCompletenessAuthorityEnabled mirrors
+	// config.Config.ServerCompletenessAuthorityEnabled's own doc comment --
+	// read live by the by-id investigation-result route, since a stored
+	// row never reaches the engine's own gated flip (finalizeServed).
+	ServerCompletenessAuthorityEnabled bool
 }
 
 type Dependencies struct {

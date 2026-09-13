@@ -139,6 +139,29 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 				"served_status", string(result.Status))
 		}
 		result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
+		// The outcome-derivation completeness authority, re-evaluated HERE
+		// against the row's OWN outcome rows -- a stored row never reaches
+		// finalizeServed (this route reads storage directly, the same
+		// reason the two repairs immediately above exist), so without this
+		// a by-id read would silently be the one serving surface the
+		// authority never measures or corrects, no matter how long the
+		// engine-served surfaces have carried it.
+		//
+		// The knob is read LIVE, from the deployment's current
+		// configuration, not from anything baked into the row: a result
+		// saved before the flip was ever turned on must not keep serving
+		// a stale answer forever just because Save already ran once.
+		completenessAuthority := contextfabric.DeriveCompletenessAuthority(result)
+		a.logger.InfoContext(r.Context(), "context fabric completeness authority",
+			"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
+			"model_status", contextfabric.SanitizeLogAttr(string(completenessAuthority.ModelStatus)),
+			"disposition", contextfabric.SanitizeLogAttr(string(completenessAuthority.Disposition)),
+			"basis", contextfabric.SanitizeLogAttr(string(completenessAuthority.Basis)),
+			"server_state", contextfabric.SanitizeLogAttr(string(completenessAuthority.ServerState)),
+			"derived", completenessAuthority.Derived,
+			"disagreed", completenessAuthority.Disagreed,
+			"version", contextfabric.SanitizeLogAttr(completenessAuthority.Version))
+		result = contextfabric.ApplyServerCompletenessAuthority(result, a.config.ServerCompletenessAuthorityEnabled, completenessAuthority)
 		// The consumer projection is served from THIS route, through the
 		// same answerprojection.Project the MCP tool calls (CHAOS-3746
 		// codex round-1 F2). Before this, the API only ever returned the
