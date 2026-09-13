@@ -21,7 +21,9 @@ package graphrank
 
 import (
 	"context"
+	"sort"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -474,6 +476,13 @@ func resolveNamedComparison(
 ) (contextfabric.SubjectResolution, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
 	run := comparisonResolutionRun{admission: comparison.Admission}
 
+	// THE POLICY LINE FIRES AT DISPATCH, before every other line and before
+	// anything can fail or return -- the scoped hold included. If it is absent
+	// from a rig's logs for a question that should be a comparison, the
+	// dispatch did not happen: the one failure that leaves no other trace,
+	// because the flat pooled path serves a perfectly well-formed answer.
+	recordComparisonPolicy(ctx, principal, request, deps, comparison)
+
 	// THE SCOPED HOLD FIRES BEFORE ANY RETRIEVAL. Not after a failed attempt to
 	// resolve the anchor, and not after reading anything: the pair is refused
 	// on its VARIANT, which is knowable from the frame alone. Admitting it
@@ -500,18 +509,24 @@ func resolveNamedComparison(
 		return resolution, bases, digests, nil
 	}
 
-	// THE POLICY LINE FIRES AT DISPATCH, before anything can fail. If it is
-	// absent from a rig's logs for a question that should be a comparison,
-	// the dispatch did not happen -- the one failure that leaves no other
-	// trace, because the flat pooled path serves a perfectly well-formed
-	// answer.
-	recordComparisonPolicy(ctx, principal, request, deps, comparison)
+	// ONE KEYED IDENTITY READ AND ONE EXACT-NAME FETCH FOR THE WHOLE
+	// COMPARISON. Every operand retrieves through the same per-term arms the
+	// single-subject path runs, and two of those arms are request-scoped: the
+	// alias read (and the identity-universe read behind it) is declared at
+	// most once per request, and the exact-name fetch enumerates the same
+	// population whichever operand asks. Each is read once here and each slot
+	// takes only the part keyed by its own terms.
+	deps = withSharedExactNameCandidates(deps)
+	aliases, err := lookupComparisonAliasClaimants(ctx, principal, request, deps, comparison.Slots)
+	if err != nil {
+		return contextfabric.SubjectResolution{}, nil, nil, err
+	}
 
 	// RECEIPTS BIND BEFORE ANY SLOT RESOLVES. The binding decision is about
 	// the current question's operand terms, and it must be complete before a
 	// slot's own retrieval can influence it -- otherwise a slot that happened
 	// to retrieve the selected subject anyway would look like a binding.
-	preCommitted, unbound, err := bindReceiptsToSlots(ctx, principal, request, deps, comparison.Slots, contest)
+	preCommitted, unbound, err := bindReceiptsToSlots(ctx, principal, request, deps, comparison.Slots, contest, aliases)
 	if err != nil {
 		return contextfabric.SubjectResolution{}, nil, nil, err
 	}
@@ -564,7 +579,7 @@ func resolveNamedComparison(
 		// declared ExactlyOnePerPass -- would land in one group and the
 		// per-candidate decision lines would collide on index.
 		slotRun, err := resolveOneOperandSlot(ctx, principal, request, deps, slot, preCommitted[index],
-			contest, index+1, searchIndexBase, searchTermTotal)
+			contest, aliases, index+1, searchIndexBase, searchTermTotal)
 		searchIndexBase += len(slot.Terms)
 		if err != nil {
 			return contextfabric.SubjectResolution{}, nil, nil, err
@@ -701,6 +716,9 @@ func resolveOneOperandSlot(
 	slot contextfabric.ComparisonOperandSlot,
 	preCommitted []contextfabric.SubjectCandidate,
 	contest *contestAdmission,
+	// aliases is the comparison's one keyed identity read; this slot merges
+	// only the claimants keyed by its own terms.
+	aliases comparisonAliasClaimants,
 	// pass is this slot's own trace pass number, 1-based in slot order. See
 	// the call site for why two operands cannot share one.
 	pass int,
@@ -743,6 +761,42 @@ func resolveOneOperandSlot(
 	if err != nil {
 		return operandSlotRun{}, err
 	}
+	searchTruncated := retrieval.searchTruncated
+	retrievalDegraded := retrieval.retrievalDegraded
+
+	// EVERY PER-TERM ARM THE SINGLE-SUBJECT PATH RUNS, in its order, over THIS
+	// SLOT'S OWN TERMS: ordinary search above, then the keyed alias claimants,
+	// then the kind-scoped search for the kind the question stated for this
+	// operand, then the exact-name arm. An operand reachable only through one
+	// of these arms would otherwise vanish from its own pool and hold a pair
+	// the single-subject path resolves. The whole-question arms stay off:
+	// they are not per-operand, and that absence is the no-read hold.
+	for _, term := range slot.Terms {
+		for _, nodes := range aliases.claimantsForTerm(term) {
+			// allowExactMatch=true and no vector similarity: the same
+			// treatment the single-subject path gives a keyed identity read.
+			_, _ = mergeSearchResults(ctx, principal, request, deps, term, nodes,
+				candidatesBySubject, observationParentKey, observationBlocked, true, nil, identity, identityTerms, contest)
+		}
+	}
+	// The slot's own stated kind is its only hint: a caller-supplied expected
+	// kind names the question's kinds, not which operand each belongs to.
+	if isAliasLookupScopedKind(slot.Kind) {
+		_, _, hintedTruncated, hintedDegraded, hintedErr := applyKindHintedPoolSearch(ctx, principal, request, deps, slot.Terms,
+			candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms,
+			[]contextfabric.SubjectKind{slot.Kind}, contest, nil)
+		if hintedErr != nil {
+			return operandSlotRun{}, hintedErr
+		}
+		searchTruncated = searchTruncated || hintedTruncated
+		retrievalDegraded = retrievalDegraded || hintedDegraded
+	}
+	_, _, exactNameTruncated, exactNameErr := applyExactNameArm(ctx, principal, request, deps, slot.Terms,
+		candidatesBySubject, observationParentKey, observationBlocked, identity, identityTerms, contest)
+	if exactNameErr != nil {
+		return operandSlotRun{}, exactNameErr
+	}
+	searchTruncated = searchTruncated || exactNameTruncated
 
 	gate := deps.CommitGatePolicy
 	if gate == (CommitGatePolicy{}) {
@@ -753,12 +807,9 @@ func resolveOneOperandSlot(
 	}
 	effectiveSearchLimit := enforcedCandidateBudget(request, deps)
 
-	// aliasIdentityComplete is FALSE for a slot, deliberately and
-	// conservatively. It is a claim that a keyed identity read enumerated the
-	// whole population, and no such read has run for this operand's terms on
-	// this path. False cannot make anything commit that otherwise would not --
-	// it only withholds the identity fast path's completeness bump, which is
-	// the safe direction for a claim nobody has proven here.
+	// aliasIdentityComplete is the comparison's keyed identity read's own
+	// completeness claim, and false when no such read ran -- the same value
+	// the single-subject path hands its gates for the same read.
 	//
 	// evidenceCensusAttestedKey is "" and the census is never invoked: that is
 	// the no-read hold, stated as an absence rather than a flag.
@@ -777,10 +828,10 @@ func resolveOneOperandSlot(
 	resolution, bases, digests := resolveFromMergedCandidatesWithAnchorSlot(
 		candidatesBySubject, observationParentKey, observationBlocked,
 		request.Options.MaxSubjectCandidates, request.Options.AllowClarification,
-		retrieval.searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold,
-		retrieval.retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK,
+		searchTruncated, vectorArmSimilarity, deps.VectorMarginCommitThreshold,
+		retrievalDegraded, effectiveSearchLimit, deps.CalibratedTopK,
 		unscopedVisibilityFor(principal, request), gate, identity, identityTerms,
-		false, deps.ResolutionTracer, request.RequestID, "", false, false,
+		aliases.complete, deps.ResolutionTracer, request.RequestID, "", false, false,
 		[]contextfabric.SubjectKind{slot.Kind}, anchorReservedSlot{}, nil, pass,
 	)
 
@@ -791,7 +842,7 @@ func resolveOneOperandSlot(
 		bases:             bases,
 		digests:           digests,
 		receiptBound:      len(preCommitted) > 0,
-		retrievalDegraded: retrieval.retrievalDegraded,
+		retrievalDegraded: retrievalDegraded,
 		// Recorded from the value HANDED TO the resolver, not re-derived, so
 		// the line reports the bound that ran rather than a second opinion
 		// about what it should have been.
@@ -834,6 +885,7 @@ func bindReceiptsToSlots(
 	deps ResolveDeps,
 	slots []contextfabric.ComparisonOperandSlot,
 	contest *contestAdmission,
+	aliases comparisonAliasClaimants,
 ) (map[int][]contextfabric.SubjectCandidate, int, error) {
 	bound := make(map[int][]contextfabric.SubjectCandidate, len(slots))
 	unbound := 0
@@ -870,7 +922,7 @@ func bindReceiptsToSlots(
 			continue
 		}
 
-		matches := matchingSlotsForReceipt(principal, request, deps, slots, subject, node)
+		matches := matchingSlotsForReceipt(principal, request, deps, slots, subject, node, aliases)
 		if len(matches) != 1 {
 			unbound++
 			continue
@@ -918,6 +970,7 @@ func matchingSlotsForReceipt(
 	slots []contextfabric.ComparisonOperandSlot,
 	subject contextfabric.SubjectRef,
 	node CandidateNode,
+	aliases comparisonAliasClaimants,
 ) []int {
 	var matches []int
 	for index, slot := range slots {
@@ -946,6 +999,113 @@ func matchingSlotsForReceipt(
 				break
 			}
 		}
+		if len(matches) > 0 && matches[len(matches)-1] == index {
+			continue
+		}
+		// THE KEYED IDENTITY READ IS A WITNESS TOO. The slot's own retrieval
+		// admits a subject the alias read claims for one of its terms, so
+		// binding must accept that same claim -- otherwise a subject whose
+		// alias lives only in the identity source, not on the graph node, is
+		// retrievable for the operand and unbindable to it.
+		if aliases.claims(slot.Terms, subject) {
+			matches = append(matches, index)
+		}
 	}
 	return matches
+}
+
+// comparisonAliasClaimants is the comparison's one keyed identity read.
+type comparisonAliasClaimants struct {
+	claimantsByTerm map[string][]CandidateNode
+	complete        bool
+}
+
+// claimantsForTerm returns every claimant list keyed by a term that
+// normalizes to the same alias as term. The read keys each normalization class
+// by the first spelling it saw, so an operand spelled differently from the
+// other operand's same alias still finds its own claimants.
+func (a comparisonAliasClaimants) claimantsForTerm(term string) [][]CandidateNode {
+	normalized := NormalizeAliasTerm(term)
+	if normalized == "" {
+		return nil
+	}
+	keys := make([]string, 0, len(a.claimantsByTerm))
+	for key := range a.claimantsByTerm {
+		if NormalizeAliasTerm(key) == normalized {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	lists := make([][]CandidateNode, 0, len(keys))
+	for _, key := range keys {
+		lists = append(lists, a.claimantsByTerm[key])
+	}
+	return lists
+}
+
+// claims reports whether the read names subject as a claimant for any of terms.
+func (a comparisonAliasClaimants) claims(terms []string, subject contextfabric.SubjectRef) bool {
+	want := SubjectKey(subject)
+	for _, term := range terms {
+		for _, nodes := range a.claimantsForTerm(term) {
+			for _, node := range nodes {
+				if claimant, ok := NodeSubject(node); ok && SubjectKey(claimant) == want {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// lookupComparisonAliasClaimants runs the keyed identity read ONCE over every
+// operand's terms, traced exactly as the single-subject path traces it. A
+// backend without the read returns the zero value: no claimants, not complete.
+func lookupComparisonAliasClaimants(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, slots []contextfabric.ComparisonOperandSlot) (comparisonAliasClaimants, error) {
+	if deps.AliasLookup == nil {
+		return comparisonAliasClaimants{}, nil
+	}
+	seen := make(map[string]struct{})
+	var terms []string
+	for _, slot := range slots {
+		for _, term := range slot.Terms {
+			if strings.TrimSpace(term) == "" {
+				continue
+			}
+			if _, dup := seen[term]; dup {
+				continue
+			}
+			seen[term] = struct{}{}
+			terms = append(terms, term)
+		}
+	}
+	if len(terms) == 0 {
+		return comparisonAliasClaimants{}, nil
+	}
+	claimantsByTerm, complete, err := deps.AliasLookup(ctx, principal.OrgID, terms)
+	if err != nil {
+		return comparisonAliasClaimants{}, err
+	}
+	traceAliasLookup(deps, request.RequestID, complete, claimantsByTerm)
+	return comparisonAliasClaimants{claimantsByTerm: claimantsByTerm, complete: complete}, nil
+}
+
+// withSharedExactNameCandidates makes the exact-name population a
+// once-per-comparison read: every operand filters the same fetched set.
+func withSharedExactNameCandidates(deps ResolveDeps) ResolveDeps {
+	fetch := deps.ExactNameCandidates
+	if fetch == nil {
+		return deps
+	}
+	var (
+		once      sync.Once
+		nodes     []CandidateNode
+		truncated bool
+		fetchErr  error
+	)
+	deps.ExactNameCandidates = func(ctx context.Context) ([]CandidateNode, bool, error) {
+		once.Do(func() { nodes, truncated, fetchErr = fetch(ctx) })
+		return nodes, truncated, fetchErr
+	}
+	return deps
 }

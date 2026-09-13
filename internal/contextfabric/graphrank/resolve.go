@@ -3105,20 +3105,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		}
 		aliasIdentityComplete = complete
 		aliasClaimantsByTerm = claimantsByTerm
-		if deps.ResolutionTracer != nil {
-			matched := 0
-			for _, nodes := range claimantsByTerm {
-				matched += len(nodes)
-			}
-			// THIS event firing at all is C1 (AliasLookup was invoked);
-			// AliasLookupMatchedClaimants>0 is C2 (it found a match) --
-			// team-lead's reachability question, read from the trace, not
-			// inferred from a passing unit test.
-			deps.ResolutionTracer.Trace(ResolutionTraceEvent{
-				RequestID: request.RequestID, Stage: "alias_lookup",
-				AliasLookupComplete: complete, AliasLookupMatchedClaimants: matched,
-			})
-		}
+		traceAliasLookup(deps, request.RequestID, complete, claimantsByTerm)
 		for term, nodes := range claimantsByTerm {
 			// allowExactMatch=true: these are the SAME genuine
 			// caller-derived terms the per-term Search loop above already
@@ -4869,4 +4856,21 @@ func retrieveCandidatesForTerms(
 		outcome.authzDropped += termAuthzDropped
 	}
 	return outcome, nil
+}
+
+// traceAliasLookup emits the alias_lookup stage for one keyed identity read.
+// The event firing at all shows the read was invoked; a positive
+// matched-claimant count shows it found a match.
+func traceAliasLookup(deps ResolveDeps, requestID string, complete bool, claimantsByTerm map[string][]CandidateNode) {
+	if deps.ResolutionTracer == nil {
+		return
+	}
+	matched := 0
+	for _, nodes := range claimantsByTerm {
+		matched += len(nodes)
+	}
+	deps.ResolutionTracer.Trace(ResolutionTraceEvent{
+		RequestID: requestID, Stage: "alias_lookup",
+		AliasLookupComplete: complete, AliasLookupMatchedClaimants: matched,
+	})
 }

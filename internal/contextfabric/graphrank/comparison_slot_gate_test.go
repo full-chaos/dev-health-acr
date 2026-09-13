@@ -109,7 +109,7 @@ func TestOneOperandSlotCommitsItsLoneExactMatch(t *testing.T) {
 		Kind: contextfabric.SubjectTeam, Terms: []string{"alpha"},
 	}
 
-	run, err := resolveOneOperandSlot(context.Background(), storage.Principal{OrgID: "org-1"}, slotGateRequest(), deps, slot, nil, nil, 1, 0, len(slot.Terms))
+	run, err := resolveOneOperandSlot(context.Background(), storage.Principal{OrgID: "org-1"}, slotGateRequest(), deps, slot, nil, nil, comparisonAliasClaimants{}, 1, 0, len(slot.Terms))
 	if err != nil {
 		t.Fatalf("resolveOneOperandSlot() error = %v", err)
 	}
@@ -153,7 +153,7 @@ func TestOneOperandSlotSeesOnlyItsOwnTerms(t *testing.T) {
 		Position: 0, Variant: contextfabric.ComparisonOperandNamed,
 		Kind: contextfabric.SubjectTeam, Terms: []string{"alpha"},
 	}
-	run, err := resolveOneOperandSlot(context.Background(), storage.Principal{OrgID: "org-1"}, slotGateRequest(), deps, slot, nil, nil, 1, 0, len(slot.Terms))
+	run, err := resolveOneOperandSlot(context.Background(), storage.Principal{OrgID: "org-1"}, slotGateRequest(), deps, slot, nil, nil, comparisonAliasClaimants{}, 1, 0, len(slot.Terms))
 	if err != nil {
 		t.Fatalf("resolveOneOperandSlot() error = %v", err)
 	}
@@ -264,11 +264,11 @@ func TestOneSlotsAmbiguityDoesNotSuppressTheOthersCommit(t *testing.T) {
 		},
 	}
 
-	runA, err := resolveOneOperandSlot(context.Background(), storage.Principal{OrgID: "org-1"}, slotGateRequest(), deps, comparison.Slots[0], nil, nil, 1, 0, len(comparison.Slots[0].Terms)+len(comparison.Slots[1].Terms))
+	runA, err := resolveOneOperandSlot(context.Background(), storage.Principal{OrgID: "org-1"}, slotGateRequest(), deps, comparison.Slots[0], nil, nil, comparisonAliasClaimants{}, 1, 0, len(comparison.Slots[0].Terms)+len(comparison.Slots[1].Terms))
 	if err != nil {
 		t.Fatalf("slot A: %v", err)
 	}
-	runB, err := resolveOneOperandSlot(context.Background(), storage.Principal{OrgID: "org-1"}, slotGateRequest(), deps, comparison.Slots[1], nil, nil, 2, len(comparison.Slots[0].Terms), len(comparison.Slots[0].Terms)+len(comparison.Slots[1].Terms))
+	runB, err := resolveOneOperandSlot(context.Background(), storage.Principal{OrgID: "org-1"}, slotGateRequest(), deps, comparison.Slots[1], nil, nil, comparisonAliasClaimants{}, 2, len(comparison.Slots[0].Terms), len(comparison.Slots[0].Terms)+len(comparison.Slots[1].Terms))
 	if err != nil {
 		t.Fatalf("slot B: %v", err)
 	}
@@ -407,7 +407,7 @@ func TestEveryComparisonAdmissionSiteConsultsTheContest(t *testing.T) {
 		// CONTROL: admitting. The fixture must retrieve, or the refusing arm
 		// below proves nothing.
 		admitted, err := resolveOneOperandSlot(context.Background(), storage.Principal{OrgID: "org-1"}, slotGateRequest(), deps, slot, nil,
-			newContestAdmission(contestScope{Source: contestScopeNone}), 1, 0, len(slot.Terms))
+			newContestAdmission(contestScope{Source: contestScopeNone}), comparisonAliasClaimants{}, 1, 0, len(slot.Terms))
 		if err != nil {
 			t.Fatalf("resolveOneOperandSlot() control error = %v", err)
 		}
@@ -417,7 +417,7 @@ func TestEveryComparisonAdmissionSiteConsultsTheContest(t *testing.T) {
 
 		contest := refusing()
 		run, err := resolveOneOperandSlot(context.Background(), storage.Principal{OrgID: "org-1"}, slotGateRequest(), deps, slot, nil,
-			contest, 1, 0, len(slot.Terms))
+			contest, comparisonAliasClaimants{}, 1, 0, len(slot.Terms))
 		if err != nil {
 			t.Fatalf("resolveOneOperandSlot() error = %v", err)
 		}
@@ -471,7 +471,7 @@ func TestEveryComparisonAdmissionSiteConsultsTheContest(t *testing.T) {
 			// nothing must bind, or absence below is telling us about the
 			// matcher rather than about the contest.
 			bound, unbound, err := bindReceiptsToSlots(context.Background(), storage.Principal{OrgID: "org-1"}, request, deps,
-				[]contextfabric.ComparisonOperandSlot{slot}, newContestAdmission(contestScope{Source: contestScopeNone}))
+				[]contextfabric.ComparisonOperandSlot{slot}, newContestAdmission(contestScope{Source: contestScopeNone}), comparisonAliasClaimants{})
 			if err != nil {
 				t.Fatalf("bindReceiptsToSlots() control error = %v", err)
 			}
@@ -481,7 +481,7 @@ func TestEveryComparisonAdmissionSiteConsultsTheContest(t *testing.T) {
 
 			contest := refusing()
 			bound, unbound, err = bindReceiptsToSlots(context.Background(), storage.Principal{OrgID: "org-1"}, request, deps,
-				[]contextfabric.ComparisonOperandSlot{slot}, contest)
+				[]contextfabric.ComparisonOperandSlot{slot}, contest, comparisonAliasClaimants{})
 			if err != nil {
 				t.Fatalf("bindReceiptsToSlots() error = %v", err)
 			}
