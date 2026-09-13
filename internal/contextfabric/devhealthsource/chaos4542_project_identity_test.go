@@ -177,7 +177,12 @@ func TestChaos4542_CheckpointMarkerMovedWithTheJoin(t *testing.T) {
 	// else in this file's test suite forces it (a guard that only checks
 	// the two literals stay in sync does not know a THIRD literal was
 	// owed). See the constant's own doc comment.
-	if want := "devhealthsource.teams_projects.v10"; TeamsProjectsSourceVersion != want {
+	//
+	// v10 -> v11 is CHAOS-5675: a project entity gains an alias derived from
+	// its own URL. Same trap again -- the project rows' own updated_at does
+	// not move when the producer starts deriving the alias, so an organization
+	// caught up under v10 would never re-read them and never gain it.
+	if want := "devhealthsource.teams_projects.v11"; TeamsProjectsSourceVersion != want {
 		t.Fatalf("TeamsProjectsSourceVersion = %q, want %q -- changing this constant is a deliberate full-rebuild decision, so update this test with the reason in the constant's doc comment", TeamsProjectsSourceVersion, want)
 	}
 }

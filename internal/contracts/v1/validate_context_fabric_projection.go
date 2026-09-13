@@ -105,7 +105,7 @@ func (e ContextFabricEntityProjection) Validate() error {
 	if err := e.Subject.Validate(); err != nil {
 		return fmt.Errorf("subject: %w", err)
 	}
-	if len(e.Aliases) > 100 || len(e.PreviousNames) > 100 || len(e.ProviderAliases) > 100 || !uniqueTrimmedStrings(e.Aliases, 512) || !uniqueTrimmedStrings(e.PreviousNames, 512) || !uniqueTrimmedStrings(e.ProviderAliases, 512) || len(e.ProviderIDs) > 50 || len(e.Properties) > 100 || !boundedEvidenceRefs(e.EvidenceRefIDs, 500, false) || e.ObservedAt.IsZero() || !validVersion(e.SourceVersion) {
+	if len(e.Aliases) > 100 || len(e.PreviousNames) > 100 || len(e.ProviderAliases) > 100 || !uniqueTrimmedStrings(e.Aliases, ContextFabricEntityAliasMaxRunes) || !uniqueTrimmedStrings(e.PreviousNames, ContextFabricEntityAliasMaxRunes) || !uniqueTrimmedStrings(e.ProviderAliases, ContextFabricEntityAliasMaxRunes) || len(e.ProviderIDs) > 50 || len(e.Properties) > 100 || !boundedEvidenceRefs(e.EvidenceRefIDs, 500, false) || e.ObservedAt.IsZero() || !validVersion(e.SourceVersion) {
 		return fmt.Errorf("entity projection violates v1 bounds")
 	}
 	// A backend that persists a list as a delimited string (e.g. zepgraph's

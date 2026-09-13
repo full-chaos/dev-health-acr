@@ -3,6 +3,7 @@ package falkorgraph
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
@@ -157,10 +158,13 @@ func fieldLabelWords(labels ...string) []string {
 // rollback criterion; declaring a capped template here is the one move that
 // promotes a kind into the byte-identity class.
 //
-// NO RETRIEVAL HANDLE IS EVER DROPPED: every template composes the
+// NO TEMPLATE OMITS THE RETRIEVAL HANDLES: every template composes the
 // entity's aliases AND previous names (retrievalHandles) -- templates
 // whose spec line already carries the handles place them there; every
-// other templated kind appends them as a trailing line. entitySearchText
+// other templated kind appends them as a trailing line. Within that line's
+// rune budget each handle is kept WHOLE or left out, never cut: a handle
+// indexed as a truncated prefix is a spelling no source carries, and it can
+// match a term the subject was never named by. entitySearchText
 // indexed both, and a renamed subject must stay resolvable by its previous
 // name after this change exactly as before (pinned by the live
 // prior-canonical-metadata invariant test).
@@ -204,14 +208,48 @@ func subjectSearchText(entity contextfabric.EntityProjection, includeBodies bool
 // retrievalHandles is the union of an entity's aliases, provider-qualified
 // aliases (CHAOS-3884), and previous names, deduplicated and sorted -- the
 // lexical handles entitySearchText always indexed. Every template composes
-// it exactly once. "NO RETRIEVAL HANDLE IS EVER DROPPED" (this file's own
-// header discipline) now covers all three sources.
+// it exactly once.
+//
+// WHOLE HANDLES ONLY. The line is bounded at capHandles runes, and the bound
+// is applied per handle rather than to the joined string: a handle that would
+// carry the line past the budget is left out, and a later, shorter handle that
+// still fits is kept. Cutting the joined string instead indexes whatever
+// prefix of a handle happens to straddle the boundary -- a spelling no source
+// carries. For every entity whose handles fit the budget the result is
+// byte-identical to the joined string, so its search text and embedding are
+// unchanged.
 func retrievalHandles(entity contextfabric.EntityProjection) string {
 	handles := make([]string, 0, len(entity.Aliases)+len(entity.ProviderAliases)+len(entity.PreviousNames))
 	handles = append(handles, entity.Aliases...)
 	handles = append(handles, entity.ProviderAliases...)
 	handles = append(handles, entity.PreviousNames...)
-	return capRunes(strings.Join(graphrank.UniqueSorted(handles), " "), capHandles)
+	return joinWholeHandles(graphrank.UniqueSorted(handles), capHandles)
+}
+
+// joinWholeHandles joins handles with single spaces, in the order given,
+// keeping each handle whole: a handle that would carry the line past limit
+// runes is skipped rather than truncated. The handles arrive trimmed and
+// non-empty (graphrank.UniqueSorted guarantees both), so the result carries no
+// leading or trailing space.
+func joinWholeHandles(handles []string, limit int) string {
+	var line strings.Builder
+	used := 0
+	for _, handle := range handles {
+		separator := 0
+		if used > 0 {
+			separator = 1
+		}
+		width := utf8.RuneCountInString(handle)
+		if used+separator+width > limit {
+			continue
+		}
+		if separator == 1 {
+			line.WriteByte(' ')
+		}
+		line.WriteString(handle)
+		used += separator + width
+	}
+	return line.String()
 }
 
 // workItemSearchText (spec §2):

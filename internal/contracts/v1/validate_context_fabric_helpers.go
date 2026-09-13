@@ -449,6 +449,27 @@ func boundedEvidenceRefs(values []string, maximum int, allowEmpty bool) bool {
 // delimited-string separator character a backend that persists a list of
 // strings as a single "|a|b|"-encoded field would use (zepgraph's
 // encodeScope did, before its CHAOS-3771 deletion).
+// ContextFabricEntityAliasMaxRunes is the per-value bound the entity
+// projection validator applies to every alias, previous name and provider
+// alias. It is declared once so the validator and any producer that must
+// pre-screen a value read the same number.
+const ContextFabricEntityAliasMaxRunes = 512
+
+// ValidContextFabricEntityAlias reports whether a single value is admissible
+// as an entity alias under the projection validator's own per-value rules:
+// no surrounding whitespace, between 1 and ContextFabricEntityAliasMaxRunes
+// runes, and no '|' separator.
+//
+// It is COMPOSED FROM THE SAME HELPERS the validator calls rather than
+// restating their rules, so the two cannot drift. A producer that derives an
+// alias from data it does not control -- a URL, say -- screens with this and
+// drops a value it rejects, because one inadmissible alias fails the entity's
+// whole projection rather than only itself.
+func ValidContextFabricEntityAlias(value string) bool {
+	values := []string{value}
+	return uniqueTrimmedStrings(values, ContextFabricEntityAliasMaxRunes) && !containsSeparatorCharacter(values)
+}
+
 func containsSeparatorCharacter(values []string) bool {
 	for _, value := range values {
 		if strings.Contains(value, "|") {

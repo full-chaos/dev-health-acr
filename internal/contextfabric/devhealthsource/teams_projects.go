@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -174,7 +175,16 @@ const TeamsProjectsSourceName = "dev_health_teams_projects"
 // the same discipline subRetractsAnEdgeWhoseKeyBecomesAmbiguous already
 // used for arm C. This bump is only for the backlog that predates the
 // deploy.
-const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v10"
+//
+// v10 -> v11 (CHAOS-5675): a project entity gains an alias derived from its
+// own URL, beside its provider key. It is a shape change on rows whose own
+// updated_at does not move when the producer starts deriving it, so an
+// organization already caught up under a v10 checkpoint never re-reads those
+// projects and never gains the alias -- the same unreachable-backlog trap the
+// v8 and v10 entries above record. The bump drains that backlog once per
+// organization; a project whose row changes afterwards picks up its alias on
+// the ordinary incremental tick.
+const TeamsProjectsSourceVersion = "devhealthsource.teams_projects.v11"
 
 // teamsProjectsTables is this source's bounded coverage. Both tables were
 // already canonical Dev Health data; neither introduces a new ingest path.
@@ -1223,7 +1233,7 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "updated_at", rowKey) +
 		}
 		entity := contractsv1.ContextFabricEntityProjection{
 			Subject:        subject,
-			Aliases:        distinctNonEmpty(projectKey),
+			Aliases:        distinctNonEmpty(projectKey, projectURLHandle(provider, url)),
 			ProviderIDs:    providerID(provider, id),
 			Properties:     properties,
 			Authorization:  authorization,
@@ -1332,3 +1342,77 @@ func distinctNonEmpty(values ...string) []string {
 // unpublishable rows, so it is the only one implementing the optional
 // progress capability.
 var _ contextfabric.ProjectionProgress = (*TeamsProjectsSource)(nil)
+
+// projectURLHandle returns the retrieval handle a project's own URL carries,
+// or "" when the URL carries none that the alias contract admits.
+//
+// WHY A PROJECT NEEDS ONE AT ALL. A project's only alias channel is its
+// provider key, and that key is absent for a whole provider: measured on the
+// trial org, jira supplies one for 16 of 16 projects and gitlab for 2 of 2,
+// while linear supplies none for any of 18. Those eighteen reach retrieval
+// with their display label and nothing else, so a question that names the
+// project the way its URL does -- the spelling that appears in every link
+// anyone pastes -- has no handle to match and depends on the label alone.
+//
+// THE HANDLE IS THE LAST PATH SEGMENT. For linear, whose project URLs end the
+// segment with an opaque twelve-hex id, that id is removed so the handle is
+// the readable half a caller would type. The removal is scoped to linear
+// because linear is the provider whose suffix is KNOWN to be an id: a gitlab or
+// jira segment that happens to end in twelve hex characters is part of the
+// name, and stripping it there would publish a spelling the URL does not
+// carry. A linear project named "release-0123456789ab" has the URL segment
+// "release-0123456789ab-<id>", so removing exactly one trailing id keeps the
+// name whole.
+//
+// SCREENED, NEVER REPAIRED. The candidate is checked against the contract's
+// own alias rule and dropped if it fails. A URL decodes "%20" and "%7C" into a
+// space and a '|', and a path can exceed the per-value bound; any of those
+// fails the entity's WHOLE projection, not only this alias. Trimming or
+// truncating would instead invent a spelling no source carries.
+//
+// IT IS NOT A MATCHING RULE. This adds one more exact handle to the same
+// alias channel jira and gitlab keys already use; nothing about how a term is
+// compared to a handle changes, and no kind acquires typing it did not have.
+func projectURLHandle(provider, rawURL string) string {
+	// PARSED, NEVER STRING-SLICED. Taking the text after the last "/" reads
+	// the HOST as the handle for a URL with no path, and a host is shared by
+	// every project on the provider -- one term would then match all of them.
+	// Requiring a scheme and a host, and reading the handle out of the PATH,
+	// is what makes the no-path case yield nothing; the host requirement alone
+	// is what rejects a scheme with no host, such as a file: URL.
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	path := strings.Trim(parsed.Path, "/")
+	if path == "" {
+		return ""
+	}
+	handle := path[strings.LastIndex(path, "/")+1:]
+	if provider == linearProvider && hasHexIDSuffix(handle) {
+		handle = handle[:len(handle)-13]
+	}
+	if !contractsv1.ValidContextFabricEntityAlias(handle) {
+		return ""
+	}
+	return handle
+}
+
+// linearProvider is the provider whose project URL segments end in an opaque
+// twelve-hex id.
+const linearProvider = "linear"
+
+// hasHexIDSuffix reports whether a URL segment ends in "-" followed by exactly
+// twelve lowercase hexadecimal characters -- the shape linear appends to a
+// project slug.
+func hasHexIDSuffix(segment string) bool {
+	if len(segment) < 13 || segment[len(segment)-13] != '-' {
+		return false
+	}
+	for _, r := range segment[len(segment)-12:] {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
+}
