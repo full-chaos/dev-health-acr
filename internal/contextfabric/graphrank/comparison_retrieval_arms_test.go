@@ -13,6 +13,7 @@ package graphrank
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -422,3 +423,47 @@ func (s *recordingBindingSink) RecordComparisonReceiptBinding(_ context.Context,
 	s.bindings = append(s.bindings, event)
 }
 func (s *recordingBindingSink) RecordComparisonDecision(context.Context, ComparisonDecisionEvent) {}
+
+// TestTheAliasReadsCompletenessReachesEachOperandsGates pins that the keyed
+// read's own completeness claim is what each operand's commit gates see, in
+// both directions. A slot handed a constant would either claim a uniqueness
+// nobody proved or withhold the identity fast path the read earned, and the
+// committed set alone cannot show which: the commit digest records the value
+// the gates decided under.
+func TestTheAliasReadsCompletenessReachesEachOperandsGates(t *testing.T) {
+	t.Parallel()
+
+	alphaSubject := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team_alpha", Label: "Alpha Team"}
+	for _, complete := range []bool{true, false} {
+		t.Run(fmt.Sprintf("read complete=%t", complete), func(t *testing.T) {
+			t.Parallel()
+			alpha := candidateNode(contextfabric.SubjectTeam, "team_alpha", "Alpha Team", 1, "*")
+			alpha.Mechanism = contextfabric.MatchAlias
+			alpha.FromKeyedIdentityLookup = true
+			backend := &fakeGraphBackend{
+				searchResults:        map[string][]CandidateNode{"beta": {exactMatchNode(contextfabric.SubjectTeam, "team_beta", "beta")}},
+				enableAliasLookup:    true,
+				aliasLookupClaimants: map[string][]CandidateNode{"alpha": {alpha}},
+				aliasLookupComplete:  complete,
+			}
+			resolution, _, _, digests, err := ResolveSubjectsWithCommitBasis(context.Background(), storage.Principal{OrgID: "org-1"},
+				slotGateRequest(), testInterpreted("alpha", "beta"), backend.deps(), nil, nil, twoNamedSlotGateFrame(), "")
+			if err != nil {
+				t.Fatalf("ResolveSubjectsWithCommitBasis() error = %v", err)
+			}
+			digest := digests.For(alphaSubject)
+			if complete {
+				if !committedIDs(resolution)["team_alpha"] {
+					t.Fatalf("committed = %v, want operand A committed on the complete keyed read", resolution.Committed)
+				}
+				if !digest.AliasLookupComplete {
+					t.Errorf("operand A digest = %+v, want AliasLookupComplete -- the gates must decide under the read's own completeness claim", digest)
+				}
+				return
+			}
+			if digest.AliasLookupComplete || digest.CommitGate == "identity_fast_path" {
+				t.Errorf("operand A digest = %+v, want no completeness claim and no identity fast path -- the read did not enumerate the population", digest)
+			}
+		})
+	}
+}
