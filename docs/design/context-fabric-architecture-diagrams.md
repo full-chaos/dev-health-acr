@@ -1072,6 +1072,52 @@ retryable window veto, never a persisted refusal. The decision line names the
 carrier (`referenced_result_id`) and what admission's read returned
 (`carrier_read`: `not_read` / `read` / `failed`).
 
+### 6b — The persisted semantic snapshot a continuation carries
+
+Every result saves its ACCEPTED READING in the same row as its payload: the
+nullable `semantic_state` jsonb column (migration 0038), written in the same
+insert, never attached afterwards. The snapshot (`PersistedSemanticState`,
+`internal/contextfabric/semantic_state.go`, format `semantic-state.v1`) holds the
+accepted family and table version, the complete normalized frame, the
+validation and gate verdict with the emitted shape it was validated against,
+the frame's role slots with stable slot ids, and the requirement declarations
+planning consumed (required/advisory, derivation version). It is bounded at
+65,536 canonical bytes and per collection, and a snapshot over a bound is
+rejected, never truncated. A turn that ends before interpretation, a refused
+continuation, and a rejected snapshot save a closed absence reason instead.
+
+```mermaid
+flowchart LR
+  T1["turn one<br/>accepted reading"] -->|"capture: saveResult"| ROW[("result row<br/>payload + semantic_state")]
+  ROW -->|"Get: decode, validate,<br/>canonical check"| READ{"read status"}
+  READ -->|"available"| ADMIT["admission<br/>versions in force?<br/>family = public plan?"]
+  READ -->|"absent / malformed /<br/>oversized / unreported"| WH["withheld<br/>semantic_state_absent / _invalid"]
+  READ -->|"unsupported_version"| WH2["withheld<br/>context_version_mismatch"]
+  ADMIT --> COMP["composeAcceptedContext<br/>revalidate the CARRIED frame;<br/>fresh frame is comparison only"]
+  COMP -->|"usable"| PLAN["plan on the carried frame<br/>and carried declarations"]
+  PLAN -->|"capture materializes<br/>the carried reading"| ROW2[("turn two row<br/>complete snapshot")]
+  WH --> REF["continuation refusal (6a)"]
+  WH2 --> REF
+  class REF refuse
+  classDef refuse fill:#7f1d1d,stroke:#ef4444,color:#ffffff
+```
+
+Replay compares the snapshot too: an identical payload with a different
+snapshot, or a present snapshot against an absent one, is refused
+(`ErrSemanticStateReplayConflict`) by both adapters and on both PostgreSQL save
+paths. Every Save emits `context fabric semantic state persistence` at Info
+with the site, the decision, the absence reason or the snapshot's closed values,
+and the encoded size against the cap; the decision line carries
+`carried_state_read` and both readings (`carried_state`, `fresh_state`). Neither
+line carries a retrieval term.
+
+Anchors: `internal/contextfabric/semantic_state.go` (codec, bounds, capture),
+`semantic_state_persistence.go` (`saveResult`, the engine's only Save),
+`chaos5465_semantic_carry.go` (admission and comparison),
+`chaos5465_composition_boundary.go` (`composeAcceptedContext`),
+`pginvestigation/store.go` and `memoryinvestigation/store.go` (insert, replay,
+Get).
+
 ---
 
 ## 7 — Cohort ranking (CHAOS-4398, PR1+PR2)

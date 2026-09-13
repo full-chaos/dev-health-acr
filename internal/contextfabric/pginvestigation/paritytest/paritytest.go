@@ -15,6 +15,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +36,21 @@ type SaveStep struct {
 	// Empty for every pre-existing case, which keeps them byte-identical to
 	// their pre-ancestry behaviour.
 	ParentResultID string
+	// Semantic is the semantic-state argument. Nil means the closed absence
+	// every pre-snapshot case is equivalent to (no reading was captured), so
+	// those cases keep their meaning.
+	Semantic *contextfabric.SemanticStateWrite
+	// WantErrIs, when set, is the sentinel a WantErr step's error must wrap,
+	// so a step is refused for the reason it names and not a neighbour's.
+	WantErrIs error
+}
+
+// semanticWrite is the step's semantic-state argument.
+func (step SaveStep) semanticWrite() contextfabric.SemanticStateWrite {
+	if step.Semantic != nil {
+		return *step.Semantic
+	}
+	return contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)
 }
 
 // GetStep is the Get call a Case verifies after its Save steps.
@@ -46,6 +64,11 @@ type GetStep struct {
 	// distinguishable from "do not check" -- the empty-string case is the one
 	// that matters for a first turn, and a plain string could not say it.
 	WantParentResultID *string
+	// WantSemanticRead and WantSemantic, when set, assert the semantic
+	// snapshot's read status and value (canonical equality) after the round
+	// trip. Pointers for the same "assert absent" vs "do not check" reason.
+	WantSemanticRead *contextfabric.SemanticStateReadStatus
+	WantSemantic     *contextfabric.PersistedSemanticState
 }
 
 // Case is one save/get parity scenario.
@@ -258,7 +281,7 @@ func Cases() []Case {
 	// contract it's supposed to satisfy can never be corrected later.
 	invalid := contextfabric.InvestigationResult{ResultID: "result-id-invalid-0000001"}
 
-	return []Case{
+	return append(semanticStateCases(), []Case{
 		{
 			Name: "save and get round trip",
 			Save: []SaveStep{{Principal: orgA, Result: roundTrip}},
@@ -408,7 +431,7 @@ func Cases() []Case {
 			},
 			Get: GetStep{Principal: orgA, ResultID: invalid.ResultID, WantNotFound: true},
 		},
-	}
+	}...)
 }
 
 // RunSuite runs Cases() against a fresh store per case. newStore must
@@ -426,10 +449,13 @@ func RunSuite(t *testing.T, newStore func(t *testing.T) contextfabric.Investigat
 			ctx := context.Background()
 
 			for index, step := range testCase.Save {
-				err := store.Save(ctx, step.Principal, step.Result, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, step.ParentResultID)
+				err := store.Save(ctx, step.Principal, step.Result, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, step.ParentResultID, step.semanticWrite())
 				if step.WantErr {
 					if err == nil {
 						t.Fatalf("save[%d] %q: want error, got nil", index, step.Result.ResultID)
+					}
+					if step.WantErrIs != nil && !errors.Is(err, step.WantErrIs) {
+						t.Fatalf("save[%d] %q: error %v does not wrap %v -- refused for the wrong reason", index, step.Result.ResultID, err, step.WantErrIs)
 					}
 					continue
 				}
@@ -465,6 +491,17 @@ func runGet(t *testing.T, ctx context.Context, store contextfabric.Investigation
 	// carrier; this parity suite compares the wrapped canonical payload
 	// only -- persistence metadata (GraphEpoch) is a store-implementation
 	// detail, not part of what parity across stores means here.
+	if step.WantSemanticRead != nil && stored.SemanticStateRead != *step.WantSemanticRead {
+		t.Fatalf("get %q: SemanticStateRead = %q, want %q", step.ResultID, stored.SemanticStateRead, *step.WantSemanticRead)
+	}
+	if step.WantSemanticRead != nil && *step.WantSemanticRead != contextfabric.SemanticStateReadAvailable && stored.SemanticState != nil {
+		t.Fatalf("get %q: a %s snapshot came back with a value", step.ResultID, stored.SemanticStateRead)
+	}
+	if step.WantSemantic != nil && !contextfabric.SemanticStatesEqual(stored.SemanticState, step.WantSemantic) {
+		got, _ := json.Marshal(stored.SemanticState)
+		want, _ := json.Marshal(step.WantSemantic)
+		t.Fatalf("get %q: semantic snapshot mismatch\n got: %s\nwant: %s", step.ResultID, got, want)
+	}
 	if step.WantParentResultID != nil && stored.ParentResultID != *step.WantParentResultID {
 		t.Fatalf("get %q: ParentResultID = %q, want %q -- ancestry must survive the round trip identically in every store, or a conversation is walkable on one backend and not the other", step.ResultID, stored.ParentResultID, *step.WantParentResultID)
 	}
@@ -544,7 +581,7 @@ func RunExplicitNullDegradedReasonsSuite(t *testing.T, newStore func(t *testing.
 		// successful idempotent replay: doing so would report success
 		// while leaving the invalid stored row in place forever, since
 		// these stores never overwrite.
-		err := store.Save(context.Background(), orgA, valid, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "")
+		err := store.Save(context.Background(), orgA, valid, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation))
 		if err == nil {
 			t.Fatal("Save() error = nil, want a replay against a stored explicit-null row to be rejected, not treated as an idempotent success")
 		}
@@ -557,3 +594,399 @@ func RunExplicitNullDegradedReasonsSuite(t *testing.T, newStore func(t *testing.
 // ptr is the address-of helper GetStep.WantParentResultID needs so that
 // "assert empty" stays expressible and distinct from "do not check".
 func ptr[T any](v T) *T { return &v }
+
+// SemanticStateFixture builds a VALID semantic snapshot through the producer:
+// a validated grouped frame, the gate decided on it, and the requirement
+// declarations the real derivation produces for it.
+func SemanticStateFixture(group, member contextfabric.SubjectKind) *contextfabric.PersistedSemanticState {
+	result := contextfabric.ValidateFrame(contextfabric.QuestionFrame{
+		Goals: []contextfabric.InvestigationGoal{contextfabric.GoalAssessState},
+		SubjectExpression: contextfabric.SubjectExpression{
+			Kind:    contextfabric.SubjectExpressionGroupedMembers,
+			Grouped: &contextfabric.GroupedSetExpression{GroupKind: group, MemberKind: member},
+		},
+		Temporal: contextfabric.TemporalIntentCurrent,
+	}, nil, contextfabric.ShapeOpen)
+	if result.Outcome != contextfabric.FrameValidationOutcomeValid {
+		panic("paritytest: semantic fixture frame is invalid: " + string(result.Failure.Invariant))
+	}
+	frame := result.Frame
+	state := contextfabric.BuildSemanticState(contextfabric.SemanticStateInput{
+		Outcome: contextfabric.QuestionFamilyOutcome{
+			Family: contractsv1.ContextFabricQuestionFamilyGroupedCohortStatus, Source: contractsv1.ContextFabricQuestionFamilySourceModel,
+			Frame: &frame, Gate: contextfabric.DecideFrameGate(result, true),
+		},
+		EmittedShape:  contextfabric.ShapeOpen,
+		GroupKind:     group,
+		FamilyVersion: contextfabric.QuestionFamilyTableVersion,
+		Requirements:  contextfabric.DeriveRequirements(frame, contextfabric.ObligationSeed{}, nil),
+	})
+	if _, err := contextfabric.EncodeSemanticState(state); err != nil {
+		panic("paritytest: semantic fixture does not validate: " + err.Error())
+	}
+	return state
+}
+
+// SizedSemanticState builds a valid snapshot whose canonical encoding is
+// EXACTLY target bytes, for the cap cells. It fails the test rather than
+// guessing when the target is unreachable.
+// VersionPaddedSemanticState builds a snapshot of EXACTLY target encoded bytes
+// by padding the family table stamp -- a field no collection bound covers.
+//
+// SizedSemanticState pads with retrieval terms, and the total term-bytes bound
+// now stops that padding well short of the byte cap: a cap cell built that way
+// measures the term bound instead of the cap. The cap's own cells are driven
+// through the one open field so they measure what they claim to.
+func VersionPaddedSemanticState(t testing.TB, target int) *contextfabric.PersistedSemanticState {
+	t.Helper()
+	state := SizedSemanticState(t, 4000)
+	size := func(s *contextfabric.PersistedSemanticState) int {
+		encoded, err := json.Marshal(s)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return len(encoded)
+	}
+	delta := target - size(state)
+	if delta < 0 {
+		t.Fatalf("fixture defect: the base snapshot is already %d bytes, over the %d-byte target", size(state), target)
+	}
+	state.FamilyTableVersion += strings.Repeat("v", delta)
+	if got := size(state); got != target {
+		t.Fatalf("fixture defect: padded to %d bytes, want %d", got, target)
+	}
+	return state
+}
+
+func SizedSemanticState(t testing.TB, target int) *contextfabric.PersistedSemanticState {
+	t.Helper()
+	kind := contextfabric.SubjectRepository
+	build := func(terms [][]string) *contextfabric.PersistedSemanticState {
+		operands := make([]contextfabric.SubjectOperand, 0, len(terms))
+		for _, list := range terms {
+			operands = append(operands, contextfabric.SubjectOperand{Kind: contextfabric.SubjectOperandNamed, Named: &contextfabric.NamedSubjectExpression{Terms: list, ExpectedKind: &kind}})
+		}
+		frame := contextfabric.QuestionFrame{
+			Goals:             []contextfabric.InvestigationGoal{contextfabric.GoalCompare},
+			SubjectExpression: contextfabric.SubjectExpression{Kind: contextfabric.SubjectExpressionExplicitSet, Explicit: &contextfabric.ExplicitSetExpression{Operands: operands}},
+			Temporal:          contextfabric.TemporalIntentCurrent,
+			Obligations:       []contextfabric.AnswerObligation{contextfabric.ObligationState},
+			Version:           contextfabric.QuestionFrameVersion,
+		}
+		return contextfabric.BuildSemanticState(contextfabric.SemanticStateInput{
+			Outcome:       contextfabric.QuestionFamilyOutcome{Family: contractsv1.ContextFabricQuestionFamilySubjectInvestigation, Source: contractsv1.ContextFabricQuestionFamilySourceModel, Frame: &frame, Gate: contextfabric.FrameGate{Outcome: contextfabric.FrameGatePassed}},
+			EmittedShape:  contextfabric.ShapeExplicitCohort,
+			FamilyVersion: contextfabric.QuestionFamilyTableVersion,
+		})
+	}
+	size := func(state *contextfabric.PersistedSemanticState) int {
+		encoded, _ := json.Marshal(state)
+		return len(encoded)
+	}
+	terms := make([][]string, contextfabric.SemanticStateMaxOperands)
+	for i := range terms {
+		terms[i] = []string{}
+	}
+fill:
+	for op := range terms {
+		for len(terms[op]) < contextfabric.SemanticStateMaxTerms {
+			terms[op] = append(terms[op], strings.Repeat("a", 500))
+			if size(build(terms)) > target-400 {
+				break fill
+			}
+		}
+	}
+	for op := len(terms) - 1; op >= 0; op-- {
+		if n := len(terms[op]); n > 0 {
+			last := &terms[op][n-1]
+			delta := target - size(build(terms))
+			if len(*last)+delta < 1 || len(*last)+delta > contextfabric.SemanticStateMaxTermBytes {
+				t.Fatalf("paritytest: cannot size a snapshot to %d bytes (delta %d)", target, delta)
+			}
+			*last = strings.Repeat("a", len(*last)+delta)
+			break
+		}
+	}
+	state := build(terms)
+	if got := size(state); got != target {
+		t.Fatalf("paritytest: sized snapshot is %d bytes, want %d", got, target)
+	}
+	return state
+}
+
+// ClaimBearingResult is result(...) plus one applied, receipt-sourced
+// confirmed-structure entry: the shape that takes PostgreSQL's
+// TRANSACTIONAL save path (the supersession claim) rather than the plain
+// insert.
+func ClaimBearingResult(resultID, question, priorResultID, receiptID string) contextfabric.InvestigationResult {
+	built := result(resultID, question)
+	built.ConfirmedStructure = []contextfabric.ConfirmedStructureEntry{{
+		Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: "pull_request",
+		Source: contractsv1.ContextFabricStructureSourceReceipt, PriorResultID: priorResultID, ReceiptID: receiptID,
+		Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionApplied,
+	}}
+	return built
+}
+
+func semanticStateCases() []Case {
+	withState := func(state *contextfabric.PersistedSemanticState) *contextfabric.SemanticStateWrite {
+		w := contextfabric.SemanticStateOf(state)
+		return &w
+	}
+	absent := func(reason contextfabric.SemanticStateAbsence) *contextfabric.SemanticStateWrite {
+		w := contextfabric.SemanticStateAbsent(reason)
+		return &w
+	}
+	teamState := SemanticStateFixture(contextfabric.SubjectTeam, contextfabric.SubjectRepository)
+	projectState := SemanticStateFixture(contextfabric.SubjectProject, contextfabric.SubjectRepository)
+	invalidState := SemanticStateFixture(contextfabric.SubjectTeam, contextfabric.SubjectRepository)
+	invalidState.Family = contractsv1.ContextFabricQuestionFamily("invented-family")
+	// PostgreSQL jsonb cannot hold a NUL; the codec refuses it first, so the
+	// adapter reports the closed rejection rather than a driver error.
+	nulKind := contextfabric.SubjectRepository
+	nulFrame := contextfabric.QuestionFrame{
+		Goals: []contextfabric.InvestigationGoal{contextfabric.GoalCompare},
+		SubjectExpression: contextfabric.SubjectExpression{Kind: contextfabric.SubjectExpressionExplicitSet, Explicit: &contextfabric.ExplicitSetExpression{Operands: []contextfabric.SubjectOperand{
+			{Kind: contextfabric.SubjectOperandNamed, Named: &contextfabric.NamedSubjectExpression{Terms: []string{"team\x00alpha"}, ExpectedKind: &nulKind}},
+			{Kind: contextfabric.SubjectOperandNamed, Named: &contextfabric.NamedSubjectExpression{Terms: []string{"team-beta"}, ExpectedKind: &nulKind}},
+		}}},
+		Temporal:    contextfabric.TemporalIntentCurrent,
+		Obligations: []contextfabric.AnswerObligation{contextfabric.ObligationState},
+		Version:     contextfabric.QuestionFrameVersion,
+	}
+	nulState := contextfabric.BuildSemanticState(contextfabric.SemanticStateInput{
+		Outcome:       contextfabric.QuestionFamilyOutcome{Family: contractsv1.ContextFabricQuestionFamilySubjectInvestigation, Source: contractsv1.ContextFabricQuestionFamilySourceModel, Frame: &nulFrame, Gate: contextfabric.FrameGate{Outcome: contextfabric.FrameGatePassed}},
+		EmittedShape:  contextfabric.ShapeExplicitCohort,
+		FamilyVersion: contextfabric.QuestionFamilyTableVersion,
+	})
+	available := contextfabric.SemanticStateReadAvailable
+	absentStatus := contextfabric.SemanticStateReadAbsent
+
+	roundTrip := result("result-id-semantic-roundtrip", "which teams are behind?")
+	absentRow := result("result-id-semantic-absent", "how is the migration going?")
+	replay := result("result-id-semantic-replay", "is the rollout healthy?")
+	conflict := result("result-id-semantic-conflict", "why did the deploy fail?")
+	presentThenAbsent := result("result-id-semantic-present-absent", "who owns this service?")
+	absentThenPresent := result("result-id-semantic-absent-present", "what shipped this week?")
+	claimReplay := ClaimBearingResult("result-id-semantic-claim-replay", "which kind did you mean?", "result-prior-semantic-claim", "kindr_semantic000001")
+	rejectedCells := []struct {
+		name  string
+		write contextfabric.SemanticStateWrite
+	}{
+		{"neither half", contextfabric.SemanticStateWrite{}},
+		{"both halves", contextfabric.SemanticStateWrite{State: teamState, Absence: contextfabric.SemanticStateAbsenceContinuationRefused}},
+		{"an absence outside the vocabulary", contextfabric.SemanticStateAbsent("invented-absence")},
+		{"a snapshot that fails validation", contextfabric.SemanticStateOf(invalidState)},
+		{"a snapshot carrying a NUL character", contextfabric.SemanticStateOf(nulState)},
+	}
+	cases := []Case{
+		{
+			Name: "a semantic snapshot survives the round trip",
+			Save: []SaveStep{{Principal: orgA, Result: roundTrip, Semantic: withState(teamState)}},
+			Get:  GetStep{Principal: orgA, ResultID: roundTrip.ResultID, Want: &roundTrip, WantSemanticRead: &available, WantSemantic: teamState},
+		},
+		{
+			Name: "an absent snapshot reads back absent, whatever the absence reason",
+			Save: []SaveStep{{Principal: orgA, Result: absentRow, Semantic: absent(contextfabric.SemanticStateAbsenceSnapshotOversized)}},
+			Get:  GetStep{Principal: orgA, ResultID: absentRow.ResultID, Want: &absentRow, WantSemanticRead: &absentStatus},
+		},
+		{
+			Name: "an identical payload and an identical snapshot replay idempotently",
+			Save: []SaveStep{
+				{Principal: orgA, Result: replay, Semantic: withState(teamState)},
+				{Principal: orgA, Result: replay, Semantic: withState(SemanticStateFixture(contextfabric.SubjectTeam, contextfabric.SubjectRepository))},
+			},
+			Get: GetStep{Principal: orgA, ResultID: replay.ResultID, Want: &replay, WantSemanticRead: &available, WantSemantic: teamState},
+		},
+		{
+			Name: "an identical payload with a different snapshot is a replay conflict and leaves the original",
+			Save: []SaveStep{
+				{Principal: orgA, Result: conflict, Semantic: withState(teamState)},
+				{Principal: orgA, Result: conflict, Semantic: withState(projectState), WantErr: true, WantErrIs: contextfabric.ErrSemanticStateReplayConflict},
+			},
+			Get: GetStep{Principal: orgA, ResultID: conflict.ResultID, Want: &conflict, WantSemanticRead: &available, WantSemantic: teamState},
+		},
+		{
+			Name: "an identical payload replayed WITHOUT the snapshot it was saved with is a conflict",
+			Save: []SaveStep{
+				{Principal: orgA, Result: presentThenAbsent, Semantic: withState(teamState)},
+				{Principal: orgA, Result: presentThenAbsent, Semantic: absent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation), WantErr: true, WantErrIs: contextfabric.ErrSemanticStateReplayConflict},
+			},
+			Get: GetStep{Principal: orgA, ResultID: presentThenAbsent.ResultID, Want: &presentThenAbsent, WantSemanticRead: &available, WantSemantic: teamState},
+		},
+		{
+			Name: "an identical payload replayed WITH a snapshot it was saved without is a conflict",
+			Save: []SaveStep{
+				{Principal: orgA, Result: absentThenPresent, Semantic: absent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)},
+				{Principal: orgA, Result: absentThenPresent, Semantic: withState(teamState), WantErr: true, WantErrIs: contextfabric.ErrSemanticStateReplayConflict},
+			},
+			Get: GetStep{Principal: orgA, ResultID: absentThenPresent.ResultID, Want: &absentThenPresent, WantSemanticRead: &absentStatus},
+		},
+		{
+			// The claim-bearing shape takes PostgreSQL's transactional save
+			// path; its replay branch must compare the snapshot too.
+			Name: "a claim-bearing result replayed with a different snapshot is a conflict",
+			Save: []SaveStep{
+				{Principal: orgA, Result: claimReplay, Semantic: withState(teamState)},
+				{Principal: orgA, Result: claimReplay, Semantic: withState(teamState)},
+				{Principal: orgA, Result: claimReplay, Semantic: withState(projectState), WantErr: true, WantErrIs: contextfabric.ErrSemanticStateReplayConflict},
+			},
+			Get: GetStep{Principal: orgA, ResultID: claimReplay.ResultID, Want: &claimReplay, WantSemanticRead: &available, WantSemantic: teamState},
+		},
+	}
+	for i, cell := range rejectedCells {
+		row := result(fmt.Sprintf("result-id-semantic-rejected-%02d", i), "is this write refused? "+cell.name)
+		write := cell.write
+		cases = append(cases, Case{
+			Name: "a semantic-state write naming " + cell.name + " is rejected and persists nothing",
+			Save: []SaveStep{{Principal: orgA, Result: row, Semantic: &write, WantErr: true, WantErrIs: contextfabric.ErrSemanticStateRejected}},
+			Get:  GetStep{Principal: orgA, ResultID: row.ResultID, WantNotFound: true},
+		})
+	}
+	return cases
+}
+
+// RunSemanticStateCapSuite runs the byte-cap cells -- 65,535 and 65,536
+// accepted and round-tripped, 65,537 rejected with nothing persisted --
+// against a store.
+func RunSemanticStateCapSuite(t *testing.T, newStore func(t *testing.T) contextfabric.InvestigationResultStore, isNotFound func(error) bool) {
+	t.Helper()
+	for _, tc := range []struct {
+		bytes  int
+		accept bool
+	}{{contextfabric.SemanticStateMaxEncodedBytes - 1, true}, {contextfabric.SemanticStateMaxEncodedBytes, true}, {contextfabric.SemanticStateMaxEncodedBytes + 1, false}} {
+		t.Run(fmt.Sprint(tc.bytes), func(t *testing.T) {
+			store := newStore(t)
+			state := VersionPaddedSemanticState(t, tc.bytes)
+			row := result(fmt.Sprintf("result-id-semantic-cap-%d", tc.bytes), "how large may a reading be?")
+			err := store.Save(context.Background(), orgA, row, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateOf(state))
+			stored, getErr := store.Get(context.Background(), orgA, row.ResultID)
+			t.Logf("%d-byte snapshot -> save_err=%v get_err=%v read=%s", tc.bytes, err, getErr, stored.SemanticStateRead)
+			if !tc.accept {
+				if err == nil || !errors.Is(err, contextfabric.ErrSemanticStateRejected) {
+					t.Fatalf("save err=%v, want ErrSemanticStateRejected", err)
+				}
+				if !isNotFound(getErr) {
+					t.Fatalf("a rejected write persisted a row (get err %v)", getErr)
+				}
+				return
+			}
+			if err != nil || getErr != nil {
+				t.Fatalf("save=%v get=%v, want both nil", err, getErr)
+			}
+			if stored.SemanticStateRead != contextfabric.SemanticStateReadAvailable || !contextfabric.SemanticStatesEqual(stored.SemanticState, state) {
+				t.Fatalf("read=%s equal=%v, want the %d-byte snapshot back whole", stored.SemanticStateRead, contextfabric.SemanticStatesEqual(stored.SemanticState, state), tc.bytes)
+			}
+		})
+	}
+}
+
+// SemanticSeed plants a result row AND a raw semantic-state column value
+// directly into a store's backing storage, bypassing Save.
+type SemanticSeed func(t *testing.T, orgID, resultID string, payload, semanticState []byte)
+
+// RunSemanticStateReadSuite is the SHARED read side: a stored column this build
+// cannot read comes back unavailable with the status that names why, the
+// public result still reads, and a canonical document in a different key
+// order (a store's own rendering) reads back available.
+func RunSemanticStateReadSuite(t *testing.T, newStore func(t *testing.T) (contextfabric.InvestigationResultStore, SemanticSeed)) {
+	t.Helper()
+	canonicalState := SemanticStateFixture(contextfabric.SubjectTeam, contextfabric.SubjectRepository)
+	canonical, err := contextfabric.EncodeSemanticState(canonicalState)
+	if err != nil {
+		t.Fatalf("encode fixture: %v", err)
+	}
+	reordered := reorderTopLevelKeys(t, canonical)
+	oversized, err := json.Marshal(SizedSemanticState(t, contextfabric.SemanticStateMaxEncodedBytes+1))
+	if err != nil {
+		t.Fatalf("marshal oversized: %v", err)
+	}
+	missingKey := bytes.Replace(canonical, []byte(`"narrowing_basis":"",`), nil, 1)
+	for _, tc := range []struct {
+		name   string
+		column []byte
+		want   contextfabric.SemanticStateReadStatus
+	}{
+		{"canonical, keys reordered", reordered, contextfabric.SemanticStateReadAvailable},
+		{"an unsupported format", []byte(`{"format_version":"semantic-state.v9","anything":true}`), contextfabric.SemanticStateReadUnsupportedVersion},
+		{"a malformed document", []byte(`{"format_version":"semantic-state.v1","family":"not-a-family"}`), contextfabric.SemanticStateReadMalformed},
+		{"a canonical document missing one key", missingKey, contextfabric.SemanticStateReadMalformed},
+		{"an oversized document", oversized, contextfabric.SemanticStateReadOversized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.name == "a canonical document missing one key" && bytes.Equal(missingKey, canonical) {
+				t.Fatalf("fixture defect: the key to remove was not found")
+			}
+			store, seed := newStore(t)
+			row := ValidResult("result-semantic-read-"+strings.ReplaceAll(tc.name, " ", "-"), "does the stored reading decode?")
+			payload, err := json.Marshal(row)
+			if err != nil {
+				t.Fatalf("marshal row: %v", err)
+			}
+			seed(t, orgA.OrgID, row.ResultID, payload, tc.column)
+			stored, err := store.Get(context.Background(), orgA, row.ResultID)
+			if err != nil {
+				t.Fatalf("Get() error = %v -- an unreadable snapshot must not fail the result's own read", err)
+			}
+			t.Logf("%s -> read=%s snapshot=%v", tc.name, stored.SemanticStateRead, stored.SemanticState != nil)
+			if stored.SemanticStateRead != tc.want {
+				t.Fatalf("read=%s, want %s", stored.SemanticStateRead, tc.want)
+			}
+			if (stored.SemanticState != nil) != (tc.want == contextfabric.SemanticStateReadAvailable) {
+				t.Fatalf("snapshot present=%v beside status %s", stored.SemanticState != nil, stored.SemanticStateRead)
+			}
+			if tc.want == contextfabric.SemanticStateReadAvailable && !contextfabric.SemanticStatesEqual(stored.SemanticState, canonicalState) {
+				t.Fatalf("the reordered document did not decode to the canonical snapshot")
+			}
+			// And a replay of the row against an unreadable snapshot is a
+			// conflict, never an idempotent success.
+			if tc.want != contextfabric.SemanticStateReadAvailable {
+				replayErr := store.Save(context.Background(), orgA, row, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateOf(canonicalState))
+				if !errors.Is(replayErr, contextfabric.ErrSemanticStateReplayConflict) {
+					t.Fatalf("replay against a %s snapshot -> %v, want ErrSemanticStateReplayConflict", tc.want, replayErr)
+				}
+				// AN ABSENT REPLAY TOO. A present replay fails the snapshot
+				// comparison whether or not the unreadable-row guard exists, so
+				// it cannot tell the guard is there; only an absence can. A
+				// stored row this build cannot read is not "absent", so an
+				// absent replay of it is a conflict as well.
+				absentErr := store.Save(context.Background(), orgA, row, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation))
+				t.Logf("%s -> absent replay err=%v", tc.name, absentErr)
+				if !errors.Is(absentErr, contextfabric.ErrSemanticStateReplayConflict) {
+					t.Fatalf("an ABSENT replay against a %s snapshot -> %v, want ErrSemanticStateReplayConflict", tc.want, absentErr)
+				}
+			}
+		})
+	}
+}
+
+// reorderTopLevelKeys re-renders a JSON object with its top-level keys in
+// REVERSE order: the same value, different bytes.
+func reorderTopLevelKeys(t *testing.T, raw []byte) []byte {
+	t.Helper()
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	keys := make([]string, 0, len(fields))
+	for key := range fields {
+		keys = append(keys, key)
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(keys)))
+	var buf bytes.Buffer
+	buf.WriteString("{")
+	for i, key := range keys {
+		if i > 0 {
+			buf.WriteString(",")
+		}
+		name, _ := json.Marshal(key)
+		buf.Write(name)
+		buf.WriteString(":")
+		buf.Write(fields[key])
+	}
+	buf.WriteString("}")
+	if bytes.Equal(buf.Bytes(), raw) {
+		t.Fatalf("fixture defect: reordering produced the same bytes")
+	}
+	return buf.Bytes()
+}

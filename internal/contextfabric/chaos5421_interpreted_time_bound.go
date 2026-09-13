@@ -421,7 +421,7 @@ func (e *Engine) interpretedTimeBoundResult(
 		// branch: a refused span must never become a lookup key, and the
 		// nil reuse snapshots below mean this row never becomes reusable
 		// anyway.
-		if err := e.results.Save(ctx, principal, result, nil, nil, TimeAxisKeyFor(request.TimeContext), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch, ancestryParent); err != nil {
+		if err := e.saveResult(ctx, principal, BudgetAssertInterpretedTimeBound, result, nil, nil, TimeAxisKeyFor(request.TimeContext), binding.Epoch, ancestryParent, absentSemanticState(SemanticStateAbsenceInterpretedTimeUnanswerable)); err != nil {
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
 	}

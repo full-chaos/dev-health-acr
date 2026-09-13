@@ -6,12 +6,13 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-// AXES CELLS, red-first. Each drives composeAcceptedContext directly with the
-// shapes astra's probe used, so the boundary is proven on the composition
-// rather than on a downstream symptom.
+// AXES CELLS. Each drives composeAcceptedContext directly with a CARRIED
+// snapshot, so the boundary is proven on the composition rather than on a
+// downstream symptom: the carried frame is revalidated under today's rules and
+// either established whole or refused with a named invariant.
 func TestCells_CompositionBoundary(t *testing.T) {
-	base := func(group, member SubjectKind) *QuestionFrame {
-		return &QuestionFrame{
+	grouped := func(group, member SubjectKind) QuestionFrame {
+		return QuestionFrame{
 			Goals: []InvestigationGoal{GoalAssessState},
 			SubjectExpression: SubjectExpression{
 				Kind:    SubjectExpressionGroupedMembers,
@@ -20,61 +21,71 @@ func TestCells_CompositionBoundary(t *testing.T) {
 			Temporal: TemporalIntentCurrent,
 		}
 	}
+	validated := func(t *testing.T, frame QuestionFrame) (QuestionFrame, FrameGate) {
+		t.Helper()
+		result := ValidateFrame(frame, nil, ShapeOpen)
+		if result.Outcome != FrameValidationOutcomeValid {
+			t.Fatalf("fixture defect: frame invalid (%v)", result.Failure.Invariant)
+		}
+		return result.Frame, DecideFrameGate(result, true)
+	}
+	teamRepo, teamRepoGate := validated(t, grouped(contractsv1.ContextFabricSubjectTeam, contractsv1.ContextFabricSubjectRepository))
+	projectRepo, _ := validated(t, grouped(contractsv1.ContextFabricSubjectProject, contractsv1.ContextFabricSubjectRepository))
+	unservable, refusing := unservableDiscoveredFrame(t)
+	// A recorded frame today's validation would refuse (I6: grouped by its own
+	// member kind), normalized so only the invariant differs.
+	selfGrouped := NormalizeFrame(grouped(contractsv1.ContextFabricSubjectTeam, contractsv1.ContextFabricSubjectTeam))
+	selfGrouped = DeriveFrameObligations(selfGrouped, nil)
+	// A recorded frame today's normalization would REPAIR.
+	stripped := nonCanonicalFrame(teamRepo)
+
 	for _, tc := range []struct {
-		name        string
-		freshGroup  SubjectKind
-		member      SubjectKind
-		carried     SubjectKind
-		wantOutcome CompositionOutcome
-		wantGroup   SubjectKind
+		name          string
+		carried       *PersistedSemanticState
+		fresh         *QuestionFrame
+		wantOutcome   CompositionOutcome
+		wantInvariant string
+		wantGroup     SubjectKind
 	}{
-		{"substitution accepted", contractsv1.ContextFabricSubjectProject, contractsv1.ContextFabricSubjectRepository,
-			contractsv1.ContextFabricSubjectTeam, CompositionAccepted, contractsv1.ContextFabricSubjectTeam},
-		{"i6 group equals member", contractsv1.ContextFabricSubjectProject, contractsv1.ContextFabricSubjectTeam,
-			contractsv1.ContextFabricSubjectTeam, CompositionInvalid, ""},
-		{"unset carried group", contractsv1.ContextFabricSubjectProject, contractsv1.ContextFabricSubjectTeam,
-			"", CompositionInvalid, ""},
-		{"already equal", contractsv1.ContextFabricSubjectTeam, contractsv1.ContextFabricSubjectRepository,
-			contractsv1.ContextFabricSubjectTeam, CompositionUnchanged, contractsv1.ContextFabricSubjectTeam},
+		{"carried frame established over a different fresh frame", carriedStateFor(t, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam, &teamRepo, teamRepoGate),
+			&projectRepo, CompositionAccepted, "", contractsv1.ContextFabricSubjectTeam},
+		{"carried frame already equal to the fresh one", carriedStateFor(t, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam, &teamRepo, teamRepoGate),
+			&teamRepo, CompositionUnchanged, "", contractsv1.ContextFabricSubjectTeam},
+		{"carried frame fails an invariant today", carriedStateFor(t, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam, &selfGrouped, FrameGate{Outcome: FrameGatePassed}),
+			&projectRepo, CompositionInvalid, "i6", ""},
+		{"carried frame would be repaired today", carriedStateFor(t, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam, &stripped, teamRepoGate),
+			&projectRepo, CompositionInvalid, CompositionInvariantCarriedFrameNotCanonical, ""},
+		{"carried frame refused by today's gate", carriedStateFor(t, QuestionFamilyDiscoveredCohortRanking, "", &unservable, refusing),
+			&projectRepo, CompositionInvalid, CompositionInvariantCarriedFrameRefused, ""},
+		{"no carried snapshot at all", nil, &projectRepo, CompositionInvalid, CompositionInvariantCarriedStateIncomplete, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			fresh := base(tc.freshGroup, tc.member)
-			freshResult := ValidateFrame(*fresh, nil, ShapeOpen)
-			freshGate := DecideFrameGate(freshResult, true)
-			t.Logf("fresh_valid=%v fresh_gate=%q", freshResult.Outcome == FrameValidationOutcomeValid, freshGate.Outcome)
-			if freshResult.Outcome != FrameValidationOutcomeValid {
-				t.Fatalf("fixture defect: fresh frame invalid (%v)", freshResult.Failure.Invariant)
-			}
-			got := composeAcceptedContext(compositionInput{
-				Fresh: &freshResult.Frame, FreshGate: freshGate,
-				FreshFamily:      QuestionFamilyGroupedCohortStatus,
-				CarriedFamily:    QuestionFamilyGroupedCohortStatus,
-				CarriedGroupKind: tc.carried,
-				EmittedShape:     ShapeOpen,
-			})
+			got := composeAcceptedContext(compositionInput{Carried: tc.carried, Fresh: tc.fresh, FreshFamily: QuestionFamilyGroupedCohortStatus})
 			t.Logf("%s -> outcome=%q gate=%q invariant=%q effective_group=%q",
 				tc.name, got.Outcome, got.Gate.Outcome, got.FailedInvariant, got.EffectiveGroupKind())
 			if got.Outcome != tc.wantOutcome {
 				t.Errorf("outcome=%q want %q", got.Outcome, tc.wantOutcome)
 			}
+			if got.FailedInvariant != tc.wantInvariant {
+				t.Errorf("invariant=%q want %q", got.FailedInvariant, tc.wantInvariant)
+			}
 			if got.EffectiveGroupKind() != tc.wantGroup {
 				t.Errorf("effective group=%q want %q", got.EffectiveGroupKind(), tc.wantGroup)
 			}
-			// THE PROPERTY THE OLD BUILD VIOLATED: whatever frame comes back is
-			// the frame the gate describes.
+			// THE PROPERTY: whatever frame comes back is the frame the gate
+			// describes, and it is the CARRIED frame, byte for byte.
 			if got.Usable() {
 				if got.Frame == nil {
-					t.Fatalf("usable context with no frame")
+					t.Fatalf("usable context with no frame from a framed carrier")
 				}
-				recheck := ValidateFrame(*got.Frame, nil, ShapeOpen)
-				if recheck.Outcome != FrameValidationOutcomeValid {
-					t.Errorf("USABLE context carries an INVALID frame (%v) while gate=%q -- the gate does not certify what consumers receive",
-						recheck.Failure.Invariant, got.Gate.Outcome)
+				recheck := ValidateFrame(*got.Frame, got.Frame.WidenedObligations, ShapeOpen)
+				if recheck.Outcome != FrameValidationOutcomeValid || got.Gate.Refuses() {
+					t.Errorf("USABLE context carries an invalid frame (%v) or a refusing gate %q", recheck.Failure.Invariant, got.Gate.Outcome)
 				}
-				if got.Gate.Refuses() {
-					t.Errorf("usable context whose gate refuses")
+				if !framesEqual(*got.Frame, *tc.carried.Frame) {
+					t.Errorf("the accepted frame is not the carried frame")
 				}
-			} else if got.Outcome == CompositionInvalid && got.FailedInvariant == "" {
+			} else if got.FailedInvariant == "" {
 				t.Errorf("invalid composition with no named invariant")
 			}
 		})

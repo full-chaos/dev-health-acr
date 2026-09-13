@@ -55,7 +55,11 @@ func seedLegacyUnanswerableClarification(t *testing.T, store *memoryinvestigatio
 		contextfabric.SourceWatermarkSnapshot{}, nil,
 		contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}),
 		contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{},
-		contextfabric.ReuseVersionAuthorities{}, 0, ""); err != nil {
+		contextfabric.ReuseVersionAuthorities{}, 0, "",
+		// A seeded row's turn ended before interpretation, so it carries the
+		// closed absence rather than a reading -- the same shape every other
+		// route fixture in this package seeds.
+		contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)); err != nil {
 		t.Fatalf("seed result: %v", err)
 	}
 	return result
@@ -129,7 +133,11 @@ func TestResultRouteStillServesAnAnswerableClarification(t *testing.T) {
 		contextfabric.SourceWatermarkSnapshot{}, nil,
 		contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}),
 		contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{},
-		contextfabric.ReuseVersionAuthorities{}, 0, ""); err != nil {
+		contextfabric.ReuseVersionAuthorities{}, 0, "",
+		// A seeded row's turn ended before interpretation, so it carries the
+		// closed absence rather than a reading -- the same shape every other
+		// route fixture in this package seeds.
+		contextfabric.SemanticStateAbsent(contextfabric.SemanticStateAbsenceTurnEndedBeforeInterpretation)); err != nil {
 		t.Fatalf("seed result: %v", err)
 	}
 	app, token := newContextFabricTestAppWithResults(t, nil, store)

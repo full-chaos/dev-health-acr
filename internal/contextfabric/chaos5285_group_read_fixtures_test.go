@@ -255,6 +255,19 @@ type groupReadFixtureConfig struct {
 	// interpreter, when set, replaces the legal projects-by-team framed
 	// interpreter -- for a pin about what a FRAME-seam refusal serves.
 	interpreter QuestionInterpreter
+	// results, when set, is the result store the engine saves into -- for a
+	// pin about what a turn PERSISTS, and about what a second turn can then
+	// continue. Without one the engine saves into a store nothing can read,
+	// which is right for every pin that only reads the served document.
+	results InvestigationResultStore
+}
+
+// groupReadResultStore is the config's store, or the stub that discards.
+func groupReadResultStore(store InvestigationResultStore) InvestigationResultStore {
+	if store != nil {
+		return store
+	}
+	return &resultStoreStub{}
 }
 
 // groupReadEngineFixtureConfigured is the same fixture with a hook onto the
@@ -372,7 +385,10 @@ func groupReadEngineFixtureConfigured(t *testing.T, telemetry EngineTelemetry, f
 				},
 			}, nil
 		}),
-		Results:   &resultStoreStub{},
+		// The config's store when a pin needs to read what was SAVED; the
+		// stub otherwise, which is what every pin that only reads the served
+		// document wants.
+		Results:   groupReadResultStore(config.results),
 		Telemetry: telemetry,
 	}, groupReadEngineOptions(options))
 	if err != nil {

@@ -3,11 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	migrationspg "github.com/full-chaos/dev-health-acr/migrations/postgres"
 	"github.com/stretchr/testify/require"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
@@ -114,11 +117,25 @@ func TestRun_reportsAppliedCountAndNoOpDistinctly(t *testing.T) {
 	// 0035, and CHAOS-4634 S4 (question_family_version reuse-key dimension,
 	// per the CHAOS-4632/S2 note deferring it here) added 0036, and the
 	// durable chain-identity work (context_fabric_result parent_result_id)
-	// added 0037, so the embedded set is now 37 files. A future migration must
-	// bump this literal too -- see expectedMigrationVersions in
-	// migrations/postgres/runner_integration_test.go for the same
-	// convention, held in one place there.
-	require.Equal(t, "applied 37 migrations\n", first.String())
+	// added 0037. The running tally above is history now: the expectation is
+	// no longer a literal anyone has to remember to bump.
+	// COUNTED FROM THE EMBEDDED SET, NOT TYPED. The literal that used to sit
+	// here went stale the moment a migration was added -- it is how this
+	// assertion failed on a branch whose sibling convention
+	// (expectedMigrationVersions in migrations/postgres/runner_integration_test.go)
+	// had already been moved. The set the command applies is the set the
+	// expectation is read from, so the two cannot disagree, and the negative
+	// control below keeps the counter honest.
+	entries, err := fs.ReadDir(migrationspg.Files, ".")
+	require.NoError(t, err)
+	embedded := 0
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".sql") {
+			embedded++
+		}
+	}
+	require.NotZero(t, embedded, "the embedded set counted zero -- a zero expectation would pass over a command that applied nothing")
+	require.Equal(t, fmt.Sprintf("applied %d migrations\n", embedded), first.String())
 	require.NoError(t, secondErr)
 	require.Equal(t, "no migrations applied\n", second.String())
 }

@@ -1644,10 +1644,7 @@ func closedDecisionFields() []closedDecisionField {
 			// composition's own. Empty is legitimate -- most turns fail nothing.
 			Token: func(d windowContinuationDecision) string {
 				value := d.CompositionFailedInvariant
-				valid := value == "" ||
-					value == CompositionInvariantCarriedAxisUnexpressible ||
-					ValidFrameInvariant(FrameInvariant(value))
-				return guard(valid, value)
+				return guard(validCompositionFailedInvariant(value), value)
 			},
 			Invent: func(d *windowContinuationDecision) { d.CompositionFailedInvariant = "invented-invariant" },
 		},
@@ -1657,6 +1654,37 @@ func closedDecisionFields() []closedDecisionField {
 				return guard(ValidContinuationCarrierRead(d.ObservableCarrierRead()), string(d.ObservableCarrierRead()))
 			},
 			Invent: func(d *windowContinuationDecision) { d.CarrierRead = ContinuationCarrierRead("invented-read") },
+		},
+		{
+			Key: "request_identity_match",
+			// WHICH of the two identities differed, as a closed token. A turn
+			// that never reached the comparison says so; a carrier stamped by
+			// a recipe this build does not know is not_comparable, which is a
+			// deploy event; changed is a caller event. One token, three
+			// operationally different causes, never folded together.
+			Token: func(d windowContinuationDecision) string {
+				return guard(ValidContinuationRequestIdentityMatch(d.RequestIdentityMatch), string(d.RequestIdentityMatch))
+			},
+			Invent: func(d *windowContinuationDecision) {
+				d.RequestIdentityMatch = ContinuationRequestIdentityMatch("invented-match")
+			},
+		},
+		{
+			Key: "carried_state_read",
+			// The carrier's snapshot read status, "not_read" when admission
+			// never read a carrier. An empty status from a store that did not
+			// report one is published as the unrecognised sentinel, never
+			// folded into `absent`.
+			Token: func(d windowContinuationDecision) string {
+				if !d.CarriedStateConsulted {
+					return "not_read"
+				}
+				return guard(ValidSemanticStateReadStatus(d.CarriedStateRead), string(d.CarriedStateRead))
+			},
+			Invent: func(d *windowContinuationDecision) {
+				d.CarriedStateConsulted = true
+				d.CarriedStateRead = SemanticStateReadStatus("invented-status")
+			},
 		},
 		{
 			Key: "refusal_basis",
@@ -1757,6 +1785,13 @@ func ContinuationDecisionLineVocabulary(key string) []string {
 		return tokenStrings(continuationAxisOutcomes())
 	case "carrier_read":
 		return tokenStrings([]ContinuationCarrierRead{ContinuationCarrierNotRead, ContinuationCarrierReadOK, ContinuationCarrierReadFailed})
+	case "request_identity_match":
+		return tokenStrings(continuationRequestIdentityMatches())
+	case "carried_state_read":
+		// The store's own read statuses, plus the "admission never consulted a
+		// carrier" token the guard renders. Enumerated from the producer, so a
+		// new status joins here by existing, never by being remembered.
+		return append([]string{"not_read"}, tokenStrings(semanticStateReadStatuses())...)
 	case "refusal_basis":
 		// The one wire member a continuation can serve, and the explicit
 		// not-refused token ObservableRefusalBasis renders.
@@ -1841,6 +1876,13 @@ func (t SlogEngineTelemetry) RecordWindowContinuationDecision(ctx context.Contex
 		"carried_axis", SanitizeLogAttr(closedDecisionToken("carried_axis", decision)),
 		"executed_axis", SanitizeLogAttr(closedDecisionToken("executed_axis", decision)),
 		"interpreted_axis_outcome", SanitizeLogAttr(closedDecisionToken("interpreted_axis_outcome", decision)),
+		"carried_state_read", SanitizeLogAttr(closedDecisionToken("carried_state_read", decision)),
+		"request_identity_match", SanitizeLogAttr(closedDecisionToken("request_identity_match", decision)),
+		// The two readings, in full. The carried one is what admission read;
+		// the fresh one is the diagnostic proposal. Together with
+		// conflict_fields they are the decision's whole input.
+		semanticStateLogGroup("carried_state", decision.carriedState()),
+		semanticStateLogGroup("fresh_state", decision.freshState()),
 	}
 	// requestIDLogAttrs already returns its value through SanitizeLogAttr --
 	// no second strip needed here.

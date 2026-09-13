@@ -19,6 +19,7 @@ func FieldKeys(e Event) []string {
 // ByID is the generated lookup from Event.ID to its declaration -- generated
 // rather than hand-maintained so it can never drift from All.
 var ByID = map[string]Event{
+	"contextfabric.semantic_state_persistence":    SemanticStatePersistence,
 	"contextfabric.window_continuation_decision":  WindowContinuationDecision,
 	"graphrank.alias_lookup":                      AliasLookup,
 	"graphrank.anchor_kind_withheld":              AnchorKindWithheld,
@@ -57,6 +58,77 @@ var ByID = map[string]Event{
 	"graphrank.slice_b_survivor_verdict_summary":  SliceBSurvivorVerdictSummary,
 }
 
+// SemanticStatePersistenceFields is contextfabric.semantic_state_persistence's generated typed construction interface
+// (CHAOS-5516): one Go field per Field SemanticStatePersistence.Fields declares in spec.go.
+type SemanticStatePersistenceFields struct {
+	OrgID          string
+	ResultID       string
+	ParentResultID string
+	Site           string
+	Decision       string
+	Absence        string
+	OversizedBound string
+	EncodedBytes   int
+	EncodedCap     int
+	State          map[string]any
+	RequestID      string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every SemanticStatePersistenceFields uniformly, set ONLY by NewSemanticStatePersistenceFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewSemanticStatePersistenceFields is the generated constructor for SemanticStatePersistenceFields -- every
+// field SemanticStatePersistence.Fields declares is a required parameter.
+func NewSemanticStatePersistenceFields(orgID string, resultID string, parentResultID string, site string, decision string, absence string, oversizedBound string, encodedBytes int, encodedCap int, state map[string]any, requestID string) SemanticStatePersistenceFields {
+	return SemanticStatePersistenceFields{
+		OrgID:          orgID,
+		ResultID:       resultID,
+		ParentResultID: parentResultID,
+		Site:           site,
+		Decision:       decision,
+		Absence:        absence,
+		OversizedBound: oversizedBound,
+		EncodedBytes:   encodedBytes,
+		EncodedCap:     encodedCap,
+		State:          state,
+		RequestID:      requestID,
+		constructed:    true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewSemanticStatePersistenceFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f SemanticStatePersistenceFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns SemanticStatePersistence's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f SemanticStatePersistenceFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"result_id", contextfabric.SanitizeLogAttr(f.ResultID),
+		"parent_result_id", contextfabric.SanitizeLogAttr(f.ParentResultID),
+		"site", contextfabric.SanitizeLogAttr(f.Site),
+		"decision", contextfabric.SanitizeLogAttr(f.Decision),
+		"absence", contextfabric.SanitizeLogAttr(f.Absence),
+		"oversized_bound", contextfabric.SanitizeLogAttr(f.OversizedBound),
+		"encoded_bytes", f.EncodedBytes,
+		"encoded_cap", f.EncodedCap,
+		"state", f.State,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
 // WindowContinuationDecisionFields is contextfabric.window_continuation_decision's generated typed construction interface
 // (CHAOS-5516): one Go field per Field WindowContinuationDecision.Fields declares in spec.go.
 type WindowContinuationDecisionFields struct {
@@ -83,6 +155,10 @@ type WindowContinuationDecisionFields struct {
 	RefusalBasis               string
 	ReferencedResultID         string
 	CarrierRead                string
+	CarriedStateRead           string
+	RequestIdentityMatch       string
+	CarriedState               map[string]any
+	FreshState                 map[string]any
 	WindowReceiptCount         int
 	ExplicitWindowPresent      bool
 	InterpretedAxis            string
@@ -103,7 +179,7 @@ type WindowContinuationDecisionFields struct {
 
 // NewWindowContinuationDecisionFields is the generated constructor for WindowContinuationDecisionFields -- every
 // field WindowContinuationDecision.Fields declares is a required parameter.
-func NewWindowContinuationDecisionFields(orgID string, sourceResultID string, seedSource string, familyCarried string, familyFresh string, familyAccepted string, familySource string, continuationDisposition string, decisionReason string, comparisonEvaluated bool, agreement bool, conflictReason string, conflictCount int, conflictFields string, appliedWindow string, carriedContextID string, freshContextID string, acceptedContextID string, compositionOutcome string, compositionFailedInvariant string, refusalBasis string, referencedResultID string, carrierRead string, windowReceiptCount int, explicitWindowPresent bool, interpretedAxis string, carriedAxis string, executedAxis string, interpretedAxisOutcome string, requestID string) WindowContinuationDecisionFields {
+func NewWindowContinuationDecisionFields(orgID string, sourceResultID string, seedSource string, familyCarried string, familyFresh string, familyAccepted string, familySource string, continuationDisposition string, decisionReason string, comparisonEvaluated bool, agreement bool, conflictReason string, conflictCount int, conflictFields string, appliedWindow string, carriedContextID string, freshContextID string, acceptedContextID string, compositionOutcome string, compositionFailedInvariant string, refusalBasis string, referencedResultID string, carrierRead string, carriedStateRead string, requestIdentityMatch string, carriedState map[string]any, freshState map[string]any, windowReceiptCount int, explicitWindowPresent bool, interpretedAxis string, carriedAxis string, executedAxis string, interpretedAxisOutcome string, requestID string) WindowContinuationDecisionFields {
 	return WindowContinuationDecisionFields{
 		OrgID:                      orgID,
 		SourceResultID:             sourceResultID,
@@ -128,6 +204,10 @@ func NewWindowContinuationDecisionFields(orgID string, sourceResultID string, se
 		RefusalBasis:               refusalBasis,
 		ReferencedResultID:         referencedResultID,
 		CarrierRead:                carrierRead,
+		CarriedStateRead:           carriedStateRead,
+		RequestIdentityMatch:       requestIdentityMatch,
+		CarriedState:               carriedState,
+		FreshState:                 freshState,
 		WindowReceiptCount:         windowReceiptCount,
 		ExplicitWindowPresent:      explicitWindowPresent,
 		InterpretedAxis:            interpretedAxis,
@@ -175,6 +255,10 @@ func (f WindowContinuationDecisionFields) SlogArgs() []any {
 		"refusal_basis", contextfabric.SanitizeLogAttr(f.RefusalBasis),
 		"referenced_result_id", contextfabric.SanitizeLogAttr(f.ReferencedResultID),
 		"carrier_read", contextfabric.SanitizeLogAttr(f.CarrierRead),
+		"carried_state_read", contextfabric.SanitizeLogAttr(f.CarriedStateRead),
+		"request_identity_match", contextfabric.SanitizeLogAttr(f.RequestIdentityMatch),
+		"carried_state", f.CarriedState,
+		"fresh_state", f.FreshState,
 		"window_receipt_count", f.WindowReceiptCount,
 		"explicit_window_present", f.ExplicitWindowPresent,
 		"interpreted_axis", contextfabric.SanitizeLogAttr(f.InterpretedAxis),

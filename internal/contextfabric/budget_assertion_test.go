@@ -380,6 +380,7 @@ func TestEveryFreshResultExitAssertsTheBudget(t *testing.T) {
 			t.Fatalf("Investigate() error = %v", err)
 		}
 		assertStageRecorded(t, telemetry, BudgetAssertSubjectlessTerminal)
+		assertSemanticPersistence(t, telemetry, BudgetAssertSubjectlessTerminal, semanticPresent, "")
 		seen[BudgetAssertSubjectlessTerminal] = true
 	})
 
@@ -409,6 +410,12 @@ func TestEveryFreshResultExitAssertsTheBudget(t *testing.T) {
 			t.Fatalf("Investigate() error = %v", err)
 		}
 		assertStageRecorded(t, telemetry, BudgetAssertDecisive)
+		// This builder configures no result store, so the decisive exit saves
+		// nothing and records no decision; the decisive save's own decision
+		// is pinned through a real store in semantic_state_engine_test.go.
+		if len(telemetry.semanticStatePersistences) != 0 {
+			t.Errorf("an engine with no result store recorded %d persistence decisions", len(telemetry.semanticStatePersistences))
+		}
 		seen[BudgetAssertDecisive] = true
 	})
 
@@ -441,6 +448,8 @@ func TestEveryFreshResultExitAssertsTheBudget(t *testing.T) {
 				t.Fatalf("Status = %q, want %q (sanity check: the intended exit was not taken, so this subtest proves nothing)", result.Status, tc.status)
 			}
 			assertStageRecorded(t, telemetry, tc.stage)
+			// Both vetoes here fire before interpretation: nothing was read.
+			assertSemanticPersistence(t, telemetry, tc.stage, semanticAbsent, SemanticStateAbsenceTurnEndedBeforeInterpretation)
 			seen[tc.stage] = true
 		})
 	}
@@ -461,6 +470,7 @@ func TestEveryFreshResultExitAssertsTheBudget(t *testing.T) {
 			t.Fatalf("Status = %q, want clarification_required (sanity check on the gate path taken)", result.Status)
 		}
 		assertStageRecorded(t, telemetry, BudgetAssertWindowConfirmationRequired)
+		assertSemanticPersistence(t, telemetry, BudgetAssertWindowConfirmationRequired, semanticAbsent, SemanticStateAbsenceTurnEndedBeforeInterpretation)
 		seen[BudgetAssertWindowConfirmationRequired] = true
 	})
 
@@ -487,6 +497,7 @@ func TestEveryFreshResultExitAssertsTheBudget(t *testing.T) {
 			t.Fatalf("Status = %q, want no_match (sanity check: the intended exit was not taken, so this subtest proves nothing)", result.Status)
 		}
 		assertStageRecorded(t, telemetry, BudgetAssertInterpretedTimeBound)
+		assertSemanticPersistence(t, telemetry, BudgetAssertInterpretedTimeBound, semanticAbsent, SemanticStateAbsenceInterpretedTimeUnanswerable)
 		seen[BudgetAssertInterpretedTimeBound] = true
 	})
 
@@ -511,6 +522,7 @@ func TestEveryFreshResultExitAssertsTheBudget(t *testing.T) {
 			t.Fatalf("refusal_basis = %q (sanity check: the intended exit was not taken, so this subtest proves nothing)", result.RefusalBasis)
 		}
 		assertStageRecorded(t, telemetry, BudgetAssertContinuationRefusal)
+		assertSemanticPersistence(t, telemetry, BudgetAssertContinuationRefusal, semanticAbsent, SemanticStateAbsenceContinuationRefused)
 		seen[BudgetAssertContinuationRefusal] = true
 	})
 
@@ -526,6 +538,10 @@ func TestEveryFreshResultExitAssertsTheBudget(t *testing.T) {
 			t.Fatal("premise: this subtest must be a reuse hit, or it proves nothing about the reuse exit")
 		}
 		assertStageRecorded(t, telemetry, BudgetAssertReuse)
+		// A reuse serve persists nothing, so it records no persistence decision.
+		if len(telemetry.semanticStatePersistences) != 0 {
+			t.Errorf("a reuse serve recorded %d semantic-state persistence decisions, want 0", len(telemetry.semanticStatePersistences))
+		}
 		seen[BudgetAssertReuse] = true
 	})
 

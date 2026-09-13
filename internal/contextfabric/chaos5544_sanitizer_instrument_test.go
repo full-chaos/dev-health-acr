@@ -424,6 +424,21 @@ func chaos5544ScanForUnsanitizedLogAttrs(t *testing.T, dir, pattern string) []st
 			switch name {
 			case "String", "Any", "Group", "StringValue", "AnyValue":
 				return false
+			// THE NON-STRING BUILDERS. slog.Bool/Int/Int64/Uint64/Float64/
+			// Duration/Time take a value parameter whose static type is not a
+			// string and not a []string, so there is no corpus text for them
+			// to carry and nothing for SanitizeLogAttr to do -- wrapping one
+			// is not even expressible. Treating them as opaque reported a
+			// false finding on every such attr spliced into a Group's arg
+			// list, which is how this was found: six of them on one line of
+			// the semantic-state group. They are trusted for their TYPE, not
+			// for their name being on a list -- their key is a literal and
+			// their value cannot be a string -- and
+			// TestChaos5544SanitizerInstrumentStillCatchesAStringBesideNonStringAttrs
+			// proves the gate still fires on an unwrapped string standing
+			// beside them.
+			case "Bool", "Int", "Int64", "Uint64", "Float64", "Duration", "Time":
+				return false
 			}
 		}
 		return true // an external, non-builder function -- opaque
@@ -1769,4 +1784,38 @@ func LogIt(logger *slog.Logger, requestID string) {
 	if want := fmt.Sprintf("%s:6:", filepath.Join(dir, "fixture.go")); findings[0][:len(want)] != want {
 		t.Fatalf("finding = %q, want it to point at fixture.go:6 (the trailing requestID arg)", findings[0])
 	}
+}
+
+// TestChaos5544SanitizerInstrumentStillCatchesAStringBesideNonStringAttrs is
+// the control for trusting slog's non-string builders: a Group whose arg list
+// mixes slog.Bool/slog.Int attrs with ONE unwrapped string attr must still be
+// reported. Without it, "trust Bool and Int" could have been read as "trust
+// everything in a Group that contains one".
+func TestChaos5544SanitizerInstrumentStillCatchesAStringBesideNonStringAttrs(t *testing.T) {
+	dir := t.TempDir()
+	src := `package fixture
+
+import "log/slog"
+
+func LogIt(logger *slog.Logger, requestID string, n int) {
+	logger.Info("fixture line", "outer", slog.Group("inner",
+		slog.Bool("present", true),
+		slog.Int("count", n),
+		slog.String("request_id", requestID),
+		slog.Bool("done", false),
+	))
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "fixture.go"), []byte(src), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	modSrc := "module fixture.example/chaos5544mixed\n\ngo 1.21\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(modSrc), 0o644); err != nil {
+		t.Fatalf("write fixture go.mod: %v", err)
+	}
+	findings := chaos5544ScanForUnsanitizedLogAttrs(t, dir, "./...")
+	if len(findings) != 1 {
+		t.Fatalf("want exactly the one unwrapped string attr, got %d: %v", len(findings), findings)
+	}
+	t.Logf("instrument reported: %v", findings)
 }

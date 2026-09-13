@@ -625,7 +625,16 @@ func TestWindowContinuation_ComparableFieldsAreExactlyTheCarriedComponents(t *te
 	t.Parallel()
 
 	got := continuationComparableFields()
-	want := []ContinuationConflictField{ContinuationConflictFieldFamily, ContinuationConflictFieldSubjectExpression}
+	// Every component the persisted snapshot carries, and nothing it does
+	// not: narrowing_basis is carried and never proposed by the fresh side,
+	// and interpretation is not in the snapshot at all.
+	want := []ContinuationConflictField{
+		ContinuationConflictFieldFamily, ContinuationConflictFieldSubjectExpression, ContinuationConflictFieldRoles,
+		ContinuationConflictFieldGoals, ContinuationConflictFieldTemporal, ContinuationConflictFieldEmphasis,
+		ContinuationConflictFieldDimensions, ContinuationConflictFieldObligations, ContinuationConflictFieldWidenedObligations,
+		ContinuationConflictFieldRequirements, ContinuationConflictFieldFrameGate, ContinuationConflictFieldScopeAnchor,
+		ContinuationConflictFieldEmittedShape,
+	}
 	if len(got) != len(want) {
 		t.Fatalf("comparable fields = %v, want %v -- this list is what `agreement` is a statement ABOUT; widening it without carrying the component would claim agreement about something nothing carried, and narrowing it would hide a real substitution", got, want)
 	}
@@ -676,7 +685,7 @@ func TestWindowContinuation_TheDecisionReachesTheRealSink(t *testing.T) {
 			return fresh, nil
 		}),
 		Interpreter: forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam},
-		Results:     &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		Results:     withCarrierStates(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}),
 		Telemetry:   SlogEngineTelemetry{logger: logger},
 	})
 	if _, err := engine.Investigate(context.Background(), acceptancePrincipal(), request); err != nil {
@@ -851,7 +860,7 @@ func TestWindowContinuation_R1_AWindowReceiptRequestEmitsADecisionEvenWhenGraphB
 			return fresh, nil
 		}),
 		Interpreter: forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam},
-		Results:     &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		Results:     withCarrierStates(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}),
 		Telemetry:   telemetry,
 	})
 	if _, err := engine.Investigate(context.Background(), acceptancePrincipal(), request); err == nil {
@@ -925,6 +934,12 @@ type reasonDriver struct {
 	// resultsWrap replaces the store the engine saves through, for the one
 	// reason that is decided at SAVE time rather than at admission.
 	resultsWrap func(*staticResultStore) InvestigationResultStore
+	// legacyCarrier leaves the carrier WITHOUT a persisted snapshot (a row
+	// written before the column); stateRead forces the snapshot read status.
+	legacyCarrier bool
+	stateRead     SemanticStateReadStatus
+	// carrier replaces the carrier's snapshot.
+	carrier func(testing.TB, InvestigationResult) *PersistedSemanticState
 }
 
 // TestWindowContinuation_EveryReasonIsReachedThroughTheEngine is the r3 F4
@@ -1025,12 +1040,16 @@ func TestWindowContinuation_EveryReasonIsReachedThroughTheEngine(t *testing.T) {
 			prior:       func(p InvestigationResult) InvestigationResult { p.Question = driftQuestion; return p },
 		},
 		{
-			// The carried reading is grouped and the fresh frame has no
-			// grouped expression to put the axis in, so the composition is
-			// refused rather than served without its axis.
-			reason:      ContinuationReasonCompositionInvalid,
-			interpreter: r1UngroupedInterpreter{family: QuestionFamilyDiscoveredCohortRanking},
+			// The carried frame would be REPAIRED by today's validation (its
+			// derived obligations are missing), so it cannot be established.
+			reason:  ContinuationReasonCompositionInvalid,
+			carrier: strippedFramedCarrierState,
 		},
+		// The carrier has no persisted reading: a row written before the
+		// column existed.
+		{reason: ContinuationReasonSemanticStateAbsent, legacyCarrier: true},
+		// The carrier's snapshot is present and unreadable.
+		{reason: ContinuationReasonSemanticStateInvalid, stateRead: SemanticStateReadMalformed},
 		{
 			// Decided at SAVE time, not at admission: the continuation was
 			// applied and the window did not survive the save.
@@ -1046,6 +1065,27 @@ func TestWindowContinuation_EveryReasonIsReachedThroughTheEngine(t *testing.T) {
 			// The effective byte budget differs from the one turn one recorded.
 			reason: ContinuationReasonAnswerBudgetChanged,
 			mutate: func(r *InvestigationRequest) { r.Options.MaxSerializedBytes = r.Options.MaxSerializedBytes / 2 },
+		},
+		{
+			// An answer-shaping option the public plan does not record: turn
+			// one stamped it into the snapshot's request-identity digest, and
+			// this turn asks with a different one. max_drivers is driven here
+			// because it reaches graph discovery, where it truncates the
+			// drivers the answer may cite -- a changed value changes the
+			// answer, which is what makes it part of the identity.
+			reason: ContinuationReasonRequestIdentityChanged,
+			mutate: func(r *InvestigationRequest) { r.Options.MaxDrivers = r.Options.MaxDrivers + 1 },
+		},
+		{
+			// A carrier stamped by a recipe this build does not know: nothing
+			// today's digest can be compared against. A DEPLOY event, not a
+			// request one, which is why it is its own member.
+			reason: ContinuationReasonRequestIdentityUnverifiable,
+			carrier: func(t testing.TB, prior InvestigationResult) *PersistedSemanticState {
+				state := framelessCarrierState(prior)
+				state.RequestIdentity.Version = "request-identity.v0-not-in-force"
+				return state
+			},
 		},
 	}
 
@@ -1085,6 +1125,15 @@ func TestWindowContinuation_EveryReasonIsReachedThroughTheEngine(t *testing.T) {
 			baseStore := &staticResultStore{
 				results:    map[string]InvestigationResult{prior.ResultID: prior, older.ResultID: older},
 				graphEpoch: d.storeEpoch,
+			}
+			if d.carrier != nil {
+				baseStore.states = map[string]*PersistedSemanticState{prior.ResultID: d.carrier(t, prior)}
+			}
+			if !d.legacyCarrier {
+				withCarrierStates(t, baseStore)
+			}
+			if d.stateRead != "" {
+				baseStore.stateReads = map[string]SemanticStateReadStatus{prior.ResultID: d.stateRead}
 			}
 			var store InvestigationResultStore = baseStore
 			if d.resultsWrap != nil {
@@ -1274,8 +1323,10 @@ func TestWindowContinuation_TheInputShapeSpace(t *testing.T) {
 					return fresh, nil
 				}),
 				Interpreter: interpreter,
-				Results:     &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
-				Telemetry:   telemetry,
+				// Turn one proposed and validated a frame, so its snapshot
+				// carries one -- the frame retrieval then reads.
+				Results:   withFramedCarrier(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}, prior, contractsv1.ContextFabricSubjectRepository),
+				Telemetry: telemetry,
 			}
 			if tc.bindingFails {
 				deps.Graph = bindingFailingGraphReader{err: errBindingUnavailableForRepro}
@@ -1377,7 +1428,7 @@ func TestWindowContinuation_R2_ABindingFailureCarriesItsOwnReasonNotUnspecified(
 			return fresh, nil
 		}),
 		Interpreter: forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam},
-		Results:     &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		Results:     withCarrierStates(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}),
 		Telemetry:   telemetry,
 	})
 	if _, err := engine.Investigate(context.Background(), acceptancePrincipal(), request); err == nil {
@@ -1418,13 +1469,15 @@ func TestWindowContinuation_R2_TheGraphConsumersNeverSeeANilFrame(t *testing.T) 
 			family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam,
 			frameGroup: contractsv1.ContextFabricSubjectTeam,
 		},
-		Results:   &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		// Turn one saved a frame. With the reading persisted, retrieval reads
+		// the CARRIED frame -- never a nil, and never the fresh one.
+		Results:   withFramedCarrier(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}, prior, contractsv1.ContextFabricSubjectRepository),
 		Telemetry: telemetry,
 	})
 	if _, err := engine.Investigate(context.Background(), acceptancePrincipal(), request); err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
-	t.Logf("R2-3: ResolveSubjects saw frame=%v (calls=%d); the interpreter PROPOSED a non-nil frame",
+	t.Logf("ResolveSubjects saw frame=%v (calls=%d); the carrier saved a non-nil frame",
 		graph.lastFrameNonNil, graph.calls)
 	if graph.calls > 0 && !graph.lastFrameNonNil {
 		t.Fatalf("R2-3 REGRESSION: the fresh frame was cleared for the PLANNER and the nil then reached ResolveSubjects, a CURRENT-request consumer that reads the frame for this turn's retrieval -- the fix for R1-1 is scoped wider than the defect it closed")
@@ -1454,7 +1507,7 @@ func TestWindowContinuation_R2_AppliedIsNeverPublishedForATurnTheAxisVetoUndoes(
 		// The interpreter moves the axis AWAY from current, which is the
 		// documented shape that drops a confirmed window.
 		Interpreter: axisMovingInterpreter{family: QuestionFamilyGroupedCohortStatus},
-		Results:     &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		Results:     withCarrierStates(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}),
 		Telemetry:   telemetry,
 	})
 	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), request)
@@ -1679,7 +1732,7 @@ func TestWindowContinuation_R3_TheInterpretedTimeBoundErrorCarriesItsOwnReason(t
 		}),
 		// An as-of AFTER the pinned test clock -> resolveTimeContext errors.
 		Interpreter: futureAsOfInterpreter{family: QuestionFamilyGroupedCohortStatus},
-		Results:     &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		Results:     withCarrierStates(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}),
 		Telemetry:   telemetry,
 	})
 	// CHAOS-5421 turned this exit from a bare error into a SERVED TERMINAL, so
@@ -1724,7 +1777,7 @@ func TestWindowContinuation_R3_ACancelledWindowRequestStillEmitsADecision(t *tes
 			return fresh, nil
 		}),
 		Interpreter: forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam},
-		Results:     &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+		Results:     withCarrierStates(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}),
 		Telemetry:   telemetry,
 	})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1988,4 +2041,27 @@ func TestWindowContinuation_TheConflictCountEqualsTheFieldsItNames(t *testing.T)
 	if d.ConflictCount() == 0 {
 		t.Errorf("fixture defect: this arm forces a family AND subject-expression conflict, so a zero count means the comparison did not run")
 	}
+}
+
+// strippedFramedCarrierState is a framed carrier whose recorded frame today's
+// validation would REPAIR (its goal set out of canonical order, obligations not
+// derived from it), so the recorded frame is not a fixed point of today's
+// validation and composition refuses it.
+func strippedFramedCarrierState(t testing.TB, prior InvestigationResult) *PersistedSemanticState {
+	t.Helper()
+	state := framedCarrierState(t, prior, contractsv1.ContextFabricSubjectRepository)
+	*state.Frame = nonCanonicalFrame(*state.Frame)
+	if _, err := EncodeSemanticState(state); err != nil {
+		t.Fatalf("fixture defect: stripped carrier does not validate: %v", err)
+	}
+	return state
+}
+
+// nonCanonicalFrame returns a copy of frame that the codec accepts (closed
+// values, non-empty sets, no duplicates) and today's validation would change:
+// its goals out of canonical order, with a goal its obligations do not reflect.
+func nonCanonicalFrame(frame QuestionFrame) QuestionFrame {
+	out := cloneFrame(frame)
+	out.Goals = []InvestigationGoal{GoalRankOrSurvey, GoalAssessState}
+	return out
 }

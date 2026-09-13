@@ -1,5 +1,305 @@
 [
   {
+    "id": "contextfabric.semantic_state_persistence",
+    "msg": "context fabric semantic state persistence",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "exactly one line per Save, from the engine's single save site; a request that never reaches Save emits none.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "result_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "parent_result_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "site",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "decisive",
+          "subjectless_terminal",
+          "window_veto",
+          "window_confirmation_required",
+          "structure_veto",
+          "reuse",
+          "interpreted_time_bound",
+          "continuation_refusal",
+          "unrecognised"
+        ]
+      },
+      {
+        "key": "decision",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "persisted",
+          "replay_conflict",
+          "superseded",
+          "save_failed",
+          "unrecognised"
+        ]
+      },
+      {
+        "key": "absence",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "turn_ended_before_interpretation",
+          "interpreted_time_unanswerable",
+          "continuation_refused",
+          "snapshot_oversized",
+          "snapshot_invalid",
+          "unrecognised"
+        ]
+      },
+      {
+        "key": "oversized_bound",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "encoded_bytes",
+          "requirements",
+          "operands",
+          "terms",
+          "term_bytes",
+          "term_bytes_total",
+          "frame_set",
+          "requirement_fact_kinds",
+          "requirement_dimensions",
+          "unrecognised"
+        ]
+      },
+      {
+        "key": "encoded_bytes",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "encoded_cap",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "state",
+        "type": "object",
+        "presence": "required",
+        "fields": [
+          {
+            "key": "present",
+            "type": "bool",
+            "presence": "required"
+          },
+          {
+            "key": "format_version",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "family",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "family_source",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "family_table_version",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "group_kind",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "narrowing_basis",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "scope_anchor_kind",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "scope_anchor_term_present",
+            "type": "bool",
+            "presence": "conditional",
+            "applicability": "written when present=true; the term itself is corpus text and is never published"
+          },
+          {
+            "key": "frame_present",
+            "type": "bool",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "frame_version",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "subject_expression_kind",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "subject_member_kind",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "subject_group_kind",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "subject_expected_kind",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "operands",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "retrieval_term_count",
+            "type": "int",
+            "presence": "conditional",
+            "applicability": "written when present=true; the terms themselves are corpus text and are never published"
+          },
+          {
+            "key": "goals",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "temporal",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "emphasis",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "dimensions",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "obligations",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "widened_obligations",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "emitted_shape",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "gate",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "roles",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "requirements_declared",
+            "type": "bool",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "requirement_count",
+            "type": "int",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "requirements",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "requirement_derivation_version",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "request_identity_version",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true; the recipe that produced the digest, empty on a snapshot written before one existed"
+          },
+          {
+            "key": "request_identity_digest",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true; a hash, never the inputs it was taken over"
+          }
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.window_continuation_decision",
     "msg": "context fabric window continuation decision",
     "level": "info",
@@ -122,6 +422,10 @@
           "composition_invalid",
           "window_superseded",
           "answer_budget_changed",
+          "request_identity_changed",
+          "request_identity_unverifiable",
+          "semantic_state_absent",
+          "semantic_state_invalid",
           "unspecified"
         ]
       },
@@ -237,6 +541,426 @@
           "not_read",
           "read",
           "failed"
+        ]
+      },
+      {
+        "key": "carried_state_read",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_read",
+          "available",
+          "absent",
+          "unsupported_version",
+          "malformed",
+          "oversized"
+        ]
+      },
+      {
+        "key": "request_identity_match",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "matched",
+          "changed",
+          "not_comparable",
+          "not_evaluated"
+        ]
+      },
+      {
+        "key": "carried_state",
+        "type": "object",
+        "presence": "required",
+        "fields": [
+          {
+            "key": "present",
+            "type": "bool",
+            "presence": "required"
+          },
+          {
+            "key": "format_version",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "family",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "family_source",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "family_table_version",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "group_kind",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "narrowing_basis",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "scope_anchor_kind",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "scope_anchor_term_present",
+            "type": "bool",
+            "presence": "conditional",
+            "applicability": "written when present=true; the term itself is corpus text and is never published"
+          },
+          {
+            "key": "frame_present",
+            "type": "bool",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "frame_version",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "subject_expression_kind",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "subject_member_kind",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "subject_group_kind",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "subject_expected_kind",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "operands",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "retrieval_term_count",
+            "type": "int",
+            "presence": "conditional",
+            "applicability": "written when present=true; the terms themselves are corpus text and are never published"
+          },
+          {
+            "key": "goals",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "temporal",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "emphasis",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "dimensions",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "obligations",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "widened_obligations",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "emitted_shape",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "gate",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "roles",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "requirements_declared",
+            "type": "bool",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "requirement_count",
+            "type": "int",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "requirements",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "requirement_derivation_version",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "request_identity_version",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true; the recipe that produced the digest, empty on a snapshot written before one existed"
+          },
+          {
+            "key": "request_identity_digest",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true; a hash, never the inputs it was taken over"
+          }
+        ]
+      },
+      {
+        "key": "fresh_state",
+        "type": "object",
+        "presence": "required",
+        "fields": [
+          {
+            "key": "present",
+            "type": "bool",
+            "presence": "required"
+          },
+          {
+            "key": "format_version",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "family",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "family_source",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "family_table_version",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "group_kind",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "narrowing_basis",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "scope_anchor_kind",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "scope_anchor_term_present",
+            "type": "bool",
+            "presence": "conditional",
+            "applicability": "written when present=true; the term itself is corpus text and is never published"
+          },
+          {
+            "key": "frame_present",
+            "type": "bool",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "frame_version",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "subject_expression_kind",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "subject_member_kind",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "subject_group_kind",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "subject_expected_kind",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "operands",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "retrieval_term_count",
+            "type": "int",
+            "presence": "conditional",
+            "applicability": "written when present=true; the terms themselves are corpus text and are never published"
+          },
+          {
+            "key": "goals",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "temporal",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "emphasis",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "dimensions",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "obligations",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "widened_obligations",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "emitted_shape",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "gate",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "roles",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "requirements_declared",
+            "type": "bool",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "requirement_count",
+            "type": "int",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "requirements",
+            "type": "string_slice",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "requirement_derivation_version",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "request_identity_version",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true; the recipe that produced the digest, empty on a snapshot written before one existed"
+          },
+          {
+            "key": "request_identity_digest",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true; a hash, never the inputs it was taken over"
+          }
         ]
       },
       {

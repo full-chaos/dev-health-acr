@@ -156,6 +156,8 @@ func goVarName(e Event) string {
 		return "SliceBSurvivorVerdict"
 	case SliceBSurvivorVerdictSummary.ID:
 		return "SliceBSurvivorVerdictSummary"
+	case SemanticStatePersistence.ID:
+		return "SemanticStatePersistence"
 	default:
 		panic("eventspec: goVarName has no mapping for " + e.ID + " -- add one before regenerating")
 	}
@@ -225,6 +227,12 @@ func goFieldType(t FieldType) string {
 		return "[]string"
 	case FieldObjectSlice:
 		return "[]map[string]any"
+	case FieldObject:
+		// One nested object. The generated construction interface carries it
+		// as a map the producer fills; its MEMBERS are still declared in
+		// spec.go and still walked by the certifier, so the map is a carrier
+		// shape here, never an unchecked blob on the wire.
+		return "map[string]any"
 	default:
 		panic("eventspec: goFieldType has no mapping for " + string(t))
 	}

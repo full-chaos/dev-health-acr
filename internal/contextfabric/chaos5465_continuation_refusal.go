@@ -165,7 +165,7 @@ func (e *Engine) continuationRefusalResult(
 		// snapshots, exactly like the interpreted-time-bound refusal: a
 		// refusal must never become reusable, and nil snapshots are the
 		// store's fail-closed "never reusable" reading.
-		if err := e.results.Save(ctx, principal, result, nil, nil, TimeAxisKeyFor(request.TimeContext), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch, ancestryParent); err != nil {
+		if err := e.saveResult(ctx, principal, BudgetAssertContinuationRefusal, result, nil, nil, TimeAxisKeyFor(request.TimeContext), binding.Epoch, ancestryParent, absentSemanticState(SemanticStateAbsenceContinuationRefused)); err != nil {
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
 	}

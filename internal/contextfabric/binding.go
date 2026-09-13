@@ -94,6 +94,15 @@ type StoredInvestigationResult struct {
 	// assume something": the walk fails closed on an empty parent exactly as
 	// it does on a missing reference.
 	ParentResultID string
+	// SemanticState is the result's decoded internal semantic snapshot, an
+	// independent copy, or nil when SemanticStateRead is anything other
+	// than available. It lives on the carrier for the reason GraphEpoch
+	// does: only the server reads it, and the public payload is closed.
+	SemanticState *PersistedSemanticState
+	// SemanticStateRead is the closed read status. A store that does not
+	// report one leaves it empty, which every reader treats as unavailable
+	// -- an unreported snapshot is never assumed to be absent-but-fine.
+	SemanticStateRead SemanticStateReadStatus
 }
 
 // ReuseMissReason classifies WHY AnswerReuseGate.FindReusable found no

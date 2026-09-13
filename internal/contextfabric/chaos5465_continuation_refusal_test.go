@@ -143,7 +143,7 @@ func (s *refusalStore) Get(ctx context.Context, principal storage.Principal, res
 	return s.staticResultStore.Get(ctx, principal, resultID)
 }
 
-func (s *refusalStore) Save(ctx context.Context, principal storage.Principal, result InvestigationResult, snap SourceWatermarkSnapshot, epoch RebuildEpoch, axisKey string, retrieval ReuseRetrievalIdentity, prompts ReusePromptVersions, authorities ReuseVersionAuthorities, graphEpoch int64, parentResultID string) error {
+func (s *refusalStore) Save(ctx context.Context, principal storage.Principal, result InvestigationResult, snap SourceWatermarkSnapshot, epoch RebuildEpoch, axisKey string, retrieval ReuseRetrievalIdentity, prompts ReusePromptVersions, authorities ReuseVersionAuthorities, graphEpoch int64, parentResultID string, semantic SemanticStateWrite) error {
 	if s.saveErr != nil {
 		return s.saveErr
 	}
@@ -151,7 +151,7 @@ func (s *refusalStore) Save(ctx context.Context, principal storage.Principal, re
 	s.savedParents = append(s.savedParents, parentResultID)
 	s.savedResultID = append(s.savedResultID, result.ResultID)
 	s.mu.Unlock()
-	return s.staticResultStore.Save(ctx, principal, result, snap, epoch, axisKey, retrieval, prompts, authorities, graphEpoch, parentResultID)
+	return s.staticResultStore.Save(ctx, principal, result, snap, epoch, axisKey, retrieval, prompts, authorities, graphEpoch, parentResultID, semantic)
 }
 
 type refusalReadCounts struct {
@@ -160,6 +160,20 @@ type refusalReadCounts struct {
 
 func newRefusalEngine(t *testing.T, store InvestigationResultStore, interpreter QuestionInterpreter, telemetry EngineTelemetry) (*Engine, *refusalReadCounts) {
 	t.Helper()
+	// Every carrier a production turn saves carries its persisted reading, so
+	// every fixture carrier does too -- one place, through the same producer,
+	// for both store shapes these pins use. A pin that WANTS a carrier without
+	// one (the legacy-row cells) opts out with staticResultStore.noCarrierStates.
+	switch s := store.(type) {
+	case *refusalStore:
+		if !s.staticResultStore.noCarrierStates {
+			withCarrierStates(t, s.staticResultStore)
+		}
+	case *staticResultStore:
+		if !s.noCarrierStates {
+			withCarrierStates(t, s)
+		}
+	}
 	counts := &refusalReadCounts{}
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	fresh := validInvestigationResult()
@@ -214,6 +228,12 @@ type refusalCell struct {
 	// one fails.
 	failGetAfter int
 	interpreter  QuestionInterpreter
+	// legacyCarrier leaves the carrier without a snapshot; stateRead forces
+	// its read status.
+	legacyCarrier bool
+	stateRead     SemanticStateReadStatus
+	// carrier replaces the carrier's snapshot.
+	carrier func(testing.TB, InvestigationResult) *PersistedSemanticState
 
 	wantRefused         bool
 	wantDisposition     ContinuationDisposition
@@ -294,19 +314,57 @@ func refusalCells() []refusalCell {
 			wantDecisionEmitted: true, wantServedBasis: contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable,
 		},
 		{
-			name:        "carried axis cannot be expressed by the fresh frame",
+			name:        "carried frame would be repaired by today's validation",
 			priorFamily: QuestionFamilyGroupedCohortStatus, priorGroup: contractsv1.ContextFabricSubjectTeam,
-			interpreter: r1UngroupedInterpreter{family: QuestionFamilyDiscoveredCohortRanking},
+			carrier:     strippedFramedCarrierState,
+			interpreter: forced,
 			wantRefused: true, wantDisposition: ContinuationWithheld, wantReason: ContinuationReasonCompositionInvalid,
 			wantDecisionEmitted: true, wantServedBasis: contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable,
 		},
 		{
-			name: "composed frame violates a frame invariant",
-			// The carried group axis equals the fresh frame's MEMBER kind, so
-			// the composition is grouped-by-itself (i6).
-			priorFamily: QuestionFamilyGroupedCohortStatus, priorGroup: SubjectRepository,
-			interpreter: frameBearingInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam, frameGroup: contractsv1.ContextFabricSubjectTeam},
+			name:        "carried frame refused by today's gate",
+			priorFamily: QuestionFamilyDiscoveredCohortRanking,
+			carrier: func(t testing.TB, prior InvestigationResult) *PersistedSemanticState {
+				frame, gate := unservableDiscoveredFrame(t.(*testing.T))
+				return carriedStateFor(t.(*testing.T), prior.AnswerPlan.Family, "", &frame, gate)
+			},
+			interpreter: forced,
 			wantRefused: true, wantDisposition: ContinuationWithheld, wantReason: ContinuationReasonCompositionInvalid,
+			wantDecisionEmitted: true, wantServedBasis: contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable,
+		},
+		{
+			name:          "legacy carrier with no persisted reading",
+			legacyCarrier: true,
+			interpreter:   forced,
+			wantRefused:   true, wantDisposition: ContinuationWithheld, wantReason: ContinuationReasonSemanticStateAbsent,
+			wantDecisionEmitted: true, wantServedBasis: contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable,
+		},
+		{
+			name:        "carrier snapshot of an unsupported format",
+			stateRead:   SemanticStateReadUnsupportedVersion,
+			interpreter: forced,
+			wantRefused: true, wantDisposition: ContinuationWithheld, wantReason: ContinuationReasonContextVersionMismatch,
+			wantDecisionEmitted: true, wantServedBasis: contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable,
+		},
+		{
+			name:        "carrier snapshot malformed",
+			stateRead:   SemanticStateReadMalformed,
+			interpreter: forced,
+			wantRefused: true, wantDisposition: ContinuationWithheld, wantReason: ContinuationReasonSemanticStateInvalid,
+			wantDecisionEmitted: true, wantServedBasis: contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable,
+		},
+		{
+			name:        "carrier snapshot oversized",
+			stateRead:   SemanticStateReadOversized,
+			interpreter: forced,
+			wantRefused: true, wantDisposition: ContinuationWithheld, wantReason: ContinuationReasonSemanticStateInvalid,
+			wantDecisionEmitted: true, wantServedBasis: contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable,
+		},
+		{
+			name:        "carrier snapshot status unreported by the store",
+			stateRead:   SemanticStateReadStatus("unreported-fixture"),
+			interpreter: forced,
+			wantRefused: true, wantDisposition: ContinuationWithheld, wantReason: ContinuationReasonSemanticStateInvalid,
 			wantDecisionEmitted: true, wantServedBasis: contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable,
 		},
 
@@ -372,10 +430,27 @@ func TestContinuationRefusal_TheRefusalMatrixThroughTheEngine(t *testing.T) {
 				}
 			}
 			older := continuationPrior(t, continuationOlderID, base, QuestionFamilyDiscoveredCohortRanking, "")
-			store := newRefusalStore(&staticResultStore{
+			base := &staticResultStore{
 				results:    map[string]InvestigationResult{prior.ResultID: prior, older.ResultID: older},
 				graphEpoch: cell.storeEpoch,
-			})
+			}
+			if cell.carrier != nil {
+				base.states = map[string]*PersistedSemanticState{prior.ResultID: cell.carrier(t, prior)}
+			}
+			if cell.legacyCarrier {
+				// A LEGACY ROW OPTS OUT ONCE, ON THE STORE. Skipping the call
+				// here is not enough: every later stamping point (the engine
+				// constructor, the axis harness) asks the store itself, and a
+				// cell that means "written before the column existed" must
+				// stay that way through all of them.
+				base.noCarrierStates = true
+			} else {
+				withCarrierStates(t, base)
+			}
+			if cell.stateRead != "" {
+				base.stateReads = map[string]SemanticStateReadStatus{continuationPriorID: cell.stateRead}
+			}
+			store := newRefusalStore(base)
 			if cell.failGetOf != "" {
 				store.failGetOf, store.failGetAfter = cell.failGetOf, cell.failGetAfter
 			}
@@ -478,7 +553,9 @@ func TestContinuationRefusal_AdmissionPublishesAnUnreadableCarrierAsItsOwnValue(
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			prior := continuationPrior(t, continuationPriorID, base, QuestionFamilyDiscoveredCohortRanking, "")
-			store := newRefusalStore(&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}, graphEpoch: tc.epoch})
+			carriers := &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}, graphEpoch: tc.epoch}
+			withCarrierStates(t, carriers)
+			store := newRefusalStore(carriers)
 			if tc.failGet {
 				store.failGetOf, store.failGetAfter = continuationPriorID, 0
 			}
@@ -636,7 +713,7 @@ func TestContinuationRefusal_TheDecisionLineNamesTheServedBasis(t *testing.T) {
 			var buf bytes.Buffer
 			sink := SlogEngineTelemetry{logger: slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))}
 			prior := continuationPrior(t, continuationPriorID, base, QuestionFamilyDiscoveredCohortRanking, "")
-			store := newRefusalStore(&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}, graphEpoch: tc.storeEpoch})
+			store := newRefusalStore(withCarrierStates(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}, graphEpoch: tc.storeEpoch}))
 			store.saveErr = tc.saveErr
 			engine, _ := newRefusalEngine(t, store, forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam}, sink)
 			_, err := engine.Investigate(context.Background(), acceptancePrincipal(), continuationRequest(base))
@@ -764,7 +841,7 @@ func servedContinuationRefusal(t *testing.T) InvestigationResult {
 	t.Helper()
 	base := validInvestigationRequest().Question
 	prior := continuationPrior(t, continuationPriorID, base, QuestionFamilyDiscoveredCohortRanking, "")
-	store := newRefusalStore(&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}, graphEpoch: staleEpoch()})
+	store := newRefusalStore(withCarrierStates(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}, graphEpoch: staleEpoch()}))
 	engine, _ := newRefusalEngine(t, store, forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam}, &recordingTelemetry{})
 	result, err := engine.Investigate(context.Background(), acceptancePrincipal(), continuationRequest(base))
 	if err != nil {
@@ -901,7 +978,7 @@ func TestContinuationRefusal_TheProjectionKeepsBothHalvesAtTheCap(t *testing.T) 
 // the reading cannot ride a window receipt unnoticed.
 func TestWindowContinuation_EveryRequestFieldIsDecidedByName(t *testing.T) {
 	t.Parallel()
-	const unrecordedOption = "not recorded at turn one; compared in the stacked semantic-state digest"
+	const unrecordedOption = "an answer-shaping option the public plan does not record: turn one stamped it into the snapshot's request-identity digest, and a changed value is request_identity_changed -- the fresh path, not this turn's continuation"
 	base := validInvestigationRequest().Question
 	type decided struct {
 		kind   string // key | disqualifier | exempt
@@ -951,13 +1028,13 @@ func TestWindowContinuation_EveryRequestFieldIsDecidedByName(t *testing.T) {
 		"options.max_serialized_bytes": {"disqualifier", "the effective byte budget turn one recorded on the carrier's plan differs", func(r *InvestigationRequest) {
 			r.Options.MaxSerializedBytes = r.Options.MaxSerializedBytes / 2
 		}},
-		"options.max_subject_candidates": {"exempt", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxSubjectCandidates = 3 }},
-		"options.max_cohort_members":     {"exempt", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxCohortMembers = 7 }},
-		"options.max_relationship_paths": {"exempt", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxRelationshipPaths = 7 }},
-		"options.max_drivers":            {"exempt", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxDrivers = 3 }},
-		"options.max_evidence_refs":      {"exempt", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxEvidenceRefs = 7 }},
-		"options.allow_clarification":    {"exempt", unrecordedOption, func(r *InvestigationRequest) { r.Options.AllowClarification = false }},
-		"options.window_confirmation_mode": {"exempt", unrecordedOption, func(r *InvestigationRequest) {
+		"options.max_subject_candidates": {"disqualifier", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxSubjectCandidates = 3 }},
+		"options.max_cohort_members":     {"disqualifier", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxCohortMembers = 7 }},
+		"options.max_relationship_paths": {"disqualifier", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxRelationshipPaths = 7 }},
+		"options.max_drivers":            {"disqualifier", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxDrivers = 3 }},
+		"options.max_evidence_refs":      {"disqualifier", unrecordedOption, func(r *InvestigationRequest) { r.Options.MaxEvidenceRefs = 7 }},
+		"options.allow_clarification":    {"disqualifier", unrecordedOption, func(r *InvestigationRequest) { r.Options.AllowClarification = false }},
+		"options.window_confirmation_mode": {"disqualifier", unrecordedOption, func(r *InvestigationRequest) {
 			r.Options.WindowConfirmationMode = contractsv1.ContextFabricWindowConfirmationNudge
 		}},
 		"options.include_debug": {"exempt", "debug output only: executed, the continuation decision is unchanged", func(r *InvestigationRequest) { r.Options.IncludeDebug = true }},

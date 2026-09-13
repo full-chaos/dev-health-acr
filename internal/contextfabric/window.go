@@ -1170,7 +1170,13 @@ func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Princip
 	// validation has run yet, and a terminal that recomputed it with nil would
 	// silently drop a validated prior-subject receipt on exactly the paths
 	// where one exists.
-	ancestryParent string) (InvestigationResult, error) {
+	ancestryParent string,
+	// semantic is this result's semantic-state capture: the accepted
+	// snapshot, or the closed reason there is none. Passed in rather than
+	// built here -- only the caller knows whether interpretation and
+	// planning ran, and an exit must never reconstruct a reading it did not
+	// accept.
+	semantic semanticStateCapture) (InvestigationResult, error) {
 	if e.telemetry != nil {
 		e.telemetry.RecordWindowCanonicalization(ctx, principal, windowCanonicalizationOutcomeForVeto(veto))
 	}
@@ -1293,7 +1299,7 @@ func (e *Engine) windowVetoResult(ctx context.Context, principal storage.Princip
 		// exact request would have used (see timeAxisKeySource above) --
 		// never on a window key component: a window veto is never itself
 		// a reusable answer (its own status is a refusal, not a judgment).
-		if err := e.results.Save(ctx, principal, result, nil, nil, TimeAxisKeyFor(timeAxisKeySource), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch, ancestryParent); err != nil {
+		if err := e.saveResult(ctx, principal, BudgetAssertWindowVeto, result, nil, nil, TimeAxisKeyFor(timeAxisKeySource), binding.Epoch, ancestryParent, semantic); err != nil {
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
 	}
@@ -1410,7 +1416,13 @@ func (e *Engine) windowConfirmationRequiredResult(
 	// validation has run yet, and a terminal that recomputed it with nil would
 	// silently drop a validated prior-subject receipt on exactly the paths
 	// where one exists.
-	ancestryParent string) (InvestigationResult, error) {
+	ancestryParent string,
+	// semantic is this result's semantic-state capture: the accepted
+	// snapshot, or the closed reason there is none. Passed in rather than
+	// built here -- only the caller knows whether interpretation and
+	// planning ran, and an exit must never reconstruct a reading it did not
+	// accept.
+	semantic semanticStateCapture) (InvestigationResult, error) {
 	resolvedInterpretation := InterpretedQuestion{
 		Shape:             ShapeOpen,
 		RequestedJudgment: windowVetoPlaceholderJudgment,
@@ -1625,7 +1637,7 @@ func (e *Engine) windowConfirmationRequiredResult(
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}
 	if e.results != nil {
-		if err := e.results.Save(ctx, principal, result, nil, nil, TimeAxisKeyFor(timeAxisKeySource), e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, binding.Epoch, ancestryParent); err != nil {
+		if err := e.saveResult(ctx, principal, BudgetAssertWindowConfirmationRequired, result, nil, nil, TimeAxisKeyFor(timeAxisKeySource), binding.Epoch, ancestryParent, semantic); err != nil {
 			// CHAOS-3927 P4 (codex xhigh review round 1, confirmed): a
 			// gate-2 Save carrying confirmed structure can lose the SAME
 			// atomic claim race every other structure-bearing Save call
@@ -1642,7 +1654,7 @@ func (e *Engine) windowConfirmationRequiredResult(
 					// CHAOS-3478 (codex round-2 finding): result.SubjectResolution
 					// already carries this call's own priorSubjectReceiptDispositions
 					// parameter -- the race terminal must not silently drop it.
-					return e.structureSupersessionVetoResult(ctx, principal, request, structureCanon.Confirmed, superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions, carriedStructureEntries, plan, ancestryParent)
+					return e.structureSupersessionVetoResult(ctx, principal, request, structureCanon.Confirmed, superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions, carriedStructureEntries, plan, ancestryParent, semantic)
 				}
 			}
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))

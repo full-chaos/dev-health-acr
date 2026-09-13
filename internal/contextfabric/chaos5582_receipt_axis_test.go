@@ -112,6 +112,15 @@ type axis5582Run struct {
 
 func axis5582Investigate(t *testing.T, results InvestigationResultStore, interpreter QuestionInterpreter, request InvestigationRequest) axis5582Run {
 	t.Helper()
+	// EVERY CARRIER A PRODUCTION TURN SAVES NOW CARRIES ITS SNAPSHOT. These
+	// pins were written before the reading was persisted, so their stores held
+	// results with none -- under the persisted reading that is a carrier with
+	// nothing to continue (semantic_state_absent), and every axis cell here
+	// would measure that instead of the axis. Stamped in ONE place rather than
+	// at eight call sites, through the same producer every other fixture uses.
+	if store, ok := results.(*staticResultStore); ok && !store.noCarrierStates {
+		withCarrierStates(t, store)
+	}
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	recording := &recordingTelemetry{}
 	var buf bytes.Buffer
@@ -651,7 +660,23 @@ func TestCHAOS5582_WithoutAnAdmittedReceiptTheFreshAxisStillGoverns(t *testing.T
 // holds and the SAMPLED axis never decides the turn. What ends it is the
 // withheld carrier's own refusal (continuation_context_unverifiable), with its
 // own basis -- never the axis-conflict limitation or its canonicalization label.
-func TestCHAOS5582_AWithheldReadingOnAnEstablishedTransitionKeepsTheConfirmedAxis(t *testing.T) {
+func TestCHAOS5582_ACarriedReadingOnAnEstablishedTransitionKeepsTheConfirmedAxis(t *testing.T) {
+	// FLIPPED BY THE PERSISTED READING, and this is the cell that flipped.
+	//
+	// It was written when the carried reading had to be substituted into THIS
+	// turn's fresh frame: a carrier whose family groups nothing, read beside a
+	// fresh grouped proposal, had nowhere to put its axis, so composition
+	// failed (carried_axis_unexpressible) and the turn ended on the carrier's
+	// own refusal. The reading is now persisted WITH ITS FRAME, so composition
+	// runs on what turn one actually validated and never consults the fresh
+	// proposal's shape at all -- an established transition cannot fail here
+	// for want of somewhere to put the axis.
+	//
+	// The claim in the name is unchanged and is what this cell still protects:
+	// the SAMPLED axis never decides an established transition. What changed is
+	// the ending -- the confirmed reading is SERVED rather than refused, so the
+	// turn executes, and executed_axis is the confirmed `current` rather than
+	// empty. The axis-veto assertions below are untouched.
 	t.Parallel()
 	question := validInvestigationRequest().Question
 	for _, surface := range axis5582Surfaces() {
@@ -676,36 +701,35 @@ func TestCHAOS5582_AWithheldReadingOnAnEstablishedTransitionKeepsTheConfirmedAxi
 					if n := canonicalizationOutcomes(run.telemetry, WindowCanonicalizationVetoAxisConflict) + canonicalizationOutcomes(run.telemetry, WindowCanonicalizationVetoConflict); n != 0 {
 						t.Errorf("a veto canonicalization outcome was recorded %d time(s): %v", n, run.telemetry.windowCanonicalizationOutcomes)
 					}
-					if run.result.Status != InvestigationNoMatch || run.result.RefusalBasis != contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable {
-						t.Errorf("served status=%q refusal_basis=%q, want the withheld carrier's own refusal (no_match, continuation_context_unverifiable)", run.result.Status, run.result.RefusalBasis)
+					if run.result.Status == InvestigationNoMatch || run.result.RefusalBasis != "" {
+						t.Errorf("served status=%q refusal_basis=%q, want the confirmed reading served -- the carried frame is durable, so composition has nothing to fail on", run.result.Status, run.result.RefusalBasis)
 					}
-					if run.result.AnswerPlan != nil && run.result.AnswerPlan.FamilySource == QuestionFamilySourceCarried {
-						t.Errorf("the withheld carried reading was served: %+v", run.result.AnswerPlan)
+					if run.result.AnswerPlan == nil || run.result.AnswerPlan.FamilySource != QuestionFamilySourceCarried {
+						t.Errorf("the confirmed reading was not served as carried: %+v", run.result.AnswerPlan)
 					}
 				})
 				t.Run("line", func(t *testing.T) {
 					assertLine(t, line, map[string]any{
 						"request_id":               run.requestID,
-						"continuation_disposition": "withheld",
-						"decision_reason":          "composition_invalid",
-						"composition_outcome":      "invalid",
+						"continuation_disposition": "applied",
+						"decision_reason":          "none",
 						"family_carried":           "explicit_comparison",
+						"family_accepted":          "explicit_comparison",
+						"family_source":            "carried",
 						"interpreted_axis":         axis.name,
 						"carried_axis":             "current",
-						// EMPTY, and that is what this cell now protects. The
-						// fresh axis still does not govern -- `carried_axis` is
-						// current and the outcome is overridden_by_receipt, which
-						// is the claim in this test's name. But the turn ends on
-						// the carrier's own refusal with no plan and no answer,
-						// so nothing executed under any axis, and a populated
-						// `executed_axis` here would be the line claiming an
-						// execution that did not happen.
-						"executed_axis":            "",
+						// THE CONFIRMED AXIS, EXECUTED. The fresh axis still
+						// does not govern -- `carried_axis` is current and the
+						// outcome is overridden_by_receipt, which is the claim
+						// in this test's name -- and now the turn actually
+						// executes under it, so the line says so. Empty here
+						// would be the line denying an execution that happened.
+						"executed_axis":            "current",
 						"interpreted_axis_outcome": "overridden_by_receipt",
-						"refusal_basis":            "continuation_context_unverifiable",
+						"refusal_basis":            "none",
 					})
-					if line["composition_failed_invariant"] == "" {
-						t.Errorf("composition_failed_invariant is empty on a refused composition")
+					if line["composition_failed_invariant"] != "" {
+						t.Errorf("composition_failed_invariant = %q on a composition that succeeded", line["composition_failed_invariant"])
 					}
 				})
 			})

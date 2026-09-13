@@ -50,29 +50,31 @@ func TestReviewR4_ValidatedFrameComposition(t *testing.T) {
 			if valid.Outcome != FrameValidationOutcomeValid {
 				t.Fatalf("fixture invalid: %+v", valid.Failure)
 			}
-			harness := newContinuationHarness(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}, r4ValidatedInterpreter{frame, SubjectProject})
+			// Turn one saved a validated frame on the carried reading, as a
+			// production turn does; retrieval must receive THAT frame.
+			member := SubjectRepository
+			if carriedGroup == "" {
+				member = SubjectTeam
+			}
+			harness := newContinuationHarness(t, withFramedCarrier(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}, prior, member), r4ValidatedInterpreter{frame, SubjectProject})
 			graph := &r4FrameGraph{graphReaderStub: harness.engine.graph.(graphReaderStub)}
 			harness.engine.graph = graph
 			result := harness.investigate(t, req)
 			d := harness.soleDecision(t)
 			if graph.seen == nil {
-				// NO RETRIEVAL AT ALL is the strong form of this property: a
-				// composition that cannot be validated is withheld, and a
-				// withheld window-only continuation refuses above retrieval,
-				// so no frame -- valid or not -- reaches discovery. Anything
-				// else that skipped discovery is a defect this pin reports.
-				t.Logf("fresh_valid=%v disposition=%s reason=%s composition=%s refusal_basis=%q", valid.Outcome == FrameValidationOutcomeValid, d.Disposition, d.Reason, d.CompositionOutcome, result.RefusalBasis)
-				if d.Disposition != ContinuationWithheld {
-					t.Fatalf("discovery was not reached and the continuation was %q, not withheld", d.Disposition)
-				}
-				assertContinuationRefused(t, result)
-				return
+				t.Fatalf("discovery was not reached (disposition=%s reason=%s composition=%s refusal_basis=%q)", d.Disposition, d.Reason, d.CompositionOutcome, result.RefusalBasis)
 			}
 			_, _, servedGroup := servedPlanAxes(result)
 			failure, invalid := ValidateFramePhaseA1(*graph.seen)
-			t.Logf("fresh_valid=%v fresh_gate=%s disposition=%s accepted_group=%q executed_group=%q executed_member=%q invalid=%v invariant=%s detail=%s served_group=%q", valid.Outcome == FrameValidationOutcomeValid, DecideFrameGate(valid, true).Outcome, d.Disposition, d.AcceptedGroupKind(), graph.seen.SubjectExpression.Grouped.GroupKind, graph.seen.SubjectExpression.Grouped.MemberKind, invalid, failure.Invariant, failure.Detail, servedGroup)
+			executedGroup, _ := graph.seen.SubjectExpression.GroupKind()
+			t.Logf("fresh_valid=%v fresh_gate=%s disposition=%s accepted_group=%q executed_kind=%q executed_group=%q invalid=%v invariant=%s detail=%s served_group=%q", valid.Outcome == FrameValidationOutcomeValid, DecideFrameGate(valid, true).Outcome, d.Disposition, d.AcceptedGroupKind(), graph.seen.SubjectExpression.Kind, executedGroup, invalid, failure.Invariant, failure.Detail, servedGroup)
 			if invalid {
 				t.Errorf("admission converted a validated frame to invalid retrieval input")
+			}
+			// AND IT IS THE CARRIED FRAME, not the fresh one: the reading the
+			// caller confirmed is the one retrieval executes.
+			if d.Accepted == nil || d.Accepted.State == nil || d.Accepted.State.Frame == nil || !framesEqual(*graph.seen, *d.Accepted.State.Frame) {
+				t.Errorf("discovery received a frame that is not the carried one")
 			}
 		})
 	}
@@ -105,7 +107,7 @@ func TestReviewR4_SaveRaceDecision(t *testing.T) {
 		t.Run(map[bool]string{false: "decisive", true: "subjectless_terminal"}[terminal], func(t *testing.T) {
 			req := continuationRequest(validInvestigationRequest().Question)
 			prior := r4CheckedPrior(t, continuationPriorID, req.Question, QuestionFamilyGroupedCohortStatus, SubjectTeam)
-			store := &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}}
+			store := withCarrierStates(t, &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}})
 			h := newContinuationHarness(t, store, forcedFamilyInterpreter{family: QuestionFamilyDiscoveredCohortRanking})
 			race := &supersessionRacingResultStore{staticResultStore: store, conflictMembers: []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedWindow}}
 			h.engine.results = race

@@ -11,6 +11,7 @@ package contextfabric
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,6 +108,115 @@ func continuationPrior(t testing.TB, resultID, question string, family QuestionF
 	return prior
 }
 
+// carrierRequestIdentity is the request identity TURN ONE stamped on its
+// snapshot. Turn one asked the same question through the same harness request,
+// so it is that request's identity with nothing dropped -- a fixture carrier
+// whose identity is absent would read as "the caller changed something", which
+// is a fixture defect, not the cell under test. A pin that WANTS a changed
+// identity mutates the continuing request, never this.
+func carrierRequestIdentity(question string) SemanticRequestIdentity {
+	base := validInvestigationRequest()
+	base.Question = question
+	return SemanticRequestIdentityOf(base, "")
+}
+
+// framelessCarrierState is the persisted snapshot turn one saved when its
+// interpreter proposed no frame -- the shape every frameless fixture
+// interpreter in these pins produces. It carries the plan's family, group axis
+// and narrowing basis, no frame, no roles and no declarations.
+func framelessCarrierState(prior InvestigationResult) *PersistedSemanticState {
+	plan := prior.AnswerPlan
+	// A fixture plan that names only its family stands for a turn whose
+	// family came from the model under the table in force.
+	source, version := plan.FamilySource, plan.FamilyVersion
+	if source == "" {
+		source = QuestionFamilySourceModel
+	}
+	// The SNAPSHOT records the table in force at capture; a plan stamp a cell
+	// has deliberately corrupted (blank, whitespace) is the plan gate's input,
+	// not a value the capture would have written.
+	if strings.TrimSpace(version) != version || version == "" {
+		version = QuestionFamilyTableVersion
+	}
+	return BuildSemanticState(SemanticStateInput{
+		Outcome: QuestionFamilyOutcome{
+			Family: plan.Family, Source: source,
+			Gate: FrameGate{Outcome: FrameGateNotEvaluated},
+		},
+		// Turn one read the SAME question through the same harness
+		// interpreter, so its interpretation shape is the harness's.
+		EmittedShape:    ShapeOpen,
+		GroupKind:       plan.GroupKind,
+		NarrowingBasis:  plan.Budget.NarrowingBasis,
+		FamilyVersion:   version,
+		RequestIdentity: carrierRequestIdentity(prior.Question),
+	})
+}
+
+// framedCarrierState is the snapshot a turn one that DID propose a validated
+// frame saved: a grouped frame on the plan's own axis (members of `member`), or
+// a discovered-kind frame of `member` when the plan groups nothing.
+func framedCarrierState(t testing.TB, prior InvestigationResult, member SubjectKind) *PersistedSemanticState {
+	t.Helper()
+	plan := prior.AnswerPlan
+	expression := SubjectExpression{Kind: SubjectExpressionDiscoveredKind, Discovered: &DiscoveredSetExpression{MemberKind: member}}
+	if plan.GroupKind != "" {
+		expression = SubjectExpression{Kind: SubjectExpressionGroupedMembers, Grouped: &GroupedSetExpression{GroupKind: plan.GroupKind, MemberKind: member}}
+	}
+	result := ValidateFrame(QuestionFrame{Goals: []InvestigationGoal{GoalAssessState}, SubjectExpression: expression, Temporal: TemporalIntentCurrent}, nil, ShapeOpen)
+	if result.Outcome != FrameValidationOutcomeValid {
+		t.Fatalf("fixture defect: carrier frame invalid (%v)", result.Failure.Invariant)
+	}
+	gate := DecideFrameGate(result, true)
+	if gate.Refuses() {
+		t.Fatalf("fixture defect: carrier frame refused by its gate (%s)", gate.Observable())
+	}
+	frame := result.Frame
+	state := BuildSemanticState(SemanticStateInput{
+		Outcome:         QuestionFamilyOutcome{Family: plan.Family, Source: QuestionFamilySourceModel, Frame: &frame, Gate: gate},
+		EmittedShape:    ShapeOpen,
+		GroupKind:       plan.GroupKind,
+		NarrowingBasis:  plan.Budget.NarrowingBasis,
+		FamilyVersion:   QuestionFamilyTableVersion,
+		RequestIdentity: carrierRequestIdentity(prior.Question),
+	})
+	if _, err := EncodeSemanticState(state); err != nil {
+		t.Fatalf("fixture defect: framed carrier snapshot does not validate: %v", err)
+	}
+	return state
+}
+
+// withFramedCarrier registers a framed snapshot for prior in store.
+func withFramedCarrier(t testing.TB, store *staticResultStore, prior InvestigationResult, member SubjectKind) *staticResultStore {
+	t.Helper()
+	if store.states == nil {
+		store.states = map[string]*PersistedSemanticState{}
+	}
+	store.states[prior.ResultID] = framedCarrierState(t, prior, member)
+	return store
+}
+
+// withCarrierStates gives every stored result that has a carriable plan the
+// snapshot its turn would have saved, unless the result already has one. A
+// pin about a LEGACY carrier (no snapshot) simply does not call it.
+func withCarrierStates(t testing.TB, store *staticResultStore) *staticResultStore {
+	t.Helper()
+	if store.states == nil {
+		store.states = map[string]*PersistedSemanticState{}
+	}
+	for id, result := range store.results {
+		if _, ok := store.states[id]; ok || carriablePlan(result) == nil {
+			continue
+		}
+		state := framelessCarrierState(result)
+		if _, err := EncodeSemanticState(state); err != nil {
+			t.Fatalf("fixture defect: the carrier snapshot for %q does not validate: %v", id, err)
+		}
+		store.states[id] = state
+	}
+	return store
+}
+
 // continuationRequest is the window-only turn two: identical question bytes,
 // exactly one window receipt, and no other prior-result reference. That is the
 // archived shape -- 38 of 38 turn-two requests measured.
@@ -125,6 +235,11 @@ type continuationHarness struct {
 
 func newContinuationHarness(t *testing.T, store *staticResultStore, interpreter QuestionInterpreter) continuationHarness {
 	t.Helper()
+	// Every carrier a production turn saves carries its snapshot now; a pin
+	// about a legacy carrier opts out with store.noCarrierStates.
+	if !store.noCarrierStates {
+		withCarrierStates(t, store)
+	}
 	project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
 	telemetry := &recordingTelemetry{}
 	fresh := validInvestigationResult()

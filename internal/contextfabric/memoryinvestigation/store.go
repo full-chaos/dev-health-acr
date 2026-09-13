@@ -47,6 +47,11 @@ type entry struct {
 	// chains, which is the exact gap the chain-identity field exists to
 	// close.
 	parentResultID string
+	// semanticState is the snapshot's CANONICAL ENCODING, nil for an absence
+	// -- separate bytes, never an aliased pointer, so a caller that mutates
+	// the snapshot it saved or received cannot reach into this store. Get
+	// decodes it fresh, through the same codec PostgreSQL rows are read with.
+	semanticState []byte
 }
 
 // structureSupersessionClaimKey is the in-memory twin of
@@ -90,7 +95,7 @@ func NewStore() *Store {
 // (contextfabric.AnswerReuseGate), so there is no reuse-key bookkeeping to
 // populate; Get correspondingly always returns a nil GraphEpoch on its
 // StoredInvestigationResult carrier.
-func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch, timeAxisKey string, _ contextfabric.ReuseRetrievalIdentity, _ contextfabric.ReusePromptVersions, _ contextfabric.ReuseVersionAuthorities, _ int64, parentResultID string) error {
+func (s *Store) Save(ctx context.Context, principal storage.Principal, result contextfabric.InvestigationResult, reuseSnapshot contextfabric.SourceWatermarkSnapshot, reuseEpoch contextfabric.RebuildEpoch, timeAxisKey string, _ contextfabric.ReuseRetrievalIdentity, _ contextfabric.ReusePromptVersions, _ contextfabric.ReuseVersionAuthorities, _ int64, parentResultID string, semantic contextfabric.SemanticStateWrite) error {
 	if s == nil {
 		return errors.New("memoryinvestigation: store is not configured")
 	}
@@ -120,6 +125,11 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 	if err != nil {
 		return fmt.Errorf("memoryinvestigation: marshal investigation result: %w", err)
 	}
+	// The SAME codec, bounds and refusal PostgreSQL's adapter applies.
+	semanticColumn, err := semantic.EncodedColumn()
+	if err != nil {
+		return fmt.Errorf("memoryinvestigation: %w", err)
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -142,15 +152,24 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 		if existing.orgID != orgID {
 			return fmt.Errorf("memoryinvestigation: investigation result %q already exists under a different organization", resultID)
 		}
-		if bytes.Equal(existing.payload, payload) {
-			// CHAOS-3927 P4: a genuine idempotent replay of an ALREADY
-			// stored result. Its claims (if any) were already recorded by
-			// the original Save call inside this SAME critical section
-			// (a losing Save never reaches this far -- see the fresh-insert
-			// branch below), so there is nothing left to claim.
-			return nil
+		if !bytes.Equal(existing.payload, payload) {
+			return fmt.Errorf("memoryinvestigation: investigation result %q already exists with different content", resultID)
 		}
-		return fmt.Errorf("memoryinvestigation: investigation result %q already exists with different content", resultID)
+		// AND THE SEMANTIC SNAPSHOT, presence included -- the rule
+		// PostgreSQL's replay applies, through the same decode-and-compare.
+		storedState, status := contextfabric.DecodeSemanticState(existing.semanticState)
+		switch {
+		case status != contextfabric.SemanticStateReadAvailable && status != contextfabric.SemanticStateReadAbsent:
+			return fmt.Errorf("memoryinvestigation: investigation result %q: %w: stored semantic state is %s", resultID, contextfabric.ErrSemanticStateReplayConflict, status)
+		case !contextfabric.SemanticStatesEqual(storedState, semantic.State):
+			return fmt.Errorf("memoryinvestigation: investigation result %q: %w: identical payload, different semantic state (stored %s, incoming present=%v)", resultID, contextfabric.ErrSemanticStateReplayConflict, status, semantic.State != nil)
+		}
+		// CHAOS-3927 P4: a genuine idempotent replay of an ALREADY stored
+		// result. Its claims (if any) were already recorded by the original
+		// Save call inside this SAME critical section (a losing Save never
+		// reaches this far -- see the fresh-insert branch below), so there is
+		// nothing left to claim.
+		return nil
 	}
 
 	// CHAOS-3927 P4 (design brief §2.1): every ConfirmedStructure entry
@@ -179,7 +198,7 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 		key := structureSupersessionClaimKey{orgID: orgID, priorResultID: claim.priorResultID, member: claim.member}
 		s.claims[key] = resultID
 	}
-	s.results[resultID] = entry{orgID: orgID, payload: payload, parentResultID: strings.TrimSpace(parentResultID)}
+	s.results[resultID] = entry{orgID: orgID, payload: payload, parentResultID: strings.TrimSpace(parentResultID), semanticState: semanticColumn}
 	return nil
 }
 
@@ -283,7 +302,8 @@ func (s *Store) Get(ctx context.Context, principal storage.Principal, resultID s
 	// implement answer reuse at all), so GraphEpoch is always nil -- every
 	// consumer (starting with the §2.2 ingress taint gate) must already
 	// treat that as "cannot prove", never a silent pass.
-	return contextfabric.StoredInvestigationResult{Result: result, ParentResultID: stored.parentResultID}, nil
+	semanticState, semanticStatus := contextfabric.DecodeSemanticState(stored.semanticState)
+	return contextfabric.StoredInvestigationResult{Result: result, ParentResultID: stored.parentResultID, SemanticState: semanticState, SemanticStateRead: semanticStatus}, nil
 }
 
 // rejectExplicitNullDegradedReasons reports whether payload contains a

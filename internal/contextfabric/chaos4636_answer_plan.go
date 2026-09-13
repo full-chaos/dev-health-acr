@@ -58,6 +58,16 @@ type (
 // The set itself is UNCHANGED, deliberately: this slice moves where the
 // decision is made, not what the decision is. RankCohort's formula and
 // weights are explicitly out of scope (design §8, "left alone, on purpose").
+// cohortRankingFormulaKindCount is cohortRankingFormulaKinds' length as a
+// CONSTANT, so an allocation can be sized without a len() of a package
+// variable. TestCohortRankingFormulaKindCountMatchesItsProducer asserts the two
+// agree, so the constant cannot drift from the set it counts.
+const cohortRankingFormulaKindCount = 5
+
+// maxRankingFactKinds is the most distinct fact kinds the ranking pass can see:
+// the closed fact-kind vocabulary plus the formula's own set.
+const maxRankingFactKinds = contractsv1.ContextFabricFactKindCount + cohortRankingFormulaKindCount
+
 var cohortRankingFormulaKinds = []FactKind{
 	FactHealth, FactWorkload, FactReadiness, FactOperationalDeficiencies, FactInvestment,
 }

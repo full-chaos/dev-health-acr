@@ -278,9 +278,9 @@ func newAncestryRecordingStore(seed *staticResultStore) *ancestryRecordingStore 
 	return &ancestryRecordingStore{staticResultStore: seed, saved: map[string]string{}}
 }
 
-func (s *ancestryRecordingStore) Save(ctx context.Context, principal storage.Principal, result InvestigationResult, snap SourceWatermarkSnapshot, epoch RebuildEpoch, axisKey string, retrieval ReuseRetrievalIdentity, prompts ReusePromptVersions, authorities ReuseVersionAuthorities, graphEpoch int64, parentResultID string) error {
+func (s *ancestryRecordingStore) Save(ctx context.Context, principal storage.Principal, result InvestigationResult, snap SourceWatermarkSnapshot, epoch RebuildEpoch, axisKey string, retrieval ReuseRetrievalIdentity, prompts ReusePromptVersions, authorities ReuseVersionAuthorities, graphEpoch int64, parentResultID string, semantic SemanticStateWrite) error {
 	s.saved[result.ResultID] = parentResultID
-	return s.staticResultStore.Save(ctx, principal, result, snap, epoch, axisKey, retrieval, prompts, authorities, graphEpoch, parentResultID)
+	return s.staticResultStore.Save(ctx, principal, result, snap, epoch, axisKey, retrieval, prompts, authorities, graphEpoch, parentResultID, semantic)
 }
 
 // TestChainIdentity_EverySaveBearingReturnRecordsAncestry is the design
