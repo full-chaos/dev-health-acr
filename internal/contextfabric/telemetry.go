@@ -275,6 +275,16 @@ func (t SlogEngineTelemetry) RecordSubjectlessTerminal(ctx context.Context, prin
 	t.logger.InfoContext(ctx, "context fabric subjectless terminal", args...)
 }
 
+// RecordStoredAnswerability logs at Info: which determination a read surface
+// took on a stored clarification, and on what reading. The line is composed
+// by StoredAnswerabilityLogArgs, the same builder the result-by-id route logs
+// through, so the two surfaces cannot report one determination two ways.
+func (t SlogEngineTelemetry) RecordStoredAnswerability(ctx context.Context, principal storage.Principal, surface StoredAnswerabilitySurface, answerability StoredAnswerability, storedStatus InvestigationStatus, servedStatus InvestigationStatus) {
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID)}, StoredAnswerabilityLogArgs(surface, answerability, storedStatus, servedStatus)...)
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, StoredAnswerabilityLogMessage, args...)
+}
+
 // RecordPriorSubjectReceiptSkipReason logs at Info: a per-reason breakdown
 // of an already-reported RecordPriorSubjectReceiptsSkipped aggregate, not a
 // new failure signal of its own. epochDelta (CHAOS-3898 P2 fix-forward) is

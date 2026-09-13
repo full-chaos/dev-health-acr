@@ -410,6 +410,12 @@ type EngineTelemetry interface {
 	// decision: the roles evaluated, the role the winning offer advanced and
 	// its channel, and the offer counts.
 	RecordSubjectlessTerminal(ctx context.Context, principal storage.Principal, reason string, refusalBasis string, declaredKinds string, offeredKinds string, answerability SubjectlessTerminalAnswerability)
+	// RecordStoredAnswerability reports the answerability
+	// determination a READ surface took on a stored clarification: the
+	// surface, the determination (answerable / unanswerable / unavailable),
+	// the persisted reading's read status, the role half of the decision,
+	// and the stored and served statuses ("" served = nothing served).
+	RecordStoredAnswerability(ctx context.Context, principal storage.Principal, surface StoredAnswerabilitySurface, answerability StoredAnswerability, storedStatus InvestigationStatus, servedStatus InvestigationStatus)
 	// RecordSynthesisStatusOverride (CHAOS-4098) reports that the engine
 	// served a DIFFERENT investigation status than the synthesis step
 	// returned -- today only clarification_required -> no_match, when the

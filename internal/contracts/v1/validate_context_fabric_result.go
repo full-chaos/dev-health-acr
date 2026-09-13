@@ -1381,6 +1381,9 @@ func (r ContextFabricFactRequirement) validate(bounds contextFabricBounds) error
 // accepted. Use it for every write and for anything a caller is about to
 // receive fresh.
 func (r ContextFabricInvestigationResult) Validate() error {
+	if err := validateSemanticReadingOnResult(r.SemanticReading, r.Status); err != nil {
+		return err
+	}
 	return r.validate(contextFabricWriteBounds)
 }
 
@@ -1397,6 +1400,9 @@ func (r ContextFabricInvestigationResult) Validate() error {
 // created at the legacy size. See the cohort inclusion-reason bounds block
 // for the specific allowance and its origin.
 func (r ContextFabricInvestigationResult) ValidateStored() error {
+	if err := validateSemanticReadingOnResult(r.SemanticReading, r.Status); err != nil {
+		return err
+	}
 	return r.validate(contextFabricLegacyBounds)
 }
 
@@ -1411,6 +1417,9 @@ func (r ContextFabricInvestigationResult) ValidateStored() error {
 // versa (the ruling's "a v1 offer must never acquire v2 membership
 // semantics" / "do not reinterpret old persisted v1 receipts").
 func (r ContextFabricInvestigationResult) ValidateV2() error {
+	if err := validateSemanticReadingOnResult(r.SemanticReading, r.Status); err != nil {
+		return err
+	}
 	return r.validateAgainstSchemaVersion(contextFabricWriteBounds, ContextFabricInvestigationResultSchemaV2)
 }
 
@@ -1418,6 +1427,9 @@ func (r ContextFabricInvestigationResult) ValidateV2() error {
 // ValidateStored's own doc comment for the legacy-bounds rationale, which
 // applies identically here.
 func (r ContextFabricInvestigationResult) ValidateStoredV2() error {
+	if err := validateSemanticReadingOnResult(r.SemanticReading, r.Status); err != nil {
+		return err
+	}
 	return r.validateAgainstSchemaVersion(contextFabricLegacyBounds, ContextFabricInvestigationResultSchemaV2)
 }
 

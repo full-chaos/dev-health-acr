@@ -18,6 +18,9 @@ import (
 // self-consistent document: every referenced claim and evidence ref it
 // carries actually appears in it, and every declared drop is coherent.
 func (p ContextFabricAnswerProjection) Validate() error {
+	if err := validateSemanticReadingOnResult(p.SemanticReading, p.Status); err != nil {
+		return err
+	}
 	if p.SchemaVersion != ContextFabricAnswerProjectionSchema {
 		return fmt.Errorf("answer projection schema version must be %q", ContextFabricAnswerProjectionSchema)
 	}

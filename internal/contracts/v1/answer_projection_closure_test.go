@@ -330,7 +330,12 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// verbatim rather than narrowing it. All six are SERVER-DERIVED
 		// closed tokens the resolver mints from its own vocabularies; none is
 		// model-authorable, so none joins the untrusted set.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 235},
+		// semantic_reading: 235 -> 237 and 347 -> 349, +2 on BOTH surfaces --
+		// semantic_reading.status and semantic_reading.reason, two closed
+		// vocabularies a read sets from the stored reading's read status,
+		// never model prose. Equal on the two surfaces because the
+		// projection copies the disclosure verbatim.
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 237},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -391,7 +396,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// difference is the point: the projection copies only the block, so
 		// a basis that lived solely at the result root would never reach a
 		// bounded consumer. Both leaves are trusted-because-closed.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 347},
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 349},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -443,6 +448,14 @@ func countMatching(values []string, predicate func(string) bool) int {
 // service-issued version tokens, and digests. Each pattern is a positive
 // claim that the value's shape is constrained by the contract itself.
 func trustedBecauseClosed(path string) bool {
+	// semantic_reading.reason is ContextFabricSemanticReadingReason,
+	// a two-member closed vocabulary set by the result-by-id read from the
+	// stored reading's read status. Matched on its full suffix rather than on
+	// the bare leaf "reason", which other shapes in this contract use for
+	// free text: allowlisting the leaf would trust them too.
+	if strings.HasSuffix(path, ".semantic_reading.reason") {
+		return true
+	}
 	leaf := path[strings.LastIndex(path, ".")+1:]
 	leaf = strings.TrimSuffix(leaf, "[]")
 	switch leaf {

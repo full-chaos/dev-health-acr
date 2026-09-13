@@ -218,6 +218,9 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 		// state across a surface that narrows again is how a served answer
 		// comes to claim a completeness its own document contradicts.
 		Completeness: result.Completeness,
+		// SemanticReading: a read's disclosure, never dropped
+		// by the projection, for the reason RefusalBasis rides Completeness.
+		SemanticReading: result.SemanticReading,
 	}
 	projection.ProjectionBudget = contractsv1.ContextFabricProjectionBudget{
 		DriversOmitted:         driversOmitted,

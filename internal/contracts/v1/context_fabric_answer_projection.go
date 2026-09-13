@@ -202,6 +202,9 @@ type ContextFabricAnswerProjection struct {
 	// much the investigation actually produced. See
 	// ContextFabricAnswerCompleteness's own doc comment.
 	Completeness ContextFabricAnswerCompleteness `json:"completeness"`
+	// SemanticReading mirrors the canonical result's field: the
+	// read's disclosure that the stored accepted reading was unavailable.
+	SemanticReading *ContextFabricSemanticReading `json:"semantic_reading,omitempty"`
 }
 
 // ContextFabricProjectedClarification carries the ambiguity a caller must
