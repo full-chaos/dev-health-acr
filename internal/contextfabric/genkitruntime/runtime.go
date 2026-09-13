@@ -462,8 +462,8 @@ const (
 	// soft default-on-malformed policy hosted composition applies to its
 	// own environment variable.
 	//
-	// 3, not merely "low", is load-bearing: codex round 1 (2026-09-13) found
-	// that draw_output_digests (formatSynthesisDrawDigests) renders as
+	// 3, not merely "low", is load-bearing: draw_output_digests
+	// (formatSynthesisDrawDigests) renders as
 	// "N:<64-hex-char digest>" per draw, comma-joined, and every decision-
 	// line field is sanitized through contextfabric.SanitizeLogAttr, which
 	// truncates at 256 RUNES. Four single-digit-indexed digests already need
@@ -1536,10 +1536,9 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	// CHAOS-5655: totalUsage sums EVERY draw's token usage, including
 	// rejected ones -- each draw is its own full, separately billable model
 	// call, so a receipt that reported only the LAST draw's usage would make
-	// a rejected draw's real cost invisible. Every existing single-draw path
-	// (maxDraws==1, and the fallback leg, which never runs this loop) sums
-	// exactly one term, so this is bit-for-bit identical to the pre-5655
-	// value there.
+	// a rejected draw's real cost invisible. A single-draw call (maxDraws==1,
+	// and the fallback leg, which never runs this loop) sums exactly one
+	// term, so totalUsage equals that one draw's own usage there.
 	var totalUsage contextfabric.ModelUsage
 	var generationErr error
 	var draft contextfabric.SynthesisDraft
@@ -1561,37 +1560,39 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	// attemptOutcomes/receipt.Attempts below (transport retries within ONE
 	// draw, versus how many draws were drawn).
 	for draw := 1; draw <= maxDraws; draw++ {
-		// CHAOS-5655 / 4452 vol.1 §10 D5: the FIRST draw always runs -- it is
-		// the one draw every pre-5655 caller already made unconditionally,
-		// and refusing it would change existing behavior for a reason this
-		// design decision was never about. From the SECOND draw on, a redraw
-		// is only started when the caller's own remaining request deadline
-		// is at least one full attempt-budget (r.config.Timeout) wide. A
-		// deadline this loop cannot see honored (ctx.Deadline's ok==false --
-		// no deadline at all, e.g. context.Background() in most of this
-		// package's own tests) never refuses a draw: there is no shared
-		// budget to protect it from.
+		// CHAOS-5655 / 4452 vol.1 §10 D5 ("the reserved synthesis deadline
+		// ships in the same slice ... or the terminal case is a 504
+		// regardless"): the first draw is unconditional, matching a
+		// single-draw call's own one attempt, which runs without a budget
+		// check. From the second draw on, a redraw is only started when the
+		// caller's own remaining request deadline covers a full reserved
+		// slice: one attempt-budget (r.config.Timeout) when no fallback is
+		// configured, or TWO -- this redraw plus one full fallback attempt
+		// -- when one is, so that stopping here still leaves the fallback
+		// leg its own complete budget rather than merely SOME remainder.
+		// D5's "terminal case" is whatever runs after this decision, and
+		// that is the fallback leg whenever one exists. A ctx with no
+		// deadline at all (ctx.Deadline's ok==false -- e.g.
+		// context.Background(), most of this package's own tests) never
+		// refuses a draw: there is no shared budget to protect it from.
 		//
-		// The reservation is deliberately r.config.Timeout -- the SAME fixed
-		// per-attempt ceiling withRetry already enforces on every individual
-		// call -- rather than a measurement of how long the PREVIOUS draw
-		// actually took: a real provider's latency varies call to call, and
-		// a reservation sized off one lucky fast draw could still starve the
-		// next one (or the fallback leg after it). Using the ceiling itself
-		// means: if there is not enough room left for even a worst-case
-		// single attempt, don't gamble the caller's remaining budget on
-		// drawing again -- stop now and leave that time for the fallback
-		// leg (if configured) or a clean, fast-failing terminal response,
-		// rather than risking that THIS draw is the one that runs into the
-		// deadline mid-flight and leaves fallbackWouldSeeADeadContext
-		// refusing a fallback that would otherwise have succeeded.
+		// The reservation is deliberately sized off r.config.Timeout -- the
+		// SAME fixed per-attempt ceiling withRetry already enforces on
+		// every individual call -- rather than a measurement of how long
+		// the PREVIOUS draw actually took: a real provider's latency varies
+		// call to call, and a reservation sized off one lucky fast draw
+		// could still starve the next one or the fallback leg after it.
 		if draw > 1 {
 			if deadline, ok := ctx.Deadline(); ok {
 				budgetChecked = true
 				remaining := time.Until(deadline)
-				budgetRemainingMS = remaining.Milliseconds()
-				budgetReservedMS = r.config.Timeout.Milliseconds()
-				if remaining < r.config.Timeout {
+				reserved := r.config.Timeout
+				if r.config.Fallback != nil {
+					reserved *= 2
+				}
+				budgetRemainingMS = contextfabric.SanitizeLogInt(remaining.Milliseconds())
+				budgetReservedMS = contextfabric.SanitizeLogInt(reserved.Milliseconds())
+				if remaining < reserved {
 					budgetStopped = true
 					break
 				}

@@ -23,10 +23,10 @@ import (
 type drawSequenceGenerator struct {
 	outputs []synthesisOutput
 	calls   int
-	// requests (codex r1 finding 4) records every Synthesize call's own
-	// generationRequest, so a test can assert the SAME prompt was sent on
-	// every draw -- CHAOS-5655's own invariant ("re-sends the SAME encoded
-	// synthesis prompt") was previously asserted only by reading the loop's
+	// requests records every Synthesize call's own generationRequest, so a
+	// test can assert the SAME prompt was sent on every draw -- CHAOS-5655's
+	// own invariant ("re-sends the SAME encoded synthesis prompt") is
+	// otherwise only checkable by reading the loop's
 	// source, never by a generator that could see whether it held.
 	requests []generationRequest
 }
@@ -58,10 +58,10 @@ func (g *drawSequenceGenerator) Phrase(context.Context, generationRequest) (phra
 func invalidTitleSynthesisOutput() synthesisOutput {
 	output := validSynthesisOutput()
 	output.Drivers[0].Title = stringsRepeatA(513)
-	// codex r1 finding 4: validSynthesisOutput's DirectJudgment is a fixed
-	// literal, identical across every variant built from it -- a test
+	// validSynthesisOutput's DirectJudgment is a fixed literal, identical
+	// across every variant built from it unless overridden -- a test
 	// asserting "the served draft is draw N's, not an earlier one" by
-	// comparing DirectJudgment alone could not actually distinguish them.
+	// comparing DirectJudgment alone cannot distinguish them without this.
 	// Marked per-variant so that comparison is genuinely discriminating.
 	output.DirectJudgment = "draw-1-rejected: title overrun"
 	return output
@@ -121,10 +121,10 @@ func TestSynthesizeAnswerResynthesizesOnRejectionUntilSuccess(t *testing.T) {
 	if gen.calls != 3 {
 		t.Fatalf("generator.calls = %d, want exactly 3 -- the loop must stop the moment a draw validates, never drawing a fourth time", gen.calls)
 	}
-	// codex r1 finding 4: every draw must see the IDENTICAL encoded prompt --
-	// CHAOS-5655 re-sends the same synthesis prompt, it never re-assembles
-	// one per draw. Asserted structurally here, not only by reading the
-	// loop's source.
+	// Every draw must see the IDENTICAL encoded prompt -- CHAOS-5655
+	// re-sends the same synthesis prompt, it never re-assembles one per
+	// draw. Asserted structurally here, not only by reading the loop's
+	// source.
 	if len(gen.requests) != 3 {
 		t.Fatalf("generator saw %d requests, want 3", len(gen.requests))
 	}
@@ -141,10 +141,10 @@ func TestSynthesizeAnswerResynthesizesOnRejectionUntilSuccess(t *testing.T) {
 	if draft.DirectJudgment != wantDraft.DirectJudgment {
 		t.Fatalf("draft.DirectJudgment = %q, want the THIRD draw's own content %q -- a rejected earlier draft must never be served", draft.DirectJudgment, wantDraft.DirectJudgment)
 	}
-	// codex r1 finding 4: DirectJudgment now differs on every one of the
-	// three outputs (see invalidTitleSynthesisOutput/
-	// invalidEvidenceSynthesisOutput), so this is a genuinely discriminating
-	// negative check, not merely the same value compared to itself three
+	// DirectJudgment differs on every one of the three outputs (see
+	// invalidTitleSynthesisOutput/invalidEvidenceSynthesisOutput), so this
+	// is a genuinely discriminating negative check, not merely the same
+	// value compared to itself three
 	// ways.
 	if draft.DirectJudgment == "draw-1-rejected: title overrun" || draft.DirectJudgment == "draw-2-rejected: invented evidence" {
 		t.Fatalf("draft.DirectJudgment = %q, a REJECTED draw's own content was served", draft.DirectJudgment)
@@ -331,8 +331,8 @@ func TestSynthesizeAnswerFallbackRunsOnceAfterResynthesisBudgetExhausted(t *test
 	}
 }
 
-// rejectThenBlockUntilCanceledGenerator (codex r1 finding 2, 2026-09-13) is
-// the generator for TestBoundedResynthesisCanSuppressAConfiguredFallback:
+// rejectThenBlockUntilCanceledGenerator is the generator for
+// TestBoundedResynthesisWithNoDeadlineStillFollowsPreExistingFallbackComposition:
 // draw 1 rejects immediately (a real, fast validator rejection, ctx still
 // alive); draw 2 blocks until the caller's ctx is done, simulating a draw
 // that runs into the caller's own request deadline mid-flight, then reports
@@ -362,7 +362,7 @@ func (g *rejectThenBlockUntilCanceledGenerator) Phrase(context.Context, generati
 }
 
 // TestBoundedResynthesisWithNoDeadlineStillFollowsPreExistingFallbackComposition
-// is codex round 1's P1 finding (2026-09-13). The reservation guard added
+// pins a residual composition risk. The reservation guard added
 // below it (see SynthesizeAnswer's own comment, and
 // TestBoundedResynthesisStopsDrawingWhenDeadlineCannotAffordAnotherDraw)
 // FIXES this composition for a context that carries a deadline -- which
@@ -416,19 +416,16 @@ func TestBoundedResynthesisWithNoDeadlineStillFollowsPreExistingFallbackComposit
 	}
 }
 
-// TestBoundedResynthesisStopsDrawingWhenDeadlineCannotAffordAnotherDraw is
-// the 4452 vol.1 §10 D5 fix itself: chris's ruling on codex r1 finding 2
-// ("the reserved synthesis deadline ships in the same slice ... or the
-// terminal case is a 504 regardless") requires a redraw to check the
+// TestBoundedResynthesisStopsDrawingWhenDeadlineCannotAffordAnotherDraw pins
+// 4452 vol.1 §10 D5 ("the reserved synthesis deadline ships in the same
+// slice ... or the terminal case is a 504 regardless"): a redraw checks the
 // caller's remaining request deadline first. Draw 1 rejects almost
 // instantly; the context's own deadline (40ms) leaves far less remaining
 // than Config.Timeout (1s, mustRuntime's default) -- nowhere near enough
 // for a full second attempt -- so the loop must stop BEFORE calling the
-// generator a second time and fall through to the existing fallback
-// leg immediately, while the deadline still has room left for it. This is
-// the fallback that codex r1's own repro found could be suppressed; this
-// test proves the SAME class of scenario (a bound wider than 1, a
-// context with a real deadline) now reaches it.
+// generator a second time and fall through to the existing fallback leg
+// immediately, while the deadline still has room left for it, reaching a
+// fallback that an unguarded loop would have suppressed.
 func TestBoundedResynthesisStopsDrawingWhenDeadlineCannotAffordAnotherDraw(t *testing.T) {
 	t.Parallel()
 	handler, logger := newCaptureLogger()
@@ -524,6 +521,75 @@ func TestBoundedResynthesisReservationIsTheWholeTimeoutNotAFraction(t *testing.T
 	}
 	if gen.calls != 1 {
 		t.Fatalf("generator.calls = %d, want exactly 1 -- ~800ms remaining is less than the full 1s reservation, even though it is more than half of it", gen.calls)
+	}
+}
+
+// TestBoundedResynthesisReservesDoubleTheTimeoutWhenFallbackConfigured pins
+// the reserved slice's own size when a fallback IS configured: the
+// terminal case a redraw's stop decision protects is whatever runs after
+// it, and that is a full fallback attempt whenever one exists -- so the
+// reservation is TWO attempt-budgets (this redraw plus the fallback), not
+// one. Remaining budget after draw 1 (~1.5s) sits strictly inside
+// [Config.Timeout, 2*Config.Timeout) = [1s, 2s): enough for one more draw
+// on its own, but not enough for one more draw PLUS a fallback attempt.
+func TestBoundedResynthesisReservesDoubleTheTimeoutWhenFallbackConfigured(t *testing.T) {
+	t.Parallel()
+	handler, logger := newCaptureLogger()
+	gen := &drawSequenceGenerator{outputs: []synthesisOutput{
+		invalidTitleSynthesisOutput(),
+		validSynthesisOutput(), // must NEVER be reached
+	}}
+	fallback := &trackedErroringFallback{
+		err:     errors.New("fallback reached, as this test requires"),
+		receipt: validReceipt(contextfabric.ModelOperationSynthesize),
+	}
+	runtime := mustRuntime(t, gen, Config{Logger: logger, Timeout: time.Second, MaxSynthesisResynthesisAttempts: 3, Fallback: fallback})
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+
+	_, _, err := runtime.SynthesizeAnswer(ctx, storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+	if err == nil {
+		t.Fatal("SynthesizeAnswer() error = nil, want the fallback's own error surfaced")
+	}
+	if gen.calls != 1 {
+		t.Fatalf("generator.calls = %d, want exactly 1 -- ~1.5s remaining covers one more draw on its own but not one more draw PLUS a fallback attempt", gen.calls)
+	}
+	if fallback.calls != 1 {
+		t.Fatalf("fallback.calls = %d, want exactly 1 -- the reservation must leave room for the fallback leg, not merely for one more draw", fallback.calls)
+	}
+	if got := onlyDecisionEvent(t, handler).Attrs["resynthesis_deadline_reserved_ms"]; got != int64(2000) {
+		t.Fatalf("resynthesis_deadline_reserved_ms = %#v, want 2000 (2 * Config.Timeout, since a fallback is configured)", got)
+	}
+}
+
+// TestBoundedResynthesisAllowsRedrawInTheSameBandWithoutFallback is the
+// negative half: the SAME remaining budget (~1.5s) that stops a redraw when
+// a fallback is configured must NOT stop one when no fallback exists --
+// there is nothing after the redraw to protect a reservation for, so the
+// reservation is exactly one Config.Timeout, and 1.5s comfortably covers it.
+func TestBoundedResynthesisAllowsRedrawInTheSameBandWithoutFallback(t *testing.T) {
+	t.Parallel()
+	handler, logger := newCaptureLogger()
+	gen := &drawSequenceGenerator{outputs: []synthesisOutput{
+		invalidTitleSynthesisOutput(),
+		validSynthesisOutput(),
+	}}
+	runtime := mustRuntime(t, gen, Config{Logger: logger, Timeout: time.Second, MaxSynthesisResynthesisAttempts: 3})
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+
+	_, receipt, err := runtime.SynthesizeAnswer(ctx, storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+	if err != nil {
+		t.Fatalf("SynthesizeAnswer() error = %v, want success on the second draw", err)
+	}
+	if receipt.Outcome != "success" {
+		t.Fatalf("receipt.Outcome = %q, want success", receipt.Outcome)
+	}
+	if gen.calls != 2 {
+		t.Fatalf("generator.calls = %d, want exactly 2 -- with no fallback configured, ~1.5s remaining must cover the single-Timeout reservation", gen.calls)
+	}
+	if got := onlyDecisionEvent(t, handler).Attrs["resynthesis_deadline_reserved_ms"]; got != int64(1000) {
+		t.Fatalf("resynthesis_deadline_reserved_ms = %#v, want 1000 (1 * Config.Timeout, no fallback configured)", got)
 	}
 }
 
@@ -659,9 +725,8 @@ func TestSynthesisDrawClauseOmittedFieldsSpellNoneNotBlank(t *testing.T) {
 	}
 }
 
-// TestFormatSynthesisDrawDigestsFitsTheLogSanitizerBudget is codex round 1's
-// own P1 finding (2026-09-13), reproduced as a permanent pin rather than a
-// one-off probe: contextfabric.SanitizeLogAttr truncates every decision-line
+// TestFormatSynthesisDrawDigestsFitsTheLogSanitizerBudget is a permanent pin,
+// not a one-off probe: contextfabric.SanitizeLogAttr truncates every decision-line
 // field at 256 RUNES, and draw_output_digests is the one field whose
 // per-entry cost (a 64-hex-char digest) makes that bound reachable. At
 // MaxSynthesisResynthesisAttemptsCeiling+1 draws the rendered string would

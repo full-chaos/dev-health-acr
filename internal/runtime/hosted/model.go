@@ -31,7 +31,7 @@ import (
 // who mis-set a tuning-only variable still finds out" posture
 // newContextFabricModelRuntime already applies to an unconfigured provider.
 //
-// codex round 1 (2026-09-13): this function is called from BOTH
+// This function is called from BOTH
 // contextFabricModelConfigFromEnv (the deployment-default path) and, when a
 // per-organization model-config store is also configured,
 // contextFabricModelDefaults (internal/runtime/hosted/org_model_config.go) --

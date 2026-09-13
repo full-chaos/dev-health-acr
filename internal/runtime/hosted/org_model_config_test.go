@@ -197,9 +197,9 @@ func TestContextFabricModelDefaults_stampsResynthesisAttemptsWhenConfigured(t *t
 	}
 }
 
-// TestMalformedResynthesisAttemptsWarnsOncePerCompositionPath is codex round
-// 1's P3 finding (2026-09-13), reproduced as a pin: a deployment with BOTH a
-// configured provider AND a per-organization model-config store resolves
+// TestMalformedResynthesisAttemptsWarnsOncePerCompositionPath pins a
+// deployment with BOTH a configured provider AND a per-organization
+// model-config store, which resolves
 // EnvSynthesisResynthesisAttempts through two independent composition paths
 // -- contextFabricModelConfigFromEnv (the deployment default) and
 // contextFabricModelDefaults (the per-organization defaults) -- so a
