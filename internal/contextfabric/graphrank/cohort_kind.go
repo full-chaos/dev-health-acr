@@ -237,7 +237,7 @@ func cohortKindFromFrame(frame *contextfabric.QuestionFrame) (servable contextfa
 	// does it declare a member kind, is there an arm for that kind -- stated
 	// once, in the layer both this seam and the requirement derivation can
 	// reach.
-	servableKind, declaredKind, reason := contextfabric.CohortMemberKindFor(frame.SubjectExpression)
+	servableKind, declaredKind, reason := contextfabric.CohortMemberKindForFrame(*frame)
 	return servableKind, declaredKind, cohortKindBasisForDiscoverability(reason)
 }
 

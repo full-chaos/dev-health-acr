@@ -189,7 +189,14 @@ func TestTheNotAPopulationArmStillFires(t *testing.T) {
 func TestTheArmsCountEveryComputedObligation(t *testing.T) {
 	t.Parallel()
 
-	kind := SubjectTeam
+	// The specimen declares an UNSERVABLE member kind. An organization scope
+	// counting a servable kind resolves that kind's members, so the
+	// unavailable `count` row this case is about exists only for a kind no
+	// arm serves.
+	kind := SubjectWorkItem
+	if servableCohortKinds[kind] {
+		t.Fatalf("fixture kind %q became servable, so this frame no longer produces an unavailable count row", kind)
+	}
 	frame := frameWith(
 		[]InvestigationGoal{GoalCountOrAggregate},
 		orgExpression(&kind),
@@ -391,14 +398,21 @@ func TestTheArmCountersRefuseANonComputedRow(t *testing.T) {
 func TestTheArmCountersCoverEveryRoleThatCanRefuseAPopulation(t *testing.T) {
 	t.Parallel()
 
-	kind := SubjectTeam
+	// The specimen is an organization scope declaring an UNSERVABLE member
+	// kind. An organization scope counting a servable kind resolves its member
+	// set, so the population refusal this case is about comes from the kind:
+	// no arm serves it, whatever the scope.
+	kind := SubjectWorkItem
+	if servableCohortKinds[kind] {
+		t.Fatalf("fixture kind %q became servable, so this case no longer exhibits a refusal at the MEMBER role", kind)
+	}
 	cases := []struct {
 		name     string
 		frame    QuestionFrame
 		wantRole SubjectRole
 	}{
 		{
-			name:     "organization scope with a member kind refuses at the MEMBER role",
+			name:     "organization scope with an unservable member kind refuses at the MEMBER role",
 			frame:    frameWith([]InvestigationGoal{GoalRankOrSurvey}, orgExpression(&kind), TemporalIntentCurrent, nil),
 			wantRole: SubjectRoleMember,
 		},

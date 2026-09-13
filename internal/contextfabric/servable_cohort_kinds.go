@@ -104,9 +104,23 @@ const (
 	// discovers.
 	CohortDiscoverable CohortDiscoverability = "discoverable"
 	// CohortNotACohortVariant: the expression names ONE subject
-	// (named_subject) or the organization itself, with nothing to
-	// enumerate. Discovering a cohort here would invent a set the question
-	// never asked for.
+	// (named_subject), with nothing to enumerate. Discovering a cohort here
+	// would invent a set the question never asked for.
+	//
+	// `organization_scope` always lands here from an expression alone. Whether
+	// its declared member kind names a population depends on the frame's
+	// goals, which an expression does not carry, so CohortMemberKindForFrame
+	// decides it: an organization scope whose goals include
+	// count_or_aggregate and whose declared member kind is servable names
+	// every member of that kind in the organization -- the set "how many
+	// repositories are there across the organization" counts -- and is
+	// discoverable. Every other organization scope keeps this reason at the
+	// frame level too.
+	//
+	// That includes an organization scope declaring an unservable kind or no
+	// kind, and it is deliberate: DecideFrameGate refuses the whole turn on
+	// `member_kind_unservable`, so routing those cases into the kind-based
+	// refusals would turn a served clarification into a hard frame refusal.
 	//
 	// THIS CONDITION IS LOAD-BEARING AND IS NOT SUBSUMED BY THE KIND TEST
 	// BELOW, which is the trap that makes this a switch rather than a
@@ -114,8 +128,8 @@ const (
 	// `named_subject` (it reads ExpectedKind, so the kind-hinted pool
 	// search stops treating a named subject as kindless) and for
 	// `organization_scope` (it reads the optional Org.MemberKind). Both are
-	// legal frames, both can declare `team`, and neither can ever produce a
-	// cohort. Deciding this on the declared kind alone would serve a
+	// legal frames, both can declare `team`, and neither is a cohort variant
+	// here. Deciding this on the declared kind alone would serve a
 	// ranking row for both -- the exact defect the change before this one
 	// shipped a red-at-parent proof against.
 	CohortNotACohortVariant CohortDiscoverability = "not_a_cohort_variant"
@@ -181,6 +195,9 @@ func ValidCohortDiscoverability(value CohortDiscoverability) bool {
 // which reason a frame gets, and each reason points at a different party.
 func CohortMemberKindFor(expression SubjectExpression) (servable SubjectKind, declared SubjectKind, reason CohortDiscoverability) {
 	if !expression.IsCohortVariant() {
+		// organization_scope stops here: whether its member kind names a
+		// population depends on the frame's goals, which an expression does not
+		// carry. CohortMemberKindForFrame owns that decision.
 		return "", "", CohortNotACohortVariant
 	}
 	kind, ok := expression.MemberKind()
@@ -202,6 +219,64 @@ func CohortMemberKindFor(expression SubjectExpression) (servable SubjectKind, de
 func CohortMemberSetResolvable(expression SubjectExpression) bool {
 	_, _, reason := CohortMemberKindFor(expression)
 	return reason == CohortDiscoverable
+}
+
+// CohortMemberKindForFrame is the member-set decision for a whole frame, and
+// the ONLY place an organization_scope frame can be admitted.
+//
+// An organization scope's MemberKind is the kind being COUNTED when the goal
+// set contains count_or_aggregate (frame.go). Invariant I17 permits a member
+// kind on a non-counting organization scope, so a supplied kind alone is not
+// evidence that the question asks about a population -- "where should we focus
+// next?" arrives framed organization_scope with an interpreter-supplied
+// member kind and no subject axis at all. Admitting on the kind alone serves
+// that question from a cohort it never asked about. The count goal is what
+// makes the kind a population, so it is required here.
+//
+// An organization scope that is not admitted keeps not_a_cohort_variant, never
+// a kind-based refusal: DecideFrameGate refuses the whole turn on
+// member_kind_unservable, and that would turn a served clarification into a
+// hard refusal.
+//
+// Every other frame is decided by CohortMemberKindFor on its expression.
+func CohortMemberKindForFrame(frame QuestionFrame) (servable SubjectKind, declared SubjectKind, reason CohortDiscoverability) {
+	if kind, counted := organizationScopeServableKind(frame); kind != "" && counted {
+		return kind, kind, CohortDiscoverable
+	}
+	return CohortMemberKindFor(frame.SubjectExpression)
+}
+
+// CohortMemberSetResolvableForFrame is the boolean projection of
+// CohortMemberKindForFrame, defined as it so the two cannot disagree.
+func CohortMemberSetResolvableForFrame(frame QuestionFrame) bool {
+	_, _, reason := CohortMemberKindForFrame(frame)
+	return reason == CohortDiscoverable
+}
+
+// OrganizationScopeCountGoalAbsent reports the one refusal that
+// CohortMemberKindForFrame's reason cannot name: an organization scope that
+// declares a SERVABLE member kind and would be admitted, but whose goals do
+// not count it. It is read from the same helper as the admission, so a frame
+// is never both admitted and reported as missing its count goal.
+func OrganizationScopeCountGoalAbsent(frame QuestionFrame) bool {
+	kind, counted := organizationScopeServableKind(frame)
+	return kind != "" && !counted
+}
+
+// organizationScopeServableKind returns the servable member kind an
+// organization_scope frame declares ("" for any other frame, or for an
+// organization scope declaring no kind or an unservable one), and whether the
+// frame's goals count it.
+func organizationScopeServableKind(frame QuestionFrame) (kind SubjectKind, counted bool) {
+	expression := frame.SubjectExpression
+	if expression.Kind != SubjectExpressionOrganizationScope {
+		return "", false
+	}
+	declared, ok := expression.MemberKind()
+	if !ok || !servableCohortKinds[declared] {
+		return "", false
+	}
+	return declared, frame.HasGoal(GoalCountOrAggregate)
 }
 
 // ServableCohortKindsForAudit returns the allow-list's members, sorted, so a

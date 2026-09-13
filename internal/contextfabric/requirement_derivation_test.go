@@ -492,48 +492,49 @@ func TestRankingTheOrganizationItselfIsUnavailable(t *testing.T) {
 		t.Errorf("an unavailable row carries quantifier %q", row.Quantifier)
 	}
 
-	// SUPERSEDED ASSERTION, recorded rather than quietly rewritten.
-	//
-	// This block used to assert that `organization_scope` WITH a counted
-	// member kind derives a SERVED ranking row named by rank_cohort. That
-	// claim was false in the same way the block above it is about, one field
-	// over: `organization_scope` is not a cohort variant, so
-	// `IsCohortVariant` is false, so nothing discovers that population and
-	// the engine resolves no cohort -- and `RankCohort` is invoked only when
-	// a cohort exists. The row named a server that could never run.
-	//
-	// The incoherence was visible ON THIS VERY FIXTURE and is asserted below
-	// rather than argued: `count` over the SAME frame was already unavailable
-	// for exactly this reason, because the population guard read
-	// `InputClass == resolved_member_set` -- which membership_cardinality
-	// declares and rank_cohort (class `fact_kinds`) does not. Two computed
-	// cells on one frame disagreed about whether that frame has a population,
-	// and the disagreement was an artifact of which field the guard happened
-	// to read.
-	//
-	// The counterpart's PURPOSE stands and is preserved below: the fix must
-	// not collapse to "never rank". The honest control is a frame that
-	// genuinely resolves a member set -- a cohort variant -- not an
-	// organization scope that never did.
+	// An organization scope whose goals count a servable member kind names
+	// the members of that kind in the organization, a real population, so the
+	// engine resolves that cohort and ranking it is SERVED by rank_cohort --
+	// the server that runs only when a cohort exists. The PARITY statement
+	// below is the durable part: the two computed cells on one frame agree
+	// about whether that frame has a population, served together here and
+	// unavailable together on the unservable specimen that follows.
 	kind := SubjectTeam
 	orgWithMemberKind := DeriveRequirements(
 		frameWith([]InvestigationGoal{GoalRankOrSurvey, GoalCountOrAggregate}, orgExpression(&kind), TemporalIntentCurrent, nil),
 		fixtureSeed(), fixtureCapabilities())
 	memberRow := requirementFor(t, orgWithMemberKind, ObligationRanking, SubjectTeam)
-	if memberRow.Served() {
-		t.Errorf("ranking a counted member kind under ORGANIZATION SCOPE reports server %q: that expression is not a cohort variant, so no member set is discovered and RankCohort is never invoked", memberRow.Step)
+	if !memberRow.Served() || memberRow.Step != ComputedStepRankCohort {
+		t.Errorf("ranking a servable member kind under ORGANIZATION SCOPE should be served by rank_cohort now that the shape resolves its member set; got served=%v step=%q unavailable=%q", memberRow.Served(), memberRow.Step, memberRow.Unavailable)
 	}
-	if memberRow.Unavailable != RequirementReasonComputedPopulationAbsent {
-		t.Errorf("unavailable reason is %q, want %q", memberRow.Unavailable, RequirementReasonComputedPopulationAbsent)
-	}
-	// The parity statement, executed: the two computed cells on ONE frame
-	// must agree about whether that frame has a population. This is the
-	// assertion that makes the supersession above a correction rather than
-	// an opinion.
 	countRow := requirementFor(t, orgWithMemberKind, ObligationCount, SubjectTeam)
 	if countRow.Served() != memberRow.Served() {
 		t.Errorf("on one organization-scope frame `count` is served=%v and `ranking` is served=%v -- two computed cells disagree about whether the frame resolves a population (count unavailable=%q, ranking unavailable=%q)",
 			countRow.Served(), memberRow.Served(), countRow.Unavailable, memberRow.Unavailable)
+	}
+
+	// THE UNAVAILABLE SPECIMEN. Under organization scope, an unservable member
+	// KIND is what makes a computed cell unavailable. This frame is the repo's
+	// specimen of an unavailable computed cell, and the parity statement is
+	// asserted on it too -- both cells unavailable, agreeing.
+	unservableKind := SubjectWorkItem
+	if servableCohortKinds[unservableKind] {
+		t.Fatalf("fixture kind %q became servable, so this frame no longer exhibits an unavailable computed cell", unservableKind)
+	}
+	orgWithUnservableKind := DeriveRequirements(
+		frameWith([]InvestigationGoal{GoalRankOrSurvey, GoalCountOrAggregate}, orgExpression(&unservableKind), TemporalIntentCurrent, nil),
+		fixtureSeed(), fixtureCapabilities())
+	unservableRanking := requirementFor(t, orgWithUnservableKind, ObligationRanking, unservableKind)
+	if unservableRanking.Served() {
+		t.Errorf("ranking an UNSERVABLE member kind under organization scope reports server %q: no arm discovers that population, so RankCohort is never invoked", unservableRanking.Step)
+	}
+	if unservableRanking.Unavailable != RequirementReasonComputedPopulationAbsent {
+		t.Errorf("unavailable reason is %q, want %q", unservableRanking.Unavailable, RequirementReasonComputedPopulationAbsent)
+	}
+	unservableCount := requirementFor(t, orgWithUnservableKind, ObligationCount, unservableKind)
+	if unservableCount.Served() != unservableRanking.Served() {
+		t.Errorf("on one unservable-kind frame `count` is served=%v and `ranking` is served=%v -- two computed cells disagree about whether the frame resolves a population (count unavailable=%q, ranking unavailable=%q)",
+			unservableCount.Served(), unservableRanking.Served(), unservableCount.Unavailable, unservableRanking.Unavailable)
 	}
 
 	// THE COUNTERPART THAT MUST STILL WORK, on a frame that really does

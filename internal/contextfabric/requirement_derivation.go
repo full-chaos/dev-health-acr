@@ -335,7 +335,7 @@ func DeriveRequirements(frame QuestionFrame, seed ObligationSeed, capabilities [
 	// nothing is a runtime fact, unknowable here by anyone, and it is
 	// corrected on the served document by `finalizeResult` -- see
 	// `appendUnresolvedMemberSetOutcomes`.
-	memberSetResolvable := CohortMemberSetResolvable(frame.SubjectExpression)
+	memberSetResolvable := CohortMemberSetResolvableForFrame(frame)
 	rows := make([]DerivedRequirement, 0, len(coordinates))
 	for _, coordinate := range coordinates {
 		rows = append(rows, deriveRequirement(coordinate, seed, capabilities, memberSetResolvable))
@@ -403,8 +403,8 @@ func deriveRequirement(coordinate RequirementCoordinate, seed ObligationSeed, ca
 		// admits `ranking/subject/<named>`, and the row was then SERVED: it
 		// named rank_cohort as its server, and `planningStageOutcomeRow`
 		// seeds a served row `satisfied`. But `IsCohortVariant` is false for
-		// `named_subject` (and for `organization_scope`), so the engine
-		// resolves no cohort, RankCohort is never invoked, and
+		// `named_subject`, so the engine resolves no cohort, RankCohort is
+		// never invoked, and
 		// ComputedStepInputReads' five declared kinds are planned as reads
 		// the fact request -- gated on the same cohort pointer -- never
 		// carries. The cell claimed an ordering that nothing computed, over
@@ -413,6 +413,15 @@ func deriveRequirement(coordinate RequirementCoordinate, seed ObligationSeed, ca
 		// are": an unavailable row is not Served, so ComputedStepInputReads
 		// plans nothing for it and the seed says `unavailable` with a named
 		// cause instead of a silent `satisfied`.
+		//
+		// An organization scope reaches this guard with a member set only
+		// when its goals count a servable declared kind:
+		// memberSetResolvable is CohortMemberSetResolvableForFrame, which
+		// resolves the members of that kind in the organization, so a computed
+		// step over that population has its cohort and is not refused. An
+		// organization scope with an UNSERVABLE kind, no kind, or no count
+		// goal resolves no member set, so its computed row is unavailable
+		// here, for the same reason a named subject's is.
 		if inputs, declared := InputsForComputedStep(step); stepNeedsAResolvedMemberSet(inputs, declared) &&
 			!memberSetResolvable {
 			row.Quantifier = CompletionQuantifierNone

@@ -113,11 +113,11 @@
   C6    5a  not_applicable                   -                                      lost=[-] gained=[flow health investment landscape readiness workload]
   C6    5b  not_reproducible_by_construction -                                      lost=[-] gained=[-]
   C6    6   dropped_pending_mechanism        -                                      lost=[-] gained=[-]
-  C7    1   not_subsumed                     computed_population_unavailable        lost=[health identity metrics] gained=[-]
+  C7    1   not_subsumed                     not_required_by_any_obligation (SUPERIOR) lost=[health identity metrics] gained=[-]
   C7    2   advisory_by_rule                 -                                      lost=[-] gained=[-]
   C7    3   not_applicable                   -                                      lost=[-] gained=[-]
   C7    4   not_reproducible_by_construction -                                      lost=[-] gained=[-]
-  C7    5a  not_subsumed                     computed_population_unavailable        lost=[health] gained=[-]
+  C7    5a  not_subsumed                     not_required_by_any_obligation (SUPERIOR) lost=[health] gained=[-]
   C7    5b  not_reproducible_by_construction -                                      lost=[-] gained=[-]
   C7    6   dropped_pending_mechanism        -                                      lost=[-] gained=[-]
   B5    1   not_subsumed                     unavailable_named_instead (SUPERIOR)   lost=[status] gained=[-]
@@ -134,24 +134,31 @@
   C2s   5a  not_applicable                   -                                      lost=[-] gained=[flow health investment landscape readiness workload]
   C2s   5b  not_reproducible_by_construction -                                      lost=[-] gained=[-]
   C2s   6   dropped_pending_mechanism        -                                      lost=[-] gained=[-]
+  C7u   1   not_subsumed                     computed_population_unavailable        lost=[status] gained=[-]
+  C7u   2   advisory_by_rule                 -                                      lost=[-] gained=[-]
+  C7u   3   not_applicable                   -                                      lost=[-] gained=[-]
+  C7u   4   not_reproducible_by_construction -                                      lost=[-] gained=[-]
+  C7u   5a  not_applicable                   -                                      lost=[-] gained=[-]
+  C7u   5b  not_reproducible_by_construction -                                      lost=[-] gained=[-]
+  C7u   6   dropped_pending_mechanism        -                                      lost=[-] gained=[-]
 
 ## PER-AUTHORITY VERDICT HISTOGRAM (every token, including the zeroes)
 
-  1   subsumed=11  not_subsumed=3  not_applicable=0  advisory_by_rule=0  not_reproducible_by_construction=0  dropped_pending_mechanism=0
-  2   subsumed=0  not_subsumed=0  not_applicable=0  advisory_by_rule=14  not_reproducible_by_construction=0  dropped_pending_mechanism=0
-  3   subsumed=2  not_subsumed=8  not_applicable=4  advisory_by_rule=0  not_reproducible_by_construction=0  dropped_pending_mechanism=0
-  4   subsumed=0  not_subsumed=0  not_applicable=0  advisory_by_rule=0  not_reproducible_by_construction=14  dropped_pending_mechanism=0
-  5a  subsumed=6  not_subsumed=2  not_applicable=6  advisory_by_rule=0  not_reproducible_by_construction=0  dropped_pending_mechanism=0
-  5b  subsumed=0  not_subsumed=0  not_applicable=0  advisory_by_rule=0  not_reproducible_by_construction=14  dropped_pending_mechanism=0
-  6   subsumed=0  not_subsumed=0  not_applicable=0  advisory_by_rule=0  not_reproducible_by_construction=0  dropped_pending_mechanism=14
+  1   subsumed=11  not_subsumed=4  not_applicable=0  advisory_by_rule=0  not_reproducible_by_construction=0  dropped_pending_mechanism=0
+  2   subsumed=0  not_subsumed=0  not_applicable=0  advisory_by_rule=15  not_reproducible_by_construction=0  dropped_pending_mechanism=0
+  3   subsumed=2  not_subsumed=8  not_applicable=5  advisory_by_rule=0  not_reproducible_by_construction=0  dropped_pending_mechanism=0
+  4   subsumed=0  not_subsumed=0  not_applicable=0  advisory_by_rule=0  not_reproducible_by_construction=15  dropped_pending_mechanism=0
+  5a  subsumed=6  not_subsumed=2  not_applicable=7  advisory_by_rule=0  not_reproducible_by_construction=0  dropped_pending_mechanism=0
+  5b  subsumed=0  not_subsumed=0  not_applicable=0  advisory_by_rule=0  not_reproducible_by_construction=15  dropped_pending_mechanism=0
+  6   subsumed=0  not_subsumed=0  not_applicable=0  advisory_by_rule=0  not_reproducible_by_construction=0  dropped_pending_mechanism=15
 
 ## LOSS CAUSE HISTOGRAM (every token, including the zeroes)
 
   unavailable_named_instead                  1  derivation ruled SUPERIOR
-  not_required_by_any_obligation            10  derivation ruled SUPERIOR
+  not_required_by_any_obligation            12  derivation ruled SUPERIOR
   computed_step_input_unserved               0  blocks retirement
   computed_step_not_wired                    0  blocks retirement
-  computed_population_unavailable            2  blocks retirement
+  computed_population_unavailable            1  blocks retirement
 
 ## RETIREMENT VERDICT, PER AUTHORITY
 #
@@ -168,21 +175,21 @@
 # measurement on real answers -- which this table, computed from frames
 # alone, cannot stand in for.
 
-  1   NOT RETIRABLE -- 1 blocking loss cell(s)                   (2 superior, 1 blocking, 14 cells)
-  2   NOT RETIRABLE -- disclosed drop, see the roster's reach column (0 superior, 0 blocking, 14 cells)
-  3   RETIRABLE on this evidence                                 (8 superior, 0 blocking, 14 cells)
-  4   NOT RETIRABLE -- disclosed drop, see the roster's reach column (0 superior, 0 blocking, 14 cells)
-  5a  NOT RETIRABLE -- 1 blocking loss cell(s)                   (1 superior, 1 blocking, 14 cells)
-  5b  NOT RETIRABLE -- disclosed drop, see the roster's reach column (0 superior, 0 blocking, 14 cells)
-  6   NOT RETIRABLE -- disclosed drop, see the roster's reach column (0 superior, 0 blocking, 14 cells)
+  1   NOT RETIRABLE -- 1 blocking loss cell(s)                   (3 superior, 1 blocking, 15 cells)
+  2   NOT RETIRABLE -- disclosed drop, see the roster's reach column (0 superior, 0 blocking, 15 cells)
+  3   RETIRABLE on this evidence                                 (8 superior, 0 blocking, 15 cells)
+  4   NOT RETIRABLE -- disclosed drop, see the roster's reach column (0 superior, 0 blocking, 15 cells)
+  5a  RETIRABLE on this evidence                                 (2 superior, 0 blocking, 15 cells)
+  5b  NOT RETIRABLE -- disclosed drop, see the roster's reach column (0 superior, 0 blocking, 15 cells)
+  6   NOT RETIRABLE -- disclosed drop, see the roster's reach column (0 superior, 0 blocking, 15 cells)
 
 # MEASUREMENT
-#   98 cells = 14 frames x 7 authorities
-#   subsumed 19 / not_subsumed 13 / not_applicable 10 / disclosed drops 56
-#   of the 13 not_subsumed cells, 11 are ruled SUPERIOR and 2 BLOCK retirement
+#   105 cells = 15 frames x 7 authorities
+#   subsumed 19 / not_subsumed 14 / not_applicable 12 / disclosed drops 60
+#   of the 14 not_subsumed cells, 13 are ruled SUPERIOR and 1 BLOCK retirement
 #
 # REFUTED PROPERTY (reported, not asserted -- see the file header)
 #   "every pre-resolution authority is subsumed by the derived rows"
-#   FAILS on 13 of 42 pre-resolution cells. This proof was written to assert it;
+#   FAILS on 14 of 45 pre-resolution cells. This proof was written to assert it;
 #   the measurement stands and the assertion moved to oracle O9's shape. Closing
 #   the blocking cause drives this number toward the superior-only remainder.

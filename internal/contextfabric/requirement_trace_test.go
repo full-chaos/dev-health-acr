@@ -188,6 +188,7 @@ func traceOrg(member *contextfabric.SubjectKind) contextfabric.SubjectExpression
 // only.
 func traceFrames() []traceFrame {
 	repository := contextfabric.SubjectRepository
+	unservableMemberKind := contextfabric.SubjectWorkItem
 	return []traceFrame{
 		{"Q1", "named subject (team), assess_state",
 			traceBuildFrame([]contextfabric.InvestigationGoal{contextfabric.GoalAssessState}, traceNamed(contextfabric.SubjectTeam), contextfabric.TemporalIntentCurrent, nil, nil), true},
@@ -218,6 +219,15 @@ func traceFrames() []traceFrame {
 		// ADDED to the recorded thirteen -- see traceExplicitMixed.
 		{"C2s", "explicit_set (named team operand, SCOPED project operand), compare",
 			traceBuildFrame([]contextfabric.InvestigationGoal{contextfabric.GoalCompare}, traceExplicitMixed(), contextfabric.TemporalIntentCurrent, nil, nil), false},
+		// The corpus's ONLY unavailable computed cell, and the one-sided-clause
+		// guard's and both artifacts' example of the unavailable side. C7 above
+		// counts `repository` under organization scope and serves, because a
+		// counted SERVABLE kind resolves its members. This frame is C7 with
+		// `work_item` in place of `repository`, so the two sit beside each
+		// other in the artifacts and the difference between them is exactly
+		// the kind: an UNSERVABLE member kind resolves no member set.
+		{"C7u", "organization scope, count, MemberKind=work_item (unservable)",
+			traceBuildFrame([]contextfabric.InvestigationGoal{contextfabric.GoalCountOrAggregate}, traceOrg(&unservableMemberKind), contextfabric.TemporalIntentCurrent, nil, nil), false},
 	}
 }
 
