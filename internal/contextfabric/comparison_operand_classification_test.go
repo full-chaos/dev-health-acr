@@ -18,7 +18,6 @@ package contextfabric
 // same frame rather than the same bug.
 
 import (
-	"sync/atomic"
 	"testing"
 )
 
@@ -196,13 +195,11 @@ func TestClassifierAgreesWithFrameRoleSlotsInBothDirections(t *testing.T) {
 		},
 	}
 
-	// ATOMIC: the rows run as parallel subtests, so a plain counter would be a
-	// data race and could under-count on a correct table.
-	var reached atomic.Int32
+	// The rows run serially: the counter below is read after the loop, so no
+	// row shares mutable state with another row while it runs.
+	reached := 0
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-
 			// SIDE A, read from the authority itself.
 			gotRoleKinds := operandRoleKinds(testCase.frame)
 			if len(gotRoleKinds) != len(testCase.wantRoleKinds) {
@@ -250,15 +247,13 @@ func TestClassifierAgreesWithFrameRoleSlotsInBothDirections(t *testing.T) {
 					t.Errorf("kinded slot %d = %q but the authority projects %q at that position", index, slotKinds[index], gotRoleKinds[index])
 				}
 			}
-			reached.Add(1)
+			reached++
 		})
 	}
 
-	t.Cleanup(func() {
-		if got := int(reached.Load()); got != len(cases) {
-			t.Errorf("only %d of %d rows reached the agreement assertions -- a table that skips rows proves nothing about the ones it skipped", got, len(cases))
-		}
-	})
+	if reached != len(cases) {
+		t.Errorf("only %d of %d rows reached the agreement assertions -- a table that skips rows proves nothing about the ones it skipped", reached, len(cases))
+	}
 }
 
 // TestClassifierReportsEveryNonExplicitSetVariantAsNotAComparison quantifies
