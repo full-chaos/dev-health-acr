@@ -698,6 +698,9 @@ func mustRuntime(t *testing.T, generator generator, override Config) *Runtime {
 	if override.Telemetry != nil {
 		config.Telemetry = override.Telemetry
 	}
+	if override.MaxSynthesisResynthesisAttempts != 0 {
+		config.MaxSynthesisResynthesisAttempts = override.MaxSynthesisResynthesisAttempts
+	}
 	runtime, err := newWithGenerator(config, generator)
 	if err != nil {
 		t.Fatalf("newWithGenerator() error = %v", err)
@@ -1547,6 +1550,19 @@ func TestDecisionEventNeverCarriesCorpusText(t *testing.T) {
 		"primary_provider":      true,
 		"primary_model_id":      true,
 		"primary_model_version": true,
+		// CHAOS-5655: the draw sequence beside the terminal outcome, emitted
+		// whenever the re-synthesis loop judged at least one draft -- true
+		// for this test's SUCCESSFUL synthesize call. draws_total/
+		// draws_retried are counts; draw_outcomes/draw_output_digests/
+		// draw_rejected_clauses are index-prefixed lists whose every
+		// component is a digit, a fixed-length hex digest, or a member of a
+		// closed vocabulary -- never model content, so this test still
+		// exercises them for the leak assertion below.
+		"draws_total":           true,
+		"draws_retried":         true,
+		"draw_outcomes":         true,
+		"draw_output_digests":   true,
+		"draw_rejected_clauses": true,
 	}
 
 	for _, event := range events {

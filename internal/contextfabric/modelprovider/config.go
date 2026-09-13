@@ -178,6 +178,18 @@ type Config struct {
 	// collected sink entirely. Exactly the shape CHAOS-4355 found for
 	// Telemetry one field above.
 	Logger *slog.Logger
+	// MaxSynthesisResynthesisAttempts (CHAOS-5655) is OPTIONAL and, like
+	// Telemetry/Logger above, set directly by the caller rather than read by
+	// ConfigFromEnv/validate: it is a hosted-composition policy knob (see
+	// internal/runtime/hosted), not a provider-identity or transport-tuning
+	// value, and it applies with a soft default-on-malformed environment
+	// read rather than this package's fail-fast one. It reaches
+	// genkitruntime.Config.MaxSynthesisResynthesisAttempts on the PRIMARY
+	// runtime ONLY (see runtimeConfigWithPhrasing) -- the fallback runtime
+	// keeps its existing single-draw behavior. Zero means "unset": New
+	// leaves the primary's genkitruntime.Config field at its own zero value
+	// too, which genkitruntime.New then defaults to 1 (today's behavior).
+	MaxSynthesisResynthesisAttempts int
 }
 
 // validate enforces the bounds this package owns. genkitruntime.New

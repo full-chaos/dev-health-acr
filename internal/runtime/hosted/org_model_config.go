@@ -68,7 +68,7 @@ func wrapWithOrgModelRuntimeResolver(deploymentDefault contextfabric.ModelRuntim
 	if orgConfigs == nil {
 		return deploymentDefault, nil, nil
 	}
-	defaults, err := contextFabricModelDefaults(lookup)
+	defaults, err := contextFabricModelDefaults(lookup, logger)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load context fabric model defaults for per-organization runtimes: %w", err)
 	}
@@ -157,26 +157,38 @@ func appendReuseIdentity(identities []string, candidate string) []string {
 }
 
 // contextFabricModelDefaults returns the Timeout/MaxAttempts/
-// MaxTransportRetries tuning a per-organization BYO LLM runtime inherits
-// from the deployment surface (§19.3.2: those knobs are not part of the
-// per-organization contract, only Provider/BaseURL/Model/FallbackModel/
-// Credential are). When the deployment-default provider itself is not
+// MaxTransportRetries/MaxSynthesisResynthesisAttempts tuning a
+// per-organization BYO LLM runtime inherits from the deployment surface
+// (§19.3.2: those knobs are not part of the per-organization contract, only
+// Provider/BaseURL/Model/FallbackModel/Credential are; CHAOS-5655 extends
+// the same inheritance to its own knob rather than carving out an
+// exception). When the deployment-default provider itself is not
 // configured -- an operator may support ONLY per-organization BYO LLM, with
 // no deployment default -- this falls back to modelprovider's own package
 // defaults rather than failing: those defaults are exactly what an
 // unconfigured deployment-default Config would have used anyway.
-func contextFabricModelDefaults(lookup func(string) (string, bool)) (modelprovider.Config, error) {
+func contextFabricModelDefaults(lookup func(string) (string, bool), logger *slog.Logger) (modelprovider.Config, error) {
 	if !modelprovider.Configured(lookup) {
 		return modelprovider.Config{
 			Timeout: modelprovider.DefaultTimeout, MaxAttempts: modelprovider.DefaultMaxAttempts,
-			MaxTransportRetries: modelprovider.DefaultMaxTransportRetries,
+			MaxTransportRetries:             modelprovider.DefaultMaxTransportRetries,
+			MaxSynthesisResynthesisAttempts: synthesisResynthesisAttemptsFromEnv(lookup, logger),
 		}, nil
 	}
 	// Configured() is already true, so newContextFabricModelRuntime (called
 	// separately, before this) has already parsed and validated this same
 	// environment successfully -- re-parsing here is a second cheap,
 	// side-effect-free startup-time read, not a duplicated failure surface.
-	return modelprovider.ConfigFromEnv(lookup)
+	cfg, err := modelprovider.ConfigFromEnv(lookup)
+	if err != nil {
+		return modelprovider.Config{}, err
+	}
+	// CHAOS-5655: not part of modelprovider.ConfigFromEnv (see
+	// EnvSynthesisResynthesisAttempts's own doc comment), so it is stamped
+	// here explicitly -- the same pattern contextFabricModelConfigFromEnv
+	// uses for the deployment-default runtime.
+	cfg.MaxSynthesisResynthesisAttempts = synthesisResynthesisAttemptsFromEnv(lookup, logger)
+	return cfg, nil
 }
 
 // buildModelReceiptSink composes the durable ModelExecutionReceipt sink
