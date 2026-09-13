@@ -253,7 +253,7 @@ func TestHeldComparisonTerminalOverTheWholeAnswerabilityGrid(t *testing.T) {
 			frame: nil, resolution: heldResolution(OfferPoolEmptiedClarificationPrompt, 0),
 			allow: true, redeemable: true,
 			wantStatus: InvestigationClarificationRequired, wantLimitation: clarificationRequiredLimitationOne,
-			why: "the arm this change is placed ahead of must be untouched for every shape that is not a held comparison",
+			why: "the arm the held-comparison branch is placed ahead of must be untouched for every shape that is not a held comparison",
 		},
 		{
 			name:  "not a comparison: the withheld-pool arm still downgrades when nothing is redeemable",

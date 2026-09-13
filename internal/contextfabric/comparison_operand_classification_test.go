@@ -4,10 +4,9 @@ package contextfabric
 //
 // EVERY LOOP IN THIS FILE COUNTS THE INPUTS THAT REACHED ITS ASSERTIONS AND
 // FAILS AT ZERO, for the reason subject_role_test.go's header already states
-// for this layer: the declaration slice shipped a coordinate derivation whose
-// oracle passed while a whole operand variant was never derived. A loop that
-// can `continue` past its assertions proves nothing about the cases it
-// skipped.
+// for this layer: an oracle can pass while a whole operand variant is never
+// derived. A loop that can `continue` past its assertions proves nothing about
+// the cases it skipped.
 //
 // THE AGREEMENT IS ASSERTED IN BOTH DIRECTIONS, AND EACH SIDE'S EXPECTATION IS
 // PINNED INDEPENDENTLY. ClassifyComparisonOperands takes its role/kind
@@ -111,7 +110,7 @@ func TestClassifierAdmitsExactlyTheTwoNamedStatedKindCut(t *testing.T) {
 			t.Errorf("slot %d Kind = %q, want %q", index, slot.Kind, SubjectTeam)
 		}
 		if len(slot.Terms) != 1 || slot.Terms[0] != wantTerms[index] {
-			t.Errorf("slot %d Terms = %v, want [%q] -- a slot resolved from anything but its OWN terms is the defect this work removes", index, slot.Terms, wantTerms[index])
+			t.Errorf("slot %d Terms = %v, want [%q] -- a slot resolved from anything but its OWN terms cannot bind its own operand", index, slot.Terms, wantTerms[index])
 		}
 	}
 }

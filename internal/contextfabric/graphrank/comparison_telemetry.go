@@ -20,8 +20,8 @@ package graphrank
 //     production rig -- where debug is off -- none of it exists. An observable
 //     nobody can read is not an observable.
 //
-// This sink takes a context and emits at INFO, which is the level a bisect on
-// the rig actually reads.
+// This sink takes a context and emits at INFO, which is the level the rig
+// actually reads.
 //
 // CONTENT SAFETY BY CONSTRUCTION, the same discipline the tracer documents:
 // every field below is a closed token, a count, a bool, or a subject kind.
@@ -47,8 +47,8 @@ import (
 // as a comparison. Interpreter drift or a classifier change would send it back
 // down the flat pooled path -- which is a LEGAL outcome that serves a
 // perfectly well-formed answer -- so nothing else on the document would move.
-// Without this line the fix would quietly stop applying and the only symptom
-// would be the return of the original defect.
+// Without this line operand binding would quietly stop applying and the only
+// symptom would be two operands collapsing into one ambiguity again.
 //
 // It also carries the two SUPPRESSIONS that implement the no-read hold, for
 // the same reason: if the exclusions lapsed, a comparison would begin reading
@@ -69,8 +69,7 @@ type ComparisonPolicyEvent struct {
 // candidate list is the MERGED one, so a slot that started seeing the other
 // operand's candidates would look identical on the served document -- the same
 // subjects, the same count. Per-slot candidate counts are the only place that
-// shows, and they are the direct observable for the defect this whole change
-// exists to fix.
+// shows, and they are the direct observable for operand binding itself.
 type OperandSlotEvent struct {
 	RequestID         string
 	OrgID             string

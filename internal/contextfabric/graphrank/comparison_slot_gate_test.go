@@ -3,14 +3,13 @@ package graphrank
 // ONE OPERAND SLOT, IN ISOLATION -- the unit that answers "did the gate refuse,
 // or did the wiring never reach it".
 //
-// WHY THIS FILE EXISTS, stated because the reason is a debugging lesson worth
-// keeping. The end-to-end battery reported `committed = []` for a comparison
-// whose two operands were each retrieved with confidence 1 and a MatchExact
-// mechanism. That single fact is consistent with at least three different
-// defects -- retrieval never reaching the slots, the per-slot gate declining a
-// lone exact match, or publication holding a pair that had in fact resolved --
-// and an end-to-end fixture cannot tell them apart, because it can only see
-// what came out of the far end.
+// WHAT THIS FILE PINS, AND WHY THE DOUBLES DIFFER FROM THE ENGINE TESTS. An
+// empty committed set for a comparison whose two operands were each retrieved
+// with confidence 1 and a MatchExact mechanism is consistent with at least
+// three different defects -- retrieval never reaching the slots, the per-slot
+// gate declining a lone exact match, or publication holding a pair that had in
+// fact resolved -- and an end-to-end fixture cannot tell them apart, because it
+// sees only what comes out of the far end.
 //
 // This file drives ONE slot with a hand-built dependency stub and a RECORDING
 // TRACER, so the gate states which branch it took in its own words rather than
@@ -170,8 +169,8 @@ func TestOneOperandSlotSeesOnlyItsOwnTerms(t *testing.T) {
 	}
 }
 
-// TestAnAdmittedPairCommitsBothOperandsAtTheResolverUnit is the SECOND step of
-// a deliberate bisection.
+// TestAnAdmittedPairCommitsBothOperandsAtTheResolverUnit is the SECOND layer
+// of a two-layer localisation.
 //
 // The slot arm above proves one operand commits its lone exact match. This one
 // proves the PAIR does, at the same unit, with the same stub. Together they
@@ -181,9 +180,8 @@ func TestOneOperandSlotSeesOnlyItsOwnTerms(t *testing.T) {
 // wiring above this call, and the next question is about that layer rather
 // than this one.
 //
-// A bisection arm is worth keeping after it has served its debugging purpose:
-// it is the tightest possible statement of "the resolver, given two clean
-// operands, publishes both".
+// It is the tightest possible statement of "the resolver, given two clean
+// operands, publishes both", and it locates a failure to one layer.
 func TestAnAdmittedPairCommitsBothOperandsAtTheResolverUnit(t *testing.T) {
 	t.Parallel()
 
@@ -228,14 +226,13 @@ func TestAnAdmittedPairCommitsBothOperandsAtTheResolverUnit(t *testing.T) {
 // STEP 4 -- THE EMPTINESS GATE IS INVOKED INDEPENDENTLY PER SLOT
 // ---------------------------------------------------------------------------
 //
-// §4.5's requirement is met by INVOCATION rather than by modification:
-// resolution.go is untouched, its `len(committedIndex) == 0` guard is intact,
-// and its six singleton commit assignments are still six singletons and one
-// accumulating append. What makes that sufficient is that the existing gate is
-// called ONCE PER OPERAND over that operand's OWN pool.
+// §4.5's requirement is met by INVOCATION: the single-pool gate in
+// resolution.go, with its `len(committedIndex) == 0` guard and its six
+// singleton commit assignments and one accumulating append, is called ONCE PER
+// OPERAND over that operand's OWN pool.
 //
-// "resolution.go is untouched" is a fact about a diff, and a diff is not a
-// property. These two arms are the property.
+// What the gate's source looks like is not a property. These two arms are the
+// property.
 
 // TestOneSlotsAmbiguityDoesNotSuppressTheOthersCommit is independence, stated
 // as the thing that would break if the invocation were shared.
@@ -371,9 +368,8 @@ func TestAnOutOfCutOperandCountIsLeftToTheExistingPath(t *testing.T) {
 // The contest scope only narrows a children-of-scope frame, and a comparison
 // requires an explicit set, so on every question the product can actually ask
 // this admission admits everything. A threaded argument nothing observes is a
-// line someone deletes in good faith six months from now -- and the finding
-// that produced the boundary was that a refusal enforced anywhere downstream
-// of the insert leaks through a side channel. So the pin does not wait for a
+// line someone deletes in good faith -- and a refusal enforced anywhere
+// downstream of the insert leaks through a side channel. So the pin does not wait for a
 // frame that refuses: it hands the path an admission that DOES refuse and
 // requires the candidate to be absent.
 //

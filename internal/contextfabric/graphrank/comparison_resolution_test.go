@@ -386,7 +386,7 @@ func TestThePromptStaysInsideTheExistingBoundOnAdversarialInput(t *testing.T) {
 	prompt := comparisonClarificationPrompt(run)
 
 	if got := utf8.RuneCountInString(prompt); got > comparisonPromptMaxRunes {
-		t.Errorf("prompt is %d runes, over the existing published bound of %d -- this work does not widen it", got, comparisonPromptMaxRunes)
+		t.Errorf("prompt is %d runes, over the existing published bound of %d -- the comparison prompt must not widen it", got, comparisonPromptMaxRunes)
 	}
 	if !utf8.ValidString(prompt) {
 		t.Error("the prompt is not valid UTF-8 -- a byte budget split a rune, and the contract counts runes")

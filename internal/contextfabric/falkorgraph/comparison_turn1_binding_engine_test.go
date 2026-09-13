@@ -1,7 +1,6 @@
 package falkorgraph
 
-// TURN-1 BINDING OF A TWO-NAMED-OPERAND COMPARISON -- the red-at-parent
-// battery.
+// TURN-1 BINDING OF A TWO-NAMED-OPERAND COMPARISON.
 //
 // WHAT THIS FILE PROVES, AND WHY IT IS HERE AND NOT IN package contextfabric.
 // Every arm below drives a REAL contextfabric.Engine whose GraphReader is a
@@ -12,24 +11,20 @@ package falkorgraph
 // the same reason cohort_pool_truncation_engine_test.go and
 // engine_org_isolation_test.go live here.
 //
-// THE MEASUREMENT THAT MADE THIS FILE NECESSARY. The probe that first
-// established the zero-commit result passed a NIL FRAME. A nil frame routes
-// resolution down the flat-pool path and never reaches the production
-// dispatch, so that probe measured a path the product does not take for a
-// framed comparison. Every fixture here carries a REAL validated frame,
+// EVERY FIXTURE CARRIES A REAL VALIDATED FRAME. A nil frame routes resolution
+// down the flat-pool path and never reaches the comparison dispatch, so a
+// frameless fixture measures a path the product does not take for a framed
+// comparison. Every fixture here carries a REAL validated frame,
 // built through the shipped DeriveFrameObligations rather than by hand-typing
 // obligations, and an interpreter that returns it on the family outcome --
 // which is the only way the frame reaches Adapter.ResolveSubjects at all.
 //
 // EVERY ARM ASSERTS ITS OWN FIXTURE FIRST. A comparison fixture that
 // accidentally failed to retrieve either operand would satisfy "nothing was
-// committed" for the wrong reason and would go on passing after the defect
-// is fixed. Each arm therefore proves the candidate pool it depends on
+// committed" for the wrong reason, whether or not operand binding works. Each
+// arm therefore proves the candidate pool it depends on
 // before it asserts anything about the decision taken over that pool.
 //
-// The ticket is referred to by role throughout; no tracker id appears in
-// this file.
-
 import (
 	"bytes"
 	"context"
@@ -403,13 +398,12 @@ func (s refusingSynthesizer) Synthesize(context.Context, storage.Principal, cont
 	s.t.Helper()
 	s.t.Error("the synthesizer was invoked for a held comparison -- a hold publishes no judgment and must terminate before synthesis")
 	// WELL-FORMED, DELIBERATELY, even though reaching here is already the
-	// failure. The first version of this double returned a zero-value result;
-	// the engine then rejected it ("result identity or status violates v1
-	// bounds") and Investigate returned an ERROR, which the drive turns into
-	// a t.Fatalf -- so five arms died on a validation message instead of on
-	// the assertion they exist to make. The t.Error above had already fired,
-	// so the arms were red for the right reason, but the reason was masked.
-	// A refusing double must still let the call it is refusing COMPLETE.
+	// failure. A zero-value result is rejected by the engine ("result identity
+	// or status violates v1 bounds") and Investigate returns an ERROR, which the
+	// drive turns into a t.Fatalf -- so an arm would fail on a validation
+	// message instead of on the assertion it exists to make, masking the
+	// t.Error above. A refusing double must still let the call it is refusing
+	// COMPLETE.
 	return contextfabric.InvestigationResult{
 		Status: contextfabric.InvestigationNoMatch, StrongestPressures: []string{}, Drivers: []contextfabric.DriverJudgment{},
 		RemainingWork: []contextfabric.Finding{}, ReadinessGaps: []contextfabric.Finding{}, Paths: []contextfabric.RelationshipPath{},
@@ -425,9 +419,9 @@ func (s refusingSynthesizer) Synthesize(context.Context, storage.Principal, cont
 }
 
 // comparisonDrive is one full investigation. `facts` and `synthesizer` are
-// parameters rather than fixtures because the two halves of this battery need
-// opposite doubles: the arms that must NOT read pass refusing ones, and the
-// arm that must read all the way through passes permissive ones.
+// parameters rather than fixtures because the arms in this file need opposite
+// doubles: the arms that must NOT read pass refusing ones, and the arms that
+// must read all the way through pass permissive ones.
 type comparisonDrive struct {
 	frame        *contextfabric.QuestionFrame
 	family       contextfabric.QuestionFamily
@@ -552,8 +546,8 @@ func candidateFor(resolution contextfabric.SubjectResolution, subject contextfab
 
 // requireRetrieved fails loudly when a fixture did not put a subject into the
 // candidate pool at all. Without this, every "it was not committed" assertion
-// below could be satisfied by a fixture that never retrieved the subject, and
-// would keep passing after the defect is fixed.
+// below could be satisfied by a fixture that never retrieved the subject,
+// whether or not the decision under test is correct.
 func requireRetrieved(t *testing.T, resolution contextfabric.SubjectResolution, subject contextfabric.SubjectRef, why string) contextfabric.SubjectCandidate {
 	t.Helper()
 	candidate := candidateFor(resolution, subject)
@@ -615,24 +609,23 @@ func assertHeldComparison(t *testing.T, result contextfabric.InvestigationResult
 		t.Fatal("the held comparison carries an empty clarification prompt -- the user is asked nothing and cannot complete the comparison")
 	}
 	lowered := strings.ToLower(prompt)
-	// NECESSARY, NOT SUFFICIENT -- and the first version of this helper
-	// stopped here, which made two arms VACUOUS. An exact label match
-	// requires EqualFold(term, subject.Label) (graphrank/candidate.go), so
-	// these fixtures' candidate labels MUST equal their operand terms; and
-	// the parent's own prompt is graphrank.ClarificationPrompt, which is a
-	// list of the first three candidate LABELS. So the single-subject prompt
-	// contained both operand names by construction and satisfied these two
-	// checks at the parent, on a resolution that had not held for any
-	// operand reason at all. Measured, not argued: both arms passed at the
-	// parent before the check below existed.
+	// NECESSARY, NOT SUFFICIENT -- these two checks alone are vacuous. An exact
+	// label match requires EqualFold(term, subject.Label)
+	// (graphrank/candidate.go), so these fixtures' candidate labels MUST equal
+	// their operand terms; and the generic single-subject prompt,
+	// graphrank.ClarificationPrompt, is a list of the first three candidate
+	// LABELS. That prompt therefore contains both operand names by
+	// construction and satisfies both checks on a resolution that did not hold
+	// for any operand reason. The discriminating check below is what separates
+	// a comparison hold from it.
 	if !strings.Contains(lowered, strings.ToLower(operandOne)) {
 		t.Errorf("clarification prompt %q does not name operand one (%q)", prompt, operandOne)
 	}
 	if !strings.Contains(lowered, strings.ToLower(operandTwo)) {
 		t.Errorf("clarification prompt %q does not name operand two (%q)", prompt, operandTwo)
 	}
-	// THE DISCRIMINATING CHECK, and the plan's actual stated harm: "a
-	// SINGLE-SUBJECT disambiguation prompt for a two-subject request". A held
+	// THE DISCRIMINATING CHECK, against the harm of "a SINGLE-SUBJECT
+	// disambiguation prompt for a two-subject request". A held
 	// comparison must not be asking the generic "which of these subjects did
 	// you mean" question -- it must name each operand, its state, and the
 	// action required to complete the comparison.
@@ -664,19 +657,19 @@ func assertHeldComparison(t *testing.T, result contextfabric.InvestigationResult
 // AFFIRMATION -- the gate a served-document assertion is really asserting through
 // ---------------------------------------------------------------------------
 //
-// THE LESSON THIS SECTION EXISTS TO KEEP. An arm asserting on
-// `result.SubjectResolution.Committed` is reading the SERVED document, and the
-// served committed set has already passed the post-synthesis commit-affirmation
+// WHAT AN ASSERTION ON THE SERVED COMMITTED SET IS ASSERTING THROUGH. An arm
+// asserting on `result.SubjectResolution.Committed` reads the SERVED document,
+// and the served committed set has already passed the post-synthesis commit-affirmation
 // gate (chaos4085_commit_affirmation.go). That gate RETRACTS any subject
 // committed on statistical grounds which the produced answer does not
 // independently support -- and the exact-label tier stamps a statistical basis
 // deliberately, because label equality is not identity.
 //
-// The first version of the discriminating arm used a synthesizer that returned
-// a fixed string naming neither operand. Both operands committed -- the
-// resolver's own decision trace says so, twice, at `exact_index` -- and both
-// were then correctly retracted. The arm reported `committed = []` and read
-// exactly like a resolution failure for a resolver that had done its job.
+// A synthesizer returning a fixed string that names neither operand makes
+// this indistinguishable from a resolution failure: both operands commit at
+// `exact_index`, both are then correctly retracted for want of an answer that
+// names them, and the served committed set is empty for a resolver that did
+// its job.
 //
 // So an end-to-end arm about BINDING must make the answer AFFIRM what was
 // bound, which is also what a real comparison answer does: it names both
@@ -745,10 +738,9 @@ func (s comparisonAffirmingSynthesizer) Synthesize(context.Context, storage.Prin
 	}, nil
 }
 
-// requireNoCommitRetraction is the control that stops this whole class of
-// mistake recurring. If the affirmation gate retracted anything, the arm above
-// it was measuring the gate rather than the property it names -- and it says so
-// in those words rather than leaving the next reader to rediscover it.
+// requireNoCommitRetraction guards an arm against measuring the affirmation
+// gate. If the gate retracted anything, the arm was measuring the gate rather
+// than the property it names -- and the failure says so in those words.
 func requireNoCommitRetraction(t *testing.T, result contextfabric.InvestigationResult) {
 	t.Helper()
 	for _, limitation := range result.Limitations {
@@ -791,14 +783,13 @@ func requireNoCommitRetraction(t *testing.T, result contextfabric.InvestigationR
 //     same argument holds and for the same reason.
 //
 // THE BINDING ARMS -- every arm that expects a PUBLISHED comparison -- are
-// handled the other way round, and there are FOUR of them, not two. An earlier
-// version of this audit named only the first two and cost a cycle for exactly
-// that omission: the two receipt binding arms were left on a non-affirming
-// synthesizer and reported `committed = [one subject]`, because a
-// receipt-bound operand commits on an IDENTITY-PROVEN basis and survives while
-// a text-resolved one commits on a STATISTICAL basis and is retracted. A
-// half-published comparison is the most misleading possible reading of an
-// operand-binding failure.
+// handled the other way round, and there are FOUR of them: the two turn-1
+// binding arms and the two receipt binding arms. All four need an affirming
+// synthesizer. On a non-affirming one a receipt-bound operand commits on an
+// IDENTITY-PROVEN basis and survives while a text-resolved one commits on a
+// STATISTICAL basis and is retracted, so the served set shows one subject --
+// and a half-published comparison is the most misleading possible reading of
+// an operand-binding failure.
 //
 //   - TestTurnOneBindsBothNamedOperandsOfAComparison
 //   - TestAReceiptForOneOperandStillResolvesTheOtherOperandIndependently
@@ -820,19 +811,18 @@ func requireNoCommitRetraction(t *testing.T, result contextfabric.InvestigationR
 // ARM 1 -- THE DISCRIMINATING ARM
 // ---------------------------------------------------------------------------
 
-// TestTurnOneBindsBothNamedOperandsOfAComparison is the arm the whole cut is
-// measured by, and the one the earlier nil-frame probe could not express.
+// TestTurnOneBindsBothNamedOperandsOfAComparison is the discriminating arm. It
+// needs a real frame, which a nil-frame fixture cannot express.
 //
 // Two named team operands, each exactly retrievable by its own term, no
 // hints, a real frame, the production engine and the production resolver.
 // Both operands must be committed and the turn must not ask a question.
 //
-// AT THE PARENT it fails for the reported harm: both operand terms are
-// flattened into one deduped term bag before resolution begins, both exact
-// claimants land in one candidate pool, the exact-label gate requires
-// uniqueness ACROSS THE WHOLE POOL and therefore refuses, and the turn
-// returns a resolution-wide ambiguity -- one question, for two subjects,
-// committing neither.
+// THE DEFECT IT CATCHES: both operand terms flattened into one deduped term bag
+// before resolution, so both exact claimants land in one candidate pool, the
+// exact-label gate requires uniqueness ACROSS THE WHOLE POOL and refuses, and
+// the turn returns a resolution-wide ambiguity -- one question, for two
+// subjects, committing neither.
 func TestTurnOneBindsBothNamedOperandsOfAComparison(t *testing.T) {
 	t.Parallel()
 
@@ -895,7 +885,7 @@ func TestTurnOneBindsBothNamedOperandsOfAComparison(t *testing.T) {
 		}
 	}
 	if result.Status == contextfabric.InvestigationClarificationRequired {
-		t.Errorf("status = %q with both operands resolvable -- asking a question here is the round trip this work removes; prompt was %q",
+		t.Errorf("status = %q with both operands resolvable -- asking a question here is a round trip the comparison does not need; prompt was %q",
 			result.Status, result.SubjectResolution.ClarificationPrompt)
 	}
 
@@ -914,12 +904,11 @@ func TestTurnOneBindsBothNamedOperandsOfAComparison(t *testing.T) {
 // hold in its plainest form: operand A is exactly retrievable, operand B
 // retrieves nothing at all.
 //
-// AT THE PARENT it fails for a harm distinct from arm 1's. With one exact
-// claimant in the flat pool the exact-label gate is unique and DOES fire, so
-// the parent commits operand A alone and proceeds to read facts for it: the
-// user receives half a comparison, and -- because the shared projection drops
-// a clarification unless the status is the clarification-required one -- no
-// way to complete it.
+// THE DEFECT IT CATCHES is distinct from arm 1's. With one exact claimant in a
+// flat pool the exact-label gate is unique and fires, so operand A commits
+// alone and facts are read for it: the user receives half a comparison, and --
+// because the shared projection drops a clarification unless the status is the
+// clarification-required one -- no way to complete it.
 func TestOneResolvedOperandAndOneMissingOperandHoldsTheWholeComparison(t *testing.T) {
 	t.Parallel()
 
@@ -940,8 +929,7 @@ func TestOneResolvedOperandAndOneMissingOperandHoldsTheWholeComparison(t *testin
 
 	// FIXTURE CONTROL. Operand A must genuinely be the resolvable side. If it
 	// were not retrieved either, this arm would degenerate into "nothing was
-	// found", which the parent already handles and which measures nothing
-	// about holding.
+	// found", an ordinary no-match that measures nothing about holding.
 	resolved := requireRetrieved(t, result.SubjectResolution, comparisonSubjectA,
 		"operand A is the side this arm needs RESOLVED so that holding it back is a decision rather than an absence")
 	if resolved.Confidence != 1 {
@@ -954,11 +942,11 @@ func TestOneResolvedOperandAndOneMissingOperandHoldsTheWholeComparison(t *testin
 // TestOneResolvedOperandAndOneAmbiguousOperandHoldsTheWholeComparison is the
 // same rule where operand B has TWO exact claimants of its own.
 //
-// It is a separate arm because the parent reaches it by a different route: two
-// rivals inside operand B's own term make the pool-wide exact gate refuse, so
-// the parent commits nothing here and asks a single-subject question. The
-// after-state is identical to the arm above, which is the point -- the hold is
-// a property of the comparison, not of which way the operand failed.
+// It is a separate arm because a flat pool reaches it by a different route:
+// two rivals inside operand B's own term make the pool-wide exact gate refuse,
+// so a flat pool commits nothing and asks a single-subject question. The
+// expected state is identical to the arm above, which is the point -- the hold
+// is a property of the comparison, not of which way the operand failed.
 func TestOneResolvedOperandAndOneAmbiguousOperandHoldsTheWholeComparison(t *testing.T) {
 	t.Parallel()
 
@@ -1056,9 +1044,8 @@ func TestANamedOperandPairedWithAScopedOperandHoldsBeforeAnyRead(t *testing.T) {
 	// VARIANT, before any retrieval runs, so the pool is empty by
 	// construction -- and a comparison publishes no structure material. With
 	// every offer channel empty CHAOS-5637 rules the turn a no_match rather
-	// than an ask the caller cannot redeem. The hold itself is unchanged: no
-	// commit, no read, no cohort, and the prompt still rides on the
-	// resolution.
+	// than an ask the caller cannot redeem. It is still a hold: no commit, no
+	// read, no cohort, and the prompt rides on the resolution.
 	if got := len(result.SubjectResolution.Candidates); got != 0 {
 		t.Fatalf("the scoped hold published %d candidate(s) -- it must hold BEFORE retrieval, so any candidate means retrieval ran for a pair that was refused on its variant", got)
 	}
@@ -1082,12 +1069,11 @@ func TestANamedOperandPairedWithAScopedOperandHoldsBeforeAnyRead(t *testing.T) {
 // ARM 4 -- THE WHOLE-QUESTION-ONLY SUBJECT
 // ---------------------------------------------------------------------------
 
-// TestAWholeQuestionOnlySubjectStillCannotCommitOnItsOwn is a CONTROL, and it
-// is GREEN AT THE PARENT AND GREEN AFTER. It is written down as a control
-// because the first version of it was written as a red-at-parent arm and was
-// wrong about the product.
+// TestAWholeQuestionOnlySubjectStillCannotCommitOnItsOwn is a CONTROL: the
+// property it holds is true with or without operand dispatch, and it guards
+// that property against the dispatch being relied on in its place.
 //
-// WHAT THE MEASUREMENT SHOWED. A whole-question-only candidate arrives at
+// WHY IT CANNOT COMMIT. A whole-question-only candidate arrives at
 // confidence 0.70 and cannot reach the lone-candidate commit gate -- not
 // because of anything this fixture does, but because two shipped facts
 // compose. `ResolveDeps.SearchQuestion` is wired to `questionVectorSearchNodes`
@@ -1103,16 +1089,15 @@ func TestANamedOperandPairedWithAScopedOperandHoldsBeforeAnyRead(t *testing.T) {
 // restate the constant: a copied number here would be a second, silently
 // divergent authority for a value those two already own.
 //
-// SO WHY KEEP THE ARM AT ALL. After this work there are TWO independent
-// reasons a question-only subject cannot stand in for an operand: the ceiling,
-// and its exclusion from every slot's identity pool. A control that passes on
+// WHY KEEP THE ARM. There are TWO independent reasons a question-only subject
+// cannot stand in for an operand: the ceiling, and its exclusion from every
+// slot's identity pool. A control that passes on
 // either and fails only when BOTH are gone is exactly the property worth
 // holding -- and it is the arm that would catch someone raising the ceiling on
-// the assumption that the slot exclusion now covers it.
+// the assumption that the slot exclusion covers it.
 //
-// The RED half of the original row moved to the receipt route, where the
-// ceiling gives no protection at all -- see
-// TestAQuestionOnlySubjectCarriedInOnAReceiptCannotBeBoundToAnOperand.
+// The receipt route, where the ceiling gives no protection at all, is pinned
+// by TestAQuestionOnlySubjectCarriedInOnAReceiptCannotBeBoundToAnOperand.
 func TestAWholeQuestionOnlySubjectStillCannotCommitOnItsOwn(t *testing.T) {
 	t.Parallel()
 
@@ -1126,9 +1111,8 @@ func TestAWholeQuestionOnlySubjectStillCannotCommitOnItsOwn(t *testing.T) {
 	requireQuestionPassRan(t, conn)
 
 	// FIXTURE CONTROL 2, READ OFF THE TRACE RATHER THAN THE PUBLISHED POOL.
-	// The subject cannot be asserted present in result.SubjectResolution any
-	// more, and its absence there is now a THIRD refusal rather than a broken
-	// fixture: the offer-pool exclusion withholds every candidate matched by
+	// The subject cannot be asserted present in result.SubjectResolution: its
+	// absence there is a THIRD refusal rather than a broken fixture: the offer-pool exclusion withholds every candidate matched by
 	// semantic similarity alone, so a vector-only hit reaches ranking and is
 	// then withheld before it can be offered. That withholding is the fact
 	// this control needs -- "retrieved, then refused" -- and asserting it from
@@ -1140,9 +1124,8 @@ func TestAWholeQuestionOnlySubjectStillCannotCommitOnItsOwn(t *testing.T) {
 			subjectKey(comparisonQuestionOnlySubject))
 	}
 
-	// THE PROPERTY, NOW IN BOTH ITS FORMS. Not committed is the original
-	// claim. Not OFFERED is the one the exclusion added, and it is the
-	// stronger of the two: an offer is a commit deferred by one turn, so a
+	// THE PROPERTY, IN BOTH ITS FORMS: not committed, and not OFFERED. Not
+	// offered is the stronger of the two: an offer is a commit deferred by one turn, so a
 	// question-only subject appearing in the pool would let the next turn
 	// redeem it into exactly the operand substitution this arm refuses.
 	if subjectCommitted(result.SubjectResolution, comparisonQuestionOnlySubject) {
@@ -1164,8 +1147,8 @@ func TestAWholeQuestionOnlySubjectStillCannotCommitOnItsOwn(t *testing.T) {
 // The receipt arm in the file beside this one builds the SAME retrieval shape
 // on the receipt-aware adapter (which additionally answers the by-kind-and-id
 // lookup a carried receipt re-authorizes through), sharing this file's
-// questionOnlyVectorRow so the two halves of the split row cannot drift into
-// measuring different subjects.
+// questionOnlyVectorRow so the two routes cannot drift into measuring
+// different subjects.
 func questionOnlyComparisonDrive(t *testing.T, tracer *comparisonDecisionTracer) (contextfabric.InvestigationResult, *comparisonConn) {
 	t.Helper()
 	conn := &comparisonConn{rowsForTerm: perOperandRows(nil, nil, nil)}
@@ -1462,8 +1445,8 @@ func TestAHeldComparisonEmitsItsObservableThroughTheRealEngine(t *testing.T) {
 	}
 
 	// THE POLICY AND DECISION LINES MUST BOTH BE PRESENT. Policy proves the
-	// dispatch happened at all -- the regression that otherwise leaves no
-	// trace, because the flat path serves a well-formed answer. Decision
+	// dispatch happened at all -- a lost dispatch otherwise leaves no trace,
+	// because the flat path serves a well-formed answer. Decision
 	// proves the hold was a hold.
 	policy, ok := byMessage["context fabric comparison resolution policy"]
 	if !ok {
@@ -1620,10 +1603,10 @@ func TestTheDeployedWiringEmitsTheObservableAtItsOwnLevel(t *testing.T) {
 // the real engine rather than by argument about the emitters.
 //
 // WHY A COMPARISON IS THE FIRST CALLER THAT CAN BREAK THEM. Both properties
-// were true by construction while resolveSubjects finalized once per request.
-// A comparison finalizes once per OPERAND, so for the first time one request
-// runs the per-term retrieval pass twice and the commit machinery twice --
-// and the certifier's rules are about the request, not about a call.
+// hold by construction for a resolution that finalizes once per request. A
+// comparison finalizes once per OPERAND, so one request runs the per-term
+// retrieval pass twice and the commit machinery twice -- and the certifier's
+// rules are about the request, not about a call.
 //
 //   - graphrank.search declares NO pass field, so certify groups every search
 //     line in a request together and requires index 1..total to be unique and

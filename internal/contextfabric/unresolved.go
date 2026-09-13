@@ -773,7 +773,7 @@ func resolveTerminalStatus(request InvestigationRequest, resolution *SubjectReso
 	if len(resolution.Candidates) == 0 {
 		// THE COMPARISON-ONLY BRANCH, checked before the exclusion arm below
 		// because it is the more specific claim about WHY this pool is empty.
-		// Every other empty-pool outcome is unchanged.
+		// Every other empty-pool outcome falls through to the arms below.
 		//
 		// A HELD COMPARISON IS SUBJECT TO CHAOS-5637 LIKE EVERY OTHER
 		// CLARIFICATION. It publishes no structure material at all, so when

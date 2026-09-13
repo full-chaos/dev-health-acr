@@ -1,7 +1,6 @@
 package falkorgraph
 
-// TURN-2 RECEIPT BINDING FOR A TWO-NAMED-OPERAND COMPARISON -- the
-// red-at-parent battery's second half.
+// TURN-2 RECEIPT BINDING FOR A TWO-NAMED-OPERAND COMPARISON.
 //
 // A follow-up selection is matched SERVER-SIDE against the CURRENT question:
 // no new request field exists, and none is added. Which operand a receipt
@@ -9,17 +8,16 @@ package falkorgraph
 // that matches no operand, or both, stays UNBOUND rather than being guessed
 // into a slot.
 //
-// WHY THE PARENT FAILS THESE. The commit gate in the merged-candidate
-// resolver runs its ordinary gates only when NOTHING is pre-committed. A
-// receipt-derived hint pre-commits one subject for the whole resolution, so
-// the second operand's gate never runs at all: the parent publishes the
-// receipt's subject alone and reports the comparison as having proceeded,
-// whatever the second operand's own evidence says. Every arm here is that
-// suppression, seen from a different side.
+// THE SUPPRESSION THESE ARMS GUARD AGAINST. The merged-candidate resolver runs
+// its ordinary gates only when NOTHING is pre-committed. A receipt-derived hint
+// that pre-commits one subject for the WHOLE resolution would stop the second
+// operand's gate from ever running: the receipt's subject would publish alone
+// and the comparison would read as having proceeded, whatever the second
+// operand's own evidence says. Every arm here is that suppression, seen from a
+// different side.
 //
 // These arms drive the SAME real Engine over the SAME real Adapter as the
-// turn-1 file beside them; only the request carries receipts. The ticket is
-// referred to by role; no tracker id appears in this file.
+// turn-1 file beside them; only the request carries receipts.
 
 import (
 	"context"
@@ -262,10 +260,10 @@ func (d receiptDrive) run(t *testing.T) (contextfabric.InvestigationResult, *pri
 // Both operands must end up bound: the receipt binds A, and B runs its OWN
 // commit gate on its OWN terms.
 //
-// AT THE PARENT the receipt pre-commits A for the whole resolution, the
-// ordinary gates are skipped wholesale because something is already
-// committed, and B never gets a decision at all -- the turn publishes one
-// subject and calls the comparison done.
+// THE DEFECT IT CATCHES: a receipt pre-committing A for the whole resolution,
+// so the ordinary gates are skipped wholesale because something is already
+// committed, B never gets a decision, and the turn publishes one subject as a
+// completed comparison.
 func TestAReceiptForOneOperandStillResolvesTheOtherOperandIndependently(t *testing.T) {
 	t.Parallel()
 
@@ -289,16 +287,14 @@ func TestAReceiptForOneOperandStillResolvesTheOtherOperandIndependently(t *testi
 		synthesizer: comparisonAffirmingSynthesizer{subjects: []contextfabric.SubjectRef{comparisonSubjectA, comparisonSubjectB}},
 	}.run(t)
 
-	// THE AFFIRMATION CONTROL, and this arm is why the rule exists in the
-	// first place. It is a BINDING arm, not a hold arm, so it expects a
-	// published comparison and must therefore affirm what it expects to stay
-	// committed. Without it this arm reported `committed = [team/team_platform]`
-	// -- one subject, not zero -- because the receipt-bound operand commits on
-	// an IDENTITY-PROVEN basis and survives, while the text-resolved operand
-	// commits on a STATISTICAL basis and was retracted for want of an answer
-	// that named it. A half-published comparison is the most misleading
-	// possible reading of an operand-binding failure, and it was a fixture
-	// artefact.
+	// THE AFFIRMATION CONTROL. This is a BINDING arm, not a hold arm, so it
+	// expects a published comparison and must affirm what it expects to stay
+	// committed. Without affirmation the served set shows ONE subject, not
+	// zero: the receipt-bound operand commits on an IDENTITY-PROVEN basis and
+	// survives, while the text-resolved operand commits on a STATISTICAL basis
+	// and is retracted for want of an answer that names it. A half-published
+	// comparison is the most misleading possible reading of an operand-binding
+	// failure, and here it would be a fixture artefact.
 	requireNoCommitRetraction(t, result)
 
 	got := committedKeys(result.SubjectResolution)
@@ -363,9 +359,9 @@ func TestASymmetricReceiptSelectionBindsTheOtherOperand(t *testing.T) {
 // than dropping one of them, and rather than reassigning one to the empty
 // slot to manufacture a completed pair.
 //
-// AT THE PARENT both receipts simply pre-commit, and the turn publishes a
+// THE DEFECT IT CATCHES: both receipts pre-committing, so the turn publishes a
 // two-subject "comparison" in which both subjects answer the same operand and
-// the other operand was never resolved at all.
+// the other operand is never resolved.
 func TestTwoDistinctReceiptsTargetingOneOperandHoldTheComparison(t *testing.T) {
 	t.Parallel()
 
@@ -500,16 +496,16 @@ func TestAReceiptWinnerOfTheWrongStatedKindHoldsTheComparison(t *testing.T) {
 // ARM 7 -- THE QUESTION-ONLY SUBJECT, ON THE RECEIPT ROUTE
 // ---------------------------------------------------------------------------
 
-// TestAQuestionOnlySubjectCarriedInOnAReceiptCannotBeBoundToAnOperand is the
-// RED half of the split whole-question row, and the route where the arithmetic
-// that protects the other half gives no protection at all.
+// TestAQuestionOnlySubjectCarriedInOnAReceiptCannotBeBoundToAnOperand pins the
+// question-only subject on the receipt route, where the arithmetic that
+// protects the text route gives no protection at all.
 //
-// WHY THE SPLIT. The lone-commit half is unchanged behaviour: the
-// whole-question pass is vector-only and the vector relevance ceiling sits
+// WHY TWO ROUTES. On the text route the lone commit is refused by arithmetic:
+// the whole-question pass is vector-only and the vector relevance ceiling sits
 // deliberately below graphrank's lone-candidate gate, so a question-only
 // subject can never auto-commit -- pinned by the two shipped tests named in
-// TestAWholeQuestionOnlySubjectStillCannotCommitOnItsOwn, which is that half's
-// green/green control. NONE OF THAT APPLIES HERE. A receipt-derived hint
+// TestAWholeQuestionOnlySubjectStillCannotCommitOnItsOwn, which is the text
+// route's control. NONE OF THAT APPLIES HERE. A receipt-derived hint
 // PRE-COMMITS, and the ordinary commit gates run only when nothing is
 // pre-committed -- so on this route the subject's confidence is never
 // consulted, and 0.70 buys nothing.
@@ -520,8 +516,8 @@ func TestAReceiptWinnerOfTheWrongStatedKindHoldsTheComparison(t *testing.T) {
 // witness in either slot's own terms -- a whole-question hit is not identity
 // evidence -- so it must bind to NEITHER operand and the comparison must hold.
 //
-// AT THE PARENT the receipt pre-commits it outright, and the turn proceeds to
-// read facts for a subject that answers neither side of the comparison.
+// THE DEFECT IT CATCHES: the receipt pre-committing it outright, so the turn
+// reads facts for a subject that answers neither side of the comparison.
 func TestAQuestionOnlySubjectCarriedInOnAReceiptCannotBeBoundToAnOperand(t *testing.T) {
 	t.Parallel()
 

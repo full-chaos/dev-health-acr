@@ -368,9 +368,9 @@ func RenderRequirementCoordinates(label string, coordinates []RequirementCoordin
 // must stay there. read_population.go cites frameRoleSlots' explicit-set walk
 // by LINE RANGE ("SLOTS ARE WALKED EXACTLY AS frameRoleSlots WALKS THEM
 // (subject_role.go:128-143)"). Inserting anything above that walk silently
-// falsifies a cross-reference in a file this change does not touch, and the
-// falsification is invisible -- nothing compiles differently and no test goes
-// red. Everything this section adds goes at the END of the file.
+// falsifies a cross-reference in another file, and the falsification is
+// invisible -- nothing compiles differently and no test fails. This section
+// therefore stays at the END of the file.
 
 // ComparisonOperandVariant names WHICH member of the operand union a slot
 // carries. It mirrors SubjectOperandKind rather than aliasing it because the
@@ -436,7 +436,7 @@ type ComparisonOperandSlot struct {
 	// Terms are this operand's OWN retrieval terms, and they are the reason
 	// this type exists: frameRoleSlots carries the role/kind projection but
 	// not the terms, and a slot resolved from the whole-question term bag
-	// instead of from its own terms is the defect this work removes.
+	// instead of from its own terms loses which operand each term named.
 	//
 	// For a scoped operand these are the ANCHOR terms, which are retrieval
 	// POINTERS, NEVER VALUES. They are carried so the hold can name the side

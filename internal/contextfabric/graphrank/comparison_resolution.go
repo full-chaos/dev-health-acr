@@ -53,7 +53,7 @@ const (
 	// narrowed, because choosing between them is the guess this design exists
 	// to avoid.
 	operandSlotOverCommitted operandSlotState = "over_committed"
-	// operandSlotScoped: a scoped operand. Never resolved in this cut -- the
+	// operandSlotScoped: a scoped operand. Never resolved by this dispatch -- the
 	// state exists so the hold can describe the side it is holding.
 	operandSlotScoped operandSlotState = "scoped"
 )
@@ -67,7 +67,7 @@ type operandSlotRun struct {
 
 	// candidates are the authorized candidates retrieved for THIS SLOT'S OWN
 	// TERMS. Neither the whole-question term bag nor another slot's terms may
-	// contribute to this list -- that isolation IS the fix.
+	// contribute to this list -- that isolation is what binds each operand.
 	candidates []contextfabric.SubjectCandidate
 
 	// committed holds this slot's winner. ADMISSIBLE CARDINALITY IS ZERO OR
@@ -297,7 +297,7 @@ func combineSlotCandidates(run comparisonResolutionRun, budget int) []contextfab
 
 // comparisonPromptMaxRunes mirrors the EXISTING published bound on
 // SubjectResolution.ClarificationPrompt, which the contract validates in RUNES
-// (utf8.RuneCountInString), not bytes. This work does not widen it.
+// (utf8.RuneCountInString), not bytes, and does not widen it.
 //
 // Stated in runes here for the same reason the validator counts them: a
 // byte-budgeted prompt would truncate a multibyte label mid-rune and produce a
@@ -330,7 +330,7 @@ const comparisonOperandNameMaxRunes = 120
 // THERE IS NO MACHINE-READABLE SLOT-TO-CANDIDATE MAPPING PROMISED HERE, and
 // none is added: operand identity reaches the human through these descriptions.
 // A consumer that needed to know which candidate belongs to which operand would
-// need a wire change, which this work does not make.
+// need a wire change; the wire carries none.
 func comparisonClarificationPrompt(run comparisonResolutionRun) string {
 	descriptions := make([]string, 0, len(run.slots))
 	for index, slot := range run.slots {
@@ -502,9 +502,9 @@ func resolveNamedComparison(
 
 	// THE POLICY LINE FIRES AT DISPATCH, before anything can fail. If it is
 	// absent from a rig's logs for a question that should be a comparison,
-	// the dispatch did not happen -- which is the one regression that leaves
-	// no other trace, because the flat pooled path serves a perfectly
-	// well-formed answer.
+	// the dispatch did not happen -- the one failure that leaves no other
+	// trace, because the flat pooled path serves a perfectly well-formed
+	// answer.
 	recordComparisonPolicy(ctx, principal, request, deps, comparison)
 
 	// RECEIPTS BIND BEFORE ANY SLOT RESOLVES. The binding decision is about
@@ -729,8 +729,8 @@ func resolveOneOperandSlot(
 	// selection bound HERE suppresses the gates for THIS SLOT, which is
 	// correct because the user's selection IS this slot's decision, while the
 	// other slot's invocation starts empty and runs every ordinary gate it
-	// always has. The suppression that used to swallow the second operand is
-	// now scoped to the operand the selection actually answered.
+	// always has. The suppression is scoped to the operand the selection
+	// actually answered, so it cannot swallow the other operand.
 	for _, candidate := range preCommitted {
 		candidatesBySubject[SubjectKey(candidate.Subject)] = candidate
 	}
@@ -809,7 +809,7 @@ func resolveOneOperandSlot(
 //
 // NO NEW REQUEST FIELD, AND NONE IS NEEDED. Which operand a follow-up answers
 // is DERIVED from the current question's own operand terms, not declared by the
-// client. The wire carries no slot index and this work does not add one.
+// client. The wire carries no slot index.
 //
 // ALL MATCHING SLOTS ARE DETERMINED BEFORE ANY RECEIPT IS ASSIGNED. Assigning
 // as we go would make the outcome depend on receipt order and on slot order --

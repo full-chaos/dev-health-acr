@@ -462,10 +462,9 @@ type ResolveDeps struct {
 	// is held to.
 	ResolutionTracer ResolutionTracer
 
-	// OperandResolutionSink (turn-1 comparison work) is the INFO-level,
-	// CONTEXT-TAKING observable for comparison resolution. Optional and
-	// nil-safe: a backend that does not set it costs nothing and behaves
-	// exactly as before.
+	// OperandResolutionSink is the INFO-level, CONTEXT-TAKING observable for
+	// comparison resolution. Optional and nil-safe: a backend that does not
+	// set it costs nothing and resolves identically.
 	//
 	// It is a SEPARATE dependency from ResolutionTracer, not an extension of
 	// it, for two structural reasons: that tracer builds its own
@@ -2596,7 +2595,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	}
 	// COMPARISON DISPATCH -- BEFORE SubjectTerms FLATTENS THE QUESTION.
 	//
-	// This position is the fix. One line below, SubjectTerms reduces the
+	// This position is what binds each operand. One line below, SubjectTerms reduces the
 	// question to a flat, deduped term bag, and at that moment which operand
 	// each term belonged to is gone: the resolver can only resolve "a" subject
 	// from a pool, so two well-posed operands become one ambiguity. Dispatching
@@ -4791,10 +4790,9 @@ type termRetrievalOutcome struct {
 // retrieveCandidatesForTerms runs the per-term retrieval pass: one Search per
 // term, its own trace event, and a merge into the caller's candidate state.
 //
-// THIS IS AN EXTRACTION, NOT NEW BEHAVIOUR. The body moved here verbatim from
-// resolveSubjects, and resolveSubjects still calls it with exactly the terms
-// and maps it used to loop over itself -- so the ordinary single-subject path
-// is unchanged, term for term and event for event.
+// THIS IS AN EXTRACTION, NOT NEW BEHAVIOUR. resolveSubjects calls it with its
+// own terms and maps, so the ordinary single-subject path runs the same pass,
+// term for term and event for event, that a comparison runs once per operand.
 //
 // WHY IT EXISTS. A two-named-operand comparison resolves each operand from ITS
 // OWN terms, and each operand's pass needs the same authorization, collision,
