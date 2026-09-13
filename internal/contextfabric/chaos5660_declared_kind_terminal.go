@@ -113,10 +113,12 @@ const declaredKindTerminalBasis = contractsv1.ContextFabricRefusalBasisDeclaredK
 // ONE DERIVATION, TWO READERS. graphrank's frameKindHints was this
 // derivation's only home and is now a delegation to it (cohort_kind.go):
 // phase 4 reserves candidate slots for exactly these kinds, and the
-// answerability decision below asks whether any offer carries one of exactly
-// these kinds. A second copy would be a second authority on what the frame
-// declared, and the two would disagree the first time the union grew a
-// variant -- which is the defect the frame itself exists to remove.
+// subjectless terminal line reports them as declared_kinds. A second copy
+// would be a second authority on what the frame declared, and the two would
+// disagree the first time the union grew a variant -- which is the defect the
+// frame itself exists to remove. The answerability decision does NOT read
+// this union: a union loses which role each kind belongs to, and the decision
+// is taken per role (role_answerability.go).
 //
 // A NIL FRAME DECLARES NOTHING, and so does a frame whose variant carries no
 // kind. Both return nil, and every caller reads that as "this question
@@ -146,13 +148,17 @@ func (f *QuestionFrame) DeclaredKinds() []SubjectKind {
 	return kinds
 }
 
-// declaredKindDecision is what one turn concluded about its own declared
-// kind, carried to the status decision and to the log line as ONE value so
-// the two cannot disagree about a turn.
+// declaredKindDecision is what one turn concluded about whether any offer it
+// carries can advance its accepted reading, carried to the status decision and
+// to the log line as ONE value so the two cannot disagree about a turn.
+//
+// The name is the wire basis's (declared_kind_unmatched). CHAOS-5720 moved the
+// decision itself from a flat kind comparison to a per-role one:
+// decideAnswerability (role_answerability.go) takes it.
 type declaredKindDecision struct {
-	// DeclaredKinds is the frame's own declared set, empty when the frame
-	// declared none. Empty means this decision does not apply at all --
-	// Unsatisfiable is then always false.
+	// DeclaredKinds is the frame's own declared set (QuestionFrame.DeclaredKinds),
+	// empty when the frame declared none. Reported on the log line; the
+	// decision reads Roles, never this union.
 	DeclaredKinds []SubjectKind
 	// OfferedKinds is every distinct kind this turn actually put in front
 	// of the caller, across all four structure channels AND the subject
@@ -161,67 +167,41 @@ type declaredKindDecision struct {
 	// served document beside it: "declared project, offered
 	// ci_pipeline_run/pull_request" is the whole finding on one line.
 	OfferedKinds []SubjectKind
-	// Unsatisfiable is true when the frame declared at least one kind and
-	// NONE of the declared kinds appears among OfferedKinds.
+	// Roles are the roles of the accepted reading this decision evaluated,
+	// in derivation order, each with what it admits. Empty when the reading
+	// has nothing to evaluate -- the decision then does not apply and
+	// Unsatisfiable is always false.
+	Roles []answerabilitySlot
+	// Advance is the first offer, in channel order, that advanced a role,
+	// with the role it advanced. Nil when no offer advanced any role.
+	Advance *answerabilityAdvance
+	// OffersEvaluated counts the offers that carried a kind; OffersAdvancing
+	// counts the ones among them that advanced some role.
+	OffersEvaluated int
+	OffersAdvancing int
+	// Unsatisfiable is true when the reading has at least one role, at
+	// least one offer carried a kind, and no offer advanced any role.
 	//
-	// It is deliberately false when OfferedKinds is empty as well: a turn
-	// with no offers at all is CHAOS-5637's condition, decided by
-	// CHAOS-5637's predicate, and reporting it here too would give one
-	// state two names in two log lines.
+	// It is deliberately false when no offer carried a kind: a turn with no
+	// offers at all is CHAOS-5637's condition, decided by CHAOS-5637's
+	// predicate, and reporting it here too would give one state two names in
+	// two log lines.
 	Unsatisfiable bool
 }
 
-// decideDeclaredKind answers, for one turn, whether any offer it carries can
-// satisfy the kind its frame declared.
-//
-// EVERY CHANNEL A CALLER CAN REDEEM, not a sample. All four structure option
-// lists carry a Kind on the wire, and so does every subject candidate; a
-// caller may answer through any of them, so an option of the declared kind
-// on ANY of them makes the turn satisfiable. Reading fewer channels here
-// would terminate a turn the caller could in fact have answered.
+// decideDeclaredKind takes the decision for one COMPOSING turn: the reading is
+// the turn's accepted frame with the anchor kind its winning sample stated,
+// and the offers are the gated material and candidate list the served
+// document is composed from.
 //
 // WINDOW OPTIONS ARE NOT A CHANNEL FOR THIS QUESTION, and their absence from
 // the list is the decision this function turns on. A window option answers
 // WHEN, never WHICH SUBJECT; redeeming one on these turns was measured to
 // advance the exchange by exactly one turn and then return it to the same
-// state. Counting a window offer as satisfying a declared KIND need is what
-// would keep the loop alive through this predicate.
-func decideDeclaredKind(frame *QuestionFrame, resolution SubjectResolution, material StructureOfferMaterial) declaredKindDecision {
-	decision := declaredKindDecision{DeclaredKinds: frame.DeclaredKinds()}
-	seen := make(map[SubjectKind]bool, 4)
-	add := func(kind contractsv1.ContextFabricSubjectKind) {
-		subjectKind := SubjectKind(kind)
-		if subjectKind == "" || seen[subjectKind] {
-			return
-		}
-		seen[subjectKind] = true
-		decision.OfferedKinds = append(decision.OfferedKinds, subjectKind)
-	}
-	for _, option := range material.KindOptions {
-		add(option.Kind)
-	}
-	for _, option := range material.AnchorOptions {
-		add(option.Kind)
-	}
-	for _, option := range material.HandleOptions {
-		add(option.Kind)
-	}
-	for _, option := range material.CandidateOptions {
-		add(option.Kind)
-	}
-	for _, candidate := range resolution.Candidates {
-		add(candidate.Subject.Kind)
-	}
-	if len(decision.DeclaredKinds) == 0 || len(decision.OfferedKinds) == 0 {
-		return decision
-	}
-	for _, kind := range decision.DeclaredKinds {
-		if seen[kind] {
-			return decision
-		}
-	}
-	decision.Unsatisfiable = true
-	return decision
+// state. Counting a window offer as satisfying a subject need is what would
+// keep the loop alive through this predicate.
+func decideDeclaredKind(frame *QuestionFrame, sampleAnchorKind SubjectKind, resolution SubjectResolution, material StructureOfferMaterial) declaredKindDecision {
+	return decideAnswerability(answerabilityReadingOf(frame, sampleAnchorKind), answerabilityOffersOfTurn(resolution, material))
 }
 
 // ObservableDeclaredKinds renders the declared set for the log line, with an

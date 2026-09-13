@@ -336,7 +336,11 @@ func (e *Engine) terminalResult(
 	// the status decision and the log line below. Deriving it separately at
 	// any of those three would let a turn be reported under one reading and
 	// answered under another.
-	declaredKind := decideDeclaredKind(familyOutcome.Frame, resolution, structureMaterial)
+	// CHAOS-5720: the anchor kind is the winning sample's, the same value
+	// ResolveSubjects is hinted with through ScopeAnchorRetrievalKind -- on a
+	// carried continuation it is the carried anchor -- so the anchor the
+	// decision admits is the anchor retrieval searched for.
+	declaredKind := decideDeclaredKind(familyOutcome.Frame, familyOutcome.WinningSample.ScopeAnchorKind, resolution, structureMaterial)
 	// The frame is carried from the family outcome this turn already
 	// produced, never reconstructed here; it is what tells a held
 	// comparison's empty pool apart from an ordinary one.
@@ -386,7 +390,7 @@ func (e *Engine) terminalResult(
 		// the answer would disagree about what happened. One decision value
 		// reaches both surfaces, and the served-document test asserts they
 		// agree.
-		e.telemetry.RecordSubjectlessTerminal(ctx, principal, subjectlessTerminalReason(familyOutcome.Gate, resolution, subjectCandidatesAuthzDropped, declaredKind), observableRefusalBasis(refusalBasis), declaredKind.ObservableDeclaredKinds(), declaredKind.ObservableOfferedKinds())
+		e.telemetry.RecordSubjectlessTerminal(ctx, principal, subjectlessTerminalReason(familyOutcome.Gate, resolution, subjectCandidatesAuthzDropped, declaredKind), observableRefusalBasis(refusalBasis), declaredKind.ObservableDeclaredKinds(), declaredKind.ObservableOfferedKinds(), declaredKind.ObservableAnswerability())
 	}
 	coverage := graphContext.Coverage
 	if coverage.Sources == nil {

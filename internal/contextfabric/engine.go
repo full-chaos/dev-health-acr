@@ -390,7 +390,10 @@ type EngineTelemetry interface {
 	// subjectlessTerminalReason's own doc comment for the exact
 	// classification and why an authorization-narrowing cause specifically
 	// must stay telemetry-only, never surfacing in the response contract.
-	RecordSubjectlessTerminal(ctx context.Context, principal storage.Principal, reason string, refusalBasis string, declaredKinds string, offeredKinds string)
+	// The answerability argument (CHAOS-5720) carries the role half of the
+	// decision: the roles evaluated, the role the winning offer advanced and
+	// its channel, and the offer counts.
+	RecordSubjectlessTerminal(ctx context.Context, principal storage.Principal, reason string, refusalBasis string, declaredKinds string, offeredKinds string, answerability SubjectlessTerminalAnswerability)
 	// RecordSynthesisStatusOverride (CHAOS-4098) reports that the engine
 	// served a DIFFERENT investigation status than the synthesis step
 	// returned -- today only clarification_required -> no_match, when the

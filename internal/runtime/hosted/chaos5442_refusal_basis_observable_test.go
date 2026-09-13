@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -31,6 +32,15 @@ func emitSubjectlessTerminal(t *testing.T, reason string, refusalBasis string) m
 // emitSubjectlessTerminalWithKinds is the same drive with CHAOS-5660's two
 // declared/offered kind values supplied explicitly.
 func emitSubjectlessTerminalWithKinds(t *testing.T, reason string, refusalBasis string, declaredKinds string, offeredKinds string) map[string]any {
+	t.Helper()
+	return emitSubjectlessTerminalWithAnswerability(t, reason, refusalBasis, declaredKinds, offeredKinds, contextfabric.SubjectlessTerminalAnswerability{
+		EvaluatedRoles: "none", AdvancedRole: "none", AdvancingChannel: "none",
+	})
+}
+
+// emitSubjectlessTerminalWithAnswerability is the same drive with CHAOS-5720's
+// role half of the decision supplied explicitly.
+func emitSubjectlessTerminalWithAnswerability(t *testing.T, reason string, refusalBasis string, declaredKinds string, offeredKinds string, answerability contextfabric.SubjectlessTerminalAnswerability) map[string]any {
 	t.Helper()
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -46,7 +56,7 @@ func emitSubjectlessTerminalWithKinds(t *testing.T, reason string, refusalBasis 
 		t.Fatal("the hosted installation returned no engine telemetry at all -- every subjectless terminal would be silent in production")
 	}
 	telemetry.RecordSubjectlessTerminal(
-		context.Background(), storage.Principal{OrgID: "org_5442"}, reason, refusalBasis, declaredKinds, offeredKinds)
+		context.Background(), storage.Principal{OrgID: "org_5442"}, reason, refusalBasis, declaredKinds, offeredKinds, answerability)
 	if buf.Len() == 0 {
 		t.Fatal("the deployed telemetry emitted NOTHING at the production log level -- a refusal an operator cannot see is a refusal that cannot be counted")
 	}
@@ -131,5 +141,60 @@ func TestTheDeployedSubjectlessTerminalCarriesExplicitNoneKinds(t *testing.T) {
 	}
 	if declared != "none" || offered != "none" {
 		t.Errorf("declared/offered = %q/%q, want the explicit token \"none\" on both, never an empty value", declared, offered)
+	}
+}
+
+// THE ROLE LINE (CHAOS-5720). declared_kinds and offered_kinds cannot say
+// whether a team offer was refused on a question whose open role IS a team
+// anchor; the role pair can. Every value here differs from every other, so an
+// emitter that swapped two keys, or wrote one count into both, fails.
+func TestTheDeployedSubjectlessTerminalNamesTheEvaluatedAndAdvancedRoles(t *testing.T) {
+	t.Parallel()
+	rec := emitSubjectlessTerminalWithAnswerability(t, "ambiguous", "none", "project", "team,pull_request",
+		contextfabric.SubjectlessTerminalAnswerability{
+			EvaluatedRoles:   "anchor:team:open,member:project:population",
+			AdvancedRole:     "anchor:team",
+			AdvancingChannel: "subject_candidate",
+			OffersEvaluated:  3,
+			OffersAdvancing:  2,
+		})
+	for key, want := range map[string]string{
+		"evaluated_roles":   "anchor:team:open,member:project:population",
+		"advanced_role":     "anchor:team",
+		"advancing_channel": "subject_candidate",
+	} {
+		if got, _ := rec[key].(string); got != want {
+			t.Errorf("%s = %q, want %q; line: %v", key, got, want, rec)
+		}
+	}
+	for key, want := range map[string]float64{"offers_evaluated": 3, "offers_advancing": 2} {
+		if got, ok := rec[key].(float64); !ok || got != want {
+			t.Errorf("%s = %v (present=%v), want %v; line: %v", key, rec[key], ok, want, rec)
+		}
+	}
+}
+
+// THE ORDINARY ARM for the role keys: present with the explicit "none" token
+// and measured zero counts on a turn that evaluated no role and read no offer.
+func TestTheDeployedSubjectlessTerminalCarriesExplicitNoneRoles(t *testing.T) {
+	t.Parallel()
+	rec := emitSubjectlessTerminal(t, "empty_pool", "none")
+	for _, key := range []string{"evaluated_roles", "advanced_role", "advancing_channel"} {
+		got, ok := rec[key].(string)
+		if !ok {
+			t.Fatalf("the emitted line carries no %s key at all; line: %v", key, rec)
+		}
+		if got != "none" {
+			t.Errorf("%s = %q, want the explicit token \"none\"", key, got)
+		}
+	}
+	for _, key := range []string{"offers_evaluated", "offers_advancing"} {
+		got, ok := rec[key].(float64)
+		if !ok {
+			t.Fatalf("the emitted line carries no %s key at all -- a missing count and a measured zero must never read alike; line: %v", key, rec)
+		}
+		if got != 0 {
+			t.Errorf("%s = %v, want 0", key, got)
+		}
 	}
 }
