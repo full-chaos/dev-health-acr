@@ -329,6 +329,22 @@ func TestSemanticState_EveryMutationOfTheStoredDocumentIsUnavailable(t *testing.
 	if _, status := DecodeSemanticState([]byte(`{"format_version":"semantic-state.v2","anything":[1,2]}`)); status != SemanticStateReadUnsupportedVersion {
 		t.Errorf("a v2 document with a new shape -> %s, want unsupported_version", status)
 	}
+	// CHAOS-5639: ConfirmedNeeds is additive. A row with nothing confirmed --
+	// which is what every row saved before this field existed also reads as
+	// -- omits the key entirely (this codec's own writer never emits an empty
+	// ledger) and decodes back AVAILABLE with an empty ledger, never
+	// malformed or unsupported.
+	noLedger := semanticFixture(t)
+	noLedgerEncoded, err := EncodeSemanticState(noLedger)
+	if err != nil {
+		t.Fatalf("encode a fixture with no confirmed needs: %v", err)
+	}
+	if strings.Contains(string(noLedgerEncoded), "confirmed_needs") {
+		t.Errorf("an empty ledger encoded with the confirmed_needs key present: %s", noLedgerEncoded)
+	}
+	if state, status := DecodeSemanticState(noLedgerEncoded); status != SemanticStateReadAvailable || len(state.ConfirmedNeeds) != 0 {
+		t.Errorf("a row with no confirmed_needs key -> status=%s confirmed_needs=%#v, want available with an empty ledger", status, state)
+	}
 	// A FIELD THE CODEC NEVER WROTE is malformed, whichever guard gets there
 	// first: the decoder refuses unknown fields, and the canonical re-encode
 	// refuses any document whose bytes the codec would not have produced.
@@ -939,6 +955,15 @@ func TestSemanticState_AnOversizedCaptureNamesItsBoundOnTheLine(t *testing.T) {
 			in.Outcome.Frame = &frame
 			return in
 		},
+		SemanticStateBoundConfirmedNeeds: func(t *testing.T) SemanticStateInput {
+			in := inputOf(sizedSemanticState(t, 4000))
+			entries := make([]ConfirmedNeedEntry, 0, contractsv1.ContextFabricStructureNeedKindCount+1)
+			for i := 0; i <= contractsv1.ContextFabricStructureNeedKindCount; i++ {
+				entries = append(entries, ConfirmedNeedEntry{Member: contractsv1.ContextFabricStructureNeedKind(fmt.Sprintf("synthetic_need_%02d", i))})
+			}
+			in.ConfirmedNeeds = entries
+			return in
+		},
 	}
 	for _, bound := range semanticStateBounds() {
 		t.Run(string(bound), func(t *testing.T) {
@@ -980,6 +1005,61 @@ func TestSemanticState_AnOversizedCaptureNamesItsBoundOnTheLine(t *testing.T) {
 			t.Errorf("an in-bounds capture = %+v, want a snapshot and no bound", capture)
 		}
 	})
+}
+
+// TestSemanticState_ConfirmedNeedsValidation drives EncodeSemanticState's own
+// input domain for the per-need confirmation ledger (CHAOS-5639): a valid
+// non-empty entry accepts, and every malformed shape is refused BY NAME
+// (never silently accepted, never conflated with a different rejection).
+func TestSemanticState_ConfirmedNeedsValidation(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		entries []ConfirmedNeedEntry
+		accept  bool
+	}{
+		{"nil (additive default)", nil, true},
+		{"one valid kind entry", []ConfirmedNeedEntry{
+			{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectTeam)},
+		}, true},
+		{"one valid anchor entry with a kind", []ConfirmedNeedEntry{
+			{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: contractsv1.ContextFabricSubjectProject, AppliedValue: "project_ask_dev"},
+		}, true},
+		{"every member, once each", []ConfirmedNeedEntry{
+			{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectTeam)},
+			{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: contractsv1.ContextFabricSubjectProject, AppliedValue: "p"},
+			{Member: contractsv1.ContextFabricStructureNeedSubjectHandle, AppliedKind: contractsv1.ContextFabricSubjectPullRequest, AppliedValue: "42"},
+			{Member: contractsv1.ContextFabricStructureNeedWindow, AppliedValue: "trailing_30d"},
+			{Member: contractsv1.ContextFabricStructureNeedSubjectCandidate, AppliedKind: contractsv1.ContextFabricSubjectWorkItem, AppliedValue: "wi_1"},
+		}, true},
+		{"unknown member string", []ConfirmedNeedEntry{{Member: "not_a_member", AppliedValue: "x"}}, false},
+		{"duplicate member", []ConfirmedNeedEntry{
+			{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectTeam)},
+			{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectProject)},
+		}, false},
+		{"out-of-vocabulary applied_kind", []ConfirmedNeedEntry{
+			{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: "not_a_kind", AppliedValue: "x"},
+		}, false},
+		{"out-of-vocabulary applied_value for expected_kind (the value IS the kind)", []ConfirmedNeedEntry{
+			{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: "not_a_subject_kind"},
+		}, false},
+		{"oversized applied_value", []ConfirmedNeedEntry{
+			{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: strings.Repeat("x", SemanticStateMaxTermBytes+1)},
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			state := semanticFixture(t)
+			state.ConfirmedNeeds = tc.entries
+			_, err := EncodeSemanticState(state)
+			if tc.accept && err != nil {
+				t.Errorf("EncodeSemanticState() = %v, want accepted", err)
+			}
+			if !tc.accept && (err == nil || !errors.Is(err, ErrSemanticStateRejected)) {
+				t.Errorf("EncodeSemanticState() = %v, want %v", err, ErrSemanticStateRejected)
+			}
+		})
+	}
 }
 
 // TestSemanticState_TheScopeAnchorTermIsBoundedLikeEveryTerm: the anchor term

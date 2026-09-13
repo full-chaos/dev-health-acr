@@ -334,7 +334,7 @@ func TestResolveCarriedKind_RefusesAVetoedCarrier(t *testing.T) {
 			request := validInvestigationRequest()
 			request.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: "result_turn_a", ReceiptID: "candr_turn_a_01"}}
 
-			got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0})
+			got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0}, nil, "")
 			if got.Outcome == KindCarryHit {
 				t.Fatalf("resolveCarriedKind() = %#v, want a miss: a %s entry is a kind the engine REFUSED, and carrying it forward relabels that refusal as applied caller authority", got, disposition)
 			}
@@ -384,7 +384,7 @@ func TestResolveCarriedKind_NamesTheOriginalConfirmationAcrossHops(t *testing.T)
 	request := validInvestigationRequest()
 	request.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: "result_carrier", ReceiptID: "candr_carrier_01"}}
 
-	got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0})
+	got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0}, nil, "")
 	if got.Outcome != KindCarryHit || got.Kind != contractsv1.ContextFabricSubjectTeam {
 		t.Fatalf("resolveCarriedKind() = %#v, want a hit carrying team", got)
 	}
@@ -413,7 +413,7 @@ func TestResolveCarriedKind_NamesTheOriginalConfirmationAcrossHops(t *testing.T)
 	request3 := validInvestigationRequest()
 	request3.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: "result_carrier_two", ReceiptID: "candr_carrier_two_01"}}
 
-	got3 := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request3, nil, ResolvedGraphBinding{Epoch: 0})
+	got3 := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request3, nil, ResolvedGraphBinding{Epoch: 0}, nil, "")
 	if got3.Outcome != KindCarryHit || got3.Kind != contractsv1.ContextFabricSubjectTeam {
 		t.Fatalf("three-hop resolveCarriedKind() = %#v, want a hit carrying team", got3)
 	}

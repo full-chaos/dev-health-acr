@@ -44,7 +44,7 @@ func TestResolveCarriedKind_CarriesAConfirmedKindNamedByACandidateReceipt(t *tes
 	request := validInvestigationRequest()
 	request.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: "result_turn_a", ReceiptID: "candr_turn_a_01"}}
 
-	got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0})
+	got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0}, nil, "")
 	if got.Outcome != KindCarryHit {
 		t.Fatalf("resolveCarriedKind().Outcome = %q, want %q: turn A's receipt-confirmed kind must carry", got.Outcome, KindCarryHit)
 	}
@@ -116,7 +116,7 @@ func TestResolveCarriedKind_NewChainInheritsNothing(t *testing.T) {
 
 	request := validInvestigationRequest() // names no prior result in ANY of the six receipt fields
 
-	got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0})
+	got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0}, nil, "")
 	if got.Outcome != KindCarryMissNoReference {
 		t.Fatalf("resolveCarriedKind().Outcome = %q, want %q: an unlinked turn has nothing to walk", got.Outcome, KindCarryMissNoReference)
 	}
@@ -148,7 +148,7 @@ func TestResolveCarriedKind_SiblingChainInTheSameOrgIsNotAChainLink(t *testing.T
 	request := validInvestigationRequest()
 	request.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: "result_chain_b", ReceiptID: "candr_chain_b_01"}}
 
-	got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0})
+	got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0}, nil, "")
 	if got.Outcome != KindCarryMissNoConfirmedKind {
 		t.Fatalf("resolveCarriedKind().Outcome = %q, want %q", got.Outcome, KindCarryMissNoConfirmedKind)
 	}
@@ -179,7 +179,7 @@ func TestResolveCarriedKind_RefusesACarrierFromADifferentGraphEpoch(t *testing.T
 	request := validInvestigationRequest()
 	request.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: "result_turn_a", ReceiptID: "candr_turn_a_01"}}
 
-	got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0})
+	got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0}, nil, "")
 	if got.Outcome != KindCarryMissStaleGraphEpoch {
 		t.Fatalf("resolveCarriedKind().Outcome = %q, want %q", got.Outcome, KindCarryMissStaleGraphEpoch)
 	}
@@ -214,7 +214,7 @@ func TestResolveCarriedKind_FailsClosedOnTwoDisagreeingCarriers(t *testing.T) {
 	request.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: "result_turn_team", ReceiptID: "candr_turn_team_01"}}
 	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: "result_turn_project", ReceiptID: "kindr_turn_project_01"}}
 
-	got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0})
+	got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0}, nil, "")
 	if got.Outcome != KindCarryMissConflictingKinds {
 		t.Fatalf("resolveCarriedKind().Outcome = %q, want %q", got.Outcome, KindCarryMissConflictingKinds)
 	}
@@ -247,7 +247,7 @@ func TestResolveCarriedKind_IgnoresANonReceiptSourcedKind(t *testing.T) {
 	request := validInvestigationRequest()
 	request.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: "result_turn_a", ReceiptID: "candr_turn_a_01"}}
 
-	got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0})
+	got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0}, nil, "")
 	if got.Outcome != KindCarryMissNoConfirmedKind {
 		t.Fatalf("resolveCarriedKind().Outcome = %q, want %q: an explicit-tier kind is not caller authority", got.Outcome, KindCarryMissNoConfirmedKind)
 	}
@@ -492,13 +492,13 @@ func TestCarryResultCache_DoesNotMemoiseFailures(t *testing.T) {
 	request.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: "result_turn_a", ReceiptID: "candr_turn_a_01"}}
 
 	// First axis: the store fails, so this axis correctly misses.
-	first := engine.resolveCarriedKind(ctx, acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0})
+	first := engine.resolveCarriedKind(ctx, acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0}, nil, "")
 	if first.Outcome != KindCarryMissUnloadable {
 		t.Fatalf("first attempt Outcome = %q, want %q", first.Outcome, KindCarryMissUnloadable)
 	}
 	// Second axis, SAME request context: the failure must not have been
 	// memoised, so this load reaches the store again and succeeds.
-	second := engine.resolveCarriedKind(ctx, acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0})
+	second := engine.resolveCarriedKind(ctx, acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0}, nil, "")
 	if second.Outcome != KindCarryHit || second.Kind != contractsv1.ContextFabricSubjectTeam {
 		t.Fatalf("second attempt = %#v, want a hit carrying team: a transient failure must not be frozen into the memo", second)
 	}
@@ -506,7 +506,7 @@ func TestCarryResultCache_DoesNotMemoiseFailures(t *testing.T) {
 		t.Fatalf("store.calls = %d, want 2 (the failure retried, the success then memoised)", store.calls)
 	}
 	// Third attempt proves the SUCCESS is memoised -- the memo still does its job.
-	if third := engine.resolveCarriedKind(ctx, acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0}); third.Outcome != KindCarryHit {
+	if third := engine.resolveCarriedKind(ctx, acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0}, nil, ""); third.Outcome != KindCarryHit {
 		t.Fatalf("third attempt = %#v, want a hit", third)
 	}
 	if store.calls != 2 {
@@ -548,7 +548,7 @@ func TestResolveCarriedKind_FailsClosedWhenADepthCouldNotBeFullyScanned(t *testi
 	request.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: "result_readable", ReceiptID: "candr_readable_01"}}
 	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: "result_stale_sibling", ReceiptID: "kindr_stale_01"}}
 
-	got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0})
+	got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0}, nil, "")
 	if got.Outcome == KindCarryHit {
 		t.Fatalf("resolveCarriedKind() = %#v, want a miss: a depth with an unreadable sibling cannot prove the hit is unique", got)
 	}
@@ -712,7 +712,7 @@ func TestResolveCarriedKind_DoesNotDescendPastATruncatedDepth(t *testing.T) {
 	request.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: "result_depth0_breadcrumb", ReceiptID: "candr_depth0_01"}}
 	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: "result_depth0_unreadable", ReceiptID: "kindr_depth0_01"}}
 
-	got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0})
+	got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0}, nil, "")
 	if got.Outcome == KindCarryHit {
 		t.Fatalf("resolveCarriedKind() = %#v, want a miss: the walk must not descend past a depth it could not finish reading", got)
 	}

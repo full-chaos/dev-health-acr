@@ -145,6 +145,46 @@ type PersistedSemanticState struct {
 	// RequirementDerivationVersion is the requirement derivation version in
 	// force when the declarations were produced.
 	RequirementDerivationVersion string `json:"requirement_derivation_version"`
+
+	// ConfirmedNeeds is the per-need confirmation ledger (CHAOS-5639): one
+	// entry per StructureNeedKind this conversation has confirmed by receipt,
+	// carried forward so a later turn under the SAME request identity is not
+	// re-raised for it without the receipt being redeemed again.
+	//
+	// ADDITIVE, unlike every other field in this format: "absent" and "empty"
+	// are the SAME fact for a confirmation ledger (no need has been
+	// confirmed), so there is no presence/absence distinction here worth a
+	// format bump to preserve -- omitempty on both the struct tag and every
+	// write this codec produces (nil and a zero-length slice both omit the
+	// key), so a v1 row saved before this field existed reads back with an
+	// empty ledger, not unavailable. Consulted only by its own identity-keyed
+	// admission (chaos5639_confirmed_need.go), never by the D-b/D-c
+	// continuation comparison -- see
+	// TestSemanticState_EverySnapshotKeyIsComparedOrExemptByName's own exempt
+	// entry for why.
+	ConfirmedNeeds []ConfirmedNeedEntry `json:"confirmed_needs,omitempty"`
+}
+
+// ConfirmedNeedEntry is one structure need's remembered confirmation
+// (CHAOS-5639): the value a receipt confirmed for one StructureNeedKind
+// member, in the same shape a redeemed receipt produces
+// (confirmedStructureMember, structure.go) so a remembered entry can be
+// applied exactly where a fresh confirmation would be. One entry per member --
+// the vocabulary's own closed set is the key, so a later confirmation for the
+// same member replaces its entry rather than appending a second one.
+type ConfirmedNeedEntry struct {
+	Member       contractsv1.ContextFabricStructureNeedKind `json:"member"`
+	AppliedKind  contractsv1.ContextFabricSubjectKind       `json:"applied_kind"`
+	AppliedValue string                                     `json:"applied_value"`
+	// MatchedTermHash (CHAOS-5639) is populated for subject_anchor only,
+	// copied from confirmedStructureMember.MatchedTermHash: the redemption-
+	// time reverify a fresh ancr_ receipt must pass (reverifyAnchorClaim,
+	// structure.go) needs it to replay the SAME check against a remembered
+	// value -- without it, admitting a remembered anchor could only ever
+	// mean trusting the stored offer unverified, which canonicalizeStructure's
+	// own P1.E discipline forbids for this member. Empty for every other
+	// member.
+	MatchedTermHash string `json:"matched_term_hash,omitempty"`
 }
 
 // SemanticScopeAnchor is the scope anchor a reading resolved its subject under.
@@ -358,6 +398,10 @@ const (
 	SemanticStateBoundRequirementFactKinds  SemanticStateBound = "requirement_fact_kinds"
 	SemanticStateBoundRequirementDimensions SemanticStateBound = "requirement_dimensions"
 	SemanticStateBoundFrameSet              SemanticStateBound = "frame_set"
+	// SemanticStateBoundConfirmedNeeds bounds the per-need confirmation
+	// ledger at the StructureNeedKind vocabulary's own size -- one entry per
+	// member is the most a closed-set ledger can ever hold.
+	SemanticStateBoundConfirmedNeeds SemanticStateBound = "confirmed_needs"
 )
 
 func semanticStateBounds() []SemanticStateBound {
@@ -366,6 +410,7 @@ func semanticStateBounds() []SemanticStateBound {
 		SemanticStateBoundOperands, SemanticStateBoundTerms, SemanticStateBoundTermBytes,
 		SemanticStateBoundTermBytesTotal, SemanticStateBoundFrameSet,
 		SemanticStateBoundRequirementFactKinds, SemanticStateBoundRequirementDimensions,
+		SemanticStateBoundConfirmedNeeds,
 	}
 }
 
@@ -598,6 +643,46 @@ func validateSemanticState(s PersistedSemanticState) error {
 	}
 	if err := validateSemanticValidation(s.Validation, s.FramePresent); err != nil {
 		return reject("validation: %v", err)
+	}
+	// NO NIL CHECK, unlike Roles/Requirements above: ConfirmedNeeds is
+	// additive (this type's own doc comment) -- nil is the ordinary, expected
+	// value for a v1 row saved before this field existed, or for any turn
+	// with nothing confirmed yet, not a document this codec did not write.
+	if len(s.ConfirmedNeeds) > contractsv1.ContextFabricStructureNeedKindCount {
+		return oversized(SemanticStateBoundConfirmedNeeds, "%d confirmed needs exceeds the %d the vocabulary holds", len(s.ConfirmedNeeds), contractsv1.ContextFabricStructureNeedKindCount)
+	}
+	seenNeedMembers := map[contractsv1.ContextFabricStructureNeedKind]bool{}
+	for i, entry := range s.ConfirmedNeeds {
+		if !contractsv1.ValidContextFabricStructureNeedKind(entry.Member) {
+			return reject("confirmed_needs[%d].member %q is not a vocabulary member", i, entry.Member)
+		}
+		if seenNeedMembers[entry.Member] {
+			return reject("confirmed_needs carries member %q twice", entry.Member)
+		}
+		seenNeedMembers[entry.Member] = true
+		if entry.AppliedKind != "" && !contractsv1.ValidContextFabricSubjectKind(entry.AppliedKind) {
+			return reject("confirmed_needs[%d].applied_kind %q is not a vocabulary member", i, entry.AppliedKind)
+		}
+		// expected_kind's AppliedValue IS the kind (confirmedStructureMember's
+		// own doc comment, structure.go), so IT is what a subject-kind
+		// vocabulary check must read for this member -- AppliedKind stays
+		// empty for it (mirrors the receipt shape exactly).
+		if entry.Member == contractsv1.ContextFabricStructureNeedExpectedKind && entry.AppliedValue != "" &&
+			!contractsv1.ValidContextFabricSubjectKind(contractsv1.ContextFabricSubjectKind(entry.AppliedValue)) {
+			return reject("confirmed_needs[%d].applied_value %q is not a subject-kind vocabulary member", i, entry.AppliedValue)
+		}
+		if len(entry.AppliedValue) > SemanticStateMaxTermBytes {
+			return oversized(SemanticStateBoundTermBytes, "confirmed_needs[%d].applied_value is %d bytes, exceeds %d", i, len(entry.AppliedValue), SemanticStateMaxTermBytes)
+		}
+		// MatchedTermHash is meaningful for subject_anchor only
+		// (reverifyAnchorClaim's own third argument) -- carried on any other
+		// member is a document this codec did not write.
+		if entry.MatchedTermHash != "" && entry.Member != contractsv1.ContextFabricStructureNeedSubjectAnchor {
+			return reject("confirmed_needs[%d].matched_term_hash is set for member %q, only subject_anchor carries one", i, entry.Member)
+		}
+		if len(entry.MatchedTermHash) > SemanticStateMaxTermBytes {
+			return oversized(SemanticStateBoundTermBytes, "confirmed_needs[%d].matched_term_hash is %d bytes, exceeds %d", i, len(entry.MatchedTermHash), SemanticStateMaxTermBytes)
+		}
 	}
 	var expectedRoles []SemanticRoleSlot
 	if s.Frame != nil {
@@ -899,6 +984,13 @@ type SemanticStateInput struct {
 	// (it needs the referenced question, which the engine holds and this
 	// builder does not).
 	RequestIdentity SemanticRequestIdentity
+	// ConfirmedNeeds is the per-need confirmation ledger to persist on this
+	// result (CHAOS-5639): this turn's own receipt-confirmed structure
+	// members merged over whatever the referenced result's own ledger still
+	// admits. Computed by the caller (mergeConfirmedNeedsLedger,
+	// chaos5639_confirmed_need.go); never re-derived here. nil is treated as
+	// empty.
+	ConfirmedNeeds []ConfirmedNeedEntry
 }
 
 // BuildSemanticState assembles a snapshot from the accepted values. It does
@@ -917,6 +1009,7 @@ func BuildSemanticState(in SemanticStateInput) *PersistedSemanticState {
 		Requirements:                 []SemanticRequirement{},
 		RequirementDerivationVersion: RequirementDerivationVersion,
 		RequestIdentity:              in.RequestIdentity,
+		ConfirmedNeeds:               in.ConfirmedNeeds,
 		Validation: SemanticStateValidation{
 			EmittedShape:       in.EmittedShape,
 			GateOutcome:        in.Outcome.Gate.Outcome,

@@ -132,7 +132,7 @@ func containmentAxes() []containmentAxis {
 			name:      "kind",
 			carriable: carriableKindResult,
 			resolve: func(_ *testing.T, engine *Engine, request InvestigationRequest) containmentOutcome {
-				got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0})
+				got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0}, nil, "")
 				return containmentOutcome{
 					hit:        got.Outcome == KindCarryHit,
 					drift:      got.Outcome == KindCarryMissQuestionDrift,
@@ -428,7 +428,7 @@ func TestSameQuestionContainment_ComparesTheOriginNotTheHopItArrivedThrough(t *t
 				return hop
 			},
 			resolve: func(engine *Engine, request InvestigationRequest) containmentOutcome {
-				got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0})
+				got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0}, nil, "")
 				return containmentOutcome{hit: got.Outcome == KindCarryHit, drift: got.Outcome == KindCarryMissQuestionDrift, outcome: string(got.Outcome)}
 			},
 		},

@@ -81,6 +81,7 @@
           "frame_set",
           "requirement_fact_kinds",
           "requirement_dimensions",
+          "confirmed_needs",
           "unrecognised"
         ]
       },

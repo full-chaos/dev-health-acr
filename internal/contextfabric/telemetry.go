@@ -345,6 +345,24 @@ func (t SlogEngineTelemetry) RecordKindCarry(ctx context.Context, principal stor
 	t.logger.InfoContext(ctx, "context fabric kind carry", args...)
 }
 
+// RecordConfirmedNeedLedger (CHAOS-5639) logs at Info: outcome is a closed
+// vocabulary, applied_members a comma-joined list of closed StructureNeedKind
+// values (or "none"), applied_expected_kind/applied_anchor_kind closed
+// subject-kind values (empty when that member did not apply) -- content-safe
+// by construction, never question text, a canonical id, or a free-form
+// value. source_result_id is the parent result consulted, the same
+// correlation handle RecordWindowContinuationDecision already logs for its
+// own referenced result.
+func (t SlogEngineTelemetry) RecordConfirmedNeedLedger(ctx context.Context, principal storage.Principal, outcome ConfirmedNeedLedgerOutcome, sourceResultID string, appliedMembers []contractsv1.ContextFabricStructureNeedKind, appliedExpectedKind, appliedAnchorKind contractsv1.ContextFabricSubjectKind) {
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome)),
+		"source_result_id", SanitizeLogAttr(sourceResultID),
+		"applied_members", SanitizeLogAttr(observableAppliedNeedMembers(appliedMembers)),
+		"applied_expected_kind", SanitizeLogAttr(string(appliedExpectedKind)), "applied_anchor_kind", SanitizeLogAttr(string(appliedAnchorKind)),
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric confirmed need ledger", args...)
+}
+
 // RecordStructureNeedsDisclosed (CHAOS-3900 P1.F). member is a closed
 // StructureNeedKind enum value -- content-safe by construction, never
 // question text or a subject identifier.

@@ -108,8 +108,8 @@ func TestCaptureBoundary_TheStoredReadingIsTheServedTurnsOwn(t *testing.T) {
 		// with no declarations is refused as an incomplete reading, which
 		// would make every cell below read an absence instead of a value.
 		derived := DeriveRequirements(*frame, ObligationSeed{}, nil)
-		withAxis := engine.captureAcceptedReading(request, windowContinuationDecision{}, grouped, ShapeOpen, planWithAxis, derived)
-		cleared := engine.captureAcceptedReading(request, windowContinuationDecision{}, grouped, ShapeOpen, planCleared, derived)
+		withAxis := engine.captureAcceptedReading(request, windowContinuationDecision{}, grouped, ShapeOpen, planWithAxis, derived, nil)
+		cleared := engine.captureAcceptedReading(request, windowContinuationDecision{}, grouped, ShapeOpen, planCleared, derived, nil)
 		// ASSERTED BEFORE LOGGED, so an absence fails a cell instead of
 		// aborting the package.
 		if withAxis.Write.State == nil {
@@ -139,7 +139,7 @@ func TestCaptureBoundary_TheStoredReadingIsTheServedTurnsOwn(t *testing.T) {
 		// not persist as a passed reading.
 		refused := grouped
 		refused.Gate = FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable}
-		refusedCapture := engine.captureAcceptedReading(request, windowContinuationDecision{}, refused, ShapeOpen, planWithAxis, derived)
+		refusedCapture := engine.captureAcceptedReading(request, windowContinuationDecision{}, refused, ShapeOpen, planWithAxis, derived, nil)
 		gate := FrameGateOutcome("")
 		if refusedCapture.Write.State != nil {
 			gate = refusedCapture.Write.State.Validation.GateOutcome
