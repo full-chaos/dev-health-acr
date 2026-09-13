@@ -1480,9 +1480,19 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 		// that returns before the loop appends anything (empty on every
 		// pre-loop return and on a pure transport failure).
 		draws []synthesisDraw
+		// budgetChecked/budgetRemainingMS/budgetReservedMS/budgetStopped
+		// (CHAOS-5655 / 4452 vol.1 §10 D5, "the reserved synthesis deadline
+		// ships in the same slice ... or the terminal case is a 504
+		// regardless"): whether the draw loop consulted the caller's
+		// remaining request deadline before starting another draw, what it
+		// saw, and whether that check refused one. Declared here, in the
+		// shared var block, so the hoisted defer can always read the final
+		// state -- see the loop's own comment for the mechanism.
+		budgetChecked, budgetStopped        bool
+		budgetRemainingMS, budgetReservedMS int64
 	)
 	defer func() {
-		r.logSynthesizeDecision(ctx, principal.OrgID, input.Request.RequestID, receipt, primaryFailureClassification, grounding, rejectionReason, factGroupSize, groundedBeyondFirst, attemptOutcomes, fallbackAttempts, primaryProvider, primaryModel, primaryModelVersion, draws)
+		r.logSynthesizeDecision(ctx, principal.OrgID, input.Request.RequestID, receipt, primaryFailureClassification, grounding, rejectionReason, factGroupSize, groundedBeyondFirst, attemptOutcomes, fallbackAttempts, primaryProvider, primaryModel, primaryModelVersion, draws, budgetChecked, budgetRemainingMS, budgetReservedMS, budgetStopped)
 	}()
 
 	if strings.TrimSpace(principal.OrgID) == "" {
@@ -1551,6 +1561,42 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	// attemptOutcomes/receipt.Attempts below (transport retries within ONE
 	// draw, versus how many draws were drawn).
 	for draw := 1; draw <= maxDraws; draw++ {
+		// CHAOS-5655 / 4452 vol.1 §10 D5: the FIRST draw always runs -- it is
+		// the one draw every pre-5655 caller already made unconditionally,
+		// and refusing it would change existing behavior for a reason this
+		// design decision was never about. From the SECOND draw on, a redraw
+		// is only started when the caller's own remaining request deadline
+		// is at least one full attempt-budget (r.config.Timeout) wide. A
+		// deadline this loop cannot see honored (ctx.Deadline's ok==false --
+		// no deadline at all, e.g. context.Background() in most of this
+		// package's own tests) never refuses a draw: there is no shared
+		// budget to protect it from.
+		//
+		// The reservation is deliberately r.config.Timeout -- the SAME fixed
+		// per-attempt ceiling withRetry already enforces on every individual
+		// call -- rather than a measurement of how long the PREVIOUS draw
+		// actually took: a real provider's latency varies call to call, and
+		// a reservation sized off one lucky fast draw could still starve the
+		// next one (or the fallback leg after it). Using the ceiling itself
+		// means: if there is not enough room left for even a worst-case
+		// single attempt, don't gamble the caller's remaining budget on
+		// drawing again -- stop now and leave that time for the fallback
+		// leg (if configured) or a clean, fast-failing terminal response,
+		// rather than risking that THIS draw is the one that runs into the
+		// deadline mid-flight and leaves fallbackWouldSeeADeadContext
+		// refusing a fallback that would otherwise have succeeded.
+		if draw > 1 {
+			if deadline, ok := ctx.Deadline(); ok {
+				budgetChecked = true
+				remaining := time.Until(deadline)
+				budgetRemainingMS = remaining.Milliseconds()
+				budgetReservedMS = r.config.Timeout.Milliseconds()
+				if remaining < r.config.Timeout {
+					budgetStopped = true
+					break
+				}
+			}
+		}
 		attemptOutcomes, generationErr = r.withRetry(ctx, func(callCtx context.Context) error {
 			var callErr error
 			output, usage, callErr = r.generator.Synthesize(callCtx, generationRequest{
@@ -2440,7 +2486,7 @@ func groundingCountsFrom(draft contextfabric.SynthesisDraft) synthesisGroundingC
 // counterpart (H7/H8). See logInterpretDecision's doc comment for the
 // corpus-safety and log-level-gating rationale, which applies identically
 // here.
-func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification string, grounding synthesisGroundingCounts, rejectionReason string, factGroupSize, groundedBeyondFirst int, attemptOutcomes []attemptOutcome, fallbackAttempts int, primaryProvider, primaryModel, primaryModelVersion string, draws []synthesisDraw) {
+func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID string, receipt contextfabric.ModelExecutionReceipt, primaryFailureClassification string, grounding synthesisGroundingCounts, rejectionReason string, factGroupSize, groundedBeyondFirst int, attemptOutcomes []attemptOutcome, fallbackAttempts int, primaryProvider, primaryModel, primaryModelVersion string, draws []synthesisDraw, budgetChecked bool, budgetRemainingMS, budgetReservedMS int64, budgetStopped bool) {
 	fields := []any{
 		"request_id", contextfabric.SanitizeLogAttr(requestID),
 		"org_id_hash", contextfabric.SanitizeLogAttr(decisionOrgIDHash(orgID)),
@@ -2478,6 +2524,20 @@ func (r *Runtime) logSynthesizeDecision(ctx context.Context, orgID, requestID st
 	// must not carry these fields at all.
 	if len(draws) > 0 {
 		fields = append(fields, drawLogFields(draws)...)
+	}
+	// CHAOS-5655 / 4452 vol.1 §10 D5: appended only when the loop actually
+	// consulted the caller's remaining request deadline (a ctx with no
+	// deadline at all never triggers the check, and carries none of this).
+	// Reports the PRE-DECISION state (remaining/reserved budget) and the
+	// DECISION (stopped or not) on the same line, so the whole decision
+	// graph -- why a redraw was or was not attempted -- is reconstructable
+	// from the trace alone, never only from re-running the request.
+	if budgetChecked {
+		fields = append(fields,
+			"resynthesis_deadline_remaining_ms", budgetRemainingMS,
+			"resynthesis_deadline_reserved_ms", budgetReservedMS,
+			"resynthesis_stopped_for_deadline", budgetStopped,
+		)
 	}
 	// CHAOS-4522: appended, never unconditional, so a successful or
 	// transport-failed call's line stays byte-identical to its pre-4522

@@ -361,24 +361,25 @@ func (g *rejectThenBlockUntilCanceledGenerator) Phrase(context.Context, generati
 	return phrasingOutput{}, contextfabric.ModelUsage{}, errors.New("rejectThenBlockUntilCanceledGenerator.Phrase is unused")
 }
 
-// TestBoundedResynthesisCanSuppressAConfiguredFallback is codex round 1's P1
-// finding (2026-09-13), reproduced as a permanent regression pin, not fixed:
-// no code change makes this safe, because BOTH pieces of behavior it
-// composes are independently correct -- fallbackWouldSeeADeadContext
-// deliberately refuses to place a fallback call against an already-dead
-// context (CHAOS-5577), and this ticket's own loop deliberately keeps
-// drawing on a validator rejection. Their COMPOSITION means: at
-// MaxSynthesisResynthesisAttempts=1 (pre-CHAOS-5655 behavior), a quick
-// draw-1 rejection leaves the caller's context very much alive, so a
-// configured fallback gets its full remaining budget and can succeed. At
-// N>1, if a LATER draw's own call is still in flight when the caller's
-// context deadline lands, that draw's own failure IS the context dying --
-// and the fallback that would have succeeded at N=1 is now correctly, but
-// consequentially, never even attempted. This is the sharper mechanism
-// behind the RISK-NOTES latency/cost composition already disclosed in the
-// PR body; see there for the operational mitigation (size the deployment's
-// request timeout for N draws PLUS one fallback attempt).
-func TestBoundedResynthesisCanSuppressAConfiguredFallback(t *testing.T) {
+// TestBoundedResynthesisWithNoDeadlineStillFollowsPreExistingFallbackComposition
+// is codex round 1's P1 finding (2026-09-13). The reservation guard added
+// below it (see SynthesizeAnswer's own comment, and
+// TestBoundedResynthesisStopsDrawingWhenDeadlineCannotAffordAnotherDraw)
+// FIXES this composition for a context that carries a deadline -- which
+// every real deployment's ACR_REQUEST_TIMEOUT middleware does. It cannot
+// fix it for a context that carries NO deadline at all (only a cancel
+// func, as this test uses): ctx.Deadline() reports ok=false, there is no
+// remaining-budget number to compare against, and the guard is correctly a
+// no-op -- there is nothing to reserve against. In that residual case, both
+// pieces of behavior this composes remain independently correct --
+// fallbackWouldSeeADeadContext deliberately refuses to place a fallback
+// call against an already-dead context (CHAOS-5577), and this ticket's own
+// loop deliberately keeps drawing on a validator rejection -- and their
+// composition still means a draw still in flight when a bare cancel lands
+// suppresses a fallback that a faster rejection would have reached. This
+// is now a narrower, still-real, still-disclosed (RISK-NOTES) residual,
+// not a regression the guard could have closed.
+func TestBoundedResynthesisWithNoDeadlineStillFollowsPreExistingFallbackComposition(t *testing.T) {
 	t.Parallel()
 	gen := &rejectThenBlockUntilCanceledGenerator{started: make(chan struct{})}
 	fallback := &trackedErroringFallback{
@@ -412,6 +413,117 @@ func TestBoundedResynthesisCanSuppressAConfiguredFallback(t *testing.T) {
 	}
 	if fallback.calls != 0 {
 		t.Fatalf("fallback.calls = %d, want 0 -- draw 2 genuinely contacted the provider before the in-flight cancellation, so fallbackWouldSeeADeadContext correctly refuses to place a doomed fallback call. This is the documented composition risk, not a bug to fix here.", fallback.calls)
+	}
+}
+
+// TestBoundedResynthesisStopsDrawingWhenDeadlineCannotAffordAnotherDraw is
+// the 4452 vol.1 §10 D5 fix itself: chris's ruling on codex r1 finding 2
+// ("the reserved synthesis deadline ships in the same slice ... or the
+// terminal case is a 504 regardless") requires a redraw to check the
+// caller's remaining request deadline first. Draw 1 rejects almost
+// instantly; the context's own deadline (40ms) leaves far less remaining
+// than Config.Timeout (1s, mustRuntime's default) -- nowhere near enough
+// for a full second attempt -- so the loop must stop BEFORE calling the
+// generator a second time and fall through to the existing fallback
+// leg immediately, while the deadline still has room left for it. This is
+// the fallback that codex r1's own repro found could be suppressed; this
+// test proves the SAME class of scenario (a bound wider than 1, a
+// context with a real deadline) now reaches it.
+func TestBoundedResynthesisStopsDrawingWhenDeadlineCannotAffordAnotherDraw(t *testing.T) {
+	t.Parallel()
+	handler, logger := newCaptureLogger()
+	gen := &drawSequenceGenerator{outputs: []synthesisOutput{
+		invalidTitleSynthesisOutput(),
+		validSynthesisOutput(), // must NEVER be reached -- the guard must stop before draw 2
+	}}
+	fallback := &trackedErroringFallback{
+		err:     errors.New("fallback reached, as this test requires"),
+		receipt: validReceipt(contextfabric.ModelOperationSynthesize),
+	}
+	runtime := mustRuntime(t, gen, Config{Logger: logger, MaxAttempts: 1, MaxSynthesisResynthesisAttempts: MaxSynthesisResynthesisAttemptsCeiling, Fallback: fallback})
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+
+	_, _, err := runtime.SynthesizeAnswer(ctx, storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+	if err == nil {
+		t.Fatal("SynthesizeAnswer() error = nil, want the fallback's own error surfaced")
+	}
+	if gen.calls != 1 {
+		t.Fatalf("generator.calls = %d, want exactly 1 -- the deadline guard must stop the loop BEFORE a second call, not merely record that one is unaffordable", gen.calls)
+	}
+	if fallback.calls != 1 {
+		t.Fatalf("fallback.calls = %d, want exactly 1 -- stopping the resynthesis loop early must leave the fallback leg its chance to run, not suppress it the way an unguarded loop would", fallback.calls)
+	}
+
+	attrs := onlyDecisionEvent(t, handler).Attrs
+	if got, ok := attrs["resynthesis_stopped_for_deadline"].(bool); !ok || !got {
+		t.Fatalf("resynthesis_stopped_for_deadline = %#v, want true", attrs["resynthesis_stopped_for_deadline"])
+	}
+	if _, ok := attrs["resynthesis_deadline_remaining_ms"]; !ok {
+		t.Fatalf("decision line missing resynthesis_deadline_remaining_ms: %#v", attrs)
+	}
+	if _, ok := attrs["resynthesis_deadline_reserved_ms"]; !ok {
+		t.Fatalf("decision line missing resynthesis_deadline_reserved_ms: %#v", attrs)
+	}
+}
+
+// TestBoundedResynthesisProceedsWhenDeadlineHasRoom is the guard's own
+// negative case: a context WITH a deadline that comfortably covers another
+// attempt must not be refused just because a deadline exists at all -- only
+// an insufficient one stops the loop.
+func TestBoundedResynthesisProceedsWhenDeadlineHasRoom(t *testing.T) {
+	t.Parallel()
+	handler, logger := newCaptureLogger()
+	valid := validSynthesisOutput()
+	gen := &drawSequenceGenerator{outputs: []synthesisOutput{
+		invalidTitleSynthesisOutput(),
+		valid,
+	}}
+	// Config.Timeout (the minimum newWithGenerator allows, 1s) is the
+	// reservation; the context's own deadline (30s) leaves vastly more than
+	// that after an instant draw 1, so the guard must allow draw 2.
+	runtime := mustRuntime(t, gen, Config{Logger: logger, Timeout: time.Second, MaxSynthesisResynthesisAttempts: 3})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, receipt, err := runtime.SynthesizeAnswer(ctx, storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+	if err != nil {
+		t.Fatalf("SynthesizeAnswer() error = %v, want success on the second draw", err)
+	}
+	if receipt.Outcome != "success" {
+		t.Fatalf("receipt.Outcome = %q, want success", receipt.Outcome)
+	}
+	if gen.calls != 2 {
+		t.Fatalf("generator.calls = %d, want exactly 2 -- a deadline with ample room must not refuse the second draw", gen.calls)
+	}
+
+	attrs := onlyDecisionEvent(t, handler).Attrs
+	if got, ok := attrs["resynthesis_stopped_for_deadline"].(bool); !ok || got {
+		t.Fatalf("resynthesis_stopped_for_deadline = %#v, want false -- the deadline had room", attrs["resynthesis_stopped_for_deadline"])
+	}
+}
+
+// TestBoundedResynthesisReservationIsTheWholeTimeoutNotAFraction pins the
+// guard's own threshold: the reservation is a FULL Config.Timeout, not some
+// fraction of it. Remaining budget after draw 1 (~800ms) sits strictly
+// BETWEEN half of Config.Timeout (500ms) and the whole of it (1s) -- a
+// guard checking only a fraction would wrongly let draw 2 proceed here.
+func TestBoundedResynthesisReservationIsTheWholeTimeoutNotAFraction(t *testing.T) {
+	t.Parallel()
+	gen := &drawSequenceGenerator{outputs: []synthesisOutput{
+		invalidTitleSynthesisOutput(),
+		validSynthesisOutput(), // must NEVER be reached
+	}}
+	runtime := mustRuntime(t, gen, Config{Timeout: time.Second, MaxSynthesisResynthesisAttempts: 3})
+	ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
+	defer cancel()
+
+	_, _, err := runtime.SynthesizeAnswer(ctx, storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+	if err == nil {
+		t.Fatal("SynthesizeAnswer() error = nil, want the draw-1 rejection surfaced (no fallback configured)")
+	}
+	if gen.calls != 1 {
+		t.Fatalf("generator.calls = %d, want exactly 1 -- ~800ms remaining is less than the full 1s reservation, even though it is more than half of it", gen.calls)
 	}
 }
 
