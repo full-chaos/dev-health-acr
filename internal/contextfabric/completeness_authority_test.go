@@ -55,6 +55,12 @@ func TestDeriveAnswerDisposition_IsTotalOverInvestigationStatus(t *testing.T) {
 		{"clarification required, with refusal basis", InvestigationClarificationRequired, contractsv1.ContextFabricRefusalBasisUnspecified, AnswerDispositionRefusal},
 		{"partial, with refusal basis", InvestigationPartial, contractsv1.ContextFabricRefusalBasisUnspecified, AnswerDispositionRefusal},
 		{"degraded, with refusal basis", InvestigationDegraded, contractsv1.ContextFabricRefusalBasisUnspecified, AnswerDispositionRefusal},
+		// The default arm: a status outside the five-member closed
+		// vocabulary. Go's InvestigationStatus is a string type, so this
+		// value is constructible even though no producer emits it; the
+		// default arm must report the least-claiming disposition, never
+		// `answer`, on the strength of not recognizing the value.
+		{"unrecognized status", InvestigationStatus("not_a_real_status"), "", AnswerDispositionNoMatch},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
@@ -439,6 +445,29 @@ func TestApplyServerCompletenessAuthority_ObservationMatchesResult(t *testing.T)
 	fresh := DeriveCompletenessAuthority(result)
 	if !fresh.Derived || fresh.ServerState != contractsv1.ContextFabricAnswerCompletenessDegraded {
 		t.Fatalf("setup: expected a derived degraded observation, got %+v", fresh)
+	}
+}
+
+// TestApplyServerCompletenessAuthority_RefusesAnObservationThatDoesNotMap
+// pins the function's OWN defensive guard against a hand-built (never a
+// DeriveCompletenessAuthority) observation that claims Derived=true with a
+// ServerState outside the three that answerCompletenessStateToStatus
+// actually maps -- the guard a caller cannot reach through the paired
+// DeriveCompletenessAuthority (that function only ever sets Derived=true
+// alongside a ServerState it already confirmed maps), but which
+// applyServerCompletenessAuthority still must not skip: a status is never
+// written from an unmapped value.
+func TestApplyServerCompletenessAuthority_RefusesAnObservationThatDoesNotMap(t *testing.T) {
+	t.Parallel()
+	result := InvestigationResult{Status: InvestigationComplete, DirectJudgment: "x"}
+	inconsistent := CompletenessAuthorityObservation{
+		Basis:       CompletenessAuthorityBasisOutcomeDerived,
+		ServerState: contractsv1.ContextFabricAnswerCompletenessState("not_a_real_state"),
+		Derived:     true,
+	}
+	got := applyServerCompletenessAuthority(result, true, inconsistent)
+	if got.Status != InvestigationComplete {
+		t.Fatalf("Status = %q, want it left at complete (an unmapped ServerState must never be written)", got.Status)
 	}
 }
 
