@@ -63,6 +63,7 @@ import inspect
 import json
 import os
 import subprocess
+import tempfile
 from collections import Counter
 from pathlib import Path
 
@@ -76,6 +77,22 @@ from validators import load_attempt
 # (never expectations.py's scoring TABLE, which is identified by acr's own
 # git sha, recorded separately in the published provenance).
 LEGACY_SCORER_ADAPTER_VERSION = "acr-expectations-adapter-v1"
+
+
+class PersistedSemanticStateInfraError(Exception):
+    """CHAOS-5722: an INFRASTRUCTURE failure reading acr's own persisted
+    semantic_state row for a result id -- psql missing, the invocation
+    itself raising, a non-zero psql exit, or a timeout. Distinct from
+    `semantic_verdict_module.PersistedSemanticStateUnreadable`, which stays
+    reserved for a DATA-class failure (the row itself is oversized, not
+    JSON, or not an object): a broken PIPE to the store is not the same
+    fact as a genuinely corrupt STORED VALUE. merge_corpus.py catches this
+    ONCE per run (first occurrence only): it logs the message, records
+    `persisted_semantic_state_available=false` with
+    `persisted_semantic_state_error=<class>` in provenance, and stops
+    calling the adapter for the rest of the run -- never lets it re-raise
+    per row.
+    """
 
 
 class AskDevUnavailable(Exception):
@@ -323,16 +340,23 @@ def make_persisted_semantic_state_adapter(semantic_verdict_module, run=subproces
     `semantic_verdict.build_verdict(persisted_semantic_state=...)`, which
     already treats "no adapter" as "no persisted row", never a crash.
 
-    The returned adapter callable NEVER raises anything but
-    `semantic_verdict_module.PersistedSemanticStateUnreadable` -- a `psql`
-    invocation failure, a non-zero exit, an oversized result, or a body
-    that does not decode as a JSON object are all "this row's persisted
-    state cannot be trusted right now", the identical bucket the row being
-    genuinely corrupt falls into, per this module's own "fails CLOSED,
-    never raises past its caller" discipline. `result_id` itself is passed
-    to `psql` ONLY via a `-v` bind variable substituted through `:'name'`
-    (`psql`'s own literal-quoting substitution, not string interpolation),
-    so it is never concatenated into the SQL text.
+    The returned adapter callable raises one of two things, never a bare
+    exception (CHAOS-5722): `PersistedSemanticStateInfraError` for an
+    INFRA-class fault -- `psql` missing, the invocation itself raising, a
+    non-zero exit, or a timeout -- and
+    `semantic_verdict_module.PersistedSemanticStateUnreadable` for a
+    DATA-class fault -- an oversized result or a body that does not decode
+    as a JSON object. An infrastructure fault must surface as ONE named
+    infrastructure fact per run, never as a `semantic_state_unreadable`
+    DATA verdict repeated on every served row -- see merge_corpus.py's own
+    guard around this adapter. `result_id` itself is passed to `psql` ONLY
+    via a `-v` bind variable substituted through `:'name'` in a query read
+    with `-f` (`psql`'s own literal-quoting substitution, not string
+    interpolation) -- it is never concatenated into the SQL text. `psql`
+    substitutes a `:'name'` bind variable only for a query read via `-f`
+    (or stdin/interactive input); it never scans a `-c` command-line
+    string for `:` variable references, so the query is always written to
+    a file and read with `-f`, never passed via `-c`.
     """
     if not trial_postgres_env_present():
         return None
@@ -343,6 +367,13 @@ def make_persisted_semantic_state_adapter(semantic_verdict_module, run=subproces
     password = os.environ["ACR_TEST_TRIAL_PG_PASSWORD"]
     db = _trial_pg_database()
 
+    def _redact(text):
+        """Never let the trial-postgres password reach a log/exception line
+        -- psql's own stderr does not normally echo PGPASSWORD, but this
+        scrub is the one place any of this text leaves the function, so it
+        costs nothing to assert it can never carry the literal secret."""
+        return text.replace(password, "***") if password else text
+
     def persisted_semantic_state(result_id):
         if not isinstance(result_id, str) or not result_id:
             # The scorer itself already guards this (see
@@ -351,20 +382,36 @@ def make_persisted_semantic_state_adapter(semantic_verdict_module, run=subproces
             return None
         env = {**os.environ, "PGPASSWORD": password,
                "PGCONNECT_TIMEOUT": os.environ.get("PGCONNECT_TIMEOUT", "15")}
+        # CHAOS-5722: `psql` substitutes a `:'name'` bind variable only for
+        # a query read via `-f` (or stdin/interactive) -- never for a `-c`
+        # command-line string. The query is written to a private scratch
+        # file and read with `-f`, so `:'result_id'` substitutes as psql's
+        # own literal-quoted bind variable -- `result_id` still never
+        # touches the SQL text, only the `-v name=value` pair.
         query = ("select semantic_state::text from acr.context_fabric_investigation_results "
-                 "where result_id = :'result_id'")
+                 "where result_id = :'result_id';\n")
+        sql_path = None
         try:
+            fd, sql_path = tempfile.mkstemp(prefix="acr-5722-persisted-state-", suffix=".sql")
+            with os.fdopen(fd, "w") as fh:
+                fh.write(query)
             proc = run(
                 ["psql", "-h", host, "-p", port, "-U", user, "-d", db,
-                 "-v", f"result_id={result_id}", "-At", "-c", query],
+                 "-v", f"result_id={result_id}", "-At", "-f", sql_path],
                 capture_output=True, text=True, timeout=15, env=env,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
-            raise semantic_verdict_module.PersistedSemanticStateUnreadable(
-                f"{result_id}: psql invocation failed: {exc}") from exc
+            raise PersistedSemanticStateInfraError(
+                f"{result_id}: psql invocation failed: {_redact(str(exc))}") from exc
+        finally:
+            if sql_path is not None:
+                try:
+                    os.unlink(sql_path)
+                except OSError:
+                    pass
         if proc.returncode != 0:
-            raise semantic_verdict_module.PersistedSemanticStateUnreadable(
-                f"{result_id}: psql exited {proc.returncode}: {proc.stderr.strip()}")
+            raise PersistedSemanticStateInfraError(
+                f"{result_id}: psql exited {proc.returncode}: {_redact(proc.stderr.strip())}")
         raw = proc.stdout.strip()
         if not raw:
             # NULL semantic_state (the common case -- most rows predate M2,
