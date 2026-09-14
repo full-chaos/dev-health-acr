@@ -368,9 +368,10 @@ func (e *Engine) readAdmittedGroupFacts(ctx context.Context, principal storage.P
 	// would let a provider widen a group read back onto the members, which is
 	// the projection this whole stage exists to remove.
 	bundle, err := e.facts.ReadFacts(ctx, principal, CanonicalFactRequest{
-		Question:     factReadQuestion(interpretation, window),
-		Subjects:     admitted,
-		Requirements: requirements,
+		Question:                 factReadQuestion(interpretation, window),
+		Subjects:                 admitted,
+		Requirements:             requirements,
+		RequestedRepositoryScope: copyRequestedRepositoryScope(request.RequestedScope.RepositorySlugs),
 	})
 	outcome.Read = true
 	outcome.FactsReturned = len(bundle.Facts)
