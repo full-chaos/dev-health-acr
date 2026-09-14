@@ -1581,6 +1581,75 @@ func TestConfirmedNeedConsumers_LedgerLineOnEveryExit(t *testing.T) {
 // route: a receipt replaces the remembered value, an explicit field retires it,
 // and nothing else changes. Control: nothing stated keeps every remembered
 // entry.
+func TestConfirmedNeedConsumers_EarlyExitRetiresExplicitMember(t *testing.T) {
+	t.Parallel()
+	for _, member := range []contractsv1.ContextFabricStructureNeedKind{
+		contractsv1.ContextFabricStructureNeedExpectedKind,
+		contractsv1.ContextFabricStructureNeedSubjectHandle,
+		contractsv1.ContextFabricStructureNeedWindow,
+	} {
+		for _, gate := range []string{"structure_veto", "window_veto", "explicit_window_gate"} {
+			// The explicit-window gate itself states a window, so it cannot
+			// provide a control that changes only whether one was stated.
+			if member == contractsv1.ContextFabricStructureNeedWindow && gate == "explicit_window_gate" {
+				continue
+			}
+			t.Run(string(member)+"/"+gate, func(t *testing.T) {
+				t.Parallel()
+				for _, stated := range []bool{false, true} {
+					candidate := ConfirmedNeedEntry{Member: contractsv1.ContextFabricStructureNeedSubjectCandidate, AppliedKind: SubjectRepository, AppliedValue: "repository:need-r2"}
+					entry := ConfirmedNeedEntry{Member: member}
+					switch member {
+					case contractsv1.ContextFabricStructureNeedExpectedKind:
+						entry.AppliedValue = string(SubjectTeam)
+					case contractsv1.ContextFabricStructureNeedSubjectHandle:
+						entry.AppliedKind, entry.AppliedValue, entry.PatternID = SubjectPullRequest, "532", "pull_request_number"
+					case contractsv1.ContextFabricStructureNeedWindow:
+						entry.AppliedValue = string(RelativeWindowTrailing90D)
+					}
+					store := &staticResultStore{results: map[string]InvestigationResult{}, states: map[string]*PersistedSemanticState{}}
+					ledgerOnlyParent(t, store, "result_need_early_parent", nil, []ConfirmedNeedEntry{entry, candidate})
+					h := newNeedTurnHarness(t, store)
+					request := continuingNeedTurn(needTurnRequest("request_need_early_retirement", member != contractsv1.ContextFabricStructureNeedWindow), "result_need_early_parent")
+					if stated {
+						switch member {
+						case contractsv1.ContextFabricStructureNeedExpectedKind:
+							request.ExpectedKinds = []SubjectKind{SubjectRepository}
+						case contractsv1.ContextFabricStructureNeedSubjectHandle:
+							request.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: SubjectPullRequest, PatternID: "pull_request_number", Value: "777"}}
+						case contractsv1.ContextFabricStructureNeedWindow:
+							request.TimeContext.EvidenceWindow = validConfirmedWindow()
+						}
+					}
+					status := InvestigationNoMatch
+					switch gate {
+					case "structure_veto":
+						request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: "result_need_early_parent", ReceiptID: "kindr_missing00001"}}
+					case "window_veto":
+						request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: "result_need_early_parent", ReceiptID: "winr_missing000001"}}
+					case "explicit_window_gate":
+						request.Consumer = ConsumerInfo{Name: "test", Version: "1.0.0", Surface: "mcp"}
+						request.TimeContext.EvidenceWindow = &contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: RelativeWindowTrailing30D}
+						status = InvestigationClarificationRequired
+					}
+					out := h.turn(request, committingNeedResponse())
+					if out.result.Status != status || len(out.calls) != 0 || soleLedgerEvent(t, out).Outcome != ConfirmedNeedLedgerHit || out.saved == nil {
+						t.Fatalf("fixture: stated=%v status=%s calls=%d ledger=%#v", stated, out.result.Status, len(out.calls), out.saved)
+					}
+					retained, unrelated := false, false
+					for _, saved := range out.saved.ConfirmedNeeds {
+						retained = retained || saved.Member == member
+						unrelated = unrelated || reflect.DeepEqual(saved, candidate)
+					}
+					if retained == stated || !unrelated {
+						t.Fatalf("stated=%v retained=%v unrelated=%v ledger=%#v", stated, retained, unrelated, out.saved.ConfirmedNeeds)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestMergeConfirmedNeedsLedger_StatedThisTurnRetiresTheRemembered(t *testing.T) {
 	t.Parallel()
 	start := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
