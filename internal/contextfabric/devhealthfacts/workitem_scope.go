@@ -143,6 +143,9 @@ const (
 var errWorkItemReaderDeadlineTooShort = errors.New("work item reader deadline is too short for a bounded query")
 
 func workItemReaderSettings(ctx context.Context) (readers.Settings, error) {
+	if err := ctx.Err(); err != nil {
+		return readers.Settings{}, err
+	}
 	settings := readers.Settings{
 		MaxRowsToRead:  workItemReaderMaxRowsToRead,
 		MaxMemoryUsage: workItemReaderMaxMemoryUsage,

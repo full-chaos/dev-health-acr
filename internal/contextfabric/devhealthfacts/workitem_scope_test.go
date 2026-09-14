@@ -186,3 +186,31 @@ func TestWorkItemReaderSettingsUseThrowingCeilingsAndRespectDeadline(t *testing.
 		t.Fatalf("bounded settings = %q, want every configured overflow mode to throw", rendered)
 	}
 }
+
+func TestWorkItemReaderSettingsPreserveExpiredContextErrors(t *testing.T) {
+	t.Parallel()
+
+	t.Run("canceled", func(t *testing.T) {
+		canceled, cancel := context.WithCancel(context.Background())
+		cancel()
+		settings, err := workItemReaderSettings(canceled)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled settings error = %v, want context.Canceled", err)
+		}
+		if settings != (readers.Settings{}) {
+			t.Fatalf("canceled settings = %#v, want zero settings", settings)
+		}
+	})
+
+	t.Run("expired", func(t *testing.T) {
+		expired, expire := context.WithDeadline(context.Background(), time.Now().Add(-time.Millisecond))
+		defer expire()
+		settings, err := workItemReaderSettings(expired)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("expired settings error = %v, want context.DeadlineExceeded", err)
+		}
+		if settings != (readers.Settings{}) {
+			t.Fatalf("expired settings = %#v, want zero settings", settings)
+		}
+	})
+}
