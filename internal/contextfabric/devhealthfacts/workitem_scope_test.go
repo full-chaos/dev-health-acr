@@ -63,7 +63,7 @@ func TestWorkItemRepositoryAuthorizationPreservesACRRequestSemantics(t *testing.
 		{
 			name:            "invalid nonempty requested list denies",
 			principalScopes: []string{"acme/tools"},
-			requested:       []string{"not a selector", "acme/"},
+			requested:       []string{"not a selector", "acme/", "/*"},
 			wantGranted:     readers.RepositorySelectorSet{ExactSlugs: []string{"acme/tools"}},
 			wantRequested:   &readers.RepositorySelectorSet{},
 		},
