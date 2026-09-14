@@ -497,6 +497,9 @@
         "type": "string",
         "presence": "required",
         "closed_vocabulary": [
+          "carried_frame_not_canonical",
+          "carried_frame_refused",
+          "carried_state_incomplete",
           "i1",
           "i17",
           "i2",

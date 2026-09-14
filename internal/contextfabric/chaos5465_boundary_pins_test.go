@@ -964,3 +964,33 @@ func TestComposition_TheCarriedAxisIsNeverUnexpressible(t *testing.T) {
 		}
 	})
 }
+
+// TestCompositionFailedInvariantWireVocabularyIncludesEveryProducedInvariant
+// pins a gap between two independently-maintained lists: ContinuationDecision
+// LineVocabulary's "composition_failed_invariant" case only ever listed the
+// frame invariants (plus, before the dead token's removal, the one member
+// that could never fire) -- composeAcceptedContext's OWN invariants
+// (CarriedFrameNotCanonical, CarriedFrameRefused, CarriedStateIncomplete)
+// were never wired into the WIRE vocabulary at all. A production line naming
+// any of them -- which composeAcceptedContext genuinely emits -- failed
+// eventspec certification even though nothing was wrong with the emission
+// itself; only the declared vocabulary was short.
+//
+// Enumerated from the producer, so the two lists cannot silently diverge
+// again: every member compositionInvariants() returns must be a member of
+// the wire vocabulary AND a value the guard accepts.
+func TestCompositionFailedInvariantWireVocabularyIncludesEveryProducedInvariant(t *testing.T) {
+	vocab := ContinuationDecisionLineVocabulary("composition_failed_invariant")
+	seen := make(map[string]bool, len(vocab))
+	for _, member := range vocab {
+		seen[member] = true
+	}
+	for _, member := range compositionInvariants() {
+		if !seen[member] {
+			t.Errorf("composition_failed_invariant wire vocabulary is missing %q, a value composeAcceptedContext genuinely produces", member)
+		}
+		if !validCompositionFailedInvariant(member) {
+			t.Errorf("%q does not validate as a composition invariant", member)
+		}
+	}
+}
