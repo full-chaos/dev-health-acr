@@ -336,6 +336,51 @@ func TestTheTransitionLineFiresOnTheDecisiveExitOnly(t *testing.T) {
 	}
 }
 
+// TestTheAssemblyReasonNeedsEveryConditionOfItsOneWriter isolates each of the
+// four conditions requirementAssemblyReason reads: one cell per condition,
+// differing from the canonical cell in that condition alone. The engine-level
+// fixtures cannot tell the conditions apart, because the one writer of an
+// assembled `fact_pruned` row always sets all four together.
+func TestTheAssemblyReasonNeedsEveryConditionOfItsOneWriter(t *testing.T) {
+	t.Parallel()
+	canonical := RequirementOutcomeRow{
+		Stage: contractsv1.ContextFabricOutcomeStageAssembledResult, Requirement: reconciliationCountRequirement,
+		Obligation: string(ObligationCount), Outcome: contractsv1.ContextFabricRequirementUnavailable,
+		CauseCoverage: contractsv1.ContextFabricCoverageDetailFactPruned,
+	}
+	absent := InvestigationResult{}
+	resolved := InvestigationResult{Cohort: countingCohort(SubjectTeam, 2)}
+	for _, cell := range []struct {
+		name   string
+		row    func(RequirementOutcomeRow) RequirementOutcomeRow
+		result InvestigationResult
+		want   RequirementAssemblyReason
+	}{
+		{"canonical", func(r RequirementOutcomeRow) RequirementOutcomeRow { return r }, absent, RequirementAssemblyReasonComputedPopulationAbsent},
+		{"outcome narrowed", func(r RequirementOutcomeRow) RequirementOutcomeRow {
+			r.Outcome = contractsv1.ContextFabricRequirementNarrowed
+			return r
+		}, absent, RequirementAssemblyReasonNone},
+		{"code fact_unconfigured", func(r RequirementOutcomeRow) RequirementOutcomeRow {
+			r.CauseCoverage = contractsv1.ContextFabricCoverageDetailFactUnconfigured
+			return r
+		}, absent, RequirementAssemblyReasonNone},
+		{"read obligation", func(r RequirementOutcomeRow) RequirementOutcomeRow {
+			r.Obligation, r.Requirement = string(ObligationState), "state/member/team"
+			return r
+		}, absent, RequirementAssemblyReasonNone},
+		{"member set resolved", func(r RequirementOutcomeRow) RequirementOutcomeRow { return r }, resolved, RequirementAssemblyReasonNone},
+	} {
+		cell := cell
+		t.Run(cell.name, func(t *testing.T) {
+			t.Parallel()
+			if got := requirementAssemblyReason(cell.row(canonical), cell.result); got != cell.want {
+				t.Fatalf("requirementAssemblyReason = %q, want %q", got, cell.want)
+			}
+		})
+	}
+}
+
 // TestTheAssembledAccountIsTheRowThatLosesTheMost pins the choice among several
 // assembled_result rows for one identity: the most lossy row, the first on a
 // tie, and planning rows never.
