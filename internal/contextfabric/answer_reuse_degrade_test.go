@@ -196,7 +196,7 @@ func TestReuseDegradesWhenOnlyAnAuxiliaryRefIsNoLongerVisible(t *testing.T) {
 // storedResultWithStaleKindCensusServed is storedResultWithCandidateEvidence
 // plus a Cohort and a kind_census_truncated detail whose Served is
 // deliberately WRONG relative to the cohort it travels with (99, when the
-// cohort carries 2 members) -- CHAOS-5732 (D47) class fix: served must be
+// cohort carries 2 members) -- CHAOS-5732 (D47): served must be
 // derived LAST, from the cohort the row actually travels with, at every
 // serving surface including reuse, never left standing from whatever value
 // the row happened to be stored with.

@@ -309,7 +309,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// inconsistently. An unresolved cardinality is still an absence, never a
 	// count of zero.
 	cardinality, _ := ComputeMembershipCardinality(params.Graph.Cohort, params.Graph.CohortPopulation, params.Plan.Narrowing)
-	// CHAOS-5732 (D47) round-1 P1: a kind_census_truncated detail's Served
+	// CHAOS-5732 (D47): a kind_census_truncated detail's Served
 	// is minted by falkorgraph's DiscoverContext, BEFORE stage 3's own
 	// budget narrowing can shrink graphContext.Cohort further -- the same
 	// staleness the membership_cardinality step above exists to avoid,
@@ -666,7 +666,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 // correctKindCensusTruncatedServedCounts re-states a kind_census_truncated
 // detail's Served field against THIS pass's own cohort, in place.
 //
-// CHAOS-5732 (D47) round-1 P1: falkorgraph's DiscoverContext mints Served at
+// CHAOS-5732 (D47): falkorgraph's DiscoverContext mints Served at
 // graph-discovery time, before stage 3's own response-budget narrowing can
 // shrink the cohort further -- so a detail read straight off graphContext.Coverage
 // can describe a cohort larger than the one this pass actually serves. Cheap

@@ -9,7 +9,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-// CHAOS-5732 (D47) round-1 P1, executed reproduction and fix: a
+// CHAOS-5732 (D47): a
 // kind_census_truncated detail's Served is minted by falkorgraph's
 // DiscoverContext at graph-discovery time -- BEFORE stage 3's own
 // response-budget narrowing can shrink the served cohort further. Drives a

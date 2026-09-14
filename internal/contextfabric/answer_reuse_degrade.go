@@ -421,7 +421,7 @@ func stripUnverifiedEvidenceRefs(result InvestigationResult, missing map[string]
 		cohort.Members = kept
 		result.Cohort = &cohort
 	}
-	// CHAOS-5732 (D47) class fix: served is DERIVED LAST, at every serving
+	// CHAOS-5732 (D47): served is DERIVED LAST, at every serving
 	// surface, from the cohort that surface actually serves -- never left
 	// standing from an earlier stage. A reuse-time authorization recheck can
 	// strip cohort members the ORIGINAL serve never had reason to drop (the
