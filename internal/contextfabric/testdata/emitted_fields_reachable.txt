@@ -42,19 +42,19 @@
 # coverage claim that overclaims is itself a defect.
 
 FactActualCompletion
-  reached_funcs      21
+  reached_funcs      25
   dynamic_key_sites  0
-  leaked_call_sites  0
-    leak interface_method     0
+  leaked_call_sites  2
+    leak interface_method     2
     leak external_func_value  0
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            22
+    calls followed            28
     calls accounted           13
-    calls not_a_call          1
-    calls excluded_by_design  27
-    calls leaked              0
+    calls not_a_call          4
+    calls excluded_by_design  45
+    calls leaked              2
   fields             completed completed_at
 
 FactBlockers
@@ -330,35 +330,35 @@ FactSourceHealth
   fields             duration_ms error_message items_synced last_synced_at provider status
 
 FactStatus
-  reached_funcs      21
+  reached_funcs      25
   dynamic_key_sites  0
-  leaked_call_sites  0
-    leak interface_method     0
+  leaked_call_sites  2
+    leak interface_method     2
     leak external_func_value  0
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            20
+    calls followed            26
     calls accounted           13
-    calls not_a_call          1
-    calls excluded_by_design  22
-    calls leaked              0
+    calls not_a_call          4
+    calls excluded_by_design  40
+    calls leaked              2
   fields             status
 
 FactWork
-  reached_funcs      21
+  reached_funcs      25
   dynamic_key_sites  0
-  leaked_call_sites  0
-    leak interface_method     0
+  leaked_call_sites  2
+    leak interface_method     2
     leak external_func_value  0
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            20
+    calls followed            26
     calls accounted           13
-    calls not_a_call          1
-    calls excluded_by_design  22
-    calls leaked              0
+    calls not_a_call          4
+    calls excluded_by_design  40
+    calls leaked              2
   fields             title
 
 FactWorkload
