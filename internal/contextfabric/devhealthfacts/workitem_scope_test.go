@@ -154,6 +154,12 @@ func TestWorkItemReaderSettingsUseThrowingCeilingsAndRespectDeadline(t *testing.
 	if bounded.MaxExecutionTimeSeconds > 1 {
 		t.Fatalf("bounded MaxExecutionTimeSeconds = %d, want no more than the remaining whole seconds", bounded.MaxExecutionTimeSeconds)
 	}
+	longCtx, longCancel := context.WithDeadline(context.Background(), time.Now().Add(3*time.Second))
+	defer longCancel()
+	long := workItemReaderSettings(longCtx)
+	if long.MaxExecutionTimeSeconds == 0 || long.MaxExecutionTimeSeconds > 3 {
+		t.Fatalf("long bounded MaxExecutionTimeSeconds = %d, want a positive value no more than the deadline", long.MaxExecutionTimeSeconds)
+	}
 	shortCtx, shortCancel := context.WithDeadline(context.Background(), time.Now().Add(750*time.Millisecond))
 	defer shortCancel()
 	short := workItemReaderSettings(shortCtx)
