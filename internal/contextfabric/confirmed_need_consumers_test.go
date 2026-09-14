@@ -77,6 +77,22 @@ type needTurnHarness struct {
 	// historical makes the interpreter move the axis off current, which a
 	// request carrying a window receipt answers with the axis-conflict veto.
 	historical bool
+	// windowless makes the interpreter return a question with no window class,
+	// so a turn with no request-side window gets no inferred default at all.
+	windowless bool
+	// saveKeys is every time-axis reuse key Save received, in order.
+	saveKeys []string
+}
+
+// needKeyStore records the time-axis reuse key of every Save.
+type needKeyStore struct {
+	*staticResultStore
+	h *needTurnHarness
+}
+
+func (s *needKeyStore) Save(ctx context.Context, principal storage.Principal, result InvestigationResult, watermarks SourceWatermarkSnapshot, epoch RebuildEpoch, timeAxisKey string, retrieval ReuseRetrievalIdentity, prompts ReusePromptVersions, authorities ReuseVersionAuthorities, graphEpoch int64, ancestryParent string, semantic SemanticStateWrite) error {
+	s.h.saveKeys = append(s.h.saveKeys, timeAxisKey)
+	return s.staticResultStore.Save(ctx, principal, result, watermarks, epoch, timeAxisKey, retrieval, prompts, authorities, graphEpoch, ancestryParent, semantic)
 }
 
 // needTurnOutcome is one turn's served result plus everything the turn
@@ -92,6 +108,7 @@ type needTurnOutcome struct {
 	windowCanons []WindowCanonicalizationOutcome
 	reuseBypass  []AnswerReuseBypassReason
 	saved        *PersistedSemanticState
+	saveKey      string
 }
 
 type needHarnessOption func(*EngineDependencies)
@@ -122,6 +139,9 @@ func newNeedTurnHarness(t *testing.T, store *staticResultStore, options ...needH
 				asOf := time.Unix(100, 0).UTC()
 				return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalValidTime, AsOf: &asOf}}, nil
 			}
+			if h.windowless {
+				return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+			}
 			// A trend class gives a turn with no window of its own a class
 			// default, which the window gate answers with a clarification.
 			return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}, WindowClass: WindowClassTrendAssessment}, nil
@@ -133,7 +153,7 @@ func newNeedTurnHarness(t *testing.T, store *staticResultStore, options ...needH
 		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
 			return fresh, nil
 		}),
-		Results:   store,
+		Results:   &needKeyStore{staticResultStore: store, h: h},
 		Telemetry: h.telemetry,
 		CandidateVerifier: func(_ context.Context, _ storage.Principal, _ RequestedScope, _ ResolvedGraphBinding, kind contractsv1.ContextFabricSubjectKind, canonicalID string) (bool, CandidateVerificationReason) {
 			h.candidates = append(h.candidates, needVerifierCall{kind: kind, value: canonicalID})
@@ -173,14 +193,14 @@ func (h *needTurnHarness) turn(request InvestigationRequest, response needTurnRe
 	h.graph.response = response
 	callsMark, ledgerMark, windowMark := len(h.graph.calls), len(h.telemetry.confirmedNeedLedgers), len(h.telemetry.confirmedNeedLedgerWindows)
 	kindMark, windowCarryMark, canonMark := len(h.telemetry.kindCarries), len(h.telemetry.windowCarries), len(h.telemetry.windowCanonicalizationOutcomes)
-	reuseMark := len(h.telemetry.answerReuseBypasses)
+	reuseMark, keyMark := len(h.telemetry.answerReuseBypasses), len(h.saveKeys)
 	h.store.saved, h.store.savedSemantic = nil, nil
 	result, err := h.engine.Investigate(context.Background(), acceptancePrincipal(), request)
 	if err != nil {
 		h.t.Fatalf("Investigate(%s) error = %v", request.RequestID, err)
 	}
-	if h.store.saved == nil {
-		h.t.Fatalf("fixture defect: turn %s saved nothing", request.RequestID)
+	if h.store.saved == nil || len(h.saveKeys) != keyMark+1 {
+		h.t.Fatalf("fixture defect: turn %s must save exactly once (saves=%d)", request.RequestID, len(h.saveKeys)-keyMark)
 	}
 	h.store.results[h.store.saved.ResultID] = *h.store.saved
 	var saved *PersistedSemanticState
@@ -198,6 +218,7 @@ func (h *needTurnHarness) turn(request InvestigationRequest, response needTurnRe
 		windowCanons: append([]WindowCanonicalizationOutcome(nil), h.telemetry.windowCanonicalizationOutcomes[canonMark:]...),
 		reuseBypass:  append([]AnswerReuseBypassReason(nil), h.telemetry.answerReuseBypasses[reuseMark:]...),
 		saved:        saved,
+		saveKey:      h.saveKeys[keyMark],
 	}
 }
 
@@ -219,6 +240,19 @@ func continuingNeedTurn(request InvestigationRequest, parentID string) Investiga
 		{TurnID: "turn_need_q", Role: contractsv1.ContextFabricConversationUser, Content: request.Question, CreatedAt: time.Unix(480, 0).UTC()},
 		{TurnID: "turn_need_a", Role: contractsv1.ContextFabricConversationAssistant, Content: "Ask Dev is not release-ready.", CreatedAt: time.Unix(481, 0).UTC()},
 	}
+	return request
+}
+
+// continuingNeedTurnAgain continues a turn that was itself a continuation:
+// its conversation is the parent's, plus the parent's own exchange, which is
+// the exchange SemanticRequestIdentityOf drops -- so the digest equals the one
+// the parent stored.
+func continuingNeedTurnAgain(request, parentRequest InvestigationRequest, parentID string) InvestigationRequest {
+	request.ParentResultID = parentID
+	request.Conversation = append(append([]contractsv1.ContextFabricConversationTurn{}, parentRequest.Conversation...),
+		contractsv1.ContextFabricConversationTurn{TurnID: "turn_need_q2", Role: contractsv1.ContextFabricConversationUser, Content: request.Question, CreatedAt: time.Unix(490, 0).UTC()},
+		contractsv1.ContextFabricConversationTurn{TurnID: "turn_need_a2", Role: contractsv1.ContextFabricConversationAssistant, Content: "Ask Dev is still not release-ready.", CreatedAt: time.Unix(491, 0).UTC()},
+	)
 	return request
 }
 
@@ -732,8 +766,8 @@ func TestConfirmedNeedConsumers_WindowThreeTurns(t *testing.T) {
 
 	t.Run("same identity: the carrier misses and the remembered window applies", func(t *testing.T) {
 		three := h.turn(continuingNeedTurn(needTurnRequest("request_need_window_three", false), two.result.ResultID), committingNeedResponse())
-		if len(three.windowCarry) != 1 || three.windowCarry[0].outcome == WindowCarryHit {
-			t.Fatalf("window carries = %#v, want exactly one miss (the population this consumer exists for)", three.windowCarry)
+		if len(three.windowCarry) != 0 {
+			t.Fatalf("window carries = %#v, want none attempted: the remembered window is this turn's request-side window, as the receipt's would be", three.windowCarry)
 		}
 		if !reflect.DeepEqual(three.windows, []confirmedNeedLedgerWindowRecord{{ConfirmedNeedLedgerWindowApplied, two.result.ResultID, string(option.RelativeID)}}) {
 			t.Fatalf("ledger window events = %#v, want exactly one applied", three.windows)
@@ -780,13 +814,25 @@ func TestConfirmedNeedConsumers_WindowThreeTurns(t *testing.T) {
 		if got := memberEntries(three.result, contractsv1.ContextFabricStructureNeedWindow); len(got) != 0 {
 			t.Fatalf("window disclosure = %#v, want none from the ledger", got)
 		}
+		if three.saved == nil {
+			t.Fatalf("turn three saved no semantic state")
+		}
+		for _, entry := range three.saved.ConfirmedNeeds {
+			if entry.Member == contractsv1.ContextFabricStructureNeedWindow {
+				t.Fatalf("turn three ledger = %#v, want the remembered window retired by the window stated this turn", three.saved.ConfirmedNeeds)
+			}
+		}
 	})
 }
 
-// TestConfirmedNeedConsumers_WindowCarrierWins pins the precedence: when the
-// parent persisted its confirmed window, the same-conversation carrier
-// supplies it and the ledger stands down -- one window value, one entry.
-func TestConfirmedNeedConsumers_WindowCarrierWins(t *testing.T) {
+// TestConfirmedNeedConsumers_RememberedWindowStandsTheCarryDown: when the
+// parent persisted its confirmed window AND remembers it, the remembered
+// window is this turn's request-side window, exactly as a re-echoed receipt
+// would be, so the same-conversation carry is never attempted -- one window
+// value, one entry, keyed on its frozen bounds. Control: under a changed
+// identity the ledger is refused and the carry supplies the same window, also
+// keyed on its effective window's frozen bounds.
+func TestConfirmedNeedConsumers_RememberedWindowStandsTheCarryDown(t *testing.T) {
 	t.Parallel()
 	h := newNeedTurnHarness(t, nil)
 	one, option := windowTurnOne(t, h, "request_need_precedence_one")
@@ -796,19 +842,55 @@ func TestConfirmedNeedConsumers_WindowCarrierWins(t *testing.T) {
 	if two.result.EffectiveEvidenceWindow == nil || two.saved == nil || len(two.saved.ConfirmedNeeds) != 1 {
 		t.Fatalf("fixture defect: turn two must persist its confirmed window and ledger; window=%#v saved=%#v", two.result.EffectiveEvidenceWindow, two.saved)
 	}
+	frozenKey := composeTimeAxisKey(TimeAxisKeyFor(TimeContext{Axis: TemporalCurrent}), windowKeyComponent(*two.result.EffectiveEvidenceWindow, windowKeyFrozen))
+	if two.saveKey != frozenKey {
+		t.Fatalf("fixture defect: the receipt turn keyed %q, want %q", two.saveKey, frozenKey)
+	}
+
 	three := h.turn(continuingNeedTurn(needTurnRequest("request_need_precedence_three", false), two.result.ResultID), committingNeedResponse())
-	if len(three.windowCarry) != 1 || three.windowCarry[0].outcome != WindowCarryHit {
-		t.Fatalf("window carries = %#v, want exactly one hit", three.windowCarry)
+	if len(three.windowCarry) != 0 {
+		t.Fatalf("window carries = %#v, want none attempted", three.windowCarry)
 	}
-	if !reflect.DeepEqual(three.windows, []confirmedNeedLedgerWindowRecord{{ConfirmedNeedLedgerWindowCarrierPrecedence, two.result.ResultID, string(option.RelativeID)}}) {
-		t.Fatalf("ledger window events = %#v, want exactly one carrier_precedence", three.windows)
+	if !reflect.DeepEqual(three.windows, []confirmedNeedLedgerWindowRecord{{ConfirmedNeedLedgerWindowApplied, two.result.ResultID, string(option.RelativeID)}}) {
+		t.Fatalf("ledger window events = %#v, want exactly one applied", three.windows)
 	}
-	entries := memberEntries(three.result, contractsv1.ContextFabricStructureNeedWindow)
-	if len(entries) != 1 || entries[0].Source != contractsv1.ContextFabricStructureSourceCarried {
-		t.Fatalf("window disclosure = %#v, want exactly one carried entry (the carrier's)", entries)
+	if got := memberEntries(three.result, contractsv1.ContextFabricStructureNeedWindow); !reflect.DeepEqual(got, []ConfirmedStructureEntry{carriedNeedEntry(contractsv1.ContextFabricStructureNeedWindow, string(option.RelativeID), two.result.ResultID)}) {
+		t.Fatalf("window disclosure = %#v, want exactly the ledger's carried entry", got)
 	}
-	if window := three.result.EffectiveEvidenceWindow; window == nil || window.RelativeID != option.RelativeID || !sameWindowBounds(window.Start, option.Start) {
-		t.Fatalf("effective window = %#v, want the carried confirmed window", window)
+	if window := three.result.EffectiveEvidenceWindow; window == nil || window.RelativeID != option.RelativeID || !sameWindowBounds(window.Start, option.Start) || !sameWindowBounds(window.End, option.End) {
+		t.Fatalf("effective window = %#v, want the remembered confirmed window", window)
+	}
+	if three.saveKey != frozenKey {
+		t.Fatalf("ledger turn keyed %q, want the receipt turn's %q", three.saveKey, frozenKey)
+	}
+
+	changedRequest := continuingNeedTurn(needTurnRequest("request_need_precedence_three_b", false), two.result.ResultID)
+	changedRequest.RequestedScope.RepositorySlugs = []string{"full-chaos/dev-health-acr"}
+	changed := h.turn(changedRequest, committingNeedResponse())
+	if len(changed.windows) != 0 || len(changed.windowCarry) != 1 || changed.windowCarry[0].outcome != WindowCarryHit {
+		t.Fatalf("control: ledger windows=%#v carries=%#v, want no ledger decision and one carry hit", changed.windows, changed.windowCarry)
+	}
+	if entries := memberEntries(changed.result, contractsv1.ContextFabricStructureNeedWindow); len(entries) != 1 || entries[0].Source != contractsv1.ContextFabricStructureSourceCarried {
+		t.Fatalf("control: window disclosure = %#v, want the carry's one entry", entries)
+	}
+	if changed.saveKey != frozenKey {
+		t.Fatalf("control: carried turn keyed %q, want its effective window's %q", changed.saveKey, frozenKey)
+	}
+
+	// The subjectless terminal keys the same way: a resolution committing
+	// nothing, on the ledger turn and on the carried turn.
+	nothing := needTurnResponse{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}}
+	terminalLedger := h.turn(continuingNeedTurn(needTurnRequest("request_need_precedence_terminal", false), two.result.ResultID), nothing)
+	terminalChangedRequest := continuingNeedTurn(needTurnRequest("request_need_precedence_terminal_b", false), two.result.ResultID)
+	terminalChangedRequest.RequestedScope.RepositorySlugs = []string{"full-chaos/dev-health-acr"}
+	terminalChanged := h.turn(terminalChangedRequest, nothing)
+	for name, turn := range map[string]needTurnOutcome{"ledger": terminalLedger, "carried": terminalChanged} {
+		if len(turn.calls) != 1 || len(turn.result.SubjectResolution.Committed) != 0 || turn.result.EffectiveEvidenceWindow == nil {
+			t.Fatalf("fixture defect: %s terminal must resolve once, commit nothing and keep the window; calls=%d window=%#v", name, len(turn.calls), turn.result.EffectiveEvidenceWindow)
+		}
+		if turn.saveKey != frozenKey {
+			t.Fatalf("%s subjectless terminal keyed %q, want %q", name, turn.saveKey, frozenKey)
+		}
 	}
 }
 
@@ -845,10 +927,16 @@ func TestConfirmedNeedConsumers_AxisConflictVetoCapturesNoWindow(t *testing.T) {
 func TestAxisConflictConfirmedNeeds_CarriesOnlyTheRememberedLedger(t *testing.T) {
 	t.Parallel()
 	remembered := []confirmedStructureMember{{Member: contractsv1.ContextFabricStructureNeedSubjectCandidate, AppliedKind: SubjectRepository, AppliedValue: "repository:need-r2"}}
-	got := axisConflictConfirmedNeeds(remembered)
+	got := axisConflictConfirmedNeeds(remembered, validInvestigationRequest())
 	want := []ConfirmedNeedEntry{{Member: contractsv1.ContextFabricStructureNeedSubjectCandidate, AppliedKind: SubjectRepository, AppliedValue: "repository:need-r2"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("axisConflictConfirmedNeeds() = %#v, want %#v", got, want)
+	}
+	handle := append(remembered, confirmedStructureMember{Member: contractsv1.ContextFabricStructureNeedSubjectHandle, AppliedKind: SubjectPullRequest, AppliedValue: "532", PatternID: "p"})
+	explicit := validInvestigationRequest()
+	explicit.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: SubjectPullRequest, PatternID: "p", Value: "777"}}
+	if got := axisConflictConfirmedNeeds(handle, explicit); !reflect.DeepEqual(got, want) {
+		t.Fatalf("axisConflictConfirmedNeeds() with an explicit handle = %#v, want %#v: the explicit value retires the remembered one", got, want)
 	}
 }
 
@@ -858,30 +946,43 @@ func TestDecideLedgerWindow(t *testing.T) {
 	end := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	relative := confirmedStructureMember{Member: contractsv1.ContextFabricStructureNeedWindow, AppliedValue: string(RelativeWindowTrailing90D), WindowStart: &start, WindowEnd: &end}
 	absolute := confirmedStructureMember{Member: contractsv1.ContextFabricStructureNeedWindow, AppliedValue: windowAbsoluteAppliedValuePrefix + "1:2", WindowStart: &start, WindowEnd: &end}
-	inferred := &contractsv1.ContextFabricEffectiveEvidenceWindow{RelativeID: RelativeWindowTrailing30D, Provenance: WindowInferredDefault}
-	stated := &contractsv1.ContextFabricEffectiveEvidenceWindow{RelativeID: RelativeWindowTrailing30D, Provenance: WindowQuestionStated}
 	ledger := func(entries ...confirmedStructureMember) confirmedNeedLedgerResult {
 		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerHit, Entries: entries, SourceResultID: "result_need_parent"}
 	}
-	miss := windowCarryResult{Outcome: WindowCarryMissNoConfirmedWindow}
-	hit := windowCarryResult{Outcome: WindowCarryHit, Window: stated}
+	silent := validInvestigationRequest()
+	silentCanon := requestWindowCanonicalization{}
+	stated := validInvestigationRequest()
+	stated.TimeContext.EvidenceWindow = validConfirmedWindow()
+	historical := validInvestigationRequest()
+	historical.TimeContext = TimeContext{Axis: TemporalValidTime}
+	statedWindow := &contractsv1.ContextFabricEffectiveEvidenceWindow{RelativeID: RelativeWindowTrailing30D, Provenance: WindowQuestionStated}
 
-	if got := decideLedgerWindow(ledger(), inferred, miss); got.Present {
+	if got := decideLedgerWindow(ledger(), silent, silentCanon); got.Present {
 		t.Fatalf("no window entry: got %#v, want not present", got)
 	}
-	if got := decideLedgerWindow(ledger(confirmedStructureMember{Member: contractsv1.ContextFabricStructureNeedWindow}), inferred, miss); got.Present {
+	if got := decideLedgerWindow(ledger(confirmedStructureMember{Member: contractsv1.ContextFabricStructureNeedWindow}), silent, silentCanon); got.Present {
 		t.Fatalf("empty-valued entry: got %#v, want not present", got)
 	}
-	if got := decideLedgerWindow(ledger(relative), inferred, hit); got.Decision != ConfirmedNeedLedgerWindowCarrierPrecedence || got.Applied() || composeLedgerWindowEntry(got) != nil {
-		t.Fatalf("carrier hit: got %#v, want carrier_precedence, nothing applied or disclosed", got)
+	for name, cell := range map[string]struct {
+		request InvestigationRequest
+		canon   requestWindowCanonicalization
+	}{
+		"explicit window stated this turn":   {stated, requestWindowCanonicalization{Effective: statedWindow, KeyComponent: "rel:trailing_30d"}},
+		"explicit window, canon not yet set": {stated, silentCanon},
+		"window receipt confirmed this turn": {silent, requestWindowCanonicalization{ConfirmedMember: &confirmedStructureMember{Member: contractsv1.ContextFabricStructureNeedWindow, AppliedValue: "trailing_30d"}}},
+		"request-side window resolved":       {silent, requestWindowCanonicalization{Effective: statedWindow}},
+		"request-side veto":                  {silent, requestWindowCanonicalization{Veto: windowVetoConfirmationUnresolved}},
+		"request not on the current axis":    {historical, silentCanon},
+	} {
+		got := decideLedgerWindow(ledger(relative), cell.request, cell.canon)
+		if !got.Present || got.Decision != ConfirmedNeedLedgerWindowNotApplicable || got.Applied() || composeLedgerWindowEntry(got) != nil {
+			t.Fatalf("%s: got %#v, want present, not_applicable, nothing applied or disclosed", name, got)
+		}
+		if after := cell.canon.withRememberedWindow(got); !reflect.DeepEqual(after, cell.canon) {
+			t.Fatalf("%s: withRememberedWindow changed the canonicalization: %#v", name, after)
+		}
 	}
-	if got := decideLedgerWindow(ledger(relative), stated, miss); got.Decision != ConfirmedNeedLedgerWindowNotApplicable || got.Applied() {
-		t.Fatalf("stated window: got %#v, want not_applicable", got)
-	}
-	if got := decideLedgerWindow(ledger(relative), nil, miss); got.Decision != ConfirmedNeedLedgerWindowNotApplicable || got.Applied() {
-		t.Fatalf("no window axis: got %#v, want not_applicable", got)
-	}
-	applied := decideLedgerWindow(ledger(relative), inferred, miss)
+	applied := decideLedgerWindow(ledger(relative), silent, silentCanon)
 	if !applied.Applied() || applied.Window.RelativeID != RelativeWindowTrailing90D || applied.Window.Provenance != WindowClarificationConfirmed ||
 		!applied.Window.Start.Equal(start) || !applied.Window.End.Equal(end) || applied.Window.Start == relative.WindowStart {
 		t.Fatalf("applied: got %#v, want the remembered window rebuilt with copied bounds", applied)
@@ -889,7 +990,12 @@ func TestDecideLedgerWindow(t *testing.T) {
 	if entry := composeLedgerWindowEntry(applied); entry == nil || *entry != carriedNeedEntry(contractsv1.ContextFabricStructureNeedWindow, string(RelativeWindowTrailing90D), "result_need_parent") {
 		t.Fatalf("applied disclosure = %#v", entry)
 	}
-	abs := decideLedgerWindow(ledger(absolute), inferred, miss)
+	canon := silentCanon.withRememberedWindow(applied)
+	if canon.Effective != applied.Window || canon.KeyComponent != windowKeyComponent(*applied.Window, windowKeyFrozen) || canon.KeyEncoding != windowKeyFrozen ||
+		canon.KeyComponent == windowKeyComponent(*applied.Window, windowKeyRederivable) || canon.ConfirmedMember != nil {
+		t.Fatalf("withRememberedWindow = %#v, want the window keyed on its frozen bounds, with no confirmed receipt member", canon)
+	}
+	abs := decideLedgerWindow(ledger(absolute), silent, silentCanon)
 	if !abs.Applied() || abs.Window.RelativeID != "" || observableLedgerWindowValue(abs.AppliedValue) != confirmedNeedLedgerWindowAbsolute {
 		t.Fatalf("absolute: got %#v, want no relative id and the absolute token", abs)
 	}
@@ -1186,7 +1292,7 @@ func TestConfirmedNeedVocabularies(t *testing.T) {
 		}
 	}
 	if ValidConfirmedNeedMemberDropReason("reverify_refused") || ValidConfirmedNeedLedgerWindowDecision("carried") ||
-		len(confirmedNeedMemberDropReasons()) != 2 || len(confirmedNeedLedgerWindowDecisions()) != 3 {
+		len(confirmedNeedMemberDropReasons()) != 2 || len(confirmedNeedLedgerWindowDecisions()) != 2 {
 		t.Fatal("vocabulary membership is not closed")
 	}
 	if got := observableConfirmedNeedDrops(nil); got != "none" {
@@ -1194,5 +1300,346 @@ func TestConfirmedNeedVocabularies(t *testing.T) {
 	}
 	if got := confirmedNeedValueHash(""); got != "" {
 		t.Fatalf("confirmedNeedValueHash(\"\") = %q, want empty", got)
+	}
+}
+
+// TestConfirmedNeedConsumers_ExplicitValueRetiresTheRememberedOne: a value the
+// caller states explicitly this turn retires the remembered value for that
+// member from the ledger this turn saves, so a later turn naming this turn as
+// parent never gets the replaced value back. Swept over every member with an
+// explicit request field (subject_handle, expected_kind, window). Control per
+// member: the same four turns with nothing stated on turn three carry the
+// remembered value to turn four.
+func TestConfirmedNeedConsumers_ExplicitValueRetiresTheRememberedOne(t *testing.T) {
+	t.Parallel()
+	start := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name   string
+		member contractsv1.ContextFabricStructureNeedKind
+		ledger []ConfirmedNeedEntry
+		// state makes turn three state the member explicitly.
+		state func(*InvestigationRequest)
+		// statedWindow is the window flag every turn of the chain uses.
+		statedWindow bool
+		// remembered reports whether a turn applied the remembered member.
+		remembered func(needTurnOutcome) bool
+	}{
+		{
+			name:         "subject_handle",
+			member:       contractsv1.ContextFabricStructureNeedSubjectHandle,
+			ledger:       []ConfirmedNeedEntry{{Member: contractsv1.ContextFabricStructureNeedSubjectHandle, AppliedKind: SubjectPullRequest, AppliedValue: "532", PatternID: "pull_request_number"}},
+			statedWindow: true,
+			state: func(r *InvestigationRequest) {
+				r.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: SubjectPullRequest, PatternID: "pull_request_number", Value: "777"}}
+			},
+			remembered: func(o needTurnOutcome) bool {
+				got := memberEntries(o.result, contractsv1.ContextFabricStructureNeedSubjectHandle)
+				return len(got) == 1 && got[0].Source == contractsv1.ContextFabricStructureSourceCarried && got[0].AppliedValue == "532"
+			},
+		},
+		{
+			name:         "expected_kind",
+			member:       contractsv1.ContextFabricStructureNeedExpectedKind,
+			ledger:       []ConfirmedNeedEntry{{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(SubjectTeam)}},
+			statedWindow: true,
+			state: func(r *InvestigationRequest) {
+				r.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{SubjectRepository}
+			},
+			remembered: func(o needTurnOutcome) bool {
+				return len(o.ledgers) == 1 && o.ledgers[0].AppliedExpectedKind == SubjectTeam
+			},
+		},
+		{
+			name:   "window",
+			member: contractsv1.ContextFabricStructureNeedWindow,
+			ledger: []ConfirmedNeedEntry{{Member: contractsv1.ContextFabricStructureNeedWindow, AppliedValue: string(RelativeWindowTrailing90D), WindowStart: &start, WindowEnd: &end}},
+			state: func(r *InvestigationRequest) {
+				r.TimeContext.EvidenceWindow = validConfirmedWindow()
+			},
+			remembered: func(o needTurnOutcome) bool {
+				return len(o.windows) == 1 && o.windows[0].decision == ConfirmedNeedLedgerWindowApplied
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			for _, stated := range []bool{true, false} {
+				store := &staticResultStore{results: map[string]InvestigationResult{}, states: map[string]*PersistedSemanticState{}}
+				ledgerOnlyParent(t, store, "result_need_retire_parent", nil, tc.ledger)
+				h := newNeedTurnHarness(t, store)
+				threeRequest := continuingNeedTurn(needTurnRequest("request_need_retire_three", tc.statedWindow), "result_need_retire_parent")
+				if stated {
+					tc.state(&threeRequest)
+				}
+				three := h.turn(threeRequest, committingNeedResponse())
+				if three.saved == nil {
+					t.Fatalf("stated=%v: turn three saved no semantic state", stated)
+				}
+				inLedger := false
+				for _, entry := range three.saved.ConfirmedNeeds {
+					inLedger = inLedger || entry.Member == tc.member
+				}
+				four := h.turn(continuingNeedTurnAgain(needTurnRequest("request_need_retire_four", tc.statedWindow), threeRequest, three.result.ResultID), committingNeedResponse())
+				if stated {
+					if tc.remembered(three) {
+						t.Fatalf("turn three applied the remembered %s while the caller stated one", tc.member)
+					}
+					if inLedger {
+						t.Fatalf("turn three ledger = %#v, want %s retired by the value stated this turn", three.saved.ConfirmedNeeds, tc.member)
+					}
+					if tc.remembered(four) {
+						t.Fatalf("turn four re-applied the retired remembered %s", tc.member)
+					}
+					continue
+				}
+				if !tc.remembered(three) || !inLedger || !tc.remembered(four) {
+					t.Fatalf("control: remembered on three=%v, in three's ledger=%v, remembered on four=%v; want all true with nothing stated", tc.remembered(three), inLedger, tc.remembered(four))
+				}
+			}
+		})
+	}
+}
+
+// windowLedgerChain drives turn one (raises the window need), then turn two,
+// which redeems the window beside a structure receipt that vetoes -- a parent
+// whose ledger remembers the window and which persists no effective window.
+func windowLedgerChain(t *testing.T, h *needTurnHarness, prefix string) (needTurnOutcome, needTurnOutcome, contractsv1.ContextFabricWindowOption) {
+	t.Helper()
+	one, option := windowTurnOne(t, h, "request_need_"+prefix+"_one")
+	request := needTurnRequest("request_need_"+prefix+"_two", false)
+	request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: one.result.ResultID, ReceiptID: option.ReceiptID}}
+	request.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: one.result.ResultID, ReceiptID: "kindr_needmissing0001"}}
+	two := h.turn(request, committingNeedResponse())
+	if two.saved == nil || len(two.saved.ConfirmedNeeds) != 1 || two.result.EffectiveEvidenceWindow != nil {
+		t.Fatalf("fixture defect: turn two must remember the window and persist none; saved=%#v window=%#v", two.saved, two.result.EffectiveEvidenceWindow)
+	}
+	return one, two, option
+}
+
+// TestConfirmedNeedConsumers_RememberedWindowAppliesWhereTheReceiptDoes pins
+// application and reuse-key parity: a remembered window and a fresh receipt
+// for the same option, on otherwise identical turns, produce the same
+// effective window under the same save key and meet the same axis-conflict
+// veto -- whatever Interpret infers. Controls: the same turn under a changed
+// identity has no window at all (no inferred default either), keys
+// unwindowed, and meets no veto.
+func TestConfirmedNeedConsumers_RememberedWindowAppliesWhereTheReceiptDoes(t *testing.T) {
+	t.Parallel()
+	h := newNeedTurnHarness(t, nil)
+	one, two, option := windowLedgerChain(t, h, "parity")
+	changed := func(request InvestigationRequest) InvestigationRequest {
+		request.RequestedScope.RepositorySlugs = []string{"full-chaos/dev-health-acr"}
+		return request
+	}
+	fresh := func(requestID string) InvestigationRequest {
+		request := needTurnRequest(requestID, false)
+		request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: one.result.ResultID, ReceiptID: option.ReceiptID}}
+		// A parent reference keeps the receipt turn outside the window-only
+		// continuation shape, as the ledger turn is.
+		request.ParentResultID = one.result.ResultID
+		return request
+	}
+
+	t.Run("no inferred default: applied, served and keyed like the receipt", func(t *testing.T) {
+		h.windowless = true
+		defer func() { h.windowless = false }()
+		ledger := h.turn(continuingNeedTurn(needTurnRequest("request_need_parity_ledger", false), two.result.ResultID), committingNeedResponse())
+		receipt := h.turn(fresh("request_need_parity_receipt"), committingNeedResponse())
+		control := h.turn(changed(continuingNeedTurn(needTurnRequest("request_need_parity_control", false), two.result.ResultID)), committingNeedResponse())
+		for name, turn := range map[string]needTurnOutcome{"ledger": ledger, "receipt": receipt} {
+			window := turn.result.EffectiveEvidenceWindow
+			if turn.result.Status == InvestigationClarificationRequired || turn.result.Status == InvestigationNoMatch || window == nil ||
+				window.Provenance != WindowClarificationConfirmed || window.RelativeID != option.RelativeID ||
+				!sameWindowBounds(window.Start, option.Start) || !sameWindowBounds(window.End, option.End) {
+				t.Fatalf("%s turn: status=%s window=%#v, want served under the confirmed option's frozen window", name, turn.result.Status, window)
+			}
+		}
+		if !reflect.DeepEqual(ledger.windows, []confirmedNeedLedgerWindowRecord{{ConfirmedNeedLedgerWindowApplied, two.result.ResultID, string(option.RelativeID)}}) {
+			t.Fatalf("ledger window events = %#v, want exactly one applied", ledger.windows)
+		}
+		if ledger.saveKey != receipt.saveKey || ledger.saveKey == control.saveKey {
+			t.Fatalf("save keys ledger=%q receipt=%q control=%q, want ledger == receipt != control", ledger.saveKey, receipt.saveKey, control.saveKey)
+		}
+		if control.result.EffectiveEvidenceWindow != nil || len(control.windows) != 0 || control.saveKey != TimeAxisKeyFor(TimeContext{Axis: TemporalCurrent}) {
+			t.Fatalf("control: window=%#v ledger windows=%#v key=%q, want no window, no decision, the unwindowed key", control.result.EffectiveEvidenceWindow, control.windows, control.saveKey)
+		}
+		last := func(o needTurnOutcome) WindowCanonicalizationOutcome { return o.windowCanons[len(o.windowCanons)-1] }
+		if last(ledger) != WindowCanonicalizationCarried || last(receipt) != WindowCanonicalizationReceiptConfirmed {
+			t.Fatalf("canonicalization outcomes ledger=%s receipt=%s, want carried and receipt_confirmed", last(ledger), last(receipt))
+		}
+	})
+
+	t.Run("interpretation moves the axis: the same veto as the receipt", func(t *testing.T) {
+		h.historical = true
+		defer func() { h.historical = false }()
+		ledger := h.turn(continuingNeedTurn(needTurnRequest("request_need_parity_axis_ledger", false), two.result.ResultID), committingNeedResponse())
+		receipt := h.turn(fresh("request_need_parity_axis_receipt"), committingNeedResponse())
+		control := h.turn(changed(continuingNeedTurn(needTurnRequest("request_need_parity_axis_control", false), two.result.ResultID)), committingNeedResponse())
+		vetoed := func(o needTurnOutcome) bool {
+			for _, outcome := range o.windowCanons {
+				if outcome == WindowCanonicalizationVetoAxisConflict {
+					return o.result.Status == InvestigationNoMatch
+				}
+			}
+			return false
+		}
+		if !vetoed(ledger) || !vetoed(receipt) || vetoed(control) {
+			t.Fatalf("axis-conflict veto ledger=%v receipt=%v control=%v, want true, true, false", vetoed(ledger), vetoed(receipt), vetoed(control))
+		}
+		if ledger.saved == nil || len(ledger.saved.ConfirmedNeeds) != 1 || ledger.saved.ConfirmedNeeds[0].Member != contractsv1.ContextFabricStructureNeedWindow {
+			t.Fatalf("ledger turn saved %#v, want the remembered window carried forward through the veto", ledger.saved)
+		}
+	})
+}
+
+// TestConfirmedNeedConsumers_LedgerLineOnEveryExit pins the telemetry axis:
+// every exit that follows admission -- the window veto, the explicit-window
+// gate and the structure veto included -- reports the admitted ledger exactly
+// once, applying nothing on an exit that ran no consumer; the window decision
+// is reported on those exits too, and a remembered window applied before the
+// structure veto is echoed there as the receipt would be. Controls: the
+// decisive path reports what applied, and a turn naming no parent reports
+// miss_no_reference -- one line each.
+func TestConfirmedNeedConsumers_LedgerLineOnEveryExit(t *testing.T) {
+	t.Parallel()
+	t.Run("candidate ledger", func(t *testing.T) {
+		t.Parallel()
+		h := newNeedTurnHarness(t, nil)
+		_, two, offer := candidateTurnsOneAndTwo(t, h)
+		want := []ConfirmedNeedEntry{{Member: contractsv1.ContextFabricStructureNeedSubjectCandidate, AppliedKind: offer.Kind, AppliedValue: offer.CanonicalID}}
+		for _, cell := range []struct {
+			name   string
+			mutate func(*InvestigationRequest)
+			status InvestigationStatus
+		}{
+			{"structure veto", func(r *InvestigationRequest) {
+				r.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: two.result.ResultID, ReceiptID: "kindr_needmissing0001"}}
+			}, InvestigationNoMatch},
+			{"window veto", func(r *InvestigationRequest) {
+				r.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: two.result.ResultID, ReceiptID: "winr_needmissing0001"}}
+			}, InvestigationNoMatch},
+			{"explicit window gate", func(r *InvestigationRequest) {
+				r.Consumer = ConsumerInfo{Name: "test", Version: "1.0.0", Surface: "mcp"}
+				r.TimeContext.EvidenceWindow = &contractsv1.ContextFabricRequestedEvidenceWindow{RelativeID: RelativeWindowTrailing30D}
+			}, InvestigationClarificationRequired},
+		} {
+			request := continuingNeedTurn(needTurnRequest("request_need_exit_"+strings.ReplaceAll(cell.name, " ", "_"), true), two.result.ResultID)
+			cell.mutate(&request)
+			out := h.turn(request, committingNeedResponse())
+			if out.result.Status != cell.status || len(out.calls) != 0 {
+				t.Fatalf("fixture defect: %s must end the turn before resolution with %s; got %s after %d resolutions", cell.name, cell.status, out.result.Status, len(out.calls))
+			}
+			if event := soleLedgerEvent(t, out); event.Outcome != ConfirmedNeedLedgerHit || event.SourceResultID != two.result.ResultID || len(event.AppliedMembers) != 0 {
+				t.Fatalf("%s: ledger event = %#v, want one hit from turn two applying nothing", cell.name, event)
+			}
+			if out.saved == nil || !reflect.DeepEqual(out.saved.ConfirmedNeeds, want) {
+				t.Fatalf("%s: saved ledger = %#v, want %#v carried forward", cell.name, out.saved, want)
+			}
+		}
+		decisive := h.turn(continuingNeedTurn(needTurnRequest("request_need_exit_decisive", true), two.result.ResultID), committingNeedResponse())
+		if event := soleLedgerEvent(t, decisive); !reflect.DeepEqual(event.AppliedMembers, []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectCandidate}) {
+			t.Fatalf("control: decisive ledger event = %#v, want subject_candidate applied", event)
+		}
+		if event := soleLedgerEvent(t, h.turn(needTurnRequest("request_need_exit_no_parent", true), committingNeedResponse())); event.Outcome != ConfirmedNeedLedgerMissNoReference {
+			t.Fatalf("control: no-parent ledger event = %#v, want miss_no_reference", event)
+		}
+	})
+	t.Run("window ledger", func(t *testing.T) {
+		t.Parallel()
+		h := newNeedTurnHarness(t, nil)
+		_, two, option := windowLedgerChain(t, h, "exit_window")
+		vetoRequest := continuingNeedTurn(needTurnRequest("request_need_exit_window_structure", false), two.result.ResultID)
+		vetoRequest.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: two.result.ResultID, ReceiptID: "kindr_needmissing0001"}}
+		veto := h.turn(vetoRequest, committingNeedResponse())
+		if veto.result.Status != InvestigationNoMatch || soleLedgerEvent(t, veto).Outcome != ConfirmedNeedLedgerHit {
+			t.Fatalf("fixture defect: structure veto status=%s ledger=%#v", veto.result.Status, veto.ledgers)
+		}
+		if !reflect.DeepEqual(veto.windows, []confirmedNeedLedgerWindowRecord{{ConfirmedNeedLedgerWindowApplied, two.result.ResultID, string(option.RelativeID)}}) {
+			t.Fatalf("structure veto: ledger window events = %#v, want exactly one applied", veto.windows)
+		}
+		if got := memberEntries(veto.result, contractsv1.ContextFabricStructureNeedWindow); !reflect.DeepEqual(got, []ConfirmedStructureEntry{carriedNeedEntry(contractsv1.ContextFabricStructureNeedWindow, string(option.RelativeID), two.result.ResultID)}) {
+			t.Fatalf("structure veto: window echo = %#v, want the remembered window's carried entry", got)
+		}
+		windowVetoRequest := continuingNeedTurn(needTurnRequest("request_need_exit_window_veto", false), two.result.ResultID)
+		windowVetoRequest.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: two.result.ResultID, ReceiptID: "winr_needmissing0001"}}
+		windowVeto := h.turn(windowVetoRequest, committingNeedResponse())
+		if windowVeto.result.Status != InvestigationNoMatch || soleLedgerEvent(t, windowVeto).Outcome != ConfirmedNeedLedgerHit {
+			t.Fatalf("fixture defect: window veto status=%s ledger=%#v", windowVeto.result.Status, windowVeto.ledgers)
+		}
+		if !reflect.DeepEqual(windowVeto.windows, []confirmedNeedLedgerWindowRecord{{ConfirmedNeedLedgerWindowNotApplicable, two.result.ResultID, string(option.RelativeID)}}) {
+			t.Fatalf("window veto: ledger window events = %#v, want exactly one not_applicable", windowVeto.windows)
+		}
+		if got := memberEntries(windowVeto.result, contractsv1.ContextFabricStructureNeedWindow); len(got) != 0 {
+			t.Fatalf("window veto: window echo = %#v, want none from the ledger", got)
+		}
+	})
+}
+
+// TestMergeConfirmedNeedsLedger_StatedThisTurnRetiresTheRemembered sweeps the
+// outgoing-ledger half of supersession over every member and every statement
+// route: a receipt replaces the remembered value, an explicit field retires it,
+// and nothing else changes. Control: nothing stated keeps every remembered
+// entry.
+func TestMergeConfirmedNeedsLedger_StatedThisTurnRetiresTheRemembered(t *testing.T) {
+	t.Parallel()
+	start := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	remembered := []confirmedStructureMember{
+		{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(SubjectTeam)},
+		{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: SubjectTeam, AppliedValue: "a"},
+		{Member: contractsv1.ContextFabricStructureNeedSubjectCandidate, AppliedKind: SubjectRepository, AppliedValue: "c"},
+		{Member: contractsv1.ContextFabricStructureNeedSubjectHandle, AppliedKind: SubjectPullRequest, AppliedValue: "h", PatternID: "p"},
+		{Member: contractsv1.ContextFabricStructureNeedWindow, AppliedValue: string(RelativeWindowTrailing90D), WindowStart: &start, WindowEnd: &end},
+	}
+	members := func(entries []ConfirmedNeedEntry) map[contractsv1.ContextFabricStructureNeedKind]string {
+		out := map[contractsv1.ContextFabricStructureNeedKind]string{}
+		for _, entry := range entries {
+			out[entry.Member] = entry.AppliedValue
+		}
+		return out
+	}
+	all := members(mergeConfirmedNeedsLedger(remembered, nil, validInvestigationRequest()))
+	if len(all) != 5 {
+		t.Fatalf("control: merged = %#v, want all five remembered members kept with nothing stated", all)
+	}
+	for _, r := range remembered {
+		got := members(mergeConfirmedNeedsLedger(remembered, []confirmedStructureMember{{Member: r.Member, AppliedValue: "fresh"}}, validInvestigationRequest()))
+		if len(got) != 5 || got[r.Member] != "fresh" {
+			t.Fatalf("receipt for %s: merged = %#v, want that member replaced by the receipt's value", r.Member, got)
+		}
+	}
+	explicit := map[string]struct {
+		member contractsv1.ContextFabricStructureNeedKind
+		state  func(*InvestigationRequest)
+	}{
+		"singular handle": {contractsv1.ContextFabricStructureNeedSubjectHandle, func(r *InvestigationRequest) {
+			r.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: SubjectPullRequest, PatternID: "p", Value: "9"}}
+		}},
+		"plural handles": {contractsv1.ContextFabricStructureNeedSubjectHandle, func(r *InvestigationRequest) {
+			r.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: SubjectPullRequest, PatternID: "p", Value: "9"}, {Kind: SubjectPullRequest, PatternID: "p", Value: "10"}}
+		}},
+		"singular kind": {contractsv1.ContextFabricStructureNeedExpectedKind, func(r *InvestigationRequest) {
+			r.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{SubjectRepository}
+		}},
+		"plural kinds": {contractsv1.ContextFabricStructureNeedExpectedKind, func(r *InvestigationRequest) {
+			r.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{SubjectRepository, SubjectProject}
+		}},
+		"evidence window": {contractsv1.ContextFabricStructureNeedWindow, func(r *InvestigationRequest) {
+			r.TimeContext.EvidenceWindow = validConfirmedWindow()
+		}},
+	}
+	for name, cell := range explicit {
+		request := validInvestigationRequest()
+		cell.state(&request)
+		got := members(mergeConfirmedNeedsLedger(remembered, nil, request))
+		if _, kept := got[cell.member]; kept || len(got) != 4 {
+			t.Fatalf("explicit %s: merged = %#v, want %s alone retired", name, got, cell.member)
+		}
+		if applied := appliedNeedLedgerEntries(remembered, nil, request); cell.member != contractsv1.ContextFabricStructureNeedWindow {
+			if _, ok := applied[cell.member]; ok {
+				t.Fatalf("explicit %s: %s still applies", name, cell.member)
+			}
+		}
 	}
 }

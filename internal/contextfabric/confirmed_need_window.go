@@ -17,25 +17,31 @@ import (
 // same bytes (ConfirmedNeedEntry.WindowStart/WindowEnd, the applied relative
 // id) and applies the same value -- nothing more.
 //
-// PRECEDENCE: THE CARRIER WINS. The same-conversation window carry
-// (resolveCarriedWindow, chaos4360_carry.go) already reproduces a confirmed
-// window from the parent's own EffectiveEvidenceWindow, and it runs under the
-// same condition this consumer does (this turn's own window would otherwise
-// be an inferred default). When the carrier hits, the ledger applies nothing
-// and discloses nothing, so one turn can never carry two window values or two
-// window entries. The ledger applies only where the carrier missed.
+// DECIDED WHERE THE RECEIPT IS. A fresh redemption resolves request-side, in
+// canonicalizeEvidenceWindow, before answer reuse and before Interpret. The
+// remembered window is decided at that same point and enters the same
+// request-side canonicalization (withRememberedWindow), so every consumer a
+// receipt-confirmed window reaches, the remembered one reaches identically:
+//   - application does not depend on what Interpret infers -- a question
+//     whose class has no default window still runs under it;
+//   - the reuse key every Save forms carries its frozen-bounds fragment;
+//   - an interpretation that moves the axis off current meets the same
+//     axis-conflict veto;
+//   - the same-conversation window carry and the prior/class defaults stand
+//     down, because the turn's window is no longer an inferred default.
 //
-// WHERE THE CARRIER MISSES AND THE LEDGER DOES NOT. Both read the same one
-// parent under the same epoch and same-question checks, so the population is
-// a parent that confirmed a window without persisting an effective window of
-// its own: a structure-veto terminal (structureVetoResult) echoes a window
-// redeemed on the same request as applied, saves no EffectiveEvidenceWindow,
-// and so leaves the carrier nothing to read at depth zero.
+// WHEN IT APPLIES. Exactly when a fresh winr_ redemption on this request
+// would be the turn's window: request-side canonicalization resolved no window
+// and vetoed nothing, the request is on the current axis (the only axis a
+// window is representable on), and this turn does not state the window itself
+// (statedNeedMembers: no explicit evidence_window, no confirmed window
+// receipt).
 //
 // NOT A THIRD WINDOW AUTHORITY. The value applied is a caller's own earlier
-// confirmation, identity-checked on admission; it enters where a carried
-// window enters and is disclosed the way a carried window is (Source=carried),
-// so every downstream consumer of the effective window treats it as a carry.
+// confirmation, identity-checked on admission; it is disclosed the way a
+// carried window is (Source=carried) and its canonicalization outcome is
+// carried, never receipt_confirmed: no receipt was redeemed on this request,
+// so none is claimed at Save.
 
 // ConfirmedNeedLedgerWindowDecision is the closed vocabulary for what the
 // window consumer did with an admitted remembered window, once per
@@ -43,22 +49,18 @@ import (
 type ConfirmedNeedLedgerWindowDecision string
 
 const (
-	// ConfirmedNeedLedgerWindowNotApplicable: this turn's own window is not an
-	// inferred default -- stated or confirmed on this request, or the question
-	// has no window axis at all -- so there is no silence to fill.
+	// ConfirmedNeedLedgerWindowNotApplicable: a fresh winr_ redemption would
+	// not be this turn's window either -- the turn states or confirms its own
+	// window, request-side canonicalization already resolved or vetoed one,
+	// or the request is not on the current axis.
 	ConfirmedNeedLedgerWindowNotApplicable ConfirmedNeedLedgerWindowDecision = "not_applicable"
-	// ConfirmedNeedLedgerWindowCarrierPrecedence: the same-conversation window
-	// carry hit and supplied the effective window; the ledger stood down.
-	ConfirmedNeedLedgerWindowCarrierPrecedence ConfirmedNeedLedgerWindowDecision = "carrier_precedence"
-	// ConfirmedNeedLedgerWindowApplied: the carrier missed and the remembered
-	// window became the effective window.
+	// ConfirmedNeedLedgerWindowApplied: the remembered window became this
+	// turn's request-side window.
 	ConfirmedNeedLedgerWindowApplied ConfirmedNeedLedgerWindowDecision = "applied"
 )
 
 func confirmedNeedLedgerWindowDecisions() []ConfirmedNeedLedgerWindowDecision {
-	return []ConfirmedNeedLedgerWindowDecision{
-		ConfirmedNeedLedgerWindowNotApplicable, ConfirmedNeedLedgerWindowCarrierPrecedence, ConfirmedNeedLedgerWindowApplied,
-	}
+	return []ConfirmedNeedLedgerWindowDecision{ConfirmedNeedLedgerWindowNotApplicable, ConfirmedNeedLedgerWindowApplied}
 }
 
 // ValidConfirmedNeedLedgerWindowDecision reports membership.
@@ -99,26 +101,51 @@ func (a ledgerWindowApplication) Applied() bool {
 	return a.Present && a.Decision == ConfirmedNeedLedgerWindowApplied && a.Window != nil
 }
 
-// decideLedgerWindow decides the window consumer. effective is this turn's
-// effective window BEFORE the carrier replaced it; carry is the carrier's own
-// result. Checked in precedence order: a carrier hit first, then whether this
-// turn has a silence to fill at all.
-func decideLedgerWindow(ledger confirmedNeedLedgerResult, effective *contractsv1.ContextFabricEffectiveEvidenceWindow, carry windowCarryResult) ledgerWindowApplication {
+// decideLedgerWindow decides the window consumer, from the admitted ledger,
+// the request and its request-side window canonicalization -- the inputs a
+// fresh winr_ redemption is decided from, and nothing Interpret produces.
+func decideLedgerWindow(ledger confirmedNeedLedgerResult, request InvestigationRequest, canon requestWindowCanonicalization) ledgerWindowApplication {
 	entry, ok := rememberedWindowEntry(ledger.Entries)
 	if !ok {
 		return ledgerWindowApplication{}
 	}
-	app := ledgerWindowApplication{Present: true, AppliedValue: entry.AppliedValue, SourceResultID: ledger.SourceResultID}
-	switch {
-	case carry.Outcome == WindowCarryHit:
-		app.Decision = ConfirmedNeedLedgerWindowCarrierPrecedence
-	case effective == nil || effective.Provenance != WindowInferredDefault:
-		app.Decision = ConfirmedNeedLedgerWindowNotApplicable
-	default:
+	app := ledgerWindowApplication{Present: true, AppliedValue: entry.AppliedValue, SourceResultID: ledger.SourceResultID, Decision: ConfirmedNeedLedgerWindowNotApplicable}
+	if rememberedWindowApplies(request, canon) {
 		app.Decision = ConfirmedNeedLedgerWindowApplied
 		app.Window = rememberedEffectiveWindow(entry)
 	}
 	return app
+}
+
+// rememberedWindowApplies reports whether a fresh winr_ redemption on this
+// request would be the turn's window, so the remembered one is: this turn
+// states no window of its own, request-side canonicalization resolved and
+// vetoed none, and the request is on the current axis.
+func rememberedWindowApplies(request InvestigationRequest, canon requestWindowCanonicalization) bool {
+	if statedNeedMembers(request, mergeConfirmedMembers(nil, canon.ConfirmedMember))[contractsv1.ContextFabricStructureNeedWindow] {
+		return false
+	}
+	if canon.Veto != windowVetoNone {
+		return false
+	}
+	if canon.Effective != nil {
+		return false
+	}
+	return request.TimeContext.Axis == TemporalCurrent
+}
+
+// withRememberedWindow is canon with an applied remembered window as its
+// request-side window: the same Effective and the same frozen-bounds reuse-key
+// fragment resolveWindowReceipts gives a redeemed option, and no
+// ConfirmedMember, because no receipt was redeemed on this request.
+func (canon requestWindowCanonicalization) withRememberedWindow(app ledgerWindowApplication) requestWindowCanonicalization {
+	if applied := app.Applied(); !applied {
+		return canon
+	}
+	canon.Effective = app.Window
+	canon.KeyComponent = windowKeyComponent(*app.Window, windowKeyFrozen)
+	canon.KeyEncoding = windowKeyFrozen
+	return canon
 }
 
 // rememberedWindowEntry returns the admitted ledger's window entry, when it
@@ -148,9 +175,7 @@ func rememberedEffectiveWindow(entry confirmedStructureMember) *contractsv1.Cont
 }
 
 // composeLedgerWindowEntry is the wire disclosure for an applied remembered
-// window -- nil for every other decision, so a carrier-precedence turn keeps
-// exactly the one window entry composeCarriedWindowEntry already gives it.
-// Source=carried, the same member/source shape a carried window has: the
+// window -- nil for every other decision. Source=carried, the same member/source shape a carried window has: the
 // existing provenance vocabulary has no member that distinguishes a ledger
 // carry from a chain carry, and none is added.
 func composeLedgerWindowEntry(app ledgerWindowApplication) *contractsv1.ContextFabricConfirmedStructureEntry {
@@ -178,7 +203,8 @@ func observableLedgerWindowValue(appliedValue string) string {
 
 // recordConfirmedNeedLedgerWindow reports the window consumer's decision --
 // only when the admitted ledger held a window entry, so the line's population
-// is exactly the turns this consumer decided something for.
+// is exactly the turns this consumer decided something for. Called where the
+// decision is made, above every exit that can end the turn.
 func (e *Engine) recordConfirmedNeedLedgerWindow(ctx context.Context, principal storage.Principal, app ledgerWindowApplication) {
 	if e.telemetry == nil || !app.Present {
 		return

@@ -1434,7 +1434,24 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// carry axis in this package already pays for at this exact point.
 	confirmedNeedLedger := e.resolveConfirmedNeedLedger(carryCtx, principal, request, binding)
 	remembered := confirmedNeedLedger.Entries
+	// CHAOS-5734: the ledger line is published at the EXIT, declared here,
+	// above every return that follows the admission, so no gate below --
+	// the two window gates and the structure veto included -- can end the
+	// turn with an admitted ledger nobody reported. appliedNeeds stays empty
+	// on an exit that ends the turn before any consumer ran, which is what
+	// the line then says.
+	var appliedNeeds map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember
+	defer func() { e.recordConfirmedNeedLedger(ctx, principal, confirmedNeedLedger, appliedNeeds) }()
 	windowCanon := e.canonicalizeEvidenceWindow(carryCtx, principal, request)
+	// CHAOS-5734: the confirmed-need ledger's window consumer, decided HERE,
+	// where a fresh winr_ redemption is decided, and entering the SAME
+	// request-side canonicalization -- so the reuse key, the axis-conflict
+	// veto, the window carry and every default treat a remembered window
+	// exactly as they treat the receipt it stands in for
+	// (confirmed_need_window.go).
+	ledgerWindow := decideLedgerWindow(confirmedNeedLedger, request, windowCanon)
+	windowCanon = windowCanon.withRememberedWindow(ledgerWindow)
+	e.recordConfirmedNeedLedgerWindow(ctx, principal, ledgerWindow)
 	if windowCanon.Veto != windowVetoNone {
 		// D-e: a window veto is CHAOS-5271's mechanism, not this one.
 		continuation = continuation.withReason(ContinuationReasonWindowVeto)
@@ -1522,6 +1539,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		if windowCanon.ConfirmedMember != nil {
 			echoEntries = append(echoEntries, composeConfirmedStructure([]confirmedStructureMember{*windowCanon.ConfirmedMember}, nil)...)
 		}
+		// CHAOS-5734: the same echo for a remembered window applied at
+		// request-side canonicalization above -- the receipt it stands in for
+		// is echoed here, so it is.
+		echoEntries = appendCarriedStructureEntry(echoEntries, composeLedgerWindowEntry(ledgerWindow))
 		// CHAOS-3478: nil -- canonicalizeStructure fires before
 		// resolvePriorSubjectHints (this call site's own ordering), the
 		// same "nothing attempted yet" convention every other
@@ -1544,15 +1565,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// window included -- a redeemed winr_ lands in windowCanon.ConfirmedMember,
 	// never in structureCanon.Confirmed.
 	confirmedThisTurn := mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember)
-	appliedNeeds := appliedNeedLedgerEntries(remembered, confirmedThisTurn, request)
-	e.recordConfirmedNeedLedger(ctx, principal, confirmedNeedLedger, appliedNeeds)
+	appliedNeeds = appliedNeedLedgerEntries(remembered, confirmedThisTurn, request)
 	// The OUTGOING ledger for whatever result this turn saves: this turn's
 	// own confirmations over whatever remembered still admits. Computed once
 	// so every captureAcceptedReading call site from here on agrees; the
 	// three pre-interpretation exits above compute their own version through
 	// captureConfirmedNeedLedgerOnly instead, since structureCanon.Confirmed
 	// does not exist yet at two of them.
-	confirmedNeedsForCapture := mergeConfirmedNeedsLedger(remembered, confirmedThisTurn)
+	confirmedNeedsForCapture := mergeConfirmedNeedsLedger(remembered, confirmedThisTurn, request)
 
 	// CHAOS-3782 answer reuse. This MUST run before Interpret -- that
 	// ordering is the entire mechanism behind AC-3782-1's zero-model-call
@@ -2210,7 +2230,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// a confirmed window receipt whose interpretation moves the axis to
 		// historical lands here -- and the result is SAVED, so a plan
 		// omitted here is missing from a persisted answer permanently.
-		veto, vetoErr := e.windowVetoResult(ctx, principal, request, windowVetoAxisConflict, &interpretation, nil, binding, axisConflictDispositions, structureCanon.Explicit, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts)), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, axisConflictConfirmedNeeds(remembered)))
+		veto, vetoErr := e.windowVetoResult(ctx, principal, request, windowVetoAxisConflict, &interpretation, nil, binding, axisConflictDispositions, structureCanon.Explicit, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts)), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, axisConflictConfirmedNeeds(remembered, request)))
 		return veto, vetoErr
 	}
 	// CHAOS-3977 P5 (design brief §3.4): ONE prior consult per Investigate
@@ -2262,18 +2282,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			effectiveWindow = windowCarry.Window
 		}
 	}
-	// CHAOS-5734: the confirmed-need ledger's window consumer, decided HERE,
-	// right after the window carry, because the carrier wins: a remembered
-	// window applies only when the carrier missed and this turn's own window
-	// would otherwise be an inferred default (confirmed_need_window.go). One
-	// decision, read by the effective window, the disclosure and the line.
-	ledgerWindow := decideLedgerWindow(confirmedNeedLedger, effectiveWindow, windowCarry)
-	if ledgerWindow.Applied() {
-		effectiveWindow = ledgerWindow.Window
-	}
-	e.recordConfirmedNeedLedgerWindow(ctx, principal, ledgerWindow)
 	// windowCarried is the ONE carried-vs-inferred flag every window
-	// canonicalization outcome below reads.
+	// canonicalization outcome and reusable Save key below reads: the window
+	// carry hit, or a remembered window applied request-side above.
 	windowCarried := windowCarry.Outcome == WindowCarryHit || ledgerWindow.Applied()
 	// Same-conversation expected_kind carry (structure_axis_carry.go), the
 	// structure-axis twin of the window carry above. Attempted ONLY when
@@ -2325,7 +2336,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// disclosure -- never silent, the same discipline the other two hold.
 		composeCarriedNeedEntry(contractsv1.ContextFabricStructureNeedSubjectAnchor, appliedNeeds, confirmedNeedLedger.SourceResultID),
 		// CHAOS-5734: the same disclosure for a remembered candidate or handle,
-		// and for a remembered window the carrier did not already supply.
+		// and for a remembered window applied request-side.
 		composeCarriedNeedEntry(contractsv1.ContextFabricStructureNeedSubjectCandidate, appliedNeeds, confirmedNeedLedger.SourceResultID),
 		composeCarriedNeedEntry(contractsv1.ContextFabricStructureNeedSubjectHandle, appliedNeeds, confirmedNeedLedger.SourceResultID),
 		composeLedgerWindowEntry(ledgerWindow),
@@ -3310,7 +3321,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// know the former, so keying Save on the latter would reopen the
 		// same asymmetry from the other side.
 		epochDeltaSample := e.sampleBindingEpochDelta(ctx, principal, binding)
-		if err := e.saveResult(ctx, principal, BudgetAssertDecisive, result, reuseWatermarkSnapshot, reuseEpoch, composeTimeAxisKey(TimeAxisKeyFor(clampedRequestTime), windowCanon.KeyComponent), binding.Epoch, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture)); err != nil {
+		if err := e.saveResult(ctx, principal, BudgetAssertDecisive, result, reuseWatermarkSnapshot, reuseEpoch, composeTimeAxisKey(TimeAxisKeyFor(clampedRequestTime), windowSaveKeyComponent(windowCanon, effectiveWindow, windowCarried)), binding.Epoch, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture)); err != nil {
 			// CHAOS-3927 P4 (design brief §2.1): a decisive result carrying
 			// confirmed structure can still lose the atomic (org,
 			// prior_result_id, member) supersession claim to a concurrent

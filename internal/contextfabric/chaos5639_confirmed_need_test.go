@@ -497,7 +497,7 @@ func TestMergeConfirmedNeedsLedger_ThisTurnWinsOverRemembered(t *testing.T) {
 	confirmedThisTurn := []confirmedStructureMember{
 		{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectProject)},
 	}
-	got := mergeConfirmedNeedsLedger(remembered, confirmedThisTurn)
+	got := mergeConfirmedNeedsLedger(remembered, confirmedThisTurn, validInvestigationRequest())
 	want := []ConfirmedNeedEntry{
 		{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectProject)},
 		{Member: contractsv1.ContextFabricStructureNeedSubjectHandle, AppliedKind: contractsv1.ContextFabricSubjectPullRequest, AppliedValue: "42"},
@@ -517,7 +517,7 @@ func TestMergeConfirmedNeedsLedger_OrderIsTheVocabularysOwn(t *testing.T) {
 		{Member: contractsv1.ContextFabricStructureNeedSubjectCandidate, AppliedValue: "c"},
 		{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: "k"},
 	}
-	got := mergeConfirmedNeedsLedger(reverseOrder, nil)
+	got := mergeConfirmedNeedsLedger(reverseOrder, nil, validInvestigationRequest())
 	if len(got) != 2 || got[0].Member != contractsv1.ContextFabricStructureNeedExpectedKind || got[1].Member != contractsv1.ContextFabricStructureNeedSubjectCandidate {
 		t.Fatalf("mergeConfirmedNeedsLedger() = %#v, want expected_kind before subject_candidate (the vocabulary's own order)", got)
 	}

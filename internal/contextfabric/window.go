@@ -837,13 +837,20 @@ func composeEffectiveWindow(interpretation InterpretedQuestion, requestWindow *c
 // this parameter a carried window would fall through to the SAME
 // "effective != nil" branch an ordinary class-table/binder-default guess
 // does and misreport as inferred_default -- exactly the outcome CHAOS-4040
-// exists to distinguish this window FROM.
+// exists to distinguish this window FROM. CHAOS-5734: carried is also true for
+// a remembered confirmed-need window, which DOES sit in canon.Effective (it is
+// decided request-side, where the receipt it stands in for is), so carried is
+// checked before canon.Effective's provenance -- otherwise it would misreport
+// as receipt_confirmed on a request that redeemed no receipt.
 func windowCanonicalizationOutcome(canon requestWindowCanonicalization, effective *contractsv1.ContextFabricEffectiveEvidenceWindow, carried bool) WindowCanonicalizationOutcome {
 	switch canon.Veto {
 	case windowVetoConfirmationUnresolved:
 		return WindowCanonicalizationVetoUnresolved
 	case windowVetoConfirmationConflict:
 		return WindowCanonicalizationVetoConflict
+	}
+	if carried {
+		return WindowCanonicalizationCarried
 	}
 	if canon.Effective != nil {
 		switch canon.Effective.Provenance {
@@ -854,9 +861,6 @@ func windowCanonicalizationOutcome(canon requestWindowCanonicalization, effectiv
 		default:
 			return WindowCanonicalizationInferredDefault
 		}
-	}
-	if carried {
-		return WindowCanonicalizationCarried
 	}
 	if effective != nil {
 		return WindowCanonicalizationInferredDefault
@@ -949,6 +953,24 @@ func windowKeyComponent(effective contractsv1.ContextFabricEffectiveEvidenceWind
 
 func formatUnixNano(value time.Time) string {
 	return strconv.FormatInt(value.UTC().UnixNano(), 10)
+}
+
+// windowSaveKeyComponent (CHAOS-5734) is the window fragment a reusable Save
+// keys on, derived from the turn's EFFECTIVE window whatever its source: the
+// request-side fragment when canonicalization resolved one (stated, receipt
+// confirmed, or a remembered confirmed-need window), else the frozen-bounds
+// fragment of a window the same-conversation carry supplied, else none (an
+// inferred default contributes no fragment; WindowInferenceVersion guards it).
+// A carried window keys on its frozen bounds for the reason a redeemed option
+// does: it is a commitment to specific bounds, never re-derivable later.
+func windowSaveKeyComponent(canon requestWindowCanonicalization, effective *contractsv1.ContextFabricEffectiveEvidenceWindow, carried bool) string {
+	if canon.KeyComponent != "" {
+		return canon.KeyComponent
+	}
+	if carried && effective != nil {
+		return windowKeyComponent(*effective, windowKeyFrozen)
+	}
+	return ""
 }
 
 // composeTimeAxisKey appends a REQUEST-side window's reuse-key fragment

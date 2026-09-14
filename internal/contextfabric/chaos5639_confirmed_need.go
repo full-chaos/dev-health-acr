@@ -51,9 +51,10 @@ package contextfabric
 //     (composeCarriedNeedEntry, mergeConfirmedNeedsLedger,
 //     kindCarryComparators). It is not applied as the resolved subject,
 //     because a fresh receipt is not.
-//   - window applies as the effective evidence window, where the
-//     same-conversation window carry did not already supply it
-//     (confirmed_need_window.go).
+//   - window applies as the effective evidence window, decided where a fresh
+//     winr_ redemption is decided -- request-side, before answer reuse -- so
+//     it keys the saved result, meets the axis-conflict veto and stands the
+//     window carry down exactly as the receipt does (confirmed_need_window.go).
 //
 // ADMISSION: every member passes exactly the checks a fresh carry or receipt
 // already passes, never a ledger-specific substitute. The ledger as a whole is
@@ -70,9 +71,13 @@ package contextfabric
 // have no reverify, exactly as their fresh redemptions have none.
 //
 // SUPERSESSION: a same-member receipt this turn, or a same-member value the
-// caller states explicitly this turn, always wins over a remembered one
-// (appliedNeedLedgerEntries); a receipt whose save-time claim was refused is
-// never persisted into the outgoing ledger (withoutSupersededConfirmedNeeds).
+// caller states explicitly this turn, always wins over a remembered one --
+// in what applies to this turn (appliedNeedLedgerEntries, decideLedgerWindow)
+// AND in the outgoing ledger every exit saves (mergeConfirmedNeedsLedger).
+// Both read one authority, statedNeedMembers, so a remembered value the caller
+// just replaced can never coexist with the replacement or come back on a later
+// turn. A receipt whose save-time claim was refused is never persisted into
+// the outgoing ledger (withoutSupersededConfirmedNeeds).
 //
 // A remembered expected_kind is checked FIRST inside Engine.resolveCarriedKind
 // itself -- the kind axis's own gated producer -- so it flows through the
@@ -359,24 +364,16 @@ func (e *Engine) anchorReverifierWired(schemaVersion string) bool {
 	}
 }
 
-// appliedNeedLedgerEntries is the SINGLE authority for "does this remembered
-// entry apply this turn" for the four structure members -- every consumer
-// (Engine.resolveCarriedKind, confirmedAnchorSelection, kindCarryComparators,
-// composeCarriedNeedEntry, telemetry) reads this map rather than re-deriving
-// the check, so none of them can disagree about what applied: a member
-// excluded here is excluded everywhere, including telemetry. window has its
-// own consumer (decideLedgerWindow), because whether it applies depends on
-// the window carry, which runs later.
-//
-// An entry applies when it names expected_kind, subject_anchor,
-// subject_candidate or subject_handle; it carries a non-empty value; and this
-// turn did not already state that member -- by receipt (confirmedThisTurn)
-// or by the caller's own explicit field (request.ExpectedKinds,
-// request.SubjectHandles, singular or plural). What the caller says this turn
-// always wins and is never argued with; an explicit member is also echoed on
-// the wire, and a second entry for the same member is one the v1 result
-// validator refuses.
-func appliedNeedLedgerEntries(remembered []confirmedStructureMember, confirmedThisTurn []confirmedStructureMember, request InvestigationRequest) map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember {
+// statedNeedMembers is the SINGLE authority for "this turn states this member
+// itself": by a receipt this request confirmed (confirmedThisTurn, window
+// included), or by the caller's own explicit field -- request.ExpectedKinds,
+// request.SubjectHandles (singular or plural) or
+// request.TimeContext.EvidenceWindow. What the caller says this turn always
+// wins over a remembered value and is never argued with, so every reader of
+// the remembered ledger -- what applies (appliedNeedLedgerEntries,
+// decideLedgerWindow) and what is saved forward (mergeConfirmedNeedsLedger) --
+// asks this one function.
+func statedNeedMembers(request InvestigationRequest, confirmedThisTurn []confirmedStructureMember) map[contractsv1.ContextFabricStructureNeedKind]bool {
 	stated := map[contractsv1.ContextFabricStructureNeedKind]bool{}
 	for _, c := range confirmedThisTurn {
 		stated[c.Member] = true
@@ -387,6 +384,28 @@ func appliedNeedLedgerEntries(remembered []confirmedStructureMember, confirmedTh
 	if len(request.SubjectHandles) > 0 {
 		stated[contractsv1.ContextFabricStructureNeedSubjectHandle] = true
 	}
+	if request.TimeContext.EvidenceWindow != nil {
+		stated[contractsv1.ContextFabricStructureNeedWindow] = true
+	}
+	return stated
+}
+
+// appliedNeedLedgerEntries is the SINGLE authority for "does this remembered
+// entry apply this turn" for the four structure members -- every consumer
+// (Engine.resolveCarriedKind, confirmedAnchorSelection, kindCarryComparators,
+// composeCarriedNeedEntry, telemetry) reads this map rather than re-deriving
+// the check, so none of them can disagree about what applied: a member
+// excluded here is excluded everywhere, including telemetry. window has its
+// own consumer (decideLedgerWindow), decided where a fresh winr_ redemption
+// is.
+//
+// An entry applies when it names expected_kind, subject_anchor,
+// subject_candidate or subject_handle; it carries a non-empty value; and this
+// turn does not state that member itself (statedNeedMembers). An explicit
+// member is also echoed on the wire, and a second entry for the same member
+// is one the v1 result validator refuses.
+func appliedNeedLedgerEntries(remembered []confirmedStructureMember, confirmedThisTurn []confirmedStructureMember, request InvestigationRequest) map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember {
+	stated := statedNeedMembers(request, confirmedThisTurn)
 	out := map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember{}
 	for _, r := range remembered {
 		switch r.Member {
@@ -454,15 +473,22 @@ func confirmedNeedEntryOf(member confirmedStructureMember) ConfirmedNeedEntry {
 
 // mergeConfirmedNeedsLedger builds the OUTGOING per-need ledger for a
 // result's own semantic_state: this turn's own receipt-confirmed members
-// (window included) win over an inherited entry for the SAME member; every
-// other inherited member (the ledger this turn's own admission admitted)
-// carries forward unchanged. Iterated in the StructureNeedKind vocabulary's
-// own fixed order, never map order, so the canonical encoding
-// (EncodeSemanticState) is deterministic across two calls that resolve to the
-// same set.
-func mergeConfirmedNeedsLedger(remembered []confirmedStructureMember, confirmedThisTurn []confirmedStructureMember) []ConfirmedNeedEntry {
+// (window included) win over an inherited entry for the SAME member; an
+// inherited member this turn states explicitly is RETIRED -- an explicit
+// value is the caller speaking now, it is not a confirmation the ledger
+// keeps, and the remembered value it replaced must not come back on a later
+// turn that names this result as parent (statedNeedMembers); every other
+// inherited member (the ledger this turn's own admission admitted) carries
+// forward unchanged. Iterated in the StructureNeedKind vocabulary's own fixed
+// order, never map order, so the canonical encoding (EncodeSemanticState) is
+// deterministic across two calls that resolve to the same set.
+func mergeConfirmedNeedsLedger(remembered []confirmedStructureMember, confirmedThisTurn []confirmedStructureMember, request InvestigationRequest) []ConfirmedNeedEntry {
+	stated := statedNeedMembers(request, confirmedThisTurn)
 	byMember := map[contractsv1.ContextFabricStructureNeedKind]ConfirmedNeedEntry{}
 	for _, r := range remembered {
+		if stated[r.Member] {
+			continue
+		}
 		byMember[r.Member] = confirmedNeedEntryOf(r)
 	}
 	for _, c := range confirmedThisTurn {
@@ -481,9 +507,10 @@ func mergeConfirmedNeedsLedger(remembered []confirmedStructureMember, confirmedT
 // window veto. That terminal echoes none of this turn's receipt
 // confirmations (windowVetoResult receives only the explicit members), so
 // Save claims none of them and none is a confirmation this turn won: only the
-// admitted remembered ledger carries forward.
-func axisConflictConfirmedNeeds(remembered []confirmedStructureMember) []ConfirmedNeedEntry {
-	return mergeConfirmedNeedsLedger(remembered, nil)
+// admitted remembered ledger carries forward, less what this turn states
+// explicitly.
+func axisConflictConfirmedNeeds(remembered []confirmedStructureMember, request InvestigationRequest) []ConfirmedNeedEntry {
+	return mergeConfirmedNeedsLedger(remembered, nil, request)
 }
 
 // withoutSupersededConfirmedNeeds drops every member the atomic (org,
@@ -573,7 +600,7 @@ func (e *Engine) captureConfirmedNeedLedgerOnly(request InvestigationRequest, re
 		Outcome:         QuestionFamilyOutcome{Family: QuestionFamilyUnclassified, Source: QuestionFamilySourceNone},
 		FamilyVersion:   QuestionFamilyTableVersion,
 		RequestIdentity: SemanticRequestIdentityOf(request, ""),
-		ConfirmedNeeds:  mergeConfirmedNeedsLedger(remembered, confirmedThisTurn),
+		ConfirmedNeeds:  mergeConfirmedNeedsLedger(remembered, confirmedThisTurn, request),
 	})
 }
 
@@ -691,7 +718,10 @@ func confirmedNeedLedgerEventOf(ledger confirmedNeedLedgerResult, applied map[co
 }
 
 // recordConfirmedNeedLedger reports the gate decision, once per Investigate
-// call: the admission outcome, the parent result id it consulted (the SAME
+// call and on every exit (Investigate defers it above its first return, so an
+// early window or structure gate never hides an admitted ledger; applied is
+// empty on an exit that ended the turn before any consumer ran): the
+// admission outcome, the parent result id it consulted (the SAME
 // correlation handle window_continuation_decision already discloses for its
 // own referenced result), each member that applied with its closed kind and
 // hashed value, and each member dropped at reverify with its reason -- "a
