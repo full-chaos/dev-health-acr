@@ -1050,12 +1050,16 @@ func MemberQualifierPresent(value MemberQualifier) bool {
 }
 
 // SanitizeMemberQualifier closes a raw qualifier against the recognized
-// vocabulary. Unknown non-empty values become an explicit carrier marker;
-// they are never returned as the empty unqualified value.
+// vocabulary. Unknown non-empty values, including values that trim to empty,
+// become an explicit carrier marker; they are never returned as the empty
+// unqualified value.
 func SanitizeMemberQualifier(raw string) (qualifier MemberQualifier, unrecognized bool) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
-		return "", false
+		if raw == "" {
+			return "", false
+		}
+		return MemberQualifierUnrecognized, true
 	}
 	candidate := MemberQualifier(trimmed)
 	for _, member := range memberQualifiers {

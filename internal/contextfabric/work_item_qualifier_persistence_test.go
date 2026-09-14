@@ -149,14 +149,23 @@ func TestMemberQualifierCarrierSurvivesFrameValidationAndPersistence(t *testing.
 	t.Parallel()
 	for _, testCase := range []struct {
 		name      string
+		raw       string
 		qualifier MemberQualifier
 	}{
 		{name: "unqualified", qualifier: ""},
 		{name: "status", qualifier: MemberQualifierStatus},
 		{name: "assignee", qualifier: MemberQualifierAssignee},
 		{name: "unknown", qualifier: MemberQualifierUnrecognized},
+		{name: "ascii-whitespace", raw: "   ", qualifier: MemberQualifierUnrecognized},
+		{name: "unicode-whitespace", raw: "\u2003\u2003", qualifier: MemberQualifierUnrecognized},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
+			if testCase.raw != "" {
+				got, unrecognized := SanitizeMemberQualifier(testCase.raw)
+				if got != testCase.qualifier || !unrecognized {
+					t.Fatalf("SanitizeMemberQualifier(%q) = %q/%v, want %q/true", testCase.raw, got, unrecognized, testCase.qualifier)
+				}
+			}
 			frame := QuestionFrame{
 				Goals: []InvestigationGoal{GoalAssessState},
 				SubjectExpression: SubjectExpression{

@@ -143,6 +143,65 @@ func TestParseInterpretationOutputSignalsKeepsUnknownScopedOperandQualifierPrese
 	}
 }
 
+func TestParseInterpretationOutputSignalsKeepsSanitizedWhitespaceQualifierPresent(t *testing.T) {
+	t.Parallel()
+	for _, form := range []string{"outer", "scoped-operand"} {
+		for _, testCase := range []struct {
+			name string
+			raw  string
+		}{
+			{name: "ascii-whitespace", raw: "   "},
+			{name: "unicode-whitespace", raw: "\u2003\u2003"},
+		} {
+			testCase := testCase
+			t.Run(form+"/"+testCase.name, func(t *testing.T) {
+				var rawOutput []byte
+				if form == "outer" {
+					rawOutput = rawInterpretationOutputWithMemberQualifier(t, testCase.raw)
+				} else {
+					output := validInterpretationOutput()
+					output.QuestionFrame = &questionFrameOutput{
+						Goals: []string{"compare"},
+						SubjectExpression: &subjectExpressionOutput{
+							Kind: "explicit_set",
+							Operands: []subjectOperandOutput{
+								{Kind: "named_subject", Terms: []string{"Project Alpha"}},
+								{
+									Kind:            "children_of_scope",
+									AnchorTerms:     []string{"Project Alpha"},
+									MemberKind:      "work_item",
+									MemberQualifier: testCase.raw,
+								},
+							},
+						},
+						Temporal: "current",
+					}
+					var err error
+					rawOutput, err = json.Marshal(output)
+					if err != nil {
+						t.Fatalf("json.Marshal() error = %v", err)
+					}
+				}
+
+				_, capture, err := ParseInterpretationOutputSignals(rawOutput, contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent})
+				if err != nil {
+					t.Fatalf("ParseInterpretationOutputSignals() error = %v", err)
+				}
+				var value contextfabric.MemberQualifier
+				var present bool
+				if form == "outer" {
+					value, present = capture.Frame.Frame.SubjectExpression.MemberQualifier()
+				} else {
+					value, present = capture.Frame.Frame.SubjectExpression.Explicit.Operands[1].MemberQualifier()
+				}
+				if value != contextfabric.MemberQualifierUnrecognized || !present || !capture.Frame.MemberQualifierUnrecognized {
+					t.Fatalf("raw %q decoded as %q/present=%t/unknown=%t, want unrecognized/true/true", testCase.raw, value, present, capture.Frame.MemberQualifierUnrecognized)
+				}
+			})
+		}
+	}
+}
+
 func TestInterpretQuestionPreservesUnknownMemberQualifierOnReceipt(t *testing.T) {
 	t.Parallel()
 	output := validInterpretationOutput()
