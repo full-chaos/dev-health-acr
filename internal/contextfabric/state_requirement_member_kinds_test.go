@@ -1,20 +1,8 @@
 package contextfabric_test
 
-// A pin of the CURRENT state, not of a rule: the `state` requirement over
-// pull_request and incident MEMBERS, derived against the live registry.
-//
-// The invariant this is named for is that a state requirement over a member
-// kind is served by the producer that reads that kind's own state. Today it is
-// not: the pull_request and incident producers declare only
-// `principal_drivers` for their own subject kinds, so the derivation reports
-// `state/member/pull_request` and `state/member/incident` as
-// `no_declaring_producer` while those producers read the members' state. This
-// test asserts that current state exactly, so the change that declares the
-// obligation turns it red at the right line and inverts it in the same commit.
-//
-// It lives in the external test package for the reason the requirement trace
-// does: devhealthfacts imports contextfabric. liveCapabilityList reads
-// Capability() declarations only and starts nothing.
+// State requirements over pull-request and incident members are served by
+// the producers that read each member kind's canonical state/status.
+// The external package reads actual provider Capability declarations.
 
 import (
 	"testing"
@@ -22,7 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
 
-func TestStateOverPullRequestAndIncidentMembersIsServedByTheirOwnProducer_CurrentStateIsNoDeclaringProducer(t *testing.T) {
+func TestStateOverPullRequestAndIncidentMembersIsServedByTheirOwnProducer(t *testing.T) {
 	capabilities := liveCapabilityList(t)
 	seed := contextfabric.GenerateObligationSeed(capabilities)
 
@@ -36,8 +24,7 @@ func TestStateOverPullRequestAndIncidentMembersIsServedByTheirOwnProducer_Curren
 		member := member
 		t.Run(string(member.kind), func(t *testing.T) {
 			// The producer that reads this member kind exists and supports it.
-			// Without this, `no_declaring_producer` below would be the honest
-			// reason rather than the defect the pin documents.
+			// The declaration must come from that producer, not a parent proxy.
 			supported := false
 			for _, capability := range capabilities {
 				if capability.Kind != member.producer {
@@ -74,11 +61,8 @@ func TestStateOverPullRequestAndIncidentMembersIsServedByTheirOwnProducer_Curren
 			if state == nil {
 				t.Fatalf("the frame derives no state/member/%s requirement; the fixture does not reach the cell", member.kind)
 			}
-			// CURRENT STATE. When the producer declares `state` for its own kind,
-			// this reads served and the pin is inverted in that change.
-			if state.Unavailable != contextfabric.RequirementReasonNoDeclaringProducer {
-				t.Fatalf("state/member/%s derives unavailable=%q (served=%v); the pinned current state is %q -- if the %q producer now declares state, invert this pin in the same change",
-					member.kind, state.Unavailable, state.Served(), contextfabric.RequirementReasonNoDeclaringProducer, member.producer)
+			if !state.Served() || state.Unavailable != "" || len(state.FactKinds) != 1 || state.FactKinds[0] != member.producer {
+				t.Fatalf("state/member/%s derives %+v; want its own canonical %s producer", member.kind, state, member.producer)
 			}
 		})
 	}

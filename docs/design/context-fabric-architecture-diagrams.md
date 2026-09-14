@@ -565,11 +565,11 @@ source for the SAME kind).
 | actual_completion | `work_items` | work_item |
 | blockers | `work_item_dependencies` | work_item |
 | required_children | `work_item_dependencies` | work_item |
-| pull_requests | `git_pull_requests` | pull_request |
+| pull_requests | `git_pull_requests` (`state`: member state and drivers) | pull_request |
 | reviews | `git_pull_request_reviews` | pull_request_review |
 | continuous_integration | `ci_pipeline_runs` (per-run status); **+`cicd_metrics_daily`** (repository aggregate, CHAOS-4347) | ci_pipeline_run, **repository** |
 | deployments | `deployments` (per-deployment status/environment); **+`deploy_metrics_daily`** (repository aggregate, CHAOS-4347) | deployment, **repository** |
-| incidents | `operational_incidents` | incident |
+| incidents | `operational_incidents` (`status`: member state and drivers) | incident |
 | metrics | `repo_metrics_daily` — **own raw query (not `readers.ReadRepositoryMetrics`, which collapses to one row), `daily_metrics` per-day Rows table over the caller's own evidence window (explicit Start/End verbatim, else the platform's 90-day default policy width — CHAOS-4418)**; **+`team_metrics_daily`** (team, direct, still one-row scalar); **+`team_project_ownership` ⋈ `team_metrics_daily`** (project, summed-counts rollup, CHAOS-4347) | repository, **team, project** |
 | health | `compounding_risk_daily` — scalar `severity`/`compounding_risk` **+ `risk_rules` Rows table, one row per formula component (churn/complexity/ownership/review norm × weight, CHAOS-4418)**, repository and team; **+`team_project_ownership` ⋈ `compounding_risk_daily` (team layer) and +`team_project_ownership` ⋈ `team_repo_ownership` ⋈ `compounding_risk_daily` (repo layer, one hop further), both landing in one `risk_breakdown` Rows table (project, CHAOS-4363)** | repository, team, **project** |
 | workload | `capacity_forecasts`; **+`team_project_ownership` ⋈ `capacity_forecasts`, per-team `team_breakdown` Rows, never summed/averaged (project, CHAOS-4363)** | team, **project** |
@@ -2194,6 +2194,7 @@ flowchart TB
 
     I --> EX{"row.StepExecution<br/>does the SERVER run it?"}
     EX -- server_executed --> XR["RankCohort<br/>between the fact read and Synthesize"]
+    XR --> RO["finalizeResult: join published ranking requirement<br/>to served member qualification and population<br/>append one assembled_result outcome before completeness"]
     EX -- server_executed --> XC["ComputeMembershipCardinality<br/>in finalizeResult, over the SERVED member set"]
     XC --> OUT["appended as the count requirement's<br/>assembled_result outcome row:<br/>served / declared + the outcome token"]
     OUT --> TEL["RecordMembershipCardinality<br/>reads the SERVED row, never recounts"]
@@ -2203,6 +2204,18 @@ flowchart TB
     RR --> T["RequirementDerivationSummary<br/>+ requirement_computed_input_kind_* counts<br/>+ ComputedStepExecutions<br/>(histograms over the closed vocabularies,<br/>zeroes included)"]
     CR --> T
 ```
+
+Ranking outcomes use the server-computed member qualification. All members must
+have qualified scores over a complete population for `satisfied`. Provisional
+scores report reduced evidence depth; no scored members report `unavailable`.
+An incomplete or narrowed population reports scope loss. Missing signals remain
+on the members. The fallback evidence cause is marked unobserved when no provider
+reported a cause. Empty or unresolved sets have no ranking to serve. Finalization
+appends once per published requirement; fresh retries evaluate the new document.
+The canonical pull-request state and incident status each contribute one served
+state reading. The corroborated state requirement remains `narrowed/depth` at
+1 of 2 readings. Neither fact satisfies the separate required health obligation,
+which retains its own unavailable outcome when unsupported.
 
 **Why the class exists, rather than just a kinds list.** `membership_cardinality`
 counts the resolved member set and reads no fact. Spelling that as an empty

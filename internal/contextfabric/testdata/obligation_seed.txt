@@ -43,7 +43,9 @@ remaining_work
   work_item            blockers required_children
 
 state
+  incident             incidents
   project              flow health investment landscape readiness workload
+  pull_request         pull_requests
   repository           health identity metrics
   team                 flow health investment landscape readiness workload
   work_item            status
