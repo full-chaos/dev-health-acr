@@ -349,6 +349,27 @@ func (e *Engine) finalizeServed(ctx context.Context, principal storage.Principal
 	if err := assertAnswerableClarification(result); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, err)
 	}
+	// CHAOS-5737: the requirement-outcome invariant and the transition line,
+	// HERE for the reason every guard above is here -- this is the one point
+	// every serving path is downstream of, and the document it reads is final.
+	// See requirement_outcome_reconciliation.go.
+	//
+	// The invariant runs on EVERY exit: a satisfied assembled row with no
+	// served evidence of its kind and subject is a defect wherever it is
+	// served, a stored document on the reuse path included.
+	//
+	// The transition line fires on the DECISIVE exit only, because it reports
+	// what ASSEMBLY did to a prediction, and only that exit runs assembly on
+	// this request. A reuse serve re-serves a stored document's rows; the veto
+	// and refusal exits never reach assembly and carry no assembled_result
+	// row. BEFORE the budget assertion, so a requirement transition on an
+	// answer the budget then refuses is still on the trace beside the refusal.
+	if err := assertSatisfiedRequirementsAreServed(result); err != nil {
+		return InvestigationResult{}, stageError(StageValidation, err)
+	}
+	if stage == BudgetAssertDecisive {
+		e.recordRequirementOutcomeTransitions(ctx, principal, ReconcileRequirementOutcomes(result))
+	}
 	if err := e.assertFitsBudget(ctx, principal, stage, result, budget); err != nil {
 		return InvestigationResult{}, err
 	}

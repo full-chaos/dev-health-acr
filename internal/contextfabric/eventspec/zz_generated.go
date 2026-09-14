@@ -19,43 +19,139 @@ func FieldKeys(e Event) []string {
 // ByID is the generated lookup from Event.ID to its declaration -- generated
 // rather than hand-maintained so it can never drift from All.
 var ByID = map[string]Event{
-	"contextfabric.semantic_state_persistence":    SemanticStatePersistence,
-	"contextfabric.window_continuation_decision":  WindowContinuationDecision,
-	"graphrank.alias_lookup":                      AliasLookup,
-	"graphrank.anchor_kind_withheld":              AnchorKindWithheld,
-	"graphrank.anchor_kind_withheld_summary":      AnchorKindWithheldSummary,
-	"graphrank.anchor_offer":                      AnchorOffer,
-	"graphrank.anchor_pool":                       AnchorPool,
-	"graphrank.anchor_slot_displaced":             AnchorSlotDisplaced,
-	"graphrank.confirmed_kind_rescue":             ConfirmedKindRescue,
-	"graphrank.confirmed_kind_scope":              ConfirmedKindScope,
-	"graphrank.corroboration":                     Corroboration,
-	"graphrank.corroboration_summary":             CorroborationSummary,
-	"graphrank.decision":                          Decision,
-	"graphrank.decision_summary":                  DecisionSummary,
-	"graphrank.evidence_census_commit":            EvidenceCensusCommit,
-	"graphrank.evidence_probe":                    EvidenceProbe,
-	"graphrank.evidence_round":                    EvidenceRound,
-	"graphrank.evidence_source_native":            EvidenceSourceNative,
-	"graphrank.evidence_source_native_probe":      EvidenceSourceNativeProbe,
-	"graphrank.exact_name_search":                 ExactNameSearch,
-	"graphrank.identity_gate":                     IdentityGate,
-	"graphrank.identity_gate_summary":             IdentityGateSummary,
-	"graphrank.identity_universe":                 IdentityUniverse,
-	"graphrank.kind_coverage_floor":               KindCoverageFloor,
-	"graphrank.kind_hint_search":                  KindHintSearch,
-	"graphrank.kind_offer":                        KindOffer,
-	"graphrank.kind_offer_withheld":               KindOfferWithheld,
-	"graphrank.low_population_kind_scope":         LowPopulationKindScope,
-	"graphrank.low_population_kind_scope_summary": LowPopulationKindScopeSummary,
-	"graphrank.offer_pool":                        OfferPool,
-	"graphrank.offer_pool_summary":                OfferPoolSummary,
-	"graphrank.ranked_cut_summary":                RankedCutSummary,
-	"graphrank.reserved_kind_admitted":            ReservedKindAdmitted,
-	"graphrank.search":                            Search,
-	"graphrank.search_question":                   SearchQuestion,
-	"graphrank.slice_b_survivor_verdict":          SliceBSurvivorVerdict,
-	"graphrank.slice_b_survivor_verdict_summary":  SliceBSurvivorVerdictSummary,
+	"contextfabric.requirement_outcome_transition": RequirementOutcomeTransition,
+	"contextfabric.semantic_state_persistence":     SemanticStatePersistence,
+	"contextfabric.window_continuation_decision":   WindowContinuationDecision,
+	"graphrank.alias_lookup":                       AliasLookup,
+	"graphrank.anchor_kind_withheld":               AnchorKindWithheld,
+	"graphrank.anchor_kind_withheld_summary":       AnchorKindWithheldSummary,
+	"graphrank.anchor_offer":                       AnchorOffer,
+	"graphrank.anchor_pool":                        AnchorPool,
+	"graphrank.anchor_slot_displaced":              AnchorSlotDisplaced,
+	"graphrank.confirmed_kind_rescue":              ConfirmedKindRescue,
+	"graphrank.confirmed_kind_scope":               ConfirmedKindScope,
+	"graphrank.corroboration":                      Corroboration,
+	"graphrank.corroboration_summary":              CorroborationSummary,
+	"graphrank.decision":                           Decision,
+	"graphrank.decision_summary":                   DecisionSummary,
+	"graphrank.evidence_census_commit":             EvidenceCensusCommit,
+	"graphrank.evidence_probe":                     EvidenceProbe,
+	"graphrank.evidence_round":                     EvidenceRound,
+	"graphrank.evidence_source_native":             EvidenceSourceNative,
+	"graphrank.evidence_source_native_probe":       EvidenceSourceNativeProbe,
+	"graphrank.exact_name_search":                  ExactNameSearch,
+	"graphrank.identity_gate":                      IdentityGate,
+	"graphrank.identity_gate_summary":              IdentityGateSummary,
+	"graphrank.identity_universe":                  IdentityUniverse,
+	"graphrank.kind_coverage_floor":                KindCoverageFloor,
+	"graphrank.kind_hint_search":                   KindHintSearch,
+	"graphrank.kind_offer":                         KindOffer,
+	"graphrank.kind_offer_withheld":                KindOfferWithheld,
+	"graphrank.low_population_kind_scope":          LowPopulationKindScope,
+	"graphrank.low_population_kind_scope_summary":  LowPopulationKindScopeSummary,
+	"graphrank.offer_pool":                         OfferPool,
+	"graphrank.offer_pool_summary":                 OfferPoolSummary,
+	"graphrank.ranked_cut_summary":                 RankedCutSummary,
+	"graphrank.reserved_kind_admitted":             ReservedKindAdmitted,
+	"graphrank.search":                             Search,
+	"graphrank.search_question":                    SearchQuestion,
+	"graphrank.slice_b_survivor_verdict":           SliceBSurvivorVerdict,
+	"graphrank.slice_b_survivor_verdict_summary":   SliceBSurvivorVerdictSummary,
+}
+
+// RequirementOutcomeTransitionFields is contextfabric.requirement_outcome_transition's generated typed construction interface
+// (CHAOS-5516): one Go field per Field RequirementOutcomeTransition.Fields declares in spec.go.
+type RequirementOutcomeTransitionFields struct {
+	OrgID             string
+	Requirement       string
+	Obligation        string
+	Role              string
+	SubjectKind       string
+	Predicted         string
+	PredictedReason   string
+	AssembledOutcome  string
+	Cause             string
+	CauseCoverage     string
+	CauseOverrun      string
+	CauseNarrowing    string
+	Served            int
+	Declared          int
+	ServedFactCount   int
+	MemberSetResolved bool
+	Index             int
+	Total             int
+	RequestID         string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every RequirementOutcomeTransitionFields uniformly, set ONLY by NewRequirementOutcomeTransitionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewRequirementOutcomeTransitionFields is the generated constructor for RequirementOutcomeTransitionFields -- every
+// field RequirementOutcomeTransition.Fields declares is a required parameter.
+func NewRequirementOutcomeTransitionFields(orgID string, requirement string, obligation string, role string, subjectKind string, predicted string, predictedReason string, assembledOutcome string, cause string, causeCoverage string, causeOverrun string, causeNarrowing string, served int, declared int, servedFactCount int, memberSetResolved bool, index int, total int, requestID string) RequirementOutcomeTransitionFields {
+	return RequirementOutcomeTransitionFields{
+		OrgID:             orgID,
+		Requirement:       requirement,
+		Obligation:        obligation,
+		Role:              role,
+		SubjectKind:       subjectKind,
+		Predicted:         predicted,
+		PredictedReason:   predictedReason,
+		AssembledOutcome:  assembledOutcome,
+		Cause:             cause,
+		CauseCoverage:     causeCoverage,
+		CauseOverrun:      causeOverrun,
+		CauseNarrowing:    causeNarrowing,
+		Served:            served,
+		Declared:          declared,
+		ServedFactCount:   servedFactCount,
+		MemberSetResolved: memberSetResolved,
+		Index:             index,
+		Total:             total,
+		RequestID:         requestID,
+		constructed:       true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewRequirementOutcomeTransitionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f RequirementOutcomeTransitionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns RequirementOutcomeTransition's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f RequirementOutcomeTransitionFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"requirement", contextfabric.SanitizeLogAttr(f.Requirement),
+		"obligation", contextfabric.SanitizeLogAttr(f.Obligation),
+		"role", contextfabric.SanitizeLogAttr(f.Role),
+		"subject_kind", contextfabric.SanitizeLogAttr(f.SubjectKind),
+		"predicted", contextfabric.SanitizeLogAttr(f.Predicted),
+		"predicted_reason", contextfabric.SanitizeLogAttr(f.PredictedReason),
+		"assembled_outcome", contextfabric.SanitizeLogAttr(f.AssembledOutcome),
+		"cause", contextfabric.SanitizeLogAttr(f.Cause),
+		"cause_coverage", contextfabric.SanitizeLogAttr(f.CauseCoverage),
+		"cause_overrun", contextfabric.SanitizeLogAttr(f.CauseOverrun),
+		"cause_narrowing", contextfabric.SanitizeLogAttr(f.CauseNarrowing),
+		"served", f.Served,
+		"declared", f.Declared,
+		"served_fact_count", f.ServedFactCount,
+		"member_set_resolved", f.MemberSetResolved,
+		"index", f.Index,
+		"total", f.Total,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
 }
 
 // SemanticStatePersistenceFields is contextfabric.semantic_state_persistence's generated typed construction interface

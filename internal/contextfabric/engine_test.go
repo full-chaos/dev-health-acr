@@ -344,6 +344,9 @@ func TestNewEngineRequiresAllCoreCapabilities(t *testing.T) {
 // through.
 type recordingTelemetry struct {
 	ensembleEvents []InterpretationEnsembleEvent
+	// requirementOutcomeTransitions (CHAOS-5737) records every transition line
+	// verbatim, in emission order.
+	requirementOutcomeTransitions []RequirementOutcomeTransitionEvent
 	// planCarries records every applied carry verbatim -- the ONLY event
 	// that can carry family_source=carried, since the family-resolution
 	// line is sent before the carry runs.
@@ -789,6 +792,13 @@ func (r *recordingTelemetry) RecordReadRequirementPopulation(_ context.Context, 
 // set the decision carried, not merely that something was recorded.
 func (r *recordingTelemetry) RecordReadRequirementObservationCover(_ context.Context, _ storage.Principal, event ReadRequirementObservationCoverEvent) {
 	r.readRequirementObservationCovers = append(r.readRequirementObservationCovers, event)
+}
+
+// RecordRequirementOutcomeTransition records the whole event, same
+// list-not-count discipline; the reconciliation tests read it back after
+// driving Engine.Investigate, so deleting the production emit fails them.
+func (r *recordingTelemetry) RecordRequirementOutcomeTransition(_ context.Context, _ storage.Principal, event RequirementOutcomeTransitionEvent) {
+	r.requirementOutcomeTransitions = append(r.requirementOutcomeTransitions, event)
 }
 
 // RecordBudgetAssertion (Y3) records the whole event, same list-not-count
