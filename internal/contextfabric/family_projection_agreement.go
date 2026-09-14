@@ -381,7 +381,7 @@ type FamilyAgreementShadow struct {
 // agreement.
 func ShadowFamilyAgreement(receipt ModelExecutionReceipt, outcome QuestionFamilyOutcome) FamilyAgreementShadow {
 	shadow := FamilyAgreementShadow{FrameOutcome: receipt.FrameOutcome}
-	if receipt.QuestionFrame == nil || receipt.FrameOutcome != FrameValidationOutcomeValid {
+	if receipt.QuestionFrame == nil || !receipt.FrameOutcome.Accepted() {
 		// No validated frame: there is nothing to project. Deliberately
 		// NOT reported as a disagreement -- counting "the model emitted no
 		// frame" as the projection disagreeing would inflate the

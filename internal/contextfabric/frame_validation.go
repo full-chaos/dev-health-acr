@@ -5,28 +5,23 @@ package contextfabric
 //
 // SHADOW ONLY -- see frame_vocab.go's package-level note.
 //
-// REPAIR IS NOT IN THIS SLICE, and its absence is a decision rather than an
-// omission. §13.6 admits ONE bounded repair attempt on a frame that fails
-// validation, and the mechanism that makes it safe is the BOUND -- the rule
-// that a repair may only correct what the server has already proven
-// inconsistent, and may not talk itself into a different question. That
-// bound is carved into its own change, because five adversarial rounds
-// found defects in it and none anywhere else in this file's surface.
+// VALIDATION HERE NEVER REPAIRS. §13.6 admits ONE bounded repair attempt on
+// a frame that fails validation, and the mechanism that makes it safe is the
+// BOUND -- the rule that a repair may only correct what the server has
+// already proven inconsistent, and may not talk itself into a different
+// question. The one repair that exists, for I9, needs the interpretation's
+// own member hint, which this function does not see; it runs a layer up, in
+// validateProposedFrame, under the bound frame_repair.go states.
 //
 // So a frame that fails validation here is REFUSED. That is the honest
 // outcome and the design's own fallback -- §13.6 rule 4, "still invalid =>
-// unclassified, refuse to guess" -- reached immediately rather than after
-// an attempt. Nothing degrades: without a repair path the failure surfaces
-// as `refused_invalid` with the failing invariant named, which is exactly
-// what a shadow slice needs in order to measure how often frames are
-// malformed and why.
+// unclassified, refuse to guess" -- and the failure surfaces as
+// `refused_invalid` with the failing invariant named.
 //
 // CONSENSUS IS UNCHANGED AND IS NOT A REPLACEMENT FOR REPAIR. The two
 // handle different failure classes (§13.6): consensus handles stochastic
 // instability -- the same question sampling to different objects -- while
-// repair handles a frame that is STABLE but violates an invariant. This
-// slice ships the second class as a REFUSAL and measures its rate; the
-// repair that would rescue it lands with its bound.
+// repair handles a frame that is STABLE but violates an invariant.
 
 // FrameValidationResult is the outcome of validating one proposed frame.
 type FrameValidationResult struct {
@@ -41,6 +36,10 @@ type FrameValidationResult struct {
 	// a refusal so telemetry records WHICH invariant refused the frame,
 	// not merely that one did.
 	Failure FrameValidationFailure
+	// Repair is the bounded repair's decision on this result. Zero on a
+	// result ValidateFrame alone produced; validateProposedFrame always
+	// decides it.
+	Repair FrameRepair
 }
 
 // ValidateFrame runs the §13.1 sequence over a proposed frame: phase A1

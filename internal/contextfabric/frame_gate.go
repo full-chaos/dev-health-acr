@@ -169,7 +169,7 @@ func DecideFrameGate(result FrameValidationResult, hasProposal bool) FrameGate {
 	if !hasProposal {
 		return FrameGate{Outcome: FrameGateNotProposed}
 	}
-	if result.Outcome != FrameValidationOutcomeValid {
+	if !result.Outcome.Accepted() {
 		return FrameGate{Outcome: FrameGateRejectedInvalid, FailedInvariant: result.Failure.Invariant}
 	}
 	if _, declaredKind, reason := CohortMemberKindForFrame(result.Frame); reason == CohortMemberKindUnservable {

@@ -1054,10 +1054,9 @@ func (t SlogEngineTelemetry) RecordCompletenessAuthority(ctx context.Context, pr
 // `failed_phase` are both here -- the same invariant id failing in a1
 // versus a2 is two different investigations.
 //
-// There are no repair fields, because this slice has no repair path: a
-// frame that fails validation is refused. They land with the bounded
-// repair itself, so an operator never sees a `repair_attempted` key that
-// could only ever read false.
+// The repair keys carry the bounded repair's decision (frame_repair.go) on
+// every line, including the lines where no repair applied, so "no repair was
+// considered" and "a repair was declined" are distinguishable values.
 func (t SlogEngineTelemetry) RecordFrameValidation(ctx context.Context, principal storage.Principal, event FrameValidationEvent) {
 	args := []any{
 		"org_id", SanitizeLogAttr(principal.OrgID),
@@ -1100,6 +1099,19 @@ func (t SlogEngineTelemetry) RecordFrameValidation(ctx context.Context, principa
 		"proposed_group_kind", SanitizeLogAttr(event.Boundary.ProposedGroupKind),
 		"proposed_member_kind", SanitizeLogAttr(event.Boundary.ProposedMemberKind),
 		"group_axis", SanitizeLogAttr(observableGroupAxis(event.Boundary.GroupAxis)),
+		// THE BOUNDED REPAIR. The decision and its reason, the invariant it
+		// answers, the expression kind before and after, the member kind it
+		// used and the attempt count. Closed tokens, `none` for a slot the
+		// decision left empty, and `not_evaluated` for a result no
+		// interpreter decided.
+		"repair_decision", SanitizeLogAttr(event.Repair.ObservableDecision()),
+		"repair", SanitizeLogAttr(noneWhenEmpty(string(event.Repair.Name))),
+		"repair_invariant", SanitizeLogAttr(noneWhenEmpty(string(event.Repair.Invariant))),
+		"repair_kind_before", SanitizeLogAttr(noneWhenEmpty(string(vocabularyKindOnly(event.Repair.KindBefore)))),
+		"repair_kind_after", SanitizeLogAttr(noneWhenEmpty(string(vocabularyKindOnly(event.Repair.KindAfter)))),
+		"repair_member_kind", SanitizeLogAttr(repairMemberKindToken(event.Repair.MemberKind)),
+		"repair_terms_match", SanitizeLogAttr(event.Repair.ObservableTermsMatch()),
+		"repair_attempts", SanitizeLogInt(int64(event.Repair.Attempts)),
 	}
 	args = append(args, requirementDerivationLogAttrs(event.RequirementDerivation)...)
 	args = append(args, requestIDLogAttrs(ctx)...)
