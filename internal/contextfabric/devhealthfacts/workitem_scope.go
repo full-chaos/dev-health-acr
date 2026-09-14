@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"time"
@@ -94,11 +95,17 @@ func workItemRepositorySelector(raw string) (workItemSelectorKind, string, bool)
 
 	if strings.HasSuffix(strings.ToLower(trimmed), "/*") {
 		normalized, err := auth.NormalizeRepositoryScopes([]string{trimmed})
-		if err != nil || len(normalized) != 1 {
+		if err != nil {
+			return 0, "", false
+		}
+		if len(normalized) != 1 {
 			return 0, "", false
 		}
 		owner, ok := strings.CutSuffix(normalized[0], "/*")
-		if !ok || owner == "" {
+		if !ok {
+			return 0, "", false
+		}
+		if owner == "" {
 			return 0, "", false
 		}
 		return workItemSelectorOwner, owner, true
@@ -133,7 +140,9 @@ const (
 	workItemReaderMaxMemoryUsage = uint64(512 << 20)
 )
 
-func workItemReaderSettings(ctx context.Context) readers.Settings {
+var errWorkItemReaderDeadlineTooShort = errors.New("work item reader deadline is too short for a bounded query")
+
+func workItemReaderSettings(ctx context.Context) (readers.Settings, error) {
 	settings := readers.Settings{
 		MaxRowsToRead:  workItemReaderMaxRowsToRead,
 		MaxMemoryUsage: workItemReaderMaxMemoryUsage,
@@ -141,14 +150,15 @@ func workItemReaderSettings(ctx context.Context) readers.Settings {
 	}
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining := time.Until(deadline)
-		if remaining > 0 {
-			seconds := uint64(remaining / time.Second)
-			if seconds > 0 {
-				settings.MaxExecutionTimeSeconds = seconds
-			}
+		if remaining < time.Second {
+			return readers.Settings{}, errWorkItemReaderDeadlineTooShort
+		}
+		seconds := uint64(remaining / time.Second)
+		if seconds > 0 {
+			settings.MaxExecutionTimeSeconds = seconds
 		}
 	} else {
 		settings.MaxExecutionTimeSeconds = uint64(defaultTimeout / time.Second)
 	}
-	return settings
+	return settings, nil
 }

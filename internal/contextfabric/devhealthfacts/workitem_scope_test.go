@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -140,7 +141,10 @@ func selectorSetMatchesRepository(set readers.RepositorySelectorSet, slug string
 
 func TestWorkItemReaderSettingsUseThrowingCeilingsAndRespectDeadline(t *testing.T) {
 	t.Parallel()
-	background := workItemReaderSettings(context.Background())
+	background, err := workItemReaderSettings(context.Background())
+	if err != nil {
+		t.Fatalf("background settings error = %v", err)
+	}
 	if background.MaxExecutionTimeSeconds != uint64(defaultTimeout/time.Second) {
 		t.Fatalf("background MaxExecutionTimeSeconds = %d, want %d", background.MaxExecutionTimeSeconds, uint64(defaultTimeout/time.Second))
 	}
@@ -150,21 +154,30 @@ func TestWorkItemReaderSettingsUseThrowingCeilingsAndRespectDeadline(t *testing.
 
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(1500*time.Millisecond))
 	defer cancel()
-	bounded := workItemReaderSettings(ctx)
+	bounded, err := workItemReaderSettings(ctx)
+	if err != nil {
+		t.Fatalf("bounded settings error = %v", err)
+	}
 	if bounded.MaxExecutionTimeSeconds > 1 {
 		t.Fatalf("bounded MaxExecutionTimeSeconds = %d, want no more than the remaining whole seconds", bounded.MaxExecutionTimeSeconds)
 	}
 	longCtx, longCancel := context.WithDeadline(context.Background(), time.Now().Add(3*time.Second))
 	defer longCancel()
-	long := workItemReaderSettings(longCtx)
+	long, err := workItemReaderSettings(longCtx)
+	if err != nil {
+		t.Fatalf("long settings error = %v", err)
+	}
 	if long.MaxExecutionTimeSeconds == 0 || long.MaxExecutionTimeSeconds > 3 {
 		t.Fatalf("long bounded MaxExecutionTimeSeconds = %d, want a positive value no more than the deadline", long.MaxExecutionTimeSeconds)
 	}
 	shortCtx, shortCancel := context.WithDeadline(context.Background(), time.Now().Add(750*time.Millisecond))
 	defer shortCancel()
-	short := workItemReaderSettings(shortCtx)
-	if short.MaxExecutionTimeSeconds != 0 {
-		t.Fatalf("sub-second MaxExecutionTimeSeconds = %d, want 0 because the context carries the remaining deadline", short.MaxExecutionTimeSeconds)
+	short, err := workItemReaderSettings(shortCtx)
+	if !errors.Is(err, errWorkItemReaderDeadlineTooShort) {
+		t.Fatalf("sub-second settings error = %v, want %v", err, errWorkItemReaderDeadlineTooShort)
+	}
+	if short != (readers.Settings{}) {
+		t.Fatalf("sub-second settings = %#v, want zero settings on refusal", short)
 	}
 	rendered := bounded.Render()
 	if !strings.Contains(rendered, "timeout_overflow_mode = 'throw'") ||

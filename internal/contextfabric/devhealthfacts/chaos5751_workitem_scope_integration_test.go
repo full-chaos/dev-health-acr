@@ -232,9 +232,10 @@ func TestChaos5751WorkItemProvidersUseCurrentRepositoryMetadata(t *testing.T) {
 
 // TestChaos5751SubsecondDeadlineUsesClientContextWithoutRounding proves the
 // boundary the readers API can represent. A remaining deadline below one
-// second must not be rounded up into a one-second SETTINGS ceiling. The real
-// client still receives the caller context, so a deliberately slow server
-// query is canceled before it can finish.
+// second must not be rounded up into a one-second SETTINGS ceiling, so each
+// production content provider refuses before issuing a statement. The real
+// client still receives the caller context, so a separately issued
+// deliberately slow server query is canceled before it can finish.
 func TestChaos5751SubsecondDeadlineUsesClientContextWithoutRounding(t *testing.T) {
 	query, direct := sharedClickHouseFixture(t)
 	orgID := sharedTestOrgID(t)
@@ -250,16 +251,14 @@ func TestChaos5751SubsecondDeadlineUsesClientContextWithoutRounding(t *testing.T
 		Kind:     contextfabric.FactStatus,
 		Subjects: []contextfabric.SubjectRef{workItemSubject(chaos5751LiveRepoA, "WI-A")},
 	})
-	if err != nil {
-		t.Fatalf("status ReadFacts() error = %v", err)
+	var failure *contextfabric.FactReadFailure
+	if !errors.As(err, &failure) || failure.State != contextfabric.SourceUnavailable {
+		t.Fatalf("status ReadFacts() error = %v, want SourceUnavailable FactReadFailure", err)
 	}
-	if client.calls != 1 {
-		t.Fatalf("status query calls = %d, want exactly one", client.calls)
+	if client.calls != 0 {
+		t.Fatalf("status query calls = %d, want zero because no positive whole-second server ceiling fits", client.calls)
 	}
-	statementHasExecutionLimit := strings.Contains(client.statements[0], "max_execution_time")
-	if statementHasExecutionLimit {
-		t.Fatalf("sub-second statement = %q, want no rounded-up max_execution_time", client.statements[0])
-	}
+	t.Logf("sub-second production provider control: provider_query_started=%t refusal=%T", client.calls != 0, err)
 
 	serverStatement := readers.WithSettings(
 		"SELECT sleepEachRow(1) FROM numbers(3) SETTINGS max_block_size = 1",
@@ -306,7 +305,7 @@ func TestChaos5751SubsecondDeadlineUsesClientContextWithoutRounding(t *testing.T
 		t.Fatalf("sub-second real-client query error = %v, want context.DeadlineExceeded", err)
 	}
 	elapsed := time.Since(started)
-	t.Logf("sub-second deadline control: statement_has_max_execution_time=%t query_error_type=%T query_error=%v elapsed=%s", statementHasExecutionLimit, err, err, elapsed)
+	t.Logf("sub-second deadline control: query_error_type=%T query_error=%v elapsed=%s", err, err, elapsed)
 	if elapsed >= time.Second {
 		t.Fatalf("sub-second real-client query took %s, want cancellation before one second", elapsed)
 	}

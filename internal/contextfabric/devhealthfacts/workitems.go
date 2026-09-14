@@ -53,7 +53,11 @@ func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Princi
 	// CHAOS-5438: PROBE one row past the output bound so a full page and a
 	// truncated one are distinguishable -- see shared.go's maxFactRowsProbe.
 	scope := workItemRepositoryAuthorization(principal, query.RequestedRepositoryScope)
-	rows, scanErr := readers.ReadWorkItemStatusWithScopeAndRowLimit(ctx, p.facts.client, orgID, ids, scope, workItemReaderSettings(ctx), maxFactRowsProbe)
+	settings, settingsErr := workItemReaderSettings(ctx)
+	if settingsErr != nil {
+		return contextfabric.FactProviderResult{}, readFailure("query work item status", settingsErr)
+	}
+	rows, scanErr := readers.ReadWorkItemStatusWithScopeAndRowLimit(ctx, p.facts.client, orgID, ids, scope, settings, maxFactRowsProbe)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item status", scanErr)
 	}
@@ -118,7 +122,11 @@ func (p *WorkProvider) ReadFacts(ctx context.Context, principal storage.Principa
 	// CHAOS-5438: PROBE one row past the output bound so a full page and a
 	// truncated one are distinguishable -- see shared.go's maxFactRowsProbe.
 	scope := workItemRepositoryAuthorization(principal, query.RequestedRepositoryScope)
-	rows, scanErr := readers.ReadWorkItemTitleWithScopeAndRowLimit(ctx, p.facts.client, orgID, ids, scope, workItemReaderSettings(ctx), maxFactRowsProbe)
+	settings, settingsErr := workItemReaderSettings(ctx)
+	if settingsErr != nil {
+		return contextfabric.FactProviderResult{}, readFailure("query work item work descriptors", settingsErr)
+	}
+	rows, scanErr := readers.ReadWorkItemTitleWithScopeAndRowLimit(ctx, p.facts.client, orgID, ids, scope, settings, maxFactRowsProbe)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item work descriptors", scanErr)
 	}
@@ -197,7 +205,11 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 	// CHAOS-5438: PROBE one row past the output bound so a full page and a
 	// truncated one are distinguishable -- see shared.go's maxFactRowsProbe.
 	scope := workItemRepositoryAuthorization(principal, query.RequestedRepositoryScope)
-	rows, scanErr := readers.ReadWorkItemCompletionWithScopeAndRowLimit(ctx, p.facts.client, orgID, ids, timeBound.neutral(), scope, workItemReaderSettings(ctx), maxFactRowsProbe)
+	settings, settingsErr := workItemReaderSettings(ctx)
+	if settingsErr != nil {
+		return contextfabric.FactProviderResult{}, readFailure("query work item actual completion", settingsErr)
+	}
+	rows, scanErr := readers.ReadWorkItemCompletionWithScopeAndRowLimit(ctx, p.facts.client, orgID, ids, timeBound.neutral(), scope, settings, maxFactRowsProbe)
 	if scanErr != nil {
 		return contextfabric.FactProviderResult{}, readFailure("query work item actual completion", scanErr)
 	}

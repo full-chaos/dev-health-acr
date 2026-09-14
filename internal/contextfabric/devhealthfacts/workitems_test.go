@@ -86,6 +86,36 @@ func TestWorkItemProvidersUseCurrentSelectorScopeAndThrowingSettings(t *testing.
 	}
 }
 
+func TestWorkItemProvidersRefuseBeforeQueryWhenDeadlineHasNoWholeSecondCeiling(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []contextfabric.FactKind{
+		contextfabric.FactStatus,
+		contextfabric.FactWork,
+		contextfabric.FactActualCompletion,
+	} {
+		kind := kind
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+			client := &fakeClient{}
+			provider := findProvider(t, devhealthfacts.NewProviders(client), kind)
+			ctx, cancel := context.WithTimeout(context.Background(), 900*time.Millisecond)
+			defer cancel()
+			_, err := provider.ReadFacts(ctx, storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+				Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+				Kind:     kind,
+				Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WI-1")},
+			})
+			var failure *contextfabric.FactReadFailure
+			if !errors.As(err, &failure) || failure.State != contextfabric.SourceUnavailable {
+				t.Fatalf("ReadFacts() error = %v, want SourceUnavailable FactReadFailure", err)
+			}
+			if len(client.queries) != 0 {
+				t.Fatalf("query count = %d, want zero because no positive whole-second server ceiling fits", len(client.queries))
+			}
+		})
+	}
+}
+
 func testBindingValue(t *testing.T, client *fakeClient, name string) any {
 	t.Helper()
 	return testBindingValueAt(t, client, len(client.queries)-1, name)
