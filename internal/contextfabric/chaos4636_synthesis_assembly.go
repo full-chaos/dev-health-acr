@@ -73,14 +73,18 @@ type synthesisAssemblyParams struct {
 	// pass did, and selecting on a different frame -- or on none -- would
 	// let a re-synthesized answer draw a different chart than the one the
 	// budget measured.
-	Frame                   *QuestionFrame
-	Graph                   GraphContext
-	Facts                   CanonicalFactBundle
-	Resolution              SubjectResolution
-	CohortSignalCitations   cohortMemberSignalCitations
-	EffectiveWindow         *contractsv1.ContextFabricEffectiveEvidenceWindow
-	WindowCanon             requestWindowCanonicalization
-	WindowCarry             windowCarryResult
+	Frame                 *QuestionFrame
+	Graph                 GraphContext
+	Facts                 CanonicalFactBundle
+	Resolution            SubjectResolution
+	CohortSignalCitations cohortMemberSignalCitations
+	EffectiveWindow       *contractsv1.ContextFabricEffectiveEvidenceWindow
+	WindowCanon           requestWindowCanonicalization
+	// WindowCarried is true when this turn's effective window was carried --
+	// by the same-conversation window carry or by the confirmed-need
+	// ledger's window consumer -- rather than confirmed, stated or inferred
+	// on this request.
+	WindowCarried           bool
 	StructureCanon          requestStructureCanonicalization
 	CarriedStructureEntries []*ConfirmedStructureEntry
 	CommitBases             CommitBasisSet
@@ -268,7 +272,6 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	cohortSignalCitations := params.CohortSignalCitations
 	effectiveWindow := params.EffectiveWindow
 	windowCanon := params.WindowCanon
-	windowCarry := params.WindowCarry
 	structureCanon := params.StructureCanon
 	carriedStructureEntries := params.CarriedStructureEntries
 	commitBases := params.CommitBases
@@ -403,7 +406,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// here (that case already gated and returned above) -- every path
 	// reaching this line carries a confirmed/stated window or none at all.
 	result.EffectiveEvidenceWindow = effectiveWindow
-	windowOutcome := windowCanonicalizationOutcome(windowCanon, result.EffectiveEvidenceWindow, windowCarry.Outcome == WindowCarryHit)
+	windowOutcome := windowCanonicalizationOutcome(windowCanon, result.EffectiveEvidenceWindow, params.WindowCarried)
 	pending.WindowCanonicalization = &windowOutcome
 	// CHAOS-3900 W2 (design brief §4): the fresh disclosure W1's own scope
 	// note deferred -- nil unless the effective window is genuinely

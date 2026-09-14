@@ -35,6 +35,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -185,6 +186,19 @@ type ConfirmedNeedEntry struct {
 	// own P1.E discipline forbids for this member. Empty for every other
 	// member.
 	MatchedTermHash string `json:"matched_term_hash,omitempty"`
+	// PatternID (CHAOS-5734) is populated for subject_handle only, copied
+	// from confirmedStructureMember.PatternID: HandleVerifier's own pattern
+	// argument, without which a remembered handle could not be reverified
+	// through the SAME verifier a fresh handr_ redemption must pass. Empty
+	// for every other member.
+	PatternID string `json:"pattern_id,omitempty"`
+	// WindowStart/WindowEnd (CHAOS-5734) are populated for window only: the
+	// redeemed option's FROZEN bounds, exactly as resolveWindowReceipts
+	// applies them. Both or neither -- an all_time option carries none. A
+	// remembered window reproduces these bytes; it never re-derives bounds
+	// from the relative id at a later time.
+	WindowStart *time.Time `json:"window_start,omitempty"`
+	WindowEnd   *time.Time `json:"window_end,omitempty"`
 }
 
 // SemanticScopeAnchor is the scope anchor a reading resolved its subject under.
@@ -682,6 +696,37 @@ func validateSemanticState(s PersistedSemanticState) error {
 		}
 		if len(entry.MatchedTermHash) > SemanticStateMaxTermBytes {
 			return oversized(SemanticStateBoundTermBytes, "confirmed_needs[%d].matched_term_hash is %d bytes, exceeds %d", i, len(entry.MatchedTermHash), SemanticStateMaxTermBytes)
+		}
+		// pattern_id is meaningful for subject_handle only (HandleVerifier's
+		// own pattern argument).
+		if entry.PatternID != "" && entry.Member != contractsv1.ContextFabricStructureNeedSubjectHandle {
+			return reject("confirmed_needs[%d].pattern_id is set for member %q, only subject_handle carries one", i, entry.Member)
+		}
+		if len(entry.PatternID) > SemanticStateMaxTermBytes {
+			return oversized(SemanticStateBoundTermBytes, "confirmed_needs[%d].pattern_id is %d bytes, exceeds %d", i, len(entry.PatternID), SemanticStateMaxTermBytes)
+		}
+		// Window bounds are the redeemed option's frozen bounds: window only,
+		// both or neither, never reversed.
+		if (entry.WindowStart != nil || entry.WindowEnd != nil) && entry.Member != contractsv1.ContextFabricStructureNeedWindow {
+			return reject("confirmed_needs[%d] carries window bounds for member %q, only window carries them", i, entry.Member)
+		}
+		if (entry.WindowStart == nil) != (entry.WindowEnd == nil) {
+			return reject("confirmed_needs[%d] carries one window bound without the other", i)
+		}
+		if entry.WindowStart != nil && entry.WindowEnd != nil && entry.WindowEnd.Before(*entry.WindowStart) {
+			return reject("confirmed_needs[%d] window_end is before window_start", i)
+		}
+		// A window's applied value is either a relative id from the closed
+		// vocabulary, or the absolute-bounds form, which is meaningless
+		// without the bounds it names.
+		if entry.Member == contractsv1.ContextFabricStructureNeedWindow && entry.AppliedValue != "" {
+			if strings.HasPrefix(entry.AppliedValue, windowAbsoluteAppliedValuePrefix) {
+				if entry.WindowStart == nil {
+					return reject("confirmed_needs[%d] is an absolute window with no bounds", i)
+				}
+			} else if !contractsv1.ValidContextFabricRelativeWindowID(contractsv1.ContextFabricRelativeWindowID(entry.AppliedValue)) {
+				return reject("confirmed_needs[%d].applied_value %q is not a relative window vocabulary member", i, entry.AppliedValue)
+			}
 		}
 	}
 	var expectedRoles []SemanticRoleSlot

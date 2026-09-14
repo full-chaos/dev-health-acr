@@ -480,7 +480,10 @@ type recordingTelemetry struct {
 	planCarryOutcomes []planCarryOutcomeRecord
 	// confirmedNeedLedgers (CHAOS-5639) mirrors the SAME list-not-count
 	// discipline.
-	confirmedNeedLedgers []confirmedNeedLedgerRecord
+	confirmedNeedLedgers []ConfirmedNeedLedgerEvent
+	// confirmedNeedLedgerWindows (CHAOS-5734) mirrors the SAME list-not-count
+	// discipline.
+	confirmedNeedLedgerWindows []confirmedNeedLedgerWindowRecord
 	// modelRowsStripped (CHAOS-4355 follow-up) mirrors the SAME
 	// list-not-count discipline.
 	modelRowsStripped []int
@@ -548,12 +551,12 @@ type kindCarryRecord struct {
 	viaStoredAncestry bool
 }
 
-type confirmedNeedLedgerRecord struct {
-	outcome             ConfirmedNeedLedgerOutcome
-	sourceResultID      string
-	appliedMembers      []contractsv1.ContextFabricStructureNeedKind
-	appliedExpectedKind contractsv1.ContextFabricSubjectKind
-	appliedAnchorKind   contractsv1.ContextFabricSubjectKind
+// confirmedNeedLedgerWindowRecord stores every field the production
+// RecordConfirmedNeedLedgerWindow emit writes.
+type confirmedNeedLedgerWindowRecord struct {
+	decision       ConfirmedNeedLedgerWindowDecision
+	sourceResultID string
+	appliedWindow  string
 }
 
 // planCarryOutcomeRecord (CHAOS-5003) is the plan axis's counterpart to
@@ -693,8 +696,12 @@ func (r *recordingTelemetry) RecordStructureNeedsDisclosed(_ context.Context, _ 
 	r.structureNeedsDisclosed = append(r.structureNeedsDisclosed, member)
 }
 
-func (r *recordingTelemetry) RecordConfirmedNeedLedger(_ context.Context, _ storage.Principal, outcome ConfirmedNeedLedgerOutcome, sourceResultID string, appliedMembers []contractsv1.ContextFabricStructureNeedKind, appliedExpectedKind, appliedAnchorKind contractsv1.ContextFabricSubjectKind) {
-	r.confirmedNeedLedgers = append(r.confirmedNeedLedgers, confirmedNeedLedgerRecord{outcome, sourceResultID, appliedMembers, appliedExpectedKind, appliedAnchorKind})
+func (r *recordingTelemetry) RecordConfirmedNeedLedger(_ context.Context, _ storage.Principal, event ConfirmedNeedLedgerEvent) {
+	r.confirmedNeedLedgers = append(r.confirmedNeedLedgers, event)
+}
+
+func (r *recordingTelemetry) RecordConfirmedNeedLedgerWindow(_ context.Context, _ storage.Principal, decision ConfirmedNeedLedgerWindowDecision, sourceResultID, appliedWindow string) {
+	r.confirmedNeedLedgerWindows = append(r.confirmedNeedLedgerWindows, confirmedNeedLedgerWindowRecord{decision, sourceResultID, appliedWindow})
 }
 
 func (r *recordingTelemetry) RecordGatedOfferResolution(_ context.Context, _ storage.Principal, outcome GatedOfferResolutionOutcome) {

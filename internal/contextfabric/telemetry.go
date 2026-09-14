@@ -382,14 +382,38 @@ func (t SlogEngineTelemetry) RecordKindCarry(ctx context.Context, principal stor
 // value. source_result_id is the parent result consulted, the same
 // correlation handle RecordWindowContinuationDecision already logs for its
 // own referenced result.
-func (t SlogEngineTelemetry) RecordConfirmedNeedLedger(ctx context.Context, principal storage.Principal, outcome ConfirmedNeedLedgerOutcome, sourceResultID string, appliedMembers []contractsv1.ContextFabricStructureNeedKind, appliedExpectedKind, appliedAnchorKind contractsv1.ContextFabricSubjectKind) {
+//
+// CHAOS-5734 adds the candidate and handle members and every member's hashed
+// applied value (applied_*_value_hash, confirmedNeedValueHash -- never the raw
+// canonical id or handle value), and dropped_members: member:reason pairs for
+// each member refused at reverify, or "none".
+func (t SlogEngineTelemetry) RecordConfirmedNeedLedger(ctx context.Context, principal storage.Principal, event ConfirmedNeedLedgerEvent) {
 	args := append([]any{
-		"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome)),
-		"source_result_id", SanitizeLogAttr(sourceResultID),
-		"applied_members", SanitizeLogAttr(observableAppliedNeedMembers(appliedMembers)),
-		"applied_expected_kind", SanitizeLogAttr(string(appliedExpectedKind)), "applied_anchor_kind", SanitizeLogAttr(string(appliedAnchorKind)),
+		"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(event.Outcome)),
+		"source_result_id", SanitizeLogAttr(event.SourceResultID),
+		"applied_members", SanitizeLogAttr(observableAppliedNeedMembers(event.AppliedMembers)),
+		"applied_expected_kind", SanitizeLogAttr(string(event.AppliedExpectedKind)),
+		"applied_anchor_kind", SanitizeLogAttr(string(event.AppliedAnchorKind)),
+		"applied_anchor_value_hash", SanitizeLogAttr(event.AppliedAnchorValueHash),
+		"applied_candidate_kind", SanitizeLogAttr(string(event.AppliedCandidateKind)),
+		"applied_candidate_value_hash", SanitizeLogAttr(event.AppliedCandidateValueHash),
+		"applied_handle_kind", SanitizeLogAttr(string(event.AppliedHandleKind)),
+		"applied_handle_value_hash", SanitizeLogAttr(event.AppliedHandleValueHash),
+		"dropped_members", SanitizeLogAttr(observableConfirmedNeedDrops(event.Dropped)),
 	}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric confirmed need ledger", args...)
+}
+
+// RecordConfirmedNeedLedgerWindow (CHAOS-5734) logs at Info: decision is a
+// closed vocabulary, applied_window a closed relative window id or
+// "absolute" (never bounds), source_result_id the parent the ledger was
+// admitted from.
+func (t SlogEngineTelemetry) RecordConfirmedNeedLedgerWindow(ctx context.Context, principal storage.Principal, decision ConfirmedNeedLedgerWindowDecision, sourceResultID, appliedWindow string) {
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID), "decision", SanitizeLogAttr(string(decision)),
+		"source_result_id", SanitizeLogAttr(sourceResultID), "applied_window", SanitizeLogAttr(appliedWindow),
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric confirmed need ledger window", args...)
 }
 
 // RecordStructureNeedsDisclosed (CHAOS-3900 P1.F). member is a closed
