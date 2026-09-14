@@ -1434,6 +1434,21 @@ func (t SlogEngineTelemetry) RecordReadRequirementObservationCover(ctx context.C
 	t.logger.InfoContext(ctx, "context fabric observation cover", args...)
 }
 
+// RecordRequirementOutcomeTransition (CHAOS-5737) logs at Info, once per
+// published requirement whose assembled outcome differs from the derivation's
+// prediction, from every engine exit that serves a document carrying an
+// assembled account. A request whose every assembled account matches its
+// prediction emits none; `index` and `total` on each line say how many the
+// request emitted.
+//
+// The fields are built by RequirementOutcomeTransitionLogArgs, which the
+// stored-read route logs through as well: one construction of this line, two
+// surfaces that serve documents.
+func (t SlogEngineTelemetry) RecordRequirementOutcomeTransition(ctx context.Context, principal storage.Principal, event RequirementOutcomeTransitionEvent) {
+	args := append(RequirementOutcomeTransitionLogArgs(event, principal.OrgID), requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, RequirementOutcomeTransitionLogMessage, args...)
+}
+
 func (t SlogEngineTelemetry) RecordMembershipCardinality(ctx context.Context, principal storage.Principal, event MembershipCardinalityEvent) {
 	args := []any{
 		"org_id", SanitizeLogAttr(principal.OrgID),

@@ -1660,6 +1660,54 @@ var SemanticStatePersistence = Event{
 	},
 }
 
+// RequirementOutcomeTransition (CHAOS-5737) is the Info line for ONE published
+// requirement whose assembled outcome differs from the derivation's prediction.
+//
+// EVERY SURFACE THAT SERVES A DOCUMENT EMITS IT, through one construction
+// (contextfabric.RequirementOutcomeTransitionLogArgs): the engine's own serving
+// exits via RecordRequirementOutcomeTransition, and the stored-read route,
+// which never reaches the engine and whose response the MCP
+// investigation_result tool forwards. What decides the line is the document
+// served, never the path it took to a reader.
+//
+// A request emits one line per such requirement and none when every assembled
+// account matches its prediction, so the multiplicity is bounded-many with no
+// pass: the line describes the served document, which exists once per request.
+var RequirementOutcomeTransition = Event{
+	ID:                 "contextfabric.requirement_outcome_transition",
+	Msg:                "context fabric requirement outcome transition",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityBoundedManyPerPass,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "bounded by the number of requirements the served answer plan publishes; total on every line is the request's transition count and index is this line's 1-based position among them, in plan order.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		// Open: the requirement coordinate and its three parts, each drawn from
+		// a vocabulary the contracts package owns (obligation, subject role,
+		// subject kind).
+		{Key: "requirement", Type: FieldString, Presence: PresenceRequired},
+		{Key: "obligation", Type: FieldString, Presence: PresenceRequired},
+		{Key: "role", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "predicted", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RequirementOutcomeTransitionLineVocabulary("predicted")},
+		{Key: "predicted_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RequirementOutcomeTransitionLineVocabulary("predicted_reason")},
+		{Key: "assembled_outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RequirementOutcomeTransitionLineVocabulary("assembled_outcome")},
+		{Key: "cause", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.RequirementOutcomeTransitionLineVocabulary("cause")},
+		// Open: the assembled row's own wire causes, each from the contracts
+		// vocabulary that owns it and validated there, or `none`.
+		{Key: "cause_coverage", Type: FieldString, Presence: PresenceRequired},
+		{Key: "cause_overrun", Type: FieldString, Presence: PresenceRequired},
+		{Key: "cause_narrowing", Type: FieldString, Presence: PresenceRequired},
+		{Key: "served", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "declared", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "served_fact_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "member_set_resolved", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "index", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+	},
+}
+
 var All = []Event{
 	RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld,
 	Corroboration, CorroborationSummary, ReservedKindAdmitted, OfferPool, OfferPoolSummary,
@@ -1678,4 +1726,5 @@ var All = []Event{
 	EvidenceRound, EvidenceProbe, EvidenceCensusCommit, EvidenceSourceNative, EvidenceSourceNativeProbe,
 	SliceBSurvivorVerdict, SliceBSurvivorVerdictSummary,
 	SemanticStatePersistence,
+	RequirementOutcomeTransition,
 }

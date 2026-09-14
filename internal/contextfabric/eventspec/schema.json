@@ -1,5 +1,134 @@
 [
   {
+    "id": "contextfabric.requirement_outcome_transition",
+    "msg": "context fabric requirement outcome transition",
+    "level": "info",
+    "multiplicity": "bounded_many_per_pass",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "bounded by the number of requirements the served answer plan publishes; total on every line is the request's transition count and index is this line's 1-based position among them, in plan order.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "requirement",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "obligation",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "role",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "predicted",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "served",
+          "unavailable"
+        ]
+      },
+      {
+        "key": "predicted_reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "subject_kind_unsupported",
+          "no_declaring_producer",
+          "table_shape_undeclared",
+          "computed_population_absent"
+        ]
+      },
+      {
+        "key": "assembled_outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "satisfied",
+          "narrowed",
+          "unavailable",
+          "not_applicable",
+          "not_attempted"
+        ]
+      },
+      {
+        "key": "cause",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "computed_population_absent"
+        ]
+      },
+      {
+        "key": "cause_coverage",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "cause_overrun",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "cause_narrowing",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "served",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "declared",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "served_fact_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "member_set_resolved",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "index",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.semantic_state_persistence",
     "msg": "context fabric semantic state persistence",
     "level": "info",

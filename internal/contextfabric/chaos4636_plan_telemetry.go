@@ -488,6 +488,17 @@ type PlanTelemetry interface {
 	// this decision must be a compile error, not a line that quietly keeps
 	// missing the service's own log stream.
 	RecordReadRequirementObservationCover(ctx context.Context, principal storage.Principal, event ReadRequirementObservationCoverEvent)
+	// RecordRequirementOutcomeTransition (CHAOS-5737) reports ONE published
+	// requirement whose assembled outcome differs from the derivation's
+	// prediction: the prediction and its reason, the assembled outcome and its
+	// wire causes, the reason assembly observed below a collapsed wire cause,
+	// and how many served facts of the requirement's kind and subject the
+	// document carries. See requirement_outcome_reconciliation.go.
+	//
+	// REQUIRED on this interface for the reason every sibling states: a
+	// requirement predicted served that ends unavailable is a decision, and a
+	// sink that cannot report it must be a compile error, not a silent flip.
+	RecordRequirementOutcomeTransition(ctx context.Context, principal storage.Principal, event RequirementOutcomeTransitionEvent)
 }
 
 // GroupedCohortCompletenessEvent (CHAOS-4733) is CLOSED ENUMS AND COUNTS

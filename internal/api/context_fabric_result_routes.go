@@ -163,6 +163,37 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 		// configuration, not from anything baked into the row: a result
 		// saved before the flip was ever turned on must not keep serving
 		// a stale answer forever just because Save already ran once.
+		// The requirement-outcome reconciliation, on the surface that serves
+		// STORED documents. This route never reaches finalizeServed, so without
+		// these two calls a mismatch a stored document carries is stated on the
+		// trace of the investigation that produced it and on no later read of
+		// it, and a document claiming a requirement satisfied with nothing
+		// behind it is served by id indefinitely.
+		//
+		// The MCP investigation_result tool forwards THIS route's response
+		// (internal/mcp/investigation_result.go reads through the sidecar
+		// client), so both read surfaces take one determination here rather
+		// than two that have to agree.
+		//
+		// Both calls are the exported ones the engine itself uses: one
+		// numbering of the lines, one definition of served evidence.
+		for _, transition := range contextfabric.RequirementOutcomeTransitionEvents(result) {
+			args := contextfabric.RequirementOutcomeTransitionLogArgs(transition, principal.OrgID)
+			args = append(args, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())))
+			a.logger.InfoContext(r.Context(), contextfabric.RequirementOutcomeTransitionLogMessage, args...)
+		}
+		// A stored row that states a satisfied requirement its own evidence does
+		// not back is a SERVER defect, and the caller receives it as one:
+		// serving it would put the claim this guard exists to forbid in front of
+		// a reader through the one door the engine does not stand in.
+		if err := contextfabric.AssertServedRequirementEvidence(result); err != nil {
+			a.logger.ErrorContext(r.Context(), "context fabric stored result states an unsupported satisfied requirement",
+				"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
+				"result_id", contextfabric.SanitizeLogAttr(result.ResultID),
+				"detail", contextfabric.SanitizeLogAttr(err.Error()))
+			writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation result could not be served", false, nil)
+			return
+		}
 		completenessAuthority := contextfabric.DeriveCompletenessAuthority(result)
 		a.logger.InfoContext(r.Context(), "context fabric completeness authority",
 			"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
