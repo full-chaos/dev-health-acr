@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -1057,6 +1058,62 @@ func TestSemanticState_ConfirmedNeedsValidation(t *testing.T) {
 			}
 			if !tc.accept && (err == nil || !errors.Is(err, ErrSemanticStateRejected)) {
 				t.Errorf("EncodeSemanticState() = %v, want %v", err, ErrSemanticStateRejected)
+			}
+		})
+	}
+}
+
+// TestSemanticState_ConfirmedNeedsNewFieldsDecodeDomain runs the stored-row
+// side of the pattern_id and window bound fields (CHAOS-5734): a row the codec
+// did not write -- a wrong type, a null, an empty string, an unknown key, a
+// reversed pair -- reads back malformed, never as a ledger with a silently
+// zeroed field; the canonical row reads back available.
+func TestSemanticState_ConfirmedNeedsNewFieldsDecodeDomain(t *testing.T) {
+	t.Parallel()
+	start := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	state := semanticFixture(t)
+	state.ConfirmedNeeds = []ConfirmedNeedEntry{
+		{Member: contractsv1.ContextFabricStructureNeedSubjectHandle, AppliedKind: contractsv1.ContextFabricSubjectPullRequest, AppliedValue: "532", PatternID: "pull_request_number"},
+		{Member: contractsv1.ContextFabricStructureNeedWindow, AppliedValue: "trailing_90d", WindowStart: &start, WindowEnd: &end},
+	}
+	encoded, err := EncodeSemanticState(state)
+	if err != nil {
+		t.Fatalf("fixture defect: %v", err)
+	}
+	canonical := string(encoded)
+	const pattern = `"pattern_id":"pull_request_number"`
+	const windowStart = `"window_start":"2026-05-01T00:00:00Z"`
+	const windowPair = `"window_start":"2026-05-01T00:00:00Z","window_end":"2026-08-01T00:00:00Z"`
+	for _, needle := range []string{pattern, windowStart, windowPair} {
+		if strings.Count(canonical, needle) != 1 {
+			t.Fatalf("fixture defect: %s occurs %d times in %s", needle, strings.Count(canonical, needle), canonical)
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		from string
+		to   string
+		want SemanticStateReadStatus
+	}{
+		{"canonical", pattern, pattern, SemanticStateReadAvailable},
+		{"pattern_id wrong scalar type", pattern, `"pattern_id":7`, SemanticStateReadMalformed},
+		{"pattern_id null", pattern, `"pattern_id":null`, SemanticStateReadMalformed},
+		{"pattern_id empty string", pattern, `"pattern_id":""`, SemanticStateReadMalformed},
+		{"pattern_id wrong container type", pattern, `"pattern_id":["pull_request_number"]`, SemanticStateReadMalformed},
+		{"unknown key beside pattern_id", pattern, pattern + `,"pattern":"x"`, SemanticStateReadMalformed},
+		{"window_start wrong scalar type", windowStart, `"window_start":1746057600`, SemanticStateReadMalformed},
+		{"window_start empty string", windowStart, `"window_start":""`, SemanticStateReadMalformed},
+		{"window_start null", windowStart, `"window_start":null`, SemanticStateReadMalformed},
+		{"window_start not a time", windowStart, `"window_start":"yesterday"`, SemanticStateReadMalformed},
+		{"window pair reversed", windowPair, `"window_start":"2026-08-01T00:00:00Z","window_end":"2026-05-01T00:00:00Z"`, SemanticStateReadMalformed},
+		{"window_end removed", windowPair, `"window_start":"2026-05-01T00:00:00Z"`, SemanticStateReadMalformed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			decoded, status := DecodeSemanticState([]byte(strings.Replace(canonical, tc.from, tc.to, 1)))
+			if status != tc.want {
+				t.Fatalf("DecodeSemanticState() status = %s (state %#v), want %s", status, decoded, tc.want)
 			}
 		})
 	}

@@ -90,6 +90,7 @@ type needTurnOutcome struct {
 	kindCarries  []kindCarryRecord
 	windowCarry  []windowCarryRecord
 	windowCanons []WindowCanonicalizationOutcome
+	reuseBypass  []AnswerReuseBypassReason
 	saved        *PersistedSemanticState
 }
 
@@ -172,6 +173,7 @@ func (h *needTurnHarness) turn(request InvestigationRequest, response needTurnRe
 	h.graph.response = response
 	callsMark, ledgerMark, windowMark := len(h.graph.calls), len(h.telemetry.confirmedNeedLedgers), len(h.telemetry.confirmedNeedLedgerWindows)
 	kindMark, windowCarryMark, canonMark := len(h.telemetry.kindCarries), len(h.telemetry.windowCarries), len(h.telemetry.windowCanonicalizationOutcomes)
+	reuseMark := len(h.telemetry.answerReuseBypasses)
 	h.store.saved, h.store.savedSemantic = nil, nil
 	result, err := h.engine.Investigate(context.Background(), acceptancePrincipal(), request)
 	if err != nil {
@@ -194,6 +196,7 @@ func (h *needTurnHarness) turn(request InvestigationRequest, response needTurnRe
 		kindCarries:  append([]kindCarryRecord(nil), h.telemetry.kindCarries[kindMark:]...),
 		windowCarry:  append([]windowCarryRecord(nil), h.telemetry.windowCarries[windowCarryMark:]...),
 		windowCanons: append([]WindowCanonicalizationOutcome(nil), h.telemetry.windowCanonicalizationOutcomes[canonMark:]...),
+		reuseBypass:  append([]AnswerReuseBypassReason(nil), h.telemetry.answerReuseBypasses[reuseMark:]...),
 		saved:        saved,
 	}
 }
@@ -349,6 +352,12 @@ func TestConfirmedNeedConsumers_CandidateThreeTurns(t *testing.T) {
 		}
 		if got := h.candidates[verified:]; !reflect.DeepEqual(got, []needVerifierCall{{kind: offer.Kind, value: offer.CanonicalID}}) {
 			t.Fatalf("CandidateVerifier calls on turn three = %#v, want the remembered (kind, id) reverified exactly once", got)
+		}
+		// A remembered confirmation is not a receipt this turn: the answer
+		// reuse lookup is bypassed for the parent reference, never reported as
+		// confirmed structure.
+		if !reflect.DeepEqual(three.reuseBypass, []AnswerReuseBypassReason{AnswerReuseBypassPriorResultReference}) {
+			t.Fatalf("reuse bypass reasons = %#v, want exactly prior_result_reference", three.reuseBypass)
 		}
 		call := lastPortCall(t, three)
 		if len(call.request.RequestedScope.SubjectHints) != 0 || len(call.request.SubjectHandles) != 0 || call.kind != nil || call.anchor != nil {
