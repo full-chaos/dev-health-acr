@@ -116,11 +116,6 @@ func compositionInvariants() []string {
 		CompositionInvariantCarriedFrameNotCanonical,
 		CompositionInvariantCarriedFrameRefused,
 		CompositionInvariantCarriedStateIncomplete,
-		// Declared, and undrivable once the frame itself is carried -- see the
-		// constant's own comment. It stays a member so the guard and the
-		// published vocabulary agree; narrowing a closed contract member is a
-		// separate decision from this change.
-		CompositionInvariantCarriedAxisUnexpressible,
 	}
 }
 
@@ -137,25 +132,6 @@ func validCompositionFailedInvariant(value string) bool {
 	}
 	return false
 }
-
-// CompositionInvariantCarriedAxisUnexpressible is the composition's OWN
-// invariant, and it is deliberately not one of the frame invariants i1..i18.
-//
-// Those describe a frame that is internally wrong. This describes a frame that
-// is entirely valid and simply CANNOT SAY the thing the carried reading needs
-// said: a reading with no grouped expression has nowhere to put a carried group
-// axis. Validation will never object, because there is nothing wrong with the
-// frame -- the mismatch is between the frame and the carrier.
-//
-// IT IS UNDRIVABLE ONCE THE FRAME ITSELF IS CARRIED. The accepted context is
-// now composed from the carrier's OWN validated frame, which expresses the
-// carrier's own axis by construction, so there is no frame/carrier mismatch
-// left for this boundary to find. The token stays in the published vocabulary
-// -- narrowing a closed contract member is not this change's business, and the
-// membership check must keep matching the schema -- and
-// TestComposition_TheCarriedAxisIsNeverUnexpressible pins that no established
-// transition can produce it.
-const CompositionInvariantCarriedAxisUnexpressible = "carried_axis_unexpressible"
 
 // AcceptedContext is what composeAcceptedContext returns, and it is the ONLY
 // thing downstream may read.
