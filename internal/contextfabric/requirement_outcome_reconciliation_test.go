@@ -293,7 +293,7 @@ func TestASatisfiedRequirementWithNoServedEvidenceIsRefused(t *testing.T) {
 		t.Run(cell.name, func(t *testing.T) {
 			t.Parallel()
 			document := cell.mutate(served)
-			for _, stage := range []BudgetAssertStage{BudgetAssertDecisive, BudgetAssertReuse} {
+			for _, stage := range BudgetAssertStageVocabulary() {
 				_, err := engine.finalizeServed(context.Background(), storage.Principal{OrgID: "org_1"}, stage, document, nil, ResponseBudget{})
 				switch {
 				case cell.refused && !errors.Is(err, ErrSatisfiedRequirementUnserved):
@@ -301,6 +301,36 @@ func TestASatisfiedRequirementWithNoServedEvidenceIsRefused(t *testing.T) {
 				case !cell.refused && err != nil:
 					t.Fatalf("stage %s: err = %v, want the document served", stage, err)
 				}
+			}
+		})
+	}
+}
+
+// TestTheTransitionLineFiresOnTheDecisiveExitOnly sweeps every serving exit of
+// finalizeServed over the Class B document: each serves it, and only the
+// decisive exit, the one that runs assembly on its request, reports the
+// transition.
+func TestTheTransitionLineFiresOnTheDecisiveExitOnly(t *testing.T) {
+	t.Parallel()
+	served := runReconciliation(t, newReconciliationEngine(t, nil, InvestigationPartial, []ClaimedFact{reconciliationAnchorMembershipClaim()}, &recordingTelemetry{}, nil), 0)
+	if len(ReconcileRequirementOutcomes(served)) != 1 {
+		t.Fatal("the Class B document does not reconcile to one transition; the sweep would test nothing")
+	}
+	for _, stage := range BudgetAssertStageVocabulary() {
+		stage := stage
+		t.Run(string(stage), func(t *testing.T) {
+			t.Parallel()
+			telemetry := &recordingTelemetry{}
+			engine := newReconciliationEngine(t, nil, InvestigationPartial, nil, telemetry, nil)
+			if _, err := engine.finalizeServed(context.Background(), storage.Principal{OrgID: "org_1"}, stage, served, nil, ResponseBudget{}); err != nil {
+				t.Fatalf("finalizeServed(%s) error = %v", stage, err)
+			}
+			want := 0
+			if stage == BudgetAssertDecisive {
+				want = 1
+			}
+			if got := len(telemetry.requirementOutcomeTransitions); got != want {
+				t.Fatalf("stage %s emitted %d transition line(s), want %d", stage, got, want)
 			}
 		})
 	}

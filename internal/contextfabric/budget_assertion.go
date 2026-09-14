@@ -362,8 +362,7 @@ func (e *Engine) finalizeServed(ctx context.Context, principal storage.Principal
 	// what ASSEMBLY did to a prediction, and only that exit runs assembly on
 	// this request. A reuse serve re-serves a stored document's rows; the veto
 	// and refusal exits never reach assembly and carry no assembled_result
-	// row. BEFORE the budget assertion, so a requirement transition on an
-	// answer the budget then refuses is still on the trace beside the refusal.
+	// row.
 	if err := assertSatisfiedRequirementsAreServed(result); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, err)
 	}
