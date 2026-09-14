@@ -18,10 +18,8 @@ import (
 // production implemented it, every event failed a type assertion, and the
 // whole signal disappeared with tests passing throughout.
 //
-// There are no repair keys here: this slice REFUSES an invalid frame
-// rather than repairing it, and a log key nothing can populate is a key an
-// operator would wait forever to see. They land with the bounded repair,
-// in the change that can actually emit them.
+// The repair keys are the bounded repair's (frame_repair.go), mapped one
+// level down in frameRepairLogKeys and checked in both directions.
 //
 // frameValidationEventLogKeys is the field -> log-key map, declared
 // EXPLICITLY rather than derived by snake-casing. That is deliberate: an
@@ -69,6 +67,65 @@ var frameValidationEventLogKeys = map[string]string{
 	// interpretationBoundaryLogKeys below carries every field one level
 	// down, checked in both directions by its own test.
 	"Boundary": "group_axis",
+	// Repair is a STRUCT flattened across seven keys, the same shape as
+	// Boundary: this entry names the decision key, and frameRepairLogKeys
+	// below carries every field one level down.
+	"Repair": "repair_decision",
+}
+
+// frameRepairLogKeys is the explicit field -> key map for the bounded
+// repair's record flattened onto the frame-validation line. Closed tokens and
+// one count only.
+var frameRepairLogKeys = map[string]string{
+	"Decision":   "repair_decision",
+	"Name":       "repair",
+	"Invariant":  "repair_invariant",
+	"KindBefore": "repair_kind_before",
+	"KindAfter":  "repair_kind_after",
+	"MemberKind": "repair_member_kind",
+	"Attempts":   "repair_attempts",
+}
+
+// TestEveryFrameRepairFieldReachesTheLogLine is the structural half for the
+// repair record: struct and key map agree in both directions, every key is
+// present on an emitted line, and an event with no repair decision renders
+// explicit tokens rather than empty values.
+func TestEveryFrameRepairFieldReachesTheLogLine(t *testing.T) {
+	repairType := reflect.TypeOf(FrameRepair{})
+	seen := map[string]bool{}
+	for i := 0; i < repairType.NumField(); i++ {
+		name := repairType.Field(i).Name
+		seen[name] = true
+		if _, ok := frameRepairLogKeys[name]; !ok {
+			t.Errorf("FrameRepair.%s has no log key", name)
+		}
+	}
+	for name := range frameRepairLogKeys {
+		if !seen[name] {
+			t.Errorf("log key map names %q, which is not a field on FrameRepair", name)
+		}
+	}
+	records := captureSlogJSON(t, func(logger *slog.Logger) {
+		NewSlogEngineTelemetry(logger).RecordFrameValidation(context.Background(), storage.Principal{OrgID: "org_sink_test"},
+			FrameValidationEvent{Outcome: FrameValidationOutcomeValid})
+	})
+	if len(records) != 1 {
+		t.Fatalf("got %d records, want 1", len(records))
+	}
+	for _, key := range frameRepairLogKeys {
+		if _, present := records[0][key]; !present {
+			t.Errorf("key %q is absent from the frame-validation line", key)
+		}
+	}
+	for key, want := range map[string]any{
+		"repair_decision": "not_evaluated", "repair": "none", "repair_invariant": "none",
+		"repair_kind_before": "none", "repair_kind_after": "none", "repair_member_kind": "none",
+		"repair_attempts": float64(0),
+	} {
+		if got := records[0][key]; got != want {
+			t.Errorf("%s on an event with no repair decision = %v, want %v", key, got, want)
+		}
+	}
 }
 
 // interpretationBoundaryLogKeys is the explicit field -> key map for the
@@ -456,6 +513,11 @@ func TestFrameValidationTelemetryLeaksNoQuestionContent(t *testing.T) {
 	// The interpretation boundary's keys, from its own map: closed kind
 	// tokens, explicit absence tokens and a closed decision only.
 	for _, key := range interpretationBoundaryLogKeys {
+		allowed[key] = true
+	}
+	// The bounded repair's keys, from its own map: closed tokens and one
+	// attempt count only.
+	for _, key := range frameRepairLogKeys {
 		allowed[key] = true
 	}
 	for key := range records[0] {

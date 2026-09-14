@@ -41,23 +41,21 @@ const (
 	// and A2 with no repair.
 	FrameValidationOutcomeValid FrameValidationOutcome = "valid"
 	// FrameValidationOutcomeRepaired: one bounded repair ran and the
-	// repaired frame passed the SAME invariants, unrelaxed. RESERVED --
-	// nothing emits it in this slice, which ships repair as refuse-only;
-	// the vocabulary member is kept so the closed set does not change
-	// meaning when the bound lands.
+	// repaired frame passed the SAME invariants, unrelaxed. Emitted by the
+	// I9 repair (frame_repair.go); the frame it carries is the repaired one.
 	FrameValidationOutcomeRepaired FrameValidationOutcome = "repaired"
 	// FrameValidationOutcomeRefusedInvalid: the frame failed an invariant
 	// and was refused. The family is unclassified -- refuse to guess.
 	//
-	// In THIS slice it is the only refusal outcome, because there is no
-	// repair path: a frame that fails validation is refused immediately
-	// rather than after an attempt (§13.6 rule 4 reached directly).
+	// It is the only refusal outcome emitted: a frame no repair applies to,
+	// and a repaired frame that still fails, are both refused here, and the
+	// frame-validation line's repair keys say which.
 	FrameValidationOutcomeRefusedInvalid FrameValidationOutcome = "refused_invalid"
 	// FrameValidationOutcomeRefusedKindChange: the repair proposed a
 	// SubjectExpression.Kind change the violated invariant does not name.
 	//
-	// RESERVED, like `repaired` above: nothing in this slice emits it,
-	// because nothing here repairs. It stays in the vocabulary because
+	// RESERVED: nothing emits it, because the one repair that exists changes
+	// the kind only for I9, which names the kind. It stays in the vocabulary because
 	// §13.6's telemetry table DECLARES these four members, and shrinking a
 	// design-declared closed vocabulary to match one slice's emission
 	// subset would be a design change made by omission. The registry test
@@ -80,11 +78,19 @@ var frameValidationOutcomes = [...]FrameValidationOutcome{
 	FrameValidationOutcomeRefusedKindChange,
 }
 
-// FrameValidationOutcomeCount is four, per §13.6's telemetry table. Two of
-// the four (`repaired`, `refused_kind_change`) are RESERVED in this slice,
-// which has no repair path: the vocabulary is the design's, and one
-// slice's emission subset does not shrink it.
+// FrameValidationOutcomeCount is four, per §13.6's telemetry table. One of
+// the four (`refused_kind_change`) is RESERVED: the vocabulary is the
+// design's, and one slice's emission subset does not shrink it.
 const FrameValidationOutcomeCount = len(frameValidationOutcomes)
+
+// Accepted reports whether the outcome carries a frame the turn acts on:
+// `valid`, or `repaired`. Every consumer asking "did validation produce a
+// usable frame" reads this rather than comparing against `valid`, so a
+// repaired frame reaches the gate, the requirement derivation, the receipt
+// and the family outcome by the same path a valid one does.
+func (o FrameValidationOutcome) Accepted() bool {
+	return o == FrameValidationOutcomeValid || o == FrameValidationOutcomeRepaired
+}
 
 // FrameValidationOutcomeVocabulary returns the closed vocabulary.
 func FrameValidationOutcomeVocabulary() [FrameValidationOutcomeCount]FrameValidationOutcome {
@@ -216,6 +222,12 @@ type FrameValidationEvent struct {
 	// interpreter from the same receipt and the same proposal this event
 	// is built from; see InterpretationBoundaryFrom.
 	Boundary InterpretationBoundary
+
+	// Repair is the bounded repair's decision on this proposal: whether one
+	// ran, why or why not, the kind before and after, the member kind it
+	// used, and how many attempts. ALWAYS SET from the result, so a refused
+	// frame's line says whether a repair was declined or ran and failed.
+	Repair FrameRepair
 }
 
 // FrameValidationEventFrom projects a repair result into the telemetry
@@ -246,9 +258,10 @@ func FrameValidationEventFrom(proposed QuestionFrame, result FrameValidationResu
 		// be blank on every line the gate actually acted on -- the same
 		// "appears only when it did not fire" defect the outcome field's
 		// own doc comment refuses.
-		Gate: DecideFrameGate(result, true),
+		Gate:   DecideFrameGate(result, true),
+		Repair: result.Repair,
 	}
-	if result.Outcome == FrameValidationOutcomeValid {
+	if result.Outcome.Accepted() {
 		event.DerivedObligationCount = len(result.Frame.Obligations)
 		event.WidenedObligationCount = len(result.Frame.WidenedObligations)
 		event.FrameVersion = result.Frame.Version

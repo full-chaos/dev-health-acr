@@ -1591,12 +1591,11 @@ type RuntimeQuestionInterpreter struct {
 // resolveFrame validates the frame a receipt proposed, records the outcome
 // on the receipt, and emits the telemetry event.
 //
-// THERE IS NO REPAIR HERE. §13.6 admits one bounded repair attempt on an
-// invalid frame, and the bound that makes it safe is deferred to its own
-// change -- so an invalid frame is REFUSED, which is the design's own
-// fallback reached immediately rather than after an attempt. What that
-// costs is measurable and is exactly what this slice measures: the
-// refusal rate and the first-failed-invariant histogram.
+// ONE BOUNDED REPAIR, AND ONLY ONE. §13.6 admits one bounded repair attempt
+// on an invalid frame. validateProposedFrame applies the I9 repair under the
+// bound frame_repair.go states; every other invalid frame is REFUSED, which
+// is the design's own fallback. The line records the repair decision beside
+// the refusal rate and the first-failed-invariant histogram.
 //
 // WHERE THIS SITS IN THE DESIGN'S FLOW, because the placement is the
 // substantive decision and not an implementation detail. §13.1's order is
@@ -1683,7 +1682,7 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 	// with the registry would count cells for a question the server
 	// declined to act on.
 	var requirements []DerivedRequirement
-	if r.Requirements != nil && result.Outcome == FrameValidationOutcomeValid {
+	if r.Requirements != nil && result.Outcome.Accepted() {
 		requirements = r.Requirements.DeriveRequirements(result.Frame)
 		summary := RequirementDerivationSummaryFrom(requirements)
 		receipt.RequirementCellsDerived = summary.Derived
@@ -1691,13 +1690,14 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 		receipt.RequirementDerivationVersion = summary.Version
 	}
 
-	switch result.Outcome {
-	case FrameValidationOutcomeValid:
+	switch {
+	case result.Outcome.Accepted():
 		// The receipt carries the VALIDATED, normalized (and backfilled)
-		// frame -- the one that would be acted on -- rather than the raw
-		// proposal, so a persisted receipt can be replayed against the
-		// table that produced it, and so it agrees with the requirement
-		// rows just derived above from this SAME frame value.
+		// frame -- the one that would be acted on, which for a repaired
+		// proposal is the repaired frame -- rather than the raw proposal, so
+		// a persisted receipt can be replayed against the table that
+		// produced it, and so it agrees with the requirement rows just
+		// derived above from this SAME frame value.
 		validated := result.Frame
 		receipt.QuestionFrame = &validated
 	default:
@@ -1736,10 +1736,20 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 // Here and not in ValidateFrame, because the hint is the receipt's and the
 // invariant table reads the frame alone; this is the one place both halves of
 // the same model call are in hand. The axis is never restored instead:
-// rewriting the model's frame from its hint would be a repair, and this slice
-// has none. One function, called by resolveFrame and by the input-domain
-// table, so the table measures what production decides.
+// rewriting the model's frame from its group hint would be a repair, and the
+// one bounded repair is for I9 only (frame_repair.go), applied here to the
+// result of validateAgainstInterpretation. One function, called by
+// resolveFrame and by the input-domain table, so the table measures what
+// production decides.
 func validateProposedFrame(receipt ModelExecutionReceipt, proposed QuestionFrame, emittedShape InvestigationShape) FrameValidationResult {
+	return repairCountKindCollapse(receipt, proposed, emittedShape, validateAgainstInterpretation(receipt, proposed, emittedShape))
+}
+
+// validateAgainstInterpretation is validation without repair: the frame's
+// invariants, then the requested-group-axis check. The bounded repair
+// revalidates its repaired frame through this same function, so the repaired
+// frame meets the same checks, unrelaxed, and is never repaired again.
+func validateAgainstInterpretation(receipt ModelExecutionReceipt, proposed QuestionFrame, emittedShape InvestigationShape) FrameValidationResult {
 	result := ValidateFrame(proposed, nil, emittedShape)
 	if result.Outcome == FrameValidationOutcomeValid && requestedGroupAxisDropped(receipt, proposed) {
 		return FrameValidationResult{
@@ -2022,7 +2032,7 @@ func (r RuntimeQuestionInterpreter) finishFamilyResolution(
 	if receipt.FrameGateOutcome == FrameGateRejectedInvalid {
 		outcome.Gate.FailedInvariant = receipt.FrameFailedInvariant
 	}
-	if receipt.QuestionFrame != nil && receipt.FrameOutcome == FrameValidationOutcomeValid {
+	if receipt.QuestionFrame != nil && receipt.FrameOutcome.Accepted() {
 		// The frame itself and its obligation set leave this point
 		// TOGETHER, from the same receipt, in one branch. Setting them in
 		// two places is how the pair would drift; a test asserts the
