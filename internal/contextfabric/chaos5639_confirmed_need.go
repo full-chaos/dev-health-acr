@@ -1,7 +1,8 @@
 package contextfabric
 
 // CHAOS-5639 (A3): a confirmed structure need persists across turns without
-// re-echo.
+// re-echo. CHAOS-5734 completes the consumers for subject_candidate,
+// subject_handle and window.
 //
 // THE DESIGN (dictation 1387, stacked on CHAOS-5465 M2): a per-need
 // confirmation ledger keyed by M2's request-identity digest, invalidated by
@@ -32,48 +33,60 @@ package contextfabric
 // ONE HOP, like D-a: only the DIRECTLY named parent's ledger is read, never
 // an older ancestor.
 //
-// HOW A REMEMBERED CONFIRMATION TAKES EFFECT, and how it does NOT.
-// appliedNeedLedgerEntries is the ONE function that decides what actually
-// applies -- every consumer (telemetry, resolution, wire disclosure) reads
-// its output rather than re-deriving "does this apply" independently, so none
-// of them can report a different answer than the others: telemetry can never
-// say "none" while a resolution parameter applies a value anyway.
+// WHAT A REMEMBERED CONFIRMATION DOES: exactly what the fresh receipt it
+// stands in for does, and no more. The ledger exists so a caller never has to
+// re-echo a receipt it already redeemed, so a remembered entry reaches the
+// consumers that receipt reached on the turn it was redeemed:
 //
-// ONLY expected_kind AND subject_anchor ARE APPLIED (subject_handle,
-// subject_candidate and window are persisted for completeness -- nothing
-// consults them yet). BOTH are admitted through exactly the checks a fresh
-// carry or receipt already passes, never a ledger-specific substitute:
-// expected_kind carries no live tampering vector, so a stale-epoch-checked,
-// same-question, identity-equal remembered value is exactly as trustworthy
-// as a receipt (canonicalizeStructure's own reverify-field doc comment,
-// structure.go -- "the confirmed kind only narrows a pool, it never stands
-// in for a fact"). subject_anchor is different -- a rival can gain the same
-// alias, or lose membership, between the offer and any later turn -- so
-// resolveConfirmedNeedLedger reverifies it through reverifyAnchorClaim, the
-// SAME dispatch (AnchorVerifier v1 / AnchorMembershipVerifier v2, on the
-// carrier's OWN schema_version) canonicalizeStructure's own ancr_ redemption
-// already uses, carrying the redeemed offer's own matched_term_hash forward
-// in ConfirmedNeedEntry for exactly that replay. A claim that fails or
-// cannot be reverified is dropped from the ledger -- never the whole
-// ledger, only that member.
+//   - expected_kind narrows the pool, through Engine.resolveCarriedKind
+//     (structure_axis_carry.go), so it passes the same gates a carried kind
+//     does (statedExpectedKindThisTurn, applyCarryDrop).
+//   - subject_anchor becomes the census anchor discriminator
+//     (confirmedAnchorSelection).
+//   - subject_candidate and subject_handle reach NO resolution parameter:
+//     GraphReader.ResolveSubjects takes none for either member, so a fresh
+//     candr_/handr_ receipt is disclosed, captured into this ledger, and
+//     compared against a carried expected_kind (subjectAxisRedeemedKinds) --
+//     nothing else. A remembered entry does those same three things
+//     (composeCarriedNeedEntry, mergeConfirmedNeedsLedger,
+//     kindCarryComparators). It is not applied as the resolved subject,
+//     because a fresh receipt is not.
+//   - window applies as the effective evidence window, where the
+//     same-conversation window carry did not already supply it
+//     (confirmed_need_window.go).
 //
-// A remembered expected_kind is NOT threaded into effectiveConfirmedKind the
-// same way. It is checked FIRST inside Engine.resolveCarriedKind itself
-// (structure_axis_carry.go) -- the kind axis's own gated producer -- so it
-// flows through the exact gates a receipt-derived carry already has to
-// survive: statedExpectedKindThisTurn (a kind the caller stated THIS turn, by
-// receipt or explicitly, is never argued with, checked by resolveCarriedKind's
-// caller before resolveCarriedKind is even invoked) and applyCarryDrop (a
-// subject-axis receipt naming a different kind stands a carried value down,
-// applied uniformly to whatever resolveCarriedKind returns). A parallel
-// precedence rule ahead of both gates, in a helper outside resolveCarriedKind,
-// would let a remembered kind override the caller's own explicit statement
-// THIS turn and survive a disagreement the legacy carry mechanism would
-// otherwise drop -- checking the ledger inside resolveCarriedKind itself is
-// what keeps that impossible.
+// ADMISSION: every member passes exactly the checks a fresh carry or receipt
+// already passes, never a ledger-specific substitute. The ledger as a whole is
+// refused for a stale graph epoch, a different question, or a changed or
+// incomparable identity. Then each member is reverified through the SAME
+// verifier its fresh redemption uses (reverifyRememberedNeed): subject_anchor
+// through reverifyAnchorClaim on the carrier's own schema_version,
+// subject_candidate through CandidateVerifier, subject_handle through
+// HandleVerifier with the offer's own pattern_id. A member that fails, or
+// that this deployment cannot reverify, is dropped alone -- never the whole
+// ledger -- and the drop is reported with its reason. expected_kind and
+// window carry no live tampering vector ("the confirmed kind only narrows a
+// pool, it never stands in for a fact"; a window is a time range), so they
+// have no reverify, exactly as their fresh redemptions have none.
+//
+// SUPERSESSION: a same-member receipt this turn, or a same-member value the
+// caller states explicitly this turn, always wins over a remembered one
+// (appliedNeedLedgerEntries); a receipt whose save-time claim was refused is
+// never persisted into the outgoing ledger (withoutSupersededConfirmedNeeds).
+//
+// A remembered expected_kind is checked FIRST inside Engine.resolveCarriedKind
+// itself -- the kind axis's own gated producer -- so it flows through the
+// exact gates a receipt-derived carry already has to survive: a kind the
+// caller stated THIS turn is never argued with, and a subject-axis receipt
+// naming a different kind stands a carried value down. A parallel precedence
+// rule in a helper outside resolveCarriedKind would let a remembered kind
+// override the caller's own explicit statement this turn -- checking the
+// ledger inside resolveCarriedKind itself is what keeps that impossible.
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -152,25 +165,64 @@ func ValidConfirmedNeedLedgerOutcome(value ConfirmedNeedLedgerOutcome) bool {
 	return false
 }
 
+// ConfirmedNeedMemberDropReason is the closed vocabulary for why ONE member of
+// an admitted ledger was dropped at redemption time while the rest of the
+// ledger stayed admitted.
+type ConfirmedNeedMemberDropReason string
+
+const (
+	// ConfirmedNeedMemberDropReverifyUnavailable: this deployment cannot
+	// reverify the member -- no verifier wired for it, or the entry lacks the
+	// input its verifier needs. Fail-closed, exactly as the member's fresh
+	// redemption fails closed on an unwired verifier.
+	ConfirmedNeedMemberDropReverifyUnavailable ConfirmedNeedMemberDropReason = "reverify_unavailable"
+	// ConfirmedNeedMemberDropReverifyNotConfirmed: the verifier ran and did
+	// not confirm the remembered value still holds for this principal at this
+	// binding (no longer visible, no longer authorized, no longer resolving,
+	// or not checkable against the live graph).
+	ConfirmedNeedMemberDropReverifyNotConfirmed ConfirmedNeedMemberDropReason = "reverify_not_confirmed"
+)
+
+func confirmedNeedMemberDropReasons() []ConfirmedNeedMemberDropReason {
+	return []ConfirmedNeedMemberDropReason{ConfirmedNeedMemberDropReverifyUnavailable, ConfirmedNeedMemberDropReverifyNotConfirmed}
+}
+
+// ValidConfirmedNeedMemberDropReason reports membership.
+func ValidConfirmedNeedMemberDropReason(value ConfirmedNeedMemberDropReason) bool {
+	for _, member := range confirmedNeedMemberDropReasons() {
+		if member == value {
+			return true
+		}
+	}
+	return false
+}
+
+// ConfirmedNeedMemberDrop is one dropped member and why.
+type ConfirmedNeedMemberDrop struct {
+	Member contractsv1.ContextFabricStructureNeedKind
+	Reason ConfirmedNeedMemberDropReason
+}
+
 // confirmedNeedLedgerResult is resolveConfirmedNeedLedger's own return: the
-// admission outcome, and -- only on a hit -- the ledger's entries (in the
-// same shape a redeemed receipt produces) and the id of the result they came
-// from, for disclosure.
+// admission outcome and -- only on a hit -- the ledger's surviving entries
+// (in the same shape a redeemed receipt produces), the members dropped at
+// reverify, and the id of the result they came from, for disclosure.
 type confirmedNeedLedgerResult struct {
 	Outcome        ConfirmedNeedLedgerOutcome
 	Entries        []confirmedStructureMember
+	Dropped        []ConfirmedNeedMemberDrop
 	SourceResultID string
 }
 
-// resolveConfirmedNeedLedger is CHAOS-5639's own need-gate admission. It
-// reads the ONE parent this request names (request.ParentResultID -- the
-// general "this turn continues that one" bearer field, D-d's own phrase),
-// and admits its ledger only when (a) the parent's snapshot decoded cleanly,
-// (b) the parent was saved at THIS turn's own graph epoch, (c) this turn asks
-// the SAME question the parent answered, and (d) this turn's recomputed
-// request identity (SemanticRequestIdentityOf, the referenced exchange
-// dropped exactly as D-a's own comparison drops it) equals the identity the
-// parent's own snapshot recorded.
+// resolveConfirmedNeedLedger is the need-gate admission. It reads the ONE
+// parent this request names (request.ParentResultID -- the general "this
+// turn continues that one" bearer field, D-d's own phrase), and admits its
+// ledger only when (a) the parent's snapshot decoded cleanly, (b) the parent
+// was saved at THIS turn's own graph epoch, (c) this turn asks the SAME
+// question the parent answered, and (d) this turn's recomputed request
+// identity (SemanticRequestIdentityOf, the referenced exchange dropped exactly
+// as D-a's own comparison drops it) equals the identity the parent's own
+// snapshot recorded. Each admitted member is then reverified on its own.
 //
 // Uses carryLoadResult (chaos4360_carry.go) so a call already made for the
 // SAME result id within this Investigate call costs no second store round
@@ -234,70 +286,146 @@ func (e *Engine) resolveConfirmedNeedLedger(ctx context.Context, principal stora
 		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerDroppedIdentityChanged}
 	}
 	entries := make([]confirmedStructureMember, 0, len(stored.SemanticState.ConfirmedNeeds))
+	var dropped []ConfirmedNeedMemberDrop
 	for _, entry := range stored.SemanticState.ConfirmedNeeds {
-		// SUBJECT_ANCHOR REDEMPTION-TIME REVERIFY: a remembered anchor gets
-		// no other check the way a fresh ancr_ receipt gets one from
-		// canonicalizeStructure's own reverify wiring -- this IS that check,
-		// replayed through the SAME reverifyAnchorClaim dispatch (structure.go)
-		// on the SAME (kind, canonical_id, matched_term_hash) triple, against
-		// the carrier's OWN schema_version. A claim that fails, or that this
-		// deployment has no verifier wired for, is dropped from the ledger --
-		// never the whole ledger, only this one member, exactly as a fresh
-		// redemption's own failure vetoes only its own member.
-		if entry.Member == contractsv1.ContextFabricStructureNeedSubjectAnchor {
-			if !e.reverifyAnchorClaim(ctx, principal, request.RequestedScope, binding, stored.Result.SchemaVersion, entry.AppliedKind, entry.AppliedValue, entry.MatchedTermHash) {
-				continue
-			}
+		if reason, ok := e.reverifyRememberedNeed(ctx, principal, request, binding, stored.Result.SchemaVersion, entry); !ok {
+			dropped = append(dropped, ConfirmedNeedMemberDrop{Member: entry.Member, Reason: reason})
+			continue
 		}
 		entries = append(entries, confirmedStructureMember{
 			Member: entry.Member, AppliedKind: entry.AppliedKind, AppliedValue: entry.AppliedValue,
-			MatchedTermHash: entry.MatchedTermHash,
+			MatchedTermHash: entry.MatchedTermHash, PatternID: entry.PatternID,
+			WindowStart: cloneWindowBound(entry.WindowStart), WindowEnd: cloneWindowBound(entry.WindowEnd),
 		})
 	}
-	return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerHit, Entries: entries, SourceResultID: parent}
+	return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerHit, Entries: entries, Dropped: dropped, SourceResultID: parent}
 }
 
-// appliedNeedLedgerEntries is CHAOS-5639's SINGLE authority for "does this
-// remembered entry actually apply this turn" -- every consumer
-// (Engine.resolveCarriedKind, confirmedAnchorSelection, composeCarriedNeedEntry,
-// telemetry) reads this map rather than re-deriving the check, so none of
-// them can disagree about what applied: a member excluded here is excluded
-// everywhere, including telemetry, and one included here is included in
-// whatever narrows resolution.
+// reverifyRememberedNeed replays, for ONE remembered member, the redemption-time
+// reverify that member's fresh receipt passes in canonicalizeStructure
+// (structure.go) -- the same verifier, the same inputs, the same fail-closed
+// rule on an unwired verifier. ok=false names why the member is dropped.
+func (e *Engine) reverifyRememberedNeed(ctx context.Context, principal storage.Principal, request InvestigationRequest, binding ResolvedGraphBinding, schemaVersion string, entry ConfirmedNeedEntry) (ConfirmedNeedMemberDropReason, bool) {
+	switch entry.Member {
+	case contractsv1.ContextFabricStructureNeedSubjectAnchor:
+		// The carrier's OWN schema_version selects the verifier, exactly as an
+		// ancr_ redemption dispatches on the issuing result's schema_version.
+		if !e.anchorReverifierWired(schemaVersion) {
+			return ConfirmedNeedMemberDropReverifyUnavailable, false
+		}
+		if !e.reverifyAnchorClaim(ctx, principal, request.RequestedScope, binding, schemaVersion, entry.AppliedKind, entry.AppliedValue, entry.MatchedTermHash) {
+			return ConfirmedNeedMemberDropReverifyNotConfirmed, false
+		}
+		return "", true
+	case contractsv1.ContextFabricStructureNeedSubjectCandidate:
+		// candr_'s own reverify: the (kind, canonical_id) still exists as a
+		// real, authorized node at THIS turn's pinned binding.
+		if e.candidateVerifier == nil {
+			return ConfirmedNeedMemberDropReverifyUnavailable, false
+		}
+		ok, reason := e.candidateVerifier(ctx, principal, request.RequestedScope, binding, entry.AppliedKind, entry.AppliedValue)
+		if !ok || reason != CandidateVerificationValid {
+			return ConfirmedNeedMemberDropReverifyNotConfirmed, false
+		}
+		return "", true
+	case contractsv1.ContextFabricStructureNeedSubjectHandle:
+		// handr_'s own reverify: the value's grammar and keyed source row, for
+		// the offer's own pattern. An entry with no pattern cannot be replayed.
+		if e.handleVerifier == nil || entry.PatternID == "" {
+			return ConfirmedNeedMemberDropReverifyUnavailable, false
+		}
+		ok, reason := e.handleVerifier(ctx, principal.OrgID, entry.AppliedKind, entry.PatternID, entry.AppliedValue)
+		if !ok || reason != HandleVerificationValid {
+			return ConfirmedNeedMemberDropReverifyNotConfirmed, false
+		}
+		return "", true
+	default:
+		// expected_kind and window: their fresh redemptions carry no reverify.
+		return "", true
+	}
+}
+
+// anchorReverifierWired reports whether reverifyAnchorClaim has a verifier to
+// run for schemaVersion -- the SAME dispatch, asked only so an unwired
+// deployment is reported apart from a claim the verifier refused.
+func (e *Engine) anchorReverifierWired(schemaVersion string) bool {
+	switch schemaVersion {
+	case InvestigationResultSchemaV1:
+		return e.anchorVerifier != nil
+	case InvestigationResultSchemaV2:
+		return e.anchorMembershipVerifier != nil
+	default:
+		return false
+	}
+}
+
+// appliedNeedLedgerEntries is the SINGLE authority for "does this remembered
+// entry apply this turn" for the four structure members -- every consumer
+// (Engine.resolveCarriedKind, confirmedAnchorSelection, kindCarryComparators,
+// composeCarriedNeedEntry, telemetry) reads this map rather than re-deriving
+// the check, so none of them can disagree about what applied: a member
+// excluded here is excluded everywhere, including telemetry. window has its
+// own consumer (decideLedgerWindow), because whether it applies depends on
+// the window carry, which runs later.
 //
-// An entry applies when: it names one of the two members with a resolution
-// parameter to reach (expected_kind, subject_anchor -- subject_handle,
-// subject_candidate and window are stored for completeness but nothing
-// consults them yet); it carries a non-empty value; and this turn's OWN
-// receipts (confirmedThisTurn) did not already confirm that member -- a real
-// receipt this turn always wins and is never argued with.
-//
-// BOTH members are safe to admit here because BOTH already passed every
-// check a fresh carry or receipt passes before ever reaching `remembered`:
-// resolveConfirmedNeedLedger (this file) drops a stale-epoch entry outright,
-// and reverifies subject_anchor specifically through reverifyAnchorClaim --
-// the SAME verifier dispatch canonicalizeStructure's own ancr_ redemption
-// uses -- dropping it alone (never the whole ledger) on a failed or
-// unverifiable claim. expected_kind needs no such reverify: it carries no
-// live tampering vector (canonicalizeStructure's own reverify-field doc
-// comment, structure.go -- "the confirmed kind only narrows a pool, it never
-// stands in for a fact").
-func appliedNeedLedgerEntries(remembered []confirmedStructureMember, confirmedThisTurn []confirmedStructureMember) map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember {
-	thisTurn := map[contractsv1.ContextFabricStructureNeedKind]bool{}
+// An entry applies when it names expected_kind, subject_anchor,
+// subject_candidate or subject_handle; it carries a non-empty value; and this
+// turn did not already state that member -- by receipt (confirmedThisTurn)
+// or by the caller's own explicit field (request.ExpectedKinds,
+// request.SubjectHandles, singular or plural). What the caller says this turn
+// always wins and is never argued with; an explicit member is also echoed on
+// the wire, and a second entry for the same member is one the v1 result
+// validator refuses.
+func appliedNeedLedgerEntries(remembered []confirmedStructureMember, confirmedThisTurn []confirmedStructureMember, request InvestigationRequest) map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember {
+	stated := map[contractsv1.ContextFabricStructureNeedKind]bool{}
 	for _, c := range confirmedThisTurn {
-		thisTurn[c.Member] = true
+		stated[c.Member] = true
+	}
+	if len(request.ExpectedKinds) > 0 {
+		stated[contractsv1.ContextFabricStructureNeedExpectedKind] = true
+	}
+	if len(request.SubjectHandles) > 0 {
+		stated[contractsv1.ContextFabricStructureNeedSubjectHandle] = true
 	}
 	out := map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember{}
 	for _, r := range remembered {
 		switch r.Member {
-		case contractsv1.ContextFabricStructureNeedExpectedKind, contractsv1.ContextFabricStructureNeedSubjectAnchor:
+		case contractsv1.ContextFabricStructureNeedExpectedKind, contractsv1.ContextFabricStructureNeedSubjectAnchor,
+			contractsv1.ContextFabricStructureNeedSubjectCandidate, contractsv1.ContextFabricStructureNeedSubjectHandle:
 		default:
 			continue
 		}
-		if r.AppliedValue == "" || thisTurn[r.Member] {
+		if r.AppliedValue == "" || stated[r.Member] {
 			continue
 		}
 		out[r.Member] = r
+	}
+	return out
+}
+
+// kindCarryComparators is the member list applyCarryDrop compares a carried
+// kind against: this turn's own receipts, plus the remembered subject-axis
+// members that apply -- the same comparator a fresh candr_/handr_ receipt
+// joins on the turn it is redeemed.
+//
+// EXCEPT when the carried kind is itself remembered. A remembered
+// expected_kind (resolveCarriedKind returns it first whenever it applies)
+// stands in for a kindr_ receipt, and a remembered candidate or handle stands
+// in for its receipt; had the caller re-echoed all of them, the kind would be
+// a confirmation on this turn rather than a carry, and no subject-axis
+// receipt drops a confirmation. Comparing the two remembered values would
+// drop on this turn a kind the redeeming turn applied, so only this turn's
+// own receipts are compared then.
+func kindCarryComparators(confirmedThisTurn []confirmedStructureMember, applied map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember) []confirmedStructureMember {
+	if _, rememberedKind := applied[contractsv1.ContextFabricStructureNeedExpectedKind]; rememberedKind {
+		return confirmedThisTurn
+	}
+	out := make([]confirmedStructureMember, 0, len(confirmedThisTurn)+2)
+	out = append(out, confirmedThisTurn...)
+	for _, member := range []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectCandidate, contractsv1.ContextFabricStructureNeedSubjectHandle} {
+		if entry, ok := applied[member]; ok {
+			out = append(out, entry)
+		}
 	}
 	return out
 }
@@ -315,10 +443,19 @@ func appliedNeedLedgerMembers(applied map[contractsv1.ContextFabricStructureNeed
 	return out
 }
 
+// confirmedNeedEntryOf is the persisted shape of one confirmed member.
+func confirmedNeedEntryOf(member confirmedStructureMember) ConfirmedNeedEntry {
+	return ConfirmedNeedEntry{
+		Member: member.Member, AppliedKind: member.AppliedKind, AppliedValue: member.AppliedValue,
+		MatchedTermHash: member.MatchedTermHash, PatternID: member.PatternID,
+		WindowStart: cloneWindowBound(member.WindowStart), WindowEnd: cloneWindowBound(member.WindowEnd),
+	}
+}
+
 // mergeConfirmedNeedsLedger builds the OUTGOING per-need ledger for a
-// result's own semantic_state (CHAOS-5639): this turn's own receipt-confirmed
-// members win over an inherited entry for the SAME member; every other
-// inherited member (the ledger this turn's own admission check admitted)
+// result's own semantic_state: this turn's own receipt-confirmed members
+// (window included) win over an inherited entry for the SAME member; every
+// other inherited member (the ledger this turn's own admission admitted)
 // carries forward unchanged. Iterated in the StructureNeedKind vocabulary's
 // own fixed order, never map order, so the canonical encoding
 // (EncodeSemanticState) is deterministic across two calls that resolve to the
@@ -326,10 +463,10 @@ func appliedNeedLedgerMembers(applied map[contractsv1.ContextFabricStructureNeed
 func mergeConfirmedNeedsLedger(remembered []confirmedStructureMember, confirmedThisTurn []confirmedStructureMember) []ConfirmedNeedEntry {
 	byMember := map[contractsv1.ContextFabricStructureNeedKind]ConfirmedNeedEntry{}
 	for _, r := range remembered {
-		byMember[r.Member] = ConfirmedNeedEntry{Member: r.Member, AppliedKind: r.AppliedKind, AppliedValue: r.AppliedValue, MatchedTermHash: r.MatchedTermHash}
+		byMember[r.Member] = confirmedNeedEntryOf(r)
 	}
 	for _, c := range confirmedThisTurn {
-		byMember[c.Member] = ConfirmedNeedEntry{Member: c.Member, AppliedKind: c.AppliedKind, AppliedValue: c.AppliedValue, MatchedTermHash: c.MatchedTermHash}
+		byMember[c.Member] = confirmedNeedEntryOf(c)
 	}
 	var out []ConfirmedNeedEntry
 	for _, member := range contractsv1.ContextFabricStructureNeedKindVocabulary() {
@@ -340,22 +477,32 @@ func mergeConfirmedNeedsLedger(remembered []confirmedStructureMember, confirmedT
 	return out
 }
 
+// axisConflictConfirmedNeeds is the outgoing ledger for the axis-conflict
+// window veto. That terminal echoes none of this turn's receipt
+// confirmations (windowVetoResult receives only the explicit members), so
+// Save claims none of them and none is a confirmation this turn won: only the
+// admitted remembered ledger carries forward.
+func axisConflictConfirmedNeeds(remembered []confirmedStructureMember) []ConfirmedNeedEntry {
+	return mergeConfirmedNeedsLedger(remembered, nil)
+}
+
 // withoutSupersededConfirmedNeeds drops every member the atomic (org,
 // prior_result_id, member) supersession claim just REFUSED (CHAOS-3927 P4:
 // ErrStructureOfferSuperseded.Members, ports.go) from the ledger about to be
 // captured onto the veto terminal Save persists instead.
 //
-// WHY THIS EXISTS. confirmedNeedsForCapture is computed once, before Save is
-// even attempted, from structureCanon.Confirmed -- the members this turn's
-// OWN receipts claimed. When Save's atomic claim on one of those members
-// loses the race, structureSupersessionVetoResult persists the SAME
-// captureAcceptedReading value the decisive path would have: recordStructureConfirmationOutcome's
+// WHY THIS EXISTS. The outgoing ledger is computed before Save is attempted,
+// from the members this turn's OWN receipts claimed. When Save's atomic claim
+// on one of those members loses the race, the veto terminal persists a
+// capture built from that SAME ledger: recordStructureConfirmationOutcome's
 // own doc comment states the invariant this must not violate --
 // "structureCanon.Confirmed genuinely won its claim" is proved ONLY by Save
 // succeeding. A receipt whose claim just lost is caller authority nothing won;
 // persisting it into the ledger unchanged would let a LATER turn, naming this
-// veto result as parent, admit expected_kind (or subject_anchor) as if the
-// claim it was refused for had actually been confirmed.
+// veto result as parent, admit that member as if the claim it was refused for
+// had actually been confirmed. Applied once, inside
+// structureSupersessionVetoResult, so every Save site that can lose the race
+// shares it (semanticStateCapture.withoutSupersededNeeds).
 func withoutSupersededConfirmedNeeds(entries []ConfirmedNeedEntry, superseded []contractsv1.ContextFabricStructureNeedKind) []ConfirmedNeedEntry {
 	if len(superseded) == 0 {
 		return entries
@@ -372,6 +519,28 @@ func withoutSupersededConfirmedNeeds(entries []ConfirmedNeedEntry, superseded []
 		out = append(out, entry)
 	}
 	return out
+}
+
+// withoutSupersededNeeds is the capture-level form of
+// withoutSupersededConfirmedNeeds: the same capture with the refused members
+// removed from its ledger and the snapshot re-encoded. A capture with no
+// snapshot, or whose ledger holds none of the refused members, is returned
+// unchanged.
+func (c semanticStateCapture) withoutSupersededNeeds(superseded []contractsv1.ContextFabricStructureNeedKind) semanticStateCapture {
+	if c.Write.State == nil || len(superseded) == 0 {
+		return c
+	}
+	kept := withoutSupersededConfirmedNeeds(c.Write.State.ConfirmedNeeds, superseded)
+	if len(kept) == len(c.Write.State.ConfirmedNeeds) {
+		return c
+	}
+	state := *c.Write.State
+	state.ConfirmedNeeds = kept
+	encoded, err := EncodeSemanticState(&state)
+	if err != nil {
+		return semanticStateCapture{Write: SemanticStateAbsent(SemanticStateAbsenceSnapshotInvalid)}
+	}
+	return semanticStateCapture{Write: SemanticStateOf(&state), EncodedBytes: len(encoded)}
 }
 
 // captureConfirmedNeedLedgerOnly builds the semantic-state capture for a
@@ -409,14 +578,16 @@ func (e *Engine) captureConfirmedNeedLedgerOnly(request InvestigationRequest, re
 }
 
 // composeCarriedNeedEntry composes the wire disclosure for a remembered
-// subject_anchor this turn actually applied -- the anchor-axis analogue of
-// composeCarriedKindEntry/composeCarriedWindowEntry, so a remembered
-// confirmation is never a "silent" carry, the discipline both of those
-// functions' own doc comments hold. NOT used for expected_kind: a remembered
-// kind is checked inside Engine.resolveCarriedKind itself and disclosed
-// through composeCarriedKindEntry already -- composing a second entry for
-// the same member here would violate the v1 result validator's "one entry
-// per member" rule.
+// subject_anchor, subject_candidate or subject_handle this turn actually
+// applied -- the analogue of composeCarriedKindEntry/composeCarriedWindowEntry,
+// so a remembered confirmation is never a "silent" carry, the discipline both
+// of those functions' own doc comments hold. Source=carried naming the parent
+// the ledger was admitted from; provenance clarification_confirmed, because
+// every entry the ledger holds was confirmed by a caller redeeming an offer.
+// NOT used for expected_kind: a remembered kind is disclosed through
+// composeCarriedKindEntry already -- composing a second entry for the same
+// member here would violate the v1 result validator's "one entry per member"
+// rule.
 func composeCarriedNeedEntry(member contractsv1.ContextFabricStructureNeedKind, applied map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember, sourceResultID string) *contractsv1.ContextFabricConfirmedStructureEntry {
 	entry, ok := applied[member]
 	if !ok {
@@ -450,25 +621,85 @@ func observableAppliedNeedMembers(appliedMembers []contractsv1.ContextFabricStru
 	return rendered
 }
 
-// recordConfirmedNeedLedger reports CHAOS-5639's own gate decision, once per
-// Investigate call: the admission outcome, the parent result id it consulted
-// (the SAME correlation handle window_continuation_decision already
-// discloses for its own referenced result, never a canonical id or free
-// text), and -- only for a member that actually applied -- the closed
-// subject-kind value it applied. Both applied kinds are closed, content-safe
-// vocabularies (mirrors RecordKindCarry's own carried_kind/redeemed_kind
-// pair): "a drop reported without both sides is a decision an operator
-// cannot check" applies here exactly as it does there.
+// observableConfirmedNeedDrops renders dropped for the log line as
+// member:reason pairs in ledger order, or "none".
+func observableConfirmedNeedDrops(dropped []ConfirmedNeedMemberDrop) string {
+	if len(dropped) == 0 {
+		return "none"
+	}
+	rendered := ""
+	for index, drop := range dropped {
+		if index > 0 {
+			rendered += ","
+		}
+		rendered += string(drop.Member) + ":" + string(drop.Reason)
+	}
+	return rendered
+}
+
+// confirmedNeedValueHash is the log-safe form of an applied canonical id or
+// handle value: SHA-256, first 6 bytes, hex -- the same construction the
+// projection coordinator uses for an org id. Empty in, empty out, so a member
+// that did not apply logs no hash.
+func confirmedNeedValueHash(value string) string {
+	if value == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:6])
+}
+
+// ConfirmedNeedLedgerEvent is everything RecordConfirmedNeedLedger reports for
+// one Investigate call. Kinds are closed subject-kind values; values are
+// hashed (confirmedNeedValueHash), never logged raw; each is empty when its
+// member did not apply.
+type ConfirmedNeedLedgerEvent struct {
+	Outcome                   ConfirmedNeedLedgerOutcome
+	SourceResultID            string
+	AppliedMembers            []contractsv1.ContextFabricStructureNeedKind
+	AppliedExpectedKind       contractsv1.ContextFabricSubjectKind
+	AppliedAnchorKind         contractsv1.ContextFabricSubjectKind
+	AppliedAnchorValueHash    string
+	AppliedCandidateKind      contractsv1.ContextFabricSubjectKind
+	AppliedCandidateValueHash string
+	AppliedHandleKind         contractsv1.ContextFabricSubjectKind
+	AppliedHandleValueHash    string
+	Dropped                   []ConfirmedNeedMemberDrop
+}
+
+// confirmedNeedLedgerEventOf builds the event from the admission result and
+// the single applied map, so the line can never report a member the map did
+// not apply.
+func confirmedNeedLedgerEventOf(ledger confirmedNeedLedgerResult, applied map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember) ConfirmedNeedLedgerEvent {
+	event := ConfirmedNeedLedgerEvent{
+		Outcome: ledger.Outcome, SourceResultID: ledger.SourceResultID,
+		AppliedMembers: appliedNeedLedgerMembers(applied), Dropped: ledger.Dropped,
+	}
+	if entry, ok := applied[contractsv1.ContextFabricStructureNeedExpectedKind]; ok {
+		event.AppliedExpectedKind = contractsv1.ContextFabricSubjectKind(entry.AppliedValue)
+	}
+	if entry, ok := applied[contractsv1.ContextFabricStructureNeedSubjectAnchor]; ok {
+		event.AppliedAnchorKind, event.AppliedAnchorValueHash = entry.AppliedKind, confirmedNeedValueHash(entry.AppliedValue)
+	}
+	if entry, ok := applied[contractsv1.ContextFabricStructureNeedSubjectCandidate]; ok {
+		event.AppliedCandidateKind, event.AppliedCandidateValueHash = entry.AppliedKind, confirmedNeedValueHash(entry.AppliedValue)
+	}
+	if entry, ok := applied[contractsv1.ContextFabricStructureNeedSubjectHandle]; ok {
+		event.AppliedHandleKind, event.AppliedHandleValueHash = entry.AppliedKind, confirmedNeedValueHash(entry.AppliedValue)
+	}
+	return event
+}
+
+// recordConfirmedNeedLedger reports the gate decision, once per Investigate
+// call: the admission outcome, the parent result id it consulted (the SAME
+// correlation handle window_continuation_decision already discloses for its
+// own referenced result), each member that applied with its closed kind and
+// hashed value, and each member dropped at reverify with its reason -- "a
+// drop reported without both sides is a decision an operator cannot check"
+// applies here exactly as it does to RecordKindCarry.
 func (e *Engine) recordConfirmedNeedLedger(ctx context.Context, principal storage.Principal, ledger confirmedNeedLedgerResult, applied map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember) {
 	if e.telemetry == nil {
 		return
 	}
-	var appliedExpectedKind, appliedAnchorKind contractsv1.ContextFabricSubjectKind
-	if entry, ok := applied[contractsv1.ContextFabricStructureNeedExpectedKind]; ok {
-		appliedExpectedKind = contractsv1.ContextFabricSubjectKind(entry.AppliedValue)
-	}
-	if entry, ok := applied[contractsv1.ContextFabricStructureNeedSubjectAnchor]; ok {
-		appliedAnchorKind = entry.AppliedKind
-	}
-	e.telemetry.RecordConfirmedNeedLedger(ctx, principal, ledger.Outcome, ledger.SourceResultID, appliedNeedLedgerMembers(applied), appliedExpectedKind, appliedAnchorKind)
+	e.telemetry.RecordConfirmedNeedLedger(ctx, principal, confirmedNeedLedgerEventOf(ledger, applied))
 }

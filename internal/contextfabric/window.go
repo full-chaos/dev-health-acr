@@ -585,6 +585,7 @@ func (e *Engine) resolveWindowReceipts(ctx context.Context, principal storage.Pr
 	confirmedMember := &confirmedStructureMember{
 		Member: contractsv1.ContextFabricStructureNeedWindow, AppliedValue: windowConfirmedAppliedValue(*option),
 		PriorResultID: resultID, ReceiptID: receiptID, OfferSource: contractsv1.ContextFabricStructureOfferEngine,
+		WindowStart: cloneWindowBound(option.Start), WindowEnd: cloneWindowBound(option.End),
 	}
 	// CHAOS-4314: this SAME receiptID redeems byte-identically whether it
 	// was offered as a plain WindowOption or ALSO annotated as the
@@ -697,12 +698,12 @@ func windowConfirmedAppliedValue(option contractsv1.ContextFabricWindowOption) s
 		return string(option.RelativeID)
 	}
 	if option.Start != nil && option.End != nil {
-		return "abs:" + formatUnixNano(*option.Start) + ":" + formatUnixNano(*option.End)
+		return windowAbsoluteAppliedValuePrefix + formatUnixNano(*option.Start) + ":" + formatUnixNano(*option.End)
 	}
 	// Unreachable given WindowOption.Validate's own invariant -- defensive
 	// fallback only, matching this file's own "skipped/handled defensively
 	// rather than offered with an invalid shape" precedent.
-	return "abs:unbounded"
+	return windowAbsoluteAppliedValuePrefix + "unbounded"
 }
 
 // windowsAgree reports whether a receipt-confirmed effective window agrees

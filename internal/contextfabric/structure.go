@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -103,6 +104,18 @@ type confirmedStructureMember struct {
 	// (reverifyAnchorClaim) a fresh ancr_ redemption already goes through,
 	// rather than trusting a stored value with nothing left to re-check.
 	MatchedTermHash string
+	// PatternID (CHAOS-5734) is the redeemed handle offer's own pattern_id,
+	// populated for subject_handle only (patternIDFor) -- HandleVerifier's
+	// own pattern argument, carried so a ledger entry persisted from this
+	// member is reverified through the SAME verifier a fresh handr_
+	// redemption uses.
+	PatternID string
+	// WindowStart/WindowEnd (CHAOS-5734) are the redeemed window option's
+	// FROZEN bounds, populated for window only (resolveWindowReceipts), so a
+	// ledger entry persisted from this member reproduces exactly the
+	// effective window the fresh winr_ redemption applied.
+	WindowStart *time.Time
+	WindowEnd   *time.Time
 }
 
 // explicitStructureMember is one member's EXPLICIT (non-receipt) value
@@ -462,6 +475,11 @@ type structureReceiptMember struct {
 	// unwired entirely (this type's own doc comment above), and
 	// subject_handle's HandleVerifier takes no term hash at all.
 	matchedTermHashFor func(stored InvestigationResult, receiptID string) string
+	// patternIDFor (CHAOS-5734) returns the redeemed offer's own pattern_id,
+	// when this member's reverify needs one to replay later (subject_handle
+	// only -- HandleVerifier's own pattern argument). nil for every other
+	// member.
+	patternIDFor func(stored InvestigationResult, receiptID string) string
 	// offerSnapshot (P1.G) echoes EVERY offer in stored's own offer list
 	// for this member (not just the redeemed one) as
 	// ContextFabricStructureOfferSnapshotEntry rows, Rank = the offer's
@@ -631,6 +649,17 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 				}
 				return handleOptionsOffered(stored.StructureNeeds.HandleOptions)
 			},
+			patternIDFor: func(stored InvestigationResult, receiptID string) string {
+				if stored.StructureNeeds == nil {
+					return ""
+				}
+				for _, opt := range stored.StructureNeeds.HandleOptions {
+					if opt.ReceiptID == receiptID {
+						return opt.PatternID
+					}
+				}
+				return ""
+			},
 			// reverify (P1.E): a handr_ redemption re-validates the stored
 			// value's grammar AND re-runs the keyed source-row existence
 			// check (design brief §2.1) -- a value that was offerable when
@@ -789,10 +818,14 @@ func (e *Engine) canonicalizeStructure(ctx context.Context, principal storage.Pr
 		if m.matchedTermHashFor != nil {
 			matchedTermHash = m.matchedTermHashFor(stored.Result, receiptID)
 		}
+		var patternID string
+		if m.patternIDFor != nil {
+			patternID = m.patternIDFor(stored.Result, receiptID)
+		}
 		confirmed = append(confirmed, confirmedStructureMember{
 			Member: m.member, AppliedValue: value, AppliedKind: kind, PriorResultID: resultID, ReceiptID: receiptID,
 			OfferSource: offerSource, PriorVersionID: priorVersionID, PriorEntryID: priorEntryID,
-			MatchedTermHash: matchedTermHash,
+			MatchedTermHash: matchedTermHash, PatternID: patternID,
 		})
 		if m.offerSnapshot != nil {
 			offerSnapshot = append(offerSnapshot, m.offerSnapshot(stored.Result)...)
@@ -960,7 +993,9 @@ func (e *Engine) structureSupersessionVetoResult(ctx context.Context, principal 
 	// "applied" against a round that was actually discarded.
 	recordStructureExplicitTelemetry(ctx, e.telemetry, principal, request, requestStructureCanonicalization{Veto: structureVetoStaleSupersededOffer})
 	echo := appendCarriedStructureEntry(staleConfirmedStructureEntries(confirmed, superseded.Members), carriedStructureEntries...)
-	return e.structureVetoResult(ctx, principal, request, structureVetoStaleSupersededOffer, echo, binding, priorSubjectReceiptDispositions, plan, ancestryParent, semantic)
+	// The refused members leave the outgoing ledger HERE, once, for every Save
+	// site that can lose the claim race (withoutSupersededConfirmedNeeds).
+	return e.structureVetoResult(ctx, principal, request, structureVetoStaleSupersededOffer, echo, binding, priorSubjectReceiptDispositions, plan, ancestryParent, semantic.withoutSupersededNeeds(superseded.Members))
 }
 
 // resolveExplicitStructure implements design brief §2.5's "explicit

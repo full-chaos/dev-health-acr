@@ -260,7 +260,7 @@ func TestAppliedNeedLedgerEntries_ExcludesWhatThisTurnAlreadyConfirmed(t *testin
 	confirmedThisTurn := []confirmedStructureMember{
 		{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(contractsv1.ContextFabricSubjectProject)},
 	}
-	got := appliedNeedLedgerEntries(remembered, confirmedThisTurn)
+	got := appliedNeedLedgerEntries(remembered, confirmedThisTurn, validInvestigationRequest())
 	if _, ok := got[contractsv1.ContextFabricStructureNeedExpectedKind]; ok {
 		t.Fatalf("applied = %#v, expected_kind must be excluded: this turn's own receipt already confirmed it", got)
 	}
@@ -278,7 +278,7 @@ func TestAppliedNeedLedgerEntries_AppliesSubjectAnchor(t *testing.T) {
 	remembered := []confirmedStructureMember{
 		{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: contractsv1.ContextFabricSubjectTeam, AppliedValue: "team_remembered"},
 	}
-	got := appliedNeedLedgerEntries(remembered, nil)
+	got := appliedNeedLedgerEntries(remembered, nil, validInvestigationRequest())
 	entry, ok := got[contractsv1.ContextFabricStructureNeedSubjectAnchor]
 	if !ok || entry.AppliedValue != "team_remembered" {
 		t.Fatalf("applied = %#v, want subject_anchor=team_remembered", got)
@@ -380,18 +380,18 @@ func TestResolveConfirmedNeedLedger_AdmitsAnchorWhenTheVerifierConfirmsIt(t *tes
 
 // TestAppliedNeedLedgerEntries_ExcludesEmptyValuesAndUnappliableMembers pins
 // two invariants at once: an entry with no value never applies (a resolution
-// parameter must never receive an empty-but-non-nil selection), and a member
-// with no resolution parameter to reach (subject_handle here) is never
-// reported as applied even though the ledger may still store it.
+// parameter must never receive an empty-but-non-nil selection), and the
+// window member is never in this map -- its own consumer (decideLedgerWindow)
+// decides it after the window carry has run.
 func TestAppliedNeedLedgerEntries_ExcludesEmptyValuesAndUnappliableMembers(t *testing.T) {
 	t.Parallel()
 	remembered := []confirmedStructureMember{
 		{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: ""},
-		{Member: contractsv1.ContextFabricStructureNeedSubjectHandle, AppliedKind: contractsv1.ContextFabricSubjectPullRequest, AppliedValue: "42"},
+		{Member: contractsv1.ContextFabricStructureNeedWindow, AppliedValue: "trailing_30d"},
 	}
-	got := appliedNeedLedgerEntries(remembered, nil)
+	got := appliedNeedLedgerEntries(remembered, nil, validInvestigationRequest())
 	if len(got) != 0 {
-		t.Fatalf("applied = %#v, want empty: an empty-valued kind and an unappliable member must both be excluded", got)
+		t.Fatalf("applied = %#v, want empty: an empty-valued kind and the window member (decided by its own consumer) must both be excluded", got)
 	}
 }
 
@@ -608,12 +608,13 @@ func TestRecordConfirmedNeedLedger_ForwardsSourceAndAppliedKinds(t *testing.T) {
 		t.Fatalf("confirmedNeedLedgers = %#v, want exactly one record", telemetry.confirmedNeedLedgers)
 	}
 	got := telemetry.confirmedNeedLedgers[0]
-	if got.outcome != ConfirmedNeedLedgerHit || got.sourceResultID != "result_parent" ||
-		got.appliedExpectedKind != contractsv1.ContextFabricSubjectTeam || got.appliedAnchorKind != contractsv1.ContextFabricSubjectProject {
-		t.Fatalf("recorded = %#v, want outcome=hit source=result_parent expected_kind=team anchor_kind=project", got)
+	if got.Outcome != ConfirmedNeedLedgerHit || got.SourceResultID != "result_parent" ||
+		got.AppliedExpectedKind != contractsv1.ContextFabricSubjectTeam || got.AppliedAnchorKind != contractsv1.ContextFabricSubjectProject ||
+		got.AppliedAnchorValueHash != confirmedNeedValueHash("p") {
+		t.Fatalf("recorded = %#v, want outcome=hit source=result_parent expected_kind=team anchor_kind=project anchor_value_hash=hash(p)", got)
 	}
-	if len(got.appliedMembers) != 2 {
-		t.Fatalf("appliedMembers = %v, want both members reported", got.appliedMembers)
+	if len(got.AppliedMembers) != 2 {
+		t.Fatalf("AppliedMembers = %v, want both members reported", got.AppliedMembers)
 	}
 }
 

@@ -603,16 +603,22 @@ type EngineTelemetry interface {
 	// ConfirmedNeedLedgerOutcome vocabulary; sourceResultID is the parent
 	// result consulted (empty when none was named), the same correlation
 	// handle RecordWindowContinuationDecision already discloses for its own
-	// referenced result. appliedMembers is non-empty only on a hit, and only
-	// for the members that actually applied to this turn's resolution (a
-	// real receipt for the same member this turn always wins over a
-	// remembered one). appliedExpectedKind/appliedAnchorKind are the closed
-	// subject-kind values actually applied for those two members (empty when
-	// that member did not apply) -- both content-safe by construction, the
-	// same discipline RecordKindCarry's own carried_kind/redeemed_kind pair
-	// holds: a drop reported without the value is a decision an operator
-	// cannot check.
-	RecordConfirmedNeedLedger(ctx context.Context, principal storage.Principal, outcome ConfirmedNeedLedgerOutcome, sourceResultID string, appliedMembers []contractsv1.ContextFabricStructureNeedKind, appliedExpectedKind, appliedAnchorKind contractsv1.ContextFabricSubjectKind)
+	// referenced result. AppliedMembers is non-empty only on a hit, and only
+	// for the members that actually applied to this turn (a same-member
+	// receipt or explicit value this turn always wins over a remembered one).
+	// Each applied member carries its closed subject kind and, for the
+	// id-bearing members, a hashed value; Dropped names each member refused
+	// at reverify with its reason -- content-safe by construction, the same
+	// discipline RecordKindCarry's own carried_kind/redeemed_kind pair holds:
+	// a drop reported without the value is a decision an operator cannot
+	// check.
+	RecordConfirmedNeedLedger(ctx context.Context, principal storage.Principal, event ConfirmedNeedLedgerEvent)
+	// RecordConfirmedNeedLedgerWindow (CHAOS-5734) reports the window member's
+	// ledger consumer: at most once per Investigate call, and only when the
+	// admitted ledger held a window entry (confirmed_need_window.go).
+	// decision is the closed ConfirmedNeedLedgerWindowDecision vocabulary;
+	// appliedWindow is the remembered relative window id, or "absolute".
+	RecordConfirmedNeedLedgerWindow(ctx context.Context, principal storage.Principal, decision ConfirmedNeedLedgerWindowDecision, sourceResultID, appliedWindow string)
 	// RecordStructureNeedsDisclosed (CHAOS-3900 P1.F, design brief §2.1's
 	// cf_structure_needs_disclosed{member}) reports one member appearing
 	// in a composed StructureNeeds.Missing -- called once per member,
@@ -1524,7 +1530,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// refuses the receipt its own veto DISPROVED and this path did not.
 		// Same shape, one member over -- recording a disproved receipt as
 		// ancestry guarantees the next turn's walk stops at miss_unloadable.
-		return e.structureVetoResult(ctx, principal, request, structureCanon.Veto, echoEntries, binding, nil, nil, ancestryRoot(request, receiptsNotYetValidated(), vetoingStructureReceiptID(request, structureCanon.Veto)), e.captureConfirmedNeedLedgerOnly(request, remembered, structureCanon.Confirmed))
+		return e.structureVetoResult(ctx, principal, request, structureCanon.Veto, echoEntries, binding, nil, nil, ancestryRoot(request, receiptsNotYetValidated(), vetoingStructureReceiptID(request, structureCanon.Veto)), e.captureConfirmedNeedLedgerOnly(request, remembered, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember)))
 	}
 
 	// CHAOS-5639: confirmedNeedLedger/remembered were already resolved above,
@@ -1534,7 +1540,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// this remembered entry apply this turn" -- every consumer below reads
 	// it rather than re-deriving the check, so none of them can disagree
 	// about what applied (chaos5639_confirmed_need.go's own doc comment).
-	appliedNeeds := appliedNeedLedgerEntries(remembered, structureCanon.Confirmed)
+	// confirmedThisTurn is every member this request's own receipts confirmed,
+	// window included -- a redeemed winr_ lands in windowCanon.ConfirmedMember,
+	// never in structureCanon.Confirmed.
+	confirmedThisTurn := mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember)
+	appliedNeeds := appliedNeedLedgerEntries(remembered, confirmedThisTurn, request)
 	e.recordConfirmedNeedLedger(ctx, principal, confirmedNeedLedger, appliedNeeds)
 	// The OUTGOING ledger for whatever result this turn saves: this turn's
 	// own confirmations over whatever remembered still admits. Computed once
@@ -1542,7 +1552,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// three pre-interpretation exits above compute their own version through
 	// captureConfirmedNeedLedgerOnly instead, since structureCanon.Confirmed
 	// does not exist yet at two of them.
-	confirmedNeedsForCapture := mergeConfirmedNeedsLedger(remembered, structureCanon.Confirmed)
+	confirmedNeedsForCapture := mergeConfirmedNeedsLedger(remembered, confirmedThisTurn)
 
 	// CHAOS-3782 answer reuse. This MUST run before Interpret -- that
 	// ordering is the entire mechanism behind AC-3782-1's zero-model-call
@@ -2200,7 +2210,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// a confirmed window receipt whose interpretation moves the axis to
 		// historical lands here -- and the result is SAVED, so a plan
 		// omitted here is missing from a persisted answer permanently.
-		veto, vetoErr := e.windowVetoResult(ctx, principal, request, windowVetoAxisConflict, &interpretation, nil, binding, axisConflictDispositions, structureCanon.Explicit, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts)), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture))
+		veto, vetoErr := e.windowVetoResult(ctx, principal, request, windowVetoAxisConflict, &interpretation, nil, binding, axisConflictDispositions, structureCanon.Explicit, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts)), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, axisConflictConfirmedNeeds(remembered)))
 		return veto, vetoErr
 	}
 	// CHAOS-3977 P5 (design brief §3.4): ONE prior consult per Investigate
@@ -2252,6 +2262,19 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			effectiveWindow = windowCarry.Window
 		}
 	}
+	// CHAOS-5734: the confirmed-need ledger's window consumer, decided HERE,
+	// right after the window carry, because the carrier wins: a remembered
+	// window applies only when the carrier missed and this turn's own window
+	// would otherwise be an inferred default (confirmed_need_window.go). One
+	// decision, read by the effective window, the disclosure and the line.
+	ledgerWindow := decideLedgerWindow(confirmedNeedLedger, effectiveWindow, windowCarry)
+	if ledgerWindow.Applied() {
+		effectiveWindow = ledgerWindow.Window
+	}
+	e.recordConfirmedNeedLedgerWindow(ctx, principal, ledgerWindow)
+	// windowCarried is the ONE carried-vs-inferred flag every window
+	// canonicalization outcome below reads.
+	windowCarried := windowCarry.Outcome == WindowCarryHit || ledgerWindow.Applied()
 	// Same-conversation expected_kind carry (structure_axis_carry.go), the
 	// structure-axis twin of the window carry above. Attempted ONLY when
 	// this turn states no kind of its own -- by receipt OR explicitly. A kind
@@ -2275,7 +2298,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		kindCarry = e.resolveCarriedKind(carryCtx, principal, request, priorValidatedReceipts, binding, appliedNeeds, confirmedNeedLedger.SourceResultID)
 		// Compare and drop BEFORE the disclosure is composed and before the
 		// outcome is recorded, so all three views agree.
-		kindCarry = applyCarryDrop(structureCanon.Confirmed, kindCarry)
+		// CHAOS-5734: a remembered subject_candidate/subject_handle joins the
+		// comparator exactly as its fresh receipt would (kindCarryComparators).
+		kindCarry = applyCarryDrop(kindCarryComparators(structureCanon.Confirmed, appliedNeeds), kindCarry)
 	}
 	// F1(a): a parent the drift gate REFUSED must not become durable ancestry.
 	// Recording it leaves laundering material behind -- the next turn naming
@@ -2299,6 +2324,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// through (unlike expected_kind, just above), so it needs its own
 		// disclosure -- never silent, the same discipline the other two hold.
 		composeCarriedNeedEntry(contractsv1.ContextFabricStructureNeedSubjectAnchor, appliedNeeds, confirmedNeedLedger.SourceResultID),
+		// CHAOS-5734: the same disclosure for a remembered candidate or handle,
+		// and for a remembered window the carrier did not already supply.
+		composeCarriedNeedEntry(contractsv1.ContextFabricStructureNeedSubjectCandidate, appliedNeeds, confirmedNeedLedger.SourceResultID),
+		composeCarriedNeedEntry(contractsv1.ContextFabricStructureNeedSubjectHandle, appliedNeeds, confirmedNeedLedger.SourceResultID),
+		composeLedgerWindowEntry(ledgerWindow),
 	}
 	if effectiveWindow != nil && effectiveWindow.Provenance == WindowInferredDefault {
 		// CHAOS-4234: the gate still fires HERE, before anything decisive,
@@ -2425,7 +2455,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			gateResolution.PriorSubjectReceiptDispositions = composePriorSubjectReceiptDispositions(priorOutcomes, gateResolution)
 			e.recordPriorSubjectReceiptSkips(ctx, principal, gateResolution.PriorSubjectReceiptDispositions, priorHintsStaleGraphEpochDelta)
 		}
-		return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, gateResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, gateMaterial, effectiveWindow, windowCarry.Outcome == WindowCarryHit, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture))
+		return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, gateResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, gateMaterial, effectiveWindow, windowCarried, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture))
 	}
 	resolution, structureMaterial, commitBases, commitDigests, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, effectiveConfirmedKind(structureCanon.Confirmed, kindCarry), confirmedAnchorSelection(structureCanon.Confirmed, appliedNeeds), familyOutcome.Frame, ScopeAnchorRetrievalKind(familyOutcome.Frame, familyOutcome.WinningSample.ScopeAnchorKind))
 	if err != nil {
@@ -2469,7 +2499,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				emptyResolution.PriorSubjectReceiptDispositions = composePriorSubjectReceiptDispositions(priorOutcomes, emptyResolution)
 				e.recordPriorSubjectReceiptSkips(ctx, principal, emptyResolution.PriorSubjectReceiptDispositions, priorHintsStaleGraphEpochDelta)
 			}
-			terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, emptyResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarry.Outcome == WindowCarryHit, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture))
+			terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, emptyResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture))
 			return terminal, terminalErr
 		}
 		// CHAOS-4088: StageSubjectResolution, not StageResolution -- the
@@ -2563,7 +2593,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// read facts for, and it must keep running.
 	subjects := investigationSubjects(resolution, graphContext.Cohort)
 	if len(subjects) == 0 {
-		terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarry.Outcome == WindowCarryHit, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture))
+		terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture))
 		return terminal, terminalErr
 	}
 
@@ -2703,7 +2733,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// to describe. Both kinds are on the Info line above.
 			plan.MemberKind = ""
 			collapsedResolution := SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}
-			terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, collapsedResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarry.Outcome == WindowCarryHit, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture))
+			terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, collapsedResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture))
 			return terminal, terminalErr
 		}
 	}
@@ -3119,7 +3149,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		Request:    request, Interpretation: interpretation, Frame: familyOutcome.Frame,
 		Graph: graphContext, Facts: facts,
 		Resolution: resolution, CohortSignalCitations: cohortSignalCitations,
-		EffectiveWindow: effectiveWindow, WindowCanon: windowCanon, WindowCarry: windowCarry,
+		EffectiveWindow: effectiveWindow, WindowCanon: windowCanon, WindowCarried: windowCarried,
 		StructureCanon: structureCanon, CarriedStructureEntries: carriedStructureEntries,
 		CommitBases: commitBases, CommitDigests: commitDigests,
 		GroupedNarrowingBasis: stage2GroupedBasis,
@@ -3306,12 +3336,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// reported -- which is the whole point of doing this as a
 				// sweep: the class was "post-plan exits", never "this exit".
 				// CHAOS-5639: the members named in superseded.Members just
-				// lost their atomic claim -- never capture them into the
-				// veto result's own ledger, or a later turn naming THIS
-				// result as parent would admit a confirmation this exact
-				// Save call just refused (withoutSupersededConfirmedNeeds's
+				// lost their atomic claim -- structureSupersessionVetoResult
+				// removes them from the capture's ledger, or a later turn
+				// naming THIS result as parent would admit a confirmation this
+				// exact Save call just refused (withoutSupersededConfirmedNeeds's
 				// own doc comment, chaos5639_confirmed_need.go).
-				superseding, supersededErr := e.structureSupersessionVetoResult(ctx, principal, request, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, withoutSupersededConfirmedNeeds(confirmedNeedsForCapture, superseded.Members)))
+				superseding, supersededErr := e.structureSupersessionVetoResult(ctx, principal, request, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture))
 				return superseding, supersededErr
 			}
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
