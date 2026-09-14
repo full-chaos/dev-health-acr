@@ -296,8 +296,8 @@ func repairCells() []repairCell {
 			wantLine: refusedI9("declined_hint_unservable", "named_subject"),
 		},
 		{
-			// RULING: an explicit set enumerates named operands and is not a
-			// scoped cohort, so a count over one is never repaired.
+			// An explicit set enumerates named operands and is not a scoped
+			// cohort, so it is never repaired.
 			cell: "explicit_set count with a hint", receipt: func(*ModelExecutionReceipt) {},
 			frame: withFrame(func(frame *QuestionFrame) {
 				frame.SubjectExpression = SubjectExpression{Kind: SubjectExpressionExplicitSet, Explicit: &ExplicitSetExpression{Operands: []SubjectOperand{
@@ -498,8 +498,8 @@ func TestClassAScoresZeroOverTheRepairedFixture(t *testing.T) {
 			t.Errorf("%s: accepted frame variant/member/group = %q/%q/%q, want the row's intended %q/%q/%q",
 				rep.name, accepted.SubjectExpression.Kind, member, group, intendedVariant, intendedMember, intendedGroup)
 		}
-		if !reflect.DeepEqual(accepted.SubjectExpression.Scoped.AnchorTerms, rep.terms) {
-			t.Errorf("%s: anchor terms = %#v, want %#v", rep.name, accepted.SubjectExpression.Scoped.AnchorTerms, rep.terms)
+		if scoped := accepted.SubjectExpression.Scoped; scoped == nil || !reflect.DeepEqual(scoped.AnchorTerms, rep.terms) {
+			t.Errorf("%s: scoped variant = %+v, want anchor terms %#v", rep.name, scoped, rep.terms)
 		}
 	}
 	if triggered != 0 {
