@@ -230,6 +230,88 @@ func TestChaos5751WorkItemProvidersUseCurrentRepositoryMetadata(t *testing.T) {
 	})
 }
 
+// TestChaos5751SubsecondDeadlineUsesClientContextWithoutRounding proves the
+// boundary the readers API can represent. A remaining deadline below one
+// second must not be rounded up into a one-second SETTINGS ceiling. The real
+// client still receives the caller context, so a deliberately slow server
+// query is canceled before it can finish.
+func TestChaos5751SubsecondDeadlineUsesClientContextWithoutRounding(t *testing.T) {
+	query, direct := sharedClickHouseFixture(t)
+	orgID := sharedTestOrgID(t)
+	at := time.Now().UTC().Truncate(time.Millisecond)
+	seedChaos5751WorkItems(t, context.Background(), direct, orgID, at)
+
+	client := &chaos5751CountingClickHouseClient{inner: query}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactStatus)
+	ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
+	defer cancel()
+	_, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID}, contextfabric.FactQuery{
+		Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind:     contextfabric.FactStatus,
+		Subjects: []contextfabric.SubjectRef{workItemSubject(chaos5751LiveRepoA, "WI-A")},
+	})
+	if err != nil {
+		t.Fatalf("status ReadFacts() error = %v", err)
+	}
+	if client.calls != 1 {
+		t.Fatalf("status query calls = %d, want exactly one", client.calls)
+	}
+	statementHasExecutionLimit := strings.Contains(client.statements[0], "max_execution_time")
+	if statementHasExecutionLimit {
+		t.Fatalf("sub-second statement = %q, want no rounded-up max_execution_time", client.statements[0])
+	}
+
+	serverStatement := readers.WithSettings(
+		"SELECT sleepEachRow(1) FROM numbers(3) SETTINGS max_block_size = 1",
+		readers.Settings{MaxExecutionTimeSeconds: 1},
+	)
+	serverStarted := time.Now()
+	serverRows, serverErr := query.Query(context.Background(), serverStatement, nil)
+	if serverErr == nil {
+		for serverRows.Next() {
+		}
+		serverErr = serverRows.Err()
+		if closeErr := serverRows.Close(); closeErr != nil && serverErr == nil {
+			serverErr = closeErr
+		}
+	}
+	if serverErr == nil {
+		t.Fatal("whole-second real-server query unexpectedly completed")
+	}
+	var serverException *clickhousedriver.Exception
+	if !errors.As(serverErr, &serverException) {
+		t.Fatalf("whole-second real-server query error = %v, want a native ClickHouse exception", serverErr)
+	}
+	if serverException.Code != 159 {
+		t.Fatalf("whole-second real-server query native error code = %d, want 159 (TIMEOUT_EXCEEDED)", serverException.Code)
+	}
+	t.Logf("whole-second server deadline control: native_error_code=%d query_error=%v elapsed=%s", serverException.Code, serverErr, time.Since(serverStarted))
+
+	probeCtx, probeCancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer probeCancel()
+	started := time.Now()
+	rows, err := query.Query(probeCtx, "SELECT sleepEachRow(1) FROM numbers(3) SETTINGS max_block_size = 1", nil)
+	if err == nil {
+		for rows.Next() {
+		}
+		err = rows.Err()
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}
+	if err == nil {
+		t.Fatal("sub-second real-client query unexpectedly completed")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("sub-second real-client query error = %v, want context.DeadlineExceeded", err)
+	}
+	elapsed := time.Since(started)
+	t.Logf("sub-second deadline control: statement_has_max_execution_time=%t query_error_type=%T query_error=%v elapsed=%s", statementHasExecutionLimit, err, err, elapsed)
+	if elapsed >= time.Second {
+		t.Fatalf("sub-second real-client query took %s, want cancellation before one second", elapsed)
+	}
+}
+
 // TestChaos5751WorkItemReadersReadK200WithIndependentPhysicalCeilings proves
 // the fixed reader settings against the production tables and client. The
 // first arm returns exactly the 200-row fact budget; the second scans the same
