@@ -651,6 +651,25 @@ def main():
                   f"ask_dev_sha {sv_pin['ask_dev_sha']} names HEAD, not the working "
                   "tree this run actually scored with", file=sys.stderr)
 
+    # CHAOS-5722: the persisted-semantic-state adapter is built ONCE per run
+    # (never per row) and is ADDITIVE, the same discipline as the ask-dev
+    # pin above -- its absence (no trial-postgres env recipe bound to this
+    # process) is named on stderr and in provenance but never a MERGE ABORT:
+    # every `any_of` serve branch just scores `unscored`/`semantic_state_absent`
+    # exactly as it did before this ticket. Built regardless of whether the
+    # ask-dev pin resolved (`sv_module` may be None): the adapter itself
+    # only needs `PersistedSemanticStateUnreadable`'s name off that module,
+    # never used when there is no scorer to hand it to.
+    sv_persisted_state_available = sv_bridge.trial_postgres_env_present()
+    sv_persisted_state_adapter = None
+    if sv_module is not None:
+        if sv_persisted_state_available:
+            sv_persisted_state_adapter = sv_bridge.make_persisted_semantic_state_adapter(sv_module)
+        else:
+            print("NOTE: trial-postgres env recipe (ACR_TEST_TRIAL_PG_*) not fully present -- "
+                  "every any_of serve branch this run scores will read the persisted-state link "
+                  "as absent, never a merge abort", file=sys.stderr)
+
     # INSTRUMENT V2 — subject identity, read back from the raw attempt files under
     # the SAME --in root. Applies retroactively to any arm that kept its per-attempt
     # JSON, which is why arm 2 and arm 3B can both be re-scored without re-running.
@@ -713,6 +732,7 @@ def main():
                 subject_substitution=bool(subs_by_id.get(r["corpus_id"])),
                 identity_state=_states.get(r["corpus_id"], "read"),
                 disclosed_basis=_disclosed_basis.get(r["corpus_id"]),
+                persisted_semantic_state=sv_persisted_state_adapter,
             )
             for r in rows
         }
@@ -731,6 +751,11 @@ def main():
             "ask_dev_dirty": sv_pin["ask_dev_dirty"],
             "ask_dev_root": sv_pin["ask_dev_root"],
             "corpus_version": _corpus_version,
+            # CHAOS-5722: NAMED the same way ask_dev availability above is --
+            # a reader must be able to tell "this run had no trial-postgres
+            # binding" apart from "every any_of serve branch's persisted
+            # link genuinely came up absent" from provenance.json alone.
+            "persisted_semantic_state_available": sv_persisted_state_adapter is not None,
             **sv_bridge.aggregate(_sv_by_id.values()),
         }
     else:
@@ -741,6 +766,7 @@ def main():
         provenance["semantic_verdict"] = {
             "available": False,
             "reason": sv_unavailable_reason,
+            "persisted_semantic_state_available": False,
         }
 
     # codex r2 P1: `rig_diagnostics.attempt_upstream_504_n` / `attempt_overrun_413_n`

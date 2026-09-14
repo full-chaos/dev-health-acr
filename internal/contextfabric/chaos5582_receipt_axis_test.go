@@ -666,8 +666,8 @@ func TestCHAOS5582_ACarriedReadingOnAnEstablishedTransitionKeepsTheConfirmedAxis
 	// It was written when the carried reading had to be substituted into THIS
 	// turn's fresh frame: a carrier whose family groups nothing, read beside a
 	// fresh grouped proposal, had nowhere to put its axis, so composition
-	// failed (carried_axis_unexpressible) and the turn ended on the carrier's
-	// own refusal. The reading is now persisted WITH ITS FRAME, so composition
+	// failed on that mismatch and the turn ended on the carrier's own
+	// refusal. The reading is now persisted WITH ITS FRAME, so composition
 	// runs on what turn one actually validated and never consults the fresh
 	// proposal's shape at all -- an established transition cannot fail here
 	// for want of somewhere to put the axis.

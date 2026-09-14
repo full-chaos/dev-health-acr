@@ -104,3 +104,30 @@ func TestCHAOS5582_TheSpecificationDeclaresExactlyTheEmittedKeys(t *testing.T) {
 		}
 	}
 }
+
+// TestCompositionFailedInvariant_EveryProducedValueCertifies drives the real
+// production sink for every invariant composeAcceptedContext can produce and
+// certifies the emitted line against the eventspec declaration -- closing the
+// gap a hand-typed vocabulary list can pass while the two disagree: a
+// unit-level pin on compositionInvariants() proves the value exists, but only
+// a certified production line proves the WIRE declares it too.
+func TestCompositionFailedInvariant_EveryProducedValueCertifies(t *testing.T) {
+	t.Parallel()
+	for _, invariant := range contextfabric.CompositionInvariantsForTest() {
+		invariant := invariant
+		t.Run(invariant, func(t *testing.T) {
+			t.Parallel()
+			raw, requestID := contextfabric.RunCompositionFailureForTest(t, invariant)
+			log, err := certify.Parse(raw)
+			if err != nil {
+				t.Fatalf("certify.Parse(): %v", err)
+			}
+			if _, err := certify.Certify(log, certify.Assertion{
+				Event: eventspec.WindowContinuationDecision,
+				Want:  map[string]any{"request_id": requestID, "composition_failed_invariant": invariant},
+			}); err != nil {
+				t.Fatalf("the downstream certifier rejected a real production line naming %q: %v", invariant, err)
+			}
+		})
+	}
+}
