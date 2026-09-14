@@ -629,6 +629,46 @@ func composeCarriedNeedEntry(member contractsv1.ContextFabricStructureNeedKind, 
 	}
 }
 
+// appendVetoedRememberedNeeds discloses reverified confirmations when the
+// structure batch ends before its consumers run. The value is remembered,
+// but its disposition is the batch veto, never applied. A member supplied
+// on this request, or already echoed by canonicalization, keeps that entry.
+// Window has its own request-side decision and is not part of this batch.
+func appendVetoedRememberedNeeds(echo []ConfirmedStructureEntry, ledger confirmedNeedLedgerResult, request InvestigationRequest, veto structureVetoReason) []ConfirmedStructureEntry {
+	var disposition contractsv1.ContextFabricStructureDisposition
+	switch veto {
+	case structureVetoConfirmationUnresolved:
+		disposition = contractsv1.ContextFabricStructureDispositionVetoedUnresolved
+	case structureVetoConfirmationConflict:
+		disposition = contractsv1.ContextFabricStructureDispositionVetoedConflict
+	case structureVetoStaleSupersededOffer:
+		disposition = contractsv1.ContextFabricStructureDispositionVetoedStale
+	default:
+		return echo
+	}
+	var supplied []confirmedStructureMember
+	for _, entry := range echo {
+		supplied = append(supplied, confirmedStructureMember{Member: entry.Member})
+	}
+	for member, receipts := range map[contractsv1.ContextFabricStructureNeedKind][]BoundSubjectReceipt{
+		contractsv1.ContextFabricStructureNeedExpectedKind:     request.PriorKindReceipts,
+		contractsv1.ContextFabricStructureNeedSubjectAnchor:    request.PriorAnchorReceipts,
+		contractsv1.ContextFabricStructureNeedSubjectHandle:    request.PriorHandleReceipts,
+		contractsv1.ContextFabricStructureNeedSubjectCandidate: request.PriorCandidateReceipts,
+	} {
+		if len(receipts) > 0 {
+			supplied = append(supplied, confirmedStructureMember{Member: member})
+		}
+	}
+	remembered := appliedNeedLedgerEntries(ledger.Entries, supplied, request)
+	for _, member := range appliedNeedLedgerMembers(remembered) {
+		entry := composeCarriedNeedEntry(member, remembered, ledger.SourceResultID)
+		entry.Disposition = disposition
+		echo = append(echo, *entry)
+	}
+	return echo
+}
+
 // observableAppliedNeedMembers renders appliedMembers for the log line, with
 // the explicit "none" token a zero value would otherwise leave
 // indistinguishable from a key nobody wrote (mirrors

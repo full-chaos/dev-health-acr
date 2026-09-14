@@ -1543,6 +1543,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// request-side canonicalization above -- the receipt it stands in for
 		// is echoed here, so it is.
 		echoEntries = appendCarriedStructureEntry(echoEntries, composeLedgerWindowEntry(ledgerWindow))
+		echoEntries = appendVetoedRememberedNeeds(echoEntries, confirmedNeedLedger, request, structureCanon.Veto)
 		// CHAOS-3478: nil -- canonicalizeStructure fires before
 		// resolvePriorSubjectHints (this call site's own ordering), the
 		// same "nothing attempted yet" convention every other

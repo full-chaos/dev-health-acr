@@ -1712,3 +1712,160 @@ func TestMergeConfirmedNeedsLedger_StatedThisTurnRetiresTheRemembered(t *testing
 		}
 	}
 }
+
+func TestConfirmedNeedConsumers_StructureVetoEchoParity(t *testing.T) {
+	for _, member := range []contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedExpectedKind, contractsv1.ContextFabricStructureNeedSubjectAnchor, contractsv1.ContextFabricStructureNeedSubjectHandle, contractsv1.ContextFabricStructureNeedSubjectCandidate} {
+		t.Run(string(member), func(t *testing.T) {
+			h := newNeedTurnHarness(t, nil, func(d *EngineDependencies) {
+				d.AnchorVerifier = func(context.Context, string, contractsv1.ContextFabricSubjectKind, string, string) (bool, AnchorVerificationReason) {
+					return true, AnchorVerificationValid
+				}
+				d.AnchorMembershipVerifier = func(context.Context, storage.Principal, RequestedScope, ResolvedGraphBinding, contractsv1.ContextFabricSubjectKind, string, string) (bool, AnchorVerificationReason) {
+					return true, AnchorVerificationValid
+				}
+			})
+			response := candidateOfferingNeedResponse()
+			response.material.Missing = []contractsv1.ContextFabricStructureNeedKind{member}
+			switch member {
+			case contractsv1.ContextFabricStructureNeedExpectedKind:
+				response.material.CandidateOptions = nil
+				response.material.KindOptions = []KindOption{{Label: "a repository", Kind: SubjectRepository, OfferSource: "engine"}}
+			case contractsv1.ContextFabricStructureNeedSubjectAnchor:
+				response.material.CandidateOptions = nil
+				response.material.AnchorOptions = []AnchorOption{{Label: "need-r2", Kind: SubjectRepository, CanonicalID: "repository:need-r2", MatchedTermHash: "aa11bb22cc33dd44ee55ff66", OfferSource: "engine"}}
+			case contractsv1.ContextFabricStructureNeedSubjectHandle:
+				response = handleOfferingNeedResponse()
+			}
+			one := h.turn(needTurnRequest("request_need_veto_offer", true), response)
+			if one.result.StructureNeeds == nil {
+				t.Fatal("fixture: expected generated offer")
+			}
+			confirm := func(r *InvestigationRequest) {
+				var receipt string
+				switch member {
+				case contractsv1.ContextFabricStructureNeedExpectedKind:
+					receipt = one.result.StructureNeeds.KindOptions[0].ReceiptID
+					r.PriorKindReceipts = []BoundSubjectReceipt{{ResultID: one.result.ResultID, ReceiptID: receipt}}
+				case contractsv1.ContextFabricStructureNeedSubjectAnchor:
+					receipt = one.result.StructureNeeds.AnchorOptions[0].ReceiptID
+					r.PriorAnchorReceipts = []BoundSubjectReceipt{{ResultID: one.result.ResultID, ReceiptID: receipt}}
+				case contractsv1.ContextFabricStructureNeedSubjectHandle:
+					receipt = one.result.StructureNeeds.HandleOptions[0].ReceiptID
+					r.PriorHandleReceipts = []BoundSubjectReceipt{{ResultID: one.result.ResultID, ReceiptID: receipt}}
+				case contractsv1.ContextFabricStructureNeedSubjectCandidate:
+					receipt = one.result.StructureNeeds.CandidateOptions[0].ReceiptID
+					r.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: one.result.ResultID, ReceiptID: receipt}}
+				}
+			}
+			parentReq := needTurnRequest("request_need_veto_parent", true)
+			confirm(&parentReq)
+			parent := h.turn(parentReq, committingNeedResponse())
+			if parent.saved == nil || len(parent.saved.ConfirmedNeeds) != 1 {
+				t.Fatalf("fixture: one persisted confirmation required: %#v", parent.saved)
+			}
+			ledgerReq := continuingNeedTurn(needTurnRequest("request_need_veto_ledger", true), parent.result.ResultID)
+			wantDisposition := contractsv1.ContextFabricStructureDispositionVetoedUnresolved
+			if member == contractsv1.ContextFabricStructureNeedSubjectCandidate {
+				// Candidate is last in the receipt loop. A conflict after that loop
+				// proves it was confirmed before the veto, rather than never evaluated.
+				handleOffer := h.turn(needTurnRequest("request_need_veto_handle_offer", true), handleOfferingNeedResponse())
+				ledgerReq.PriorHandleReceipts = []BoundSubjectReceipt{{ResultID: handleOffer.result.ResultID, ReceiptID: handleOffer.result.StructureNeeds.HandleOptions[0].ReceiptID}}
+				ledgerReq.SubjectHandles = []contractsv1.ContextFabricRequestedHandle{{Kind: SubjectPullRequest, PatternID: "pull_request_number", Value: "777"}}
+				wantDisposition = contractsv1.ContextFabricStructureDispositionVetoedConflict
+			} else {
+				ledgerReq.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: one.result.ResultID, ReceiptID: "candr_missing00001"}}
+			}
+			freshReq := ledgerReq
+			freshReq.RequestID = "request_need_veto_fresh"
+			confirm(&freshReq)
+			fresh := h.turn(freshReq, committingNeedResponse())
+			ledger := h.turn(ledgerReq, committingNeedResponse())
+			f := memberEntries(fresh.result, member)
+			l := memberEntries(ledger.result, member)
+			if fresh.result.Status != InvestigationNoMatch || ledger.result.Status != InvestigationNoMatch || len(f) != 1 || f[0].Disposition != wantDisposition || len(ledger.calls) != 0 || soleLedgerEvent(t, ledger).Outcome != ConfirmedNeedLedgerHit {
+				t.Fatalf("fixture: fresh=%#v ledger=%#v", f, l)
+			}
+			if len(l) != 1 || l[0].AppliedValue != f[0].AppliedValue || l[0].Disposition != f[0].Disposition || l[0].Source != contractsv1.ContextFabricStructureSourceCarried || l[0].PriorResultID != parent.result.ResultID || l[0].ReceiptID != "" {
+				t.Errorf("ledger echo=%#v fresh=%#v: want same value/disposition with carried provenance", l, f)
+			}
+			if ledger.saved == nil || !reflect.DeepEqual(ledger.saved.ConfirmedNeeds, parent.saved.ConfirmedNeeds) {
+				t.Error("veto lost the previously confirmed ledger")
+			}
+			controlReq := ledgerReq
+			controlReq.RequestID = "request_need_veto_changed_scope"
+			controlReq.RequestedScope.RepositorySlugs = []string{"full-chaos/dev-health-acr"}
+			control := h.turn(controlReq, committingNeedResponse())
+			if soleLedgerEvent(t, control).Outcome != ConfirmedNeedLedgerDroppedIdentityChanged || len(memberEntries(control.result, member)) != 0 {
+				t.Fatal("changed identity disclosed a remembered member")
+			}
+		})
+	}
+}
+
+func TestAppendVetoedRememberedNeeds(t *testing.T) {
+	t.Parallel()
+	ledger := confirmedNeedLedgerResult{SourceResultID: "result_need_veto_parent", Entries: []confirmedStructureMember{
+		{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(SubjectRepository)},
+		{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedValue: "repository:need-anchor"},
+		{Member: contractsv1.ContextFabricStructureNeedSubjectHandle, AppliedValue: "532"},
+		{Member: contractsv1.ContextFabricStructureNeedSubjectCandidate, AppliedValue: "repository:need-candidate"},
+		{Member: contractsv1.ContextFabricStructureNeedWindow, AppliedValue: string(RelativeWindowTrailing90D)},
+	}}
+	for veto, disposition := range map[structureVetoReason]contractsv1.ContextFabricStructureDisposition{structureVetoConfirmationUnresolved: contractsv1.ContextFabricStructureDispositionVetoedUnresolved, structureVetoConfirmationConflict: contractsv1.ContextFabricStructureDispositionVetoedConflict, structureVetoStaleSupersededOffer: contractsv1.ContextFabricStructureDispositionVetoedStale} {
+		got := appendVetoedRememberedNeeds(nil, ledger, InvestigationRequest{}, veto)
+		if len(got) != 4 {
+			t.Fatalf("%s entries=%#v, want four structure members", veto, got)
+		}
+		for _, entry := range got {
+			if err := entry.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			if entry.Disposition != disposition || entry.Source != contractsv1.ContextFabricStructureSourceCarried || entry.Member == contractsv1.ContextFabricStructureNeedWindow || entry.PriorResultID != ledger.SourceResultID {
+				t.Fatalf("%s: %#v", veto, entry)
+			}
+		}
+	}
+	for _, veto := range []structureVetoReason{structureVetoNone, "unrecognized"} {
+		if got := appendVetoedRememberedNeeds(nil, ledger, InvestigationRequest{}, veto); len(got) != 0 {
+			t.Fatalf("non-veto %q emitted %#v", veto, got)
+		}
+	}
+	receipt := []BoundSubjectReceipt{{ResultID: "result_fresh_need", ReceiptID: "receipt_fresh_need"}}
+	for _, cell := range []struct {
+		name    string
+		request InvestigationRequest
+		blocked contractsv1.ContextFabricStructureNeedKind
+	}{
+		{"kind receipt", InvestigationRequest{PriorKindReceipts: receipt}, contractsv1.ContextFabricStructureNeedExpectedKind},
+		{"anchor receipt", InvestigationRequest{PriorAnchorReceipts: receipt}, contractsv1.ContextFabricStructureNeedSubjectAnchor},
+		{"handle receipt", InvestigationRequest{PriorHandleReceipts: receipt}, contractsv1.ContextFabricStructureNeedSubjectHandle},
+		{"candidate receipt", InvestigationRequest{PriorCandidateReceipts: receipt}, contractsv1.ContextFabricStructureNeedSubjectCandidate},
+		{"explicit kind", InvestigationRequest{ExpectedKinds: []SubjectKind{SubjectTeam}}, contractsv1.ContextFabricStructureNeedExpectedKind},
+		{"explicit handle", InvestigationRequest{SubjectHandles: []contractsv1.ContextFabricRequestedHandle{{Kind: SubjectPullRequest, Value: "777"}}}, contractsv1.ContextFabricStructureNeedSubjectHandle},
+	} {
+		t.Run(cell.name, func(t *testing.T) {
+			got := appendVetoedRememberedNeeds(nil, ledger, cell.request, structureVetoConfirmationConflict)
+			if len(got) != 3 {
+				t.Fatalf("got %#v, want only three unstated members", got)
+			}
+			for _, entry := range got {
+				if entry.Member == cell.blocked {
+					t.Fatalf("supplied member fell back to old value: %#v", entry)
+				}
+			}
+		})
+	}
+	existing := ConfirmedStructureEntry{Member: contractsv1.ContextFabricStructureNeedSubjectCandidate, AppliedValue: "repository:new", Source: contractsv1.ContextFabricStructureSourceReceipt, PriorResultID: "result_fresh_need", ReceiptID: "receipt_fresh_need", Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionVetoedConflict}
+	got := appendVetoedRememberedNeeds([]ConfirmedStructureEntry{existing}, ledger, InvestigationRequest{}, structureVetoConfirmationConflict)
+	if len(got) != 4 || !reflect.DeepEqual(got[0], existing) {
+		t.Fatalf("existing echo replaced or duplicated: %#v", got)
+	}
+	for _, entry := range got[1:] {
+		if entry.Member == existing.Member {
+			t.Fatal("duplicate member")
+		}
+	}
+	if got := appendVetoedRememberedNeeds([]ConfirmedStructureEntry{existing}, confirmedNeedLedgerResult{}, InvestigationRequest{}, structureVetoConfirmationConflict); !reflect.DeepEqual(got, []ConfirmedStructureEntry{existing}) {
+		t.Fatalf("empty ledger changed echo: %#v", got)
+	}
+}
