@@ -46,6 +46,49 @@ import semantic_verdict_bridge as sv_bridge  # noqa: E402
 
 SERVED_STATUSES = {"complete", "partial", "degraded", "answered"}
 
+
+class _PersistedStateInfraGuard:
+    """CHAOS-5722: wraps the persisted-semantic-state adapter so a run-level
+    INFRASTRUCTURE failure (psql missing, invocation error, non-zero exit,
+    timeout -- `sv_bridge.PersistedSemanticStateInfraError`) is caught ONCE,
+    on its FIRST occurrence this run, logged (stderr; the adapter itself
+    never lets a password reach the message), and then the adapter stops
+    being called for the rest of the run -- every later row falls back to
+    the adapter-omitted path (`persisted_semantic_state=None`), the same
+    path a run with no trial-postgres binding at all already takes. A
+    DATA-class failure (`semantic_verdict_module.PersistedSemanticStateUnreadable`
+    -- oversized row, non-JSON, non-object) is NOT caught here: it stays
+    scoped to the one row and reaches the scorer exactly as before, so a
+    genuinely corrupt stored value still scores `unscored/semantic_state_
+    unreadable` on that row alone, never silently swallowed.
+
+    See `disabled_after_first_call` below, read into
+    `provenance["semantic_verdict"]` after the row loop completes.
+    """
+
+    def __init__(self, adapter):
+        self._adapter = adapter
+        self.error = None
+
+    @property
+    def disabled_after_first_call(self):
+        return self.error is not None
+
+    def __call__(self, result_id):
+        if self.disabled_after_first_call:
+            return None
+        try:
+            return self._adapter(result_id)
+        except sv_bridge.PersistedSemanticStateInfraError as exc:
+            self.error = str(exc)
+            print(
+                "NOTE: persisted-semantic-state adapter hit an INFRASTRUCTURE "
+                f"failure on its first occurrence this run -- {exc} -- falling "
+                "back to the adapter-omitted path (persisted_semantic_state_"
+                "available=false) for the rest of this run, never re-raising "
+                "per row", file=sys.stderr)
+            return None
+
 # The clarification vocabulary, authored once. Imported by the bucketer so that classify()
 # and the scorer cannot disagree about what counts as a clarification.
 from expectations import CLARIFICATION_VALUES  # noqa: E402
@@ -662,9 +705,16 @@ def main():
     # never used when there is no scorer to hand it to.
     sv_persisted_state_available = sv_bridge.trial_postgres_env_present()
     sv_persisted_state_adapter = None
+    sv_persisted_state_guard = None
     if sv_module is not None:
         if sv_persisted_state_available:
-            sv_persisted_state_adapter = sv_bridge.make_persisted_semantic_state_adapter(sv_module)
+            _raw_adapter = sv_bridge.make_persisted_semantic_state_adapter(sv_module)
+            # CHAOS-5722: wrapped in the INFRA guard ABOVE the raw adapter --
+            # `verdict_for_row` below is handed the guard, never `_raw_adapter`
+            # directly, so a run-level infrastructure fault degrades once
+            # instead of re-raising per row (see _PersistedStateInfraGuard).
+            sv_persisted_state_guard = _PersistedStateInfraGuard(_raw_adapter)
+            sv_persisted_state_adapter = sv_persisted_state_guard
         else:
             print("NOTE: trial-postgres env recipe (ACR_TEST_TRIAL_PG_*) not fully present -- "
                   "every any_of serve branch this run scores will read the persisted-state link "
@@ -741,6 +791,17 @@ def main():
         # pin, policy, schema, or legacy adapter is never mistaken for a rescore under
         # the old one (see semantic_verdict.py's own module docstring on why every one
         # of these is a separate, explicit version string).
+        # CHAOS-5722: read AFTER the row loop above has run, never before --
+        # `sv_persisted_state_adapter is not None` alone only says an
+        # adapter was BUILT, not that any call through it ever succeeded. A
+        # run whose very first call hit an INFRA failure sets
+        # `sv_persisted_state_guard.disabled_after_first_call`, and that run
+        # must report `persisted_semantic_state_available=false`, never
+        # `true` with the store simply reading empty for every row.
+        _sv_persisted_state_ok = (
+            sv_persisted_state_adapter is not None
+            and not (sv_persisted_state_guard and sv_persisted_state_guard.disabled_after_first_call)
+        )
         provenance["semantic_verdict"] = {
             "available": True,
             "scorer_version": sv_pin["scorer_version"],
@@ -755,7 +816,10 @@ def main():
             # a reader must be able to tell "this run had no trial-postgres
             # binding" apart from "every any_of serve branch's persisted
             # link genuinely came up absent" from provenance.json alone.
-            "persisted_semantic_state_available": sv_persisted_state_adapter is not None,
+            "persisted_semantic_state_available": _sv_persisted_state_ok,
+            **({"persisted_semantic_state_error": sv_persisted_state_guard.error}
+               if sv_persisted_state_guard and sv_persisted_state_guard.disabled_after_first_call
+               else {}),
             **sv_bridge.aggregate(_sv_by_id.values()),
         }
     else:
