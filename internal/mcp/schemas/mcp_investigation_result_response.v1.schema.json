@@ -2602,7 +2602,24 @@
               "type": "array"
             },
             "kind": {
-              "type": "string"
+              "type": "string",
+              "enum": [
+                "organization",
+                "team",
+                "project",
+                "repository",
+                "work_item",
+                "pull_request",
+                "deployment",
+                "incident",
+                "document",
+                "decision",
+                "episode",
+                "metric",
+                "pull_request_review",
+                "ci_pipeline_run",
+                "work_item_ref"
+              ]
             },
             "declared": {
               "type": "integer",
