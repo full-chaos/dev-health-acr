@@ -1906,7 +1906,7 @@ func ContinuationDecisionLineVocabulary(key string) []string {
 	case "interpreted_axis_outcome":
 		return tokenStrings(continuationAxisOutcomes())
 	case "carrier_read":
-		return tokenStrings([]ContinuationCarrierRead{ContinuationCarrierNotRead, ContinuationCarrierReadOK, ContinuationCarrierReadFailed})
+		return tokenStrings(continuationCarrierReadVocabulary())
 	case "request_identity_match":
 		return tokenStrings(continuationRequestIdentityMatches())
 	case "carried_state_read":

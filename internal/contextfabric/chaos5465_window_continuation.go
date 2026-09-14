@@ -589,11 +589,21 @@ const (
 	ContinuationCarrierReadFailed ContinuationCarrierRead = "failed"
 )
 
+// continuationCarrierReadVocabulary is the closed list, in production so the
+// guard's membership check and the wire vocabulary (telemetry.go) read the
+// SAME list rather than each hand-listing it -- the drift a second list is
+// how this package has paid for before (see compositionInvariants' own
+// comment on the same discipline).
+func continuationCarrierReadVocabulary() []ContinuationCarrierRead {
+	return []ContinuationCarrierRead{ContinuationCarrierNotRead, ContinuationCarrierReadOK, ContinuationCarrierReadFailed}
+}
+
 // ValidContinuationCarrierRead reports membership.
 func ValidContinuationCarrierRead(value ContinuationCarrierRead) bool {
-	switch value {
-	case ContinuationCarrierNotRead, ContinuationCarrierReadOK, ContinuationCarrierReadFailed:
-		return true
+	for _, member := range continuationCarrierReadVocabulary() {
+		if member == value {
+			return true
+		}
 	}
 	return false
 }

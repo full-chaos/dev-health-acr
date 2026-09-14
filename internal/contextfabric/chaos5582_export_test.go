@@ -1,9 +1,13 @@
 package contextfabric
 
 import (
+	"bytes"
+	"context"
+	"log/slog"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/observability"
 )
 
 // CHAOS-5582 test-only export: drives one named scenario through
@@ -38,4 +42,29 @@ func RunCHAOS5582ScenarioForTest(t *testing.T, scenario string) (log []byte, req
 		t.Fatalf("Investigate() error = %v", run.err)
 	}
 	return run.log.Bytes(), run.requestID
+}
+
+// CompositionInvariantsForTest is a test-only export of compositionInvariants
+// (unexported), so an external test package can enumerate the invariants
+// composeAcceptedContext can produce rather than hand-listing them again.
+func CompositionInvariantsForTest() []string { return compositionInvariants() }
+
+// RunCompositionFailureForTest is a test-only export, same purpose as
+// RunCHAOS5582ScenarioForTest above: it emits ONE real production
+// window-continuation-decision line through SlogEngineTelemetry -- the exact
+// production sink, never a hand-typed fixture line -- with
+// composition_failed_invariant set to the given invariant, so the external
+// certification pin (package contextfabric_test) judges the real emitted
+// bytes for every value composeAcceptedContext can produce.
+func RunCompositionFailureForTest(t *testing.T, invariant string) (log []byte, requestID string) {
+	t.Helper()
+	requestID = "req_" + "00000000000000000000000000000001"
+	ctx := observability.WithRequestID(context.Background(), requestID)
+	decision := newWindowContinuationDecision(continuationRequest(validInvestigationRequest().Question))
+	decision.CompositionOutcome = CompositionInvalid
+	decision.CompositionFailedInvariant = invariant
+	var buf bytes.Buffer
+	SlogEngineTelemetry{logger: slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))}.
+		RecordWindowContinuationDecision(ctx, acceptancePrincipal(), decision)
+	return buf.Bytes(), requestID
 }
