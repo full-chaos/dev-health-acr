@@ -1,6 +1,10 @@
 package contextfabric
 
-import contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+import (
+	"strings"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+)
 
 // THE ONE BOUNDED REPAIR (CHAOS-5723): a count over a named subject, re-read
 // as the scoped cohort the same interpretation's member hint names.
@@ -27,6 +31,12 @@ import contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 //     named subject itself (its ExpectedKind, or the sample's scope-anchor
 //     kind): members of a kind under an anchor of that same kind is not a
 //     scoped cohort (phase-B invariant I11).
+//   - Only when the named subject's terms are the terms retrieval will
+//     search: subject resolution searches the interpretation's flat subject
+//     terms, not the frame's, so a repaired anchor is the anchor retrieval
+//     follows only when the two are the same set (trimmed,
+//     case-insensitive). A named subject with several terms is one subject
+//     with several retrieval pointers, and I5 admits several anchor terms.
 //   - Only a member kind a discovery arm serves, decided by
 //     CohortMemberKindFor, the predicate the gate refuses on. A repair into a
 //     frame the gate would refuse on its basis would trade one refusal for
@@ -71,6 +81,9 @@ const (
 	// FrameRepairDeclinedHintIsSubjectKind: the hint names the named subject's
 	// own stated kind. Refused on I9.
 	FrameRepairDeclinedHintIsSubjectKind FrameRepairDecision = "declined_hint_is_subject_kind"
+	// FrameRepairDeclinedTermsDiverge: the named subject's terms are not the
+	// flat subject terms retrieval searches. Refused on I9.
+	FrameRepairDeclinedTermsDiverge FrameRepairDecision = "declined_terms_diverge"
 	// FrameRepairDeclinedHintUnservable: no discovery arm serves the hinted
 	// kind. Refused on I9.
 	FrameRepairDeclinedHintUnservable FrameRepairDecision = "declined_hint_unservable"
@@ -87,9 +100,21 @@ var frameRepairDecisions = [...]FrameRepairDecision{
 	FrameRepairDeclinedHintAbsent,
 	FrameRepairDeclinedHintUnrecognized,
 	FrameRepairDeclinedHintIsSubjectKind,
+	FrameRepairDeclinedTermsDiverge,
 	FrameRepairDeclinedHintUnservable,
 	FrameRepairDeclinedBoundReached,
 }
+
+// FrameRepairTermsMatch is whether the named subject's terms equal the flat
+// subject terms retrieval searches. Empty when the comparison did not run.
+type FrameRepairTermsMatch string
+
+const (
+	// FrameRepairTermsSame: the two term sets are equal.
+	FrameRepairTermsSame FrameRepairTermsMatch = "match"
+	// FrameRepairTermsDiverge: the two term sets differ.
+	FrameRepairTermsDiverge FrameRepairTermsMatch = "diverge"
+)
 
 // FrameRepairDecisionCount is the closed vocabulary's size.
 const FrameRepairDecisionCount = len(frameRepairDecisions)
@@ -127,8 +152,45 @@ type FrameRepair struct {
 	// kind, set only when the repair ran.
 	KindAfter  SubjectExpressionKind
 	MemberKind SubjectKind
+	// TermsMatch is the comparison of the named subject's terms with the
+	// flat subject terms retrieval searches, empty when it did not run.
+	TermsMatch FrameRepairTermsMatch
 	// Attempts is how many repairs ran on this proposal.
 	Attempts int
+}
+
+// ObservableTermsMatch renders the terms comparison for a log line:
+// `not_evaluated` when it did not run.
+func (r FrameRepair) ObservableTermsMatch() string {
+	if r.TermsMatch == "" {
+		return "not_evaluated"
+	}
+	return string(r.TermsMatch)
+}
+
+// sameSubjectTermSet reports whether two term lists name the same set of
+// retrieval pointers, case-insensitively, duplicates ignored. Both inputs are
+// already bounded upstream: named terms pass I3 (non-empty, no blank term)
+// and flat terms pass the interpreted-question contract (no blank or padded
+// term).
+func sameSubjectTermSet(named, flat []string) bool {
+	set := func(terms []string) map[string]bool {
+		out := make(map[string]bool, len(terms))
+		for _, term := range terms {
+			out[strings.ToLower(term)] = true
+		}
+		return out
+	}
+	left, right := set(named), set(flat)
+	if len(left) != len(right) {
+		return false
+	}
+	for term := range left {
+		if !right[term] {
+			return false
+		}
+	}
+	return true
 }
 
 // ObservableDecision renders the decision for a log line: `not_evaluated`
@@ -162,8 +224,9 @@ func repairMemberKindToken(kind SubjectKind) string {
 
 // repairCountKindCollapse applies the bound above to one validation result
 // and returns the result the turn acts on. proposed is the frame the result
-// was validated from, and receipt is the same interpretation's receipt.
-func repairCountKindCollapse(receipt ModelExecutionReceipt, proposed QuestionFrame, emittedShape InvestigationShape, result FrameValidationResult) FrameValidationResult {
+// was validated from, receipt is the same interpretation's receipt, and
+// subjectTerms are its flat subject terms, the terms retrieval searches.
+func repairCountKindCollapse(receipt ModelExecutionReceipt, proposed QuestionFrame, emittedShape InvestigationShape, subjectTerms []string, result FrameValidationResult) FrameValidationResult {
 	if result.Failure.Invariant != FrameInvariantI9 {
 		if result.Repair.Decision == "" {
 			result.Repair.Decision = FrameRepairNotApplicable
@@ -199,6 +262,11 @@ func repairCountKindCollapse(receipt ModelExecutionReceipt, proposed QuestionFra
 	// hint that is present).
 	if subjectKind, _ := proposed.SubjectExpression.MemberKind(); subjectKind == hint || receipt.ScopeAnchorKind == hint {
 		return declined(FrameRepairDeclinedHintIsSubjectKind)
+	}
+	considered.TermsMatch = FrameRepairTermsSame
+	if !sameSubjectTermSet(proposed.SubjectExpression.SubjectTerms(), subjectTerms) {
+		considered.TermsMatch = FrameRepairTermsDiverge
+		return declined(FrameRepairDeclinedTermsDiverge)
 	}
 	repaired := proposed
 	repaired.SubjectExpression = SubjectExpression{

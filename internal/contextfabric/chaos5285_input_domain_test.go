@@ -533,7 +533,7 @@ func domainInterpretationBoundary(d *domainTable) {
 	// gate -- never off a gate literal this table chose.
 	run := func(receipt ModelExecutionReceipt, expression SubjectExpression) string {
 		frame := boundaryFrame(expression)
-		gate := DecideFrameGate(validateProposedFrame(receipt, frame, ShapeDiscoveredCohort), true)
+		gate := DecideFrameGate(validateProposedFrame(receipt, frame, ShapeDiscoveredCohort, nil), true)
 		b := InterpretationBoundaryFrom(receipt, frame, gate)
 		return fmt.Sprintf("hint=%s member_hint=%s group=%s member=%s axis=%s",
 			b.RequestedGroupHint, b.RequestedMemberHint, b.ProposedGroupKind, b.ProposedMemberKind, observableGroupAxis(b.GroupAxis))
@@ -555,7 +555,7 @@ func domainInterpretationBoundary(d *domainTable) {
 	d.want(guard, "receipt.GroupKind", "canonical, frame dropped the grouping (refused under i6, round 2 P1-1)", run(hint(team, false), discoveredExpression(team)),
 		"hint=team member_hint=absent group=not_applicable member=team axis=refused")
 	gateOf := func(receipt ModelExecutionReceipt, expression SubjectExpression) string {
-		result := validateProposedFrame(receipt, boundaryFrame(expression), ShapeDiscoveredCohort)
+		result := validateProposedFrame(receipt, boundaryFrame(expression), ShapeDiscoveredCohort, nil)
 		return fmt.Sprintf("gate=%s detail=%s", DecideFrameGate(result, true).Observable(), result.Failure.Detail)
 	}
 	d.want(guard, "receipt.GroupKind x frame", "hint set, frame flat: the requested axis is refused with its own detail", gateOf(hint(team, false), discoveredExpression(team)),

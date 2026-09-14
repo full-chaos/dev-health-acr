@@ -1613,7 +1613,7 @@ type RuntimeQuestionInterpreter struct {
 // still decides the family; no answer, plan, offer, render selection or
 // clarification changes because of any of it. Zero behaviour change is a
 // required, provable property of this slice.
-func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal storage.Principal, receipt *ModelExecutionReceipt, emittedShape InvestigationShape) {
+func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal storage.Principal, receipt *ModelExecutionReceipt, emittedShape InvestigationShape, subjectTerms []string) {
 	if receipt != nil && receipt.QuestionFrame == nil {
 		// A turn that proposed no frame still DECIDES -- to `not_proposed`,
 		// which allows. Stamped here rather than left as the zero value so
@@ -1632,7 +1632,7 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 		return
 	}
 	proposed := *receipt.QuestionFrame
-	result := validateProposedFrame(*receipt, proposed, emittedShape)
+	result := validateProposedFrame(*receipt, proposed, emittedShape, subjectTerms)
 
 	receipt.FrameOutcome = result.Outcome
 	receipt.FrameFailedInvariant = result.Failure.Invariant
@@ -1741,8 +1741,8 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 // result of validateAgainstInterpretation. One function, called by
 // resolveFrame and by the input-domain table, so the table measures what
 // production decides.
-func validateProposedFrame(receipt ModelExecutionReceipt, proposed QuestionFrame, emittedShape InvestigationShape) FrameValidationResult {
-	return repairCountKindCollapse(receipt, proposed, emittedShape, validateAgainstInterpretation(receipt, proposed, emittedShape))
+func validateProposedFrame(receipt ModelExecutionReceipt, proposed QuestionFrame, emittedShape InvestigationShape, subjectTerms []string) FrameValidationResult {
+	return repairCountKindCollapse(receipt, proposed, emittedShape, subjectTerms, validateAgainstInterpretation(receipt, proposed, emittedShape))
 }
 
 // validateAgainstInterpretation is validation without repair: the frame's
@@ -1938,7 +1938,7 @@ func (r RuntimeQuestionInterpreter) interpretOneSample(
 		// already rejected, which would put a phantom row into the
 		// invariant histogram.
 		if err == nil {
-			r.resolveFrame(ctx, principal, &receipt, question.Shape)
+			r.resolveFrame(ctx, principal, &receipt, question.Shape, question.SubjectTerms)
 		}
 	}
 	if sinkErr := recordModelReceipt(ctx, principal, r.Sink, receipt); sinkErr != nil {

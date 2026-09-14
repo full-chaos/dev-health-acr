@@ -83,6 +83,7 @@ var frameRepairLogKeys = map[string]string{
 	"KindBefore": "repair_kind_before",
 	"KindAfter":  "repair_kind_after",
 	"MemberKind": "repair_member_kind",
+	"TermsMatch": "repair_terms_match",
 	"Attempts":   "repair_attempts",
 }
 
@@ -120,7 +121,7 @@ func TestEveryFrameRepairFieldReachesTheLogLine(t *testing.T) {
 	for key, want := range map[string]any{
 		"repair_decision": "not_evaluated", "repair": "none", "repair_invariant": "none",
 		"repair_kind_before": "none", "repair_kind_after": "none", "repair_member_kind": "none",
-		"repair_attempts": float64(0),
+		"repair_terms_match": "not_evaluated", "repair_attempts": float64(0),
 	} {
 		if got := records[0][key]; got != want {
 			t.Errorf("%s on an event with no repair decision = %v, want %v", key, got, want)

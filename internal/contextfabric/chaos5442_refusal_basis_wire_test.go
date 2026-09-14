@@ -176,7 +176,7 @@ func (i receiptPathInterpreter) Interpret(ctx context.Context, principal storage
 	}
 	receipt := ModelExecutionReceipt{QuestionFrame: i.frame}
 	runtime := RuntimeQuestionInterpreter{}
-	runtime.resolveFrame(ctx, principal, &receipt, "")
+	runtime.resolveFrame(ctx, principal, &receipt, "", nil)
 	return interpreted, runtime.recordFamilyResolution(ctx, principal, interpreted, receipt), nil
 }
 

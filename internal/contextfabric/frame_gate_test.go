@@ -412,7 +412,7 @@ func TestTheDeployedInterpreterAlwaysDecidesTheFrameGate(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			receipt := ModelExecutionReceipt{QuestionFrame: testCase.frame}
-			RuntimeQuestionInterpreter{}.resolveFrame(context.Background(), storage.Principal{OrgID: "org_1"}, &receipt, "")
+			RuntimeQuestionInterpreter{}.resolveFrame(context.Background(), storage.Principal{OrgID: "org_1"}, &receipt, "", nil)
 			if receipt.FrameGateOutcome == FrameGateNotEvaluated {
 				t.Fatalf("the deployed interpreter left the gate UNDECIDED; the zero value allows, so this reverts the seam to a shadow with no other symptom")
 			}
@@ -432,7 +432,7 @@ func TestTheCarriedGateAgreesWithTheReceipt(t *testing.T) {
 	t.Parallel()
 	for _, frame := range []*QuestionFrame{selfGroupedFrame(), unservableMemberKindFrame(), namedSubjectFrame()} {
 		receipt := ModelExecutionReceipt{QuestionFrame: frame}
-		RuntimeQuestionInterpreter{}.resolveFrame(context.Background(), storage.Principal{OrgID: "org_1"}, &receipt, "")
+		RuntimeQuestionInterpreter{}.resolveFrame(context.Background(), storage.Principal{OrgID: "org_1"}, &receipt, "", nil)
 		fromResult := DecideFrameGate(ValidateFrame(*frame, nil, ""), true)
 		if receipt.FrameGateOutcome != fromResult.Outcome {
 			t.Errorf("receipt outcome %q disagrees with the validator's own verdict %q", receipt.FrameGateOutcome, fromResult.Outcome)
@@ -710,7 +710,7 @@ func TestTheGateIsCarriedFromTheReceiptOntoTheFamilyOutcome(t *testing.T) {
 			t.Parallel()
 			receipt := ModelExecutionReceipt{QuestionFrame: testCase.frame}
 			interpreter := RuntimeQuestionInterpreter{}
-			interpreter.resolveFrame(context.Background(), storage.Principal{OrgID: "org_1"}, &receipt, "")
+			interpreter.resolveFrame(context.Background(), storage.Principal{OrgID: "org_1"}, &receipt, "", nil)
 
 			outcome := interpreter.recordFamilyResolution(context.Background(), storage.Principal{OrgID: "org_1"}, InterpretedQuestion{}, receipt)
 

@@ -45,11 +45,12 @@ func countOverNamedSubject() QuestionFrame {
 }
 
 // repairInterpretation is the interpreted question the fake runtime returns
-// beside the receipt.
-func repairInterpretation() InterpretedQuestion {
+// beside the receipt; flat is its flat subject terms, the terms retrieval
+// searches.
+func repairInterpretation(flat []string) InterpretedQuestion {
 	return InterpretedQuestion{
 		Shape: ShapeSingleSubject, RequestedJudgment: "count",
-		SubjectTerms: []string{repairAnchorTerm}, TimeContext: TimeContext{Axis: TemporalCurrent},
+		SubjectTerms: flat, TimeContext: TimeContext{Axis: TemporalCurrent},
 		FactRequirements: []FactRequirement{{Kind: FactStatus}},
 	}
 }
@@ -67,13 +68,13 @@ const familyResolutionMessage = "context fabric question family resolution"
 
 // interpretForRepair runs ONE production interpretation of frame under
 // receipt and returns what it carried out.
-func interpretForRepair(t *testing.T, receipt ModelExecutionReceipt, frame QuestionFrame) repairRun {
+func interpretForRepair(t *testing.T, receipt ModelExecutionReceipt, frame QuestionFrame, flat []string) repairRun {
 	t.Helper()
 	logs := captureEngineLogger(t)
 	receipt.QuestionFrame = &frame
 	sink := &fakeReceiptSink{}
 	interpreter := RuntimeQuestionInterpreter{
-		Runtime:         fakeModelRuntime{interpreted: repairInterpretation(), receipt: receipt},
+		Runtime:         fakeModelRuntime{interpreted: repairInterpretation(flat), receipt: receipt},
 		Sink:            sink,
 		FrameTelemetry:  logs.telemetry,
 		FamilyTelemetry: logs.telemetry,
@@ -124,7 +125,7 @@ func TestACountOverANamedSubjectIsRepairedIntoTheScopedCohortItsHintNames(t *tes
 	proposal.Temporal = TemporalIntentBoundedWindow
 	proposal.Dimensions = []HealthDimension{dimension}
 
-	run := interpretForRepair(t, classAReceipt(), proposal)
+	run := interpretForRepair(t, classAReceipt(), proposal, []string{repairAnchorTerm})
 
 	frame := run.outcome.Frame
 	if frame == nil {
@@ -180,6 +181,7 @@ func TestACountOverANamedSubjectIsRepairedIntoTheScopedCohortItsHintNames(t *tes
 		"repair_kind_before":     "named_subject",
 		"repair_kind_after":      "children_of_scope",
 		"repair_member_kind":     "team",
+		"repair_terms_match":     "match",
 		"repair_attempts":        float64(1),
 	})
 	if got, _ := run.line["requirement_cells_derived"].(float64); got == 0 {
@@ -196,16 +198,22 @@ type repairCell struct {
 	receipt     func(*ModelExecutionReceipt)
 	frame       func() QuestionFrame
 	wantOutcome FrameValidationOutcome
+	// flat is the interpretation's flat subject terms; nil means the Class A
+	// named term, and a non-nil empty slice means none.
+	flat []string
 	// wantKind is the carried frame's kind, "" when the turn carries none.
 	wantKind SubjectExpressionKind
-	wantLine map[string]any
+	// wantAnchors is the carried scoped frame's anchor terms, nil when the
+	// cell carries no scoped frame.
+	wantAnchors []string
+	wantLine    map[string]any
 }
 
 func refusedI9Line(decision string) map[string]any {
 	return map[string]any{
 		"outcome": "refused_invalid", "failed_invariant": "i9", "failure_detail": "count_requires_set_valued_kind",
 		"frame_gate": "rejected:i9", "repair_decision": decision, "repair": "count_kind_collapse", "repair_invariant": "i9",
-		"repair_kind_after": "none", "repair_member_kind": "none", "repair_attempts": float64(0),
+		"repair_kind_after": "none", "repair_member_kind": "none", "repair_terms_match": "not_evaluated", "repair_attempts": float64(0),
 	}
 }
 
@@ -213,7 +221,16 @@ func notApplicableLine(outcome, invariant, gate string) map[string]any {
 	return map[string]any{
 		"outcome": outcome, "failed_invariant": invariant, "frame_gate": gate,
 		"repair_decision": "not_applicable", "repair": "none", "repair_invariant": "none",
-		"repair_kind_before": "none", "repair_kind_after": "none", "repair_member_kind": "none", "repair_attempts": float64(0),
+		"repair_kind_before": "none", "repair_kind_after": "none", "repair_member_kind": "none",
+		"repair_terms_match": "not_evaluated", "repair_attempts": float64(0),
+	}
+}
+
+func appliedLine() map[string]any {
+	return map[string]any{
+		"outcome": "repaired", "failed_invariant": "", "frame_gate": "passed", "repair_decision": "applied",
+		"repair_kind_before": "named_subject", "repair_kind_after": "children_of_scope", "repair_member_kind": "team",
+		"repair_terms_match": "match", "repair_attempts": float64(1),
 	}
 }
 
@@ -237,6 +254,12 @@ func repairCells() []repairCell {
 		line["repair_kind_before"] = kindBefore
 		return line
 	}
+	refusedI9Terms := func(decision, termsMatch string) map[string]any {
+		line := refusedI9(decision, "named_subject")
+		line["repair_terms_match"] = termsMatch
+		return line
+	}
+	multiTerm := withNamed(func(named *NamedSubjectExpression) { named.Terms = []string{"owner", repairAnchorTerm} })
 	return []repairCell{
 		{
 			cell: "hint absent", receipt: func(r *ModelExecutionReceipt) { r.RequestedSubjectKind = "" },
@@ -280,20 +303,49 @@ func repairCells() []repairCell {
 				named.ExpectedKind = &kind
 			}),
 			wantOutcome: FrameValidationOutcomeRepaired, wantKind: SubjectExpressionChildrenOfScope,
-			wantLine: map[string]any{
-				"outcome": "repaired", "frame_gate": "passed", "repair_decision": "applied",
-				"repair_kind_after": "children_of_scope", "repair_member_kind": "team", "repair_attempts": float64(1),
-			},
+			wantAnchors: []string{repairAnchorTerm}, wantLine: appliedLine(),
+		},
+		{
+			cell: "flat terms differ from the named subject's terms", receipt: func(*ModelExecutionReceipt) {},
+			frame: countOverNamedSubject, flat: []string{"flat-term"}, wantOutcome: FrameValidationOutcomeRefusedInvalid,
+			wantLine: refusedI9Terms("declined_terms_diverge", "diverge"),
+		},
+		{
+			cell: "flat terms empty", receipt: func(*ModelExecutionReceipt) {},
+			frame: countOverNamedSubject, flat: []string{}, wantOutcome: FrameValidationOutcomeRefusedInvalid,
+			wantLine: refusedI9Terms("declined_terms_diverge", "diverge"),
+		},
+		{
+			cell: "flat terms a superset of the named terms", receipt: func(*ModelExecutionReceipt) {},
+			frame: countOverNamedSubject, flat: []string{repairAnchorTerm, "other-term"}, wantOutcome: FrameValidationOutcomeRefusedInvalid,
+			wantLine: refusedI9Terms("declined_terms_diverge", "diverge"),
+		},
+		{
+			cell: "flat terms a subset of a multi-term named subject", receipt: func(*ModelExecutionReceipt) {},
+			frame: multiTerm, flat: []string{repairAnchorTerm}, wantOutcome: FrameValidationOutcomeRefusedInvalid,
+			wantLine: refusedI9Terms("declined_terms_diverge", "diverge"),
+		},
+		{
+			cell: "flat terms equal up to case and duplicates", receipt: func(*ModelExecutionReceipt) {},
+			frame: countOverNamedSubject, flat: []string{"ANCHOR-REPO", repairAnchorTerm}, wantOutcome: FrameValidationOutcomeRepaired,
+			wantKind: SubjectExpressionChildrenOfScope, wantAnchors: []string{repairAnchorTerm}, wantLine: appliedLine(),
+		},
+		{
+			// A named subject with several terms is one subject with several
+			// retrieval pointers; I5 admits several anchor terms.
+			cell: "multi-term named subject with the same flat terms", receipt: func(*ModelExecutionReceipt) {},
+			frame: multiTerm, flat: []string{repairAnchorTerm, "owner"}, wantOutcome: FrameValidationOutcomeRepaired,
+			wantKind: SubjectExpressionChildrenOfScope, wantAnchors: []string{"owner", repairAnchorTerm}, wantLine: appliedLine(),
 		},
 		{
 			cell: "hint a vocabulary kind no discovery arm serves", receipt: func(r *ModelExecutionReceipt) { r.RequestedSubjectKind = contractsv1.ContextFabricSubjectDeployment },
 			frame: countOverNamedSubject, wantOutcome: FrameValidationOutcomeRefusedInvalid,
-			wantLine: refusedI9("declined_hint_unservable", "named_subject"),
+			wantLine: refusedI9Terms("declined_hint_unservable", "match"),
 		},
 		{
 			cell: "hint organization", receipt: func(r *ModelExecutionReceipt) { r.RequestedSubjectKind = SubjectOrganization },
 			frame: countOverNamedSubject, wantOutcome: FrameValidationOutcomeRefusedInvalid,
-			wantLine: refusedI9("declined_hint_unservable", "named_subject"),
+			wantLine: refusedI9Terms("declined_hint_unservable", "match"),
 		},
 		{
 			// An explicit set enumerates named operands and is not a scoped
@@ -315,7 +367,7 @@ func repairCells() []repairCell {
 				"outcome": "refused_invalid", "failed_invariant": "i6", "failure_detail": "requested_group_axis_not_expressed",
 				"frame_gate": "rejected:i6", "repair_decision": "refused_after_repair", "repair_invariant": "i9",
 				"repair_kind_before": "named_subject", "repair_kind_after": "children_of_scope", "repair_member_kind": "team",
-				"repair_attempts": float64(1),
+				"repair_terms_match": "match", "repair_attempts": float64(1),
 			},
 		},
 		{
@@ -325,7 +377,8 @@ func repairCells() []repairCell {
 			wantLine: map[string]any{
 				"outcome": "refused_invalid", "failed_invariant": "i14", "failed_phase": "a2",
 				"frame_gate": "rejected:i14", "repair_decision": "refused_after_repair",
-				"repair_kind_after": "children_of_scope", "repair_member_kind": "team", "repair_attempts": float64(1),
+				"repair_kind_after": "children_of_scope", "repair_member_kind": "team", "repair_terms_match": "match",
+				"repair_attempts": float64(1),
 			},
 		},
 		{
@@ -364,7 +417,11 @@ func TestTheCountKindRepairIsBounded(t *testing.T) {
 		t.Run(testCase.cell, func(t *testing.T) {
 			receipt := classAReceipt()
 			testCase.receipt(&receipt)
-			run := interpretForRepair(t, receipt, testCase.frame())
+			flat := testCase.flat
+			if flat == nil {
+				flat = []string{repairAnchorTerm}
+			}
+			run := interpretForRepair(t, receipt, testCase.frame(), flat)
 			produced[run.line["repair_decision"].(string)] = true
 
 			if run.receipt.FrameOutcome != testCase.wantOutcome {
@@ -377,6 +434,12 @@ func TestTheCountKindRepairIsBounded(t *testing.T) {
 				t.Errorf("the turn carries no frame, want %q (gate %s)", testCase.wantKind, run.outcome.Gate.Observable())
 			case testCase.wantKind != "" && run.outcome.Frame.SubjectExpression.Kind != testCase.wantKind:
 				t.Errorf("carried frame kind = %q, want %q", run.outcome.Frame.SubjectExpression.Kind, testCase.wantKind)
+			}
+			if testCase.wantAnchors != nil {
+				if run.outcome.Frame == nil || run.outcome.Frame.SubjectExpression.Scoped == nil ||
+					!reflect.DeepEqual(run.outcome.Frame.SubjectExpression.Scoped.AnchorTerms, testCase.wantAnchors) {
+					t.Errorf("carried frame = %+v, want anchor terms %#v (the named subject's own terms)", run.outcome.Frame, testCase.wantAnchors)
+				}
 			}
 			if testCase.wantKind == "" && !run.outcome.Gate.Refuses() {
 				t.Errorf("gate %s does not refuse a turn that carries no frame", run.outcome.Gate.Observable())
@@ -413,7 +476,7 @@ func repairAtTheBound(t *testing.T, attempts int) FrameValidationResult {
 		t.Fatalf("fixture defect: the Class A proposal validated to %q/%q without repair", refused.Outcome, refused.Failure.Invariant)
 	}
 	refused.Repair.Attempts = attempts
-	return repairCountKindCollapse(receipt, proposal, ShapeSingleSubject, refused)
+	return repairCountKindCollapse(receipt, proposal, ShapeSingleSubject, []string{repairAnchorTerm}, refused)
 }
 
 // TestTheRepairRunsAtMostOnce holds the bound on attempts: a result already
@@ -484,7 +547,7 @@ func TestClassAScoresZeroOverTheRepairedFixture(t *testing.T) {
 		rep.receipt(&receipt)
 		frame := countOverNamedSubject()
 		frame.SubjectExpression.Named.Terms = rep.terms
-		run := interpretForRepair(t, receipt, frame)
+		run := interpretForRepair(t, receipt, frame, rep.terms)
 		if run.receipt.QuestionFrame == nil {
 			t.Fatalf("%s: the receipt carries no frame at all", rep.name)
 		}
@@ -511,35 +574,53 @@ func TestClassAScoresZeroOverTheRepairedFixture(t *testing.T) {
 	}
 }
 
-// TestTheRepairedCountIsServedPersistedAndCarried drives Engine.Investigate
-// over the production interpreter: the repaired turn serves a scoped count
-// over the anchor's team members, persists the repaired frame, reads it back
-// by id through the codec, and a continuation composes from it.
-func TestTheRepairedCountIsServedPersistedAndCarried(t *testing.T) {
-	const members = 3
+// retrievalRecordingGraph records, per ResolveSubjects call, the frame, the
+// anchor-kind hint and the flat subject terms the engine handed retrieval.
+type retrievalRecordingGraph struct {
+	graphReaderStub
+	frames      []*QuestionFrame
+	anchorKinds []SubjectKind
+	flatTerms   [][]string
+}
+
+func (g *retrievalRecordingGraph) ResolveSubjects(ctx context.Context, principal storage.Principal, request InvestigationRequest, interpreted InterpretedQuestion, binding ResolvedGraphBinding, kind *ConfirmedExpectedKind, anchor *ConfirmedAnchorSelection, frame *QuestionFrame, anchorKind SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
+	g.frames = append(g.frames, frame)
+	g.anchorKinds = append(g.anchorKinds, anchorKind)
+	g.flatTerms = append(g.flatTerms, append([]string(nil), interpreted.SubjectTerms...))
+	return g.graphReaderStub.ResolveSubjects(ctx, principal, request, interpreted, binding, kind, anchor, frame, anchorKind)
+}
+
+const repairedCountMembers = 3
+
+// newRepairEngine builds an engine over the production interpreter for the
+// Class A proposal with the given flat subject terms, a recording graph that
+// commits the repository anchor and discovers its team members, and a store
+// that keeps what the turn saved.
+func newRepairEngine(t *testing.T, flat []string) (*Engine, *retrievalRecordingGraph, *staticResultStore) {
+	t.Helper()
 	logs := captureEngineLogger(t)
 	anchor := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:" + repairAnchorTerm, Label: repairAnchorTerm}
 	receipt := classAReceipt()
 	proposal := countOverNamedSubject()
 	receipt.QuestionFrame = &proposal
-	telemetry := &recordingTelemetry{}
 	store := &staticResultStore{results: map[string]InvestigationResult{}}
+	graph := &retrievalRecordingGraph{graphReaderStub: graphReaderStub{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{anchor}},
+		context: GraphContext{
+			Cohort: countingCohort(SubjectTeam, repairedCountMembers), Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
+			FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
+			Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		},
+		bases: provenCommitBases(anchor),
+	}}
 	engine, err := NewEngine(EngineDependencies{
 		Interpreter: RuntimeQuestionInterpreter{
-			Runtime:        fakeModelRuntime{interpreted: repairInterpretation(), receipt: receipt},
+			Runtime:        fakeModelRuntime{interpreted: repairInterpretation(flat), receipt: receipt},
 			Sink:           &fakeReceiptSink{},
 			FrameTelemetry: logs.telemetry,
 			Requirements:   registryDeriver{},
 		},
-		Graph: graphReaderStub{
-			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{anchor}},
-			context: GraphContext{
-				Cohort: countingCohort(SubjectTeam, members), Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
-				FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
-				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
-			},
-			bases: provenCommitBases(anchor),
-		},
+		Graph: graph,
 		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
 			return CanonicalFactBundle{
 				Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
@@ -560,7 +641,7 @@ func TestTheRepairedCountIsServedPersistedAndCarried(t *testing.T) {
 			}, nil
 		}),
 		Results:      store,
-		Telemetry:    telemetry,
+		Telemetry:    &recordingTelemetry{},
 		Requirements: registryDeriver{},
 	}, EngineOptions{
 		ServiceVersion: "acr-test",
@@ -570,6 +651,17 @@ func TestTheRepairedCountIsServedPersistedAndCarried(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
 	}
+	return engine, graph, store
+}
+
+// TestTheRepairedCountIsServedPersistedAndCarried drives Engine.Investigate
+// over the production interpreter: retrieval receives the repaired frame, its
+// anchor-kind hint and flat subject terms equal to the anchor terms; the turn
+// serves a scoped count over the anchor's team members, persists the repaired
+// frame, reads it back by id through the codec, and a continuation composes
+// from it.
+func TestTheRepairedCountIsServedPersistedAndCarried(t *testing.T) {
+	engine, graph, store := newRepairEngine(t, []string{repairAnchorTerm})
 	principal := storage.Principal{OrgID: "org_repair"}
 	request := validInvestigationRequestWithConfirmedWindow()
 	request.RequestID = "request_i9_repair_01"
@@ -577,6 +669,18 @@ func TestTheRepairedCountIsServedPersistedAndCarried(t *testing.T) {
 	result, err := engine.Investigate(context.Background(), principal, request)
 	if err != nil {
 		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(graph.frames) == 0 {
+		t.Fatal("retrieval was never called for the repaired turn")
+	}
+	for call, frame := range graph.frames {
+		assertRepairedCarriedFrame(t, "handed to retrieval", frame)
+		if graph.anchorKinds[call] != SubjectRepository {
+			t.Fatalf("retrieval call %d anchor-kind hint = %q, want repository", call, graph.anchorKinds[call])
+		}
+		if !reflect.DeepEqual(graph.flatTerms[call], frame.SubjectExpression.Scoped.AnchorTerms) {
+			t.Fatalf("retrieval call %d searches flat terms %v, want the repaired anchor terms %v", call, graph.flatTerms[call], frame.SubjectExpression.Scoped.AnchorTerms)
+		}
 	}
 	if result.Status != InvestigationComplete {
 		t.Fatalf("status = %q (basis %q, limitations %#v), want complete: the repaired count was not served", result.Status, result.RefusalBasis, result.Limitations)
@@ -588,8 +692,8 @@ func TestTheRepairedCountIsServedPersistedAndCarried(t *testing.T) {
 	if want := string(ObligationCount) + "/" + string(SubjectRoleMember) + "/" + string(SubjectTeam); rows[0].Requirement != want {
 		t.Fatalf("count row requirement = %q, want %q", rows[0].Requirement, want)
 	}
-	if rows[0].Served != members || rows[0].Outcome != contractsv1.ContextFabricRequirementSatisfied {
-		t.Fatalf("count row served/outcome = %d/%q, want %d/satisfied", rows[0].Served, rows[0].Outcome, members)
+	if rows[0].Served != repairedCountMembers || rows[0].Outcome != contractsv1.ContextFabricRequirementSatisfied {
+		t.Fatalf("count row served/outcome = %d/%q, want %d/satisfied", rows[0].Served, rows[0].Outcome, repairedCountMembers)
 	}
 
 	if store.savedSemantic == nil || store.savedSemantic.State == nil || store.saved == nil {
@@ -617,6 +721,32 @@ func TestTheRepairedCountIsServedPersistedAndCarried(t *testing.T) {
 		t.Fatalf("continuation composition outcome/gate = %q/%s (failed %q), want accepted/passed", accepted.Outcome, accepted.Gate.Observable(), accepted.FailedInvariant)
 	}
 	assertRepairedCarriedFrame(t, "carried by the continuation", accepted.Frame)
+}
+
+// TestADivergentTermsTurnIsRefusedBeforeRetrieval drives the same engine with
+// flat subject terms that differ from the named subject's term: the repair
+// declines, the turn is refused on I9, and retrieval never receives a
+// repaired frame.
+func TestADivergentTermsTurnIsRefusedBeforeRetrieval(t *testing.T) {
+	engine, graph, _ := newRepairEngine(t, []string{"flat-term"})
+	request := validInvestigationRequestWithConfirmedWindow()
+	request.RequestID = "request_i9_repair_02"
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_repair"}, request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	for call, frame := range graph.frames {
+		if frame != nil && frame.SubjectExpression.Kind == SubjectExpressionChildrenOfScope {
+			t.Fatalf("retrieval call %d received a repaired frame while searching %v", call, graph.flatTerms[call])
+		}
+	}
+	switch result.Status {
+	case InvestigationComplete, InvestigationPartial, InvestigationDegraded:
+		t.Fatalf("status = %q, want a refusal: the repair must not serve a count retrieval would search for by other terms", result.Status)
+	}
+	if result.RefusalBasis != contractsv1.ContextFabricRefusalBasisFrameInvariantViolated {
+		t.Fatalf("refusal basis = %q, want %q", result.RefusalBasis, contractsv1.ContextFabricRefusalBasisFrameInvariantViolated)
+	}
 }
 
 func assertRepairedCarriedFrame(t *testing.T, where string, frame *QuestionFrame) {

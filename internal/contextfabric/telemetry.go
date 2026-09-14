@@ -1110,6 +1110,7 @@ func (t SlogEngineTelemetry) RecordFrameValidation(ctx context.Context, principa
 		"repair_kind_before", SanitizeLogAttr(noneWhenEmpty(string(vocabularyKindOnly(event.Repair.KindBefore)))),
 		"repair_kind_after", SanitizeLogAttr(noneWhenEmpty(string(vocabularyKindOnly(event.Repair.KindAfter)))),
 		"repair_member_kind", SanitizeLogAttr(repairMemberKindToken(event.Repair.MemberKind)),
+		"repair_terms_match", SanitizeLogAttr(event.Repair.ObservableTermsMatch()),
 		"repair_attempts", SanitizeLogInt(int64(event.Repair.Attempts)),
 	}
 	args = append(args, requirementDerivationLogAttrs(event.RequirementDerivation)...)
