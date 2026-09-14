@@ -343,7 +343,11 @@ func TestLiveHistoricalReadsMatchProductionTyping(t *testing.T) {
 func TestLiveFinalKeepsTheVersionColumnWinner(t *testing.T) {
 	ctx := context.Background()
 	client, direct := newCHAOS3780IntegrationClient(t, ctx)
-	for _, statement := range devhealthschema.DDL("work_items") {
+	// The work-item content readers now always evaluate the typed repository
+	// selector relation, including for an organization-wide principal. Keep
+	// this FINAL fixture production-shaped by creating the metadata table that
+	// the same statement joins.
+	for _, statement := range devhealthschema.DDL("repos", "work_items") {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create table: %v\n%s", err, statement)
 		}
@@ -353,6 +357,12 @@ func TestLiveFinalKeepsTheVersionColumnWinner(t *testing.T) {
 	repoID := "3f2504e0-4f89-11d3-9a0c-0305e82c3303"
 	newer := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	older := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := direct.Exec(ctx,
+		`INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`,
+		repoID, orgID, "acme/final", "github", newer,
+	); err != nil {
+		t.Fatalf("seed repos: %v", err)
+	}
 
 	// Same sort key (org_id, repo_id, work_item_id) -- two versions of one
 	// logical row. The NEWER version is inserted FIRST so that "last

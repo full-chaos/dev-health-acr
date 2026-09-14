@@ -356,9 +356,13 @@ type CanonicalFactRequest struct {
 	// FactRequirement.Parameters, which are model-authored capability inputs
 	// and never an authorization channel.
 	//
-	// Preserve nil and non-nil empty slices. The readers use nil as
-	// unconstrained and a non-nil empty slice as deny, so collapsing either
-	// shape while copying would change authorization semantics.
+	// Preserve nil and non-nil empty slices while carrying the raw request.
+	// The ACR request contract treats both shapes as no requested repository
+	// restriction; the distinction is retained here so transport does not
+	// silently rewrite caller input. The dev-health-go selector semantics are
+	// applied only at the provider adapter: an empty raw list becomes a nil
+	// requested selector, while a non-empty list that normalizes to no valid
+	// selector becomes an explicit zero (deny) selector.
 	RequestedRepositoryScope []string `json:"-"`
 	// Scope is the FactReadScopeResolver's verdict for this request
 	// (CHAOS-4099): which derived subjects each requirement may additionally

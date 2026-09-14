@@ -1284,10 +1284,12 @@ func buildFactQuery(request CanonicalFactRequest, requirement FactRequirement, c
 	}, nil
 }
 
-// copyRequestedRepositoryScope returns an owned copy while preserving the
-// distinction between an absent scope (nil) and an explicit empty scope. The
-// distinction is meaningful to the downstream readers: nil means
-// unconstrained and non-nil empty means deny all repositories.
+// copyRequestedRepositoryScope returns an owned copy while preserving the raw
+// request shape. ACR treats an absent and an explicitly empty
+// RequestedScope.RepositorySlugs list as no requested restriction; the
+// provider adapter translates that raw contract to the reader's typed
+// selector semantics. Keeping the copy lossless prevents a transport helper
+// from changing the request before that one policy translation point.
 func copyRequestedRepositoryScope(values []string) []string {
 	if values == nil {
 		return nil

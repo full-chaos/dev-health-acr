@@ -31,7 +31,7 @@ func TestBuildFactQueryCopiesRequestedRepositoryScopeOutsideModelParameters(t *t
 		want  []string
 	}{
 		{name: "nil is unconstrained", input: nil, want: nil},
-		{name: "empty is deny", input: []string{}, want: []string{}},
+		{name: "empty stays an unconstrained raw request", input: []string{}, want: []string{}},
 		{name: "values stay ordered and unchanged", input: []string{"repo-b", "repo-a", "repo-b"}, want: []string{"repo-b", "repo-a", "repo-b"}},
 	}
 	for _, test := range tests {

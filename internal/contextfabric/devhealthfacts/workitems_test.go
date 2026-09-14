@@ -3,6 +3,8 @@ package devhealthfacts_test
 import (
 	"context"
 	"errors"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +12,98 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
+
+func TestWorkItemProvidersUseCurrentSelectorScopeAndThrowingSettings(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name contextfabric.FactKind
+		rows [][]any
+	}{
+		{name: contextfabric.FactStatus, rows: [][]any{{"WI-1", "in_progress", "repo-b"}}},
+		{name: contextfabric.FactWork, rows: [][]any{{"WI-1", "A scoped title", "repo-b"}}},
+		{name: contextfabric.FactActualCompletion, rows: [][]any{{"WI-1", uint8(1), time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC), "repo-b"}}},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(string(tt.name), func(t *testing.T) {
+			t.Parallel()
+			client := &fakeClient{tables: []fakeTable{{match: "FROM work_items", rows: tt.rows}}}
+			provider := findProvider(t, devhealthfacts.NewProviders(client), tt.name)
+			query := contextfabric.FactQuery{
+				Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+				Kind: tt.name, Subjects: []contextfabric.SubjectRef{workItemSubject("repo-b", "WI-1")},
+				RequestedRepositoryScope: []string{" ACME/B ", "acme/c"},
+			}
+			principal := storage.Principal{OrgID: "org-1", RepositoryScopes: []string{"acme/a", " ACME/B "}}
+			result, err := provider.ReadFacts(context.Background(), principal, query)
+			if err != nil {
+				t.Fatalf("ReadFacts() error = %v", err)
+			}
+			if len(result.Facts) != 1 {
+				t.Fatalf("facts = %#v, want one scanned fact", result.Facts)
+			}
+			if len(client.queries) != 1 {
+				t.Fatalf("query count = %d, want one scoped content query and no metadata lookup", len(client.queries))
+			}
+			statement := client.queries[0].statement
+			for _, fragment := range []string{
+				"LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id",
+				"authorized_repo_slugs",
+				"requested_repo_slugs",
+				"SETTINGS",
+				"timeout_overflow_mode = 'throw'",
+				"read_overflow_mode = 'throw'",
+				"result_overflow_mode = 'throw'",
+			} {
+				if !strings.Contains(statement, fragment) {
+					t.Errorf("statement = %q, want %q", statement, fragment)
+				}
+			}
+			if got := testBindingValue(t, client, "authorized_repo_slugs"); !reflect.DeepEqual(got, []string{"acme/a", "acme/b"}) {
+				t.Errorf("authorized_repo_slugs = %#v, want normalized principal selectors", got)
+			}
+			if got := testBindingValue(t, client, "requested_repo_slugs"); !reflect.DeepEqual(got, []string{"acme/b", "acme/c"}) {
+				t.Errorf("requested_repo_slugs = %#v, want normalized request selectors", got)
+			}
+			if got := testBindingValue(t, client, "authorized_repo_owners"); !reflect.DeepEqual(got, []string{}) {
+				t.Errorf("authorized_repo_owners = %#v, want no owner selectors", got)
+			}
+			if got := testBindingValue(t, client, "requested_repo_owners"); !reflect.DeepEqual(got, []string{}) {
+				t.Errorf("requested_repo_owners = %#v, want no owner selectors", got)
+			}
+
+			// The provider must build this scope from each current query. A
+			// second request with a different selector cannot inherit the
+			// first request's bindings.
+			query.RequestedRepositoryScope = []string{"acme/c"}
+			if _, err := provider.ReadFacts(context.Background(), principal, query); err != nil {
+				t.Fatalf("second ReadFacts() error = %v", err)
+			}
+			if got := testBindingValueAt(t, client, 1, "requested_repo_slugs"); !reflect.DeepEqual(got, []string{"acme/c"}) {
+				t.Fatalf("second requested_repo_slugs = %#v, want only current query selector", got)
+			}
+		})
+	}
+}
+
+func testBindingValue(t *testing.T, client *fakeClient, name string) any {
+	t.Helper()
+	return testBindingValueAt(t, client, len(client.queries)-1, name)
+}
+
+func testBindingValueAt(t *testing.T, client *fakeClient, queryIndex int, name string) any {
+	t.Helper()
+	if queryIndex < 0 || queryIndex >= len(client.queries) {
+		t.Fatalf("query index %d out of range for %d queries", queryIndex, len(client.queries))
+	}
+	for _, binding := range client.queries[queryIndex].bindings {
+		if binding.Name == name {
+			return binding.Value
+		}
+	}
+	t.Fatalf("binding %q not found in query %d", name, queryIndex)
+	return nil
+}
 
 func TestStatusProviderHappyPath(t *testing.T) {
 	t.Parallel()
