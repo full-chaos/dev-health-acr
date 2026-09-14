@@ -2534,7 +2534,8 @@
                 "population_truncated",
                 "requirement_read_not_planned",
                 "read_population_unverified",
-                "fact_read_origin_state"
+                "fact_read_origin_state",
+                "kind_census_truncated"
               ],
               "type": "string"
             },
@@ -2599,6 +2600,34 @@
               },
               "maxItems": 32,
               "type": "array"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "organization",
+                "team",
+                "project",
+                "repository",
+                "work_item",
+                "pull_request",
+                "deployment",
+                "incident",
+                "document",
+                "decision",
+                "episode",
+                "metric",
+                "pull_request_review",
+                "ci_pipeline_run",
+                "work_item_ref"
+              ]
+            },
+            "declared": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "served": {
+              "type": "integer",
+              "minimum": 0
             }
           },
           "required": [

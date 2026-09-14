@@ -193,6 +193,79 @@ func TestReuseDegradesWhenOnlyAnAuxiliaryRefIsNoLongerVisible(t *testing.T) {
 	}
 }
 
+// storedResultWithStaleKindCensusServed is storedResultWithCandidateEvidence
+// plus a Cohort and a kind_census_truncated detail whose Served is
+// deliberately WRONG relative to the cohort it travels with (99, when the
+// cohort carries 2 members) -- CHAOS-5732 (D47): served must be
+// derived LAST, from the cohort the row actually travels with, at every
+// serving surface including reuse, never left standing from whatever value
+// the row happened to be stored with.
+func storedResultWithStaleKindCensusServed() InvestigationResult {
+	stored := storedResultWithCandidateEvidence()
+	// The cohort's one member is reuseDegradeSubject() itself -- the SAME
+	// subject the fixed graphReaderStub resolves as Committed regardless of
+	// hints. reuseAuthorizationStillHolds rechecks every cohort member
+	// (reuseSubjectsToRecheck) against the graph's own resolution; a member
+	// this stub cannot resolve would refuse the reuse outright rather than
+	// degrading it, which would test authorization, not this fix.
+	stored.Cohort = &Cohort{
+		Kind: SubjectProject, Rationale: "kind census match", Complete: true,
+		Members: []CohortMember{
+			{Subject: reuseDegradeSubject(), Rank: 1, InclusionReasons: []string{"matched"}},
+		},
+	}
+	declared, staleServed := 40, 99
+	detail := CoverageDetail{
+		DetailID: "cov-graph-01", Source: "context-fabric:graph",
+		Code: contractsv1.ContextFabricCoverageDetailKindCensusTruncated, Degrading: true,
+		Kind: SubjectProject, Declared: &declared, Served: &staleServed,
+		Raw: "kind_census_truncated:project:0:0",
+	}
+	detail.Label = contractsv1.ComposeCoverageDetailLabel(detail)
+	stored.Coverage.Details = []CoverageDetail{detail}
+	stored.Coverage.DegradedReasons = []string{detail.Raw}
+	stored.Coverage.Partial = true
+	stored.Completeness = ComputeAnswerCompleteness(stored)
+	return stored
+}
+
+// TestReuseCorrectsAStaleKindCensusServedCountOnDegrade drives the SAME
+// production reuse-degrade path TestReuseDegradesWhenOnlyAnAuxiliaryRefIsNoLongerVisible
+// does (a real partial miss through the real engine), from a stored row
+// whose kind_census_truncated detail carries a Served value that does not
+// match the cohort it travels with. The served document's own detail must
+// report the cohort it ACTUALLY carries (2), never the stale stored value
+// (99).
+func TestReuseCorrectsAStaleKindCensusServedCountOnDegrade(t *testing.T) {
+	t.Parallel()
+
+	stored := storedResultWithStaleKindCensusServed()
+	telemetry := &recordingTelemetry{}
+	engine := reuseDegradeEngine(t, stored,
+		productionShapedGraphContext([]string{reuseCitationRef}, nil), telemetry)
+
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if !result.Reused {
+		t.Fatal("result.Reused = false, want true: a partial miss degrades, it does not refuse")
+	}
+	if result.Cohort == nil || len(result.Cohort.Members) != 1 {
+		t.Fatalf("served cohort = %+v, want the stored 1-member cohort unchanged by this degrade", result.Cohort)
+	}
+	detail, found := kindCensusTruncatedDetailIn(result.Coverage.Details)
+	if !found {
+		t.Fatalf("served result.Coverage.Details = %+v, want the kind_census_truncated row to survive the degrade", result.Coverage.Details)
+	}
+	if detail.Served == nil || *detail.Served != len(result.Cohort.Members) {
+		t.Fatalf("detail served = %v, want %d (the served cohort's own member count) -- got the stale stored value instead", detail.Served, len(result.Cohort.Members))
+	}
+	if detail.Declared == nil || *detail.Declared != 40 {
+		t.Errorf("detail declared = %v, want 40 (unaffected by this correction)", detail.Declared)
+	}
+}
+
 // TestReuseRefusesWhenATopLevelCitationIsNoLongerVisible is test (c): the
 // behaviour this change deliberately does NOT relax.
 //

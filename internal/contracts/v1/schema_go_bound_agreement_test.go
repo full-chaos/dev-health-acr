@@ -145,6 +145,10 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		// source shares SourceObservation's 1..128 name bound; the two
 		// kind arrays share the 32-entry cap the validator enforces.
 		"common#$defs.CoverageDetail.properties.count.minimum": 0,
+		// CHAOS-5732 (D47): Declared/Served share Count's own "must be
+		// non-negative" clause (ContextFabricCoverageDetail.Validate).
+		"common#$defs.CoverageDetail.properties.declared.minimum": 0,
+		"common#$defs.CoverageDetail.properties.served.minimum":   0,
 		// CHAOS-5405 D-d: the census record's own non-negative clauses, all
 		// three enforced by ContextFabricInvestigationResult.Validate's
 		// fact_scope_census loop. authorized_population_count is checked only

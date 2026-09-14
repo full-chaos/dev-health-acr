@@ -421,6 +421,17 @@ func stripUnverifiedEvidenceRefs(result InvestigationResult, missing map[string]
 		cohort.Members = kept
 		result.Cohort = &cohort
 	}
+	// CHAOS-5732 (D47): served is DERIVED LAST, at every serving
+	// surface, from the cohort that surface actually serves -- never left
+	// standing from an earlier stage. A reuse-time authorization recheck can
+	// strip cohort members the ORIGINAL serve never had reason to drop (the
+	// block immediately above), so a kind_census_truncated detail's Served,
+	// even if correct when this row was first stored, can go stale again
+	// here. Re-run unconditionally (correctKindCensusTruncatedServedCounts
+	// is a no-op when nothing changed) rather than only inside the
+	// DroppedMembers branch, so this call site never has to be told when a
+	// numeric field silently drifted from the object it names.
+	correctKindCensusTruncatedServedCounts(result.Coverage.Details, result.Cohort)
 
 	if len(result.Drivers) > 0 {
 		kept := make([]DriverJudgment, 0, len(result.Drivers))

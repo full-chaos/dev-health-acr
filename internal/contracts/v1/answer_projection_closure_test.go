@@ -335,7 +335,12 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// vocabularies a read sets from the stored reading's read status,
 		// never model prose. Equal on the two surfaces because the
 		// projection copies the disclosure verbatim.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 237},
+		// CHAOS-5732 (D47): 237 -> 238 -- the new kind_census_truncated
+		// coverage detail's own "kind" string leaf (declared/served are
+		// integers and are not walked here). Already trusted-because-closed
+		// by the existing bare-leaf "kind" case above (ContextFabricSubjectKind,
+		// the same enum origin_kind/supported_kinds/skipped_kinds draw from).
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 238},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -396,7 +401,9 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// difference is the point: the projection copies only the block, so
 		// a basis that lived solely at the result root would never reach a
 		// bounded consumer. Both leaves are trusted-because-closed.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 349},
+		// CHAOS-5732 (D47): 349 -> 350 -- the same new "kind" leaf, reached
+		// through the canonical result's $ref to CoverageDetail.
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 350},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)

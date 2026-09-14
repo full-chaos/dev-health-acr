@@ -309,6 +309,16 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// inconsistently. An unresolved cardinality is still an absence, never a
 	// count of zero.
 	cardinality, _ := ComputeMembershipCardinality(params.Graph.Cohort, params.Graph.CohortPopulation, params.Plan.Narrowing)
+	// CHAOS-5732 (D47): a kind_census_truncated detail's Served
+	// is minted by falkorgraph's DiscoverContext, BEFORE stage 3's own
+	// budget narrowing can shrink graphContext.Cohort further -- the same
+	// staleness the membership_cardinality step above exists to avoid,
+	// for the same reason: stage 3 re-enters this function on its own
+	// cohort rather than narrowing a document in place, so THIS pass's
+	// graphContext.Cohort is always the member set THIS pass serves.
+	// Corrected here, once per pass, immediately before synthesis reads
+	// Coverage.Details, mirroring where the cardinality step reads it.
+	correctKindCensusTruncatedServedCounts(graphContext.Coverage.Details, graphContext.Cohort)
 	result, err := e.synthesizer.Synthesize(ctx, principal, SynthesisInput{
 		Allocation: synthesisAllocation,
 		Request:    request, Interpretation: interpretation, Graph: graphContext, Facts: facts,
@@ -651,6 +661,48 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		result.SubjectResolution.CommitDecisionDigests = digests
 	}
 	return result, synthesisAllocation, pending, cardinality, nil
+}
+
+// correctKindCensusTruncatedServedCounts re-states a kind_census_truncated
+// detail's Served field against THIS pass's own cohort, in place.
+//
+// CHAOS-5732 (D47): falkorgraph's DiscoverContext mints Served at
+// graph-discovery time, before stage 3's own response-budget narrowing can
+// shrink the cohort further -- so a detail read straight off graphContext.Coverage
+// can describe a cohort larger than the one this pass actually serves. Cheap
+// to correct here rather than upstream: this pass's own graphContext.Cohort
+// (never a population/backfilled figure) is exactly the member set the
+// document synthesis is about to build IS the document this pass serves --
+// the same fact membership_cardinality's own placement rule rests on, see
+// synthesizeAndAssemble's call one line above this function's own call site.
+//
+// Guarded on Kind matching the cohort's own Kind, the same guard the detail's
+// original mint uses: a served count belongs to the kind the census was for,
+// never to a cohort of a different kind reached some other way. A nil cohort
+// (every member of that kind narrowed away, or none ever assembled) states
+// Served=0, matching the "no cohort of this kind was served" reading the
+// detail's own doc comment already gives that case.
+func correctKindCensusTruncatedServedCounts(details []CoverageDetail, cohort *Cohort) {
+	served := 0
+	if cohort != nil {
+		served = len(cohort.Members)
+	}
+	for i := range details {
+		if details[i].Code != contractsv1.ContextFabricCoverageDetailKindCensusTruncated {
+			continue
+		}
+		// A live cohort updates only the detail for ITS OWN kind -- a
+		// served count belongs to the kind the census was for, never to a
+		// cohort of a different kind reached some other way. A NIL cohort
+		// carries no kind to match against at all, so every census-cut
+		// detail this pass carries is corrected to Served=0 unconditionally
+		// -- there is no cohort of ANY kind left for this pass to serve.
+		if cohort != nil && details[i].Kind != cohort.Kind {
+			continue
+		}
+		servedCopy := served
+		details[i].Served = &servedCopy
+	}
 }
 
 // assemblyTelemetry is every per-investigation decision event one assembly

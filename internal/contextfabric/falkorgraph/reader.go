@@ -1053,7 +1053,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		unbounded = countUnboundedValidity(cohortNodes, orderedResolved)
 	}
 
-	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || exactNameTruncated || cohortWhollyDeniedByAuthz
+	partial := failedLookups > 0 || admission.DroppedUnknownRelationshipTypeCount > 0 || exactNameTruncated || cohortWhollyDeniedByAuthz || kindCensusTruncated
 	var degradedReasons []string
 	var coverageDetails []contextfabric.CoverageDetail
 	// CHAOS-4690: every degraded reason this reader composes gets a paired
@@ -1083,6 +1083,41 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	if exactNameTruncated {
 		degradedReasons = append(degradedReasons, "exact_name_candidates_truncated")
 		appendGraphDetail(contractsv1.ContextFabricCoverageDetailGraphExactNameCandidatesTruncated, true, nil, "exact_name_candidates_truncated", "context-fabric:graph")
+	}
+	if kindCensusTruncated {
+		// CHAOS-5732 (D47): the kind-scoped census (CHAOS-5654,
+		// cohort_kind_census.go) hit its own row bound before it finished
+		// enumerating declaredCohortKind -- the sibling loss the
+		// exact_name_candidates_truncated branch above reports for the
+		// OTHER term-free census. Declared is the raw figure THIS call's
+		// census observed (kindCensusMembers, capped to
+		// exactNameCandidateQueryLimit when cut) -- a floor, never raised
+		// to look like a total. Served is how many members of that kind
+		// made this call's own cohort, read here rather than re-derived by
+		// a caller that would have to re-learn which kind the census ran
+		// for; guarded on cohort.Kind matching declaredCohortKind so a
+		// future cohort-kind divergence reports zero rather than another
+		// kind's count.
+		declaredCensus := kindCensusMembers
+		served := 0
+		if cohort != nil && cohort.Kind == declaredCohortKind {
+			served = len(cohort.Members)
+		}
+		reason := fmt.Sprintf("kind_census_truncated:%s:%d:%d", declaredCohortKind, declaredCensus, served)
+		degradedReasons = append(degradedReasons, reason)
+		kindCensusKind := declaredCohortKind
+		kindCensusDetail := contextfabric.CoverageDetail{
+			DetailID:  fmt.Sprintf("cov-graph-%02d", len(coverageDetails)+1),
+			Source:    "context-fabric:graph",
+			Code:      contractsv1.ContextFabricCoverageDetailKindCensusTruncated,
+			Degrading: true,
+			Kind:      kindCensusKind,
+			Declared:  &declaredCensus,
+			Served:    &served,
+			Raw:       reason,
+		}
+		kindCensusDetail.Label = contractsv1.ComposeCoverageDetailLabel(kindCensusDetail)
+		coverageDetails = append(coverageDetails, kindCensusDetail)
 	}
 	if cohortWhollyDeniedByAuthz {
 		// CHAOS-4577: the discovered_cohort request found candidate members,

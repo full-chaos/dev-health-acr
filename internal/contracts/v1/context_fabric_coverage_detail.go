@@ -207,6 +207,38 @@ const (
 	// of the read (the member kind or the group kind), never a scope-expansion
 	// origin, which is why it rides alone rather than with the scope quartet.
 	ContextFabricCoverageDetailFactReadOriginState ContextFabricCoverageDetailCode = "fact_read_origin_state"
+
+	// ContextFabricCoverageDetailKindCensusTruncated: a term-free CENSUS of
+	// one subject kind's whole population -- the exhaustive kind-scoped
+	// fetch a discovered cohort's declared member kind runs when no name
+	// narrowed the search (falkorgraph's kind-scoped census, CHAOS-5654) --
+	// was cut at its own row bound before it finished enumerating that
+	// kind. Any count this turn derives from the kind is therefore a FLOOR,
+	// not a total.
+	//
+	// It differs from `population_truncated` in WHAT was cut. That code
+	// names a MEMBER SET already assembled and known to be a subset of a
+	// larger, unmeasured population -- the cohort itself says so via
+	// Cohort.Complete/Truncated, and it is minted on a REQUIREMENT outcome
+	// row (RequirementOutcomeRow.CauseCoverage), never on Coverage.Details,
+	// silent about which kind or how many were declared versus served. This
+	// code names the CENSUS QUERY itself: the fetch that would have
+	// enumerated the kind ran, hit its own row limit, and stopped. It
+	// carries the kind and the two numbers that name which floor and how
+	// much of it made the served answer -- Kind, Declared (the census
+	// figure as observed) and Served (the members of that kind the answer
+	// actually carries) -- fields no other code in this vocabulary uses.
+	//
+	// Present BESIDE Cohort.Truncated, never instead of it: Cohort.Truncated
+	// stays the coarse boolean every discovered cohort already carries;
+	// this is the additive detail that names which kind's census was the
+	// cause, and by how much. It is emitted on every terminal the census
+	// reaches, including a clarification turn that offers this kind as an
+	// option -- the census can be cut before a cohort is ever assembled (an
+	// empty or denied cohort still ran the census that would have populated
+	// it), so gating the disclosure on a served Cohort would drop it on
+	// exactly the turns a caller most needs to see the floor.
+	ContextFabricCoverageDetailKindCensusTruncated ContextFabricCoverageDetailCode = "kind_census_truncated"
 )
 
 // contextFabricCoverageDetailCodes is the closed vocabulary in published
@@ -229,6 +261,7 @@ var contextFabricCoverageDetailCodes = [...]ContextFabricCoverageDetailCode{
 	ContextFabricCoverageDetailReadPopulationUnverified,
 	ContextFabricCoverageDetailRequirementReadNotPlanned,
 	ContextFabricCoverageDetailFactReadOriginState,
+	ContextFabricCoverageDetailKindCensusTruncated,
 }
 
 // ContextFabricCoverageDetailCodeCount is the vocabulary size as a
@@ -393,6 +426,20 @@ type ContextFabricCoverageDetail struct {
 	Count          *int                       `json:"count,omitempty"`
 	Narrowed       bool                       `json:"narrowed,omitempty"`
 
+	// Kind, Declared and Served are additive fields for
+	// ContextFabricCoverageDetailKindCensusTruncated ONLY -- absent on
+	// every other code, and required together, never singly, when that
+	// code is present (validateCoverageDetail's field rule). Kind is the
+	// subject kind the truncated census was for (a member of the closed
+	// SubjectKind vocabulary, matching OriginKind's own type); Declared is
+	// the census figure as observed -- the floor the truncated fetch
+	// returned; Served is how many members of that kind the answer
+	// actually carries. Pointers, like Count, so an absent value cannot be
+	// confused with an observed zero.
+	Kind     ContextFabricSubjectKind `json:"kind,omitempty"`
+	Declared *int                     `json:"declared,omitempty"`
+	Served   *int                     `json:"served,omitempty"`
+
 	// Label is REQUIRED: the server-composed terse plain-language phrase
 	// (ComposeCoverageDetailLabel) — what renders when no Phrasing exists.
 	Label string `json:"label"`
@@ -425,6 +472,14 @@ type coverageDetailFieldRule struct {
 	// every other code OriginKind stays part of requireScope's all-or-nothing.
 	requireOriginKind  bool
 	requireSourceState bool
+	// requireKind: Kind is required ON ITS OWN -- only
+	// ContextFabricCoverageDetailKindCensusTruncated sets it, and it never
+	// rides with the scope quartet's OriginKind.
+	requireKind bool
+	// requireDeclaredServed: Declared and Served are required TOGETHER,
+	// never singly -- only ContextFabricCoverageDetailKindCensusTruncated
+	// uses either field.
+	requireDeclaredServed bool
 }
 
 var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetailFieldRule{
@@ -492,6 +547,15 @@ var coverageDetailFieldRules = map[ContextFabricCoverageDetailCode]coverageDetai
 		requireSourceState: true, allowSourceState: true,
 		requireOriginKind: true,
 	},
+	// Kind, Declared and Served, all three REQUIRED, and nothing else: the
+	// row says "this kind's census stopped at Declared; Served of them made
+	// the answer". No fact kind (nothing was read), no scope quartet
+	// (nothing was expanded), no narrowing (a census bound is not a
+	// narrowing step), no legacy Count -- Declared/Served already carry the
+	// two numbers a Count would duplicate under a different name.
+	ContextFabricCoverageDetailKindCensusTruncated: {
+		requireKind: true, requireDeclaredServed: true,
+	},
 }
 
 // coverageDetailCodeQualifiesPopulation names the codes that describe the
@@ -511,6 +575,14 @@ func coverageDetailCodeQualifiesPopulation(code ContextFabricCoverageDetailCode)
 	case ContextFabricCoverageDetailFactReadOriginState:
 		// A read's state, not a value computed over a population. Named
 		// rather than left to the default for the reason given below.
+		return false
+	case ContextFabricCoverageDetailKindCensusTruncated:
+		// This code is minted on Coverage.Details, never on a
+		// RequirementOutcomeRow's CauseCoverage -- the predicate this
+		// function serves. It carries its own Declared/Served pair rather
+		// than leaning on the row's, so it has nothing to say about that
+		// row's own equal-counts exception. Named rather than left to the
+		// default for the same reason `fact_read_origin_state` is above.
 		return false
 	default:
 		// `requirement_read_not_planned` deliberately does NOT qualify. It
@@ -588,6 +660,18 @@ func (d ContextFabricCoverageDetail) Validate() error {
 	if d.OriginKind != "" && !validContextFabricSubjectKind(d.OriginKind) {
 		return fmt.Errorf("coverage detail origin kind %q is invalid", d.OriginKind)
 	}
+	if d.Kind != "" && !validContextFabricSubjectKind(d.Kind) {
+		return fmt.Errorf("coverage detail kind %q is invalid", d.Kind)
+	}
+	if d.Declared != nil && *d.Declared < 0 {
+		return fmt.Errorf("coverage detail declared must be non-negative")
+	}
+	if d.Served != nil && *d.Served < 0 {
+		return fmt.Errorf("coverage detail served must be non-negative")
+	}
+	if d.Declared != nil && d.Served != nil && *d.Served > *d.Declared {
+		return fmt.Errorf("coverage detail served must not exceed declared")
+	}
 	if len(d.SupportedKinds) > contextFabricCoverageDetailKindsMaxCount || len(d.SkippedKinds) > contextFabricCoverageDetailKindsMaxCount {
 		return fmt.Errorf("coverage detail kind arrays violate v1 bounds")
 	}
@@ -652,6 +736,18 @@ func (d ContextFabricCoverageDetail) Validate() error {
 	}
 	if !rule.requireCount && !rule.allowCount && d.Count != nil {
 		return fmt.Errorf("coverage detail code %q forbids count", d.Code)
+	}
+	if rule.requireKind && d.Kind == "" {
+		return fmt.Errorf("coverage detail code %q requires kind", d.Code)
+	}
+	if !rule.requireKind && d.Kind != "" {
+		return fmt.Errorf("coverage detail code %q forbids kind", d.Code)
+	}
+	if rule.requireDeclaredServed && (d.Declared == nil || d.Served == nil) {
+		return fmt.Errorf("coverage detail code %q requires declared and served together", d.Code)
+	}
+	if !rule.requireDeclaredServed && (d.Declared != nil || d.Served != nil) {
+		return fmt.Errorf("coverage detail code %q forbids declared/served", d.Code)
 	}
 	return nil
 }
