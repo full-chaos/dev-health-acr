@@ -358,17 +358,18 @@ func (e *Engine) finalizeServed(ctx context.Context, principal storage.Principal
 	// served evidence of its kind and subject is a defect wherever it is
 	// served, a stored document on the reuse path included.
 	//
-	// The transition line fires on the DECISIVE exit only, because it reports
-	// what ASSEMBLY did to a prediction, and only that exit runs assembly on
-	// this request. A reuse serve re-serves a stored document's rows; the veto
-	// and refusal exits never reach assembly and carry no assembled_result
-	// row.
-	if err := assertSatisfiedRequirementsAreServed(result); err != nil {
+	// The transition line fires on EVERY exit that serves a document carrying
+	// an assembled account -- the decisive one and the reuse serve alike. What
+	// the line is about is the DOCUMENT the caller receives, not the pass that
+	// composed it: a reused answer states the same mismatch to its reader, and
+	// a reader of that request's trace who sees nothing has no way to learn it.
+	// The veto, refusal and clarification exits reach no assembly and carry no
+	// assembled_result row, so they emit nothing by construction rather than by
+	// a stage test here.
+	if err := AssertServedRequirementEvidence(result); err != nil {
 		return InvestigationResult{}, stageError(StageValidation, err)
 	}
-	if stage == BudgetAssertDecisive {
-		e.recordRequirementOutcomeTransitions(ctx, principal, ReconcileRequirementOutcomes(result))
-	}
+	e.recordRequirementOutcomeTransitions(ctx, principal, result)
 	if err := e.assertFitsBudget(ctx, principal, stage, result, budget); err != nil {
 		return InvestigationResult{}, err
 	}

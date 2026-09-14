@@ -89,6 +89,18 @@ func TestTheReadRouteDisclosesALegacyCompletenessState(t *testing.T) {
 			plan, rows := completenessRows(testCase.evaluated)
 			result.AnswerPlan = &plan
 			result.Completeness.Outcomes = rows
+			// The observation this requirement's own satisfied row is computed
+			// FROM. A document whose assembled row says a health read served in
+			// full over a coverage block that observed nothing is a shape no
+			// producer emits -- the evaluator reads exactly these sources to
+			// decide `satisfied` -- and the read route now refuses that shape as
+			// the server defect it would be. Present in BOTH arms, so the
+			// control stays byte-identical to the legacy fixture but for the
+			// evaluated row.
+			result.Coverage.Sources = []contractsv1.ContextFabricSourceObservation{{
+				Source: "canonical_fact:health",
+				State:  contractsv1.ContextFabricSourceAvailable,
+			}}
 			// The state a PRE-AMENDMENT binary would have stamped, computed
 			// with the frozen predicate rather than typed in, so the fixture
 			// cannot drift from the rule it is standing in for.

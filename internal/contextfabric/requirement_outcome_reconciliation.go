@@ -364,9 +364,14 @@ func requirementEvidenceServed(result InvestigationResult, requirement contracts
 	return false
 }
 
-// assertSatisfiedRequirementsAreServed is the invariant: no assembled_result
-// row says `satisfied` for a published requirement without served evidence of
-// that requirement's kind and subject.
+// AssertServedRequirementEvidence is the invariant: no assembled_result row
+// says `satisfied` for a published requirement without served evidence of that
+// requirement's kind and subject.
+//
+// EXPORTED, and there is exactly one of it. Every surface that SERVES a
+// document owes this check -- the engine's own exits and the stored-read route
+// that never reaches them -- and a second copy at the second surface is how the
+// two come to disagree about what "served evidence" means.
 //
 // ASSEMBLED ROWS ONLY. A planning seed's `satisfied` is the derivation's
 // prediction, not a claim about the served document -- it is what the
@@ -376,7 +381,7 @@ func requirementEvidenceServed(result InvestigationResult, requirement contracts
 // A row whose identity the plan does not publish is left to the join that
 // owns plan/outcome agreement: without the requirement its kind and subject
 // are unknown here, and guessing them is how a check starts to lie.
-func assertSatisfiedRequirementsAreServed(result InvestigationResult) error {
+func AssertServedRequirementEvidence(result InvestigationResult) error {
 	if result.AnswerPlan == nil {
 		return nil
 	}
@@ -395,18 +400,70 @@ func assertSatisfiedRequirementsAreServed(result InvestigationResult) error {
 	return nil
 }
 
-// recordRequirementOutcomeTransitions emits one line per transition, each
-// carrying its 1-based index and the request's total.
-func (e *Engine) recordRequirementOutcomeTransitions(ctx context.Context, principal storage.Principal, transitions []RequirementOutcomeTransition) {
-	if e.telemetry == nil {
-		return
+// RequirementOutcomeTransitionEvents is what a served document's transitions
+// look like on the trace: one event per transition, in plan order, each
+// carrying its 1-based index and the request's own total.
+//
+// EXPORTED AND SHARED, for the reason AssertServedRequirementEvidence is: the
+// engine and the stored-read route serve the same documents and must state the
+// same lines about them. The numbering lives here so neither surface can
+// number its own.
+func RequirementOutcomeTransitionEvents(result InvestigationResult) []RequirementOutcomeTransitionEvent {
+	transitions := ReconcileRequirementOutcomes(result)
+	if len(transitions) == 0 {
+		return nil
 	}
+	events := make([]RequirementOutcomeTransitionEvent, 0, len(transitions))
 	for index, transition := range transitions {
-		e.telemetry.RecordRequirementOutcomeTransition(ctx, principal, RequirementOutcomeTransitionEvent{
+		events = append(events, RequirementOutcomeTransitionEvent{
 			RequirementOutcomeTransition: transition,
 			Index:                        index + 1,
 			Total:                        len(transitions),
 		})
+	}
+	return events
+}
+
+// RequirementOutcomeTransitionLogArgs is the ONE construction of the transition
+// line's fields, sanitized at this site.
+//
+// The engine's slog sink and the stored-read route both log through it, so a
+// field added or renamed moves on both surfaces at once -- and the certified
+// declaration describes one line rather than two that happen to agree today.
+// The caller appends its own request-id attribute.
+func RequirementOutcomeTransitionLogArgs(event RequirementOutcomeTransitionEvent, orgID string) []any {
+	return []any{
+		"org_id", SanitizeLogAttr(orgID),
+		"requirement", SanitizeLogAttr(event.Requirement),
+		"obligation", SanitizeLogAttr(event.Obligation),
+		"role", SanitizeLogAttr(event.Role),
+		"subject_kind", SanitizeLogAttr(string(event.Subject)),
+		"predicted", SanitizeLogAttr(string(event.Predicted)),
+		"predicted_reason", SanitizeLogAttr(transitionLineTokenOrNone(string(event.PredictedReason))),
+		"assembled_outcome", SanitizeLogAttr(string(event.AssembledOutcome)),
+		// The SPLIT: the reason assembly observed below the wire cause. The wire
+		// code itself rides beside it, unchanged, as cause_coverage.
+		"cause", SanitizeLogAttr(string(event.AssemblyReason)),
+		"cause_coverage", SanitizeLogAttr(transitionLineTokenOrNone(string(event.CauseCoverage))),
+		"cause_overrun", SanitizeLogAttr(transitionLineTokenOrNone(string(event.CauseOverrun))),
+		"cause_narrowing", SanitizeLogAttr(transitionLineTokenOrNone(string(event.CauseNarrowing))),
+		"served", SanitizeLogInt(int64(event.Served)),
+		"declared", SanitizeLogInt(int64(event.Declared)),
+		"served_fact_count", SanitizeLogInt(int64(event.ServedFactCount)),
+		"member_set_resolved", event.MemberSetResolved,
+		"index", SanitizeLogInt(int64(event.Index)),
+		"total", SanitizeLogInt(int64(event.Total)),
+	}
+}
+
+// recordRequirementOutcomeTransitions emits the served document's transitions
+// through the engine's own telemetry.
+func (e *Engine) recordRequirementOutcomeTransitions(ctx context.Context, principal storage.Principal, result InvestigationResult) {
+	if e.telemetry == nil {
+		return
+	}
+	for _, event := range RequirementOutcomeTransitionEvents(result) {
+		e.telemetry.RecordRequirementOutcomeTransition(ctx, principal, event)
 	}
 }
 

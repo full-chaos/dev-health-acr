@@ -267,11 +267,16 @@ func TestTheTwoFactPrunedReasonsAreToldApartOnTheLine(t *testing.T) {
 	}
 }
 
-// TestAReusedClassBAnswerServesTheSameRowsAndNoTransition pins the reuse half:
-// a stored Class B document re-served from the reuse path carries the same
+// TestAReusedClassBAnswerServesTheSameRowsAndStatesTheTransition pins the reuse
+// half: a stored Class B document re-served from the reuse path carries the same
 // outcome rows, reconciles to the same transition, passes the invariant, and
-// emits no transition line, because no assembly ran on this request.
-func TestAReusedClassBAnswerServesTheSameRowsAndNoTransition(t *testing.T) {
+// STATES that transition on this request's trace.
+//
+// The line is about the document the caller receives, not about the pass that
+// composed it. A reused answer tells its reader exactly what the fresh one told
+// its own, and a reader of this request's trace who saw nothing would have no
+// way to learn that the count it was promised is unavailable.
+func TestAReusedClassBAnswerServesTheSameRowsAndStatesTheTransition(t *testing.T) {
 	t.Parallel()
 	fresh := runReconciliation(t, newReconciliationEngine(t, nil, InvestigationPartial, []ClaimedFact{reconciliationAnchorMembershipClaim()}, &recordingTelemetry{}, nil), 0)
 
@@ -305,8 +310,15 @@ func TestAReusedClassBAnswerServesTheSameRowsAndNoTransition(t *testing.T) {
 	if got, want := ReconcileRequirementOutcomes(served), ReconcileRequirementOutcomes(fresh); !reflect.DeepEqual(got, want) || len(want) != 1 {
 		t.Fatalf("reconciling the reused document gives %+v, the fresh one %+v (want one transition in both)", got, want)
 	}
-	if n := len(telemetry.requirementOutcomeTransitions); n != 0 {
-		t.Fatalf("the reuse serve emitted %d transition line(s); no assembly ran on this request", n)
+	if n := len(telemetry.requirementOutcomeTransitions); n != 1 {
+		t.Fatalf("the reuse serve emitted %d transition line(s), want 1 -- it serves a document whose count was predicted served and is unavailable", n)
+	}
+	reused := telemetry.requirementOutcomeTransitions[0]
+	if reused.Requirement != reconciliationCountRequirement ||
+		reused.AssembledOutcome != contractsv1.ContextFabricRequirementUnavailable ||
+		reused.AssemblyReason != RequirementAssemblyReasonComputedPopulationAbsent ||
+		reused.Index != 1 || reused.Total != 1 {
+		t.Fatalf("the reuse serve's line does not describe the served document: %+v", reused)
 	}
 	if len(telemetry.completenessAuthorities) == 0 || telemetry.completenessAuthorities[len(telemetry.completenessAuthorities)-1].ServerState != contractsv1.ContextFabricAnswerCompletenessDegraded {
 		t.Fatalf("the reuse serve's authority observation does not derive degraded from the same rows: %+v", telemetry.completenessAuthorities)

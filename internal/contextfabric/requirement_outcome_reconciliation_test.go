@@ -308,33 +308,55 @@ func TestASatisfiedRequirementWithNoServedEvidenceIsRefused(t *testing.T) {
 	}
 }
 
-// TestTheTransitionLineFiresOnTheDecisiveExitOnly sweeps every serving exit of
-// finalizeServed over the Class B document: each serves it, and only the
-// decisive exit, the one that runs assembly on its request, reports the
-// transition.
-func TestTheTransitionLineFiresOnTheDecisiveExitOnly(t *testing.T) {
+// TestEveryServingExitStatesTheTransitionsItsDocumentCarries sweeps every
+// serving exit of finalizeServed: what decides the line is the DOCUMENT, never
+// which exit served it. A document carrying a mismatch states it at every exit;
+// one whose rows never reached assembly states nothing at any of them, which is
+// why the veto and refusal exits are silent in production without a stage test
+// in the code.
+func TestEveryServingExitStatesTheTransitionsItsDocumentCarries(t *testing.T) {
 	t.Parallel()
-	served := runReconciliation(t, newReconciliationEngine(t, nil, InvestigationPartial, []ClaimedFact{reconciliationAnchorMembershipClaim()}, &recordingTelemetry{}, nil), 0)
-	if len(ReconcileRequirementOutcomes(served)) != 1 {
+	mismatch := runReconciliation(t, newReconciliationEngine(t, nil, InvestigationPartial, []ClaimedFact{reconciliationAnchorMembershipClaim()}, &recordingTelemetry{}, nil), 0)
+	if len(ReconcileRequirementOutcomes(mismatch)) != 1 {
 		t.Fatal("the Class B document does not reconcile to one transition; the sweep would test nothing")
 	}
-	for _, stage := range BudgetAssertStageVocabulary() {
-		stage := stage
-		t.Run(string(stage), func(t *testing.T) {
-			t.Parallel()
-			telemetry := &recordingTelemetry{}
-			engine := newReconciliationEngine(t, nil, InvestigationPartial, nil, telemetry, nil)
-			if _, err := engine.finalizeServed(context.Background(), storage.Principal{OrgID: "org_1"}, stage, served, nil, ResponseBudget{}); err != nil {
-				t.Fatalf("finalizeServed(%s) error = %v", stage, err)
-			}
-			want := 0
-			if stage == BudgetAssertDecisive {
-				want = 1
-			}
-			if got := len(telemetry.requirementOutcomeTransitions); got != want {
-				t.Fatalf("stage %s emitted %d transition line(s), want %d", stage, got, want)
-			}
-		})
+	// The shape every pre-assembly exit actually serves: the plan's requirements
+	// seeded, nothing appended by assembly.
+	unassembled := mismatch
+	planningOnly := make([]RequirementOutcomeRow, 0, len(mismatch.Completeness.Outcomes))
+	for _, row := range mismatch.Completeness.Outcomes {
+		if row.Stage == contractsv1.ContextFabricOutcomeStagePlanning {
+			planningOnly = append(planningOnly, row)
+		}
+	}
+	unassembled.Completeness.Outcomes = planningOnly
+	if len(ReconcileRequirementOutcomes(unassembled)) != 0 {
+		t.Fatal("a document with no assembled row reconciles to a transition; the control tests nothing")
+	}
+
+	for _, document := range []struct {
+		name     string
+		document InvestigationResult
+		want     int
+	}{
+		{"carries an assembled mismatch", mismatch, 1},
+		{"never reached assembly", unassembled, 0},
+	} {
+		document := document
+		for _, stage := range BudgetAssertStageVocabulary() {
+			stage := stage
+			t.Run(document.name+"/"+string(stage), func(t *testing.T) {
+				t.Parallel()
+				telemetry := &recordingTelemetry{}
+				engine := newReconciliationEngine(t, nil, InvestigationPartial, nil, telemetry, nil)
+				if _, err := engine.finalizeServed(context.Background(), storage.Principal{OrgID: "org_1"}, stage, document.document, nil, ResponseBudget{}); err != nil {
+					t.Fatalf("finalizeServed(%s) error = %v", stage, err)
+				}
+				if got := len(telemetry.requirementOutcomeTransitions); got != document.want {
+					t.Fatalf("stage %s emitted %d transition line(s), want %d", stage, got, document.want)
+				}
+			})
+		}
 	}
 }
 

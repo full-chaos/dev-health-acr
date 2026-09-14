@@ -1436,38 +1436,16 @@ func (t SlogEngineTelemetry) RecordReadRequirementObservationCover(ctx context.C
 
 // RecordRequirementOutcomeTransition (CHAOS-5737) logs at Info, once per
 // published requirement whose assembled outcome differs from the derivation's
-// prediction, from the decisive exit of finalizeServed. A request whose every
-// assembled account matches its prediction emits none; `index` and `total` on
-// each line say how many the request emitted.
+// prediction, from every engine exit that serves a document carrying an
+// assembled account. A request whose every assembled account matches its
+// prediction emits none; `index` and `total` on each line say how many the
+// request emitted.
 //
-// EVERY field on the event reaches this line. Every string is a closed token or
-// a requirement coordinate built from closed tokens, and still goes through
-// SanitizeLogAttr; every integer goes through SanitizeLogInt, because Served
-// and Declared can derive from a request option. An empty optional token is
-// written as `none`, so "nothing applied" is never an empty string.
+// The fields are built by RequirementOutcomeTransitionLogArgs, which the
+// stored-read route logs through as well: one construction of this line, two
+// surfaces that serve documents.
 func (t SlogEngineTelemetry) RecordRequirementOutcomeTransition(ctx context.Context, principal storage.Principal, event RequirementOutcomeTransitionEvent) {
-	args := append([]any{
-		"org_id", SanitizeLogAttr(principal.OrgID),
-		"requirement", SanitizeLogAttr(event.Requirement),
-		"obligation", SanitizeLogAttr(event.Obligation),
-		"role", SanitizeLogAttr(event.Role),
-		"subject_kind", SanitizeLogAttr(string(event.Subject)),
-		"predicted", SanitizeLogAttr(string(event.Predicted)),
-		"predicted_reason", SanitizeLogAttr(transitionLineTokenOrNone(string(event.PredictedReason))),
-		"assembled_outcome", SanitizeLogAttr(string(event.AssembledOutcome)),
-		// The SPLIT: the reason assembly observed below the wire cause. The wire
-		// code itself rides beside it, unchanged, as cause_coverage.
-		"cause", SanitizeLogAttr(string(event.AssemblyReason)),
-		"cause_coverage", SanitizeLogAttr(transitionLineTokenOrNone(string(event.CauseCoverage))),
-		"cause_overrun", SanitizeLogAttr(transitionLineTokenOrNone(string(event.CauseOverrun))),
-		"cause_narrowing", SanitizeLogAttr(transitionLineTokenOrNone(string(event.CauseNarrowing))),
-		"served", SanitizeLogInt(int64(event.Served)),
-		"declared", SanitizeLogInt(int64(event.Declared)),
-		"served_fact_count", SanitizeLogInt(int64(event.ServedFactCount)),
-		"member_set_resolved", event.MemberSetResolved,
-		"index", SanitizeLogInt(int64(event.Index)),
-		"total", SanitizeLogInt(int64(event.Total)),
-	}, requestIDLogAttrs(ctx)...)
+	args := append(RequirementOutcomeTransitionLogArgs(event, principal.OrgID), requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, RequirementOutcomeTransitionLogMessage, args...)
 }
 

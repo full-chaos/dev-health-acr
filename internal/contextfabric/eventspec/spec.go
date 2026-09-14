@@ -1660,13 +1660,19 @@ var SemanticStatePersistence = Event{
 	},
 }
 
-// RequirementOutcomeTransition (CHAOS-5737) is the Info line
-// (contextfabric/telemetry.go RecordRequirementOutcomeTransition, emitted from
-// finalizeServed's decisive exit) for ONE published requirement whose
-// assembled outcome differs from the derivation's prediction. A request emits
-// one line per such requirement and none when every assembled account matches
-// its prediction, so the multiplicity is bounded-many with no pass: the line
-// describes the final served document, which exists once per request.
+// RequirementOutcomeTransition (CHAOS-5737) is the Info line for ONE published
+// requirement whose assembled outcome differs from the derivation's prediction.
+//
+// EVERY SURFACE THAT SERVES A DOCUMENT EMITS IT, through one construction
+// (contextfabric.RequirementOutcomeTransitionLogArgs): the engine's own serving
+// exits via RecordRequirementOutcomeTransition, and the stored-read route,
+// which never reaches the engine and whose response the MCP
+// investigation_result tool forwards. What decides the line is the document
+// served, never the path it took to a reader.
+//
+// A request emits one line per such requirement and none when every assembled
+// account matches its prediction, so the multiplicity is bounded-many with no
+// pass: the line describes the served document, which exists once per request.
 var RequirementOutcomeTransition = Event{
 	ID:                 "contextfabric.requirement_outcome_transition",
 	Msg:                "context fabric requirement outcome transition",
