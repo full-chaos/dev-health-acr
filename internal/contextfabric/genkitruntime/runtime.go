@@ -1205,6 +1205,19 @@ type subjectOperandOutput struct {
 	MemberQualifier string   `json:"member_qualifier,omitempty"`
 }
 
+func (o *subjectOperandOutput) UnmarshalJSON(data []byte) error {
+	if err := rejectExplicitNullMemberQualifier(data); err != nil {
+		return err
+	}
+	type plain subjectOperandOutput
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*o = subjectOperandOutput(decoded)
+	return nil
+}
+
 type subjectExpressionOutput struct {
 	Kind            string                 `json:"kind,omitempty"`
 	Terms           []string               `json:"terms,omitempty"`
@@ -1213,6 +1226,52 @@ type subjectExpressionOutput struct {
 	MemberQualifier string                 `json:"member_qualifier,omitempty"`
 	GroupKind       string                 `json:"group_kind,omitempty"`
 	Operands        []subjectOperandOutput `json:"operands,omitempty"`
+}
+
+func (o *subjectExpressionOutput) UnmarshalJSON(data []byte) error {
+	if err := rejectExplicitNullMemberQualifier(data); err != nil {
+		return err
+	}
+	type plain subjectExpressionOutput
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*o = subjectExpressionOutput(decoded)
+	return nil
+}
+
+func rejectExplicitNullMemberQualifier(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	first, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, ok := first.(json.Delim)
+	if !ok || delimiter != '{' {
+		return nil
+	}
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return fmt.Errorf("member qualifier field name is not a string")
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return err
+		}
+		if strings.EqualFold(key, "member_qualifier") && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return errors.New("member_qualifier must be a string when present")
+		}
+	}
+	if _, err := decoder.Token(); err != nil {
+		return err
+	}
+	return nil
 }
 
 type questionFrameOutput struct {
@@ -2795,7 +2854,29 @@ func mergeFallbackReceipt(primary, fallback contextfabric.ModelExecutionReceipt)
 	primary.Usage.InputTokens += fallback.Usage.InputTokens
 	primary.Usage.OutputTokens += fallback.Usage.OutputTokens
 	primary.Usage.TotalTokens += fallback.Usage.TotalTokens
+	mergeFallbackFrameCapture(&primary, fallback)
 	return primary
+}
+
+func mergeFallbackFrameCapture(primary *contextfabric.ModelExecutionReceipt, fallback contextfabric.ModelExecutionReceipt) {
+	primary.QuestionFrame = fallback.QuestionFrame
+	primary.FrameOutcome = fallback.FrameOutcome
+	primary.FrameFailedInvariant = fallback.FrameFailedInvariant
+	primary.FrameGateOutcome = fallback.FrameGateOutcome
+	primary.FrameGateRefuseBasis = fallback.FrameGateRefuseBasis
+	primary.FrameGateDeclaredMemberKind = fallback.FrameGateDeclaredMemberKind
+	primary.FrameGoalsDropped = fallback.FrameGoalsDropped
+	primary.FrameTermsTruncated = fallback.FrameTermsTruncated
+	primary.FrameKindUnrecognized = fallback.FrameKindUnrecognized
+	primary.RequirementCellsDerived = fallback.RequirementCellsDerived
+	primary.RequirementCellsUnserved = fallback.RequirementCellsUnserved
+	primary.RequirementDerivationVersion = fallback.RequirementDerivationVersion
+	primary.FrameTemporalUnrecognized = fallback.FrameTemporalUnrecognized
+	primary.FrameEmphasisDropped = fallback.FrameEmphasisDropped
+	primary.FrameDimensionsDropped = fallback.FrameDimensionsDropped
+	primary.FrameMemberKindUnrecognized = fallback.FrameMemberKindUnrecognized
+	primary.FrameGroupKindUnrecognized = fallback.FrameGroupKindUnrecognized
+	primary.FrameMemberQualifierUnrecognized = fallback.FrameMemberQualifierUnrecognized
 }
 
 // describeReportedLeg makes a both-legs-failed receipt one projection of the
