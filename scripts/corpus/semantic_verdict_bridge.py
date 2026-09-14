@@ -396,8 +396,20 @@ def make_persisted_semantic_state_adapter(semantic_verdict_module, run=subproces
             with os.fdopen(fd, "w") as fh:
                 fh.write(query)
             proc = run(
+                # -v ON_ERROR_STOP=1: without it, psql's default `-f`
+                # behavior is to print a SQL error to stderr and still
+                # exit 0 -- the exact shape that let a genuine SQL error
+                # (bad column, permission denial, a broken migration)
+                # print an empty stdout and fall through this adapter's
+                # own "empty stdout = NULL/absent" branch below, silently
+                # scoring a real infrastructure fault as an ordinary
+                # absent row. With it set, the same error exits non-zero
+                # and is caught by the `proc.returncode != 0` branch
+                # below as `PersistedSemanticStateInfraError`, never as
+                # an absent value.
                 ["psql", "-h", host, "-p", port, "-U", user, "-d", db,
-                 "-v", f"result_id={result_id}", "-At", "-f", sql_path],
+                 "-v", "ON_ERROR_STOP=1", "-v", f"result_id={result_id}",
+                 "-At", "-f", sql_path],
                 capture_output=True, text=True, timeout=15, env=env,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:

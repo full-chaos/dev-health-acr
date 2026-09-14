@@ -24,6 +24,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -301,6 +302,27 @@ def test_adapter_never_queries_for_a_malformed_result_id():
     _with_env(go)
 
 
+def test_adapter_passes_on_error_stop_to_psql():
+    # `psql -f` exits 0 on a genuine SQL error unless `-v ON_ERROR_STOP=1`
+    # is set -- without it, an error prints to stderr while stdout stays
+    # empty, and empty stdout is this adapter's own signal for NULL/absent.
+    # An error-with-empty-stdout must never read as NULL/absent, so this
+    # pin locks the argv shape in place.
+    captured = {}
+
+    def spying_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    def go():
+        adapter = sv_bridge.make_persisted_semantic_state_adapter(_FakeSemanticVerdictModule, run=spying_run)
+        adapter("result_abc123")
+        cmd = captured["cmd"]
+        pairs = list(zip(cmd, cmd[1:]))
+        _require(("-v", "ON_ERROR_STOP=1") in pairs, f"missing -v ON_ERROR_STOP=1: {cmd}")
+    _with_env(go)
+
+
 def test_result_id_is_bound_via_psql_variable_not_string_concatenation():
     captured = {}
 
@@ -524,6 +546,42 @@ def test_real_psql_round_trip_against_the_trial_store():
     _require(isinstance(got_state, dict),
              f"a non-NULL semantic_state row must round-trip to a dict, got {type(got_state).__name__}")
     _require("format_version" in got_state, f"the decoded state must carry format_version: {got_state}")
+
+    # A genuine SQL error against the real binary and table, run twice:
+    # without `-v ON_ERROR_STOP=1` psql exits 0 with the error only on
+    # stderr; with it, the identical query exits non-zero, which the
+    # adapter's own `proc.returncode != 0` branch turns into
+    # PersistedSemanticStateInfraError (see test_adapter_raises_infra_error_
+    # on_nonzero_exit for that branch, proven with a fake run).
+    bad_sql_fd, bad_sql_path = tempfile.mkstemp(prefix="acr-5722-test-badquery-", suffix=".sql")
+    try:
+        with os.fdopen(bad_sql_fd, "w") as fh:
+            fh.write("select this_column_does_not_exist from "
+                     "acr.context_fabric_investigation_results where result_id = :'result_id';\n")
+        proc_bug = subprocess.run(
+            ["psql", "-h", os.environ["ACR_TEST_TRIAL_PG_HOST"], "-p", os.environ["ACR_TEST_TRIAL_PG_PORT"],
+             "-U", os.environ["ACR_TEST_TRIAL_PG_USER"], "-d", sv_bridge._trial_pg_database(),
+             "-v", f"result_id={null_id}", "-At", "-f", bad_sql_path],
+            capture_output=True, text=True, timeout=15, env=env)
+        _require(proc_bug.returncode == 0,
+                  f"pre-fix repro: psql -f WITHOUT ON_ERROR_STOP must exit 0 even on a real SQL error "
+                  f"(got rc={proc_bug.returncode}) -- this is the bug the fix closes")
+        _require("ERROR" in proc_bug.stderr, f"expected a real SQL error on stderr: {proc_bug.stderr!r}")
+        _require(proc_bug.stdout.strip() == "", f"expected empty stdout on the errored query: {proc_bug.stdout!r}")
+
+        proc_fixed = subprocess.run(
+            ["psql", "-h", os.environ["ACR_TEST_TRIAL_PG_HOST"], "-p", os.environ["ACR_TEST_TRIAL_PG_PORT"],
+             "-U", os.environ["ACR_TEST_TRIAL_PG_USER"], "-d", sv_bridge._trial_pg_database(),
+             "-v", "ON_ERROR_STOP=1", "-v", f"result_id={null_id}", "-At", "-f", bad_sql_path],
+            capture_output=True, text=True, timeout=15, env=env)
+        _require(proc_fixed.returncode != 0,
+                  f"post-fix: psql -f WITH ON_ERROR_STOP=1 must exit non-zero on the same real SQL error "
+                  f"(got rc={proc_fixed.returncode})")
+    finally:
+        os.unlink(bad_sql_path)
+
+    print(f"PASS (real psql, ON_ERROR_STOP): pre-fix rc={proc_bug.returncode} (bug reproduced) -> "
+          f"post-fix rc={proc_fixed.returncode} (caught)")
 
     print(f"PASS (real psql, {os.environ['ACR_TEST_TRIAL_PG_HOST']}:{os.environ['ACR_TEST_TRIAL_PG_PORT']}/"
           f"{sv_bridge._trial_pg_database()}): NULL row {null_id} -> None; "
