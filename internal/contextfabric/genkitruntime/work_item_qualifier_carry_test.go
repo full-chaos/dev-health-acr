@@ -93,11 +93,53 @@ func TestParseInterpretationOutputSignalsCarriesScopedOperandQualifier(t *testin
 	if operand.Scoped == nil {
 		t.Fatal("sanitized explicit operand has no scoped variant")
 	}
-	if got := operand.Scoped.MemberQualifier; got != contextfabric.MemberQualifierStatus {
-		t.Fatalf("scoped operand qualifier = %q, want %q", got, contextfabric.MemberQualifierStatus)
+	got, present := operand.MemberQualifier()
+	if got != contextfabric.MemberQualifierStatus || !present {
+		t.Fatalf("scoped operand qualifier = %q/%v, want %q/true", got, present, contextfabric.MemberQualifierStatus)
 	}
 	if capture.Frame.MemberQualifierUnrecognized {
 		t.Fatal("recognized scoped operand qualifier was marked unrecognized")
+	}
+}
+
+func TestParseInterpretationOutputSignalsKeepsUnknownScopedOperandQualifierPresent(t *testing.T) {
+	t.Parallel()
+	output := validInterpretationOutput()
+	output.QuestionFrame = &questionFrameOutput{
+		Goals: []string{"compare"},
+		SubjectExpression: &subjectExpressionOutput{
+			Kind: "explicit_set",
+			Operands: []subjectOperandOutput{
+				{Kind: "named_subject", Terms: []string{"Project Alpha"}},
+				{
+					Kind:            "children_of_scope",
+					AnchorTerms:     []string{"Project Alpha"},
+					MemberKind:      "work_item",
+					MemberQualifier: "future_filter",
+				},
+			},
+		},
+		Temporal: "current",
+	}
+	rawOutput, err := json.Marshal(output)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	_, capture, err := ParseInterpretationOutputSignals(rawOutput, contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent})
+	if err != nil {
+		t.Fatalf("ParseInterpretationOutputSignals() error = %v", err)
+	}
+	operands := capture.Frame.Frame.SubjectExpression.Explicit.Operands
+	if len(operands) != 2 || operands[1].Scoped == nil {
+		t.Fatalf("sanitized explicit operands = %#v, want named plus scoped", operands)
+	}
+	got, present := operands[1].MemberQualifier()
+	if got != contextfabric.MemberQualifierUnrecognized || !present {
+		t.Fatalf("scoped operand qualifier = %q/%v, want unrecognized/true", got, present)
+	}
+	if !capture.Frame.MemberQualifierUnrecognized {
+		t.Fatal("unknown scoped operand qualifier was not recorded on the transport capture")
 	}
 }
 

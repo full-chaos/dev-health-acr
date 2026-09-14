@@ -45,6 +45,22 @@ func TestMemberQualifierVocabularyAndSanitizer(t *testing.T) {
 	}
 }
 
+func TestMemberQualifierIsDeclaredAsAnOuterScopeInvariantInput(t *testing.T) {
+	t.Parallel()
+	for _, spec := range FrameInvariantSpecs() {
+		if spec.ID != FrameInvariantI5 {
+			continue
+		}
+		for _, field := range spec.Reads {
+			if field == FrameFieldMemberQualifier {
+				return
+			}
+		}
+		t.Fatal("I5 does not declare member_qualifier among its model-emitted inputs")
+	}
+	t.Fatal("I5 is missing from the frame invariant table")
+}
+
 func TestMemberQualifierTelemetryPreservesPresence(t *testing.T) {
 	t.Parallel()
 	for _, testCase := range []struct {
@@ -86,6 +102,46 @@ func TestMemberQualifierTelemetryPreservesPresence(t *testing.T) {
 				t.Fatalf("subject_member_qualifier = %#v, want %q", got, testCase.qualifier)
 			}
 		})
+	}
+}
+
+func TestMemberQualifierTelemetryPreservesScopedOperandPresence(t *testing.T) {
+	t.Parallel()
+	state := semanticFixture(t)
+	state.Frame.SubjectExpression = SubjectExpression{
+		Kind: SubjectExpressionExplicitSet,
+		Explicit: &ExplicitSetExpression{Operands: []SubjectOperand{
+			{Kind: SubjectOperandNamed, Named: &NamedSubjectExpression{Terms: []string{"Project Alpha"}}},
+			{Kind: SubjectOperandScoped, Scoped: &ScopedSetExpression{
+				AnchorTerms:     []string{"Project Alpha"},
+				MemberKind:      SubjectWorkItem,
+				MemberQualifier: MemberQualifierStatus,
+			}},
+		}},
+	}
+	state.GroupKind = ""
+	state.Roles = semanticRoleSlots(state.Frame.SubjectExpression)
+	state.Requirements = []SemanticRequirement{}
+	if _, err := EncodeSemanticState(state); err != nil {
+		t.Fatalf("EncodeSemanticState() error = %v", err)
+	}
+	var buf strings.Builder
+	sink := NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&buf, nil)))
+	sink.RecordSemanticStatePersistence(context.Background(), acceptancePrincipal(), SemanticStatePersistenceEvent{
+		ResultID: "qualifier-operand-telemetry",
+		Site:     BudgetAssertDecisive,
+		Decision: SemanticStatePersisted,
+		State:    state,
+	})
+	if !strings.Contains(buf.String(), "work_item:status") {
+		t.Fatalf("telemetry = %s, want the scoped operand qualifier token", buf.String())
+	}
+}
+
+func TestMemberQualifierTelemetryRejectsInventedToken(t *testing.T) {
+	t.Parallel()
+	if got := semanticMemberQualifierToken(MemberQualifier("invented_filter")); got != continuationTelemetryUnrecognised {
+		t.Fatalf("semanticMemberQualifierToken() = %q, want %q", got, continuationTelemetryUnrecognised)
 	}
 }
 
@@ -193,5 +249,64 @@ func TestMemberQualifierValidationRejectsUnknownScopedOperandValue(t *testing.T)
 		}
 	} else {
 		t.Fatal("ValidateFramePhaseA1() accepted an invented scoped operand qualifier")
+	}
+}
+
+func TestMemberQualifierSemanticCodecRejectsInventedOuterValue(t *testing.T) {
+	t.Parallel()
+	state := semanticFixture(t)
+	state.Frame.SubjectExpression = SubjectExpression{
+		Kind: SubjectExpressionChildrenOfScope,
+		Scoped: &ScopedSetExpression{
+			AnchorTerms:     []string{"Project Alpha"},
+			MemberKind:      SubjectWorkItem,
+			MemberQualifier: MemberQualifier("invented_filter"),
+		},
+	}
+	state.GroupKind = ""
+	state.Roles = semanticRoleSlots(state.Frame.SubjectExpression)
+	state.Requirements = []SemanticRequirement{}
+	if _, err := EncodeSemanticState(state); err == nil || !strings.Contains(err.Error(), "scoped member_qualifier") {
+		t.Fatalf("EncodeSemanticState() error = %v, want the outer scoped qualifier validity rejection", err)
+	}
+}
+
+func TestMemberQualifierSemanticCodecRejectsInventedOperandValue(t *testing.T) {
+	t.Parallel()
+	state := semanticFixture(t)
+	state.Frame.SubjectExpression = SubjectExpression{
+		Kind: SubjectExpressionExplicitSet,
+		Explicit: &ExplicitSetExpression{Operands: []SubjectOperand{
+			{Kind: SubjectOperandNamed, Named: &NamedSubjectExpression{Terms: []string{"Project Alpha"}}},
+			{
+				Kind: SubjectOperandScoped,
+				Scoped: &ScopedSetExpression{
+					AnchorTerms:     []string{"Project Alpha"},
+					MemberKind:      SubjectWorkItem,
+					MemberQualifier: MemberQualifier("invented_filter"),
+				},
+			},
+		}},
+	}
+	state.GroupKind = ""
+	state.Roles = semanticRoleSlots(state.Frame.SubjectExpression)
+	state.Requirements = []SemanticRequirement{}
+	if _, err := EncodeSemanticState(state); err == nil || !strings.Contains(err.Error(), "operand scoped member_qualifier") {
+		t.Fatalf("EncodeSemanticState() error = %v, want the scoped operand qualifier validity rejection", err)
+	}
+}
+
+func TestScopedOperandWellFormedRejectsInventedQualifier(t *testing.T) {
+	t.Parallel()
+	operand := SubjectOperand{
+		Kind: SubjectOperandScoped,
+		Scoped: &ScopedSetExpression{
+			AnchorTerms:     []string{"Project Alpha"},
+			MemberKind:      SubjectWorkItem,
+			MemberQualifier: MemberQualifier("invented_filter"),
+		},
+	}
+	if subjectOperandWellFormed(operand) {
+		t.Fatal("subjectOperandWellFormed() accepted an invented member qualifier")
 	}
 }
