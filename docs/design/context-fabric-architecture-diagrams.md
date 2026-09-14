@@ -587,10 +587,11 @@ and then into `FactQuery`; it remains separate from the resolver's `Scope`
 and from model-authored requirement parameters. The adapter translates the
 current principal and current request into the typed reader selector sets.
 The reader package renders one statement with the organization-qualified
-`work_items` ↔ `repos` relation when selectors are present. Its authorization
-expression applies directly to `w.repo_id` with bound ID and selector arrays;
-the caller supplies repository IDs, and there is no separate metadata lookup
-query. A nil selector keeps the legacy ID-only statement.
+`work_items` ↔ `repos` relation. The adapter supplies typed slug/owner
+selectors and wildcard flags. The reader evaluates them against current
+`r.repo` metadata, with repository-presence guards; it does not perform a
+separate metadata lookup. The library's optional ID-only mode is a separate
+compatibility path and is not used by this adapter.
 
 ```mermaid
 flowchart LR
@@ -598,7 +599,7 @@ flowchart LR
     CFR --> BFQ["buildFactQuery"] --> FQ["FactQuery<br/>RequestedRepositoryScope<br/>separate from Scope and Parameters"]
     FQ --> AD["workItemRepositoryAuthorization<br/>current Principal + request"]
     AD --> TS["typed Granted / Requested<br/>RepositorySelectorSet"]
-    TS --> SQL["WorkItemScopeSQL<br/>bound w.repo_id predicates<br/>+ same-statement LEFT JOIN repos AS r FINAL"]
+    TS --> SQL["WorkItemScopeSQL<br/>bound slug/owner selectors + presence guards<br/>same-statement LEFT JOIN repos AS r FINAL"]
     SQL --> READ["status / title / actual-completion<br/>WithScopeAndRowLimit"]
     READ --> BOUNDS["SETTINGS: rows 10000<br/>memory 512 MiB · result 201<br/>all overflow modes throw"]
     CTX{"context deadline"} -->|"remaining ≥ 1 second"| SEC["server max_execution_time =<br/>whole-second floor"]
@@ -606,8 +607,9 @@ flowchart LR
     SEC --> BOUNDS
 ```
 
-The reader keeps the existing ID predicate and selector predicate as an AND
-combination. A current principal is re-evaluated for each content read, and
+The content reader intersects the requested work-item identities with the
+principal and request selector predicates. A current principal is
+re-evaluated for each content read, and
 the request selector is not carried from a prior query. A canceled or already
 expired context returns its context error before statement execution. A live
 sub-second budget is refused because the released reader API accepts only
