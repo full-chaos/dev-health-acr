@@ -37,6 +37,7 @@ func semanticStateLogGroup(key string, state *PersistedSemanticState) slog.Attr 
 	}
 	expression := frame.SubjectExpression
 	var memberKind, groupKind, expectedKind SubjectKind
+	var memberQualifier MemberQualifier
 	operands := []string{}
 	terms := 0
 	if expression.Named != nil {
@@ -50,6 +51,7 @@ func semanticStateLogGroup(key string, state *PersistedSemanticState) slog.Attr 
 	}
 	if expression.Scoped != nil {
 		memberKind = expression.Scoped.MemberKind
+		memberQualifier = expression.Scoped.MemberQualifier
 		terms += len(expression.Scoped.AnchorTerms)
 	}
 	if expression.Grouped != nil {
@@ -70,6 +72,9 @@ func semanticStateLogGroup(key string, state *PersistedSemanticState) slog.Attr 
 			if operand.Scoped != nil {
 				terms += len(operand.Scoped.AnchorTerms)
 				token += ":" + string(operand.Scoped.MemberKind)
+				if operand.Scoped.MemberQualifier != "" {
+					token += ":" + semanticMemberQualifierToken(operand.Scoped.MemberQualifier)
+				}
 			}
 			operands = append(operands, token)
 		}
@@ -98,6 +103,7 @@ func semanticStateLogGroup(key string, state *PersistedSemanticState) slog.Attr 
 		slog.String("frame_version", SanitizeLogAttr(state.FrameVersion)),
 		slog.String("subject_expression_kind", SanitizeLogAttr(string(expression.Kind))),
 		slog.String("subject_member_kind", SanitizeLogAttr(string(memberKind))),
+		slog.String("subject_member_qualifier", SanitizeLogAttr(semanticMemberQualifierToken(memberQualifier))),
 		slog.String("subject_group_kind", SanitizeLogAttr(string(groupKind))),
 		slog.String("subject_expected_kind", SanitizeLogAttr(string(expectedKind))),
 		slog.Any("operands", SanitizeLogStrings(operands)),
@@ -127,6 +133,13 @@ func semanticStateLogGroup(key string, state *PersistedSemanticState) slog.Attr 
 		slog.String("request_identity_version", SanitizeLogAttr(state.RequestIdentity.Version)),
 		slog.String("request_identity_digest", SanitizeLogAttr(state.RequestIdentity.Digest)),
 	)
+}
+
+func semanticMemberQualifierToken(value MemberQualifier) string {
+	if !ValidMemberQualifier(value) {
+		return continuationTelemetryUnrecognised
+	}
+	return SanitizeLogAttr(string(value))
 }
 
 // semanticRequirementToken renders one declaration as one closed token:

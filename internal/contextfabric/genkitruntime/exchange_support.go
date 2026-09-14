@@ -177,11 +177,12 @@ type InterpretationOutputFrame struct {
 	// fix, so the file-exchange transport's capture stays the byte-
 	// identical mirror this struct's own doc comment promises rather than
 	// falling one field behind again.
-	TemporalUnrecognized   bool
-	EmphasisDropped        int
-	DimensionsDropped      int
-	MemberKindUnrecognized bool
-	GroupKindUnrecognized  bool
+	TemporalUnrecognized        bool
+	EmphasisDropped             int
+	DimensionsDropped           int
+	MemberKindUnrecognized      bool
+	GroupKindUnrecognized       bool
+	MemberQualifierUnrecognized bool
 }
 
 type InterpretationOutputFamily struct {
@@ -291,16 +292,17 @@ func ParseInterpretationOutputSignals(raw []byte, defaultTime contextfabric.Time
 			RequestedKindUnrecognized:   family.RequestedKindUnrecognized,
 		},
 		Frame: InterpretationOutputFrame{
-			Frame:                  frame.Frame,
-			Present:                frame.Present,
-			GoalsDropped:           frame.GoalsDropped,
-			TermsTruncated:         frame.TermsTruncated,
-			KindUnrecognized:       frame.KindUnrecognized,
-			TemporalUnrecognized:   frame.TemporalUnrecognized,
-			EmphasisDropped:        frame.EmphasisDropped,
-			DimensionsDropped:      frame.DimensionsDropped,
-			MemberKindUnrecognized: frame.MemberKindUnrecognized,
-			GroupKindUnrecognized:  frame.GroupKindUnrecognized,
+			Frame:                       frame.Frame,
+			Present:                     frame.Present,
+			GoalsDropped:                frame.GoalsDropped,
+			TermsTruncated:              frame.TermsTruncated,
+			KindUnrecognized:            frame.KindUnrecognized,
+			TemporalUnrecognized:        frame.TemporalUnrecognized,
+			EmphasisDropped:             frame.EmphasisDropped,
+			DimensionsDropped:           frame.DimensionsDropped,
+			MemberKindUnrecognized:      frame.MemberKindUnrecognized,
+			GroupKindUnrecognized:       frame.GroupKindUnrecognized,
+			MemberQualifierUnrecognized: frame.MemberQualifierUnrecognized,
 		},
 	}, nil
 }
@@ -341,5 +343,6 @@ func ApplyInterpretationCapture(receipt *contextfabric.ModelExecutionReceipt, ca
 		receipt.FrameDimensionsDropped = capture.Frame.DimensionsDropped
 		receipt.FrameMemberKindUnrecognized = capture.Frame.MemberKindUnrecognized
 		receipt.FrameGroupKindUnrecognized = capture.Frame.GroupKindUnrecognized
+		receipt.FrameMemberQualifierUnrecognized = capture.Frame.MemberQualifierUnrecognized
 	}
 }

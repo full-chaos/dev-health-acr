@@ -307,6 +307,12 @@
             "applicability": "written when present=true"
           },
           {
+            "key": "subject_member_qualifier",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
             "key": "subject_group_kind",
             "type": "string",
             "presence": "conditional",
@@ -782,6 +788,12 @@
             "applicability": "written when present=true"
           },
           {
+            "key": "subject_member_qualifier",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
             "key": "subject_group_kind",
             "type": "string",
             "presence": "conditional",
@@ -975,6 +987,12 @@
           },
           {
             "key": "subject_member_kind",
+            "type": "string",
+            "presence": "conditional",
+            "applicability": "written when present=true"
+          },
+          {
+            "key": "subject_member_qualifier",
             "type": "string",
             "presence": "conditional",
             "applicability": "written when present=true"

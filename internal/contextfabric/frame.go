@@ -305,6 +305,11 @@ type ScopedSetExpression struct {
 	AnchorTerms []string `json:"anchor_terms,omitempty"`
 	// MemberKind is the kind being asked for UNDER that anchor.
 	MemberKind SubjectKind `json:"member_kind"`
+	// MemberQualifier is present when the question asks for a qualified
+	// subset of the members under the anchor. Empty means unqualified
+	// membership; the unrecognized marker is preserved as present so a later
+	// admission gate cannot treat an unknown model value as unqualified.
+	MemberQualifier MemberQualifier `json:"member_qualifier,omitempty"`
 }
 
 // GroupedSetExpression asks for members of one kind grouped by another.
@@ -391,6 +396,28 @@ func (e SubjectExpression) MemberKind() (SubjectKind, bool) {
 	default:
 		return "", false
 	}
+}
+
+// MemberQualifier returns the qualifier carried by a children_of_scope
+// expression. The second result distinguishes an unqualified request from a
+// qualified request, including one whose raw value was unrecognized and was
+// retained as the internal carrier marker.
+func (e SubjectExpression) MemberQualifier() (MemberQualifier, bool) {
+	if e.Kind != SubjectExpressionChildrenOfScope || e.Scoped == nil {
+		return "", false
+	}
+	qualifier := e.Scoped.MemberQualifier
+	return qualifier, MemberQualifierPresent(qualifier)
+}
+
+// MemberQualifier returns the qualifier carried by a scoped comparison
+// operand. Named operands have no member qualifier.
+func (o SubjectOperand) MemberQualifier() (MemberQualifier, bool) {
+	if o.Kind != SubjectOperandScoped || o.Scoped == nil {
+		return "", false
+	}
+	qualifier := o.Scoped.MemberQualifier
+	return qualifier, MemberQualifierPresent(qualifier)
 }
 
 // GroupKind returns the grouping axis and whether the variant has one.

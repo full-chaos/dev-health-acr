@@ -994,6 +994,78 @@ func SanitizeSubjectKind(raw string) (kind SubjectKind, unrecognized bool) {
 	return candidate, false
 }
 
+// MemberQualifier is the closed qualifier axis for a scoped member set.
+// The empty value means that the question asks for the complete membership
+// set. MemberQualifierUnrecognized is an internal carrier marker: it keeps a
+// model value outside the known vocabulary from becoming the unqualified
+// value at the sanitization boundary.
+type MemberQualifier string
+
+const (
+	MemberQualifierStatus       MemberQualifier = "status"
+	MemberQualifierAssignee     MemberQualifier = "assignee"
+	MemberQualifierUnrecognized MemberQualifier = "unrecognized"
+	// MemberQualifierUnknown is kept as a descriptive alias for callers that
+	// need to name the carrier state rather than the sanitizer outcome.
+	MemberQualifierUnknown = MemberQualifierUnrecognized
+)
+
+var memberQualifiers = [...]MemberQualifier{
+	MemberQualifierStatus,
+	MemberQualifierAssignee,
+}
+
+// MemberQualifierCount is the number of recognized qualifier values. The
+// unrecognized carrier marker is not part of this count.
+const MemberQualifierCount = len(memberQualifiers)
+
+// MemberQualifierVocabulary returns the recognized qualifier values in their
+// declared order. The unrecognized carrier marker is intentionally excluded:
+// it records a sanitizer outcome, not a value the model may select.
+func MemberQualifierVocabulary() [MemberQualifierCount]MemberQualifier {
+	return memberQualifiers
+}
+
+// ValidMemberQualifier reports whether value is valid in a frame. Empty is
+// the valid absence used for unqualified membership, and the unrecognized
+// marker is valid only as the sanitizer's internal carrier state.
+func ValidMemberQualifier(value MemberQualifier) bool {
+	if value == "" || value == MemberQualifierUnrecognized {
+		return true
+	}
+	for _, member := range memberQualifiers {
+		if member == value {
+			return true
+		}
+	}
+	return false
+}
+
+// MemberQualifierPresent reports whether the frame carries either a
+// recognized or an unrecognized qualifier. It deliberately treats the
+// unrecognized marker as present so a later gate cannot mistake it for an
+// unqualified request.
+func MemberQualifierPresent(value MemberQualifier) bool {
+	return value != ""
+}
+
+// SanitizeMemberQualifier closes a raw qualifier against the recognized
+// vocabulary. Unknown non-empty values become an explicit carrier marker;
+// they are never returned as the empty unqualified value.
+func SanitizeMemberQualifier(raw string) (qualifier MemberQualifier, unrecognized bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", false
+	}
+	candidate := MemberQualifier(trimmed)
+	for _, member := range memberQualifiers {
+		if member == candidate {
+			return candidate, false
+		}
+	}
+	return MemberQualifierUnrecognized, true
+}
+
 // sortedObligations returns a copy in vocabulary order. Obligation sets
 // are SETS; every derivation and every comparison in this slice goes
 // through here so that set equality is decidable by slice equality and an

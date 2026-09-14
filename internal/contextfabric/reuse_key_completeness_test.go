@@ -259,11 +259,12 @@ var modelExecutionReceiptAuthorities = map[string]versionAuthority{
 	"RequirementCellsUnserved":     {reason: "per-call cell count (telemetry and replay only), not a version identity -- same reasoning as FrameGoalsDropped"},
 	"RequirementDerivationVersion": {reason: "package constant (RequirementDerivationVersion) naming the role/completion table the rows were derived under. A real version authority, but the rows are shadow-only in this phase -- nothing downstream reads them, so a table change cannot make a reused answer wrong. A ReuseKey member is OWED at promotion, on the same schedule as QuestionFrame's embedded Version"},
 
-	"FrameTemporalUnrecognized":   {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as FrameKindUnrecognized"},
-	"FrameEmphasisDropped":        {reason: "per-call sanitize-outcome count (telemetry only), not a version identity -- same reasoning as FrameGoalsDropped"},
-	"FrameDimensionsDropped":      {reason: "per-call sanitize-outcome count (telemetry only), not a version identity -- same reasoning as FrameGoalsDropped"},
-	"FrameMemberKindUnrecognized": {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as FrameKindUnrecognized"},
-	"FrameGroupKindUnrecognized":  {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as FrameKindUnrecognized"},
+	"FrameTemporalUnrecognized":        {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as FrameKindUnrecognized"},
+	"FrameEmphasisDropped":             {reason: "per-call sanitize-outcome count (telemetry only), not a version identity -- same reasoning as FrameGoalsDropped"},
+	"FrameDimensionsDropped":           {reason: "per-call sanitize-outcome count (telemetry only), not a version identity -- same reasoning as FrameGoalsDropped"},
+	"FrameMemberKindUnrecognized":      {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as FrameKindUnrecognized"},
+	"FrameGroupKindUnrecognized":       {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as FrameKindUnrecognized"},
+	"FrameMemberQualifierUnrecognized": {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as FrameKindUnrecognized"},
 	// InterpretationRejectionReason names WHICH validator rule rejected one
 	// interpretation. It is a per-call diagnostic, not a version authority,
 	// and the exclusion is stronger than "it merely seems unimportant": a
