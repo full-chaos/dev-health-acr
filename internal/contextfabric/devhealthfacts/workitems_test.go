@@ -120,28 +120,31 @@ func TestWorkItemProvidersDoNotQueryWithCanceledOrExpiredContext(t *testing.T) {
 	t.Parallel()
 	contexts := []struct {
 		name string
-		ctx  context.Context
+		new  func() (context.Context, context.CancelFunc)
 	}{
 		{
 			name: "canceled",
-			ctx: func() context.Context {
+			new: func() (context.Context, context.CancelFunc) {
 				ctx, cancel := context.WithCancel(context.Background())
 				cancel()
-				return ctx
-			}(),
+				return ctx, cancel
+			},
 		},
 		{
 			name: "expired",
-			ctx: func() context.Context {
-				ctx, _ := context.WithDeadline(context.Background(), time.Now().Add(-time.Millisecond))
-				return ctx
-			}(),
+			new: func() (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(time.Millisecond))
+				<-ctx.Done()
+				return ctx, cancel
+			},
 		},
 	}
 	for _, tc := range contexts {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			ctx, cancel := tc.new()
+			defer cancel()
 			for _, kind := range []contextfabric.FactKind{
 				contextfabric.FactStatus,
 				contextfabric.FactWork,
@@ -152,7 +155,7 @@ func TestWorkItemProvidersDoNotQueryWithCanceledOrExpiredContext(t *testing.T) {
 					t.Parallel()
 					client := &fakeClient{}
 					provider := findProvider(t, devhealthfacts.NewProviders(client), kind)
-					_, err := provider.ReadFacts(tc.ctx, storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+					_, err := provider.ReadFacts(ctx, storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
 						Time:     contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
 						Kind:     kind,
 						Subjects: []contextfabric.SubjectRef{workItemSubject("repo-1", "WI-1")},

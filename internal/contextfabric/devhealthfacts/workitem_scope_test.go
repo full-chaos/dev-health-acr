@@ -203,8 +203,9 @@ func TestWorkItemReaderSettingsPreserveExpiredContextErrors(t *testing.T) {
 	})
 
 	t.Run("expired", func(t *testing.T) {
-		expired, expire := context.WithDeadline(context.Background(), time.Now().Add(-time.Millisecond))
+		expired, expire := context.WithDeadline(context.Background(), time.Now().Add(time.Millisecond))
 		defer expire()
+		<-expired.Done()
 		settings, err := workItemReaderSettings(expired)
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("expired settings error = %v, want context.DeadlineExceeded", err)
