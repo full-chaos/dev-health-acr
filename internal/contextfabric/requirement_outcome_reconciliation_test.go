@@ -192,7 +192,6 @@ func planRequirementFor(t *testing.T, result InvestigationResult, identity strin
 func TestASatisfiedRequirementWithNoServedEvidenceIsRefused(t *testing.T) {
 	t.Parallel()
 	served := runReconciliation(t, newReconciliationEngine(t, countingCohort(SubjectTeam, 3), InvestigationComplete, nil, &recordingTelemetry{}, nil), 0)
-	engine := newReconciliationEngine(t, countingCohort(SubjectTeam, 3), InvestigationComplete, nil, &recordingTelemetry{}, nil)
 
 	withoutCardinalityClaim := func(result InvestigationResult) InvestigationResult {
 		kept := make([]ClaimedFact, 0, len(result.ClaimedFacts))
@@ -294,6 +293,9 @@ func TestASatisfiedRequirementWithNoServedEvidenceIsRefused(t *testing.T) {
 			t.Parallel()
 			document := cell.mutate(served)
 			for _, stage := range BudgetAssertStageVocabulary() {
+				// One engine per exit, never shared across parallel subtests: the
+				// recording telemetry is not safe for concurrent use.
+				engine := newReconciliationEngine(t, countingCohort(SubjectTeam, 3), InvestigationComplete, nil, &recordingTelemetry{}, nil)
 				_, err := engine.finalizeServed(context.Background(), storage.Principal{OrgID: "org_1"}, stage, document, nil, ResponseBudget{})
 				switch {
 				case cell.refused && !errors.Is(err, ErrSatisfiedRequirementUnserved):
