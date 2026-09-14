@@ -1869,3 +1869,79 @@ func TestAppendVetoedRememberedNeeds(t *testing.T) {
 		t.Fatalf("empty ledger changed echo: %#v", got)
 	}
 }
+
+// A confirmed window has the same authority as its fresh receipt when a
+// separately selected candidate carries a different window. All offers and
+// parent ledgers below come from preceding engine turns.
+func TestConfirmedNeedConsumers_ConfirmedWindowPrecedesDifferentCarrier(t *testing.T) {
+	h := newNeedTurnHarness(t, nil)
+	offerTurn, long := windowTurnOne(t, h, "request_resume_window_offer")
+	var short contractsv1.ContextFabricWindowOption
+	for _, o := range offerTurn.result.WindowClarification.Options {
+		if o.RelativeID == RelativeWindowTrailing30D && o.Start != nil {
+			short = o
+			break
+		}
+	}
+	if short.ReceiptID == "" || long.RelativeID != RelativeWindowTrailing90D {
+		t.Fatal("fixture: two distinct generated windows required")
+	}
+	parentReq := needTurnRequest("request_resume_window_parent", false)
+	parentReq.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: offerTurn.result.ResultID, ReceiptID: long.ReceiptID}}
+	parent := h.turn(parentReq, committingNeedResponse())
+	carrierReq := needTurnRequest("request_resume_window_carrier", false)
+	carrierReq.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: offerTurn.result.ResultID, ReceiptID: short.ReceiptID}}
+	carrier := h.turn(carrierReq, candidateOfferingNeedResponse())
+	if parent.saved == nil || len(parent.saved.ConfirmedNeeds) != 1 || carrier.result.StructureNeeds == nil || len(carrier.result.StructureNeeds.CandidateOptions) == 0 {
+		t.Fatal("fixture: persisted ledger and candidate offer required")
+	}
+	candidate := carrier.result.StructureNeeds.CandidateOptions[0]
+	req := continuingNeedTurn(needTurnRequest("request_resume_window_ledger", false), parent.result.ResultID)
+	req.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: carrier.result.ResultID, ReceiptID: candidate.ReceiptID}}
+	ledger := h.turn(req, committingNeedResponse())
+	freshReq := req
+	freshReq.RequestID = "request_resume_window_fresh"
+	freshReq.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: offerTurn.result.ResultID, ReceiptID: long.ReceiptID}}
+	fresh := h.turn(freshReq, committingNeedResponse())
+	controlReq := req
+	controlReq.RequestID = "request_resume_window_control"
+	controlReq.ParentResultID = ""
+	controlReq.Conversation = nil
+	control := h.turn(controlReq, committingNeedResponse())
+	for name, o := range map[string]needTurnOutcome{"ledger": ledger, "fresh": fresh, "carrier_only": control} {
+		if o.result.EffectiveEvidenceWindow == nil {
+			t.Fatalf("fixture: %s no effective window", name)
+		}
+		t.Logf("%s effective=%s save_key=%s ledger=%v carrier=%v", name, o.result.EffectiveEvidenceWindow.RelativeID, o.saveKey, o.windows, o.windowCarry)
+	}
+	if !reflect.DeepEqual(ledger.result.EffectiveEvidenceWindow, fresh.result.EffectiveEvidenceWindow) || ledger.saveKey != fresh.saveKey {
+		t.Fatal("ledger/fresh differ")
+	}
+	if control.result.EffectiveEvidenceWindow.RelativeID != short.RelativeID || ledger.result.EffectiveEvidenceWindow.RelativeID != long.RelativeID {
+		t.Fatal("fixture did not distinguish sources")
+	}
+
+	// A new window confirmation on this turn replaces the remembered 90 days.
+	replacementReq := req
+	replacementReq.RequestID = "request_need_window_replacement"
+	replacementReq.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: offerTurn.result.ResultID, ReceiptID: short.ReceiptID}}
+	replacement := h.turn(replacementReq, committingNeedResponse())
+	if !reflect.DeepEqual(replacement.result.EffectiveEvidenceWindow, control.result.EffectiveEvidenceWindow) || replacement.saveKey != control.saveKey {
+		t.Fatal("current window confirmation must replace the remembered window")
+	}
+	if replacement.saved == nil || len(replacement.saved.ConfirmedNeeds) == 0 {
+		t.Fatal("replacement must save its new window confirmation")
+	}
+	windowSaved := false
+	for _, entry := range replacement.saved.ConfirmedNeeds {
+		if entry.Member == contractsv1.ContextFabricStructureNeedWindow {
+			windowSaved = true
+			if entry.AppliedValue != string(short.RelativeID) || !sameWindowBounds(entry.WindowStart, short.Start) || !sameWindowBounds(entry.WindowEnd, short.End) {
+				t.Fatalf("replacement did not save the new frozen window: %+v", entry)
+			}
+		}
+	}
+	if !windowSaved {
+		t.Fatal("replacement ledger omitted the new window")
+	}
+}

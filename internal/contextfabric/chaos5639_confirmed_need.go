@@ -611,10 +611,10 @@ func (e *Engine) captureConfirmedNeedLedgerOnly(request InvestigationRequest, re
 // of those functions' own doc comments hold. Source=carried naming the parent
 // the ledger was admitted from; provenance clarification_confirmed, because
 // every entry the ledger holds was confirmed by a caller redeeming an offer.
-// NOT used for expected_kind: a remembered kind is disclosed through
-// composeCarriedKindEntry already -- composing a second entry for the same
-// member here would violate the v1 result validator's "one entry per member"
-// rule.
+// Applied expected_kind uses composeCarriedKindEntry. An early structure
+// veto uses this helper for every remembered structure member, including
+// expected_kind, then assigns the veto disposition. The caller excludes
+// members already disclosed so each member has exactly one entry.
 func composeCarriedNeedEntry(member contractsv1.ContextFabricStructureNeedKind, applied map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember, sourceResultID string) *contractsv1.ContextFabricConfirmedStructureEntry {
 	entry, ok := applied[member]
 	if !ok {
