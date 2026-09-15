@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"log"
 	"log/slog"
 	"strings"
 	"testing"
@@ -28,9 +29,15 @@ import (
 // the fix also broke the positive control.
 func TestInvestmentProviderReportsSubjectIDShapeRejectionNotNoData(t *testing.T) {
 	handler := &recordingSlogHandler{}
-	previous := slog.Default()
+	previousSlog := slog.Default()
+	previousWriter := log.Writer()
+	previousFlags := log.Flags()
 	slog.SetDefault(slog.New(handler))
-	t.Cleanup(func() { slog.SetDefault(previous) })
+	t.Cleanup(func() {
+		slog.SetDefault(previousSlog)
+		log.SetOutput(previousWriter)
+		log.SetFlags(previousFlags)
+	})
 
 	client := &fakeClient{}
 	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
@@ -220,9 +227,15 @@ var wellShapedSubjectByKind = map[contextfabric.SubjectKind]func() contextfabric
 // above fails loudly (via t.Fatalf), not by being skipped.
 func TestEveryProviderDisclosesShapeRejectionAlongsideItsOwnSubjectKind(t *testing.T) {
 	handler := &recordingSlogHandler{}
-	previous := slog.Default()
+	previousSlog := slog.Default()
+	previousWriter := log.Writer()
+	previousFlags := log.Flags()
 	slog.SetDefault(slog.New(handler))
-	t.Cleanup(func() { slog.SetDefault(previous) })
+	t.Cleanup(func() {
+		slog.SetDefault(previousSlog)
+		log.SetOutput(previousWriter)
+		log.SetFlags(previousFlags)
+	})
 
 	client := &fakeClient{}
 	providers := devhealthfacts.NewProviders(client)
