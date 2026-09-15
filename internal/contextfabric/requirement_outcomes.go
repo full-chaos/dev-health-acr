@@ -568,7 +568,15 @@ func (e *Engine) planCandidateNarrowing(
 	// this pass computed before synthesis still describes the member set the
 	// narrowed document carries and must survive unchanged.
 	cardinality MembershipCardinality,
+	workItemCensus *WorkItemTupleCensus,
 ) (outcomeNarrowingAttempt, error) {
+	// A census-bearing tuple has one live-authorized project anchor.
+	// Removing its candidate would turn a budget refusal into an invalid
+	// tuple payload. Keep it and let the caller report the existing refusal.
+	if workItemCensus != nil {
+		count := len(result.SubjectResolution.Candidates)
+		return outcomeNarrowingAttempt{Narrowing: candidateNarrowing{Declared: count, Served: count}, Declined: OutcomeReductionNothingReducible, Measured: measured}, nil
+	}
 	narrowedResult, narrowing, declined := narrowCandidatesToBudget(result, budget, measured.Allocation, measured.Measurement, measured.Overrun)
 	if !narrowing.Narrowed {
 		// The attempt the caller was given is still the one that describes

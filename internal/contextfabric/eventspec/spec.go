@@ -1709,6 +1709,63 @@ var RequirementOutcomeTransition = Event{
 	},
 }
 
+// SynthesisRetrySelection is the Info line emitted when the first synthesis
+// measurement selects a bounded cohort for one retry. It is emitted before
+// the retry executes, so the three retry outcome fields are explicit false
+// values on this line; the later plan-narrowing line reports whether that
+// retry ran, fitted, or failed. The rest of the fields intentionally reuse
+// PlanNarrowingEvent's measurement vocabulary so the selected cohort can be
+// compared with the measured result without a second, drifting field set.
+var SynthesisRetrySelection = Event{
+	ID:                 "contextfabric.synthesis_retry_selection",
+	Msg:                "context fabric synthesis retry selected",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "at most one line per request, emitted when the first synthesis measurement selects a bounded retry cohort and before the retry executes; requests that fit or decline a retry emit none.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "family", Type: FieldString, Presence: PresenceRequired},
+		{Key: "family_version", Type: FieldString, Presence: PresenceRequired},
+		{Key: "stage", Type: FieldString, Presence: PresenceRequired},
+		{Key: "basis", Type: FieldString, Presence: PresenceRequired},
+		{Key: "basis_observed", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "before", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "after", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "groups", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "overrun", Type: FieldString, Presence: PresenceRequired},
+		{Key: "measured_items", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "predicted_items", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "attribution_global", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "attribution_member", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "attribution_group", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "attribution_multi_group", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "measured_bytes", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "max_items", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "max_serialized_bytes", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "retry_attempted", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "retry_fit", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "retry_failed", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "refusal_planned", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "deadline_reserved", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "retry_declined", Type: FieldString, Presence: PresenceRequired},
+		{Key: "narrower_continuation_axis", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome_reduction_applied", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "outcome_reduction_inner_fit", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "outcome_items_served", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "outcome_items_declared", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "outcome_completeness_state", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome_reduction_declined", Type: FieldString, Presence: PresenceRequired},
+		{Key: "ledger_status", Type: FieldString, Presence: PresenceRequired},
+		{Key: "quota_availability", Type: FieldString, Presence: PresenceRequired},
+		{Key: "quota_group_allowance", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "quota_groups_granted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "quota_groups_measured", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "quota_groups_over_allowance", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
 // WorkItemMembershipS1 is the Info line emitted after the dormant PR2 reader
 // completes its one-statement S1 census. Counts are explicit even when zero;
 // an unmeasured result is identified by state/reason and never represented by
@@ -1803,6 +1860,33 @@ var WorkItemStoredServing = Event{
 	},
 }
 
+// AnswerDisplay records one executed bounded projection at its caller.
+var AnswerDisplay = Event{
+	ID: "contextfabric.answer_display", Msg: "context fabric answer display", Level: LevelInfo,
+	Multiplicity: MultiplicityZeroOrOnePerRequest, Attribution: []string{"request_id", "surface"},
+	BoundedAggregation: "one line after bounded projection validation succeeds and before response delivery; canonical-only retrieval and requests rejected before a validated projection emit none; markdown_rendered distinguishes API projection from MCP rendering",
+	Fields: []Field{
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "surface", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"result_by_id", "investigate_question"}},
+		{Key: "canonical_members", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "projected_members", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "canonical_eligible_facts", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "projected_facts", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "facts_omitted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "members_omitted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "evidence_omitted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "max_facts", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "max_members", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "max_evidence", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "floor_counts", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "recorded_counts", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "count_basis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"absent", "floor", "recorded", "mixed"}},
+		{Key: "projection_truncated", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "markdown_rendered", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "markdown_truncated", Type: FieldBool, Presence: PresenceRequired},
+	},
+}
+
 // RetainedRankingAccounting reports a serving decision made from recorded
 // member qualification. Counts describe the retained set, never the lost
 // original population, and RowAdded never means a new ranking executed.
@@ -1834,6 +1918,7 @@ var RetainedRankingAccounting = Event{
 }
 
 var All = []Event{
+	AnswerDisplay,
 	RetainedRankingAccounting,
 	RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld,
 	Corroboration, CorroborationSummary, ReservedKindAdmitted, OfferPool, OfferPoolSummary,
@@ -1853,6 +1938,7 @@ var All = []Event{
 	SliceBSurvivorVerdict, SliceBSurvivorVerdictSummary,
 	SemanticStatePersistence,
 	RequirementOutcomeTransition,
+	SynthesisRetrySelection,
 	WorkItemMembershipS1,
 	WorkItemMembershipGate,
 	WorkItemReuse,

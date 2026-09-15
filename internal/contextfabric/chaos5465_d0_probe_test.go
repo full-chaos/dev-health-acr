@@ -41,7 +41,7 @@ func (d d0ForcedInterpreter) Interpret(context.Context, storage.Principal, Inves
 			GroupKind:   d.groupKind,
 		},
 		WinningSampleIndex: 0,
-		Version:            "question-family.v2",
+		Version:            QuestionFamilyTableVersion,
 	}, nil
 }
 

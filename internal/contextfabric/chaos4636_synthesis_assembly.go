@@ -65,6 +65,7 @@ import (
 // Investigate's scope. It is a struct rather than a parameter list so that
 // adding an input is a visible change to this stage's contract.
 type synthesisAssemblyParams struct {
+	WorkItemCensus *WorkItemTupleCensus
 	Request        InvestigationRequest
 	Interpretation InterpretedQuestion
 	// Frame is this turn's validated QuestionFrame, nil when none
@@ -312,6 +313,9 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// inconsistently. An unresolved cardinality is still an absence, never a
 	// count of zero.
 	cardinality, _ := ComputeMembershipCardinality(params.Graph.Cohort, params.Graph.CohortPopulation, params.Plan.Narrowing)
+	if params.WorkItemCensus != nil {
+		cardinality = workItemTupleCardinality(params.WorkItemCensus)
+	}
 	// CHAOS-5732 (D47): a kind_census_truncated detail's Served
 	// is minted by falkorgraph's DiscoverContext, BEFORE stage 3's own
 	// budget narrowing can shrink graphContext.Cohort further -- the same
@@ -373,7 +377,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 		result.LimitationsDisplaced += displaced
 		result.Coverage.Partial = true
 	}
-	if result.Cohort == nil {
+	if result.Cohort == nil || params.WorkItemCensus != nil {
 		result.Cohort = graphContext.Cohort
 	}
 	if strings.TrimSpace(result.Versions.ServiceVersion) == "" {
@@ -627,7 +631,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// its limitations. Routing to the subjectless terminal here would
 	// discard a paid-for answer and change this path's contract outcome on
 	// a signal the terminal's own logic never sees.
-	if outcomes := applyCommitAffirmation(&result, affirmationInputs{
+	if outcomes := applyCommitAffirmationForWorkItemTuple(&result, params.WorkItemCensus, affirmationInputs{
 		Bases: commitBases,
 		// result.SubjectResolution.Candidates, not the local resolution's:
 		// the same backing array today, but the RESULT's copy is the one
@@ -717,6 +721,9 @@ func correctKindCensusTruncatedServedCounts(details []CoverageDetail, cohort *Co
 // The alternative -- a bool that each emitter consults -- is what let three
 // emitters drift out of the rule one at a time.
 type assemblyTelemetry struct {
+	// RetryAttempted carries actual second-pass execution to the final
+	// decisive budget assertion; input narrowing alone does not prove it.
+	RetryAttempted          bool
 	WindowCanonicalization  *WindowCanonicalizationOutcome
 	SynthesisStatusOverride *SynthesisStatusOverrideOutcome
 	CohortNarration         *CohortDriverNarrationEvent

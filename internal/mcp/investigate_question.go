@@ -127,7 +127,7 @@ func handleInvestigateQuestion(ctx context.Context, boot *Bootstrap, req *mcpsdk
 		}
 	}
 
-	result, err := boot.Client.Investigate(ctx, hosted)
+	result, currentRequestID, err := boot.Client.InvestigateWithRequestID(ctx, hosted)
 	if err != nil {
 		return toolErrorResult(err), nil
 	}
@@ -162,6 +162,11 @@ func handleInvestigateQuestion(ctx context.Context, boot *Bootstrap, req *mcpsdk
 	}
 	if err := response.Validate(); err != nil {
 		return toolErrorResult(&classifiedError{category: "internal", message: "the assembled response failed contract validation"}), nil
+	}
+	if boot.diagnostics != nil {
+		args := answerprojection.DisplayLogArgs(result, response.Structured, answerprojection.Budget{MaxDrivers: budget.MaxDrivers, MaxCohortMembers: budget.MaxCohortMembers, MaxEvidenceRefs: budget.MaxEvidenceRefs}, true, truncated)
+		args = append(args, "request_id", currentRequestID, "surface", "investigate_question")
+		boot.diagnostics.InfoContext(ctx, "context fabric answer display", args...)
 	}
 	return buildToolResult(response, response.RenderedMarkdown.Markdown)
 }

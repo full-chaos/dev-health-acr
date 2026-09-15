@@ -202,7 +202,7 @@ func TestWindowContinuation_AVersionMismatchedCarrierIsWithheldNotReinterpreted(
 
 	request := continuationRequest(validInvestigationRequest().Question)
 	prior := continuationPrior(t, continuationPriorID, request.Question, QuestionFamilyDiscoveredCohortRanking, "")
-	prior.AnswerPlan.FamilyVersion = "question-family.v0-not-in-force"
+	prior.AnswerPlan.FamilyVersion = "question-family.v2"
 	harness := newContinuationHarness(t,
 		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
 		forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: contractsv1.ContextFabricSubjectTeam})
@@ -817,7 +817,7 @@ func TestWindowContinuation_R1_TheServedGroupAxisIsTheAcceptedOneNotTheFreshFram
 func TestWindowContinuation_R1_AWithheldCarrierCannotBeServedByTheLegacyCarry(t *testing.T) {
 	request := continuationRequest(validInvestigationRequest().Question)
 	prior := continuationPrior(t, continuationPriorID, request.Question, QuestionFamilyGroupedCohortStatus, contractsv1.ContextFabricSubjectTeam)
-	prior.AnswerPlan.FamilyVersion = "question-family.v0-not-in-force"
+	prior.AnswerPlan.FamilyVersion = "question-family.v2"
 	harness := newContinuationHarness(t,
 		&staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
 		// THIS TURN CLASSIFIES NOTHING -- the one condition under which the old

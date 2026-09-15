@@ -147,6 +147,9 @@ func cardinalityAnswerSentence(cardinality MembershipCardinality) string {
 		return ""
 	}
 	noun := cardinalityNoun(cardinality.Kind, cardinality.Served)
+	if cardinality.Kind == SubjectWorkItem && cardinality.PopulationIncomplete {
+		return fmt.Sprintf("Counted at least %d %s.", cardinality.Served, noun)
+	}
 	if cardinality.Declared > cardinality.Served {
 		return fmt.Sprintf("Counted %d %s of %d found.", cardinality.Served, noun, cardinality.Declared)
 	}
@@ -154,17 +157,16 @@ func cardinalityAnswerSentence(cardinality MembershipCardinality) string {
 }
 
 // cardinalityNoun pluralises the counted kind for the answer sentence.
-//
-// Naive and deliberately so: every member of the subject-kind vocabulary is a
-// regular noun ("team", "project", "repository"), so an "s" is correct for all
-// of them and a table would be ceremony around one rule. A future kind with an
-// irregular plural is the thing that makes this a table, and it does not exist
-// yet.
+// Work-item counts use the human label rather than the wire discriminator.
 func cardinalityNoun(kind SubjectKind, count int) string {
-	if count == 1 {
-		return string(kind)
+	noun := string(kind)
+	if kind == SubjectWorkItem {
+		noun = "work item"
 	}
-	return string(kind) + "s"
+	if count == 1 {
+		return noun
+	}
+	return noun + "s"
 }
 
 // resultCarriesCardinalityClaim reports whether the served document actually

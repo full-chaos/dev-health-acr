@@ -307,6 +307,9 @@ const (
 // QuestionFamilyDefinition is one row of the §3.1 family table.
 type QuestionFamilyDefinition struct {
 	Family QuestionFamily
+	// allowsWorkItemTuple is only the family prerequisite for D-WI admission.
+	// Frame, time, goal, anchor, and authorization checks still apply.
+	allowsWorkItemTuple bool
 	// Dimension is the health dimension this family's answers speak to.
 	Dimension HealthDimension
 	// SubjectAxis is how many subjects, and how obtained.
@@ -429,9 +432,10 @@ var questionFamilyDefinitions = []QuestionFamilyDefinition{
 		NarrowerContinuationAxis: NarrowingContinuationResultCount,
 	},
 	{
-		Family:      QuestionFamilyScopedCohortStatus,
-		Dimension:   HealthDimensionExecutionCompletion,
-		SubjectAxis: SubjectAxisManyScoped,
+		Family:              QuestionFamilyScopedCohortStatus,
+		allowsWorkItemTuple: true,
+		Dimension:           HealthDimensionExecutionCompletion,
+		SubjectAxis:         SubjectAxisManyScoped,
 		// scope_anchor (which "fullchaos"?) and window. NEVER a
 		// single-subject pick: subject_handle/subject_candidate are
 		// deliberately absent, because offering them is precisely the
@@ -638,8 +642,8 @@ func LookupQuestionFamily(family QuestionFamily) (QuestionFamilyDefinition, bool
 //
 // BUMP THIS whenever any row above changes in a way that could change an
 // answer -- ApplicableAxes, AskOrder, RequireDrivers, RequireRanking,
-// RenderKinds, Budget, NarrowerContinuationAxis, or the precedence table in
-// chaos4632_question_family_precedence.go.
+// RenderKinds, Budget, NarrowerContinuationAxis, allowsWorkItemTuple, or the
+// precedence table in chaos4632_question_family_precedence.go.
 //
 // v1 -> v2 (CHAOS-4735). The original text said "in THIS slice nothing is
 // gated, so no answer can change", and that stopped being true the moment a
@@ -662,7 +666,10 @@ func LookupQuestionFamily(family QuestionFamily) (QuestionFamilyDefinition, bool
 // invalidates answers cached under the old table. That is the intended
 // effect, not a side effect: an answer whose continuation was computed from
 // the v1 table should not be replayed as though it came from v2.
-const QuestionFamilyTableVersion = "question-family.v2"
+//
+// v2 -> v3: the consumed work-item tuple policy admits scoped work-item
+// investigations. Old table versions cannot authorize reuse or semantic carry.
+const QuestionFamilyTableVersion = "question-family.v3"
 
 func allStructureNeedKinds() []StructureNeedKind {
 	wire := contractsv1.ContextFabricStructureNeedKindVocabulary()

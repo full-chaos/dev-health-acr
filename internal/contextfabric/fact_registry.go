@@ -1630,6 +1630,11 @@ func clampCoverageText(value string, maximum int) string {
 }
 
 func validateCanonicalFactRequest(request CanonicalFactRequest) error {
+	if request.workItemTuple {
+		if err := validateWorkItemTupleFactRequest(request); err != nil {
+			return err
+		}
+	}
 	if len(request.Requirements) == 0 || len(request.Requirements) > 64 {
 		return errors.New("canonical fact request requires bounded fact requirements")
 	}

@@ -1618,7 +1618,7 @@ type RuntimeQuestionInterpreter struct {
 // still decides the family; no answer, plan, offer, render selection or
 // clarification changes because of any of it. Zero behaviour change is a
 // required, provable property of this slice.
-func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal storage.Principal, receipt *ModelExecutionReceipt, emittedShape InvestigationShape, subjectTerms []string) {
+func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal storage.Principal, receipt *ModelExecutionReceipt, emittedShape InvestigationShape, subjectTerms []string, times ...TimeContext) {
 	if receipt != nil && receipt.QuestionFrame == nil {
 		// A turn that proposed no frame still DECIDES -- to `not_proposed`,
 		// which allows. Stamped here rather than left as the zero value so
@@ -1676,6 +1676,10 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 	// predicate -- named_subject is not a cohort variant either way -- and
 	// a test pins that, so the ordering here is belt to that test's braces.)
 	gate := DecideFrameGate(result, true)
+	if len(times) == 1 && result.Outcome.Accepted() {
+		definition, known := LookupQuestionFamily(DeriveQuestionFamily(result.Frame).Family)
+		gate = workItemTupleFrameGate(gate, &result.Frame, known && definition.allowsWorkItemTuple, times[0])
+	}
 	receipt.FrameGateOutcome = gate.Outcome
 	receipt.FrameGateRefuseBasis = gate.RefuseBasis
 	receipt.FrameGateDeclaredMemberKind = gate.DeclaredMemberKind
@@ -1943,7 +1947,7 @@ func (r RuntimeQuestionInterpreter) interpretOneSample(
 		// already rejected, which would put a phantom row into the
 		// invariant histogram.
 		if err == nil {
-			r.resolveFrame(ctx, principal, &receipt, question.Shape, question.SubjectTerms)
+			r.resolveFrame(ctx, principal, &receipt, question.Shape, question.SubjectTerms, question.TimeContext)
 		}
 	}
 	if sinkErr := recordModelReceipt(ctx, principal, r.Sink, receipt); sinkErr != nil {
@@ -1980,7 +1984,7 @@ func (r RuntimeQuestionInterpreter) interpretOneSample(
 // call in this package is.
 func (r RuntimeQuestionInterpreter) recordFamilyResolution(ctx context.Context, principal storage.Principal, interpreted InterpretedQuestion, receipt ModelExecutionReceipt) QuestionFamilyOutcome {
 	samples := []FamilySample{familySampleFrom(interpreted, receipt)}
-	return r.finishFamilyResolution(ctx, principal, ResolveQuestionFamily(samples), samples, receipt)
+	return r.finishFamilyResolution(ctx, principal, ResolveQuestionFamily(samples), samples, receipt, interpreted.TimeContext)
 }
 
 // finishFamilyResolution stamps the frame verdict, runs the shadow
@@ -2006,6 +2010,7 @@ func (r RuntimeQuestionInterpreter) finishFamilyResolution(
 	outcome QuestionFamilyOutcome,
 	samples []FamilySample,
 	receipt ModelExecutionReceipt,
+	times ...TimeContext,
 ) QuestionFamilyOutcome {
 	// THE SHADOW COMPARISON, and its placement is the substantive part.
 	//
@@ -2086,6 +2091,10 @@ func (r RuntimeQuestionInterpreter) finishFamilyResolution(
 		}
 	}
 	outcome.Route = route
+	if len(times) == 1 {
+		definition, known := LookupQuestionFamily(outcome.Family)
+		outcome.Gate = tightenWorkItemTupleFrameGate(outcome.Gate, outcome.Frame, known && definition.allowsWorkItemTuple, times[0])
+	}
 	if r.FamilyTelemetry != nil {
 		event := QuestionFamilyResolutionEventFrom(outcome, samples)
 		event.Shadow = shadow

@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"context"
+	"io"
+	"os"
 	"slices"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -67,6 +69,16 @@ func buildWritebackTool(name, title, inputSchemaFile, outputSchemaFile string) *
 }
 
 func NewServer(boot *Bootstrap, serverVersion string) *mcpsdk.Server {
+	return NewServerWithDiagnostics(boot, serverVersion, os.Stderr)
+}
+
+// NewServerWithDiagnostics shares the configured sidecar JSON logger with
+// tool execution. Production supplies stderr; stdout remains protocol-only.
+func NewServerWithDiagnostics(boot *Bootstrap, serverVersion string, diagnostics io.Writer) *mcpsdk.Server {
+	configured := *boot
+	boot = &configured
+	boot.diagnostics = newDiagnosticsLogger(diagnostics, boot.Config.LogLevel)
+
 	impl := &mcpsdk.Implementation{
 		Name:    "dev-health-acr-mcp",
 		Title:   "Dev Health ACR",

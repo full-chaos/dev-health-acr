@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/answerprojection"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -160,6 +161,7 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 		}
 	}
 
+	displayedFacts := make(map[string]struct{})
 	if projection.Cohort != nil {
 		b.writeLine("")
 		if !b.writeLine(fmt.Sprintf("## Cohort (%s of %s shown)",
@@ -169,7 +171,41 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 		if !b.writeLines(untrustedBlock("cohort_rationale", projection.Cohort.Rationale)) {
 			return b.finishWithTruncation()
 		}
+		plainWorkItems := projection.Cohort.Kind == contractsv1.ContextFabricSubjectWorkItem
 		for _, member := range projection.Cohort.Members {
+			if member.RankingComputed {
+				plainWorkItems = false
+			}
+		}
+		if plainWorkItems && !b.writeLine("### Work item / Status ("+untrustedDataHeader+")") {
+			return b.finishWithTruncation()
+		}
+		for _, member := range projection.Cohort.Members {
+			if plainWorkItems {
+				values := []string{}
+				for _, fact := range projection.KeyFacts {
+					if fact.Subject.Kind != member.Subject.Kind || fact.Subject.CanonicalID != member.Subject.CanonicalID {
+						continue
+					}
+					if fact.Kind == contractsv1.ContextFabricFactStatus {
+						values = append(values, untrustedInline(scalarValueText(fact.Value)))
+						displayedFacts[fact.ClaimID] = struct{}{}
+					}
+					// The source title is already the member label. Do not print
+					// the identical work/title scalar as a second repeated line.
+					if fact.Kind == contractsv1.ContextFabricFactWork && fact.Field == "title" && fact.Value.String != nil && *fact.Value.String == member.Subject.Label {
+						displayedFacts[fact.ClaimID] = struct{}{}
+					}
+				}
+				status := "No status evidence in this answer"
+				if len(values) > 0 {
+					status = strings.Join(values, "; ")
+				}
+				if !b.writeLine("- Work item: " + untrustedInline(member.Subject.Label) + " — Status: " + status) {
+					return b.finishWithTruncation()
+				}
+				continue
+			}
 			line := fmt.Sprintf("%s. %s `%s`", strconv.Itoa(member.Rank),
 				safeInline(string(member.Subject.Kind)), untrustedInline(member.Subject.Label))
 			if !b.writeLine(line) {
@@ -209,6 +245,25 @@ func RenderAnswerProjectionMarkdown(projection contractsv1.ContextFabricAnswerPr
 			return b.finishWithTruncation()
 		}
 		for _, fact := range projection.KeyFacts {
+			if _, shown := displayedFacts[fact.ClaimID]; shown {
+				continue
+			}
+			if basis := answerprojection.WorkItemCountQualification(projection, fact); basis != "absent" {
+				line := "- Recorded work-item count: " + strconv.FormatInt(*fact.Value.Integer, 10) + ". This view does not establish whether the population count is exact."
+				if basis == "floor" {
+					line = "- Work-item count: at least " + strconv.FormatInt(*fact.Value.Integer, 10) + "."
+				}
+				// Reserve the existing truncation notice before admitting this
+				// atomic unit. finish() can never cut its qualification later.
+				if b.buf.Len()+len(line)+1+len(truncationNotice) > b.maxBytes {
+					b.truncated = true
+					return b.finishWithTruncation()
+				}
+				if !b.writeLine(line) {
+					return b.finishWithTruncation()
+				}
+				continue
+			}
 			line := fmt.Sprintf("- %s.%s = %s (`%s`)",
 				untrustedInline(fact.Subject.Label), untrustedInline(fact.Field),
 				untrustedInline(scalarValueText(fact.Value)), safeInline(string(fact.Kind)))

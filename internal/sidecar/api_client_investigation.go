@@ -40,9 +40,17 @@ const (
 // transport that quietly summarised would be a second projection, which is
 // exactly what CHAOS-3746 exists to prevent.
 func (c *Client) Investigate(ctx context.Context, request contractsv1.ContextFabricInvestigationRequest) (contractsv1.ContextFabricInvestigationResult, error) {
+	result, _, err := c.InvestigateWithRequestID(ctx, request)
+	return result, err
+}
+
+// InvestigateWithRequestID also returns the current client-owned request ID.
+// A reused result can retain a historical ID; caller diagnostics must use
+// the outgoing request's identity without modifying that stored result.
+func (c *Client) InvestigateWithRequestID(ctx context.Context, request contractsv1.ContextFabricInvestigationRequest) (contractsv1.ContextFabricInvestigationResult, string, error) {
 	requestID, err := newClientRequestID()
 	if err != nil {
-		return contractsv1.ContextFabricInvestigationResult{}, err
+		return contractsv1.ContextFabricInvestigationResult{}, requestID, err
 	}
 	request.SchemaVersion = contractsv1.ContextFabricInvestigationRequestSchema
 	request.RequestID = requestID
@@ -52,25 +60,27 @@ func (c *Client) Investigate(ctx context.Context, request contractsv1.ContextFab
 		Surface: contextFabricMCPSurface,
 	}
 	if err := request.Validate(); err != nil {
-		return contractsv1.ContextFabricInvestigationResult{}, fmt.Errorf("invalid investigation request: %w", err)
+		return contractsv1.ContextFabricInvestigationResult{}, requestID, fmt.Errorf("invalid investigation request: %w", err)
 	}
 	encoded, err := json.Marshal(request)
 	if err != nil {
-		return contractsv1.ContextFabricInvestigationResult{}, fmt.Errorf("encode investigation request: %w", err)
+		return contractsv1.ContextFabricInvestigationResult{}, requestID, fmt.Errorf("encode investigation request: %w", err)
 	}
 
 	var result contractsv1.ContextFabricInvestigationResult
-	if err := c.call(ctx, http.MethodPost, investigationsPath, encoded, &result); err != nil {
-		return contractsv1.ContextFabricInvestigationResult{}, err
+	// Use the same transport-owned ID in the existing correlation header;
+	// the hosted route replaces body IDs with its request-context ID.
+	if _, err := c.callWithHeaders(ctx, http.MethodPost, investigationsPath, encoded, &result, http.Header{"X-Request-ID": []string{requestID}}); err != nil {
+		return contractsv1.ContextFabricInvestigationResult{}, requestID, err
 	}
 	// Lenient, even though this is the "fresh answer" call: with CHAOS-3782
 	// answer reuse the server may legitimately serve a STORED row here, so
 	// a strict client gate would reject an answer the hosted side was right
 	// to return (codex round-5 R5-1).
 	if err := validateStoredInvestigationResult(result); err != nil {
-		return contractsv1.ContextFabricInvestigationResult{}, err
+		return contractsv1.ContextFabricInvestigationResult{}, requestID, err
 	}
-	return result, nil
+	return result, requestID, nil
 }
 
 // InvestigationResult re-reads one persisted investigation result by its

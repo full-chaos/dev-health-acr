@@ -51,7 +51,7 @@ func ServeWithIdentity(ctx context.Context, diagnostics io.Writer, identity vers
 		"writeback_enabled", boot.Config.EnableWriteback,
 		"record_episode_active", recordEpisodeEnabled(boot),
 	)
-	server := NewServer(boot, identity.Version)
+	server := NewServerWithDiagnostics(boot, identity.Version, diagnostics)
 	if err := Run(ctx, server); err != nil {
 		if causedByCallerCancellation(ctx, err) {
 			return nil

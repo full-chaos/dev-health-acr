@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -59,6 +60,10 @@ var decisionEventFunctions = []string{
 	// still being inside the population -- which is exactly the distinction
 	// this list exists to make explicit rather than leave to a reader.
 	"Investigate",
+	// This emits separate plan-cap and measured population cardinalities,
+	// with no response measurement or prediction. The behavioral control
+	// below pins both sources and the absence of a second document.
+	"workItemTupleNarrowing",
 }
 
 // TestEveryRefusalSitePairsOneDocument pins the enumeration.
@@ -267,5 +272,25 @@ func TestTheCandidateRescueEventPredictsTheCohortItServed(t *testing.T) {
 					want, cohortSizes[0], line)
 			}
 		})
+	}
+}
+
+func TestWorkItemTupleNarrowingEventsKeepTheirCardinalitySources(t *testing.T) {
+	sink := &recordingTelemetry{}
+	engine := &Engine{telemetry: sink}
+	plan := AnswerPlan{Family: QuestionFamilyScopedCohortStatus, Budget: AnswerPlanBudget{MaxMembers: 234}}
+	census := &WorkItemTupleCensus{State: WorkItemMembershipCensusFloor, Value: 2000, Retained: 200}
+	engine.workItemTupleNarrowing(context.Background(), storage.Principal{OrgID: "org-1"}, &plan, 250, census)
+	if len(sink.planNarrowings) != 2 {
+		t.Fatalf("cardinality events=%+v", sink.planNarrowings)
+	}
+	for i, counts := range [][2]int{{234, 200}, {2000, 200}} {
+		event := sink.planNarrowings[i]
+		if event.Stage != contractsv1.ContextFabricPlanNarrowingCardinality || event.Before != counts[0] || event.After != counts[1] || event.Basis != contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical {
+			t.Errorf("cardinality source %d: %+v", i, event)
+		}
+		if event.MeasuredItems != 0 || event.MeasuredBytes != 0 || event.PredictedItems != 0 || event.RefusalPlanned || event.Overrun != "" {
+			t.Errorf("cardinality event acquired a second document: %+v", event)
+		}
 	}
 }

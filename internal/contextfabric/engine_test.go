@@ -399,6 +399,10 @@ type recordingTelemetry struct {
 	questionFamilyResolutions []QuestionFamilyResolutionEvent
 	frameValidations          []FrameValidationEvent
 	planNarrowings            []PlanNarrowingEvent
+	// synthesisRetrySelections records each pre-execution retry selection
+	// verbatim, so tests can assert the measured first-pass event and the
+	// required false retry outcome fields independently of later execution.
+	synthesisRetrySelections []PlanNarrowingEvent
 	// groupedCohortCompletenesses (CHAOS-4733) records every grouped-cohort
 	// completeness fold verbatim, same list-not-count discipline.
 	groupedCohortCompletenesses []GroupedCohortCompletenessEvent
@@ -751,6 +755,13 @@ func (r *recordingTelemetry) RecordFrameValidation(_ context.Context, _ storage.
 // double keeping only a count could not observe any of them going missing.
 func (r *recordingTelemetry) RecordPlanNarrowing(_ context.Context, _ storage.Principal, event PlanNarrowingEvent) {
 	r.planNarrowings = append(r.planNarrowings, event)
+}
+
+// RecordSynthesisRetrySelection records the pre-execution retry selection
+// separately from the later plan-narrowing events, preserving the event's
+// own measured basis and false execution outcome fields for assertions.
+func (r *recordingTelemetry) RecordSynthesisRetrySelection(_ context.Context, _ storage.Principal, event PlanNarrowingEvent) {
+	r.synthesisRetrySelections = append(r.synthesisRetrySelections, event)
 }
 
 // RecordGroupedCohortCompleteness (CHAOS-4733) records the whole event, same

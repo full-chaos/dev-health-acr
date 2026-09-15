@@ -19,9 +19,11 @@ func FieldKeys(e Event) []string {
 // ByID is the generated lookup from Event.ID to its declaration -- generated
 // rather than hand-maintained so it can never drift from All.
 var ByID = map[string]Event{
+	"contextfabric.answer_display":                 AnswerDisplay,
 	"contextfabric.requirement_outcome_transition": RequirementOutcomeTransition,
 	"contextfabric.retained_ranking_accounting":    RetainedRankingAccounting,
 	"contextfabric.semantic_state_persistence":     SemanticStatePersistence,
+	"contextfabric.synthesis_retry_selection":      SynthesisRetrySelection,
 	"contextfabric.window_continuation_decision":   WindowContinuationDecision,
 	"contextfabric.work_item_membership_gate":      WorkItemMembershipGate,
 	"contextfabric.work_item_membership_s1":        WorkItemMembershipS1,
@@ -62,6 +64,98 @@ var ByID = map[string]Event{
 	"graphrank.search_question":                    SearchQuestion,
 	"graphrank.slice_b_survivor_verdict":           SliceBSurvivorVerdict,
 	"graphrank.slice_b_survivor_verdict_summary":   SliceBSurvivorVerdictSummary,
+}
+
+// AnswerDisplayFields is contextfabric.answer_display's generated typed construction interface
+// (CHAOS-5516): one Go field per Field AnswerDisplay.Fields declares in spec.go.
+type AnswerDisplayFields struct {
+	RequestID              string
+	Surface                string
+	CanonicalMembers       int
+	ProjectedMembers       int
+	CanonicalEligibleFacts int
+	ProjectedFacts         int
+	FactsOmitted           int
+	MembersOmitted         int
+	EvidenceOmitted        int
+	MaxFacts               int
+	MaxMembers             int
+	MaxEvidence            int
+	FloorCounts            int
+	RecordedCounts         int
+	CountBasis             string
+	ProjectionTruncated    bool
+	MarkdownRendered       bool
+	MarkdownTruncated      bool
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every AnswerDisplayFields uniformly, set ONLY by NewAnswerDisplayFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewAnswerDisplayFields is the generated constructor for AnswerDisplayFields -- every
+// field AnswerDisplay.Fields declares is a required parameter.
+func NewAnswerDisplayFields(requestID string, surface string, canonicalMembers int, projectedMembers int, canonicalEligibleFacts int, projectedFacts int, factsOmitted int, membersOmitted int, evidenceOmitted int, maxFacts int, maxMembers int, maxEvidence int, floorCounts int, recordedCounts int, countBasis string, projectionTruncated bool, markdownRendered bool, markdownTruncated bool) AnswerDisplayFields {
+	return AnswerDisplayFields{
+		RequestID:              requestID,
+		Surface:                surface,
+		CanonicalMembers:       canonicalMembers,
+		ProjectedMembers:       projectedMembers,
+		CanonicalEligibleFacts: canonicalEligibleFacts,
+		ProjectedFacts:         projectedFacts,
+		FactsOmitted:           factsOmitted,
+		MembersOmitted:         membersOmitted,
+		EvidenceOmitted:        evidenceOmitted,
+		MaxFacts:               maxFacts,
+		MaxMembers:             maxMembers,
+		MaxEvidence:            maxEvidence,
+		FloorCounts:            floorCounts,
+		RecordedCounts:         recordedCounts,
+		CountBasis:             countBasis,
+		ProjectionTruncated:    projectionTruncated,
+		MarkdownRendered:       markdownRendered,
+		MarkdownTruncated:      markdownTruncated,
+		constructed:            true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewAnswerDisplayFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f AnswerDisplayFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns AnswerDisplay's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f AnswerDisplayFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"surface", contextfabric.SanitizeLogAttr(f.Surface),
+		"canonical_members", f.CanonicalMembers,
+		"projected_members", f.ProjectedMembers,
+		"canonical_eligible_facts", f.CanonicalEligibleFacts,
+		"projected_facts", f.ProjectedFacts,
+		"facts_omitted", f.FactsOmitted,
+		"members_omitted", f.MembersOmitted,
+		"evidence_omitted", f.EvidenceOmitted,
+		"max_facts", f.MaxFacts,
+		"max_members", f.MaxMembers,
+		"max_evidence", f.MaxEvidence,
+		"floor_counts", f.FloorCounts,
+		"recorded_counts", f.RecordedCounts,
+		"count_basis", contextfabric.SanitizeLogAttr(f.CountBasis),
+		"projection_truncated", f.ProjectionTruncated,
+		"markdown_rendered", f.MarkdownRendered,
+		"markdown_truncated", f.MarkdownTruncated,
+	}
 }
 
 // RequirementOutcomeTransitionFields is contextfabric.requirement_outcome_transition's generated typed construction interface
@@ -312,6 +406,161 @@ func (f SemanticStatePersistenceFields) SlogArgs() []any {
 		"encoded_bytes", f.EncodedBytes,
 		"encoded_cap", f.EncodedCap,
 		"state", f.State,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// SynthesisRetrySelectionFields is contextfabric.synthesis_retry_selection's generated typed construction interface
+// (CHAOS-5516): one Go field per Field SynthesisRetrySelection.Fields declares in spec.go.
+type SynthesisRetrySelectionFields struct {
+	OrgID                    string
+	Family                   string
+	FamilyVersion            string
+	Stage                    string
+	Basis                    string
+	BasisObserved            bool
+	Before                   int
+	After                    int
+	Groups                   bool
+	Overrun                  string
+	MeasuredItems            int
+	PredictedItems           int
+	AttributionGlobal        int
+	AttributionMember        int
+	AttributionGroup         int
+	AttributionMultiGroup    int
+	MeasuredBytes            int
+	MaxItems                 int
+	MaxSerializedBytes       int
+	RetryAttempted           bool
+	RetryFit                 bool
+	RetryFailed              bool
+	RefusalPlanned           bool
+	DeadlineReserved         bool
+	RetryDeclined            string
+	NarrowerContinuationAxis string
+	OutcomeReductionApplied  bool
+	OutcomeReductionInnerFit bool
+	OutcomeItemsServed       int
+	OutcomeItemsDeclared     int
+	OutcomeCompletenessState string
+	OutcomeReductionDeclined string
+	LedgerStatus             string
+	QuotaAvailability        string
+	QuotaGroupAllowance      int
+	QuotaGroupsGranted       int
+	QuotaGroupsMeasured      int
+	QuotaGroupsOverAllowance int
+	RequestID                string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every SynthesisRetrySelectionFields uniformly, set ONLY by NewSynthesisRetrySelectionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewSynthesisRetrySelectionFields is the generated constructor for SynthesisRetrySelectionFields -- every
+// field SynthesisRetrySelection.Fields declares is a required parameter.
+func NewSynthesisRetrySelectionFields(orgID string, family string, familyVersion string, stage string, basis string, basisObserved bool, before int, after int, groups bool, overrun string, measuredItems int, predictedItems int, attributionGlobal int, attributionMember int, attributionGroup int, attributionMultiGroup int, measuredBytes int, maxItems int, maxSerializedBytes int, retryAttempted bool, retryFit bool, retryFailed bool, refusalPlanned bool, deadlineReserved bool, retryDeclined string, narrowerContinuationAxis string, outcomeReductionApplied bool, outcomeReductionInnerFit bool, outcomeItemsServed int, outcomeItemsDeclared int, outcomeCompletenessState string, outcomeReductionDeclined string, ledgerStatus string, quotaAvailability string, quotaGroupAllowance int, quotaGroupsGranted int, quotaGroupsMeasured int, quotaGroupsOverAllowance int, requestID string) SynthesisRetrySelectionFields {
+	return SynthesisRetrySelectionFields{
+		OrgID:                    orgID,
+		Family:                   family,
+		FamilyVersion:            familyVersion,
+		Stage:                    stage,
+		Basis:                    basis,
+		BasisObserved:            basisObserved,
+		Before:                   before,
+		After:                    after,
+		Groups:                   groups,
+		Overrun:                  overrun,
+		MeasuredItems:            measuredItems,
+		PredictedItems:           predictedItems,
+		AttributionGlobal:        attributionGlobal,
+		AttributionMember:        attributionMember,
+		AttributionGroup:         attributionGroup,
+		AttributionMultiGroup:    attributionMultiGroup,
+		MeasuredBytes:            measuredBytes,
+		MaxItems:                 maxItems,
+		MaxSerializedBytes:       maxSerializedBytes,
+		RetryAttempted:           retryAttempted,
+		RetryFit:                 retryFit,
+		RetryFailed:              retryFailed,
+		RefusalPlanned:           refusalPlanned,
+		DeadlineReserved:         deadlineReserved,
+		RetryDeclined:            retryDeclined,
+		NarrowerContinuationAxis: narrowerContinuationAxis,
+		OutcomeReductionApplied:  outcomeReductionApplied,
+		OutcomeReductionInnerFit: outcomeReductionInnerFit,
+		OutcomeItemsServed:       outcomeItemsServed,
+		OutcomeItemsDeclared:     outcomeItemsDeclared,
+		OutcomeCompletenessState: outcomeCompletenessState,
+		OutcomeReductionDeclined: outcomeReductionDeclined,
+		LedgerStatus:             ledgerStatus,
+		QuotaAvailability:        quotaAvailability,
+		QuotaGroupAllowance:      quotaGroupAllowance,
+		QuotaGroupsGranted:       quotaGroupsGranted,
+		QuotaGroupsMeasured:      quotaGroupsMeasured,
+		QuotaGroupsOverAllowance: quotaGroupsOverAllowance,
+		RequestID:                requestID,
+		constructed:              true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewSynthesisRetrySelectionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f SynthesisRetrySelectionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns SynthesisRetrySelection's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f SynthesisRetrySelectionFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"family", contextfabric.SanitizeLogAttr(f.Family),
+		"family_version", contextfabric.SanitizeLogAttr(f.FamilyVersion),
+		"stage", contextfabric.SanitizeLogAttr(f.Stage),
+		"basis", contextfabric.SanitizeLogAttr(f.Basis),
+		"basis_observed", f.BasisObserved,
+		"before", f.Before,
+		"after", f.After,
+		"groups", f.Groups,
+		"overrun", contextfabric.SanitizeLogAttr(f.Overrun),
+		"measured_items", f.MeasuredItems,
+		"predicted_items", f.PredictedItems,
+		"attribution_global", f.AttributionGlobal,
+		"attribution_member", f.AttributionMember,
+		"attribution_group", f.AttributionGroup,
+		"attribution_multi_group", f.AttributionMultiGroup,
+		"measured_bytes", f.MeasuredBytes,
+		"max_items", f.MaxItems,
+		"max_serialized_bytes", f.MaxSerializedBytes,
+		"retry_attempted", f.RetryAttempted,
+		"retry_fit", f.RetryFit,
+		"retry_failed", f.RetryFailed,
+		"refusal_planned", f.RefusalPlanned,
+		"deadline_reserved", f.DeadlineReserved,
+		"retry_declined", contextfabric.SanitizeLogAttr(f.RetryDeclined),
+		"narrower_continuation_axis", contextfabric.SanitizeLogAttr(f.NarrowerContinuationAxis),
+		"outcome_reduction_applied", f.OutcomeReductionApplied,
+		"outcome_reduction_inner_fit", f.OutcomeReductionInnerFit,
+		"outcome_items_served", f.OutcomeItemsServed,
+		"outcome_items_declared", f.OutcomeItemsDeclared,
+		"outcome_completeness_state", contextfabric.SanitizeLogAttr(f.OutcomeCompletenessState),
+		"outcome_reduction_declined", contextfabric.SanitizeLogAttr(f.OutcomeReductionDeclined),
+		"ledger_status", contextfabric.SanitizeLogAttr(f.LedgerStatus),
+		"quota_availability", contextfabric.SanitizeLogAttr(f.QuotaAvailability),
+		"quota_group_allowance", f.QuotaGroupAllowance,
+		"quota_groups_granted", f.QuotaGroupsGranted,
+		"quota_groups_measured", f.QuotaGroupsMeasured,
+		"quota_groups_over_allowance", f.QuotaGroupsOverAllowance,
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

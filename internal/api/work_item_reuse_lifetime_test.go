@@ -51,41 +51,12 @@ func (c *lifetimeTupleClient) Query(context.Context, string, []contextpacket.Cli
 	if c.panicQuery {
 		panic("S1 panic immediately after admission")
 	}
-	return &lifetimeTupleRows{client: c}, nil
-}
-
-type lifetimeTupleRows struct {
-	client *lifetimeTupleClient
-	index  int
-}
-
-func (r *lifetimeTupleRows) Next() bool { return r.index < 2 }
-func (r *lifetimeTupleRows) Scan(dest ...any) error {
-	// Successful S1 has one member and one identity-free resolved sentinel.
-	values := []any{r.client.id, r.client.repo, r.client.work, hostedTestRepository, uint8(1), r.client.count, r.client.count, uint64(0), uint64(0), uint64(0), uint8(0), uint8(1)}
-	if r.index == 1 {
-		values = []any{"", "", "", "", uint8(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint8(1), uint8(1)}
+	rows, err := freshTupleResolvedS1Rows([][]any{{c.id, c.repo, c.work, hostedTestRepository, uint8(1), c.count, c.count, uint64(0), uint64(0), uint64(0)}})
+	if err != nil {
+		return nil, err
 	}
-	if len(dest) != len(values) {
-		return errors.New("unexpected S1 scan width")
-	}
-	for i, d := range dest {
-		switch p := d.(type) {
-		case *string:
-			*p = values[i].(string)
-		case *uint8:
-			*p = values[i].(uint8)
-		case *uint64:
-			*p = values[i].(uint64)
-		default:
-			return errors.New("unexpected S1 scan type")
-		}
-	}
-	r.index++
-	return nil
+	return &freshTupleQueryRows{rows: rows}, nil
 }
-func (r *lifetimeTupleRows) Err() error   { return nil }
-func (r *lifetimeTupleRows) Close() error { return nil }
 
 // This drives the actual Engine and Begin reader through the full hosted
 // middleware/route. Only the database query transport supplies fixed rows;

@@ -1,0 +1,148 @@
+{
+  "schema_version": "context_fabric_answer_projection.v1",
+  "result_id": "result_tuple_producer_001",
+  "request_id": "req_00000000000000000000000000000001",
+  "generated_at": "2026-09-14T12:00:00Z",
+  "status": "complete",
+  "question": "What is the state and count of this project's work items?",
+  "reused": false,
+  "direct_judgment": "This investigation is complete.",
+  "current_state": "No canonical facts were observed to describe the current state.",
+  "strongest_pressures": [],
+  "committed_subjects": [
+    {
+      "kind": "project",
+      "canonical_id": "project.v2:linear:P1",
+      "label": "Project Alpha"
+    }
+  ],
+  "cohort": {
+    "kind": "work_item",
+    "total": 0,
+    "rationale": "Work items are members of the resolved project within the authorized scope.",
+    "complete": true,
+    "members": []
+  },
+  "principal_drivers": [],
+  "key_facts": [
+    {
+      "claim_id": "server:cardinality:work_item",
+      "kind": "cardinality",
+      "subject": {
+        "kind": "organization",
+        "canonical_id": "org_1",
+        "label": "org_1"
+      },
+      "field": "work_item_count",
+      "value": {
+        "integer": 0
+      }
+    }
+  ],
+  "coverage_summary": [],
+  "coverage_partial": false,
+  "limitations": [],
+  "warnings": [],
+  "evidence_ref_ids": [],
+  "subject_receipts": [
+    {
+      "result_id": "result_tuple_producer_001",
+      "receipt_id": "receipt_tuple_project"
+    }
+  ],
+  "versions": {
+    "service_version": "tuple-test",
+    "contract_version": "context_fabric_investigation_result.v1",
+    "backend": "graph",
+    "projection_version": "projection-v1",
+    "query_version": "query-v1",
+    "interpretation_version": "schema-v1",
+    "synthesis_version": "prompt-v1+model-v1",
+    "canonical_service_version": "unwired",
+    "model_identity": "test-provider/test-model"
+  },
+  "projection_budget": {
+    "truncated": false,
+    "drivers_omitted": 0,
+    "withheld_drivers_omitted": 0,
+    "cohort_members_omitted": 0,
+    "cohort_groups_omitted": 0,
+    "facts_omitted": 0,
+    "candidates_omitted": 0,
+    "evidence_refs_omitted": 0,
+    "limitations_omitted": 0,
+    "warnings_omitted": 0,
+    "coverage_omitted": 0,
+    "reasons_omitted": 0,
+    "values_clamped": 0,
+    "render_shapes_omitted": 0,
+    "full_result_omitted": false
+  },
+  "effective_evidence_window": {
+    "start": "2026-06-16T12:00:00Z",
+    "end": "2026-09-14T12:00:00Z",
+    "relative_id": "trailing_90d",
+    "provenance": "question_stated"
+  },
+  "completeness": {
+    "terminal_status": "complete",
+    "claimed_facts_count": 1,
+    "rows_count": 0,
+    "state": "degraded",
+    "outcomes": [
+      {
+        "stage": "planning",
+        "requirement": "count/member/work_item",
+        "obligation": "count",
+        "outcome": "unavailable",
+        "impact": "dimension",
+        "cause_coverage": "fact_pruned",
+        "cause_observed": true,
+        "served": 0,
+        "declared": 0
+      },
+      {
+        "stage": "planning",
+        "requirement": "health/member/work_item",
+        "obligation": "health",
+        "outcome": "unavailable",
+        "impact": "dimension",
+        "cause_coverage": "fact_unconfigured",
+        "cause_observed": true,
+        "served": 0,
+        "declared": 0
+      },
+      {
+        "stage": "planning",
+        "requirement": "state/member/work_item",
+        "obligation": "state",
+        "outcome": "satisfied",
+        "impact": "none",
+        "cause_observed": false,
+        "served": 0,
+        "declared": 0
+      },
+      {
+        "stage": "assembled_result",
+        "requirement": "count/member/work_item",
+        "obligation": "count",
+        "outcome": "satisfied",
+        "impact": "none",
+        "cause_observed": false,
+        "served": 0,
+        "declared": 0
+      },
+      {
+        "stage": "assembled_result",
+        "requirement": "state/member/work_item",
+        "obligation": "state",
+        "outcome": "unavailable",
+        "impact": "dimension",
+        "cause_coverage": "requirement_read_not_planned",
+        "cause_observed": false,
+        "served": 0,
+        "declared": 2
+      }
+    ]
+  }
+}
