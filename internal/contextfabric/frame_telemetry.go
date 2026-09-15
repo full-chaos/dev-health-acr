@@ -148,15 +148,21 @@ type FrameValidationEvent struct {
 	// qualifies.
 	OrderingPresent bool
 
-	// StrippedObligations is the closed-vocabulary set the work-item
-	// tuple's promotion removed from this frame's derived Obligations
-	// (workItemTupleStripSurveyObligations), in the frame's own order. Nil,
-	// never an empty non-nil slice, on every line the tuple did not
-	// promote -- including every non-work-item-tuple frame -- so "nothing
-	// was stripped" and "the mutation did not run here" stay one value.
-	// This is the in-place frame mutation's own observability: without it,
-	// a regression that started stripping the wrong obligation, or
-	// stopped stripping the one it must, would be invisible at Info.
+	// StrippedObligations is the closed-vocabulary set THIS
+	// INTERPRETATION'S promotion would remove from the frame's derived
+	// Obligations (workItemTupleObligationsToStrip), in the frame's own
+	// order. Nil, never an empty non-nil slice, on every line the tuple
+	// did not promote here -- including every non-work-item-tuple frame --
+	// so "nothing would be stripped" and "the promotion did not run here"
+	// stay one value.
+	//
+	// PROSPECTIVE: a later tighten call (finishFamilyResolution, engine.go)
+	// can still turn this SAME turn's promotion back to a refusal under a
+	// routed or carry-adjusted family this line never sees, and the actual
+	// removal (workItemTupleStripSurveyObligations) happens only once,
+	// after that later call settles, in engine.go. This field is this
+	// interpretation's own observability for its own decision, not a
+	// report that a mutation was applied.
 	StrippedObligations []AnswerObligation
 
 	// DerivedObligationCount / WidenedObligationCount are counts, not

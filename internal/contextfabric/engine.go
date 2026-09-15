@@ -2176,6 +2176,18 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	familyAllowsWorkItemTuple := tupleFamilyKnown && tupleFamilyDefinition.allowsWorkItemTuple
 	familyOutcome.Gate = tightenWorkItemTupleFrameGate(familyOutcome.Gate, familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext)
 	workItemTuple := prospectiveWorkItemTupleAdmission(familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext) == workItemTupleProspective
+	// THE ONE POINT this arm's ranking-obligation strip actually runs.
+	// workItemTuple, just above, is the LAST word: every earlier reading
+	// (resolveFrame's heuristic DeriveQuestionFamily projection, then
+	// finishFamilyResolution's routed-family tighten) has already been
+	// through this same predicate with a family that can still have
+	// differed, and a frame this call refuses never reaches the mutation
+	// at all -- so a frame this arm ultimately declines to serve keeps
+	// every obligation it started with. See
+	// workItemTupleStripSurveyObligations's own doc comment for why.
+	if workItemTuple && familyOutcome.Frame != nil {
+		workItemTupleStripSurveyObligations(familyOutcome.Frame)
+	}
 	// DERIVED ONCE, AND READ TWICE ON THIS LINE AND THE NEXT. The rows are an
 	// INPUT to the plan (planFactKinds reads a computed step's declared inputs
 	// so the declaration actually plans the read) and they are the plan's own

@@ -144,6 +144,75 @@ func TestWorkItemSurveyGoalWithOrderingStaysRefused(t *testing.T) {
 	}
 }
 
+// TestWorkItemLateFamilyDisallowReRefusesWithoutLosingObligations is the
+// end-to-end proof for the late-family-flip class: a gate ALREADY promoted
+// (as resolveFrame's own heuristic family reading would promote it) reaches
+// the engine under a family that does not allow the work-item tuple at all
+// -- exactly what a routed or carry-adjusted family reading can still
+// produce after interpretation already promoted the gate once. The engine's
+// own tighten (engine.go, after the carry-adjusted family is known) must
+// re-refuse it, and because the strip runs only once that is settled
+// (workItemTupleStripSurveyObligations's own call site), the frame never
+// loses its ranking obligation to a promotion the engine went on to
+// reverse.
+func TestWorkItemLateFamilyDisallowReRefusesWithoutLosingObligations(t *testing.T) {
+	defer reportWorkItemMutationPanic(t)
+	frame := prospectiveTupleFrame(GoalRankOrSurvey)
+	before := append([]AnswerObligation(nil), frame.Obligations...)
+	if !frame.HasObligation(ObligationRanking) {
+		t.Fatal("fixture frame does not carry the ranking obligation to begin with")
+	}
+	// Simulates interpretation's own promotion (resolveFrame's heuristic
+	// family reading always allows the tuple for a children_of_scope/
+	// work_item expression) landing on a family the engine's OWN lookup,
+	// after routing/carry, does not allow.
+	outcome := QuestionFamilyOutcome{
+		Family: QuestionFamilyDiscoveredCohortRanking, Source: QuestionFamilySourceModel,
+		Frame: &frame, FrameObligations: frame.Obligations, Gate: FrameGate{Outcome: FrameGatePassed},
+		WinningSample: FamilySample{ScopeAnchorKind: SubjectProject, ScopeAnchorTerm: "Project"},
+	}
+	if allows := workItemTupleFamilyPolicyForTest(outcome.Family); allows {
+		t.Fatalf("fixture family %s unexpectedly allows the work-item tuple", outcome.Family)
+	}
+	payload := workItemTuplePayloadFixture(t)
+	graph := &dispatchGraphProbe{graphReaderStub: graphReaderStub{resolution: payload.SubjectResolution, bases: provenCommitBases(payload.SubjectResolution.Committed...)}}
+	membershipReads, factReads := 0, 0
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: familyInterpreter{interpreted: InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "survey", TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: []FactRequirement{{Kind: FactStatus}}}, outcome: outcome},
+		Graph:       graph,
+		CandidateVerifier: func(context.Context, storage.Principal, RequestedScope, ResolvedGraphBinding, SubjectKind, string) (bool, CandidateVerificationReason) {
+			return true, ""
+		},
+		WorkItemMembership: tupleMembershipFunc(func(context.Context, storage.Principal, WorkItemMembershipRequest) (*WorkItemMembershipLease, WorkItemMembershipResult, error) {
+			membershipReads++
+			return nil, WorkItemMembershipResult{}, nil
+		}),
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			factReads++
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return InvestigationResult{}, errors.New("synthesis should not run on a re-refused frame")
+		}),
+	}, EngineOptions{ServiceVersion: "test", NewResultID: func() string { return "result_tuple_late_flip_001" }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, investigateErr := engine.Investigate(context.Background(), storage.Principal{OrgID: "org-1"}, validInvestigationRequestWithConfirmedWindow())
+	if investigateErr != nil {
+		t.Fatalf("Investigate() error = %v", investigateErr)
+	}
+	if graph.resolveCalls != 0 || membershipReads != 0 || graph.discoverCalls != 0 || factReads != 0 {
+		t.Fatalf("phase counts resolve=%d membership=%d discover=%d facts=%d; want 0,0,0,0 on a late-refused frame", graph.resolveCalls, membershipReads, graph.discoverCalls, factReads)
+	}
+	if result.RefusalBasis != contractsv1.ContextFabricRefusalBasisMemberKindUnservable {
+		t.Fatalf("refusal basis = %q, want member_kind_unservable", result.RefusalBasis)
+	}
+	if !reflect.DeepEqual(frame.Obligations, before) {
+		t.Fatalf("BUG: a gate the engine re-refused still lost obligations: before=%v after=%v", before, frame.Obligations)
+	}
+}
+
 type dispatchGraphProbe struct {
 	graphReaderStub
 	resolveCalls, discoverCalls int

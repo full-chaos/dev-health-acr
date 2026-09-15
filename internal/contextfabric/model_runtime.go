@@ -1677,15 +1677,23 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 	// a test pins that, so the ordering here is belt to that test's braces.)
 	gate := DecideFrameGate(result, true)
 	// Captured only when the tuple call below can run at all, and read only
-	// by the telemetry event further down -- obligationsRemoved's own doc
-	// comment says why this is a before/after diff rather than a value
-	// threaded through FrameGate itself.
+	// by the telemetry event further down. This is a PREDICTION
+	// (workItemTupleObligationsToStrip), never a mutation: the frame is not
+	// touched here at all, because this is the FIRST of several tighten
+	// calls this interpretation's own family reading feeds (resolveFrame's
+	// heuristic DeriveQuestionFamily projection here; the routed and later
+	// carry-adjusted family in finishFamilyResolution and engine.go), and a
+	// later call in that chain can still turn this promotion back to
+	// refused. See workItemTupleStripSurveyObligations's own doc comment
+	// for where the real mutation happens instead.
 	var strippedObligations []AnswerObligation
 	if len(times) == 1 && result.Outcome.Accepted() {
 		definition, known := LookupQuestionFamily(DeriveQuestionFamily(result.Frame).Family)
-		obligationsBeforeTuple := append([]AnswerObligation(nil), result.Frame.Obligations...)
+		preTuple := gate
 		gate = workItemTupleFrameGate(gate, &result.Frame, known && definition.allowsWorkItemTuple, times[0])
-		strippedObligations = obligationsRemoved(obligationsBeforeTuple, result.Frame.Obligations)
+		if gate.Outcome == FrameGatePassed && preTuple.Outcome != FrameGatePassed {
+			strippedObligations = workItemTupleObligationsToStrip(&result.Frame)
+		}
 	}
 	receipt.FrameGateOutcome = gate.Outcome
 	receipt.FrameGateRefuseBasis = gate.RefuseBasis
@@ -1733,11 +1741,14 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 		// this line and the receipt reading the SAME decision rather than
 		// two, the exact drift this package's gate seam exists to close.
 		event.Gate = gate
-		// The other observable half of the SAME call: what the tuple's
-		// promotion removed from the frame's obligation set, nil when it
-		// removed nothing (including every non-work-item-tuple frame,
-		// which never reaches the branch that can strip). See
-		// obligationsRemoved's own doc comment.
+		// The other observable half of the SAME call: what this
+		// interpretation's promotion would remove from the frame's
+		// obligation set, nil when nothing would be (including every
+		// non-work-item-tuple frame). PROSPECTIVE, not a report of an
+		// applied mutation -- a later tighten call (finishFamilyResolution,
+		// engine.go) can still reverse this promotion, and the actual
+		// removal happens only once that is settled. See
+		// workItemTupleObligationsToStrip's own doc comment.
 		event.StrippedObligations = strippedObligations
 		// The requested-versus-proposed half, from THIS receipt and THIS
 		// proposal, judged by the gate this event already carries -- one
