@@ -10,7 +10,7 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-// The class-B test, driven through the REAL engine on EVERY terminal arm.
+// The class-B test, driven through the REAL engine on EVERY measured arm.
 //
 // The history this exists against is three review rounds of one shape. The
 // quota was written at three sites and read at none. It was then read at the
@@ -23,7 +23,7 @@ import (
 // the arm that FITS -- the majority path -- never computed one at all. A test
 // that drove one arm and asserted three numbers would have passed each time.
 //
-// So this drives the same five arms the attribution sweep drives, from the same
+// So this drives the same measured arms the attribution sweep drives, from the same
 // case table, and asserts what every arm must be able to say about the document
 // it describes. An arm added without a measured attempt fails here, and an arm
 // added without a case fails the population check the attribution sweep already
@@ -81,18 +81,7 @@ func TestEveryAssembledResultArmReportsAMeasuredQuota(t *testing.T) {
 			cohortSizes := []int{}
 			result, servedDocument := one.drive(t, &sink, one.spec, &cohortSizes)
 
-			line := ""
-			for _, candidate := range strings.Split(sink.String(), "\n") {
-				if strings.Contains(candidate, "context fabric plan narrowing") &&
-					strings.Contains(candidate, "stage=assembled_result") &&
-					strings.Contains(candidate, one.discriminator) {
-					line = candidate
-				}
-			}
-			if line == "" {
-				t.Fatalf("no assembled_result line carrying %q was emitted: this fixture did not reach the "+
-					"arm it claims to test.\nemitted:\n%s", one.discriminator, sink.String())
-			}
+			line := one.emittedLine(t, sink.String())
 
 			tokens, counts := quotaFieldsOf(t, line)
 
@@ -139,14 +128,23 @@ func TestEveryAssembledResultArmReportsAMeasuredQuota(t *testing.T) {
 			// for an answer that HAS no group axis, and reporting it for one
 			// that does is the absence that used to be indistinguishable from
 			// a measured zero.
-			if servedDocument && result.Cohort != nil && len(result.Cohort.Groups) > 0 {
+			groupsInDocument := 0
+			if one.measuresInitialCohort {
+				// Selection describes the first attempt. Its groups come from
+				// the fixture that supplied the original synthesis input, not
+				// from the later served cohort or the event under test.
+				groupsInDocument = len(attributionCohort(one.spec.members).Groups)
+			} else if servedDocument && result.Cohort != nil {
+				groupsInDocument = len(result.Cohort.Groups)
+			}
+			if groupsInDocument > 0 {
 				if availability == string(ItemQuotaUnavailable) {
-					t.Errorf("the served document carries %d groups and the line says the quota is "+
-						"unavailable.\nline: %s", len(result.Cohort.Groups), line)
+					t.Errorf("the measured document carries %d groups and the line says the quota is "+
+						"unavailable.\nline: %s", groupsInDocument, line)
 				}
-				if measured != len(result.Cohort.Groups) {
-					t.Errorf("quota_groups_measured = %d but the served document carries %d groups.\nline: %s",
-						measured, len(result.Cohort.Groups), line)
+				if measured != groupsInDocument {
+					t.Errorf("quota_groups_measured = %d but the measured document carries %d groups.\nline: %s",
+						measured, groupsInDocument, line)
 				}
 			}
 			if availability == string(ItemQuotaBoundedZero) && counts["group_allowance"] != 0 {
@@ -188,7 +186,7 @@ func TestTheFittingArmMeasuresItsQuotaToo(t *testing.T) {
 	if !served {
 		t.Fatal("the fitting arm served no document")
 	}
-	line := assembledResultLine(t, sink.String())
+	line := fitting.emittedLine(t, sink.String())
 
 	tokens, counts := quotaFieldsOf(t, line)
 	if tokens["quota_availability"] == "unclassified" {

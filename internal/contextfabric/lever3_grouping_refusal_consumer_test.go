@@ -345,7 +345,7 @@ var limitationComposerAssemblyOrder = []string{
 	"applySynthesisStatusOverride",
 	"applyFactScopeDisclosure",
 	"applyGroupingRefusalDisclosure",
-	"applyCommitAffirmation",
+	"applyCommitAffirmationForWorkItemTuple",
 }
 
 // TestLimitationComposersRunInTheDocumentedOrder reads synthesizeAndAssemble's
@@ -358,6 +358,14 @@ func TestLimitationComposersRunInTheDocumentedOrder(t *testing.T) {
 		t.Fatalf("read assembly source: %v", err)
 	}
 	body := string(source)
+
+	// The tuple wrapper occupies the same final composer position. Its
+	// ordinary path still calls the original composer; census-bearing tuples
+	// skip anchor-status affirmation (pinned by the tuple behavior tests).
+	_, files := parsePackageForQuantifier(t)
+	if !callsWithin(t, files, "applyCommitAffirmationForWorkItemTuple")["applyCommitAffirmation"] {
+		t.Fatal("the tuple wrapper no longer reaches the ordinary commit-affirmation composer")
+	}
 
 	positions := make(map[string]int, len(limitationComposerAssemblyOrder))
 	for _, composer := range limitationComposerAssemblyOrder {
@@ -392,7 +400,7 @@ func TestLimitationComposersRunInTheDocumentedOrder(t *testing.T) {
 	// runs later.
 	refusal := positions["applyGroupingRefusalDisclosure"]
 	for _, composer := range limitationComposerAssemblyOrder {
-		if composer == "applyGroupingRefusalDisclosure" || composer == "applyCommitAffirmation" {
+		if composer == "applyGroupingRefusalDisclosure" || composer == "applyCommitAffirmationForWorkItemTuple" {
 			continue
 		}
 		if positions[composer] > refusal {

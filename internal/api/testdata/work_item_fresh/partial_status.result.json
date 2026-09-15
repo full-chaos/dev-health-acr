@@ -1,0 +1,314 @@
+{
+  "schema_version": "context_fabric_investigation_result.v1",
+  "result_id": "result_tuple_producer_001",
+  "request_id": "req_00000000000000000000000000000001",
+  "generated_at": "2026-09-14T12:00:00Z",
+  "status": "complete",
+  "question": "What is the state and count of this project's work items?",
+  "interpretation": {
+    "shape": "discovered_cohort",
+    "requested_judgment": "status",
+    "subject_terms": [
+      "Project Alpha"
+    ],
+    "time_context": {
+      "axis": "current"
+    },
+    "fact_requirements": [
+      {
+        "kind": "health"
+      }
+    ],
+    "clarification_needed": false
+  },
+  "subject_resolution": {
+    "candidates": [
+      {
+        "receipt_id": "receipt_tuple_project",
+        "subject": {
+          "kind": "project",
+          "canonical_id": "project.v2:linear:P1",
+          "label": "Project Alpha"
+        },
+        "state": "committed",
+        "matched_terms": [
+          "Project Alpha"
+        ],
+        "match_reasons": [
+          "Exact canonical subject label match."
+        ],
+        "confidence": 1,
+        "match_mechanisms": [
+          "exact"
+        ]
+      }
+    ],
+    "committed": [
+      {
+        "kind": "project",
+        "canonical_id": "project.v2:linear:P1",
+        "label": "Project Alpha"
+      }
+    ],
+    "commit_decision_digests": [
+      {
+        "subject": {
+          "kind": "project",
+          "canonical_id": "project.v2:linear:P1",
+          "label": "Project Alpha"
+        }
+      }
+    ]
+  },
+  "answer_plan": {
+    "family": "scoped_cohort_status",
+    "family_source": "model",
+    "family_version": "question-family.v3",
+    "member_kind": "work_item",
+    "require_drivers": false,
+    "require_ranking": false,
+    "render_kinds": [
+      "table"
+    ],
+    "fact_kinds": [
+      "status",
+      "work"
+    ],
+    "axes": [
+      "subject_anchor",
+      "expected_kind",
+      "window"
+    ],
+    "budget": {
+      "max_items": 50,
+      "max_serialized_bytes": 262144,
+      "max_members": 34,
+      "synthesis_headroom": 16,
+      "narrowing_basis": "canonical_id_lexical"
+    },
+    "narrowing": [
+      {
+        "stage": "cardinality",
+        "basis": "canonical_id_lexical",
+        "before": 50,
+        "after": 34
+      }
+    ],
+    "requirements": [
+      {
+        "requirement": "count/member/work_item",
+        "obligation": "count",
+        "role": "member",
+        "subject": "work_item",
+        "kind": "computed",
+        "scope": "each_member",
+        "quantifier": "none",
+        "unavailable": "computed_population_absent"
+      },
+      {
+        "requirement": "health/member/work_item",
+        "obligation": "health",
+        "role": "member",
+        "subject": "work_item",
+        "kind": "read",
+        "scope": "each_member",
+        "quantifier": "none",
+        "unavailable": "no_declaring_producer"
+      },
+      {
+        "requirement": "state/member/work_item",
+        "obligation": "state",
+        "role": "member",
+        "subject": "work_item",
+        "kind": "read",
+        "fact_kinds": [
+          "status"
+        ],
+        "scope": "each_member",
+        "quantifier": "corroborated"
+      }
+    ]
+  },
+  "cohort": {
+    "kind": "work_item",
+    "members": [
+      {
+        "subject": {
+          "kind": "work_item",
+          "canonical_id": "work_item.v2:repo-1:work-1",
+          "label": "Implement the thing"
+        },
+        "rank": 1,
+        "inclusion_reasons": [
+          "Work items are members of the resolved project within the authorized scope."
+        ],
+        "evidence_ref_ids": [
+          "acr:v1:work-item:repo-1:work-1"
+        ]
+      }
+    ],
+    "rationale": "Work items are members of the resolved project within the authorized scope.",
+    "complete": true,
+    "truncated": false
+  },
+  "direct_judgment": "This investigation is complete.",
+  "current_state": "Current observed values: work.title=Implement the thing for Implement the thing.",
+  "strongest_pressures": [],
+  "drivers": [],
+  "remaining_work": [],
+  "readiness_gaps": [],
+  "paths": [],
+  "conflicts": [],
+  "limitations": [],
+  "evidence_ref_ids": [
+    "acr:v1:work-item:repo-1:work-1"
+  ],
+  "claimed_facts": [
+    {
+      "claim_id": "claim_tuple_0",
+      "kind": "work",
+      "subject": {
+        "kind": "work_item",
+        "canonical_id": "work_item.v2:repo-1:work-1",
+        "label": "Implement the thing"
+      },
+      "field": "title",
+      "value": {
+        "string": "Implement the thing"
+      }
+    },
+    {
+      "claim_id": "server:cardinality:work_item",
+      "kind": "cardinality",
+      "subject": {
+        "kind": "organization",
+        "canonical_id": "org_1",
+        "label": "org_1"
+      },
+      "field": "work_item_count",
+      "value": {
+        "integer": 1
+      }
+    }
+  ],
+  "coverage": {
+    "sources": [
+      {
+        "source": "canonical_fact:status",
+        "state": "unavailable",
+        "reason": "devhealthfacts: query work item status failed",
+        "label": "Canonical facts — status",
+        "state_label": "unavailable"
+      },
+      {
+        "source": "canonical_fact:work",
+        "state": "available",
+        "label": "Canonical facts — work",
+        "state_label": "available"
+      }
+    ],
+    "partial": true,
+    "degraded_reasons": [
+      "status: devhealthfacts: query work item status failed"
+    ],
+    "details": [
+      {
+        "detail_id": "cov-01",
+        "source": "canonical_fact:status",
+        "code": "fact_read_failed",
+        "degrading": true,
+        "fact_kind": "status",
+        "source_state": "unavailable",
+        "supported_kinds": [
+          "work_item"
+        ],
+        "label": "Status facts could not be read",
+        "raw": "status: devhealthfacts: query work item status failed"
+      }
+    ]
+  },
+  "evidence_ref_labels": {
+    "acr:v1:work-item:repo-1:work-1": "Work item: repo-1:work-1"
+  },
+  "versions": {
+    "service_version": "tuple-test",
+    "contract_version": "context_fabric_investigation_result.v1",
+    "backend": "graph",
+    "projection_version": "projection-v1",
+    "query_version": "query-v1",
+    "interpretation_version": "schema-v1",
+    "synthesis_version": "prompt-v1+model-v1",
+    "canonical_service_version": "context-fabric-facts.v2",
+    "model_identity": "test-provider/test-model"
+  },
+  "deterministic_answer": "This investigation is complete. Counted 1 work item.",
+  "warnings": [],
+  "reused": false,
+  "effective_evidence_window": {
+    "start": "2026-06-16T12:00:00Z",
+    "end": "2026-09-14T12:00:00Z",
+    "relative_id": "trailing_90d",
+    "provenance": "question_stated"
+  },
+  "completeness": {
+    "terminal_status": "complete",
+    "claimed_facts_count": 2,
+    "rows_count": 0,
+    "state": "degraded",
+    "outcomes": [
+      {
+        "stage": "planning",
+        "requirement": "count/member/work_item",
+        "obligation": "count",
+        "outcome": "unavailable",
+        "impact": "dimension",
+        "cause_coverage": "fact_pruned",
+        "cause_observed": true,
+        "served": 0,
+        "declared": 0
+      },
+      {
+        "stage": "planning",
+        "requirement": "health/member/work_item",
+        "obligation": "health",
+        "outcome": "unavailable",
+        "impact": "dimension",
+        "cause_coverage": "fact_unconfigured",
+        "cause_observed": true,
+        "served": 0,
+        "declared": 0
+      },
+      {
+        "stage": "planning",
+        "requirement": "state/member/work_item",
+        "obligation": "state",
+        "outcome": "satisfied",
+        "impact": "none",
+        "cause_observed": false,
+        "served": 0,
+        "declared": 0
+      },
+      {
+        "stage": "assembled_result",
+        "requirement": "count/member/work_item",
+        "obligation": "count",
+        "outcome": "satisfied",
+        "impact": "none",
+        "cause_observed": false,
+        "served": 1,
+        "declared": 1
+      },
+      {
+        "stage": "assembled_result",
+        "requirement": "state/member/work_item",
+        "obligation": "state",
+        "outcome": "unavailable",
+        "impact": "dimension",
+        "cause_coverage": "fact_read_failed",
+        "cause_observed": true,
+        "served": 0,
+        "declared": 2
+      }
+    ]
+  }
+}

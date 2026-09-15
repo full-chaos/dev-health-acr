@@ -343,6 +343,10 @@ type GraphContext struct {
 }
 
 type CanonicalFactRequest struct {
+	// workItemTuple requires explicit retained-member requirements at the fact
+	// boundary; it is internal dispatch state, never a request or model field.
+	workItemTuple bool
+
 	Question     InterpretedQuestion `json:"question"`
 	Subjects     []SubjectRef        `json:"subjects"`
 	Cohort       *Cohort             `json:"cohort,omitempty"`

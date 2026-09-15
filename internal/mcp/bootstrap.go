@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -16,6 +17,7 @@ import (
 // sidecar configuration, a hardened hosted API client, and the hosted
 // capability descriptor confirmed compatible with this sidecar at startup.
 type Bootstrap struct {
+	diagnostics  *slog.Logger
 	Config       sidecar.Config
 	Client       *sidecar.Client
 	Capabilities contractsv1.Capabilities

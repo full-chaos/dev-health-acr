@@ -229,7 +229,7 @@ func (r RuntimeQuestionInterpreter) interpretEnsemble(ctx context.Context, princ
 	if !quorumMet {
 		winner := succeeded[0]
 		single := []FamilySample{winner.sample}
-		return winner.question, r.finishFamilyResolution(ctx, principal, ResolveQuestionFamily(single), single, winner.receipt), nil
+		return winner.question, r.finishFamilyResolution(ctx, principal, ResolveQuestionFamily(single), single, winner.receipt, winner.question.TimeContext), nil
 	}
 
 	outcome := ResolveQuestionFamily(samples)
@@ -248,7 +248,7 @@ func (r RuntimeQuestionInterpreter) interpretEnsemble(ctx context.Context, princ
 	if outcome.WinningSampleIndex >= 0 && outcome.WinningSampleIndex < len(succeeded) {
 		winner = succeeded[outcome.WinningSampleIndex]
 	}
-	return winner.question, r.finishFamilyResolution(ctx, principal, outcome, samples, winner.receipt), nil
+	return winner.question, r.finishFamilyResolution(ctx, principal, outcome, samples, winner.receipt, winner.question.TimeContext), nil
 }
 
 // recordEnsembleComposition emits the one event that makes an ensemble turn's

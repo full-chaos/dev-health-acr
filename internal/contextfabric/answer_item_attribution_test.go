@@ -487,6 +487,11 @@ type assembledResultArmCase struct {
 	// scenario that does not produce one is a fixture that silently landed
 	// somewhere else, which is a failure and not a skip.
 	discriminator string
+	// message selects the distinct retry-selection event when set.
+	message string
+	// measuresInitialCohort selects the first synthesis input even when the
+	// investigation later serves a smaller document.
+	measuresInitialCohort bool
 	// spec is per-arm because the expected bucket values must be pairwise
 	// DISTINCT on the document THIS arm measured, and the arms measure
 	// cohorts of different sizes.
@@ -506,6 +511,30 @@ type assembledResultArmCase struct {
 	drive func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec, cohortSizes *[]int) (result InvestigationResult, served bool)
 }
 
+// emittedLine selects the measured event owned by this case. Both the item
+// attribution and quota sweeps must inspect that same document, including the
+// first-attempt selection event when the case later serves a smaller result.
+func (one assembledResultArmCase) emittedLine(t *testing.T, emitted string) string {
+	t.Helper()
+	message := one.message
+	if message == "" {
+		message = "context fabric plan narrowing"
+	}
+	var lines []string
+	for _, candidate := range strings.Split(emitted, "\n") {
+		if strings.Contains(candidate, `msg="`+message+`"`) &&
+			strings.Contains(candidate, "stage=assembled_result") &&
+			strings.Contains(candidate, one.discriminator) {
+			lines = append(lines, candidate)
+		}
+	}
+	if len(lines) != 1 {
+		t.Fatalf("got %d assembled_result lines with message %q and discriminator %q, want exactly one for this arm.\nemitted:\n%s",
+			len(lines), message, one.discriminator, emitted)
+	}
+	return lines[0]
+}
+
 func assembledResultArmCases() []assembledResultArmCase {
 	return []assembledResultArmCase{
 		{
@@ -517,6 +546,52 @@ func assembledResultArmCases() []assembledResultArmCase {
 				result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
 				if err != nil {
 					t.Fatalf("Investigate() error = %v, want a served answer", err)
+				}
+				return result, true
+			},
+		},
+		{
+			name:                  "retry selection measures the first attempt",
+			message:               "context fabric synthesis retry selected",
+			discriminator:         "retry_attempted=false retry_fit=false retry_failed=false",
+			measuresInitialCohort: true,
+			spec:                  defaultAttributionSpec(),
+			drive: func(t *testing.T, sink *bytes.Buffer, spec attributionFixtureSpec, cohortSizes *[]int) (InvestigationResult, bool) {
+				// The fixture charges 14 items first, then 12 after narrowing,
+				// against a 13-item ceiling. These differ so the final document
+				// cannot stand in for the measurement that selected the retry.
+				engine, _ := attributionEngine(t, spec, sink, budgetStageOptions(13, time.Second), cohortSizes)
+				original := engine.synthesizer
+				calls := 0
+				engine.synthesizer = synthesizerFunc(func(ctx context.Context, principal storage.Principal, input SynthesisInput) (InvestigationResult, error) {
+					calls++
+					if calls == 1 && strings.Contains(sink.String(), "context fabric synthesis retry selected") {
+						t.Fatal("retry selection was emitted before the first synthesis")
+					}
+					if calls == 2 {
+						if got := strings.Count(sink.String(), "context fabric synthesis retry selected"); got != 1 {
+							t.Fatalf("before second synthesis, got %d retry-selection events, want exactly one", got)
+						}
+					}
+					return original.Synthesize(ctx, principal, input)
+				})
+				result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequestWithConfirmedWindow())
+				if err != nil {
+					t.Fatalf("Investigate() error = %v, want the smaller retry document served", err)
+				}
+				if calls != 2 || len(*cohortSizes) != 2 || (*cohortSizes)[0] != spec.members || (*cohortSizes)[1] >= (*cohortSizes)[0] {
+					t.Fatalf("synthesis calls=%d cohorts=%v, want the original cohort followed by one smaller cohort", calls, *cohortSizes)
+				}
+				if result.Cohort == nil || len(result.Cohort.Members) != (*cohortSizes)[1] {
+					t.Fatalf("served cohort does not match the second synthesis input: %+v", result.Cohort)
+				}
+				if got := strings.Count(sink.String(), "context fabric synthesis retry selected"); got != 1 {
+					t.Fatalf("completed investigation emitted %d retry-selection events, want one", got)
+				}
+				finalLine := assembledResultLine(t, sink.String())
+				if !strings.Contains(finalLine, "retry_attempted=true retry_fit=true retry_failed=false") ||
+					measuredItemsOf(t, finalLine) != spec.expect((*cohortSizes)[1], len(result.SubjectResolution.Candidates)).total() {
+					t.Fatalf("final event does not describe the successful, smaller retry document: %s", finalLine)
 				}
 				return result, true
 			},
@@ -681,7 +756,7 @@ func TestEveryAssembledResultArmEmitsASplitThatDescribesIt(t *testing.T) {
 	// then the probe's assertion actually runs. Each fix was a tighter
 	// source-reading check on a claim that only execution can settle.
 	//
-	// It guarded nothing: all five arms are driven end to end below, and this
+	// It guarded nothing: all arms are driven end to end below, and this
 	// exact reconciliation is what carries the guarantee. If an arm is ever
 	// added that cannot be driven, this fails immediately and loudly, which is
 	// the honest signal -- and the standing rule then requires a reach probe
@@ -709,18 +784,7 @@ func TestEveryAssembledResultArmEmitsASplitThatDescribesIt(t *testing.T) {
 			cohortSizes := []int{}
 			result, servedDocument := one.drive(t, &sink, one.spec, &cohortSizes)
 
-			line := ""
-			for _, candidate := range strings.Split(sink.String(), "\n") {
-				if strings.Contains(candidate, "context fabric plan narrowing") &&
-					strings.Contains(candidate, "stage=assembled_result") &&
-					strings.Contains(candidate, one.discriminator) {
-					line = candidate
-				}
-			}
-			if line == "" {
-				t.Fatalf("no assembled_result line carrying %q was emitted: this fixture did not reach the arm "+
-					"it claims to test.\nemitted:\n%s", one.discriminator, sink.String())
-			}
+			line := one.emittedLine(t, sink.String())
 
 			// ---- the INDEPENDENT expectation ----
 			//
@@ -731,6 +795,14 @@ func TestEveryAssembledResultArmEmitsASplitThatDescribesIt(t *testing.T) {
 			candidatesInDoc := one.spec.candidates
 			membersMeasured := one.spec.members
 			switch {
+			case one.measuresInitialCohort:
+				if len(cohortSizes) != 2 || cohortSizes[0] != one.spec.members {
+					t.Fatalf("selection needs an observed first synthesis input and one retry; got %v", cohortSizes)
+				}
+				membersMeasured = cohortSizes[0]
+				if !strings.Contains(line, "level=INFO") || !strings.Contains(line, "overrun=items") || !strings.Contains(line, "max_items=13 ") {
+					t.Fatalf("selection must describe the initial item overrun at Info level: %s", line)
+				}
 			case servedDocument:
 				candidatesInDoc = len(result.SubjectResolution.Candidates)
 				if result.Cohort != nil {

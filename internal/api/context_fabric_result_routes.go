@@ -264,6 +264,9 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 				writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric answer projection could not be produced", false, nil)
 				return
 			}
+			displayArgs := answerprojection.DisplayLogArgs(result, projection, budget, false, false)
+			displayArgs = append(displayArgs, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "surface", "result_by_id")
+			a.logger.InfoContext(r.Context(), "context fabric answer display", displayArgs...)
 			payload = projection
 		}
 		maximumBytes := int64(a.config.MaxSerializedBytes)

@@ -1229,6 +1229,7 @@ func (e *Engine) captureAcceptedReading(
 	plan *AnswerPlan,
 	requirements []DerivedRequirement,
 	confirmedNeeds []ConfirmedNeedEntry,
+	censuses ...*WorkItemTupleCensus,
 ) semanticStateCapture {
 	identity := SemanticRequestIdentityOf(request, "")
 	if continuation.Applies() && continuation.RequestIdentity.Comparable() {
@@ -1245,6 +1246,9 @@ func (e *Engine) captureAcceptedReading(
 		in.GroupKind = plan.GroupKind
 		in.NarrowingBasis = plan.Budget.NarrowingBasis
 		in.FamilyVersion = plan.FamilyVersion
+	}
+	if len(censuses) == 1 {
+		in.WorkItemCensus = censuses[0]
 	}
 	return captureSemanticState(in)
 }
@@ -2143,6 +2147,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		driftRefusedParent = carryParentSeed(request)
 	}
 	familyOutcome = e.applyAndRecordCarry(ctx, principal, familyOutcome, planCarry)
+	tupleFamilyDefinition, tupleFamilyKnown := LookupQuestionFamily(familyOutcome.Family)
+	familyAllowsWorkItemTuple := tupleFamilyKnown && tupleFamilyDefinition.allowsWorkItemTuple
+	familyOutcome.Gate = tightenWorkItemTupleFrameGate(familyOutcome.Gate, familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext)
+	workItemTuple := prospectiveWorkItemTupleAdmission(familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext) == workItemTupleProspective
 	// DERIVED ONCE, AND READ TWICE ON THIS LINE AND THE NEXT. The rows are an
 	// INPUT to the plan (planFactKinds reads a computed step's declared inputs
 	// so the declaration actually plans the read) and they are the plan's own
@@ -2599,17 +2607,45 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		e.recordPlanNarrowing(ctx, principal, PlanNarrowingEventFrom(plan, contractsv1.ContextFabricPlanNarrowingCardinality, graphRequest.Options.MaxCohortMembers, clamped, false, false, "", ""))
 		graphRequest.Options.MaxCohortMembers = clamped
 	}
-	graphContext, err := e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{
-		Request: graphRequest, Interpretation: interpretation, Resolution: resolution, Binding: binding,
-		ScopeAnchorResolved: scopeAnchorResolved(familyOutcome),
-		// CARRIED, NOT RE-DERIVED (CHAOS-4736 bar 5): the frame comes off
-		// the family outcome this turn's interpretation already produced.
-		// Nothing here reconstructs a frame from the family, from Shape or
-		// from the interpretation's flat term fields.
-		Frame: familyOutcome.Frame,
-	})
-	if err != nil {
-		return InvestigationResult{}, stageError(StageGraph, fmt.Errorf("discover graph context: %w", err))
+	var graphContext GraphContext
+	var tupleCensus *WorkItemTupleCensus
+	if workItemTuple {
+		if len(resolution.Committed) != 1 || resolution.Committed[0].Kind != SubjectProject {
+			if len(resolution.Committed) > 0 {
+				familyOutcome.Gate = FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable, DeclaredMemberKind: SubjectWorkItem}
+				resolution.Committed = []SubjectRef{}
+			}
+			return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture))
+		}
+		authorized := false
+		if e.candidateVerifier != nil {
+			authorized, _ = e.candidateVerifier(ctx, principal, request.RequestedScope, binding, SubjectProject, resolution.Committed[0].CanonicalID)
+		}
+		if !authorized || ctx.Err() != nil {
+			resolution = SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}
+			return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture))
+		}
+		resolution = restrictWorkItemTupleCandidate(resolution)
+		plan.MemberKind = SubjectWorkItem
+		plan.FactKinds = []FactKind{FactStatus, FactWork}
+		graphContext, tupleCensus, err = e.discoverWorkItemTuple(ctx, principal, request, resolution, &plan)
+		if err != nil {
+			return InvestigationResult{}, stageError(StageGraph, err)
+		}
+		e.workItemTupleNarrowing(ctx, principal, &plan, request.Options.MaxCohortMembers, tupleCensus)
+	} else {
+		graphContext, err = e.graph.DiscoverContext(ctx, principal, GraphDiscoveryRequest{
+			Request: graphRequest, Interpretation: interpretation, Resolution: resolution, Binding: binding,
+			ScopeAnchorResolved: scopeAnchorResolved(familyOutcome),
+			// CARRIED, NOT RE-DERIVED (CHAOS-4736 bar 5): the frame comes off
+			// the family outcome this turn's interpretation already produced.
+			// Nothing here reconstructs a frame from the family, from Shape or
+			// from the interpretation's flat term fields.
+			Frame: familyOutcome.Frame,
+		})
+		if err != nil {
+			return InvestigationResult{}, stageError(StageGraph, fmt.Errorf("discover graph context: %w", err))
+		}
 	}
 	graphContext.Resolution = resolution
 
@@ -2631,7 +2667,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// cohort discovery commits nothing yet has perfectly good subjects to
 	// read facts for, and it must keep running.
 	subjects := investigationSubjects(resolution, graphContext.Cohort)
-	if len(subjects) == 0 {
+	if workItemTuple {
+		subjects = workItemTupleSubjects(graphContext.Cohort)
+	}
+	if len(subjects) == 0 && !workItemTuple {
 		terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture))
 		return terminal, terminalErr
 	}
@@ -2643,7 +2682,12 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// graph-derived requirements below, so mergeFactRequirements' own
 	// first-kind-wins dedup sees the composed kinds like any other
 	// requirement. See composeStatusCategoryRequirements' own doc comment.
-	statusComposedRequirements := e.composeStatusCategoryRequirements(ctx, principal, interpretation.FactRequirements, subjects)
+	var statusComposedRequirements []FactRequirement
+	if workItemTuple {
+		statusComposedRequirements = workItemTupleFactRequirements(subjects)
+	} else {
+		statusComposedRequirements = e.composeStatusCategoryRequirements(ctx, principal, interpretation.FactRequirements, subjects)
+	}
 	// CHAOS-4398 (subject-model-and-cohort-answers.md §3a, "must be resolved
 	// in PR1"): investigationScopeSubjects only fans the SUBJECT set out to
 	// cohort members -- it does not decide which fact KINDS get read. If
@@ -2684,7 +2728,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// an answer worse, which is the one thing the widening-only rule
 	// forbids.
 	var cohortRankingRequirements []FactRequirement
-	if graphContext.Cohort != nil {
+	if graphContext.Cohort != nil && !workItemTuple {
 		// A CONSTANT HINT: fact kinds are a closed vocabulary and the plan may
 		// have been carried from a stored result, so the maximum is computed at
 		// compile time rather than from the plan's own count.
@@ -2777,6 +2821,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 	}
 	factRequest := CanonicalFactRequest{
+		workItemTuple:            workItemTuple,
 		Question:                 factReadQuestion(interpretation, effectiveWindow),
 		Subjects:                 subjects,
 		Cohort:                   graphContext.Cohort,
@@ -2788,24 +2833,35 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// unreachable. A future edit that reintroduces a path to the fact read
 	// with no subjects fails here as a NAMED condition the route classifies,
 	// instead of rediscovering the unclassified 500.
-	if len(factRequest.Subjects) == 0 {
-		return InvestigationResult{}, stageError(StageFactRead, fmt.Errorf("%w: read canonical facts", ErrNoInvestigationSubjects))
+	var facts CanonicalFactBundle
+	if workItemTuple {
+		facts.Version = nonEmptyVersion("", "")
 	}
-	facts, err := e.facts.ReadFacts(ctx, principal, factRequest)
-	// CHAOS-4099 / CHAOS-4089 standing order: every scope-expansion decision
-	// this read made is reported here, immediately, whether it expanded,
-	// declined, or failed.
-	//
-	// BEFORE the error check, not after (codex review finding). A fact read
-	// that resolved its scope and THEN failed -- an unbuildable query, a
-	// provider result the merge rejected -- is precisely the run an operator
-	// most needs the expansion decisions for, and emitting after the early
-	// return would drop them exactly then. ReadFacts returns the in-progress
-	// bundle alongside its error so Scope survives; a nil Scope (an error
-	// raised before resolution ran) simply emits nothing.
-	e.recordFactScopeExpansion(ctx, principal, facts.Scope)
-	if err != nil {
-		return InvestigationResult{}, stageError(StageFactRead, fmt.Errorf("read canonical facts: %w", err))
+	if !workItemTuple || len(subjects) > 0 {
+		if len(factRequest.Subjects) == 0 {
+			return InvestigationResult{}, stageError(StageFactRead, fmt.Errorf("%w: read canonical facts", ErrNoInvestigationSubjects))
+		}
+		facts, err = e.facts.ReadFacts(ctx, principal, factRequest)
+		// CHAOS-4099 / CHAOS-4089 standing order: every scope-expansion decision
+		// this read made is reported here, immediately, whether it expanded,
+		// declined, or failed.
+		//
+		// BEFORE the error check, not after (codex review finding). A fact read
+		// that resolved its scope and THEN failed -- an unbuildable query, a
+		// provider result the merge rejected -- is precisely the run an operator
+		// most needs the expansion decisions for, and emitting after the early
+		// return would drop them exactly then. ReadFacts returns the in-progress
+		// bundle alongside its error so Scope survives; a nil Scope (an error
+		// raised before resolution ran) simply emits nothing.
+		e.recordFactScopeExpansion(ctx, principal, facts.Scope)
+		if err != nil {
+			return InvestigationResult{}, stageError(StageFactRead, fmt.Errorf("read canonical facts: %w", err))
+		}
+
+	}
+
+	if workItemTuple {
+		applyWorkItemTitles(graphContext.Cohort, facts.Facts)
 	}
 
 	// CHAOS-4398: RankCohort runs HERE -- after the fact read, before
@@ -3167,7 +3223,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// rankedForServedResult is seeded here and REPLACED by stage 3 if the
 	// retry re-ranks; e.emit publishes whichever describes the served answer.
 	var rankedForServedResult *CohortRankedEvent
-	if graphContext.Cohort != nil {
+	if graphContext.Cohort != nil && !workItemTuple {
 		var rankEvent CohortRankedEvent
 		graphContext.Cohort, rankEvent, cohortSignalCitations = RankCohort(graphContext.Cohort, facts.Facts, facts.Coverage)
 		// DEFERRED, not emitted here: stage 3 may re-rank a narrowed cohort
@@ -3179,6 +3235,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	}
 
 	assemblyParams := synthesisAssemblyParams{
+		WorkItemCensus: tupleCensus,
 		// The plan the allocator is derived from, and the allocation itself.
 		// ONE authority for the ceiling every spender writes against, derived
 		// HERE and carried -- not re-derived by each reader from the same
@@ -3236,7 +3293,16 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// stage 3 measures that. The retry re-runs assembly AND finalization, so
 	// the shape measured on the second pass is the shape that would be
 	// served on the second pass.
+	if tupleCensus != nil {
+		result = ServeWorkItemTupleCensus(result, tupleCensus)
+		// Measure the same display labels the final response will carry.
+		applyCoverageDisplayLabels(&result)
+		result = restrictWorkItemTupleEvidence(result)
+	}
 	result = e.finalizeResult(ctx, principal, result, plan, familyOutcome.Frame, facts, &pendingTelemetry, answerPassFirst, cardinality)
+	if tupleCensus != nil {
+		result = ApplyServerCompletenessAuthority(result, e.serverCompletenessAuthorityEnabled, DeriveCompletenessAuthority(result))
+	}
 	cover.events = pendingTelemetry.ObservationCover
 	result, pendingTelemetry, err = e.fitAssembledResult(ctx, principal, &plan, result, consumedAllocation, pendingTelemetry, retryBase, cardinality)
 	// Read BEFORE the error check: a stage-3 refusal returns the telemetry of
@@ -3331,8 +3397,22 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// plan itself a few lines above (the narrowing steps stage 3 appended must
 	// reach the served document), so there is nothing left for finalizeServed
 	// to stamp. It still measures, which is the half that matters.
+	if tupleCensus != nil {
+		if err := ValidateWorkItemTuplePayload(result, principal); err != nil {
+			return InvestigationResult{}, stageError(StageValidation, err)
+		}
+	}
 	result, budgetErr := e.finalizeServed(ctx, principal, BudgetAssertDecisive, result, nil, ResponseBudget{MaxItems: plan.Budget.MaxItems, MaxSerializedBytes: plan.Budget.MaxSerializedBytes})
 	if budgetErr != nil {
+		if tupleCensus != nil {
+			var refusal AnswerBudgetRefusal
+			if errors.As(budgetErr, &refusal) {
+				refusal.Family = plan.Family
+				refusal.NarrowerContinuationAxis = narrowerContinuationAxisFor(plan)
+				refusal.RetryAttempted = pendingTelemetry.RetryAttempted
+				budgetErr = refusal
+			}
+		}
 		return InvestigationResult{}, budgetErr
 	}
 	if err := result.Validate(); err != nil {
@@ -3350,7 +3430,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// know the former, so keying Save on the latter would reopen the
 		// same asymmetry from the other side.
 		epochDeltaSample := e.sampleBindingEpochDelta(ctx, principal, binding)
-		if err := e.saveResult(ctx, principal, BudgetAssertDecisive, result, reuseWatermarkSnapshot, reuseEpoch, composeTimeAxisKey(TimeAxisKeyFor(clampedRequestTime), windowSaveKeyComponent(windowCanon, effectiveWindow, windowCarried)), binding.Epoch, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture)); err != nil {
+		if err := e.saveResult(ctx, principal, BudgetAssertDecisive, result, reuseWatermarkSnapshot, reuseEpoch, composeTimeAxisKey(TimeAxisKeyFor(clampedRequestTime), windowSaveKeyComponent(windowCanon, effectiveWindow, windowCarried)), binding.Epoch, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture, finalWorkItemTupleCensus(tupleCensus, result.Cohort))); err != nil {
 			// CHAOS-3927 P4 (design brief §2.1): a decisive result carrying
 			// confirmed structure can still lose the atomic (org,
 			// prior_result_id, member) supersession claim to a concurrent

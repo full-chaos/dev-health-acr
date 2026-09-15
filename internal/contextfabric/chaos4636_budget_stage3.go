@@ -199,7 +199,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// single-subject investigation has no cohort, so `declined` is
 		// always nothing_to_narrow here and the refusal was reached
 		// without any content reduction ever being attempted.
-		attempt, accountingErr := e.planCandidateNarrowing(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts, &firstPass, answerPassSecond, cardinality)
+		attempt, accountingErr := e.planCandidateNarrowing(ctx, principal, plan, params.Frame, result, budget, measured, params.Facts, &firstPass, answerPassSecond, cardinality, params.WorkItemCensus)
 		if accountingErr != nil {
 			return InvestigationResult{}, firstPass, accountingErr
 		}
@@ -240,6 +240,17 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// still carries real quota fields rather than the zeros both
 		// refusal arms used to emit.
 		return InvestigationResult{}, firstPass, e.planRefusal(ctx, principal, plan, measured, false, grouped, narrowed.Basis, before, after, declined, attempt.Declined)
+	}
+
+	// Selection records the first attempt's measured trigger. The retry has
+	// not executed yet; its outcome remains on the final narrowing record.
+	if e.telemetry != nil {
+		selected := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
+			before, after, grouped, false, overrun, narrowed.Basis)
+		selected.recordMeasurement(measured)
+		selected.PredictedItems = PredictedItemsForPlan(*plan, before)
+		selected.DeadlineReserved = e.synthesisDeadlineReserve > 0
+		e.telemetry.RecordSynthesisRetrySelection(ctx, principal, selected)
 	}
 
 	e.recordPlanNarrowingStep(plan, PlanNarrowing{
@@ -284,7 +295,10 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// caller's copy: equal on every honest input, and blind to any fault the
 	// producer applied to its own, which is the defect keystone #5 found in
 	// narration.
+	// This records execution, independently of whether the retry fit.
+	firstPass.RetryAttempted = true
 	retried, consumedRetryAllocation, retryPending, retryCardinality, retryErr := e.synthesizeAndAssemble(ctx, principal, retryParams)
+	retryPending.RetryAttempted = firstPass.RetryAttempted
 	if retryErr != nil {
 		// PROPAGATE the retry's own error. An earlier revision discarded it
 		// and returned a budget refusal, so a transient ErrModelUnavailable
@@ -361,7 +375,16 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// NARROWED cohort, and the number must describe the document that will be
 	// served. This is the recomputation the pre-synthesis move preserves --
 	// one per pass, each against its own member set.
+	if params.WorkItemCensus != nil {
+		retried = ServeWorkItemTupleCensus(retried, params.WorkItemCensus)
+		// Measure the same display labels the final response will carry.
+		applyCoverageDisplayLabels(&retried)
+		retried = restrictWorkItemTupleEvidence(retried)
+	}
 	retried = e.finalizeResult(ctx, principal, retried, *plan, params.Frame, retryParams.Facts, &retryPending, answerPassSecond, retryCardinality)
+	if params.WorkItemCensus != nil {
+		retried = ApplyServerCompletenessAuthority(retried, e.serverCompletenessAuthorityEnabled, DeriveCompletenessAuthority(retried))
+	}
 	// READ BACK FROM THE PRODUCER, not from the params and not from the local
 	// `retryAllocation`, and the difference is the entire lesson of this class.
 	//
@@ -397,7 +420,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	outcomeAttempt := outcomeNarrowingAttempt{Measured: retryMeasured}
 	if retryOverrun != contractsv1.ContextFabricBudgetFits {
 		var accountingErr error
-		outcomeAttempt, accountingErr = e.planCandidateNarrowing(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts, &retryPending, answerPassThird, retryCardinality)
+		outcomeAttempt, accountingErr = e.planCandidateNarrowing(ctx, principal, plan, params.Frame, retried, budget, retryMeasured, retryParams.Facts, &retryPending, answerPassThird, retryCardinality, params.WorkItemCensus)
 		if accountingErr != nil {
 			return InvestigationResult{}, retryPending, accountingErr
 		}
@@ -412,7 +435,9 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	if outcomeAttempt.Served {
 		e.recordCandidateNarrowing(ctx, principal, plan, outcomeAttempt, retryOverrun, grouped, narrowed.Basis, before, after, RetryDeclinedNotApplicable, true, false)
 		retryRanked := narrowed.Ranked
-		retryPending.CohortRanked = &retryRanked
+		if params.WorkItemCensus == nil {
+			retryPending.CohortRanked = &retryRanked
+		}
 		return outcomeAttempt.Result, retryPending, nil
 	}
 	// ONE DOCUMENT: the RETRY's, which is what the refusal below reports.
@@ -474,7 +499,9 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// "telemetry describes a different artifact than the one served" class the
 	// deferred emitters fix.
 	retryRanked := narrowed.Ranked
-	retryPending.CohortRanked = &retryRanked
+	if params.WorkItemCensus == nil {
+		retryPending.CohortRanked = &retryRanked
+	}
 	return retried, retryPending, nil
 }
 
@@ -581,7 +608,12 @@ func narrowSynthesisInput(params synthesisAssemblyParams, plan *AnswerPlan) narr
 	}
 	// Re-rank: RankCohort min-max normalizes workload WITHIN the cohort, so
 	// scores computed against the wider member set do not describe this one.
-	rankedCohort, rankEvent, citations := RankCohort(cohort, facts.Facts, facts.Coverage)
+	rankedCohort := cohort
+	var rankEvent CohortRankedEvent
+	var citations cohortMemberSignalCitations
+	if params.WorkItemCensus == nil {
+		rankedCohort, rankEvent, citations = RankCohort(cohort, facts.Facts, facts.Coverage)
+	}
 	graph.Cohort = rankedCohort
 	var retention FactRetentionDecision
 	facts.Facts, retention = RetainFactsForCohortWithDecision(facts.Facts, rankedCohort, removed, params.Resolution.Committed)

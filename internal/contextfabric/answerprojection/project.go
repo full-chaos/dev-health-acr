@@ -122,8 +122,9 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 	// reasons behind the answer.
 	clamp := &clamper{}
 	index := newEvidenceIndex(bounds.MaxEvidenceRefs)
-	drivers, driversOmitted, withheldOmitted, facts, factsOmitted := projectDrivers(result, bounds, index, clamp)
-	cohort, cohortOmitted, cohortReasonsOmitted, cohortGroupsOmitted, cohortSelectionBasis := projectCohort(result, bounds, index, clamp)
+	drivers, driversOmitted, withheldOmitted, facts := projectDrivers(result, bounds, index, clamp)
+	cohort, cohortOmitted, cohortReasonsOmitted, cohortGroupsOmitted, cohortSelectionBasis := projectCohort(result, bounds, index, clamp, &facts)
+	factsOmitted := countProjectedFactsOmitted(result, facts)
 	clarification, candidatesOmitted, candidateReasonsOmitted := projectClarification(result, bounds, clamp)
 	limitations, limitationsOmitted := boundedLimitations(result.Limitations, clamp)
 	// The engine's own displacement counts too (CHAOS-3746 round-16).
@@ -311,7 +312,7 @@ func declaresDrop(budget contractsv1.ContextFabricProjectionBudget) bool {
 // drivers are admitted one at a time, and a driver whose claims would push
 // the fact set past the budget is dropped instead -- counted as an omitted
 // driver, which is the honest description of what happened.
-func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds Budget, index *evidenceIndex, clamp *clamper) (drivers []contractsv1.ContextFabricProjectedDriver, driversOmitted, withheldOmitted int, facts []contractsv1.ContextFabricProjectedFact, factsOmitted int) {
+func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds Budget, index *evidenceIndex, clamp *clamper) (drivers []contractsv1.ContextFabricProjectedDriver, driversOmitted, withheldOmitted int, facts []contractsv1.ContextFabricProjectedFact) {
 	claims := make(map[string]contractsv1.ContextFabricClaimedFact, len(result.ClaimedFacts))
 	for _, fact := range result.ClaimedFacts {
 		claims[fact.ClaimID] = fact
@@ -424,9 +425,8 @@ func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds 
 	}
 	// THE SERVER-COMPUTED CLAIMS, CARRIED BY AN EXPLICIT ALLOW-LIST.
 	//
-	// Everything above copies a claim only because some retained DRIVER cites
-	// it, which is right for the claims this projection is about: a claim is
-	// evidence for a judgment, and a judgment nobody kept needs no evidence.
+	// Driver claims are copied above; direct unranked work-item claims are
+	// admitted with their cohort members below.
 	//
 	// A server-computed claim has no driver and never will. It asserts
 	// something the server measured over the served member set rather than
@@ -436,8 +436,8 @@ func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds 
 	// carried it. The count reached the API and not the answer.
 	//
 	// An ALLOW-LIST by claim kind, not a widening of the citation rule. The
-	// rule is correct for producer-read claims and stays exactly as it is;
-	// this names the one kind that is exempt because the server minted it, so
+	// rule stays in place outside the direct work-item member path;
+	// this names the kind independently eligible because the server minted it, so
 	// a future uncited model claim cannot ride in behind it. Bounded by
 	// MaxFacts like everything else, and deduplicated against what the drivers
 	// already brought, so a claim some driver did happen to cite is carried
@@ -466,34 +466,8 @@ func projectDrivers(result contractsv1.ContextFabricInvestigationResult, bounds 
 			TimeSeriesTable: claim.TimeSeriesTable,
 		})
 	}
-	// Claimed facts the canonical result carried but no retained driver
-	// cites are not "omitted" in the sense that matters -- they were never
-	// part of what this projection asserts. Only facts a dropped driver
-	// would have brought are counted, which is the count a caller can act
-	// on.
-	factsOmitted = countUncitedClaims(result, retainedClaims)
-	return drivers, driversOmitted, withheldOmitted, facts, factsOmitted
-}
-
-// countUncitedClaims counts claimed facts cited by at least one non-withheld
-// canonical driver that the projection did not retain.
-func countUncitedClaims(result contractsv1.ContextFabricInvestigationResult, retained map[string]struct{}) int {
-	cited := make(map[string]struct{})
-	for _, driver := range result.Drivers {
-		if driver.Standing == contractsv1.ContextFabricDriverWithheld {
-			continue
-		}
-		for _, claimID := range driver.ClaimedFactIDs {
-			cited[claimID] = struct{}{}
-		}
-	}
-	omitted := 0
-	for claimID := range cited {
-		if _, ok := retained[claimID]; !ok {
-			omitted++
-		}
-	}
-	return omitted
+	// Eligible omissions are counted after member/fact admission in Project.
+	return drivers, driversOmitted, withheldOmitted, facts
 }
 
 // projectCohort narrows a cohort to its leading members. Total always
@@ -509,12 +483,17 @@ func countUncitedClaims(result contractsv1.ContextFabricInvestigationResult, ret
 // rather than logged because this package is pure by a binding constraint
 // and has no sink to log to -- and because the caller a basis is owed is the
 // consumer reading the projection, not only an operator.
-func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds Budget, index *evidenceIndex, clamp *clamper) (*contractsv1.ContextFabricProjectedCohort, int, int, int, contractsv1.ContextFabricNarrowingBasis) {
+func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds Budget, index *evidenceIndex, clamp *clamper, facts *[]contractsv1.ContextFabricProjectedFact) (*contractsv1.ContextFabricProjectedCohort, int, int, int, contractsv1.ContextFabricNarrowingBasis) {
 	if result.Cohort == nil {
 		return nil, 0, 0, 0, ""
 	}
 	canonical := *result.Cohort
 	reasonsOmitted := 0
+	direct := workItemDirectClaims(result)
+	retainedClaims := make(map[string]struct{}, len(*facts))
+	for _, fact := range *facts {
+		retainedClaims[fact.ClaimID] = struct{}{}
+	}
 	// CHAOS-4636: the member budget is ALLOCATED ACROSS GROUPS before
 	// anything is truncated within them. Without this, the leading-prefix
 	// cut below could return every member of the first group and none of
@@ -546,12 +525,27 @@ func projectCohort(result contractsv1.ContextFabricInvestigationResult, bounds B
 				continue
 			}
 		}
+		// Direct member facts and member evidence are admitted together. A
+		// present status that cannot fit must not look absent at source.
+		var additional []contractsv1.ContextFabricClaimedFact
+		for _, fact := range direct[subjectIdentity{member.Subject.Kind, member.Subject.CanonicalID}] {
+			if _, exists := retainedClaims[fact.ClaimID]; !exists {
+				additional = append(additional, fact)
+			}
+		}
+		if len(*facts)+len(additional) > bounds.MaxFacts {
+			break
+		}
 		// Same rule as drivers: a member whose citations do not fit the
 		// evidence index is dropped whole rather than kept with dangling
 		// references. Ranks stay strictly increasing because members are
 		// only ever dropped from consideration, never reordered.
 		if !index.admit(member.EvidenceRefIDs) {
 			break
+		}
+		for _, fact := range additional {
+			*facts = append(*facts, projectedScalarFact(fact))
+			retainedClaims[fact.ClaimID] = struct{}{}
 		}
 		reasons, reasonsDropped := clamp.strings(member.InclusionReasons, contractsv1.ContextFabricProjectedInclusionReasonsMaxCount, contractsv1.ContextFabricProjectedInclusionReasonMaxLength)
 		reasonsOmitted += reasonsDropped
@@ -1241,9 +1235,8 @@ func retainPastTheCut(kept, dropped []clampedNarrative, retain func(string) bool
 // ONE MEMBER, and it is a list rather than a boolean on the claim so that
 // adding a second server-computed kind is a one-line change here instead of a
 // new rule at the copy site. A kind is on this list only when the SERVER mints
-// it -- a model-authored claim reaches the answer by being cited, which is the
-// rule that keeps an uncited assertion out of a document that cannot show its
-// workings.
+// it. Other model-authored claims require driver citations, apart from the
+// scoped unranked work-item exception admitted with member evidence above.
 func projectionCarriesUncited(kind contractsv1.ContextFabricFactKind) bool {
 	return kind == contractsv1.ContextFabricFactCardinality
 }

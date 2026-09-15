@@ -389,6 +389,11 @@ type PlanTelemetry interface {
 	// diagnosable and a single summary field could not represent two stages
 	// acting for different reasons.
 	RecordPlanNarrowing(ctx context.Context, principal storage.Principal, event PlanNarrowingEvent)
+	// RecordSynthesisRetrySelection reports the bounded retry cohort selected
+	// after the first synthesis measurement. It fires before the retry starts,
+	// so RetryAttempted, RetryFit and RetryFailed are all false on this event;
+	// the later plan-narrowing events retain the execution outcome fields.
+	RecordSynthesisRetrySelection(ctx context.Context, principal storage.Principal, event PlanNarrowingEvent)
 	// RecordGroupedCohortCompleteness (CHAOS-4733) reports the outcome of
 	// folding a grouped cohort's completeness at BuildCohortGroups +
 	// ApplyGroupedCohortCompleteness time: whether the pre-grouping cohort

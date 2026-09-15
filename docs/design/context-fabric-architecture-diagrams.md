@@ -2160,9 +2160,13 @@ this sequence inside `synthesizeAndAssemble`:
 ```mermaid
 flowchart LR
     RD["1 retrieval degradation"] --> TL["2 temporal"] --> SO["3 status override"]
-    SO --> FS["4 fact scope"] --> GR["5 GROUPING REFUSAL"] --> CA["6 commit affirmation"]
+    SO --> FS["4 fact scope"] --> GR["5 GROUPING REFUSAL"] --> CA["6 tuple-aware commit affirmation<br/>census-bearing tuple skips anchor status"]
     CA --> V["Validate → Save → served"]
 ```
+
+`applyCommitAffirmationForWorkItemTuple` is the final wrapper. It calls the
+ordinary composer when there is no work-item census; a census-bearing tuple
+skips anchor-status affirmation because its content concerns retained members.
 
 So the grouping refusal is fifth of six, and **commit affirmation is the only
 composer that runs after it** — which is precisely why that one, and no other,
@@ -2386,17 +2390,17 @@ flowchart TD
   DENIAL --> RESULT
   RESULT --> EVENTS["configured slog Info path<br/>eventspec declaration + certifier<br/>finite fields; missing remains distinct from zero"]
   RESULT --> RESPONSE["response owner holds through HTTP writes<br/>or direct Engine return"]
-  RESPONSE --> RUNTIME["hosted Engine tuple reuse is wired<br/>fresh tuple dispatch remains inactive<br/>reuse runs no S2 or S3"]
+  RESPONSE --> RUNTIME["hosted Engine tuple reuse and fresh dispatch are wired<br/>fresh dispatch reads retained status/title content<br/>reuse runs no S2 or S3"]
 
   classDef fixed fill:#14532d,stroke:#22c55e,color:#ffffff
   classDef refuse fill:#7f1d1d,stroke:#ef4444,color:#ffffff
   classDef gap fill:#78350f,stroke:#f59e0b,color:#ffffff
   class LEASE,RESOURCE,SQL,COUNTS,VALIDATE,EXACT,FLOOR,SERVE,RESULT,EVENTS fixed
   class GREFUSE,DREFUSE,UNMEASURED,VUNMEASURED,XUNMEASURED,DENIAL refuse
-  class RUNTIME gap
+  class RUNTIME fixed
 ```
 
-**Caption.** The reader is used by the stored tuple reuse branch.
+**Caption.** The reader is used by stored tuple reuse and fresh dispatch.
 It accepts a project anchor, the live authenticated principal, and the raw
 repository selector. It derives the library authorization scope inside S1,
 then uses the same rendered authorization expression for the mask and the
@@ -2423,20 +2427,18 @@ reach the configured Info collection path and eventspec certifier with finite
 fields only.
 
 **Activation boundary.** Hosted composition constructs the membership reader
-for tuple reuse. Fresh tuple admission and dispatch remain inactive. Reuse
-reads only S1, and serves stored member status/title facts. A later fresh-path
-change must preserve the same authorization renderer and response owner.
+for tuple reuse and the narrow fresh tuple described in §14. Reuse reads only
+S1 and serves stored member status/title facts. Fresh dispatch uses the same
+authorization renderer and response owner, then reads retained-member content.
 
 **Anchors.** The request/result/port and telemetry types are in
 `internal/contextfabric/work_item_membership.go:15-145,147-287`; admission
 and lease behavior is in `internal/contextfabric/work_item_membership_gate.go:8-106`;
-the adapter starts at
-`internal/contextfabric/devhealthfacts/work_item_membership.go:39`, S1 at
-`:66`, settings at `:207`, census validation at `:248`, and the statement at
-`:479`. Shared resource constants are in
-`internal/contextfabric/devhealthfacts/workitem_scope.go:125`. The certified
-Info declarations start at `internal/contextfabric/eventspec/spec.go:1717`
-and `:1749`, with their construction generated in
+the adapter, settings, census validation, and query are in
+`internal/contextfabric/devhealthfacts/work_item_membership.go`; shared resource
+constants are in `internal/contextfabric/devhealthfacts/workitem_scope.go`. The
+certified `WorkItemMembershipS1` and `WorkItemMembershipGate` declarations are in
+`internal/contextfabric/eventspec/spec.go`, with constructors generated in
 `internal/contextfabric/eventspec/zz_generated.go`.
 
 **Update rule.** Any later activation, SQL-shape change, admission-bound
@@ -2507,8 +2509,8 @@ encoding so an identical save remains idempotent after PostgreSQL storage.
 An unavailable nested census does not erase an available semantic reading. The digest covers sorted raw grants
 and requested repository selectors; project/team scope reaches live anchor
 authorization. Neither reuse nor by-id rewrites the stored row. Tuple reuse
-never calls ResolveSubjects or DiscoverContext. Fresh tuple dispatch remains
-outside this change.
+never calls ResolveSubjects or DiscoverContext. Fresh tuple dispatch follows
+the separate admission and read path in §14.
 
 **Construction anchors:** `internal/runtime/hosted/open.go` constructs
 `NewWorkItemMembershipReader` when the ClickHouse query client is present and
@@ -2521,6 +2523,71 @@ loads semantic state for reuse. `internal/api/context_fabric_result_routes.go`
 uses `ServeStoredWorkItemTuple`; `response_owner_middleware.go` encloses recovery.
 `work_item_response_owner.go` owns registration and completion, and
 `devhealthfacts/work_item_membership.go` registers before S1.
+
+
+## 14 — Fresh project work-item tuple
+
+```mermaid
+flowchart TD
+  REUSE["Try reuse first"] -->|"miss: release discarded lease"| INTERPRET["Validate and interpret frame + TimeContext"]
+  INTERPRET --> POLICY["LookupQuestionFamily: private tuple policy<br/>true only for scoped_cohort_status; unknown denies<br/>question-family.v3 reuse/carry fence"]
+  POLICY --> INITIAL{"Initial tuple admission:<br/>children_of_scope + work_item<br/>assess_state/count_or_aggregate only<br/>current intent AND current axis<br/>qualifier absent"}
+  INITIAL -->|"refused / invalid"| REFUSE["existing refusal; no ResolveSubjects or S1"]
+  INITIAL -->|"prospective"| FINAL["Final family routing + accepted continuation + plan carry<br/>lookup final family policy; tighten gate using policy and effective time"]
+  FINAL -->|"refused"| REFUSE
+  FINAL -->|"passed"| RESOLVE["ResolveSubjects<br/>project-only anchor answerability"]
+  RESOLVE --> AUTH{"Exactly one project + live CandidateVerifier<br/>current principal, raw scope, pinned binding"}
+  AUTH -->|"not authorized / unresolved"| TERMINAL["existing terminal; no S1 or facts<br/>preserve accepted prospective reading, no census"]
+  AUTH -->|"authorized"| S1["BeginWorkItemMembership<br/>register lease with response owner immediately<br/>bounded S1 census; no DiscoverContext"]
+  S1 -->|"unmeasured"| UNKNOWN["nil cohort; no fact read or count claim"]
+  S1 -->|"measured zero"| ZERO["non-nil empty cohort; count 0; no fact read"]
+  S1 -->|"measured members"| RETAIN["M in canonical ID order<br/>K = min of 200 and positive plan/request caps<br/>record canonical_id_lexical narrowing"]
+  RETAIN --> CONTENT["FactStatus + FactWork<br/>each requirement explicitly names M<br/>no anchor facts, expansion or ranking"]
+  CONTENT --> PARTIAL["retain M across content failures<br/>successful status/title evidence; ID title fallback"]
+  UNKNOWN --> ASSEMBLE
+  ZERO --> ASSEMBLE
+  PARTIAL --> ASSEMBLE["assemble and fit; retry may only narrow M<br/>no RankCohort at either attempt"]
+  ASSEMBLE -->|"retry selected"| SELECT["Info: initial measured overrun + selected narrowing<br/>before second synthesis; retry outcome flags false"]
+  SELECT --> ASSEMBLE
+  ASSEMBLE -->|"fits with required anchor"| SAVE["final retained-member evidence closure<br/>D47 served from final canonical cohort<br/>save raw-scope census + digest"]
+  ASSEMBLE -->|"still over budget / retry declined"| BUDGET["preserve sole project candidate<br/>existing explained budget refusal; no save"]
+  SAVE --> WRITE["HTTP encode and synchronous write<br/>creator completes lease owner at exit"]
+```
+
+Initial frame admission can replace the ordinary unsupported-kind refusal only
+for the complete tuple. Later family routing and family-only plan carry can
+restrict a passed gate but cannot promote an earlier refusal. Existing accepted
+clarification composition retains its own frame and gate precedence. Every
+refusing tuple ends before either ordinary or offers-only subject resolution.
+
+S1 owns the measured population. Content gaps do not erase measured membership,
+and an unmeasured read does not imply zero. An exact count remains the full
+measured population when the answer retains fewer members; the existing count
+sentence uses “work item” or “work items.” A floor census says “Counted at least
+2000 work items.” using its measured lower bound. Health remains independently required
+for `assess_state`, including when its own evidence is unavailable.
+
+The plan-cap reduction (for example, 234 to 200) is recorded separately from
+measured population-to-retained narrowing. Budget reduction cannot remove the
+sole authorized project candidate: if the answer still exceeds the ceiling
+after its one bounded retry, or a retry is declined, it returns the existing
+explained budget refusal. When a retry is selected, the configured Info logger
+records the initial measured overrun before the second synthesis. This selection
+does not assert that the retry ran or fit; the final narrowing record reports
+the executed outcome separately. Before membership, an ordinary subjectless or window
+clarification can preserve the accepted reading only without a census,
+committed anchor, cohort, or answer-bearing evidence.
+
+**Construction anchors:** `RuntimeQuestionInterpreter.resolveFrame` and
+`finishFamilyResolution` in `model_runtime.go` establish initial and final
+admission; `work_item_tuple_admission.go` owns the narrow conditions.
+`role_answerability.go` restricts the anchor slot to projects.
+`Engine.Investigate` checks the final gate before resolution and dispatches
+immediately after live anchor verification. `work_item_dispatch.go` builds the
+retained set, explicit content requests and census; `fact_registry.go` rejects
+empty or foreign tuple subjects. `chaos4636_synthesis_assembly.go` carries the
+census through assembly and `chaos4636_budget_stage3.go` excludes tuple ranking
+on retries. Save, reuse, by-id and response-owner boundaries remain those in §13.
 
 
 ## Sources

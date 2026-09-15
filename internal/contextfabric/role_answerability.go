@@ -227,6 +227,9 @@ func (r answerabilityReading) slots() []answerabilitySlot {
 			return nil
 		}
 		member := vocabularyKind(expression.Scoped.MemberKind)
+		if member == SubjectWorkItem {
+			return []answerabilitySlot{{Role: answerabilityRoleAnchor, State: answerabilityRoleOpen, Kind: SubjectProject}, {Role: answerabilityRoleMember, State: answerabilityRolePopulation, Kind: member}}
+		}
 		return []answerabilitySlot{
 			{Role: answerabilityRoleAnchor, State: answerabilityRoleOpen, Kind: vocabularyKind(r.AnchorKind), Excluded: member},
 			{Role: answerabilityRoleMember, State: answerabilityRolePopulation, Kind: member},

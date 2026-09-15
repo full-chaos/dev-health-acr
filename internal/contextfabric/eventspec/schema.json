@@ -1,5 +1,118 @@
 [
   {
+    "id": "contextfabric.answer_display",
+    "msg": "context fabric answer display",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id",
+      "surface"
+    ],
+    "bounded_aggregation": "one line after bounded projection validation succeeds and before response delivery; canonical-only retrieval and requests rejected before a validated projection emit none; markdown_rendered distinguishes API projection from MCP rendering",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "surface",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "result_by_id",
+          "investigate_question"
+        ]
+      },
+      {
+        "key": "canonical_members",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "projected_members",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "canonical_eligible_facts",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "projected_facts",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "facts_omitted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "members_omitted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "evidence_omitted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "max_facts",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "max_members",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "max_evidence",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "floor_counts",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "recorded_counts",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "count_basis",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "absent",
+          "floor",
+          "recorded",
+          "mixed"
+        ]
+      },
+      {
+        "key": "projection_truncated",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "markdown_rendered",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "markdown_truncated",
+        "type": "bool",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.requirement_outcome_transition",
     "msg": "context fabric requirement outcome transition",
     "level": "info",
@@ -533,6 +646,214 @@
         "key": "request_id",
         "type": "string",
         "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.synthesis_retry_selection",
+    "msg": "context fabric synthesis retry selected",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per request, emitted when the first synthesis measurement selects a bounded retry cohort and before the retry executes; requests that fit or decline a retry emit none.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "family",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "family_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "stage",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "basis",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "basis_observed",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "before",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "after",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "groups",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "overrun",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "measured_items",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "predicted_items",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "attribution_global",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "attribution_member",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "attribution_group",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "attribution_multi_group",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "measured_bytes",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "max_items",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "max_serialized_bytes",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "retry_attempted",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "retry_fit",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "retry_failed",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "refusal_planned",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "deadline_reserved",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "retry_declined",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "narrower_continuation_axis",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome_reduction_applied",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "outcome_reduction_inner_fit",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "outcome_items_served",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "outcome_items_declared",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "outcome_completeness_state",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome_reduction_declined",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "ledger_status",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "quota_availability",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "quota_group_allowance",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "quota_groups_granted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "quota_groups_measured",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "quota_groups_over_allowance",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
       }
     ]
   },

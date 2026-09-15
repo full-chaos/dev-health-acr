@@ -1231,6 +1231,16 @@ func requirementDerivationLogAttrs(summary RequirementDerivationSummary) []any {
 // was too generous" and "synthesis produced more than the headroom allowed"
 // indistinguishable, which is the diagnosis an over-budget answer needs.
 func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal storage.Principal, event PlanNarrowingEvent) {
+	args := planNarrowingLogAttrs(ctx, principal, event)
+	t.logger.InfoContext(ctx, "context fabric plan narrowing", args...)
+}
+
+// planNarrowingLogAttrs is the shared, content-safe field formatter for the
+// ordinary plan-narrowing line and the pre-execution retry-selection line.
+// Keeping one field list is deliberate: both lines describe the same measured
+// PlanNarrowingEvent, while their slog identities distinguish the decision
+// stage from the later retry outcome.
+func planNarrowingLogAttrs(ctx context.Context, principal storage.Principal, event PlanNarrowingEvent) []any {
 	args := []any{
 		"org_id", SanitizeLogAttr(principal.OrgID),
 		"family", SanitizeLogAttr(string(event.Family)),
@@ -1313,8 +1323,24 @@ func (t SlogEngineTelemetry) RecordPlanNarrowing(ctx context.Context, principal 
 		"quota_groups_measured", event.QuotaGroupsMeasured,
 		"quota_groups_over_allowance", event.QuotaGroupsOverAllowance,
 	}
-	args = append(args, requestIDLogAttrs(ctx)...)
-	t.logger.InfoContext(ctx, "context fabric plan narrowing", args...)
+	return append(args, requestIDLogAttrs(ctx)...)
+}
+
+// SynthesisRetrySelectionLogMessage is the stable Info identity for the
+// pre-execution retry-selection decision. It is intentionally distinct from
+// RecordPlanNarrowing's identity: that line reports the narrowing stage and
+// later retry outcome, while this line says that the measured first pass
+// caused a retry cohort to be selected.
+const SynthesisRetrySelectionLogMessage = "context fabric synthesis retry selected"
+
+// RecordSynthesisRetrySelection emits the measured plan event at the moment a
+// retry cohort is selected, before the second synthesis call executes. The
+// fields deliberately match RecordPlanNarrowing so operators can compare the
+// selected cohort with the later retry outcome without a second measurement
+// vocabulary. The caller supplies an existing configured logger through this
+// sink; this method does not consult or replace the process default logger.
+func (t SlogEngineTelemetry) RecordSynthesisRetrySelection(ctx context.Context, principal storage.Principal, event PlanNarrowingEvent) {
+	t.logger.InfoContext(ctx, SynthesisRetrySelectionLogMessage, planNarrowingLogAttrs(ctx, principal, event)...)
 }
 
 // RecordGroupedCohortCompleteness (CHAOS-4733) emits one grouped-cohort
