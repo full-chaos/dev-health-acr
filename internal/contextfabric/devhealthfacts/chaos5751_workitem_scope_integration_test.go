@@ -10,6 +10,7 @@ package devhealthfacts_test
 import (
 	"context"
 	"errors"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -290,6 +291,10 @@ func TestChaos5751SubsecondDeadlineUsesClientContextWithoutRounding(t *testing.T
 
 	probeCtx, probeCancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer probeCancel()
+	probeDeadline, deadlineSet := probeCtx.Deadline()
+	if !deadlineSet {
+		t.Fatal("sub-second probe context has no deadline")
+	}
 	started := time.Now()
 	rows, err := query.Query(probeCtx, "SELECT sleepEachRow(1) FROM numbers(3) SETTINGS max_block_size = 1", nil)
 	if err == nil {
@@ -303,11 +308,14 @@ func TestChaos5751SubsecondDeadlineUsesClientContextWithoutRounding(t *testing.T
 	if err == nil {
 		t.Fatal("sub-second real-client query unexpectedly completed")
 	}
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("sub-second real-client query error = %v, want context.DeadlineExceeded", err)
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("sub-second real-client query error = %v, want context.DeadlineExceeded or os.ErrDeadlineExceeded", err)
 	}
 	elapsed := time.Since(started)
 	t.Logf("sub-second deadline control: query_error_type=%T query_error=%v elapsed=%s", err, err, elapsed)
+	if elapsed < probeDeadline.Sub(started) {
+		t.Fatalf("sub-second real-client query stopped after %s, before its context deadline (%s)", elapsed, probeDeadline.Sub(started))
+	}
 	if elapsed >= time.Second {
 		t.Fatalf("sub-second real-client query took %s, want cancellation before one second", elapsed)
 	}
