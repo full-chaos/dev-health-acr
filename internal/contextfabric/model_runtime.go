@@ -1718,6 +1718,14 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 
 	if r.FrameTelemetry != nil {
 		event := FrameValidationEventFrom(proposed, result, emittedShape, requirements)
+		// `gate` is the ENFORCED verdict this call already decided above
+		// (DecideFrameGate, then the work-item tuple's own refinement) and
+		// receipt.FrameGateOutcome already carries it. FrameValidationEventFrom
+		// cannot see it -- it only has `result` -- so it re-derives the
+		// pre-tuple verdict internally; overwriting it here is what keeps
+		// this line and the receipt reading the SAME decision rather than
+		// two, the exact drift this package's gate seam exists to close.
+		event.Gate = gate
 		// The requested-versus-proposed half, from THIS receipt and THIS
 		// proposal, judged by the gate this event already carries -- one
 		// verdict, read once.
