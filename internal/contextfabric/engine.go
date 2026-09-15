@@ -1648,7 +1648,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if bypass := reuseBypassReason(request, structureCanon); bypass != "" {
 		e.recordReuseBypass(ctx, principal, bypass)
 	} else {
-		reused, ok, workItemTuple, reuseErr := e.tryReuse(ctx, principal, request, clampedRequestTime, windowCanon.KeyComponent, windowCanon.KeyEncoding, binding)
+		reused, ok, workItemTuple, reusedReading, reuseErr := e.tryReuseWithReading(ctx, principal, request, clampedRequestTime, windowCanon.KeyComponent, windowCanon.KeyEncoding, binding)
 		if reuseErr != nil {
 			return InvestigationResult{}, stageError(StageValidation, reuseErr)
 		}
@@ -1695,6 +1695,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// the guard in ComputeMembershipCardinality states.
 			if !workItemTuple {
 				reusedCardinality, _ := ComputeMembershipCardinality(reused.Cohort, 0, reusedPlanNarrowing(reused))
+				// The same scope decision the fresh path applies, over the frame
+				// of the reading persisted beside the stored row and that row's
+				// own resolution.
+				reusedCardinality = scopedMembershipCardinality(reusedCardinality, DecideCountPopulationScope(reusedReading.Frame, reusedReading.AnchorKind, reused.SubjectResolution, nil))
 				if backfilled, _, _ := appendMembershipCardinality(reused.Completeness.Outcomes, reusedCardinality, reusedPlanNarrowing(reused)); len(backfilled) > 0 {
 					reused.Completeness.Outcomes = backfilled
 				}
@@ -1750,6 +1754,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				if event, counted := membershipCardinalityEventFrom(reused, reusedPlanFamily(reused)); counted {
 					e.telemetry.RecordMembershipCardinality(ctx, principal, event)
 				}
+				// A stored document carries no pass to take a decision from, so
+				// the decision is the backfill's: the stored reading's frame and
+				// the stored resolution.
+				e.recordCountPopulationScope(ctx, principal, reused, DecideCountPopulationScope(reusedReading.Frame, reusedReading.AnchorKind, reused.SubjectResolution, nil), true)
 			}
 			// chris's promise of record, verbatim: "reuse and stored reads
 			// are re-validated against the current budget and refuse if they
@@ -3243,7 +3251,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// checking a replacement.
 		Plan:       plan,
 		Allocation: AllocateItems(plan, groupCountOf(graphContext.Cohort), cohortMemberCount(graphContext.Cohort)),
-		Request:    request, Interpretation: interpretation, Frame: familyOutcome.Frame,
+		Request:    request, Interpretation: interpretation, Frame: familyOutcome.Frame, ScopeAnchorKind: familyOutcome.WinningSample.ScopeAnchorKind,
 		Graph: graphContext, Facts: facts,
 		Resolution: resolution, CohortSignalCitations: cohortSignalCitations,
 		EffectiveWindow: effectiveWindow, WindowCanon: windowCanon, WindowCarried: windowCarried,
@@ -3349,6 +3357,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		if event, counted := membershipCardinalityEventFrom(result, plan.Family); counted {
 			e.telemetry.RecordMembershipCardinality(ctx, principal, event)
 		}
+		// Whether that count describes the requested population, from the
+		// same point and off the same served document.
+		e.recordCountPopulationScope(ctx, principal, result, cardinality.Scope, false)
 		// The read-population lines, emitted from the SAME once-per-served-
 		// result point and for the same reason the cardinality above is: the
 		// derivation is pure and could run inside finalizeResult, but

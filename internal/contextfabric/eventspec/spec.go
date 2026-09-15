@@ -1943,4 +1943,45 @@ var All = []Event{
 	WorkItemMembershipGate,
 	WorkItemReuse,
 	WorkItemStoredServing,
+	CountPopulationScope,
+}
+
+// CountPopulationScope (CHAOS-5775) is the Info line for whether a served
+// answer's counted member set is the population its frame asks about: the
+// requested population (expression, member kind, requirement), what resolution
+// and retrieval measured, the decision, and what the served document then
+// states. Built by contextfabric.CountPopulationScopeLogArgs, emitted once per
+// served document that owes a count, on the fresh decisive exit and on reuse.
+var CountPopulationScope = Event{
+	ID:                 "contextfabric.count_population_scope",
+	Msg:                contextfabric.CountPopulationScopeLogMessage,
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"org_id"},
+	BoundedAggregation: "at most one per request: one served document, and a document owes at most one count requirement",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		// Open: the frame's subject expression kind and member kind, empty when
+		// no frame records the requested population.
+		{Key: "expression_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "member_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "requirement", Type: FieldString, Presence: PresenceRequired},
+		{Key: "committed", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "committed_anchors", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "committed_unbound", Type: FieldInt, Presence: PresenceRequired},
+		// Open: the reading's anchor kind and the bound anchor's canonical id,
+		// empty when there is none.
+		{Key: "anchor_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "anchor_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "candidates", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "anchor_candidates", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "member_set_resolved", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "members", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CountPopulationScopeDecisionVocabulary()},
+		{Key: "assembled_outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none"}, contextfabric.RequirementOutcomeTransitionLineVocabulary("assembled_outcome")...)},
+		{Key: "counted", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "served", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "reused", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
 }

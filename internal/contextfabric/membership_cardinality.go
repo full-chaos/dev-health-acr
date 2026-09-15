@@ -104,6 +104,11 @@ type MembershipCardinality struct {
 	// and still be a floor on the population, and the two numbers cannot say
 	// so between them.
 	PopulationIncomplete bool
+	// Scope is whether the member set is the population the plan asks about
+	// (count_population_scope.go), decided over the resolution retrieval ran
+	// under. Set on a withheld value too, where every other field is zero, so
+	// the decision reaches telemetry beside the absence it caused.
+	Scope CountPopulationScope
 }
 
 // Narrowed reports whether the answer carries fewer members than were found.

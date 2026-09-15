@@ -174,6 +174,8 @@ func goVarName(e Event) string {
 		return "WorkItemReuse"
 	case WorkItemStoredServing.ID:
 		return "WorkItemStoredServing"
+	case CountPopulationScope.ID:
+		return "CountPopulationScope"
 	default:
 		panic("eventspec: goVarName has no mapping for " + e.ID + " -- add one before regenerating")
 	}

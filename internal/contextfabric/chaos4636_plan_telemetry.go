@@ -438,6 +438,11 @@ type PlanTelemetry interface {
 	// test still passing. A build in which nothing reports the count must
 	// not compile.
 	RecordMembershipCardinality(ctx context.Context, principal storage.Principal, event MembershipCardinalityEvent)
+	// RecordCountPopulationScope reports whether a served answer's counted
+	// member set is the population its plan asks about. REQUIRED for the
+	// reason RecordMembershipCardinality is: the decision withholds a count,
+	// and a withheld count nobody reports is indistinguishable from none owed.
+	RecordCountPopulationScope(ctx context.Context, principal storage.Principal, event CountPopulationScopeEvent)
 	// RecordReadRequirementPopulation reports ONE distributive read row of a
 	// served answer: who the requirement was owed to, how many of them the
 	// turn read, and what is known about the population's extent.

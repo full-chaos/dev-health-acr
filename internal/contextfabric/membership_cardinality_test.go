@@ -123,7 +123,9 @@ func newCountingEngineWithPopulation(t *testing.T, cohort *Cohort, population in
 
 	graph := graphReaderStub{
 		resolution: SubjectResolution{
-			Candidates: []SubjectCandidate{},
+			// The anchor as resolution records it: committed on a match for
+			// the frame's anchor term (count_population_scope.go).
+			Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)},
 			Committed:  []SubjectRef{anchor},
 		},
 		context: GraphContext{
@@ -1041,6 +1043,8 @@ func TestAReusedAnswerStatesItsCardinality(t *testing.T) {
 	// a real cohort, and NO assembled-result count row -- exactly what a row
 	// persisted before this change looks like.
 	candidate.Cohort = countingCohort(SubjectTeam, 3)
+	// The stored anchor as resolution recorded it (count_population_scope.go).
+	candidate.SubjectResolution.Candidates = []SubjectCandidate{scopeAnchorMatch(project)}
 	candidate.Completeness.Outcomes = []RequirementOutcomeRow{{
 		Stage:       contractsv1.ContextFabricOutcomeStagePlanning,
 		Requirement: string(ObligationCount) + "/" + string(SubjectRoleMember) + "/" + string(SubjectTeam),
@@ -1062,11 +1066,9 @@ func TestAReusedAnswerStatesItsCardinality(t *testing.T) {
 		committed = append(committed, member.Subject)
 	}
 	engine := mustReuseTestEngine(t, EngineDependencies{
-		Graph:   graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed}},
-		Results: &resultStoreStub{},
-		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
-			return candidate, true, nil
-		}),
+		Graph:     graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed}},
+		Results:   &resultStoreStub{},
+		ReuseGate: readingReuseGate{stored: candidate, frame: countingFrame(SubjectTeam)},
 	})
 	served, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
 	if err != nil {
@@ -1109,6 +1111,8 @@ func TestAReusedNarrowedAnswerIsBackfilledAsNarrowed(t *testing.T) {
 	t.Parallel()
 	project, candidate := reusableCandidate()
 	candidate.Cohort = countingCohort(SubjectTeam, 3)
+	// The stored anchor as resolution recorded it (count_population_scope.go).
+	candidate.SubjectResolution.Candidates = []SubjectCandidate{scopeAnchorMatch(project)}
 	candidate.Cohort.Complete = false
 	candidate.Cohort.Truncated = true
 	// The stored plan's OWN narrowing history: this document was cut from
@@ -1136,11 +1140,9 @@ func TestAReusedNarrowedAnswerIsBackfilledAsNarrowed(t *testing.T) {
 		committed = append(committed, member.Subject)
 	}
 	engine := mustReuseTestEngine(t, EngineDependencies{
-		Graph:   graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed}},
-		Results: &resultStoreStub{},
-		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
-			return candidate, true, nil
-		}),
+		Graph:     graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed}},
+		Results:   &resultStoreStub{},
+		ReuseGate: readingReuseGate{stored: candidate, frame: countingFrame(SubjectTeam)},
 	})
 	served, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
 	if err != nil {
@@ -1433,6 +1435,8 @@ func TestAReusedAnswersCountReachesTheOperator(t *testing.T) {
 	t.Parallel()
 	project, candidate := reusableCandidate()
 	candidate.Cohort = countingCohort(SubjectTeam, 3)
+	// The stored anchor as resolution recorded it (count_population_scope.go).
+	candidate.SubjectResolution.Candidates = []SubjectCandidate{scopeAnchorMatch(project)}
 	candidate.Completeness.Outcomes = []RequirementOutcomeRow{{
 		Stage:       contractsv1.ContextFabricOutcomeStagePlanning,
 		Requirement: string(ObligationCount) + "/" + string(SubjectRoleMember) + "/" + string(SubjectTeam),
@@ -1450,9 +1454,7 @@ func TestAReusedAnswersCountReachesTheOperator(t *testing.T) {
 		Graph:     graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed}},
 		Results:   &resultStoreStub{},
 		Telemetry: telemetry,
-		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
-			return candidate, true, nil
-		}),
+		ReuseGate: readingReuseGate{stored: candidate, frame: countingFrame(SubjectTeam)},
 	})
 	served, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
 	if err != nil {

@@ -309,6 +309,14 @@ func currencyReuseEngine(t *testing.T, stored InvestigationResult, telemetry *re
 		authorized[key] = struct{}{}
 	}
 	authorize(reuseDegradeSubject())
+	// The stored anchor as resolution recorded it: the project candidate
+	// matched the stored reading's anchor term (count_population_scope.go).
+	stored.SubjectResolution.Candidates = append([]SubjectCandidate(nil), stored.SubjectResolution.Candidates...)
+	for index := range stored.SubjectResolution.Candidates {
+		if stored.SubjectResolution.Candidates[index].Subject == reuseDegradeSubject() {
+			stored.SubjectResolution.Candidates[index].MatchedTerms = append(append([]string(nil), stored.SubjectResolution.Candidates[index].MatchedTerms...), "a")
+		}
+	}
 	if stored.Cohort != nil {
 		for _, subject := range currencyRecheckedSubjects(stored.Cohort) {
 			authorize(subject)
@@ -334,9 +342,7 @@ func currencyReuseEngine(t *testing.T, stored InvestigationResult, telemetry *re
 		},
 		Results:   &resultStoreStub{},
 		Telemetry: telemetry,
-		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
-			return stored, true, nil
-		}),
+		ReuseGate: readingReuseGate{stored: stored, frame: countingFrame(SubjectTeam)},
 	})
 }
 

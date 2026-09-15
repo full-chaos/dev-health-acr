@@ -61,7 +61,7 @@ func newReconciliationEngine(t *testing.T, cohort *Cohort, status InvestigationS
 	frame := countingFrame(SubjectTeam)
 	anchor := reconciliationAnchor()
 	graph := graphReaderStub{
-		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{anchor}},
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}, Committed: []SubjectRef{anchor}},
 		context: GraphContext{
 			Cohort: cohort, Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
 			FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},

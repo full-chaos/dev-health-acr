@@ -113,6 +113,129 @@
     ]
   },
   {
+    "id": "contextfabric.count_population_scope",
+    "msg": "context fabric count population scope",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "at most one per request: one served document, and a document owes at most one count requirement",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "expression_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "member_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "requirement",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "committed",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "committed_anchors",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "committed_unbound",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "anchor_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "anchor_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "candidates",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "anchor_candidates",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "member_set_resolved",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "members",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "decision",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "organization_scope",
+          "anchor_committed",
+          "anchor_unresolved",
+          "anchor_ambiguous",
+          "frame_absent"
+        ]
+      },
+      {
+        "key": "assembled_outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "satisfied",
+          "narrowed",
+          "unavailable",
+          "not_applicable",
+          "not_attempted"
+        ]
+      },
+      {
+        "key": "counted",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "served",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "reused",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.requirement_outcome_transition",
     "msg": "context fabric requirement outcome transition",
     "level": "info",

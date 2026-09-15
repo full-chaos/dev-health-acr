@@ -349,7 +349,9 @@ func workItemTuplePayloadFixture(t *testing.T) InvestigationResult {
 		SubjectResolution: SubjectResolution{
 			Candidates: []SubjectCandidate{{
 				ReceiptID: "receipt-1", Subject: anchor, State: ResolutionCommitted,
-				MatchReasons: []string{"exact"},
+				// The anchor as resolution recorded it: a match for the stored
+				// reading's anchor term (count_population_scope.go).
+				MatchedTerms: []string{"project"}, MatchReasons: []string{"exact"},
 			}},
 			Committed: []SubjectRef{anchor},
 		},
