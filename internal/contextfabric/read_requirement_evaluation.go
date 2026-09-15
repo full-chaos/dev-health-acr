@@ -99,6 +99,17 @@ type readEvidence struct {
 	//
 	Truncated int
 	Failed    int
+	// TruncatedKinds are WHICH kinds counted Truncated above, in the
+	// requirement's own declared order -- ServedKinds' twin for the one
+	// other state that returns real facts.
+	//
+	// A truncated source is NOT a lost one: the fact registry drops
+	// over-budget facts and marks the source truncated rather than failing
+	// the read, "because a partial, explicitly-truncated answer is the
+	// honest outcome" (see the fact-bearing comment below). So a truncated
+	// kind belongs beside ServedKinds when the row states how much a
+	// narrowed requirement actually served -- see factBearingKinds.
+	TruncatedKinds []FactKind
 	// Pruned counts pruned observations FOR ONE PURPOSE ONLY: to tell "the
 	// turn planned nothing that could serve this cell" apart from "everything
 	// it planned was pruned". Those are different answers and they had
@@ -271,6 +282,7 @@ func evaluateReadRequirement(requirement contractsv1.ContextFabricPlanRequiremen
 			evidence.ServedKinds = append(evidence.ServedKinds, kind)
 		case state == SourceTruncated:
 			evidence.Truncated++
+			evidence.TruncatedKinds = append(evidence.TruncatedKinds, kind)
 		default:
 			evidence.Failed++
 		}
@@ -600,13 +612,65 @@ func carryObservationCover(prior []ReadRequirementObservationCoverEvent, carried
 // SERVED kind is untaintable for the same reason, staying the singleton it
 // always was.
 func servedObservationCover(evidence readEvidence, subject SubjectKind, assignment observationKeyAssignment) int {
-	servedSet := make(map[FactKind]bool, len(evidence.ServedKinds))
-	for _, kind := range evidence.ServedKinds {
-		servedSet[kind] = true
+	return taintedObservationCoverOf(evidence.ServedKinds, evidence, subject, assignment)
+}
+
+// factBearingKinds is ServedKinds' broader sibling: every declared kind that
+// returned REAL FACTS, whether or not it served the requirement in full.
+//
+// TRUNCATED KINDS JOIN SERVED KINDS HERE, and nowhere else. A truncated
+// source is one of the three states this file's own factBearing test already
+// names as "not `unavailable`" (see readRequirementOutcomeRow's own comment):
+// "the fact registry drops over-budget facts and marks the source truncated
+// RATHER THAN failing the read... a partial, explicitly-truncated answer is
+// the honest outcome". So a truncated kind is exactly as fact-bearing as a
+// served one -- it is excluded from ServedKinds only because it is not
+// served IN FULL, which is a question about the OUTCOME token (narrowed vs
+// satisfied), not about whether the row's own SERVED COUNT should read it as
+// zero facts.
+//
+// A NARROWED (planner-narrowed) kind is deliberately NOT included. It is a
+// different axis of loss -- the provider returned data for fewer SUBJECTS
+// than the plan asked for, which the population layer accounts for on its
+// own row (readPopulationOutcomeRow), not this one -- and a per-kind budget
+// cut is a different mechanism from a per-subject one.
+func factBearingKinds(evidence readEvidence) []FactKind {
+	if len(evidence.TruncatedKinds) == 0 {
+		return evidence.ServedKinds
+	}
+	// Capacity covers ServedKinds; append grows the backing array for
+	// TruncatedKinds on its own.
+	kinds := make([]FactKind, 0, len(evidence.ServedKinds))
+	kinds = append(kinds, evidence.ServedKinds...)
+	kinds = append(kinds, evidence.TruncatedKinds...)
+	return kinds
+}
+
+// factBearingCover (CHAOS-5742) is servedObservationCover's twin over
+// factBearingKinds instead of ServedKinds -- see that function's doc comment
+// for what changes (a truncated kind now counts toward the cover). The
+// mechanism is unchanged -- worst-state-wins per OBSERVATION, not per kind --
+// so a truncated kind sharing its only key with a FAILED kind is still
+// tainted out, exactly as a served kind would be.
+func factBearingCover(evidence readEvidence, subject SubjectKind, assignment observationKeyAssignment) int {
+	return taintedObservationCoverOf(factBearingKinds(evidence), evidence, subject, assignment)
+}
+
+// taintedObservationCoverOf is the ONE mixed-state-taint algorithm behind
+// servedObservationCover and factBearingCover: the cover of `credited` --
+// whichever kind list the caller counts as fact-bearing -- after removing
+// every observation key ALSO backed by a kind in evidence.ObservedKinds that
+// is NOT in `credited`. See servedObservationCover's own doc comment (the
+// function this was extracted from) for the mixed-state alias rule and why
+// it taints the OBSERVATION, not the producer.
+func taintedObservationCoverOf(credited []FactKind, evidence readEvidence, subject SubjectKind, assignment observationKeyAssignment) int {
+	creditedSet := make(map[FactKind]bool, len(credited))
+	for _, kind := range credited {
+		creditedSet[kind] = true
 	}
 	taintedKeys := map[ObservationKey]bool{}
 	for _, kind := range evidence.ObservedKinds {
-		if servedSet[kind] {
+		if creditedSet[kind] {
 			continue
 		}
 		for _, key := range dedupeObservationKeys(assignment[kind][subject]) {
@@ -614,15 +678,15 @@ func servedObservationCover(evidence readEvidence, subject SubjectKind, assignme
 		}
 	}
 	if len(taintedKeys) == 0 {
-		return observationCover(evidence.ServedKinds, subject, assignment)
+		return observationCover(credited, subject, assignment)
 	}
 	// Rebuild the assignment with every tainted key removed, then cover the
-	// served kinds against THAT. A served kind whose labels all vanish is
+	// credited kinds against THAT. A credited kind whose labels all vanish is
 	// dropped; one that keeps any label still covers the observations that
 	// label stands for.
-	untainted := make(observationKeyAssignment, len(evidence.ServedKinds))
-	clean := make([]FactKind, 0, len(evidence.ServedKinds))
-	for _, kind := range evidence.ServedKinds {
+	untainted := make(observationKeyAssignment, len(credited))
+	clean := make([]FactKind, 0, len(credited))
+	for _, kind := range credited {
 		declared := dedupeObservationKeys(assignment[kind][subject])
 		if len(declared) == 0 {
 			// Unkeyed: a singleton, untaintable, always counted.
@@ -1132,7 +1196,32 @@ func readRequirementCoverDecision(
 		}
 		return 0, threshold, event
 	}
+	// factBearingCover, not servedObservationCover, ONLY when nothing ELSE
+	// served this requirement: a requirement whose cover would
+	// otherwise read zero despite a truncated, fact-bearing source must
+	// still report what it served. No separate `evidence.Truncated > 0`
+	// guard is needed here: factBearingKinds already falls back to
+	// ServedKinds when there are no truncated kinds to add, so calling it
+	// whenever servedCover is already 0 recomputes the SAME zero for every
+	// other reason nothing served (all-failed, all-pruned) and only moves
+	// the number for a truncated one -- one conjunct, not two, guarding one
+	// decision.
+	//
+	// NARROW ON PURPOSE in the OTHER direction: a MIXED requirement -- one
+	// kind served in full beside another truncated -- already reports the
+	// shortfall correctly today: `evidence.Served` counts the one full
+	// serve, `Declared` counts every observed kind, and the row reads a
+	// true "1 of 2". Crediting the truncated kind THERE TOO would
+	// double-count it: the served kind already proves the row is not a
+	// false zero, so the truncated kind's own contribution is exactly the
+	// ONE THING the shortfall arm is disclosing, and folding it into Served
+	// would erase the very reduction the row exists to name. See
+	// TestTheOutcomeRowFollowsTheEvidence's "a truncated source narrows a
+	// met standard" case, pinned at 1/2 -- not 2/2.
 	servedCover := servedObservationCover(evidence, requirement.Subject, assignment)
+	if servedCover == 0 {
+		servedCover = factBearingCover(evidence, requirement.Subject, assignment)
+	}
 	declared := observationCover(evidence.ObservedKinds, requirement.Subject, assignment)
 	if threshold > declared {
 		declared = threshold
