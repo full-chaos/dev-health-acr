@@ -347,6 +347,7 @@ type recordingTelemetry struct {
 	// requirementOutcomeTransitions (CHAOS-5737) records every transition line
 	// verbatim, in emission order.
 	requirementOutcomeTransitions []RequirementOutcomeTransitionEvent
+	retainedRankingAccounting     []RetainedRankingAccountingEvent
 	// planCarries records every applied carry verbatim -- the ONLY event
 	// that can carry family_source=carried, since the family-resolution
 	// line is sent before the carry runs.
@@ -2207,4 +2208,8 @@ func (g *countingGraphReader) ResolveSubjects(context.Context, storage.Principal
 func (g *countingGraphReader) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {
 	g.discoverCalls++
 	return GraphContext{}, nil
+}
+
+func (r *recordingTelemetry) RecordRetainedRankingAccounting(_ context.Context, _ storage.Principal, event RetainedRankingAccountingEvent) {
+	r.retainedRankingAccounting = append(r.retainedRankingAccounting, event)
 }

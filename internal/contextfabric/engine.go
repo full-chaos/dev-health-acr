@@ -1702,6 +1702,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 					reused.DeterministicAnswer = appendCardinalitySentence(reused.DeterministicAnswer, sentence)
 				}
 			}
+			var rankingAccounting []RetainedRankingAccountingEvent
+			reused, rankingAccounting = AccountForRetainedRanking(reused)
+			if e.telemetry != nil {
+				for _, event := range rankingAccounting {
+					e.telemetry.RecordRetainedRankingAccounting(ctx, principal, event)
+				}
+			}
 			reused.Completeness = ComputeAnswerCompleteness(reused)
 			// The count reaches the OPERATOR on this path too.
 			//

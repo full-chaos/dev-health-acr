@@ -129,6 +129,106 @@
     ]
   },
   {
+    "id": "contextfabric.retained_ranking_accounting",
+    "msg": "context fabric retained ranking accounting",
+    "level": "info",
+    "multiplicity": "bounded_many_per_pass",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "one per served computed ranking requirement in the stored plan; index and total delimit the bounded request set",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "requirement",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "existing_row",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "qualification_recorded",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "row_added",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "assembled_outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "satisfied",
+          "narrowed",
+          "unavailable",
+          "not_applicable",
+          "not_attempted"
+        ]
+      },
+      {
+        "key": "retained_members",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "qualified",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "provisional",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "insufficient_evidence",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "not_applicable",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "unrecorded_members",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "index",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.semantic_state_persistence",
     "msg": "context fabric semantic state persistence",
     "level": "info",

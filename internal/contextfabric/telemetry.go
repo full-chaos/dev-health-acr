@@ -2372,3 +2372,8 @@ func requestDerivedLogInt(value int) int {
 	}
 	return parsed
 }
+
+func (t SlogEngineTelemetry) RecordRetainedRankingAccounting(ctx context.Context, principal storage.Principal, event RetainedRankingAccountingEvent) {
+	args := append(RetainedRankingAccountingLogArgs(event, principal.OrgID), requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, RetainedRankingAccountingLogMessage, args...)
+}

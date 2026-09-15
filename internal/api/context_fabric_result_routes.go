@@ -150,6 +150,13 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 			args = append(args, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())))
 			a.logger.InfoContext(r.Context(), contextfabric.StoredAnswerabilityLogMessage, args...)
 		}
+		var rankingAccounting []contextfabric.RetainedRankingAccountingEvent
+		result, rankingAccounting = contextfabric.AccountForRetainedRanking(result)
+		for _, event := range rankingAccounting {
+			args := contextfabric.RetainedRankingAccountingLogArgs(event, principal.OrgID)
+			args = append(args, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())))
+			a.logger.InfoContext(r.Context(), contextfabric.RetainedRankingAccountingLogMessage, args...)
+		}
 		result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
 		// The outcome-derivation completeness authority, re-evaluated HERE
 		// against the row's OWN outcome rows -- a stored row never reaches
