@@ -3325,9 +3325,23 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		result = restrictWorkItemTupleEvidence(result)
 	}
 	result = e.finalizeResult(ctx, principal, result, plan, familyOutcome.Frame, facts, &pendingTelemetry, answerPassFirst, cardinality)
-	if tupleCensus != nil {
-		result = ApplyServerCompletenessAuthority(result, e.serverCompletenessAuthorityEnabled, e.serverCompletenessAuthoritySymmetricEnabled, DeriveCompletenessAuthority(result))
-	}
+	// The outcome-derivation completeness authority is applied exactly ONCE,
+	// inside finalizeServed below -- the one point every serving path,
+	// tupleCensus included, is downstream of (that function's own doc
+	// comment). Neither fitAssembledResult immediately below nor
+	// ValidateWorkItemTuplePayload reads result.Status, so nothing between
+	// here and finalizeServed depends on the correction having already
+	// landed. Applying it a second time here, ahead of finalizeServed's own
+	// derivation, would make finalizeServed re-derive its observation from
+	// an ALREADY-CORRECTED result.Status -- reading Disagreed=false and
+	// WouldFlip=false on the one line that observation is measured from,
+	// even when the model and server genuinely disagreed. The stage-3 retry
+	// decision immediately below therefore measures the PRE-flip byte count
+	// for a tupleCensus result when a flip flag is enabled -- a narrow-or-not
+	// heuristic, not the serving decision -- while finalizeServed's own hard
+	// budget gate still measures the POST-flip document for every path,
+	// tupleCensus included, so the served document and its refusal boundary
+	// are unaffected.
 	cover.events = pendingTelemetry.ObservationCover
 	result, pendingTelemetry, err = e.fitAssembledResult(ctx, principal, &plan, result, consumedAllocation, pendingTelemetry, retryBase, cardinality)
 	// Read BEFORE the error check: a stage-3 refusal returns the telemetry of
