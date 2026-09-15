@@ -435,9 +435,8 @@ func hasEvaluatedReadOutcome(rows []RequirementOutcomeRow, identity string) bool
 // say about a read that was never planned because nothing could serve it.
 //
 // COMPUTED REQUIREMENTS ARE NOT EVALUATED EITHER. `count` is answered by
-// appendMembershipCardinality, and `ranking` has no evaluator yet -- a gap that
-// is disclosed rather than covered here, because inventing an evidence reading
-// for a step this function cannot observe would be worse than saying nothing.
+// appendMembershipCardinality, and `ranking` by appendRankingRequirementEvaluations.
+// Neither computation can be evaluated from read coverage alone.
 //
 // A thin wrapper over appendReadRequirementEvaluationsWithCover for the many
 // callers that only want the rows -- see that function for the observation-cover

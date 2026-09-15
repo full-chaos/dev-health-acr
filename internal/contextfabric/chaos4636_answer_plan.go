@@ -638,6 +638,8 @@ func (e *Engine) finalizeResult(
 		pending.ObservationCover = append(pending.ObservationCover, coverEvents...)
 		pending.ObservationCover = append(pending.ObservationCover, carriedEvents...)
 	}
+	result.Completeness.Outcomes = appendRankingRequirementEvaluations(
+		result.Completeness.Outcomes, stamped.Requirements, result.Cohort, cardinality)
 	result.Completeness = ComputeAnswerCompleteness(result)
 	return result
 }

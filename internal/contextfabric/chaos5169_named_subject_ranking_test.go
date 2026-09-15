@@ -77,7 +77,7 @@ func rankingFrameOverACohort() *QuestionFrame {
 // `cohortRankingFormulaKinds`, so a reader that received a ranking kind can
 // only have got it from the plan, never from the model's own widening or
 // from the engine's unconditional cohort injection.
-func rankingInvestigation(t *testing.T, cohort *Cohort, frame *QuestionFrame, family QuestionFamily, shape InvestigationShape) (InvestigationResult, map[FactKind]bool, int) {
+func rankingInvestigation(t *testing.T, cohort *Cohort, frame *QuestionFrame, family QuestionFamily, shape InvestigationShape, bundles ...CanonicalFactBundle) (InvestigationResult, map[FactKind]bool, int) {
 	t.Helper()
 
 	for _, injected := range cohortRankingFormulaKinds {
@@ -123,6 +123,9 @@ func rankingInvestigation(t *testing.T, cohort *Cohort, frame *QuestionFrame, fa
 			observed = make(map[FactKind]bool, len(request.Requirements))
 			for _, requirement := range request.Requirements {
 				observed[requirement.Kind] = true
+			}
+			if len(bundles) > 0 {
+				return bundles[0], nil
 			}
 			return CanonicalFactBundle{
 				Facts:    []CanonicalFact{},

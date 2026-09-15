@@ -499,6 +499,9 @@ type PlanTelemetry interface {
 	// requirement predicted served that ends unavailable is a decision, and a
 	// sink that cannot report it must be a compile error, not a silent flip.
 	RecordRequirementOutcomeTransition(ctx context.Context, principal storage.Principal, event RequirementOutcomeTransitionEvent)
+	// Required: retained accounting must reach the configured serving trace,
+	// including records whose missing qualification prevents a new row.
+	RecordRetainedRankingAccounting(ctx context.Context, principal storage.Principal, event RetainedRankingAccountingEvent)
 }
 
 // GroupedCohortCompletenessEvent (CHAOS-4733) is CLOSED ENUMS AND COUNTS

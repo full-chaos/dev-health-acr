@@ -187,6 +187,10 @@ const (
 	// the question differently than one told only to describe it
 	// structurally. That is measured on the rig before this ships, not
 	// assumed -- the before/after tally is in the PR body.
+	// v14: scoped-set frame output now carries an optional member qualifier.
+	// The value is sanitized into the internal frame carrier so an unknown
+	// model value cannot become the unqualified state.
+	//
 	// v13: the frame section's grouped_members sentence no longer tells the
 	// model the two kinds "must be DIFFERENT". It now tells the model to
 	// express a grouping exactly as asked -- including a kind grouped by
@@ -201,7 +205,7 @@ const (
 	// the rule stated at v9: any change to the prompt's content changes
 	// the ReuseKey dimension, or stored answers produced under the old
 	// sentence keep being served for exactly the questions it re-expressed.
-	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v13"
+	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v14"
 	// DefaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3
 	// closes the driver category vocabulary (a fixed 16-value set, no
@@ -417,6 +421,9 @@ const (
 	// serve such a result as though it came from the same contract as a
 	// v3 call, which is exactly the version-drift class this field exists
 	// to prevent (its own doc comment above).
+	// v5: interpretationOutput's scoped subject expression gained one
+	// optional member_qualifier field, carried through the shadow frame.
+	//
 	// v4 (CHAOS-4452 stage 2): interpretationOutput gained one optional
 	// nested object, question_frame, carrying the goals list, the subject
 	// expression with its per-variant fields and its operand list, the
@@ -431,7 +438,7 @@ const (
 	// interpreted by a model that was never offered a frame and could not
 	// have emitted one, so serving it through reuse as though it came from
 	// a v4 call is exactly the version-drift this field exists to prevent.
-	DefaultSchemaVersion    = "context-fabric-model-output.v4"
+	DefaultSchemaVersion    = "context-fabric-model-output.v5"
 	defaultEvaluatorVersion = "context-fabric-grounding.v1"
 	// DefaultPhrasingPromptVersion is v1 (CHAOS-4171 PR2): the SECOND
 	// bounded model call's own prompt, versioned independently of
@@ -1191,19 +1198,80 @@ type interpretationFamilyCapture struct {
 // new way to fail a real investigation. The vocabularies are stated in the
 // prompt and enforced by the sanitizer.
 type subjectOperandOutput struct {
-	Kind        string   `json:"kind,omitempty"`
-	Terms       []string `json:"terms,omitempty"`
-	AnchorTerms []string `json:"anchor_terms,omitempty"`
-	MemberKind  string   `json:"member_kind,omitempty"`
+	Kind            string   `json:"kind,omitempty"`
+	Terms           []string `json:"terms,omitempty"`
+	AnchorTerms     []string `json:"anchor_terms,omitempty"`
+	MemberKind      string   `json:"member_kind,omitempty"`
+	MemberQualifier string   `json:"member_qualifier,omitempty"`
+}
+
+func (o *subjectOperandOutput) UnmarshalJSON(data []byte) error {
+	if err := rejectExplicitNullMemberQualifier(data); err != nil {
+		return err
+	}
+	type plain subjectOperandOutput
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*o = subjectOperandOutput(decoded)
+	return nil
 }
 
 type subjectExpressionOutput struct {
-	Kind        string                 `json:"kind,omitempty"`
-	Terms       []string               `json:"terms,omitempty"`
-	AnchorTerms []string               `json:"anchor_terms,omitempty"`
-	MemberKind  string                 `json:"member_kind,omitempty"`
-	GroupKind   string                 `json:"group_kind,omitempty"`
-	Operands    []subjectOperandOutput `json:"operands,omitempty"`
+	Kind            string                 `json:"kind,omitempty"`
+	Terms           []string               `json:"terms,omitempty"`
+	AnchorTerms     []string               `json:"anchor_terms,omitempty"`
+	MemberKind      string                 `json:"member_kind,omitempty"`
+	MemberQualifier string                 `json:"member_qualifier,omitempty"`
+	GroupKind       string                 `json:"group_kind,omitempty"`
+	Operands        []subjectOperandOutput `json:"operands,omitempty"`
+}
+
+func (o *subjectExpressionOutput) UnmarshalJSON(data []byte) error {
+	if err := rejectExplicitNullMemberQualifier(data); err != nil {
+		return err
+	}
+	type plain subjectExpressionOutput
+	var decoded plain
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*o = subjectExpressionOutput(decoded)
+	return nil
+}
+
+func rejectExplicitNullMemberQualifier(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	first, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, ok := first.(json.Delim)
+	if !ok || delimiter != '{' {
+		return nil
+	}
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return fmt.Errorf("member qualifier field name is not a string")
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return err
+		}
+		if strings.EqualFold(key, "member_qualifier") && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return errors.New("member_qualifier must be a string when present")
+		}
+	}
+	if _, err := decoder.Token(); err != nil {
+		return err
+	}
+	return nil
 }
 
 type questionFrameOutput struct {
@@ -1231,11 +1299,12 @@ type interpretationFrameCapture struct {
 	// countability gap the five fields above already closed for
 	// Goals/Terms/Kind -- see ModelExecutionReceipt's matching fields'
 	// doc comment for the full account (found by merge-gate round 3).
-	TemporalUnrecognized   bool
-	EmphasisDropped        int
-	DimensionsDropped      int
-	MemberKindUnrecognized bool
-	GroupKindUnrecognized  bool
+	TemporalUnrecognized        bool
+	EmphasisDropped             int
+	DimensionsDropped           int
+	MemberKindUnrecognized      bool
+	GroupKindUnrecognized       bool
+	MemberQualifierUnrecognized bool
 }
 
 // sanitizeFrameOutput is THE ONE PLACE the stage-2 frame is built from raw
@@ -1289,6 +1358,10 @@ func sanitizeFrameOutput(output interpretationOutput) interpretationFrameCapture
 	if memberKindUnrecognized {
 		capture.MemberKindUnrecognized = true
 	}
+	memberQualifier, memberQualifierUnrecognized := contextfabric.SanitizeMemberQualifier(expression.MemberQualifier)
+	if memberQualifierUnrecognized {
+		capture.MemberQualifierUnrecognized = true
+	}
 	groupKind, groupKindUnrecognized := contextfabric.SanitizeSubjectKind(expression.GroupKind)
 	if groupKindUnrecognized {
 		capture.GroupKindUnrecognized = true
@@ -1305,7 +1378,7 @@ func sanitizeFrameOutput(output interpretationOutput) interpretationFrameCapture
 	case contextfabric.SubjectExpressionDiscoveredKind:
 		capture.Frame.SubjectExpression.Discovered = &contextfabric.DiscoveredSetExpression{MemberKind: memberKind}
 	case contextfabric.SubjectExpressionChildrenOfScope:
-		capture.Frame.SubjectExpression.Scoped = &contextfabric.ScopedSetExpression{AnchorTerms: anchors, MemberKind: memberKind}
+		capture.Frame.SubjectExpression.Scoped = &contextfabric.ScopedSetExpression{AnchorTerms: anchors, MemberKind: memberKind, MemberQualifier: memberQualifier}
 	case contextfabric.SubjectExpressionGroupedMembers:
 		capture.Frame.SubjectExpression.Grouped = &contextfabric.GroupedSetExpression{GroupKind: groupKind, MemberKind: memberKind}
 	case contextfabric.SubjectExpressionOrganizationScope:
@@ -1317,10 +1390,13 @@ func sanitizeFrameOutput(output interpretationOutput) interpretationFrameCapture
 	case contextfabric.SubjectExpressionExplicitSet:
 		operands := make([]contextfabric.SubjectOperand, 0, len(expression.Operands))
 		for _, rawOperand := range expression.Operands {
-			operand, operandTruncated, operandMemberKindUnrecognized := sanitizeOperandOutput(rawOperand)
+			operand, operandTruncated, operandMemberKindUnrecognized, operandMemberQualifierUnrecognized := sanitizeOperandOutput(rawOperand)
 			capture.TermsTruncated += operandTruncated
 			if operandMemberKindUnrecognized {
 				capture.MemberKindUnrecognized = true
+			}
+			if operandMemberQualifierUnrecognized {
+				capture.MemberQualifierUnrecognized = true
 			}
 			operands = append(operands, operand)
 		}
@@ -1330,12 +1406,10 @@ func sanitizeFrameOutput(output interpretationOutput) interpretationFrameCapture
 }
 
 // sanitizeOperandOutput returns the sanitized operand, the terms-truncated
-// count, and whether the operand's own member_kind was supplied but
-// unrecognized -- the third return exists so the caller can OR it into
-// interpretationFrameCapture.MemberKindUnrecognized alongside the
-// variant-level member_kind's own signal (merge-gate round 3: this was
-// the third of three sites silently discarding that bool).
-func sanitizeOperandOutput(raw subjectOperandOutput) (contextfabric.SubjectOperand, int, bool) {
+// count, and the two qualifier/kind sanitizer signals. The signals are
+// returned so the caller can preserve one receipt-level countability record
+// while the frame keeps only closed values.
+func sanitizeOperandOutput(raw subjectOperandOutput) (contextfabric.SubjectOperand, int, bool, bool) {
 	operand := contextfabric.SubjectOperand{}
 	trimmed := strings.TrimSpace(raw.Kind)
 	switch contextfabric.SubjectOperandKind(trimmed) {
@@ -1348,18 +1422,19 @@ func sanitizeOperandOutput(raw subjectOperandOutput) (contextfabric.SubjectOpera
 		// both pointers nil, which invariant I19 rejects BY NAME. Guessing
 		// a variant from whichever fields happen to be populated would
 		// repair a malformed operand into a well-formed different one.
-		return operand, 0, false
+		return operand, 0, false, false
 	}
 	terms, truncated := contextfabric.SanitizeSubjectTerms(raw.Terms)
 	anchors, anchorTruncated := contextfabric.SanitizeSubjectTerms(raw.AnchorTerms)
 	memberKind, memberKindUnrecognized := contextfabric.SanitizeSubjectKind(raw.MemberKind)
+	memberQualifier, memberQualifierUnrecognized := contextfabric.SanitizeMemberQualifier(raw.MemberQualifier)
 	switch operand.Kind {
 	case contextfabric.SubjectOperandNamed:
 		operand.Named = &contextfabric.NamedSubjectExpression{Terms: terms}
 	case contextfabric.SubjectOperandScoped:
-		operand.Scoped = &contextfabric.ScopedSetExpression{AnchorTerms: anchors, MemberKind: memberKind}
+		operand.Scoped = &contextfabric.ScopedSetExpression{AnchorTerms: anchors, MemberKind: memberKind, MemberQualifier: memberQualifier}
 	}
-	return operand, truncated + anchorTruncated, memberKindUnrecognized
+	return operand, truncated + anchorTruncated, memberKindUnrecognized, memberQualifierUnrecognized
 }
 
 func sanitizeFamilyOutput(output interpretationOutput) interpretationFamilyCapture {
@@ -1410,6 +1485,7 @@ func applyFrameCapture(receipt *contextfabric.ModelExecutionReceipt, capture int
 	receipt.FrameDimensionsDropped = capture.DimensionsDropped
 	receipt.FrameMemberKindUnrecognized = capture.MemberKindUnrecognized
 	receipt.FrameGroupKindUnrecognized = capture.GroupKindUnrecognized
+	receipt.FrameMemberQualifierUnrecognized = capture.MemberQualifierUnrecognized
 }
 
 // sanitizeWindowOutput applies the CHAOS-3900 W0 sanitize-before-validate
@@ -2778,7 +2854,29 @@ func mergeFallbackReceipt(primary, fallback contextfabric.ModelExecutionReceipt)
 	primary.Usage.InputTokens += fallback.Usage.InputTokens
 	primary.Usage.OutputTokens += fallback.Usage.OutputTokens
 	primary.Usage.TotalTokens += fallback.Usage.TotalTokens
+	mergeFallbackFrameCapture(&primary, fallback)
 	return primary
+}
+
+func mergeFallbackFrameCapture(primary *contextfabric.ModelExecutionReceipt, fallback contextfabric.ModelExecutionReceipt) {
+	primary.QuestionFrame = fallback.QuestionFrame
+	primary.FrameOutcome = fallback.FrameOutcome
+	primary.FrameFailedInvariant = fallback.FrameFailedInvariant
+	primary.FrameGateOutcome = fallback.FrameGateOutcome
+	primary.FrameGateRefuseBasis = fallback.FrameGateRefuseBasis
+	primary.FrameGateDeclaredMemberKind = fallback.FrameGateDeclaredMemberKind
+	primary.FrameGoalsDropped = fallback.FrameGoalsDropped
+	primary.FrameTermsTruncated = fallback.FrameTermsTruncated
+	primary.FrameKindUnrecognized = fallback.FrameKindUnrecognized
+	primary.RequirementCellsDerived = fallback.RequirementCellsDerived
+	primary.RequirementCellsUnserved = fallback.RequirementCellsUnserved
+	primary.RequirementDerivationVersion = fallback.RequirementDerivationVersion
+	primary.FrameTemporalUnrecognized = fallback.FrameTemporalUnrecognized
+	primary.FrameEmphasisDropped = fallback.FrameEmphasisDropped
+	primary.FrameDimensionsDropped = fallback.FrameDimensionsDropped
+	primary.FrameMemberKindUnrecognized = fallback.FrameMemberKindUnrecognized
+	primary.FrameGroupKindUnrecognized = fallback.FrameGroupKindUnrecognized
+	primary.FrameMemberQualifierUnrecognized = fallback.FrameMemberQualifierUnrecognized
 }
 
 // describeReportedLeg makes a both-legs-failed receipt one projection of the

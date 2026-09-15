@@ -140,12 +140,9 @@ func TestARankingRequirementOverAnEmptySearchIsStatedUnavailable(t *testing.T) {
 	}
 }
 
-// TestARankingRequirementOverAResolvedMemberSetIsLeftAlone is the CONTROL, and
-// without it the test above is satisfied by a sweep that refuses everything.
-//
-// Same frame, same kind, same question -- the ONLY difference is that the
-// search retained members. Nothing may be appended.
-func TestARankingRequirementOverAResolvedMemberSetIsLeftAlone(t *testing.T) {
+// A resolved member set still needs evidence qualification. It must not
+// receive the absent-population cause just because no member has a score.
+func TestARankingRequirementOverAResolvedMemberSetIsEvaluated(t *testing.T) {
 	t.Parallel()
 	cohort := countingCohort(SubjectTeam, 3)
 	if cohort == nil || len(cohort.Members) == 0 {
@@ -154,11 +151,15 @@ func TestARankingRequirementOverAResolvedMemberSetIsLeftAlone(t *testing.T) {
 
 	result := runRankingInvestigation(t, SubjectTeam, cohort)
 
-	if assembled := outcomeRowsFor(result, ObligationRanking, contractsv1.ContextFabricOutcomeStageAssembledResult); len(assembled) != 0 {
-		t.Fatalf("a ranking question over a RESOLVED member set acquired %d assembled-result row(s) (%+v); the correction must fire on an absent member set and nothing else", len(assembled), assembled)
+	assembled := outcomeRowsFor(result, ObligationRanking, contractsv1.ContextFabricOutcomeStageAssembledResult)
+	if len(assembled) != 1 {
+		t.Fatalf("resolved ranking has %d assembled rows, want one", len(assembled))
 	}
-	// The document still carries the requirement, so the absence above is a
-	// decision and not a fixture that derived nothing.
+	row := assembled[0]
+	if row.Outcome != contractsv1.ContextFabricRequirementUnavailable || row.Impact != contractsv1.ContextFabricAnswerImpactDimension || row.CauseCoverage != contractsv1.ContextFabricCoverageDetailFactProviderReported || row.CauseObserved {
+		t.Fatalf("resolved ranking without signal evidence must retain evidence loss, not population absence: %+v", row)
+	}
+	// The planning declaration is retained alongside the actual evaluation.
 	if planning := outcomeRowsFor(result, ObligationRanking, contractsv1.ContextFabricOutcomeStagePlanning); len(planning) == 0 {
 		t.Fatal("the control derived no `ranking` requirement at all, so its empty assembled set proves nothing")
 	}

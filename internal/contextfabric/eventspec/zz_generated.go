@@ -20,6 +20,7 @@ func FieldKeys(e Event) []string {
 // rather than hand-maintained so it can never drift from All.
 var ByID = map[string]Event{
 	"contextfabric.requirement_outcome_transition": RequirementOutcomeTransition,
+	"contextfabric.retained_ranking_accounting":    RetainedRankingAccounting,
 	"contextfabric.semantic_state_persistence":     SemanticStatePersistence,
 	"contextfabric.window_continuation_decision":   WindowContinuationDecision,
 	"graphrank.alias_lookup":                       AliasLookup,
@@ -148,6 +149,92 @@ func (f RequirementOutcomeTransitionFields) SlogArgs() []any {
 		"declared", f.Declared,
 		"served_fact_count", f.ServedFactCount,
 		"member_set_resolved", f.MemberSetResolved,
+		"index", f.Index,
+		"total", f.Total,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// RetainedRankingAccountingFields is contextfabric.retained_ranking_accounting's generated typed construction interface
+// (CHAOS-5516): one Go field per Field RetainedRankingAccounting.Fields declares in spec.go.
+type RetainedRankingAccountingFields struct {
+	OrgID                 string
+	Requirement           string
+	SubjectKind           string
+	ExistingRow           bool
+	QualificationRecorded bool
+	RowAdded              bool
+	AssembledOutcome      string
+	RetainedMembers       int
+	Qualified             int
+	Provisional           int
+	InsufficientEvidence  int
+	NotApplicable         int
+	UnrecordedMembers     int
+	Index                 int
+	Total                 int
+	RequestID             string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every RetainedRankingAccountingFields uniformly, set ONLY by NewRetainedRankingAccountingFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewRetainedRankingAccountingFields is the generated constructor for RetainedRankingAccountingFields -- every
+// field RetainedRankingAccounting.Fields declares is a required parameter.
+func NewRetainedRankingAccountingFields(orgID string, requirement string, subjectKind string, existingRow bool, qualificationRecorded bool, rowAdded bool, assembledOutcome string, retainedMembers int, qualified int, provisional int, insufficientEvidence int, notApplicable int, unrecordedMembers int, index int, total int, requestID string) RetainedRankingAccountingFields {
+	return RetainedRankingAccountingFields{
+		OrgID:                 orgID,
+		Requirement:           requirement,
+		SubjectKind:           subjectKind,
+		ExistingRow:           existingRow,
+		QualificationRecorded: qualificationRecorded,
+		RowAdded:              rowAdded,
+		AssembledOutcome:      assembledOutcome,
+		RetainedMembers:       retainedMembers,
+		Qualified:             qualified,
+		Provisional:           provisional,
+		InsufficientEvidence:  insufficientEvidence,
+		NotApplicable:         notApplicable,
+		UnrecordedMembers:     unrecordedMembers,
+		Index:                 index,
+		Total:                 total,
+		RequestID:             requestID,
+		constructed:           true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewRetainedRankingAccountingFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f RetainedRankingAccountingFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns RetainedRankingAccounting's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f RetainedRankingAccountingFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"requirement", contextfabric.SanitizeLogAttr(f.Requirement),
+		"subject_kind", contextfabric.SanitizeLogAttr(f.SubjectKind),
+		"existing_row", f.ExistingRow,
+		"qualification_recorded", f.QualificationRecorded,
+		"row_added", f.RowAdded,
+		"assembled_outcome", contextfabric.SanitizeLogAttr(f.AssembledOutcome),
+		"retained_members", f.RetainedMembers,
+		"qualified", f.Qualified,
+		"provisional", f.Provisional,
+		"insufficient_evidence", f.InsufficientEvidence,
+		"not_applicable", f.NotApplicable,
+		"unrecorded_members", f.UnrecordedMembers,
 		"index", f.Index,
 		"total", f.Total,
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),

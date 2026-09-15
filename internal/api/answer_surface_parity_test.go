@@ -174,7 +174,7 @@ func configureSidecarEnvironment(t *testing.T, server *httptest.Server, token st
 // callRealMCPInvestigateQuestion drives the real MCP server over the SDK's
 // in-memory transport, so the tool call goes through genuine protocol
 // dispatch rather than a direct handler invocation.
-func callRealMCPInvestigateQuestion(t *testing.T, boot *acrmcp.Bootstrap, question string, maxDrivers, maxCohort, maxEvidence int) contractsv1.ContextFabricAnswerProjection {
+func callRealMCPInvestigateQuestion(t *testing.T, boot *acrmcp.Bootstrap, question string, maxDrivers, maxCohort, maxEvidence int, windowReceipts ...contractsv1.ContextFabricBoundSubjectReceipt) contractsv1.ContextFabricAnswerProjection {
 	t.Helper()
 	ctx := context.Background()
 	server := acrmcp.NewServer(boot, "test-version")
@@ -193,7 +193,7 @@ func callRealMCPInvestigateQuestion(t *testing.T, boot *acrmcp.Bootstrap, questi
 	defer clientSession.Close()
 
 	arguments, err := json.Marshal(contractsv1.MCPInvestigateQuestionRequest{
-		Question: question,
+		Question: question, PriorWindowReceipts: windowReceipts,
 		Budget: &contractsv1.MCPInvestigationBudget{
 			MaxDrivers: maxDrivers, MaxCohortMembers: maxCohort, MaxEvidenceRefs: maxEvidence,
 		},

@@ -594,11 +594,11 @@ func factKindObligations(kind contextfabric.FactKind) map[contextfabric.SubjectK
 	// Substrate -- see the doc comment above.
 	case contextfabric.FactMembership, contextfabric.FactSourceHealth:
 		return nil
-	// Review and CI pressure explain why delivery looks the way it does;
-	// neither is a state reading of the subject in its own right.
+	// Pull-request state is the canonical state of the pull request itself.
+	// Review and CI pressure also explain delivery, without declaring health.
 	case contextfabric.FactPullRequests:
 		return map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
-			contextfabric.SubjectPullRequest: {contextfabric.ObligationPrincipalDrivers},
+			contextfabric.SubjectPullRequest: {contextfabric.ObligationState, contextfabric.ObligationPrincipalDrivers},
 		}
 	case contextfabric.FactReviews:
 		return map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
@@ -626,12 +626,13 @@ func factKindObligations(kind contextfabric.FactKind) map[contextfabric.SubjectK
 	// Same reasoning, and here it leaves the producer with nothing to
 	// serve `readiness` for at all: IncidentsProvider supports only the
 	// `incident` subject kind, and an incident's readiness is not a
-	// question. Incidents EXPLAIN reliability -- they are a driver. The
+	// question. Its canonical status answers state; incidents also explain
+	// reliability as drivers. The
 	// `readiness` obligation on a team or project is served by the
 	// readiness producer, not by this one.
 	case contextfabric.FactIncidents:
 		return map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
-			contextfabric.SubjectIncident: {contextfabric.ObligationPrincipalDrivers},
+			contextfabric.SubjectIncident: {contextfabric.ObligationState, contextfabric.ObligationPrincipalDrivers},
 		}
 	// Fired operational-deficiency rules explain pressure: a driver, never
 	// a state.

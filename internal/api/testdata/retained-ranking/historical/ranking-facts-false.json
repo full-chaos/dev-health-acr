@@ -1,0 +1,385 @@
+{
+  "Result": {
+    "schema_version": "context_fabric_investigation_result.v1",
+    "result_id": "result_ranking_surface_01",
+    "request_id": "request_retained_producer",
+    "generated_at": "1970-01-01T00:11:40Z",
+    "status": "complete",
+    "question": "Rank the team cohort",
+    "interpretation": {
+      "shape": "discovered_cohort",
+      "requested_judgment": "ranking",
+      "time_context": {
+        "axis": "current"
+      },
+      "fact_requirements": [
+        {
+          "kind": "health"
+        }
+      ],
+      "clarification_needed": false,
+      "window_class": "trend_assessment",
+      "window_confidence": "high"
+    },
+    "subject_resolution": {
+      "candidates": [],
+      "committed": []
+    },
+    "answer_plan": {
+      "family": "discovered_cohort_ranking",
+      "family_source": "model",
+      "family_version": "question-family.v2",
+      "member_kind": "team",
+      "require_drivers": true,
+      "require_ranking": true,
+      "render_kinds": [
+        "series"
+      ],
+      "fact_kinds": [
+        "health",
+        "workload",
+        "readiness",
+        "operational_deficiencies",
+        "investment"
+      ],
+      "axes": [
+        "window"
+      ],
+      "budget": {
+        "max_items": 0,
+        "max_serialized_bytes": 1048576,
+        "max_members": 50,
+        "synthesis_headroom": 16,
+        "narrowing_basis": "canonical_id_lexical"
+      },
+      "requirements": [
+        {
+          "requirement": "health/member/team",
+          "obligation": "health",
+          "role": "member",
+          "subject": "team",
+          "kind": "read",
+          "fact_kinds": [
+            "health"
+          ],
+          "scope": "each_member",
+          "quantifier": "at_least_one"
+        },
+        {
+          "requirement": "ranking/member/team",
+          "obligation": "ranking",
+          "role": "member",
+          "subject": "team",
+          "kind": "computed",
+          "step": "rank_cohort",
+          "step_execution": "server_executed",
+          "input_class": "fact_kinds",
+          "input_fact_kinds": [
+            "health",
+            "workload",
+            "investment",
+            "readiness",
+            "operational_deficiencies"
+          ],
+          "scope": "each_member",
+          "quantifier": "all"
+        },
+        {
+          "requirement": "state/member/team",
+          "obligation": "state",
+          "role": "member",
+          "subject": "team",
+          "kind": "read",
+          "fact_kinds": [
+            "flow",
+            "health",
+            "investment",
+            "landscape",
+            "readiness",
+            "workload"
+          ],
+          "scope": "each_member",
+          "quantifier": "corroborated"
+        }
+      ]
+    },
+    "cohort": {
+      "kind": "team",
+      "members": [
+        {
+          "subject": {
+            "kind": "team",
+            "canonical_id": "team:surface1",
+            "label": "Team 1"
+          },
+          "rank": 1,
+          "inclusion_reasons": [
+            "bounded cohort"
+          ],
+          "ranking_computed": true,
+          "attention_rank": 1,
+          "data_completeness": "degraded",
+          "outcome": "insufficient_evidence",
+          "missing_signals": [
+            "investment_mix",
+            "health.compounding_risk",
+            "readiness.coverage_gap",
+            "workload.forecast_pressure"
+          ]
+        },
+        {
+          "subject": {
+            "kind": "team",
+            "canonical_id": "team:surface2",
+            "label": "Team 2"
+          },
+          "rank": 2,
+          "inclusion_reasons": [
+            "bounded cohort"
+          ],
+          "ranking_computed": true,
+          "attention_rank": 2,
+          "data_completeness": "degraded",
+          "outcome": "insufficient_evidence",
+          "missing_signals": [
+            "investment_mix",
+            "health.compounding_risk",
+            "readiness.coverage_gap",
+            "workload.forecast_pressure"
+          ]
+        }
+      ],
+      "rationale": "bounded team cohort",
+      "complete": true,
+      "truncated": false
+    },
+    "direct_judgment": "Ranked.",
+    "current_state": "Bounded team ranking.",
+    "strongest_pressures": [],
+    "drivers": [],
+    "remaining_work": [],
+    "readiness_gaps": [],
+    "paths": [],
+    "conflicts": [],
+    "limitations": [
+      "A candidate subject was identified but not committed: the evidence assembled for it does not support naming it as the answer to this question."
+    ],
+    "evidence_ref_ids": [],
+    "claimed_facts": [],
+    "coverage": {
+      "sources": [],
+      "partial": true
+    },
+    "versions": {
+      "service_version": "acr-test",
+      "contract_version": "context_fabric_investigation_result.v1",
+      "backend": "test",
+      "projection_version": "projection-v1",
+      "query_version": "query-v1",
+      "interpretation_version": "interpret-v1",
+      "synthesis_version": "synthesis-v1",
+      "canonical_service_version": "ops-v1",
+      "model_identity": "unwired"
+    },
+    "deterministic_answer": "Ranked.",
+    "warnings": [],
+    "reused": false,
+    "effective_evidence_window": {
+      "start": "1969-10-03T00:11:40Z",
+      "end": "1970-01-01T00:11:40Z",
+      "relative_id": "trailing_90d",
+      "provenance": "question_stated"
+    },
+    "completeness": {
+      "terminal_status": "complete",
+      "claimed_facts_count": 0,
+      "rows_count": 0,
+      "state": "degraded",
+      "outcomes": [
+        {
+          "stage": "planning",
+          "requirement": "health/member/team",
+          "obligation": "health",
+          "outcome": "satisfied",
+          "impact": "none",
+          "cause_observed": false,
+          "served": 0,
+          "declared": 0
+        },
+        {
+          "stage": "planning",
+          "requirement": "ranking/member/team",
+          "obligation": "ranking",
+          "outcome": "satisfied",
+          "impact": "none",
+          "cause_observed": false,
+          "served": 0,
+          "declared": 0
+        },
+        {
+          "stage": "planning",
+          "requirement": "state/member/team",
+          "obligation": "state",
+          "outcome": "satisfied",
+          "impact": "none",
+          "cause_observed": false,
+          "served": 0,
+          "declared": 0
+        },
+        {
+          "stage": "assembled_result",
+          "requirement": "health/member/team",
+          "obligation": "health",
+          "outcome": "unavailable",
+          "impact": "dimension",
+          "cause_coverage": "requirement_read_not_planned",
+          "cause_observed": false,
+          "served": 0,
+          "declared": 1
+        },
+        {
+          "stage": "assembled_result",
+          "requirement": "state/member/team",
+          "obligation": "state",
+          "outcome": "unavailable",
+          "impact": "dimension",
+          "cause_coverage": "requirement_read_not_planned",
+          "cause_observed": false,
+          "served": 0,
+          "declared": 2
+        }
+      ]
+    }
+  },
+  "GraphEpoch": 0,
+  "SavedAt": "0001-01-01T00:00:00Z",
+  "ParentResultID": "",
+  "SemanticState": {
+    "format_version": "semantic-state.v1",
+    "family": "discovered_cohort_ranking",
+    "family_source": "model",
+    "family_table_version": "question-family.v2",
+    "group_kind": "",
+    "narrowing_basis": "canonical_id_lexical",
+    "scope_anchor": {
+      "kind": "",
+      "term": ""
+    },
+    "frame_present": true,
+    "frame": {
+      "goals": [
+        "rank_or_survey"
+      ],
+      "subject_expression": {
+        "kind": "discovered_kind",
+        "discovered": {
+          "member_kind": "team"
+        }
+      },
+      "temporal": "current",
+      "obligations": [
+        "state",
+        "health",
+        "ranking",
+        "evidence",
+        "coverage"
+      ],
+      "version": "question-frame.v1"
+    },
+    "frame_version": "question-frame.v1",
+    "validation": {
+      "emitted_shape": "discovered_cohort",
+      "gate_outcome": "passed",
+      "failed_invariant": "",
+      "refuse_basis": "",
+      "declared_member_kind": ""
+    },
+    "roles": [
+      {
+        "slot_id": "member:0",
+        "role": "member",
+        "subject": "team"
+      }
+    ],
+    "request_identity": {
+      "version": "request-identity.v1",
+      "digest": "7b5b659e30f344b770c41afd783f538770e3038b0bf62483c70abea254834f3f"
+    },
+    "requirements_declared": true,
+    "requirements": [
+      {
+        "obligation": "health",
+        "role": "member",
+        "subject": "team",
+        "requiredness": "required",
+        "kind": "read",
+        "fact_kinds": [
+          "health"
+        ],
+        "dimensions": [
+          "code_ownership_risk"
+        ],
+        "step": "",
+        "input_class": "",
+        "input_fact_kinds": [],
+        "step_execution": "",
+        "scope": "each_member",
+        "quantifier": "at_least_one",
+        "unavailable": ""
+      },
+      {
+        "obligation": "ranking",
+        "role": "member",
+        "subject": "team",
+        "requiredness": "required",
+        "kind": "computed",
+        "fact_kinds": [],
+        "dimensions": [],
+        "step": "rank_cohort",
+        "input_class": "fact_kinds",
+        "input_fact_kinds": [
+          "health",
+          "workload",
+          "investment",
+          "readiness",
+          "operational_deficiencies"
+        ],
+        "step_execution": "server_executed",
+        "scope": "each_member",
+        "quantifier": "all",
+        "unavailable": ""
+      },
+      {
+        "obligation": "state",
+        "role": "member",
+        "subject": "team",
+        "requiredness": "required",
+        "kind": "read",
+        "fact_kinds": [
+          "flow",
+          "health",
+          "investment",
+          "landscape",
+          "readiness",
+          "workload"
+        ],
+        "dimensions": [
+          "execution_completion",
+          "delivery_flow",
+          "code_ownership_risk",
+          "cognitive_workload_pressure",
+          "investment_balance"
+        ],
+        "step": "",
+        "input_class": "",
+        "input_fact_kinds": [],
+        "step_execution": "",
+        "scope": "each_member",
+        "quantifier": "corroborated",
+        "unavailable": ""
+      }
+    ],
+    "requirement_derivation_version": "requirement-derivation.v2"
+  },
+  "SemanticStateRead": "available"
+}
