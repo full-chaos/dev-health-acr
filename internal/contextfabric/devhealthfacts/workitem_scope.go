@@ -118,15 +118,10 @@ func workItemRepositorySelector(raw string) (workItemSelectorKind, string, bool)
 	return workItemSelectorExact, normalized, true
 }
 
-// workItemReaderSettings provides the same fixed, caller-independent
-// statement resource class to status, title and actual-completion reads. The
-// result ceiling matches the existing R+1 probe. max_rows_to_read is a
-// separate physical-scan budget: ClickHouse counts source rows read before
-// the WHERE/LIMIT and FINAL steps, so it cannot be derived from the 201-row
-// result probe. The row, memory and thread values are finite private policy
-// bounds shared by all three readers; they do not claim that every input fits
-// within this class. Every configured overflow mode is rendered as throw by
-// the readers package; a caller context remains the final deadline authority.
+// Membership, status, title and actual-completion statements share these
+// fixed private resource bounds. The physical scan limit is independent of
+// each reader's result probe: ClickHouse counts source rows before WHERE,
+// LIMIT and FINAL. These finite bounds do not promise that every input fits.
 const (
 	workItemReaderMaxRowsToRead  = uint64(8192)
 	workItemReaderMaxMemoryUsage = uint64(64 << 20)
@@ -135,6 +130,10 @@ const (
 
 var errWorkItemReaderDeadlineTooShort = errors.New("work item reader deadline is too short for a bounded query")
 
+// workItemReaderSettings applies the shared resource class to content reads
+// with the existing R+1 result probe. Every overflow mode renders as throw;
+// the caller context remains the final deadline authority. S1 uses its own
+// deadline/error handling and K+1 result probe with the same resource bounds.
 func workItemReaderSettings(ctx context.Context) (readers.Settings, error) {
 	if err := ctx.Err(); err != nil {
 		return readers.Settings{}, err

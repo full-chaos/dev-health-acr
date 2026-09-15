@@ -1278,6 +1278,169 @@
     ]
   },
   {
+    "id": "contextfabric.work_item_membership_gate",
+    "msg": "context fabric work item membership gate",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "at most one Info line per BeginWorkItemMembership admission attempt; the line exists only for refusal or cancellation and carries the bounded in-flight and queue occupancy.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "refused",
+          "context_canceled",
+          "deadline_too_short"
+        ]
+      },
+      {
+        "key": "in_flight",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "queued",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "max_in_flight",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "queue_capacity",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.work_item_membership_s1",
+    "msg": "context fabric work item membership s1",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "exactly one Info line per BeginWorkItemMembership S1 call; the call emits one line after the atomic statement completes or fails, with fixed census and response caps carried on the line.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "state",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "exact",
+          "floor",
+          "unmeasured"
+        ]
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "s1_error",
+          "excluded_provider",
+          "zero_authorized_overflow",
+          "identity_omitted"
+        ]
+      },
+      {
+        "key": "population_measured",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "population_complete",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "capped_population",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "authorized_population",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "denied_population",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "served_members",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "census_limit",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "future_boundary_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "transition_assertion_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "max_execution_time_seconds",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "max_rows_to_read",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "max_memory_usage",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "max_result_rows",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "graphrank.alias_lookup",
     "msg": "context fabric resolution trace: alias lookup",
     "level": "info",

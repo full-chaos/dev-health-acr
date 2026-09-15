@@ -162,6 +162,10 @@ func goVarName(e Event) string {
 		return "SemanticStatePersistence"
 	case RequirementOutcomeTransition.ID:
 		return "RequirementOutcomeTransition"
+	case WorkItemMembershipS1.ID:
+		return "WorkItemMembershipS1"
+	case WorkItemMembershipGate.ID:
+		return "WorkItemMembershipGate"
 	default:
 		panic("eventspec: goVarName has no mapping for " + e.ID + " -- add one before regenerating")
 	}

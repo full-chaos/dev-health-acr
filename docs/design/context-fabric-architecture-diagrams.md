@@ -1,6 +1,6 @@
 # Context Fabric architecture diagrams (CHAOS-4133)
 
-Six mermaid diagrams covering the question-answering pipeline, the
+Mermaid diagrams covering the question-answering pipeline, the
 candidate-pool mechanism that hid CHAOS-4348, the live subject/graph data
 model, the fact data model, the two-turn trial harness's measurement
 fields, and the N-turn confirmation-carry class (CHAOS-4360). Built
@@ -616,8 +616,10 @@ sub-second budget is refused because the released reader API accepts only
 whole-second server execution ceilings; longer deadlines use the floored
 server value and the client context remains an additional bound.
 
-The shared resource policy is independent of fixture size: 8192 physical
-rows, 64 MiB of query memory and one requested query thread. It does not
+The resource constants in `workitem_scope.go` are shared with dormant
+membership S1: 8192 physical rows, 64 MiB of query memory and one requested
+query thread, supplied through typed reader settings. The policy is
+independent of fixture size. It does not
 promise that every valid history or storage layout fits. A native limit
 failure is a failed content read, never a successfully measured partial
 stream. The thread setting is per statement and does not change the shared
@@ -2346,6 +2348,99 @@ result, it does not stop the model stating a number in words.
 **Update rule.** Any change to the obligation kinds table, the computed-step
 table, the input declaration, the EXECUTION declaration or where a
 server-executed step runs, or `DerivedRequirement`'s fields updates this
+diagram in the same PR.
+
+---
+
+## 12 — Dormant work-item membership S1 and admission gate
+
+```mermaid
+flowchart TD
+  INPUT["resolved project anchor<br/>current authenticated principal<br/>raw repository selector<br/>positive plan/request caps<br/>context deadline"] --> PORT["WorkItemMembershipPort.BeginWorkItemMembership<br/>internal/contextfabric/work_item_membership.go"]
+  PORT --> ADAPTER["devhealthfacts.WorkItemMembershipReader<br/>validate project identity<br/>derive scope from principal + raw selector<br/>5751 helper is the only selector translation"]
+  ADAPTER --> GATE["shared default process gate<br/>WorkItemMembershipGate.Acquire<br/>32 in-flight permits + 32 queue slots"]
+  GATE -->|"permit or queued admission"| LEASE["lease held for S1 and the future response"]
+  GATE -->|"queue full / cancelled"| GREFUSE["refuse before query<br/>gate Info record"]
+  LEASE --> SETTINGS{"deadline has at least one whole second?"}
+  SETTINGS -->|"no"| DREFUSE["refuse before S1<br/>deadline_too_short Info record"]
+  SETTINGS -->|"yes"| RESOURCE["shared workitem_scope resource constants<br/>typed Settings: rows 8192 · memory 64 MiB · threads 1<br/>S1 result ceiling K+1 · overflow modes throw"]
+  RESOURCE --> SQL["ONE atomic S1 statement<br/>project_membership_presence m<br/>INNER JOIN work_items FINAL<br/>WorkItemScopeSQL repos join + org predicate<br/>unique provider-qualified project resolution<br/>same authorization expression as the mask<br/>authorized-first, canonical order, LIMIT C+1"]
+  SQL --> COUNTS["12-column stream: member identities and counts<br/>future-boundary and transition assertions<br/>one identity-free anchor sentinel"]
+  COUNTS --> FAILURE{"query, scan, iterator, or row error?"}
+  FAILURE -->|"yes"| UNMEASURED["discard every scanned row<br/>state=unmeasured<br/>existing limitation string"]
+  FAILURE -->|"no"| VALIDATE["exactly one valid resolved sentinel<br/>resolved member rows<br/>validate finite counters and<br/>same-row counter consistency<br/>authorized flag 0/1<br/>derive + compare canonical identity<br/>dedup, then canonical sort"]
+  VALIDATE -->|"invalid"| VUNMEASURED["state=unmeasured<br/>no member claim"]
+  VALIDATE -->|"valid"| EXCLUDED{"GitLab anchor, or GitHub<br/>without ghprojv2 project column?"}
+  EXCLUDED -->|"yes"| XUNMEASURED["state=unmeasured<br/>retain transition/future assertions"]
+  EXCLUDED -->|"no"| ZERO{"zero authorized AND<br/>capped population reached C+1?"}
+  ZERO -->|"yes"| DENIAL["zero-authorized overflow<br/>state=unmeasured denial"]
+  ZERO -->|"no"| CENSUS{"authorized population reached C+1?"}
+  CENSUS -->|"no"| EXACT["state=exact<br/>including measured zero"]
+  CENSUS -->|"yes"| FLOOR["state=floor<br/>population_complete=false<br/>authorized lower bound"]
+  FLOOR --> SERVE["serve up to K=min(200,<br/>positive plan cap, positive request cap)"]
+  EXACT --> SERVE
+  SERVE --> RESULT["WorkItemMembershipResult<br/>+ held lease"]
+  UNMEASURED --> RESULT
+  VUNMEASURED --> RESULT
+  XUNMEASURED --> RESULT
+  DENIAL --> RESULT
+  RESULT --> EVENTS["configured slog Info path<br/>eventspec declaration + certifier<br/>finite fields; missing remains distinct from zero"]
+  RESULT --> RESPONSE["future response owner calls<br/>lease.Release after terminal response"]
+  RESPONSE -. "no edge in this dormant tip" .-> RUNTIME["Engine / fact registry / runtime / old callers<br/>deliberately unwired<br/>S2 and S3 are not executed"]
+
+  classDef fixed fill:#14532d,stroke:#22c55e,color:#ffffff
+  classDef refuse fill:#7f1d1d,stroke:#ef4444,color:#ffffff
+  classDef gap fill:#78350f,stroke:#f59e0b,color:#ffffff
+  class LEASE,RESOURCE,SQL,COUNTS,VALIDATE,EXACT,FLOOR,SERVE,RESULT,EVENTS fixed
+  class GREFUSE,DREFUSE,UNMEASURED,VUNMEASURED,XUNMEASURED,DENIAL refuse
+  class RUNTIME gap
+```
+
+**Caption.** The new reader is a dormant boundary after semantic resolution.
+It accepts a project anchor, the live authenticated principal, and the raw
+repository selector. It derives the library authorization scope inside S1,
+then uses the same rendered authorization expression for the mask and the
+joined work-item relation. No pre-read lookup supplies a grant, and no
+caller-supplied typed scope is trusted. The statement reads the production
+membership view with organization-qualified `work_items` and `repos` joins,
+projects the transition counters, and takes an authorized-first C+1 window so
+an exact census can be separated from a floor. S1 consumes the same private
+row, memory and thread constants as the content readers through typed
+`readers.Settings`; it adds no SQL settings suffix. Its own whole-second
+deadline handling, five-second default, `ErrWorkItemMembershipDeadlineTooShort`
+and K+1 result ceiling remain separate from the content settings helper.
+Native limit failures discard the stream rather than reporting a partial census.
+
+Unknown and zero remain different outcomes. Query or scan failure, invalid
+row shape, excluded GitLab/GitHub column arms, and zero-authorized overflow
+do not claim a population. A resolved, identity-free sentinel with no member
+rows is an exact measured zero; a missing, duplicate, malformed or unresolved
+sentinel is unmeasured. C+1 authorized rows establish a lower-bound floor;
+denied rows alone do not establish that floor. The response cap K can only
+narrow the fixed 200-member serving limit. The lease belongs to the future
+response owner and is not released when S1 returns. S1 and gate decisions
+reach the configured Info collection path and eventspec certifier with finite
+fields only.
+
+**Dormancy boundary.** This tip adds no edge from the port to `Engine`, the
+fact registry, runtime composition, or existing work-item callers. It does
+not run S2 or S3. A later activation change owns that wiring and must keep
+the same authorization renderer, response lease, and outcome distinctions.
+
+**Anchors.** The request/result/port and telemetry types are in
+`internal/contextfabric/work_item_membership.go:15-145,147-287`; admission
+and lease behavior is in `internal/contextfabric/work_item_membership_gate.go:8-106`;
+the adapter starts at
+`internal/contextfabric/devhealthfacts/work_item_membership.go:39`, S1 at
+`:66`, settings at `:207`, census validation at `:248`, and the statement at
+`:479`. Shared resource constants are in
+`internal/contextfabric/devhealthfacts/workitem_scope.go:125`. The certified
+Info declarations start at `internal/contextfabric/eventspec/spec.go:1717`
+and `:1749`, with their construction generated in
+`internal/contextfabric/eventspec/zz_generated.go`.
+
+**Update rule.** Any later activation, SQL-shape change, admission-bound
+change, lease-owner change, or event-field change updates this dormant-boundary
 diagram in the same PR.
 
 ---
