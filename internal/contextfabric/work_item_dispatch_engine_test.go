@@ -93,6 +93,14 @@ func TestWorkItemSurveyGoalDispatchesMembershipRead(t *testing.T) {
 	if graph.resolveCalls != 1 || membershipReads != 1 || graph.discoverCalls != 0 || factReads != 0 {
 		t.Fatalf("phase counts resolve=%d membership=%d discover=%d facts=%d; want 1,1,0,0", graph.resolveCalls, membershipReads, graph.discoverCalls, factReads)
 	}
+	// The engine-level mutation (engine.go, gated on workItemTuple) must
+	// actually have run for a turn that reaches dispatch: the frame the
+	// engine used carries no ranking obligation once workItemTuple settled
+	// true, the positive control TestWorkItemLateFamilyDisallowReRefusesWithoutLosingObligations's
+	// negative control needs beside it.
+	if frame.HasObligation(ObligationRanking) {
+		t.Fatalf("engine-level strip did not run on an admitted, dispatched survey turn: obligations=%v", frame.Obligations)
+	}
 }
 
 // TestWorkItemSurveyGoalWithOrderingStaysRefused is the control this arm

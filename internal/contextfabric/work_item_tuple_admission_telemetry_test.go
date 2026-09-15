@@ -84,6 +84,49 @@ func TestWorkItemSurveyGoalTelemetryReflectsTheEnforcedGate(t *testing.T) {
 	}
 }
 
+// TestNonWorkItemRankingFrameNeverPredictsAStrip is the negative control
+// workItemTupleObligationsToStrip's own gating needs beside the positive
+// case above: a frame that legitimately carries ObligationRanking
+// (GoalRankOrSurvey) but is not children_of_scope/work_item passes the
+// base frame gate WITHOUT the tuple ever running (prospectiveWorkItemTupleAdmission
+// returns not_applicable), so the prediction must never fire for it --
+// resolveFrame's own gate is already FrameGatePassed BEFORE the tuple call,
+// which is exactly the case an unconditional "gate ended up passed" read
+// (instead of "THIS call promoted it") would get wrong.
+func TestNonWorkItemRankingFrameNeverPredictsAStrip(t *testing.T) {
+	defer reportWorkItemMutationPanic(t)
+	logs := captureEngineLogger(t)
+	frame := frameWith([]InvestigationGoal{GoalRankOrSurvey}, discoveredExpression(SubjectIncident), TemporalIntentCurrent, nil)
+	if !frame.HasObligation(ObligationRanking) {
+		t.Fatal("fixture frame does not carry the ranking obligation to begin with")
+	}
+	receipt := validModelReceiptFixture(ModelOperationInterpret)
+	receipt.QuestionFrame = &frame
+	interpreted := InterpretedQuestion{
+		Shape: ShapeDiscoveredCohort, RequestedJudgment: "rank", TimeContext: TimeContext{Axis: TemporalCurrent},
+		FactRequirements: []FactRequirement{{Kind: FactStatus}}, SubjectTerms: []string{"incidents"},
+	}
+	interpreter := RuntimeQuestionInterpreter{
+		Runtime:        fakeModelRuntime{interpreted: interpreted, receipt: receipt},
+		Sink:           &fakeReceiptSink{},
+		FrameTelemetry: logs.telemetry,
+	}
+	if _, _, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_1"}, validInvestigationRequest()); err != nil {
+		t.Fatalf("Interpret() error = %v", err)
+	}
+	lines := linesWithMessage(t, logs.configured.String(), frameValidationMessage)
+	if len(lines) != 1 {
+		t.Fatalf("frame-validation lines = %d, want exactly 1 per interpretation", len(lines))
+	}
+	line := lines[0]
+	if line["frame_gate"] != "passed" {
+		t.Fatalf("frame_gate = %v, want \"passed\" (a discovered-kind incident frame is not this arm's concern)", line["frame_gate"])
+	}
+	if got := stringSliceLogValue(t, line["stripped_obligations"]); got != nil {
+		t.Fatalf("stripped_obligations = %v, want nil: the work-item tuple never ran for this frame", got)
+	}
+}
+
 // stringSliceLogValue decodes a captured JSON log field (a []any of
 // strings, or absent/null) into a []string, nil for either absent form --
 // the log line's own "nothing stripped" contract.
