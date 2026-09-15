@@ -874,3 +874,38 @@ func TestEveryCountSurfaceOnEveryPathFollowsTheScopeDecision(t *testing.T) {
 		})
 	}
 }
+
+// TestAnEmptyAnchorTermBindsNothing pins the empty-term guard over its input
+// domain: an empty or whitespace anchor term on the frame never binds a
+// candidate, whatever resolution recorded as matched. Only a real anchor term
+// binds.
+func TestAnEmptyAnchorTermBindsNothing(t *testing.T) {
+	t.Parallel()
+	anchor := scopeAnchorRepository()
+	for _, cell := range []struct {
+		name        string
+		anchorTerms []string
+		matched     []string
+		wantBound   bool
+	}{
+		{"empty anchor term, empty match", []string{""}, []string{""}, false},
+		{"empty anchor term, whitespace match", []string{""}, []string{" "}, false},
+		{"whitespace anchor term, empty match", []string{" "}, []string{""}, false},
+		{"whitespace anchor term, whitespace match", []string{" "}, []string{"  "}, false},
+		{"empty and whitespace anchor terms, empty match", []string{"", " "}, []string{""}, false},
+		{"whitespace beside a real anchor term, empty match", []string{" ", "a"}, []string{""}, false},
+		{"whitespace beside a real anchor term, whitespace match", []string{" ", "a"}, []string{" "}, false},
+		{"whitespace beside a real anchor term, real match", []string{" ", "a"}, []string{"a"}, true},
+		{"empty anchor term beside a real one, real match", []string{"", "a"}, []string{"a"}, true},
+	} {
+		frame := frameWithPointer([]InvestigationGoal{GoalCountOrAggregate}, SubjectExpression{
+			Kind:   SubjectExpressionChildrenOfScope,
+			Scoped: &ScopedSetExpression{AnchorTerms: cell.anchorTerms, MemberKind: SubjectTeam},
+		})
+		resolution := SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor, cell.matched...)}}
+		got := DecideCountPopulationScope(frame, "", resolution, nil)
+		if bound := got.Decision == CountPopulationScopeAnchorCommitted; bound != cell.wantBound {
+			t.Errorf("%s: decision %q (anchors=%d unbound=%d), want bound=%t", cell.name, got.Decision, got.CommittedAnchors, got.CommittedUnbound, cell.wantBound)
+		}
+	}
+}
