@@ -153,6 +153,21 @@
         "presence": "required"
       },
       {
+        "key": "committed_unbound",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "anchor_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "anchor_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
         "key": "candidates",
         "type": "int",
         "presence": "required"

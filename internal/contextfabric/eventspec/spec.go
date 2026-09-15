@@ -1968,6 +1968,11 @@ var CountPopulationScope = Event{
 		{Key: "requirement", Type: FieldString, Presence: PresenceRequired},
 		{Key: "committed", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "committed_anchors", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "committed_unbound", Type: FieldInt, Presence: PresenceRequired},
+		// Open: the reading's anchor kind and the bound anchor's canonical id,
+		// empty when there is none.
+		{Key: "anchor_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "anchor_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "candidates", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "member_set_resolved", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "members", Type: FieldInt, Presence: PresenceRequired},

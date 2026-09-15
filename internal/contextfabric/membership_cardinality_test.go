@@ -123,7 +123,9 @@ func newCountingEngineWithPopulation(t *testing.T, cohort *Cohort, population in
 
 	graph := graphReaderStub{
 		resolution: SubjectResolution{
-			Candidates: []SubjectCandidate{},
+			// The anchor as resolution records it: committed on a match for
+			// the frame's anchor term (count_population_scope.go).
+			Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)},
 			Committed:  []SubjectRef{anchor},
 		},
 		context: GraphContext{
@@ -1041,6 +1043,8 @@ func TestAReusedAnswerStatesItsCardinality(t *testing.T) {
 	// a real cohort, and NO assembled-result count row -- exactly what a row
 	// persisted before this change looks like.
 	candidate.Cohort = countingCohort(SubjectTeam, 3)
+	// The stored anchor as resolution recorded it (count_population_scope.go).
+	candidate.SubjectResolution.Candidates = []SubjectCandidate{scopeAnchorMatch(project)}
 	candidate.Completeness.Outcomes = []RequirementOutcomeRow{{
 		Stage:       contractsv1.ContextFabricOutcomeStagePlanning,
 		Requirement: string(ObligationCount) + "/" + string(SubjectRoleMember) + "/" + string(SubjectTeam),
@@ -1107,6 +1111,8 @@ func TestAReusedNarrowedAnswerIsBackfilledAsNarrowed(t *testing.T) {
 	t.Parallel()
 	project, candidate := reusableCandidate()
 	candidate.Cohort = countingCohort(SubjectTeam, 3)
+	// The stored anchor as resolution recorded it (count_population_scope.go).
+	candidate.SubjectResolution.Candidates = []SubjectCandidate{scopeAnchorMatch(project)}
 	candidate.Cohort.Complete = false
 	candidate.Cohort.Truncated = true
 	// The stored plan's OWN narrowing history: this document was cut from
@@ -1429,6 +1435,8 @@ func TestAReusedAnswersCountReachesTheOperator(t *testing.T) {
 	t.Parallel()
 	project, candidate := reusableCandidate()
 	candidate.Cohort = countingCohort(SubjectTeam, 3)
+	// The stored anchor as resolution recorded it (count_population_scope.go).
+	candidate.SubjectResolution.Candidates = []SubjectCandidate{scopeAnchorMatch(project)}
 	candidate.Completeness.Outcomes = []RequirementOutcomeRow{{
 		Stage:       contractsv1.ContextFabricOutcomeStagePlanning,
 		Requirement: string(ObligationCount) + "/" + string(SubjectRoleMember) + "/" + string(SubjectTeam),

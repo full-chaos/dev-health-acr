@@ -74,7 +74,10 @@ type synthesisAssemblyParams struct {
 	// pass did, and selecting on a different frame -- or on none -- would
 	// let a re-synthesized answer draw a different chart than the one the
 	// budget measured.
-	Frame                 *QuestionFrame
+	Frame *QuestionFrame
+	// ScopeAnchorKind is the winning sample's stated scope anchor kind, read
+	// by the count scope decision beside Frame.
+	ScopeAnchorKind       SubjectKind
 	Graph                 GraphContext
 	Facts                 CanonicalFactBundle
 	Resolution            SubjectResolution
@@ -320,7 +323,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// about -- see count_population_scope.go. Applied here, to the one value
 	// every count surface of this pass reads, so the row, the claim and the
 	// sentence cannot disagree about it.
-	cardinality = scopedMembershipCardinality(cardinality, DecideCountPopulationScope(params.Frame, params.Resolution))
+	cardinality = scopedMembershipCardinality(cardinality, DecideCountPopulationScope(params.Frame, params.ScopeAnchorKind, params.Resolution, params.CommitBases))
 	// CHAOS-5732 (D47): a kind_census_truncated detail's Served
 	// is minted by falkorgraph's DiscoverContext, BEFORE stage 3's own
 	// budget narrowing can shrink graphContext.Cohort further -- the same

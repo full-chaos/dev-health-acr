@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -40,11 +41,14 @@ const (
 	// population. The count stands.
 	CountPopulationScopeOrganization CountPopulationScopeDecision = "organization_scope"
 	// CountPopulationScopeAnchorCommitted: the question counts members under
-	// an anchor, and at least one committed subject is not of the member kind
-	// -- the anchor the member set was retrieved under. The count stands.
+	// an anchor, and a committed subject is BOUND to that anchor -- of the
+	// anchor's kind when the reading states one, and recorded by resolution
+	// as the anchor term's match or committed on the caller's own canonical
+	// id. The count stands.
 	CountPopulationScopeAnchorCommitted CountPopulationScopeDecision = "anchor_committed"
 	// CountPopulationScopeAnchorUnresolved: the question counts members under
-	// an anchor, no committed subject can be that anchor, and at most one
+	// an anchor, no committed subject is bound to that anchor (a committed
+	// subject of another identity is not the anchor), and at most one
 	// candidate was offered. The member set is not bounded by the requested
 	// scope, so it is not counted.
 	CountPopulationScopeAnchorUnresolved CountPopulationScopeDecision = "anchor_unresolved"
@@ -78,9 +82,18 @@ type CountPopulationScope struct {
 	MemberKind     SubjectKind
 	// Committed is how many subjects the resolution committed.
 	Committed int
-	// CommittedAnchors is how many of them are NOT of the member kind -- the
-	// subjects that can be the anchor a scoped member set hangs off.
+	// CommittedAnchors is how many of them are BOUND to the frame's anchor
+	// (see anchorBound).
 	CommittedAnchors int
+	// CommittedUnbound is how many committed subjects are not of the member
+	// kind and are NOT bound to the anchor: a subject of another identity,
+	// the shape an unbound "any non-member subject" rule counted.
+	CommittedUnbound int
+	// AnchorKind is the reading's anchor kind (ScopeAnchorRetrievalKind's
+	// verdict), "" when the reading states none.
+	AnchorKind SubjectKind
+	// AnchorID is the canonical id of the first bound anchor, "" when none.
+	AnchorID string
 	// Candidates is how many uncommitted candidates the resolution offered.
 	Candidates int
 }
@@ -93,8 +106,12 @@ func (s CountPopulationScope) Counts() bool {
 // DecideCountPopulationScope decides whether a resolved member set may be
 // counted as the population the frame asks about.
 //
+// sampleAnchorKind is the reading's stated anchor kind (the winning sample's
+// on the fresh path, the persisted reading's on reuse); bases is the
+// resolution's commit basis set, nil where none is carried.
+//
 // PURE: reads its arguments and mutates nothing.
-func DecideCountPopulationScope(frame *QuestionFrame, resolution SubjectResolution) CountPopulationScope {
+func DecideCountPopulationScope(frame *QuestionFrame, sampleAnchorKind SubjectKind, resolution SubjectResolution, bases CommitBasisSet) CountPopulationScope {
 	scope := CountPopulationScope{
 		Committed:  len(resolution.Committed),
 		Candidates: len(resolution.Candidates),
@@ -105,10 +122,19 @@ func DecideCountPopulationScope(frame *QuestionFrame, resolution SubjectResoluti
 	}
 	scope.ExpressionKind = frame.SubjectExpression.Kind
 	scope.MemberKind, _ = frame.SubjectExpression.MemberKind()
+	scope.AnchorKind = ScopeAnchorRetrievalKind(frame, sampleAnchorKind)
 	for _, subject := range resolution.Committed {
-		if subject.Kind != scope.MemberKind {
-			scope.CommittedAnchors++
+		if subject.Kind == scope.MemberKind {
+			continue
 		}
+		if anchorBound(frame, scope.AnchorKind, subject, resolution, bases) {
+			scope.CommittedAnchors++
+			if scope.AnchorID == "" {
+				scope.AnchorID = subject.CanonicalID
+			}
+			continue
+		}
+		scope.CommittedUnbound++
 	}
 	switch {
 	case scope.ExpressionKind != SubjectExpressionChildrenOfScope:
@@ -121,6 +147,86 @@ func DecideCountPopulationScope(frame *QuestionFrame, resolution SubjectResoluti
 		scope.Decision = CountPopulationScopeAnchorUnresolved
 	}
 	return scope
+}
+
+// anchorBound reports whether a committed subject is the frame's anchor, from
+// the resolution's own record rather than from its kind alone.
+//
+// KIND: when the reading states an anchor kind, only a subject of that kind can
+// be the anchor. PROVENANCE: the subject was committed on the caller's own
+// canonical id, or resolution recorded it as a match for one of the frame's
+// anchor terms. The terms are compared as retrieval pointers against
+// resolution's record of what each pointer matched, never as values.
+func anchorBound(frame *QuestionFrame, anchorKind SubjectKind, subject SubjectRef, resolution SubjectResolution, bases CommitBasisSet) bool {
+	if anchorKind != "" && subject.Kind != anchorKind {
+		return false
+	}
+	if bases.For(subject) == CommitBasisCallerCanonicalID {
+		return true
+	}
+	if frame.SubjectExpression.Scoped == nil {
+		return false
+	}
+	terms := make(map[string]struct{}, len(frame.SubjectExpression.Scoped.AnchorTerms))
+	for _, term := range frame.SubjectExpression.Scoped.AnchorTerms {
+		if normalized := NormalizeRetrievalTerm(term); normalized != "" {
+			terms[normalized] = struct{}{}
+		}
+	}
+	for _, candidate := range resolution.Candidates {
+		if candidate.Subject.Kind != subject.Kind || candidate.Subject.CanonicalID != subject.CanonicalID {
+			continue
+		}
+		for _, matched := range candidate.MatchedTerms {
+			if _, anchor := terms[NormalizeRetrievalTerm(matched)]; anchor {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// NormalizeRetrievalTerm is the one normalization a retrieval pointer is
+// compared under: trimmed and lower-cased. graphrank.NormalizeAliasTerm is
+// defined as this function, so resolution's matching and this comparison
+// cannot drift apart.
+func NormalizeRetrievalTerm(term string) string {
+	return strings.ToLower(strings.TrimSpace(term))
+}
+
+// storedCountReading is what the count scope decision reads from the reading
+// persisted beside a stored row.
+type storedCountReading struct {
+	Frame      *QuestionFrame
+	AnchorKind SubjectKind
+}
+
+// storedCountReadingOf is the reading persisted beside a stored row, or the
+// zero reading when it is not available -- absent, unreadable, or carrying no
+// frame. A zero reading is an absence the decision refuses to count over.
+func storedCountReadingOf(stored StoredInvestigationResult) storedCountReading {
+	if stored.SemanticStateRead != SemanticStateReadAvailable || stored.SemanticState == nil || !stored.SemanticState.FramePresent {
+		return storedCountReading{}
+	}
+	return storedCountReading{Frame: stored.SemanticState.Frame, AnchorKind: stored.SemanticState.ScopeAnchor.Kind}
+}
+
+// storedDocumentStatesCount reports whether a stored document already states a
+// count: an assembled count row that counted, or a cardinality claim. The
+// answer sentence is composed only beside those two, so it is not read.
+func storedDocumentStatesCount(result InvestigationResult) bool {
+	if resultCarriesCardinalityClaim(result) {
+		return true
+	}
+	for _, row := range result.Completeness.Outcomes {
+		if row.Stage != contractsv1.ContextFabricOutcomeStageAssembledResult || row.Obligation != string(ObligationCount) {
+			continue
+		}
+		if row.Outcome == contractsv1.ContextFabricRequirementSatisfied || row.Outcome == contractsv1.ContextFabricRequirementNarrowed {
+			return true
+		}
+	}
+	return false
 }
 
 // scopedMembershipCardinality applies the decision to a computed cardinality.
@@ -210,6 +316,9 @@ func CountPopulationScopeLogArgs(event CountPopulationScopeEvent, orgID string) 
 		// PRE-DECISION: what resolution and retrieval measured.
 		"committed", SanitizeLogInt(int64(event.Scope.Committed)),
 		"committed_anchors", SanitizeLogInt(int64(event.Scope.CommittedAnchors)),
+		"committed_unbound", SanitizeLogInt(int64(event.Scope.CommittedUnbound)),
+		"anchor_kind", SanitizeLogAttr(string(event.Scope.AnchorKind)),
+		"anchor_id", SanitizeLogAttr(event.Scope.AnchorID),
 		"candidates", SanitizeLogInt(int64(event.Scope.Candidates)),
 		"member_set_resolved", event.MemberSetResolved,
 		"members", SanitizeLogInt(int64(event.Members)),

@@ -93,7 +93,7 @@ const IdentityNormalizationVersion = "identity_norm_v1"
 // transform locally (CRITICAL-2's "one normal form, one implementation"
 // requirement).
 func NormalizeAliasTerm(s string) string {
-	return strings.ToLower(strings.TrimSpace(s))
+	return contextfabric.NormalizeRetrievalTerm(s)
 }
 
 // IsASCIIIdentityTerm reports whether s contains only the alphabet

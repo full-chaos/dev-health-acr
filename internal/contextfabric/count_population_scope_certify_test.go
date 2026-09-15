@@ -28,8 +28,17 @@ func TestTheCountPopulationScopeLineCertifiesAgainstItsSpecification(t *testing.
 			"decision": "anchor_ambiguous", "assembled_outcome": "unavailable", "counted": false, "served": 0,
 		}},
 		{"scoped count, anchor committed", map[string]any{
-			"expression_kind": "children_of_scope", "committed": 1, "committed_anchors": 1, "candidates": 0, "members": 3,
+			"expression_kind": "children_of_scope", "committed": 1, "committed_anchors": 1, "committed_unbound": 0, "candidates": 1, "members": 3,
+			"anchor_kind": "", "anchor_id": "repository:SCOPE_ANCHOR",
 			"decision": "anchor_committed", "assembled_outcome": "satisfied", "counted": true, "served": 3,
+		}},
+		{"scoped count, unrelated committed subject", map[string]any{
+			"committed": 1, "committed_anchors": 0, "committed_unbound": 1, "anchor_id": "",
+			"decision": "anchor_unresolved", "assembled_outcome": "unavailable", "counted": false, "served": 0,
+		}},
+		{"scoped count, anchor term matched under the reading's anchor kind, normalized", map[string]any{
+			"committed_anchors": 1, "committed_unbound": 0, "anchor_kind": "repository", "anchor_id": "repository:SCOPE_ANCHOR",
+			"decision": "anchor_committed", "counted": true, "served": 3,
 		}},
 		{"scoped count, only a member-kind subject committed", map[string]any{
 			"committed": 1, "committed_anchors": 0, "decision": "anchor_unresolved", "counted": false,
