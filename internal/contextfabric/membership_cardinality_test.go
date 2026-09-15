@@ -1048,10 +1048,6 @@ func TestAReusedAnswerStatesItsCardinality(t *testing.T) {
 		Outcome:     contractsv1.ContextFabricRequirementSatisfied,
 		Impact:      contractsv1.ContextFabricAnswerImpactNone,
 	}}
-	// The stored plan names the population: teams under the committed
-	// project. A document with no plan records no population, and its count is
-	// withheld (count_population_scope_test.go).
-	candidate.AnswerPlan = &AnswerPlan{Family: QuestionFamilyScopedCohortStatus, FamilyVersion: QuestionFamilyTableVersion, MemberKind: SubjectTeam}
 	candidate.Completeness = ComputeAnswerCompleteness(candidate)
 	if len(countOutcomeRows(candidate, contractsv1.ContextFabricOutcomeStageAssembledResult)) != 0 {
 		t.Fatal("the stored fixture already carries an assembled-result count row; it does not model a pre-wire row")
@@ -1066,11 +1062,9 @@ func TestAReusedAnswerStatesItsCardinality(t *testing.T) {
 		committed = append(committed, member.Subject)
 	}
 	engine := mustReuseTestEngine(t, EngineDependencies{
-		Graph:   graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed}},
-		Results: &resultStoreStub{},
-		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
-			return candidate, true, nil
-		}),
+		Graph:     graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed}},
+		Results:   &resultStoreStub{},
+		ReuseGate: readingReuseGate{stored: candidate, frame: countingFrame(SubjectTeam)},
 	})
 	served, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
 	if err != nil {
@@ -1140,11 +1134,9 @@ func TestAReusedNarrowedAnswerIsBackfilledAsNarrowed(t *testing.T) {
 		committed = append(committed, member.Subject)
 	}
 	engine := mustReuseTestEngine(t, EngineDependencies{
-		Graph:   graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed}},
-		Results: &resultStoreStub{},
-		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
-			return candidate, true, nil
-		}),
+		Graph:     graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed}},
+		Results:   &resultStoreStub{},
+		ReuseGate: readingReuseGate{stored: candidate, frame: countingFrame(SubjectTeam)},
 	})
 	served, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
 	if err != nil {
@@ -1454,9 +1446,7 @@ func TestAReusedAnswersCountReachesTheOperator(t *testing.T) {
 		Graph:     graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed}},
 		Results:   &resultStoreStub{},
 		Telemetry: telemetry,
-		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
-			return candidate, true, nil
-		}),
+		ReuseGate: readingReuseGate{stored: candidate, frame: countingFrame(SubjectTeam)},
 	})
 	served, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
 	if err != nil {

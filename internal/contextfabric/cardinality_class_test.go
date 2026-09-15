@@ -271,10 +271,10 @@ func TestReuseRederivesTheCountRatherThanCarryingIt(t *testing.T) {
 	stored.DeterministicAnswer = "Ask Dev is release-ready."
 	// An organization-level count of projects: its only committed subject is
 	// a member, so the population is the discovered kind, not an anchor's
-	// children, and the stored plan says so.
+	// children, and the reading persisted beside the row says so.
+	storedFrame := frameWithPointer([]InvestigationGoal{GoalCountOrAggregate}, discoveredExpression(SubjectProject))
 	stored.Completeness.Outcomes = SeedRequirementOutcomes(
-		deriveTurnRequirements(frameWithPointer([]InvestigationGoal{GoalCountOrAggregate}, discoveredExpression(SubjectProject)), registryDeriver{}))
-	stored.AnswerPlan = &AnswerPlan{Family: QuestionFamilyDiscoveredCohortRanking, FamilyVersion: QuestionFamilyTableVersion, MemberKind: SubjectProject}
+		deriveTurnRequirements(storedFrame, registryDeriver{}))
 
 	// FIXTURE CONTROLS. Without both, the assertions below could pass for a
 	// document that never owed a count, or one that already carried it.
@@ -289,8 +289,15 @@ func TestReuseRederivesTheCountRatherThanCarryingIt(t *testing.T) {
 	// directly would prove the helpers work, not that reuse uses them, and it
 	// would hold with the engine wiring absent. Serving a real hit is what
 	// makes missing wiring fail here.
-	engine := reuseDegradeEngine(t, stored,
-		productionShapedGraphContext([]string{reuseCitationRef}, []string{reuseNodeRef}), &recordingTelemetry{})
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph: graphReaderStub{
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{reuseDegradeSubject()}},
+			context:    productionShapedGraphContext([]string{reuseCitationRef}, []string{reuseNodeRef}),
+		},
+		Results:   &resultStoreStub{},
+		Telemetry: &recordingTelemetry{},
+		ReuseGate: readingReuseGate{stored: stored, frame: storedFrame},
+	})
 	result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
 	if err != nil {
 		t.Fatalf("Investigate() error = %v", err)

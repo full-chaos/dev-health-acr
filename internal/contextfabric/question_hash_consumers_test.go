@@ -57,8 +57,8 @@ func TestQuestionHashConsumers_EveryCallSiteHasADeclaredDisposition(t *testing.T
 			"refuses the structure-priors lookup BEFORE issuing it, so a store holding identityless rows cannot serve them (priors_consult.go)"},
 		"Engine.captureClarificationSelection": {"guards",
 			"refuses to capture a clarification selection under the identityless hash; curation turns these rows into priors (engine.go)"},
-		"Engine.tryReuse": {"guards",
-			"refuses the reuse lookup; the original instance of this class, fixed at its own earlier review (answer_reuse.go)"},
+		"Engine.tryReuseWithReading": {"guards",
+			"refuses the reuse lookup; the original instance of this class, fixed at its own earlier review. tryReuse delegates to it (answer_reuse.go)"},
 		"Store.reuseColumnsFor": {"guards",
 			"refuses to write reuse columns, the save-side twin of tryReuse (pginvestigation/store.go)"},
 

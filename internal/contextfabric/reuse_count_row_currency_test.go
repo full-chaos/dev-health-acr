@@ -334,9 +334,7 @@ func currencyReuseEngine(t *testing.T, stored InvestigationResult, telemetry *re
 		},
 		Results:   &resultStoreStub{},
 		Telemetry: telemetry,
-		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
-			return stored, true, nil
-		}),
+		ReuseGate: readingReuseGate{stored: stored, frame: countingFrame(SubjectTeam)},
 	})
 }
 

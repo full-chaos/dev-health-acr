@@ -1947,8 +1947,8 @@ var All = []Event{
 }
 
 // CountPopulationScope (CHAOS-5775) is the Info line for whether a served
-// answer's counted member set is the population its plan asks about: the
-// requested population (family, member kind, requirement), what resolution
+// answer's counted member set is the population its frame asks about: the
+// requested population (expression, member kind, requirement), what resolution
 // and retrieval measured, the decision, and what the served document then
 // states. Built by contextfabric.CountPopulationScopeLogArgs, emitted once per
 // served document that owes a count, on the fresh decisive exit and on reuse.
@@ -1961,9 +1961,9 @@ var CountPopulationScope = Event{
 	BoundedAggregation: "at most one per request: one served document, and a document owes at most one count requirement",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
-		// Open: the plan's family and member kind are contracts vocabularies,
-		// empty when the document carries no plan.
-		{Key: "family", Type: FieldString, Presence: PresenceRequired},
+		// Open: the frame's subject expression kind and member kind, empty when
+		// no frame records the requested population.
+		{Key: "expression_kind", Type: FieldString, Presence: PresenceRequired},
 		{Key: "member_kind", Type: FieldString, Presence: PresenceRequired},
 		{Key: "requirement", Type: FieldString, Presence: PresenceRequired},
 		{Key: "committed", Type: FieldInt, Presence: PresenceRequired},

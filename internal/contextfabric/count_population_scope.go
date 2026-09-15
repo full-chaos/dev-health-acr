@@ -18,24 +18,24 @@ import (
 // the step served that number as an exact count, claimed and stated in the
 // answer, beside a terminal that said the anchor was never found.
 //
-// The decision is made ONCE, from the served plan and the subject resolution,
-// on both paths that state a count: the fresh assembly and the reuse backfill.
-// Both carry those two inputs on the document itself, so the stored document
-// and the fresh one are judged by one function over the same fields.
+// The decision is made ONCE per pass, from the turn's frame and the subject
+// resolution retrieval ran under, on both paths that state a count: the fresh
+// assembly, and the reuse backfill over the frame of the reading persisted
+// beside the stored row.
 //
-// WHAT DECIDES THE SCOPE IS THE PLAN'S FAMILY, not the frame. The family is on
-// every stored plan, and `scoped_cohort_status` is assigned only to a question
-// whose members hang off an anchor -- the frame projection maps
-// children_of_scope to it and nothing else, and the model-precedence row that
-// reaches it requires a scope anchor term. Every other family counts an
-// organization-level population (a discovered kind, a grouped or compared
-// set, or the organization itself), and its count is unchanged here.
+// WHAT DECIDES THE SCOPE IS THE FRAME'S SUBJECT EXPRESSION, never the family.
+// The family is a lossy projection and no stage may branch on it
+// (DeriveQuestionFamily's own record); the expression is the requested
+// population's definition. Only children_of_scope hangs its members off an
+// anchor. Every other expression counts an organization-level population (a
+// discovered kind, a grouped or compared set, or the organization itself), and
+// its count is unchanged here.
 
 // CountPopulationScopeDecision is the closed decision this file makes.
 type CountPopulationScopeDecision string
 
 const (
-	// CountPopulationScopeOrganization: the plan's family counts an
+	// CountPopulationScopeOrganization: the frame's expression counts an
 	// organization-level population, so a resolved member set is that
 	// population. The count stands.
 	CountPopulationScopeOrganization CountPopulationScopeDecision = "organization_scope"
@@ -51,10 +51,11 @@ const (
 	// CountPopulationScopeAnchorAmbiguous: as unresolved, but more than one
 	// candidate was offered and none committed. Not counted.
 	CountPopulationScopeAnchorAmbiguous CountPopulationScopeDecision = "anchor_ambiguous"
-	// CountPopulationScopePlanAbsent: the document carries no plan, so nothing
-	// records which population the question asked for. Not counted: a count
-	// whose population cannot be named is the defect this file removes.
-	CountPopulationScopePlanAbsent CountPopulationScopeDecision = "plan_absent"
+	// CountPopulationScopeFrameAbsent: no frame records which population the
+	// question asked for -- on reuse, a stored row whose persisted reading is
+	// absent or unreadable. Not counted: a count whose population cannot be
+	// named is the defect this file removes.
+	CountPopulationScopeFrameAbsent CountPopulationScopeDecision = "frame_absent"
 )
 
 // CountPopulationScopeDecisionVocabulary is the closed vocabulary, in
@@ -65,16 +66,16 @@ func CountPopulationScopeDecisionVocabulary() []string {
 		string(CountPopulationScopeAnchorCommitted),
 		string(CountPopulationScopeAnchorUnresolved),
 		string(CountPopulationScopeAnchorAmbiguous),
-		string(CountPopulationScopePlanAbsent),
+		string(CountPopulationScopeFrameAbsent),
 	}
 }
 
 // CountPopulationScope is the decision and the measured inputs that produced
 // it, carried together so the trace can rebuild the decision from its own line.
 type CountPopulationScope struct {
-	Decision   CountPopulationScopeDecision
-	Family     QuestionFamily
-	MemberKind SubjectKind
+	Decision       CountPopulationScopeDecision
+	ExpressionKind SubjectExpressionKind
+	MemberKind     SubjectKind
 	// Committed is how many subjects the resolution committed.
 	Committed int
 	// CommittedAnchors is how many of them are NOT of the member kind -- the
@@ -90,27 +91,27 @@ func (s CountPopulationScope) Counts() bool {
 }
 
 // DecideCountPopulationScope decides whether a resolved member set may be
-// counted as the population the plan asks about.
+// counted as the population the frame asks about.
 //
 // PURE: reads its arguments and mutates nothing.
-func DecideCountPopulationScope(plan *AnswerPlan, resolution SubjectResolution) CountPopulationScope {
+func DecideCountPopulationScope(frame *QuestionFrame, resolution SubjectResolution) CountPopulationScope {
 	scope := CountPopulationScope{
 		Committed:  len(resolution.Committed),
 		Candidates: len(resolution.Candidates),
 	}
-	if plan == nil {
-		scope.Decision = CountPopulationScopePlanAbsent
+	if frame == nil {
+		scope.Decision = CountPopulationScopeFrameAbsent
 		return scope
 	}
-	scope.Family = plan.Family
-	scope.MemberKind = plan.MemberKind
+	scope.ExpressionKind = frame.SubjectExpression.Kind
+	scope.MemberKind, _ = frame.SubjectExpression.MemberKind()
 	for _, subject := range resolution.Committed {
-		if subject.Kind != plan.MemberKind {
+		if subject.Kind != scope.MemberKind {
 			scope.CommittedAnchors++
 		}
 	}
 	switch {
-	case plan.Family != QuestionFamilyScopedCohortStatus:
+	case scope.ExpressionKind != SubjectExpressionChildrenOfScope:
 		scope.Decision = CountPopulationScopeOrganization
 	case scope.CommittedAnchors > 0:
 		scope.Decision = CountPopulationScopeAnchorCommitted
@@ -148,7 +149,7 @@ func scopedMembershipCardinality(cardinality MembershipCardinality, scope CountP
 const CountPopulationScopeLogMessage = "context fabric count population scope"
 
 // CountPopulationScopeEvent is the decision's telemetry, read off the SERVED
-// document: the requested population (family, member kind, requirement), what
+// document: the requested population (expression, member kind, requirement), what
 // resolution measured, the decision, and what the document then states.
 type CountPopulationScopeEvent struct {
 	Requirement       string
@@ -203,7 +204,7 @@ func CountPopulationScopeLogArgs(event CountPopulationScopeEvent, orgID string) 
 	return []any{
 		"org_id", SanitizeLogAttr(orgID),
 		// PRE-ENTRY: the population the question asked for.
-		"family", SanitizeLogAttr(string(event.Scope.Family)),
+		"expression_kind", SanitizeLogAttr(string(event.Scope.ExpressionKind)),
 		"member_kind", SanitizeLogAttr(string(event.Scope.MemberKind)),
 		"requirement", SanitizeLogAttr(event.Requirement),
 		// PRE-DECISION: what resolution and retrieval measured.

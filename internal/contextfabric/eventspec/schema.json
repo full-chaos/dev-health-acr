@@ -128,7 +128,7 @@
         "presence": "required"
       },
       {
-        "key": "family",
+        "key": "expression_kind",
         "type": "string",
         "presence": "required"
       },
@@ -176,7 +176,7 @@
           "anchor_committed",
           "anchor_unresolved",
           "anchor_ambiguous",
-          "plan_absent"
+          "frame_absent"
         ]
       },
       {

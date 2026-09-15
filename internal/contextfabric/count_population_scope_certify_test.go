@@ -19,7 +19,7 @@ func TestTheCountPopulationScopeLineCertifiesAgainstItsSpecification(t *testing.
 		want     map[string]any
 	}{
 		{"scoped count, anchor unresolved, no_match", map[string]any{
-			"family": "scoped_cohort_status", "member_kind": "team", "requirement": "count/member/team",
+			"expression_kind": "children_of_scope", "member_kind": "team", "requirement": "count/member/team",
 			"committed": 0, "committed_anchors": 0, "candidates": 0, "member_set_resolved": true, "members": 3,
 			"decision": "anchor_unresolved", "assembled_outcome": "unavailable", "counted": false, "served": 0, "reused": false,
 		}},
@@ -28,14 +28,14 @@ func TestTheCountPopulationScopeLineCertifiesAgainstItsSpecification(t *testing.
 			"decision": "anchor_ambiguous", "assembled_outcome": "unavailable", "counted": false, "served": 0,
 		}},
 		{"scoped count, anchor committed", map[string]any{
-			"family": "scoped_cohort_status", "committed": 1, "committed_anchors": 1, "candidates": 0, "members": 3,
+			"expression_kind": "children_of_scope", "committed": 1, "committed_anchors": 1, "candidates": 0, "members": 3,
 			"decision": "anchor_committed", "assembled_outcome": "satisfied", "counted": true, "served": 3,
 		}},
 		{"scoped count, only a member-kind subject committed", map[string]any{
 			"committed": 1, "committed_anchors": 0, "decision": "anchor_unresolved", "counted": false,
 		}},
 		{"organization-level discovered count, nothing committed", map[string]any{
-			"family": "discovered_cohort_ranking", "member_kind": "team", "committed": 0, "committed_anchors": 0, "members": 5,
+			"expression_kind": "discovered_kind", "member_kind": "team", "committed": 0, "committed_anchors": 0, "members": 5,
 			"decision": "organization_scope", "assembled_outcome": "satisfied", "counted": true, "served": 5,
 		}},
 	} {

@@ -163,7 +163,7 @@ func (f AnswerDisplayFields) SlogArgs() []any {
 // (CHAOS-5516): one Go field per Field CountPopulationScope.Fields declares in spec.go.
 type CountPopulationScopeFields struct {
 	OrgID             string
-	Family            string
+	ExpressionKind    string
 	MemberKind        string
 	Requirement       string
 	Committed         int
@@ -190,10 +190,10 @@ type CountPopulationScopeFields struct {
 
 // NewCountPopulationScopeFields is the generated constructor for CountPopulationScopeFields -- every
 // field CountPopulationScope.Fields declares is a required parameter.
-func NewCountPopulationScopeFields(orgID string, family string, memberKind string, requirement string, committed int, committedAnchors int, candidates int, memberSetResolved bool, members int, decision string, assembledOutcome string, counted bool, served int, reused bool, requestID string) CountPopulationScopeFields {
+func NewCountPopulationScopeFields(orgID string, expressionKind string, memberKind string, requirement string, committed int, committedAnchors int, candidates int, memberSetResolved bool, members int, decision string, assembledOutcome string, counted bool, served int, reused bool, requestID string) CountPopulationScopeFields {
 	return CountPopulationScopeFields{
 		OrgID:             orgID,
-		Family:            family,
+		ExpressionKind:    expressionKind,
 		MemberKind:        memberKind,
 		Requirement:       requirement,
 		Committed:         committed,
@@ -225,7 +225,7 @@ func (f CountPopulationScopeFields) IsConstructed() bool { return f.constructed 
 func (f CountPopulationScopeFields) SlogArgs() []any {
 	return []any{
 		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
-		"family", contextfabric.SanitizeLogAttr(f.Family),
+		"expression_kind", contextfabric.SanitizeLogAttr(f.ExpressionKind),
 		"member_kind", contextfabric.SanitizeLogAttr(f.MemberKind),
 		"requirement", contextfabric.SanitizeLogAttr(f.Requirement),
 		"committed", f.Committed,

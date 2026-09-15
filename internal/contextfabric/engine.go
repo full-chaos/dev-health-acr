@@ -1648,7 +1648,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if bypass := reuseBypassReason(request, structureCanon); bypass != "" {
 		e.recordReuseBypass(ctx, principal, bypass)
 	} else {
-		reused, ok, workItemTuple, reuseErr := e.tryReuse(ctx, principal, request, clampedRequestTime, windowCanon.KeyComponent, windowCanon.KeyEncoding, binding)
+		reused, ok, workItemTuple, reusedFrame, reuseErr := e.tryReuseWithReading(ctx, principal, request, clampedRequestTime, windowCanon.KeyComponent, windowCanon.KeyEncoding, binding)
 		if reuseErr != nil {
 			return InvestigationResult{}, stageError(StageValidation, reuseErr)
 		}
@@ -1695,9 +1695,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// the guard in ComputeMembershipCardinality states.
 			if !workItemTuple {
 				reusedCardinality, _ := ComputeMembershipCardinality(reused.Cohort, 0, reusedPlanNarrowing(reused))
-				// The same scope decision the fresh path applies, over the
-				// stored document's own plan and resolution.
-				reusedCardinality = scopedMembershipCardinality(reusedCardinality, DecideCountPopulationScope(reused.AnswerPlan, reused.SubjectResolution))
+				// The same scope decision the fresh path applies, over the frame
+				// of the reading persisted beside the stored row and that row's
+				// own resolution.
+				reusedCardinality = scopedMembershipCardinality(reusedCardinality, DecideCountPopulationScope(reusedFrame, reused.SubjectResolution))
 				if backfilled, _, _ := appendMembershipCardinality(reused.Completeness.Outcomes, reusedCardinality, reusedPlanNarrowing(reused)); len(backfilled) > 0 {
 					reused.Completeness.Outcomes = backfilled
 				}
@@ -1754,8 +1755,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 					e.telemetry.RecordMembershipCardinality(ctx, principal, event)
 				}
 				// A stored document carries no pass to take a decision from, so
-				// the decision is the backfill's: its stored plan and resolution.
-				e.recordCountPopulationScope(ctx, principal, reused, DecideCountPopulationScope(reused.AnswerPlan, reused.SubjectResolution), true)
+				// the decision is the backfill's: the stored reading's frame and
+				// the stored resolution.
+				e.recordCountPopulationScope(ctx, principal, reused, DecideCountPopulationScope(reusedFrame, reused.SubjectResolution), true)
 			}
 			// chris's promise of record, verbatim: "reuse and stored reads
 			// are re-validated against the current budget and refuse if they

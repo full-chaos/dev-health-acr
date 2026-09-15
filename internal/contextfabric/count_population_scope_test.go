@@ -212,6 +212,16 @@ func scopeCells() []scopeCell {
 			wantDecision: CountPopulationScopeAnchorUnresolved, wantAssembled: contractsv1.ContextFabricRequirementUnavailable,
 		},
 		{
+			// THE FAMILY IS NOT READ. A discovered-kind frame whose turn carried
+			// the scoped family counts the organization-level population, even
+			// with only a member-kind subject committed.
+			name: "discovered frame under a scoped family, member-kind subject committed", frame: frameWithPointer([]InvestigationGoal{GoalCountOrAggregate}, discoveredExpression(SubjectTeam)), family: QuestionFamilyScopedCohortStatus,
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{{Kind: SubjectTeam, CanonicalID: "team:COUNTED_A", Label: "Counted A"}}},
+			cohort:     kindCohort(SubjectTeam, 3), status: InvestigationComplete,
+			wantDecision: CountPopulationScopeOrganization, wantCounted: true, wantServed: 3,
+			wantSentence: "Counted 3 teams.", wantAssembled: contractsv1.ContextFabricRequirementSatisfied,
+		},
+		{
 			// A LEGITIMATE ORGANIZATION COUNT: a discovered kind has no anchor
 			// to resolve, so nothing committed is not a scope loss.
 			name: "organization-level discovered count, nothing committed", frame: frameWithPointer([]InvestigationGoal{GoalCountOrAggregate}, discoveredExpression(SubjectTeam)), family: QuestionFamilyDiscoveredCohortRanking,
@@ -301,16 +311,16 @@ func TestACountIsServedOnlyOverTheRequestedPopulation(t *testing.T) {
 			if event.MemberSetResolved != (cell.cohort != nil) || (cell.cohort != nil && event.Members != len(cell.cohort.Members)) {
 				t.Errorf("event member set resolved=%t members=%d, fixture cohort %+v", event.MemberSetResolved, event.Members, cell.cohort)
 			}
-			if event.Scope.Family != cell.family || event.Reused {
-				t.Errorf("event family=%q reused=%t, want %q/false", event.Scope.Family, event.Reused, cell.family)
+			if event.Scope.ExpressionKind != cell.frame.SubjectExpression.Kind || event.Reused {
+				t.Errorf("event expression=%q reused=%t, want %q/false", event.Scope.ExpressionKind, event.Reused, cell.frame.SubjectExpression.Kind)
 			}
 		})
 	}
 }
 
 // TestDecideCountPopulationScopeCoversItsInputDomain enumerates the decision's
-// whole input domain: plan absent, every family, and committed/candidate
-// shapes at their boundaries.
+// whole input domain: frame absent, every subject expression kind, and
+// committed/candidate shapes at their boundaries.
 func TestDecideCountPopulationScopeCoversItsInputDomain(t *testing.T) {
 	t.Parallel()
 	member := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:M", Label: "m"}
@@ -328,20 +338,30 @@ func TestDecideCountPopulationScopeCoversItsInputDomain(t *testing.T) {
 		{"member committed, two candidates", SubjectResolution{Committed: []SubjectRef{member}, Candidates: []SubjectCandidate{candidate, candidate}}, 0},
 		{"anchor committed", SubjectResolution{Committed: []SubjectRef{anchor}}, 1},
 		{"anchor and member committed", SubjectResolution{Committed: []SubjectRef{member, anchor}}, 1},
-		{"two anchors committed", SubjectResolution{Committed: []SubjectRef{anchor, scopeTeamAnchor()}}, 1},
+		{"two anchors committed", SubjectResolution{Committed: []SubjectRef{anchor, scopeAnchorRepository()}}, 2},
 	}
 	for _, resolution := range resolutions {
 		got := DecideCountPopulationScope(nil, resolution.resolution)
-		if got.Decision != CountPopulationScopePlanAbsent || got.Counts() {
-			t.Errorf("plan absent / %s: decision %q counts %t, want plan_absent and not counted", resolution.name, got.Decision, got.Counts())
+		if got.Decision != CountPopulationScopeFrameAbsent || got.Counts() {
+			t.Errorf("frame absent / %s: decision %q counts %t, want frame_absent and not counted", resolution.name, got.Decision, got.Counts())
 		}
 	}
-	for _, family := range QuestionFamilyVocabulary() {
+	team := SubjectTeam
+	expressions := []SubjectExpression{
+		namedExpression(SubjectTeam),
+		{Kind: SubjectExpressionExplicitSet, Explicit: &ExplicitSetExpression{}},
+		discoveredExpression(SubjectTeam),
+		scopedExpression(SubjectTeam),
+		groupedExpression(SubjectTeam, SubjectProject),
+		orgExpression(&team),
+	}
+	for _, expression := range expressions {
+		frame := frameWithPointer([]InvestigationGoal{GoalCountOrAggregate}, expression)
+		wantMember, _ := expression.MemberKind()
 		for _, resolution := range resolutions {
-			plan := &AnswerPlan{Family: family, MemberKind: SubjectTeam}
-			got := DecideCountPopulationScope(plan, resolution.resolution)
+			got := DecideCountPopulationScope(frame, resolution.resolution)
 			want := CountPopulationScopeOrganization
-			if family == QuestionFamilyScopedCohortStatus {
+			if expression.Kind == SubjectExpressionChildrenOfScope {
 				switch {
 				case resolution.anchors > 0:
 					want = CountPopulationScopeAnchorCommitted
@@ -352,40 +372,85 @@ func TestDecideCountPopulationScopeCoversItsInputDomain(t *testing.T) {
 				}
 			}
 			if got.Decision != want {
-				t.Errorf("%s / %s: decision %q, want %q", family, resolution.name, got.Decision, want)
+				t.Errorf("%s / %s: decision %q, want %q", expression.Kind, resolution.name, got.Decision, want)
 			}
 			wantAnchors := 0
 			for _, subject := range resolution.resolution.Committed {
-				if subject.Kind != SubjectTeam {
+				if subject.Kind != wantMember {
 					wantAnchors++
 				}
 			}
+			if got.ExpressionKind != expression.Kind || got.MemberKind != wantMember {
+				t.Errorf("%s / %s: expression %q member %q, want %q/%q", expression.Kind, resolution.name, got.ExpressionKind, got.MemberKind, expression.Kind, wantMember)
+			}
 			if got.CommittedAnchors != wantAnchors || got.Committed != len(resolution.resolution.Committed) || got.Candidates != len(resolution.resolution.Candidates) {
-				t.Errorf("%s / %s: measured %d/%d/%d", family, resolution.name, got.Committed, got.CommittedAnchors, got.Candidates)
+				t.Errorf("%s / %s: measured %d/%d/%d", expression.Kind, resolution.name, got.Committed, got.CommittedAnchors, got.Candidates)
 			}
 			if got.Counts() != (want == CountPopulationScopeOrganization || want == CountPopulationScopeAnchorCommitted) {
-				t.Errorf("%s / %s: counts %t for decision %q", family, resolution.name, got.Counts(), got.Decision)
+				t.Errorf("%s / %s: counts %t for decision %q", expression.Kind, resolution.name, got.Counts(), got.Decision)
 			}
 		}
 	}
 }
 
+// TestStoredReadingFrameIsNilUnlessAFrameWasRead enumerates the stored reading
+// the reuse decision reads its frame from.
+func TestStoredReadingFrameIsNilUnlessAFrameWasRead(t *testing.T) {
+	t.Parallel()
+	frame := countingFrame(SubjectTeam)
+	for _, status := range []SemanticStateReadStatus{"", SemanticStateReadAvailable, SemanticStateReadAbsent, SemanticStateReadUnsupportedVersion, SemanticStateReadMalformed, SemanticStateReadOversized} {
+		for _, cell := range []struct {
+			name  string
+			state *PersistedSemanticState
+		}{
+			{"no state", nil},
+			{"state without a frame", &PersistedSemanticState{FramePresent: false, Frame: nil}},
+			{"frame flagged absent but set", &PersistedSemanticState{FramePresent: false, Frame: frame}},
+			{"frame present", &PersistedSemanticState{FramePresent: true, Frame: frame}},
+		} {
+			got := storedReadingFrame(StoredInvestigationResult{SemanticState: cell.state, SemanticStateRead: status})
+			wantFrame := status == SemanticStateReadAvailable && cell.name == "frame present"
+			if (got != nil) != wantFrame || (wantFrame && got != frame) {
+				t.Errorf("read %q / %s: frame %v, want present=%t", status, cell.name, got, wantFrame)
+			}
+		}
+	}
+}
+
+// readingReuseGate serves one stored row with the reading persisted beside it;
+// a nil frame serves the row with no readable reading.
+type readingReuseGate struct {
+	stored InvestigationResult
+	frame  *QuestionFrame
+}
+
+func (g readingReuseGate) FindReusable(context.Context, storage.Principal, ReuseKey) (StoredInvestigationResult, bool, ReuseMissReason, error) {
+	if g.frame == nil {
+		return StoredInvestigationResult{Result: g.stored, SemanticStateRead: SemanticStateReadAbsent}, true, "", nil
+	}
+	return StoredInvestigationResult{
+		Result:            g.stored,
+		SemanticState:     &PersistedSemanticState{FramePresent: true, Frame: g.frame},
+		SemanticStateRead: SemanticStateReadAvailable,
+	}, true, "", nil
+}
+
 // TestAReusedCountIsHeldToTheSameScopeDecision drives the reuse backfill: a
 // stored document that owes a count and carries no count row is judged by the
-// same decision, over its own stored plan and resolution.
+// same decision, over its stored reading's frame and its stored resolution.
 func TestAReusedCountIsHeldToTheSameScopeDecision(t *testing.T) {
 	t.Parallel()
-	scopedTeams := &AnswerPlan{Family: QuestionFamilyScopedCohortStatus, FamilyVersion: QuestionFamilyTableVersion, MemberKind: SubjectTeam}
+	scopedTeams := countingFrame(SubjectTeam)
 	for _, cell := range []struct {
 		name         string
-		plan         *AnswerPlan
+		frame        *QuestionFrame
 		withAnchor   bool
 		wantDecision CountPopulationScopeDecision
 		wantCounted  bool
 	}{
 		{"anchor committed", scopedTeams, true, CountPopulationScopeAnchorCommitted, true},
 		{"anchor unresolved", scopedTeams, false, CountPopulationScopeAnchorUnresolved, false},
-		{"plan absent", nil, true, CountPopulationScopePlanAbsent, false},
+		{"stored reading absent", nil, true, CountPopulationScopeFrameAbsent, false},
 	} {
 		cell := cell
 		t.Run(cell.name, func(t *testing.T) {
@@ -399,7 +464,6 @@ func TestAReusedCountIsHeldToTheSameScopeDecision(t *testing.T) {
 				Outcome:     contractsv1.ContextFabricRequirementSatisfied,
 				Impact:      contractsv1.ContextFabricAnswerImpactNone,
 			}}
-			candidate.AnswerPlan = cell.plan
 			committed := []SubjectRef{}
 			if cell.withAnchor {
 				committed = append(committed, project)
@@ -414,9 +478,7 @@ func TestAReusedCountIsHeldToTheSameScopeDecision(t *testing.T) {
 				Graph:     graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed}},
 				Results:   &resultStoreStub{},
 				Telemetry: telemetry,
-				ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
-					return candidate, true, nil
-				}),
+				ReuseGate: readingReuseGate{stored: candidate, frame: cell.frame},
 			})
 			served, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
 			if err != nil {
