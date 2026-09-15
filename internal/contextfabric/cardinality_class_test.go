@@ -269,8 +269,12 @@ func TestReuseRederivesTheCountRatherThanCarryingIt(t *testing.T) {
 	}
 	stored.ClaimedFacts = []ClaimedFact{}
 	stored.DeterministicAnswer = "Ask Dev is release-ready."
+	// An organization-level count of projects: its only committed subject is
+	// a member, so the population is the discovered kind, not an anchor's
+	// children, and the stored plan says so.
 	stored.Completeness.Outcomes = SeedRequirementOutcomes(
-		deriveTurnRequirements(countingFrame(SubjectProject), registryDeriver{}))
+		deriveTurnRequirements(frameWithPointer([]InvestigationGoal{GoalCountOrAggregate}, discoveredExpression(SubjectProject)), registryDeriver{}))
+	stored.AnswerPlan = &AnswerPlan{Family: QuestionFamilyDiscoveredCohortRanking, FamilyVersion: QuestionFamilyTableVersion, MemberKind: SubjectProject}
 
 	// FIXTURE CONTROLS. Without both, the assertions below could pass for a
 	// document that never owed a count, or one that already carried it.

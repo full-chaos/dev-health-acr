@@ -1499,6 +1499,13 @@ func (t SlogEngineTelemetry) RecordRequirementOutcomeTransition(ctx context.Cont
 	t.logger.InfoContext(ctx, RequirementOutcomeTransitionLogMessage, args...)
 }
 
+// RecordCountPopulationScope logs the count-population scope decision at
+// Info, built by CountPopulationScopeLogArgs.
+func (t SlogEngineTelemetry) RecordCountPopulationScope(ctx context.Context, principal storage.Principal, event CountPopulationScopeEvent) {
+	args := append(CountPopulationScopeLogArgs(event, principal.OrgID), requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, CountPopulationScopeLogMessage, args...)
+}
+
 func (t SlogEngineTelemetry) RecordMembershipCardinality(ctx context.Context, principal storage.Principal, event MembershipCardinalityEvent) {
 	args := []any{
 		"org_id", SanitizeLogAttr(principal.OrgID),

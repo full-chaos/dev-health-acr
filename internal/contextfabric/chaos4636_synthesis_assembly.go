@@ -316,6 +316,11 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	if params.WorkItemCensus != nil {
 		cardinality = workItemTupleCardinality(params.WorkItemCensus)
 	}
+	// The member set is counted only when it is the population the plan asks
+	// about -- see count_population_scope.go. Applied here, to the one value
+	// every count surface of this pass reads, so the row, the claim and the
+	// sentence cannot disagree about it.
+	cardinality = scopedMembershipCardinality(cardinality, DecideCountPopulationScope(&params.Plan, params.Resolution))
 	// CHAOS-5732 (D47): a kind_census_truncated detail's Served
 	// is minted by falkorgraph's DiscoverContext, BEFORE stage 3's own
 	// budget narrowing can shrink graphContext.Cohort further -- the same

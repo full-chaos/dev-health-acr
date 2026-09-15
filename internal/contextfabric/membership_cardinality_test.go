@@ -1048,6 +1048,10 @@ func TestAReusedAnswerStatesItsCardinality(t *testing.T) {
 		Outcome:     contractsv1.ContextFabricRequirementSatisfied,
 		Impact:      contractsv1.ContextFabricAnswerImpactNone,
 	}}
+	// The stored plan names the population: teams under the committed
+	// project. A document with no plan records no population, and its count is
+	// withheld (count_population_scope_test.go).
+	candidate.AnswerPlan = &AnswerPlan{Family: QuestionFamilyScopedCohortStatus, FamilyVersion: QuestionFamilyTableVersion, MemberKind: SubjectTeam}
 	candidate.Completeness = ComputeAnswerCompleteness(candidate)
 	if len(countOutcomeRows(candidate, contractsv1.ContextFabricOutcomeStageAssembledResult)) != 0 {
 		t.Fatal("the stored fixture already carries an assembled-result count row; it does not model a pre-wire row")

@@ -20,6 +20,7 @@ func FieldKeys(e Event) []string {
 // rather than hand-maintained so it can never drift from All.
 var ByID = map[string]Event{
 	"contextfabric.answer_display":                 AnswerDisplay,
+	"contextfabric.count_population_scope":         CountPopulationScope,
 	"contextfabric.requirement_outcome_transition": RequirementOutcomeTransition,
 	"contextfabric.retained_ranking_accounting":    RetainedRankingAccounting,
 	"contextfabric.semantic_state_persistence":     SemanticStatePersistence,
@@ -155,6 +156,89 @@ func (f AnswerDisplayFields) SlogArgs() []any {
 		"projection_truncated", f.ProjectionTruncated,
 		"markdown_rendered", f.MarkdownRendered,
 		"markdown_truncated", f.MarkdownTruncated,
+	}
+}
+
+// CountPopulationScopeFields is contextfabric.count_population_scope's generated typed construction interface
+// (CHAOS-5516): one Go field per Field CountPopulationScope.Fields declares in spec.go.
+type CountPopulationScopeFields struct {
+	OrgID             string
+	Family            string
+	MemberKind        string
+	Requirement       string
+	Committed         int
+	CommittedAnchors  int
+	Candidates        int
+	MemberSetResolved bool
+	Members           int
+	Decision          string
+	AssembledOutcome  string
+	Counted           bool
+	Served            int
+	Reused            bool
+	RequestID         string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every CountPopulationScopeFields uniformly, set ONLY by NewCountPopulationScopeFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewCountPopulationScopeFields is the generated constructor for CountPopulationScopeFields -- every
+// field CountPopulationScope.Fields declares is a required parameter.
+func NewCountPopulationScopeFields(orgID string, family string, memberKind string, requirement string, committed int, committedAnchors int, candidates int, memberSetResolved bool, members int, decision string, assembledOutcome string, counted bool, served int, reused bool, requestID string) CountPopulationScopeFields {
+	return CountPopulationScopeFields{
+		OrgID:             orgID,
+		Family:            family,
+		MemberKind:        memberKind,
+		Requirement:       requirement,
+		Committed:         committed,
+		CommittedAnchors:  committedAnchors,
+		Candidates:        candidates,
+		MemberSetResolved: memberSetResolved,
+		Members:           members,
+		Decision:          decision,
+		AssembledOutcome:  assembledOutcome,
+		Counted:           counted,
+		Served:            served,
+		Reused:            reused,
+		RequestID:         requestID,
+		constructed:       true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewCountPopulationScopeFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f CountPopulationScopeFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns CountPopulationScope's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f CountPopulationScopeFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"family", contextfabric.SanitizeLogAttr(f.Family),
+		"member_kind", contextfabric.SanitizeLogAttr(f.MemberKind),
+		"requirement", contextfabric.SanitizeLogAttr(f.Requirement),
+		"committed", f.Committed,
+		"committed_anchors", f.CommittedAnchors,
+		"candidates", f.Candidates,
+		"member_set_resolved", f.MemberSetResolved,
+		"members", f.Members,
+		"decision", contextfabric.SanitizeLogAttr(f.Decision),
+		"assembled_outcome", contextfabric.SanitizeLogAttr(f.AssembledOutcome),
+		"counted", f.Counted,
+		"served", f.Served,
+		"reused", f.Reused,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
 
