@@ -1974,6 +1974,7 @@ var CountPopulationScope = Event{
 		{Key: "anchor_kind", Type: FieldString, Presence: PresenceRequired},
 		{Key: "anchor_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "candidates", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "anchor_candidates", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "member_set_resolved", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "members", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CountPopulationScopeDecisionVocabulary()},

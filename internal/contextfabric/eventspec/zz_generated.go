@@ -172,6 +172,7 @@ type CountPopulationScopeFields struct {
 	AnchorKind        string
 	AnchorID          string
 	Candidates        int
+	AnchorCandidates  int
 	MemberSetResolved bool
 	Members           int
 	Decision          string
@@ -193,7 +194,7 @@ type CountPopulationScopeFields struct {
 
 // NewCountPopulationScopeFields is the generated constructor for CountPopulationScopeFields -- every
 // field CountPopulationScope.Fields declares is a required parameter.
-func NewCountPopulationScopeFields(orgID string, expressionKind string, memberKind string, requirement string, committed int, committedAnchors int, committedUnbound int, anchorKind string, anchorID string, candidates int, memberSetResolved bool, members int, decision string, assembledOutcome string, counted bool, served int, reused bool, requestID string) CountPopulationScopeFields {
+func NewCountPopulationScopeFields(orgID string, expressionKind string, memberKind string, requirement string, committed int, committedAnchors int, committedUnbound int, anchorKind string, anchorID string, candidates int, anchorCandidates int, memberSetResolved bool, members int, decision string, assembledOutcome string, counted bool, served int, reused bool, requestID string) CountPopulationScopeFields {
 	return CountPopulationScopeFields{
 		OrgID:             orgID,
 		ExpressionKind:    expressionKind,
@@ -205,6 +206,7 @@ func NewCountPopulationScopeFields(orgID string, expressionKind string, memberKi
 		AnchorKind:        anchorKind,
 		AnchorID:          anchorID,
 		Candidates:        candidates,
+		AnchorCandidates:  anchorCandidates,
 		MemberSetResolved: memberSetResolved,
 		Members:           members,
 		Decision:          decision,
@@ -240,6 +242,7 @@ func (f CountPopulationScopeFields) SlogArgs() []any {
 		"anchor_kind", contextfabric.SanitizeLogAttr(f.AnchorKind),
 		"anchor_id", contextfabric.SanitizeLogAttr(f.AnchorID),
 		"candidates", f.Candidates,
+		"anchor_candidates", f.AnchorCandidates,
 		"member_set_resolved", f.MemberSetResolved,
 		"members", f.Members,
 		"decision", contextfabric.SanitizeLogAttr(f.Decision),

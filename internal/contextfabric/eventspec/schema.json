@@ -173,6 +173,11 @@
         "presence": "required"
       },
       {
+        "key": "anchor_candidates",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "member_set_resolved",
         "type": "bool",
         "presence": "required"

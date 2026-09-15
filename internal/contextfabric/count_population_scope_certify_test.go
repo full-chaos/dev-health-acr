@@ -20,15 +20,15 @@ func TestTheCountPopulationScopeLineCertifiesAgainstItsSpecification(t *testing.
 	}{
 		{"scoped count, anchor unresolved, no_match", map[string]any{
 			"expression_kind": "children_of_scope", "member_kind": "team", "requirement": "count/member/team",
-			"committed": 0, "committed_anchors": 0, "candidates": 0, "member_set_resolved": true, "members": 3,
+			"committed": 0, "committed_anchors": 0, "candidates": 0, "anchor_candidates": 0, "member_set_resolved": true, "members": 3,
 			"decision": "anchor_unresolved", "assembled_outcome": "unavailable", "counted": false, "served": 0, "reused": false,
 		}},
 		{"scoped count, anchor ambiguous", map[string]any{
-			"committed": 0, "committed_anchors": 0, "candidates": 2, "members": 3,
+			"committed": 0, "committed_anchors": 0, "candidates": 2, "anchor_candidates": 2, "members": 3,
 			"decision": "anchor_ambiguous", "assembled_outcome": "unavailable", "counted": false, "served": 0,
 		}},
 		{"scoped count, anchor committed", map[string]any{
-			"expression_kind": "children_of_scope", "committed": 1, "committed_anchors": 1, "committed_unbound": 0, "candidates": 1, "members": 3,
+			"expression_kind": "children_of_scope", "committed": 1, "committed_anchors": 1, "committed_unbound": 0, "candidates": 1, "anchor_candidates": 1, "members": 3,
 			"anchor_kind": "", "anchor_id": "repository:SCOPE_ANCHOR",
 			"decision": "anchor_committed", "assembled_outcome": "satisfied", "counted": true, "served": 3,
 		}},

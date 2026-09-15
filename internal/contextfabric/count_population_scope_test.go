@@ -174,6 +174,17 @@ func scopeCells() []scopeCell {
 			wantDecision: CountPopulationScopeAnchorUnresolved, wantAssembled: contractsv1.ContextFabricRequirementUnavailable,
 		},
 		{
+			// Candidates of the member kind cannot be the anchor, so many of
+			// them do not make an unbound anchor ambiguous.
+			name: "scoped count, many member candidates, no anchor candidate", frame: countingFrame(SubjectTeam), family: QuestionFamilyScopedCohortStatus,
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{
+				scopeCandidate(SubjectRef{Kind: SubjectTeam, CanonicalID: "team:COUNTED_A", Label: "Counted A"}, "receipt_scope_11"),
+				scopeCandidate(SubjectRef{Kind: SubjectTeam, CanonicalID: "team:COUNTED_B", Label: "Counted B"}, "receipt_scope_12"),
+			}, Committed: []SubjectRef{}},
+			cohort: kindCohort(SubjectTeam, 3), status: InvestigationComplete,
+			wantDecision: CountPopulationScopeAnchorUnresolved, wantAssembled: contractsv1.ContextFabricRequirementUnavailable,
+		},
+		{
 			name: "scoped count, anchor ambiguous", frame: countingFrame(SubjectTeam), family: QuestionFamilyScopedCohortStatus,
 			resolution: SubjectResolution{Candidates: []SubjectCandidate{
 				scopeCandidate(scopeAnchorRepository(), "receipt_scope_01"),
@@ -308,6 +319,20 @@ func scopeCells() []scopeCell {
 	}
 }
 
+// engineCellAnchorCandidates is each engine cell's expected anchor-candidate
+// count, written out; a cell absent here expects zero.
+var engineCellAnchorCandidates = map[string]int{
+	"scoped count, one uncommitted candidate":                                       1,
+	"scoped count, anchor ambiguous":                                                2,
+	"scoped count, anchor committed":                                                1,
+	"scoped count, anchor committed, population larger than served":                 1,
+	"scoped count, anchor committed, empty measured population":                     1,
+	"scoped count, anchor committed, population unmeasured":                         1,
+	"scoped repository count, team anchor committed":                                1,
+	"scoped count, committed subject matched a different term":                      1,
+	"scoped count, anchor term matched under the reading's anchor kind, normalized": 1,
+}
+
 func frameWithPointer(goals []InvestigationGoal, expression SubjectExpression) *QuestionFrame {
 	frame := frameWith(goals, expression, TemporalIntentCurrent, nil)
 	return &frame
@@ -370,6 +395,9 @@ func TestACountIsServedOnlyOverTheRequestedPopulation(t *testing.T) {
 			if event.Counted != cell.wantCounted || event.Served != rows[0].Served || event.Assembly != rows[0].Outcome {
 				t.Errorf("event post-decision = counted %t served %d assembled %q; served document says counted %t served %d assembled %q",
 					event.Counted, event.Served, event.Assembly, cell.wantCounted, rows[0].Served, rows[0].Outcome)
+			}
+			if got, want := event.Scope.AnchorCandidates, engineCellAnchorCandidates[cell.name]; got != want {
+				t.Errorf("event anchor_candidates = %d, want %d", got, want)
 			}
 			if event.Scope.CommittedUnbound != cell.wantUnbound || event.Scope.AnchorID != cell.wantAnchorID || event.Scope.AnchorKind != cell.anchorKind {
 				t.Errorf("event unbound=%d anchor_id=%q anchor_kind=%q, want %d/%q/%q", event.Scope.CommittedUnbound, event.Scope.AnchorID, event.Scope.AnchorKind, cell.wantUnbound, cell.wantAnchorID, cell.anchorKind)
@@ -435,6 +463,10 @@ func TestDecideCountPopulationScopeCoversItsInputDomain(t *testing.T) {
 		{"statistical basis alone", "", SubjectResolution{Committed: []SubjectRef{anchor}}, CommitBasisSet{SubjectMapKey(anchor): CommitBasisStatistical}, CountPopulationScopeAnchorUnresolved, 0, 1, ""},
 		{"bound anchor beside an unbound subject", "", SubjectResolution{Committed: []SubjectRef{other, anchor, member}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}, nil, CountPopulationScopeAnchorCommitted, 1, 1, anchor.CanonicalID},
 		{"two bound anchors, first id reported", "", SubjectResolution{Committed: []SubjectRef{project, anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor), scopeAnchorMatch(project)}}, nil, CountPopulationScopeAnchorCommitted, 2, 0, project.CanonicalID},
+		{"two member candidates", "", SubjectResolution{Candidates: []SubjectCandidate{scopeCandidate(member, "receipt_m1"), scopeCandidate(member, "receipt_m2")}}, nil, CountPopulationScopeAnchorUnresolved, 0, 0, ""},
+		{"one anchor candidate beside a member candidate", "", SubjectResolution{Candidates: []SubjectCandidate{offered, scopeCandidate(member, "receipt_m1")}}, nil, CountPopulationScopeAnchorUnresolved, 0, 0, ""},
+		{"two candidates of a kind the reading excludes", SubjectProject, SubjectResolution{Candidates: []SubjectCandidate{offered, offered}}, nil, CountPopulationScopeAnchorUnresolved, 0, 0, ""},
+		{"two candidates of the reading's anchor kind", SubjectRepository, SubjectResolution{Candidates: []SubjectCandidate{offered, offered}}, nil, CountPopulationScopeAnchorAmbiguous, 0, 0, ""},
 	}
 	for _, row := range rows {
 		got := DecideCountPopulationScope(nil, row.anchorKind, row.resolution, row.bases)
@@ -465,6 +497,9 @@ func TestDecideCountPopulationScopeCoversItsInputDomain(t *testing.T) {
 			if got.Decision != want {
 				t.Errorf("%s / %s: decision %q, want %q", expression.Kind, row.name, got.Decision, want)
 			}
+			if scoped && got.AnchorCandidates != domainRowAnchorCandidates[row.name] {
+				t.Errorf("%s / %s: anchor_candidates=%d, want %d", expression.Kind, row.name, got.AnchorCandidates, domainRowAnchorCandidates[row.name])
+			}
 			if scoped && (got.CommittedAnchors != wantAnchors || got.CommittedUnbound != wantUnbound || got.AnchorID != wantID) {
 				t.Errorf("%s / %s: anchors=%d unbound=%d id=%q, want %d/%d/%q", expression.Kind, row.name, got.CommittedAnchors, got.CommittedUnbound, got.AnchorID, wantAnchors, wantUnbound, wantID)
 			}
@@ -476,6 +511,28 @@ func TestDecideCountPopulationScopeCoversItsInputDomain(t *testing.T) {
 			}
 		}
 	}
+}
+
+// domainRowAnchorCandidates is each domain row's expected anchor-candidate
+// count under the scoped expression (member kind team), written out; a row
+// absent here expects zero.
+var domainRowAnchorCandidates = map[string]int{
+	"one candidate":  1,
+	"two candidates": 2,
+	"unbound non-member committed, two candidates":   2,
+	"anchor match on another subject":                1,
+	"same id other kind matched":                     1,
+	"anchor matched":                                 1,
+	"anchor matched after normalization":             1,
+	"anchor matched only the question marker":        1,
+	"anchor matched an empty term":                   1,
+	"anchor matched, reading kind agrees":            1,
+	"reading kind equal to member kind is dropped":   1,
+	"reading kind out of vocabulary is dropped":      1,
+	"bound anchor beside an unbound subject":         1,
+	"two bound anchors, first id reported":           2,
+	"one anchor candidate beside a member candidate": 1,
+	"two candidates of the reading's anchor kind":    2,
 }
 
 // TestNormalizeRetrievalTermIsResolutionsNormalization pins the comparison's

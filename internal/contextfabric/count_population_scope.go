@@ -53,7 +53,9 @@ const (
 	// scope, so it is not counted.
 	CountPopulationScopeAnchorUnresolved CountPopulationScopeDecision = "anchor_unresolved"
 	// CountPopulationScopeAnchorAmbiguous: as unresolved, but more than one
-	// candidate was offered and none committed. Not counted.
+	// candidate that could be the anchor was offered -- not of the member
+	// kind, and of the reading's anchor kind when one is stated -- and none
+	// is bound. Not counted.
 	CountPopulationScopeAnchorAmbiguous CountPopulationScopeDecision = "anchor_ambiguous"
 	// CountPopulationScopeFrameAbsent: no frame records which population the
 	// question asked for -- on reuse, a stored row whose persisted reading is
@@ -94,8 +96,12 @@ type CountPopulationScope struct {
 	AnchorKind SubjectKind
 	// AnchorID is the canonical id of the first bound anchor, "" when none.
 	AnchorID string
-	// Candidates is how many uncommitted candidates the resolution offered.
+	// Candidates is how many candidates the resolution carries.
 	Candidates int
+	// AnchorCandidates is how many of them could be the anchor: not of the
+	// member kind, and of the reading's anchor kind when one is stated. Only
+	// these make an unbound anchor ambiguous.
+	AnchorCandidates int
 }
 
 // Counts reports whether the resolved member set is the requested population.
@@ -123,6 +129,15 @@ func DecideCountPopulationScope(frame *QuestionFrame, sampleAnchorKind SubjectKi
 	scope.ExpressionKind = frame.SubjectExpression.Kind
 	scope.MemberKind, _ = frame.SubjectExpression.MemberKind()
 	scope.AnchorKind = ScopeAnchorRetrievalKind(frame, sampleAnchorKind)
+	for _, candidate := range resolution.Candidates {
+		if candidate.Subject.Kind == scope.MemberKind {
+			continue
+		}
+		if scope.AnchorKind != "" && candidate.Subject.Kind != scope.AnchorKind {
+			continue
+		}
+		scope.AnchorCandidates++
+	}
 	for _, subject := range resolution.Committed {
 		if subject.Kind == scope.MemberKind {
 			continue
@@ -141,7 +156,7 @@ func DecideCountPopulationScope(frame *QuestionFrame, sampleAnchorKind SubjectKi
 		scope.Decision = CountPopulationScopeOrganization
 	case scope.CommittedAnchors > 0:
 		scope.Decision = CountPopulationScopeAnchorCommitted
-	case scope.Candidates > 1:
+	case scope.AnchorCandidates > 1:
 		scope.Decision = CountPopulationScopeAnchorAmbiguous
 	default:
 		scope.Decision = CountPopulationScopeAnchorUnresolved
@@ -320,6 +335,7 @@ func CountPopulationScopeLogArgs(event CountPopulationScopeEvent, orgID string) 
 		"anchor_kind", SanitizeLogAttr(string(event.Scope.AnchorKind)),
 		"anchor_id", SanitizeLogAttr(event.Scope.AnchorID),
 		"candidates", SanitizeLogInt(int64(event.Scope.Candidates)),
+		"anchor_candidates", SanitizeLogInt(int64(event.Scope.AnchorCandidates)),
 		"member_set_resolved", event.MemberSetResolved,
 		"members", SanitizeLogInt(int64(event.Members)),
 		// DECISION.
