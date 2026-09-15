@@ -330,7 +330,188 @@ func TestDeriveCompletenessAuthority_EveryObservationCarriesTheDerivationVersion
 	}
 }
 
+// TestDeriveCompletenessAuthority_DirectionIsTotalOverEveryPair pins the
+// direction acceptance item: every ordered (model, server) pair among
+// complete/partial/degraded produces the one Direction that names it, and
+// every agreeing pair produces CompletenessAuthorityDirectionNone -- pinned
+// through the real derivation (DeriveCompletenessAuthority), not the
+// internal helper directly, so the table also proves WouldFlip stays in
+// lockstep with Disagreed on every case.
+func TestDeriveCompletenessAuthority_DirectionIsTotalOverEveryPair(t *testing.T) {
+	t.Parallel()
+	satisfiedOutcome := []RequirementOutcomeRow{satisfiedRow("evidence/subject/team", "evidence")}
+	narrowedOutcome := []RequirementOutcomeRow{outcomeRow(contractsv1.ContextFabricOutcomeStageAssembledResult, "ranking/subject/team", "ranking", contractsv1.ContextFabricRequirementNarrowed)}
+	unavailableOutcome := []RequirementOutcomeRow{outcomeRow(contractsv1.ContextFabricOutcomeStageAssembledResult, "evidence/subject/team", "evidence", contractsv1.ContextFabricRequirementUnavailable)}
+	for _, testCase := range []struct {
+		name          string
+		modelStatus   InvestigationStatus
+		outcomes      []RequirementOutcomeRow
+		wantServer    contractsv1.ContextFabricAnswerCompletenessState
+		wantDirection CompletenessAuthorityDirection
+		wantDisagreed bool
+	}{
+		{"complete agrees complete", InvestigationComplete, satisfiedOutcome, contractsv1.ContextFabricAnswerCompletenessComplete, CompletenessAuthorityDirectionNone, false},
+		{"complete_to_partial", InvestigationComplete, narrowedOutcome, contractsv1.ContextFabricAnswerCompletenessPartial, CompletenessAuthorityDirectionCompleteToPartial, true},
+		{"complete_to_degraded", InvestigationComplete, unavailableOutcome, contractsv1.ContextFabricAnswerCompletenessDegraded, CompletenessAuthorityDirectionCompleteToDegraded, true},
+		{"partial_to_complete", InvestigationPartial, satisfiedOutcome, contractsv1.ContextFabricAnswerCompletenessComplete, CompletenessAuthorityDirectionPartialToComplete, true},
+		{"partial agrees partial", InvestigationPartial, narrowedOutcome, contractsv1.ContextFabricAnswerCompletenessPartial, CompletenessAuthorityDirectionNone, false},
+		{"partial_to_degraded", InvestigationPartial, unavailableOutcome, contractsv1.ContextFabricAnswerCompletenessDegraded, CompletenessAuthorityDirectionPartialToDegraded, true},
+		{"degraded_to_complete", InvestigationDegraded, satisfiedOutcome, contractsv1.ContextFabricAnswerCompletenessComplete, CompletenessAuthorityDirectionDegradedToComplete, true},
+		{"degraded_to_partial", InvestigationDegraded, narrowedOutcome, contractsv1.ContextFabricAnswerCompletenessPartial, CompletenessAuthorityDirectionDegradedToPartial, true},
+		{"degraded agrees degraded", InvestigationDegraded, unavailableOutcome, contractsv1.ContextFabricAnswerCompletenessDegraded, CompletenessAuthorityDirectionNone, false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			result := InvestigationResult{Status: testCase.modelStatus, Completeness: contractsv1.ContextFabricAnswerCompleteness{Outcomes: testCase.outcomes}}
+			observation := DeriveCompletenessAuthority(result)
+			if observation.ServerState != testCase.wantServer {
+				t.Fatalf("test setup: ServerState = %q, want %q", observation.ServerState, testCase.wantServer)
+			}
+			if observation.Disagreed != testCase.wantDisagreed {
+				t.Fatalf("Disagreed = %v, want %v", observation.Disagreed, testCase.wantDisagreed)
+			}
+			if observation.WouldFlip != observation.Disagreed {
+				t.Fatalf("WouldFlip = %v, Disagreed = %v -- these must never read apart", observation.WouldFlip, observation.Disagreed)
+			}
+			if observation.Direction != testCase.wantDirection {
+				t.Fatalf("Direction = %q, want %q", observation.Direction, testCase.wantDirection)
+			}
+			if !ValidCompletenessAuthorityDirection(observation.Direction) {
+				t.Fatalf("Direction %q is not a vocabulary member", observation.Direction)
+			}
+		})
+	}
+}
+
+// TestCompletenessAuthorityDirectionVocabulary_MembershipIsExact is the same
+// pin every other closed vocabulary in this file gets.
+func TestCompletenessAuthorityDirectionVocabulary_MembershipIsExact(t *testing.T) {
+	t.Parallel()
+	vocabulary := CompletenessAuthorityDirectionVocabulary()
+	if len(vocabulary) != CompletenessAuthorityDirectionCount {
+		t.Fatalf("len(vocabulary) = %d, want CompletenessAuthorityDirectionCount %d", len(vocabulary), CompletenessAuthorityDirectionCount)
+	}
+	for _, member := range vocabulary {
+		if !ValidCompletenessAuthorityDirection(member) {
+			t.Errorf("ValidCompletenessAuthorityDirection(%q) = false, want true (a vocabulary member)", member)
+		}
+	}
+	if ValidCompletenessAuthorityDirection(CompletenessAuthorityDirection("not_a_real_direction")) {
+		t.Error("ValidCompletenessAuthorityDirection(\"not_a_real_direction\") = true, want false")
+	}
+}
+
 // -- The gated flip --
+
+// TestApplyServerCompletenessAuthority_SymmetricDowngradesPartialToDegraded
+// and its mirror pin the LATERAL pair: with symmetricEnabled on (and the
+// old `enabled` flag off), a model-claimed partial/degraded may be
+// corrected to the other of the pair.
+func TestApplyServerCompletenessAuthority_SymmetricDowngradesPartialToDegraded(t *testing.T) {
+	t.Parallel()
+	rows := []RequirementOutcomeRow{
+		outcomeRow(contractsv1.ContextFabricOutcomeStageAssembledResult, "evidence/subject/team", "evidence", contractsv1.ContextFabricRequirementUnavailable),
+	}
+	result := InvestigationResult{Status: InvestigationPartial, DirectJudgment: "x", Completeness: contractsv1.ContextFabricAnswerCompleteness{Outcomes: rows}}
+	observation := DeriveCompletenessAuthority(result)
+	got := ApplyServerCompletenessAuthority(result, false, true, observation)
+	if got.Status != InvestigationDegraded {
+		t.Fatalf("Status = %q, want degraded", got.Status)
+	}
+	if got.Completeness.TerminalStatus != got.Status {
+		t.Fatalf("Completeness.TerminalStatus = %q, must equal Status %q after the flip", got.Completeness.TerminalStatus, got.Status)
+	}
+}
+
+func TestApplyServerCompletenessAuthority_SymmetricDowngradesDegradedToPartial(t *testing.T) {
+	t.Parallel()
+	rows := []RequirementOutcomeRow{
+		outcomeRow(contractsv1.ContextFabricOutcomeStageAssembledResult, "ranking/subject/team", "ranking", contractsv1.ContextFabricRequirementNarrowed),
+	}
+	result := InvestigationResult{Status: InvestigationDegraded, DirectJudgment: "x", Completeness: contractsv1.ContextFabricAnswerCompleteness{Outcomes: rows}}
+	observation := DeriveCompletenessAuthority(result)
+	got := ApplyServerCompletenessAuthority(result, false, true, observation)
+	if got.Status != InvestigationPartial {
+		t.Fatalf("Status = %q, want partial", got.Status)
+	}
+	if got.Completeness.TerminalStatus != got.Status {
+		t.Fatalf("Completeness.TerminalStatus = %q, must equal Status %q after the flip", got.Completeness.TerminalStatus, got.Status)
+	}
+}
+
+// TestApplyServerCompletenessAuthority_SymmetricDisabledLeavesLateralPairUntouched
+// pins the new flag's default: with symmetricEnabled off, a disagreeing
+// partial/degraded pair is left exactly as the model served it, regardless
+// of the OLD flag's setting (which only ever acts on a model-claimed
+// complete).
+func TestApplyServerCompletenessAuthority_SymmetricDisabledLeavesLateralPairUntouched(t *testing.T) {
+	t.Parallel()
+	rows := []RequirementOutcomeRow{
+		outcomeRow(contractsv1.ContextFabricOutcomeStageAssembledResult, "evidence/subject/team", "evidence", contractsv1.ContextFabricRequirementUnavailable),
+	}
+	for _, modelStatus := range []InvestigationStatus{InvestigationPartial, InvestigationDegraded} {
+		for _, enabled := range []bool{false, true} {
+			result := InvestigationResult{Status: modelStatus, DirectJudgment: "x", Completeness: contractsv1.ContextFabricAnswerCompleteness{Outcomes: rows}}
+			observation := DeriveCompletenessAuthority(result)
+			got := ApplyServerCompletenessAuthority(result, enabled, false, observation)
+			if got.Status != modelStatus {
+				t.Fatalf("model status %q, enabled=%v, symmetricEnabled=false: flip changed Status to %q, want it left at %q", modelStatus, enabled, got.Status, modelStatus)
+			}
+		}
+	}
+}
+
+// TestApplyServerCompletenessAuthority_SymmetricNeverPromotesToComplete pins
+// that the lateral flag, however set, never joins the complete-side pair:
+// a model-claimed partial/degraded whose outcome rows are all satisfied
+// (mapping to complete) is never promoted, even with symmetricEnabled on.
+func TestApplyServerCompletenessAuthority_SymmetricNeverPromotesToComplete(t *testing.T) {
+	t.Parallel()
+	rows := []RequirementOutcomeRow{satisfiedRow("evidence/subject/team", "evidence")}
+	for _, modelStatus := range []InvestigationStatus{InvestigationPartial, InvestigationDegraded} {
+		result := InvestigationResult{Status: modelStatus, DirectJudgment: "x", Completeness: contractsv1.ContextFabricAnswerCompleteness{Outcomes: rows}}
+		observation := DeriveCompletenessAuthority(result)
+		got := ApplyServerCompletenessAuthority(result, true, true, observation)
+		if got.Status != modelStatus {
+			t.Fatalf("model status %q with all-satisfied outcomes, both flags on: flip changed Status to %q, want it left at %q (never promote to complete)", modelStatus, got.Status, modelStatus)
+		}
+	}
+}
+
+// TestApplyServerCompletenessAuthority_FlagsActIndependently pins that the
+// two flags gate two disjoint pairs: enabling one never lets the other
+// pair's correction through.
+func TestApplyServerCompletenessAuthority_FlagsActIndependently(t *testing.T) {
+	t.Parallel()
+	completeRows := []RequirementOutcomeRow{
+		outcomeRow(contractsv1.ContextFabricOutcomeStageAssembledResult, "evidence/subject/team", "evidence", contractsv1.ContextFabricRequirementUnavailable),
+	}
+	lateralRows := completeRows // same unavailable row; only ModelStatus differs below.
+
+	// enabled=true, symmetricEnabled=false: corrects complete->degraded, but
+	// leaves a disagreeing partial/degraded pair untouched.
+	completeResult := InvestigationResult{Status: InvestigationComplete, DirectJudgment: "x", Completeness: contractsv1.ContextFabricAnswerCompleteness{Outcomes: completeRows}}
+	gotComplete := ApplyServerCompletenessAuthority(completeResult, true, false, DeriveCompletenessAuthority(completeResult))
+	if gotComplete.Status != InvestigationDegraded {
+		t.Fatalf("enabled=true symmetricEnabled=false: complete-side Status = %q, want degraded", gotComplete.Status)
+	}
+	partialResult := InvestigationResult{Status: InvestigationPartial, DirectJudgment: "x", Completeness: contractsv1.ContextFabricAnswerCompleteness{Outcomes: lateralRows}}
+	gotPartial := ApplyServerCompletenessAuthority(partialResult, true, false, DeriveCompletenessAuthority(partialResult))
+	if gotPartial.Status != InvestigationPartial {
+		t.Fatalf("enabled=true symmetricEnabled=false: lateral-pair Status = %q, want left at partial (this flag must not touch it)", gotPartial.Status)
+	}
+
+	// enabled=false, symmetricEnabled=true: the reverse -- lateral pair
+	// corrects, complete-side does not.
+	gotPartialSymmetric := ApplyServerCompletenessAuthority(partialResult, false, true, DeriveCompletenessAuthority(partialResult))
+	if gotPartialSymmetric.Status != InvestigationDegraded {
+		t.Fatalf("enabled=false symmetricEnabled=true: lateral-pair Status = %q, want degraded", gotPartialSymmetric.Status)
+	}
+	gotCompleteSymmetric := ApplyServerCompletenessAuthority(completeResult, false, true, DeriveCompletenessAuthority(completeResult))
+	if gotCompleteSymmetric.Status != InvestigationComplete {
+		t.Fatalf("enabled=false symmetricEnabled=true: complete-side Status = %q, want left at complete (this flag must not touch it)", gotCompleteSymmetric.Status)
+	}
+}
 
 // TestApplyServerCompletenessAuthority_DisabledIsANoOp pins the config
 // knob's default: with the flag off, the result is returned byte-for-byte
@@ -342,7 +523,7 @@ func TestApplyServerCompletenessAuthority_DisabledIsANoOp(t *testing.T) {
 	}
 	result := InvestigationResult{Status: InvestigationComplete, DirectJudgment: "x", Completeness: contractsv1.ContextFabricAnswerCompleteness{Outcomes: rows, TerminalStatus: InvestigationComplete}}
 	observation := DeriveCompletenessAuthority(result)
-	got := ApplyServerCompletenessAuthority(result, false, observation)
+	got := ApplyServerCompletenessAuthority(result, false, false, observation)
 	if got.Status != InvestigationComplete {
 		t.Fatalf("disabled flip changed Status to %q, want it left at complete", got.Status)
 	}
@@ -357,7 +538,7 @@ func TestApplyServerCompletenessAuthority_DowngradesCompleteToPartial(t *testing
 	}
 	result := InvestigationResult{Status: InvestigationComplete, DirectJudgment: "x", Completeness: contractsv1.ContextFabricAnswerCompleteness{Outcomes: rows}}
 	observation := DeriveCompletenessAuthority(result)
-	got := ApplyServerCompletenessAuthority(result, true, observation)
+	got := ApplyServerCompletenessAuthority(result, true, false, observation)
 	if got.Status != InvestigationPartial {
 		t.Fatalf("Status = %q, want partial", got.Status)
 	}
@@ -376,7 +557,7 @@ func TestApplyServerCompletenessAuthority_DowngradesCompleteToDegraded(t *testin
 	}
 	result := InvestigationResult{Status: InvestigationComplete, DirectJudgment: "x", Completeness: contractsv1.ContextFabricAnswerCompleteness{Outcomes: rows}}
 	observation := DeriveCompletenessAuthority(result)
-	got := ApplyServerCompletenessAuthority(result, true, observation)
+	got := ApplyServerCompletenessAuthority(result, true, false, observation)
 	if got.Status != InvestigationDegraded {
 		t.Fatalf("Status = %q, want degraded", got.Status)
 	}
@@ -394,7 +575,7 @@ func TestApplyServerCompletenessAuthority_NeverUpgrades(t *testing.T) {
 	for _, modelStatus := range []InvestigationStatus{InvestigationPartial, InvestigationDegraded} {
 		result := InvestigationResult{Status: modelStatus, DirectJudgment: "x", Completeness: contractsv1.ContextFabricAnswerCompleteness{Outcomes: rows}}
 		observation := DeriveCompletenessAuthority(result)
-		got := ApplyServerCompletenessAuthority(result, true, observation)
+		got := ApplyServerCompletenessAuthority(result, true, false, observation)
 		if got.Status != modelStatus {
 			t.Fatalf("model status %q with all-satisfied outcomes: flip changed Status to %q, want it left at %q (never upgrade)", modelStatus, got.Status, modelStatus)
 		}
@@ -422,7 +603,7 @@ func TestApplyServerCompletenessAuthority_NeverTouchesNonAnswerDispositions(t *t
 			t.Parallel()
 			result := InvestigationResult{Status: testCase.status, RefusalBasis: testCase.refusalBasis, Completeness: contractsv1.ContextFabricAnswerCompleteness{Outcomes: degradingRows}}
 			observation := DeriveCompletenessAuthority(result)
-			got := ApplyServerCompletenessAuthority(result, true, observation)
+			got := ApplyServerCompletenessAuthority(result, true, false, observation)
 			if got.Status != testCase.status {
 				t.Fatalf("Status changed from %q to %q; a non-answer disposition must never be touched", testCase.status, got.Status)
 			}
@@ -446,7 +627,7 @@ func TestApplyServerCompletenessAuthority_ObservationMatchesResult(t *testing.T)
 	if !fresh.Derived || fresh.ServerState != contractsv1.ContextFabricAnswerCompletenessDegraded {
 		t.Fatalf("setup: expected a derived degraded observation, got %+v", fresh)
 	}
-	got := ApplyServerCompletenessAuthority(result, true, fresh)
+	got := ApplyServerCompletenessAuthority(result, true, false, fresh)
 	if got.Status != InvestigationDegraded {
 		t.Fatalf("Status = %q, want degraded -- a matching, freshly-taken observation must correct the result", got.Status)
 	}
@@ -478,7 +659,7 @@ func TestApplyServerCompletenessAuthority_RefusesAnObservationThatDoesNotMap(t *
 		ServerState: contractsv1.ContextFabricAnswerCompletenessState("not_a_real_state"),
 		Derived:     true,
 	}
-	got := ApplyServerCompletenessAuthority(result, true, inconsistent)
+	got := ApplyServerCompletenessAuthority(result, true, false, inconsistent)
 	if got.Status != InvestigationComplete {
 		t.Fatalf("Status = %q, want it left at complete (an unmapped ServerState must never be written)", got.Status)
 	}
@@ -509,6 +690,8 @@ func TestCompletenessAuthority_ProductionTelemetryEmitsEveryField(t *testing.T) 
 				ServerState: contractsv1.ContextFabricAnswerCompletenessDegraded,
 				Derived:     true,
 				Disagreed:   true,
+				WouldFlip:   true,
+				Direction:   CompletenessAuthorityDirectionCompleteToDegraded,
 				Version:     CompletenessAuthorityVersion,
 			},
 		)
@@ -526,6 +709,8 @@ func TestCompletenessAuthority_ProductionTelemetryEmitsEveryField(t *testing.T) 
 		"server_state": string(contractsv1.ContextFabricAnswerCompletenessDegraded),
 		"derived":      true,
 		"disagreed":    true,
+		"would_flip":   true,
+		"direction":    string(CompletenessAuthorityDirectionCompleteToDegraded),
 		"version":      CompletenessAuthorityVersion,
 	} {
 		if got, ok := record[key]; !ok || got != want {

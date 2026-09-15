@@ -29,6 +29,10 @@ type AppConfig struct {
 	// read live by the by-id investigation-result route, since a stored
 	// row never reaches the engine's own gated flip (finalizeServed).
 	ServerCompletenessAuthorityEnabled bool
+	// ServerCompletenessAuthoritySymmetricEnabled (CHAOS-5743) mirrors
+	// config.Config.ServerCompletenessAuthoritySymmetricEnabled's own doc
+	// comment, for the same by-id route reason immediately above.
+	ServerCompletenessAuthoritySymmetricEnabled bool
 }
 
 type Dependencies struct {

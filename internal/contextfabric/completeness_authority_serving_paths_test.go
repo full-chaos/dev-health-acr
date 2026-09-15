@@ -13,7 +13,7 @@ import (
 // completenessAuthorityTestEngine builds an Engine directly (not through
 // mustReuseTestEngine, which hardcodes EngineOptions) so these tests can
 // set Telemetry and ServerCompletenessAuthorityEnabled explicitly.
-func completenessAuthorityTestEngine(t *testing.T, deps EngineDependencies, enabled bool) *Engine {
+func completenessAuthorityTestEngine(t *testing.T, deps EngineDependencies, enabled bool, symmetricEnabled bool) *Engine {
 	t.Helper()
 	if deps.Graph == nil {
 		deps.Graph = bindingOnlyGraphReader{t: t}
@@ -38,8 +38,9 @@ func completenessAuthorityTestEngine(t *testing.T, deps EngineDependencies, enab
 	}
 	engine, err := NewEngine(deps, EngineOptions{
 		ServiceVersion: "acr-test", Now: func() time.Time { return time.Unix(200, 0).UTC() },
-		NewResultID:                        func() string { return "result_fresh_00001" },
-		ServerCompletenessAuthorityEnabled: enabled,
+		NewResultID:                                 func() string { return "result_fresh_00001" },
+		ServerCompletenessAuthorityEnabled:          enabled,
+		ServerCompletenessAuthoritySymmetricEnabled: symmetricEnabled,
 	})
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
@@ -68,6 +69,127 @@ func degradedOutcomeCandidate() (SubjectRef, InvestigationResult) {
 	return project, candidate
 }
 
+// outcomeAuthorityCandidate is degradedOutcomeCandidate's general form:
+// a stored, reuse-eligible InvestigationResult with the given model status,
+// whose own outcome rows derive serverState. The every-direction pins
+// below need every ordered pair among complete/partial/degraded, not only
+// the one degradedOutcomeCandidate fixes on.
+func outcomeAuthorityCandidate(modelStatus InvestigationStatus, serverState contractsv1.ContextFabricAnswerCompletenessState) (SubjectRef, InvestigationResult) {
+	project, candidate := reusableCandidate()
+	candidate.Status = modelStatus
+	switch serverState {
+	case contractsv1.ContextFabricAnswerCompletenessComplete:
+		candidate.Completeness.Outcomes = []RequirementOutcomeRow{{
+			Stage: contractsv1.ContextFabricOutcomeStageAssembledResult, Requirement: "evidence/subject/team",
+			Obligation: "evidence", Outcome: contractsv1.ContextFabricRequirementSatisfied,
+		}}
+	case contractsv1.ContextFabricAnswerCompletenessPartial:
+		candidate.Completeness.Outcomes = []RequirementOutcomeRow{{
+			Stage: contractsv1.ContextFabricOutcomeStageAssembledResult, Requirement: "ranking/subject/team",
+			Obligation: "ranking", Outcome: contractsv1.ContextFabricRequirementNarrowed,
+		}}
+	case contractsv1.ContextFabricAnswerCompletenessDegraded:
+		candidate.Completeness.Outcomes = []RequirementOutcomeRow{{
+			Stage: contractsv1.ContextFabricOutcomeStageAssembledResult, Requirement: "evidence/subject/team",
+			Obligation: "evidence", Outcome: contractsv1.ContextFabricRequirementUnavailable,
+			Impact: contractsv1.ContextFabricAnswerImpactDimension, CauseCoverage: contractsv1.ContextFabricCoverageDetailFactUnconfigured, CauseObserved: true,
+		}}
+	default:
+		panic("outcomeAuthorityCandidate: unsupported serverState " + string(serverState))
+	}
+	candidate.Completeness = ComputeAnswerCompleteness(candidate)
+	if candidate.Completeness.State != serverState {
+		panic("test setup: expected the fixture's own outcome rows to derive " + string(serverState) + ", got " + string(candidate.Completeness.State))
+	}
+	return project, candidate
+}
+
+// TestCompletenessAuthority_EveryDirectionEveryFlagState exercises every
+// (model, server) disagreement pair against every combination of the two
+// gated flags, through Engine.Investigate (the reuse-hit path) rather than
+// the bare function: DERIVATION (Direction, Disagreed, WouldFlip) is
+// unconditionally symmetric and identical across every flag combination;
+// SERVICE is gated exactly by the two flags' documented scope -- the
+// complete-side pair by `enabled`, the lateral partial/degraded pair by
+// `symmetricEnabled` -- and no pair is ever promoted to complete, under any
+// combination of the two flags.
+func TestCompletenessAuthority_EveryDirectionEveryFlagState(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name          string
+		modelStatus   InvestigationStatus
+		serverState   contractsv1.ContextFabricAnswerCompletenessState
+		wantDirection CompletenessAuthorityDirection
+		// gate names which flag (if any) must be true for the correction to
+		// be SERVED: "enabled", "symmetric", or "never".
+		gate string
+	}{
+		{"complete_to_partial", InvestigationComplete, contractsv1.ContextFabricAnswerCompletenessPartial, CompletenessAuthorityDirectionCompleteToPartial, "enabled"},
+		{"complete_to_degraded", InvestigationComplete, contractsv1.ContextFabricAnswerCompletenessDegraded, CompletenessAuthorityDirectionCompleteToDegraded, "enabled"},
+		{"partial_to_degraded", InvestigationPartial, contractsv1.ContextFabricAnswerCompletenessDegraded, CompletenessAuthorityDirectionPartialToDegraded, "symmetric"},
+		{"degraded_to_partial", InvestigationDegraded, contractsv1.ContextFabricAnswerCompletenessPartial, CompletenessAuthorityDirectionDegradedToPartial, "symmetric"},
+		{"partial_to_complete_never_served", InvestigationPartial, contractsv1.ContextFabricAnswerCompletenessComplete, CompletenessAuthorityDirectionPartialToComplete, "never"},
+		{"degraded_to_complete_never_served", InvestigationDegraded, contractsv1.ContextFabricAnswerCompletenessComplete, CompletenessAuthorityDirectionDegradedToComplete, "never"},
+	} {
+		testCase := testCase
+		for _, flagCase := range []struct {
+			name             string
+			enabled          bool
+			symmetricEnabled bool
+		}{
+			{"both_off", false, false},
+			{"asymmetric_only", true, false},
+			{"symmetric_only", false, true},
+			{"both_on", true, true},
+		} {
+			flagCase := flagCase
+			t.Run(testCase.name+"/"+flagCase.name, func(t *testing.T) {
+				t.Parallel()
+				project, candidate := outcomeAuthorityCandidate(testCase.modelStatus, testCase.serverState)
+				telemetry := &recordingTelemetry{}
+				engine := completenessAuthorityTestEngine(t, EngineDependencies{
+					Graph:     graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+					Telemetry: telemetry,
+					ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
+						return candidate, true, nil
+					}),
+				}, flagCase.enabled, flagCase.symmetricEnabled)
+
+				result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+				if err != nil {
+					t.Fatalf("Investigate() error = %v", err)
+				}
+				if len(telemetry.completenessAuthorities) != 1 {
+					t.Fatalf("completenessAuthorities recorded = %d, want 1", len(telemetry.completenessAuthorities))
+				}
+				observation := telemetry.completenessAuthorities[0]
+				if observation.Direction != testCase.wantDirection {
+					t.Fatalf("Direction = %q, want %q -- the measurement must be identical regardless of either flag", observation.Direction, testCase.wantDirection)
+				}
+				if !observation.Disagreed || !observation.WouldFlip {
+					t.Fatalf("Disagreed=%v WouldFlip=%v, want both true (model=%q server=%q disagree by construction)", observation.Disagreed, observation.WouldFlip, testCase.modelStatus, testCase.serverState)
+				}
+
+				servedShouldFlip := (testCase.gate == "enabled" && flagCase.enabled) || (testCase.gate == "symmetric" && flagCase.symmetricEnabled)
+				wantServed := testCase.modelStatus
+				if servedShouldFlip {
+					mapped, ok := answerCompletenessStateToStatus(testCase.serverState)
+					if !ok {
+						t.Fatalf("test setup: serverState %q does not map to a status", testCase.serverState)
+					}
+					wantServed = mapped
+				}
+				if result.Status != wantServed {
+					t.Fatalf("result.Status = %q, want %q (enabled=%v symmetricEnabled=%v, gate=%q)", result.Status, wantServed, flagCase.enabled, flagCase.symmetricEnabled, testCase.gate)
+				}
+				if result.Completeness.TerminalStatus != result.Status {
+					t.Fatalf("result.Completeness.TerminalStatus = %q, must equal result.Status %q", result.Completeness.TerminalStatus, result.Status)
+				}
+			})
+		}
+	}
+}
+
 // TestCompletenessAuthority_ReuseHitIsMeasured pins that a reuse hit is
 // measured too: the reuse path returns from Investigate before ever
 // reaching the decisive path's own telemetry point, so the measurement
@@ -84,7 +206,7 @@ func TestCompletenessAuthority_ReuseHitIsMeasured(t *testing.T) {
 		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
 			return candidate, true, nil
 		}),
-	}, false)
+	}, false, false)
 
 	result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
 	if err != nil {
@@ -116,7 +238,7 @@ func TestCompletenessAuthority_ReuseHitIsCorrectedWhenEnabled(t *testing.T) {
 		ReuseGate: reuseGateFunc(func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error) {
 			return candidate, true, nil
 		}),
-	}, true)
+	}, true, false)
 
 	result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
 	if err != nil {
@@ -199,7 +321,7 @@ func TestFinalizeServed_BudgetMeasuresThePostFlipDocument(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MeasureContextFabricResponse(pre-flip) error = %v", err)
 	}
-	flipped := ApplyServerCompletenessAuthority(candidate, true, DeriveCompletenessAuthority(candidate))
+	flipped := ApplyServerCompletenessAuthority(candidate, true, false, DeriveCompletenessAuthority(candidate))
 	if flipped.Status != InvestigationDegraded {
 		t.Fatalf("setup: expected the flip to degrade, got %q", flipped.Status)
 	}
@@ -295,7 +417,7 @@ func TestCompletenessAuthority_NilTelemetryDoesNotPanic(t *testing.T) {
 			return candidate, true, nil
 		}),
 		// Telemetry deliberately left nil.
-	}, true)
+	}, true, false)
 
 	result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
 	if err != nil {

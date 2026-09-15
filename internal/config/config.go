@@ -165,6 +165,17 @@ type Config struct {
 	// contextfabric.EngineOptions.ServerCompletenessAuthorityEnabled's own
 	// doc comment for the mechanism itself.
 	ServerCompletenessAuthorityEnabled bool
+	// ServerCompletenessAuthoritySymmetricEnabled (CHAOS-5743,
+	// ACR_CONTEXT_FABRIC_SERVER_COMPLETENESS_AUTHORITY_SYMMETRIC_ENABLED) is
+	// the LATERAL half of the same gated flip -- default OFF, independent of
+	// ServerCompletenessAuthorityEnabled immediately above. The measurement
+	// (contextfabric.DeriveCompletenessAuthority's Disagreed/WouldFlip/
+	// Direction fields) runs and is recorded unconditionally either way;
+	// this flag gates only whether a model-claimed partial/degraded may
+	// also be corrected to the other of the pair. See
+	// contextfabric.EngineOptions.ServerCompletenessAuthoritySymmetricEnabled's
+	// own doc comment for the mechanism.
+	ServerCompletenessAuthoritySymmetricEnabled bool
 	// AnswerReuseMaxAge (CHAOS-3782, ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE)
 	// is the staleness window TRD §19.7.3 condition 4 enforces: a stored
 	// investigation result older than this is never reused, regardless of

@@ -383,7 +383,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	}
 	retried = e.finalizeResult(ctx, principal, retried, *plan, params.Frame, retryParams.Facts, &retryPending, answerPassSecond, retryCardinality)
 	if params.WorkItemCensus != nil {
-		retried = ApplyServerCompletenessAuthority(retried, e.serverCompletenessAuthorityEnabled, DeriveCompletenessAuthority(retried))
+		retried = ApplyServerCompletenessAuthority(retried, e.serverCompletenessAuthorityEnabled, e.serverCompletenessAuthoritySymmetricEnabled, DeriveCompletenessAuthority(retried))
 	}
 	// READ BACK FROM THE PRODUCER, not from the params and not from the local
 	// `retryAllocation`, and the difference is the entire lesson of this class.
