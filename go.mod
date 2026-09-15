@@ -6,10 +6,11 @@ require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.47.0
 	github.com/FalkorDB/falkordb-go/v2 v2.1.0
 	github.com/firebase/genkit/go v1.11.0
-	github.com/full-chaos/dev-health-go v0.7.0
+	github.com/full-chaos/dev-health-go v0.8.0
 	github.com/google/jsonschema-go v0.4.3
 	github.com/invopop/jsonschema v0.13.0
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/moby/moby/api v1.55.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/openai/openai-go v1.8.2
 	github.com/redis/go-redis/v9 v9.17.2
@@ -77,7 +78,6 @@ require (
 	github.com/mbleigh/raymond v0.0.0-20250414171441-6b3a58ab9e0a // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/go-archive v0.3.0 // indirect
-	github.com/moby/moby/api v1.55.0 // indirect
 	github.com/moby/moby/client v0.5.0 // indirect
 	github.com/moby/patternmatcher v0.6.1 // indirect
 	github.com/moby/sys/sequential v0.7.0 // indirect
