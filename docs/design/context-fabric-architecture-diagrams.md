@@ -580,7 +580,7 @@ source for the SAME kind).
 | flow (CHAOS-4364) | `work_item_metrics_daily` (team, per-scope Rows; `work_item_cycle_times`'s flow_efficiency is DELIBERATELY NOT read -- ops sink omits it, see flow.go's doc comment); **+`team_project_ownership` ⋈ `work_item_metrics_daily`**, summed/averaged across a team's own (provider, work_scope_id) rows into one row per team (project, codex R2 fix); **+`repo_metrics_daily`** (repository, PR pickup/review timings, distinct shape) | team, project, repository |
 | landscape (CHAOS-4364) | `ic_landscape_rolling_30d` aggregated to (team, map_name) — never per-identity (no person-to-person ranking); **+`team_project_ownership` ⋈ `ic_landscape_rolling_30d`** (project, owning-teams rollup) | team, project |
 
-**Updated 2026-09-14 (request-carried work-item repository scope).** The
+**Updated 2026-09-15 (request-carried work-item repository scope).** The
 status, work-title, and actual-completion providers now share this bounded
 path. `RequestedScope.RepositorySlugs` is copied into the canonical request
 and then into `FactQuery`; it remains separate from the resolver's `Scope`
@@ -601,7 +601,7 @@ flowchart LR
     AD --> TS["typed Granted / Requested<br/>RepositorySelectorSet"]
     TS --> SQL["WorkItemScopeSQL<br/>bound slug/owner selectors + presence guards<br/>same-statement LEFT JOIN repos AS r FINAL"]
     SQL --> READ["status / title / actual-completion<br/>WithScopeAndRowLimit"]
-    READ --> BOUNDS["SETTINGS: rows 10000<br/>memory 512 MiB · result 201<br/>all overflow modes throw"]
+    READ --> BOUNDS["SETTINGS: physical rows 8192<br/>memory 64 MiB · threads 1 · result 201<br/>native limit failures throw"]
     CTX{"context deadline"} -->|"remaining ≥ 1 second"| SEC["server max_execution_time =<br/>whole-second floor"]
     CTX -->|"remaining < 1 second"| REFUSE["bounded refusal before query<br/>never rounds upward"]
     SEC --> BOUNDS
@@ -615,6 +615,13 @@ expired context returns its context error before statement execution. A live
 sub-second budget is refused because the released reader API accepts only
 whole-second server execution ceilings; longer deadlines use the floored
 server value and the client context remains an additional bound.
+
+The shared resource policy is independent of fixture size: 8192 physical
+rows, 64 MiB of query memory and one requested query thread. It does not
+promise that every valid history or storage layout fits. A native limit
+failure is a failed content read, never a successfully measured partial
+stream. The thread setting is per statement and does not change the shared
+client pool or server defaults.
 
 **`FactMetrics`'s project rollup never averages a rate across
 differently-sized teams.** Additive counts (commits, after-hours/weekend
