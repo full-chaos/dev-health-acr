@@ -1708,7 +1708,38 @@ var RequirementOutcomeTransition = Event{
 	},
 }
 
+// RetainedRankingAccounting reports a serving decision made from recorded
+// member qualification. Counts describe the retained set, never the lost
+// original population, and RowAdded never means a new ranking executed.
+var RetainedRankingAccounting = Event{
+	ID:                 "contextfabric.retained_ranking_accounting",
+	Msg:                contextfabric.RetainedRankingAccountingLogMessage,
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityBoundedManyPerPass,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "one per served computed ranking requirement in the stored plan; index and total delimit the bounded request set",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "requirement", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "existing_row", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "qualification_recorded", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "row_added", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "assembled_outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none"}, contextfabric.RequirementOutcomeTransitionLineVocabulary("assembled_outcome")...)},
+		{Key: "retained_members", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "qualified", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "provisional", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "insufficient_evidence", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "not_applicable", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "unrecorded_members", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "index", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "total", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+	},
+}
+
 var All = []Event{
+	RetainedRankingAccounting,
 	RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld,
 	Corroboration, CorroborationSummary, ReservedKindAdmitted, OfferPool, OfferPoolSummary,
 	Decision, SearchQuestion, AliasLookup, AnchorPool, KindCoverageFloor, ConfirmedKindRescue,

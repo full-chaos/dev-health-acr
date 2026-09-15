@@ -84,6 +84,8 @@ func generateGo() ([]byte, error) {
 // on ByID build) rather than silently omitting the event.
 func goVarName(e Event) string {
 	switch e.ID {
+	case RetainedRankingAccounting.ID:
+		return "RetainedRankingAccounting"
 	case RankedCutSummary.ID:
 		return "RankedCutSummary"
 	case AnchorSlotDisplaced.ID:

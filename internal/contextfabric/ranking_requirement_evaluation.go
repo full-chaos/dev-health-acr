@@ -30,7 +30,21 @@ func appendRankingRequirementEvaluations(
 	return rows
 }
 
+// rankingScopeQualification carries recorded scope evidence without inventing a
+// population count when only a retained result is available.
+type rankingScopeQualification struct {
+	narrowed bool
+	basis    contractsv1.ContextFabricNarrowingBasis
+	overrun  contractsv1.ContextFabricBudgetOverrun
+}
+
 func rankingRequirementOutcome(requirement contractsv1.ContextFabricPlanRequirement, cohort *Cohort, cardinality MembershipCardinality) RequirementOutcomeRow {
+	return rankingRequirementOutcomeForScope(requirement, cohort, rankingScopeQualification{
+		narrowed: cardinality.Narrowed(), basis: cardinality.Basis, overrun: cardinality.Overrun,
+	})
+}
+
+func rankingRequirementOutcomeForScope(requirement contractsv1.ContextFabricPlanRequirement, cohort *Cohort, scope rankingScopeQualification) RequirementOutcomeRow {
 	if cohort == nil || cohort.Kind != requirement.Subject || len(cohort.Members) == 0 {
 		return unresolvedMemberSetOutcomeRow(requirement.Requirement, requirement.Obligation)
 	}
@@ -66,15 +80,15 @@ func rankingRequirementOutcome(requirement contractsv1.ContextFabricPlanRequirem
 		row.CauseCoverage = contractsv1.ContextFabricCoverageDetailFactProviderReported
 		return row
 	}
-	if !cohort.Complete || cohort.Truncated || cardinality.Narrowed() {
+	if !cohort.Complete || cohort.Truncated || scope.narrowed {
 		row.Outcome = contractsv1.ContextFabricRequirementNarrowed
 		row.Impact = contractsv1.ContextFabricAnswerImpactScope
 		row.CauseObserved = true
 		row.CauseCoverage = contractsv1.ContextFabricCoverageDetailPopulationTruncated
-		if cardinality.Narrowed() && cardinality.Basis != "" {
+		if scope.narrowed && scope.basis != "" {
 			row.CauseCoverage = ""
-			row.CauseNarrowing = cardinality.Basis
-			row.CauseOverrun = cardinality.Overrun
+			row.CauseNarrowing = scope.basis
+			row.CauseOverrun = scope.overrun
 		}
 	}
 	return row
