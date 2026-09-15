@@ -286,6 +286,13 @@ func TestTheOutcomeRowFollowsTheEvidence(t *testing.T) {
 			// honest outcome". Publishing `unavailable` told the reader they
 			// got none of a cell they got part of, and degraded an answer the
 			// layer below had deliberately kept partial.
+			//
+			// Served == Declared here (there is exactly one fact-bearing
+			// observation to cover) is the truncation-qualified equal-count
+			// shape (CHAOS-5742) ContextFabricPlanRequirementOutcomeRow's
+			// validator admits, symmetric with the census exception; no
+			// refinement, because a refinement records a Before that is
+			// larger than the After and nothing here is.
 			name:       "a truncated-only read is narrowed, never unavailable",
 			quantifier: CompletionQuantifierAtLeastOne,
 			coverage: codedCoverage(contractsv1.ContextFabricCoverageDetailFactProviderReported,
@@ -293,7 +300,7 @@ func TestTheOutcomeRowFollowsTheEvidence(t *testing.T) {
 			wantRow: true, wantOutcome: contractsv1.ContextFabricRequirementNarrowed,
 			wantImpact:   contractsv1.ContextFabricAnswerImpactDepth,
 			wantCause:    contractsv1.ContextFabricCoverageDetailFactProviderReported,
-			wantObserved: true, wantServed: 0, wantDeclared: 1, wantRefinements: 1,
+			wantObserved: true, wantServed: 1, wantDeclared: 1, wantRefinements: 0,
 		},
 		{
 			// THE COMPLEMENT of the case above: a state that is genuinely NOT
@@ -307,6 +314,25 @@ func TestTheOutcomeRowFollowsTheEvidence(t *testing.T) {
 			wantImpact:   contractsv1.ContextFabricAnswerImpactDimension,
 			wantCause:    contractsv1.ContextFabricCoverageDetailFactProviderReported,
 			wantObserved: true, wantServed: 0, wantDeclared: 1, wantRefinements: 0,
+		},
+		{
+			// A PLANNER-NARROWED KIND BESIDE A TRUNCATED ONE, neither of
+			// them in ServedKinds. The truncated-kind credit in
+			// readRequirementCoverDecision is deliberately indifferent to a
+			// co-occurring planner narrowing: the truncated kind's real
+			// facts still count, and this case is the reach probe that a
+			// Narrowed>0 sibling does not turn the correction off. Declared
+			// covers both kinds (2); the truncated kind alone covers 1 -- a
+			// true "1 of 2", not the 2-of-2 the mixed-serve case above would
+			// read if the correction credited the narrowed kind too.
+			name:       "a planner narrowing beside a truncated kind still credits the truncated one",
+			quantifier: CompletionQuantifierCorroborated,
+			coverage: narrowedCoverage([]FactKind{contractsv1.ContextFabricFactHealth},
+				health, SourceAvailable, workload, SourceTruncated),
+			wantRow: true, wantOutcome: contractsv1.ContextFabricRequirementNarrowed,
+			wantImpact:   contractsv1.ContextFabricAnswerImpactDepth,
+			wantCause:    contractsv1.ContextFabricCoverageDetailFactProviderReported,
+			wantObserved: true, wantServed: 1, wantDeclared: 2, wantRefinements: 1,
 		},
 		{
 			// A PLANNER NARROWING, recorded in Coverage.Details while the
