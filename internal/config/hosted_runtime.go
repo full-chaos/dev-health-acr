@@ -123,6 +123,11 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, defaultRequireStores
 	if cfg.ServerCompletenessAuthorityEnabled, err = boolValue(lookup, "ACR_CONTEXT_FABRIC_SERVER_COMPLETENESS_AUTHORITY_ENABLED", false); err != nil {
 		return err
 	}
+	// CHAOS-5743: default OFF -- see
+	// Config.ServerCompletenessAuthoritySymmetricEnabled's own doc comment.
+	if cfg.ServerCompletenessAuthoritySymmetricEnabled, err = boolValue(lookup, "ACR_CONTEXT_FABRIC_SERVER_COMPLETENESS_AUTHORITY_SYMMETRIC_ENABLED", false); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -190,6 +195,7 @@ func (c Config) SafeAttributes() []any {
 		"context_fabric_structure_priors_enabled", c.StructurePriorsEnabled,
 		"context_fabric_anchor_membership_enabled", c.AnchorMembershipOffersEnabled,
 		"context_fabric_server_completeness_authority_enabled", c.ServerCompletenessAuthorityEnabled,
+		"context_fabric_server_completeness_authority_symmetric_enabled", c.ServerCompletenessAuthoritySymmetricEnabled,
 		"minimum_sidecar_version", c.MinimumSidecarVersion,
 		"entitlement_key", c.EntitlementKey,
 		"entitlement_mode", string(c.EntitlementMode()),

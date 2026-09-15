@@ -225,16 +225,10 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 			return
 		}
 		completenessAuthority := contextfabric.DeriveCompletenessAuthority(result)
-		a.logger.InfoContext(r.Context(), "context fabric completeness authority",
-			"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
-			"model_status", contextfabric.SanitizeLogAttr(string(completenessAuthority.ModelStatus)),
-			"disposition", contextfabric.SanitizeLogAttr(string(completenessAuthority.Disposition)),
-			"basis", contextfabric.SanitizeLogAttr(string(completenessAuthority.Basis)),
-			"server_state", contextfabric.SanitizeLogAttr(string(completenessAuthority.ServerState)),
-			"derived", completenessAuthority.Derived,
-			"disagreed", completenessAuthority.Disagreed,
-			"version", contextfabric.SanitizeLogAttr(completenessAuthority.Version))
-		result = contextfabric.ApplyServerCompletenessAuthority(result, a.config.ServerCompletenessAuthorityEnabled, completenessAuthority)
+		completenessAuthorityArgs := contextfabric.CompletenessAuthorityLogArgs(completenessAuthority, principal.OrgID)
+		completenessAuthorityArgs = append(completenessAuthorityArgs, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())))
+		a.logger.InfoContext(r.Context(), "context fabric completeness authority", completenessAuthorityArgs...)
+		result = contextfabric.ApplyServerCompletenessAuthority(result, a.config.ServerCompletenessAuthorityEnabled, a.config.ServerCompletenessAuthoritySymmetricEnabled, completenessAuthority)
 		// The consumer projection is served from THIS route, through the
 		// same answerprojection.Project the MCP tool calls (CHAOS-3746
 		// codex round-1 F2). Before this, the API only ever returned the

@@ -1046,22 +1046,20 @@ func (t SlogEngineTelemetry) RecordServerStatusShadow(ctx context.Context, princ
 // proxy, so the two series must never be spliced together -- see
 // CompletenessAuthorityVersion's own doc comment.
 //
-// SanitizeLogAttr covers every string field here, the same sink discipline
-// this file already applies to RecordServerStatusShadow; there is no
-// numeric field on this event; content-safe by construction (closed
-// enums and booleans only), per CompletenessAuthorityObservation's own doc
-// comment.
+// `would_flip` and `direction` (CHAOS-5743) are on every line for the same
+// reason `disagreed` is: both are populated unconditionally by
+// DeriveCompletenessAuthority regardless of either gated flip's setting --
+// the measurement never depends on what is actually being served.
+//
+// The fields themselves are built by CompletenessAuthorityLogArgs, the ONE
+// construction this sink and the stored-read route both log through -- see
+// that function's own doc comment. SanitizeLogAttr covers every string
+// field there, the same sink discipline this file already applies to
+// RecordServerStatusShadow; there is no numeric field on this event;
+// content-safe by construction (closed enums and booleans only), per
+// CompletenessAuthorityObservation's own doc comment.
 func (t SlogEngineTelemetry) RecordCompletenessAuthority(ctx context.Context, principal storage.Principal, event CompletenessAuthorityObservation) {
-	args := []any{
-		"org_id", SanitizeLogAttr(principal.OrgID),
-		"model_status", SanitizeLogAttr(string(event.ModelStatus)),
-		"disposition", SanitizeLogAttr(string(event.Disposition)),
-		"basis", SanitizeLogAttr(string(event.Basis)),
-		"server_state", SanitizeLogAttr(string(event.ServerState)),
-		"derived", event.Derived,
-		"disagreed", event.Disagreed,
-		"version", SanitizeLogAttr(event.Version),
-	}
+	args := CompletenessAuthorityLogArgs(event, principal.OrgID)
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric completeness authority", args...)
 }

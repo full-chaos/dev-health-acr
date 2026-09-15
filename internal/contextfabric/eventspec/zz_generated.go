@@ -20,6 +20,7 @@ func FieldKeys(e Event) []string {
 // rather than hand-maintained so it can never drift from All.
 var ByID = map[string]Event{
 	"contextfabric.answer_display":                 AnswerDisplay,
+	"contextfabric.completeness_authority":         CompletenessAuthority,
 	"contextfabric.count_population_scope":         CountPopulationScope,
 	"contextfabric.requirement_outcome_transition": RequirementOutcomeTransition,
 	"contextfabric.retained_ranking_accounting":    RetainedRankingAccounting,
@@ -156,6 +157,77 @@ func (f AnswerDisplayFields) SlogArgs() []any {
 		"projection_truncated", f.ProjectionTruncated,
 		"markdown_rendered", f.MarkdownRendered,
 		"markdown_truncated", f.MarkdownTruncated,
+	}
+}
+
+// CompletenessAuthorityFields is contextfabric.completeness_authority's generated typed construction interface
+// (CHAOS-5516): one Go field per Field CompletenessAuthority.Fields declares in spec.go.
+type CompletenessAuthorityFields struct {
+	OrgID       string
+	ModelStatus string
+	Disposition string
+	Basis       string
+	ServerState string
+	Derived     bool
+	Disagreed   bool
+	WouldFlip   bool
+	Direction   string
+	Version     string
+	RequestID   string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every CompletenessAuthorityFields uniformly, set ONLY by NewCompletenessAuthorityFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewCompletenessAuthorityFields is the generated constructor for CompletenessAuthorityFields -- every
+// field CompletenessAuthority.Fields declares is a required parameter.
+func NewCompletenessAuthorityFields(orgID string, modelStatus string, disposition string, basis string, serverState string, derived bool, disagreed bool, wouldFlip bool, direction string, version string, requestID string) CompletenessAuthorityFields {
+	return CompletenessAuthorityFields{
+		OrgID:       orgID,
+		ModelStatus: modelStatus,
+		Disposition: disposition,
+		Basis:       basis,
+		ServerState: serverState,
+		Derived:     derived,
+		Disagreed:   disagreed,
+		WouldFlip:   wouldFlip,
+		Direction:   direction,
+		Version:     version,
+		RequestID:   requestID,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewCompletenessAuthorityFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f CompletenessAuthorityFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns CompletenessAuthority's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f CompletenessAuthorityFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"model_status", contextfabric.SanitizeLogAttr(f.ModelStatus),
+		"disposition", contextfabric.SanitizeLogAttr(f.Disposition),
+		"basis", contextfabric.SanitizeLogAttr(f.Basis),
+		"server_state", contextfabric.SanitizeLogAttr(f.ServerState),
+		"derived", f.Derived,
+		"disagreed", f.Disagreed,
+		"would_flip", f.WouldFlip,
+		"direction", contextfabric.SanitizeLogAttr(f.Direction),
+		"version", contextfabric.SanitizeLogAttr(f.Version),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
 

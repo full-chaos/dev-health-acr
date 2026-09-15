@@ -133,6 +133,21 @@ type EngineOptions struct {
 	// version -- this field gates ONLY whether the measured correction is
 	// also served.
 	ServerCompletenessAuthorityEnabled bool
+	// ServerCompletenessAuthoritySymmetricEnabled (CHAOS-5743) turns ON the
+	// gated FLIP's LATERAL pair in ApplyServerCompletenessAuthority: when
+	// true, the outcome-derivation authority may also correct a
+	// model-claimed `partial` to `degraded` or a model-claimed `degraded`
+	// to `partial` -- never a promotion to `complete`, and never a
+	// non-answer disposition. Independent of ServerCompletenessAuthorityEnabled
+	// immediately above: either flag, both, or neither may be set. See that
+	// function's own doc comment for the full guardrail set.
+	//
+	// ZERO VALUE = DISABLED, same "ships dark" convention as
+	// ServerCompletenessAuthorityEnabled: the measurement
+	// (DeriveCompletenessAuthority's Disagreed/WouldFlip/Direction) runs
+	// and is recorded unconditionally either way; this field gates ONLY
+	// whether the lateral correction is also served.
+	ServerCompletenessAuthoritySymmetricEnabled bool
 }
 
 type EngineDependencies struct {
@@ -1123,41 +1138,42 @@ type CohortRankedEvent struct {
 // Engine coordinates one open-ended investigation. It deliberately composes
 // capabilities rather than matching the question against a route/plan table.
 type Engine struct {
-	interpreter                        QuestionInterpreter
-	graph                              GraphReader
-	facts                              CanonicalFactReader
-	synthesizer                        AnswerSynthesizer
-	results                            InvestigationResultStore
-	telemetry                          EngineTelemetry
-	reuseGate                          AnswerReuseGate
-	reuseSnapshotter                   SourceWatermarkSnapshotter
-	reuseEpochSnapshotter              RebuildEpochSnapshotter
-	reuseModelIdentityResolver         ReuseModelIdentityResolver
-	reuseProjectionVersion             string
-	reuseModelIdentities               []string
-	reuseRetrievalIdentity             ReuseRetrievalIdentity
-	reusePromptVersions                ReusePromptVersions
-	reuseVersionAuthorities            ReuseVersionAuthorities
-	clarificationSelectionSink         ClarificationSelectionSink
-	structureSelectionSink             StructureSelectionSink
-	handleVerifier                     HandleVerifier
-	anchorVerifier                     AnchorVerifier
-	anchorMembershipVerifier           AnchorMembershipVerifier
-	candidateVerifier                  CandidateVerifier
-	workItemMembership                 WorkItemMembershipPort
-	priorConsultant                    PriorConsultant
-	priorHandleGrammarChecker          HandleGrammarChecker
-	offerPhraser                       OfferPhraser
-	requirements                       RequirementDeriver
-	observationKeys                    ObservationKeyDeclarer
-	regimeAOffersDisabled              bool
-	serverCompletenessAuthorityEnabled bool
-	maxItems                           int
-	maxSerializedBytes                 int64
-	synthesisDeadlineReserve           time.Duration
-	serviceVersion                     string
-	now                                func() time.Time
-	newResultID                        func() string
+	interpreter                                 QuestionInterpreter
+	graph                                       GraphReader
+	facts                                       CanonicalFactReader
+	synthesizer                                 AnswerSynthesizer
+	results                                     InvestigationResultStore
+	telemetry                                   EngineTelemetry
+	reuseGate                                   AnswerReuseGate
+	reuseSnapshotter                            SourceWatermarkSnapshotter
+	reuseEpochSnapshotter                       RebuildEpochSnapshotter
+	reuseModelIdentityResolver                  ReuseModelIdentityResolver
+	reuseProjectionVersion                      string
+	reuseModelIdentities                        []string
+	reuseRetrievalIdentity                      ReuseRetrievalIdentity
+	reusePromptVersions                         ReusePromptVersions
+	reuseVersionAuthorities                     ReuseVersionAuthorities
+	clarificationSelectionSink                  ClarificationSelectionSink
+	structureSelectionSink                      StructureSelectionSink
+	handleVerifier                              HandleVerifier
+	anchorVerifier                              AnchorVerifier
+	anchorMembershipVerifier                    AnchorMembershipVerifier
+	candidateVerifier                           CandidateVerifier
+	workItemMembership                          WorkItemMembershipPort
+	priorConsultant                             PriorConsultant
+	priorHandleGrammarChecker                   HandleGrammarChecker
+	offerPhraser                                OfferPhraser
+	requirements                                RequirementDeriver
+	observationKeys                             ObservationKeyDeclarer
+	regimeAOffersDisabled                       bool
+	serverCompletenessAuthorityEnabled          bool
+	serverCompletenessAuthoritySymmetricEnabled bool
+	maxItems                                    int
+	maxSerializedBytes                          int64
+	synthesisDeadlineReserve                    time.Duration
+	serviceVersion                              string
+	now                                         func() time.Time
+	newResultID                                 func() string
 }
 
 func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine, error) {
@@ -1192,15 +1208,16 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		requirements:               dependencies.Requirements,
 		observationKeys:            dependencies.ObservationKeys,
 		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
-		reuseRetrievalIdentity:             options.ReuseRetrievalIdentity,
-		reusePromptVersions:                options.ReusePromptVersions,
-		reuseVersionAuthorities:            options.ReuseVersionAuthorities,
-		regimeAOffersDisabled:              options.RegimeAOffersDisabled,
-		serverCompletenessAuthorityEnabled: options.ServerCompletenessAuthorityEnabled,
-		maxItems:                           options.MaxItems,
-		maxSerializedBytes:                 options.MaxSerializedBytes,
-		synthesisDeadlineReserve:           options.SynthesisDeadlineReserve,
-		serviceVersion:                     options.ServiceVersion, now: options.Now, newResultID: options.NewResultID,
+		reuseRetrievalIdentity:                      options.ReuseRetrievalIdentity,
+		reusePromptVersions:                         options.ReusePromptVersions,
+		reuseVersionAuthorities:                     options.ReuseVersionAuthorities,
+		regimeAOffersDisabled:                       options.RegimeAOffersDisabled,
+		serverCompletenessAuthorityEnabled:          options.ServerCompletenessAuthorityEnabled,
+		serverCompletenessAuthoritySymmetricEnabled: options.ServerCompletenessAuthoritySymmetricEnabled,
+		maxItems:                 options.MaxItems,
+		maxSerializedBytes:       options.MaxSerializedBytes,
+		synthesisDeadlineReserve: options.SynthesisDeadlineReserve,
+		serviceVersion:           options.ServiceVersion, now: options.Now, newResultID: options.NewResultID,
 	}, nil
 }
 
@@ -3308,9 +3325,23 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		result = restrictWorkItemTupleEvidence(result)
 	}
 	result = e.finalizeResult(ctx, principal, result, plan, familyOutcome.Frame, facts, &pendingTelemetry, answerPassFirst, cardinality)
-	if tupleCensus != nil {
-		result = ApplyServerCompletenessAuthority(result, e.serverCompletenessAuthorityEnabled, DeriveCompletenessAuthority(result))
-	}
+	// The outcome-derivation completeness authority is applied exactly ONCE,
+	// inside finalizeServed below -- the one point every serving path,
+	// tupleCensus included, is downstream of (that function's own doc
+	// comment). Neither fitAssembledResult immediately below nor
+	// ValidateWorkItemTuplePayload reads result.Status, so nothing between
+	// here and finalizeServed depends on the correction having already
+	// landed. Applying it a second time here, ahead of finalizeServed's own
+	// derivation, would make finalizeServed re-derive its observation from
+	// an ALREADY-CORRECTED result.Status -- reading Disagreed=false and
+	// WouldFlip=false on the one line that observation is measured from,
+	// even when the model and server genuinely disagreed. The stage-3 retry
+	// decision immediately below therefore measures the PRE-flip byte count
+	// for a tupleCensus result when a flip flag is enabled -- a narrow-or-not
+	// heuristic, not the serving decision -- while finalizeServed's own hard
+	// budget gate still measures the POST-flip document for every path,
+	// tupleCensus included, so the served document and its refusal boundary
+	// are unaffected.
 	cover.events = pendingTelemetry.ObservationCover
 	result, pendingTelemetry, err = e.fitAssembledResult(ctx, principal, &plan, result, consumedAllocation, pendingTelemetry, retryBase, cardinality)
 	// Read BEFORE the error check: a stage-3 refusal returns the telemetry of

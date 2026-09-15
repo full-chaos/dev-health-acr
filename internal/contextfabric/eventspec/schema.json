@@ -113,6 +113,106 @@
     ]
   },
   {
+    "id": "contextfabric.completeness_authority",
+    "msg": "context fabric completeness authority",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "exactly one line per investigation that reaches finalizeServed or the stored-read route, from the shared measurement site; a request that reaches neither emits none.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "model_status",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "complete",
+          "partial",
+          "degraded",
+          "clarification_required",
+          "no_match"
+        ]
+      },
+      {
+        "key": "disposition",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "answer",
+          "clarification",
+          "refusal",
+          "no_match"
+        ]
+      },
+      {
+        "key": "basis",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "outcome_derived",
+          "unavailable",
+          "not_an_answer"
+        ]
+      },
+      {
+        "key": "server_state",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "complete",
+          "partial",
+          "degraded"
+        ]
+      },
+      {
+        "key": "derived",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "disagreed",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "would_flip",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "direction",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "complete_to_partial",
+          "complete_to_degraded",
+          "partial_to_complete",
+          "partial_to_degraded",
+          "degraded_to_complete",
+          "degraded_to_partial"
+        ]
+      },
+      {
+        "key": "version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.count_population_scope",
     "msg": "context fabric count population scope",
     "level": "info",

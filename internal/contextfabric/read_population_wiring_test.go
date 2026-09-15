@@ -92,17 +92,30 @@ func TestTheRetryAllocationIsBoundToWhatTheProducerConsumed(t *testing.T) {
 		t.Error("the retry producer does not RETURN what it consumed; without that return value the " +
 			"guard below has nothing to read but the caller's own copy")
 	}
-	if !strings.Contains(source, "e.measureAssembledAttempt(ctx, principal, \"re_synthesized_result\", consumedRetryAllocation, retried, budget)") {
+	// The measured RESULT argument is `retryMeasurementInput`, not `retried`
+	// directly: a work-item census retry may still need a completeness
+	// authority correction weighed into this fit-or-retry decision, and that
+	// correction is derived into a local, disposable copy so `retried`
+	// itself -- returned below, and carried forward to finalizeServed --
+	// is never mutated by this measurement. See this call's own
+	// surrounding comment. The ALLOCATION argument this test exists to pin
+	// is unchanged by that: still `consumedRetryAllocation`, the producer's
+	// own returned value, never a caller-side copy.
+	if !strings.Contains(source, "e.measureAssembledAttempt(ctx, principal, \"re_synthesized_result\", consumedRetryAllocation, retryMeasurementInput, budget)") {
 		t.Error("the retry is not measured against the allocation the PRODUCER RETURNED as consumed; " +
 			"any caller-side object is a copy that agrees on every honest input and diverges only " +
 			"under a fault")
 	}
+	if !strings.Contains(source, "retryMeasurementInput := retried") {
+		t.Error("the retry's measurement input is not anchored to `retried` (the producer's own returned document); " +
+			"a measurement input built from anything else could describe a document nobody synthesized")
+	}
 	// Both superseded forms, refused by name so neither can return.
-	if strings.Contains(source, "e.measureAssembledAttempt(ctx, principal, \"re_synthesized_result\", retryAllocation, retried, budget)") {
+	if strings.Contains(source, "e.measureAssembledAttempt(ctx, principal, \"re_synthesized_result\", retryAllocation, retryMeasurementInput, budget)") {
 		t.Error("the retry is measured against the LOCAL allocation (revision-1 shape); measure " +
 			"`consumedRetryAllocation`, what the producer returned as spent")
 	}
-	if strings.Contains(source, "e.measureAssembledAttempt(ctx, principal, \"re_synthesized_result\", retryParams.Allocation, retried, budget)") {
+	if strings.Contains(source, "e.measureAssembledAttempt(ctx, principal, \"re_synthesized_result\", retryParams.Allocation, retryMeasurementInput, budget)") {
 		t.Error("the retry is measured against the params the producer was HANDED (revision-2 shape). " +
 			"`params` is by value, so that is still the caller's copy and a producer-local fault " +
 			"cannot reach it; measure `consumedRetryAllocation`")

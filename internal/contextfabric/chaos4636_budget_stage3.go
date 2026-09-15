@@ -125,7 +125,24 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// this guard, which is how narration came to spend a re-copied local that
 	// nothing validated (keystone #5). It now reads what the producer returned.
 	allocation := consumed
-	measured, err := e.measureAssembledAttempt(ctx, principal, "assembled_result", allocation, result, budget)
+	// measurementInput is a LOCAL COPY, measured here and nowhere else --
+	// `result` itself, which this function returns and the caller carries
+	// forward to finalizeServed, is never mutated by it. A work-item census
+	// result may still be corrected by the completeness authority before it
+	// is served, and this stage's fit-or-retry decision must weigh the bytes
+	// that correction will actually add or remove; but finalizeServed is the
+	// one place that correction is APPLIED to the served result and its own
+	// observation DERIVED, and it must always derive from the model's own,
+	// uncorrected status -- never from a status this stage already
+	// rewrote. Measuring a copy, never the value itself, is what keeps both
+	// true at once. InvestigationResult is passed by value throughout this
+	// engine (measureAssembledAttempt included), so a derived copy here
+	// costs nothing structurally and mutates nothing the caller holds.
+	measurementInput := result
+	if params.WorkItemCensus != nil {
+		measurementInput = ApplyServerCompletenessAuthority(result, e.serverCompletenessAuthorityEnabled, e.serverCompletenessAuthoritySymmetricEnabled, DeriveCompletenessAuthority(result))
+	}
+	measured, err := e.measureAssembledAttempt(ctx, principal, "assembled_result", allocation, measurementInput, budget)
 	if err != nil {
 		// A result that cannot be marshaled is a server defect, not an
 		// over-budget answer. Conflating the two would let a serialization
@@ -382,9 +399,12 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		retried = restrictWorkItemTupleEvidence(retried)
 	}
 	retried = e.finalizeResult(ctx, principal, retried, *plan, params.Frame, retryParams.Facts, &retryPending, answerPassSecond, retryCardinality)
-	if params.WorkItemCensus != nil {
-		retried = ApplyServerCompletenessAuthority(retried, e.serverCompletenessAuthorityEnabled, DeriveCompletenessAuthority(retried))
-	}
+	// The outcome-derivation completeness authority is applied exactly ONCE,
+	// inside finalizeServed -- see engine.go's fresh-dispatch tupleCensus
+	// branch for the full reasoning, identical here. `retried` itself
+	// (returned below, and carried forward by the caller to finalizeServed)
+	// is never corrected here; only the LOCAL measurement copy immediately
+	// below is, matching the first-pass measurement's own approach.
 	// READ BACK FROM THE PRODUCER, not from the params and not from the local
 	// `retryAllocation`, and the difference is the entire lesson of this class.
 	//
@@ -398,7 +418,11 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 	// no fault inside the producer can ever reach a guard that reads the caller's
 	// copy. The only formulation a value type admits across a function boundary is
 	// that the producer RETURNS what it consumed and the guard measures that.
-	retryMeasured, err := e.measureAssembledAttempt(ctx, principal, "re_synthesized_result", consumedRetryAllocation, retried, budget)
+	retryMeasurementInput := retried
+	if params.WorkItemCensus != nil {
+		retryMeasurementInput = ApplyServerCompletenessAuthority(retried, e.serverCompletenessAuthorityEnabled, e.serverCompletenessAuthoritySymmetricEnabled, DeriveCompletenessAuthority(retried))
+	}
+	retryMeasured, err := e.measureAssembledAttempt(ctx, principal, "re_synthesized_result", consumedRetryAllocation, retryMeasurementInput, budget)
 	if err != nil {
 		return InvestigationResult{}, retryPending, err
 	}
