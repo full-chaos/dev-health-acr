@@ -117,8 +117,8 @@ type surfaceReuseGate struct {
 	candidate contextfabric.InvestigationResult
 }
 
-func (g surfaceReuseGate) FindReusable(context.Context, storage.Principal, contextfabric.ReuseKey) (contextfabric.InvestigationResult, bool, contextfabric.ReuseMissReason, error) {
-	return g.candidate, true, "", nil
+func (g surfaceReuseGate) FindReusable(context.Context, storage.Principal, contextfabric.ReuseKey) (contextfabric.StoredInvestigationResult, bool, contextfabric.ReuseMissReason, error) {
+	return contextfabric.StoredInvestigationResult{Result: g.candidate, SemanticStateRead: contextfabric.SemanticStateReadAbsent}, true, "", nil
 }
 
 func surfaceEngine(t *testing.T, label string, frame *contextfabric.QuestionFrame, pool []contextfabric.SubjectCandidate, results contextfabric.InvestigationResultStore, gate contextfabric.AnswerReuseGate) *contextfabric.Engine {

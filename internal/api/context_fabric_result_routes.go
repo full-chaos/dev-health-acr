@@ -86,6 +86,29 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 			return
 		}
 		result := stored.Result
+		// A stored project-to-work-item tuple has an independent census
+		// serving rule. Apply it immediately after the org-scoped read so a
+		// changed authorization digest is indistinguishable from a missing
+		// row, and so an unavailable census cannot be mistaken for a current
+		// population. This branch only transforms the in-memory serving copy;
+		// it never writes the stored result or starts a new investigation.
+		tupleDecision := contextfabric.ServeStoredWorkItemTuple(result, stored.SemanticState, stored.SemanticStateRead, principal)
+		if tupleDecision.Disposition != contextfabric.WorkItemTupleByIDNotApplicable {
+			args := contextfabric.WorkItemStoredServingLogArgs(tupleDecision.Event)
+			args = append(args, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "org_id", contextfabric.SanitizeLogAttr(principal.OrgID))
+			a.logger.InfoContext(r.Context(), contextfabric.WorkItemStoredServingLogMessage, args...)
+		}
+		if tupleDecision.Err != nil {
+			a.writeInvestigationResultError(w, r, principal, tupleDecision.Err)
+			return
+		}
+		switch tupleDecision.Disposition {
+		case contextfabric.WorkItemTupleByIDNotFound:
+			a.writeInvestigationResultNotFound(w, r, principal)
+			return
+		case contextfabric.WorkItemTupleByIDServed, contextfabric.WorkItemTupleByIDStored:
+			result = tupleDecision.Result
+		}
 		// CHAOS-4413 (codex xhigh round-1 P1, confirmed): a row persisted
 		// before Completeness existed reads back with the exact zero
 		// value ValidateStored's legacy exemption allows -- fine for the

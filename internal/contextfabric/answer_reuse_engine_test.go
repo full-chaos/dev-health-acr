@@ -15,7 +15,7 @@ import (
 // stateful fake.
 type reuseGateFunc func(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, error)
 
-func (f reuseGateFunc) FindReusable(ctx context.Context, principal storage.Principal, key ReuseKey) (InvestigationResult, bool, ReuseMissReason, error) {
+func (f reuseGateFunc) FindReusable(ctx context.Context, principal storage.Principal, key ReuseKey) (StoredInvestigationResult, bool, ReuseMissReason, error) {
 	result, ok, err := f(ctx, principal, key)
 	// CHAOS-3898 v4.1 F5: every existing test closure here predates the
 	// typed miss reason and returns only (result, ok, error) -- default a
@@ -26,7 +26,7 @@ func (f reuseGateFunc) FindReusable(ctx context.Context, principal storage.Princ
 	if !ok {
 		reason = ReuseMissNoCandidate
 	}
-	return result, ok, reason, err
+	return StoredInvestigationResult{Result: result, SemanticStateRead: SemanticStateReadAbsent}, ok, reason, err
 }
 
 // failingModelRuntime fails the test immediately if either method is

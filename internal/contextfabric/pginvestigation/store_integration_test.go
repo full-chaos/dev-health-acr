@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/pginvestigation/paritytest"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -288,6 +289,298 @@ VALUES ($1, $2, $3, $4, $5::jsonb)`, resultID, orgID, payload, time.Date(2026, 1
 			require.NoError(t, execErr)
 		}
 	})
+}
+
+// TestStore_FindReusableReturnsSemanticTupleCensusRoundTrip proves the reuse
+// lookup carries the same decoded semantic snapshot as Get through REAL
+// Postgres. The tuple branch must receive the census beside the payload; it
+// cannot reconstruct one from public result fields.
+func TestStore_FindReusableReturnsSemanticTupleCensusRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-reuse-semantic-tuple", RepositoryScopes: []string{"acme/api"}}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+	store := mustReuseStore(t, db, time.Hour)
+	result := reusableResult("result-reuse-semantic-tuple", principal.OrgID, "What work items remain in Project Alpha?")
+	state := persistedWorkItemTupleSemanticState(t, principal, []string{"acme/api"})
+
+	snapshot, err := store.SnapshotSourceWatermarks(ctx, principal.OrgID)
+	require.NoError(t, err)
+	epoch, err := store.SnapshotRebuildEpoch(ctx, principal.OrgID)
+	require.NoError(t, err)
+	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch,
+		contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext), testReuseRetrievalIdentity,
+		testReusePromptVersions, testReuseVersionAuthorities, 0, "", contextfabric.SemanticStateOf(state)))
+
+	// jsonb reorders object keys. An identical semantic census must still be
+	// an idempotent replay after that real storage round trip.
+	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch,
+		contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext), testReuseRetrievalIdentity,
+		testReusePromptVersions, testReuseVersionAuthorities, 0, "", contextfabric.SemanticStateOf(state)))
+
+	found, ok, reason, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Empty(t, reason)
+	require.Equal(t, result.ResultID, found.Result.ResultID)
+	require.Equal(t, contextfabric.SemanticStateReadAvailable, found.SemanticStateRead)
+	require.NotNil(t, found.SemanticState)
+	require.Equal(t, contextfabric.WorkItemTupleCensusReadAvailable, contextfabric.ValidateWorkItemTupleCensus(found.SemanticState.WorkItemCensus))
+	require.Equal(t, state.WorkItemCensus.Version, found.SemanticState.WorkItemCensus.Version)
+	require.Equal(t, state.WorkItemCensus.State, found.SemanticState.WorkItemCensus.State)
+	require.Equal(t, state.WorkItemCensus.Value, found.SemanticState.WorkItemCensus.Value)
+	require.Equal(t, state.WorkItemCensus.Retained, found.SemanticState.WorkItemCensus.Retained)
+	require.Equal(t, state.WorkItemCensus.RequestedRepositoryScope, found.SemanticState.WorkItemCensus.RequestedRepositoryScope)
+	require.Equal(t, state.WorkItemCensus.AuthorizationDigest, found.SemanticState.WorkItemCensus.AuthorizationDigest)
+}
+
+// TestStore_EngineReuseGateServesPersistedWorkItemTuple proves the complete
+// tuple reuse slice against real Postgres: Engine.Investigate obtains the
+// semantic census from Store.FindReusable, rechecks the live anchor and the
+// bounded S1 membership result, then serves the stored payload without a new
+// interpretation, graph discovery, fact read, or synthesis.
+func TestStore_EngineReuseGateServesPersistedWorkItemTuple(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	principal := storage.Principal{OrgID: "org-engine-tuple-reuse", RepositoryScopes: []string{"acme/api"}}
+	setCheckpointWatermark(t, ctx, db, principal.OrgID, "linear", "wm-1")
+	store := mustReuseStore(t, db, time.Hour)
+
+	result, memberID := reusableWorkItemTupleResult(t, "result-engine-tuple-reuse", "What work items remain in Project Alpha?")
+	require.Len(t, result.ClaimedFacts, 2)
+	require.Equal(t, contextfabric.FactStatus, result.ClaimedFacts[0].Kind)
+	require.Equal(t, "status", result.ClaimedFacts[0].Field)
+	require.Equal(t, memberID, result.ClaimedFacts[0].Subject.CanonicalID)
+	require.NotNil(t, result.ClaimedFacts[0].Value.String)
+	require.Equal(t, "open", *result.ClaimedFacts[0].Value.String)
+	require.Equal(t, contextfabric.FactWork, result.ClaimedFacts[1].Kind)
+	require.Equal(t, "title", result.ClaimedFacts[1].Field)
+	require.Equal(t, memberID, result.ClaimedFacts[1].Subject.CanonicalID)
+	require.NotNil(t, result.ClaimedFacts[1].Value.String)
+	require.Equal(t, "Implement the thing", *result.ClaimedFacts[1].Value.String)
+	state := persistedWorkItemTupleSemanticState(t, principal, []string{"acme/api"})
+	snapshot, err := store.SnapshotSourceWatermarks(ctx, principal.OrgID)
+	require.NoError(t, err)
+	epoch, err := store.SnapshotRebuildEpoch(ctx, principal.OrgID)
+	require.NoError(t, err)
+	const graphEpoch int64 = 7
+	require.NoError(t, store.Save(ctx, principal, result, snapshot, &epoch,
+		contextfabric.TimeAxisKeyFor(result.Interpretation.TimeContext), testReuseRetrievalIdentity,
+		testReusePromptVersions, testReuseVersionAuthorities, graphEpoch, "", contextfabric.SemanticStateOf(state)))
+
+	var interpretCalls, factCalls, synthesizeCalls, anchorCalls, membershipCalls int
+	graph := &engineTupleReuseGraph{binding: contextfabric.ResolvedGraphBinding{GraphKey: "tuple-reuse", Epoch: graphEpoch}}
+	gate, err := contextfabric.NewWorkItemMembershipGate(1, 0)
+	require.NoError(t, err)
+	membership := engineTupleMembership(func(callCtx context.Context, gotPrincipal storage.Principal, input contextfabric.WorkItemMembershipRequest) (*contextfabric.WorkItemMembershipLease, contextfabric.WorkItemMembershipResult, error) {
+		membershipCalls++
+		require.Equal(t, principal, gotPrincipal)
+		require.Equal(t, []string{"acme/api"}, input.RequestedRepositoryScope)
+		require.Equal(t, "project-1", input.Anchor.Subject.CanonicalID)
+		lease, acquireErr := gate.Acquire(callCtx)
+		return lease, contextfabric.WorkItemMembershipResult{
+			Members: []contextfabric.WorkItemMembershipMember{{CanonicalID: memberID}},
+			Census: contextfabric.WorkItemMembershipCensus{
+				State: contextfabric.WorkItemMembershipCensusExact, PopulationMeasured: true,
+				AuthorizedPopulation: 1, ServedMembers: 1,
+			},
+		}, acquireErr
+	})
+	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
+		Interpreter: engineTupleReuseInterpreter{calls: &interpretCalls},
+		Graph:       graph,
+		Facts:       engineTupleReuseFacts{calls: &factCalls},
+		Synthesizer: engineTupleReuseSynthesizer{calls: &synthesizeCalls},
+		Results:     store,
+		ReuseGate:   store,
+		CandidateVerifier: func(_ context.Context, gotPrincipal storage.Principal, scope contextfabric.RequestedScope, binding contextfabric.ResolvedGraphBinding, kind contextfabric.SubjectKind, canonicalID string) (bool, contextfabric.CandidateVerificationReason) {
+			anchorCalls++
+			require.Equal(t, principal, gotPrincipal)
+			require.Equal(t, []string{"acme/api"}, scope.RepositorySlugs)
+			require.Equal(t, graphEpoch, binding.Epoch)
+			require.Equal(t, contextfabric.SubjectProject, kind)
+			require.Equal(t, "project-1", canonicalID)
+			return true, contextfabric.CandidateVerificationValid
+		},
+		WorkItemMembership: membership,
+	}, contextfabric.EngineOptions{
+		ServiceVersion:          "tuple-reuse-test",
+		Now:                     time.Now,
+		NewResultID:             func() string { return "result-unused-tuple-reuse" },
+		ReuseProjectionVersion:  result.Versions.ProjectionVersion,
+		ReuseModelIdentities:    []string{result.Versions.ModelIdentity},
+		ReuseRetrievalIdentity:  testReuseRetrievalIdentity,
+		ReusePromptVersions:     testReusePromptVersions,
+		ReuseVersionAuthorities: testReuseVersionAuthorities,
+	})
+	require.NoError(t, err)
+
+	request := contextfabric.InvestigationRequest{
+		SchemaVersion: contextfabric.InvestigationRequestSchemaV1,
+		RequestID:     "request-engine-tuple-reuse",
+		Question:      result.Question,
+		RequestedScope: contextfabric.RequestedScope{
+			RepositorySlugs: []string{"acme/api"},
+			ProjectIDs:      []string{"project-1"},
+			TeamIDs:         []string{"team-a"},
+		},
+		TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Options: contextfabric.InvestigationOptions{
+			MaxSubjectCandidates: 10, MaxCohortMembers: 50, MaxRelationshipPaths: 50,
+			MaxDrivers: 10, MaxEvidenceRefs: 100, MaxSerializedBytes: 1 << 20, AllowClarification: true,
+		},
+		Consumer: contextfabric.ConsumerInfo{Name: "context-fabric-workbench", Version: "0.1.0", Surface: "workbench"},
+	}
+
+	served, err := engine.Investigate(ctx, principal, request)
+	require.NoError(t, err)
+	require.True(t, served.Reused)
+	require.Equal(t, result.ResultID, served.ResultID)
+	require.Equal(t, result.ClaimedFacts, served.ClaimedFacts, "a tuple reuse hit must preserve each retained member's stored status and title claims")
+	require.Equal(t, 1, anchorCalls)
+	require.Equal(t, 1, membershipCalls)
+	require.Equal(t, 0, interpretCalls)
+	require.Equal(t, 0, graph.resolveSubjectsCalls)
+	require.Equal(t, 0, graph.discoverContextCalls)
+	require.Equal(t, 0, factCalls)
+	require.Equal(t, 0, synthesizeCalls)
+	require.Equal(t, 0, gate.Stats().InFlight, "Engine must release the S1 lease when direct Investigate returns")
+}
+
+func reusableWorkItemTupleResult(t testing.TB, resultID, question string) (contextfabric.InvestigationResult, string) {
+	t.Helper()
+	result := reusableResult(resultID, "", question)
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project-1", Label: "Project Alpha"}
+	memberID, omitted, err := identity.Derive(identity.KindWorkItem, []string{"repo-1", "work-1"}, nil)
+	if err != nil {
+		t.Fatalf("derive work-item identity: %v", err)
+	}
+	if omitted {
+		t.Fatal("derive work-item identity unexpectedly omitted fixture")
+	}
+	member := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: memberID, Label: "Work item"}
+	evidence := contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, "repo-1:work-1")
+	status, title := "open", "Implement the thing"
+	result.SubjectResolution = contextfabric.SubjectResolution{
+		Candidates: []contextfabric.SubjectCandidate{{ReceiptID: "receipt-1", Subject: anchor, State: contextfabric.ResolutionCommitted, MatchReasons: []string{"exact"}}},
+		Committed:  []contextfabric.SubjectRef{anchor},
+	}
+	result.Cohort = &contextfabric.Cohort{
+		Kind:      contextfabric.SubjectWorkItem,
+		Rationale: "Project Alpha work-item members",
+		Complete:  true,
+		Members: []contextfabric.CohortMember{{
+			Subject: member, Rank: 1, InclusionReasons: []string{"project_membership"}, EvidenceRefIDs: []string{evidence},
+		}},
+	}
+	result.EvidenceRefIDs = []string{evidence}
+	result.EvidenceRefLabels = map[string]string{evidence: "work item"}
+	result.ClaimedFacts = []contextfabric.ClaimedFact{
+		{ClaimID: "claim-status", Kind: contextfabric.FactStatus, Subject: member, Field: "status", Value: contextfabric.ScalarValue{String: &status}},
+		{ClaimID: "claim-title", Kind: contextfabric.FactWork, Subject: member, Field: "title", Value: contextfabric.ScalarValue{String: &title}},
+	}
+	result.Completeness = contextfabric.ComputeAnswerCompleteness(result)
+	require.NoError(t, contextfabric.ValidateResult(result))
+	require.NoError(t, contextfabric.ValidateWorkItemTuplePayload(result, storage.Principal{OrgID: "org-engine-tuple-reuse"}))
+	return result, memberID
+}
+
+type engineTupleMembership func(context.Context, storage.Principal, contextfabric.WorkItemMembershipRequest) (*contextfabric.WorkItemMembershipLease, contextfabric.WorkItemMembershipResult, error)
+
+func (f engineTupleMembership) BeginWorkItemMembership(ctx context.Context, principal storage.Principal, request contextfabric.WorkItemMembershipRequest) (*contextfabric.WorkItemMembershipLease, contextfabric.WorkItemMembershipResult, error) {
+	return f(ctx, principal, request)
+}
+
+type engineTupleReuseInterpreter struct{ calls *int }
+
+func (i engineTupleReuseInterpreter) Interpret(context.Context, storage.Principal, contextfabric.InvestigationRequest) (contextfabric.InterpretedQuestion, contextfabric.QuestionFamilyOutcome, error) {
+	*i.calls++
+	return contextfabric.InterpretedQuestion{}, contextfabric.QuestionFamilyOutcome{}, errors.New("unexpected interpreter call")
+}
+
+type engineTupleReuseGraph struct {
+	binding              contextfabric.ResolvedGraphBinding
+	resolveSubjectsCalls int
+	discoverContextCalls int
+}
+
+func (g *engineTupleReuseGraph) ResolveInvestigationBinding(context.Context, storage.Principal) (contextfabric.ResolvedGraphBinding, error) {
+	return g.binding, nil
+}
+
+func (g *engineTupleReuseGraph) ResolveSubjects(context.Context, storage.Principal, contextfabric.InvestigationRequest, contextfabric.InterpretedQuestion, contextfabric.ResolvedGraphBinding, *contextfabric.ConfirmedExpectedKind, *contextfabric.ConfirmedAnchorSelection, *contextfabric.QuestionFrame, contextfabric.SubjectKind) (contextfabric.SubjectResolution, contextfabric.StructureOfferMaterial, contextfabric.CommitBasisSet, contextfabric.CommitDecisionDigestSet, error) {
+	g.resolveSubjectsCalls++
+	return contextfabric.SubjectResolution{}, contextfabric.StructureOfferMaterial{}, nil, nil, errors.New("unexpected resolve subjects call")
+}
+
+func (g *engineTupleReuseGraph) DiscoverContext(context.Context, storage.Principal, contextfabric.GraphDiscoveryRequest) (contextfabric.GraphContext, error) {
+	g.discoverContextCalls++
+	return contextfabric.GraphContext{}, errors.New("unexpected discover context call")
+}
+
+type engineTupleReuseFacts struct{ calls *int }
+
+func (f engineTupleReuseFacts) ReadFacts(context.Context, storage.Principal, contextfabric.CanonicalFactRequest) (contextfabric.CanonicalFactBundle, error) {
+	*f.calls++
+	return contextfabric.CanonicalFactBundle{}, errors.New("unexpected fact read")
+}
+
+type engineTupleReuseSynthesizer struct{ calls *int }
+
+func (s engineTupleReuseSynthesizer) Synthesize(context.Context, storage.Principal, contextfabric.SynthesisInput) (contextfabric.InvestigationResult, error) {
+	*s.calls++
+	return contextfabric.InvestigationResult{}, errors.New("unexpected synthesis")
+}
+
+func persistedWorkItemTupleSemanticState(t testing.TB, principal storage.Principal, requestedScope []string) *contextfabric.PersistedSemanticState {
+	t.Helper()
+	validation := contextfabric.ValidateFrame(contextfabric.QuestionFrame{
+		Goals: []contextfabric.InvestigationGoal{contextfabric.GoalAssessState},
+		SubjectExpression: contextfabric.SubjectExpression{
+			Kind: contextfabric.SubjectExpressionChildrenOfScope,
+			Scoped: &contextfabric.ScopedSetExpression{
+				AnchorTerms: []string{"Project Alpha"},
+				MemberKind:  contextfabric.SubjectWorkItem,
+			},
+		},
+		Temporal: contextfabric.TemporalIntentCurrent,
+	}, []contextfabric.AnswerObligation{contextfabric.ObligationState}, contextfabric.ShapeDiscoveredCohort)
+	if validation.Outcome != contextfabric.FrameValidationOutcomeValid {
+		t.Fatalf("tuple semantic-state fixture frame invalid: %v", validation.Failure)
+	}
+	frame := validation.Frame
+	digest, err := contextfabric.WorkItemAuthorizationDigest(principal, requestedScope)
+	if err != nil {
+		t.Fatalf("WorkItemAuthorizationDigest() error = %v", err)
+	}
+	state := contextfabric.BuildSemanticState(contextfabric.SemanticStateInput{
+		Outcome: contextfabric.QuestionFamilyOutcome{
+			Family:             contextfabric.QuestionFamilyScopedCohortStatus,
+			Source:             contextfabric.QuestionFamilySourceModel,
+			Frame:              &frame,
+			Gate:               contextfabric.DecideFrameGate(validation, true),
+			WinningSampleIndex: 0,
+			WinningSample: contextfabric.FamilySample{
+				ModelFamily:     contextfabric.QuestionFamilyScopedCohortStatus,
+				ScopeAnchorKind: contextfabric.SubjectProject,
+				ScopeAnchorTerm: "Project Alpha",
+			},
+		},
+		EmittedShape:  contextfabric.ShapeDiscoveredCohort,
+		FamilyVersion: contextfabric.QuestionFamilyTableVersion,
+	})
+	state.WorkItemCensus = &contextfabric.WorkItemTupleCensus{
+		Version:                  contextfabric.WorkItemTupleCensusVersion,
+		State:                    contextfabric.WorkItemMembershipCensusExact,
+		Value:                    1,
+		Retained:                 1,
+		RequestedRepositoryScope: append([]string{}, requestedScope...),
+		AuthorizationDigest:      digest,
+	}
+	if _, err := contextfabric.EncodeSemanticState(state); err != nil {
+		t.Fatalf("tuple semantic-state fixture invalid: %v", err)
+	}
+	return state
 }
 
 // TestStore_semanticStateIsInsertedWithThePayloadOrNotAtAll pins atomicity on

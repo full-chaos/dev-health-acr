@@ -1755,12 +1755,51 @@ var WorkItemMembershipGate = Event{
 	BoundedAggregation: "at most one Info line per BeginWorkItemMembership admission attempt; the line exists only for refusal or cancellation and carries the bounded in-flight and queue occupancy.",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
-		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"refused", "context_canceled", "deadline_too_short"}},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"refused", "context_canceled", "deadline_too_short", "owner_closed", "owner_lease_conflict"}},
 		{Key: "in_flight", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "queued", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "max_in_flight", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "queue_capacity", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// WorkItemReuse is the one tuple decision after stored clarification handling.
+var WorkItemReuse = Event{
+	ID:                 "contextfabric.work_item_reuse",
+	Msg:                "context fabric work item reuse",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"org_id"},
+	BoundedAggregation: "at most one tuple candidate per request; one decision records the first declined guard or the hit, and the current requested team scope",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"reading_unavailable", "payload_rejected", "census_unavailable", "digest_changed", "anchor_unavailable", "membership_unavailable", "membership_changed", "coverage_invalid", "hit"}},
+		{Key: "semantic_read", Type: FieldString, Presence: PresenceRequired},
+		{Key: "census_read", Type: FieldString, Presence: PresenceRequired},
+		{Key: "requested_team_ids", Type: FieldStringSlice, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// WorkItemStoredServing records tuple authorization and mandatory coverage
+// capacity on both stored serving surfaces, before any success is emitted.
+var WorkItemStoredServing = Event{
+	ID: "contextfabric.work_item_stored_serving", Msg: "context fabric work item stored serving", Level: LevelInfo,
+	Multiplicity: MultiplicityZeroOrOnePerRequest, Attribution: []string{"org_id"},
+	BoundedAggregation: "one classified stored tuple per request; coverage counts contain no stored text",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "surface", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"reuse", "result_by_id"}},
+		{Key: "basis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"digest_matched", "digest_changed", "authorization_unverifiable", "universal_grant", "coverage_invalid"}},
+		{Key: "semantic_read", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"available", "absent", "malformed", "unsupported_version", "oversized"}},
+		{Key: "census_read", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"available", "absent", "malformed", "unsupported_version"}},
+		{Key: "coverage_details_before", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "coverage_reasons_before", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "coverage_details_after", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "coverage_reasons_after", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "coverage_bound", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when request context carries request ID"},
 	},
 }
 
@@ -1816,4 +1855,6 @@ var All = []Event{
 	RequirementOutcomeTransition,
 	WorkItemMembershipS1,
 	WorkItemMembershipGate,
+	WorkItemReuse,
+	WorkItemStoredServing,
 }

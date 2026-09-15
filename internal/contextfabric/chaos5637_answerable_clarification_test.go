@@ -458,7 +458,7 @@ func TestAStaleUnanswerableClarificationIsNeverServedFromReuse(t *testing.T) {
 				}),
 			})
 
-			reused, ok := engine.tryReuse(context.Background(), reusePrincipal(), validInvestigationRequest(),
+			reused, ok, _, _ := engine.tryReuse(context.Background(), reusePrincipal(), validInvestigationRequest(),
 				TimeContext{Axis: TemporalCurrent}, "", windowKeyRederivable,
 				ResolvedGraphBinding{GraphKey: "some-key", Epoch: 0})
 			if gateCalls == 0 {

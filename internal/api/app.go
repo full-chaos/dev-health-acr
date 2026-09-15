@@ -64,6 +64,7 @@ func (p StaticCapabilitiesProvider) Capabilities(_ context.Context, _ *http.Requ
 
 func (a *App) InstrumentedHandler(next http.Handler) http.Handler {
 	handler := a.recoveryMiddleware(next)
+	handler = a.responseOwnerMiddleware(handler)
 	handler = a.timeoutMiddleware(handler)
 	handler = a.accessLogMiddleware(handler)
 	handler = a.requestIDMiddleware(handler)

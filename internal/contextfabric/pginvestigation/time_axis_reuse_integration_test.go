@@ -70,7 +70,7 @@ func TestReuseKeyDistinguishesTwoAsOfTimes(t *testing.T) {
 	reused, found, _, err := store.FindReusable(ctx, principal, juneKey)
 	require.NoError(t, err)
 	require.True(t, found, "the June answer must still be reusable for the June question")
-	require.Equal(t, juneResult.ResultID, reused.ResultID)
+	require.Equal(t, juneResult.ResultID, reused.Result.ResultID)
 }
 
 // TestReuseKeyDistinguishesAxesAtTheSameInstant covers the subtler
@@ -126,7 +126,7 @@ func TestReuseKeyDistinguishesHistoricalFromCurrent(t *testing.T) {
 	reused, found, _, err := store.FindReusable(ctx, principal, currentKey)
 	require.NoError(t, err)
 	require.True(t, found, "a current-axis answer must stay reusable for a current-axis question")
-	require.Equal(t, currentResult.ResultID, reused.ResultID)
+	require.Equal(t, currentResult.ResultID, reused.Result.ResultID)
 }
 
 // TestTimeAxisKeyForIsStableAndCollisionFree pins the canonicalization
@@ -268,8 +268,8 @@ func TestF6_AnInterpreterAxisFlipStillReusesForAnIdenticalRequest(t *testing.T) 
 	reused, found, _, err := store.FindReusable(ctx, principal, lookup)
 	require.NoError(t, err)
 	require.True(t, found, "an interpreted-historical answer was unreachable to the identical request that produced it; both reuse sides must derive the key the same way")
-	require.Equal(t, interpretedHistorical.ResultID, reused.ResultID)
+	require.Equal(t, interpretedHistorical.ResultID, reused.Result.ResultID)
 	// And what was stored still records the historical interpretation, so
 	// condition 6 re-resolves against the right question.
-	require.Equal(t, contextfabric.TemporalValidTime, reused.Interpretation.TimeContext.Axis)
+	require.Equal(t, contextfabric.TemporalValidTime, reused.Result.Interpretation.TimeContext.Axis)
 }

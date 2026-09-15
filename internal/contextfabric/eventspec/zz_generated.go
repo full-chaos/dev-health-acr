@@ -25,6 +25,8 @@ var ByID = map[string]Event{
 	"contextfabric.window_continuation_decision":   WindowContinuationDecision,
 	"contextfabric.work_item_membership_gate":      WorkItemMembershipGate,
 	"contextfabric.work_item_membership_s1":        WorkItemMembershipS1,
+	"contextfabric.work_item_reuse":                WorkItemReuse,
+	"contextfabric.work_item_stored_serving":       WorkItemStoredServing,
 	"graphrank.alias_lookup":                       AliasLookup,
 	"graphrank.anchor_kind_withheld":               AnchorKindWithheld,
 	"graphrank.anchor_kind_withheld_summary":       AnchorKindWithheldSummary,
@@ -598,6 +600,137 @@ func (f WorkItemMembershipS1Fields) SlogArgs() []any {
 		"max_rows_to_read", f.MaxRowsToRead,
 		"max_memory_usage", f.MaxMemoryUsage,
 		"max_result_rows", f.MaxResultRows,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// WorkItemReuseFields is contextfabric.work_item_reuse's generated typed construction interface
+// (CHAOS-5516): one Go field per Field WorkItemReuse.Fields declares in spec.go.
+type WorkItemReuseFields struct {
+	OrgID            string
+	Decision         string
+	SemanticRead     string
+	CensusRead       string
+	RequestedTeamIDs []string
+	RequestID        string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every WorkItemReuseFields uniformly, set ONLY by NewWorkItemReuseFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewWorkItemReuseFields is the generated constructor for WorkItemReuseFields -- every
+// field WorkItemReuse.Fields declares is a required parameter.
+func NewWorkItemReuseFields(orgID string, decision string, semanticRead string, censusRead string, requestedTeamIDs []string, requestID string) WorkItemReuseFields {
+	valid := true
+	if requestedTeamIDs == nil {
+		valid = false
+	}
+	return WorkItemReuseFields{
+		OrgID:            orgID,
+		Decision:         decision,
+		SemanticRead:     semanticRead,
+		CensusRead:       censusRead,
+		RequestedTeamIDs: requestedTeamIDs,
+		RequestID:        requestID,
+		constructed:      valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewWorkItemReuseFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f WorkItemReuseFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns WorkItemReuse's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f WorkItemReuseFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"decision", contextfabric.SanitizeLogAttr(f.Decision),
+		"semantic_read", contextfabric.SanitizeLogAttr(f.SemanticRead),
+		"census_read", contextfabric.SanitizeLogAttr(f.CensusRead),
+		"requested_team_ids", contextfabric.SanitizeLogStrings(f.RequestedTeamIDs),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// WorkItemStoredServingFields is contextfabric.work_item_stored_serving's generated typed construction interface
+// (CHAOS-5516): one Go field per Field WorkItemStoredServing.Fields declares in spec.go.
+type WorkItemStoredServingFields struct {
+	OrgID                 string
+	Surface               string
+	Basis                 string
+	SemanticRead          string
+	CensusRead            string
+	CoverageDetailsBefore int
+	CoverageReasonsBefore int
+	CoverageDetailsAfter  int
+	CoverageReasonsAfter  int
+	CoverageBound         int
+	RequestID             string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every WorkItemStoredServingFields uniformly, set ONLY by NewWorkItemStoredServingFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewWorkItemStoredServingFields is the generated constructor for WorkItemStoredServingFields -- every
+// field WorkItemStoredServing.Fields declares is a required parameter.
+func NewWorkItemStoredServingFields(orgID string, surface string, basis string, semanticRead string, censusRead string, coverageDetailsBefore int, coverageReasonsBefore int, coverageDetailsAfter int, coverageReasonsAfter int, coverageBound int, requestID string) WorkItemStoredServingFields {
+	return WorkItemStoredServingFields{
+		OrgID:                 orgID,
+		Surface:               surface,
+		Basis:                 basis,
+		SemanticRead:          semanticRead,
+		CensusRead:            censusRead,
+		CoverageDetailsBefore: coverageDetailsBefore,
+		CoverageReasonsBefore: coverageReasonsBefore,
+		CoverageDetailsAfter:  coverageDetailsAfter,
+		CoverageReasonsAfter:  coverageReasonsAfter,
+		CoverageBound:         coverageBound,
+		RequestID:             requestID,
+		constructed:           true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewWorkItemStoredServingFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f WorkItemStoredServingFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns WorkItemStoredServing's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f WorkItemStoredServingFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"surface", contextfabric.SanitizeLogAttr(f.Surface),
+		"basis", contextfabric.SanitizeLogAttr(f.Basis),
+		"semantic_read", contextfabric.SanitizeLogAttr(f.SemanticRead),
+		"census_read", contextfabric.SanitizeLogAttr(f.CensusRead),
+		"coverage_details_before", f.CoverageDetailsBefore,
+		"coverage_reasons_before", f.CoverageReasonsBefore,
+		"coverage_details_after", f.CoverageDetailsAfter,
+		"coverage_reasons_after", f.CoverageReasonsAfter,
+		"coverage_bound", f.CoverageBound,
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

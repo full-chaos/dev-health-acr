@@ -2373,6 +2373,18 @@ func requestDerivedLogInt(value int) int {
 	return parsed
 }
 
+func (t SlogEngineTelemetry) RecordWorkItemReuse(ctx context.Context, principal storage.Principal, event WorkItemReuseEvent) {
+	args := []any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"decision", SanitizeLogAttr(event.Decision),
+		"semantic_read", string(event.SemanticRead),
+		"census_read", string(event.CensusRead),
+		"requested_team_ids", SanitizeLogStrings(event.RequestedTeamIDs),
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric work item reuse", args...)
+}
+
 func (t SlogEngineTelemetry) RecordRetainedRankingAccounting(ctx context.Context, principal storage.Principal, event RetainedRankingAccountingEvent) {
 	args := append(RetainedRankingAccountingLogArgs(event, principal.OrgID), requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, RetainedRankingAccountingLogMessage, args...)

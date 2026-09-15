@@ -29,16 +29,12 @@ const (
 	// SemanticStatePersisted: the store accepted the row -- a first insert,
 	// or a replay identical in payload AND semantic state.
 	SemanticStatePersisted SemanticStatePersistenceDecision = "persisted"
+	// SemanticStatePayloadRejectedDecision refuses a tuple before storage.
+	SemanticStatePayloadRejectedDecision SemanticStatePersistenceDecision = "payload_rejected"
 	// SemanticStateReplayConflictDecision: a row with this id and an
 	// identical payload already exists with a DIFFERENT semantic state; the
 	// stored row is untouched.
 	SemanticStateReplayConflictDecision SemanticStatePersistenceDecision = "replay_conflict"
-	// NO "rejected" MEMBER. A store refuses a semantic-state argument only
-	// when it fails the codec, and the engine never hands Save one that has
-	// not already passed the same pure codec at capture (a capture that fails
-	// saves a closed absence instead). A member no engine exit can reach was
-	// removed rather than kept without a driver; a store rejection, were one
-	// ever to happen, is a save_failed like any other store error.
 	// SemanticStateSupersededDecision: the result lost a structure
 	// supersession claim, so neither it nor its snapshot was persisted.
 	SemanticStateSupersededDecision SemanticStatePersistenceDecision = "superseded"
@@ -49,6 +45,7 @@ const (
 func semanticStatePersistenceDecisions() []SemanticStatePersistenceDecision {
 	return []SemanticStatePersistenceDecision{
 		SemanticStatePersisted,
+		SemanticStatePayloadRejectedDecision,
 		SemanticStateReplayConflictDecision,
 		SemanticStateSupersededDecision,
 		SemanticStateSaveFailedDecision,
@@ -65,12 +62,16 @@ func ValidSemanticStatePersistenceDecision(value SemanticStatePersistenceDecisio
 	return false
 }
 
+var errWorkItemTuplePayloadRejected = errors.New("work item tuple payload rejected")
+
 // classifySemanticStatePersistence maps Save's error to the closed decision.
 func classifySemanticStatePersistence(err error) SemanticStatePersistenceDecision {
 	var superseded *ErrStructureOfferSuperseded
 	switch {
 	case err == nil:
 		return SemanticStatePersisted
+	case errors.Is(err, errWorkItemTuplePayloadRejected):
+		return SemanticStatePayloadRejectedDecision
 	case errors.Is(err, ErrSemanticStateReplayConflict):
 		return SemanticStateReplayConflictDecision
 	case errors.As(err, &superseded):
@@ -105,8 +106,16 @@ func (e *Engine) saveResult(
 	watermark SourceWatermarkSnapshot, epoch RebuildEpoch, timeAxisKey string, graphEpoch int64, parentResultID string,
 	capture semanticStateCapture,
 ) error {
-	err := e.results.Save(ctx, principal, result, watermark, epoch, timeAxisKey,
-		e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, graphEpoch, parentResultID, capture.Write)
+	var err error
+	if workItemTupleSemanticState(capture.Write.State) && !workItemTuplePreMembershipTerminal(site, result, capture.Write.State) {
+		if payloadErr := ValidateWorkItemTuplePayload(result, principal); payloadErr != nil {
+			err = errors.Join(errWorkItemTuplePayloadRejected, payloadErr)
+		}
+	}
+	if err == nil {
+		err = e.results.Save(ctx, principal, result, watermark, epoch, timeAxisKey,
+			e.reuseRetrievalIdentity, e.reusePromptVersions, e.reuseVersionAuthorities, graphEpoch, parentResultID, capture.Write)
+	}
 	if e.telemetry != nil {
 		e.telemetry.RecordSemanticStatePersistence(ctx, principal, SemanticStatePersistenceEvent{
 			ResultID:       result.ResultID,

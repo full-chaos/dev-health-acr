@@ -355,7 +355,7 @@ func TestReuseTakesTheStoredDeterminationBeforeServingAClarification(t *testing.
 			if testCase.noStore {
 				engine.results = nil
 			}
-			_, ok := engine.tryReuse(context.Background(), reusePrincipal(), validInvestigationRequest(),
+			_, ok, _, _ := engine.tryReuse(context.Background(), reusePrincipal(), validInvestigationRequest(),
 				TimeContext{Axis: TemporalCurrent}, "", windowKeyRederivable, ResolvedGraphBinding{GraphKey: "some-key", Epoch: 0})
 			if ok != testCase.wantReuse {
 				t.Fatalf("tryReuse hit = %v, want %v", ok, testCase.wantReuse)
@@ -705,7 +705,7 @@ func TestReuseTakesFreshCompositionsPrecedence(t *testing.T) {
 					return candidate, true, nil
 				}),
 			})
-			_, ok := engine.tryReuse(context.Background(), reusePrincipal(), validInvestigationRequest(),
+			_, ok, _, _ := engine.tryReuse(context.Background(), reusePrincipal(), validInvestigationRequest(),
 				TimeContext{Axis: TemporalCurrent}, "", windowKeyRederivable, ResolvedGraphBinding{GraphKey: "some-key", Epoch: 0})
 			if ok != testCase.wantReuse {
 				t.Fatalf("tryReuse hit = %v, want %v", ok, testCase.wantReuse)

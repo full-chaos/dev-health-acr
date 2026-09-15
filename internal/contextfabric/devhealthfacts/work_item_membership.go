@@ -34,8 +34,9 @@ type WorkItemMembershipReaderOptions struct {
 	Now       func() time.Time
 }
 
-// NewWorkItemMembershipReader builds the inactive reader against the actual
-// ClickHouse client boundary used by devhealthfacts.
+// NewWorkItemMembershipReader builds the bounded reader against the actual
+// ClickHouse client boundary used by devhealthfacts. Hosted tuple reuse uses
+// this reader; fresh tuple dispatch remains a separate integration.
 func NewWorkItemMembershipReader(client contextpacket.ClickHouseQueryClient, options WorkItemMembershipReaderOptions) (*WorkItemMembershipReader, error) {
 	if client == nil {
 		return nil, errors.New("work item membership reader: clickhouse query client is required")
@@ -63,7 +64,7 @@ func NewWorkItemMembershipReader(client contextpacket.ClickHouseQueryClient, opt
 // failures discard every scanned member and return an unmeasured result. The
 // returned lease is still held so the caller can keep the per-process bound
 // through the future response completion.
-func (r *WorkItemMembershipReader) BeginWorkItemMembership(ctx context.Context, principal storage.Principal, request contextfabric.WorkItemMembershipRequest) (*contextfabric.WorkItemMembershipLease, contextfabric.WorkItemMembershipResult, error) {
+func (r *WorkItemMembershipReader) BeginWorkItemMembership(ctx context.Context, principal storage.Principal, request contextfabric.WorkItemMembershipRequest) (returnedLease *contextfabric.WorkItemMembershipLease, membership contextfabric.WorkItemMembershipResult, returnedErr error) {
 	if r == nil || r.client == nil || r.gate == nil {
 		return nil, contextfabric.WorkItemMembershipResult{}, errors.New("work item membership reader is not configured")
 	}
@@ -92,6 +93,36 @@ func (r *WorkItemMembershipReader) BeginWorkItemMembership(ctx context.Context, 
 		return nil, contextfabric.WorkItemMembershipResult{}, acquireErr
 	}
 
+	// Transfer admission before any S1 work or telemetry can panic. Raw
+	// port callers own a returned lease; abnormal exits never hand one off.
+	owner, owned := contextfabric.WorkItemResponseOwnerFromContext(ctx)
+	if owned {
+		if err := owner.Retain(lease); err != nil {
+			stats := r.gate.Stats()
+			outcome := "owner_lease_conflict"
+			if errors.Is(err, contextfabric.ErrWorkItemResponseOwnerClosed) {
+				outcome = "owner_closed"
+			}
+			r.telemetry.RecordWorkItemMembershipGate(ctx, principal, contextfabric.WorkItemMembershipGateEvent{
+				Outcome: outcome, InFlight: stats.InFlight, Queued: stats.Queued,
+				MaxInFlight: stats.MaxInFlight, QueueCapacity: stats.QueueCapacity,
+			})
+			return nil, contextfabric.WorkItemMembershipResult{}, err
+		}
+	}
+	release := func() {
+		if owned {
+			owner.Release(lease)
+		} else {
+			lease.Release()
+		}
+	}
+	defer func() {
+		if !owned && returnedLease == nil {
+			release()
+		}
+	}()
+
 	s1Instant := request.S1Instant
 	if s1Instant.IsZero() {
 		s1Instant = r.now().UTC()
@@ -101,7 +132,7 @@ func (r *WorkItemMembershipReader) BeginWorkItemMembership(ctx context.Context, 
 	k := workItemMembershipServeLimit(request.PlanMaxMembers, request.RequestMaxMembers)
 	settings, settingsErr := workItemMembershipSettings(ctx, k)
 	if settingsErr != nil {
-		lease.Release()
+		release()
 		stats := r.gate.Stats()
 		r.telemetry.RecordWorkItemMembershipGate(ctx, principal, contextfabric.WorkItemMembershipGateEvent{
 			Outcome:       "deadline_too_short",

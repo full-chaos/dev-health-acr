@@ -2210,6 +2210,12 @@ func (g *countingGraphReader) DiscoverContext(context.Context, storage.Principal
 	return GraphContext{}, nil
 }
 
+func (r *recordingTelemetry) RecordWorkItemReuse(context.Context, storage.Principal, WorkItemReuseEvent) {
+}
+
+func (r *recordingTelemetry) RecordWorkItemStoredServing(context.Context, storage.Principal, WorkItemStoredServingEvent) {
+}
+
 func (r *recordingTelemetry) RecordRetainedRankingAccounting(_ context.Context, _ storage.Principal, event RetainedRankingAccountingEvent) {
 	r.retainedRankingAccounting = append(r.retainedRankingAccounting, event)
 }
