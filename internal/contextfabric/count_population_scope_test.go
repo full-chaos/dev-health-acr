@@ -46,6 +46,7 @@ type scopeCell struct {
 	family     QuestionFamily
 	resolution SubjectResolution
 	cohort     *Cohort
+	population int
 	status     InvestigationStatus
 
 	wantDecision  CountPopulationScopeDecision
@@ -72,7 +73,7 @@ func newScopeEngine(t *testing.T, cell scopeCell, telemetry EngineTelemetry) *En
 		Graph: graphReaderStub{
 			resolution: cell.resolution,
 			context: GraphContext{
-				Cohort: cell.cohort, Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
+				Cohort: cell.cohort, CohortPopulation: cell.population, Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
 				FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
 				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 			},
@@ -171,6 +172,15 @@ func scopeCells() []scopeCell {
 			cohort:     kindCohort(SubjectTeam, 3), status: InvestigationComplete,
 			wantDecision: CountPopulationScopeAnchorCommitted, wantCounted: true, wantServed: 3, wantAnchors: 1,
 			wantSentence: "Counted 3 teams.", wantAssembled: contractsv1.ContextFabricRequirementSatisfied,
+		},
+		{
+			// A partial truth: retrieval counted more members than the answer
+			// carries, under a committed anchor. Stated as narrowed, not withheld.
+			name: "scoped count, anchor committed, population larger than served", frame: countingFrame(SubjectTeam), family: QuestionFamilyScopedCohortStatus,
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{scopeAnchorRepository()}},
+			cohort:     kindCohort(SubjectTeam, 3), population: 5, status: InvestigationComplete,
+			wantDecision: CountPopulationScopeAnchorCommitted, wantCounted: true, wantServed: 3, wantAnchors: 1,
+			wantSentence: "Counted 3 teams of 5 found.", wantAssembled: contractsv1.ContextFabricRequirementNarrowed,
 		},
 		{
 			// A MEANINGFUL ZERO: the anchor resolved and its measured member
@@ -436,5 +446,28 @@ func TestAReusedCountIsHeldToTheSameScopeDecision(t *testing.T) {
 				t.Errorf("event decision=%q counted=%t reused=%t, want %q/%t/true", event.Scope.Decision, event.Counted, event.Reused, cell.wantDecision, cell.wantCounted)
 			}
 		})
+	}
+}
+
+// TestAnAnswerThatOwesNoCountEmitsNoScopeDecision pins the line's trigger: the
+// same scoped member set, asked a question with no count obligation, produces
+// no count surface and no decision line.
+func TestAnAnswerThatOwesNoCountEmitsNoScopeDecision(t *testing.T) {
+	t.Parallel()
+	cell := scopeCell{
+		frame: nonCountingFrame(SubjectTeam), family: QuestionFamilyScopedCohortStatus,
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+		cohort:     kindCohort(SubjectTeam, 3), status: InvestigationComplete,
+	}
+	telemetry := &recordingTelemetry{}
+	result := runScopeCell(t, context.Background(), newScopeEngine(t, cell, telemetry))
+	if requirement, _ := countRequirement(result.Completeness.Outcomes); requirement != "" {
+		t.Fatalf("fixture control: the non-counting frame seeded count requirement %q", requirement)
+	}
+	if result.Cohort == nil || len(result.Cohort.Members) != 3 {
+		t.Fatalf("fixture control: served cohort %+v, want the 3-member set", result.Cohort)
+	}
+	if got := len(telemetry.countPopulationScopes); got != 0 {
+		t.Errorf("count population scope events = %d for an answer that owes no count, want 0", got)
 	}
 }
