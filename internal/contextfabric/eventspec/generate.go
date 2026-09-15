@@ -164,6 +164,8 @@ func goVarName(e Event) string {
 		return "SemanticStatePersistence"
 	case RequirementOutcomeTransition.ID:
 		return "RequirementOutcomeTransition"
+	case CompletenessAuthority.ID:
+		return "CompletenessAuthority"
 	case SynthesisRetrySelection.ID:
 		return "SynthesisRetrySelection"
 	case WorkItemMembershipS1.ID:

@@ -133,6 +133,21 @@ type EngineOptions struct {
 	// version -- this field gates ONLY whether the measured correction is
 	// also served.
 	ServerCompletenessAuthorityEnabled bool
+	// ServerCompletenessAuthoritySymmetricEnabled (CHAOS-5743) turns ON the
+	// gated FLIP's LATERAL pair in ApplyServerCompletenessAuthority: when
+	// true, the outcome-derivation authority may also correct a
+	// model-claimed `partial` to `degraded` or a model-claimed `degraded`
+	// to `partial` -- never a promotion to `complete`, and never a
+	// non-answer disposition. Independent of ServerCompletenessAuthorityEnabled
+	// immediately above: either flag, both, or neither may be set. See that
+	// function's own doc comment for the full guardrail set.
+	//
+	// ZERO VALUE = DISABLED, same "ships dark" convention as
+	// ServerCompletenessAuthorityEnabled: the measurement
+	// (DeriveCompletenessAuthority's Disagreed/WouldFlip/Direction) runs
+	// and is recorded unconditionally either way; this field gates ONLY
+	// whether the lateral correction is also served.
+	ServerCompletenessAuthoritySymmetricEnabled bool
 }
 
 type EngineDependencies struct {
@@ -1123,41 +1138,42 @@ type CohortRankedEvent struct {
 // Engine coordinates one open-ended investigation. It deliberately composes
 // capabilities rather than matching the question against a route/plan table.
 type Engine struct {
-	interpreter                        QuestionInterpreter
-	graph                              GraphReader
-	facts                              CanonicalFactReader
-	synthesizer                        AnswerSynthesizer
-	results                            InvestigationResultStore
-	telemetry                          EngineTelemetry
-	reuseGate                          AnswerReuseGate
-	reuseSnapshotter                   SourceWatermarkSnapshotter
-	reuseEpochSnapshotter              RebuildEpochSnapshotter
-	reuseModelIdentityResolver         ReuseModelIdentityResolver
-	reuseProjectionVersion             string
-	reuseModelIdentities               []string
-	reuseRetrievalIdentity             ReuseRetrievalIdentity
-	reusePromptVersions                ReusePromptVersions
-	reuseVersionAuthorities            ReuseVersionAuthorities
-	clarificationSelectionSink         ClarificationSelectionSink
-	structureSelectionSink             StructureSelectionSink
-	handleVerifier                     HandleVerifier
-	anchorVerifier                     AnchorVerifier
-	anchorMembershipVerifier           AnchorMembershipVerifier
-	candidateVerifier                  CandidateVerifier
-	workItemMembership                 WorkItemMembershipPort
-	priorConsultant                    PriorConsultant
-	priorHandleGrammarChecker          HandleGrammarChecker
-	offerPhraser                       OfferPhraser
-	requirements                       RequirementDeriver
-	observationKeys                    ObservationKeyDeclarer
-	regimeAOffersDisabled              bool
-	serverCompletenessAuthorityEnabled bool
-	maxItems                           int
-	maxSerializedBytes                 int64
-	synthesisDeadlineReserve           time.Duration
-	serviceVersion                     string
-	now                                func() time.Time
-	newResultID                        func() string
+	interpreter                                 QuestionInterpreter
+	graph                                       GraphReader
+	facts                                       CanonicalFactReader
+	synthesizer                                 AnswerSynthesizer
+	results                                     InvestigationResultStore
+	telemetry                                   EngineTelemetry
+	reuseGate                                   AnswerReuseGate
+	reuseSnapshotter                            SourceWatermarkSnapshotter
+	reuseEpochSnapshotter                       RebuildEpochSnapshotter
+	reuseModelIdentityResolver                  ReuseModelIdentityResolver
+	reuseProjectionVersion                      string
+	reuseModelIdentities                        []string
+	reuseRetrievalIdentity                      ReuseRetrievalIdentity
+	reusePromptVersions                         ReusePromptVersions
+	reuseVersionAuthorities                     ReuseVersionAuthorities
+	clarificationSelectionSink                  ClarificationSelectionSink
+	structureSelectionSink                      StructureSelectionSink
+	handleVerifier                              HandleVerifier
+	anchorVerifier                              AnchorVerifier
+	anchorMembershipVerifier                    AnchorMembershipVerifier
+	candidateVerifier                           CandidateVerifier
+	workItemMembership                          WorkItemMembershipPort
+	priorConsultant                             PriorConsultant
+	priorHandleGrammarChecker                   HandleGrammarChecker
+	offerPhraser                                OfferPhraser
+	requirements                                RequirementDeriver
+	observationKeys                             ObservationKeyDeclarer
+	regimeAOffersDisabled                       bool
+	serverCompletenessAuthorityEnabled          bool
+	serverCompletenessAuthoritySymmetricEnabled bool
+	maxItems                                    int
+	maxSerializedBytes                          int64
+	synthesisDeadlineReserve                    time.Duration
+	serviceVersion                              string
+	now                                         func() time.Time
+	newResultID                                 func() string
 }
 
 func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine, error) {
@@ -1192,15 +1208,16 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		requirements:               dependencies.Requirements,
 		observationKeys:            dependencies.ObservationKeys,
 		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
-		reuseRetrievalIdentity:             options.ReuseRetrievalIdentity,
-		reusePromptVersions:                options.ReusePromptVersions,
-		reuseVersionAuthorities:            options.ReuseVersionAuthorities,
-		regimeAOffersDisabled:              options.RegimeAOffersDisabled,
-		serverCompletenessAuthorityEnabled: options.ServerCompletenessAuthorityEnabled,
-		maxItems:                           options.MaxItems,
-		maxSerializedBytes:                 options.MaxSerializedBytes,
-		synthesisDeadlineReserve:           options.SynthesisDeadlineReserve,
-		serviceVersion:                     options.ServiceVersion, now: options.Now, newResultID: options.NewResultID,
+		reuseRetrievalIdentity:                      options.ReuseRetrievalIdentity,
+		reusePromptVersions:                         options.ReusePromptVersions,
+		reuseVersionAuthorities:                     options.ReuseVersionAuthorities,
+		regimeAOffersDisabled:                       options.RegimeAOffersDisabled,
+		serverCompletenessAuthorityEnabled:          options.ServerCompletenessAuthorityEnabled,
+		serverCompletenessAuthoritySymmetricEnabled: options.ServerCompletenessAuthoritySymmetricEnabled,
+		maxItems:                 options.MaxItems,
+		maxSerializedBytes:       options.MaxSerializedBytes,
+		synthesisDeadlineReserve: options.SynthesisDeadlineReserve,
+		serviceVersion:           options.ServiceVersion, now: options.Now, newResultID: options.NewResultID,
 	}, nil
 }
 
@@ -3309,7 +3326,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	}
 	result = e.finalizeResult(ctx, principal, result, plan, familyOutcome.Frame, facts, &pendingTelemetry, answerPassFirst, cardinality)
 	if tupleCensus != nil {
-		result = ApplyServerCompletenessAuthority(result, e.serverCompletenessAuthorityEnabled, DeriveCompletenessAuthority(result))
+		result = ApplyServerCompletenessAuthority(result, e.serverCompletenessAuthorityEnabled, e.serverCompletenessAuthoritySymmetricEnabled, DeriveCompletenessAuthority(result))
 	}
 	cover.events = pendingTelemetry.ObservationCover
 	result, pendingTelemetry, err = e.fitAssembledResult(ctx, principal, &plan, result, consumedAllocation, pendingTelemetry, retryBase, cardinality)

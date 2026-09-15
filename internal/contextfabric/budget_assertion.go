@@ -332,7 +332,7 @@ func (e *Engine) finalizeServed(ctx context.Context, principal storage.Principal
 	if e.telemetry != nil {
 		e.telemetry.RecordCompletenessAuthority(ctx, principal, completenessAuthority)
 	}
-	result = ApplyServerCompletenessAuthority(result, e.serverCompletenessAuthorityEnabled, completenessAuthority)
+	result = ApplyServerCompletenessAuthority(result, e.serverCompletenessAuthorityEnabled, e.serverCompletenessAuthoritySymmetricEnabled, completenessAuthority)
 	// CHAOS-5637: the answerability invariant, HERE for the same reason
 	// everything else in this function is here -- this is the one point
 	// every serving path is downstream of, and a guard that holds at some

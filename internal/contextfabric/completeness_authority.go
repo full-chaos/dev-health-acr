@@ -220,8 +220,133 @@ type CompletenessAuthorityObservation struct {
 	// which has a safety reason of its own to keep it -- see that
 	// function's doc comment.
 	Disagreed bool
+	// WouldFlip names the identical signal Disagreed already carries --
+	// true exactly when Disagreed is true. It exists as its own field,
+	// rather than a second read of Disagreed, so a reader can ask "would
+	// service change if the symmetric authority were fully on" by name,
+	// independent of Disagreed's own definition. Both fields are populated
+	// from ONE computation below; they can never read apart.
+	WouldFlip bool
+	// Direction names the ModelStatus -> mapped(ServerState) pair a
+	// disagreement represents, or CompletenessAuthorityDirectionNone when
+	// there is no disagreement (including when nothing was derived at all).
+	// See CompletenessAuthorityDirection's own doc comment for why this is
+	// six members, not three.
+	Direction CompletenessAuthorityDirection
 	// Version identifies this derivation series.
 	Version string
+}
+
+// CompletenessAuthorityDirection names the ModelStatus -> mapped(ServerState)
+// pair a disagreement represents. CLOSED, seven members: the six ordered
+// pairs among complete/partial/degraded standing in disagreement, plus the
+// "no disagreement" member.
+//
+// SIX PAIRS, NOT THREE. Disagreed is symmetric (see
+// CompletenessAuthorityObservation.Disagreed's own doc comment): the model
+// can be wrong on EITHER side of any pair, and a reader of this series must
+// be able to tell "the model said partial, the server says degraded" apart
+// from its mirror image -- knowing only that the two disagreed is exactly
+// the information loss that made status_shadow.go's old shadow unable to
+// decide a partial-versus-degraded question at all.
+type CompletenessAuthorityDirection string
+
+const (
+	// CompletenessAuthorityDirectionNone: no disagreement, or nothing was
+	// derived. Never paired with Disagreed=true.
+	CompletenessAuthorityDirectionNone CompletenessAuthorityDirection = "none"
+	// CompletenessAuthorityDirectionCompleteToPartial: the model said
+	// complete, the outcome-derivation authority says partial -- the one
+	// direction ApplyServerCompletenessAuthority has always been permitted
+	// to serve.
+	CompletenessAuthorityDirectionCompleteToPartial CompletenessAuthorityDirection = "complete_to_partial"
+	// CompletenessAuthorityDirectionCompleteToDegraded: same model side,
+	// the stronger correction.
+	CompletenessAuthorityDirectionCompleteToDegraded CompletenessAuthorityDirection = "complete_to_degraded"
+	// CompletenessAuthorityDirectionPartialToComplete: the model said
+	// partial, the outcome-derivation authority says complete. Never served
+	// by ApplyServerCompletenessAuthority under either flag -- this
+	// direction would PROMOTE the served status, which the flip refuses in
+	// every mode (see that function's own doc comment). Out of scope for
+	// the symmetric authority, which corrects only the partial/degraded
+	// pair.
+	CompletenessAuthorityDirectionPartialToComplete CompletenessAuthorityDirection = "partial_to_complete"
+	// CompletenessAuthorityDirectionPartialToDegraded: the model said
+	// partial, the outcome-derivation authority says degraded -- one of the
+	// two directions the symmetric flag may serve.
+	CompletenessAuthorityDirectionPartialToDegraded CompletenessAuthorityDirection = "partial_to_degraded"
+	// CompletenessAuthorityDirectionDegradedToComplete: the model said
+	// degraded, the outcome-derivation authority says complete. Same
+	// never-promoted refusal as PartialToComplete.
+	CompletenessAuthorityDirectionDegradedToComplete CompletenessAuthorityDirection = "degraded_to_complete"
+	// CompletenessAuthorityDirectionDegradedToPartial: the model said
+	// degraded, the outcome-derivation authority says partial -- the other
+	// direction the symmetric flag may serve.
+	CompletenessAuthorityDirectionDegradedToPartial CompletenessAuthorityDirection = "degraded_to_partial"
+)
+
+var completenessAuthorityDirections = [...]CompletenessAuthorityDirection{
+	CompletenessAuthorityDirectionNone,
+	CompletenessAuthorityDirectionCompleteToPartial,
+	CompletenessAuthorityDirectionCompleteToDegraded,
+	CompletenessAuthorityDirectionPartialToComplete,
+	CompletenessAuthorityDirectionPartialToDegraded,
+	CompletenessAuthorityDirectionDegradedToComplete,
+	CompletenessAuthorityDirectionDegradedToPartial,
+}
+
+// CompletenessAuthorityDirectionCount is the vocabulary size.
+const CompletenessAuthorityDirectionCount = len(completenessAuthorityDirections)
+
+// CompletenessAuthorityDirectionVocabulary returns the closed vocabulary in
+// published order. An ARRAY return, so the caller gets a copy.
+func CompletenessAuthorityDirectionVocabulary() [CompletenessAuthorityDirectionCount]CompletenessAuthorityDirection {
+	return completenessAuthorityDirections
+}
+
+// ValidCompletenessAuthorityDirection reports membership.
+func ValidCompletenessAuthorityDirection(value CompletenessAuthorityDirection) bool {
+	for _, member := range completenessAuthorityDirections {
+		if member == value {
+			return true
+		}
+	}
+	return false
+}
+
+// deriveCompletenessAuthorityDirection is the ONE explicit, total crossing
+// from a (model status, mapped server status) pair to a Direction -- mirrors
+// answerCompletenessStateToStatus's own "explicit, never inferred" discipline.
+// disagreed is passed in rather than re-derived so this function agrees with
+// Disagreed/WouldFlip by construction instead of by coincidence.
+func deriveCompletenessAuthorityDirection(model, mappedServer InvestigationStatus, disagreed bool) CompletenessAuthorityDirection {
+	if !disagreed {
+		return CompletenessAuthorityDirectionNone
+	}
+	switch model {
+	case InvestigationComplete:
+		switch mappedServer {
+		case InvestigationPartial:
+			return CompletenessAuthorityDirectionCompleteToPartial
+		case InvestigationDegraded:
+			return CompletenessAuthorityDirectionCompleteToDegraded
+		}
+	case InvestigationPartial:
+		switch mappedServer {
+		case InvestigationComplete:
+			return CompletenessAuthorityDirectionPartialToComplete
+		case InvestigationDegraded:
+			return CompletenessAuthorityDirectionPartialToDegraded
+		}
+	case InvestigationDegraded:
+		switch mappedServer {
+		case InvestigationComplete:
+			return CompletenessAuthorityDirectionDegradedToComplete
+		case InvestigationPartial:
+			return CompletenessAuthorityDirectionDegradedToPartial
+		}
+	}
+	return CompletenessAuthorityDirectionNone
 }
 
 // DeriveCompletenessAuthority is the measurement: what the outcome-derivation
@@ -242,6 +367,7 @@ func DeriveCompletenessAuthority(result InvestigationResult) CompletenessAuthori
 	observation := CompletenessAuthorityObservation{
 		ModelStatus: result.Status,
 		Disposition: DeriveAnswerDisposition(result),
+		Direction:   CompletenessAuthorityDirectionNone,
 		Version:     CompletenessAuthorityVersion,
 	}
 	if observation.Disposition != AnswerDispositionAnswer {
@@ -265,6 +391,8 @@ func DeriveCompletenessAuthority(result InvestigationResult) CompletenessAuthori
 	observation.Derived = true
 	if mapped, ok := answerCompletenessStateToStatus(state); ok {
 		observation.Disagreed = mapped != result.Status
+		observation.WouldFlip = observation.Disagreed
+		observation.Direction = deriveCompletenessAuthorityDirection(result.Status, mapped, observation.Disagreed)
 	}
 	return observation
 }
@@ -294,24 +422,37 @@ func answerCompletenessStateToStatus(state contractsv1.ContextFabricAnswerComple
 
 // ApplyServerCompletenessAuthority is the gated FLIP: when enabled, the
 // server's own outcome-derived completeness state may CORRECT the served
-// status -- never route, never widen a contract, and default OFF
-// (EngineOptions.ServerCompletenessAuthorityEnabled's own doc comment).
+// status -- never route, never widen a contract, and default OFF both flags
+// (EngineOptions.ServerCompletenessAuthorityEnabled's own doc comment and
+// EngineOptions.ServerCompletenessAuthoritySymmetricEnabled's).
 //
-// DOWNGRADE-ONLY, deliberately asymmetric even though the MEASUREMENT above
-// is symmetric. Two guardrails, both carried over from status_shadow.go's
-// DeriveServerStatus ("A NON-COMPLETE MODEL STATUS IS NOT SECOND-GUESSED"):
+// NEVER PROMOTED TO COMPLETE, under either flag -- the one guardrail that
+// survives unconditionally. A model-authored partial or degraded is never
+// moved UP to complete: that would let the model's own preferred label
+// override a lower server verdict, which defeats the purpose of an
+// independent authority. This is why the switch below has no case that
+// writes InvestigationComplete.
 //
-//  1. Only a model-claimed `complete` may be corrected. This finds answers
-//     the model called COMPLETE that the outcome rows say were not; a
-//     correction in the other direction -- promoting a model-authored
-//     partial or degraded UP to complete -- would let the model's own
-//     preferred label override a lower server verdict, which defeats the
-//     purpose of an independent authority.
-//  2. A non-answer disposition is never touched. A pending clarification is
-//     not an incomplete answer and a refusal is not a degraded one; this
-//     function only ever looks at a result whose disposition is `answer`,
-//     and only after DeriveCompletenessAuthority has already refused to
-//     derive anything for the other three.
+// TWO FLAGS, TWO DIRECTIONS, gated independently:
+//
+//  1. `enabled`: only a model-claimed `complete` may be corrected, down to
+//     whatever partial or degraded the outcome rows say.
+//  2. `symmetricEnabled`: only the LATERAL pair -- a model-claimed
+//     `partial` corrected to `degraded`, or a model-claimed `degraded`
+//     corrected to `partial` -- may be corrected. Built in shadow:
+//     DeriveCompletenessAuthority's own measurement (Disagreed, WouldFlip,
+//     Direction) is unconditionally symmetric already; this flag gates
+//     only whether that measurement is also SERVED for the lateral pair.
+//     See CompletenessAuthorityDirection's own doc comment for why
+//     partial<->complete and degraded<->complete are excluded from this
+//     flag's scope entirely, in both directions.
+//
+// A non-answer disposition is never touched either way: this function only
+// ever acts on a result whose disposition is `answer`, and only after
+// DeriveCompletenessAuthority has already refused to derive anything for
+// the other three (carried over from status_shadow.go's DeriveServerStatus,
+// "A NON-COMPLETE MODEL STATUS IS NOT SECOND-GUESSED" -- narrowed here to
+// "not second-guessed UNLESS a flag says otherwise for this pair").
 //
 // result.Completeness is RECOMPUTED after a flip, never hand-patched: the
 // validator requires completeness.terminal_status to equal result.Status
@@ -323,20 +464,99 @@ func answerCompletenessStateToStatus(state contractsv1.ContextFabricAnswerComple
 // finalizeServed (every Engine-served result, fresh or reused), and a
 // stored-result READ surface outside the engine entirely (the by-id route)
 // that re-evaluates a persisted row's own outcome rows against whatever
-// the knob says NOW -- a row saved before the flip was ever turned on must
-// not carry a stale answer forever just because Save already ran once.
-func ApplyServerCompletenessAuthority(result InvestigationResult, enabled bool, observation CompletenessAuthorityObservation) InvestigationResult {
-	if !enabled || !observation.Derived {
-		return result
-	}
-	if result.Status != InvestigationComplete {
+// the knobs say NOW -- a row saved before either flip was ever turned on
+// must not carry a stale answer forever just because Save already ran once.
+func ApplyServerCompletenessAuthority(result InvestigationResult, enabled bool, symmetricEnabled bool, observation CompletenessAuthorityObservation) InvestigationResult {
+	if !observation.Derived {
 		return result
 	}
 	mapped, ok := answerCompletenessStateToStatus(observation.ServerState)
-	if !ok || mapped == InvestigationComplete {
+	if !ok || mapped == result.Status {
+		return result
+	}
+	switch result.Status {
+	case InvestigationComplete:
+		if !enabled {
+			return result
+		}
+		// mapped is partial or degraded: mapped == result.Status is already
+		// excluded above, and answerCompletenessStateToStatus has no other
+		// member to return `ok` for.
+	case InvestigationPartial:
+		if !symmetricEnabled || mapped != InvestigationDegraded {
+			return result
+		}
+	case InvestigationDegraded:
+		if !symmetricEnabled || mapped != InvestigationPartial {
+			return result
+		}
+	default:
 		return result
 	}
 	result.Status = mapped
 	result.Completeness = ComputeAnswerCompleteness(result)
 	return result
+}
+
+// CompletenessAuthorityLogArgs is the ONE construction of the completeness
+// authority line's fields, sanitized at this site.
+//
+// The engine's slog sink (SlogEngineTelemetry.RecordCompletenessAuthority)
+// and the stored-read route both log through it, so a field added or
+// renamed moves on both surfaces at once, and the certified declaration in
+// eventspec describes one line rather than two that happen to agree today.
+// The caller appends its own request-id attribute.
+func CompletenessAuthorityLogArgs(event CompletenessAuthorityObservation, orgID string) []any {
+	return []any{
+		"org_id", SanitizeLogAttr(orgID),
+		"model_status", SanitizeLogAttr(string(event.ModelStatus)),
+		"disposition", SanitizeLogAttr(string(event.Disposition)),
+		"basis", SanitizeLogAttr(string(event.Basis)),
+		"server_state", SanitizeLogAttr(string(event.ServerState)),
+		"derived", event.Derived,
+		"disagreed", event.Disagreed,
+		"would_flip", event.WouldFlip,
+		"direction", SanitizeLogAttr(string(event.Direction)),
+		"version", SanitizeLogAttr(event.Version),
+	}
+}
+
+// CompletenessAuthorityLineVocabulary returns the closed vocabulary of one
+// closed field on the completeness authority line, for the event
+// specification. Every list is DERIVED from the vocabulary that owns it,
+// never retyped. An unknown key returns nil, which the specification reads
+// as an open field.
+func CompletenessAuthorityLineVocabulary(key string) []string {
+	switch key {
+	case "model_status":
+		return tokenStrings([]InvestigationStatus{
+			InvestigationComplete, InvestigationPartial, InvestigationDegraded,
+			InvestigationClarificationRequired, InvestigationNoMatch,
+		})
+	case "disposition":
+		members := AnswerDispositionVocabulary()
+		return tokenStrings(members[:])
+	case "basis":
+		members := CompletenessAuthorityBasisVocabulary()
+		return tokenStrings(members[:])
+	case "server_state":
+		// ServerState never carries ContextFabricAnswerCompletenessNotDerived
+		// (DeriveCompletenessAuthority reports that case through Basis
+		// instead, leaving ServerState at its zero value) -- so the line's
+		// own closed vocabulary is the contracts vocabulary minus that one
+		// member, plus the empty string DeriveCompletenessAuthority writes
+		// when Basis is not_an_answer/unavailable.
+		values := []string{""}
+		for _, state := range contractsv1.ContextFabricAnswerCompletenessStateVocabulary() {
+			if state == contractsv1.ContextFabricAnswerCompletenessNotDerived {
+				continue
+			}
+			values = append(values, string(state))
+		}
+		return values
+	case "direction":
+		members := CompletenessAuthorityDirectionVocabulary()
+		return tokenStrings(members[:])
+	}
+	return nil
 }

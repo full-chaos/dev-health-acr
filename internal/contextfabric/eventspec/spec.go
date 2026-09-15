@@ -1709,6 +1709,49 @@ var RequirementOutcomeTransition = Event{
 	},
 }
 
+// CompletenessAuthority (CHAOS-5743) is the Info line the outcome-derivation
+// completeness authority emits for every investigation that reaches
+// assembly with a plan.
+//
+// EVERY SURFACE THAT SERVES A DOCUMENT EMITS IT, through one construction
+// (contextfabric.CompletenessAuthorityLogArgs): the engine's own serving
+// exit (SlogEngineTelemetry.RecordCompletenessAuthority, called from
+// finalizeServed, the one point every serving path -- fresh, reused, or a
+// veto/refusal/clarification exit -- is downstream of) and the stored-read
+// route, which never reaches the engine and whose response the MCP
+// investigation_result tool forwards.
+//
+// `model_status`/`disposition` are on every line regardless of disposition;
+// `server_state`/`derived` carry a real value only for the `answer`
+// disposition, empty/false otherwise, so a reader can tell "not an answer"
+// apart from "an answer with no semantic state". `disagreed`/`would_flip`
+// and `direction` are populated unconditionally by the measurement,
+// independent of either gated flip's setting -- see
+// contextfabric.CompletenessAuthorityObservation's own doc comment.
+var CompletenessAuthority = Event{
+	ID:                 "contextfabric.completeness_authority",
+	Msg:                "context fabric completeness authority",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityExactlyOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "exactly one line per investigation that reaches finalizeServed or the stored-read route, from the shared measurement site; a request that reaches neither emits none.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "model_status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CompletenessAuthorityLineVocabulary("model_status")},
+		{Key: "disposition", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CompletenessAuthorityLineVocabulary("disposition")},
+		{Key: "basis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CompletenessAuthorityLineVocabulary("basis")},
+		{Key: "server_state", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CompletenessAuthorityLineVocabulary("server_state")},
+		{Key: "derived", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "disagreed", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "would_flip", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "direction", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CompletenessAuthorityLineVocabulary("direction")},
+		// Open: the derivation series identifier, expected to gain new
+		// values as the series is amended.
+		{Key: "version", Type: FieldString, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+	},
+}
+
 // SynthesisRetrySelection is the Info line emitted when the first synthesis
 // measurement selects a bounded cohort for one retry. It is emitted before
 // the retry executes, so the three retry outcome fields are explicit false
@@ -1938,6 +1981,7 @@ var All = []Event{
 	SliceBSurvivorVerdict, SliceBSurvivorVerdictSummary,
 	SemanticStatePersistence,
 	RequirementOutcomeTransition,
+	CompletenessAuthority,
 	SynthesisRetrySelection,
 	WorkItemMembershipS1,
 	WorkItemMembershipGate,

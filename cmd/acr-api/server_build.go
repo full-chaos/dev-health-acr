@@ -142,8 +142,9 @@ func appConfig(cfg config.Config, serviceVersion string) api.AppConfig {
 		ServiceName: "dev-health-acr", ServiceVersion: serviceVersion, RequestTimeout: cfg.RequestTimeout,
 		MaxRequestBodyBytes: int64(cfg.MaxSerializedBytes), MaxEvidenceResponseBytes: int64(cfg.MaxSerializedBytes),
 		MaxItems: cfg.MaxItems, MaxOutputTokens: cfg.MaxOutputTokens, MaxSerializedBytes: cfg.MaxSerializedBytes,
-		RevokedClientVersions:              cfg.RevokedClientVersions,
-		ServerCompletenessAuthorityEnabled: cfg.ServerCompletenessAuthorityEnabled,
+		RevokedClientVersions:                       cfg.RevokedClientVersions,
+		ServerCompletenessAuthorityEnabled:          cfg.ServerCompletenessAuthorityEnabled,
+		ServerCompletenessAuthoritySymmetricEnabled: cfg.ServerCompletenessAuthoritySymmetricEnabled,
 	}
 }
 
