@@ -148,6 +148,17 @@ type FrameValidationEvent struct {
 	// qualifies.
 	OrderingPresent bool
 
+	// StrippedObligations is the closed-vocabulary set the work-item
+	// tuple's promotion removed from this frame's derived Obligations
+	// (workItemTupleStripSurveyObligations), in the frame's own order. Nil,
+	// never an empty non-nil slice, on every line the tuple did not
+	// promote -- including every non-work-item-tuple frame -- so "nothing
+	// was stripped" and "the mutation did not run here" stay one value.
+	// This is the in-place frame mutation's own observability: without it,
+	// a regression that started stripping the wrong obligation, or
+	// stopped stripping the one it must, would be invisible at Info.
+	StrippedObligations []AnswerObligation
+
 	// DerivedObligationCount / WidenedObligationCount are counts, not
 	// lists: the obligation set is derivable from the goal set and the
 	// other axes, so logging it whole would be redundant, while the
@@ -378,6 +389,18 @@ func goalsLogValue(goals []InvestigationGoal) []any {
 	out := make([]any, 0, len(goals))
 	for _, goal := range goals {
 		out = append(out, string(goal))
+	}
+	return out
+}
+
+// obligationsLogValue renders an obligation set the same way goalsLogValue
+// renders a goal set: a flat slice of strings, every member a closed
+// AnswerObligation token (ValidAnswerObligation), so a log reader sees a
+// plain array rather than a nested object.
+func obligationsLogValue(obligations []AnswerObligation) []any {
+	out := make([]any, 0, len(obligations))
+	for _, obligation := range obligations {
+		out = append(out, string(obligation))
 	}
 	return out
 }

@@ -85,6 +85,15 @@ func (admission workItemTupleAdmission) refusalBasis() contractsv1.ContextFabric
 
 // workItemTupleFrameGate refines only the tuple's existing kind refusal.
 // Invalid frames and unrelated gate outcomes retain precedence.
+//
+// The promotion branch is the ONLY place this arm's admission turns a
+// refusal into a pass (tightenWorkItemTupleFrameGate never reaches it: it
+// calls this function only when the gate does not already refuse, and the
+// promotion guard below requires the gate to be exactly the tuple's own
+// member_kind_unservable refusal). That makes it the one correct place to
+// also strip the ranking obligation this arm can never discharge -- see
+// workItemTupleSurveyObligations -- rather than a second, later pass that
+// would have to rediscover which frames this admission touched.
 func workItemTupleFrameGate(gate FrameGate, frame *QuestionFrame, familyAllowsWorkItemTuple bool, timeContext TimeContext) FrameGate {
 	if gate.Outcome == FrameGateNotProposed || gate.Outcome == FrameGateRejectedInvalid || (gate.Refuses() && !(gate.Outcome == FrameGateRefusedBasis && gate.RefuseBasis == CohortMemberKindUnservable && gate.DeclaredMemberKind == SubjectWorkItem)) {
 		return gate
@@ -95,10 +104,55 @@ func workItemTupleFrameGate(gate FrameGate, frame *QuestionFrame, familyAllowsWo
 		return FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable, DeclaredMemberKind: SubjectWorkItem}
 	case workItemTupleProspective:
 		if gate.Outcome == FrameGateRefusedBasis && gate.RefuseBasis == CohortMemberKindUnservable && gate.DeclaredMemberKind == SubjectWorkItem {
+			// FrameGate stays a comparable value (`==`/`!=` on it are load-
+			// bearing across this package's tests, chaos5465_boundary_pins_
+			// test.go and others) -- a slice field here would break that, so
+			// what this call strips is NOT carried on the gate. The caller
+			// that wants it observes the frame's Obligations before and
+			// after this call instead (see resolveFrame's own
+			// strippedObligations capture).
+			if frame != nil {
+				workItemTupleStripSurveyObligations(frame)
+			}
 			return FrameGate{Outcome: FrameGatePassed}
 		}
 	}
 	return gate
+}
+
+// workItemTupleStripSurveyObligations removes ObligationRanking from an
+// admitted frame's derived obligation set, in place, and returns exactly
+// what it removed (nil when nothing was) -- direct callers (this file's own
+// tests, and obligationsRemoved's diff for a caller that only has the frame
+// before/after) read this to make the mutation observable rather than
+// inferred.
+//
+// GoalRankOrSurvey unconditionally derives ObligationRanking
+// (frame_obligations.go), whether the frame asks to rank or only to
+// survey -- the goal-to-obligation table has no way to see
+// workItemTupleOrderingRequested's answer. This arm never computes a
+// ranking regardless: RankCohort is skipped for every work-item tuple
+// (engine.go, `!workItemTuple`), and the registry declares no ranking
+// producer for work_item (graphrank/cohort_fact_requirements.go: work_item
+// -> {FactStatus, FactWork} only). Left in place, a survey-admitted
+// question would derive a REQUIRED requirement no producer can ever serve,
+// and the answer would report degraded completeness on every admitted
+// survey -- contradicting the one promise this arm makes for it: the same
+// answer contract GoalAssessState already gets. GoalAssessState and
+// GoalCountOrAggregate never carry ObligationRanking, so this is a no-op
+// (nil returned) for every other admitted goal.
+func workItemTupleStripSurveyObligations(frame *QuestionFrame) []AnswerObligation {
+	var stripped []AnswerObligation
+	kept := frame.Obligations[:0:0]
+	for _, obligation := range frame.Obligations {
+		if obligation == ObligationRanking {
+			stripped = append(stripped, obligation)
+			continue
+		}
+		kept = append(kept, obligation)
+	}
+	frame.Obligations = kept
+	return stripped
 }
 
 // tightenWorkItemTupleFrameGate checks the final family and effective time.
@@ -109,4 +163,25 @@ func tightenWorkItemTupleFrameGate(gate FrameGate, frame *QuestionFrame, familyA
 		return gate
 	}
 	return workItemTupleFrameGate(gate, frame, familyAllowsWorkItemTuple, timeContext)
+}
+
+// obligationsRemoved reports which members of before are absent from after,
+// in before's own order -- the observable half of workItemTupleFrameGate's
+// promotion-time strip for a caller that only has the frame's Obligations
+// snapshotted on either side of the call, not the mutating call itself.
+// Nil, never an empty non-nil slice, when nothing was removed, so a log
+// line's rendering of "nothing stripped" and "the field was never touched"
+// are one value, not two.
+func obligationsRemoved(before, after []AnswerObligation) []AnswerObligation {
+	stillPresent := make(map[AnswerObligation]bool, len(after))
+	for _, obligation := range after {
+		stillPresent[obligation] = true
+	}
+	var removed []AnswerObligation
+	for _, obligation := range before {
+		if !stillPresent[obligation] {
+			removed = append(removed, obligation)
+		}
+	}
+	return removed
 }

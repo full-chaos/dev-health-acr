@@ -313,3 +313,68 @@ func workItemTupleFamilyPolicyForTest(family QuestionFamily) bool {
 	definition, known := LookupQuestionFamily(family)
 	return known && definition.allowsWorkItemTuple
 }
+
+// TestWorkItemTuplePromotionStripsRankingObligationOnlyOnPromotion pins the
+// invariant: GoalRankOrSurvey unconditionally derives
+// ObligationRanking (frame_obligations.go) whether the frame asks to rank
+// or only to survey, but this arm never computes one -- RankCohort is
+// skipped for every work-item tuple and the registry declares no ranking
+// producer for work_item. Left alone, an admitted survey turn would derive
+// a REQUIRED requirement no producer can ever serve and degrade every
+// survey answer, contradicting the one promise this arm makes for it: the
+// same answer contract GoalAssessState already gets. The obligation is
+// stripped exactly when, and only when, the tuple PROMOTES the gate --
+// never on a frame this arm leaves alone, and never on the frame it still
+// refuses (the ordering-present control).
+func TestWorkItemTuplePromotionStripsRankingObligationOnlyOnPromotion(t *testing.T) {
+	defer reportWorkItemMutationPanic(t)
+	for _, tc := range []struct {
+		name         string
+		goals        []InvestigationGoal
+		emphasis     []AnswerEmphasis
+		wantPromoted bool
+		wantRanking  bool
+	}{
+		{"survey_admitted_ranking_stripped", []InvestigationGoal{GoalRankOrSurvey}, nil, true, false},
+		{"survey_ordering_refused_obligations_untouched", []InvestigationGoal{GoalRankOrSurvey}, []AnswerEmphasis{EmphasisPositiveOutliers}, false, true},
+		{"assess_state_admitted_no_ranking_to_strip", []InvestigationGoal{GoalAssessState}, nil, true, false},
+		{"assess_count_admitted_no_ranking_to_strip", []InvestigationGoal{GoalAssessState, GoalCountOrAggregate}, nil, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer reportWorkItemMutationPanic(t)
+			frame := prospectiveTupleFrame(tc.goals...)
+			frame.Emphasis = tc.emphasis
+			before := append([]AnswerObligation(nil), frame.Obligations...)
+			beforeHadRanking := frame.HasObligation(ObligationRanking)
+			gate := workItemTupleFrameGate(DecideFrameGate(ValidateFrame(frame, nil, ""), true), &frame, workItemTupleFamilyPolicyForTest(QuestionFamilyScopedCohortStatus), TimeContext{Axis: TemporalCurrent})
+			if (gate.Outcome == FrameGatePassed) != tc.wantPromoted {
+				t.Fatalf("gate=%+v want promoted=%v", gate, tc.wantPromoted)
+			}
+			if frame.HasObligation(ObligationRanking) != tc.wantRanking {
+				t.Fatalf("obligations=%v HasObligation(ranking)=%v want=%v", frame.Obligations, frame.HasObligation(ObligationRanking), tc.wantRanking)
+			}
+			if !tc.wantPromoted {
+				if !reflect.DeepEqual(frame.Obligations, before) {
+					t.Fatalf("a non-promoting call mutated obligations: before=%v after=%v", before, frame.Obligations)
+				}
+				return
+			}
+			// Every other obligation the frame started with survives; only
+			// ranking (when present) is removed, and only that.
+			for _, obligation := range before {
+				if obligation == ObligationRanking {
+					continue
+				}
+				if !frame.HasObligation(obligation) {
+					t.Fatalf("promotion dropped an unrelated obligation %s: before=%v after=%v", obligation, before, frame.Obligations)
+				}
+			}
+			if beforeHadRanking && len(frame.Obligations) != len(before)-1 {
+				t.Fatalf("promotion should remove exactly one obligation (ranking): before=%v after=%v", before, frame.Obligations)
+			}
+			if !beforeHadRanking && len(frame.Obligations) != len(before) {
+				t.Fatalf("promotion changed obligation count with no ranking to remove: before=%v after=%v", before, frame.Obligations)
+			}
+		})
+	}
+}

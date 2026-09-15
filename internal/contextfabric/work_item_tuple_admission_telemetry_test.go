@@ -19,21 +19,29 @@ import (
 // gate resolveFrame already decided (event.Gate = gate), not a second,
 // pre-refinement reading of it -- otherwise an admitted, dispatched survey
 // turn would log as refused.
+//
+// It also pins the promotion's own observability requirement:
+// stripped_obligations on this SAME line must show what the promotion's
+// in-place frame mutation removed (nil/empty when nothing did), never only
+// inferable from the frame a later stage happens to read.
 func TestWorkItemSurveyGoalTelemetryReflectsTheEnforcedGate(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
+		goals           []InvestigationGoal
 		emphasis        []AnswerEmphasis
 		wantGate        string
 		wantOrdering    bool
 		wantRefuseBasis string
+		wantStripped    []string
 	}{
-		{"no_ordering_admits", nil, "passed", false, "none"},
-		{"ordering_refuses", []AnswerEmphasis{EmphasisPositiveOutliers}, "refused:member_kind_unservable", true, "member_kind_unservable"},
+		{"survey_no_ordering_admits", []InvestigationGoal{GoalRankOrSurvey}, nil, "passed", false, "none", []string{"ranking"}},
+		{"survey_ordering_refuses", []InvestigationGoal{GoalRankOrSurvey}, []AnswerEmphasis{EmphasisPositiveOutliers}, "refused:member_kind_unservable", true, "member_kind_unservable", nil},
+		{"assess_state_admits_nothing_to_strip", []InvestigationGoal{GoalAssessState}, nil, "passed", false, "none", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			defer reportWorkItemMutationPanic(t)
 			logs := captureEngineLogger(t)
-			frame := prospectiveTupleFrame(GoalRankOrSurvey)
+			frame := prospectiveTupleFrame(tc.goals...)
 			frame.Emphasis = tc.emphasis
 			receipt := validModelReceiptFixture(ModelOperationInterpret)
 			receipt.QuestionFrame = &frame
@@ -63,6 +71,41 @@ func TestWorkItemSurveyGoalTelemetryReflectsTheEnforcedGate(t *testing.T) {
 			if line["refuse_basis"] != tc.wantRefuseBasis {
 				t.Fatalf("refuse_basis = %v, want %q", line["refuse_basis"], tc.wantRefuseBasis)
 			}
+			got := stringSliceLogValue(t, line["stripped_obligations"])
+			if !equalStringSlices(got, tc.wantStripped) {
+				t.Fatalf("stripped_obligations = %v, want %v", got, tc.wantStripped)
+			}
+			for _, member := range got {
+				if !ValidAnswerObligation(AnswerObligation(member)) {
+					t.Fatalf("stripped_obligations carries %q, not a member of the closed AnswerObligation vocabulary", member)
+				}
+			}
 		})
 	}
+}
+
+// stringSliceLogValue decodes a captured JSON log field (a []any of
+// strings, or absent/null) into a []string, nil for either absent form --
+// the log line's own "nothing stripped" contract.
+func stringSliceLogValue(t *testing.T, raw any) []string {
+	t.Helper()
+	if raw == nil {
+		return nil
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		t.Fatalf("stripped_obligations field is %T, want a JSON array", raw)
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		s, ok := item.(string)
+		if !ok {
+			t.Fatalf("stripped_obligations element is %T, want a string", item)
+		}
+		out = append(out, s)
+	}
+	return out
 }

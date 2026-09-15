@@ -1676,9 +1676,16 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 	// predicate -- named_subject is not a cohort variant either way -- and
 	// a test pins that, so the ordering here is belt to that test's braces.)
 	gate := DecideFrameGate(result, true)
+	// Captured only when the tuple call below can run at all, and read only
+	// by the telemetry event further down -- obligationsRemoved's own doc
+	// comment says why this is a before/after diff rather than a value
+	// threaded through FrameGate itself.
+	var strippedObligations []AnswerObligation
 	if len(times) == 1 && result.Outcome.Accepted() {
 		definition, known := LookupQuestionFamily(DeriveQuestionFamily(result.Frame).Family)
+		obligationsBeforeTuple := append([]AnswerObligation(nil), result.Frame.Obligations...)
 		gate = workItemTupleFrameGate(gate, &result.Frame, known && definition.allowsWorkItemTuple, times[0])
+		strippedObligations = obligationsRemoved(obligationsBeforeTuple, result.Frame.Obligations)
 	}
 	receipt.FrameGateOutcome = gate.Outcome
 	receipt.FrameGateRefuseBasis = gate.RefuseBasis
@@ -1726,6 +1733,12 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 		// this line and the receipt reading the SAME decision rather than
 		// two, the exact drift this package's gate seam exists to close.
 		event.Gate = gate
+		// The other observable half of the SAME call: what the tuple's
+		// promotion removed from the frame's obligation set, nil when it
+		// removed nothing (including every non-work-item-tuple frame,
+		// which never reaches the branch that can strip). See
+		// obligationsRemoved's own doc comment.
+		event.StrippedObligations = strippedObligations
 		// The requested-versus-proposed half, from THIS receipt and THIS
 		// proposal, judged by the gate this event already carries -- one
 		// verdict, read once.
