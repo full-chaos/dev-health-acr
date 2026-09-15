@@ -196,6 +196,7 @@ var semanticStateGroupFields = []Field{
 	{Key: "frame_version", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
 	{Key: "subject_expression_kind", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
 	{Key: "subject_member_kind", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
+	{Key: "subject_member_qualifier", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
 	{Key: "subject_group_kind", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
 	{Key: "subject_expected_kind", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
 	{Key: "operands", Type: FieldStringSlice, Presence: PresenceConditional, Applicability: "written when present=true"},

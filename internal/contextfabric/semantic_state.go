@@ -854,6 +854,9 @@ func validateSemanticFrameBounds(frame QuestionFrame) error {
 		if err := terms(expression.Scoped.AnchorTerms); err != nil {
 			return err
 		}
+		if !ValidMemberQualifier(expression.Scoped.MemberQualifier) {
+			return fmt.Errorf("scoped member_qualifier %q is not a vocabulary member", expression.Scoped.MemberQualifier)
+		}
 	}
 	if expression.Explicit != nil {
 		if len(expression.Explicit.Operands) > SemanticStateMaxOperands {
@@ -868,6 +871,9 @@ func validateSemanticFrameBounds(frame QuestionFrame) error {
 			if operand.Scoped != nil {
 				if err := terms(operand.Scoped.AnchorTerms); err != nil {
 					return err
+				}
+				if !ValidMemberQualifier(operand.Scoped.MemberQualifier) {
+					return fmt.Errorf("operand scoped member_qualifier %q is not a vocabulary member", operand.Scoped.MemberQualifier)
 				}
 			}
 		}
