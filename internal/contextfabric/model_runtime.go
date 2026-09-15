@@ -329,6 +329,11 @@ type ModelExecutionReceipt struct {
 	FrameDimensionsDropped      int  `json:"frame_dimensions_dropped,omitempty"`
 	FrameMemberKindUnrecognized bool `json:"frame_member_kind_unrecognized,omitempty"`
 	FrameGroupKindUnrecognized  bool `json:"frame_group_kind_unrecognized,omitempty"`
+	// FrameMemberQualifierUnrecognized records that the model supplied a
+	// non-empty qualifier outside the recognized vocabulary. The frame keeps
+	// an explicit carrier marker so this signal cannot be mistaken for an
+	// omitted, unqualified member set.
+	FrameMemberQualifierUnrecognized bool `json:"frame_member_qualifier_unrecognized,omitempty"`
 	// InterpretationRejectionReason names WHICH rule in
 	// InterpretedQuestion.Validate() rejected this interpretation -- the
 	// interpret-side counterpart of the synthesis decision line's own
