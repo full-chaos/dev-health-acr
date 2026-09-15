@@ -560,9 +560,9 @@ source for the SAME kind).
 | --- | --- | --- |
 | identity | `repos`, `work_items` | repository, work_item |
 | membership | `repos`, `work_items` ⋈ `repos` | repository, work_item |
-| status | `work_items` | work_item |
-| work | `work_items` | work_item |
-| actual_completion | `work_items` | work_item |
+| status | `work_items`; selector mode uses a same-statement `work_items` ↔ `repos` join | work_item |
+| work | `work_items`; selector mode uses a same-statement `work_items` ↔ `repos` join | work_item |
+| actual_completion | `work_items`; selector mode uses a same-statement `work_items` ↔ `repos` join | work_item |
 | blockers | `work_item_dependencies` | work_item |
 | required_children | `work_item_dependencies` | work_item |
 | pull_requests | `git_pull_requests` (`state`: member state and drivers) | pull_request |
@@ -579,6 +579,49 @@ source for the SAME kind).
 | source_health | `backfill_log` | organization |
 | flow (CHAOS-4364) | `work_item_metrics_daily` (team, per-scope Rows; `work_item_cycle_times`'s flow_efficiency is DELIBERATELY NOT read -- ops sink omits it, see flow.go's doc comment); **+`team_project_ownership` ⋈ `work_item_metrics_daily`**, summed/averaged across a team's own (provider, work_scope_id) rows into one row per team (project, codex R2 fix); **+`repo_metrics_daily`** (repository, PR pickup/review timings, distinct shape) | team, project, repository |
 | landscape (CHAOS-4364) | `ic_landscape_rolling_30d` aggregated to (team, map_name) — never per-identity (no person-to-person ranking); **+`team_project_ownership` ⋈ `ic_landscape_rolling_30d`** (project, owning-teams rollup) | team, project |
+
+**Updated 2026-09-15 (request-carried work-item repository scope).** The
+status, work-title, and actual-completion providers now share this bounded
+path. `RequestedScope.RepositorySlugs` is copied into the canonical request
+and then into `FactQuery`; it remains separate from the resolver's `Scope`
+and from model-authored requirement parameters. The adapter translates the
+current principal and current request into the typed reader selector sets.
+The reader package renders one statement with the organization-qualified
+`work_items` ↔ `repos` relation. The adapter supplies typed slug/owner
+selectors and wildcard flags. The reader evaluates them against current
+`r.repo` metadata, with repository-presence guards; it does not perform a
+separate metadata lookup. The library's optional ID-only mode is a separate
+compatibility path and is not used by this adapter.
+
+```mermaid
+flowchart LR
+    REQ["InvestigationRequest<br/>RequestedScope.RepositorySlugs"] --> CFR["CanonicalFactRequest<br/>owned raw copy"]
+    CFR --> BFQ["buildFactQuery"] --> FQ["FactQuery<br/>RequestedRepositoryScope<br/>separate from Scope and Parameters"]
+    FQ --> AD["workItemRepositoryAuthorization<br/>current Principal + request"]
+    AD --> TS["typed Granted / Requested<br/>RepositorySelectorSet"]
+    TS --> SQL["WorkItemScopeSQL<br/>bound slug/owner selectors + presence guards<br/>same-statement LEFT JOIN repos AS r FINAL"]
+    SQL --> READ["status / title / actual-completion<br/>WithScopeAndRowLimit"]
+    READ --> BOUNDS["SETTINGS: physical rows 8192<br/>memory 64 MiB · threads 1 · result 201<br/>native limit failures throw"]
+    CTX{"context deadline"} -->|"remaining ≥ 1 second"| SEC["server max_execution_time =<br/>whole-second floor"]
+    CTX -->|"remaining < 1 second"| REFUSE["bounded refusal before query<br/>never rounds upward"]
+    SEC --> BOUNDS
+```
+
+The content reader intersects the requested work-item identities with the
+principal and request selector predicates. A current principal is
+re-evaluated for each content read, and
+the request selector is not carried from a prior query. A canceled or already
+expired context returns its context error before statement execution. A live
+sub-second budget is refused because the released reader API accepts only
+whole-second server execution ceilings; longer deadlines use the floored
+server value and the client context remains an additional bound.
+
+The shared resource policy is independent of fixture size: 8192 physical
+rows, 64 MiB of query memory and one requested query thread. It does not
+promise that every valid history or storage layout fits. A native limit
+failure is a failed content read, never a successfully measured partial
+stream. The thread setting is per statement and does not change the shared
+client pool or server defaults.
 
 **`FactMetrics`'s project rollup never averages a rate across
 differently-sized teams.** Additive counts (commits, after-hours/weekend

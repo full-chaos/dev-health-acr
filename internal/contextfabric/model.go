@@ -347,6 +347,23 @@ type CanonicalFactRequest struct {
 	Subjects     []SubjectRef        `json:"subjects"`
 	Cohort       *Cohort             `json:"cohort,omitempty"`
 	Requirements []FactRequirement   `json:"requirements"`
+	// RequestedRepositoryScope is the caller-owned repository scope carried
+	// into fact providers. It is copied from InvestigationRequest's
+	// RequestedScope.RepositorySlugs at each production request-construction
+	// boundary and is deliberately separate from Scope: Scope is the
+	// resolver's derived read decision, while this value remains the request's
+	// original repository constraint. It is also separate from
+	// FactRequirement.Parameters, which are model-authored capability inputs
+	// and never an authorization channel.
+	//
+	// Preserve nil and non-nil empty slices while carrying the raw request.
+	// The ACR request contract treats both shapes as no requested repository
+	// restriction; the distinction is retained here so transport does not
+	// silently rewrite caller input. The dev-health-go selector semantics are
+	// applied only at the provider adapter: an empty raw list becomes a nil
+	// requested selector, while a non-empty list that normalizes to no valid
+	// selector becomes an explicit zero (deny) selector.
+	RequestedRepositoryScope []string `json:"-"`
 	// Scope is the FactReadScopeResolver's verdict for this request
 	// (CHAOS-4099): which derived subjects each requirement may additionally
 	// be READ for, and which requirements could not be reached at all.

@@ -324,11 +324,12 @@ func (c FactCapability) Validate() error {
 }
 
 type FactQuery struct {
-	Kind       FactKind
-	Subjects   []SubjectRef
-	Cohort     *Cohort
-	Time       TimeContext
-	Parameters map[string]string
+	Kind                     FactKind
+	Subjects                 []SubjectRef
+	Cohort                   *Cohort
+	Time                     TimeContext
+	RequestedRepositoryScope []string
+	Parameters               map[string]string
 }
 
 type FactProviderResult struct {
@@ -1273,7 +1274,29 @@ func buildFactQuery(request CanonicalFactRequest, requirement FactRequirement, c
 	for key, value := range requirement.Parameters {
 		parameters[key] = value
 	}
-	return FactQuery{Kind: requirement.Kind, Subjects: append([]SubjectRef(nil), subjects...), Cohort: request.Cohort, Time: request.Question.TimeContext, Parameters: parameters}, nil
+	return FactQuery{
+		Kind:                     requirement.Kind,
+		Subjects:                 append([]SubjectRef(nil), subjects...),
+		Cohort:                   request.Cohort,
+		Time:                     request.Question.TimeContext,
+		RequestedRepositoryScope: copyRequestedRepositoryScope(request.RequestedRepositoryScope),
+		Parameters:               parameters,
+	}, nil
+}
+
+// copyRequestedRepositoryScope returns an owned copy while preserving the raw
+// request shape. ACR treats an absent and an explicitly empty
+// RequestedScope.RepositorySlugs list as no requested restriction; the
+// provider adapter translates that raw contract to the reader's typed
+// selector semantics. Keeping the copy lossless prevents a transport helper
+// from changing the request before that one policy translation point.
+func copyRequestedRepositoryScope(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	out := make([]string, len(values))
+	copy(out, values)
+	return out
 }
 
 func mergeFactProviderResult(bundle *CanonicalFactBundle, capability FactCapability, query FactQuery, result FactProviderResult, allowed map[string]SubjectRef, detailSpec coverageDetailSpec) error {

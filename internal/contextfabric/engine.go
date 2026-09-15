@@ -2757,10 +2757,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 	}
 	factRequest := CanonicalFactRequest{
-		Question:     factReadQuestion(interpretation, effectiveWindow),
-		Subjects:     subjects,
-		Cohort:       graphContext.Cohort,
-		Requirements: mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements),
+		Question:                 factReadQuestion(interpretation, effectiveWindow),
+		Subjects:                 subjects,
+		Cohort:                   graphContext.Cohort,
+		Requirements:             mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements),
+		RequestedRepositoryScope: copyRequestedRepositoryScope(request.RequestedScope.RepositorySlugs),
 	}
 	// The invariant, asserted rather than assumed (CHAOS-3810). The guard
 	// above is what makes this unreachable today; this is what keeps it
