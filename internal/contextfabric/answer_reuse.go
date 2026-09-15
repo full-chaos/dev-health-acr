@@ -428,9 +428,9 @@ func (e *Engine) recordReuseBypass(ctx context.Context, principal storage.Princi
 // re-derive a candidate's OWN key using this request's own TRUSTED,
 // in-process encoding choice, never the candidate's stored (untrusted)
 // Provenance. Meaningless when windowKey == "".
-func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, request InvestigationRequest, effectiveTimeContext TimeContext, windowKey string, windowKeyEnc windowKeyEncoding, binding ResolvedGraphBinding) (InvestigationResult, bool) {
+func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, request InvestigationRequest, effectiveTimeContext TimeContext, windowKey string, windowKeyEnc windowKeyEncoding, binding ResolvedGraphBinding) (InvestigationResult, bool, bool, error) {
 	if e.reuseGate == nil {
-		return InvestigationResult{}, false
+		return InvestigationResult{}, false, false, nil
 	}
 	if CanonicalizeQuestion(request.Question) == "" {
 		// Codex round-2 finding #4: a punctuation-only (or otherwise
@@ -440,7 +440,7 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 		// same one. Fail closed: never even attempt a lookup. See
 		// reuseColumnsFor's matching guard on the save side.
 		e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
-		return InvestigationResult{}, false
+		return InvestigationResult{}, false, false, nil
 	}
 	modelIdentities := e.reuseModelIdentities
 	if e.reuseModelIdentityResolver != nil {
@@ -456,7 +456,7 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 		resolved, err := e.reuseModelIdentityResolver.ResolveReuseModelIdentity(ctx, principal.OrgID)
 		if err != nil {
 			e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
-			return InvestigationResult{}, false
+			return InvestigationResult{}, false, false, nil
 		}
 		modelIdentities = resolved
 	}
@@ -489,7 +489,7 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 		// A historical context missing its own required bounds. Fail
 		// closed rather than key it as anything -- see TimeAxisKeyFor.
 		e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
-		return InvestigationResult{}, false
+		return InvestigationResult{}, false, false, nil
 	}
 	key := ReuseKey{
 		QuestionHash:      QuestionHash(request.Question),
@@ -548,17 +548,18 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 		// under this exact active graph epoch.
 		GraphEpoch: binding.Epoch,
 	}
-	candidate, ok, missReason, err := e.reuseGate.FindReusable(ctx, principal, key)
+	stored, ok, missReason, err := e.reuseGate.FindReusable(ctx, principal, key)
 	if err != nil || !ok {
 		outcome := AnswerReuseMissNoCandidate
 		if missReason == ReuseMissStaleGraphEpoch {
 			outcome = AnswerReuseMissStaleGraphEpoch
 		}
 		e.recordReuseOutcome(ctx, principal, outcome)
-		return InvestigationResult{}, false
+		return InvestigationResult{}, false, false, nil
 	}
+	candidate := stored.Result
 	if err := ctx.Err(); err != nil {
-		return InvestigationResult{}, false
+		return InvestigationResult{}, false, false, nil
 	}
 	// CHAOS-3900 W1 (codex review, rounds 2-5, consolidated round 5): a
 	// window-keyed lookup (windowKey != "") must never serve a candidate
@@ -591,11 +592,11 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 	if windowKey != "" {
 		if candidate.Interpretation.TimeContext.Axis != TemporalCurrent || candidate.EffectiveEvidenceWindow == nil {
 			e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
-			return InvestigationResult{}, false
+			return InvestigationResult{}, false, false, nil
 		}
 		if windowKeyComponent(*candidate.EffectiveEvidenceWindow, windowKeyEnc) != windowKey {
 			e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
-			return InvestigationResult{}, false
+			return InvestigationResult{}, false, false, nil
 		}
 	}
 	// CHAOS-4040 (sol-max ruling 2026-08-21): a DECISIVE candidate carrying
@@ -618,7 +619,7 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 		switch candidate.Status {
 		case InvestigationComplete, InvestigationPartial, InvestigationDegraded:
 			e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
-			return InvestigationResult{}, false
+			return InvestigationResult{}, false, false, nil
 		}
 	}
 	// A stored clarification is served from the reuse store only when fresh
@@ -651,17 +652,21 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 				e.telemetry.RecordStoredAnswerability(ctx, principal, StoredAnswerabilitySurfaceReuse, answerability, candidate.Status, "")
 			}
 			e.recordReuseOutcome(ctx, principal, AnswerReuseMissNoCandidate)
-			return InvestigationResult{}, false
+			return InvestigationResult{}, false, false, nil
 		}
 		if e.telemetry != nil {
 			e.telemetry.RecordStoredAnswerability(ctx, principal, StoredAnswerabilitySurfaceReuse, answerability, candidate.Status, candidate.Status)
 		}
 	}
+	if classification := ClassifyWorkItemTuple(candidate, stored.SemanticState, stored.SemanticStateRead); classification.Disposition != WorkItemTupleNotApplicable {
+		result, hit, err := e.tryReuseWorkItemTuple(ctx, principal, request, binding, stored, classification)
+		return result, hit, hit, err
+	}
 	verdict := e.reuseAuthorizationStillHolds(ctx, principal, request, candidate, binding)
 	if verdict.Refused {
 		e.recordReuseOutcome(ctx, principal, verdict.Outcome)
 		e.recordReuseContainment(ctx, principal, verdict, reuseStripCounts{}, "")
-		return InvestigationResult{}, false
+		return InvestigationResult{}, false, false, nil
 	}
 	// CHAOS-4831 (chris's ruling R1): the recheck covers everything a
 	// reused response will SERVE, and a PARTIAL miss degrades instead of
@@ -679,7 +684,7 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 		if !ok {
 			e.recordReuseOutcome(ctx, principal, AnswerReuseMissDegradeInvalid)
 			e.recordReuseContainment(ctx, principal, verdict, counts, degradeDisclosure)
-			return InvestigationResult{}, false
+			return InvestigationResult{}, false, false, nil
 		}
 		candidate = degraded
 		stripCounts = counts
@@ -703,7 +708,7 @@ func (e *Engine) tryReuse(ctx context.Context, principal storage.Principal, requ
 	if e.telemetry != nil {
 		e.telemetry.RecordAnswerReuseServedRequestID(ctx, principal, candidate.RequestID, candidate.RequestID != request.RequestID)
 	}
-	return candidate, true
+	return candidate, true, false, nil
 }
 
 func (e *Engine) recordReuseOutcome(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome) {

@@ -221,6 +221,8 @@ type EngineDependencies struct {
 	// candidate offers never exercises this path regardless, so leaving it
 	// nil is safe ONLY until they exist.
 	CandidateVerifier CandidateVerifier
+	// WorkItemMembership performs the bounded tuple-only reuse census.
+	WorkItemMembership WorkItemMembershipPort
 	// StructureSelectionSink is optional (CHAOS-3927 P4, capture-only
 	// phase, mirroring ClarificationSelectionSink's own contract exactly).
 	// When set, Engine notifies it every time a caller's kindr_/ancr_/
@@ -304,6 +306,8 @@ type EngineDependencies struct {
 // other investigation content -- so a signal is diagnosable without
 // becoming a new disclosure surface.
 type EngineTelemetry interface {
+	RecordWorkItemReuse(context.Context, storage.Principal, WorkItemReuseEvent)
+	RecordWorkItemStoredServing(context.Context, storage.Principal, WorkItemStoredServingEvent)
 	// QuestionFamilyTelemetry (CHAOS-4632 §4.3) is EMBEDDED, not offered
 	// as a separate optional interface a caller might or might not
 	// implement.
@@ -1140,6 +1144,7 @@ type Engine struct {
 	anchorVerifier                     AnchorVerifier
 	anchorMembershipVerifier           AnchorMembershipVerifier
 	candidateVerifier                  CandidateVerifier
+	workItemMembership                 WorkItemMembershipPort
 	priorConsultant                    PriorConsultant
 	priorHandleGrammarChecker          HandleGrammarChecker
 	offerPhraser                       OfferPhraser
@@ -1180,6 +1185,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		anchorVerifier:             dependencies.AnchorVerifier,
 		anchorMembershipVerifier:   dependencies.AnchorMembershipVerifier,
 		candidateVerifier:          dependencies.CandidateVerifier,
+		workItemMembership:         dependencies.WorkItemMembership,
 		priorConsultant:            dependencies.PriorConsultant,
 		priorHandleGrammarChecker:  dependencies.PriorHandleGrammarChecker,
 		offerPhraser:               dependencies.OfferPhraser,
@@ -1244,6 +1250,14 @@ func (e *Engine) captureAcceptedReading(
 }
 
 func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, request InvestigationRequest) (served InvestigationResult, servedErr error) {
+	// Only the creator completes the response owner. Hosted requests borrow
+	// the transport's larger lifetime; direct calls end at this return.
+	if _, ok := WorkItemResponseOwnerFromContext(ctx); !ok {
+		var owner *WorkItemResponseOwner
+		ctx, owner = NewWorkItemResponseOwnerContext(ctx)
+		defer owner.Complete()
+	}
+
 	// CHAOS-5465: the continuation decision is OBSERVABLE on every request
 	// carrying a window receipt, and it is DECLARED ABOVE EVERY RETURN in this
 	// function so a path that ends the turn early cannot publish the
@@ -1630,7 +1644,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if bypass := reuseBypassReason(request, structureCanon); bypass != "" {
 		e.recordReuseBypass(ctx, principal, bypass)
 	} else {
-		if reused, ok := e.tryReuse(ctx, principal, request, clampedRequestTime, windowCanon.KeyComponent, windowCanon.KeyEncoding, binding); ok {
+		reused, ok, workItemTuple, reuseErr := e.tryReuse(ctx, principal, request, clampedRequestTime, windowCanon.KeyComponent, windowCanon.KeyEncoding, binding)
+		if reuseErr != nil {
+			return InvestigationResult{}, stageError(StageValidation, reuseErr)
+		}
+		if ok {
 			// CHAOS-4413 (codex xhigh round-1 P1, confirmed): a reuse hit
 			// can serve a row persisted before Completeness existed --
 			// ValidateStored's legacy exemption lets it stay in storage,
@@ -1671,35 +1689,37 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// that may: no retrieval ran for a cached answer, so there is no
 			// pass-scoped cardinality to carry -- population 0, for the reason
 			// the guard in ComputeMembershipCardinality states.
-			reusedCardinality, _ := ComputeMembershipCardinality(reused.Cohort, 0, reusedPlanNarrowing(reused))
-			if backfilled, _, _ := appendMembershipCardinality(reused.Completeness.Outcomes, reusedCardinality, reusedPlanNarrowing(reused)); len(backfilled) > 0 {
-				reused.Completeness.Outcomes = backfilled
-			}
-			// THE CLAIM AND THE SENTENCE ARE RE-DERIVED HERE, NOT CARRIED.
-			//
-			// Backfilling the row alone would leave the other two surfaces
-			// missing on this path: a stored document that owes a count would
-			// be reused with its row restored and no claim and no sentence, so
-			// the same question answered from cache would serve strictly less
-			// than it does fresh -- with nothing telling the reader which.
-			//
-			// RE-DERIVED rather than carried because a stored document may
-			// predate the feature entirely, so there is nothing to carry; and
-			// because deriving from the row that was just backfilled is what
-			// keeps all three surfaces stating one number on this path, the
-			// same way one `cardinality` value does on the fresh path.
-			//
-			// Under the SAME precondition the fresh path uses, read from the
-			// rows as they now stand -- so a reused answer that owes no count
-			// gains no claim and no sentence, exactly as a fresh one would not.
-			if cardinalityOwed(reused.Completeness.Outcomes, reusedCardinality) {
-				if claim, ok := cardinalityClaim(principal, reusedCardinality); ok {
-					if !resultCarriesCardinalityClaim(reused) && cardinalityClaimAdmitted(len(reused.ClaimedFacts)) {
-						reused.ClaimedFacts = append(reused.ClaimedFacts, claim)
-					}
+			if !workItemTuple {
+				reusedCardinality, _ := ComputeMembershipCardinality(reused.Cohort, 0, reusedPlanNarrowing(reused))
+				if backfilled, _, _ := appendMembershipCardinality(reused.Completeness.Outcomes, reusedCardinality, reusedPlanNarrowing(reused)); len(backfilled) > 0 {
+					reused.Completeness.Outcomes = backfilled
 				}
-				if sentence := cardinalityAnswerSentence(reusedCardinality); sentence != "" && !strings.Contains(reused.DeterministicAnswer, sentence) {
-					reused.DeterministicAnswer = appendCardinalitySentence(reused.DeterministicAnswer, sentence)
+				// THE CLAIM AND THE SENTENCE ARE RE-DERIVED HERE, NOT CARRIED.
+				//
+				// Backfilling the row alone would leave the other two surfaces
+				// missing on this path: a stored document that owes a count would
+				// be reused with its row restored and no claim and no sentence, so
+				// the same question answered from cache would serve strictly less
+				// than it does fresh -- with nothing telling the reader which.
+				//
+				// RE-DERIVED rather than carried because a stored document may
+				// predate the feature entirely, so there is nothing to carry; and
+				// because deriving from the row that was just backfilled is what
+				// keeps all three surfaces stating one number on this path, the
+				// same way one `cardinality` value does on the fresh path.
+				//
+				// Under the SAME precondition the fresh path uses, read from the
+				// rows as they now stand -- so a reused answer that owes no count
+				// gains no claim and no sentence, exactly as a fresh one would not.
+				if cardinalityOwed(reused.Completeness.Outcomes, reusedCardinality) {
+					if claim, ok := cardinalityClaim(principal, reusedCardinality); ok {
+						if !resultCarriesCardinalityClaim(reused) && cardinalityClaimAdmitted(len(reused.ClaimedFacts)) {
+							reused.ClaimedFacts = append(reused.ClaimedFacts, claim)
+						}
+					}
+					if sentence := cardinalityAnswerSentence(reusedCardinality); sentence != "" && !strings.Contains(reused.DeterministicAnswer, sentence) {
+						reused.DeterministicAnswer = appendCardinalitySentence(reused.DeterministicAnswer, sentence)
+					}
 				}
 			}
 			var rankingAccounting []RetainedRankingAccountingEvent

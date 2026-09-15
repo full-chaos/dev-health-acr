@@ -275,6 +275,7 @@
         "presence": "required",
         "closed_vocabulary": [
           "persisted",
+          "payload_rejected",
           "replay_conflict",
           "superseded",
           "save_failed",
@@ -1299,7 +1300,9 @@
         "closed_vocabulary": [
           "refused",
           "context_canceled",
-          "deadline_too_short"
+          "deadline_too_short",
+          "owner_closed",
+          "owner_lease_conflict"
         ]
       },
       {
@@ -1437,6 +1440,152 @@
         "type": "string",
         "presence": "conditional",
         "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.work_item_reuse",
+    "msg": "context fabric work item reuse",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "at most one tuple candidate per request; one decision records the first declined guard or the hit, and the current requested team scope",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "decision",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "reading_unavailable",
+          "payload_rejected",
+          "census_unavailable",
+          "digest_changed",
+          "anchor_unavailable",
+          "membership_unavailable",
+          "membership_changed",
+          "coverage_invalid",
+          "hit"
+        ]
+      },
+      {
+        "key": "semantic_read",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "census_read",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "requested_team_ids",
+        "type": "string_slice",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.work_item_stored_serving",
+    "msg": "context fabric work item stored serving",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "one classified stored tuple per request; coverage counts contain no stored text",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "surface",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "reuse",
+          "result_by_id"
+        ]
+      },
+      {
+        "key": "basis",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "digest_matched",
+          "digest_changed",
+          "authorization_unverifiable",
+          "universal_grant",
+          "coverage_invalid"
+        ]
+      },
+      {
+        "key": "semantic_read",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "available",
+          "absent",
+          "malformed",
+          "unsupported_version",
+          "oversized"
+        ]
+      },
+      {
+        "key": "census_read",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "available",
+          "absent",
+          "malformed",
+          "unsupported_version"
+        ]
+      },
+      {
+        "key": "coverage_details_before",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "coverage_reasons_before",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "coverage_details_after",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "coverage_reasons_after",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "coverage_bound",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when request context carries request ID"
       }
     ]
   },

@@ -185,7 +185,7 @@ func TestFindReusable_HappyPathRoundTrip(t *testing.T) {
 	found, ok, _, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.True(t, ok, "expected a reusable candidate")
-	require.Equal(t, result.ResultID, found.ResultID)
+	require.Equal(t, result.ResultID, found.Result.ResultID)
 }
 
 // TestFindReusable_CohortMintedClaimedFactsSurviveAReuseHit is CHAOS-4398
@@ -217,7 +217,7 @@ func TestFindReusable_CohortMintedClaimedFactsSurviveAReuseHit(t *testing.T) {
 	found, ok, _, err := store.FindReusable(ctx, principal, reuseKeyFor(result))
 	require.NoError(t, err)
 	require.True(t, ok, "expected a reusable candidate")
-	require.Equal(t, result.ClaimedFacts, found.ClaimedFacts, "a reuse hit must serve the SAME cohort-minted claims the stored result carried -- a driver's SourceClaimedFactIDs must still resolve")
+	require.Equal(t, result.ClaimedFacts, found.Result.ClaimedFacts, "a reuse hit must serve the SAME cohort-minted claims the stored result carried -- a driver's SourceClaimedFactIDs must still resolve")
 }
 
 // TestFindReusable_RejectsAnExistingRowWhosePayloadCarriesPriorSubjectReceiptDispositions
@@ -313,7 +313,7 @@ func TestF5_FindReusableClassifiesGraphEpochMismatchDistinctlyFromNoCandidate(t 
 	found, ok, _, err := store.FindReusable(ctx, principal, sameEpochKey)
 	require.NoError(t, err)
 	require.True(t, ok, "expected a hit when the lookup's graph epoch matches the saved row's")
-	require.Equal(t, result.ResultID, found.ResultID)
+	require.Equal(t, result.ResultID, found.Result.ResultID)
 
 	// A lookup at a DIFFERENT graph_epoch (4) -- every other dimension
 	// identical -- misses, and the miss classifies as stale_graph_epoch
@@ -560,7 +560,7 @@ func TestChaos3786_FindReusableMatchesAnyIdentityInTheCurrentChain(t *testing.T)
 	found, ok, _, err := store.FindReusable(ctx, principal, key)
 	require.NoError(t, err)
 	require.True(t, ok, "expected the fallback-produced result to be reusable while the fallback is still in the current chain")
-	require.Equal(t, result.ResultID, found.ResultID)
+	require.Equal(t, result.ResultID, found.Result.ResultID)
 }
 
 // TestChaos3786_FindReusableMissesWhenChainNoLongerNamesTheStoredIdentity is

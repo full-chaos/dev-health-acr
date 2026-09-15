@@ -2352,14 +2352,14 @@ diagram in the same PR.
 
 ---
 
-## 12 — Dormant work-item membership S1 and admission gate
+## 12 — Work-item membership S1 and admission gate
 
 ```mermaid
 flowchart TD
   INPUT["resolved project anchor<br/>current authenticated principal<br/>raw repository selector<br/>positive plan/request caps<br/>context deadline"] --> PORT["WorkItemMembershipPort.BeginWorkItemMembership<br/>internal/contextfabric/work_item_membership.go"]
   PORT --> ADAPTER["devhealthfacts.WorkItemMembershipReader<br/>validate project identity<br/>derive scope from principal + raw selector<br/>5751 helper is the only selector translation"]
   ADAPTER --> GATE["shared default process gate<br/>WorkItemMembershipGate.Acquire<br/>32 in-flight permits + 32 queue slots"]
-  GATE -->|"permit or queued admission"| LEASE["lease held for S1 and the future response"]
+  GATE -->|"permit or queued admission"| LEASE["register lease with response owner<br/>before S1 or telemetry"]
   GATE -->|"queue full / cancelled"| GREFUSE["refuse before query<br/>gate Info record"]
   LEASE --> SETTINGS{"deadline has at least one whole second?"}
   SETTINGS -->|"no"| DREFUSE["refuse before S1<br/>deadline_too_short Info record"]
@@ -2385,8 +2385,8 @@ flowchart TD
   XUNMEASURED --> RESULT
   DENIAL --> RESULT
   RESULT --> EVENTS["configured slog Info path<br/>eventspec declaration + certifier<br/>finite fields; missing remains distinct from zero"]
-  RESULT --> RESPONSE["future response owner calls<br/>lease.Release after terminal response"]
-  RESPONSE -. "no edge in this dormant tip" .-> RUNTIME["Engine / fact registry / runtime / old callers<br/>deliberately unwired<br/>S2 and S3 are not executed"]
+  RESULT --> RESPONSE["response owner holds through HTTP writes<br/>or direct Engine return"]
+  RESPONSE --> RUNTIME["hosted Engine tuple reuse is wired<br/>fresh tuple dispatch remains inactive<br/>reuse runs no S2 or S3"]
 
   classDef fixed fill:#14532d,stroke:#22c55e,color:#ffffff
   classDef refuse fill:#7f1d1d,stroke:#ef4444,color:#ffffff
@@ -2396,7 +2396,7 @@ flowchart TD
   class RUNTIME gap
 ```
 
-**Caption.** The new reader is a dormant boundary after semantic resolution.
+**Caption.** The reader is used by the stored tuple reuse branch.
 It accepts a project anchor, the live authenticated principal, and the raw
 repository selector. It derives the library authorization scope inside S1,
 then uses the same rendered authorization expression for the mask and the
@@ -2417,15 +2417,15 @@ do not claim a population. A resolved, identity-free sentinel with no member
 rows is an exact measured zero; a missing, duplicate, malformed or unresolved
 sentinel is unmeasured. C+1 authorized rows establish a lower-bound floor;
 denied rows alone do not establish that floor. The response cap K can only
-narrow the fixed 200-member serving limit. The lease belongs to the future
-response owner and is not released when S1 returns. S1 and gate decisions
+narrow the fixed 200-member serving limit. The lease is registered with the
+response owner immediately after acquisition and is not released when S1 returns. S1 and gate decisions
 reach the configured Info collection path and eventspec certifier with finite
 fields only.
 
-**Dormancy boundary.** This tip adds no edge from the port to `Engine`, the
-fact registry, runtime composition, or existing work-item callers. It does
-not run S2 or S3. A later activation change owns that wiring and must keep
-the same authorization renderer, response lease, and outcome distinctions.
+**Activation boundary.** Hosted composition constructs the membership reader
+for tuple reuse. Fresh tuple admission and dispatch remain inactive. Reuse
+reads only S1, and serves stored member status/title facts. A later fresh-path
+change must preserve the same authorization renderer and response owner.
 
 **Anchors.** The request/result/port and telemetry types are in
 `internal/contextfabric/work_item_membership.go:15-145,147-287`; admission
@@ -2440,10 +2440,88 @@ and `:1749`, with their construction generated in
 `internal/contextfabric/eventspec/zz_generated.go`.
 
 **Update rule.** Any later activation, SQL-shape change, admission-bound
-change, lease-owner change, or event-field change updates this dormant-boundary
+change, lease-owner change, or event-field change updates this boundary
 diagram in the same PR.
 
 ---
+
+
+## 13 — Persisted work-item tuple reuse and response ownership
+
+```mermaid
+flowchart TD
+  SAVE["Engine.saveResult<br/>preserve bounded pre-membership terminals<br/>otherwise require retained-member evidence"] --> ROW[("immutable Postgres row<br/>payload + semantic_state.work_item_census<br/>state, value, retained count<br/>requested repository scope + grant digest")]
+  ROW --> FIND["FindReusable returns payload + decoded reading<br/>same semantic codec as Get"]
+  FIND --> CLAR["stored clarification determination first"]
+  CLAR --> CLASS{"available project / children_of_scope /<br/>work_item / scoped_cohort_status reading?"}
+  CLASS -->|"other result"| GENERIC["existing generic authorization recheck"]
+  CLASS -->|"tuple"| CHECK["payload closure + valid census<br/>current-grant/requested-repository digest equality"]
+  CHECK --> ANCHOR["CandidateVerifier → live AnchorMember<br/>CURRENT principal, repository/project/team scope<br/>CURRENT pinned binding"]
+  ANCHOR --> S1["bounded BeginWorkItemMembership<br/>register permit immediately<br/>then one S1 statement"]
+  S1 --> EQUAL{"same measured state, value<br/>and retained identity set?"}
+  EQUAL -->|"yes"| HIT["serve stored census and facts<br/>no population-0 backfill<br/>derive D47 served from final cohort"]
+  CLASS -->|"payload tuple, reading unavailable"| MISS
+  CHECK -->|"declined"| MISS
+  ANCHOR -->|"declined"| MISS
+  S1 -->|"refused / error / unmeasured"| MISS
+  EQUAL -->|"no"| MISS["ordinary miss<br/>release and remove discarded lease<br/>BEFORE fresh continuation"]
+  HIT --> CAPACITY{"transformed coverage fits v1<br/>and detail/reason pairing?"}
+  CAPACITY -->|"valid"| WRITE["marshal → audit → response write<br/>including error and recovered-panic writes"]
+  CAPACITY -->|"invalid"| ERROR["safe 500 / internal_error<br/>no fresh investigation; no dropped failures"]
+  ERROR --> WRITE
+  WRITE --> COMPLETE["creator completes owner<br/>on synchronous handler exit or unwind"]
+  ROW --> GET["Get by id; MCP forwards API result<br/>NO S1 and NO lease"]
+  GET --> DIGEST{"valid census and equal digest<br/>over current grants + persisted scope?"}
+  DIGEST -->|"equal"| STORED["derive persisted census D47 on detached coverage"]
+  STORED --> CAPACITY
+  DIGEST -->|"unequal"| NOTFOUND["audited not-found"]
+  GET -->|"census unavailable, or payload-classified<br/>tuple without available reading"| AUTH{"explicit current * grant<br/>after organization-scoped Get?"}
+  AUTH -->|"no: authorization unverifiable"| NOTFOUND
+  AUTH -->|"yes"| LIMITED["serve stored cardinality<br/>existing bounded limitation; no D47<br/>no semantic_reading on non-clarification"]
+  LIMITED --> CAPACITY
+```
+
+The response owner is request-local and holds at most one lease. HTTP order
+is request ID → access log → timeout → response owner → recovery → route.
+Only the creator completes it. Engine borrows a caller owner, or creates a
+fallback whose completion boundary is the method return. A raw Begin caller
+without an owner receives the lease on success; abnormal exits before handoff
+release it. Cancellation alone does not release an active synchronous write.
+MCP's later projection does not acquire or extend a server permit.
+
+Current repository authorization precedes census fallback. An available census
+keeps its digest comparison. Without available proof, only a current explicit
+organization-wide repository grant permits the classified tuple to use the
+stored-copy fallback. Restricted grants, including unchanged former grants,
+return audited not-found when metadata loss prevents proof. Other result
+families retain their existing behavior.
+
+Mandatory coverage pairs never yield. After detached tuple coverage composition,
+shared coverage validation runs before completeness, projection, or success.
+An overflow is a safe non-retryable internal error, including on an already
+accepted reuse candidate; it does not cause a fresh investigation. Configured
+Info telemetry records the closed decision and coverage counts without content.
+
+The census uses the shared semantic codec. Valid census values use canonical
+encoding so an identical save remains idempotent after PostgreSQL storage.
+An unavailable nested census does not erase an available semantic reading. The digest covers sorted raw grants
+and requested repository selectors; project/team scope reaches live anchor
+authorization. Neither reuse nor by-id rewrites the stored row. Tuple reuse
+never calls ResolveSubjects or DiscoverContext. Fresh tuple dispatch remains
+outside this change.
+
+**Construction anchors:** `internal/runtime/hosted/open.go` constructs
+`NewWorkItemMembershipReader` when the ClickHouse query client is present and
+passes `EngineDependencies.WorkItemMembership`. With no ClickHouse client,
+graph-only composition remains available and tuple reuse takes an ordinary miss;
+`internal/contextfabric/work_item_reuse.go` owns the tuple guards and release
+on miss; `semantic_state.go` and `work_item_census.go` own the shared codec;
+`semantic_state_persistence.go` owns save rejection; `pginvestigation/store.go`
+loads semantic state for reuse. `internal/api/context_fabric_result_routes.go`
+uses `ServeStoredWorkItemTuple`; `response_owner_middleware.go` encloses recovery.
+`work_item_response_owner.go` owns registration and completion, and
+`devhealthfacts/work_item_membership.go` registers before S1.
+
 
 ## Sources
 

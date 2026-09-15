@@ -147,6 +147,13 @@ type PersistedSemanticState struct {
 	// force when the declarations were produced.
 	RequirementDerivationVersion string `json:"requirement_derivation_version"`
 
+	// WorkItemCensus is the persisted bounded census for the project-to-work-
+	// item tuple. It is additive: snapshots written before the tuple exists do
+	// not carry one. Its validity is deliberately read separately from the
+	// semantic reading, because an unavailable census must not erase a valid
+	// stored frame from by-id serving.
+	WorkItemCensus *WorkItemTupleCensus `json:"work_item_census,omitempty"`
+
 	// ConfirmedNeeds is the per-need confirmation ledger (CHAOS-5639): one
 	// entry per StructureNeedKind this conversation has confirmed by receipt,
 	// carried forward so a later turn under the SAME request identity is not
@@ -474,6 +481,22 @@ func EncodeSemanticState(state *PersistedSemanticState) ([]byte, error) {
 	if err := validateSemanticState(*state); err != nil {
 		return nil, err
 	}
+	if state.WorkItemCensus != nil {
+		if status := ValidateWorkItemTupleCensus(state.WorkItemCensus); status != WorkItemTupleCensusReadAvailable {
+			return nil, fmt.Errorf("%w: work-item census is %s", ErrSemanticStateRejected, status)
+		}
+		if !workItemTupleSemanticState(state) {
+			return nil, fmt.Errorf("%w: work-item census is only permitted on a project-to-work-item tuple", ErrSemanticStateRejected)
+		}
+	}
+	return encodeSemanticStateDocument(state)
+}
+
+// encodeSemanticStateDocument validates the semantic reading and serializes
+// it. DecodeSemanticState uses it without requiring the optional census to be
+// available: a malformed or future census is a tuple-serving concern, not a
+// reason to erase the rest of a valid prior reading.
+func encodeSemanticStateDocument(state *PersistedSemanticState) ([]byte, error) {
 	encoded, err := json.Marshal(state)
 	if err != nil {
 		return nil, fmt.Errorf("%w: encode: %v", ErrSemanticStateRejected, err)
@@ -528,10 +551,17 @@ func DecodeSemanticState(raw []byte) (*PersistedSemanticState, SemanticStateRead
 	if decoder.More() {
 		return nil, SemanticStateReadMalformed
 	}
-	// Re-encoding validates AND measures the canonical size -- the size a
-	// store's own rendering happens to have (jsonb adds whitespace) is not
-	// the size this package bounds.
-	canonical, err := EncodeSemanticState(&state)
+	// Re-encoding validates the semantic reading and measures the canonical
+	// size. It deliberately does not require the optional census to be
+	// available: a stored malformed or future census must leave the semantic
+	// reading available to by-id serving.
+	if err := validateSemanticState(state); err != nil {
+		if errors.Is(err, errSemanticStateOversized) {
+			return nil, SemanticStateReadOversized
+		}
+		return nil, SemanticStateReadMalformed
+	}
+	canonical, err := encodeSemanticStateDocument(&state)
 	if err != nil {
 		if errors.Is(err, errSemanticStateOversized) {
 			return nil, SemanticStateReadOversized
@@ -1042,6 +1072,11 @@ type SemanticStateInput struct {
 	// chaos5639_confirmed_need.go); never re-derived here. nil is treated as
 	// empty.
 	ConfirmedNeeds []ConfirmedNeedEntry
+	// WorkItemCensus is the tuple's bounded measurement, captured from the
+	// same S1 result that produced the tuple payload. It is optional for all
+	// other readings. BuildSemanticState copies it, including the requested
+	// repository scope, so a caller cannot mutate a stored snapshot later.
+	WorkItemCensus *WorkItemTupleCensus
 }
 
 // BuildSemanticState assembles a snapshot from the accepted values. It does
@@ -1061,6 +1096,7 @@ func BuildSemanticState(in SemanticStateInput) *PersistedSemanticState {
 		RequirementDerivationVersion: RequirementDerivationVersion,
 		RequestIdentity:              in.RequestIdentity,
 		ConfirmedNeeds:               in.ConfirmedNeeds,
+		WorkItemCensus:               cloneWorkItemTupleCensus(in.WorkItemCensus),
 		Validation: SemanticStateValidation{
 			EmittedShape:       in.EmittedShape,
 			GateOutcome:        in.Outcome.Gate.Outcome,
@@ -1078,6 +1114,21 @@ func BuildSemanticState(in SemanticStateInput) *PersistedSemanticState {
 		state.Requirements = semanticRequirements(in.Requirements, &frame)
 	}
 	return state
+}
+
+func cloneWorkItemTupleCensus(census *WorkItemTupleCensus) *WorkItemTupleCensus {
+	if census == nil {
+		return nil
+	}
+	return &WorkItemTupleCensus{
+		Version:                  census.Version,
+		State:                    census.State,
+		Value:                    census.Value,
+		Retained:                 census.Retained,
+		RequestedRepositoryScope: append([]string{}, census.RequestedRepositoryScope...),
+		AuthorizationDigest:      census.AuthorizationDigest,
+		raw:                      append(json.RawMessage(nil), census.raw...),
+	}
 }
 
 // cloneFrame deep-copies a frame through its own encoding.

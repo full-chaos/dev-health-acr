@@ -154,6 +154,7 @@ func TestSemanticState_EverySnapshotKeyIsComparedOrExemptByName(t *testing.T) {
 		"narrowing_basis":                "the fresh side proposes none: it is derived inside PlanAnswer after this comparison",
 		"frame":                          "container: each frame key is decided below",
 		"validation":                     "container: each validation key is decided below",
+		"work_item_census":               "tuple membership metadata is bound and rechecked by work-item tuple reuse and by-id serving; it is not a component of semantic continuation reading, so the fresh side has no census to compare here.",
 		"confirmed_needs":                "CHAOS-5639: the per-need confirmation ledger, not a component of the reading itself -- it is read and extended by its own identity-keyed admission (chaos5639_confirmed_need.go), independent of this comparison, and the fresh side has no ledger of its own to disagree with.",
 	}
 	keys := func(prefix string, typ reflect.Type) []string {
@@ -378,6 +379,7 @@ func TestSemanticState_ThePersistenceDecisionClassifiesEveryStoreOutcome(t *test
 		want SemanticStatePersistenceDecision
 	}{
 		{nil, SemanticStatePersisted},
+		{fmt.Errorf("wrapped: %w", errWorkItemTuplePayloadRejected), SemanticStatePayloadRejectedDecision},
 		{fmt.Errorf("wrapped: %w", ErrSemanticStateReplayConflict), SemanticStateReplayConflictDecision},
 		{fmt.Errorf("wrapped: %w", ErrSemanticStateRejected), SemanticStateSaveFailedDecision},
 		{&ErrStructureOfferSuperseded{Members: []StructureNeedKind{contractsv1.ContextFabricStructureNeedWindow}}, SemanticStateSupersededDecision},
@@ -388,8 +390,8 @@ func TestSemanticState_ThePersistenceDecisionClassifiesEveryStoreOutcome(t *test
 		}
 	}
 	// Every member has a producer in the table above.
-	if len(semanticStatePersistenceDecisions()) != 4 {
-		t.Errorf("the decision vocabulary has %d members; the table drives 4", len(semanticStatePersistenceDecisions()))
+	if len(semanticStatePersistenceDecisions()) != 5 {
+		t.Errorf("the decision vocabulary has %d members; the table drives 5", len(semanticStatePersistenceDecisions()))
 	}
 }
 

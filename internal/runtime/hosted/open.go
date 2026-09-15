@@ -790,7 +790,20 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	// engineTelemetry was resolved earlier (before either model runtime was
 	// built -- see that declaration's own doc comment) so this and the
 	// model runtimes above share one instance.
+	// Graph-only composition remains available when ClickHouse is absent.
+	// A tuple cannot reuse without this port; the engine then takes a miss.
+	var workItemMembership contextfabric.WorkItemMembershipPort
+	if clickhouse.queryClient != nil {
+		reader, err := devhealthfacts.NewWorkItemMembershipReader(clickhouse.queryClient, devhealthfacts.WorkItemMembershipReaderOptions{
+			Telemetry: contextfabric.NewSlogWorkItemMembershipTelemetry(request.options.Logger),
+		})
+		if err != nil {
+			return nil, nil, nil, nil, nil, nil, fmt.Errorf("initialize work item membership reader: %w", err)
+		}
+		workItemMembership = reader
+	}
 	engine, err := contextfabric.NewEngine(contextfabric.EngineDependencies{
+		WorkItemMembership: workItemMembership,
 		// FrameTelemetry is wired here and NOT discovered by a type
 		// assertion, for the reason FamilyTelemetry beside it is: an
 		// optional telemetry interface that nothing implements in

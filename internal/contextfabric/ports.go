@@ -1076,7 +1076,10 @@ type ReuseVersionAuthorities struct {
 // the classification path -- metadata columns only (design brief §5's
 // SQL-predicate pin).
 type AnswerReuseGate interface {
-	FindReusable(context.Context, storage.Principal, ReuseKey) (InvestigationResult, bool, ReuseMissReason, error)
+	// FindReusable returns the same persistence carrier as Get. Reuse needs
+	// the stored semantic snapshot for tuple-specific rechecks; returning the
+	// carrier keeps that server-only metadata out of the public payload.
+	FindReusable(context.Context, storage.Principal, ReuseKey) (StoredInvestigationResult, bool, ReuseMissReason, error)
 }
 
 // ReuseInvalidator is notified when an organization's projected graph
