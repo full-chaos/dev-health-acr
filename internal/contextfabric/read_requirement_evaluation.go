@@ -638,7 +638,9 @@ func factBearingKinds(evidence readEvidence) []FactKind {
 	if len(evidence.TruncatedKinds) == 0 {
 		return evidence.ServedKinds
 	}
-	kinds := make([]FactKind, 0, len(evidence.ServedKinds)+len(evidence.TruncatedKinds))
+	// Capacity covers ServedKinds; append grows the backing array for
+	// TruncatedKinds on its own.
+	kinds := make([]FactKind, 0, len(evidence.ServedKinds))
 	kinds = append(kinds, evidence.ServedKinds...)
 	kinds = append(kinds, evidence.TruncatedKinds...)
 	return kinds
