@@ -20,7 +20,7 @@ import (
 // executes the released reader's production work-item statements with each
 // independent server-side budget lowered to a tiny, controlled value. The
 // existing CHAOS-5751 integration test checks that the shipped settings text
-// contains the fixed 10,000-row and 512 MiB ceilings and behaviorally checks
+// contains the fixed 8192-row and 64 MiB ceilings and behaviorally checks
 // max_result_rows. This test supplies deliberately lower values only to make
 // the physical-row and memory failure paths observable on a two-row fixture;
 // it does not claim that the shipped ceilings themselves can be exceeded by
@@ -81,6 +81,7 @@ func TestChaos5751WorkItemReaderPhysicalAndMemoryBudgetLimitsAgainstRealClickHou
 			rows, err := read.call(readers.Settings{
 				MaxRowsToRead:  uint64(len(ids) + 1),
 				MaxMemoryUsage: 512 << 20,
+				MaxThreads:     1,
 				MaxResultRows:  uint64(len(ids) + 1),
 			})
 			if err != nil {
@@ -95,6 +96,7 @@ func TestChaos5751WorkItemReaderPhysicalAndMemoryBudgetLimitsAgainstRealClickHou
 			rows, err := read.call(readers.Settings{
 				MaxRowsToRead:  1,
 				MaxMemoryUsage: 512 << 20,
+				MaxThreads:     1,
 				MaxResultRows:  100,
 			})
 			if err == nil {
@@ -120,8 +122,9 @@ func TestChaos5751WorkItemReaderPhysicalAndMemoryBudgetLimitsAgainstRealClickHou
 				// production-shaped reader carries the memory setting to
 				// ClickHouse and propagates native enforcement without large
 				// fixture data. It does not claim exhaustion of the shipped
-				// 512 MiB ceiling.
+				// 64 MiB ceiling.
 				MaxMemoryUsage: 1,
+				MaxThreads:     1,
 				MaxResultRows:  100,
 			})
 			if err == nil {

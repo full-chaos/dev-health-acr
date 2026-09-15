@@ -141,6 +141,15 @@ func selectorSetMatchesRepository(set readers.RepositorySelectorSet, slug string
 
 func TestWorkItemReaderSettingsUseThrowingCeilingsAndRespectDeadline(t *testing.T) {
 	t.Parallel()
+	if workItemReaderMaxRowsToRead != 8192 {
+		t.Fatalf("workItemReaderMaxRowsToRead = %d, want 8192", workItemReaderMaxRowsToRead)
+	}
+	if workItemReaderMaxMemoryUsage != 64<<20 {
+		t.Fatalf("workItemReaderMaxMemoryUsage = %d, want 64 MiB", workItemReaderMaxMemoryUsage)
+	}
+	if workItemReaderMaxThreads != 1 {
+		t.Fatalf("workItemReaderMaxThreads = %d, want one query thread", workItemReaderMaxThreads)
+	}
 	background, err := workItemReaderSettings(context.Background())
 	if err != nil {
 		t.Fatalf("background settings error = %v", err)
@@ -148,8 +157,8 @@ func TestWorkItemReaderSettingsUseThrowingCeilingsAndRespectDeadline(t *testing.
 	if background.MaxExecutionTimeSeconds != uint64(defaultTimeout/time.Second) {
 		t.Fatalf("background MaxExecutionTimeSeconds = %d, want %d", background.MaxExecutionTimeSeconds, uint64(defaultTimeout/time.Second))
 	}
-	if background.MaxRowsToRead != workItemReaderMaxRowsToRead || background.MaxMemoryUsage != workItemReaderMaxMemoryUsage || background.MaxResultRows != uint64(maxFactRowsProbe) {
-		t.Fatalf("background settings = %#v, want fixed row/memory/result ceilings", background)
+	if background.MaxRowsToRead != workItemReaderMaxRowsToRead || background.MaxMemoryUsage != workItemReaderMaxMemoryUsage || background.MaxThreads != workItemReaderMaxThreads || background.MaxResultRows != uint64(maxFactRowsProbe) {
+		t.Fatalf("background settings = %#v, want fixed row/memory/thread/result ceilings", background)
 	}
 
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(1500*time.Millisecond))
@@ -182,7 +191,8 @@ func TestWorkItemReaderSettingsUseThrowingCeilingsAndRespectDeadline(t *testing.
 	rendered := bounded.Render()
 	if !strings.Contains(rendered, "timeout_overflow_mode = 'throw'") ||
 		!strings.Contains(rendered, "read_overflow_mode = 'throw'") ||
-		!strings.Contains(rendered, "result_overflow_mode = 'throw'") {
+		!strings.Contains(rendered, "result_overflow_mode = 'throw'") ||
+		strings.Count(rendered, "max_threads = 1") != 1 {
 		t.Fatalf("bounded settings = %q, want every configured overflow mode to throw", rendered)
 	}
 }

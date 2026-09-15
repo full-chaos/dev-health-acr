@@ -119,25 +119,18 @@ func workItemRepositorySelector(raw string) (workItemSelectorKind, string, bool)
 }
 
 // workItemReaderSettings provides the same fixed, caller-independent
-// statement ceilings to status, title and actual-completion reads. The
+// statement resource class to status, title and actual-completion reads. The
 // result ceiling matches the existing R+1 probe. max_rows_to_read is a
 // separate physical-scan budget: ClickHouse counts source rows read before
 // the WHERE/LIMIT and FINAL steps, so it cannot be derived from the 201-row
-// result probe. The 10,000-row ceiling allows the keyed work-item lookup to
-// scan a bounded set of MergeTree parts while still failing loudly for a
-// pathological or unselective read. 512 MiB leaves room for the same
-// work_items↔repos FINAL join and selection buffers; both values remain
-// finite per statement. Every configured overflow mode is rendered as throw
-// by the readers package; a caller context remains the final deadline
-// authority.
+// result probe. The row, memory and thread values are finite private policy
+// bounds shared by all three readers; they do not claim that every input fits
+// within this class. Every configured overflow mode is rendered as throw by
+// the readers package; a caller context remains the final deadline authority.
 const (
-	workItemReaderMaxRowsToRead = uint64(10000)
-	// ClickHouse's MergeTree reader accounts its per-query selection buffers
-	// against this setting. A simple one-row read measured at ~99 MiB on the
-	// hosted 26.7 image, so 64 MiB rejected valid reads before the predicate
-	// could be evaluated. 512 MiB remains a finite per-statement ceiling while
-	// leaving room for the bounded physical scan above.
-	workItemReaderMaxMemoryUsage = uint64(512 << 20)
+	workItemReaderMaxRowsToRead  = uint64(8192)
+	workItemReaderMaxMemoryUsage = uint64(64 << 20)
+	workItemReaderMaxThreads     = uint64(1)
 )
 
 var errWorkItemReaderDeadlineTooShort = errors.New("work item reader deadline is too short for a bounded query")
@@ -149,6 +142,7 @@ func workItemReaderSettings(ctx context.Context) (readers.Settings, error) {
 	settings := readers.Settings{
 		MaxRowsToRead:  workItemReaderMaxRowsToRead,
 		MaxMemoryUsage: workItemReaderMaxMemoryUsage,
+		MaxThreads:     workItemReaderMaxThreads,
 		MaxResultRows:  uint64(maxFactRowsProbe),
 	}
 	if deadline, ok := ctx.Deadline(); ok {

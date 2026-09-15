@@ -98,7 +98,9 @@ func TestChaos5751WorkItemProvidersUseCurrentRepositoryMetadata(t *testing.T) {
 			for _, fragment := range []string{
 				"LEFT JOIN repos AS r FINAL ON r.id = w.repo_id AND r.org_id = w.org_id",
 				"authorized_repo_slugs",
-				"max_memory_usage = 536870912",
+				"max_rows_to_read = 8192",
+				"max_memory_usage = 67108864",
+				"max_threads = 1",
 				"read_overflow_mode = 'throw'",
 				"result_overflow_mode = 'throw'",
 			} {
@@ -377,9 +379,10 @@ func TestChaos5751WorkItemReadersReadK200WithIndependentPhysicalCeilings(t *test
 			}
 			statement := client.statements[0]
 			for _, fragment := range []string{
-				"max_rows_to_read = 10000",
+				"max_rows_to_read = 8192",
 				"read_overflow_mode = 'throw'",
-				"max_memory_usage = 536870912",
+				"max_memory_usage = 67108864",
+				"max_threads = 1",
 				"max_result_rows = 201",
 				"result_overflow_mode = 'throw'",
 			} {
