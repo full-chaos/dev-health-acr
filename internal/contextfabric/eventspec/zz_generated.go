@@ -23,6 +23,8 @@ var ByID = map[string]Event{
 	"contextfabric.retained_ranking_accounting":    RetainedRankingAccounting,
 	"contextfabric.semantic_state_persistence":     SemanticStatePersistence,
 	"contextfabric.window_continuation_decision":   WindowContinuationDecision,
+	"contextfabric.work_item_membership_gate":      WorkItemMembershipGate,
+	"contextfabric.work_item_membership_s1":        WorkItemMembershipS1,
 	"graphrank.alias_lookup":                       AliasLookup,
 	"graphrank.anchor_kind_withheld":               AnchorKindWithheld,
 	"graphrank.anchor_kind_withheld_summary":       AnchorKindWithheldSummary,
@@ -448,6 +450,154 @@ func (f WindowContinuationDecisionFields) SlogArgs() []any {
 		"carried_axis", contextfabric.SanitizeLogAttr(f.CarriedAxis),
 		"executed_axis", contextfabric.SanitizeLogAttr(f.ExecutedAxis),
 		"interpreted_axis_outcome", contextfabric.SanitizeLogAttr(f.InterpretedAxisOutcome),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// WorkItemMembershipGateFields is contextfabric.work_item_membership_gate's generated typed construction interface
+// (CHAOS-5516): one Go field per Field WorkItemMembershipGate.Fields declares in spec.go.
+type WorkItemMembershipGateFields struct {
+	OrgID         string
+	Outcome       string
+	InFlight      int
+	Queued        int
+	MaxInFlight   int
+	QueueCapacity int
+	RequestID     string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every WorkItemMembershipGateFields uniformly, set ONLY by NewWorkItemMembershipGateFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewWorkItemMembershipGateFields is the generated constructor for WorkItemMembershipGateFields -- every
+// field WorkItemMembershipGate.Fields declares is a required parameter.
+func NewWorkItemMembershipGateFields(orgID string, outcome string, inFlight int, queued int, maxInFlight int, queueCapacity int, requestID string) WorkItemMembershipGateFields {
+	return WorkItemMembershipGateFields{
+		OrgID:         orgID,
+		Outcome:       outcome,
+		InFlight:      inFlight,
+		Queued:        queued,
+		MaxInFlight:   maxInFlight,
+		QueueCapacity: queueCapacity,
+		RequestID:     requestID,
+		constructed:   true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewWorkItemMembershipGateFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f WorkItemMembershipGateFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns WorkItemMembershipGate's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f WorkItemMembershipGateFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"in_flight", f.InFlight,
+		"queued", f.Queued,
+		"max_in_flight", f.MaxInFlight,
+		"queue_capacity", f.QueueCapacity,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// WorkItemMembershipS1Fields is contextfabric.work_item_membership_s1's generated typed construction interface
+// (CHAOS-5516): one Go field per Field WorkItemMembershipS1.Fields declares in spec.go.
+type WorkItemMembershipS1Fields struct {
+	OrgID                    string
+	State                    string
+	Reason                   string
+	PopulationMeasured       bool
+	PopulationComplete       bool
+	CappedPopulation         int
+	AuthorizedPopulation     int
+	DeniedPopulation         int
+	ServedMembers            int
+	CensusLimit              int
+	FutureBoundaryCount      int
+	TransitionAssertionCount int
+	MaxExecutionTimeSeconds  int
+	MaxRowsToRead            int
+	MaxMemoryUsage           int
+	MaxResultRows            int
+	RequestID                string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every WorkItemMembershipS1Fields uniformly, set ONLY by NewWorkItemMembershipS1Fields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewWorkItemMembershipS1Fields is the generated constructor for WorkItemMembershipS1Fields -- every
+// field WorkItemMembershipS1.Fields declares is a required parameter.
+func NewWorkItemMembershipS1Fields(orgID string, state string, reason string, populationMeasured bool, populationComplete bool, cappedPopulation int, authorizedPopulation int, deniedPopulation int, servedMembers int, censusLimit int, futureBoundaryCount int, transitionAssertionCount int, maxExecutionTimeSeconds int, maxRowsToRead int, maxMemoryUsage int, maxResultRows int, requestID string) WorkItemMembershipS1Fields {
+	return WorkItemMembershipS1Fields{
+		OrgID:                    orgID,
+		State:                    state,
+		Reason:                   reason,
+		PopulationMeasured:       populationMeasured,
+		PopulationComplete:       populationComplete,
+		CappedPopulation:         cappedPopulation,
+		AuthorizedPopulation:     authorizedPopulation,
+		DeniedPopulation:         deniedPopulation,
+		ServedMembers:            servedMembers,
+		CensusLimit:              censusLimit,
+		FutureBoundaryCount:      futureBoundaryCount,
+		TransitionAssertionCount: transitionAssertionCount,
+		MaxExecutionTimeSeconds:  maxExecutionTimeSeconds,
+		MaxRowsToRead:            maxRowsToRead,
+		MaxMemoryUsage:           maxMemoryUsage,
+		MaxResultRows:            maxResultRows,
+		RequestID:                requestID,
+		constructed:              true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewWorkItemMembershipS1Fields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f WorkItemMembershipS1Fields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns WorkItemMembershipS1's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f WorkItemMembershipS1Fields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"state", contextfabric.SanitizeLogAttr(f.State),
+		"reason", contextfabric.SanitizeLogAttr(f.Reason),
+		"population_measured", f.PopulationMeasured,
+		"population_complete", f.PopulationComplete,
+		"capped_population", f.CappedPopulation,
+		"authorized_population", f.AuthorizedPopulation,
+		"denied_population", f.DeniedPopulation,
+		"served_members", f.ServedMembers,
+		"census_limit", f.CensusLimit,
+		"future_boundary_count", f.FutureBoundaryCount,
+		"transition_assertion_count", f.TransitionAssertionCount,
+		"max_execution_time_seconds", f.MaxExecutionTimeSeconds,
+		"max_rows_to_read", f.MaxRowsToRead,
+		"max_memory_usage", f.MaxMemoryUsage,
+		"max_result_rows", f.MaxResultRows,
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

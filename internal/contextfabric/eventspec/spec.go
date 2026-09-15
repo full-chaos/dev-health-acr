@@ -1709,6 +1709,61 @@ var RequirementOutcomeTransition = Event{
 	},
 }
 
+// WorkItemMembershipS1 is the Info line emitted after the dormant PR2 reader
+// completes its one-statement S1 census. Counts are explicit even when zero;
+// an unmeasured result is identified by state/reason and never represented by
+// a fabricated zero population. The request id is conditional because the
+// existing request-id middleware is the producer's source for that field.
+var WorkItemMembershipS1 = Event{
+	ID:                 "contextfabric.work_item_membership_s1",
+	Msg:                "context fabric work item membership s1",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityExactlyOnePerRequest,
+	Attribution:        []string{"org_id"},
+	BoundedAggregation: "exactly one Info line per BeginWorkItemMembership S1 call; the call emits one line after the atomic statement completes or fails, with fixed census and response caps carried on the line.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "state", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"exact", "floor", "unmeasured"}},
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"", "s1_error", "excluded_provider", "zero_authorized_overflow", "identity_omitted"}},
+		{Key: "population_measured", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "population_complete", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "capped_population", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "authorized_population", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "denied_population", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "served_members", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "census_limit", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "future_boundary_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "transition_assertion_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "max_execution_time_seconds", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "max_rows_to_read", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "max_memory_usage", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "max_result_rows", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// WorkItemMembershipGate is the Info line emitted when the bounded per-process
+// gate refuses or cancels admission. A successful admission has no line; the
+// absence is not a zero measurement because gate occupancy is present on every
+// refusal/cancellation line.
+var WorkItemMembershipGate = Event{
+	ID:                 "contextfabric.work_item_membership_gate",
+	Msg:                "context fabric work item membership gate",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"org_id"},
+	BoundedAggregation: "at most one Info line per BeginWorkItemMembership admission attempt; the line exists only for refusal or cancellation and carries the bounded in-flight and queue occupancy.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"refused", "context_canceled", "deadline_too_short"}},
+		{Key: "in_flight", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "queued", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "max_in_flight", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "queue_capacity", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
 // RetainedRankingAccounting reports a serving decision made from recorded
 // member qualification. Counts describe the retained set, never the lost
 // original population, and RowAdded never means a new ranking executed.
@@ -1759,4 +1814,6 @@ var All = []Event{
 	SliceBSurvivorVerdict, SliceBSurvivorVerdictSummary,
 	SemanticStatePersistence,
 	RequirementOutcomeTransition,
+	WorkItemMembershipS1,
+	WorkItemMembershipGate,
 }
