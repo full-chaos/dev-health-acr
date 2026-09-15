@@ -1088,6 +1088,7 @@ func (t SlogEngineTelemetry) RecordFrameValidation(ctx context.Context, principa
 		"failure_detail", SanitizeLogAttr(string(event.FailureDetail)),
 		"proposed_kind", SanitizeLogAttr(string(event.ProposedKind)),
 		"proposed_goals", goalsLogValue(event.ProposedGoals),
+		"ordering_present", event.OrderingPresent,
 		"derived_obligation_count", event.DerivedObligationCount,
 		"widened_obligation_count", event.WidenedObligationCount,
 		"shape_diverged", event.ShapeDiverged,

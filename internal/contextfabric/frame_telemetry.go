@@ -139,6 +139,15 @@ type FrameValidationEvent struct {
 	// sentence rather than a mechanism.
 	ProposedGoals []InvestigationGoal
 
+	// OrderingPresent reports whether the proposal names an END of an
+	// ordering (Emphasis non-empty) -- the one signal that tells "rank"
+	// apart from "survey" within GoalRankOrSurvey (see
+	// workItemTupleOrderingRequested). Recorded on every line, not only a
+	// work-item one: Emphasis is a general frame axis and the admission
+	// decision it feeds is diagnosable only beside the goal set it
+	// qualifies.
+	OrderingPresent bool
+
 	// DerivedObligationCount / WidenedObligationCount are counts, not
 	// lists: the obligation set is derivable from the goal set and the
 	// other axes, so logging it whole would be redundant, while the
@@ -251,6 +260,7 @@ func FrameValidationEventFrom(proposed QuestionFrame, result FrameValidationResu
 		FailureDetail:   result.Failure.Detail,
 		ProposedKind:    vocabularyKindOnly(proposed.SubjectExpression.Kind),
 		ProposedGoals:   vocabularyGoalsOnly(proposed.Goals),
+		OrderingPresent: len(proposed.Emphasis) > 0,
 		FrameVersion:    QuestionFrameVersion,
 		// SET UNCONDITIONALLY, unlike every field in the valid-only block
 		// below. The refusing verdicts are precisely the ones a refused

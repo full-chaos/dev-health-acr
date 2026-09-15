@@ -24,6 +24,13 @@ const (
 // A present but unrecognized qualifier is not unqualified membership.
 // The family prerequisite is registry policy resolved by LookupQuestionFamily
 // at the initial, final routing, or post-carry composition point.
+//
+// GoalRankOrSurvey is admitted ONLY when the frame requests no ordering
+// (workItemTupleOrderingRequested). "Survey" and "rank" share one goal
+// token; Emphasis is what tells them apart within it (see that function).
+// RankCohort and the cohort ranking injection stay suppressed for this arm
+// regardless of admission -- the tuple serves a plain enumeration, never a
+// computed order, whichever goal admitted it.
 func prospectiveWorkItemTupleAdmission(frame *QuestionFrame, familyAllowsWorkItemTuple bool, timeContext TimeContext) workItemTupleAdmission {
 	if frame == nil || frame.SubjectExpression.Kind != SubjectExpressionChildrenOfScope || frame.SubjectExpression.Scoped == nil || frame.SubjectExpression.Scoped.MemberKind != SubjectWorkItem {
 		return workItemTupleNotApplicable
@@ -31,12 +38,34 @@ func prospectiveWorkItemTupleAdmission(frame *QuestionFrame, familyAllowsWorkIte
 	if !familyAllowsWorkItemTuple || len(frame.Goals) == 0 || frame.Temporal != TemporalIntentCurrent || timeContext.Axis != TemporalCurrent || MemberQualifierPresent(frame.SubjectExpression.Scoped.MemberQualifier) {
 		return workItemTupleRefused
 	}
+	orderingRequested := workItemTupleOrderingRequested(frame)
 	for _, goal := range frame.Goals {
-		if goal != GoalAssessState && goal != GoalCountOrAggregate {
+		switch goal {
+		case GoalAssessState, GoalCountOrAggregate:
+			continue
+		case GoalRankOrSurvey:
+			if orderingRequested {
+				return workItemTupleRefused
+			}
+			continue
+		default:
 			return workItemTupleRefused
 		}
 	}
 	return workItemTupleProspective
+}
+
+// workItemTupleOrderingRequested reports whether the frame asks for an
+// actual ordering over the population rather than a plain enumeration of
+// it. Emphasis (positive_outliers/negative_outliers) is the one frame
+// signal that names an END of an ordering -- I14 refuses Emphasis without
+// the ranking obligation for exactly that reason -- so its presence is
+// what distinguishes "rank" from "survey" within the single
+// GoalRankOrSurvey token. A frame with no Emphasis asks only to enumerate
+// the scoped cohort, the same answer contract GoalAssessState already
+// serves for this arm.
+func workItemTupleOrderingRequested(frame *QuestionFrame) bool {
+	return frame != nil && len(frame.Emphasis) > 0
 }
 
 // anchorAnswerable is stage B's prospective kind match, not a committed or
