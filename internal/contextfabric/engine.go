@@ -2741,6 +2741,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// Nothing here reconstructs a frame from the family, from Shape or
 			// from the interpretation's flat term fields.
 			Frame: familyOutcome.Frame,
+			// Bases is the SAME CommitBasisSet ResolveSubjects returned above
+			// (commitBases), never re-derived, so a graph reader's own
+			// anchor-bound recognition can agree with anchorBound's.
+			Bases: commitBases,
 		})
 		if err != nil {
 			return InvestigationResult{}, stageError(StageGraph, fmt.Errorf("discover graph context: %w", err))

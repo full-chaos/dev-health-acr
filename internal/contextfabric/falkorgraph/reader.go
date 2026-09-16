@@ -615,7 +615,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			// many teams own repository R" is asking about: a project-anchored,
 			// team-member frame with an unrelated committed repository must
 			// never route through ownership on that repository's account.
-			if subject.Kind == contextfabric.SubjectRepository && subject.Label != "" && frameAnchorBound(request.Frame, subject, request.Resolution) {
+			if subject.Kind == contextfabric.SubjectRepository && subject.Label != "" && frameAnchorBound(request.Frame, subject, request.Resolution, request.Bases) {
 				ownershipRoutedRepoSlug = subject.Label
 				break
 			}
@@ -646,6 +646,19 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		edgeFilters.Authz += filters.Authz
 		edgeFilters.TemporalWindow += filters.TemporalWindow
 		for _, n := range nodes {
+			// When this call is ownership-routed for the declared member
+			// kind, that kind's member pool is the ownership census below
+			// ONLY -- never blended with a hop-walked node of the same kind
+			// reached through some OTHER committed subject's proximity
+			// (a second committed repository, a comparison operand, a
+			// carried hint). The routed anchor's own walk is already
+			// skipped above; this excludes the identical graph-proximity
+			// signal from reappearing via any OTHER subject's walk. Edges
+			// and every OTHER node kind are unaffected -- this is a
+			// member-kind filter, not a blanket hop-walk suppression.
+			if ownershipRoutedRepoSlug != "" && mustSubject(n).Kind == declaredCohortKindForRouting {
+				continue
+			}
 			nk := graphrank.SubjectKey(mustSubject(n))
 			if !seenNode[nk] {
 				seenNode[nk] = true
@@ -1312,20 +1325,25 @@ func mustSubject(n graphrank.CandidateNode) contextfabric.SubjectRef {
 
 // frameAnchorBound reports whether subject is the frame's own scope anchor,
 // never merely a committed subject that happens to share its kind. Mirrors
-// contextfabric's own anchorBound (count_population_scope.go) term-matching
-// arm -- the one arm this package can evaluate without the reading's stated
-// anchor kind or the resolution's commit-basis set, neither of which reaches
-// GraphDiscoveryRequest. A subject committed on the caller's own canonical id
-// (anchorBound's other arm) is therefore not recognized here and falls back
-// to hopWalk -- narrower than the count decision's own anchor binding, never
-// wider: a real anchor this check misses costs the OLD (hop-based) behavior,
-// never a false ownership route.
+// BOTH arms of contextfabric's own anchorBound (count_population_scope.go):
+// a subject committed on the caller's own canonical id (bases), or one
+// resolution recorded as a match for one of the frame's anchor terms.
+// GraphDiscoveryRequest now carries the same CommitBasisSet the count
+// decision reads (Bases, ports.go), so the two sites can no longer drift --
+// a canonical-id-only commit that would certify anchor_committed on the
+// served line must route through ownership here too, never leave that
+// commit to a graph-proximity read the certified line does not describe.
 //
 // A frame that is not children_of_scope, or carries no scope, binds nothing:
-// "anchor" has no meaning outside that one expression shape.
-func frameAnchorBound(frame *contextfabric.QuestionFrame, subject contextfabric.SubjectRef, resolution contextfabric.SubjectResolution) bool {
+// "anchor" has no meaning outside that one expression shape -- this mirrors
+// DecideCountPopulationScope's own switch, where anchor_committed is
+// reachable only under that same expression kind.
+func frameAnchorBound(frame *contextfabric.QuestionFrame, subject contextfabric.SubjectRef, resolution contextfabric.SubjectResolution, bases contextfabric.CommitBasisSet) bool {
 	if frame == nil || frame.SubjectExpression.Kind != contextfabric.SubjectExpressionChildrenOfScope || frame.SubjectExpression.Scoped == nil {
 		return false
+	}
+	if bases.For(subject) == contextfabric.CommitBasisCallerCanonicalID {
+		return true
 	}
 	terms := make(map[string]struct{}, len(frame.SubjectExpression.Scoped.AnchorTerms))
 	for _, term := range frame.SubjectExpression.Scoped.AnchorTerms {

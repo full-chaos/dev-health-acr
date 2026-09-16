@@ -408,3 +408,181 @@ func TestDiscoverContextStillHopWalksForANonRepositoryAnchor(t *testing.T) {
 		t.Fatalf("CohortMemberSource = %q, want %q", result.CohortMemberSource, contextfabric.CohortMemberSourceHopWalk)
 	}
 }
+
+// TestDiscoverContextOwnershipRoutingExcludesATeamReachedOnlyThroughAnotherCommittedSubject
+// pins the invariant that once a call is ownership-routed for the team
+// member kind, that kind's member pool is the ownership census ONLY: a
+// SECOND committed subject (a comparison operand, a carried hint -- anything
+// other than the bound anchor itself) still hop-walks as before -- proven
+// here by the walk actually firing -- but a team it reaches through
+// incidental graph proximity must never re-enter the pool through that
+// OTHER subject's walk. Ownership routing already skips the anchor's own
+// walk entirely; this is the same exclusion applied to every other
+// committed subject's walk, not just the anchor's.
+func TestDiscoverContextOwnershipRoutingExcludesATeamReachedOnlyThroughAnotherCommittedSubject(t *testing.T) {
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:acr", Label: "full-chaos/dev-health-acr"}
+	stray := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:other", Label: "full-chaos/other-repo"}
+	strayWalked := false
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			return nil, nil
+		case strings.Contains(cypher, "$kinds"):
+			owner := fakeSubjectNodeRow("team", "team:CHAOS", "Fullchaos")
+			owner["n"].(*node).Properties[propAuthzRepos] = []string{"full-chaos/dev-health-acr"}
+			return []row{owner}, nil
+		case strings.Contains(cypher, "UNION"):
+			// edgesOfNode: only the STRAY subject's walk should ever reach
+			// here -- the anchor's own walk is skipped entirely.
+			if params["id"] != stray.CanonicalID {
+				return nil, nil
+			}
+			strayWalked = true
+			return []row{{
+				"r": &edge{Properties: map[string]interface{}{
+					propRelationType: "BLOCKS", propRelationshipID: "rel_stray_adjacent",
+					propEvidenceRefs: []string{"evidence_stray"},
+				}},
+				"srcKind": "repository", "srcId": stray.CanonicalID, "dstKind": "team", "dstId": "team:adjacent-via-stray",
+			}}, nil
+		default: // nodeByKindID: resolveEdge's endpoint fetches
+			switch params["kind"] {
+			case "repository":
+				if params["id"] == stray.CanonicalID {
+					return []row{fakeSubjectNodeRow("repository", stray.CanonicalID, stray.Label)}, nil
+				}
+			case "team":
+				if params["id"] == "team:adjacent-via-stray" {
+					return []row{fakeSubjectNodeRow("team", "team:adjacent-via-stray", "Adjacent Via Stray")}, nil
+				}
+			}
+			return nil, nil
+		}
+	}}
+	adapter := newFakeAdapter(t, fake)
+	principal := storage.Principal{OrgID: "org-1"}
+	request := ownershipRoutingRequest(repositoryAnchorFrame(), anchor)
+	request.Resolution.Committed = append(request.Resolution.Committed, stray)
+
+	result, err := adapter.DiscoverContext(context.Background(), principal, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if !strayWalked {
+		t.Fatal("the stray committed subject's own hop walk never ran -- ownership routing must not blanket-suppress hop walk for OTHER committed subjects")
+	}
+	if result.Cohort == nil {
+		t.Fatal("Cohort = nil, want the one real owner")
+	}
+	if got := len(result.Cohort.Members); got != 1 {
+		t.Fatalf("Cohort.Members = %d, want exactly 1 (the real owner, never the stray's proximate team): %+v", got, result.Cohort.Members)
+	}
+	if result.Cohort.Members[0].Subject.CanonicalID != "team:CHAOS" {
+		t.Fatalf("Cohort.Members = %+v, want only team:CHAOS", result.Cohort.Members)
+	}
+	if result.CohortMemberSource != contextfabric.CohortMemberSourceOwnership {
+		t.Fatalf("CohortMemberSource = %q, want %q", result.CohortMemberSource, contextfabric.CohortMemberSourceOwnership)
+	}
+}
+
+// TestDiscoverContextOwnershipRoutingRecognizesACanonicalIDCommit pins the
+// invariant that a committed anchor bound the SAME way the count decision's
+// own anchorBound recognizes it -- via CommitBasisSet, never only via a
+// matched term -- routes through ownership. Before this pin, a caller who
+// named the repository by its own canonical id (never producing a matched
+// term) would certify anchor_committed on the served line while this
+// package silently served a hop-walk-computed member set: a proximity count
+// presented as the exact declared population.
+func TestDiscoverContextOwnershipRoutingRecognizesACanonicalIDCommit(t *testing.T) {
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:acr", Label: "full-chaos/dev-health-acr"}
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			return nil, nil
+		case strings.Contains(cypher, "$kinds"):
+			owner := fakeSubjectNodeRow("team", "team:CHAOS", "Fullchaos")
+			owner["n"].(*node).Properties[propAuthzRepos] = []string{"full-chaos/dev-health-acr"}
+			return []row{owner}, nil
+		default:
+			t.Fatalf("hopWalk must not run for a canonical-id-committed repository anchor -- ownership routing serves it exactly as it would a term-matched one; got cypher: %s", cypher)
+			return nil, nil
+		}
+	}}
+	adapter := newFakeAdapter(t, fake)
+	principal := storage.Principal{OrgID: "org-1"}
+	// A frame carrying anchor terms that DO NOT match anything -- the only
+	// route to anchor-bound here is the commit basis, never a matched term.
+	frame := &contextfabric.QuestionFrame{
+		Goals: []contextfabric.InvestigationGoal{contextfabric.GoalCountOrAggregate},
+		SubjectExpression: contextfabric.SubjectExpression{
+			Kind: contextfabric.SubjectExpressionChildrenOfScope,
+			Scoped: &contextfabric.ScopedSetExpression{
+				AnchorTerms: []string{"unrelated-term"}, MemberKind: contextfabric.SubjectTeam,
+			},
+		},
+		Temporal: contextfabric.TemporalIntentCurrent,
+		Version:  contextfabric.QuestionFrameVersion,
+	}
+	request := ownershipRoutingRequest(frame, anchor)
+	request.Resolution.Candidates = nil
+	request.Bases = contextfabric.CommitBasisSet{contextfabric.SubjectMapKey(anchor): contextfabric.CommitBasisCallerCanonicalID}
+
+	result, err := adapter.DiscoverContext(context.Background(), principal, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.CohortMemberSource != contextfabric.CohortMemberSourceOwnership {
+		t.Fatalf("CohortMemberSource = %q, want %q", result.CohortMemberSource, contextfabric.CohortMemberSourceOwnership)
+	}
+	if result.Cohort == nil || len(result.Cohort.Members) != 1 || result.Cohort.Members[0].Subject.CanonicalID != "team:CHAOS" {
+		t.Fatalf("Cohort = %+v, want exactly team:CHAOS", result.Cohort)
+	}
+}
+
+// TestDiscoverContextOwnershipRoutingUnboundCommitStillHopWalks is the
+// control for the canonical-id pin above: a repository committed on NEITHER
+// a matched term NOR a recorded commit basis is not anchor-bound by any
+// construction and still falls back to hopWalk, exactly like the existing
+// stray-repository control.
+func TestDiscoverContextOwnershipRoutingUnboundCommitStillHopWalks(t *testing.T) {
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:acr", Label: "full-chaos/dev-health-acr"}
+	hopWalked := false
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			return nil, nil
+		case strings.Contains(cypher, "$kinds"):
+			t.Fatal("the ownership census must not run for a repository commit that is bound by neither a matched term nor a commit basis")
+			return nil, nil
+		default:
+			hopWalked = true
+			return nil, nil
+		}
+	}}
+	adapter := newFakeAdapter(t, fake)
+	principal := storage.Principal{OrgID: "org-1"}
+	frame := &contextfabric.QuestionFrame{
+		Goals: []contextfabric.InvestigationGoal{contextfabric.GoalCountOrAggregate},
+		SubjectExpression: contextfabric.SubjectExpression{
+			Kind: contextfabric.SubjectExpressionChildrenOfScope,
+			Scoped: &contextfabric.ScopedSetExpression{
+				AnchorTerms: []string{"unrelated-term"}, MemberKind: contextfabric.SubjectTeam,
+			},
+		},
+		Temporal: contextfabric.TemporalIntentCurrent,
+		Version:  contextfabric.QuestionFrameVersion,
+	}
+	request := ownershipRoutingRequest(frame, anchor)
+	request.Resolution.Candidates = nil
+
+	result, err := adapter.DiscoverContext(context.Background(), principal, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if !hopWalked {
+		t.Fatal("hopWalk's own query was never reached")
+	}
+	if result.CohortMemberSource != contextfabric.CohortMemberSourceHopWalk {
+		t.Fatalf("CohortMemberSource = %q, want %q", result.CohortMemberSource, contextfabric.CohortMemberSourceHopWalk)
+	}
+}
