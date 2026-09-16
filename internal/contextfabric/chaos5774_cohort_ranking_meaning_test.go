@@ -187,8 +187,6 @@ func TestValidateAgainstRejectsSuperlativeAboutInsufficientEvidenceMember(t *tes
 		{"bottom", "Unrankable is at the bottom of this cohort"},
 		{"first", "Unrankable ranks first in this cohort"},
 		{"last", "Unrankable ranks last in this cohort"},
-		{"most", "Unrankable is the most pressured team in this cohort"},
-		{"least", "Unrankable is the least ready team in this cohort"},
 		{"leads", "Unrankable leads this cohort in attention pressure"},
 		{"trails", "Unrankable trails this cohort in readiness"},
 		{"leading", "Unrankable is the leading team in this cohort's attention ranking"},
@@ -225,8 +223,6 @@ func TestValidateAgainstAllowsSuperlativeAboutAQualifiedMember(t *testing.T) {
 		{"bottom", "Qualified is at the bottom of this cohort's attention ranking"},
 		{"first", "Qualified ranks first in this cohort's attention ranking"},
 		{"last", "Qualified ranks last in this cohort's attention ranking"},
-		{"most", "Qualified is the most pressured team in this cohort"},
-		{"least", "Qualified is the least ready team in this cohort"},
 		{"leads", "Qualified leads this cohort in attention pressure"},
 		{"trails", "Qualified trails this cohort in readiness"},
 		{"leading", "Qualified is the leading team in this cohort's attention ranking"},
@@ -400,6 +396,7 @@ func TestValidateAgainstAllowsAnEstSuffixExceptionWordNearACohortNoun(t *testing
 		"test", "rest", "request", "interest", "guest", "west", "chest",
 		"forest", "harvest", "invest", "digest", "manifest", "contest",
 		"protest", "arrest", "honest", "modest", "earnest", "suggest", "latest",
+		"attest", "priest", "tempest", "bequest", "conquest", "inquest", "quest",
 	}
 	got := make(map[string]bool, len(exceptions))
 	for _, word := range exceptions {
@@ -456,6 +453,166 @@ func TestValidateAgainstAllowsAPositionalWordFarFromACohortNoun(t *testing.T) {
 				t.Fatalf("ValidateAgainst() error = %v, want %q (no cohort noun in the same sentence) to be admitted", err, c.title)
 			}
 		})
+	}
+}
+
+// --- most/least: adjacency to a cohort noun, never a bare quantifier ---
+
+// TestValidateAgainstRejectsMostLeastAdjacentToACohortNoun covers the
+// adjacency construction cohortMostLeastAdjacencyPattern requires: "most"/
+// "least" followed, within at most two filler words, by a cohort noun or
+// rank word.
+func TestValidateAgainstRejectsMostLeastAdjacentToACohortNoun(t *testing.T) {
+	t.Parallel()
+	cases := []superlativeTermCase{
+		{"most-pressured-team", "Unrankable is the most pressured team in this cohort"},
+		{"least-ready-team", "Unrankable is the least ready team in this cohort"},
+		{"most-concerning-project", "Unrankable is the most concerning project in this cohort"},
+		{"least-prepared-repository", "Unrankable is the least prepared repository in this cohort"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			input, draft, _, unrankable := unrankableMemberFixture()
+			draft.Drivers[0].AffectedSubjects = []SubjectRef{unrankable}
+			draft.Drivers[0].Title = c.title
+			err := draft.ValidateAgainst(input)
+			if err == nil {
+				t.Fatalf("ValidateAgainst() = nil, want a rejection for most/least adjacent to a cohort noun")
+			}
+			if got := SynthesisRejectionReasonOf(err); got != RejectionReasonDriverSuperlativeOverUnrankableMember {
+				t.Fatalf("rejection reason = %q, want %q", got, RejectionReasonDriverSuperlativeOverUnrankableMember)
+			}
+		})
+	}
+}
+
+// TestValidateAgainstAllowsMostLeastAdjacentToACohortNoun is the qualified-
+// member control: citesUnrankable short-circuits regardless of text.
+func TestValidateAgainstAllowsMostLeastAdjacentToACohortNoun(t *testing.T) {
+	t.Parallel()
+	input, draft, qualified, _ := unrankableMemberFixture()
+	draft.Drivers[0].AffectedSubjects = []SubjectRef{qualified}
+	draft.Drivers[0].Title = "Qualified is the most pressured team in this cohort"
+	if err := draft.ValidateAgainst(input); err != nil {
+		t.Fatalf("ValidateAgainst() error = %v, want most/least about a QUALIFIED member to be admitted", err)
+	}
+}
+
+// TestValidateAgainstAllowsABareMostLeastQuantifier proves an ordinary
+// quantifier ("most of", "at least N", "least-recently-used") is never a
+// ranking claim, even when it shares a sentence with an unrelated cohort
+// noun.
+func TestValidateAgainstAllowsABareMostLeastQuantifier(t *testing.T) {
+	t.Parallel()
+	cases := []superlativeTermCase{
+		{"most-of-its-incidents", "Unrankable's team resolved most of its incidents late this cycle"},
+		{"at-least-n", "Unrankable's queue is at least 3 items behind for this team"},
+		{"least-recently-used", "Unrankable's team applied a least-recently-used eviction policy"},
+		{"at-most-n", "Unrankable's team reported at most 5 alerts this cycle"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			input, draft, _, unrankable := unrankableMemberFixture()
+			draft.Drivers[0].AffectedSubjects = []SubjectRef{unrankable}
+			draft.Drivers[0].Title = c.title
+			if err := draft.ValidateAgainst(input); err != nil {
+				t.Fatalf("ValidateAgainst() error = %v, want a bare quantifier (not adjacent to a cohort noun) to be admitted", err)
+			}
+		})
+	}
+}
+
+// TestValidateAgainstAllowsAnEstSuffixWordNotAdjacentToACohortNoun is the
+// scope control for the TIGHTENED -est/-iest rule: a real superlative word,
+// present in the SAME sentence as a cohort noun but more than two filler
+// words away from it and not preceded by "the", is not adjacent and must
+// not reject -- "anywhere in the sentence" is not the rule, adjacency is.
+func TestValidateAgainstAllowsAnEstSuffixWordNotAdjacentToACohortNoun(t *testing.T) {
+	t.Parallel()
+	input, draft, _, unrankable := unrankableMemberFixture()
+	draft.Drivers[0].AffectedSubjects = []SubjectRef{unrankable}
+	draft.Drivers[0].Title = "Unrankable was rated riskiest among several unrelated external vendors this quarter, well before any team review"
+	if err := draft.ValidateAgainst(input); err != nil {
+		t.Fatalf("ValidateAgainst() error = %v, want an -est word more than two words from the nearest cohort noun to be admitted", err)
+	}
+}
+
+// --- sentence-boundary tokenizer: a real claim must survive a wrapped line, and an abbreviation must not force a split ---
+
+// TestValidateAgainstRejectsASuperlativeClaimSplitAcrossALineWrap proves a
+// single newline (a wrapped line or a markdown bullet) is NOT a sentence
+// boundary -- a real claim written across one must still be caught, not
+// silently admitted because the word and the cohort noun landed in what an
+// over-eager tokenizer would treat as two different "sentences".
+func TestValidateAgainstRejectsASuperlativeClaimSplitAcrossALineWrap(t *testing.T) {
+	t.Parallel()
+	input, draft, _, unrankable := unrankableMemberFixture()
+	draft.Drivers[0].AffectedSubjects = []SubjectRef{unrankable}
+	// "leads" is a POSITIONAL word: it only rejects when a cohort noun
+	// shares its sentence. An -est word like "riskiest" would reject here
+	// via the unrelated "the <word>" adjacency shape regardless of how the
+	// text is split, which would prove nothing about the tokenizer.
+	draft.Drivers[0].Title = "Unrankable leads\n- the cohort in attention pressure"
+	err := draft.ValidateAgainst(input)
+	if err == nil {
+		t.Fatalf("ValidateAgainst() = nil, want a rejection for a claim split only by a line wrap, not a real sentence boundary")
+	}
+	if got := SynthesisRejectionReasonOf(err); got != RejectionReasonDriverSuperlativeOverUnrankableMember {
+		t.Fatalf("rejection reason = %q, want %q", got, RejectionReasonDriverSuperlativeOverUnrankableMember)
+	}
+}
+
+// TestValidateAgainstRejectsASuperlativeClaimAcrossAnInlineAbbreviation
+// proves "e.g." followed by a capitalized word (the shape that otherwise
+// looks exactly like a real sentence boundary: a period, whitespace, an
+// uppercase letter) never forces a split that would separate a positional
+// claim from the cohort noun it names.
+func TestValidateAgainstRejectsASuperlativeClaimAcrossAnInlineAbbreviation(t *testing.T) {
+	t.Parallel()
+	input, draft, _, unrankable := unrankableMemberFixture()
+	draft.Drivers[0].AffectedSubjects = []SubjectRef{unrankable}
+	draft.Drivers[0].Title = "Unrankable leads e.g. Project Foo, well within the same cohort review this cycle"
+	err := draft.ValidateAgainst(input)
+	if err == nil {
+		t.Fatalf("ValidateAgainst() = nil, want a rejection -- \"e.g.\" followed by a capitalized word must not split the claim from the cohort noun it names")
+	}
+	if got := SynthesisRejectionReasonOf(err); got != RejectionReasonDriverSuperlativeOverUnrankableMember {
+		t.Fatalf("rejection reason = %q, want %q", got, RejectionReasonDriverSuperlativeOverUnrankableMember)
+	}
+}
+
+// TestValidateAgainstAllowsTextAroundAKnownAbbreviation proves a known
+// abbreviation (vs./etc./Inc., each ending in a period immediately
+// followed by whitespace and an uppercase letter -- the usual look of a
+// real sentence boundary) does not force a split either, so unrelated text
+// on its far side is not pulled into the same sentence as a driver's own
+// superlative claim.
+func TestValidateAgainstAllowsTextAroundAKnownAbbreviation(t *testing.T) {
+	t.Parallel()
+	input, draft, _, unrankable := unrankableMemberFixture()
+	draft.Drivers[0].AffectedSubjects = []SubjectRef{unrankable}
+	draft.Drivers[0].Title = "Team Unrankable vs. Team Qualified showed mixed results this cycle"
+	if err := draft.ValidateAgainst(input); err != nil {
+		t.Fatalf("ValidateAgainst() error = %v, want ordinary text around a known abbreviation, with no superlative claim at all, to be admitted", err)
+	}
+}
+
+// TestValidateAgainstRejectsLeadsTheGroup proves "group" (added to
+// cohortNounOrRankWords) makes "leads"/"trails" reject the same way "leads
+// the cohort"/"leads the team" already did.
+func TestValidateAgainstRejectsLeadsTheGroup(t *testing.T) {
+	t.Parallel()
+	input, draft, _, unrankable := unrankableMemberFixture()
+	draft.Drivers[0].AffectedSubjects = []SubjectRef{unrankable}
+	draft.Drivers[0].Title = "Unrankable leads the group in attention pressure"
+	err := draft.ValidateAgainst(input)
+	if err == nil {
+		t.Fatalf("ValidateAgainst() = nil, want a rejection for \"leads the group\" about an unrankable member")
+	}
+	if got := SynthesisRejectionReasonOf(err); got != RejectionReasonDriverSuperlativeOverUnrankableMember {
+		t.Fatalf("rejection reason = %q, want %q", got, RejectionReasonDriverSuperlativeOverUnrankableMember)
 	}
 }
 
@@ -641,9 +798,9 @@ func TestEngineJudgmentMismatchFalseWhenRequestedJudgmentIsBlank(t *testing.T) {
 // TestNarrowSynthesisInputCarriesTheJudgmentMismatchDecision drives the
 // narrowing-retry re-rank directly (narrowSynthesisInput, chaos4636_budget_stage3.go)
 // -- a SEPARATE RankCohort/applyCohortJudgmentMismatch call site from the
-// engine's primary rank, exercised only when stage 3 narrows a cohort that
-// no longer fits its budget. Both fields must land on the returned event
-// here too, not only on the primary rank's event.
+// engine's primary rank, exercised only when stage 3 narrows a cohort past
+// its budget. Both fields must land on the returned event here too, not
+// only on the primary rank's event.
 func TestNarrowSynthesisInputCarriesTheJudgmentMismatchDecision(t *testing.T) {
 	t.Parallel()
 	cohort := planFixtureCohort("a1", "b1", "c1", "d1")

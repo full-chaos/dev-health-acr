@@ -100,7 +100,10 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// v18 -> v19: the vocabulary widened once more and the paragraph
 			// gained one more construction sentence. See
 			// DefaultSynthesisPromptVersion's own doc comment.
-			digest: "5a93ea82aa418ef77830005f0342660713ffeb2a8e59dd3450663921cf59c730",
+			// v19 -> v20: most/least moved to its own construction sentence,
+			// shortening the interpolated list. See
+			// DefaultSynthesisPromptVersion's own doc comment.
+			digest: "3b9b4f1983440662424d460b1b20e91f5ba2ef0e153e35a9a8dce094fa7878c0",
 		},
 		{
 			name:    "interpretation model-output schema",

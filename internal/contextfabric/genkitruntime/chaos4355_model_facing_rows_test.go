@@ -47,7 +47,9 @@ func TestDefaultSynthesisPromptVersionBumpedForModelFacingFactsChange(t *testing
 	// gained prose for two more phrase constructions the guard checks.
 	// v18 -> v19: the guard now covers a general -est/-iest construction
 	// and same-sentence scoping, with one more prose sentence to match.
-	const wantVersion = "context-fabric-synthesis.v19"
+	// v19 -> v20: most/least moved to their own adjacency construction,
+	// shortening the interpolated list and adding one more prose sentence.
+	const wantVersion = "context-fabric-synthesis.v20"
 	if DefaultSynthesisPromptVersion != wantVersion {
 		t.Fatalf("DefaultSynthesisPromptVersion = %q, want %q (moved off the pre-CHAOS-4355-follow-up v12 value now that modelFacingFacts changes the prompt payload)", DefaultSynthesisPromptVersion, wantVersion)
 	}

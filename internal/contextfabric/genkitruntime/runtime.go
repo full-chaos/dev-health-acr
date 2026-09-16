@@ -413,7 +413,11 @@ const (
 	// same-sentence scoping for positional words), and the paragraph
 	// gained a new prose sentence for the construction -- model-facing
 	// again.
-	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v19"
+	// v19 -> v20: most/least moved out of the interpolated word list into
+	// an adjacency construction of their own, shortening the interpolated
+	// list and adding a prose sentence for the new construction --
+	// model-facing again.
+	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v20"
 	// DefaultSchemaVersion is the genkit MODEL-OUTPUT JSON SCHEMA version
 	// -- ONE value shared by both the interpret and synthesize calls
 	// (Config carries a single SchemaVersion field, not a per-operation
