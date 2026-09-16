@@ -76,6 +76,55 @@ func CountPopulationScopeDecisionVocabulary() []string {
 	}
 }
 
+// CohortMemberSource is the closed vocabulary naming which graph discovery
+// arm served the resolved member set a count decision rides on, so the
+// decision's own trace line shows WHY an anchor-scoped count found what it
+// found, not only what it found.
+//
+// CARRIED, NEVER RE-DERIVED: it travels from the graph discovery call that
+// actually ran (GraphContext.CohortMemberSource) through to this decision, the
+// same "the trace describes what happened, not what a reader infers from the
+// count alone" discipline every other field on this line already follows.
+type CohortMemberSource string
+
+const (
+	// CohortMemberSourceNotApplicable: no anchor-scoped discovery arm served
+	// this pass's member set -- an organization-scope count (no anchor to
+	// discover from at all), an anchor that never resolved or stayed
+	// ambiguous, or a reuse backfill, which carries no live graph discovery
+	// of its own.
+	CohortMemberSourceNotApplicable CohortMemberSource = "not_applicable"
+	// CohortMemberSourceHopWalk: members came from a bounded graph-proximity
+	// traversal outward from the committed anchor (falkorgraph's hopWalk) --
+	// incidental adjacency, not a declared ownership signal.
+	CohortMemberSourceHopWalk CohortMemberSource = "hop_walk"
+	// CohortMemberSourceOwnership: members came from the anchor's own
+	// declared ownership signal -- an exhaustive census of the member kind,
+	// admitted only when its own authorization scope names the bound
+	// anchor.
+	CohortMemberSourceOwnership CohortMemberSource = "ownership"
+)
+
+// CohortMemberSourceVocabulary is the closed vocabulary, in declaration
+// order, for the telemetry specification to read.
+func CohortMemberSourceVocabulary() []string {
+	return []string{
+		string(CohortMemberSourceNotApplicable),
+		string(CohortMemberSourceHopWalk),
+		string(CohortMemberSourceOwnership),
+	}
+}
+
+// ValidCohortMemberSource reports membership in the closed vocabulary above.
+func ValidCohortMemberSource(value CohortMemberSource) bool {
+	for _, member := range CohortMemberSourceVocabulary() {
+		if member == string(value) {
+			return true
+		}
+	}
+	return false
+}
+
 // CountPopulationScope is the decision and the measured inputs that produced
 // it, carried together so the trace can rebuild the decision from its own line.
 type CountPopulationScope struct {
@@ -108,6 +157,10 @@ type CountPopulationScope struct {
 	// member kind, and of the reading's anchor kind when one is stated. Only
 	// these make an unbound anchor ambiguous.
 	AnchorCandidates int
+	// MemberSource is which graph discovery arm served the resolved member
+	// set this decision rides on -- carried from GraphContext.CohortMemberSource
+	// (empty/not_applicable on reuse, which ran no live discovery).
+	MemberSource CohortMemberSource
 }
 
 // Counts reports whether the resolved member set is the requested population.
@@ -122,11 +175,22 @@ func (s CountPopulationScope) Counts() bool {
 // on the fresh path, the persisted reading's on reuse); bases is the
 // resolution's commit basis set, nil where none is carried.
 //
+// memberSource is normalized to the closed vocabulary's absence value on
+// anything else -- the Go zero value included -- rather than carried
+// verbatim, so every caller (a live discovery result, a reuse path that never
+// ran one, a test double that sets nothing) always states a certifiable
+// member, never an unconstrained empty string on the line's one required
+// field this package does not otherwise validate at the call boundary.
+//
 // PURE: reads its arguments and mutates nothing.
-func DecideCountPopulationScope(frame *QuestionFrame, sampleAnchorKind SubjectKind, resolution SubjectResolution, bases CommitBasisSet) CountPopulationScope {
+func DecideCountPopulationScope(frame *QuestionFrame, sampleAnchorKind SubjectKind, resolution SubjectResolution, bases CommitBasisSet, memberSource CohortMemberSource) CountPopulationScope {
+	if !ValidCohortMemberSource(memberSource) {
+		memberSource = CohortMemberSourceNotApplicable
+	}
 	scope := CountPopulationScope{
-		Committed:  len(resolution.Committed),
-		Candidates: len(resolution.Candidates),
+		Committed:    len(resolution.Committed),
+		Candidates:   len(resolution.Candidates),
+		MemberSource: memberSource,
 	}
 	if frame == nil {
 		scope.Decision = CountPopulationScopeFrameAbsent
@@ -358,6 +422,7 @@ func CountPopulationScopeLogArgs(event CountPopulationScopeEvent, orgID string) 
 		"anchor_id", SanitizeLogAttr(event.Scope.AnchorID),
 		"candidates", SanitizeLogInt(int64(event.Scope.Candidates)),
 		"anchor_candidates", SanitizeLogInt(int64(event.Scope.AnchorCandidates)),
+		"member_source", SanitizeLogAttr(string(event.Scope.MemberSource)),
 		"member_set_resolved", event.MemberSetResolved,
 		"members", SanitizeLogInt(int64(event.Members)),
 		// DECISION.

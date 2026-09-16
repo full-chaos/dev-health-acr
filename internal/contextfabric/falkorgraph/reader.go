@@ -580,7 +580,43 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	hopWalkTruncated := false
 	var edgeFilters edgeFilterCounts
 
+	// ownershipRoutedRepoSlug (CHAOS-5783) is set when this call's committed
+	// anchor is a repository and the frame's own member kind is team: "how
+	// many teams own repository R" is an OWNERSHIP question, and hopWalk's
+	// bounded graph-proximity traversal (PRs/work items/etc. within two hops
+	// of the repository node) answers a DIFFERENT question -- which teams
+	// happen to be adjacent to this repository's activity -- that can easily
+	// under- or over-count the teams the repository's own ownership records
+	// name. A repository's ownership is a declared PROPERTY
+	// (authorization_repositories, teams_projects.go's ownedRepositoriesJoinSQL,
+	// already correctly a many-to-many set), never a hop-reachable edge, so
+	// the two arms are not two views of the same fact and must not be
+	// blended: hopWalk is skipped for this one committed subject and the
+	// ownership census below runs in its place. Any OTHER committed subject
+	// in the same call (a different anchor kind, or team-owns-project rather
+	// than team-owns-repository) is unaffected and still walks as before.
+	var declaredCohortKindForRouting contextfabric.SubjectKind
+	if request.Frame != nil {
+		declaredCohortKindForRouting, _, _ = contextfabric.CohortMemberKindForFrame(*request.Frame)
+	}
+	var ownershipRoutedRepoSlug string
+	if declaredCohortKindForRouting == contextfabric.SubjectTeam {
+		for _, subject := range request.Resolution.Committed {
+			// Label is stamped verbatim as the repository's own slug at
+			// projection time (devhealthsource/tables.go's queryRepositories)
+			// and never rewritten by resolution, so it is the same string
+			// authorization_repositories carries for a team that owns it.
+			if subject.Kind == contextfabric.SubjectRepository && subject.Label != "" {
+				ownershipRoutedRepoSlug = subject.Label
+				break
+			}
+		}
+	}
+
 	for _, subject := range request.Resolution.Committed {
+		if ownershipRoutedRepoSlug != "" && subject.Kind == contextfabric.SubjectRepository && subject.Label == ownershipRoutedRepoSlug {
+			continue
+		}
 		nodes, edges, failed, filters, walkTruncated, err := a.hopWalk(ctx, key, principal.OrgID, principal, scope, subject, 2, collectLimit, temporal)
 		if err != nil {
 			// CHAOS-4077: see graphNotProjectedError's own doc comment --
@@ -612,6 +648,38 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 				seenEdge[e.UUID] = true
 				resolvedEdges = append(resolvedEdges, e)
 			}
+		}
+	}
+
+	// cohortMemberSource travels onto GraphContext so the count scope
+	// decision's own trace line can name which arm served the member set --
+	// see contextfabric.CohortMemberSource's own doc comment.
+	cohortMemberSource := contextfabric.CohortMemberSourceNotApplicable
+	if len(request.Resolution.Committed) > 0 {
+		cohortMemberSource = contextfabric.CohortMemberSourceHopWalk
+	}
+	ownershipCensusTruncated := false
+	ownershipCensusMembers := 0
+	if ownershipRoutedRepoSlug != "" {
+		cohortMemberSource = contextfabric.CohortMemberSourceOwnership
+		ownershipNodes, truncated, ownershipErr := a.cohortKindCensusCandidates(ctx, key, principal.OrgID, []string{string(contextfabric.SubjectTeam)}, temporal)
+		if ownershipErr != nil {
+			return contextfabric.GraphContext{}, graphNotProjectedError(ownershipErr)
+		}
+		ownershipCensusTruncated = truncated
+		ownershipCensusMembers = len(ownershipNodes)
+		sortCandidateNodesBySubjectKey(ownershipNodes)
+		for _, n := range ownershipNodes {
+			subject, ok := graphrank.NodeSubject(n)
+			if !ok {
+				continue
+			}
+			nk := graphrank.SubjectKey(subject)
+			if seenNode[nk] {
+				continue
+			}
+			seenNode[nk] = true
+			resolvedNodes = append(resolvedNodes, n)
 		}
 	}
 
@@ -850,10 +918,12 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// members, or a call with a committed subject, is never widened.
 	// A nil frame declares no member kind, so there is no kind for a census to
 	// fetch or cover and DiscoveredCohort refuses before reading either anyway.
-	var declaredCohortKind contextfabric.SubjectKind
-	if request.Frame != nil {
-		declaredCohortKind, _, _ = contextfabric.CohortMemberKindForFrame(*request.Frame)
-	}
+	//
+	// This is the SAME value ownershipRoutedRepoSlug's own gate computed
+	// above (declaredCohortKindForRouting) -- carried rather than re-derived,
+	// so the routing decision and this census's own kind can never name two
+	// different member kinds for one call.
+	declaredCohortKind := declaredCohortKindForRouting
 	kindCensusDecision := cohortKindCensusDecision(censusAdmitted, declaredCohortKind)
 	kindCensusRan := kindCensusDecision == CohortKindCensusRan
 	kindCensusTruncated := false
@@ -909,15 +979,36 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// the exact-name census does not fetch. Ran and non-empty, it covers a
 	// bounded arm for that kind; cut, it covers nothing (cohortPoolTruncation).
 	// kindCensusMembers is non-zero only when the kind-scoped census ran.
+	//
+	// The ownership census (above) is the SAME shape of arm -- term-free,
+	// bounded, exhaustive for the kind it names -- just admitted
+	// for a committed anchor instead of a subjectless request, so its own
+	// truncation/coverage fold into the SAME two signals rather than adding a
+	// third, parallel classification. The two censuses can never both run for
+	// one call (one requires zero committed subjects, the other requires a
+	// committed repository anchor), so the OR never blends two real runs.
 	censusCoversThisCohort := (censusAdmitted && censusMembers > 0 && exactNameCensusCoversKind(declaredCohortKind)) ||
-		kindCensusMembers > 0
+		kindCensusMembers > 0 ||
+		ownershipCensusMembers > 0
+	kindCensusTruncated = kindCensusTruncated || ownershipCensusTruncated
 	// CHAOS-5654: a cut exact-name census removes rows only of the kinds it
 	// fetches. When the kind-scoped census ran, the cohort's kind came from that
 	// census, so the exact-name cut is not a loss from this cohort's pool.
 	exactNameCutThisCohort := exactNameTruncated && !kindCensusRan
 	poolTruncationBasis, poolTruncationArms, cohortPoolTruncated := cohortPoolTruncation(
 		fulltextTruncated, hopWalkTruncated, exactNameCutThisCohort, kindCensusTruncated, failedLookups > 0, censusCoversThisCohort)
-	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis, cohortPopulation := graphrank.DiscoveredCohort(principal, request, cohortNodes, cohortPoolTruncated, isInternalSubject)
+	// For an ownership-routed call, membership is the anchor's OWN declared
+	// ownership signal, never the caller's own requested scope alone -- so
+	// the admission check below runs against a scope narrowed to
+	// the bound anchor's repository, on a COPY, never mutating the scope
+	// every other arm in this call already used to query and filter by.
+	cohortDiscovery := request
+	if ownershipRoutedRepoSlug != "" {
+		narrowed := cohortDiscovery.Request
+		narrowed.RequestedScope.RepositorySlugs = []string{ownershipRoutedRepoSlug}
+		cohortDiscovery.Request = narrowed
+	}
+	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis, cohortPopulation := graphrank.DiscoveredCohort(principal, cohortDiscovery, cohortNodes, cohortPoolTruncated, isInternalSubject)
 	// SEAM 7 (CHAOS-4736): what decided the cohort kind, or what prevented
 	// a cohort. This is the I/O boundary, so the telemetry call lives here
 	// and DiscoveredCohort stays pure -- the same split the authzDropped
@@ -1164,7 +1255,8 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	}
 	return contextfabric.GraphContext{
 		Resolution: request.Resolution, Cohort: cohort, CohortPopulation: cohortPopulation,
-		Paths: admission.Paths, DriverCandidates: admission.Drivers,
+		CohortMemberSource: cohortMemberSource,
+		Paths:              admission.Paths, DriverCandidates: admission.Drivers,
 		EvidenceRefIDs: admission.EvidenceRefIDs, FactRequirements: factRequirements,
 		Coverage: contextfabric.Coverage{
 			Sources:         sources,

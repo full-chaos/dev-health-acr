@@ -31,12 +31,17 @@ func TestTheCountPopulationScopeLineCertifiesAgainstItsSpecification(t *testing.
 		}},
 		{"scoped count, anchor committed", map[string]any{
 			"expression_kind": "children_of_scope", "committed": 1, "committed_anchors": 1, "committed_unbound": 0, "candidates": 1, "anchor_candidates": 1, "members": 3,
-			"anchor_kind": "", "anchor_id": "repository:SCOPE_ANCHOR",
+			"anchor_kind": "", "anchor_id": "repository:SCOPE_ANCHOR", "member_source": "not_applicable",
 			"decision": "anchor_committed", "assembled_outcome": "satisfied", "counted": true, "served": 3,
 			// The minted claim's subject is the anchor itself, of the
 			// anchor's OWN kind -- never the reading's merely-stated
 			// anchor_kind above, which this scenario leaves empty.
 			"subject_kind": "repository", "subject_id": "repository:SCOPE_ANCHOR",
+		}},
+		{"scoped count, anchor committed, ownership routed", map[string]any{
+			"expression_kind": "children_of_scope", "committed": 1, "committed_anchors": 1, "committed_unbound": 0, "candidates": 1, "anchor_candidates": 1, "members": 2,
+			"anchor_kind": "", "anchor_id": "repository:SCOPE_ANCHOR", "member_source": "ownership",
+			"decision": "anchor_committed", "assembled_outcome": "satisfied", "counted": true, "served": 2,
 		}},
 		{"scoped count, unrelated committed subject", map[string]any{
 			"committed": 1, "committed_anchors": 0, "committed_unbound": 1, "anchor_id": "",

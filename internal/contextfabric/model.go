@@ -334,12 +334,22 @@ type GraphContext struct {
 	// server step, which runs after synthesis and needs no help from the
 	// narration. Engine bookkeeping about what retrieval saw, never evidence
 	// the bundle carries.
-	CohortPopulation int                `json:"-"`
-	Paths            []RelationshipPath `json:"paths"`
-	DriverCandidates []DriverJudgment   `json:"driver_candidates"`
-	EvidenceRefIDs   []string           `json:"evidence_ref_ids"`
-	FactRequirements []FactRequirement  `json:"fact_requirements"`
-	Coverage         Coverage           `json:"coverage"`
+	CohortPopulation int `json:"-"`
+	// CohortMemberSource (CHAOS-5783) is which discovery arm served this
+	// call's cohort members -- ownership (the anchor's own declared
+	// ownership signal) or hop_walk (incidental graph proximity), empty
+	// when no anchor-scoped arm ran. Read by the count scope decision so
+	// its own trace line shows why an anchor-scoped count found what it
+	// found. Engine bookkeeping, `json:"-"` like CohortPopulation beside it
+	// and for the same reason: this struct is serialized into
+	// SynthesisInput, and this value exists for a server step that runs
+	// after synthesis, never for the model.
+	CohortMemberSource CohortMemberSource `json:"-"`
+	Paths              []RelationshipPath `json:"paths"`
+	DriverCandidates   []DriverJudgment   `json:"driver_candidates"`
+	EvidenceRefIDs     []string           `json:"evidence_ref_ids"`
+	FactRequirements   []FactRequirement  `json:"fact_requirements"`
+	Coverage           Coverage           `json:"coverage"`
 }
 
 type CanonicalFactRequest struct {

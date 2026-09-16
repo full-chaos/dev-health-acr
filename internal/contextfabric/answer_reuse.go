@@ -677,7 +677,7 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 	// makes the decision again over what it retrieves.
 	reading := storedCountReadingOf(stored)
 	if storedDocumentStatesCount(candidate) {
-		if scope := DecideCountPopulationScope(reading.Frame, reading.AnchorKind, candidate.SubjectResolution, nil); !scope.Counts() {
+		if scope := DecideCountPopulationScope(reading.Frame, reading.AnchorKind, candidate.SubjectResolution, nil, CohortMemberSourceNotApplicable); !scope.Counts() {
 			e.recordReuseOutcome(ctx, principal, AnswerReuseMissCountScope)
 			return InvestigationResult{}, false, false, storedCountReading{}, nil
 		}

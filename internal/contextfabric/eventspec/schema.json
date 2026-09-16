@@ -278,6 +278,16 @@
         "presence": "required"
       },
       {
+        "key": "member_source",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_applicable",
+          "hop_walk",
+          "ownership"
+        ]
+      },
+      {
         "key": "member_set_resolved",
         "type": "bool",
         "presence": "required"

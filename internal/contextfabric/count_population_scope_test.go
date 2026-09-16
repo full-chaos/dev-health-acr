@@ -53,15 +53,16 @@ func kindCohort(kind SubjectKind, size int) *Cohort {
 }
 
 type scopeCell struct {
-	name       string
-	frame      *QuestionFrame
-	family     QuestionFamily
-	resolution SubjectResolution
-	cohort     *Cohort
-	population int
-	status     InvestigationStatus
-	anchorKind SubjectKind
-	bases      CommitBasisSet
+	name         string
+	frame        *QuestionFrame
+	family       QuestionFamily
+	resolution   SubjectResolution
+	cohort       *Cohort
+	population   int
+	status       InvestigationStatus
+	anchorKind   SubjectKind
+	bases        CommitBasisSet
+	memberSource CohortMemberSource
 
 	wantDecision  CountPopulationScopeDecision
 	wantCounted   bool
@@ -103,7 +104,8 @@ func newScopeEngine(t *testing.T, cell scopeCell, telemetry EngineTelemetry, gat
 			resolution: cell.resolution,
 			bases:      cell.bases,
 			context: GraphContext{
-				Cohort: cell.cohort, CohortPopulation: cell.population, Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
+				Cohort: cell.cohort, CohortPopulation: cell.population, CohortMemberSource: cell.memberSource,
+				Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
 				FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
 				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 			},
@@ -214,6 +216,19 @@ func scopeCells() []scopeCell {
 			wantDecision: CountPopulationScopeAnchorCommitted, wantCounted: true, wantServed: 3, wantAnchors: 1, wantAnchorID: "repository:SCOPE_ANCHOR",
 			wantSentence: "Counted 3 teams.", wantAssembled: contractsv1.ContextFabricRequirementSatisfied,
 			wantSubjectKind: SubjectRepository, wantSubjectID: "repository:SCOPE_ANCHOR",
+		},
+		{
+			// CHAOS-5783: a repository-anchored team count served by the
+			// ownership arm (falkorgraph routes this pairing away from
+			// hopWalk) -- proves CohortMemberSource travels from the graph
+			// discovery result through to this decision's own certified line.
+			name: "scoped count, anchor committed, ownership routed", frame: countingFrame(SubjectTeam), family: QuestionFamilyScopedCohortStatus,
+			resolution:   SubjectResolution{Candidates: []SubjectCandidate{scopeAnchorMatch(scopeAnchorRepository())}, Committed: []SubjectRef{scopeAnchorRepository()}},
+			cohort:       kindCohort(SubjectTeam, 2),
+			memberSource: CohortMemberSourceOwnership,
+			status:       InvestigationComplete,
+			wantDecision: CountPopulationScopeAnchorCommitted, wantCounted: true, wantServed: 2, wantAnchors: 1, wantAnchorID: "repository:SCOPE_ANCHOR",
+			wantSentence: "Counted 2 teams.", wantAssembled: contractsv1.ContextFabricRequirementSatisfied,
 		},
 		{
 			// A partial truth: retrieval counted more members than the answer
@@ -340,6 +355,7 @@ var engineCellAnchorCandidates = map[string]int{
 	"scoped count, one uncommitted candidate":                                       1,
 	"scoped count, anchor ambiguous":                                                2,
 	"scoped count, anchor committed":                                                1,
+	"scoped count, anchor committed, ownership routed":                              1,
 	"scoped count, anchor committed, population larger than served":                 1,
 	"scoped count, anchor committed, empty measured population":                     1,
 	"scoped count, anchor committed, population unmeasured":                         1,
@@ -497,7 +513,7 @@ func TestDecideCountPopulationScopeCoversItsInputDomain(t *testing.T) {
 		{"two candidates of the reading's anchor kind", SubjectRepository, SubjectResolution{Candidates: []SubjectCandidate{offered, offered}}, nil, CountPopulationScopeAnchorAmbiguous, 0, 0, ""},
 	}
 	for _, row := range rows {
-		got := DecideCountPopulationScope(nil, row.anchorKind, row.resolution, row.bases)
+		got := DecideCountPopulationScope(nil, row.anchorKind, row.resolution, row.bases, CohortMemberSourceNotApplicable)
 		if got.Decision != CountPopulationScopeFrameAbsent || got.Counts() || got.CommittedAnchors != 0 || got.AnchorID != "" {
 			t.Errorf("frame absent / %s: %+v, want frame_absent with nothing bound", row.name, got)
 		}
@@ -516,7 +532,7 @@ func TestDecideCountPopulationScopeCoversItsInputDomain(t *testing.T) {
 		wantMember, _ := expression.MemberKind()
 		scoped := expression.Kind == SubjectExpressionChildrenOfScope
 		for _, row := range rows {
-			got := DecideCountPopulationScope(frame, row.anchorKind, row.resolution, row.bases)
+			got := DecideCountPopulationScope(frame, row.anchorKind, row.resolution, row.bases, CohortMemberSourceNotApplicable)
 			want := CountPopulationScopeOrganization
 			wantAnchors, wantUnbound, wantID := 0, 0, ""
 			if scoped {
@@ -993,9 +1009,60 @@ func TestAnEmptyAnchorTermBindsNothing(t *testing.T) {
 			Scoped: &ScopedSetExpression{AnchorTerms: cell.anchorTerms, MemberKind: SubjectTeam},
 		})
 		resolution := SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor, cell.matched...)}}
-		got := DecideCountPopulationScope(frame, "", resolution, nil)
+		got := DecideCountPopulationScope(frame, "", resolution, nil, CohortMemberSourceNotApplicable)
 		if bound := got.Decision == CountPopulationScopeAnchorCommitted; bound != cell.wantBound {
 			t.Errorf("%s: decision %q (anchors=%d unbound=%d), want bound=%t", cell.name, got.Decision, got.CommittedAnchors, got.CommittedUnbound, cell.wantBound)
+		}
+	}
+}
+
+// TestCohortMemberSourceDomain enumerates ValidCohortMemberSource's input
+// domain -- absent (Go zero value), every canonical member, an out-of-
+// vocabulary string, and a boundary case built by mutating a canonical value
+// (never a value the closed vocabulary itself declares) -- so the guard's
+// admit/refuse line is exercised on every cell rather than only the values a
+// real caller happens to pass today.
+func TestCohortMemberSourceDomain(t *testing.T) {
+	for _, cell := range []struct {
+		name  string
+		value CohortMemberSource
+		valid bool
+	}{
+		{"absent (Go zero value)", "", false},
+		{"canonical: not_applicable", CohortMemberSourceNotApplicable, true},
+		{"canonical: hop_walk", CohortMemberSourceHopWalk, true},
+		{"canonical: ownership", CohortMemberSourceOwnership, true},
+		{"out-of-vocabulary string", CohortMemberSource("primary"), false},
+		{"case-mutated canonical value is not folded", CohortMemberSource("Ownership"), false},
+		{"whitespace-padded canonical value is not trimmed", CohortMemberSource(" ownership"), false},
+	} {
+		if got := ValidCohortMemberSource(cell.value); got != cell.valid {
+			t.Errorf("%s: ValidCohortMemberSource(%q) = %t, want %t", cell.name, cell.value, got, cell.valid)
+		}
+	}
+}
+
+// TestDecideCountPopulationScopeNormalizesMemberSource proves the guard
+// DecideCountPopulationScope itself applies: every caller's memberSource
+// reaches the certified line as a vocabulary member, never verbatim,
+// covering the same domain (absent/canonical/out-of-vocabulary) at the call
+// boundary a caller (a live discovery result, a reuse path, a stub with an
+// uninitialized field) actually crosses.
+func TestDecideCountPopulationScopeNormalizesMemberSource(t *testing.T) {
+	for _, cell := range []struct {
+		name  string
+		given CohortMemberSource
+		want  CohortMemberSource
+	}{
+		{"absent (Go zero value) normalizes to not_applicable", "", CohortMemberSourceNotApplicable},
+		{"canonical not_applicable passes through", CohortMemberSourceNotApplicable, CohortMemberSourceNotApplicable},
+		{"canonical hop_walk passes through", CohortMemberSourceHopWalk, CohortMemberSourceHopWalk},
+		{"canonical ownership passes through", CohortMemberSourceOwnership, CohortMemberSourceOwnership},
+		{"out-of-vocabulary value normalizes to not_applicable", CohortMemberSource("bogus"), CohortMemberSourceNotApplicable},
+	} {
+		got := DecideCountPopulationScope(nil, "", SubjectResolution{}, nil, cell.given)
+		if got.MemberSource != cell.want {
+			t.Errorf("%s: MemberSource = %q, want %q", cell.name, got.MemberSource, cell.want)
 		}
 	}
 }
