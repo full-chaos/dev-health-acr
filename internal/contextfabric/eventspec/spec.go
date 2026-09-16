@@ -2050,6 +2050,12 @@ var CountPopulationScope = Event{
 		{Key: "anchor_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "candidates", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "anchor_candidates", Type: FieldInt, Presence: PresenceRequired},
+		// member_source (CHAOS-5783): which graph discovery arm served the
+		// resolved member set -- ownership (the anchor's own declared
+		// ownership signal) or hop_walk (bounded graph-proximity traversal),
+		// not_applicable when no anchor-scoped arm ran (an organization-scope
+		// count, an anchor that never resolved, or a reuse backfill).
+		{Key: "member_source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CohortMemberSourceVocabulary()},
 		{Key: "member_set_resolved", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "members", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CountPopulationScopeDecisionVocabulary()},

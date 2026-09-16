@@ -580,7 +580,52 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	hopWalkTruncated := false
 	var edgeFilters edgeFilterCounts
 
+	// ownershipRoutedRepoSlug (CHAOS-5783) is set when this call's committed
+	// anchor is a repository and the frame's own member kind is team: "how
+	// many teams own repository R" is an OWNERSHIP question, and hopWalk's
+	// bounded graph-proximity traversal (PRs/work items/etc. within two hops
+	// of the repository node) answers a DIFFERENT question -- which teams
+	// happen to be adjacent to this repository's activity -- that can easily
+	// under- or over-count the teams the repository's own ownership records
+	// name. A repository's ownership is a declared PROPERTY
+	// (authorization_repositories, teams_projects.go's ownedRepositoriesJoinSQL,
+	// already correctly a many-to-many set), never a hop-reachable edge, so
+	// the two arms are not two views of the same fact and must not be
+	// blended: hopWalk is skipped for this one committed subject and the
+	// ownership census below runs in its place. Any OTHER committed subject
+	// in the same call (a different anchor kind, or team-owns-project rather
+	// than team-owns-repository) is unaffected and still walks as before.
+	var declaredCohortKindForRouting contextfabric.SubjectKind
+	if request.Frame != nil {
+		declaredCohortKindForRouting, _, _ = contextfabric.CohortMemberKindForFrame(*request.Frame)
+	}
+	var ownershipRoutedRepoSlug string
+	if declaredCohortKindForRouting == contextfabric.SubjectTeam {
+		for _, subject := range request.Resolution.Committed {
+			// Label is stamped verbatim as the repository's own slug at
+			// projection time (devhealthsource/tables.go's queryRepositories)
+			// and never rewritten by resolution, so it is the same string
+			// authorization_repositories carries for a team that owns it.
+			//
+			// GATED ON THE SUBJECT BEING THE FRAME'S OWN BOUND ANCHOR, not on
+			// "any committed repository": a committed subject set can carry
+			// more than one identity for reasons unrelated to this question's
+			// anchor (an explicit comparison operand, a carried-over hint), and
+			// a repository committed for one of those reasons is not what "how
+			// many teams own repository R" is asking about: a project-anchored,
+			// team-member frame with an unrelated committed repository must
+			// never route through ownership on that repository's account.
+			if subject.Kind == contextfabric.SubjectRepository && subject.Label != "" && frameAnchorBound(request.Frame, subject, request.Resolution, request.Bases) {
+				ownershipRoutedRepoSlug = subject.Label
+				break
+			}
+		}
+	}
+
 	for _, subject := range request.Resolution.Committed {
+		if ownershipRoutedRepoSlug != "" && subject.Kind == contextfabric.SubjectRepository && subject.Label == ownershipRoutedRepoSlug {
+			continue
+		}
 		nodes, edges, failed, filters, walkTruncated, err := a.hopWalk(ctx, key, principal.OrgID, principal, scope, subject, 2, collectLimit, temporal)
 		if err != nil {
 			// CHAOS-4077: see graphNotProjectedError's own doc comment --
@@ -601,6 +646,19 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		edgeFilters.Authz += filters.Authz
 		edgeFilters.TemporalWindow += filters.TemporalWindow
 		for _, n := range nodes {
+			// When this call is ownership-routed for the declared member
+			// kind, that kind's member pool is the ownership census below
+			// ONLY -- never blended with a hop-walked node of the same kind
+			// reached through some OTHER committed subject's proximity
+			// (a second committed repository, a comparison operand, a
+			// carried hint). The routed anchor's own walk is already
+			// skipped above; this excludes the identical graph-proximity
+			// signal from reappearing via any OTHER subject's walk. Edges
+			// and every OTHER node kind are unaffected -- this is a
+			// member-kind filter, not a blanket hop-walk suppression.
+			if ownershipRoutedRepoSlug != "" && mustSubject(n).Kind == declaredCohortKindForRouting {
+				continue
+			}
 			nk := graphrank.SubjectKey(mustSubject(n))
 			if !seenNode[nk] {
 				seenNode[nk] = true
@@ -612,6 +670,53 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 				seenEdge[e.UUID] = true
 				resolvedEdges = append(resolvedEdges, e)
 			}
+		}
+	}
+
+	// cohortMemberSource travels onto GraphContext so the count scope
+	// decision's own trace line can name which arm served the member set --
+	// see contextfabric.CohortMemberSource's own doc comment.
+	cohortMemberSource := contextfabric.CohortMemberSourceNotApplicable
+	if len(request.Resolution.Committed) > 0 {
+		cohortMemberSource = contextfabric.CohortMemberSourceHopWalk
+	}
+	ownershipCensusTruncated := false
+	ownershipCensusMembers := 0
+	if ownershipRoutedRepoSlug != "" {
+		cohortMemberSource = contextfabric.CohortMemberSourceOwnership
+		ownershipNodes, truncated, ownershipErr := a.cohortKindCensusCandidates(ctx, key, principal.OrgID, []string{string(contextfabric.SubjectTeam)}, temporal)
+		if ownershipErr != nil {
+			return contextfabric.GraphContext{}, graphNotProjectedError(ownershipErr)
+		}
+		ownershipCensusTruncated = truncated
+		ownershipCensusMembers = len(ownershipNodes)
+		sortCandidateNodesBySubjectKey(ownershipNodes)
+		for _, n := range ownershipNodes {
+			subject, ok := graphrank.NodeSubject(n)
+			if !ok {
+				continue
+			}
+			// Filtered to OWNERSHIP here, on the pool, never by narrowing the
+			// caller's own RequestedScope: the caller's own repository
+			// restriction is never widened by the anchor's slug. The
+			// caller's RequestedScope.RepositorySlugs is an AUTHORIZATION
+			// restriction (what this principal/request may see at all) and
+			// must reach AuthorizedAttributes below completely unmodified --
+			// overwriting it with the anchor's own slug let an ownership-
+			// routed cohort answer OUTSIDE a caller's explicit repository
+			// restriction. "Does this team own the anchor repository" is a
+			// POOL-MEMBERSHIP question, answered once here from the node's
+			// own declared signal, independently of whatever the caller may
+			// additionally be authorized to see.
+			if !graphrank.OwnsRepository(n.Attributes, ownershipRoutedRepoSlug) {
+				continue
+			}
+			nk := graphrank.SubjectKey(subject)
+			if seenNode[nk] {
+				continue
+			}
+			seenNode[nk] = true
+			resolvedNodes = append(resolvedNodes, n)
 		}
 	}
 
@@ -850,10 +955,12 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// members, or a call with a committed subject, is never widened.
 	// A nil frame declares no member kind, so there is no kind for a census to
 	// fetch or cover and DiscoveredCohort refuses before reading either anyway.
-	var declaredCohortKind contextfabric.SubjectKind
-	if request.Frame != nil {
-		declaredCohortKind, _, _ = contextfabric.CohortMemberKindForFrame(*request.Frame)
-	}
+	//
+	// This is the SAME value ownershipRoutedRepoSlug's own gate computed
+	// above (declaredCohortKindForRouting) -- carried rather than re-derived,
+	// so the routing decision and this census's own kind can never name two
+	// different member kinds for one call.
+	declaredCohortKind := declaredCohortKindForRouting
 	kindCensusDecision := cohortKindCensusDecision(censusAdmitted, declaredCohortKind)
 	kindCensusRan := kindCensusDecision == CohortKindCensusRan
 	kindCensusTruncated := false
@@ -909,14 +1016,30 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// the exact-name census does not fetch. Ran and non-empty, it covers a
 	// bounded arm for that kind; cut, it covers nothing (cohortPoolTruncation).
 	// kindCensusMembers is non-zero only when the kind-scoped census ran.
+	//
+	// The ownership census (above) is the SAME shape of arm -- term-free,
+	// bounded, exhaustive for the kind it names -- just admitted
+	// for a committed anchor instead of a subjectless request, so its own
+	// truncation/coverage fold into the SAME two signals rather than adding a
+	// third, parallel classification. The two censuses can never both run for
+	// one call (one requires zero committed subjects, the other requires a
+	// committed repository anchor), so the OR never blends two real runs.
 	censusCoversThisCohort := (censusAdmitted && censusMembers > 0 && exactNameCensusCoversKind(declaredCohortKind)) ||
-		kindCensusMembers > 0
+		kindCensusMembers > 0 ||
+		ownershipCensusMembers > 0
+	kindCensusTruncated = kindCensusTruncated || ownershipCensusTruncated
 	// CHAOS-5654: a cut exact-name census removes rows only of the kinds it
 	// fetches. When the kind-scoped census ran, the cohort's kind came from that
 	// census, so the exact-name cut is not a loss from this cohort's pool.
 	exactNameCutThisCohort := exactNameTruncated && !kindCensusRan
 	poolTruncationBasis, poolTruncationArms, cohortPoolTruncated := cohortPoolTruncation(
 		fulltextTruncated, hopWalkTruncated, exactNameCutThisCohort, kindCensusTruncated, failedLookups > 0, censusCoversThisCohort)
+	// request's OWN RequestedScope reaches admission completely unmodified
+	// here -- see the ownership-census filter above (graphrank.OwnsRepository)
+	// for where an ownership-routed call's membership is actually decided.
+	// AuthorizedAttributes below still applies the caller's own scope/
+	// principal restriction, exactly as it does for every other arm; it is
+	// never widened or replaced for this pairing.
 	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis, cohortPopulation := graphrank.DiscoveredCohort(principal, request, cohortNodes, cohortPoolTruncated, isInternalSubject)
 	// SEAM 7 (CHAOS-4736): what decided the cohort kind, or what prevented
 	// a cohort. This is the I/O boundary, so the telemetry call lives here
@@ -1164,7 +1287,8 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	}
 	return contextfabric.GraphContext{
 		Resolution: request.Resolution, Cohort: cohort, CohortPopulation: cohortPopulation,
-		Paths: admission.Paths, DriverCandidates: admission.Drivers,
+		CohortMemberSource: cohortMemberSource,
+		Paths:              admission.Paths, DriverCandidates: admission.Drivers,
 		EvidenceRefIDs: admission.EvidenceRefIDs, FactRequirements: factRequirements,
 		Coverage: contextfabric.Coverage{
 			Sources:         sources,
@@ -1197,6 +1321,47 @@ func countUnboundedValidity(nodes []graphrank.CandidateNode, edges []graphrank.R
 func mustSubject(n graphrank.CandidateNode) contextfabric.SubjectRef {
 	subject, _ := graphrank.NodeSubject(n)
 	return subject
+}
+
+// frameAnchorBound reports whether subject is the frame's own scope anchor,
+// never merely a committed subject that happens to share its kind. Mirrors
+// BOTH arms of contextfabric's own anchorBound (count_population_scope.go):
+// a subject committed on the caller's own canonical id (bases), or one
+// resolution recorded as a match for one of the frame's anchor terms.
+// GraphDiscoveryRequest now carries the same CommitBasisSet the count
+// decision reads (Bases, ports.go), so the two sites can no longer drift --
+// a canonical-id-only commit that would certify anchor_committed on the
+// served line must route through ownership here too, never leave that
+// commit to a graph-proximity read the certified line does not describe.
+//
+// A frame that is not children_of_scope, or carries no scope, binds nothing:
+// "anchor" has no meaning outside that one expression shape -- this mirrors
+// DecideCountPopulationScope's own switch, where anchor_committed is
+// reachable only under that same expression kind.
+func frameAnchorBound(frame *contextfabric.QuestionFrame, subject contextfabric.SubjectRef, resolution contextfabric.SubjectResolution, bases contextfabric.CommitBasisSet) bool {
+	if frame == nil || frame.SubjectExpression.Kind != contextfabric.SubjectExpressionChildrenOfScope || frame.SubjectExpression.Scoped == nil {
+		return false
+	}
+	if bases.For(subject) == contextfabric.CommitBasisCallerCanonicalID {
+		return true
+	}
+	terms := make(map[string]struct{}, len(frame.SubjectExpression.Scoped.AnchorTerms))
+	for _, term := range frame.SubjectExpression.Scoped.AnchorTerms {
+		if normalized := contextfabric.NormalizeRetrievalTerm(term); normalized != "" {
+			terms[normalized] = struct{}{}
+		}
+	}
+	for _, candidate := range resolution.Candidates {
+		if candidate.Subject.Kind != subject.Kind || candidate.Subject.CanonicalID != subject.CanonicalID {
+			continue
+		}
+		for _, matched := range candidate.MatchedTerms {
+			if _, anchor := terms[contextfabric.NormalizeRetrievalTerm(matched)]; anchor {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // sortCandidateNodesBySubjectKey sorts nodes in place by graphrank.SubjectKey

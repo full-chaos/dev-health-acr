@@ -317,6 +317,16 @@ const (
 	// decision over its own persisted reading and resolution withholds. Never
 	// rewritten; the request takes the fresh path.
 	AnswerReuseMissCountScope AnswerReuseOutcome = "miss_count_scope"
+	// AnswerReuseMissMemberSource: an INTERIM fence (no schema change) for a
+	// repository-anchored team count -- the one pairing whose member-set
+	// discovery arm changed to ownership routing. The persisted reading
+	// carries no record of which arm served a stored document's member set,
+	// so a candidate of this shape cannot be told apart from one computed
+	// before ownership routing existed, and reuse misses on it unconditionally
+	// rather than risk re-serving a pre-fix count. See
+	// reusedCountIsRepositoryAnchoredTeamCount's own doc comment. Never
+	// rewritten; the request takes the fresh path.
+	AnswerReuseMissMemberSource AnswerReuseOutcome = "miss_member_source"
 )
 
 // AnswerReuseBypassReason is the closed vocabulary naming WHY a request
@@ -676,8 +686,35 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 	// withholds is not reusable, and the request takes the fresh path, which
 	// makes the decision again over what it retrieves.
 	reading := storedCountReadingOf(stored)
+	// INTERIM FENCE, no schema change: a repository-anchored team count is
+	// exactly the pairing DiscoverContext now serves from the anchor's own
+	// ownership signal instead of hop-walk proximity (see falkorgraph's
+	// ownership routing). SemanticScopeAnchor.MemberSource (additive JSON
+	// field, no migration) records which arm served the row that produced
+	// it; a row saved before the field existed, or genuinely served by
+	// hop-walk, both read as "not ownership" and fence identically -- see
+	// reusedCountNeedsMemberSourceFence's own doc comment. Checked BEFORE
+	// storedDocumentStatesCount, not inside it: a document that owes a count
+	// but does not YET state one is served through the BACKFILL path below,
+	// which computes the same stale/fresh distinction from this exact
+	// stored member set -- gating only the already-stated case would leave
+	// backfill free to serve it anyway. A real ReuseKey/
+	// ReuseVersionAuthorities dimension (the precedented shape --
+	// WindowInferenceVersion, CommitGateVersion, QuestionFamilyVersion --
+	// needs a Postgres migration) is the follow-up that replaces this
+	// interim with a genuine conjunctive fence. Never rewrites the stored
+	// row.
+	if reusedCountNeedsMemberSourceFence(reading) {
+		e.recordReuseOutcome(ctx, principal, AnswerReuseMissMemberSource)
+		return InvestigationResult{}, false, false, storedCountReading{}, nil
+	}
+	// A STORED COUNT IS SERVED ONLY WHEN THE CURRENT SCOPE DECISION WOULD STATE
+	// IT. The stored row, claim and sentence are never rewritten: a document
+	// whose count the decision over its own persisted reading and resolution
+	// withholds is not reusable, and the request takes the fresh path, which
+	// makes the decision again over what it retrieves.
 	if storedDocumentStatesCount(candidate) {
-		if scope := DecideCountPopulationScope(reading.Frame, reading.AnchorKind, candidate.SubjectResolution, nil); !scope.Counts() {
+		if scope := DecideCountPopulationScope(reading.Frame, reading.AnchorKind, candidate.SubjectResolution, nil, CohortMemberSourceNotApplicable); !scope.Counts() {
 			e.recordReuseOutcome(ctx, principal, AnswerReuseMissCountScope)
 			return InvestigationResult{}, false, false, storedCountReading{}, nil
 		}

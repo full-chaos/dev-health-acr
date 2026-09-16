@@ -411,6 +411,17 @@ type GraphDiscoveryRequest struct {
 	// prose is the behaviour this ticket deletes, and reintroducing it on
 	// the failure path would delete it in name only.
 	Frame *QuestionFrame `json:"-"`
+	// Bases is the SAME CommitBasisSet ResolveSubjects already returned for
+	// this call (CHAOS-4085), carried rather than re-derived. A graph
+	// reader deciding whether a committed subject is the frame's own bound
+	// anchor must recognize a caller-canonical-id commit exactly as
+	// anchorBound (count_population_scope.go) does, or the two sites can
+	// certify a population the graph read never measured: anchorBound
+	// reads anchor_committed off this same commit while a reader lacking
+	// Bases sees only the term-match arm and falls back to graph-proximity
+	// discovery for the member set actually served under that certified
+	// line.
+	Bases CommitBasisSet `json:"-"`
 }
 
 // CanonicalFactReader is the typed, read-only boundary back to canonical Dev
