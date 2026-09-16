@@ -417,30 +417,17 @@ func DeriveCompletenessAuthority(result InvestigationResult) CompletenessAuthori
 		Direction:   CompletenessAuthorityDirectionNone,
 		Version:     CompletenessAuthorityVersion,
 	}
-	if observation.Disposition != AnswerDispositionAnswer {
-		// A pending clarification is not an incomplete answer, and a
-		// refusal is not a degraded one. Nothing here is fabricated: no
-		// ServerState, no Derived, no Disagreed.
-		observation.Basis = CompletenessAuthorityBasisNotAnAnswer
-		return observation
-	}
-	state := contractsv1.DeriveContextFabricAnswerCompletenessState(result.Completeness.Outcomes)
-	if state == contractsv1.ContextFabricAnswerCompletenessNotDerived || state == "" {
-		// A legacy row, or one whose outcome set was never stamped. The
-		// honest report is "no semantic state", not the vacuous `complete`
-		// an empty set derives under any other reading -- see
-		// ContextFabricAnswerCompletenessNotDerived's own doc comment.
-		observation.Basis = CompletenessAuthorityBasisUnavailable
-		return observation
-	}
-	observation.Basis = CompletenessAuthorityBasisOutcomeDerived
-	observation.ServerState = state
-	observation.Derived = true
-	if mapped, ok := answerCompletenessStateToStatus(state); ok {
-		observation.Disagreed = mapped != result.Status
-		observation.WouldFlip = observation.Disagreed
-		observation.Direction = deriveCompletenessAuthorityDirection(result.Status, mapped, observation.Disagreed)
-	}
+
+	// THE DIGEST IS A PROPERTY OF THE DOCUMENT, computed UNCONDITIONALLY,
+	// before either early return below. A clarification, a refusal, and a
+	// legacy result with no outcome rows at all can each still carry real
+	// claimed facts and (rarely) real outcome rows -- a stored result is
+	// never guaranteed to be one this derivation can classify. Computing
+	// the digest only on the answer-derived path made every OTHER exit
+	// publish a zero that reads as "none claimed"/"no rows" when the truth
+	// was "never counted, because this call returned before reaching the
+	// count." Missing must never read as zero; the fix is to never leave
+	// it missing on a document that has the answer.
 	rows := result.Completeness.Outcomes
 	observation.OutcomeRowsTotal = len(rows)
 	for _, row := range rows {
@@ -465,6 +452,35 @@ func DeriveCompletenessAuthority(result InvestigationResult) CompletenessAuthori
 		if index, ok := factKindIndex(claim.Kind); ok {
 			observation.ClaimedFactsByKind[index]++
 		}
+	}
+
+	if observation.Disposition != AnswerDispositionAnswer {
+		// A pending clarification is not an incomplete answer, and a
+		// refusal is not a degraded one. Nothing SEMANTIC here is
+		// fabricated: no ServerState, no Derived, no Disagreed. The digest
+		// above still reports whatever the document actually carries.
+		observation.Basis = CompletenessAuthorityBasisNotAnAnswer
+		return observation
+	}
+	state := contractsv1.DeriveContextFabricAnswerCompletenessState(rows)
+	if state == contractsv1.ContextFabricAnswerCompletenessNotDerived || state == "" {
+		// A legacy row, or one whose outcome set was never stamped. The
+		// honest report is "no semantic state", not the vacuous `complete`
+		// an empty set derives under any other reading -- see
+		// ContextFabricAnswerCompletenessNotDerived's own doc comment. The
+		// digest above still reports whatever the document actually
+		// carries (rows total 0 in this case; claimed facts, whatever the
+		// document has).
+		observation.Basis = CompletenessAuthorityBasisUnavailable
+		return observation
+	}
+	observation.Basis = CompletenessAuthorityBasisOutcomeDerived
+	observation.ServerState = state
+	observation.Derived = true
+	if mapped, ok := answerCompletenessStateToStatus(state); ok {
+		observation.Disagreed = mapped != result.Status
+		observation.WouldFlip = observation.Disagreed
+		observation.Direction = deriveCompletenessAuthorityDirection(result.Status, mapped, observation.Disagreed)
 	}
 	return observation
 }

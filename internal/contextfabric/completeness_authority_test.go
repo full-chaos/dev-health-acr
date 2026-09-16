@@ -282,6 +282,7 @@ func TestDeriveCompletenessAuthority_NonAnswerDispositionsCarryNoCompleteness(t 
 				Status:       testCase.status,
 				RefusalBasis: testCase.refusalBasis,
 				Completeness: contractsv1.ContextFabricAnswerCompleteness{Outcomes: degradingRows},
+				ClaimedFacts: []ClaimedFact{{ClaimID: "c1", Kind: contractsv1.ContextFabricFactWork, Field: "work"}},
 			}
 			observation := DeriveCompletenessAuthority(result)
 			if observation.Disposition != testCase.wantDisposition {
@@ -292,6 +293,25 @@ func TestDeriveCompletenessAuthority_NonAnswerDispositionsCarryNoCompleteness(t 
 			}
 			if observation.Derived || observation.ServerState != "" || observation.Disagreed {
 				t.Fatalf("a non-answer disposition must carry no completeness verdict at all, got %+v", observation)
+			}
+			// THE DIGEST IS NOT A COMPLETENESS VERDICT -- it is a property of
+			// the document, and a non-answer disposition still HAS a
+			// document. The row above is real and the claimed fact is real;
+			// both must still reach the line, or a zero here would read as
+			// "no rows"/"nothing claimed" when the truth is "never an
+			// answer, so never asked."
+			if observation.OutcomeRowsTotal != 1 {
+				t.Fatalf("OutcomeRowsTotal = %d, want 1 -- the digest must not depend on disposition", observation.OutcomeRowsTotal)
+			}
+			if observation.DecidingRequirement != "evidence/subject/team" {
+				t.Fatalf("DecidingRequirement = %q, want the real unavailable row's identity", observation.DecidingRequirement)
+			}
+			workIndex, ok := factKindIndex(contractsv1.ContextFabricFactWork)
+			if !ok {
+				t.Fatal("work is not in its own fact-kind vocabulary")
+			}
+			if observation.ClaimedFactsByKind[workIndex] != 1 {
+				t.Fatalf("ClaimedFactsByKind[work] = %d, want 1 -- a real claimed fact must reach the digest on every disposition", observation.ClaimedFactsByKind[workIndex])
 			}
 		})
 	}
