@@ -191,6 +191,12 @@ func TestValidateAgainstRejectsSuperlativeAboutInsufficientEvidenceMember(t *tes
 		{"bottom", "Unrankable is at the bottom of this cohort"},
 		{"first", "Unrankable ranks first in this cohort"},
 		{"last", "Unrankable ranks last in this cohort"},
+		{"most", "Unrankable is the most pressured team in this cohort"},
+		{"least", "Unrankable is the least ready team in this cohort"},
+		{"leads", "Unrankable leads this cohort in attention pressure"},
+		{"trails", "Unrankable trails this cohort in readiness"},
+		{"leading", "Unrankable is the leading team in this cohort's attention ranking"},
+		{"trailing", "Unrankable is the trailing team in this cohort's readiness ranking"},
 	}
 	assertCoversCohortSuperlativeJudgmentTerms(t, cases)
 	for _, c := range cases {
@@ -227,6 +233,12 @@ func TestValidateAgainstAllowsSuperlativeAboutAQualifiedMember(t *testing.T) {
 		{"bottom", "Qualified is at the bottom of this cohort's attention ranking"},
 		{"first", "Qualified ranks first in this cohort's attention ranking"},
 		{"last", "Qualified ranks last in this cohort's attention ranking"},
+		{"most", "Qualified is the most pressured team in this cohort"},
+		{"least", "Qualified is the least ready team in this cohort"},
+		{"leads", "Qualified leads this cohort in attention pressure"},
+		{"trails", "Qualified trails this cohort in readiness"},
+		{"leading", "Qualified is the leading team in this cohort's attention ranking"},
+		{"trailing", "Qualified is the trailing team in this cohort's readiness ranking"},
 	}
 	assertCoversCohortSuperlativeJudgmentTerms(t, cases)
 	for _, c := range cases {
@@ -239,6 +251,73 @@ func TestValidateAgainstAllowsSuperlativeAboutAQualifiedMember(t *testing.T) {
 				t.Fatalf("ValidateAgainst() error = %v, want a superlative about a QUALIFIED member to be admitted", err)
 			}
 		})
+	}
+}
+
+// TestValidateAgainstRejectsComparativeToGroupOverUnrankableMember and
+// TestValidateAgainstAllowsComparativeToGroupOverAQualifiedMember cover the
+// two constructions CohortSuperlativeJudgmentTerms cannot express as single
+// words: "more <adjective> than any/all/every other" and "#1"/"number one".
+func TestValidateAgainstRejectsComparativeToGroupOverUnrankableMember(t *testing.T) {
+	t.Parallel()
+	cases := []superlativeTermCase{
+		{"more-than-any-other", "Unrankable is more pressured than any other team in this cohort"},
+		{"more-than-all-other", "Unrankable is more critically behind than all other teams here"},
+		{"more-than-every-other", "Unrankable is more concerning than every other team in this cohort"},
+		{"hash-1", "Unrankable is #1 in this cohort's attention ranking"},
+		{"number-one", "Unrankable is number one in this cohort's attention ranking"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			input, draft, _, unrankable := unrankableMemberFixture()
+			draft.Drivers[0].AffectedSubjects = []SubjectRef{unrankable}
+			draft.Drivers[0].Title = c.title
+			err := draft.ValidateAgainst(input)
+			if err == nil {
+				t.Fatalf("ValidateAgainst() = nil, want a rejection for a comparative-to-the-group claim about an insufficient_evidence member")
+			}
+			if got := SynthesisRejectionReasonOf(err); got != RejectionReasonDriverSuperlativeOverUnrankableMember {
+				t.Fatalf("rejection reason = %q, want %q", got, RejectionReasonDriverSuperlativeOverUnrankableMember)
+			}
+		})
+	}
+}
+
+func TestValidateAgainstAllowsComparativeToGroupOverAQualifiedMember(t *testing.T) {
+	t.Parallel()
+	cases := []superlativeTermCase{
+		{"more-than-any-other", "Qualified is more pressured than any other team in this cohort"},
+		{"more-than-all-other", "Qualified is more critically behind than all other teams here"},
+		{"more-than-every-other", "Qualified is more concerning than every other team in this cohort"},
+		{"hash-1", "Qualified is #1 in this cohort's attention ranking"},
+		{"number-one", "Qualified is number one in this cohort's attention ranking"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			input, draft, qualified, _ := unrankableMemberFixture()
+			draft.Drivers[0].AffectedSubjects = []SubjectRef{qualified}
+			draft.Drivers[0].Title = c.title
+			if err := draft.ValidateAgainst(input); err != nil {
+				t.Fatalf("ValidateAgainst() error = %v, want a comparative-to-the-group claim about a QUALIFIED member to be admitted", err)
+			}
+		})
+	}
+}
+
+// TestValidateAgainstAllowsAnOrdinaryMoreThanComparisonOverAnUnrankableMember
+// guards against the OVER-strict failure mode symmetric to
+// TestContainsWordRequiresWholeWordMatch: an ordinary "more X than Y"
+// sentence that is not the "than any/all/every other" construction must
+// still be admitted.
+func TestValidateAgainstAllowsAnOrdinaryMoreThanComparisonOverAnUnrankableMember(t *testing.T) {
+	t.Parallel()
+	input, draft, _, unrankable := unrankableMemberFixture()
+	draft.Drivers[0].AffectedSubjects = []SubjectRef{unrankable}
+	draft.Drivers[0].Title = "Unrankable has more evidence available now than it did before"
+	if err := draft.ValidateAgainst(input); err != nil {
+		t.Fatalf("ValidateAgainst() error = %v, want an ordinary more-than-Y comparison (not any/all/every other) to be admitted", err)
 	}
 }
 
@@ -283,7 +362,7 @@ func TestContainsWordRequiresWholeWordMatch(t *testing.T) {
 // stub interpretation -- exactly as a real interpreter call would set it:
 // the judgment's KIND is the interpreter's own closed-vocabulary pick,
 // never re-derived downstream from the free text.
-func judgmentFramingEngineFixture(t *testing.T, requestedJudgment string, kind RequestedJudgmentKind) InvestigationResult {
+func judgmentFramingEngineFixture(t *testing.T, requestedJudgment string, kind RequestedJudgmentKind) (InvestigationResult, *recordingTelemetry) {
 	t.Helper()
 	strugglingTeam := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:STRUGGLING", Label: "Struggling"}
 	healthyTeam := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:HEALTHY", Label: "Healthy"}
@@ -363,7 +442,7 @@ func judgmentFramingEngineFixture(t *testing.T, requestedJudgment string, kind R
 	if err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
-	return result
+	return result, telemetry
 }
 
 func TestEngineJudgmentMismatchAcrossRequestedJudgmentFraming(t *testing.T) {
@@ -381,7 +460,7 @@ func TestEngineJudgmentMismatchAcrossRequestedJudgmentFraming(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			result := judgmentFramingEngineFixture(t, c.requestedJudgment, c.kind)
+			result, telemetry := judgmentFramingEngineFixture(t, c.requestedJudgment, c.kind)
 			if result.Cohort == nil || len(result.Cohort.Members) != 3 {
 				t.Fatalf("result.Cohort = %#v, want the ranked 3-member cohort", result.Cohort)
 			}
@@ -390,6 +469,18 @@ func TestEngineJudgmentMismatchAcrossRequestedJudgmentFraming(t *testing.T) {
 			}
 			if result.Cohort.JudgmentMismatch != c.wantMismatch {
 				t.Fatalf("result.Cohort.JudgmentMismatch = %v, want %v for requested_judgment %q", result.Cohort.JudgmentMismatch, c.wantMismatch, c.requestedJudgment)
+			}
+			// The SAME decision must reach the telemetry line too, through
+			// the real Engine.Investigate call path -- not just the served
+			// Cohort a caller of the API sees.
+			if len(telemetry.cohortRanked) != 1 {
+				t.Fatalf("telemetry.cohortRanked = %#v, want exactly 1 event", telemetry.cohortRanked)
+			}
+			if got := telemetry.cohortRanked[0].JudgmentMismatch; got != c.wantMismatch {
+				t.Fatalf("telemetry event JudgmentMismatch = %v, want %v", got, c.wantMismatch)
+			}
+			if got := telemetry.cohortRanked[0].RequestedJudgmentKind; got != c.kind {
+				t.Fatalf("telemetry event RequestedJudgmentKind = %q, want %q", got, c.kind)
 			}
 			// The sparse member never cleared the qualification floor --
 			// this is the fixture's own precondition, not the behavior
@@ -416,12 +507,18 @@ func TestEngineJudgmentMismatchAcrossRequestedJudgmentFraming(t *testing.T) {
 // unset) must never be flagged as a mismatch.
 func TestEngineJudgmentMismatchFalseWhenRequestedJudgmentIsBlank(t *testing.T) {
 	t.Parallel()
-	result := judgmentFramingEngineFixture(t, "teams_under_pressure", "")
+	result, telemetry := judgmentFramingEngineFixture(t, "teams_under_pressure", "")
 	if result.Cohort == nil {
 		t.Fatalf("result.Cohort = nil")
 	}
 	if result.Cohort.JudgmentMismatch {
 		t.Fatalf("result.Cohort.JudgmentMismatch = true, want false for a non-performance-worded requested judgment")
+	}
+	if len(telemetry.cohortRanked) != 1 || telemetry.cohortRanked[0].JudgmentMismatch {
+		t.Fatalf("telemetry.cohortRanked = %#v, want exactly 1 event with JudgmentMismatch=false", telemetry.cohortRanked)
+	}
+	if got := telemetry.cohortRanked[0].RequestedJudgmentKind; got != "" {
+		t.Fatalf("telemetry event RequestedJudgmentKind = %q, want empty", got)
 	}
 	if !strings.Contains(strings.ToLower(RankingFormulaVersion), "cohort-ranking") {
 		t.Fatalf("fixture sanity: RankingFormulaVersion = %q", RankingFormulaVersion)

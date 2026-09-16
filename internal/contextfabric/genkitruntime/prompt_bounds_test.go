@@ -1728,6 +1728,7 @@ var exemptPromptNumerals = []struct {
 	{"at least 1 and at most 250 affected_subjects", "affected_subjects minimum: the model must name at least one"},
 	{"confidence MUST be a number between 0 and 1 inclusive", "confidence range: a fixed unit interval, not a sized bound"},
 	{"at most 400 characters, and MUST NOT contain any digit character", "coverage_disclosures text bound (CHAOS-4690 Commit F, contractsv1.ContextFabricCoverageDetailPhrasingMaxLength): enforced by contextfabric.applyCoverageDisclosures, which DISCARDS the whole disclosure set on violation -- it never rejects SynthesisDraft.ValidateAgainst, so it is not a ContextFabricModelFacingBounds entry (that registry's own doc comment: entries there are bounds whose violation rejects the WHOLE draft)"},
+	{`a rank number like "#1"/"number one"`, "an example of a rank-number spelling the superlative guard also refuses over an unrankable member, not a sized bound"},
 }
 
 // TestEveryPromptNumeralIsAccounted ships the enumeration that was

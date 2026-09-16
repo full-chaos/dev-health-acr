@@ -94,7 +94,10 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// v16 -> v17: that paragraph's superlative-terms parenthetical is
 			// now interpolated. See DefaultSynthesisPromptVersion's own doc
 			// comment.
-			digest: "36ae017377295737ac307c68a837e305188fa0b3e7c1f73a0ffb59e6cff37792",
+			// v17 -> v18: the vocabulary widened and the paragraph gained two
+			// more phrase-construction sentences. See
+			// DefaultSynthesisPromptVersion's own doc comment.
+			digest: "ef7a9ccd1ffdabe1d30b0959a58171f3d863c4b0e90421be5e27105e5e84554c",
 		},
 		{
 			name:    "interpretation model-output schema",

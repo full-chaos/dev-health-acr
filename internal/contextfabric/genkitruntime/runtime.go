@@ -403,7 +403,12 @@ const (
 	// but the prompt's own hand-typed list never named), so the model-facing
 	// bytes changed even though the paragraph's surrounding prose did not --
 	// same standing rule as every prior bump above.
-	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v17"
+	// v17 -> v18: the guard's own term list grew four more words
+	// (leads/leading/trails/trailing), interpolated the same way, and the
+	// paragraph now also states the two phrase constructions the guard
+	// checks separately (a comparative-to-the-group phrase, a rank-number
+	// spelling) -- both are new prose, model-facing again.
+	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v18"
 	// DefaultSchemaVersion is the genkit MODEL-OUTPUT JSON SCHEMA version
 	// -- ONE value shared by both the interpret and synthesize calls
 	// (Config carries a single SchemaVersion field, not a per-operation

@@ -1,6 +1,9 @@
 package contextfabric
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // CHAOS-5774: a cohort ranking's Score/AttentionRank/RankingBasis/Drivers
 // state an ATTENTION measure (adverse pressure -- operational deficiencies,
@@ -64,34 +67,65 @@ func applyCohortJudgmentMismatch(cohort *Cohort, requestedJudgmentKind Requested
 	cohort.JudgmentMismatch = !scoreMeaningSupportsJudgmentKind(cohort.ScoreMeaning, requestedJudgmentKind)
 }
 
-// CohortSuperlativeJudgmentTerms is the CLOSED, fixed set of ranking
-// superlative/ordinal-position terms requireNoSuperlativeClaimOverUnrankableMember
-// refuses over an unrankable member. Exported so genkitruntime's synthesis
-// prompt can render this SAME list as the terms it tells the model never to
-// use there -- one constant read by both the guard and the prompt, so they
-// cannot list different words. Not an invented pattern-match: strongest/
-// weakest and best/worst are the exact words this codebase's own
-// AnswerEmphasis vocabulary already names a ranking's two ends with
-// (frame_vocab.go: EmphasisPositiveOutliers "the strong end",
-// EmphasisNegativeOutliers "the weak end"); highest/lowest, top/bottom, and
-// first/last are their ordinary ordinal-position synonyms -- the system's
-// own existing ranking vocabulary, never a phrase fitted to one team,
-// question, or dataset.
+// CohortSuperlativeJudgmentTerms is the CLOSED, fixed set of single-word
+// ranking superlative/ordinal/comparative-position terms
+// requireNoSuperlativeClaimOverUnrankableMember refuses over an unrankable
+// member. Exported so genkitruntime's synthesis prompt can render this SAME
+// list as the terms it tells the model never to use there -- one constant
+// read by both the guard and the prompt, so they cannot list different
+// words. Not an invented pattern-match: strongest/weakest and best/worst are
+// the exact words this codebase's own AnswerEmphasis vocabulary already
+// names a ranking's two ends with (frame_vocab.go: EmphasisPositiveOutliers
+// "the strong end", EmphasisNegativeOutliers "the weak end"); highest/lowest,
+// top/bottom, and first/last are their ordinary ordinal-position synonyms;
+// most/least is the general English superlative construction for a
+// multi-syllable adjective (e.g. "most pressured", "least ready") that no
+// -est-suffixed or positional term above covers; leads/leading and
+// trails/trailing name a comparative-to-the-group position the same way
+// without an explicit "most"/"least" -- this cohort's own attention-domain
+// adjectives take exactly these shapes -- the system's own existing ranking
+// vocabulary, never a phrase fitted to one team, question, or dataset.
+//
+// Two constructions this list cannot express as single words are checked
+// separately, by cohortSuperlativeComparativeToGroupPattern and
+// cohortSuperlativeOrdinalPositionPattern below: "more <adjective> than
+// any/all/every other" (a comparative naming the SAME position "most"
+// would, spelled without that word) and "#1"/"number one" (an ordinal
+// naming the SAME position "first" would, spelled as a rank number rather
+// than a word).
 var CohortSuperlativeJudgmentTerms = []string{
 	"strongest", "weakest",
 	"best", "worst",
 	"highest", "lowest",
 	"top", "bottom",
 	"first", "last",
+	"most", "least",
+	"leads", "trails",
+	"leading", "trailing",
 }
+
+// cohortSuperlativeComparativeToGroupPattern matches "more <up to 6 words>
+// than any/all/every other", case-insensitive -- the comparative-to-the-group
+// construction "most" would otherwise express (e.g. "more pressured than any
+// other team", "more critically behind than every other project"). A closed
+// grammatical pattern, not a phrase fitted to one dataset: it never matches
+// on subject/adjective content, only on the surrounding English structure.
+var cohortSuperlativeComparativeToGroupPattern = regexp.MustCompile(`(?i)\bmore\b(?:\s+\S+){0,6}?\s+than\s+(?:any|all|every)\s+other\b`)
+
+// cohortSuperlativeOrdinalPositionPattern matches "#1" or "number one",
+// case-insensitive -- the SAME first-place position "first" already covers
+// as a word, spelled as a rank number instead.
+var cohortSuperlativeOrdinalPositionPattern = regexp.MustCompile(`(?i)(?:#\s?1\b|\bnumber\s+one\b)`)
 
 // requireNoSuperlativeClaimOverUnrankableMember is the structural backstop
 // SynthesisDraft.ValidateAgainst calls for every model-authored driver: a
 // driver whose affected_subjects cite a cohort member the ranking
 // formula could NOT score (Outcome insufficient_evidence or not_applicable)
-// must never use a ranking superlative (any term in
-// CohortSuperlativeJudgmentTerms, in any case, matched as a whole word) in
-// its own title or summary. The prompt
+// must never use a ranking superlative -- any term in
+// CohortSuperlativeJudgmentTerms (in any case, matched as a whole word), the
+// comparative-to-the-group construction cohortSuperlativeComparativeToGroupPattern
+// matches, or the rank-number construction cohortSuperlativeOrdinalPositionPattern
+// matches -- in its own title or summary. The prompt
 // (genkitruntime's synthesisSystemPrompt) states this rule too, but a
 // deterministic guard applies even if a future prompt regresses -- the same
 // "guard, not the prompt, is what actually enforces this" discipline
@@ -126,6 +160,10 @@ func requireNoSuperlativeClaimOverUnrankableMember(driver DriverJudgment, cohort
 			return rejectSynthesis(RejectionReasonDriverSuperlativeOverUnrankableMember,
 				"driver uses a ranking superlative about a cohort member the ranking formula could not score (outcome insufficient_evidence/not_applicable)")
 		}
+	}
+	if cohortSuperlativeComparativeToGroupPattern.MatchString(text) || cohortSuperlativeOrdinalPositionPattern.MatchString(text) {
+		return rejectSynthesis(RejectionReasonDriverSuperlativeOverUnrankableMember,
+			"driver uses a ranking superlative about a cohort member the ranking formula could not score (outcome insufficient_evidence/not_applicable)")
 	}
 	return nil
 }
