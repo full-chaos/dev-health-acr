@@ -294,17 +294,14 @@ func TestDeriveCompletenessAuthority_NonAnswerDispositionsCarryNoCompleteness(t 
 			if observation.Derived || observation.ServerState != "" || observation.Disagreed {
 				t.Fatalf("a non-answer disposition must carry no completeness verdict at all, got %+v", observation)
 			}
-			// THE DIGEST IS NOT A COMPLETENESS VERDICT -- it is a property of
-			// the document, and a non-answer disposition still HAS a
-			// document. The row above is real and the claimed fact is real;
-			// both must still reach the line, or a zero here would read as
-			// "no rows"/"nothing claimed" when the truth is "never an
-			// answer, so never asked."
+			// THE COUNTS ARE NOT A COMPLETENESS VERDICT -- they are a
+			// property of the document, and a non-answer disposition still
+			// HAS a document. The row above is real and the claimed fact is
+			// real; both must still reach the line, or a zero here would
+			// read as "no rows"/"nothing claimed" when the truth is "never
+			// an answer, so never asked."
 			if observation.OutcomeRowsTotal != 1 {
 				t.Fatalf("OutcomeRowsTotal = %d, want 1 -- the digest must not depend on disposition", observation.OutcomeRowsTotal)
-			}
-			if observation.DecidingRequirement != "evidence/subject/team" {
-				t.Fatalf("DecidingRequirement = %q, want the real unavailable row's identity", observation.DecidingRequirement)
 			}
 			workIndex, ok := factKindIndex(contractsv1.ContextFabricFactWork)
 			if !ok {
@@ -312,6 +309,17 @@ func TestDeriveCompletenessAuthority_NonAnswerDispositionsCarryNoCompleteness(t 
 			}
 			if observation.ClaimedFactsByKind[workIndex] != 1 {
 				t.Fatalf("ClaimedFactsByKind[work] = %d, want 1 -- a real claimed fact must reach the digest on every disposition", observation.ClaimedFactsByKind[workIndex])
+			}
+			// THE DECIDING ROW IS A VERDICT FIELD, unlike the counts above:
+			// it names which row the outcome-derivation authority relies on
+			// to decide a state, and that authority is never even asked on
+			// a non-answer disposition -- a real row in the document must
+			// not leak into these fields.
+			if observation.DecidingRequirement != "" || observation.DecidingStage != "" || observation.DecidingOutcome != "" {
+				t.Fatalf("a non-answer disposition published a deciding row it never derived: %+v", observation)
+			}
+			if observation.DecidingCauseOverrun != "" || observation.DecidingCauseCoverage != "" || observation.DecidingCauseNarrowing != "" {
+				t.Fatalf("a non-answer disposition published a deciding cause it never derived: %+v", observation)
 			}
 		})
 	}
@@ -626,6 +634,21 @@ func TestApplyServerCompletenessAuthority_NeverTouchesNonAnswerDispositions(t *t
 			got := ApplyServerCompletenessAuthority(result, true, false, observation)
 			if got.Status != testCase.status {
 				t.Fatalf("Status changed from %q to %q; a non-answer disposition must never be touched", testCase.status, got.Status)
+			}
+			// THE DECIDING ROW IS A VERDICT FIELD, not a document property
+			// like the counts above: it names WHICH row the outcome-
+			// derivation authority relies on to decide a state, and a
+			// non-answer disposition never asks that authority anything
+			// (Basis is not_an_answer). A real row in the stored document
+			// must not leak into these fields just because one exists --
+			// that would contradict this field's own doc comment, which
+			// promises it is empty exactly when Basis is not
+			// outcome_derived.
+			if observation.DecidingRequirement != "" || observation.DecidingStage != "" || observation.DecidingOutcome != "" {
+				t.Fatalf("a non-answer disposition published a deciding row it never derived: %+v", observation)
+			}
+			if observation.DecidingCauseOverrun != "" || observation.DecidingCauseCoverage != "" || observation.DecidingCauseNarrowing != "" {
+				t.Fatalf("a non-answer disposition published a deciding cause it never derived: %+v", observation)
 			}
 		})
 	}

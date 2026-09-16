@@ -435,19 +435,6 @@ func DeriveCompletenessAuthority(result InvestigationResult) CompletenessAuthori
 			observation.OutcomeRowsByKind[index]++
 		}
 	}
-	if decidingRow, ok := decidingRequirementOutcomeRow(rows); ok {
-		observation.DecidingRequirement = decidingRow.Requirement
-		observation.DecidingStage = decidingRow.Stage
-		observation.DecidingOutcome = decidingRow.Outcome
-		observation.DecidingCauseOverrun = decidingRow.CauseOverrun
-		observation.DecidingCauseCoverage = decidingRow.CauseCoverage
-		observation.DecidingCauseNarrowing = decidingRow.CauseNarrowing
-	} else if identity, ok := decidingUnevaluatedReadRequirement(rows); ok {
-		observation.DecidingRequirement = identity
-		observation.DecidingStage = contractsv1.ContextFabricOutcomeStagePlanning
-		observation.DecidingOutcome = contractsv1.ContextFabricRequirementSatisfied
-		observation.DecidingReadEvaluationGap = true
-	}
 	for _, claim := range result.ClaimedFacts {
 		if index, ok := factKindIndex(claim.Kind); ok {
 			observation.ClaimedFactsByKind[index]++
@@ -481,6 +468,26 @@ func DeriveCompletenessAuthority(result InvestigationResult) CompletenessAuthori
 		observation.Disagreed = mapped != result.Status
 		observation.WouldFlip = observation.Disagreed
 		observation.Direction = deriveCompletenessAuthorityDirection(result.Status, mapped, observation.Disagreed)
+	}
+
+	// THE DECIDING ROW IS A VERDICT FIELD, unlike the counts above: it names
+	// WHICH row the outcome-derivation authority relies on to decide a
+	// state, so it is populated only here, on the ONE path that authority
+	// actually ran (Basis is outcome_derived) -- never on a non-answer
+	// disposition, even one whose stored document happens to carry real
+	// outcome rows the authority was never asked about.
+	if decidingRow, ok := decidingRequirementOutcomeRow(rows); ok {
+		observation.DecidingRequirement = decidingRow.Requirement
+		observation.DecidingStage = decidingRow.Stage
+		observation.DecidingOutcome = decidingRow.Outcome
+		observation.DecidingCauseOverrun = decidingRow.CauseOverrun
+		observation.DecidingCauseCoverage = decidingRow.CauseCoverage
+		observation.DecidingCauseNarrowing = decidingRow.CauseNarrowing
+	} else if identity, ok := decidingUnevaluatedReadRequirement(rows); ok {
+		observation.DecidingRequirement = identity
+		observation.DecidingStage = contractsv1.ContextFabricOutcomeStagePlanning
+		observation.DecidingOutcome = contractsv1.ContextFabricRequirementSatisfied
+		observation.DecidingReadEvaluationGap = true
 	}
 	return observation
 }
