@@ -637,6 +637,7 @@ func narrowSynthesisInput(params synthesisAssemblyParams, plan *AnswerPlan) narr
 	var citations cohortMemberSignalCitations
 	if params.WorkItemCensus == nil {
 		rankedCohort, rankEvent, citations = RankCohort(cohort, facts.Facts, facts.Coverage)
+		applyCohortJudgmentMismatch(rankedCohort, params.Interpretation.RequestedJudgment)
 	}
 	graph.Cohort = rankedCohort
 	var retention FactRetentionDecision

@@ -384,7 +384,14 @@ const (
 	// the model was NOT told its budget must not be served as though it had
 	// been. The answers this change exists to improve are precisely the ones
 	// a stale reuse key would keep serving unchanged.
-	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v15"
+	//
+	// v15 -> v16 (CHAOS-5774): synthesisSystemPrompt gains the
+	// score_meaning/judgment_mismatch paragraph -- a genuine change to what
+	// the model is told about a cohort ranking's meaning, so a row generated
+	// before the model was ever told to read those fields must not satisfy a
+	// reuse lookup as though it were generated under the new prompt (same
+	// standing rule as v6-v15 above).
+	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v16"
 	// DefaultSchemaVersion is the genkit MODEL-OUTPUT JSON SCHEMA version
 	// -- ONE value shared by both the interpret and synthesize calls
 	// (Config carries a single SchemaVersion field, not a per-operation

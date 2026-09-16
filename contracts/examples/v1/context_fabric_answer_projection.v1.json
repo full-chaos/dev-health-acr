@@ -65,6 +65,7 @@
         ]
       }
     ],
+    "score_meaning": "attention",
     "ranking_table": [
       {
         "fields": {

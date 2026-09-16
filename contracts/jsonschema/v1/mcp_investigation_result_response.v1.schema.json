@@ -1418,8 +1418,38 @@
             },
             "truncated": {
               "type": "boolean"
+            },
+            "score_meaning": {
+              "description": "CHAOS-5774: the closed-vocabulary statement of what member score/attention_rank/ranking_basis/drivers actually measure. Present iff at least one member has ranking_computed=true.",
+              "enum": [
+                "attention"
+              ],
+              "type": "string"
+            },
+            "judgment_mismatch": {
+              "description": "CHAOS-5774: server-computed, true when the investigation's requested judgment asked for a comparison score_meaning does not support. Never set without score_meaning also present.",
+              "type": "boolean"
             }
           },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "judgment_mismatch": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "judgment_mismatch"
+                ]
+              },
+              "then": {
+                "required": [
+                  "score_meaning"
+                ]
+              }
+            }
+          ],
           "required": [
             "kind",
             "members",

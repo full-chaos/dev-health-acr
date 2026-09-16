@@ -291,6 +291,16 @@ func (c ContextFabricProjectedCohort) Validate() error {
 			return fmt.Errorf("ranking table row: %w", err)
 		}
 	}
+	// ScoreMeaning/JudgmentMismatch (CHAOS-5774): checked only when present,
+	// same "no write/legacy split at the projection boundary" shape as
+	// Outcome above -- Project() copies whatever the source result carried,
+	// and a pre-ticket stored result re-projected here must stay readable.
+	if c.ScoreMeaning != "" && !validContextFabricCohortScoreMeaning(c.ScoreMeaning) {
+		return fmt.Errorf("projected cohort score meaning is not a recognized value")
+	}
+	if c.ScoreMeaning == "" && rankedCount == 0 && c.JudgmentMismatch {
+		return fmt.Errorf("projected cohort judgment mismatch set without a score meaning")
+	}
 	return nil
 }
 

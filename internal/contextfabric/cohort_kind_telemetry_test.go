@@ -81,6 +81,9 @@ func TestCohortRankedLineCarriesNoKeyOutsideItsAllowList(t *testing.T) {
 		// fifteen-value subject-kind vocabulary, content-free by the same
 		// reasoning that admits every other key here.
 		"cohort_kind": true,
+		// score_meaning (CHAOS-5774): a closed-vocabulary value naming what
+		// the formula measures, content-free by the same reasoning.
+		"score_meaning": true,
 	}
 	for key := range records[0] {
 		if !allowed[key] {

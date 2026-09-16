@@ -1122,9 +1122,13 @@ type CohortRankedEvent struct {
 	// side carried counts, and the graph side carried a refusal basis with
 	// no kind. An operator watching a newly admitted kind reach production
 	// had nothing to watch.
-	CohortKind          SubjectKind
-	MemberCount         int
-	FormulaVersion      string
+	CohortKind     SubjectKind
+	MemberCount    int
+	FormulaVersion string
+	// ScoreMeaning (CHAOS-5774) travels next to FormulaVersion -- see
+	// RankCohort's own minting comment. A closed-vocabulary value, content-
+	// safe by the same reasoning as every other field here.
+	ScoreMeaning        CohortScoreMeaning
 	DegradedMemberCount int
 	// SignalsAvailable maps a top-level signal-family name (the same
 	// RankingSignal* constants cohort_ranking.go's RankingBasis values
@@ -3329,6 +3333,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if graphContext.Cohort != nil && !workItemTuple {
 		var rankEvent CohortRankedEvent
 		graphContext.Cohort, rankEvent, cohortSignalCitations = RankCohort(graphContext.Cohort, facts.Facts, facts.Coverage)
+		applyCohortJudgmentMismatch(graphContext.Cohort, interpretation.RequestedJudgment)
 		// DEFERRED, not emitted here: stage 3 may re-rank a narrowed cohort
 		// for the retry, and the event that reaches an operator must describe
 		// the cohort actually SERVED. Emitting at this point published a

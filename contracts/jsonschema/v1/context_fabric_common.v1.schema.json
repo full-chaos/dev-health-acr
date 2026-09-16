@@ -2022,6 +2022,17 @@
             "$ref": "#/$defs/CohortGroup"
           },
           "maxItems": 250
+        },
+        "score_meaning": {
+          "description": "CHAOS-5774: the closed-vocabulary statement of what member score/attention_rank/ranking_basis/drivers actually measure. Present iff at least one member has ranking_computed=true.",
+          "type": "string",
+          "enum": [
+            "attention"
+          ]
+        },
+        "judgment_mismatch": {
+          "description": "CHAOS-5774: server-computed, true when the investigation's requested judgment asked for a comparison score_meaning does not support. Never set without score_meaning also present.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -2044,7 +2055,26 @@
           "complete",
           "truncated"
         ]
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "judgment_mismatch"
+            ],
+            "properties": {
+              "judgment_mismatch": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "score_meaning"
+            ]
+          }
+        }
+      ]
     },
     "CohortMember": {
       "type": "object",

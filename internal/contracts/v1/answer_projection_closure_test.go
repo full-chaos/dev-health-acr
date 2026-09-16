@@ -340,7 +340,12 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// integers and are not walked here). Already trusted-because-closed
 		// by the existing bare-leaf "kind" case above (ContextFabricSubjectKind,
 		// the same enum origin_kind/supported_kinds/skipped_kinds draw from).
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 238},
+		// CHAOS-5774: 238 -> 239 -- ProjectedCohort's new score_meaning
+		// string leaf (mirrors the canonical Cohort field verbatim).
+		// judgment_mismatch is a bool and is not walked here.
+		// Trusted-because-closed: a fixed, server-minted enum, never model
+		// prose.
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 239},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -403,7 +408,9 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// bounded consumer. Both leaves are trusted-because-closed.
 		// CHAOS-5732 (D47): 349 -> 350 -- the same new "kind" leaf, reached
 		// through the canonical result's $ref to CoverageDetail.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 350},
+		// 350 -> 351 -- Cohort's new score_meaning string leaf, same
+		// ticket and reasoning as the answer_projection surface above.
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 351},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -551,6 +558,12 @@ func trustedBecauseClosed(path string) bool {
 		// never free-form model prose, the same standing "missing" above
 		// has for its own closed-enum array.
 		"data_completeness", "ranking_basis",
+		// "score_meaning" (ContextFabricCohortScoreMeaning) is
+		// validated against its own closed registry
+		// (validContextFabricCohortScoreMeaning) before a result is stored --
+		// minted by RankCohort from a fixed formula-derived registry, the
+		// same standing as data_completeness/ranking_basis just above.
+		"score_meaning",
 		// CHAOS-4398 PR2: "signal" (ContextFabricCohortMemberDriver.Signal,
 		// the 5-value RankingSignal* vocabulary) and "window" ("current"/
 		// "current_vs_prior") are both closed-vocabulary strings validated

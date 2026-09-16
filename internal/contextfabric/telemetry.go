@@ -719,6 +719,9 @@ func (t SlogEngineTelemetry) RecordCohortRanked(ctx context.Context, principal s
 		"cohort_kind", SanitizeLogAttr(string(event.CohortKind)),
 		"member_count", event.MemberCount,
 		"formula_version", SanitizeLogAttr(event.FormulaVersion),
+		// score_meaning (CHAOS-5774): closed vocabulary, content-safe by the
+		// same reasoning as formula_version beside it.
+		"score_meaning", SanitizeLogAttr(string(event.ScoreMeaning)),
 		"degraded_member_count", event.DegradedMemberCount,
 		"signals_available", event.SignalsAvailable,
 		// outcome_counts (CHAOS-4398 PR3, codex R1): a closed-vocabulary

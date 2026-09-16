@@ -285,6 +285,12 @@ const (
 	CohortOutcomeNotApplicable        = contractsv1.ContextFabricCohortOutcomeNotApplicable
 )
 
+// CohortScoreMeaning (CHAOS-5774): Cohort.ScoreMeaning's own additive
+// contract type -- see ContextFabricCohortScoreMeaning's own doc comment.
+type CohortScoreMeaning = contractsv1.ContextFabricCohortScoreMeaning
+
+const CohortScoreMeaningAttention = contractsv1.ContextFabricCohortScoreMeaningAttention
+
 type RelationshipPath = contractsv1.ContextFabricRelationshipPath
 type RelationshipEdge = contractsv1.ContextFabricRelationshipEdge
 type RelationshipType = contractsv1.ContextFabricRelationshipType

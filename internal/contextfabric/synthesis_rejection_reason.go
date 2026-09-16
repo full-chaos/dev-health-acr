@@ -86,6 +86,13 @@ const (
 	// The cohort's own Groups[].MemberCanonicalIDs is the only place that
 	// truth lives, and until this reason existed nothing consulted it.
 	RejectionReasonDriverGroupMemberForeign SynthesisRejectionReason = "driver_group_member_foreign"
+	// RejectionReasonDriverSuperlativeOverUnrankableMember (CHAOS-5774): a
+	// driver used a ranking superlative (best/worst/strongest/weakest) about
+	// a cohort member the ranking formula could not score (Outcome
+	// insufficient_evidence/not_applicable) -- see
+	// requireNoSuperlativeClaimOverUnrankableMember's own doc comment for
+	// the full rule and why this term list is general, not dataset-specific.
+	RejectionReasonDriverSuperlativeOverUnrankableMember SynthesisRejectionReason = "driver_superlative_over_unrankable_member"
 
 	// Findings (remaining_work / readiness_gaps / conflicts share one set:
 	// WHICH section is already carried by the wrapped error's own prefix,
@@ -117,33 +124,34 @@ const (
 // and this codebase has already been bitten by exactly that shape of
 // coupling.
 var canonicalSynthesisRejectionReasons = map[SynthesisRejectionReason]SynthesisRejectionReason{
-	RejectionReasonUnclassified:                     RejectionReasonUnclassified,
-	RejectionReasonStatusInvalid:                    RejectionReasonStatusInvalid,
-	RejectionReasonDirectJudgmentMissing:            RejectionReasonDirectJudgmentMissing,
-	RejectionReasonDeterministicAnswerMissing:       RejectionReasonDeterministicAnswerMissing,
-	RejectionReasonEvidenceUnknown:                  RejectionReasonEvidenceUnknown,
-	RejectionReasonClaimInvalid:                     RejectionReasonClaimInvalid,
-	RejectionReasonClaimRowsModelAuthored:           RejectionReasonClaimRowsModelAuthored,
-	RejectionReasonClaimTimeSeriesRowsModelAuthored: RejectionReasonClaimTimeSeriesRowsModelAuthored,
-	RejectionReasonClaimIDDuplicate:                 RejectionReasonClaimIDDuplicate,
-	RejectionReasonClaimIDReservedNamespace:         RejectionReasonClaimIDReservedNamespace,
-	RejectionReasonClaimSubjectOutOfScope:           RejectionReasonClaimSubjectOutOfScope,
-	RejectionReasonClaimSubjectLabelMismatch:        RejectionReasonClaimSubjectLabelMismatch,
-	RejectionReasonClaimNoCanonicalFact:             RejectionReasonClaimNoCanonicalFact,
-	RejectionReasonClaimFieldUnobserved:             RejectionReasonClaimFieldUnobserved,
-	RejectionReasonClaimValueContradicts:            RejectionReasonClaimValueContradicts,
-	RejectionReasonDriverInvalid:                    RejectionReasonDriverInvalid,
-	RejectionReasonDriverSubjectOutOfScope:          RejectionReasonDriverSubjectOutOfScope,
-	RejectionReasonDriverSubjectLabelMismatch:       RejectionReasonDriverSubjectLabelMismatch,
-	RejectionReasonDriverPathUnknown:                RejectionReasonDriverPathUnknown,
-	RejectionReasonDriverEvidenceUnknown:            RejectionReasonDriverEvidenceUnknown,
-	RejectionReasonDriverClaimUngrounded:            RejectionReasonDriverClaimUngrounded,
-	RejectionReasonDriverGroupMemberForeign:         RejectionReasonDriverGroupMemberForeign,
-	RejectionReasonFindingInvalid:                   RejectionReasonFindingInvalid,
-	RejectionReasonFindingSubjectOutOfScope:         RejectionReasonFindingSubjectOutOfScope,
-	RejectionReasonFindingSubjectLabelMismatch:      RejectionReasonFindingSubjectLabelMismatch,
-	RejectionReasonFindingEvidenceUnknown:           RejectionReasonFindingEvidenceUnknown,
-	RejectionReasonFindingClaimUngrounded:           RejectionReasonFindingClaimUngrounded,
+	RejectionReasonUnclassified:                          RejectionReasonUnclassified,
+	RejectionReasonStatusInvalid:                         RejectionReasonStatusInvalid,
+	RejectionReasonDirectJudgmentMissing:                 RejectionReasonDirectJudgmentMissing,
+	RejectionReasonDeterministicAnswerMissing:            RejectionReasonDeterministicAnswerMissing,
+	RejectionReasonEvidenceUnknown:                       RejectionReasonEvidenceUnknown,
+	RejectionReasonClaimInvalid:                          RejectionReasonClaimInvalid,
+	RejectionReasonClaimRowsModelAuthored:                RejectionReasonClaimRowsModelAuthored,
+	RejectionReasonClaimTimeSeriesRowsModelAuthored:      RejectionReasonClaimTimeSeriesRowsModelAuthored,
+	RejectionReasonClaimIDDuplicate:                      RejectionReasonClaimIDDuplicate,
+	RejectionReasonClaimIDReservedNamespace:              RejectionReasonClaimIDReservedNamespace,
+	RejectionReasonClaimSubjectOutOfScope:                RejectionReasonClaimSubjectOutOfScope,
+	RejectionReasonClaimSubjectLabelMismatch:             RejectionReasonClaimSubjectLabelMismatch,
+	RejectionReasonClaimNoCanonicalFact:                  RejectionReasonClaimNoCanonicalFact,
+	RejectionReasonClaimFieldUnobserved:                  RejectionReasonClaimFieldUnobserved,
+	RejectionReasonClaimValueContradicts:                 RejectionReasonClaimValueContradicts,
+	RejectionReasonDriverInvalid:                         RejectionReasonDriverInvalid,
+	RejectionReasonDriverSubjectOutOfScope:               RejectionReasonDriverSubjectOutOfScope,
+	RejectionReasonDriverSubjectLabelMismatch:            RejectionReasonDriverSubjectLabelMismatch,
+	RejectionReasonDriverPathUnknown:                     RejectionReasonDriverPathUnknown,
+	RejectionReasonDriverEvidenceUnknown:                 RejectionReasonDriverEvidenceUnknown,
+	RejectionReasonDriverClaimUngrounded:                 RejectionReasonDriverClaimUngrounded,
+	RejectionReasonDriverGroupMemberForeign:              RejectionReasonDriverGroupMemberForeign,
+	RejectionReasonDriverSuperlativeOverUnrankableMember: RejectionReasonDriverSuperlativeOverUnrankableMember,
+	RejectionReasonFindingInvalid:                        RejectionReasonFindingInvalid,
+	RejectionReasonFindingSubjectOutOfScope:              RejectionReasonFindingSubjectOutOfScope,
+	RejectionReasonFindingSubjectLabelMismatch:           RejectionReasonFindingSubjectLabelMismatch,
+	RejectionReasonFindingEvidenceUnknown:                RejectionReasonFindingEvidenceUnknown,
+	RejectionReasonFindingClaimUngrounded:                RejectionReasonFindingClaimUngrounded,
 }
 
 // ValidSynthesisRejectionReason reports whether reason is a member of the

@@ -727,6 +727,9 @@ func (d SynthesisDraft) ValidateAgainst(input SynthesisInput) error {
 		if err := requireGroupMembershipClosure(driver.AffectedSubjects, input.Graph.Cohort); err != nil {
 			return rejectSynthesis(RejectionReasonDriverGroupMemberForeign, "driver: %w", err)
 		}
+		if err := requireNoSuperlativeClaimOverUnrankableMember(driver, input.Graph.Cohort); err != nil {
+			return err
+		}
 	}
 	// Fixed slice, NOT a map: a map's iteration order is randomized per
 	// run, so returning the first-rejected section's error from a map

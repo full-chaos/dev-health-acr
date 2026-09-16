@@ -1223,6 +1223,23 @@ type ContextFabricCohort struct {
 	// a conservative summary of the whole union instead of a boolean that
 	// happened to describe only the first group.
 	Groups []ContextFabricCohortGroup `json:"groups,omitempty"`
+	// ScoreMeaning (CHAOS-5774) is the closed-vocabulary statement of what
+	// Score/AttentionRank/RankingBasis/Drivers actually MEASURE, minted by
+	// RankCohort alongside RankingFormulaVersion. Present iff at least one
+	// member has RankingComputed=true; empty on an unranked cohort (offers-
+	// only discovery, or a request that never reached ranking). Carried on
+	// the WIRE, not only in telemetry, so a consumer -- human, synthesis
+	// prompt, or downstream renderer -- reads what the ranking means as
+	// DATA rather than inferring it from the formula's own signal names.
+	ScoreMeaning ContextFabricCohortScoreMeaning `json:"score_meaning,omitempty"`
+	// JudgmentMismatch is a server-computed, closed boolean
+	// disclosure: true when the investigation's own requested_judgment asked
+	// for a judgment (today: a performance/productivity comparison) that
+	// ScoreMeaning does not support. Never model-authored and never set
+	// without ScoreMeaning also being set -- there is nothing to mismatch
+	// against on an unranked cohort. A consumer reads this instead of
+	// re-deriving the same mismatch from requested_judgment text.
+	JudgmentMismatch bool `json:"judgment_mismatch,omitempty"`
 }
 
 type ContextFabricCohortMember struct {
@@ -1325,6 +1342,22 @@ const (
 	ContextFabricCohortOutcomeProvisional          ContextFabricCohortMemberOutcome = "provisional"
 	ContextFabricCohortOutcomeInsufficientEvidence ContextFabricCohortMemberOutcome = "insufficient_evidence"
 	ContextFabricCohortOutcomeNotApplicable        ContextFabricCohortMemberOutcome = "not_applicable"
+)
+
+// ContextFabricCohortScoreMeaning is the closed vocabulary for
+// ContextFabricCohort.ScoreMeaning -- see that field's own doc comment.
+// Extendable: a future ranking formula that measures something else (e.g. a
+// real performance/productivity signal, if one is ever ratified) adds a new
+// member here rather than repurposing "attention".
+type ContextFabricCohortScoreMeaning string
+
+const (
+	// ContextFabricCohortScoreMeaningAttention: Score/AttentionRank measure
+	// adverse pressure (operational deficiencies, readiness gaps, workload
+	// pressure, health risk, investment-mix concentration) -- the ONLY
+	// meaning cohort_ranking.go's formula can produce today. It is never a
+	// performance, productivity, capability, or quality measure.
+	ContextFabricCohortScoreMeaningAttention ContextFabricCohortScoreMeaning = "attention"
 )
 
 // ContextFabricCohortMemberDriver is CHAOS-4398 PR2's structured,

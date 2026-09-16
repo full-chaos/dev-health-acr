@@ -87,7 +87,9 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// are charged before per_member is published, a sentence an
 			// earlier revision stated while it was false. See
 			// DefaultSynthesisPromptVersion's own doc comment.
-			digest: "adcbfd8303c2119967b91ff29216944ad78fc0586ed644646ba5d4ef4d3ed5e7",
+			// v15 -> v16 (CHAOS-5774): the score_meaning/judgment_mismatch
+			// paragraph. See DefaultSynthesisPromptVersion's own doc comment.
+			digest: "cfafbe1cdba939890b58c5272d640fd484413d7c60833165653fdb8bfd1a3e7d",
 		},
 		{
 			name:    "interpretation model-output schema",

@@ -224,6 +224,24 @@ func (c ContextFabricCohort) validate(bounds contextFabricBounds) error {
 			return fmt.Errorf("cohort member attention ranks must be a dense 1..N sequence over every ranked member")
 		}
 	}
+	// ScoreMeaning: required exactly when ranking ran (mirrors
+	// cohortMemberOutcomeRequired's own "brand-new field, gated on its own
+	// presence too" shape), and never set on an unranked cohort -- there is
+	// nothing to state a meaning for.
+	if rankedCount > 0 && (bounds.cohortScoreMeaningRequired || c.ScoreMeaning != "") {
+		if !validContextFabricCohortScoreMeaning(c.ScoreMeaning) {
+			return fmt.Errorf("cohort score meaning is not a recognized value")
+		}
+	}
+	if rankedCount == 0 && c.ScoreMeaning != "" {
+		return fmt.Errorf("cohort score meaning set without any ranked member")
+	}
+	// JudgmentMismatch states a mismatch between the requested
+	// judgment and ScoreMeaning -- meaningless, and refused, without a
+	// ScoreMeaning to mismatch against.
+	if c.JudgmentMismatch && c.ScoreMeaning == "" {
+		return fmt.Errorf("cohort judgment mismatch set without a score meaning")
+	}
 	// CHAOS-4636: the group axis must close over the member list above --
 	// every named member exists.
 	//
@@ -395,6 +413,12 @@ type contextFabricBounds struct {
 	// freshly produced row (Validate(), write bounds) has no such excuse --
 	// the engine always stamps it before Validate runs.
 	completenessRequired bool
+	// cohortScoreMeaningRequired (CHAOS-5774) is the SAME write-only split
+	// as cohortMemberOutcomeRequired above: ScoreMeaning is a brand-new
+	// field, so every row persisted before this ticket carries its zero
+	// value. A freshly produced row (Validate(), write bounds) has no such
+	// excuse -- RankCohort always stamps it before Validate runs.
+	cohortScoreMeaningRequired bool
 }
 
 // contextFabricRelationshipPathMaxNodes is the Go-enforced ceiling on path
@@ -437,6 +461,7 @@ var contextFabricWriteBounds = contextFabricBounds{
 	cohortMemberMissingSignals:              5,
 	cohortMemberDriverConcentrationRequired: true,
 	completenessRequired:                    true,
+	cohortScoreMeaningRequired:              true,
 }
 
 // contextFabricLegacyBounds is what the Go validator alone used to accept.

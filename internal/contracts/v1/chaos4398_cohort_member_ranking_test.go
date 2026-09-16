@@ -618,6 +618,7 @@ func baseCohortResultWithClaims(driver ContextFabricCohortMemberDriver, claims [
 		Warnings: []string{},
 		Cohort: &ContextFabricCohort{
 			Kind: ContextFabricSubjectTeam, Rationale: "matched by kind census",
+			ScoreMeaning: ContextFabricCohortScoreMeaningAttention,
 			Members: []ContextFabricCohortMember{{
 				Subject:          ContextFabricSubjectRef{Kind: ContextFabricSubjectTeam, CanonicalID: "team:CHAOS", Label: "Fullchaos"},
 				Rank:             1,
