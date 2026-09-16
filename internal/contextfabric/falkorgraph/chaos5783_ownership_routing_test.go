@@ -41,12 +41,18 @@ func repositoryAnchorFrame() *contextfabric.QuestionFrame {
 // actually resolved.
 func ownershipRoutingRequest(frame *contextfabric.QuestionFrame, anchor contextfabric.SubjectRef) contextfabric.GraphDiscoveryRequest {
 	var candidates []contextfabric.SubjectCandidate
+	// bases: a term match alone never binds (contextfabric.AnchorBound
+	// requires an identity-proven basis on that branch) -- a real resolution
+	// that bound this anchor via a scoped term always carries one, so a
+	// fixture claiming to model "actually resolved" must too.
+	bases := contextfabric.CommitBasisSet{}
 	if frame != nil && frame.SubjectExpression.Scoped != nil {
 		candidates = []contextfabric.SubjectCandidate{{
 			ReceiptID: "receipt_anchor", Subject: anchor, State: contextfabric.ResolutionCommitted,
 			MatchedTerms: frame.SubjectExpression.Scoped.AnchorTerms, MatchReasons: []string{"matched"},
 			Confidence: 1, EvidenceRefIDs: []string{},
 		}}
+		bases.Record(anchor, contextfabric.CommitBasisAuthoritativeIdentity)
 	}
 	return contextfabric.GraphDiscoveryRequest{
 		Request: contextfabric.InvestigationRequest{
@@ -62,6 +68,7 @@ func ownershipRoutingRequest(frame *contextfabric.QuestionFrame, anchor contextf
 		},
 		Resolution: contextfabric.SubjectResolution{Committed: []contextfabric.SubjectRef{anchor}, Candidates: candidates},
 		Frame:      frame,
+		Bases:      bases,
 	}
 }
 

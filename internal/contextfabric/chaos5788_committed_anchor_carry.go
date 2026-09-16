@@ -1,6 +1,9 @@
 package contextfabric
 
-import contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+import (
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/hintsource"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+)
 
 // CHAOS-5788: a committed anchor with an authoritative identity is carried
 // state; a later turn that only refines the member kind must never re-derive
@@ -145,20 +148,30 @@ const (
 	// the carry and the proof point at one subject.
 	ConfirmedAnchorAgreementAgree ConfirmedAnchorAgreement = "agree"
 	// ConfirmedAnchorAgreementDisagree: an entry applied, and this turn's own
-	// resolution committed a DIFFERENT canonical id of the SAME kind. The
+	// resolution committed a DIFFERENT canonical id of the SAME kind ON AN
+	// IDENTITY-PROVEN BASIS (CommitBasis.IdentityProven -- a caller canonical
+	// id or an authoritative keyed identity, never a score comparison). The
 	// entry is VETOED: never disclosed as applied, never carried forward to
 	// a later turn -- a served document must never claim a subject its own
-	// resolution disowned in the same breath.
+	// resolution disowned in the same breath. A same-kind, different-id
+	// STATISTICAL commit is never a conflict: anchorBound itself refuses to
+	// bind such a commit (count_population_scope.go), so treating it as
+	// grounds to drop a genuinely proven carry would let the weaker signal
+	// evict the stronger one.
 	ConfirmedAnchorAgreementDisagree ConfirmedAnchorAgreement = "disagree"
 )
 
 // carriedAnchorAgreementFor decides, once per turn immediately after
 // resolution runs, whether this turn's own applied subject_anchor ledger
 // entry (appliedNeeds, chaos5639_confirmed_need.go) still agrees with what
-// resolution independently committed. Returns the agreement, the entry
-// itself (zero value when not_applicable), and vetoed=true exactly on
+// resolution independently committed. bases is the SAME CommitBasisSet
+// ResolveSubjects returned this turn -- only a same-kind, different-id
+// commit that basis itself reports IdentityProven can ever disagree; a
+// statistical or unrecorded-basis commit of the same kind is invisible to
+// this check, exactly as it is to anchorBound. Returns the agreement, the
+// entry itself (zero value when not_applicable), and vetoed=true exactly on
 // disagree -- the one case a caller must act on.
-func carriedAnchorAgreementFor(appliedNeeds map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember, resolution SubjectResolution) (ConfirmedAnchorAgreement, confirmedStructureMember, bool) {
+func carriedAnchorAgreementFor(appliedNeeds map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember, resolution SubjectResolution, bases CommitBasisSet) (ConfirmedAnchorAgreement, confirmedStructureMember, bool) {
 	entry, ok := appliedNeeds[contractsv1.ContextFabricStructureNeedSubjectAnchor]
 	if !ok {
 		return ConfirmedAnchorAgreementNotApplicable, confirmedStructureMember{}, false
@@ -171,12 +184,37 @@ func carriedAnchorAgreementFor(appliedNeeds map[contractsv1.ContextFabricStructu
 		if subject.CanonicalID == entry.AppliedValue {
 			return ConfirmedAnchorAgreementAgree, entry, false
 		}
-		sawSameKind = true
+		if bases.For(subject).IdentityProven() {
+			sawSameKind = true
+		}
 	}
 	if sawSameKind {
 		return ConfirmedAnchorAgreementDisagree, entry, true
 	}
 	return ConfirmedAnchorAgreementAbsent, entry, false
+}
+
+// engineCommittedAnchorHint builds the SubjectHint that lets an
+// identity-proven carried anchor reach resolution's own caller-hint exact
+// commit exit (graphrank/resolve.go's RequestedScope.SubjectHints loop) --
+// the SAME channel a caller-confirmed pick reaches, rather than a second,
+// parallel notion of "this is the anchor." Only ever built for the
+// engine-committed basis: the identity proof anchorBound already required
+// before this entry could be captured (chaos5788_committed_anchor_carry.go's
+// own capture gate) is exactly the proof this hint asks resolution to
+// re-verify and commit on. ok=false when nothing applies, or the applied
+// entry is a receipt-redeemed one -- a caller-confirmed pick already reaches
+// this channel through its own receipt-redemption path and must not be
+// double-injected here.
+func engineCommittedAnchorHint(appliedNeeds map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember) (contractsv1.ContextFabricSubjectHint, bool) {
+	entry, ok := appliedNeeds[contractsv1.ContextFabricStructureNeedSubjectAnchor]
+	if !ok || entry.Basis != ConfirmedNeedBasisEngineCommitted || entry.AppliedValue == "" {
+		return contractsv1.ContextFabricSubjectHint{}, false
+	}
+	return contractsv1.ContextFabricSubjectHint{
+		Kind: entry.AppliedKind, ID: entry.AppliedValue, Label: entry.AppliedValue,
+		Source: string(hintsource.EngineCommittedAnchorCarry),
+	}, true
 }
 
 // carriedStructureEntriesForDecisive replaces entries' subject_anchor member

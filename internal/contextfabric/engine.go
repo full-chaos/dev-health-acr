@@ -2626,6 +2626,20 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, gateResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, gateMaterial, effectiveWindow, windowCarried, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, CohortMemberSourceNotApplicable, confirmedNeedsForCapture))
 	}
 	scopeAnchorKind := ScopeAnchorRetrievalKind(familyOutcome.Frame, familyOutcome.WinningSample.ScopeAnchorKind)
+	// An identity-proven carried anchor reaches resolution through the SAME
+	// caller-hint exact-commit channel a caller-confirmed pick reaches
+	// (graphrank/resolve.go's RequestedScope.SubjectHints loop), so it
+	// COMMITS on a proven basis rather than merely widening the pool a
+	// same-named, lower-proof candidate could still win. Gated !workItemTuple:
+	// that shape's own resolution enforces exactly one committed project
+	// subject, and this hint's own kind is never that one.
+	if !workItemTuple {
+		// 50: the same ContextFabricRequestedScope.SubjectHints v1 bound
+		// resolvePriorSubjectHints' own cap above enforces.
+		if hint, ok := engineCommittedAnchorHint(appliedNeeds); ok && len(graphRequest.RequestedScope.SubjectHints) < 50 {
+			graphRequest.RequestedScope.SubjectHints = append(append([]SubjectHint(nil), graphRequest.RequestedScope.SubjectHints...), hint)
+		}
+	}
 	resolution, structureMaterial, commitBases, commitDigests, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, effectiveConfirmedKind(structureCanon.Confirmed, kindCarry), confirmedAnchorSelection(structureCanon.Confirmed, appliedNeeds), familyOutcome.Frame, scopeAnchorKind)
 	if err != nil {
 		// CHAOS-4077: a never-projected org (ResolveSubjects queried a
@@ -2695,8 +2709,16 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// disagree here VETOES the entry -- vetoedAnchorEntry/haveVetoedAnchor feed
 	// both the disclosure echo and the outgoing ledger below, and
 	// anchorAgreementForTelemetry is read by the deferred ledger line above.
-	anchorAgreementForTelemetry, vetoedAnchorEntry, haveVetoedAnchor := carriedAnchorAgreementFor(appliedNeeds, resolution)
+	anchorAgreementForTelemetry, vetoedAnchorEntry, haveVetoedAnchor := carriedAnchorAgreementFor(appliedNeeds, resolution, commitBases)
 	carriedStructureEntriesForServed := carriedStructureEntriesForDecisive(carriedStructureEntries, vetoedAnchorEntry, haveVetoedAnchor)
+	if haveVetoedAnchor {
+		// The deferred ledger line above closes over appliedNeeds itself
+		// (a reference type): removing the vetoed entry HERE is what makes
+		// that line's own applied_anchor_kind/applied_anchor_value_hash
+		// read the POST-veto ledger, never the stale subject a disagreement
+		// just disowned.
+		delete(appliedNeeds, contractsv1.ContextFabricStructureNeedSubjectAnchor)
+	}
 	// priorEntries: fetched ABOVE, before this call (CHAOS-4040 reordering
 	// -- see that call site's own comment for why it moved), reused here
 	// unchanged -- still the SAME single I/O call site fetchPriorEntries'

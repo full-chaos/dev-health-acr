@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/hintsource"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -40,8 +41,18 @@ func committedAnchorFrame() *QuestionFrame {
 // store, so a second Investigate call reads exactly what the first one saved.
 func buildCommittedAnchorEngine(t *testing.T) (*Engine, *needTurnGraph, *staticResultStore) {
 	t.Helper()
+	engine, graph, store, _ := buildCommittedAnchorEngineWithTelemetry(t)
+	return engine, graph, store
+}
+
+// buildCommittedAnchorEngineWithTelemetry is buildCommittedAnchorEngine's own
+// twin for a test that must also read the deferred confirmed-need-ledger
+// Info line's own recorded event.
+func buildCommittedAnchorEngineWithTelemetry(t *testing.T) (*Engine, *needTurnGraph, *staticResultStore, *recordingTelemetry) {
+	t.Helper()
 	graph := &needTurnGraph{}
 	store := &staticResultStore{results: map[string]InvestigationResult{}, states: map[string]*PersistedSemanticState{}}
+	telemetry := &recordingTelemetry{}
 	engine, err := NewEngine(EngineDependencies{
 		Interpreter: familyInterpreter{
 			interpreted: InterpretedQuestion{
@@ -60,7 +71,8 @@ func buildCommittedAnchorEngine(t *testing.T) (*Engine, *needTurnGraph, *staticR
 		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
 			return validInvestigationResult(), nil
 		}),
-		Results: store,
+		Results:   store,
+		Telemetry: telemetry,
 	}, EngineOptions{
 		ServiceVersion: "chaos5788-anchor-carry-test",
 		Now:            func() time.Time { return time.Unix(500, 0).UTC() },
@@ -69,7 +81,7 @@ func buildCommittedAnchorEngine(t *testing.T) (*Engine, *needTurnGraph, *staticR
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
 	}
-	return engine, graph, store
+	return engine, graph, store, telemetry
 }
 
 // resultIDSequence mints result_5788_0001, result_5788_0002, ... in order.
@@ -142,6 +154,26 @@ func TestCommittedAnchorSurvivesTheConfirmationTurn(t *testing.T) {
 	wantAnchor := &ConfirmedAnchorSelection{Kind: committedAnchorRepo.Kind, CanonicalID: committedAnchorRepo.CanonicalID}
 	if !reflect.DeepEqual(call.anchor, wantAnchor) {
 		t.Fatalf("ResolveSubjects anchor on the confirmation turn = %#v, want %#v", call.anchor, wantAnchor)
+	}
+
+	// The BINDING half: the confirmation turn's own request to ResolveSubjects
+	// carries the carried anchor as a SubjectHint sourced from
+	// hintsource.EngineCommittedAnchorCarry -- the channel that reaches
+	// resolution's own caller-hint exact-commit exit and lets a same-kind
+	// statistical decoy never outrank a proven carry (graphrank's own
+	// TestEngineCommittedAnchorCarryHintShortCircuitsWithProvenBasis proves
+	// what that channel does with the hint once it arrives; this proves the
+	// engine actually sends it).
+	wantHint := SubjectHint{Kind: committedAnchorRepo.Kind, ID: committedAnchorRepo.CanonicalID, Label: committedAnchorRepo.CanonicalID, Source: string(hintsource.EngineCommittedAnchorCarry)}
+	hintSent := false
+	for _, hint := range call.request.RequestedScope.SubjectHints {
+		if hint == wantHint {
+			hintSent = true
+			break
+		}
+	}
+	if !hintSent {
+		t.Fatalf("ResolveSubjects request hints = %#v, want %#v among them", call.request.RequestedScope.SubjectHints, wantHint)
 	}
 
 	scope := DecideCountPopulationScope(committedAnchorFrame(), "", twoResponse.resolution, twoResponse.bases, CohortMemberSourceNotApplicable)
@@ -341,21 +373,28 @@ func TestCarriedAnchorAgreementForCoversItsInputDomain(t *testing.T) {
 		name        string
 		hasEntry    bool
 		resolution  SubjectResolution
+		bases       CommitBasisSet
 		wantAgree   ConfirmedAnchorAgreement
 		wantVetoed  bool
 		wantEntryOK bool
 	}{
-		{"nothing applied this turn", false, SubjectResolution{Committed: []SubjectRef{committedAnchorRepoOther}}, ConfirmedAnchorAgreementNotApplicable, false, false},
-		{"applied, nothing committed this turn", true, SubjectResolution{}, ConfirmedAnchorAgreementAbsent, false, true},
-		{"applied, only a different kind committed", true, SubjectResolution{Committed: []SubjectRef{teamOther}}, ConfirmedAnchorAgreementAbsent, false, true},
-		{"applied, resolution committed the SAME subject", true, SubjectResolution{Committed: []SubjectRef{committedAnchorRepo}}, ConfirmedAnchorAgreementAgree, false, true},
-		{"applied, resolution committed a DIFFERENT subject of the same kind", true, SubjectResolution{Committed: []SubjectRef{committedAnchorRepoOther}}, ConfirmedAnchorAgreementDisagree, true, true},
-		{"applied, resolution committed both the same subject and an unrelated one", true, SubjectResolution{Committed: []SubjectRef{teamOther, committedAnchorRepo}}, ConfirmedAnchorAgreementAgree, false, true},
+		{"nothing applied this turn", false, SubjectResolution{Committed: []SubjectRef{committedAnchorRepoOther}}, nil, ConfirmedAnchorAgreementNotApplicable, false, false},
+		{"applied, nothing committed this turn", true, SubjectResolution{}, nil, ConfirmedAnchorAgreementAbsent, false, true},
+		{"applied, only a different kind committed", true, SubjectResolution{Committed: []SubjectRef{teamOther}}, nil, ConfirmedAnchorAgreementAbsent, false, true},
+		{"applied, resolution committed the SAME subject", true, SubjectResolution{Committed: []SubjectRef{committedAnchorRepo}}, nil, ConfirmedAnchorAgreementAgree, false, true},
+		{"applied, resolution committed a DIFFERENT subject of the same kind on an identity-proven basis", true, SubjectResolution{Committed: []SubjectRef{committedAnchorRepoOther}}, CommitBasisSet{SubjectMapKey(committedAnchorRepoOther): CommitBasisCallerCanonicalID}, ConfirmedAnchorAgreementDisagree, true, true},
+		// The exact gap a mislabeled veto would reopen: a same-kind,
+		// different-id STATISTICAL commit is never a conflict -- anchorBound
+		// itself refuses to bind such a commit, so it must not evict a
+		// genuinely proven carry either.
+		{"applied, resolution committed a DIFFERENT subject of the same kind on a statistical basis", true, SubjectResolution{Committed: []SubjectRef{committedAnchorRepoOther}}, CommitBasisSet{SubjectMapKey(committedAnchorRepoOther): CommitBasisStatistical}, ConfirmedAnchorAgreementAbsent, false, true},
+		{"applied, resolution committed a DIFFERENT subject of the same kind with no basis recorded at all", true, SubjectResolution{Committed: []SubjectRef{committedAnchorRepoOther}}, nil, ConfirmedAnchorAgreementAbsent, false, true},
+		{"applied, resolution committed both the same subject and an unrelated one", true, SubjectResolution{Committed: []SubjectRef{teamOther, committedAnchorRepo}}, nil, ConfirmedAnchorAgreementAgree, false, true},
 	} {
 		row := row
 		t.Run(row.name, func(t *testing.T) {
 			t.Parallel()
-			gotAgreement, gotEntry, gotVetoed := carriedAnchorAgreementFor(applied(row.hasEntry), row.resolution)
+			gotAgreement, gotEntry, gotVetoed := carriedAnchorAgreementFor(applied(row.hasEntry), row.resolution, row.bases)
 			if gotAgreement != row.wantAgree || gotVetoed != row.wantVetoed {
 				t.Fatalf("carriedAnchorAgreementFor() = (%q, vetoed=%t), want (%q, vetoed=%t)", gotAgreement, gotVetoed, row.wantAgree, row.wantVetoed)
 			}
@@ -436,10 +475,13 @@ func TestConfirmedNeedsForCaptureWithoutVetoedAnchorDropsOnlyOnVeto(t *testing.T
 // the end-to-end pin for the disagreement veto: turn one commits an
 // engine-committed anchor with no offer ever raised; turn two's own
 // resolution independently commits a DIFFERENT repository of the same kind
-// (a realistic statistical rescue naming the wrong repository). The served
-// document must never disclose the CARRIED repository as applied while its
-// own resolution answered about another -- the disclosure is vetoed, and the
-// stale anchor does not reach a third turn either.
+// on an identity-proven basis -- a genuine conflict, never a mere score
+// comparison (TestConfirmationTurnStatisticalRescueNeverVetoesACarriedAnchor
+// pins the OTHER shape: a same-kind statistical commit never reaches this
+// veto at all). The served document must never disclose the CARRIED
+// repository as applied while its own resolution answered about another --
+// the disclosure is vetoed, and the stale anchor does not reach a third turn
+// either.
 func TestConfirmationTurnNeverDisclosesACarriedAnchorItsOwnResolutionDisowned(t *testing.T) {
 	engine, graph, store := buildCommittedAnchorEngine(t)
 
@@ -452,7 +494,7 @@ func TestConfirmationTurnNeverDisclosesACarriedAnchorItsOwnResolutionDisowned(t 
 	two = continuingNeedTurn(two, oneResult.ResultID)
 	twoResponse := needTurnResponse{
 		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{committedAnchorRepoOther}},
-		bases:      CommitBasisSet{SubjectMapKey(committedAnchorRepoOther): CommitBasisStatistical},
+		bases:      CommitBasisSet{SubjectMapKey(committedAnchorRepoOther): CommitBasisCallerCanonicalID},
 	}
 	twoResult, _ := committedAnchorTurn(t, engine, graph, store, two, twoResponse)
 
@@ -474,6 +516,48 @@ func TestConfirmationTurnNeverDisclosesACarriedAnchorItsOwnResolutionDisowned(t 
 	for _, entry := range twoSaved.ConfirmedNeeds {
 		if entry.Member == contractsv1.ContextFabricStructureNeedSubjectAnchor {
 			t.Fatalf("turn two's outgoing ledger carries subject_anchor = %#v, want none: a proven disagreement must not reach a third turn", entry)
+		}
+	}
+}
+
+// TestVetoedTurnsLedgerLineReadsThePostVetoLedger pins the deferred
+// confirmed-need-ledger Info line's own closure: on a turn whose carried
+// subject_anchor is vetoed, the line's applied_anchor_kind/
+// applied_anchor_value_hash must read the FINAL, post-veto ledger -- never
+// the stale (pre-resolution) entry the veto just disowned, which the line's
+// own anchor_agreement=disagree would otherwise contradict in the same
+// breath.
+func TestVetoedTurnsLedgerLineReadsThePostVetoLedger(t *testing.T) {
+	engine, graph, store, telemetry := buildCommittedAnchorEngineWithTelemetry(t)
+
+	one := needTurnRequest("request_5788_ledger_veto_one", true)
+	oneResponse := needTurnResponse{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{committedAnchorRepo}}, bases: provenCommitBases(committedAnchorRepo)}
+	oneResult, _ := committedAnchorTurn(t, engine, graph, store, one, oneResponse)
+
+	two := needTurnRequest("request_5788_ledger_veto_two", true)
+	two.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam}
+	two = continuingNeedTurn(two, oneResult.ResultID)
+	mark := len(telemetry.confirmedNeedLedgers)
+	twoResponse := needTurnResponse{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{committedAnchorRepoOther}},
+		bases:      CommitBasisSet{SubjectMapKey(committedAnchorRepoOther): CommitBasisCallerCanonicalID},
+	}
+	committedAnchorTurn(t, engine, graph, store, two, twoResponse)
+
+	events := telemetry.confirmedNeedLedgers[mark:]
+	if len(events) != 1 {
+		t.Fatalf("confirmed-need-ledger events for turn two = %d, want exactly 1: %#v", len(events), events)
+	}
+	event := events[0]
+	if event.AnchorAgreement != ConfirmedAnchorAgreementDisagree {
+		t.Fatalf("event.AnchorAgreement = %q, want %q", event.AnchorAgreement, ConfirmedAnchorAgreementDisagree)
+	}
+	if event.AppliedAnchorKind != "" || event.AppliedAnchorValueHash != "" {
+		t.Fatalf("event = %+v, want AppliedAnchorKind/AppliedAnchorValueHash both empty -- a vetoed entry must never read as applied on the SAME line that reports it disagreed", event)
+	}
+	for _, member := range event.AppliedMembers {
+		if member == contractsv1.ContextFabricStructureNeedSubjectAnchor {
+			t.Fatalf("event.AppliedMembers = %v, must not list subject_anchor for a vetoed turn", event.AppliedMembers)
 		}
 	}
 }

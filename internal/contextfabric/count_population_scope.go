@@ -254,7 +254,28 @@ func DecideCountPopulationScope(frame *QuestionFrame, sampleAnchorKind SubjectKi
 // to a subject the graph merely scored highest would let the requested scope
 // silently drift onto the wrong entity whenever the true anchor and a
 // same-named decoy both surface as candidates.
+// AnchorBound is anchorBound's exported form, for the one other package
+// that must decide the identical question over the identical inputs
+// (falkorgraph's own ownership-routing decision) -- ONE definition,
+// consumed everywhere, rather than a second implementation that can drift
+// from this one the way an earlier, unswept copy already did once.
+func AnchorBound(frame *QuestionFrame, anchorKind SubjectKind, subject SubjectRef, resolution SubjectResolution, bases CommitBasisSet) bool {
+	return anchorBound(frame, anchorKind, subject, resolution, bases)
+}
+
 func anchorBound(frame *QuestionFrame, anchorKind SubjectKind, subject SubjectRef, resolution SubjectResolution, bases CommitBasisSet) bool {
+	// A nil frame, one whose expression is not children_of_scope, or one
+	// with no Scoped block binds nothing: "anchor" has no meaning outside
+	// that one shape, whatever the commit basis -- checked BEFORE the basis
+	// shortcut below, not after, so a caller-canonical-id commit under an
+	// unrelated expression shape can never read as an anchor either.
+	// DecideCountPopulationScope's own switch already discards this
+	// function's answer for any non-scoped expression, so this is a
+	// strengthening for AnchorBound's other caller, never a behavior change
+	// for this file's own.
+	if frame == nil || frame.SubjectExpression.Kind != SubjectExpressionChildrenOfScope || frame.SubjectExpression.Scoped == nil {
+		return false
+	}
 	if anchorKind != "" && subject.Kind != anchorKind {
 		return false
 	}
@@ -263,9 +284,6 @@ func anchorBound(frame *QuestionFrame, anchorKind SubjectKind, subject SubjectRe
 		return true
 	}
 	if !basis.IdentityProven() {
-		return false
-	}
-	if frame.SubjectExpression.Scoped == nil {
 		return false
 	}
 	terms := make(map[string]struct{}, len(frame.SubjectExpression.Scoped.AnchorTerms))
