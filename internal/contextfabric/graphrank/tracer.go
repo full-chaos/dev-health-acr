@@ -267,6 +267,7 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 			"request_id", contextfabric.SanitizeLogAttr(event.RequestID), "stage", contextfabric.SanitizeLogAttr(event.Stage),
 			"anchor_pool_kind_scope", contextfabric.SanitizeLogAttr(event.DecisionAnchorPoolKindScope),
 			"anchor_pool_kind_scope_source", contextfabric.SanitizeLogAttr(event.DecisionAnchorPoolKindScopeSource),
+			"anchor_pool_kind_scope_none_reason", contextfabric.SanitizeLogAttr(event.DecisionAnchorPoolKindScopeNoneReason),
 			"member_kind_confirmed", contextfabric.SanitizeLogAttr(event.DecisionMemberKindConfirmed),
 			"reserved_kinds", contextfabric.SanitizeLogStrings(event.DecisionReservedKinds),
 			"filter_kinds", contextfabric.SanitizeLogStrings(event.DecisionFilterKinds))

@@ -300,6 +300,90 @@ func TestAConfirmedAnchorWhoseKindIsTheMemberKindIsRefused(t *testing.T) {
 	if scope.Kind != "" || scope.Source != anchorPoolKindScopeNone {
 		t.Fatalf("decideAnchorPoolKindScope admitted %q from source %q for an anchor whose kind EQUALS the member kind -- I11 says the resolved anchor's kind is never the member kind", scope.Kind, scope.Source)
 	}
+	if scope.NoneReason != anchorPoolKindScopeNoneReasonConfirmedAnchorKindRejected {
+		t.Fatalf("NoneReason = %q, want %q: a confirmed anchor and a confirmed kind both existed, ScopeAnchorRetrievalKind is what refused it",
+			scope.NoneReason, anchorPoolKindScopeNoneReasonConfirmedAnchorKindRejected)
+	}
+}
+
+// TestTheAnchorPoolTraceLineCarriesTheRealNoneReason drives the PRODUCTION
+// resolveSubjects call over a scope-anchored frame with no receipt kind and
+// no confirmed anchor, and asserts the raw anchor_pool trace event's
+// DecisionAnchorPoolKindScopeNoneReason -- not decideAnchorPoolKindScope
+// called directly, but the wiring at the real emission call site
+// (resolve.go). A build that hardcoded any single reason value there would
+// pass a unit test on decideAnchorPoolKindScope alone and still ship a
+// dropped wire.
+func TestTheAnchorPoolTraceLineCarriesTheRealNoneReason(t *testing.T) {
+	t.Parallel()
+	capture := &anchorScopeCapture{}
+	resolveCapturingAnchorScope(t, capture, anchorRowBackend("chaos"), scopedProjectsFrame("chaos"), nil, nil, "")
+	if len(capture.anchorPool) == 0 {
+		t.Fatal("no anchor_pool summary was emitted")
+	}
+	last := capture.anchorPool[len(capture.anchorPool)-1]
+	if last.DecisionAnchorPoolKindScope != anchorPoolKindScopeNone {
+		t.Fatalf("DecisionAnchorPoolKindScope = %q, want %q", last.DecisionAnchorPoolKindScope, anchorPoolKindScopeNone)
+	}
+	if last.DecisionAnchorPoolKindScopeNoneReason != anchorPoolKindScopeNoneReasonNoReceiptNoConfirmedAnchor {
+		t.Fatalf("DecisionAnchorPoolKindScopeNoneReason = %q, want %q", last.DecisionAnchorPoolKindScopeNoneReason, anchorPoolKindScopeNoneReasonNoReceiptNoConfirmedAnchor)
+	}
+}
+
+// TestTheAnchorPoolLineNamesWhyTheScopeIsNone (CHAOS-5825) drives every
+// distinct way decideAnchorPoolKindScope ends "none" and pins its own
+// NoneReason for each: scope=none/source=none alone cannot tell "the model
+// never stated an anchor kind and nothing was carried" apart from "a
+// confirmed anchor existed but no confirmed member kind gated it in".
+func TestTheAnchorPoolLineNamesWhyTheScopeIsNone(t *testing.T) {
+	t.Parallel()
+	for _, testCase := range []struct {
+		name              string
+		frame             *contextfabric.QuestionFrame
+		receiptAnchorKind contextfabric.SubjectKind
+		confirmedAnchor   *contextfabric.ConfirmedAnchorSelection
+		confirmedKind     *contextfabric.ConfirmedExpectedKind
+		wantReason        string
+	}{
+		{
+			name:  "no receipt kind and no confirmed anchor",
+			frame: scopedProjectsFrame("chaos"), confirmedKind: confirmedProject(),
+			wantReason: anchorPoolKindScopeNoneReasonNoReceiptNoConfirmedAnchor,
+		},
+		{
+			name:            "a confirmed anchor with no confirmed member kind",
+			frame:           scopedProjectsFrame("chaos"),
+			confirmedAnchor: &contextfabric.ConfirmedAnchorSelection{Kind: contextfabric.SubjectTeam, CanonicalID: "team.v2:github:chaos"},
+			wantReason:      anchorPoolKindScopeNoneReasonConfirmedAnchorNoConfirmedKind,
+		},
+		{
+			name:  "a confirmed anchor and kind, but ScopeAnchorRetrievalKind refuses it",
+			frame: scopedProjectsFrame("chaos"), confirmedKind: confirmedProject(),
+			confirmedAnchor: &contextfabric.ConfirmedAnchorSelection{Kind: contextfabric.SubjectProject, CanonicalID: "project.v2:github:chaos"},
+			wantReason:      anchorPoolKindScopeNoneReasonConfirmedAnchorKindRejected,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			scope := decideAnchorPoolKindScope(testCase.frame, testCase.receiptAnchorKind, testCase.confirmedAnchor, testCase.confirmedKind)
+			if scope.Kind != "" {
+				t.Fatalf("fixture %q admitted a kind (%q); it must exercise the none path", testCase.name, scope.Kind)
+			}
+			if scope.NoneReason != testCase.wantReason {
+				t.Errorf("NoneReason = %q, want %q", scope.NoneReason, testCase.wantReason)
+			}
+			_, _, observedReason := scope.observable()
+			if observedReason != testCase.wantReason {
+				t.Errorf("observable() none reason = %q, want %q", observedReason, testCase.wantReason)
+			}
+		})
+	}
+	// A scope that DID admit a kind renders not_applicable, whichever source
+	// supplied it -- there is no "none" here to explain.
+	admitted := decideAnchorPoolKindScope(scopedProjectsFrame("chaos"), contextfabric.SubjectTeam, nil, confirmedProject())
+	if _, _, reason := admitted.observable(); reason != anchorPoolKindScopeNoneReasonNotApplicable {
+		t.Errorf("observable() none reason on an admitted scope = %q, want %q", reason, anchorPoolKindScopeNoneReasonNotApplicable)
+	}
 }
 
 // THE PRECEDENCE, pinned by value. The receipt wins when both exist, and

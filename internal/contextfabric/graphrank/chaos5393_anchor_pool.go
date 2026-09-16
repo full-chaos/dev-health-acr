@@ -20,9 +20,17 @@ import (
 // independently and an operator who cannot tell them apart cannot tell a
 // model that stopped emitting scope_anchor_kind from a caller that stopped
 // redeeming anchor receipts. Both render the same admitted kind.
+//
+// NoneReason (CHAOS-5825) is populated whenever Kind is empty and names
+// WHICH of this function's two inputs was missing: a trace showing
+// Source=none alone cannot tell "the model never stated an anchor kind and
+// no prior turn confirmed one either" apart from "a confirmed anchor
+// existed but no confirmed member kind gated it in" -- two different
+// upstream defects that both render identically without this field.
 type anchorPoolKindScope struct {
-	Kind   contextfabric.SubjectKind
-	Source string
+	Kind       contextfabric.SubjectKind
+	Source     string
+	NoneReason string
 }
 
 const (
@@ -36,6 +44,29 @@ const (
 	// anchorPoolKindScopeConfirmedAnchor: the receipt carried none, and the
 	// kind came from the caller's own redeemed anchor selection instead.
 	anchorPoolKindScopeConfirmedAnchor = "confirmed_anchor"
+)
+
+const (
+	// anchorPoolKindScopeNoneReasonNotApplicable: Kind is not empty -- a
+	// scope was admitted, so there is no "none" to explain.
+	anchorPoolKindScopeNoneReasonNotApplicable = "not_applicable"
+	// anchorPoolKindScopeNoneReasonNoReceiptNoConfirmedAnchor: the call's own
+	// receipt-sourced kind was empty (the model stated no usable
+	// scope_anchor_kind for this turn, or ScopeAnchorRetrievalKind's own
+	// checks gated it out upstream) AND no confirmed anchor was carried from
+	// a prior turn either -- neither input this function reads had anything
+	// to admit.
+	anchorPoolKindScopeNoneReasonNoReceiptNoConfirmedAnchor = "no_receipt_kind_no_confirmed_anchor"
+	// anchorPoolKindScopeNoneReasonConfirmedAnchorNoConfirmedKind: a
+	// confirmed anchor WAS carried, but no confirmed member kind gated it in
+	// (the fallback's own deliberate gate -- see decideAnchorPoolKindScope's
+	// doc comment on why it is gated this way).
+	anchorPoolKindScopeNoneReasonConfirmedAnchorNoConfirmedKind = "confirmed_anchor_no_confirmed_kind"
+	// anchorPoolKindScopeNoneReasonConfirmedAnchorKindRejected: a confirmed
+	// anchor and a confirmed kind both existed, but ScopeAnchorRetrievalKind
+	// refused the confirmed anchor's own kind (e.g. it equals the frame's
+	// member kind, or the frame is not children_of_scope).
+	anchorPoolKindScopeNoneReasonConfirmedAnchorKindRejected = "confirmed_anchor_kind_rejected"
 )
 
 // decideAnchorPoolKindScope prefers the receipt and falls back to the
@@ -62,7 +93,7 @@ func decideAnchorPoolKindScope(frame *contextfabric.QuestionFrame, receiptAnchor
 		return anchorPoolKindScope{Kind: receiptAnchorKind, Source: anchorPoolKindScopeReceipt}
 	}
 	if confirmedAnchor == nil {
-		return anchorPoolKindScope{Source: anchorPoolKindScopeNone}
+		return anchorPoolKindScope{Source: anchorPoolKindScopeNone, NoneReason: anchorPoolKindScopeNoneReasonNoReceiptNoConfirmedAnchor}
 	}
 	// THE FALLBACK IS GATED ON A CONFIRMED MEMBER KIND, and this is the one
 	// place this change adds a kind the engine would not otherwise have gone
@@ -83,12 +114,12 @@ func decideAnchorPoolKindScope(frame *contextfabric.QuestionFrame, receiptAnchor
 	// than beside the members -- is a separate change with its own design
 	// cover and its own rig-visibility contract to renegotiate.
 	if confirmedKind == nil {
-		return anchorPoolKindScope{Source: anchorPoolKindScopeNone}
+		return anchorPoolKindScope{Source: anchorPoolKindScopeNone, NoneReason: anchorPoolKindScopeNoneReasonConfirmedAnchorNoConfirmedKind}
 	}
 	if kind := contextfabric.ScopeAnchorRetrievalKind(frame, confirmedAnchor.Kind); kind != "" {
 		return anchorPoolKindScope{Kind: kind, Source: anchorPoolKindScopeConfirmedAnchor}
 	}
-	return anchorPoolKindScope{Source: anchorPoolKindScopeNone}
+	return anchorPoolKindScope{Source: anchorPoolKindScopeNone, NoneReason: anchorPoolKindScopeNoneReasonConfirmedAnchorKindRejected}
 }
 
 // admits reports whether this scope lets a candidate of kind through the
@@ -100,14 +131,18 @@ func (s anchorPoolKindScope) admits(kind contextfabric.SubjectKind) bool {
 // observable renders the pair the decision_summary carries. It returns
 // explicit tokens on every pass -- never "" -- so an absent scope and a build
 // that stopped deciding one can never read alike.
-func (s anchorPoolKindScope) observable() (scope string, source string) {
+func (s anchorPoolKindScope) observable() (scope string, source string, noneReason string) {
 	if s.Kind == "" {
-		return anchorPoolKindScopeNone, anchorPoolKindScopeNone
+		reason := s.NoneReason
+		if reason == "" {
+			reason = anchorPoolKindScopeNoneReasonNoReceiptNoConfirmedAnchor
+		}
+		return anchorPoolKindScopeNone, anchorPoolKindScopeNone, reason
 	}
 	if s.Source == "" {
-		return string(s.Kind), anchorPoolKindScopeNone
+		return string(s.Kind), anchorPoolKindScopeNone, anchorPoolKindScopeNoneReasonNotApplicable
 	}
-	return string(s.Kind), s.Source
+	return string(s.Kind), s.Source, anchorPoolKindScopeNoneReasonNotApplicable
 }
 
 // kindTokens renders a kind list for the observable. Always a slice, never

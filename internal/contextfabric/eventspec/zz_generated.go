@@ -1535,12 +1535,13 @@ func (f AnchorOfferFields) SlogArgs() []any {
 // AnchorPoolFields is graphrank.anchor_pool's generated typed construction interface
 // (CHAOS-5516): one Go field per Field AnchorPool.Fields declares in spec.go.
 type AnchorPoolFields struct {
-	RequestID                 string
-	AnchorPoolKindScope       string
-	AnchorPoolKindScopeSource string
-	MemberKindConfirmed       string
-	ReservedKinds             []string
-	FilterKinds               []string
+	RequestID                     string
+	AnchorPoolKindScope           string
+	AnchorPoolKindScopeSource     string
+	AnchorPoolKindScopeNoneReason string
+	MemberKindConfirmed           string
+	ReservedKinds                 []string
+	FilterKinds                   []string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every AnchorPoolFields uniformly, set ONLY by NewAnchorPoolFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -1554,7 +1555,7 @@ type AnchorPoolFields struct {
 
 // NewAnchorPoolFields is the generated constructor for AnchorPoolFields -- every
 // field AnchorPool.Fields declares is a required parameter.
-func NewAnchorPoolFields(requestID string, anchorPoolKindScope string, anchorPoolKindScopeSource string, memberKindConfirmed string, reservedKinds []string, filterKinds []string) AnchorPoolFields {
+func NewAnchorPoolFields(requestID string, anchorPoolKindScope string, anchorPoolKindScopeSource string, anchorPoolKindScopeNoneReason string, memberKindConfirmed string, reservedKinds []string, filterKinds []string) AnchorPoolFields {
 	valid := true
 	if reservedKinds == nil {
 		valid = false
@@ -1563,13 +1564,14 @@ func NewAnchorPoolFields(requestID string, anchorPoolKindScope string, anchorPoo
 		valid = false
 	}
 	return AnchorPoolFields{
-		RequestID:                 requestID,
-		AnchorPoolKindScope:       anchorPoolKindScope,
-		AnchorPoolKindScopeSource: anchorPoolKindScopeSource,
-		MemberKindConfirmed:       memberKindConfirmed,
-		ReservedKinds:             reservedKinds,
-		FilterKinds:               filterKinds,
-		constructed:               valid,
+		RequestID:                     requestID,
+		AnchorPoolKindScope:           anchorPoolKindScope,
+		AnchorPoolKindScopeSource:     anchorPoolKindScopeSource,
+		AnchorPoolKindScopeNoneReason: anchorPoolKindScopeNoneReason,
+		MemberKindConfirmed:           memberKindConfirmed,
+		ReservedKinds:                 reservedKinds,
+		FilterKinds:                   filterKinds,
+		constructed:                   valid,
 	}
 }
 
@@ -1590,6 +1592,7 @@ func (f AnchorPoolFields) SlogArgs() []any {
 		"stage", "anchor_pool",
 		"anchor_pool_kind_scope", contextfabric.SanitizeLogAttr(f.AnchorPoolKindScope),
 		"anchor_pool_kind_scope_source", contextfabric.SanitizeLogAttr(f.AnchorPoolKindScopeSource),
+		"anchor_pool_kind_scope_none_reason", contextfabric.SanitizeLogAttr(f.AnchorPoolKindScopeNoneReason),
 		"member_kind_confirmed", contextfabric.SanitizeLogAttr(f.MemberKindConfirmed),
 		"reserved_kinds", contextfabric.SanitizeLogStrings(f.ReservedKinds),
 		"filter_kinds", contextfabric.SanitizeLogStrings(f.FilterKinds),

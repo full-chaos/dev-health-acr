@@ -902,6 +902,16 @@ var AnchorPool = Event{
 		},
 		{Key: "anchor_pool_kind_scope_source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"receipt", "confirmed_anchor", "none"}},
 		{
+			// CHAOS-5825: WHY anchor_pool_kind_scope is "none" -- distinct
+			// upstream defects (no receipt kind and nothing carried, vs. a
+			// carried anchor the confirmed-kind gate withheld, vs. a carried
+			// anchor ScopeAnchorRetrievalKind itself refused) render
+			// identically on scope/source alone. "not_applicable" when a
+			// scope WAS admitted.
+			Key: "anchor_pool_kind_scope_none_reason", Type: FieldString, Presence: PresenceRequired,
+			ClosedVocabulary: []string{"not_applicable", "no_receipt_kind_no_confirmed_anchor", "confirmed_anchor_no_confirmed_kind", "confirmed_anchor_kind_rejected"},
+		},
+		{
 			Key: "member_kind_confirmed", Type: FieldString, Presence: PresenceRequired,
 			// Open vocabulary: a contextfabric.SubjectKind token, or "none".
 		},

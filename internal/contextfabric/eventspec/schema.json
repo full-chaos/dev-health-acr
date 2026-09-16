@@ -2634,6 +2634,17 @@
         ]
       },
       {
+        "key": "anchor_pool_kind_scope_none_reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_applicable",
+          "no_receipt_kind_no_confirmed_anchor",
+          "confirmed_anchor_no_confirmed_kind",
+          "confirmed_anchor_kind_rejected"
+        ]
+      },
+      {
         "key": "member_kind_confirmed",
         "type": "string",
         "presence": "required"

@@ -63,6 +63,47 @@ func provenanceForConfirmedNeedBasis(basis ConfirmedNeedBasis) contractsv1.Conte
 	return contractsv1.ContextFabricStructureClarificationConfirmed
 }
 
+// CaptureSkipReason (CHAOS-5825) names WHY a turn's own capture_decision
+// (ConfirmedNeedLedgerEvent.CaptureDecision, engineCommittedAnchorForCapture's
+// underlying CountPopulationScopeDecision) is empty for a turn whose own
+// resolution never reached the capture check at all -- distinct from a
+// resolution that reached the check and decided anchor_unresolved/
+// anchor_ambiguous/organization_scope/frame_absent. Without this axis EVERY
+// early exit (a window gate, a frame-gate refusal, a graph-not-projected
+// degrade, an error) renders the identical empty capture_decision, so an
+// operator reading the ledger line cannot tell a turn that discarded a real
+// identity-proven commit apart from one that never had a chance to find
+// one.
+//
+// SCOPED TO THE CHAOS-4234 GATE ONLY: the class-default window gate
+// (WindowCanonicalizationGatedClassDefault, engine.go) runs its subject
+// resolution offers-only and discards every commit-bearing output --
+// resolution, commit bases, commit digests -- unconditionally
+// (chaos4234_offers_only.go's own doc comment), so there is nothing
+// engineCommittedAnchorForCapture could safely be handed even if it ran on
+// that path. Every OTHER early exit still renders the unnamed empty value;
+// naming those too is a class-level change with its own scope to state,
+// never a per-exit addition made in passing.
+type CaptureSkipReason string
+
+const (
+	// CaptureSkipReasonNotApplicable is the zero value: either this turn's
+	// own resolution reached the capture check (CaptureDecision then carries
+	// the real decision), or the turn ended on an exit this axis does not
+	// name.
+	CaptureSkipReasonNotApplicable CaptureSkipReason = "not_applicable"
+	// CaptureSkipReasonWindowConfirmationGatedDiscard: this turn ended on
+	// the CHAOS-4234 class-default window gate, whose offers-only
+	// resolution's commit-bearing outputs are discarded by design before
+	// the capture check ever runs. This is the decision the ledger line
+	// discloses for the second mechanism this axis names: an
+	// identity-proven anchor this gate's own offers-only pass might have
+	// found is NOT captured for a later turn, and this is the ledger line
+	// saying so rather than leaving capture_decision silently
+	// empty.
+	CaptureSkipReasonWindowConfirmationGatedDiscard CaptureSkipReason = "window_confirmation_gated_discard"
+)
+
 // engineCommittedAnchorForCapture decides whether THIS turn's own resolution
 // bound a committed subject to the frame's own scope anchor strongly enough
 // to persist as carried state for a later turn. Reuses anchorBound's own

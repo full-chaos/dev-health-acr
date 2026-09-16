@@ -134,6 +134,30 @@ const FrameRepairCountKindCollapse FrameRepairName = "count_kind_collapse"
 // frameRepairBound is the most repair attempts one proposal gets.
 const frameRepairBound = 1
 
+// FrameRepairCarry is the set of downstream-carried fields a repaired
+// proposal must state to be shape-equivalent to the direct proposal it
+// repairs into -- every field a consumer beyond this package reads off the
+// receipt or frame for that SHAPE, not only the fields I9 itself names.
+//
+// TestEveryRepairPopulatesEveryCarriedField (frame_repair_test.go) walks
+// frameRepairTable by reflection against this struct's own fields: a repair
+// that reaches FrameRepairApplied while leaving any field here at its zero
+// value fails that test, and a field added here without every repair being
+// updated to populate it fails the same way -- CHAOS-5825: repairCountKindCollapse
+// shipped changing only SubjectExpression and left the receipt's own
+// ScopeAnchorKind at whatever the model's raw output happened to state
+// (typically absent for a named_subject proposal), so graphrank's anchor-pool
+// "receipt" source (chaos5393_anchor_pool.go) read none/none for a repaired
+// children_of_scope proposal a direct one would have carried a real anchor
+// kind for.
+type FrameRepairCarry struct {
+	// ScopeAnchorKind is the anchor's own kind for a repaired
+	// children_of_scope expression -- the value a direct proposal of the
+	// same shape would have stated as scope_anchor_kind. Set only when the
+	// repair applied.
+	ScopeAnchorKind SubjectKind
+}
+
 // FrameRepair records the bounded repair's decision on one proposal: the
 // deciding fields the frame-validation line carries, so the trace alone says
 // whether a repair ran, why or why not, and what it changed.
@@ -157,6 +181,9 @@ type FrameRepair struct {
 	TermsMatch FrameRepairTermsMatch
 	// Attempts is how many repairs ran on this proposal.
 	Attempts int
+	// Carry is the downstream-carried fields this repair stated, populated
+	// only on FrameRepairApplied. See FrameRepairCarry's own doc comment.
+	Carry FrameRepairCarry
 }
 
 // ObservableTermsMatch renders the terms comparison for a log line:
@@ -259,8 +286,11 @@ func repairCountKindCollapse(receipt ModelExecutionReceipt, proposed QuestionFra
 	}
 	// The named subject's stated kind is its ExpectedKind, read through the
 	// expression's own accessor ("" when it states none, which never equals a
-	// hint that is present).
-	if subjectKind, _ := proposed.SubjectExpression.MemberKind(); subjectKind == hint || receipt.ScopeAnchorKind == hint {
+	// hint that is present). Hoisted (rather than scoped to this check
+	// alone) because the Applied path below carries it as the repaired
+	// expression's own anchor kind (FrameRepairCarry.ScopeAnchorKind).
+	subjectKind, _ := proposed.SubjectExpression.MemberKind()
+	if subjectKind == hint || receipt.ScopeAnchorKind == hint {
 		return declined(FrameRepairDeclinedHintIsSubjectKind)
 	}
 	considered.TermsMatch = FrameRepairTermsSame
@@ -285,5 +315,28 @@ func repairCountKindCollapse(receipt ModelExecutionReceipt, proposed QuestionFra
 		return FrameValidationResult{Outcome: revalidated.Outcome, Failure: revalidated.Failure, Repair: considered}
 	}
 	considered.Decision = FrameRepairApplied
+	// subjectKind is the named subject's own stated kind (the declined-above
+	// check already proved it differs from hint) -- exactly the anchor kind
+	// a direct children_of_scope proposal of this same shape would have
+	// stated as scope_anchor_kind, since the anchor terms below are that
+	// same subject's own terms: without carrying it here, the receipt's own
+	// ScopeAnchorKind would stay at the model's raw (typically absent)
+	// value for a named_subject proposal.
+	considered.Carry.ScopeAnchorKind = subjectKind
 	return FrameValidationResult{Frame: revalidated.Frame, Outcome: FrameValidationOutcomeRepaired, Repair: considered}
+}
+
+// frameRepairFunc is one bounded repair's shape -- exactly
+// repairCountKindCollapse's own signature, so every repair in
+// frameRepairTable is invoked identically by validateProposedFrame.
+type frameRepairFunc func(receipt ModelExecutionReceipt, proposed QuestionFrame, emittedShape InvestigationShape, subjectTerms []string, result FrameValidationResult) FrameValidationResult
+
+// frameRepairTable is every bounded repair this package runs, tried in
+// order against the same evolving result. ONE MEMBER today.
+// TestEveryRepairPopulatesEveryCarriedField (frame_repair_test.go) walks
+// this slice by reflection against FrameRepairCarry's own fields, so a
+// second repair joins production only once it is proven to populate every
+// field the first repair's carry already promises a downstream consumer.
+var frameRepairTable = []frameRepairFunc{
+	repairCountKindCollapse,
 }
