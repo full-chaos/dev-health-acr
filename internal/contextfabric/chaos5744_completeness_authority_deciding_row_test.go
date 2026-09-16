@@ -64,6 +64,16 @@ func TestDecidingRequirementOutcomeRowPrecedence(t *testing.T) {
 		Requirement: "readiness/member/team", Stage: contractsv1.ContextFabricOutcomeStagePlanning,
 		Outcome: contractsv1.ContextFabricRequirementSatisfied,
 	}
+	// A SECOND, DISTINCT unavailable row -- the discriminator. A version
+	// that merely REMEMBERS "the last unavailable row seen" instead of
+	// short-circuiting on the FIRST would return unavailableAfterThird
+	// here, because it is what a bare loop-and-overwrite ends on; only true
+	// absorption (stop at the first one) returns unavailableThird.
+	unavailableAfterThird := contractsv1.ContextFabricPlanRequirementOutcomeRow{
+		Requirement: "trend_series/member/team", Stage: contractsv1.ContextFabricOutcomeStagePlanning,
+		Outcome: contractsv1.ContextFabricRequirementUnavailable, Impact: contractsv1.ContextFabricAnswerImpactDimension,
+		CauseCoverage: contractsv1.ContextFabricCoverageDetailFactTableShapeUndeclared,
+	}
 
 	for _, tc := range []struct {
 		name string
@@ -73,6 +83,9 @@ func TestDecidingRequirementOutcomeRowPrecedence(t *testing.T) {
 	}{
 		{"unavailable is absorbing regardless of position", []contractsv1.ContextFabricPlanRequirementOutcomeRow{
 			narrowedFirst, notAttemptedSecond, unavailableThird, satisfied,
+		}, unavailableThird, true},
+		{"the FIRST unavailable row wins, not the last -- true short-circuit", []contractsv1.ContextFabricPlanRequirementOutcomeRow{
+			narrowedFirst, unavailableThird, unavailableAfterThird,
 		}, unavailableThird, true},
 		{"first partial-making row wins when no row is unavailable", []contractsv1.ContextFabricPlanRequirementOutcomeRow{
 			satisfied, narrowedFirst, notAttemptedSecond,
