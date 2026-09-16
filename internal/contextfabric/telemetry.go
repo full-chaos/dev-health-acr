@@ -719,6 +719,15 @@ func (t SlogEngineTelemetry) RecordCohortRanked(ctx context.Context, principal s
 		"cohort_kind", SanitizeLogAttr(string(event.CohortKind)),
 		"member_count", event.MemberCount,
 		"formula_version", SanitizeLogAttr(event.FormulaVersion),
+		// score_meaning (CHAOS-5774): closed vocabulary, content-safe by the
+		// same reasoning as formula_version beside it.
+		"score_meaning", SanitizeLogAttr(string(event.ScoreMeaning)),
+		// judgment_mismatch/requested_judgment_kind: the SAME server-computed
+		// decision (and the interpreter pick it was computed from) that rides
+		// on the served Cohort, content-safe by the same reasoning -- a bool
+		// and a closed-vocabulary value, never a subject name or free text.
+		"judgment_mismatch", event.JudgmentMismatch,
+		"requested_judgment_kind", SanitizeLogAttr(string(event.RequestedJudgmentKind)),
 		"degraded_member_count", event.DegradedMemberCount,
 		"signals_available", event.SignalsAvailable,
 		// outcome_counts (CHAOS-4398 PR3, codex R1): a closed-vocabulary

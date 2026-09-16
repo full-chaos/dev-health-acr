@@ -639,6 +639,19 @@ func validContextFabricCohortMemberOutcome(value ContextFabricCohortMemberOutcom
 	}
 }
 
+// validContextFabricCohortScoreMeaning is ContextFabricCohort.ScoreMeaning's
+// closed-vocabulary check, same "” is not a member on the required path"
+// shape as validContextFabricCohortMemberOutcome above -- callers gate the
+// required-vs-absent decision themselves (see cohortScoreMeaningRequired).
+func validContextFabricCohortScoreMeaning(value ContextFabricCohortScoreMeaning) bool {
+	switch value {
+	case ContextFabricCohortScoreMeaningAttention:
+		return true
+	default:
+		return false
+	}
+}
+
 // contextFabricCohortRankingBasisLabels is the CLOSED vocabulary
 // ContextFabricCohortMember.RankingBasis entries must be drawn from --
 // mirrored here from internal/contextfabric/cohort_ranking.go's own

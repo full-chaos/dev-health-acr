@@ -81,11 +81,47 @@ func TestCohortRankedLineCarriesNoKeyOutsideItsAllowList(t *testing.T) {
 		// fifteen-value subject-kind vocabulary, content-free by the same
 		// reasoning that admits every other key here.
 		"cohort_kind": true,
+		// score_meaning (CHAOS-5774): a closed-vocabulary value naming what
+		// the formula measures, content-free by the same reasoning.
+		"score_meaning": true,
+		// judgment_mismatch/requested_judgment_kind: a bool and a
+		// closed-vocabulary value, content-free by the same reasoning.
+		"judgment_mismatch": true, "requested_judgment_kind": true,
 	}
 	for key := range records[0] {
 		if !allowed[key] {
 			t.Errorf("unexpected key %q on the cohort ranked line -- every field must be an explicitly allowed closed-vocabulary value or a count", key)
 		}
+	}
+}
+
+// TestCohortRankedLineCarriesTheJudgmentMismatchDecision is the POSITIVE
+// half for judgment_mismatch/requested_judgment_kind: the allow-list test
+// above only proves the keys are permitted, not that a real decision lands
+// in them. Without this, a regression that always leaves both fields at
+// their zero value would still pass the allow-list.
+func TestCohortRankedLineCarriesTheJudgmentMismatchDecision(t *testing.T) {
+	records := captureSlogJSON(t, func(logger *slog.Logger) {
+		NewSlogEngineTelemetry(logger).RecordCohortRanked(
+			context.Background(), storage.Principal{OrgID: "org_sink_test"},
+			CohortRankedEvent{
+				CohortKind: SubjectTeam, MemberCount: 2,
+				FormulaVersion:        RankingFormulaVersion,
+				ScoreMeaning:          CohortScoreMeaningAttention,
+				JudgmentMismatch:      true,
+				RequestedJudgmentKind: RequestedJudgmentKindPerformance,
+				SignalsAvailable:      map[string]int{},
+				OutcomeCounts:         map[string]int{},
+			})
+	})
+	if len(records) != 1 {
+		t.Fatalf("got %d records, want 1", len(records))
+	}
+	if got := records[0]["judgment_mismatch"]; got != true {
+		t.Errorf("judgment_mismatch = %v, want true", got)
+	}
+	if got := records[0]["requested_judgment_kind"]; got != string(RequestedJudgmentKindPerformance) {
+		t.Errorf("requested_judgment_kind = %v, want %q", got, RequestedJudgmentKindPerformance)
 	}
 }
 

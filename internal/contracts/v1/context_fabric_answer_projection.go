@@ -239,6 +239,12 @@ type ContextFabricProjectedCohort struct {
 	// a complete grouped answer from a partial one.
 	Truncated bool                                 `json:"truncated,omitempty"`
 	Members   []ContextFabricProjectedCohortMember `json:"members"`
+	// ScoreMeaning/JudgmentMismatch (CHAOS-5774) mirror the SAME fields on
+	// the canonical ContextFabricCohort verbatim -- see that type's own doc
+	// comments. Copied, never recomputed, same discipline as the ranking
+	// fields on ContextFabricProjectedCohortMember below.
+	ScoreMeaning     ContextFabricCohortScoreMeaning `json:"score_meaning,omitempty"`
+	JudgmentMismatch bool                            `json:"judgment_mismatch,omitempty"`
 	// Groups (CHAOS-4636) is the group axis, projected. Absent on every flat
 	// cohort. Members are named by canonical id into Members above, exactly
 	// as on the canonical cohort, so the projection carries one member list

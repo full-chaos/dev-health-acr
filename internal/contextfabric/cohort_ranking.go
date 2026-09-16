@@ -188,6 +188,19 @@ func RankCohort(cohort *Cohort, facts []CanonicalFact, coverage Coverage) (*Coho
 	// empty-string kind on an event nothing ranked would read as a served
 	// cohort of an unknown kind rather than as no cohort at all.
 	event.CohortKind = cohort.Kind
+	// ScoreMeaning (CHAOS-5774): minted here, next to FormulaVersion above,
+	// the SAME "the version is what makes a formula change a counted,
+	// diagnosable event" discipline this file's own package doc comment
+	// states, applied to the formula's MEANING rather than its numbers. This
+	// formula can only ever produce an attention/adverse-pressure score --
+	// see the weight* constants above, every one of them an adverse signal
+	// -- so the constant is unconditional, not computed from cohort or
+	// facts. A future formula that measures something else adds a new
+	// ContextFabricCohortScoreMeaning member and mints IT here instead of
+	// silently repurposing this one, the same discipline
+	// RankingFormulaVersion already enforces for the numbers.
+	cohort.ScoreMeaning = CohortScoreMeaningAttention
+	event.ScoreMeaning = CohortScoreMeaningAttention
 
 	bySubject := make(map[string][]CanonicalFact, len(cohort.Members))
 	for _, fact := range facts {

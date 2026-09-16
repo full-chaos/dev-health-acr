@@ -881,7 +881,8 @@
     "exclusions": [],
     "rationale": "Matched every team owning at least one repository in the org.",
     "complete": true,
-    "truncated": false
+    "truncated": false,
+    "score_meaning": "attention"
   },
   "completeness": {
     "terminal_status": "complete",

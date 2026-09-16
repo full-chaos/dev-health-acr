@@ -175,7 +175,8 @@
     ],
     "rationale": "Matched every team owning at least one repository in the org.",
     "complete": true,
-    "truncated": false
+    "truncated": false,
+    "score_meaning": "attention"
   },
   "direct_judgment": "Ask Dev is not release-ready even though most tracked implementation work is closed.",
   "current_state": "Implementation completion and release readiness diverge because required product acceptance remains open.",

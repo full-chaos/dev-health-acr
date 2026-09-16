@@ -1122,10 +1122,23 @@ type CohortRankedEvent struct {
 	// side carried counts, and the graph side carried a refusal basis with
 	// no kind. An operator watching a newly admitted kind reach production
 	// had nothing to watch.
-	CohortKind          SubjectKind
-	MemberCount         int
-	FormulaVersion      string
-	DegradedMemberCount int
+	CohortKind     SubjectKind
+	MemberCount    int
+	FormulaVersion string
+	// ScoreMeaning (CHAOS-5774) travels next to FormulaVersion -- see
+	// RankCohort's own minting comment. A closed-vocabulary value, content-
+	// safe by the same reasoning as every other field here.
+	ScoreMeaning CohortScoreMeaning
+	// JudgmentMismatch and RequestedJudgmentKind mirror the SAME two values
+	// applyCohortJudgmentMismatch computes onto the served Cohort -- a bool
+	// and a closed-vocabulary value, content-safe by the same reasoning as
+	// every other field here. They ride on this event so the decision this
+	// event exists to make observable is actually observable: without them,
+	// a regression in the mismatch computation or in which judgment kind
+	// reached it looks identical to normal at this log line.
+	JudgmentMismatch      bool
+	RequestedJudgmentKind RequestedJudgmentKind
+	DegradedMemberCount   int
 	// SignalsAvailable maps a top-level signal-family name (the same
 	// RankingSignal* constants cohort_ranking.go's RankingBasis values
 	// draw from) to the count of members whose Score actually drew from
@@ -3329,6 +3342,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if graphContext.Cohort != nil && !workItemTuple {
 		var rankEvent CohortRankedEvent
 		graphContext.Cohort, rankEvent, cohortSignalCitations = RankCohort(graphContext.Cohort, facts.Facts, facts.Coverage)
+		applyCohortJudgmentMismatch(graphContext.Cohort, interpretation.RequestedJudgmentKind)
+		// The event captures the SAME decision applyCohortJudgmentMismatch
+		// just wrote onto the cohort, plus the interpreter's own pick it was
+		// computed from -- both after that call, since RankCohort itself
+		// never sees the requested judgment kind.
+		rankEvent.JudgmentMismatch = graphContext.Cohort.JudgmentMismatch
+		rankEvent.RequestedJudgmentKind = interpretation.RequestedJudgmentKind
 		// DEFERRED, not emitted here: stage 3 may re-rank a narrowed cohort
 		// for the retry, and the event that reaches an operator must describe
 		// the cohort actually SERVED. Emitting at this point published a

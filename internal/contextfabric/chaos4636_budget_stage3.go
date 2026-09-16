@@ -637,6 +637,11 @@ func narrowSynthesisInput(params synthesisAssemblyParams, plan *AnswerPlan) narr
 	var citations cohortMemberSignalCitations
 	if params.WorkItemCensus == nil {
 		rankedCohort, rankEvent, citations = RankCohort(cohort, facts.Facts, facts.Coverage)
+		applyCohortJudgmentMismatch(rankedCohort, params.Interpretation.RequestedJudgmentKind)
+		// Same after-the-call capture as the primary rank site (engine.go):
+		// RankCohort itself never sees the requested judgment kind.
+		rankEvent.JudgmentMismatch = rankedCohort.JudgmentMismatch
+		rankEvent.RequestedJudgmentKind = params.Interpretation.RequestedJudgmentKind
 	}
 	graph.Cohort = rankedCohort
 	var retention FactRetentionDecision

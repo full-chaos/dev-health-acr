@@ -62,7 +62,8 @@ func chrisTeamsAnswer() InvestigationResult {
 		},
 		Interpretation: InterpretedQuestion{Shape: contractsv1.ContextFabricShapeDiscoveredCohort},
 		Cohort: &Cohort{
-			Kind: contractsv1.ContextFabricSubjectTeam,
+			Kind:         contractsv1.ContextFabricSubjectTeam,
+			ScoreMeaning: CohortScoreMeaningAttention,
 			Members: []CohortMember{{
 				Subject:         SubjectRef{Kind: contractsv1.ContextFabricSubjectTeam, CanonicalID: "team:gh:ops-team", Label: "ops-team"},
 				Rank:            1,

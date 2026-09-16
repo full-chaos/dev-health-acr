@@ -205,7 +205,13 @@ const (
 	// the rule stated at v9: any change to the prompt's content changes
 	// the ReuseKey dimension, or stored answers produced under the old
 	// sentence keep being served for exactly the questions it re-expressed.
-	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v14"
+	// v14 -> v15 (CHAOS-5774): interpretationSystemPrompt gains the
+	// requested_judgment_kind paragraph and interpretationOutput gains the
+	// matching field -- a genuine change to what the model is asked for, so
+	// a row interpreted before the model was ever told this field exists
+	// must not satisfy a reuse lookup as though it were interpreted under
+	// the new prompt (same standing rule stated at v9 above).
+	DefaultInterpretationPromptVersion = "context-fabric-interpretation.v15"
 	// DefaultSynthesisPromptVersion is v3 as of CHAOS-3755's adversarial
 	// review round: v2 added claimed_facts for value-level closure; v3
 	// closes the driver category vocabulary (a fixed 16-value set, no
@@ -384,7 +390,12 @@ const (
 	// the model was NOT told its budget must not be served as though it had
 	// been. The answers this change exists to improve are precisely the ones
 	// a stale reuse key would keep serving unchanged.
-	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v15"
+	//
+	// v15 -> v16: synthesisSystemPrompt gains the score_meaning/judgment_mismatch
+	// paragraph and the instruction that an unrankable member is never given a
+	// ranking superlative -- model-facing bytes changed, standing reuse rule
+	// applies (same standing rule as v6-v15 above).
+	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v16"
 	// DefaultSchemaVersion is the genkit MODEL-OUTPUT JSON SCHEMA version
 	// -- ONE value shared by both the interpret and synthesize calls
 	// (Config carries a single SchemaVersion field, not a per-operation
@@ -438,7 +449,11 @@ const (
 	// interpreted by a model that was never offered a frame and could not
 	// have emitted one, so serving it through reuse as though it came from
 	// a v4 call is exactly the version-drift this field exists to prevent.
-	DefaultSchemaVersion    = "context-fabric-model-output.v5"
+	// v6: interpretationOutput gained one optional field,
+	// requested_judgment_kind (widening, same reasoning as v3/v4 above --
+	// a v5-era model was never offered this field and could not have
+	// emitted it).
+	DefaultSchemaVersion    = "context-fabric-model-output.v6"
 	defaultEvaluatorVersion = "context-fabric-grounding.v1"
 	// DefaultPhrasingPromptVersion is v1 (CHAOS-4171 PR2): the SECOND
 	// bounded model call's own prompt, versioned independently of
@@ -2949,6 +2964,17 @@ type interpretationOutput struct {
 	// pick; the engine-side post-pass (graphrank.ClassifyWindow) owns bounds.
 	WindowClass      string `json:"window_class,omitempty" jsonschema:"enum=trend_assessment,enum=recent_activity_lookup,enum=state_snapshot,enum=explicit_window"`
 	WindowConfidence string `json:"window_confidence,omitempty" jsonschema:"enum=high,enum=low"`
+	// RequestedJudgmentKind is the model's own closed-vocabulary
+	// classification of what BASIS RequestedJudgment asks for -- see
+	// contextfabric.ContextFabricRequestedJudgmentKind's own doc comment.
+	// NO jsonschema enum tag, unlike WindowClass/WindowConfidence above and
+	// like group_kind/scope_anchor_kind below: this field IS part of
+	// contextfabric.InterpretedQuestion/toDomain (not shadow-only), so an
+	// out-of-vocabulary pick must degrade to "no pick" rather than reject
+	// the whole interpretation -- sanitizeRequestedJudgmentKind (below)
+	// handles that, the same "sanitize, don't hard-fail" reasoning
+	// group_kind/scope_anchor_kind's own comment states.
+	RequestedJudgmentKind string `json:"requested_judgment_kind,omitempty"`
 	// QuestionFamily/GroupKind/ScopeAnchorTerm/ScopeAnchorKind
 	// (CHAOS-4632, SHADOW ONLY) are the family pick and the two new
 	// structure signals the §4.2 precedence table keys on. Same discipline
@@ -3090,6 +3116,24 @@ type factRequirementOutput struct {
 	Parameters map[string]string `json:"parameters,omitempty"`
 }
 
+// sanitizeRequestedJudgmentKind maps raw (the model's own free-text field)
+// onto the closed contextfabric.RequestedJudgmentKind vocabulary, degrading
+// anything unrecognized to "" (no pick) -- this field lives inside
+// contextfabric.InterpretedQuestion/toDomain (interpreted.Validate() runs
+// before this function returns), so an out-of-vocabulary value must never
+// reach that validator: RequestedJudgmentKind's own doc comment already
+// treats "" as legitimate ("the model made no pick"), so degrading here
+// costs nothing but the one downstream decision (JudgmentMismatch) this
+// field feeds, never the interpretation itself.
+func sanitizeRequestedJudgmentKind(raw string) contextfabric.RequestedJudgmentKind {
+	switch kind := contextfabric.RequestedJudgmentKind(strings.TrimSpace(raw)); kind {
+	case contextfabric.RequestedJudgmentKindPerformance, contextfabric.RequestedJudgmentKindAttention:
+		return kind
+	default:
+		return ""
+	}
+}
+
 func (o interpretationOutput) toDomain(defaultTime contextfabric.TimeContext) (contextfabric.InterpretedQuestion, error) {
 	timeContext := contextfabric.TimeContext{Axis: contextfabric.TemporalAxis(o.TimeContext.Axis), AsOf: o.TimeContext.AsOf, Start: o.TimeContext.Start, End: o.TimeContext.End}
 	if strings.TrimSpace(o.TimeContext.Axis) == "" {
@@ -3110,6 +3154,7 @@ func (o interpretationOutput) toDomain(defaultTime contextfabric.TimeContext) (c
 		SubjectTerms: trimmedUnique(o.SubjectTerms), ComparisonTerms: trimmedUnique(o.ComparisonTerms),
 		TimeContext: timeContext, FactRequirements: requirements,
 		ClarificationNeeded: o.ClarificationNeeded, ClarificationReason: strings.TrimSpace(o.ClarificationReason),
+		RequestedJudgmentKind: sanitizeRequestedJudgmentKind(o.RequestedJudgmentKind),
 	}
 	if err := interpreted.Validate(); err != nil {
 		// Return interpreted (not a zero value) alongside the error: the
