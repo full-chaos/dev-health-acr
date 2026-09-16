@@ -96,6 +96,12 @@ type CountPopulationScope struct {
 	AnchorKind SubjectKind
 	// AnchorID is the canonical id of the first bound anchor, "" when none.
 	AnchorID string
+	// AnchorSubjectKind is the first bound anchor's OWN kind, as resolution
+	// committed it -- distinct from AnchorKind, which is the reading's stated
+	// kind and is "" whenever the question named no explicit kind even though
+	// an anchor is bound. This is the identity a minted cardinality claim's
+	// subject uses, and it is never absent when CommittedAnchors > 0.
+	AnchorSubjectKind SubjectKind
 	// Candidates is how many candidates the resolution carries.
 	Candidates int
 	// AnchorCandidates is how many of them could be the anchor: not of the
@@ -146,6 +152,7 @@ func DecideCountPopulationScope(frame *QuestionFrame, sampleAnchorKind SubjectKi
 			scope.CommittedAnchors++
 			if scope.AnchorID == "" {
 				scope.AnchorID = subject.CanonicalID
+				scope.AnchorSubjectKind = subject.Kind
 			}
 			continue
 		}
@@ -283,6 +290,14 @@ type CountPopulationScopeEvent struct {
 	Served   int
 	Assembly contractsv1.ContextFabricPlanRequirementOutcome
 	Reused   bool
+	// SubjectKind and SubjectID are the minted cardinality claim's own
+	// subject, READ OFF the served document's claim rather than re-derived
+	// from Scope -- the same discipline Counted/Served already follow, so a
+	// claim dropped at the contract cap (cardinalityClaimAdmitted) reports an
+	// empty subject here even though Scope still says the count is owed.
+	// Both are "" when the served document carries no cardinality claim.
+	SubjectKind SubjectKind
+	SubjectID   string
 }
 
 // countPopulationScopeEventFrom builds the event from the served document, or
@@ -311,6 +326,13 @@ func countPopulationScopeEventFrom(result InvestigationResult, scope CountPopula
 		event.Served = row.Served
 		event.Counted = row.Outcome == contractsv1.ContextFabricRequirementSatisfied || row.Outcome == contractsv1.ContextFabricRequirementNarrowed
 		break
+	}
+	for _, claim := range result.ClaimedFacts {
+		if claim.Kind == contractsv1.ContextFabricFactCardinality {
+			event.SubjectKind = claim.Subject.Kind
+			event.SubjectID = claim.Subject.CanonicalID
+			break
+		}
 	}
 	return event, true
 }
@@ -345,6 +367,9 @@ func CountPopulationScopeLogArgs(event CountPopulationScopeEvent, orgID string) 
 		"counted", event.Counted,
 		"served", SanitizeLogInt(int64(event.Served)),
 		"reused", event.Reused,
+		// The minted claim's own subject, "" when the document carries none.
+		"subject_kind", SanitizeLogAttr(string(event.SubjectKind)),
+		"subject_id", SanitizeLogAttr(event.SubjectID),
 	}
 }
 

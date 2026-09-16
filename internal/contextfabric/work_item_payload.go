@@ -93,9 +93,13 @@ func workItemTuplePayloadMarker(result InvestigationResult) bool {
 // payload, including candidate refs and evidence labels, must resolve to a
 // retained member's canonical work-item evidence ref.
 //
-// principal is supplied by the current request boundary so a cardinality
-// claim cannot name an arbitrary organization. An empty principal organization
-// is accepted only when the result carries no cardinality claim.
+// principal is supplied by the current request boundary: a cardinality claim
+// requires a current organization, and an empty principal organization is
+// accepted only when the result carries no cardinality claim. The claim's
+// SUBJECT is checked against the payload's own resolved anchor (below), a
+// project this tuple is always scoped under -- never against an organization,
+// since a work-item tuple's population is always anchor-bound
+// (count_population_scope.go).
 func ValidateWorkItemTuplePayload(result InvestigationResult, principal storage.Principal) error {
 	anchor, err := validateWorkItemAnchorCandidate(result.SubjectResolution)
 	if err != nil {
@@ -125,7 +129,7 @@ func ValidateWorkItemTuplePayload(result InvestigationResult, principal storage.
 		return fmt.Errorf("work-item tuple payload carries relationship paths")
 	}
 
-	memberClaimIDs, err := validateWorkItemClaims(result.ClaimedFacts, memberKeys, principal.OrgID)
+	memberClaimIDs, err := validateWorkItemClaims(result.ClaimedFacts, memberKeys, anchor, principal.OrgID)
 	if err != nil {
 		return err
 	}
@@ -245,7 +249,7 @@ func canonicalWorkItemEvidenceRef(subject SubjectRef) (string, bool) {
 	return contractsv1.EvidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, segments[0]+":"+segments[1]), true
 }
 
-func validateWorkItemClaims(claims []ClaimedFact, memberKeys map[string]struct{}, organizationID string) (map[string]struct{}, error) {
+func validateWorkItemClaims(claims []ClaimedFact, memberKeys map[string]struct{}, anchor SubjectRef, organizationID string) (map[string]struct{}, error) {
 	memberClaimIDs := make(map[string]struct{})
 	claimIDs := make(map[string]struct{}, len(claims))
 	cardinalityClaims := 0
@@ -274,8 +278,11 @@ func validateWorkItemClaims(claims []ClaimedFact, memberKeys map[string]struct{}
 			if cardinalityClaims > 1 {
 				return nil, fmt.Errorf("work-item tuple payload carries more than one cardinality claim")
 			}
-			if organizationID == "" || claim.Subject.Kind != SubjectOrganization || claim.Subject.CanonicalID != organizationID || claim.Field != "work_item_count" {
-				return nil, fmt.Errorf("work-item tuple cardinality claim is not for the current organization")
+			if organizationID == "" {
+				return nil, fmt.Errorf("work-item tuple cardinality claim requires the current organization")
+			}
+			if claim.Subject.Kind != anchor.Kind || claim.Subject.CanonicalID != anchor.CanonicalID || claim.Field != "work_item_count" {
+				return nil, fmt.Errorf("work-item tuple cardinality claim is not for the resolved anchor")
 			}
 			if claim.Value.Integer == nil || claim.Value.String != nil || claim.Value.Number != nil || claim.Value.Boolean != nil || claim.Value.Null || *claim.Value.Integer < 0 {
 				return nil, fmt.Errorf("work-item tuple cardinality claim must carry one non-negative integer")

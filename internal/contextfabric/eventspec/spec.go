@@ -2057,6 +2057,11 @@ var CountPopulationScope = Event{
 		{Key: "counted", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "served", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "reused", Type: FieldBool, Presence: PresenceRequired},
+		// The minted cardinality claim's own subject, read off the served
+		// document -- empty when it carries none. Open: a subject-kind token
+		// drawn from contextfabric.SubjectKind, or a free canonical id.
+		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }

@@ -94,30 +94,24 @@ func cardinalityOwedByFrame(frame *QuestionFrame, deriver RequirementDeriver, ca
 // cardinalityClaim builds the claim for a computed cardinality, or reports
 // false when there is nothing to claim.
 //
-// The SUBJECT is the ORGANIZATION the investigation is scoped to. A population
-// count is not a fact about any one member -- claiming it against a member
-// would assert that member has 36 of something -- and the organization is the
-// only subject the count is true of. Its canonical id is the principal's own
-// org id, which is the identity the whole investigation already runs under.
+// The SUBJECT is the counted population itself -- see cardinalityClaimSubject.
+// A population count is not a fact about any one MEMBER of that population --
+// claiming it against a member would assert that member has 36 of something --
+// so the subject is always the bounding population, never a member.
 func cardinalityClaim(principal storage.Principal, cardinality MembershipCardinality) (ClaimedFact, bool) {
 	if !cardinality.Resolved || cardinality.Kind == "" {
 		return ClaimedFact{}, false
 	}
-	if principal.OrgID == "" {
-		// No organization identity, no subject to claim against. Reported as
-		// an absence rather than claimed against a fabricated subject.
+	subject, ok := cardinalityClaimSubject(principal, cardinality.Scope)
+	if !ok {
 		return ClaimedFact{}, false
 	}
 	served := int64(cardinality.Served)
 	return ClaimedFact{
 		ClaimID: fmt.Sprintf("%s%s", cardinalityClaimIDPrefix, cardinality.Kind),
 		Kind:    contractsv1.ContextFabricFactCardinality,
-		Subject: SubjectRef{
-			Kind:        SubjectOrganization,
-			CanonicalID: principal.OrgID,
-			Label:       principal.OrgID,
-		},
-		Field: cardinalityClaimField(cardinality.Kind),
+		Subject: subject,
+		Field:   cardinalityClaimField(cardinality.Kind),
 		// SERVED, not Declared. The claim states what the answer CARRIES,
 		// which is what a reader can check against the members in front of
 		// them; the population it was cut from is disclosed on the outcome
@@ -127,6 +121,39 @@ func cardinalityClaim(principal storage.Principal, cardinality MembershipCardina
 			Integer: &served,
 		},
 	}, true
+}
+
+// cardinalityClaimSubject is the subject a cardinality claim is about: the
+// population the count describes, never a member of it.
+//
+// AN ANCHOR-BOUND COUNT NAMES THE ANCHOR. When the frame counts members under
+// an anchor and resolution committed one (count_population_scope.go's
+// anchor_committed), the counted population IS that anchor -- of the anchor's
+// OWN kind and canonical id, as resolution bound it, never the reading's
+// merely-stated kind (which the anchor's own AnchorSubjectKind can disagree
+// with when the question named no explicit kind).
+//
+// EVERY OTHER COUNTED POPULATION IS THE ORGANIZATION. organization_scope, and
+// the zero-value Scope a caller that predates this decision still passes, both
+// describe a population no anchor bounds -- a discovered kind, a grouped or
+// compared set, or the organization itself -- and the organization is the only
+// subject such a count is true of. Its canonical id is the principal's own org
+// id, the identity the whole investigation already runs under.
+func cardinalityClaimSubject(principal storage.Principal, scope CountPopulationScope) (SubjectRef, bool) {
+	if scope.Decision == CountPopulationScopeAnchorCommitted {
+		if scope.AnchorSubjectKind == "" || scope.AnchorID == "" {
+			// An invariant this file relies on elsewhere did not hold --
+			// report an absence rather than claim a fabricated subject.
+			return SubjectRef{}, false
+		}
+		return SubjectRef{Kind: scope.AnchorSubjectKind, CanonicalID: scope.AnchorID, Label: scope.AnchorID}, true
+	}
+	if principal.OrgID == "" {
+		// No organization identity, no subject to claim against. Reported as
+		// an absence rather than claimed against a fabricated subject.
+		return SubjectRef{}, false
+	}
+	return SubjectRef{Kind: SubjectOrganization, CanonicalID: principal.OrgID, Label: principal.OrgID}, true
 }
 
 // cardinalityAnswerSentence is the prose half: the number the claim asserts,

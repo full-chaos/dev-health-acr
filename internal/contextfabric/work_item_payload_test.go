@@ -258,7 +258,11 @@ func TestValidateWorkItemTuplePayloadRejectsEveryOutsideShape(t *testing.T) {
 		{name: "member claim carries table data", mutate: func(result *InvestigationResult) {
 			result.ClaimedFacts[0].Rows = []contractsv1.ContextFabricClaimedFactRow{{Fields: map[string]contractsv1.ContextFabricScalarValue{"status": {String: stringPointer("open")}}}}
 		}},
-		{name: "cardinality claim on another organization", mutate: func(result *InvestigationResult) { result.ClaimedFacts[2].Subject.CanonicalID = "org-2" }},
+		{name: "cardinality claim on another anchor id", mutate: func(result *InvestigationResult) { result.ClaimedFacts[2].Subject.CanonicalID = "project-other" }},
+		{name: "cardinality claim on a different anchor kind", mutate: func(result *InvestigationResult) { result.ClaimedFacts[2].Subject.Kind = SubjectTeam }},
+		{name: "cardinality claim on the organization", mutate: func(result *InvestigationResult) {
+			result.ClaimedFacts[2].Subject = SubjectRef{Kind: SubjectOrganization, CanonicalID: "org-1", Label: "org-1"}
+		}},
 		{name: "cardinality claim has wrong field", mutate: func(result *InvestigationResult) { result.ClaimedFacts[2].Field = "project_count" }},
 		{name: "cardinality claim has non-integer value", mutate: func(result *InvestigationResult) {
 			result.ClaimedFacts[2].Value = ScalarValue{String: stringPointer("1")}
@@ -308,8 +312,13 @@ func TestValidateWorkItemTuplePayloadRequiresTheCurrentOrganizationForCardinalit
 	if err := ValidateWorkItemTuplePayload(result, storage.Principal{}); err == nil {
 		t.Fatal("ValidateWorkItemTuplePayload() error = nil, want an empty current organization to reject a cardinality claim")
 	}
-	if WorkItemTuplePayloadAllowed(result, storage.Principal{OrgID: "org-2"}) {
-		t.Fatal("WorkItemTuplePayloadAllowed() = true for a cardinality claim belonging to another organization")
+	// The claim's SUBJECT is the resolved anchor, not the organization
+	// (count_population_scope.go's anchor_committed), so a request from a
+	// DIFFERENT organization is not what checks it -- only whether one is
+	// present at all. The anchor itself is what the cardinality claim on
+	// another anchor id/kind cases (above) pin.
+	if !WorkItemTuplePayloadAllowed(result, storage.Principal{OrgID: "org-2"}) {
+		t.Fatal("WorkItemTuplePayloadAllowed() = false for a non-empty organization whose cardinality claim names the resolved anchor")
 	}
 }
 
@@ -363,7 +372,7 @@ func workItemTuplePayloadFixture(t *testing.T) InvestigationResult {
 		ClaimedFacts: []ClaimedFact{
 			{ClaimID: "claim-status", Kind: FactStatus, Subject: member, Field: "status", Value: ScalarValue{String: &statusValue}},
 			{ClaimID: "claim-work", Kind: FactWork, Subject: member, Field: "title", Value: ScalarValue{String: &titleValue}},
-			{ClaimID: "claim-cardinality", Kind: contractsv1.ContextFabricFactCardinality, Subject: SubjectRef{Kind: SubjectOrganization, CanonicalID: "org-1", Label: "org-1"}, Field: "work_item_count", Value: ScalarValue{Integer: &count}},
+			{ClaimID: "claim-cardinality", Kind: contractsv1.ContextFabricFactCardinality, Subject: anchor, Field: "work_item_count", Value: ScalarValue{Integer: &count}},
 		},
 		RemainingWork: []Finding{{
 			FindingID: "finding-1", Kind: "remaining_work", Summary: "work remains", Subjects: []SubjectRef{member},

@@ -253,6 +253,8 @@ type CountPopulationScopeFields struct {
 	Counted           bool
 	Served            int
 	Reused            bool
+	SubjectKind       string
+	SubjectID         string
 	RequestID         string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every CountPopulationScopeFields uniformly, set ONLY by NewCountPopulationScopeFields below. A caller
@@ -267,7 +269,7 @@ type CountPopulationScopeFields struct {
 
 // NewCountPopulationScopeFields is the generated constructor for CountPopulationScopeFields -- every
 // field CountPopulationScope.Fields declares is a required parameter.
-func NewCountPopulationScopeFields(orgID string, expressionKind string, memberKind string, requirement string, committed int, committedAnchors int, committedUnbound int, anchorKind string, anchorID string, candidates int, anchorCandidates int, memberSetResolved bool, members int, decision string, assembledOutcome string, counted bool, served int, reused bool, requestID string) CountPopulationScopeFields {
+func NewCountPopulationScopeFields(orgID string, expressionKind string, memberKind string, requirement string, committed int, committedAnchors int, committedUnbound int, anchorKind string, anchorID string, candidates int, anchorCandidates int, memberSetResolved bool, members int, decision string, assembledOutcome string, counted bool, served int, reused bool, subjectKind string, subjectID string, requestID string) CountPopulationScopeFields {
 	return CountPopulationScopeFields{
 		OrgID:             orgID,
 		ExpressionKind:    expressionKind,
@@ -287,6 +289,8 @@ func NewCountPopulationScopeFields(orgID string, expressionKind string, memberKi
 		Counted:           counted,
 		Served:            served,
 		Reused:            reused,
+		SubjectKind:       subjectKind,
+		SubjectID:         subjectID,
 		RequestID:         requestID,
 		constructed:       true,
 	}
@@ -323,6 +327,8 @@ func (f CountPopulationScopeFields) SlogArgs() []any {
 		"counted", f.Counted,
 		"served", f.Served,
 		"reused", f.Reused,
+		"subject_kind", contextfabric.SanitizeLogAttr(f.SubjectKind),
+		"subject_id", contextfabric.SanitizeLogAttr(f.SubjectID),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }
