@@ -6,12 +6,11 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-// The observation-cover event used to publish IDENTICAL numbers for a
-// genuinely absent source and a merely truncated one: `health` unavailable
-// from no_data and `health` narrowed by a truncation both logged
-// observed_kinds=1 served_kinds=0. These pin that the line's own Outcome and
-// Truncated/Failed/Narrowed counters now tell the two apart without a join
-// against the store.
+// The observation-cover line's own Outcome and Truncated/Failed/Narrowed
+// counters tell a genuinely absent source apart from a merely truncated one
+// -- `health` unavailable from no_data and `health` narrowed by a
+// truncation log DIFFERENT numbers, without a join against the store, even
+// though both share observed_kinds=1 served_kinds=0. These pin that.
 
 func TestObservationCoverEventCarriesTheRowsOwnOutcome(t *testing.T) {
 	t.Parallel()

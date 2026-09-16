@@ -15,9 +15,8 @@ import (
 
 // TestUnavailableRequirementCauseNamesEachReasonDistinctly pins the wire
 // split: unavailableRequirementCause maps EACH of the four derivation
-// reasons to its own code, never collapsing no_declaring_producer and
-// table_shape_undeclared onto the shared fact_unconfigured they used to
-// share.
+// reasons to its own code, and no_declaring_producer and
+// table_shape_undeclared never collapse onto one shared code.
 func TestUnavailableRequirementCauseNamesEachReasonDistinctly(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

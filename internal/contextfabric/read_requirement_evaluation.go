@@ -1265,13 +1265,13 @@ type ReadRequirementObservationCoverEvent struct {
 	Served bool
 	// Outcome is the requirement row's own decision -- satisfied, narrowed
 	// or unavailable -- for the SAME requirement this cover event describes.
-	// It closes the gap a truncated source and a genuinely absent one used
-	// to share on this line: `health` narrowed by a truncation and `health`
-	// unavailable from no_data used to publish the identical cover numbers
-	// (observed_kinds=1 served_kinds=0), and only a join against the
-	// separate "context fabric fact read" line could tell them apart. Empty
-	// exactly when RowWithheld is not RowWithheldNone -- a withheld row
-	// names why it withheld one instead.
+	// It distinguishes a truncated source from a genuinely absent one on
+	// this line itself: `health` narrowed by a truncation and `health`
+	// unavailable from no_data both carry observed_kinds=1 served_kinds=0,
+	// and Outcome is the field that tells them apart without a join against
+	// the separate "context fabric fact read" line. Empty exactly when
+	// RowWithheld is not RowWithheldNone -- a withheld row names why it
+	// withheld one instead.
 	Outcome contractsv1.ContextFabricPlanRequirementOutcome
 	// Truncated, Failed and Narrowed are evidence.Truncated/evidence.Failed/
 	// evidence.Narrowed, carried onto the line so a truncation (fact-bearing,

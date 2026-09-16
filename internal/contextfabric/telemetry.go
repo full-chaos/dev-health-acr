@@ -1505,12 +1505,12 @@ func (t SlogEngineTelemetry) RecordReadRequirementObservationCover(ctx context.C
 		"declared_raised_to_standard", event.DeclaredRaisedToStandard,
 		"meets_threshold", event.MeetsThreshold,
 		// THE DECISION ITSELF, and the counters that distinguish an
-		// unavailable row's cause from a narrowed one's: two rows used to
-		// publish the identical cover numbers whether a source was
-		// genuinely absent or merely truncated, and only a join against the
-		// separate "context fabric fact read" line could tell them apart.
-		// Empty/zero here, on a withheld row, is the honest report --
-		// row_withheld already names why.
+		// unavailable row's cause from a narrowed one's: a genuinely absent
+		// source and a merely truncated one can carry the same cover
+		// numbers, and outcome plus these three counts are what tell them
+		// apart on this line, without a join against the separate "context
+		// fabric fact read" line. Empty/zero here, on a withheld row, is the
+		// honest report -- row_withheld already names why.
 		"outcome", SanitizeLogAttr(string(event.Outcome)),
 		"truncated", event.Truncated,
 		"failed", event.Failed,

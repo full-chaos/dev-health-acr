@@ -9,13 +9,13 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-// The "context fabric plan narrowing" line's outcome_completeness_state field
-// used to reach the wire empty on every assembled_result-stage line except
-// the one recordCandidateNarrowing emits: fitAssembledResult's three OTHER
-// exits (the immediate fit, the retry that fits without needing the
-// candidate reduction, and the retry that errors) built their events without
-// ever reading the already-computed InvestigationResult.Completeness.State
-// off the document each one describes.
+// The "context fabric plan narrowing" line's outcome_completeness_state
+// field is non-empty on every assembled_result-stage line that describes a
+// served document: recordCandidateNarrowing's own emission, and
+// fitAssembledResult's three other exits (the immediate fit, the retry that
+// fits without needing the candidate reduction, and the retry that errors)
+// all read the already-computed InvestigationResult.Completeness.State off
+// the document each one describes.
 //
 // These two tests drive the two exits that SERVE an answer -- the immediate
 // fit (the majority path) and the retry that fits on its own -- and pin that
