@@ -92,7 +92,12 @@ func reusableCandidate() (SubjectRef, InvestigationResult) {
 	candidate.ResultID = "result_reused_0001"
 	candidate.RequestID = "request_original_01"
 	candidate.GeneratedAt = time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
-	candidate.SubjectResolution = SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}
+	// CommitDecisionDigests: project is every count-related fixture's own
+	// anchor identity -- CommitBasisSetFromDigests (chaos4085_commit_basis.go)
+	// is what lets a STORED resolution's anchor still bind on reuse, since
+	// CommitBasisSet itself is never persisted. Inert for every non-count
+	// fixture built from this helper.
+	candidate.SubjectResolution = SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}, CommitDecisionDigests: identityProvenDigests(project)}
 	candidate.EvidenceRefIDs = []string{}
 	return project, candidate
 }

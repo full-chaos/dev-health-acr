@@ -225,7 +225,16 @@ func DecideCountPopulationScope(frame *QuestionFrame, sampleAnchorKind SubjectKi
 	switch {
 	case scope.ExpressionKind != SubjectExpressionChildrenOfScope:
 		scope.Decision = CountPopulationScopeOrganization
-	case scope.CommittedAnchors > 0:
+	case scope.CommittedAnchors > 1:
+		// More than one committed subject binds to the frame's own anchor --
+		// two distinct identity-proven subjects of the same kind, each
+		// individually satisfying anchorBound. Only one identity can be the
+		// requested scope; AnchorID above names whichever came first in
+		// resolution's own slice order, which is not a fact about the
+		// question, only about iteration order, so it is refused here rather
+		// than served as if it were a single answer.
+		scope.Decision = CountPopulationScopeAnchorAmbiguous
+	case scope.CommittedAnchors == 1:
 		scope.Decision = CountPopulationScopeAnchorCommitted
 	case scope.AnchorCandidates > 1:
 		scope.Decision = CountPopulationScopeAnchorAmbiguous
@@ -240,17 +249,50 @@ func DecideCountPopulationScope(frame *QuestionFrame, sampleAnchorKind SubjectKi
 //
 // KIND: when the reading states an anchor kind, only a subject of that kind can
 // be the anchor. PROVENANCE: the subject was committed on the caller's own
-// canonical id, or resolution recorded it as a match for one of the frame's
-// anchor terms. The terms are compared as retrieval pointers against
-// resolution's record of what each pointer matched, never as values.
+// canonical id, or on a proven identity (CommitBasis.IdentityProven) AND
+// resolution recorded it as a match for one of the frame's anchor terms. The
+// terms are compared as retrieval pointers against resolution's record of
+// what each pointer matched, never as values.
+//
+// THE IDENTITY-PROVEN REQUIREMENT ON THE TERM-MATCH BRANCH is deliberate, not
+// incidental: a term match alone is retrieval finding a subject whose LABEL
+// happened to echo the anchor's own wording, which a statistical (scored,
+// non-identity) commit produces just as readily as an identity-proven one --
+// the exact-label tier is a label heuristic, never a proof (CommitBasis's own
+// doc comment). Binding the count's own population, or any later carry of it,
+// to a subject the graph merely scored highest would let the requested scope
+// silently drift onto the wrong entity whenever the true anchor and a
+// same-named decoy both surface as candidates.
+// AnchorBound is anchorBound's exported form, for the one other package
+// that must decide the identical question over the identical inputs
+// (falkorgraph's own ownership-routing decision) -- ONE definition,
+// consumed everywhere, rather than a second implementation that can drift
+// from this one the way an earlier, unswept copy already did once.
+func AnchorBound(frame *QuestionFrame, anchorKind SubjectKind, subject SubjectRef, resolution SubjectResolution, bases CommitBasisSet) bool {
+	return anchorBound(frame, anchorKind, subject, resolution, bases)
+}
+
 func anchorBound(frame *QuestionFrame, anchorKind SubjectKind, subject SubjectRef, resolution SubjectResolution, bases CommitBasisSet) bool {
+	// A nil frame, one whose expression is not children_of_scope, or one
+	// with no Scoped block binds nothing: "anchor" has no meaning outside
+	// that one shape, whatever the commit basis -- checked BEFORE the basis
+	// shortcut below, not after, so a caller-canonical-id commit under an
+	// unrelated expression shape can never read as an anchor either.
+	// DecideCountPopulationScope's own switch already discards this
+	// function's answer for any non-scoped expression, so this is a
+	// strengthening for AnchorBound's other caller, never a behavior change
+	// for this file's own.
+	if frame == nil || frame.SubjectExpression.Kind != SubjectExpressionChildrenOfScope || frame.SubjectExpression.Scoped == nil {
+		return false
+	}
 	if anchorKind != "" && subject.Kind != anchorKind {
 		return false
 	}
-	if bases.For(subject) == CommitBasisCallerCanonicalID {
+	basis := bases.For(subject)
+	if basis == CommitBasisCallerCanonicalID {
 		return true
 	}
-	if frame.SubjectExpression.Scoped == nil {
+	if !basis.IdentityProven() {
 		return false
 	}
 	terms := make(map[string]struct{}, len(frame.SubjectExpression.Scoped.AnchorTerms))

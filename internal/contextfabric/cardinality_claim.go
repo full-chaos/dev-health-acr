@@ -298,7 +298,7 @@ func cardinalityClaimSubjectRepair(principal storage.Principal, result *Investig
 	if idx < 0 {
 		return false
 	}
-	scope := DecideCountPopulationScope(reading.Frame, reading.AnchorKind, result.SubjectResolution, nil, CohortMemberSourceNotApplicable)
+	scope := DecideCountPopulationScope(reading.Frame, reading.AnchorKind, result.SubjectResolution, CommitBasisSetFromDigests(result.SubjectResolution.CommitDecisionDigests), CohortMemberSourceNotApplicable)
 	if !scope.Counts() {
 		return false
 	}

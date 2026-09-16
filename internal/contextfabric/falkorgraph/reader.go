@@ -1324,44 +1324,17 @@ func mustSubject(n graphrank.CandidateNode) contextfabric.SubjectRef {
 }
 
 // frameAnchorBound reports whether subject is the frame's own scope anchor,
-// never merely a committed subject that happens to share its kind. Mirrors
-// BOTH arms of contextfabric's own anchorBound (count_population_scope.go):
-// a subject committed on the caller's own canonical id (bases), or one
-// resolution recorded as a match for one of the frame's anchor terms.
-// GraphDiscoveryRequest now carries the same CommitBasisSet the count
-// decision reads (Bases, ports.go), so the two sites can no longer drift --
-// a canonical-id-only commit that would certify anchor_committed on the
-// served line must route through ownership here too, never leave that
-// commit to a graph-proximity read the certified line does not describe.
-//
-// A frame that is not children_of_scope, or carries no scope, binds nothing:
-// "anchor" has no meaning outside that one expression shape -- this mirrors
-// DecideCountPopulationScope's own switch, where anchor_committed is
-// reachable only under that same expression kind.
+// never merely a committed subject that happens to share its kind. A thin
+// delegate to contextfabric's own exported AnchorBound (count_population_scope.go)
+// -- ONE definition, consumed everywhere, never a second implementation
+// that can drift from it the way an earlier, unswept copy already did
+// once. anchorKind is "" here deliberately: this call site already knows
+// subject's own kind by construction (it is scanning committed
+// repositories specifically), so there is no separate reading-stated
+// anchor kind to additionally constrain it by, matching this function's
+// own pre-existing behavior.
 func frameAnchorBound(frame *contextfabric.QuestionFrame, subject contextfabric.SubjectRef, resolution contextfabric.SubjectResolution, bases contextfabric.CommitBasisSet) bool {
-	if frame == nil || frame.SubjectExpression.Kind != contextfabric.SubjectExpressionChildrenOfScope || frame.SubjectExpression.Scoped == nil {
-		return false
-	}
-	if bases.For(subject) == contextfabric.CommitBasisCallerCanonicalID {
-		return true
-	}
-	terms := make(map[string]struct{}, len(frame.SubjectExpression.Scoped.AnchorTerms))
-	for _, term := range frame.SubjectExpression.Scoped.AnchorTerms {
-		if normalized := contextfabric.NormalizeRetrievalTerm(term); normalized != "" {
-			terms[normalized] = struct{}{}
-		}
-	}
-	for _, candidate := range resolution.Candidates {
-		if candidate.Subject.Kind != subject.Kind || candidate.Subject.CanonicalID != subject.CanonicalID {
-			continue
-		}
-		for _, matched := range candidate.MatchedTerms {
-			if _, anchor := terms[contextfabric.NormalizeRetrievalTerm(matched)]; anchor {
-				return true
-			}
-		}
-	}
-	return false
+	return contextfabric.AnchorBound(frame, "", subject, resolution, bases)
 }
 
 // sortCandidateNodesBySubjectKey sorts nodes in place by graphrank.SubjectKey

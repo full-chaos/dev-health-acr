@@ -116,6 +116,13 @@ type confirmedStructureMember struct {
 	// effective window the fresh winr_ redemption applied.
 	WindowStart *time.Time
 	WindowEnd   *time.Time
+	// Basis (CHAOS-5788) is populated for subject_anchor only, and only when
+	// the member was never redeemed from a receipt at all: the closed
+	// vocabulary distinguishing a caller-picked confirmation (the zero
+	// value, every member before this axis existed) from a subject the
+	// engine bound to the frame's own anchor with nothing offered to pick
+	// from (chaos5788_committed_anchor_carry.go).
+	Basis ConfirmedNeedBasis
 }
 
 // explicitStructureMember is one member's EXPLICIT (non-receipt) value

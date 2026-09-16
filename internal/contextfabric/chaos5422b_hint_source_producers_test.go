@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/hintsource"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -144,6 +145,41 @@ func TestEveryEnumeratedHintSourceHasAnExecutedProductionDriver(t *testing.T) {
 				sources, hintsource.CohortGroupAuthorization)
 		}
 		driven[hintsource.CohortGroupAuthorization] = true
+	})
+
+	t.Run("engine_committed_anchor_carry, through the confirmation turn's own carry", func(t *testing.T) {
+		// Driven through a REAL two-turn confirmation scenario
+		// (chaos5788_committed_anchor_carry_test.go's own fixtures): turn one
+		// commits an anchor with no offer ever raised; turn two, naming turn
+		// one as parent and stating only the member kind, is the production
+		// path this source's own driver has to be.
+		engine, graph, store := buildCommittedAnchorEngine(t)
+		one := needTurnRequest("request_hintsource_driver_one", true)
+		oneResponse := needTurnResponse{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{committedAnchorRepo}}, bases: provenCommitBases(committedAnchorRepo)}
+		oneResult, _ := committedAnchorTurn(t, engine, graph, store, one, oneResponse)
+
+		two := needTurnRequest("request_hintsource_driver_two", true)
+		two.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam}
+		two = continuingNeedTurn(two, oneResult.ResultID)
+		twoResponse := needTurnResponse{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{committedAnchorRepo}}, bases: provenCommitBases(committedAnchorRepo)}
+		_, call := committedAnchorTurn(t, engine, graph, store, two, twoResponse)
+
+		sources := make([]string, 0, 1)
+		for _, hint := range call.request.RequestedScope.SubjectHints {
+			sources = append(sources, hint.Source)
+		}
+		t.Logf("sources reaching ResolveSubjects = %v", sources)
+		found := false
+		for _, source := range sources {
+			if source == string(hintsource.EngineCommittedAnchorCarry) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("the confirmation turn put %v on the wire, none of which is %q -- either the carry did not run in this fixture (then it measures nothing) or it emits a different string than the registry holds",
+				sources, hintsource.EngineCommittedAnchorCarry)
+		}
+		driven[hintsource.EngineCommittedAnchorCarry] = true
 	})
 
 	// THE CLOSURE CHECK. A member added to the registry with no driver above

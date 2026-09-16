@@ -158,7 +158,18 @@ func (g *freshTupleGraph) ResolveSubjects(_ context.Context, p storage.Principal
 	}
 	candidate.State = contextfabric.ResolutionCommitted
 	candidate.ReceiptID = "receipt_tuple_project"
-	return contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{candidate}, Committed: []contextfabric.SubjectRef{candidate.Subject}}, contextfabric.StructureOfferMaterial{}, nil, nil, nil
+	// CommitBasisSet/CommitDecisionDigestSet: this fixture presents a real,
+	// authorized, uniquely resolved candidate exactly as identity_fast_path
+	// would. anchorBound (count_population_scope.go) requires the live basis
+	// to bind a term match; a later turn naming this one's saved document as
+	// its reuse candidate binds only through the PERSISTED digest twin
+	// (CommitBasisSetFromDigests, chaos4085_commit_basis.go), since
+	// CommitBasis itself is never persisted.
+	bases := contextfabric.CommitBasisSet{}
+	bases.Record(candidate.Subject, contextfabric.CommitBasisAuthoritativeIdentity)
+	digests := contextfabric.CommitDecisionDigestSet{}
+	digests.Record(candidate.Subject, contextfabric.CommitDecisionDigest{CommitGate: "identity_fast_path", IdentityProven: true})
+	return contextfabric.SubjectResolution{Candidates: []contextfabric.SubjectCandidate{candidate}, Committed: []contextfabric.SubjectRef{candidate.Subject}}, contextfabric.StructureOfferMaterial{}, bases, digests, nil
 }
 func (g *freshTupleGraph) DiscoverContext(context.Context, storage.Principal, contextfabric.GraphDiscoveryRequest) (contextfabric.GraphContext, error) {
 	g.discover++

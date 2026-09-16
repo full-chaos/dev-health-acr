@@ -27,6 +27,11 @@ type needTurnResponse struct {
 	resolution SubjectResolution
 	material   StructureOfferMaterial
 	bases      CommitBasisSet
+	// err, when set, is what ResolveSubjects itself reports for this turn --
+	// e.g. a wrapped ErrGraphNotProjected -- instead of the scripted
+	// resolution succeeding. The zero value (nil) is every existing
+	// scenario's own unchanged behavior.
+	err error
 }
 
 type needTurnCall struct {
@@ -48,7 +53,7 @@ func (g *needTurnGraph) ResolveInvestigationBinding(context.Context, storage.Pri
 
 func (g *needTurnGraph) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding, kind *ConfirmedExpectedKind, anchor *ConfirmedAnchorSelection, _ *QuestionFrame, _ SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
 	g.calls = append(g.calls, needTurnCall{request: request, kind: kind, anchor: anchor})
-	return g.response.resolution, g.response.material, g.response.bases, nil, nil
+	return g.response.resolution, g.response.material, g.response.bases, nil, g.response.err
 }
 
 func (g *needTurnGraph) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {
@@ -1145,7 +1150,7 @@ func TestSemanticState_ConfirmedNeedsNewFieldsRoundTrip(t *testing.T) {
 	state := semanticFixture(t)
 	state.ConfirmedNeeds = []ConfirmedNeedEntry{
 		{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(SubjectTeam)},
-		{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: SubjectProject, AppliedValue: "p", MatchedTermHash: "h"},
+		{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: SubjectProject, AppliedValue: "p", MatchedTermHash: "h", Basis: ConfirmedNeedBasisEngineCommitted},
 		{Member: contractsv1.ContextFabricStructureNeedSubjectHandle, AppliedKind: SubjectPullRequest, AppliedValue: "532", PatternID: "pull_request_number"},
 		{Member: contractsv1.ContextFabricStructureNeedWindow, AppliedValue: string(RelativeWindowTrailing90D), WindowStart: &start, WindowEnd: &end},
 		{Member: contractsv1.ContextFabricStructureNeedSubjectCandidate, AppliedKind: SubjectRepository, AppliedValue: "repository:need-r2"},
@@ -1161,7 +1166,7 @@ func TestSemanticState_ConfirmedNeedsNewFieldsRoundTrip(t *testing.T) {
 	for i, entry := range decoded.ConfirmedNeeds {
 		original := state.ConfirmedNeeds[i]
 		if entry.Member != original.Member || entry.AppliedKind != original.AppliedKind || entry.AppliedValue != original.AppliedValue ||
-			entry.MatchedTermHash != original.MatchedTermHash || entry.PatternID != original.PatternID ||
+			entry.MatchedTermHash != original.MatchedTermHash || entry.PatternID != original.PatternID || entry.Basis != original.Basis ||
 			!sameWindowBounds(entry.WindowStart, original.WindowStart) || !sameWindowBounds(entry.WindowEnd, original.WindowEnd) {
 			t.Fatalf("entry %d read back as %#v, want %#v", i, entry, original)
 		}
@@ -1177,6 +1182,7 @@ func TestSemanticState_ConfirmedNeedsNewFieldsValidation(t *testing.T) {
 	handle := contractsv1.ContextFabricStructureNeedSubjectHandle
 	window := contractsv1.ContextFabricStructureNeedWindow
 	candidate := contractsv1.ContextFabricStructureNeedSubjectCandidate
+	anchor := contractsv1.ContextFabricStructureNeedSubjectAnchor
 	for _, tc := range []struct {
 		name   string
 		entry  ConfirmedNeedEntry
@@ -1200,6 +1206,12 @@ func TestSemanticState_ConfirmedNeedsNewFieldsValidation(t *testing.T) {
 		{"window empty value", ConfirmedNeedEntry{Member: window}, true},
 		{"bounds on a candidate", ConfirmedNeedEntry{Member: candidate, AppliedValue: "c", WindowStart: &start, WindowEnd: &end}, false},
 		{"bounds on a handle", ConfirmedNeedEntry{Member: handle, AppliedValue: "1", WindowStart: &start, WindowEnd: &end}, false},
+		{"anchor without basis", ConfirmedNeedEntry{Member: anchor, AppliedKind: SubjectRepository, AppliedValue: "r"}, true},
+		{"anchor, engine_committed basis", ConfirmedNeedEntry{Member: anchor, AppliedKind: SubjectRepository, AppliedValue: "r", Basis: ConfirmedNeedBasisEngineCommitted}, true},
+		{"basis out of vocabulary", ConfirmedNeedEntry{Member: anchor, AppliedKind: SubjectRepository, AppliedValue: "r", Basis: ConfirmedNeedBasis("not_a_basis")}, false},
+		{"basis on a candidate", ConfirmedNeedEntry{Member: candidate, AppliedValue: "c", Basis: ConfirmedNeedBasisEngineCommitted}, false},
+		{"basis on a handle", ConfirmedNeedEntry{Member: handle, AppliedValue: "1", Basis: ConfirmedNeedBasisEngineCommitted}, false},
+		{"basis on a window", ConfirmedNeedEntry{Member: window, AppliedValue: "all_time", Basis: ConfirmedNeedBasisEngineCommitted}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -1233,7 +1245,7 @@ func TestRecordConfirmedNeedLedger_EmittedLines(t *testing.T) {
 		Outcome: ConfirmedNeedLedgerHit, SourceResultID: "result_need_parent_line",
 		Dropped: []ConfirmedNeedMemberDrop{{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, Reason: ConfirmedNeedMemberDropReverifyNotConfirmed}},
 	}
-	engine.recordConfirmedNeedLedger(context.Background(), acceptancePrincipal(), ledger, applied)
+	engine.recordConfirmedNeedLedger(context.Background(), acceptancePrincipal(), ledger, applied, CountPopulationScopeAnchorUnresolved, ConfirmedAnchorAgreementNotApplicable, contractsv1.ContextFabricStructureDispositionVetoedConflict)
 	engine.recordConfirmedNeedLedgerWindow(context.Background(), acceptancePrincipal(), ledgerWindowApplication{Present: true, Decision: ConfirmedNeedLedgerWindowApplied, AppliedValue: windowAbsoluteAppliedValuePrefix + "1:2", SourceResultID: "result_need_window_line"})
 	engine.recordConfirmedNeedLedgerWindow(context.Background(), acceptancePrincipal(), ledgerWindowApplication{})
 
@@ -1258,7 +1270,8 @@ func TestRecordConfirmedNeedLedger_EmittedLines(t *testing.T) {
 		"applied_expected_kind": "team", "applied_anchor_kind": "", "applied_anchor_value_hash": "",
 		"applied_candidate_kind": "repository", "applied_candidate_value_hash": confirmedNeedValueHash("repository:raw-candidate-id"),
 		"applied_handle_kind": "pull_request", "applied_handle_value_hash": confirmedNeedValueHash("raw-handle-532"),
-		"dropped_members": "subject_anchor:reverify_not_confirmed",
+		"dropped_members":      "subject_anchor:reverify_not_confirmed",
+		"applied_anchor_basis": "", "anchor_agreement": "not_applicable", "anchor_disposition": "vetoed_conflict", "capture_decision": "anchor_unresolved",
 	}
 	for key, want := range wantLedger {
 		if got, ok := ledgerLine[key]; !ok || got != want {

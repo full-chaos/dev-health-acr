@@ -31,6 +31,13 @@ func TestByIDRouteRepairsLegacyCardinalityClaimSubject(t *testing.T) {
 	// actually carries rather than weaken the repair to trust an
 	// unconfirmed anchor.
 	stored.Result.SubjectResolution.Candidates[0].MatchedTerms = []string{"project"}
+	// CommitDecisionDigests: the wire-safe survivor of CommitBasis a real
+	// persisted row carries (chaos4085_commit_basis.go) -- anchorBound
+	// requires an identity-proven basis on a term match, so this is what
+	// lets the anchor bind and this repair fire.
+	stored.Result.SubjectResolution.CommitDecisionDigests = []contractsv1.ContextFabricCommitDecisionDigest{{
+		Subject: stored.Result.SubjectResolution.Committed[0], CommitGate: "identity_fast_path", IdentityProven: true,
+	}}
 	legacyClaim := stored.Result.ClaimedFacts[2]
 	if legacyClaim.Kind != contractsv1.ContextFabricFactCardinality || legacyClaim.Subject.Kind != contractsv1.ContextFabricSubjectOrganization {
 		t.Fatalf("fixture control: ClaimedFacts[2] = %+v, want the legacy organization-subject cardinality claim this test targets", legacyClaim)
@@ -86,6 +93,11 @@ func TestByIDRouteLeavesAnAlreadyCorrectCardinalityClaimAlone(t *testing.T) {
 	// of stopping earlier at the "reading cannot re-derive the scope" gate.
 	stored.Result.SubjectResolution.Candidates[0].MatchedTerms = []string{"project"}
 	anchor := stored.Result.SubjectResolution.Committed[0]
+	// CommitDecisionDigests: see the sibling test above -- this is what lets
+	// the anchor's term match bind.
+	stored.Result.SubjectResolution.CommitDecisionDigests = []contractsv1.ContextFabricCommitDecisionDigest{{
+		Subject: anchor, CommitGate: "identity_fast_path", IdentityProven: true,
+	}}
 	// A freshly minted claim's Label is the anchor's canonical id, not the
 	// anchor's own display label (cardinalityClaimSubject has no display
 	// name to draw from) -- match that shape exactly, or this fixture is

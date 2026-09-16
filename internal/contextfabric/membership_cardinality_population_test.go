@@ -572,7 +572,8 @@ func TestCardinalityClaimSubjectRepairCoversItsInputDomain(t *testing.T) {
 		Frame:      &QuestionFrame{SubjectExpression: SubjectExpression{Kind: SubjectExpressionChildrenOfScope, Scoped: &ScopedSetExpression{AnchorTerms: []string{"a"}, MemberKind: SubjectTeam}}},
 		AnchorKind: "",
 	}
-	anchoredResolution := SubjectResolution{Committed: []SubjectRef{{Kind: SubjectRepository, CanonicalID: "repository:R", Label: "R"}}, Candidates: []SubjectCandidate{scopeAnchorMatch(SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:R", Label: "R"})}}
+	anchoredRepository := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:R", Label: "R"}
+	anchoredResolution := SubjectResolution{Committed: []SubjectRef{anchoredRepository}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchoredRepository)}, CommitDecisionDigests: identityProvenDigests(anchoredRepository)}
 	unresolvedResolution := SubjectResolution{}
 
 	for _, tc := range []struct {

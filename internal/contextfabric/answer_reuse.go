@@ -714,7 +714,7 @@ func (e *Engine) tryReuseWithReading(ctx context.Context, principal storage.Prin
 	// withholds is not reusable, and the request takes the fresh path, which
 	// makes the decision again over what it retrieves.
 	if storedDocumentStatesCount(candidate) {
-		if scope := DecideCountPopulationScope(reading.Frame, reading.AnchorKind, candidate.SubjectResolution, nil, CohortMemberSourceNotApplicable); !scope.Counts() {
+		if scope := DecideCountPopulationScope(reading.Frame, reading.AnchorKind, candidate.SubjectResolution, CommitBasisSetFromDigests(candidate.SubjectResolution.CommitDecisionDigests), CohortMemberSourceNotApplicable); !scope.Counts() {
 			e.recordReuseOutcome(ctx, principal, AnswerReuseMissCountScope)
 			return InvestigationResult{}, false, false, storedCountReading{}, nil
 		}

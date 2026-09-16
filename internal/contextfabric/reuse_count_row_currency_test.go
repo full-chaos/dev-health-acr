@@ -317,6 +317,12 @@ func currencyReuseEngine(t *testing.T, stored InvestigationResult, telemetry *re
 			stored.SubjectResolution.Candidates[index].MatchedTerms = append(append([]string(nil), stored.SubjectResolution.Candidates[index].MatchedTerms...), "a")
 		}
 	}
+	// CommitDecisionDigests: the wire-safe survivor of CommitBasis across a
+	// reuse boundary (CommitBasisSetFromDigests, chaos4085_commit_basis.go)
+	// -- anchorBound requires identity proof on a term match, and CommitBasis
+	// itself is never persisted, so this is what a stored anchor's term match
+	// binds through on reuse.
+	stored.SubjectResolution.CommitDecisionDigests = identityProvenDigests(reuseDegradeSubject())
 	if stored.Cohort != nil {
 		for _, subject := range currencyRecheckedSubjects(stored.Cohort) {
 			authorize(subject)

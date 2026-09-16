@@ -301,6 +301,7 @@ func (e *Engine) resolveConfirmedNeedLedger(ctx context.Context, principal stora
 			Member: entry.Member, AppliedKind: entry.AppliedKind, AppliedValue: entry.AppliedValue,
 			MatchedTermHash: entry.MatchedTermHash, PatternID: entry.PatternID,
 			WindowStart: cloneWindowBound(entry.WindowStart), WindowEnd: cloneWindowBound(entry.WindowEnd),
+			Basis: entry.Basis,
 		})
 	}
 	return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerHit, Entries: entries, Dropped: dropped, SourceResultID: parent}
@@ -313,6 +314,21 @@ func (e *Engine) resolveConfirmedNeedLedger(ctx context.Context, principal stora
 func (e *Engine) reverifyRememberedNeed(ctx context.Context, principal storage.Principal, request InvestigationRequest, binding ResolvedGraphBinding, schemaVersion string, entry ConfirmedNeedEntry) (ConfirmedNeedMemberDropReason, bool) {
 	switch entry.Member {
 	case contractsv1.ContextFabricStructureNeedSubjectAnchor:
+		// CHAOS-5788: an engine-committed anchor carries no offer's own
+		// matched_term_hash to replay -- there was never a census claim to
+		// re-check, only a resolution to re-run. It is not a live tampering
+		// vector the way a caller-picked offer is (that offer's own doc
+		// comment's reasoning): the SAME turn that consults this entry also
+		// re-resolves the frame's anchor terms from scratch through the
+		// ordinary fast path, and only a subject that resolution itself
+		// re-proves can ever reach Committed. This entry never stands in for
+		// that re-resolution; it only widens the pool it is allowed to
+		// survive into (decideAnchorPoolKindScope, graphrank). No reverify,
+		// exactly as expected_kind and window carry none (this function's
+		// own default case, below).
+		if entry.Basis == ConfirmedNeedBasisEngineCommitted {
+			return "", true
+		}
 		// The carrier's OWN schema_version selects the verifier, exactly as an
 		// ancr_ redemption dispatches on the issuing result's schema_version.
 		if !e.anchorReverifierWired(schemaVersion) {
@@ -468,6 +484,7 @@ func confirmedNeedEntryOf(member confirmedStructureMember) ConfirmedNeedEntry {
 		Member: member.Member, AppliedKind: member.AppliedKind, AppliedValue: member.AppliedValue,
 		MatchedTermHash: member.MatchedTermHash, PatternID: member.PatternID,
 		WindowStart: cloneWindowBound(member.WindowStart), WindowEnd: cloneWindowBound(member.WindowEnd),
+		Basis: member.Basis,
 	}
 }
 
@@ -624,8 +641,13 @@ func composeCarriedNeedEntry(member contractsv1.ContextFabricStructureNeedKind, 
 		Member: member, AppliedValue: entry.AppliedValue,
 		Source:        contractsv1.ContextFabricStructureSourceCarried,
 		PriorResultID: sourceResultID,
-		Provenance:    contractsv1.ContextFabricStructureClarificationConfirmed,
-		Disposition:   contractsv1.ContextFabricStructureDispositionApplied,
+		// Every member before this axis existed, and every member redeemed
+		// from a receipt, renders the ORIGINAL token
+		// (provenanceForConfirmedNeedBasis's own zero-value rule) -- only a
+		// subject_anchor the engine bound with no offer ever raised renders
+		// the new one.
+		Provenance:  provenanceForConfirmedNeedBasis(entry.Basis),
+		Disposition: contractsv1.ContextFabricStructureDispositionApplied,
 	}
 }
 
@@ -732,21 +754,61 @@ type ConfirmedNeedLedgerEvent struct {
 	AppliedHandleKind         contractsv1.ContextFabricSubjectKind
 	AppliedHandleValueHash    string
 	Dropped                   []ConfirmedNeedMemberDrop
+	// AppliedAnchorBasis is the applied subject_anchor entry's own closed
+	// basis (ConfirmedNeedBasis) -- "" for an ordinary receipt-redeemed
+	// entry, "engine_committed" for one the engine bound with no offer ever
+	// raised. Empty whenever AppliedAnchorKind is empty too (no anchor
+	// applied this turn).
+	AppliedAnchorBasis ConfirmedNeedBasis
+	// AnchorAgreement compares THIS turn's own applied subject_anchor entry
+	// (of either basis above) against what this turn's own resolution
+	// independently committed -- see ConfirmedAnchorAgreement's own doc
+	// comment for the closed vocabulary. This is the one field on this line
+	// that can turn "applied" into a proven-wrong claim: a disagree here
+	// means the entry was VETOED rather than disclosed as applied, and
+	// AppliedMembers/AppliedAnchorKind/AppliedAnchorValueHash above already
+	// reflect that (they read the post-veto ledger, not the pre-veto one).
+	AnchorAgreement ConfirmedAnchorAgreement
+	// AnchorDisposition is the wire disposition (ContextFabricStructureDisposition)
+	// this turn's own applied subject_anchor entry disclosed on its
+	// carried-structure echo, read from the SAME decision
+	// (anchorLedgerDisposition) that echo itself renders: "" when no entry
+	// applied this turn at all, "applied" when it survived, and one of the
+	// three drop dispositions (superseded_by_caller/vetoed_conflict/
+	// vetoed_unresolved) when it did not -- always the post-decision value,
+	// never the pre-decision "applied" a dropped entry started this turn
+	// with.
+	AnchorDisposition contractsv1.ContextFabricStructureDisposition
+	// CaptureDecision is THIS turn's own capture-gate scope decision
+	// (engineCommittedAnchorForCapture's underlying CountPopulationScopeDecision):
+	// "anchor_committed" means this turn's own resolution bound a NEW
+	// engine-committed anchor for a LATER turn to inherit; any other value
+	// is the honest reason it did not (frame_absent/organization_scope --
+	// not applicable; anchor_unresolved/anchor_ambiguous -- nothing strong
+	// enough bound). Empty only when the turn never reached the check
+	// (an error before resolution, or a work_item_tuple turn, which has no
+	// scope anchor of this kind at all).
+	CaptureDecision CountPopulationScopeDecision
 }
 
 // confirmedNeedLedgerEventOf builds the event from the admission result and
 // the single applied map, so the line can never report a member the map did
-// not apply.
-func confirmedNeedLedgerEventOf(ledger confirmedNeedLedgerResult, applied map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember) ConfirmedNeedLedgerEvent {
+// not apply. captureDecision and anchorAgreement are the two post-resolution
+// facts appliedNeedLedgerEntries' own pre-resolution map cannot carry --
+// captured from the SAME (frame, resolution) pair this turn's own capture
+// gate and carry-agreement check already computed, never re-derived here.
+func confirmedNeedLedgerEventOf(ledger confirmedNeedLedgerResult, applied map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember, captureDecision CountPopulationScopeDecision, anchorAgreement ConfirmedAnchorAgreement, anchorDisposition contractsv1.ContextFabricStructureDisposition) ConfirmedNeedLedgerEvent {
 	event := ConfirmedNeedLedgerEvent{
 		Outcome: ledger.Outcome, SourceResultID: ledger.SourceResultID,
 		AppliedMembers: appliedNeedLedgerMembers(applied), Dropped: ledger.Dropped,
+		CaptureDecision: captureDecision, AnchorAgreement: anchorAgreement, AnchorDisposition: anchorDisposition,
 	}
 	if entry, ok := applied[contractsv1.ContextFabricStructureNeedExpectedKind]; ok {
 		event.AppliedExpectedKind = contractsv1.ContextFabricSubjectKind(entry.AppliedValue)
 	}
 	if entry, ok := applied[contractsv1.ContextFabricStructureNeedSubjectAnchor]; ok {
 		event.AppliedAnchorKind, event.AppliedAnchorValueHash = entry.AppliedKind, confirmedNeedValueHash(entry.AppliedValue)
+		event.AppliedAnchorBasis = entry.Basis
 	}
 	if entry, ok := applied[contractsv1.ContextFabricStructureNeedSubjectCandidate]; ok {
 		event.AppliedCandidateKind, event.AppliedCandidateValueHash = entry.AppliedKind, confirmedNeedValueHash(entry.AppliedValue)
@@ -767,9 +829,9 @@ func confirmedNeedLedgerEventOf(ledger confirmedNeedLedgerResult, applied map[co
 // hashed value, and each member dropped at reverify with its reason -- "a
 // drop reported without both sides is a decision an operator cannot check"
 // applies here exactly as it does to RecordKindCarry.
-func (e *Engine) recordConfirmedNeedLedger(ctx context.Context, principal storage.Principal, ledger confirmedNeedLedgerResult, applied map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember) {
+func (e *Engine) recordConfirmedNeedLedger(ctx context.Context, principal storage.Principal, ledger confirmedNeedLedgerResult, applied map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember, captureDecision CountPopulationScopeDecision, anchorAgreement ConfirmedAnchorAgreement, anchorDisposition contractsv1.ContextFabricStructureDisposition) {
 	if e.telemetry == nil {
 		return
 	}
-	e.telemetry.RecordConfirmedNeedLedger(ctx, principal, confirmedNeedLedgerEventOf(ledger, applied))
+	e.telemetry.RecordConfirmedNeedLedger(ctx, principal, confirmedNeedLedgerEventOf(ledger, applied, captureDecision, anchorAgreement, anchorDisposition))
 }

@@ -69,6 +69,21 @@ func provenCommitBases(subjects ...SubjectRef) CommitBasisSet {
 	return bases
 }
 
+// identityProvenDigests is provenCommitBases' own STORED-document twin: the
+// wire-safe CommitDecisionDigests a fixture modeling a PERSISTED resolution
+// sets so CommitBasisSetFromDigests (chaos4085_commit_basis.go) reconstructs
+// an identity-proven basis for it across a reuse boundary -- CommitBasisSet
+// itself is never persisted, so a stored-document fixture that wants
+// anchorBound to bind on reuse must set this instead of (or beside)
+// provenCommitBases, which only ever reaches a LIVE ResolveSubjects call.
+func identityProvenDigests(subjects ...SubjectRef) []contractsv1.ContextFabricCommitDecisionDigest {
+	digests := make([]contractsv1.ContextFabricCommitDecisionDigest, 0, len(subjects))
+	for _, subject := range subjects {
+		digests = append(digests, contractsv1.ContextFabricCommitDecisionDigest{Subject: subject, CommitGate: "identity_fast_path", IdentityProven: true})
+	}
+	return digests
+}
+
 func (g graphReaderStub) ResolveInvestigationBinding(context.Context, storage.Principal) (ResolvedGraphBinding, error) {
 	return ResolvedGraphBinding{GraphKey: "stub-key", Epoch: 0}, nil
 }

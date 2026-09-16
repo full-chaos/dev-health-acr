@@ -362,11 +362,20 @@ const (
 	ContextFabricStructureInferredDefault        ContextFabricStructureProvenance = "inferred_default"
 	ContextFabricStructureQuestionStated         ContextFabricStructureProvenance = "question_stated"
 	ContextFabricStructureClarificationConfirmed ContextFabricStructureProvenance = "clarification_confirmed"
+	// ContextFabricStructureEngineCommitted (CHAOS-5788, v1-additive -- see
+	// ContextFabricStructureSourceCarried's own doc comment above for why
+	// appending a member to this closed enum is not a new major contract) is
+	// a carried subject_anchor member the engine bound to the frame's own
+	// anchor by resolving it, with no clarification ever offered for a
+	// caller to confirm: distinct from ContextFabricStructureClarificationConfirmed,
+	// which always means a caller picked from an offer this engine raised.
+	ContextFabricStructureEngineCommitted ContextFabricStructureProvenance = "engine_committed"
 )
 
 func ValidContextFabricStructureProvenance(value ContextFabricStructureProvenance) bool {
 	switch value {
-	case ContextFabricStructureInferredDefault, ContextFabricStructureQuestionStated, ContextFabricStructureClarificationConfirmed:
+	case ContextFabricStructureInferredDefault, ContextFabricStructureQuestionStated, ContextFabricStructureClarificationConfirmed,
+		ContextFabricStructureEngineCommitted:
 		return true
 	default:
 		return false
@@ -383,12 +392,30 @@ const (
 	ContextFabricStructureDispositionVetoedUnresolved ContextFabricStructureDisposition = "vetoed_unresolved"
 	ContextFabricStructureDispositionVetoedConflict   ContextFabricStructureDisposition = "vetoed_conflict"
 	ContextFabricStructureDispositionVetoedStale      ContextFabricStructureDisposition = "vetoed_stale"
+	// ContextFabricStructureDispositionSupersededByCaller: a carried member
+	// this turn's own request already contests -- a caller-supplied subject
+	// hint of the SAME kind reaches the same identity channel the carry would
+	// -- so the carry never reaches resolution to be compared at all. The
+	// caller's own hint always wins; this member is dropped here, before
+	// resolution runs, distinct from vetoed_conflict (resolution ran and
+	// proved a different identity) and vetoed_unresolved (resolution ran and
+	// found nothing of the member's own kind).
+	ContextFabricStructureDispositionSupersededByCaller ContextFabricStructureDisposition = "superseded_by_caller"
+	// ContextFabricStructureDispositionNotEvaluated: a carried member on a
+	// turn that ended before its own resolution ever ran (a window gate, a
+	// frame-gate refusal, a graph-not-projected degrade) -- the member is
+	// carried forward into the outgoing ledger unchanged, exactly as it
+	// arrived, because there was no resolution this turn to compare it
+	// against. Distinct from `applied`, which the served document may only
+	// claim for a member THIS turn's own resolution stood behind.
+	ContextFabricStructureDispositionNotEvaluated ContextFabricStructureDisposition = "not_evaluated"
 )
 
 func ValidContextFabricStructureDisposition(value ContextFabricStructureDisposition) bool {
 	switch value {
 	case ContextFabricStructureDispositionApplied, ContextFabricStructureDispositionVetoedUnresolved,
-		ContextFabricStructureDispositionVetoedConflict, ContextFabricStructureDispositionVetoedStale:
+		ContextFabricStructureDispositionVetoedConflict, ContextFabricStructureDispositionVetoedStale,
+		ContextFabricStructureDispositionSupersededByCaller, ContextFabricStructureDispositionNotEvaluated:
 		return true
 	default:
 		return false

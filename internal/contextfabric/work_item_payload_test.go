@@ -363,6 +363,13 @@ func workItemTuplePayloadFixture(t *testing.T) InvestigationResult {
 				MatchedTerms: []string{"project"}, MatchReasons: []string{"exact"},
 			}},
 			Committed: []SubjectRef{anchor},
+			// CommitDecisionDigests: the wire-safe survivor of CommitBasis
+			// across a reuse boundary (CommitBasisSetFromDigests,
+			// chaos4085_commit_basis.go) -- anchorBound requires an
+			// identity-proven basis on a term match, so this is what lets the
+			// anchor bind and the cardinality claim below reach past the
+			// stored-document count-scope recheck.
+			CommitDecisionDigests: identityProvenDigests(anchor),
 		},
 		Cohort: &Cohort{
 			Kind:    SubjectWorkItem,

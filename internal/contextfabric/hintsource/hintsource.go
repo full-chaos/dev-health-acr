@@ -46,6 +46,18 @@ const (
 	// it takes the same attributes as the reuse recheck: it is a filter over
 	// identities this turn already holds, never a way to widen a pool.
 	CohortGroupAuthorization Source = "cohort_group_authorization"
+	// EngineCommittedAnchorCarry: a subject_anchor this engine committed on
+	// an identity-proven basis on an earlier turn, with no offer ever
+	// raised, carried forward by the confirmed-need ledger with no wire
+	// re-echo. Like the two authorization sources above, it names an
+	// identity this turn already holds rather than a guess to search
+	// for -- but unlike them, the turn ALSO has an ordinary anchor term to
+	// search for on its own terms (this hint layers onto, never replaces,
+	// that search), so unlike the authorization sources it stays eligible
+	// for the search fallback: a lookup that cannot find or authorize this
+	// specific id must not abandon the turn's own resolution, only fail to
+	// contribute to it.
+	EngineCommittedAnchorCarry Source = "engine_committed_anchor_carry"
 )
 
 // Attributes are the INDEPENDENT FACTS about a source, kept apart on purpose:
@@ -173,6 +185,18 @@ var registry = map[Source]Attributes{
 		ContestExempt:        Contest(true),
 		ShortCircuitEligible: ShortCircuit(true),
 		SearchFallback:       SearchFallback(false),
+	},
+	// An identity this turn already holds (like the two authorization
+	// sources), reaching the short circuit so it commits with a proven
+	// basis rather than competing on a score -- but the turn's own anchor
+	// term is still independently searchable, so unlike those two a failed
+	// lookup here must not end the resolution: SearchFallback stays
+	// permitted.
+	EngineCommittedAnchorCarry: {
+		EngineMinted:         true,
+		ContestExempt:        Contest(true),
+		ShortCircuitEligible: ShortCircuit(true),
+		SearchFallback:       SearchFallback(true),
 	},
 }
 
