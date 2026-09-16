@@ -28,18 +28,20 @@ import (
 // mapping would silently accept a new field the logger never emits, which
 // is the exact failure this test exists to prevent.
 var frameValidationEventLogKeys = map[string]string{
-	"Outcome":                "outcome",
-	"FailedInvariant":        "failed_invariant",
-	"FailedPhase":            "failed_phase",
-	"FailureDetail":          "failure_detail",
-	"ProposedKind":           "proposed_kind",
-	"ProposedGoals":          "proposed_goals",
-	"DerivedObligationCount": "derived_obligation_count",
-	"WidenedObligationCount": "widened_obligation_count",
-	"ShapeDiverged":          "shape_diverged",
-	"EmittedShape":           "emitted_shape",
-	"DerivedShape":           "derived_shape",
-	"FrameVersion":           "frame_version",
+	"Outcome":                      "outcome",
+	"FailedInvariant":              "failed_invariant",
+	"FailedPhase":                  "failed_phase",
+	"FailureDetail":                "failure_detail",
+	"ProposedKind":                 "proposed_kind",
+	"ProposedGoals":                "proposed_goals",
+	"OrderingPresent":              "ordering_present",
+	"PredictedStrippedObligations": "predicted_stripped_obligations",
+	"DerivedObligationCount":       "derived_obligation_count",
+	"WidenedObligationCount":       "widened_obligation_count",
+	"ShapeDiverged":                "shape_diverged",
+	"EmittedShape":                 "emitted_shape",
+	"DerivedShape":                 "derived_shape",
+	"FrameVersion":                 "frame_version",
 	// CohortDiscoverability names WHY the frame can or cannot produce a
 	// discovered cohort. One closed value, one key -- it disambiguates the
 	// `unresolvable_member_set` arm, whose two causes (an expression that

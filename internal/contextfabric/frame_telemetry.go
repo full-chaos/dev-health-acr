@@ -139,6 +139,32 @@ type FrameValidationEvent struct {
 	// sentence rather than a mechanism.
 	ProposedGoals []InvestigationGoal
 
+	// OrderingPresent reports whether the proposal names an END of an
+	// ordering (Emphasis non-empty) -- the one signal that tells "rank"
+	// apart from "survey" within GoalRankOrSurvey (see
+	// workItemTupleOrderingRequested). Recorded on every line, not only a
+	// work-item one: Emphasis is a general frame axis and the admission
+	// decision it feeds is diagnosable only beside the goal set it
+	// qualifies.
+	OrderingPresent bool
+
+	// PredictedStrippedObligations is the closed-vocabulary set THIS
+	// INTERPRETATION'S promotion would remove from the frame's derived
+	// Obligations (workItemTupleObligationsToStrip), in the frame's own
+	// order. Nil, never an empty non-nil slice, on every line the tuple
+	// did not promote here -- including every non-work-item-tuple frame --
+	// so "nothing would be stripped" and "the promotion did not run here"
+	// stay one value.
+	//
+	// PROSPECTIVE: a later tighten call (finishFamilyResolution, engine.go)
+	// can still turn this SAME turn's promotion back to a refusal under a
+	// routed or carry-adjusted family this line never sees, and the actual
+	// removal (workItemTupleStripSurveyObligations) happens only once,
+	// after that later call settles, in engine.go. This field is this
+	// interpretation's own observability for its own decision, not a
+	// report that a mutation was applied.
+	PredictedStrippedObligations []AnswerObligation
+
 	// DerivedObligationCount / WidenedObligationCount are counts, not
 	// lists: the obligation set is derivable from the goal set and the
 	// other axes, so logging it whole would be redundant, while the
@@ -251,6 +277,7 @@ func FrameValidationEventFrom(proposed QuestionFrame, result FrameValidationResu
 		FailureDetail:   result.Failure.Detail,
 		ProposedKind:    vocabularyKindOnly(proposed.SubjectExpression.Kind),
 		ProposedGoals:   vocabularyGoalsOnly(proposed.Goals),
+		OrderingPresent: len(proposed.Emphasis) > 0,
 		FrameVersion:    QuestionFrameVersion,
 		// SET UNCONDITIONALLY, unlike every field in the valid-only block
 		// below. The refusing verdicts are precisely the ones a refused
@@ -368,6 +395,18 @@ func goalsLogValue(goals []InvestigationGoal) []any {
 	out := make([]any, 0, len(goals))
 	for _, goal := range goals {
 		out = append(out, string(goal))
+	}
+	return out
+}
+
+// obligationsLogValue renders an obligation set the same way goalsLogValue
+// renders a goal set: a flat slice of strings, every member a closed
+// AnswerObligation token (ValidAnswerObligation), so a log reader sees a
+// plain array rather than a nested object.
+func obligationsLogValue(obligations []AnswerObligation) []any {
+	out := make([]any, 0, len(obligations))
+	for _, obligation := range obligations {
+		out = append(out, string(obligation))
 	}
 	return out
 }

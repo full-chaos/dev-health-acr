@@ -31,6 +31,7 @@ var ByID = map[string]Event{
 	"contextfabric.work_item_membership_s1":        WorkItemMembershipS1,
 	"contextfabric.work_item_reuse":                WorkItemReuse,
 	"contextfabric.work_item_stored_serving":       WorkItemStoredServing,
+	"contextfabric.work_item_tuple_admission":      WorkItemTupleAdmission,
 	"graphrank.alias_lookup":                       AliasLookup,
 	"graphrank.anchor_kind_withheld":               AnchorKindWithheld,
 	"graphrank.anchor_kind_withheld_summary":       AnchorKindWithheldSummary,
@@ -1148,6 +1149,60 @@ func (f WorkItemStoredServingFields) SlogArgs() []any {
 		"coverage_details_after", f.CoverageDetailsAfter,
 		"coverage_reasons_after", f.CoverageReasonsAfter,
 		"coverage_bound", f.CoverageBound,
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// WorkItemTupleAdmissionFields is contextfabric.work_item_tuple_admission's generated typed construction interface
+// (CHAOS-5516): one Go field per Field WorkItemTupleAdmission.Fields declares in spec.go.
+type WorkItemTupleAdmissionFields struct {
+	OrgID               string
+	Admitted            bool
+	StrippedObligations []string
+	RequestID           string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every WorkItemTupleAdmissionFields uniformly, set ONLY by NewWorkItemTupleAdmissionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewWorkItemTupleAdmissionFields is the generated constructor for WorkItemTupleAdmissionFields -- every
+// field WorkItemTupleAdmission.Fields declares is a required parameter.
+func NewWorkItemTupleAdmissionFields(orgID string, admitted bool, strippedObligations []string, requestID string) WorkItemTupleAdmissionFields {
+	valid := true
+	if strippedObligations == nil {
+		valid = false
+	}
+	return WorkItemTupleAdmissionFields{
+		OrgID:               orgID,
+		Admitted:            admitted,
+		StrippedObligations: strippedObligations,
+		RequestID:           requestID,
+		constructed:         valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewWorkItemTupleAdmissionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f WorkItemTupleAdmissionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns WorkItemTupleAdmission's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f WorkItemTupleAdmissionFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"admitted", f.Admitted,
+		"stripped_obligations", contextfabric.SanitizeLogStrings(f.StrippedObligations),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

@@ -12,19 +12,26 @@ func prospectiveTupleFrame(goals ...InvestigationGoal) QuestionFrame {
 	return frameWith(goals, scopedExpression(SubjectWorkItem), TemporalIntentCurrent, nil)
 }
 
-// Every combination of the nine A clauses is exercised. The oracle is the
+// Every combination of the ten A clauses is exercised. The oracle is the
 // finite set of admitted bit patterns, independent of the implementation's
 // branching order. Malformed discriminator/payload combinations are deliberate
 // defensive inputs; ordinary frame validation must still precede integration.
+//
+// Clause 9 (ordering) only has an effect when clause 5 selects
+// GoalRankOrSurvey: GoalAssessState never sets Emphasis here, so both its
+// values produce the identical frame for that branch, and admission depends
+// on it only in the rank_or_survey branch.
 func TestProspectiveWorkItemTupleAdmissionClauseDomain(t *testing.T) {
 	defer reportWorkItemMutationPanic(t)
-	const clauses = 9
+	const clauses = 10
 	const all = 1<<clauses - 1
+	const required = 1<<4 | 1<<6 | 1<<7 | 1<<8
 	counts := map[workItemTupleAdmission]int{}
 	for mask := 0; mask <= all; mask++ {
 		frame := prospectiveTupleFrame(GoalAssessState)
 		family := QuestionFamilyScopedCohortStatus
 		axis := TimeContext{Axis: TemporalCurrent}
+		rankGoal := false
 		if mask&(1<<1) == 0 {
 			frame.SubjectExpression.Kind = SubjectExpressionDiscoveredKind
 		}
@@ -36,6 +43,7 @@ func TestProspectiveWorkItemTupleAdmissionClauseDomain(t *testing.T) {
 		}
 		if mask&(1<<5) == 0 {
 			frame.Goals = []InvestigationGoal{GoalRankOrSurvey}
+			rankGoal = true
 		}
 		if mask&(1<<6) == 0 {
 			frame.Temporal = TemporalIntentBoundedWindow
@@ -45,6 +53,9 @@ func TestProspectiveWorkItemTupleAdmissionClauseDomain(t *testing.T) {
 		}
 		if mask&(1<<8) == 0 {
 			frame.SubjectExpression.Scoped.MemberQualifier = MemberQualifierStatus
+		}
+		if rankGoal && mask&(1<<9) == 0 {
+			frame.Emphasis = []AnswerEmphasis{EmphasisPositiveOutliers}
 		}
 		if mask&(1<<2) == 0 {
 			frame.SubjectExpression.Scoped = nil
@@ -56,35 +67,42 @@ func TestProspectiveWorkItemTupleAdmissionClauseDomain(t *testing.T) {
 		want := workItemTupleRefused
 		if mask&15 != 15 {
 			want = workItemTupleNotApplicable
-		} else if mask == all {
+		} else if mask&required == required && (mask&(1<<5) != 0 || mask&(1<<9) != 0) {
 			want = workItemTupleProspective
 		}
 		got := prospectiveWorkItemTupleAdmission(input, workItemTupleFamilyPolicyForTest(family), axis)
 		if got != want {
-			t.Fatalf("clause mask %09b: admission=%d want=%d frame=%+v family=%s axis=%s", mask, got, want, input, family, axis.Axis)
+			t.Fatalf("clause mask %010b: admission=%d want=%d frame=%+v family=%s axis=%s", mask, got, want, input, family, axis.Axis)
 		}
 		counts[got]++
 	}
-	t.Logf("clause domain: 512 cells, not_applicable=%d refused=%d prospective=%d", counts[workItemTupleNotApplicable], counts[workItemTupleRefused], counts[workItemTupleProspective])
+	t.Logf("clause domain: 1024 cells, not_applicable=%d refused=%d prospective=%d", counts[workItemTupleNotApplicable], counts[workItemTupleRefused], counts[workItemTupleProspective])
 }
 
+// TestProspectiveWorkItemTupleAdmissionGoalSets covers every subset of the
+// goal vocabulary, with Emphasis empty (a plain survey/no-ordering frame in
+// every cell): admitted exactly when the subset is non-empty and drawn only
+// from {assess_state, count_or_aggregate, rank_or_survey}. The rank_or_survey
+// member is admitted here on the SAME terms as the other two -- ordering is
+// what refuses it, covered separately below and in the clause domain test.
 func TestProspectiveWorkItemTupleAdmissionGoalSets(t *testing.T) {
 	defer reportWorkItemMutationPanic(t)
 	vocabulary := InvestigationGoalVocabulary()
-	allowed := map[int]bool{}
-	assessMask, countMask := 0, 0
+	assessMask, countMask, rankMask := 0, 0, 0
 	for i, goal := range vocabulary {
 		switch goal {
 		case GoalAssessState:
 			assessMask = 1 << i
 		case GoalCountOrAggregate:
 			countMask = 1 << i
+		case GoalRankOrSurvey:
+			rankMask = 1 << i
 		}
 	}
-	if assessMask == 0 || countMask == 0 {
+	if assessMask == 0 || countMask == 0 || rankMask == 0 {
 		t.Fatal("the accepted goal vocabulary is absent")
 	}
-	allowed[assessMask], allowed[countMask], allowed[assessMask|countMask] = true, true, true
+	admittedBits := assessMask | countMask | rankMask
 	for mask := 0; mask < 1<<len(vocabulary); mask++ {
 		goals := []InvestigationGoal{}
 		for i, goal := range vocabulary {
@@ -92,10 +110,21 @@ func TestProspectiveWorkItemTupleAdmissionGoalSets(t *testing.T) {
 				goals = append(goals, goal)
 			}
 		}
+		wantAdmitted := mask != 0 && mask&^admittedBits == 0
 		frame := prospectiveTupleFrame(goals...)
 		got := prospectiveWorkItemTupleAdmission(&frame, workItemTupleFamilyPolicyForTest(QuestionFamilyScopedCohortStatus), TimeContext{Axis: TemporalCurrent})
-		if (got == workItemTupleProspective) != allowed[mask] {
-			t.Fatalf("goals=%v admission=%d want admitted=%v", goals, got, allowed[mask])
+		if (got == workItemTupleProspective) != wantAdmitted {
+			t.Fatalf("goals=%v emphasis=none admission=%d want admitted=%v", goals, got, wantAdmitted)
+		}
+		if mask&rankMask == 0 {
+			continue
+		}
+		// The identical goal set with an ordering requested must refuse,
+		// whatever else rank_or_survey combines with here.
+		ordered := prospectiveTupleFrame(goals...)
+		ordered.Emphasis = []AnswerEmphasis{EmphasisPositiveOutliers}
+		if got := prospectiveWorkItemTupleAdmission(&ordered, workItemTupleFamilyPolicyForTest(QuestionFamilyScopedCohortStatus), TimeContext{Axis: TemporalCurrent}); got != workItemTupleRefused {
+			t.Fatalf("goals=%v emphasis=positive_outliers admission=%d want=refused", goals, got)
 		}
 	}
 	for _, tc := range []struct {
@@ -109,6 +138,9 @@ func TestProspectiveWorkItemTupleAdmissionGoalSets(t *testing.T) {
 		{"known_and_unknown", []InvestigationGoal{GoalAssessState, "future_goal"}, workItemTupleRefused},
 		{"duplicate", []InvestigationGoal{GoalAssessState, GoalAssessState}, workItemTupleProspective},
 		{"reordered", []InvestigationGoal{GoalCountOrAggregate, GoalAssessState}, workItemTupleProspective},
+		{"survey_only", []InvestigationGoal{GoalRankOrSurvey}, workItemTupleProspective},
+		{"survey_with_assess", []InvestigationGoal{GoalRankOrSurvey, GoalAssessState}, workItemTupleProspective},
+		{"survey_and_unknown", []InvestigationGoal{GoalRankOrSurvey, "future_goal"}, workItemTupleRefused},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			defer reportWorkItemMutationPanic(t)
@@ -118,7 +150,31 @@ func TestProspectiveWorkItemTupleAdmissionGoalSets(t *testing.T) {
 			}
 		})
 	}
-	t.Logf("goal domain: all %d subsets of %d goals plus six presence/unknown/order cells", 1<<len(vocabulary), len(vocabulary))
+	// The ordering predicate itself: both Emphasis members refuse a
+	// rank_or_survey frame, an empty (non-nil) slice does not, and a
+	// non-rank goal set is unaffected by Emphasis entirely -- it is never
+	// consulted outside the rank_or_survey arm.
+	for _, tc := range []struct {
+		name     string
+		goals    []InvestigationGoal
+		emphasis []AnswerEmphasis
+		want     workItemTupleAdmission
+	}{
+		{"survey_positive_outliers", []InvestigationGoal{GoalRankOrSurvey}, []AnswerEmphasis{EmphasisPositiveOutliers}, workItemTupleRefused},
+		{"survey_negative_outliers", []InvestigationGoal{GoalRankOrSurvey}, []AnswerEmphasis{EmphasisNegativeOutliers}, workItemTupleRefused},
+		{"survey_empty_slice", []InvestigationGoal{GoalRankOrSurvey}, []AnswerEmphasis{}, workItemTupleProspective},
+		{"assess_with_emphasis_ignored", []InvestigationGoal{GoalAssessState}, []AnswerEmphasis{EmphasisPositiveOutliers}, workItemTupleProspective},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer reportWorkItemMutationPanic(t)
+			frame := prospectiveTupleFrame(tc.goals...)
+			frame.Emphasis = tc.emphasis
+			if got := prospectiveWorkItemTupleAdmission(&frame, workItemTupleFamilyPolicyForTest(QuestionFamilyScopedCohortStatus), TimeContext{Axis: TemporalCurrent}); got != tc.want {
+				t.Fatalf("goals=%v emphasis=%v admission=%d want=%d", tc.goals, tc.emphasis, got, tc.want)
+			}
+		})
+	}
+	t.Logf("goal domain: all %d subsets of %d goals, per-subset ordering control for rank_or_survey, plus nine named presence/unknown/order/emphasis cells", 1<<len(vocabulary), len(vocabulary))
 }
 
 func TestProspectiveWorkItemTupleAdmissionAxesFamilyAndQualifier(t *testing.T) {
@@ -256,4 +312,138 @@ func TestWorkItemTupleFinalGateOnlyTightens(t *testing.T) {
 func workItemTupleFamilyPolicyForTest(family QuestionFamily) bool {
 	definition, known := LookupQuestionFamily(family)
 	return known && definition.allowsWorkItemTuple
+}
+
+// TestWorkItemTupleFrameGateNeverMutatesAndPredictsCorrectly pins two
+// properties together: workItemTupleFrameGate is PURE (never touches the
+// frame it was handed, whatever it decides), and
+// workItemTupleObligationsToStrip's prediction of what a later, real strip
+// would remove agrees with the promotion outcome. The gate function used
+// to strip ObligationRanking itself, at the first of several calls this
+// admission can receive with different family readings (resolveFrame's
+// heuristic, then two later tighten calls with the routed and
+// carry-adjusted family) -- a later call reversing the promotion never
+// restored what the first had already removed. Purity here is what makes
+// that class of bug impossible: nothing is lost because nothing was ever
+// taken before the decision was final. See
+// TestWorkItemLateFamilyDisallowReRefusesWithoutLosingObligations for the
+// end-to-end proof through a real late reversal.
+func TestWorkItemTupleFrameGateNeverMutatesAndPredictsCorrectly(t *testing.T) {
+	defer reportWorkItemMutationPanic(t)
+	for _, tc := range []struct {
+		name          string
+		goals         []InvestigationGoal
+		emphasis      []AnswerEmphasis
+		wantPromoted  bool
+		wantPredicted []AnswerObligation
+	}{
+		{"survey_admitted_ranking_predicted", []InvestigationGoal{GoalRankOrSurvey}, nil, true, []AnswerObligation{ObligationRanking}},
+		{"survey_ordering_refused_not_consulted", []InvestigationGoal{GoalRankOrSurvey}, []AnswerEmphasis{EmphasisPositiveOutliers}, false, nil},
+		{"assess_state_admitted_nothing_to_predict", []InvestigationGoal{GoalAssessState}, nil, true, nil},
+		{"assess_count_admitted_nothing_to_predict", []InvestigationGoal{GoalAssessState, GoalCountOrAggregate}, nil, true, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer reportWorkItemMutationPanic(t)
+			frame := prospectiveTupleFrame(tc.goals...)
+			frame.Emphasis = tc.emphasis
+			before := append([]AnswerObligation(nil), frame.Obligations...)
+			gate := workItemTupleFrameGate(DecideFrameGate(ValidateFrame(frame, nil, ""), true), &frame, workItemTupleFamilyPolicyForTest(QuestionFamilyScopedCohortStatus), TimeContext{Axis: TemporalCurrent})
+			if (gate.Outcome == FrameGatePassed) != tc.wantPromoted {
+				t.Fatalf("gate=%+v want promoted=%v", gate, tc.wantPromoted)
+			}
+			if !reflect.DeepEqual(frame.Obligations, before) {
+				t.Fatalf("workItemTupleFrameGate mutated the frame: before=%v after=%v", before, frame.Obligations)
+			}
+			// workItemTupleObligationsToStrip is itself unconditional --
+			// it answers "what would this strip if asked", not "was this
+			// promoted" -- so the production caller (resolveFrame) only
+			// asks it when THIS call promoted the gate; a refused frame
+			// still carries ranking and this predicate would correctly say
+			// so if asked, which is why the refused case is skipped here
+			// rather than asserted as an empty prediction.
+			if !tc.wantPromoted {
+				return
+			}
+			predicted := workItemTupleObligationsToStrip(&frame)
+			if !reflect.DeepEqual(predicted, tc.wantPredicted) {
+				t.Fatalf("predicted strip=%v want=%v", predicted, tc.wantPredicted)
+			}
+		})
+	}
+}
+
+// TestWorkItemTupleStripSurveyObligationsRemovesRankingOnly is the unit
+// pin for the one function that actually mutates: every other obligation
+// the frame started with survives, and the count drops by exactly one
+// when ranking was present, not at all otherwise.
+func TestWorkItemTupleStripSurveyObligationsRemovesRankingOnly(t *testing.T) {
+	defer reportWorkItemMutationPanic(t)
+	for _, tc := range []struct {
+		name  string
+		goals []InvestigationGoal
+	}{
+		{"has_ranking", []InvestigationGoal{GoalRankOrSurvey}},
+		{"no_ranking", []InvestigationGoal{GoalAssessState, GoalCountOrAggregate}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer reportWorkItemMutationPanic(t)
+			frame := prospectiveTupleFrame(tc.goals...)
+			before := append([]AnswerObligation(nil), frame.Obligations...)
+			beforeHadRanking := frame.HasObligation(ObligationRanking)
+			stripped := workItemTupleStripSurveyObligations(&frame)
+			if beforeHadRanking {
+				if !reflect.DeepEqual(stripped, []AnswerObligation{ObligationRanking}) {
+					t.Fatalf("stripped=%v, want [ranking]", stripped)
+				}
+				if len(frame.Obligations) != len(before)-1 {
+					t.Fatalf("obligations=%v, want exactly one removed from before=%v", frame.Obligations, before)
+				}
+			} else {
+				if stripped != nil {
+					t.Fatalf("stripped=%v, want nil (no ranking to remove)", stripped)
+				}
+				if !reflect.DeepEqual(frame.Obligations, before) {
+					t.Fatalf("obligations changed with no ranking to remove: before=%v after=%v", before, frame.Obligations)
+				}
+			}
+			for _, obligation := range before {
+				if obligation != ObligationRanking && !frame.HasObligation(obligation) {
+					t.Fatalf("strip dropped an unrelated obligation %s: before=%v after=%v", obligation, before, frame.Obligations)
+				}
+			}
+		})
+	}
+}
+
+// TestWorkItemTupleSyncFrameObligationsKeepsTheB8CopyInStep pins the
+// FrameObligations refresh beside the strip that can put it out of step: the
+// B8 shadow copy (chaos4632_question_family_consensus.go's own "kept in step
+// by construction... cannot drift") is a value taken before this arm's strip
+// runs, so only the strip's own mutation -- not construction, not any other
+// reader -- can separate the two. A stripped call must re-equal them; an
+// untouched (nothing-to-strip) call must change nothing.
+func TestWorkItemTupleSyncFrameObligationsKeepsTheB8CopyInStep(t *testing.T) {
+	defer reportWorkItemMutationPanic(t)
+	for _, tc := range []struct {
+		name  string
+		goals []InvestigationGoal
+	}{
+		{"has_ranking", []InvestigationGoal{GoalRankOrSurvey}},
+		{"no_ranking", []InvestigationGoal{GoalAssessState, GoalCountOrAggregate}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer reportWorkItemMutationPanic(t)
+			frame := prospectiveTupleFrame(tc.goals...)
+			staleCopy := append([]AnswerObligation(nil), frame.Obligations...)
+			outcome := QuestionFamilyOutcome{Frame: &frame, FrameObligations: staleCopy}
+			stripped := workItemTupleStripSurveyObligations(&frame)
+			workItemTupleSyncFrameObligations(&outcome, stripped)
+			if !reflect.DeepEqual(outcome.FrameObligations, frame.Obligations) {
+				t.Fatalf("FrameObligations %v disagrees with the stripped frame's %v", outcome.FrameObligations, frame.Obligations)
+			}
+			if len(stripped) == 0 && !reflect.DeepEqual(outcome.FrameObligations, staleCopy) {
+				t.Fatalf("a no-op strip still changed FrameObligations: before=%v after=%v", staleCopy, outcome.FrameObligations)
+			}
+		})
+	}
 }

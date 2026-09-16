@@ -51,6 +51,206 @@ func TestWorkItemFreshDispatchSelectsMembershipBeforeDiscovery(t *testing.T) {
 	}
 }
 
+// TestWorkItemSurveyGoalDispatchesMembershipRead is the survey-admission
+// sibling of TestWorkItemFreshDispatchSelectsMembershipBeforeDiscovery: a
+// rank_or_survey frame with no ordering criterion reaches the SAME
+// membership-before-discovery dispatch a plain assess_state frame does, via
+// the real engine and the production gate (DecideFrameGate then the
+// work-item tuple's own refinement) rather than a hand-assembled verdict.
+func TestWorkItemSurveyGoalDispatchesMembershipRead(t *testing.T) {
+	defer reportWorkItemMutationPanic(t)
+	frame := prospectiveTupleFrame(GoalRankOrSurvey)
+	outcome := QuestionFamilyOutcome{Family: QuestionFamilyScopedCohortStatus, Source: QuestionFamilySourceModel, Frame: &frame, FrameObligations: frame.Obligations, Gate: workItemTupleFrameGate(DecideFrameGate(ValidateFrame(frame, nil, ""), true), &frame, workItemTupleFamilyPolicyForTest(QuestionFamilyScopedCohortStatus), TimeContext{Axis: TemporalCurrent}), WinningSample: FamilySample{ScopeAnchorKind: SubjectProject, ScopeAnchorTerm: "Project"}}
+	if outcome.Gate.Outcome != FrameGatePassed {
+		t.Fatalf("fixture failed to produce an admitted survey gate: %+v", outcome.Gate)
+	}
+	payload := workItemTuplePayloadFixture(t)
+	graph := &dispatchGraphProbe{graphReaderStub: graphReaderStub{resolution: payload.SubjectResolution, bases: provenCommitBases(payload.SubjectResolution.Committed...)}}
+	membershipReads, factReads := 0, 0
+	stop := errors.New("membership phase observed")
+	telemetry := &recordingTelemetry{}
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: familyInterpreter{interpreted: InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "survey", TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: []FactRequirement{{Kind: FactStatus}}}, outcome: outcome},
+		Graph:       graph,
+		CandidateVerifier: func(context.Context, storage.Principal, RequestedScope, ResolvedGraphBinding, SubjectKind, string) (bool, CandidateVerificationReason) {
+			return true, ""
+		},
+		WorkItemMembership: tupleMembershipFunc(func(context.Context, storage.Principal, WorkItemMembershipRequest) (*WorkItemMembershipLease, WorkItemMembershipResult, error) {
+			membershipReads++
+			return nil, WorkItemMembershipResult{}, stop
+		}),
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			factReads++
+			return CanonicalFactBundle{}, stop
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return InvestigationResult{}, stop
+		}),
+		Telemetry: telemetry,
+	}, EngineOptions{ServiceVersion: "test", NewResultID: func() string { return "result_tuple_survey_001" }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = engine.Investigate(context.Background(), storage.Principal{OrgID: "org-1"}, validInvestigationRequestWithConfirmedWindow())
+	if graph.resolveCalls != 1 || membershipReads != 1 || graph.discoverCalls != 0 || factReads != 0 {
+		t.Fatalf("phase counts resolve=%d membership=%d discover=%d facts=%d; want 1,1,0,0", graph.resolveCalls, membershipReads, graph.discoverCalls, factReads)
+	}
+	// The engine-level mutation (engine.go, gated on workItemTuple) must
+	// actually have run for a turn that reaches dispatch: the frame the
+	// engine used carries no ranking obligation once workItemTuple settled
+	// true, the positive control TestWorkItemLateFamilyDisallowReRefusesWithoutLosingObligations's
+	// negative control needs beside it.
+	if frame.HasObligation(ObligationRanking) {
+		t.Fatalf("engine-level strip did not run on an admitted, dispatched survey turn: obligations=%v", frame.Obligations)
+	}
+	// The SETTLED line: admitted=true, stripped_obligations carries what
+	// actually came off the frame -- the enforced outcome, not a
+	// prediction.
+	if len(telemetry.workItemTupleAdmissions) != 1 {
+		t.Fatalf("settled admission lines = %d, want exactly 1", len(telemetry.workItemTupleAdmissions))
+	}
+	settled := telemetry.workItemTupleAdmissions[0]
+	if !settled.Admitted {
+		t.Fatalf("settled admission = %+v, want Admitted=true", settled)
+	}
+	if !reflect.DeepEqual(settled.StrippedObligations, []AnswerObligation{ObligationRanking}) {
+		t.Fatalf("settled admission = %+v, want StrippedObligations=[ranking]", settled)
+	}
+}
+
+// TestWorkItemSurveyGoalWithOrderingStaysRefused is the control this arm
+// requires beside admission: the identical rank_or_survey frame, with an
+// ordering criterion (Emphasis) added, must stay refused -- no anchor
+// resolution, no membership read, no fact read -- through the real engine.
+func TestWorkItemSurveyGoalWithOrderingStaysRefused(t *testing.T) {
+	defer reportWorkItemMutationPanic(t)
+	frame := prospectiveTupleFrame(GoalRankOrSurvey)
+	frame.Emphasis = []AnswerEmphasis{EmphasisPositiveOutliers}
+	gate := workItemTupleFrameGate(DecideFrameGate(ValidateFrame(frame, nil, ""), true), &frame, workItemTupleFamilyPolicyForTest(QuestionFamilyScopedCohortStatus), TimeContext{Axis: TemporalCurrent})
+	if gate.Outcome != FrameGateRefusedBasis || gate.RefuseBasis != CohortMemberKindUnservable || gate.DeclaredMemberKind != SubjectWorkItem {
+		t.Fatalf("fixture failed to produce a refused ordering gate: %+v", gate)
+	}
+	outcome := QuestionFamilyOutcome{Family: QuestionFamilyScopedCohortStatus, Source: QuestionFamilySourceModel, Frame: &frame, FrameObligations: frame.Obligations, Gate: gate, WinningSample: FamilySample{ScopeAnchorKind: SubjectProject, ScopeAnchorTerm: "Project"}}
+	payload := workItemTuplePayloadFixture(t)
+	graph := &dispatchGraphProbe{graphReaderStub: graphReaderStub{resolution: payload.SubjectResolution, bases: provenCommitBases(payload.SubjectResolution.Committed...)}}
+	membershipReads, factReads := 0, 0
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: familyInterpreter{interpreted: InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "survey ranked", TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: []FactRequirement{{Kind: FactStatus}}}, outcome: outcome},
+		Graph:       graph,
+		CandidateVerifier: func(context.Context, storage.Principal, RequestedScope, ResolvedGraphBinding, SubjectKind, string) (bool, CandidateVerificationReason) {
+			return true, ""
+		},
+		WorkItemMembership: tupleMembershipFunc(func(context.Context, storage.Principal, WorkItemMembershipRequest) (*WorkItemMembershipLease, WorkItemMembershipResult, error) {
+			membershipReads++
+			return nil, WorkItemMembershipResult{}, nil
+		}),
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			factReads++
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return InvestigationResult{}, errors.New("synthesis should not run on a refused frame")
+		}),
+	}, EngineOptions{ServiceVersion: "test", NewResultID: func() string { return "result_tuple_survey_refused_001" }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, investigateErr := engine.Investigate(context.Background(), storage.Principal{OrgID: "org-1"}, validInvestigationRequestWithConfirmedWindow())
+	if investigateErr != nil {
+		t.Fatalf("Investigate() error = %v", investigateErr)
+	}
+	if graph.resolveCalls != 0 || membershipReads != 0 || graph.discoverCalls != 0 || factReads != 0 {
+		t.Fatalf("phase counts resolve=%d membership=%d discover=%d facts=%d; want 0,0,0,0 on a refused frame", graph.resolveCalls, membershipReads, graph.discoverCalls, factReads)
+	}
+	if result.RefusalBasis != contractsv1.ContextFabricRefusalBasisMemberKindUnservable {
+		t.Fatalf("refusal basis = %q, want member_kind_unservable", result.RefusalBasis)
+	}
+}
+
+// TestWorkItemLateFamilyDisallowReRefusesWithoutLosingObligations is the
+// end-to-end proof for the late-family-flip class: a gate ALREADY promoted
+// (as resolveFrame's own heuristic family reading would promote it) reaches
+// the engine under a family that does not allow the work-item tuple at all
+// -- exactly what a routed or carry-adjusted family reading can still
+// produce after interpretation already promoted the gate once. The engine's
+// own tighten (engine.go, after the carry-adjusted family is known) must
+// re-refuse it, and because the strip runs only once that is settled
+// (workItemTupleStripSurveyObligations's own call site), the frame never
+// loses its ranking obligation to a promotion the engine went on to
+// reverse.
+func TestWorkItemLateFamilyDisallowReRefusesWithoutLosingObligations(t *testing.T) {
+	defer reportWorkItemMutationPanic(t)
+	frame := prospectiveTupleFrame(GoalRankOrSurvey)
+	before := append([]AnswerObligation(nil), frame.Obligations...)
+	if !frame.HasObligation(ObligationRanking) {
+		t.Fatal("fixture frame does not carry the ranking obligation to begin with")
+	}
+	// Simulates interpretation's own promotion (resolveFrame's heuristic
+	// family reading always allows the tuple for a children_of_scope/
+	// work_item expression) landing on a family the engine's OWN lookup,
+	// after routing/carry, does not allow.
+	outcome := QuestionFamilyOutcome{
+		Family: QuestionFamilyDiscoveredCohortRanking, Source: QuestionFamilySourceModel,
+		Frame: &frame, FrameObligations: frame.Obligations, Gate: FrameGate{Outcome: FrameGatePassed},
+		WinningSample: FamilySample{ScopeAnchorKind: SubjectProject, ScopeAnchorTerm: "Project"},
+	}
+	if allows := workItemTupleFamilyPolicyForTest(outcome.Family); allows {
+		t.Fatalf("fixture family %s unexpectedly allows the work-item tuple", outcome.Family)
+	}
+	payload := workItemTuplePayloadFixture(t)
+	graph := &dispatchGraphProbe{graphReaderStub: graphReaderStub{resolution: payload.SubjectResolution, bases: provenCommitBases(payload.SubjectResolution.Committed...)}}
+	membershipReads, factReads := 0, 0
+	telemetry := &recordingTelemetry{}
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: familyInterpreter{interpreted: InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "survey", TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: []FactRequirement{{Kind: FactStatus}}}, outcome: outcome},
+		Graph:       graph,
+		CandidateVerifier: func(context.Context, storage.Principal, RequestedScope, ResolvedGraphBinding, SubjectKind, string) (bool, CandidateVerificationReason) {
+			return true, ""
+		},
+		WorkItemMembership: tupleMembershipFunc(func(context.Context, storage.Principal, WorkItemMembershipRequest) (*WorkItemMembershipLease, WorkItemMembershipResult, error) {
+			membershipReads++
+			return nil, WorkItemMembershipResult{}, nil
+		}),
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			factReads++
+			return CanonicalFactBundle{}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return InvestigationResult{}, errors.New("synthesis should not run on a re-refused frame")
+		}),
+		Telemetry: telemetry,
+	}, EngineOptions{ServiceVersion: "test", NewResultID: func() string { return "result_tuple_late_flip_001" }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, investigateErr := engine.Investigate(context.Background(), storage.Principal{OrgID: "org-1"}, validInvestigationRequestWithConfirmedWindow())
+	if investigateErr != nil {
+		t.Fatalf("Investigate() error = %v", investigateErr)
+	}
+	if graph.resolveCalls != 0 || membershipReads != 0 || graph.discoverCalls != 0 || factReads != 0 {
+		t.Fatalf("phase counts resolve=%d membership=%d discover=%d facts=%d; want 0,0,0,0 on a late-refused frame", graph.resolveCalls, membershipReads, graph.discoverCalls, factReads)
+	}
+	if result.RefusalBasis != contractsv1.ContextFabricRefusalBasisMemberKindUnservable {
+		t.Fatalf("refusal basis = %q, want member_kind_unservable", result.RefusalBasis)
+	}
+	if !reflect.DeepEqual(frame.Obligations, before) {
+		t.Fatalf("BUG: a gate the engine re-refused still lost obligations: before=%v after=%v", before, frame.Obligations)
+	}
+	// The SETTLED line: admitted=false, stripped_obligations empty -- the
+	// enforced outcome, distinct from whatever the interpretation-time
+	// prediction said before the engine's own family reading reversed it.
+	if len(telemetry.workItemTupleAdmissions) != 1 {
+		t.Fatalf("settled admission lines = %d, want exactly 1", len(telemetry.workItemTupleAdmissions))
+	}
+	settled := telemetry.workItemTupleAdmissions[0]
+	if settled.Admitted {
+		t.Fatalf("settled admission = %+v, want Admitted=false", settled)
+	}
+	if len(settled.StrippedObligations) != 0 {
+		t.Fatalf("settled admission = %+v, want StrippedObligations empty", settled)
+	}
+}
+
 type dispatchGraphProbe struct {
 	graphReaderStub
 	resolveCalls, discoverCalls int

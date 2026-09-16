@@ -1088,6 +1088,8 @@ func (t SlogEngineTelemetry) RecordFrameValidation(ctx context.Context, principa
 		"failure_detail", SanitizeLogAttr(string(event.FailureDetail)),
 		"proposed_kind", SanitizeLogAttr(string(event.ProposedKind)),
 		"proposed_goals", goalsLogValue(event.ProposedGoals),
+		"ordering_present", event.OrderingPresent,
+		"predicted_stripped_obligations", obligationsLogValue(event.PredictedStrippedObligations),
 		"derived_obligation_count", event.DerivedObligationCount,
 		"widened_obligation_count", event.WidenedObligationCount,
 		"shape_diverged", event.ShapeDiverged,
@@ -2414,6 +2416,23 @@ func (t SlogEngineTelemetry) RecordWorkItemReuse(ctx context.Context, principal 
 	}
 	args = append(args, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric work item reuse", args...)
+}
+
+// RecordWorkItemTupleAdmission logs the SETTLED (enforced) work-item tuple
+// admission decision -- see WorkItemTupleAdmissionEvent's own doc comment
+// for why this is a separate line from the frame-validation line's
+// predicted_stripped_obligations. Fires for every frame this arm is
+// structurally concerned with (workItemTupleInScope), whichever way the
+// admission settled -- a refusal logs admitted=false and an empty
+// stripped_obligations, never a missing line.
+func (t SlogEngineTelemetry) RecordWorkItemTupleAdmission(ctx context.Context, principal storage.Principal, event WorkItemTupleAdmissionEvent) {
+	args := []any{
+		"org_id", SanitizeLogAttr(principal.OrgID),
+		"admitted", event.Admitted,
+		"stripped_obligations", obligationsLogValue(event.StrippedObligations),
+	}
+	args = append(args, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric work item tuple admission settled", args...)
 }
 
 func (t SlogEngineTelemetry) RecordRetainedRankingAccounting(ctx context.Context, principal storage.Principal, event RetainedRankingAccountingEvent) {
