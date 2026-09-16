@@ -893,8 +893,18 @@ func validateFields(fields []eventspec.Field, obj map[string]any, eventID string
 				return fmt.Errorf("certify: %s: %q = %v (%T), declared type=string_slice", eventID, field.Key, got, got)
 			}
 			for i, elem := range arr {
-				if _, ok := elem.(string); !ok {
+				elemStr, ok := elem.(string)
+				if !ok {
 					return fmt.Errorf("certify: %s: %q[%d] = %v (%T), declared element type=string", eventID, field.Key, i, elem, elem)
+				}
+				// A closed vocabulary on a string_slice field constrains every
+				// ELEMENT, the same way it constrains a scalar FieldString's
+				// one value -- no event currently declares one here (checked
+				// at the time this arm was added), so this is additive: it
+				// enables enforcement for a field that opts in and changes
+				// nothing for one that does not.
+				if len(field.ClosedVocabulary) > 0 && !contains(field.ClosedVocabulary, elemStr) {
+					return fmt.Errorf("certify: %s: %q[%d] = %v is not in the declared closed vocabulary %v", eventID, field.Key, i, elemStr, field.ClosedVocabulary)
 				}
 			}
 		case eventspec.FieldObject:

@@ -120,6 +120,9 @@ func canonicalValueFor(f eventspec.Field) any {
 	case eventspec.FieldBool:
 		return true
 	case eventspec.FieldStringSlice:
+		if len(f.ClosedVocabulary) > 0 {
+			return []string{f.ClosedVocabulary[0]}
+		}
 		return []string{"sweep_elem"}
 	case eventspec.FieldObject:
 		// ONE nested object, built from its declared members exactly as an

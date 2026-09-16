@@ -186,6 +186,17 @@ func workItemTupleInScope(frame *QuestionFrame) bool {
 	return frame != nil && frame.SubjectExpression.Kind == SubjectExpressionChildrenOfScope && frame.SubjectExpression.Scoped != nil && frame.SubjectExpression.Scoped.MemberKind == SubjectWorkItem
 }
 
+// WorkItemTupleAdmissionStrippedObligationsVocabulary is the settled-
+// admission line's stripped_obligations field, for the event
+// specification. DERIVED from AnswerObligationVocabulary, never retyped:
+// workItemTupleStripSurveyObligations can only ever remove a member of
+// that vocabulary, so the declared closed vocabulary and the predicate
+// that fills the field read the same source.
+func WorkItemTupleAdmissionStrippedObligationsVocabulary() []string {
+	members := AnswerObligationVocabulary()
+	return tokenStrings(members[:])
+}
+
 // WorkItemTupleAdmissionEvent is the SETTLED half of this arm's admission
 // decision -- the ENFORCED outcome, recorded once every earlier and later
 // family reading (resolveFrame's heuristic, finishFamilyResolution's

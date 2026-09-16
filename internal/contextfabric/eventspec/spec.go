@@ -1960,9 +1960,40 @@ var RetainedRankingAccounting = Event{
 	},
 }
 
+// WorkItemTupleAdmission is the SETTLED (enforced) work-item tuple
+// admission decision, emitted at the one point the obligation strip
+// itself runs -- engine.go, immediately after the last of several
+// possible family-reading tighten calls decides the admission's final
+// value. It is the enforced counterpart to the interpretation-time frame-
+// validation line's predicted_stripped_obligations field, which is
+// stamped before that later reading is known and can therefore disagree
+// with this line on a turn whose family reading changes between the two.
+//
+// Fires only for a frame this arm is structurally concerned with
+// (children_of_scope over work_item), whichever way admission settled: a
+// refusal -- including one an earlier, heuristic reading of the SAME turn
+// had provisionally promoted -- logs admitted=false and an empty
+// stripped_obligations, never a missing line, so the mutation's absence
+// is as observable as its presence.
+var WorkItemTupleAdmission = Event{
+	ID:                 "contextfabric.work_item_tuple_admission",
+	Msg:                "context fabric work item tuple admission settled",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"org_id"},
+	BoundedAggregation: "at most one line per request, emitted only when the frame is children_of_scope over work_item; every other frame emits none.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "admitted", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "stripped_obligations", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: contextfabric.WorkItemTupleAdmissionStrippedObligationsVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
 var All = []Event{
 	AnswerDisplay,
 	RetainedRankingAccounting,
+	WorkItemTupleAdmission,
 	RankedCutSummary, AnchorSlotDisplaced, DecisionSummary, Search, KindOfferWithheld,
 	Corroboration, CorroborationSummary, ReservedKindAdmitted, OfferPool, OfferPoolSummary,
 	Decision, SearchQuestion, AliasLookup, AnchorPool, KindCoverageFloor, ConfirmedKindRescue,

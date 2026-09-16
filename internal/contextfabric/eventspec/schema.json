@@ -2134,6 +2134,54 @@
     ]
   },
   {
+    "id": "contextfabric.work_item_tuple_admission",
+    "msg": "context fabric work item tuple admission settled",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "at most one line per request, emitted only when the frame is children_of_scope over work_item; every other frame emits none.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "admitted",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "stripped_obligations",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "state",
+          "completion",
+          "readiness",
+          "health",
+          "principal_drivers",
+          "ranking",
+          "remaining_work",
+          "evidence",
+          "coverage",
+          "count",
+          "allocation_breakdown",
+          "trend_series",
+          "period_delta"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "graphrank.alias_lookup",
     "msg": "context fabric resolution trace: alias lookup",
     "level": "info",
