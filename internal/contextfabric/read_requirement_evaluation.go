@@ -402,10 +402,23 @@ func factKindsWithFacts(facts []CanonicalFact) map[FactKind]bool {
 }
 
 // claimedFactKinds is factKindsWithFacts' twin for a REUSED answer, which
-// re-reads nothing: the served document's own ClaimedFacts are the
-// authoritative record of what it actually carries, the same record
-// servedRequirementFactCount already reads for the SAME question one layer
-// up (requirement_outcome_reconciliation.go).
+// re-reads nothing: it credits a kind only when a driver or finding in the
+// stored document CITES a canonical fact of that kind by ClaimID.
+//
+// A LOWER BOUND, NOT PROOF OF EVERYTHING THE REGISTRY RETAINED. ClaimedFacts
+// is "the closed, checkable set of canonical fact restatements every
+// fact-shaped driver/finding in this result cites" (its own doc comment) --
+// the model's citation set, not a record of every fact the registry served.
+// A kind the registry genuinely retained but the model never cited in prose
+// reads as NOT proven here, and this evaluator then credits it Served == 0
+// on reuse even though a fresh evaluation of the same read would have found
+// facts. The same trade-off already stands one layer up:
+// servedRequirementFactCount (requirement_outcome_reconciliation.go) reads
+// the identical ClaimedFacts set for the identical question, so a reused
+// answer's disclosure was already bounded by what the model cited before
+// this evaluator existed. Tightening this bound (a stored per-kind
+// fact-bearing record independent of citation) is a reuse-path
+// enhancement, not part of this evaluator's own contract.
 func claimedFactKinds(claims []ClaimedFact) map[FactKind]bool {
 	if len(claims) == 0 {
 		return nil
