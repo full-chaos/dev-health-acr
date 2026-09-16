@@ -225,6 +225,13 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 	if questionHash.Valid && versionAuthorities.QuestionFamilyVersion != "" {
 		questionFamilyVersion = sql.NullString{String: versionAuthorities.QuestionFamilyVersion, Valid: true}
 	}
+	// Same gate, one more version authority (falkorgraph's own
+	// ownership-routing gate -- which arm serves a repository-anchored
+	// team count's member set).
+	var ownershipRoutingVersion sql.NullString
+	if questionHash.Valid && versionAuthorities.OwnershipRoutingVersion != "" {
+		ownershipRoutingVersion = sql.NullString{String: versionAuthorities.OwnershipRoutingVersion, Valid: true}
+	}
 	// CHAOS-3781: the axis key is supplied by Engine from the CLAMPED
 	// EFFECTIVE request context, matching exactly what FindReusable will
 	// key with. It is NOT re-derived from result.Interpretation here -- an
@@ -270,13 +277,13 @@ func (s *Store) Save(ctx context.Context, principal storage.Principal, result co
 		questionHash, contractVersion, projectionVersion, modelIdentity, sourceWatermarks, invalidationEpoch, timeAxisKey,
 		embedRetrievalIdentity, retrievalPolicyVersion, interpretationPromptVersion, synthesisPromptVersion,
 		queryVersion, canonicalServiceVersion, modelOutputSchemaVersion, identityNormalizationVersion, graphEpochColumn,
-		windowInferenceVersion, commitGateVersion, rankingFormulaVersion, questionFamilyVersion, parentResultIDColumn,
-		semanticStateColumn,
+		windowInferenceVersion, commitGateVersion, rankingFormulaVersion, questionFamilyVersion, ownershipRoutingVersion,
+		parentResultIDColumn, semanticStateColumn,
 	}
 	const insertResultSQL = `
 INSERT INTO acr.context_fabric_investigation_results
-    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version, identity_normalization_version, graph_epoch, window_inference_version, commit_gate_version, ranking_formula_version, question_family_version, parent_result_id, semantic_state)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+    (result_id, org_id, payload, generated_at, question_hash, contract_version, projection_version, model_identity, source_watermarks, invalidation_epoch, time_axis_key, embed_retrieval_identity, retrieval_policy_version, interpretation_prompt_version, synthesis_prompt_version, query_version, canonical_service_version, model_output_schema_version, identity_normalization_version, graph_epoch, window_inference_version, commit_gate_version, ranking_formula_version, question_family_version, ownership_routing_version, parent_result_id, semantic_state)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
 ON CONFLICT (result_id) DO NOTHING`
 
 	// CHAOS-3927 P4 (design brief §2.1): claims is empty for the
@@ -819,6 +826,14 @@ func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, k
 	if strings.TrimSpace(key.QuestionFamilyVersion) == "" {
 		return contextfabric.StoredInvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, nil
 	}
+	// Same fail-closed convention, one MORE dimension. A composition that
+	// never wired OwnershipRoutingVersion must MISS rather than run a
+	// lookup that ignores it: ignoring it would serve a repository-anchored
+	// team count computed under a different routing arm's rules, which is
+	// precisely the bypass this fence exists to close.
+	if strings.TrimSpace(key.OwnershipRoutingVersion) == "" {
+		return contextfabric.StoredInvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, nil
+	}
 	// sol round-2 F4 (noted, not solved -- no telemetry vocabulary change):
 	// every "ordinary miss" this guard block produces -- a genuinely
 	// unconfigured dimension due to a composition bug, same as a normal
@@ -935,6 +950,15 @@ func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, k
 	// the current one. Every pre-migration row holds NULL here and is
 	// permanently excluded. See ReuseKey.QuestionFamilyVersion's own field
 	// doc comment.
+	//
+	// ownership_routing_version = $21 is a TENTH conjunctive predicate,
+	// migration 0039, same NULL-never-matches shape: falkorgraph's own
+	// routing gate decides which arm serves a repository-anchored team
+	// count's member set, and a hit here would otherwise serve a stored
+	// member set computed under OLD routing rules as if it were computed
+	// under the current ones. Every
+	// pre-migration row holds NULL here and is permanently excluded. See
+	// ReuseKey.OwnershipRoutingVersion's own field doc comment.
 	row := s.db.QueryRowContext(ctx, `
 SELECT payload, source_watermarks, graph_epoch, created_at, parent_result_id, semantic_state
 FROM acr.context_fabric_investigation_results
@@ -957,6 +981,7 @@ WHERE org_id = $1
   AND commit_gate_version = $18
   AND ranking_formula_version = $19
   AND question_family_version = $20
+  AND ownership_routing_version = $21
   AND source_watermarks IS NOT NULL
   AND invalidation_epoch IS NOT NULL
   AND created_at > now() - ($6 * INTERVAL '1 second')
@@ -974,7 +999,7 @@ LIMIT 1`,
 		orgID, questionHash, key.ContractVersion, key.ProjectionVersion, key.ModelIdentities, s.reuseMaxAge.Seconds(), key.TimeAxisKey,
 		key.EmbedRetrievalIdentity, key.RetrievalPolicyVersion, key.InterpretationPromptVersion, key.SynthesisPromptVersion,
 		key.QueryVersion, key.CanonicalServiceVersion, key.ModelOutputSchemaVersion, key.IdentityNormalizationVersion, key.GraphEpoch,
-		key.WindowInferenceVersion, key.CommitGateVersion, key.RankingFormulaVersion, key.QuestionFamilyVersion)
+		key.WindowInferenceVersion, key.CommitGateVersion, key.RankingFormulaVersion, key.QuestionFamilyVersion, key.OwnershipRoutingVersion)
 	var payload, sourceWatermarks, semanticStateColumn []byte
 	var graphEpoch sql.NullInt64
 	var createdAt time.Time
@@ -1084,6 +1109,7 @@ SELECT EXISTS (
       AND commit_gate_version = $17
       AND ranking_formula_version = $18
       AND question_family_version = $19
+      AND ownership_routing_version = $20
       AND source_watermarks IS NOT NULL
       AND invalidation_epoch IS NOT NULL
       AND created_at > now() - ($6 * INTERVAL '1 second')
@@ -1094,7 +1120,7 @@ SELECT EXISTS (
 		orgID, questionHash, key.ContractVersion, key.ProjectionVersion, key.ModelIdentities, s.reuseMaxAge.Seconds(), key.TimeAxisKey,
 		key.EmbedRetrievalIdentity, key.RetrievalPolicyVersion, key.InterpretationPromptVersion, key.SynthesisPromptVersion,
 		key.QueryVersion, key.CanonicalServiceVersion, key.ModelOutputSchemaVersion, key.IdentityNormalizationVersion,
-		key.WindowInferenceVersion, key.CommitGateVersion, key.RankingFormulaVersion, key.QuestionFamilyVersion,
+		key.WindowInferenceVersion, key.CommitGateVersion, key.RankingFormulaVersion, key.QuestionFamilyVersion, key.OwnershipRoutingVersion,
 	).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("classify reuse miss: %w", sanitizeError(err))

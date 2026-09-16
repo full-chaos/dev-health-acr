@@ -83,8 +83,12 @@ import (
 // reuse-key dimension (deferred here per the CHAOS-4632/S2 note): same
 // shape again, fencing reuse on contextfabric.QuestionFamilyTableVersion
 // so a stored turn-1 disclosure computed under an old family table
-// definition is never served under a newer one's ApplicableAxes.
-var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38}
+// definition is never served under a newer one's ApplicableAxes. 0039
+// (CHAOS-5792) is the ownership-routing reuse-key dimension: same shape
+// again, fencing reuse on contextfabric.OwnershipRoutingVersion so a
+// stored repository-anchored team count computed under different routing
+// rules is not served under the current rules' semantics.
+var expectedMigrationVersions = []int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39}
 
 func TestEmbeddedRunner_appliesMigrationsInOrder_whenDatabaseIsFresh(t *testing.T) {
 	// Given
@@ -492,7 +496,8 @@ func TestRunner_upgradeTo18AddsIdentityNormalizationReuseKeyColumn(t *testing.T)
 	// TestRunner_upgradeTo22AddsWindowInferenceReuseKeyColumn and
 	// TestRunner_upgradeTo31AddsCommitGateReuseKeyColumn for the dedicated
 	// boundary proofs this same replace-don't-stack pattern needs.
-	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v10")
+	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v11")
+	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v10")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v9")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v8")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v7")
@@ -564,7 +569,8 @@ func TestRunner_upgradeTo21AddsGraphEpochReuseKeyColumn(t *testing.T) {
 	// see TestRunner_upgradeTo22AddsWindowInferenceReuseKeyColumn
 	// and TestRunner_upgradeTo31AddsCommitGateReuseKeyColumn for the
 	// dedicated boundary proofs this same replace-don't-stack pattern needs.
-	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v10")
+	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v11")
+	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v10")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v9")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v8")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v7")
@@ -633,7 +639,8 @@ func TestRunner_upgradeTo22AddsWindowInferenceReuseKeyColumn(t *testing.T) {
 	// no longer the CURRENT one; see
 	// TestRunner_upgradeTo31AddsCommitGateReuseKeyColumn for the
 	// dedicated 0022->0031-boundary proof.
-	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v10")
+	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v11")
+	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v10")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v9")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v8")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v7")
@@ -710,7 +717,8 @@ func TestRunner_upgradeTo35AddsRankingFormulaReuseKeyColumn(t *testing.T) {
 	// replaces v9 with v10 (question_family_version) -- see
 	// TestRunner_upgradeTo36AddsQuestionFamilyReuseKeyColumn for the
 	// dedicated 0035->0036-boundary proof.
-	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v10")
+	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v11")
+	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v10")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v9")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v8")
 }
@@ -782,7 +790,8 @@ func TestRunner_upgradeTo36AddsQuestionFamilyReuseKeyColumn(t *testing.T) {
 
 	requireContextFabricInvestigationResultsColumn(t, ctx, db, "question_family_version")
 	requireConstraintExists(t, ctx, db, "ck_acr_cf_investigation_results_question_family_version_length")
-	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v10")
+	requireIndexExists(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v11")
+	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v10")
 	requireIndexAbsent(t, ctx, db, "ix_acr_cf_investigation_results_reuse_key_v9")
 }
 
@@ -1371,14 +1380,21 @@ func TestRunner_upgradeTo38AddsSemanticStateColumn(t *testing.T) {
 	require.NoError(t, err)
 	for _, entry := range entries {
 		name := entry.Name()
-		if !strings.HasSuffix(name, ".sql") || strings.HasPrefix(name, "0038_") {
+		// "every migration BEFORE 0038" (this test's own doc comment), not
+		// merely "every migration except 0038": a lexical comparison on the
+		// zero-padded numeric prefix is exactly the same as a numeric one
+		// here, and stays correct as later migrations are added -- an
+		// exact-filename exclusion does not, since it would happily admit
+		// a LATER migration (0039 and on) while still excluding 0038,
+		// leaving a gap NewRunner rejects as invalid.
+		if !strings.HasSuffix(name, ".sql") || name >= "0038_" {
 			continue
 		}
 		body, readErr := fs.ReadFile(Files, name)
 		require.NoError(t, readErr)
 		pre[name] = &fstest.MapFile{Data: body}
 	}
-	require.Len(t, pre, len(expectedMigrationVersions)-1, "every migration except 0038")
+	require.Len(t, pre, 37, "every migration before 0038")
 	released, err := NewRunner(pre)
 	require.NoError(t, err)
 	require.NoError(t, released.Up(ctx, db))

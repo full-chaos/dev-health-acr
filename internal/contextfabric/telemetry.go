@@ -134,8 +134,11 @@ func (t SlogEngineTelemetry) RecordSynthesisStatusOverride(ctx context.Context, 
 	t.logger.WarnContext(ctx, "context fabric synthesis status override", args...)
 }
 
-func (t SlogEngineTelemetry) RecordAnswerReuse(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome) {
-	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome))}, requestIDLogAttrs(ctx)...)
+func (t SlogEngineTelemetry) RecordAnswerReuse(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome, ownershipRoutingVersion string) {
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome)),
+		"ownership_routing_version", SanitizeLogAttr(ownershipRoutingVersion),
+	}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric answer reuse outcome", args...)
 }
 

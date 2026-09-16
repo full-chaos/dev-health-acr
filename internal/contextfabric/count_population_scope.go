@@ -327,10 +327,6 @@ func NormalizeRetrievalTerm(term string) string {
 type storedCountReading struct {
 	Frame      *QuestionFrame
 	AnchorKind SubjectKind
-	// MemberSource is the persisted reading's own SemanticScopeAnchor.
-	// MemberSource -- see that field's own doc comment. Absent (the zero
-	// value) on any row saved before it existed.
-	MemberSource CohortMemberSource
 }
 
 // storedCountReadingOf is the reading persisted beside a stored row, or the
@@ -341,36 +337,9 @@ func storedCountReadingOf(stored StoredInvestigationResult) storedCountReading {
 		return storedCountReading{}
 	}
 	return storedCountReading{
-		Frame:        stored.SemanticState.Frame,
-		AnchorKind:   stored.SemanticState.ScopeAnchor.Kind,
-		MemberSource: stored.SemanticState.ScopeAnchor.MemberSource,
+		Frame:      stored.SemanticState.Frame,
+		AnchorKind: stored.SemanticState.ScopeAnchor.Kind,
 	}
-}
-
-// reusedCountNeedsMemberSourceFence reports whether a stored reading is the
-// (anchor kind repository, member kind team) pairing -- exactly the pairing
-// falkorgraph's DiscoverContext routes through the anchor's own ownership
-// signal instead of hop-walk proximity -- AND was not itself recorded as
-// served by that arm. A row saved before MemberSource existed carries the
-// absent zero value here, which is correctly NOT CohortMemberSourceOwnership,
-// so it fences exactly like a row genuinely served by hop-walk: the interim
-// cannot tell "predates the field" apart from "used the other arm," and
-// treats both as a miss, which is the safe direction (a false miss costs a
-// recomputation; a false hit could re-serve a stale count). A row this
-// deploy itself saves under ownership routing carries the real value and
-// reuses normally.
-func reusedCountNeedsMemberSourceFence(reading storedCountReading) bool {
-	if reading.Frame == nil || reading.Frame.SubjectExpression.Kind != SubjectExpressionChildrenOfScope {
-		return false
-	}
-	memberKind, ok := reading.Frame.SubjectExpression.MemberKind()
-	if !ok || memberKind != SubjectTeam {
-		return false
-	}
-	if reading.AnchorKind != SubjectRepository {
-		return false
-	}
-	return reading.MemberSource != CohortMemberSourceOwnership
 }
 
 // storedDocumentStatesCount reports whether a stored document already states a

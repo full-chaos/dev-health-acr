@@ -221,18 +221,16 @@ type ConfirmedNeedEntry struct {
 type SemanticScopeAnchor struct {
 	Kind SubjectKind `json:"kind"`
 	Term string      `json:"term"`
-	// MemberSource (CHAOS-5783 interim) is which graph discovery arm served
-	// this pass's member set, when one ran. ADDITIVE: `omitempty`, like
-	// ConfirmedNeeds -- a row saved before this field existed reads back
-	// with it absent (the Go zero value, "", not a member of
-	// CohortMemberSource's own closed vocabulary), which is exactly the
-	// signal reusedCountIsRepositoryAnchoredTeamCount's caller reads as "no
-	// record of which arm served this row." A real reuse-key fence
-	// (ReuseKey/ReuseVersionAuthorities, the precedented shape --
-	// WindowInferenceVersion, CommitGateVersion, QuestionFamilyVersion --
-	// needs a Postgres migration) is the follow-up that replaces this
-	// interim with a genuine conjunctive dimension; this field exists so
-	// the interim in answer_reuse.go needs no migration to land now.
+	// MemberSource is TOLERATED ON READ ONLY: DecodeSemanticState's
+	// DisallowUnknownFields decoder rejects any JSON key this struct has no
+	// matching field for, so a row a prior binary wrote with this key
+	// present must keep a field to land in, or that row becomes permanently
+	// undecodable (SemanticStateReadMalformed) the moment this binary reads
+	// it back -- a persisted format never loses a field under
+	// DisallowUnknownFields without a compatibility path. Never populated
+	// by BuildSemanticState (omitempty, and no input ever sets it): this
+	// field is accepted, ignored, and never consulted by anything -- ONLY
+	// for decoding rows an earlier binary already wrote.
 	MemberSource CohortMemberSource `json:"member_source,omitempty"`
 }
 
@@ -1112,10 +1110,6 @@ type SemanticStateInput struct {
 	// other readings. BuildSemanticState copies it, including the requested
 	// repository scope, so a caller cannot mutate a stored snapshot later.
 	WorkItemCensus *WorkItemTupleCensus
-	// MemberSource is which graph discovery arm served this pass's member
-	// set -- see SemanticScopeAnchor.MemberSource's own doc comment for what
-	// it fences and why it needs no migration.
-	MemberSource CohortMemberSource
 }
 
 // BuildSemanticState assembles a snapshot from the accepted values. It does
@@ -1128,7 +1122,7 @@ func BuildSemanticState(in SemanticStateInput) *PersistedSemanticState {
 		FamilyTableVersion:           in.FamilyVersion,
 		GroupKind:                    in.GroupKind,
 		NarrowingBasis:               in.NarrowingBasis,
-		ScopeAnchor:                  SemanticScopeAnchor{Kind: in.Outcome.WinningSample.ScopeAnchorKind, Term: in.Outcome.WinningSample.ScopeAnchorTerm, MemberSource: in.MemberSource},
+		ScopeAnchor:                  SemanticScopeAnchor{Kind: in.Outcome.WinningSample.ScopeAnchorKind, Term: in.Outcome.WinningSample.ScopeAnchorTerm},
 		FrameVersion:                 QuestionFrameVersion,
 		Roles:                        []SemanticRoleSlot{},
 		Requirements:                 []SemanticRequirement{},

@@ -1014,6 +1014,13 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 			// disclosure from cache. Wired unconditionally, same reasoning
 			// as its seven siblings; see ReuseKey.QuestionFamilyVersion.
 			QuestionFamilyVersion: contextfabric.QuestionFamilyTableVersion,
+			// One more deployment-current version authority -- the
+			// ownership-routing gate's own arm-selection rules (falkorgraph:
+			// ownership census vs. hopWalk graph-proximity for a
+			// repository-anchored team count). Wired unconditionally, same
+			// reasoning as its eight siblings; see
+			// ReuseKey.OwnershipRoutingVersion for the full reasoning.
+			OwnershipRoutingVersion: contextfabric.OwnershipRoutingVersion,
 		},
 	})
 	if err != nil {

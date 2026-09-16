@@ -233,38 +233,16 @@ func TestF6_AnInterpreterAxisFlipStillReusesForAnIdenticalRequest(t *testing.T) 
 
 	// A byte-identical follow-up request -- same text, same current axis --
 	// must find it. Before F6 this was a permanent miss.
-	lookup := contextfabric.ReuseKey{
-		QuestionHash:      contextfabric.QuestionHash(interpretedHistorical.Question),
-		ContractVersion:   interpretedHistorical.Versions.ContractVersion,
-		ProjectionVersion: interpretedHistorical.Versions.ProjectionVersion,
-		// A single-member chain (CHAOS-3786): the exact identity this
-		// result was stored under.
-		ModelIdentities: []string{interpretedHistorical.Versions.ModelIdentity},
-		TimeAxisKey:     currentAxisKey,
-		// CHAOS-3833: the same pair Save persisted, compared conjunctively.
-		EmbedRetrievalIdentity: testReuseRetrievalIdentity.EmbedRetrievalIdentity,
-		RetrievalPolicyVersion: testReuseRetrievalIdentity.RetrievalPolicyVersion,
-		// CHAOS-3862: same conjunctive-equality mirror, one dimension over.
-		InterpretationPromptVersion: testReusePromptVersions.InterpretationPromptVersion,
-		SynthesisPromptVersion:      testReusePromptVersions.SynthesisPromptVersion,
-		// CHAOS-3862 round 2: same mirror, three MORE dimensions.
-		QueryVersion:             testReuseVersionAuthorities.QueryVersion,
-		CanonicalServiceVersion:  testReuseVersionAuthorities.CanonicalServiceVersion,
-		ModelOutputSchemaVersion: testReuseVersionAuthorities.ModelOutputSchemaVersion,
-		// CHAOS-3884: same mirror, one more dimension.
-		IdentityNormalizationVersion: testReuseVersionAuthorities.IdentityNormalizationVersion,
-		// CHAOS-3900 W1: same mirror, one more dimension.
-		WindowInferenceVersion: testReuseVersionAuthorities.WindowInferenceVersion,
-		// CHAOS-4085: same mirror, one more dimension (the commit-gate
-		// fence).
-		CommitGateVersion: testReuseVersionAuthorities.CommitGateVersion,
-		// CHAOS-4398 PR3 (R4 ruling): same mirror, one more dimension (the
-		// cohort ranking formula fence).
-		RankingFormulaVersion: testReuseVersionAuthorities.RankingFormulaVersion,
-		// CHAOS-4634 (S4): same mirror, one more dimension (the family
-		// definition table fence).
-		QuestionFamilyVersion: testReuseVersionAuthorities.QuestionFamilyVersion,
-	}
+	//
+	// Built from the ONE shared reuseKeyFor helper (answer_reuse_integration_
+	// test.go), not a second hand-duplicated field list: a duplicated
+	// literal here is exactly how this file's own key silently fell behind
+	// when a later dimension was added elsewhere. Only TimeAxisKey differs
+	// from reuseKeyFor's own default (the CURRENT axis, not the one derived
+	// from interpretedHistorical's own historical interpretation) -- the one
+	// axis-flip this test exists to prove.
+	lookup := reuseKeyFor(interpretedHistorical)
+	lookup.TimeAxisKey = currentAxisKey
 	reused, found, _, err := store.FindReusable(ctx, principal, lookup)
 	require.NoError(t, err)
 	require.True(t, found, "an interpreted-historical answer was unreachable to the identical request that produced it; both reuse sides must derive the key the same way")
