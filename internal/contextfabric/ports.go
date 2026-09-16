@@ -955,6 +955,35 @@ type ReuseKey struct {
 	// too. Applied unconditionally, same precedent as RankingFormulaVersion
 	// immediately above.
 	QuestionFamilyVersion string
+	// OwnershipRoutingVersion is one more conjunctive dimension, same
+	// NULL-never-matches fail-closed shape as every sibling above. It
+	// binds reuse to contextfabric.OwnershipRoutingVersion -- the rules
+	// deciding which graph-discovery arm serves a repository-anchored team
+	// count's member set (ownership census vs. hopWalk graph-proximity;
+	// falkorgraph's own routing gate and GraphContext.CohortMemberSource).
+	//
+	// Why reuse MUST be fenced on it, rather than left to age out. The
+	// routing rules changed which arm serves this exact pairing without
+	// changing the question hash, the anchor kind, or any other existing
+	// dimension -- a stored answer computed under the OLD (hopWalk-only)
+	// rules would otherwise keep being served from cache for every repeat
+	// of the same question inside the staleness window, disagreeing with
+	// what a fresh read now measures. Exactly the class
+	// WindowInferenceVersion and CommitGateVersion each closed for their
+	// own decision. Bump the constant whenever the routing gate's own
+	// arm-selection rules change.
+	//
+	// Applied UNCONDITIONALLY to every reuse-participating row, same
+	// precedent as every sibling above -- not scoped to only
+	// repository-anchored team counts, which never exercise the routing
+	// gate at all and are unaffected by it; over-invalidating an
+	// unaffected row on an unrelated routing change is the same accepted,
+	// safe cost every prior dimension already establishes.
+	//
+	// Nullable, NULL-never-matches: every row saved before this dimension
+	// existed holds NULL here and is permanently excluded from reuse on
+	// it, no per-row JSON field or bespoke predicate required.
+	OwnershipRoutingVersion string
 	// GraphEpoch (CHAOS-3898 §2.3) is this investigation's own
 	// ResolvedGraphBinding.Epoch -- a THIRTEENTH conjunctive dimension,
 	// structurally distinct from every version-string dimension above: a
@@ -1058,6 +1087,11 @@ type ReuseVersionAuthorities struct {
 	// and why it is applied unconditionally to every reuse-participating
 	// row.
 	QuestionFamilyVersion string
+	// OwnershipRoutingVersion is ONE MORE version constant, same shape
+	// again -- see ReuseKey.OwnershipRoutingVersion's own field doc
+	// comment for what it binds (contextfabric.OwnershipRoutingVersion)
+	// and why an unset value never matches.
+	OwnershipRoutingVersion string
 }
 
 // AnswerReuseGate finds a stored InvestigationResult eligible for reuse
