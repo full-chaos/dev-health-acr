@@ -295,12 +295,13 @@ func TestWorkItemTupleEngineKeepsPersistedPopulationWithoutBackfill(t *testing.T
 // TestWorkItemTupleReuseHitSettlesAdmissionAndStrips pins that a reuse HIT
 // is this arm's admission decision settling too, exactly as the fresh
 // path's own settlement point does (engine.go, beside
-// workItemTupleStripSurveyObligations's own doc comment): a hit is this
+// workItemTupleEffectiveObligations's own doc comment): a hit is this
 // decision's only settlement point on this path, since there is no later
 // tighten call left to still reverse it, so it owes the same observable
-// line and the same strip -- run here, on the reading persisted beside the
-// served row, because that reading is the one thing this path can still
-// mutate before serving.
+// line -- computed here, PURELY, from the reading persisted beside the
+// served row. CHAOS-5787: that persisted reading's frame is NEVER
+// mutated -- it stays canonical for any later turn's composition boundary
+// to revalidate.
 func TestWorkItemTupleReuseHitSettlesAdmissionAndStrips(t *testing.T) {
 	defer reportWorkItemMutationPanic(t)
 	principal, request, stored, current := tupleReuseFixture(t)
@@ -337,8 +338,8 @@ func TestWorkItemTupleReuseHitSettlesAdmissionAndStrips(t *testing.T) {
 	if !hit || !tuple {
 		t.Fatalf("hit=%t tuple=%t, want both true", hit, tuple)
 	}
-	if surveyFrame.HasObligation(ObligationRanking) {
-		t.Fatalf("reuse-hit strip did not run: the persisted reading's frame still carries ranking, obligations=%v", surveyFrame.Obligations)
+	if !surveyFrame.HasObligation(ObligationRanking) {
+		t.Fatalf("BUG: the reuse hit mutated the persisted reading's frame -- ranking is gone, obligations=%v", surveyFrame.Obligations)
 	}
 	if len(telemetry.workItemTupleAdmissions) != 1 {
 		t.Fatalf("settled admission lines = %d, want exactly 1", len(telemetry.workItemTupleAdmissions))

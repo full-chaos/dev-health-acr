@@ -158,11 +158,11 @@ type FrameValidationEvent struct {
 	//
 	// PROSPECTIVE: a later tighten call (finishFamilyResolution, engine.go)
 	// can still turn this SAME turn's promotion back to a refusal under a
-	// routed or carry-adjusted family this line never sees, and the actual
-	// removal (workItemTupleStripSurveyObligations) happens only once,
+	// routed or carry-adjusted family this line never sees, and the SETTLED
+	// omission (workItemTupleEffectiveObligations) is only decided once,
 	// after that later call settles, in engine.go. This field is this
 	// interpretation's own observability for its own decision, not a
-	// report that a mutation was applied.
+	// report that anything was applied.
 	PredictedStrippedObligations []AnswerObligation
 
 	// DerivedObligationCount / WidenedObligationCount are counts, not

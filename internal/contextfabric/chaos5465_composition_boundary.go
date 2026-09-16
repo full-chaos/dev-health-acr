@@ -213,6 +213,29 @@ type compositionInput struct {
 	// transition composes from what turn one actually validated and can never
 	// withhold here for want of a frame to revalidate.
 	TransitionEstablished bool
+	// CarriedGateOverride is the fully refined verdict for the carried
+	// frame, when the caller has one to supply. Nil means "none supplied":
+	// the boundary decides the carried frame's gate itself, from today's
+	// table, exactly as it always has -- this field changes nothing for a
+	// caller that never sets it.
+	//
+	// IT EXISTS FOR EXACTLY ONE REASON, WHICH IS NOT A DOOR: some frame
+	// shapes gate through more than DecideFrameGate alone -- a work-item
+	// tuple's own admission (work_item_tuple_admission.go) promotes a
+	// children_of_scope/work_item frame's ordinary kind refusal to passed
+	// under conditions this boundary has no vocabulary for (a family's own
+	// ApplicableAxes, an interpreted time axis) and deliberately never
+	// imports, because composition's own job is revalidating a FRAME, not
+	// re-running an admission arm's business rule. Without this field, a
+	// canonical, correctly-admitted work-item survey's carried frame could
+	// never compose: DecideFrameGate alone refuses that shape by
+	// construction, and only the arm's own promotion says otherwise. The
+	// CALLER (engine.go) computes the promoted verdict through the SAME
+	// construction the fresh path uses and hands over a plain FrameGate --
+	// never the admission logic itself, which is how the boundary stays
+	// arm-agnostic while still answering correctly for the one arm that
+	// needs more than DecideFrameGate can decide alone.
+	CarriedGateOverride *FrameGate
 }
 
 // composeAcceptedContext establishes the carried reading as this turn's
@@ -283,6 +306,14 @@ func composeAcceptedContext(in compositionInput) AcceptedContext {
 	recorded := cloneFrame(*carried.Frame)
 	result := ValidateFrame(recorded, recorded.WidenedObligations, carried.Validation.EmittedShape)
 	gate := DecideFrameGate(result, true)
+	// THE ONE SUBSTITUTION THIS BOUNDARY MAKES, AND IT IS THE CALLER'S
+	// VERDICT, NEVER THIS BOUNDARY'S OWN DERIVATION OF ONE. See
+	// CarriedGateOverride's own doc comment. Every caller that never sets
+	// it gets the identical DecideFrameGate verdict this line always
+	// produced.
+	if in.CarriedGateOverride != nil {
+		gate = *in.CarriedGateOverride
+	}
 	if result.Outcome != FrameValidationOutcomeValid {
 		return AcceptedContext{Gate: gate, Outcome: CompositionInvalid, FailedInvariant: string(result.Failure.Invariant)}
 	}

@@ -226,7 +226,13 @@ type SemanticStateValidation struct {
 	// FrameGate fields, verbatim. A RECORD, NOT AN AUTHORITY: composition never
 	// enforces the recorded verdict -- it re-decides the gate on the carried
 	// frame from today's table, so a reading recorded as refused_basis is
-	// refused again (carried_frame_refused), never trusted as recorded.
+	// refused again (carried_frame_refused), never trusted as recorded. ONE
+	// ARM READS IT ANYWAY, AS A SEED RATHER THAN AN AUTHORITY: a work-item
+	// tuple's carried gate (carriedWorkItemTupleGateOverride, engine.go)
+	// re-decides from this recorded value through the SAME tighten
+	// construction the fresh path uses, which can still demote it -- the
+	// record is a starting point for that arm's own re-derivation, never a
+	// trusted final answer.
 	GateOutcome        FrameGateOutcome      `json:"gate_outcome"`
 	FailedInvariant    FrameInvariant        `json:"failed_invariant"`
 	RefuseBasis        CohortDiscoverability `json:"refuse_basis"`

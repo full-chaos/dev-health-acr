@@ -2080,6 +2080,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// The one flag that tells the boundary the caller has already
 				// settled this turn, so no fresh-path gate is consulted.
 				TransitionEstablished: continuation.TransitionEstablished,
+				// CarriedGateOverride: nil for every carried shape but one --
+				// see carriedWorkItemTupleGateOverride's own doc comment.
+				CarriedGateOverride: carriedWorkItemTupleGateOverride(continuation.Accepted.State, interpretation.TimeContext),
 			})
 			// THE OUTCOME IS RECORDED BEFORE THE BRANCH, so the successful
 			// path publishes it too. Recording it only in the else-arm is how
@@ -2192,28 +2195,43 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	familyAllowsWorkItemTuple := tupleFamilyKnown && tupleFamilyDefinition.allowsWorkItemTuple
 	familyOutcome.Gate = tightenWorkItemTupleFrameGate(familyOutcome.Gate, familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext)
 	workItemTuple := prospectiveWorkItemTupleAdmission(familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext) == workItemTupleProspective
-	// THE ONE POINT this arm's ranking-obligation strip actually runs, and
-	// the settled-admission Info line's one call site.
+	// THE SETTLED-ADMISSION Info line's one call site. No mutation here or
+	// anywhere in this arm -- see workItemTupleEffectiveObligations's own
+	// doc comment for why.
 	// workItemTuple, just above, is the LAST word: every earlier reading
 	// (resolveFrame's heuristic DeriveQuestionFamily projection, then
 	// finishFamilyResolution's routed-family tighten) has already been
 	// through this same predicate with a family that can still have
-	// differed, and a frame this call refuses never reaches the mutation
-	// at all -- so a frame this arm ultimately declines to serve keeps
-	// every obligation it started with. See
-	// workItemTupleStripSurveyObligations's own doc comment for why. The
-	// telemetry line fires for every frame this arm is structurally
-	// concerned with, admitted or not, so a refusal is as observable as an
-	// admission -- see WorkItemTupleAdmissionEvent's own doc comment.
+	// differed, so a frame this call refuses is reported with nothing
+	// stripped -- workItemTupleObligationsToStrip is consulted only when
+	// workItemTuple admitted. The telemetry line fires for every frame this
+	// arm is structurally concerned with, admitted or not, so a refusal is
+	// as observable as an admission -- see WorkItemTupleAdmissionEvent's
+	// own doc comment.
 	if workItemTupleInScope(familyOutcome.Frame) {
 		var stripped []AnswerObligation
 		if workItemTuple {
-			stripped = workItemTupleStripSurveyObligations(familyOutcome.Frame)
-			workItemTupleSyncFrameObligations(&familyOutcome, stripped)
+			stripped = workItemTupleObligationsToStrip(familyOutcome.Frame)
 		}
 		if e.telemetry != nil {
 			e.telemetry.RecordWorkItemTupleAdmission(ctx, principal, WorkItemTupleAdmissionEvent{Admitted: workItemTuple, StrippedObligations: stripped})
 		}
+	}
+	// requirementFrame is the ONE frame every requirement-coordinate reader
+	// downstream of this point uses -- deriveTurnRequirements here AND
+	// finalizeResult's own seedRequirementOutcomes call, later in this
+	// function. Both must run on the SAME obligation set or the served
+	// document's plan and its completeness outcomes describe two different
+	// turns (plan_requirements.go's own "DERIVED ONCE... evaluated on the
+	// SAME FRAME both times", enforced by the store's own validator). A
+	// fresh workItemTuple admission's requirement frame carries the
+	// EFFECTIVE obligation set (workItemTupleRequirementFrame), a COPY with
+	// the plan-time omission -- never familyOutcome.Frame directly, which
+	// stays canonical for persistence, the response, and the composition
+	// boundary's own revalidation.
+	requirementFrame := familyOutcome.Frame
+	if workItemTuple {
+		requirementFrame = workItemTupleRequirementFrame(familyOutcome.Frame)
 	}
 	// DERIVED ONCE, AND READ TWICE ON THIS LINE AND THE NEXT. The rows are an
 	// INPUT to the plan (planFactKinds reads a computed step's declared inputs
@@ -2226,12 +2244,15 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// ON AN APPLIED CONTINUATION THE ROWS ARE THE CARRIED DECLARATIONS, never
 	// a re-derivation: they are what turn one's planning consumed, and a
 	// registry that changed since must not substitute newer semantics under a
-	// reading the caller confirmed.
+	// reading the caller confirmed. (workItemTuple is re-derived from the now-
+	// composed familyOutcome.Frame above, so requirementFrame still agrees
+	// with what turn one persisted -- the carried frame is byte-identical to
+	// the one that produced it.)
 	var derivedRequirements []DerivedRequirement
 	if continuation.Applies() {
 		derivedRequirements = continuation.Accepted.State.DerivedRequirements()
 	} else {
-		derivedRequirements = deriveTurnRequirements(familyOutcome.Frame, e.requirements)
+		derivedRequirements = deriveTurnRequirements(requirementFrame, e.requirements)
 	}
 	plan := PlanAnswer(PlanAnswerInput{
 		Family:           familyOutcome,
@@ -3307,7 +3328,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// checking a replacement.
 		Plan:       plan,
 		Allocation: AllocateItems(plan, groupCountOf(graphContext.Cohort), cohortMemberCount(graphContext.Cohort)),
-		Request:    request, Interpretation: interpretation, Frame: familyOutcome.Frame, ScopeAnchorKind: familyOutcome.WinningSample.ScopeAnchorKind,
+		Request:    request, Interpretation: interpretation, Frame: requirementFrame, ScopeAnchorKind: familyOutcome.WinningSample.ScopeAnchorKind,
 		Graph: graphContext, Facts: facts,
 		Resolution: resolution, CohortSignalCitations: cohortSignalCitations,
 		EffectiveWindow: effectiveWindow, WindowCanon: windowCanon, WindowCarried: windowCarried,
@@ -3363,7 +3384,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		applyCoverageDisplayLabels(&result)
 		result = restrictWorkItemTupleEvidence(result)
 	}
-	result = e.finalizeResult(ctx, principal, result, plan, familyOutcome.Frame, facts, &pendingTelemetry, answerPassFirst, cardinality)
+	result = e.finalizeResult(ctx, principal, result, plan, requirementFrame, facts, &pendingTelemetry, answerPassFirst, cardinality)
 	// The outcome-derivation completeness authority is applied exactly ONCE,
 	// inside finalizeServed below -- the one point every serving path,
 	// tupleCensus included, is downstream of (that function's own doc

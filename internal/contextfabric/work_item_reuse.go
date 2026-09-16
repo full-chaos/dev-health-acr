@@ -117,14 +117,15 @@ func (e *Engine) tryReuseWorkItemTuple(ctx context.Context, principal storage.Pr
 	}
 	// A reuse hit is a SETTLED admission decision too -- it serves
 	// workItemTuple=true exactly as the fresh path's own settlement point
-	// does (engine.go, the call beside workItemTupleStripSurveyObligations's
-	// own doc comment), so it owes the same observable line and the same
-	// strip, run here because this hit is this decision's only settlement
-	// point: there is no later tighten call on this path to still reverse
-	// it.
+	// does (engine.go, beside workItemTupleEffectiveObligations's own doc
+	// comment), so it owes the same observable line, run here because this
+	// hit is this decision's only settlement point: there is no later
+	// tighten call on this path to still reverse it. PURE: the persisted
+	// reading's frame is never written to -- it stays the same canonical
+	// object a later continuation's composition boundary revalidates.
 	var stripped []AnswerObligation
 	if state := stored.SemanticState; state != nil && state.FramePresent && state.Frame != nil {
-		stripped = workItemTupleStripSurveyObligations(state.Frame)
+		stripped = workItemTupleObligationsToStrip(state.Frame)
 	}
 	if e.telemetry != nil {
 		e.telemetry.RecordWorkItemTupleAdmission(ctx, principal, WorkItemTupleAdmissionEvent{Admitted: true, StrippedObligations: stripped})
