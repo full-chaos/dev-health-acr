@@ -1689,6 +1689,62 @@ type ContextFabricInterpretedQuestion struct {
 	// back from, never an error.
 	WindowClass      ContextFabricWindowClass      `json:"window_class,omitempty"`
 	WindowConfidence ContextFabricWindowConfidence `json:"window_confidence,omitempty"`
+	// RequestedJudgmentKind is the model's own closed-
+	// vocabulary classification of what BASIS RequestedJudgment asks for --
+	// e.g. a performance comparison versus an attention/pressure one.
+	// Deliberately a SEPARATE field from RequestedJudgment's own free text:
+	// the free text stays whatever the model wrote, and this field is the
+	// one thing a downstream consumer (JudgmentMismatch) may key a decision
+	// on, the same "closed pick beside free text" shape WindowClass already
+	// uses beside the request's own time phrasing. Empty is legitimate --
+	// "the model made no pick" -- never derived from RequestedJudgment's
+	// text by any consumer (that substring-matching approach was tried and
+	// refused: a judgment's KIND is the interpreter's job, not a keyword
+	// scan downstream).
+	RequestedJudgmentKind ContextFabricRequestedJudgmentKind `json:"requested_judgment_kind,omitempty"`
+}
+
+// ContextFabricRequestedJudgmentKind is ContextFabricInterpretedQuestion.RequestedJudgmentKind's
+// closed vocabulary. Extendable: a future judgment basis (e.g. a real
+// productivity/quality measure, if one is ever ratified) adds a new member
+// here.
+type ContextFabricRequestedJudgmentKind string
+
+const (
+	// ContextFabricRequestedJudgmentKindPerformance: the question asks for
+	// a performance/productivity comparison or ranking.
+	ContextFabricRequestedJudgmentKindPerformance ContextFabricRequestedJudgmentKind = "performance"
+	// ContextFabricRequestedJudgmentKindAttention: the question asks which
+	// subjects need attention, are struggling, or are under pressure --
+	// the ONE basis cohort_ranking.go's formula can actually support.
+	ContextFabricRequestedJudgmentKindAttention ContextFabricRequestedJudgmentKind = "attention"
+)
+
+var contextFabricRequestedJudgmentKinds = [...]ContextFabricRequestedJudgmentKind{
+	ContextFabricRequestedJudgmentKindPerformance,
+	ContextFabricRequestedJudgmentKindAttention,
+}
+
+// ContextFabricRequestedJudgmentKindCount is the closed vocabulary's size.
+const ContextFabricRequestedJudgmentKindCount = len(contextFabricRequestedJudgmentKinds)
+
+// ContextFabricRequestedJudgmentKindVocabulary returns the closed
+// requested-judgment-kind vocabulary in published order.
+func ContextFabricRequestedJudgmentKindVocabulary() [ContextFabricRequestedJudgmentKindCount]ContextFabricRequestedJudgmentKind {
+	return contextFabricRequestedJudgmentKinds
+}
+
+// ValidContextFabricRequestedJudgmentKind reports whether value is a member
+// of the closed vocabulary. The empty value is deliberately not valid here
+// -- see ContextFabricInterpretedQuestion.RequestedJudgmentKind's own doc
+// comment for the "absent" case callers handle explicitly.
+func ValidContextFabricRequestedJudgmentKind(value ContextFabricRequestedJudgmentKind) bool {
+	for _, kind := range contextFabricRequestedJudgmentKinds {
+		if value == kind {
+			return true
+		}
+	}
+	return false
 }
 
 type ContextFabricFactRequirement struct {

@@ -75,7 +75,9 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// changed and why a subtractive change still bumps the version.
 			// v12 -> v13: the grouped_members sentence tells the model to
 			// express a grouping as asked and leaves I6 to the server.
-			digest: "8467ba306d2992cda4a5d2e0ee855484df09c7932a4d0f9c92020e0621343a1f",
+			// v14 -> v15: the requested_judgment_kind paragraph. See
+			// DefaultInterpretationPromptVersion's own doc comment.
+			digest: "d742ed893c24398cd98fdd2475984d85d2df16a9bf06a1d6aad2f97d8b687778",
 		},
 		{
 			name:    "synthesis system prompt",
@@ -95,7 +97,9 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			name:    "interpretation model-output schema",
 			version: DefaultSchemaVersion,
 			content: string(schema),
-			digest:  "ebeb1c863aec26367b7e6bc376376ec7a40e265ff4c5b95c7e887fb5d4372292",
+			// v5 -> v6: requested_judgment_kind. See DefaultSchemaVersion's
+			// own doc comment.
+			digest: "94dcf346c753a493c9055b76e36f349a103cd269ef7a6c0ec10250fc25b3276d",
 		},
 	} {
 		t.Run(binding.name, func(t *testing.T) {

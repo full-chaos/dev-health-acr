@@ -10,71 +10,59 @@ import "strings"
 // mechanisms close the gap an executed-answer observation found between
 // that measure and a served "strongest/weakest performer" claim:
 //
-//  1. requestedJudgmentImpliesPerformanceJudgment + applyCohortJudgmentMismatch
-//     compute, server-side and deterministically, whether the investigation's
-//     OWN requested_judgment asked for a judgment the cohort's ScoreMeaning
-//     does not support, and mint that as data (Cohort.JudgmentMismatch) --
+//  1. applyCohortJudgmentMismatch computes, server-side and
+//     deterministically, whether the interpreter's own closed-vocabulary
+//     RequestedJudgmentKind asks for a judgment the cohort's ScoreMeaning
+//     does not support, and mints that as data (Cohort.JudgmentMismatch) --
 //     seen by both the synthesis prompt (so the model can decline honestly)
-//     and any consumer of the served result.
+//     and any consumer of the served result. The judgment's KIND is the
+//     INTERPRETER's classification (a closed enum picked alongside its own
+//     free-text RequestedJudgment), never re-derived downstream by pattern-
+//     matching that free text -- an earlier revision of this file did
+//     exactly that (a substring scan for "performance"/"productivity") and
+//     was refused: a keyword scan is fitted to wordings the same way a
+//     fabricated metric is fitted to a dataset, and the judgment's basis is
+//     the interpreter's job to name, not a downstream guess.
 //  2. requireNoSuperlativeClaimOverUnrankableMember is the structural
 //     backstop: a model-authored driver may never use a ranking superlative
 //     about a member the formula could not score at all.
 
-// cohortPerformanceJudgmentTerms is the CLOSED, fixed substring vocabulary
-// requestedJudgmentImpliesPerformanceJudgment matches against. It mirrors
-// frame_shape.go's own established pattern of classifying free-text
-// RequestedJudgment by substring match (see that file's doc comment on the
-// cohort-kind match) -- applied here to a different question (does this
-// judgment ask for PERFORMANCE) rather than to which kind of subject is
-// being asked about. Fixed and general: these are the ordinary English words
-// for the requested-judgment CLASS this rule cares about, never a phrase
-// tuned to one team, question, or corpus row.
-var cohortPerformanceJudgmentTerms = []string{
-	"performance",
-	"performing",
-	"productivity",
-	"productive",
-}
-
-// requestedJudgmentImpliesPerformanceJudgment reports whether judgment (the
-// interpreter's own free-text InterpretedQuestion.RequestedJudgment) asks
-// for a performance/productivity comparison -- the one judgment class this
-// cohort ranking formula can never support (its formula measures adverse
-// pressure only; see cohort_ranking.go's weight* constants).
-func requestedJudgmentImpliesPerformanceJudgment(judgment string) bool {
-	lower := strings.ToLower(judgment)
-	for _, term := range cohortPerformanceJudgmentTerms {
-		if strings.Contains(lower, term) {
-			return true
-		}
+// scoreMeaningSupportsJudgmentKind reports whether meaning (a cohort's own
+// ScoreMeaning) can honestly answer a judgment of kind. Fail-closed on BOTH
+// arguments: an empty/unspecified kind never mismatches anything (there is
+// nothing confident enough to contradict), and an unrecognized meaning or
+// kind added by a FUTURE change is never assumed to satisfy a judgment it
+// was never verified against -- only the exhaustively-listed pairs below
+// return true.
+func scoreMeaningSupportsJudgmentKind(meaning CohortScoreMeaning, kind RequestedJudgmentKind) bool {
+	switch kind {
+	case RequestedJudgmentKindAttention:
+		return meaning == CohortScoreMeaningAttention
+	case RequestedJudgmentKindPerformance:
+		// No ScoreMeaning this formula can produce today is a performance
+		// measure -- see cohort_ranking.go's weight* constants, every one
+		// an adverse-pressure signal.
+		return false
+	default:
+		// Empty (no pick) or any kind this function does not yet know --
+		// never confident enough to call it a mismatch.
+		return true
 	}
-	return false
-}
-
-// scoreMeaningSupportsPerformanceJudgment reports whether meaning itself IS
-// a performance measure. Fail-closed: an unrecognized or future meaning is
-// never assumed to satisfy a performance judgment, so a later
-// ContextFabricCohortScoreMeaning member added for some OTHER non-
-// performance measure (e.g. a quality or complexity score) does not
-// silently stop this rule from firing just because it is not "attention".
-func scoreMeaningSupportsPerformanceJudgment(meaning CohortScoreMeaning) bool {
-	return false
 }
 
 // applyCohortJudgmentMismatch mints Cohort.JudgmentMismatch in place,
 // deterministically, BEFORE synthesis runs -- so it rides in the
 // model's own input payload (the model does not have to infer the mismatch
-// itself from requested_judgment text) and, via the existing
-// result.Cohort = graphContext.Cohort assignment, in the served answer too.
+// itself) and, via the existing result.Cohort = graphContext.Cohort
+// assignment, in the served answer too.
 //
 // A no-op whenever cohort is nil or unranked (ScoreMeaning empty): there is
 // nothing to mismatch a judgment against.
-func applyCohortJudgmentMismatch(cohort *Cohort, requestedJudgment string) {
+func applyCohortJudgmentMismatch(cohort *Cohort, requestedJudgmentKind RequestedJudgmentKind) {
 	if cohort == nil || cohort.ScoreMeaning == "" {
 		return
 	}
-	cohort.JudgmentMismatch = requestedJudgmentImpliesPerformanceJudgment(requestedJudgment) &&
-		!scoreMeaningSupportsPerformanceJudgment(cohort.ScoreMeaning)
+	cohort.JudgmentMismatch = !scoreMeaningSupportsJudgmentKind(cohort.ScoreMeaning, requestedJudgmentKind)
 }
 
 // cohortSuperlativeJudgmentTerms is the CLOSED, fixed set of ranking

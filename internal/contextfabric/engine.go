@@ -3333,7 +3333,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if graphContext.Cohort != nil && !workItemTuple {
 		var rankEvent CohortRankedEvent
 		graphContext.Cohort, rankEvent, cohortSignalCitations = RankCohort(graphContext.Cohort, facts.Facts, facts.Coverage)
-		applyCohortJudgmentMismatch(graphContext.Cohort, interpretation.RequestedJudgment)
+		applyCohortJudgmentMismatch(graphContext.Cohort, interpretation.RequestedJudgmentKind)
 		// DEFERRED, not emitted here: stage 3 may re-rank a narrowed cohort
 		// for the retry, and the event that reaches an operator must describe
 		// the cohort actually SERVED. Emitting at this point published a

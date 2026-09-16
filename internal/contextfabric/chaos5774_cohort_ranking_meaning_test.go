@@ -18,30 +18,28 @@ import (
 // a model-authored driver's ranking superlative about a member the formula
 // never scored.
 
-// --- requestedJudgmentImpliesPerformanceJudgment ---
+// --- scoreMeaningSupportsJudgmentKind ---
 
-func TestRequestedJudgmentImpliesPerformanceJudgment(t *testing.T) {
+func TestScoreMeaningSupportsJudgmentKind(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name      string
-		judgment  string
-		wantMatch bool
+		name    string
+		meaning CohortScoreMeaning
+		kind    RequestedJudgmentKind
+		want    bool
 	}{
-		{"best to worst performance", "Rank teams by current overall performance from strongest to weakest.", true},
-		{"performing", "Identify the best and worst performing teams.", true},
-		{"productivity", "Compare team productivity.", true},
-		{"productive", "Which team is most productive?", true},
-		{"case insensitive", "RANK TEAMS BY PERFORMANCE", true},
-		{"struggling", "Which teams are struggling the most?", false},
-		{"needs attention", "Identify which teams need the most attention.", false},
-		{"most pressure", "Rank teams by attention pressure, highest to lowest.", false},
-		{"empty", "", false},
+		{"attention meaning, attention kind", CohortScoreMeaningAttention, RequestedJudgmentKindAttention, true},
+		{"attention meaning, performance kind", CohortScoreMeaningAttention, RequestedJudgmentKindPerformance, false},
+		{"attention meaning, unspecified kind", CohortScoreMeaningAttention, "", true},
+		{"unrecognized meaning, attention kind", CohortScoreMeaning("future_meaning"), RequestedJudgmentKindAttention, false},
+		{"unrecognized meaning, unspecified kind", CohortScoreMeaning("future_meaning"), "", true},
+		{"attention meaning, unrecognized kind", CohortScoreMeaningAttention, RequestedJudgmentKind("future_kind"), true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			if got := requestedJudgmentImpliesPerformanceJudgment(c.judgment); got != c.wantMatch {
-				t.Fatalf("requestedJudgmentImpliesPerformanceJudgment(%q) = %v, want %v", c.judgment, got, c.wantMatch)
+			if got := scoreMeaningSupportsJudgmentKind(c.meaning, c.kind); got != c.want {
+				t.Fatalf("scoreMeaningSupportsJudgmentKind(%q, %q) = %v, want %v", c.meaning, c.kind, got, c.want)
 			}
 		})
 	}
@@ -53,30 +51,38 @@ func TestApplyCohortJudgmentMismatch(t *testing.T) {
 	t.Parallel()
 	t.Run("nil cohort is a no-op", func(t *testing.T) {
 		t.Parallel()
-		applyCohortJudgmentMismatch(nil, "Rank teams by performance.")
+		applyCohortJudgmentMismatch(nil, RequestedJudgmentKindPerformance)
 	})
 	t.Run("unranked cohort never gets a mismatch", func(t *testing.T) {
 		t.Parallel()
 		cohort := &Cohort{Kind: SubjectTeam, Rationale: "fixture"}
-		applyCohortJudgmentMismatch(cohort, "Rank teams by performance.")
+		applyCohortJudgmentMismatch(cohort, RequestedJudgmentKindPerformance)
 		if cohort.JudgmentMismatch {
 			t.Fatalf("JudgmentMismatch = true, want false on an unranked cohort (ScoreMeaning empty)")
 		}
 	})
-	t.Run("performance judgment over an attention cohort mismatches", func(t *testing.T) {
+	t.Run("performance kind over an attention cohort mismatches", func(t *testing.T) {
 		t.Parallel()
 		cohort := &Cohort{Kind: SubjectTeam, Rationale: "fixture", ScoreMeaning: CohortScoreMeaningAttention}
-		applyCohortJudgmentMismatch(cohort, "Rank teams by current overall performance from strongest to weakest.")
+		applyCohortJudgmentMismatch(cohort, RequestedJudgmentKindPerformance)
 		if !cohort.JudgmentMismatch {
-			t.Fatalf("JudgmentMismatch = false, want true for a performance-framed judgment over an attention cohort")
+			t.Fatalf("JudgmentMismatch = false, want true for a performance kind over an attention cohort")
 		}
 	})
-	t.Run("attention-framed judgment never mismatches", func(t *testing.T) {
+	t.Run("attention kind never mismatches", func(t *testing.T) {
 		t.Parallel()
 		cohort := &Cohort{Kind: SubjectTeam, Rationale: "fixture", ScoreMeaning: CohortScoreMeaningAttention}
-		applyCohortJudgmentMismatch(cohort, "Which teams need the most attention?")
+		applyCohortJudgmentMismatch(cohort, RequestedJudgmentKindAttention)
 		if cohort.JudgmentMismatch {
-			t.Fatalf("JudgmentMismatch = true, want false: requested judgment already asks for the attention measure this cohort carries")
+			t.Fatalf("JudgmentMismatch = true, want false: the requested kind already matches the cohort's own ScoreMeaning")
+		}
+	})
+	t.Run("unspecified kind never mismatches", func(t *testing.T) {
+		t.Parallel()
+		cohort := &Cohort{Kind: SubjectTeam, Rationale: "fixture", ScoreMeaning: CohortScoreMeaningAttention}
+		applyCohortJudgmentMismatch(cohort, "")
+		if cohort.JudgmentMismatch {
+			t.Fatalf("JudgmentMismatch = true, want false: an unspecified kind is never confident enough to flag a mismatch")
 		}
 	})
 }
@@ -216,11 +222,15 @@ func TestContainsWordRequiresWholeWordMatch(t *testing.T) {
 // mix, in opposite directions, and one INSUFFICIENT_EVIDENCE member with NO
 // facts at all -- deficiencySeveritySignal's own available-zero exception
 // still counts it as one available family, weight 20, below the 50/2-family
-// qualification floor) and runs it with requestedJudgment as the
-// interpreter's own RequestedJudgment, through the REAL Engine.Investigate
-// pipeline (RankCohort +
-// applyCohortJudgmentMismatch both run inside engine.go, never mocked).
-func judgmentFramingEngineFixture(t *testing.T, requestedJudgment string) InvestigationResult {
+// qualification floor) and runs it with requestedJudgment/kind as the
+// interpreter's own RequestedJudgment/RequestedJudgmentKind, through the
+// REAL Engine.Investigate pipeline (RankCohort + applyCohortJudgmentMismatch
+// both run inside engine.go, never mocked). kind is set directly on the
+// stub interpretation -- exactly as a real interpreter call would set it,
+// per the team-lead's ruling that the judgment's KIND is the interpreter's
+// own closed-vocabulary pick, never re-derived downstream from the free
+// text.
+func judgmentFramingEngineFixture(t *testing.T, requestedJudgment string, kind RequestedJudgmentKind) InvestigationResult {
 	t.Helper()
 	strugglingTeam := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:STRUGGLING", Label: "Struggling"}
 	healthyTeam := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:HEALTHY", Label: "Healthy"}
@@ -234,7 +244,7 @@ func judgmentFramingEngineFixture(t *testing.T, requestedJudgment string) Invest
 		},
 	}
 	interpretation := InterpretedQuestion{
-		Shape: ShapeDiscoveredCohort, RequestedJudgment: requestedJudgment,
+		Shape: ShapeDiscoveredCohort, RequestedJudgment: requestedJudgment, RequestedJudgmentKind: kind,
 		TimeContext:      TimeContext{Axis: TemporalCurrent},
 		FactRequirements: []FactRequirement{{Kind: FactHealth}},
 	}
@@ -308,16 +318,17 @@ func TestEngineJudgmentMismatchAcrossRequestedJudgmentFraming(t *testing.T) {
 	cases := []struct {
 		name              string
 		requestedJudgment string
+		kind              RequestedJudgmentKind
 		wantMismatch      bool
 	}{
-		{"rank best to worst (performance)", "Rank teams by current overall performance from strongest to weakest.", true},
-		{"rank most struggling (attention)", "Rank teams by how much they are struggling, most to least.", false},
-		{"who needs attention (attention)", "Which teams need the most attention right now?", false},
+		{"rank best to worst (performance)", "Rank teams by current overall performance from strongest to weakest.", RequestedJudgmentKindPerformance, true},
+		{"rank most struggling (attention)", "Rank teams by how much they are struggling, most to least.", RequestedJudgmentKindAttention, false},
+		{"who needs attention (attention)", "Which teams need the most attention right now?", RequestedJudgmentKindAttention, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			result := judgmentFramingEngineFixture(t, c.requestedJudgment)
+			result := judgmentFramingEngineFixture(t, c.requestedJudgment, c.kind)
 			if result.Cohort == nil || len(result.Cohort.Members) != 3 {
 				t.Fatalf("result.Cohort = %#v, want the ranked 3-member cohort", result.Cohort)
 			}
@@ -348,12 +359,11 @@ func TestEngineJudgmentMismatchAcrossRequestedJudgmentFraming(t *testing.T) {
 }
 
 // TestEngineJudgmentMismatchFalseWhenRequestedJudgmentIsBlank is a control:
-// a request that carries no judgment framing at all (a placeholder/degraded
-// interpretation) must never be flagged as a mismatch by simply matching
-// nothing.
+// a request whose interpreter made no kind pick at all (RequestedJudgmentKind
+// unset) must never be flagged as a mismatch.
 func TestEngineJudgmentMismatchFalseWhenRequestedJudgmentIsBlank(t *testing.T) {
 	t.Parallel()
-	result := judgmentFramingEngineFixture(t, "teams_under_pressure")
+	result := judgmentFramingEngineFixture(t, "teams_under_pressure", "")
 	if result.Cohort == nil {
 		t.Fatalf("result.Cohort = nil")
 	}

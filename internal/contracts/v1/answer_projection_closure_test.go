@@ -410,7 +410,10 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// through the canonical result's $ref to CoverageDetail.
 		// 350 -> 351 -- Cohort's new score_meaning string leaf, same
 		// ticket and reasoning as the answer_projection surface above.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 351},
+		// 351 -> 352 -- InterpretedQuestion's new requested_judgment_kind
+		// string leaf. answer_projection is unaffected: the projection
+		// carries no Interpretation at all.
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 352},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -485,6 +488,13 @@ func trustedBecauseClosed(path string) bool {
 		// every OTHER "confidence" field in this contract (SubjectCandidate,
 		// DriverJudgment) is a float64 and never reaches this string walker.
 		"window_class", "window_confidence", "confidence",
+		// "requested_judgment_kind" (ContextFabricRequestedJudgmentKind) is
+		// validated against its own closed registry
+		// (ValidContextFabricRequestedJudgmentKind) before a result is
+		// stored -- the model's closed enum PICK, never the free-text
+		// requested_judgment it classifies (that field stays untrusted; see
+		// MCPInvestigationResultUntrustedFields).
+		"requested_judgment_kind",
 		// CHAOS-3781: "grain" is ContextFabricTemporalGrain (instant,
 		// day, none) and "match_mechanisms" is the closed set of ways a
 		// candidate was matched. Both are validated against their own

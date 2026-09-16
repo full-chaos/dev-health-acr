@@ -1367,6 +1367,13 @@ func (q ContextFabricInterpretedQuestion) validate(bounds contextFabricBounds) e
 	if q.WindowConfidence != "" && !ValidContextFabricWindowConfidence(q.WindowConfidence) {
 		return fmt.Errorf("window_confidence is invalid")
 	}
+	// The empty value is legitimate ("the model made no pick"), same shape
+	// as WindowClass/WindowConfidence above -- see
+	// ContextFabricInterpretedQuestion.RequestedJudgmentKind's own doc
+	// comment.
+	if q.RequestedJudgmentKind != "" && !ValidContextFabricRequestedJudgmentKind(q.RequestedJudgmentKind) {
+		return fmt.Errorf("requested_judgment_kind is invalid")
+	}
 	return nil
 }
 

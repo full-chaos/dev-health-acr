@@ -291,6 +291,25 @@ type CohortScoreMeaning = contractsv1.ContextFabricCohortScoreMeaning
 
 const CohortScoreMeaningAttention = contractsv1.ContextFabricCohortScoreMeaningAttention
 
+// RequestedJudgmentKind is InterpretedQuestion.RequestedJudgmentKind's own
+// additive contract type -- see ContextFabricRequestedJudgmentKind's own
+// doc comment.
+type RequestedJudgmentKind = contractsv1.ContextFabricRequestedJudgmentKind
+
+const (
+	RequestedJudgmentKindPerformance = contractsv1.ContextFabricRequestedJudgmentKindPerformance
+	RequestedJudgmentKindAttention   = contractsv1.ContextFabricRequestedJudgmentKindAttention
+)
+
+// RequestedJudgmentKindCount is the closed vocabulary's size.
+const RequestedJudgmentKindCount = contractsv1.ContextFabricRequestedJudgmentKindCount
+
+// RequestedJudgmentKindVocabulary returns the closed requested-judgment-kind
+// vocabulary in published order -- what the interpreter prompt renders.
+func RequestedJudgmentKindVocabulary() [RequestedJudgmentKindCount]RequestedJudgmentKind {
+	return contractsv1.ContextFabricRequestedJudgmentKindVocabulary()
+}
+
 type RelationshipPath = contractsv1.ContextFabricRelationshipPath
 type RelationshipEdge = contractsv1.ContextFabricRelationshipEdge
 type RelationshipType = contractsv1.ContextFabricRelationshipType

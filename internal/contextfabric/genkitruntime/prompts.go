@@ -84,6 +84,7 @@ Return only the requested structured output. Infer the investigation shape, requ
 Each fact_requirements[].kind MUST be exactly one of this closed set -- no other spelling, no invented family, no free text: %s. Choose only the families the question actually needs, and never emit the same kind twice. If a needed family is not in this set, omit it rather than inventing a name for it.
 fact_requirements[].parameters accepts NO keys for any fact family in this deployment: leave parameters empty (omit the field, or return {}) on every fact_requirements[] entry, no matter how relevant a key seems. Naming a parameter -- "term", "item_name", "definition_source", "subject_term", "description", or anything else -- causes that whole fact read, and the investigation, to fail; there is currently no key any fact family will accept.
 Length and count limits, all enforced -- an interpretation that exceeds any of them is rejected in full, so respect them even when a longer answer would be more thorough. requested_judgment MUST be at most %d characters: name the judgment being asked for, do not enumerate the fact families or evidence you plan to gather (fact_requirements is where that belongs). At most %d subject_terms and %d comparison_terms, each at most %d characters. At most %d fact_requirements. Each fact_requirements[].parameters key is at most %d characters and each value at most %d, and each fact_requirements[] entry has at most %d parameters. clarification_reason is at most %d characters.
+requested_judgment_kind is OPTIONAL, a closed-vocabulary pick from this set: %s. Emit it ONLY when requested_judgment itself asks for a comparison or ranking among subjects AND the question's own wording makes which BASIS it is asking about clear: performance when it asks who performed best/worst, who is most/least productive, or otherwise compares capability or output; attention when it asks who needs the most attention, who is struggling, or who is under the most pressure. Omit it whenever the question is not that kind of comparison, or its basis is unclear -- a wrong pick here can make an honest answer read as a refusal, so omission is always safer than a guess. This never changes what fact_requirements you choose or how you word requested_judgment itself.
 For subject_terms and comparison_terms, the term you list FIRST for each subject MUST be copied VERBATIM from the question text -- the exact substring as the user wrote it, same spelling and casing, never corrected, translated, or normalized to a canonical or official name. Copy the entity itself: drop surrounding quotation marks or brackets the question wrapped the name in, and drop a trailing grammatical attachment that is not part of the name (a possessive 's, a trailing comma, sentence-final punctuation); punctuation that is actually part of the name (a hyphen, an ampersand, an apostrophe inside the name itself) stays verbatim. Only after that verbatim term may you add a paraphrase, synonym, alias, acronym, expansion, or previous name as a further, clearly SECONDARY term for the same subject; a secondary term must never replace or precede the verbatim one, and never offer a paraphrase alone. Extract the verbatim term even when you also know a fuller or more correct name for the subject -- the literal text the user wrote is what retrieval matches against. Only when the question describes a subject with no literal substring you could copy (a purely indirect description, naming no name) may that subject's first term be your own best non-verbatim term instead.
 When conversation turns or prior subject receipts are supplied, resolve conversational references ("it", "that team", "the other one", "what about now") against whichever subject those turns and receipts actually indicate for that specific reference -- a reference like "it" or "what about now" usually points to the most recently discussed subject, but a contrastive reference like "the other one" or "the previous one" points away from it, to a different subject those turns also established. Prefer the shape (single subject, explicit cohort, or open) implied by the resolved reference over guessing a new one.
 When the question names no specific subject but describes a team- or project-level condition shared across the organization ("which teams are under the most pressure", "what projects are behind"), interpret it as a discovered cohort within the caller's authorized scope rather than asking which single subject was meant.
@@ -112,6 +113,7 @@ question_frame.dimensions is OPTIONAL, a list from this closed set: %s. Emit a d
 	contractsv1.ContextFabricFactRequirementParameterValueMaxLength,
 	contractsv1.ContextFabricFactRequirementParametersMaxCount,
 	contractsv1.ContextFabricClarificationReasonMaxLength,
+	contextFabricRequestedJudgmentKindList,
 	contextFabricWindowClassList,
 	contextFabricSubjectKindList,
 	contextFabricInvestigationGoalList,
@@ -179,6 +181,15 @@ var contextFabricTemporalIntentList = func() string {
 		temporals = append(temporals, string(temporal))
 	}
 	return strings.Join(temporals, ", ")
+}()
+
+var contextFabricRequestedJudgmentKindList = func() string {
+	vocabulary := contextfabric.RequestedJudgmentKindVocabulary()
+	kinds := make([]string, 0, len(vocabulary))
+	for _, kind := range vocabulary {
+		kinds = append(kinds, string(kind))
+	}
+	return strings.Join(kinds, ", ")
 }()
 
 var contextFabricAnswerEmphasisList = func() string {

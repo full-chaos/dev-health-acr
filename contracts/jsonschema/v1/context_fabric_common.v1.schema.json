@@ -3524,6 +3524,14 @@
             "high",
             "low"
           ]
+        },
+        "requested_judgment_kind": {
+          "description": "CHAOS-5774: the model's own closed-vocabulary classification of what BASIS requested_judgment asks for. Absent means the model made no pick (equivalent to unspecified) -- never derived from requested_judgment's own text by a consumer.",
+          "type": "string",
+          "enum": [
+            "performance",
+            "attention"
+          ]
         }
       },
       "required": [
