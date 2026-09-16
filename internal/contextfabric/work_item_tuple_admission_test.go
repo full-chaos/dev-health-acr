@@ -372,11 +372,12 @@ func TestWorkItemTupleFrameGateNeverMutatesAndPredictsCorrectly(t *testing.T) {
 	}
 }
 
-// TestWorkItemTupleStripSurveyObligationsRemovesRankingOnly is the unit
-// pin for the one function that actually mutates: every other obligation
-// the frame started with survives, and the count drops by exactly one
-// when ranking was present, not at all otherwise.
-func TestWorkItemTupleStripSurveyObligationsRemovesRankingOnly(t *testing.T) {
+// TestWorkItemTupleEffectiveObligationsOmitsRankingOnly is the unit pin for
+// the plan-time obligation set: every other obligation the frame started
+// with survives in the effective set, the count drops by exactly one when
+// ranking was present (not at all otherwise), and -- the CHAOS-5787
+// property -- the frame itself never changes, whichever case runs.
+func TestWorkItemTupleEffectiveObligationsOmitsRankingOnly(t *testing.T) {
 	defer reportWorkItemMutationPanic(t)
 	for _, tc := range []struct {
 		name  string
@@ -390,60 +391,108 @@ func TestWorkItemTupleStripSurveyObligationsRemovesRankingOnly(t *testing.T) {
 			frame := prospectiveTupleFrame(tc.goals...)
 			before := append([]AnswerObligation(nil), frame.Obligations...)
 			beforeHadRanking := frame.HasObligation(ObligationRanking)
-			stripped := workItemTupleStripSurveyObligations(&frame)
+			effective := workItemTupleEffectiveObligations(&frame)
+			if !reflect.DeepEqual(frame.Obligations, before) {
+				t.Fatalf("BUG: the frame was mutated: before=%v after=%v", before, frame.Obligations)
+			}
 			if beforeHadRanking {
-				if !reflect.DeepEqual(stripped, []AnswerObligation{ObligationRanking}) {
-					t.Fatalf("stripped=%v, want [ranking]", stripped)
+				if len(effective) != len(before)-1 {
+					t.Fatalf("effective=%v, want exactly one omitted from before=%v", effective, before)
 				}
-				if len(frame.Obligations) != len(before)-1 {
-					t.Fatalf("obligations=%v, want exactly one removed from before=%v", frame.Obligations, before)
+				for _, obligation := range effective {
+					if obligation == ObligationRanking {
+						t.Fatalf("effective set still carries ranking: %v", effective)
+					}
 				}
-			} else {
-				if stripped != nil {
-					t.Fatalf("stripped=%v, want nil (no ranking to remove)", stripped)
-				}
-				if !reflect.DeepEqual(frame.Obligations, before) {
-					t.Fatalf("obligations changed with no ranking to remove: before=%v after=%v", before, frame.Obligations)
-				}
+			} else if !reflect.DeepEqual(effective, before) {
+				t.Fatalf("effective=%v, want unchanged from before=%v (no ranking to omit)", effective, before)
 			}
 			for _, obligation := range before {
-				if obligation != ObligationRanking && !frame.HasObligation(obligation) {
-					t.Fatalf("strip dropped an unrelated obligation %s: before=%v after=%v", obligation, before, frame.Obligations)
+				if obligation == ObligationRanking {
+					continue
+				}
+				found := false
+				for _, member := range effective {
+					if member == obligation {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Fatalf("effective set dropped an unrelated obligation %s: before=%v effective=%v", obligation, before, effective)
 				}
 			}
 		})
 	}
 }
 
-// TestWorkItemTupleSyncFrameObligationsKeepsTheB8CopyInStep pins the
-// FrameObligations refresh beside the strip that can put it out of step: the
-// B8 shadow copy (chaos4632_question_family_consensus.go's own "kept in step
-// by construction... cannot drift") is a value taken before this arm's strip
-// runs, so only the strip's own mutation -- not construction, not any other
-// reader -- can separate the two. A stripped call must re-equal them; an
-// untouched (nothing-to-strip) call must change nothing.
-func TestWorkItemTupleSyncFrameObligationsKeepsTheB8CopyInStep(t *testing.T) {
+// TestWorkItemTupleRequirementFrameOmitsRankingFromTheRealDerivation is the
+// integration proof, one level below Engine.Investigate: the same
+// deriveTurnRequirements/DeriveRequirements path the engine calls, exercised
+// directly. A work-item survey tuple's requirement rows carry NO ranking
+// coordinate once run through workItemTupleRequirementFrame -- the actual
+// observable property the fix promises ("serves the survey with no ranking
+// outcome row") -- while an ordinary (non-work-item) rank_or_survey question
+// is completely unaffected: this arm's own scoping guard (workItemTuple,
+// engine.go) is the ONLY thing that ever calls the effective-set helper, and
+// this test proves the unguarded path still gets its ranking requirement.
+func TestWorkItemTupleRequirementFrameOmitsRankingFromTheRealDerivation(t *testing.T) {
+	hasRankingRequirement := func(rows []DerivedRequirement) bool {
+		for _, row := range rows {
+			if row.Obligation == ObligationRanking {
+				return true
+			}
+		}
+		return false
+	}
+
+	t.Run("work-item survey tuple: no ranking requirement in the plan", func(t *testing.T) {
+		frame := prospectiveTupleFrame(GoalRankOrSurvey)
+		if !frame.HasObligation(ObligationRanking) {
+			t.Fatalf("fixture defect: frame does not carry ranking")
+		}
+		planFrame := workItemTupleRequirementFrame(&frame)
+		rows := deriveTurnRequirements(planFrame, registryDeriver{})
+		if hasRankingRequirement(rows) {
+			t.Fatalf("plan requirements = %+v, want no ranking coordinate", rows)
+		}
+		// The source frame -- what gets persisted -- is untouched.
+		if !frame.HasObligation(ObligationRanking) {
+			t.Fatalf("BUG: the source frame lost ranking: %v", frame.Obligations)
+		}
+	})
+
+	t.Run("non-work-item survey: ranking requirement unaffected", func(t *testing.T) {
+		frame := frameWith([]InvestigationGoal{GoalRankOrSurvey}, groupedExpression(contractsv1.ContextFabricSubjectRepository, contractsv1.ContextFabricSubjectTeam), TemporalIntentCurrent, nil)
+		if !frame.HasObligation(ObligationRanking) {
+			t.Fatalf("fixture defect: frame does not carry ranking")
+		}
+		// No workItemTuple guard applies here -- deriveTurnRequirements runs
+		// on the frame directly, exactly as engine.go's own `else` branch does.
+		rows := deriveTurnRequirements(&frame, registryDeriver{})
+		if !hasRankingRequirement(rows) {
+			t.Fatalf("plan requirements = %+v, want a ranking coordinate (this arm must not touch a non-work-item survey)", rows)
+		}
+	})
+}
+
+// TestWorkItemTupleRequirementFrameCopiesRatherThanMutates pins the ONE
+// property this fix depends on: the frame handed to requirement
+// derivation carries the effective obligation set, but the CALLER's frame
+// -- the one that gets persisted and later revalidated by the composition
+// boundary -- is untouched, byte for byte.
+func TestWorkItemTupleRequirementFrameCopiesRatherThanMutates(t *testing.T) {
 	defer reportWorkItemMutationPanic(t)
-	for _, tc := range []struct {
-		name  string
-		goals []InvestigationGoal
-	}{
-		{"has_ranking", []InvestigationGoal{GoalRankOrSurvey}},
-		{"no_ranking", []InvestigationGoal{GoalAssessState, GoalCountOrAggregate}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			defer reportWorkItemMutationPanic(t)
-			frame := prospectiveTupleFrame(tc.goals...)
-			staleCopy := append([]AnswerObligation(nil), frame.Obligations...)
-			outcome := QuestionFamilyOutcome{Frame: &frame, FrameObligations: staleCopy}
-			stripped := workItemTupleStripSurveyObligations(&frame)
-			workItemTupleSyncFrameObligations(&outcome, stripped)
-			if !reflect.DeepEqual(outcome.FrameObligations, frame.Obligations) {
-				t.Fatalf("FrameObligations %v disagrees with the stripped frame's %v", outcome.FrameObligations, frame.Obligations)
-			}
-			if len(stripped) == 0 && !reflect.DeepEqual(outcome.FrameObligations, staleCopy) {
-				t.Fatalf("a no-op strip still changed FrameObligations: before=%v after=%v", staleCopy, outcome.FrameObligations)
-			}
-		})
+	frame := prospectiveTupleFrame(GoalRankOrSurvey)
+	before := append([]AnswerObligation(nil), frame.Obligations...)
+	requirementFrame := workItemTupleRequirementFrame(&frame)
+	if !reflect.DeepEqual(frame.Obligations, before) {
+		t.Fatalf("BUG: the source frame was mutated: before=%v after=%v", before, frame.Obligations)
+	}
+	if requirementFrame.HasObligation(ObligationRanking) {
+		t.Fatalf("requirement frame still carries ranking: %v", requirementFrame.Obligations)
+	}
+	if requirementFrame == &frame {
+		t.Fatal("requirement frame aliases the source frame")
 	}
 }

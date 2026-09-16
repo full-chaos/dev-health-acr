@@ -1684,8 +1684,8 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 	// heuristic DeriveQuestionFamily projection here; the routed and later
 	// carry-adjusted family in finishFamilyResolution and engine.go), and a
 	// later call in that chain can still turn this promotion back to
-	// refused. See workItemTupleStripSurveyObligations's own doc comment
-	// for where the real mutation happens instead.
+	// refused. See workItemTupleEffectiveObligations's own doc comment for
+	// where the settled omission is actually decided instead.
 	var strippedObligations []AnswerObligation
 	if len(times) == 1 && result.Outcome.Accepted() {
 		definition, known := LookupQuestionFamily(DeriveQuestionFamily(result.Frame).Family)

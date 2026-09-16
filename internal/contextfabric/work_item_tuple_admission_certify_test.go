@@ -168,8 +168,8 @@ func TestEveryClosedValueOnTheWorkItemTupleAdmissionLineCertifies(t *testing.T) 
 
 // TestWorkItemTupleAdmissionRejectsAnOutOfVocabularyStrippedObligation is
 // the negative control the sweep above needs beside it: a value no
-// production path ever emits (workItemTupleStripSurveyObligations can only
-// ever return ObligationRanking) but that the wire type does not prevent a
+// production path ever emits (workItemTupleObligationsToStrip can only
+// ever name ObligationRanking) but that the wire type does not prevent a
 // caller from constructing must still be REFUSED by the certifier -- proof
 // that the per-element ClosedVocabulary check on a string_slice field
 // (certify.go, added alongside this event: no field previously declared

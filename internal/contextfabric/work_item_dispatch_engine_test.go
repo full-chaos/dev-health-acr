@@ -95,13 +95,14 @@ func TestWorkItemSurveyGoalDispatchesMembershipRead(t *testing.T) {
 	if graph.resolveCalls != 1 || membershipReads != 1 || graph.discoverCalls != 0 || factReads != 0 {
 		t.Fatalf("phase counts resolve=%d membership=%d discover=%d facts=%d; want 1,1,0,0", graph.resolveCalls, membershipReads, graph.discoverCalls, factReads)
 	}
-	// The engine-level mutation (engine.go, gated on workItemTuple) must
-	// actually have run for a turn that reaches dispatch: the frame the
-	// engine used carries no ranking obligation once workItemTuple settled
-	// true, the positive control TestWorkItemLateFamilyDisallowReRefusesWithoutLosingObligations's
-	// negative control needs beside it.
-	if frame.HasObligation(ObligationRanking) {
-		t.Fatalf("engine-level strip did not run on an admitted, dispatched survey turn: obligations=%v", frame.Obligations)
+	// The engine NEVER writes to this frame, admitted or not -- the settled
+	// omission is a plan-time computation
+	// (workItemTupleEffectiveObligations), not a mutation. The frame the
+	// engine used still carries the ranking obligation it started with, the
+	// same canonical object a later turn's composition boundary would
+	// revalidate.
+	if !frame.HasObligation(ObligationRanking) {
+		t.Fatalf("BUG: the engine mutated the caller's frame on an admitted, dispatched survey turn: obligations=%v", frame.Obligations)
 	}
 	// The SETTLED line: admitted=true, stripped_obligations carries what
 	// actually came off the frame -- the enforced outcome, not a
@@ -174,10 +175,10 @@ func TestWorkItemSurveyGoalWithOrderingStaysRefused(t *testing.T) {
 // -- exactly what a routed or carry-adjusted family reading can still
 // produce after interpretation already promoted the gate once. The engine's
 // own tighten (engine.go, after the carry-adjusted family is known) must
-// re-refuse it, and because the strip runs only once that is settled
-// (workItemTupleStripSurveyObligations's own call site), the frame never
-// loses its ranking obligation to a promotion the engine went on to
-// reverse.
+// re-refuse it. The frame itself is never mutated at all any more
+// (CHAOS-5787), so this stays true unconditionally; what this test pins
+// is that the SETTLED admission line still reports the re-refusal
+// honestly -- Admitted=false, StrippedObligations empty.
 func TestWorkItemLateFamilyDisallowReRefusesWithoutLosingObligations(t *testing.T) {
 	defer reportWorkItemMutationPanic(t)
 	frame := prospectiveTupleFrame(GoalRankOrSurvey)

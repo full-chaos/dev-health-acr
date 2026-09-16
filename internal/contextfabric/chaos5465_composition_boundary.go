@@ -213,6 +213,49 @@ type compositionInput struct {
 	// transition composes from what turn one actually validated and can never
 	// withhold here for want of a frame to revalidate.
 	TransitionEstablished bool
+	// CarriedGateOverride is the fully refined verdict for the carried
+	// frame, when the caller has one to supply. Nil means "none supplied":
+	// the boundary decides the carried frame's gate itself, from today's
+	// table, exactly as it always has -- this field changes nothing for a
+	// caller that never sets it.
+	//
+	// IT EXISTS FOR EXACTLY ONE REASON, WHICH IS NOT A DOOR: some frame
+	// shapes gate through more than DecideFrameGate alone -- a work-item
+	// tuple's own admission (work_item_tuple_admission.go) promotes a
+	// children_of_scope/work_item frame's ordinary kind refusal to passed
+	// under conditions this boundary has no vocabulary for (a family's own
+	// ApplicableAxes, an interpreted time axis) and deliberately never
+	// imports, because composition's own job is revalidating a FRAME, not
+	// re-running an admission arm's business rule. Without this field, a
+	// canonical, correctly-admitted work-item survey's carried frame could
+	// never compose: DecideFrameGate alone refuses that shape by
+	// construction, and only the arm's own promotion says otherwise. The
+	// CALLER (engine.go) computes the promoted verdict through the SAME
+	// construction the fresh path uses and hands over a plain FrameGate --
+	// never the admission logic itself, which is how the boundary stays
+	// arm-agnostic while still answering correctly for the one arm that
+	// needs more than DecideFrameGate can decide alone.
+	CarriedGateOverride *FrameGate
+	// CarriedLegacyFrame is a SECOND candidate for the carried frame, tried
+	// only when the carried frame itself fails the canonical check. Nil
+	// means "none supplied": the boundary's canonical check is exactly what
+	// it always was, unaffected for a caller that never sets it.
+	//
+	// IT EXISTS FOR ONE REASON: revalidation compares a carried frame
+	// against WHAT TODAY'S RULES WOULD PRODUCE, and a caller-owned arm can
+	// legitimately record a DIFFERENT, EQUALLY VALID shape for a row its
+	// own obligation-omission rule governs (work_item_tuple_admission.go
+	// names the rule and the one obligation it can omit). Nothing here is
+	// malformed, and there is no format-version gate to migrate such a row
+	// through -- semantic-state.v1 carries both shapes, indistinguishably,
+	// by design. Refusing a row in the shape that rule can legitimately
+	// produce breaks every conversation carrying it, permanently. The
+	// CALLER computes the one alternate shape ITS OWN arm can legitimately
+	// have recorded and hands it over as a plain frame; this boundary
+	// revalidates it through the IDENTICAL path as the primary candidate,
+	// never a relaxed one, and composes from whichever one actually
+	// re-derives to itself.
+	CarriedLegacyFrame *QuestionFrame
 }
 
 // composeAcceptedContext establishes the carried reading as this turn's
@@ -282,7 +325,28 @@ func composeAcceptedContext(in compositionInput) AcceptedContext {
 	// from the carried frame means today's rules would reinterpret it.
 	recorded := cloneFrame(*carried.Frame)
 	result := ValidateFrame(recorded, recorded.WidenedObligations, carried.Validation.EmittedShape)
+	if result.Outcome == FrameValidationOutcomeValid && !framesEqual(result.Frame, recorded) && in.CarriedLegacyFrame != nil {
+		// THE SECOND CANDIDATE, tried ONLY on the canonical-check failure
+		// this field exists for -- see CarriedLegacyFrame's own doc
+		// comment. Revalidated through the IDENTICAL path as the primary
+		// candidate above; a legacy candidate that itself fails to
+		// re-derive changes nothing here, and the primary's own result
+		// stands.
+		legacyRecorded := cloneFrame(*in.CarriedLegacyFrame)
+		legacyResult := ValidateFrame(legacyRecorded, legacyRecorded.WidenedObligations, carried.Validation.EmittedShape)
+		if legacyResult.Outcome == FrameValidationOutcomeValid && framesEqual(legacyResult.Frame, legacyRecorded) {
+			result, recorded = legacyResult, legacyRecorded
+		}
+	}
 	gate := DecideFrameGate(result, true)
+	// THE ONE SUBSTITUTION THIS BOUNDARY MAKES, AND IT IS THE CALLER'S
+	// VERDICT, NEVER THIS BOUNDARY'S OWN DERIVATION OF ONE. See
+	// CarriedGateOverride's own doc comment. Every caller that never sets
+	// it gets the identical DecideFrameGate verdict this line always
+	// produced.
+	if in.CarriedGateOverride != nil {
+		gate = *in.CarriedGateOverride
+	}
 	if result.Outcome != FrameValidationOutcomeValid {
 		return AcceptedContext{Gate: gate, Outcome: CompositionInvalid, FailedInvariant: string(result.Failure.Invariant)}
 	}
