@@ -460,7 +460,7 @@ func TestANonDegradingDisclosureNeverBecomesARequirementRowsCause(t *testing.T) 
 			continue
 		}
 		swept++
-		evidence := evaluateReadRequirement(requirement, coverageFor(code))
+		evidence := evaluateReadRequirement(requirement, coverageFor(code), nil)
 		if evidence.Cause != contractsv1.ContextFabricCoverageDetailFactProviderReported {
 			t.Errorf("second detail %q: cause = %q, want %q -- a code that can never degrade must not name the cause of a loss",
 				code, evidence.Cause, contractsv1.ContextFabricCoverageDetailFactProviderReported)
@@ -473,7 +473,7 @@ func TestANonDegradingDisclosureNeverBecomesARequirementRowsCause(t *testing.T) 
 	// THE DISCRIMINATING CONTROL: a code that CAN degrade still wins the
 	// last-writer-wins map, so the sweep above is proving the guard and not
 	// merely that the first detail is always kept.
-	control := evaluateReadRequirement(requirement, coverageFor(contractsv1.ContextFabricCoverageDetailFactNarrowed))
+	control := evaluateReadRequirement(requirement, coverageFor(contractsv1.ContextFabricCoverageDetailFactNarrowed), nil)
 	if control.Cause != contractsv1.ContextFabricCoverageDetailFactNarrowed {
 		t.Fatalf("control: cause = %q, want %q -- a degrading code must still be carried", control.Cause, contractsv1.ContextFabricCoverageDetailFactNarrowed)
 	}

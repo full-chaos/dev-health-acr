@@ -819,9 +819,64 @@ func ValidateContextFabricPlanRequirementOutcomeRow(row ContextFabricPlanRequire
 		row.CauseNarrowing == "" &&
 		row.CauseOverrun == "" &&
 		coverageDetailCodeQualifiesPopulation(row.CauseCoverage)
-	if row.Outcome == ContextFabricRequirementNarrowed && row.Declared > 0 && row.Served >= row.Declared && !censusQualified {
+	// truncationQualified (CHAOS-5742) is censusQualified's sibling for a
+	// SOURCE truncation with no population to speak of. `Impact: depth`
+	// (never `scope`, censusQualified's own discriminator) is what a
+	// truncated canonical-fact source produces: the same subject, with less
+	// behind it -- there is no larger population axis here for a shortfall
+	// to show up on, so the count over what was OBSERVED is exact (one
+	// fact-bearing source) while the source itself said it did not return
+	// everything asked of it. Equal counts are therefore the truthful pair
+	// for this one mechanism, admitted here rather than refused as "not a
+	// reduction" by this very check.
+	//
+	// The conjuncts mirror censusQualified's own discipline for the same
+	// reasons: CauseObserved so a defaulted cause cannot opt in; the other
+	// two cause fields empty so this cannot be read beside a basis or an
+	// overrun asserting a second, contradictory reduction; stage and impact
+	// so the exception is the one producer's shape and nothing wider. It
+	// does not need an obligation/role allow-list the way censusQualified
+	// does -- `Impact: depth` on an assembled-result row is minted by the
+	// kind-level (not population-level) narrowed arms only, which run
+	// before any population is consulted, so a `fact_provider_reported`
+	// cause with these counts can only describe a source, never a census.
+	truncationQualified := row.Stage == ContextFabricOutcomeStageAssembledResult &&
+		row.Impact == ContextFabricAnswerImpactDepth &&
+		// `==`, not `>=`, for the same reason censusQualified writes it that
+		// way: Served > Declared is already refused by this function's own
+		// bound check above, so at this call site (guarded by
+		// `row.Served >= row.Declared`) the two together already force
+		// equality. Written as `==` so this conjunct can never become the
+		// thing that admits a row this function's own bound would otherwise
+		// have refused, if that guard is ever relaxed or this exception is
+		// ever consulted from a second call site.
+		row.Served == row.Declared &&
+		row.CauseObserved &&
+		row.CauseNarrowing == "" &&
+		row.CauseOverrun == "" &&
+		row.CauseCoverage == ContextFabricCoverageDetailFactProviderReported
+	if row.Outcome == ContextFabricRequirementNarrowed && row.Declared > 0 && row.Served >= row.Declared && !censusQualified && !truncationQualified {
 		return fmt.Errorf("outcome narrowed served %d of %d declared, which is not a reduction", row.Served, row.Declared)
 	}
+	// THE OTHER DIRECTION IS NOT REFUSED, AND THAT IS DELIBERATE.
+	//
+	// This function's own governing sentence (two comments up) reads "a row
+	// that served none of it is not narrowed -- it is unavailable", but that
+	// sentence is not total over the outcome vocabulary: a population-scope
+	// row (read_population.go's zero-of-N-committed arms), a
+	// planner-narrowing row (a kind the plan itself narrowed to nothing),
+	// AND a source-truncation row whose provider retained zero facts (the
+	// registry's own bundle-wide cap can slice a result to empty and still
+	// mint the truncated state) all legitimately publish `narrowed` at
+	// Served == 0 -- asserted by name in
+	// TestAPartiallyEnumeratedOperandSetIsNotAbsent and
+	// TestFactBearingAgreesWithTheRegistrysOwnRule. The third shape is
+	// honest by construction at its producer
+	// (read_requirement_evaluation.go's TruncatedKindsWithFacts /
+	// factBearingKinds): the evaluator only credits Served for a truncated
+	// kind it can PROVE retained a fact, so a zero it emits for that shape
+	// is never a claim about facts nobody received, and this validator has
+	// no further test to make on it.
 	return validateContextFabricRequirementRefinements(row)
 }
 

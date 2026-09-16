@@ -394,6 +394,11 @@ func TestTheObservationInputDomainIsEnumeratedAndExecuted(t *testing.T) {
 		}
 		return result
 	}
+	storedWithClaims := func(requirements []contractsv1.ContextFabricPlanRequirement, coverage Coverage, claims []ClaimedFact, rows ...string) InvestigationResult {
+		result := stored(requirements, coverage, rows...)
+		result.ClaimedFacts = claims
+		return result
+	}
 	storedRead := readRequirement(CompletionQuantifierAtLeastOne)
 	healthKind := contractsv1.ContextFabricFactHealth
 	available := factCoverage(healthKind, SourceAvailable)
@@ -415,6 +420,17 @@ func TestTheObservationInputDomainIsEnumeratedAndExecuted(t *testing.T) {
 	reuseCell("an undeclared cause code, no row", stored([]contractsv1.ContextFabricPlanRequirement{storedRead}, codedCoverage(contractsv1.ContextFabricCoverageDetailCode("fact_invented_by_a_future_producer"), healthKind, healthKind, SourceUnavailable)), "state/subject/team:undeclared_cause:0/1")
 	reuseCell("observed, but stored without a row", stored([]contractsv1.ContextFabricPlanRequirement{storedRead}, available), "state/subject/team:stored_without_row:1/1")
 	reuseCell("two requirements, one line each", stored([]contractsv1.ContextFabricPlanRequirement{storedRead, second}, available, storedRead.Requirement, second.Requirement), "state/subject/team:none:1/1,state/subject/team#2:none:1/1")
+	// claimedFactKinds' own domain: a truncated kind's Served credit on
+	// reuse is proven by CITATION (ClaimedFacts), a lower bound on what the
+	// registry actually retained -- see claimedFactKinds' own doc comment.
+	truncated := codedCoverage(contractsv1.ContextFabricCoverageDetailFactProviderReported, healthKind, healthKind, SourceTruncated)
+	citedHealth := []ClaimedFact{{ClaimID: "claim_health", Kind: healthKind, Subject: contractsv1.ContextFabricSubjectRef{Kind: SubjectTeam, CanonicalID: "team_1"}, Field: "state", Value: boolScalar(true)}}
+	reuseCell("a truncated kind CITED in ClaimedFacts is proven and credited",
+		storedWithClaims([]contractsv1.ContextFabricPlanRequirement{storedRead}, truncated, citedHealth, storedRead.Requirement),
+		"state/subject/team:none:1/1")
+	reuseCell("a truncated kind NOT cited in ClaimedFacts is an unproven, lower-bound zero",
+		storedWithClaims([]contractsv1.ContextFabricPlanRequirement{storedRead}, truncated, nil, storedRead.Requirement),
+		"state/subject/team:none:0/1")
 
 	// ---------------------------------------------------------------- surface 6
 	// readRequirementObservationCoverEvent -- the cover line's field builder,
