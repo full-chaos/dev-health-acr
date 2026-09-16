@@ -2083,6 +2083,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// CarriedGateOverride: nil for every carried shape but one --
 				// see carriedWorkItemTupleGateOverride's own doc comment.
 				CarriedGateOverride: carriedWorkItemTupleGateOverride(continuation.Accepted.State, interpretation.TimeContext),
+				// CarriedLegacyFrame: nil for every carried shape but one --
+				// see carriedWorkItemTupleLegacyFrame's own doc comment.
+				CarriedLegacyFrame: carriedWorkItemTupleLegacyFrame(continuation.Accepted.State),
 			})
 			// THE OUTCOME IS RECORDED BEFORE THE BRANCH, so the successful
 			// path publishes it too. Recording it only in the else-arm is how

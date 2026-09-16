@@ -170,3 +170,137 @@ func TestWorkItemSurveyTwoTurnShapeComposesAndServesWithoutRanking(t *testing.T)
 		}
 	}
 }
+
+// TestWorkItemSurveyLegacyPersistedFrameStillComposes pins backward
+// compatibility for a row this arm's settled admission wrote directly onto
+// the persisted frame instead of the plan alone -- a legitimate shape this
+// arm's own rule can produce, distinct from a canonical row and carrying no
+// format-version marker of its own. A turn continuing such a row must still
+// compose and serve: the composition boundary's second candidate
+// (carriedWorkItemTupleLegacyFrame) reconstructs the one obligation this
+// arm's rule can omit and revalidates the reconstruction through the same
+// path as any other carried frame.
+func TestWorkItemSurveyLegacyPersistedFrameStillComposes(t *testing.T) {
+	defer reportWorkItemMutationPanic(t)
+
+	frame := frameWith([]InvestigationGoal{GoalRankOrSurvey}, SubjectExpression{
+		Kind:   SubjectExpressionChildrenOfScope,
+		Scoped: &ScopedSetExpression{AnchorTerms: []string{"project"}, MemberKind: SubjectWorkItem},
+	}, TemporalIntentCurrent, nil)
+	if !frame.HasObligation(ObligationRanking) {
+		t.Fatalf("fixture defect: frame does not carry ranking")
+	}
+	outcome := QuestionFamilyOutcome{
+		Family: QuestionFamilyScopedCohortStatus, Source: QuestionFamilySourceModel,
+		Frame: &frame, FrameObligations: frame.Obligations,
+		Gate:          workItemTupleFrameGate(DecideFrameGate(ValidateFrame(frame, nil, ""), true), &frame, workItemTupleFamilyPolicyForTest(QuestionFamilyScopedCohortStatus), TimeContext{Axis: TemporalCurrent}),
+		WinningSample: FamilySample{ScopeAnchorKind: SubjectProject, ScopeAnchorTerm: "Project"},
+	}
+	if outcome.Gate.Outcome != FrameGatePassed {
+		t.Fatalf("fixture failed to produce an admitted survey gate: %+v", outcome.Gate)
+	}
+	payload := workItemTuplePayloadFixture(t)
+	graph := &dispatchGraphProbe{graphReaderStub: graphReaderStub{resolution: payload.SubjectResolution, bases: provenCommitBases(payload.SubjectResolution.Committed...)}}
+	gate, err := NewWorkItemMembershipGate(1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	membershipReads, factReads := 0, 0
+	store := &staticResultStore{results: map[string]InvestigationResult{}, states: map[string]*PersistedSemanticState{}}
+	principal := storage.Principal{OrgID: "org-1"}
+	nextID := 0
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: familyInterpreter{interpreted: InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "survey", TimeContext: TimeContext{Axis: TemporalCurrent}, WindowClass: WindowClassTrendAssessment, FactRequirements: []FactRequirement{{Kind: FactStatus}}}, outcome: outcome},
+		Graph:       graph,
+		CandidateVerifier: func(context.Context, storage.Principal, RequestedScope, ResolvedGraphBinding, SubjectKind, string) (bool, CandidateVerificationReason) {
+			return true, ""
+		},
+		WorkItemMembership: tupleMembershipFunc(func(ctx context.Context, _ storage.Principal, _ WorkItemMembershipRequest) (*WorkItemMembershipLease, WorkItemMembershipResult, error) {
+			membershipReads++
+			lease, err := gate.Acquire(ctx)
+			return lease, WorkItemMembershipResult{
+				Census:  WorkItemMembershipCensus{State: WorkItemMembershipCensusExact, PopulationMeasured: true, AuthorizedPopulation: 1},
+				Members: []WorkItemMembershipMember{{CanonicalID: payload.Cohort.Members[0].Subject.CanonicalID, WorkItemID: "work-1"}},
+			}, err
+		}),
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			factReads++
+			return CanonicalFactBundle{Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Version: "ops-v1"}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			return InvestigationResult{Status: InvestigationComplete, DirectJudgment: "Available work items.", CurrentState: "Available work items.", DeterministicAnswer: "Available work items.", StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{}, Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{}, ClaimedFacts: []ClaimedFact{}, Warnings: []string{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, Versions: VersionSet{Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1", InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1"}}, nil
+		}),
+		Results:      store,
+		Requirements: registryDeriver{},
+	}, EngineOptions{ServiceVersion: "test", NewResultID: func() string {
+		nextID++
+		if nextID == 1 {
+			return "result_5787_legacy_t1"
+		}
+		return "result_5787_legacy_t2"
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t1Request := validInvestigationRequest()
+	t1Request.RequestID = "request_5787_legacy_t1"
+	t1, err := engine.Investigate(context.Background(), principal, t1Request)
+	if err != nil {
+		t.Fatalf("t1 Investigate() error = %v", err)
+	}
+	if t1.Status != InvestigationClarificationRequired || t1.WindowClarification == nil || len(t1.WindowClarification.Options) == 0 {
+		t.Fatalf("fixture defect: t1 did not raise the window need: status=%s", t1.Status)
+	}
+	if store.saved == nil || store.savedSemantic == nil || store.savedSemantic.State == nil {
+		t.Fatalf("fixture defect: t1 saved no result/semantic state")
+	}
+	store.results[t1.ResultID] = *store.saved
+	store.states[t1.ResultID] = store.savedSemantic.State
+
+	// SIMULATE A ROW THIS ARM'S OWN RULE WROTE DIRECTLY ONTO THE PERSISTED
+	// FRAME: strip ranking from the stored frame's own Obligations, exactly
+	// what the settled admission's obligation-omission rule removes from
+	// the plan today -- applied here to the FRAME instead, the one other
+	// legitimate shape carriedWorkItemTupleLegacyFrame exists to recognize.
+	legacyFrame := store.states[t1.ResultID].Frame
+	kept := legacyFrame.Obligations[:0:0]
+	for _, obligation := range legacyFrame.Obligations {
+		if obligation != ObligationRanking {
+			kept = append(kept, obligation)
+		}
+	}
+	legacyFrame.Obligations = kept
+	if legacyFrame.HasObligation(ObligationRanking) {
+		t.Fatalf("fixture defect: legacy frame still carries ranking")
+	}
+
+	var option contractsv1.ContextFabricWindowOption
+	for _, candidate := range t1.WindowClarification.Options {
+		if candidate.RelativeID == RelativeWindowTrailing90D {
+			option = candidate
+			break
+		}
+	}
+	if option.ReceiptID == "" {
+		option = t1.WindowClarification.Options[0]
+	}
+
+	t2Request := validInvestigationRequest()
+	t2Request.RequestID = "request_5787_legacy_t2"
+	t2Request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: t1.ResultID, ReceiptID: option.ReceiptID}}
+	t2, err := engine.Investigate(context.Background(), principal, t2Request)
+	if err != nil {
+		t.Fatalf("t2 Investigate() error = %v", err)
+	}
+	t.Logf("t2 status=%s refusal_basis=%s", t2.Status, t2.RefusalBasis)
+	if t2.RefusalBasis != "" {
+		t.Fatalf("t2 refusal_basis = %q, want none -- a legacy persisted frame must still compose", t2.RefusalBasis)
+	}
+	if t2.Status == InvestigationClarificationRequired {
+		t.Fatalf("t2 status = %s, want a served answer", t2.Status)
+	}
+	if membershipReads != 1 || factReads != 1 {
+		t.Fatalf("t2 did not dispatch: membership=%d facts=%d, want 1,1", membershipReads, factReads)
+	}
+}

@@ -236,6 +236,26 @@ type compositionInput struct {
 	// arm-agnostic while still answering correctly for the one arm that
 	// needs more than DecideFrameGate can decide alone.
 	CarriedGateOverride *FrameGate
+	// CarriedLegacyFrame is a SECOND candidate for the carried frame, tried
+	// only when the carried frame itself fails the canonical check. Nil
+	// means "none supplied": the boundary's canonical check is exactly what
+	// it always was, unaffected for a caller that never sets it.
+	//
+	// IT EXISTS FOR ONE REASON: revalidation compares a carried frame
+	// against WHAT TODAY'S RULES WOULD PRODUCE, and a caller-owned arm can
+	// legitimately record a DIFFERENT, EQUALLY VALID shape for a row its
+	// own obligation-omission rule governs (work_item_tuple_admission.go
+	// names the rule and the one obligation it can omit). Nothing here is
+	// malformed, and there is no format-version gate to migrate such a row
+	// through -- semantic-state.v1 carries both shapes, indistinguishably,
+	// by design. Refusing a row in the shape that rule can legitimately
+	// produce breaks every conversation carrying it, permanently. The
+	// CALLER computes the one alternate shape ITS OWN arm can legitimately
+	// have recorded and hands it over as a plain frame; this boundary
+	// revalidates it through the IDENTICAL path as the primary candidate,
+	// never a relaxed one, and composes from whichever one actually
+	// re-derives to itself.
+	CarriedLegacyFrame *QuestionFrame
 }
 
 // composeAcceptedContext establishes the carried reading as this turn's
@@ -305,6 +325,19 @@ func composeAcceptedContext(in compositionInput) AcceptedContext {
 	// from the carried frame means today's rules would reinterpret it.
 	recorded := cloneFrame(*carried.Frame)
 	result := ValidateFrame(recorded, recorded.WidenedObligations, carried.Validation.EmittedShape)
+	if result.Outcome == FrameValidationOutcomeValid && !framesEqual(result.Frame, recorded) && in.CarriedLegacyFrame != nil {
+		// THE SECOND CANDIDATE, tried ONLY on the canonical-check failure
+		// this field exists for -- see CarriedLegacyFrame's own doc
+		// comment. Revalidated through the IDENTICAL path as the primary
+		// candidate above; a legacy candidate that itself fails to
+		// re-derive changes nothing here, and the primary's own result
+		// stands.
+		legacyRecorded := cloneFrame(*in.CarriedLegacyFrame)
+		legacyResult := ValidateFrame(legacyRecorded, legacyRecorded.WidenedObligations, carried.Validation.EmittedShape)
+		if legacyResult.Outcome == FrameValidationOutcomeValid && framesEqual(legacyResult.Frame, legacyRecorded) {
+			result, recorded = legacyResult, legacyRecorded
+		}
+	}
 	gate := DecideFrameGate(result, true)
 	// THE ONE SUBSTITUTION THIS BOUNDARY MAKES, AND IT IS THE CALLER'S
 	// VERDICT, NEVER THIS BOUNDARY'S OWN DERIVATION OF ONE. See

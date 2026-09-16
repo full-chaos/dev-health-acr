@@ -236,6 +236,32 @@ func carriedWorkItemTupleGateOverride(carried *PersistedSemanticState, timeConte
 	return &tightened
 }
 
+// carriedWorkItemTupleLegacyFrame is the composition boundary's
+// CarriedLegacyFrame for exactly one carried shape: a work-item tuple's own
+// frame with ObligationRanking already absent. Nil for every other carried
+// shape, and nil when the carried frame already carries ranking -- there is
+// nothing to reconstruct.
+//
+// This arm's own obligation-omission rule (workItemTupleEffectiveObligations)
+// removes ONLY ObligationRanking, and only from the PLAN's copy, never the
+// persisted frame -- but a settled admission that omitted it from the
+// persisted frame directly is the SAME arm's own rule, applied to the frame
+// instead of the plan. That is a legitimate shape this arm can have
+// produced, on a rule this file still owns; the composition boundary just
+// cannot tell it apart from a corrupted frame on its own. Restoring
+// ObligationRanking and letting the boundary's own revalidation decide
+// whether THAT reconstruction re-derives to itself is the whole function --
+// this never invents a shape the arm could not have produced, and never
+// substitutes a repair the boundary would not independently confirm.
+func carriedWorkItemTupleLegacyFrame(carried *PersistedSemanticState) *QuestionFrame {
+	if carried == nil || !carried.FramePresent || carried.Frame == nil || !workItemTupleInScope(carried.Frame) || carried.Frame.HasObligation(ObligationRanking) {
+		return nil
+	}
+	legacy := cloneFrame(*carried.Frame)
+	legacy.Obligations = sortedObligations(append(append([]AnswerObligation(nil), legacy.Obligations...), ObligationRanking))
+	return &legacy
+}
+
 // workItemTupleInScope reports whether frame is this arm's structural
 // concern at all -- children_of_scope over work_item -- independent of
 // whether it ends up admitted. This is the ONE condition
