@@ -40,7 +40,10 @@ func TestDefaultSynthesisPromptVersionBumpedForModelFacingFactsChange(t *testing
 	// conjunctive reuse-key dimension.
 	// v15 -> v16: the prompt gained the score_meaning/judgment_mismatch
 	// paragraph, for the same conjunctive-reuse-key reason.
-	const wantVersion = "context-fabric-synthesis.v16"
+	// v16 -> v17: that paragraph's superlative-terms list is now
+	// interpolated from the same closed vocabulary the structural guard
+	// enforces, changing the rendered bytes again.
+	const wantVersion = "context-fabric-synthesis.v17"
 	if DefaultSynthesisPromptVersion != wantVersion {
 		t.Fatalf("DefaultSynthesisPromptVersion = %q, want %q (moved off the pre-CHAOS-4355-follow-up v12 value now that modelFacingFacts changes the prompt payload)", DefaultSynthesisPromptVersion, wantVersion)
 	}

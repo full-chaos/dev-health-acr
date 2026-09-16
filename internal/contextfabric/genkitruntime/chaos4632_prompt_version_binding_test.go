@@ -91,7 +91,10 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// DefaultSynthesisPromptVersion's own doc comment.
 			// v15 -> v16 (CHAOS-5774): the score_meaning/judgment_mismatch
 			// paragraph. See DefaultSynthesisPromptVersion's own doc comment.
-			digest: "cfafbe1cdba939890b58c5272d640fd484413d7c60833165653fdb8bfd1a3e7d",
+			// v16 -> v17: that paragraph's superlative-terms parenthetical is
+			// now interpolated. See DefaultSynthesisPromptVersion's own doc
+			// comment.
+			digest: "36ae017377295737ac307c68a837e305188fa0b3e7c1f73a0ffb59e6cff37792",
 		},
 		{
 			name:    "interpretation model-output schema",

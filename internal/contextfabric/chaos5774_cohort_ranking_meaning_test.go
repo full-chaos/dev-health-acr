@@ -144,17 +144,55 @@ func unrankableMemberFixture() (SynthesisInput, SynthesisDraft, SubjectRef, Subj
 	return input, draft, qualified, unrankable
 }
 
+// superlativeTermCase names one term from CohortSuperlativeJudgmentTerms and
+// a driver title that uses it about the fixture's own "Unrankable"/
+// "Qualified" subject. Shared by both domain-coverage tests below so
+// assertCoversCohortSuperlativeJudgmentTerms can check each against the
+// SAME guard vocabulary the production code reads.
+type superlativeTermCase struct {
+	name  string
+	title string
+}
+
+// assertCoversCohortSuperlativeJudgmentTerms fails the test unless cases
+// names exactly CohortSuperlativeJudgmentTerms (order-independent) -- so a
+// future term added to that one guard/prompt vocabulary cannot ship without
+// its own domain cell in both the reject-side and allow-side table here.
+func assertCoversCohortSuperlativeJudgmentTerms(t *testing.T, cases []superlativeTermCase) {
+	t.Helper()
+	got := make(map[string]bool, len(cases))
+	for _, c := range cases {
+		got[c.name] = true
+	}
+	want := make(map[string]bool, len(CohortSuperlativeJudgmentTerms))
+	for _, term := range CohortSuperlativeJudgmentTerms {
+		want[term] = true
+	}
+	if len(got) != len(want) {
+		t.Fatalf("case names = %d, CohortSuperlativeJudgmentTerms = %d -- every guard term needs its own domain cell here", len(got), len(want))
+	}
+	for term := range want {
+		if !got[term] {
+			t.Fatalf("no domain cell for guard term %q", term)
+		}
+	}
+}
+
 func TestValidateAgainstRejectsSuperlativeAboutInsufficientEvidenceMember(t *testing.T) {
 	t.Parallel()
-	cases := []struct {
-		name  string
-		title string
-	}{
+	cases := []superlativeTermCase{
 		{"strongest", "Unrankable is the provisional strongest team"},
-		{"weakest", "Unrankable ranks last, the weakest team"},
+		{"weakest", "Unrankable is provisionally the weakest team"},
 		{"best", "Unrankable is the best team in this cohort"},
 		{"worst", "Unrankable is the worst performer"},
+		{"highest", "Unrankable shows the highest attention pressure"},
+		{"lowest", "Unrankable shows the lowest attention pressure"},
+		{"top", "Unrankable is the top team in this cohort"},
+		{"bottom", "Unrankable is at the bottom of this cohort"},
+		{"first", "Unrankable ranks first in this cohort"},
+		{"last", "Unrankable ranks last in this cohort"},
 	}
+	assertCoversCohortSuperlativeJudgmentTerms(t, cases)
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -175,14 +213,32 @@ func TestValidateAgainstRejectsSuperlativeAboutInsufficientEvidenceMember(t *tes
 // TestValidateAgainstAllowsSuperlativeAboutAQualifiedMember is the scope
 // control: the rule is about a member the formula could NOT score, never
 // about disagreeing with a superlative over a member that DOES have a real
-// attention position.
+// attention position -- covering every guard term, not just one.
 func TestValidateAgainstAllowsSuperlativeAboutAQualifiedMember(t *testing.T) {
 	t.Parallel()
-	input, draft, qualified, _ := unrankableMemberFixture()
-	draft.Drivers[0].AffectedSubjects = []SubjectRef{qualified}
-	draft.Drivers[0].Title = "Qualified is the strongest attention signal in this cohort"
-	if err := draft.ValidateAgainst(input); err != nil {
-		t.Fatalf("ValidateAgainst() error = %v, want a superlative about a QUALIFIED member to be admitted", err)
+	cases := []superlativeTermCase{
+		{"strongest", "Qualified is the strongest attention signal in this cohort"},
+		{"weakest", "Qualified is provisionally the weakest attention signal here"},
+		{"best", "Qualified is the best-supported attention signal in this cohort"},
+		{"worst", "Qualified shows the worst attention pressure in this cohort"},
+		{"highest", "Qualified shows the highest attention pressure in this cohort"},
+		{"lowest", "Qualified shows the lowest attention pressure in this cohort"},
+		{"top", "Qualified is the top attention signal in this cohort"},
+		{"bottom", "Qualified is at the bottom of this cohort's attention ranking"},
+		{"first", "Qualified ranks first in this cohort's attention ranking"},
+		{"last", "Qualified ranks last in this cohort's attention ranking"},
+	}
+	assertCoversCohortSuperlativeJudgmentTerms(t, cases)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			input, draft, qualified, _ := unrankableMemberFixture()
+			draft.Drivers[0].AffectedSubjects = []SubjectRef{qualified}
+			draft.Drivers[0].Title = c.title
+			if err := draft.ValidateAgainst(input); err != nil {
+				t.Fatalf("ValidateAgainst() error = %v, want a superlative about a QUALIFIED member to be admitted", err)
+			}
+		})
 	}
 }
 

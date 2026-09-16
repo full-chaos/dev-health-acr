@@ -397,7 +397,13 @@ const (
 	// before the model was ever told to read those fields must not satisfy a
 	// reuse lookup as though it were generated under the new prompt (same
 	// standing rule as v6-v15 above).
-	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v16"
+	// v16 -> v17: the superlative-terms parenthetical in that same paragraph
+	// is now interpolated from contextfabric.CohortSuperlativeJudgmentTerms
+	// (six more ordinal-position terms the structural guard already refused
+	// but the prompt's own hand-typed list never named), so the model-facing
+	// bytes changed even though the paragraph's surrounding prose did not --
+	// same standing rule as every prior bump above.
+	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v17"
 	// DefaultSchemaVersion is the genkit MODEL-OUTPUT JSON SCHEMA version
 	// -- ONE value shared by both the interpret and synthesize calls
 	// (Config carries a single SchemaVersion field, not a per-operation

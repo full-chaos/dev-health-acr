@@ -64,27 +64,34 @@ func applyCohortJudgmentMismatch(cohort *Cohort, requestedJudgmentKind Requested
 	cohort.JudgmentMismatch = !scoreMeaningSupportsJudgmentKind(cohort.ScoreMeaning, requestedJudgmentKind)
 }
 
-// cohortSuperlativeJudgmentTerms is the CLOSED, fixed set of ranking
-// superlatives requireNoSuperlativeClaimOverUnrankableMember refuses over an
-// unrankable member. Not an invented pattern-match: these are the exact
-// words this codebase's own AnswerEmphasis vocabulary already names a
-// ranking's two ends with (frame_vocab.go: EmphasisPositiveOutliers "the
-// strong end", EmphasisNegativeOutliers "the weak end") plus their ordinary
-// English synonyms, so the list is the system's own existing ranking
-// vocabulary, never a phrase fitted to one team, question, or dataset.
-var cohortSuperlativeJudgmentTerms = []string{
-	"strongest",
-	"weakest",
-	"best",
-	"worst",
+// CohortSuperlativeJudgmentTerms is the CLOSED, fixed set of ranking
+// superlative/ordinal-position terms requireNoSuperlativeClaimOverUnrankableMember
+// refuses over an unrankable member. Exported so genkitruntime's synthesis
+// prompt can render this SAME list as the terms it tells the model never to
+// use there -- one constant read by both the guard and the prompt, so they
+// cannot list different words. Not an invented pattern-match: strongest/
+// weakest and best/worst are the exact words this codebase's own
+// AnswerEmphasis vocabulary already names a ranking's two ends with
+// (frame_vocab.go: EmphasisPositiveOutliers "the strong end",
+// EmphasisNegativeOutliers "the weak end"); highest/lowest, top/bottom, and
+// first/last are their ordinary ordinal-position synonyms -- the system's
+// own existing ranking vocabulary, never a phrase fitted to one team,
+// question, or dataset.
+var CohortSuperlativeJudgmentTerms = []string{
+	"strongest", "weakest",
+	"best", "worst",
+	"highest", "lowest",
+	"top", "bottom",
+	"first", "last",
 }
 
 // requireNoSuperlativeClaimOverUnrankableMember is the structural backstop
 // SynthesisDraft.ValidateAgainst calls for every model-authored driver: a
 // driver whose affected_subjects cite a cohort member the ranking
 // formula could NOT score (Outcome insufficient_evidence or not_applicable)
-// must never use a ranking superlative (best/worst/strongest/weakest, or any
-// case/word-boundary variant) in its own title or summary. The prompt
+// must never use a ranking superlative (any term in
+// CohortSuperlativeJudgmentTerms, in any case, matched as a whole word) in
+// its own title or summary. The prompt
 // (genkitruntime's synthesisSystemPrompt) states this rule too, but a
 // deterministic guard applies even if a future prompt regresses -- the same
 // "guard, not the prompt, is what actually enforces this" discipline
@@ -114,7 +121,7 @@ func requireNoSuperlativeClaimOverUnrankableMember(driver DriverJudgment, cohort
 		return nil
 	}
 	text := strings.ToLower(driver.Title + " " + driver.Summary)
-	for _, term := range cohortSuperlativeJudgmentTerms {
+	for _, term := range CohortSuperlativeJudgmentTerms {
 		if containsWord(text, term) {
 			return rejectSynthesis(RejectionReasonDriverSuperlativeOverUnrankableMember,
 				"driver uses a ranking superlative about a cohort member the ranking formula could not score (outcome insufficient_evidence/not_applicable)")
