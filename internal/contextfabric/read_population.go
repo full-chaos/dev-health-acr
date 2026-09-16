@@ -103,6 +103,14 @@ type readPopulationEvidence struct {
 	// evaluator with Present false is a CALLER DEFECT: it emits no row and
 	// logs, rather than guessing a population.
 	Present bool
+	// KindsWithFacts is which declared fact kinds this evidence can prove
+	// retained at least one fact -- evaluateReadRequirement's own
+	// kindsWithFacts, threaded through this struct rather than as a second
+	// parameter because every caller already builds and passes one of these.
+	// See evaluateReadRequirement's doc comment for why a TRUNCATED source
+	// needs this to be told apart from one the registry's bundle-wide cap
+	// sliced down to nothing.
+	KindsWithFacts map[FactKind]bool
 	// coverage is the per-subject read record: subject key -> kind -> worst
 	// observed state.
 	coverage map[string]map[FactKind]SourceState
@@ -516,6 +524,7 @@ func readPopulationEvidenceFrom(
 ) readPopulationEvidence {
 	evidence := readPopulationEvidence{
 		Present:             true,
+		KindsWithFacts:      factKindsWithFacts(facts.Facts),
 		coverage:            subjectReadCoverage(facts),
 		memberPopulation:    cohortMemberPopulation(result.Cohort, cardinality),
 		groupPopulation:     cohortGroupPopulation(result.Cohort, plan.Narrowing),

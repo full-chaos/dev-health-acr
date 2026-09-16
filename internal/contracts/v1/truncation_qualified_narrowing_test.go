@@ -12,10 +12,15 @@ package v1
 // row.
 //
 // This file also pins the OTHER direction: a `narrowed` row that served NONE
-// of a truncated, fact-bearing source is a contradiction and is refused --
-// but only that exact shape. A population-scope zero (read_population.go's
+// of a truncated source is LEGAL, not a contradiction -- the registry's own
+// bundle-wide cap can slice a provider's result to zero retained facts and
+// still mint the truncated state, and the read evaluator only credits
+// Served for a truncated kind it can PROVE retained a fact
+// (read_requirement_evaluation.go's TruncatedKindsWithFacts), so every zero
+// it emits is honest. A population-scope zero (read_population.go's
 // zero-of-N-committed arms) and a planner-narrowing zero (a kind the plan
-// itself narrowed to nothing) are different mechanisms, and both stay legal.
+// itself narrowed to nothing) are different mechanisms again, and all three
+// stay legal.
 
 import (
 	"strings"
@@ -179,93 +184,31 @@ func TestTheTruncationExceptionIsScopedToTheAssembledResultStage(t *testing.T) {
 	}
 }
 
-// TestANarrowedRowServingNoneOfAnObservedTruncationIsRefused is the mirror
-// rule: an observed, fact-bearing truncation reported as
-// `narrowed 0/N` is a contradiction, and the wire refuses it.
-func TestANarrowedRowServingNoneOfAnObservedTruncationIsRefused(t *testing.T) {
+// TestANarrowedRowServingNoneOfAnObservedTruncationIsNowLegal: an observed,
+// fact-bearing-BY-STATE truncation reported as `narrowed 0/N` is legal, not
+// a contradiction. The registry's own bundle-wide cap can slice a
+// provider's result to nothing and still mint SourceTruncated for it, and
+// the read evaluator only credits Served for a truncated kind it can PROVE
+// retained a fact (read_requirement_evaluation.go's TruncatedKindsWithFacts
+// / factBearingKinds) -- so a zero here is always honest, never a claim
+// about facts nobody received.
+func TestANarrowedRowServingNoneOfAnObservedTruncationIsNowLegal(t *testing.T) {
 	t.Parallel()
 	row := truncationQualifiedRow()
 	row.Served = 0
-
-	err := ValidateContextFabricPlanRequirementOutcomeRow(row)
-	if err == nil {
-		t.Fatal("a narrowed row over an observed, fact-bearing truncation with Served == 0 was accepted")
-	}
-	if !strings.Contains(err.Error(), "unavailable, not narrowed") {
-		t.Fatalf("rejected for the wrong reason: %v (want the zero-served rule)", err)
-	}
-}
-
-// TestTheZeroServedRefusalRequiresNoNarrowingBasisBesideTheTruncationCause and
-// TestTheZeroServedRefusalRequiresNoOverrunBesideTheTruncationCause pin the
-// refusal rule's own "OTHER two cause fields, empty" conjuncts: a row naming
-// a second reduction mechanism beside the truncation cause is a different,
-// malformed shape from the one this rule refuses, and this rule must not
-// reach for it -- exactly the same discipline truncationQualified's own
-// admission applies to the same two fields.
-func TestTheZeroServedRefusalRequiresNoNarrowingBasisBesideTheTruncationCause(t *testing.T) {
-	t.Parallel()
-	row := truncationQualifiedRow()
-	row.Served = 0
-	row.CauseNarrowing = ContextFabricNarrowingBasisCanonicalIDLexical
 
 	if err := ValidateContextFabricPlanRequirementOutcomeRow(row); err != nil {
-		t.Fatalf("a zero-served row also naming a narrowing basis was refused by the truncation rule: %v", err)
+		t.Fatalf("a narrowed row over an observed, fact-bearing-by-state truncation with Served == 0 was refused: %v", err)
 	}
 }
 
-func TestTheZeroServedRefusalRequiresNoOverrunBesideTheTruncationCause(t *testing.T) {
-	t.Parallel()
-	row := truncationQualifiedRow()
-	row.Served = 0
-	row.CauseOverrun = ContextFabricBudgetOverrunItems
-
-	if err := ValidateContextFabricPlanRequirementOutcomeRow(row); err != nil {
-		t.Fatalf("a zero-served row also naming a budget overrun was refused by the truncation rule: %v", err)
-	}
-}
-
-// TestTheZeroServedRefusalRequiresDepthNotScope: a population-scope zero
-// (Impact: scope) is the CENSUS shape's territory, not this rule's, even
-// with an otherwise-matching cause -- see
-// TestAZeroServedNarrowedRowIsStillLegalOutsideTheTruncationShape for why a
-// scope row needs no truncation cause at all to stay legal; this pins the
-// conjunct directly, isolated from every other difference.
-func TestTheZeroServedRefusalRequiresDepthNotScope(t *testing.T) {
-	t.Parallel()
-	row := truncationQualifiedRow()
-	row.Served = 0
-	row.Impact = ContextFabricAnswerImpactScope
-
-	if err := ValidateContextFabricPlanRequirementOutcomeRow(row); err != nil {
-		t.Fatalf("a zero-served scope-impact row was refused by the depth-only truncation rule: %v", err)
-	}
-}
-
-// TestTheZeroServedRefusalRequiresAnObservedCause: a DEFAULTED
-// `fact_provider_reported` code -- nothing reported it, the evaluator merely
-// carries the shipped default -- must not be read as the observed
-// contradiction this rule refuses.
-func TestTheZeroServedRefusalRequiresAnObservedCause(t *testing.T) {
-	t.Parallel()
-	row := truncationQualifiedRow()
-	row.Served = 0
-	row.CauseObserved = false
-
-	if err := ValidateContextFabricPlanRequirementOutcomeRow(row); err != nil {
-		t.Fatalf("a zero-served row with a DEFAULTED cause was refused by the observed-cause-only truncation rule: %v", err)
-	}
-}
-
-// TestAZeroServedNarrowedRowIsStillLegalOutsideTheTruncationShape is the
-// NEGATIVE CONTROL for the rule above: the refusal names ONE producer shape
-// as the contradiction, not every zero-served narrowed row. A
-// population-scope zero (the shape read_population.go's own
-// zero-of-N-committed arms emit) is a different mechanism -- no source was
-// truncated, nothing here claims a fact-bearing read -- and stays legal.
-// Without this control, the rule above could have been written as a blanket
-// "narrowed forbids Served == 0" and it would still pass its own positive
-// test while silently refusing shapes it was never meant to reach.
+// TestAZeroServedNarrowedRowIsStillLegalOutsideTheTruncationShape covers the
+// other zero-served narrowed shapes this package has never refused: a
+// population-scope zero (read_population.go's zero-of-N-committed arms) and
+// a planner-narrowing zero (a kind the plan itself narrowed to nothing).
+// Kept as its own test (rather than folded into the one above) because the
+// three shapes are produced by three different mechanisms and a reader
+// should be able to find each one's own coverage.
 func TestAZeroServedNarrowedRowIsStillLegalOutsideTheTruncationShape(t *testing.T) {
 	t.Parallel()
 	row := ContextFabricPlanRequirementOutcomeRow{

@@ -101,15 +101,39 @@ type readEvidence struct {
 	Failed    int
 	// TruncatedKinds are WHICH kinds counted Truncated above, in the
 	// requirement's own declared order -- ServedKinds' twin for the one
-	// other state that returns real facts.
+	// other state that CAN return real facts.
 	//
-	// A truncated source is NOT a lost one: the fact registry drops
+	// A truncated source is NOT a lost one BY STATE: the fact registry drops
 	// over-budget facts and marks the source truncated rather than failing
 	// the read, "because a partial, explicitly-truncated answer is the
-	// honest outcome" (see the fact-bearing comment below). So a truncated
-	// kind belongs beside ServedKinds when the row states how much a
-	// narrowed requirement actually served -- see factBearingKinds.
+	// honest outcome" -- and the outcome token this file publishes is keyed
+	// on the STATE alone (never `unavailable` for a state that can carry
+	// facts), never on whether THIS read actually retained any. That is
+	// TruncatedKindsWithFacts' job, not this field's: see its own doc
+	// comment for the case a truncated state does not settle.
 	TruncatedKinds []FactKind
+	// TruncatedKindsWithFacts is the SUBSET of TruncatedKinds this evaluator
+	// can prove actually retained at least one fact (evaluateReadRequirement's
+	// kindsWithFacts parameter, consulted here and only here).
+	//
+	// WHY A SUBSET, NOT A REDEFINITION OF TruncatedKinds ITSELF. The
+	// registry's own bundle-wide cap (fact_registry.go's
+	// mergeFactProviderResult) can slice a provider's result down to ZERO
+	// retained facts and still mint SourceTruncated for it: truncation says
+	// a limit was hit, not that anything survived it. Excluding a
+	// zero-retained kind from TruncatedKinds itself would make the OUTCOME
+	// token depend on a fact count this evaluator's own governing rule
+	// (TestFactBearingAgreesWithTheRegistrysOwnRule) says it must never
+	// depend on -- a truncated state is fact-bearing BY TYPE and must never
+	// read `unavailable`, whether or not this particular read kept anything.
+	// So TruncatedKinds stays total over every truncated kind for the
+	// OUTCOME/bearing decision, and this narrower set exists for the one
+	// place retained facts DO matter: how much the row's own SERVED COUNT
+	// claims to have delivered (factBearingKinds). A truncated kind that
+	// kept nothing is still narrowed, never unavailable -- it is just
+	// narrowed at zero, honestly, rather than credited for facts nobody
+	// received.
+	TruncatedKindsWithFacts []FactKind
 	// Pruned counts pruned observations FOR ONE PURPOSE ONLY: to tell "the
 	// turn planned nothing that could serve this cell" apart from "everything
 	// it planned was pruned". Those are different answers and they had
@@ -154,7 +178,29 @@ const canonicalFactSourcePrefix = "canonical_fact:"
 // retrieval, not a declared fact read, and attributing one to a read
 // requirement would be the wrong attribution appendProjectionOutcomes already
 // refuses to make.
-func evaluateReadRequirement(requirement contractsv1.ContextFabricPlanRequirement, coverage Coverage) readEvidence {
+//
+// kindsWithFacts is WHICH declared kinds the caller can prove retained at
+// least one fact, from whatever source of facts is authoritative at the
+// call site (the bundle a fresh turn just read, or the served document's
+// own claimed facts on a reuse). It exists for exactly one branch below: a
+// TRUNCATED source is not automatically fact-bearing. The registry's own
+// bundle-wide cap (fact_registry.go's mergeFactProviderResult) can slice a
+// provider's result down to ZERO retained facts and still mint
+// SourceTruncated for it -- truncation says a limit was hit, not that
+// anything survived it. ContextFabricSourceObservation carries no per-kind
+// fact count, so this file cannot tell the two cases apart from `coverage`
+// alone; kindsWithFacts is the caller-supplied answer to exactly that
+// question, checked ONLY for kinds this function would otherwise credit as
+// Truncated. A nil map credits nothing (fail closed: an unproven kind is
+// dropped to Failed) -- see the two production callers for the real
+// membership tests.
+//
+// KIND-LEVEL ONLY, matching every other membership test in this function
+// (states, ObservedKinds, ServedKinds): a distributive requirement's
+// per-subject accounting is the population layer's job, not this one's, and
+// a kind check here would not know which subject the population layer is
+// asking about anyway.
+func evaluateReadRequirement(requirement contractsv1.ContextFabricPlanRequirement, coverage Coverage, kindsWithFacts map[FactKind]bool) readEvidence {
 	states := make(map[FactKind]SourceState, len(requirement.FactKinds))
 	for _, observation := range coverage.Sources {
 		kind, ok := canonicalFactKindOf(observation.Source)
@@ -283,6 +329,9 @@ func evaluateReadRequirement(requirement contractsv1.ContextFabricPlanRequiremen
 		case state == SourceTruncated:
 			evidence.Truncated++
 			evidence.TruncatedKinds = append(evidence.TruncatedKinds, kind)
+			if kindsWithFacts[kind] {
+				evidence.TruncatedKindsWithFacts = append(evidence.TruncatedKindsWithFacts, kind)
+			}
 		default:
 			evidence.Failed++
 		}
@@ -331,6 +380,41 @@ func canonicalFactKindOf(source string) (FactKind, bool) {
 		return "", false
 	}
 	return FactKind(rest), true
+}
+
+// factKindsWithFacts is evaluateReadRequirement's kindsWithFacts, built from
+// the bundle a FRESH turn just read. It exists so a truncated source that
+// the registry sliced down to zero retained facts is never credited as
+// fact-bearing (see evaluateReadRequirement's own doc comment) -- membership
+// is exactly "at least one fact of this kind exists in the bundle", which is
+// the same test the registry's own F1 grain-composition rule already applies
+// one layer down ("'contributing' means FACTS RETAINED, not
+// State == SourceAvailable", fact_registry.go).
+func factKindsWithFacts(facts []CanonicalFact) map[FactKind]bool {
+	if len(facts) == 0 {
+		return nil
+	}
+	kinds := make(map[FactKind]bool, len(facts))
+	for _, fact := range facts {
+		kinds[fact.Kind] = true
+	}
+	return kinds
+}
+
+// claimedFactKinds is factKindsWithFacts' twin for a REUSED answer, which
+// re-reads nothing: the served document's own ClaimedFacts are the
+// authoritative record of what it actually carries, the same record
+// servedRequirementFactCount already reads for the SAME question one layer
+// up (requirement_outcome_reconciliation.go).
+func claimedFactKinds(claims []ClaimedFact) map[FactKind]bool {
+	if len(claims) == 0 {
+		return nil
+	}
+	kinds := make(map[FactKind]bool, len(claims))
+	for _, claim := range claims {
+		kinds[claim.Kind] = true
+	}
+	return kinds
 }
 
 // sourceStateSeverity orders the source states from "served in full" to
@@ -504,7 +588,7 @@ func appendReadRequirementEvaluationsWithCover(
 		if !known {
 			continue
 		}
-		row, ok, cover := readRequirementOutcomeRow(requirement, threshold, evaluateReadRequirement(requirement, coverage), populations)
+		row, ok, cover := readRequirementOutcomeRow(requirement, threshold, evaluateReadRequirement(requirement, coverage, populations.KindsWithFacts), populations)
 		// The cover line is collected whether or not a row is published: a
 		// withheld row names its reason on the line (RowWithheld).
 		if cover != nil {
@@ -615,34 +699,42 @@ func servedObservationCover(evidence readEvidence, subject SubjectKind, assignme
 	return taintedObservationCoverOf(evidence.ServedKinds, evidence, subject, assignment)
 }
 
-// factBearingKinds is ServedKinds' broader sibling: every declared kind that
-// returned REAL FACTS, whether or not it served the requirement in full.
+// factBearingKinds is ServedKinds' broader sibling: every declared kind this
+// evaluator can PROVE returned at least one real fact, whether or not it
+// served the requirement in full.
 //
-// TRUNCATED KINDS JOIN SERVED KINDS HERE, and nowhere else. A truncated
-// source is one of the three states this file's own factBearing test already
-// names as "not `unavailable`" (see readRequirementOutcomeRow's own comment):
-// "the fact registry drops over-budget facts and marks the source truncated
-// RATHER THAN failing the read... a partial, explicitly-truncated answer is
-// the honest outcome". So a truncated kind is exactly as fact-bearing as a
-// served one -- it is excluded from ServedKinds only because it is not
-// served IN FULL, which is a question about the OUTCOME token (narrowed vs
-// satisfied), not about whether the row's own SERVED COUNT should read it as
-// zero facts.
+// A PROVEN-TRUNCATED KIND JOINS SERVED KINDS HERE -- TruncatedKindsWithFacts,
+// never the wider TruncatedKinds. A truncated source is one of the states
+// this file's own factBearing test already names as "not `unavailable`" (see
+// readRequirementOutcomeRow's own comment), but that rule is about the
+// OUTCOME TOKEN, decided by state-type alone (TestFactBearingAgreesWithThe
+// RegistrysOwnRule pins that a state which CAN carry facts must never read
+// `unavailable`, whatever this specific read actually kept). The SERVED
+// COUNT is a different question this function answers, and it is not
+// entitled to the same shortcut: the registry's own bundle-wide cap
+// (fact_registry.go's mergeFactProviderResult) can slice a provider's
+// result down to ZERO retained facts and still mint SourceTruncated for
+// it, so crediting every truncated kind here would claim a reader
+// received facts nobody served. A kind that TruncatedKindsWithFacts
+// cannot prove stays out of this cover, and
+// the row's Served count reads an honest zero for it (still `narrowed`,
+// never `unavailable` -- see TruncatedKinds' own doc comment for why the
+// two questions have two different answers on purpose).
 //
-// A NARROWED (planner-narrowed) kind is deliberately NOT included. It is a
-// different axis of loss -- the provider returned data for fewer SUBJECTS
-// than the plan asked for, which the population layer accounts for on its
-// own row (readPopulationOutcomeRow), not this one -- and a per-kind budget
-// cut is a different mechanism from a per-subject one.
+// A NARROWED (planner-narrowed) kind is deliberately NOT included either.
+// It is a different axis of loss -- the provider returned data for fewer
+// SUBJECTS than the plan asked for, which the population layer accounts for
+// on its own row (readPopulationOutcomeRow), not this one -- and a per-kind
+// budget cut is a different mechanism from a per-subject one.
 func factBearingKinds(evidence readEvidence) []FactKind {
-	if len(evidence.TruncatedKinds) == 0 {
+	if len(evidence.TruncatedKindsWithFacts) == 0 {
 		return evidence.ServedKinds
 	}
 	// Capacity covers ServedKinds; append grows the backing array for
-	// TruncatedKinds on its own.
+	// TruncatedKindsWithFacts on its own.
 	kinds := make([]FactKind, 0, len(evidence.ServedKinds))
 	kinds = append(kinds, evidence.ServedKinds...)
-	kinds = append(kinds, evidence.TruncatedKinds...)
+	kinds = append(kinds, evidence.TruncatedKindsWithFacts...)
 	return kinds
 }
 
@@ -1289,7 +1381,7 @@ func reusedObservationCoverEvents(result InvestigationResult, assignment observa
 		if !known {
 			continue
 		}
-		evidence := evaluateReadRequirement(requirement, result.Coverage)
+		evidence := evaluateReadRequirement(requirement, result.Coverage, claimedFactKinds(result.ClaimedFacts))
 		_, _, event := readRequirementCoverDecision(requirement, threshold, evidence, assignment)
 		switch {
 		case hasEvaluatedReadOutcome(result.Completeness.Outcomes, requirement.Requirement):

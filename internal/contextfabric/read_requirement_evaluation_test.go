@@ -169,6 +169,12 @@ func TestTheOutcomeRowFollowsTheEvidence(t *testing.T) {
 		wantObserved bool
 		wantServed   int
 		wantDeclared int
+		// kindsWithFacts is evaluateReadRequirement's own kindsWithFacts
+		// parameter, supplied only by the cases that mean to prove a
+		// truncated kind's Served credit -- every other case leaves it nil,
+		// which is the fail-closed default (an unproven truncated kind
+		// contributes nothing to Served, see TruncatedKindsWithFacts).
+		kindsWithFacts map[FactKind]bool
 		// wantRefinements is asserted on EVERY case, including the zero.
 		//
 		// A refinement is a before and an after with a named step between
@@ -195,7 +201,15 @@ func TestTheOutcomeRowFollowsTheEvidence(t *testing.T) {
 		{
 			name: "a truncated source narrows a met standard", quantifier: CompletionQuantifierAtLeastOne,
 			coverage: factCoverage(health, SourceAvailable, workload, SourceTruncated),
-			wantRow:  true, wantOutcome: contractsv1.ContextFabricRequirementNarrowed,
+			// PROVEN facts for the truncated kind too, deliberately: this
+			// case is the reach probe that a served kind ALREADY meeting the
+			// standard stops the truncated kind's own (proven) credit from
+			// inflating Served past the true shortfall -- wantServed stays 1
+			// of 2, never 2 of 2, because readRequirementCoverDecision's own
+			// gate only reaches for TruncatedKindsWithFacts when nothing
+			// else already served.
+			kindsWithFacts: map[FactKind]bool{workload: true},
+			wantRow:        true, wantOutcome: contractsv1.ContextFabricRequirementNarrowed,
 			wantImpact:   contractsv1.ContextFabricAnswerImpactDepth,
 			wantCause:    contractsv1.ContextFabricCoverageDetailFactProviderReported,
 			wantObserved: true, wantServed: 1, wantDeclared: 2,
@@ -297,10 +311,32 @@ func TestTheOutcomeRowFollowsTheEvidence(t *testing.T) {
 			quantifier: CompletionQuantifierAtLeastOne,
 			coverage: codedCoverage(contractsv1.ContextFabricCoverageDetailFactProviderReported,
 				health, health, SourceTruncated),
-			wantRow: true, wantOutcome: contractsv1.ContextFabricRequirementNarrowed,
+			kindsWithFacts: map[FactKind]bool{health: true},
+			wantRow:        true, wantOutcome: contractsv1.ContextFabricRequirementNarrowed,
 			wantImpact:   contractsv1.ContextFabricAnswerImpactDepth,
 			wantCause:    contractsv1.ContextFabricCoverageDetailFactProviderReported,
 			wantObserved: true, wantServed: 1, wantDeclared: 1, wantRefinements: 0,
+		},
+		{
+			// THE SECOND COMPLEMENT: the SAME truncated state, but this time
+			// kindsWithFacts does not prove the kind retained anything --
+			// exactly what the registry's own bundle-wide cap produces when
+			// it slices a provider's result to empty and still mints
+			// SourceTruncated (fact_registry.go's mergeFactProviderResult).
+			// Still `narrowed`, never `unavailable` (the outcome token is
+			// keyed on state alone, TestFactBearingAgreesWithTheRegistrysOwnRule),
+			// and Served is now an honest 0/1 -- WITH a refinement, unlike
+			// the equal-count case above: Before(1) -> After(0) is a real
+			// reduction step (ContextFabricReductionRefinement declines one
+			// only when Declared <= Served, which does not hold here).
+			name:       "a truncated read that retained nothing is narrowed at zero, never unavailable",
+			quantifier: CompletionQuantifierAtLeastOne,
+			coverage: codedCoverage(contractsv1.ContextFabricCoverageDetailFactProviderReported,
+				health, health, SourceTruncated),
+			wantRow: true, wantOutcome: contractsv1.ContextFabricRequirementNarrowed,
+			wantImpact:   contractsv1.ContextFabricAnswerImpactDepth,
+			wantCause:    contractsv1.ContextFabricCoverageDetailFactProviderReported,
+			wantObserved: true, wantServed: 0, wantDeclared: 1, wantRefinements: 1,
 		},
 		{
 			// THE COMPLEMENT of the case above: a state that is genuinely NOT
@@ -329,7 +365,8 @@ func TestTheOutcomeRowFollowsTheEvidence(t *testing.T) {
 			quantifier: CompletionQuantifierCorroborated,
 			coverage: narrowedCoverage([]FactKind{contractsv1.ContextFabricFactHealth},
 				health, SourceAvailable, workload, SourceTruncated),
-			wantRow: true, wantOutcome: contractsv1.ContextFabricRequirementNarrowed,
+			kindsWithFacts: map[FactKind]bool{workload: true},
+			wantRow:        true, wantOutcome: contractsv1.ContextFabricRequirementNarrowed,
 			wantImpact:   contractsv1.ContextFabricAnswerImpactDepth,
 			wantCause:    contractsv1.ContextFabricCoverageDetailFactProviderReported,
 			wantObserved: true, wantServed: 1, wantDeclared: 2, wantRefinements: 1,
@@ -428,7 +465,8 @@ func TestTheOutcomeRowFollowsTheEvidence(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			requirement := readRequirement(testCase.quantifier)
-			rows := appendReadRequirementEvaluations(nil, []contractsv1.ContextFabricPlanRequirement{requirement}, testCase.coverage, readPopulationEvidence{})
+			rows := appendReadRequirementEvaluations(nil, []contractsv1.ContextFabricPlanRequirement{requirement}, testCase.coverage,
+				readPopulationEvidence{KindsWithFacts: testCase.kindsWithFacts})
 
 			if !testCase.wantRow {
 				if len(rows) != 0 {
@@ -1161,7 +1199,7 @@ func TestTheNotReadArmNamesItsOwnCause(t *testing.T) {
 	// deleting it" once the code existed. It exists now. Keeping the same test
 	// identity is what makes the interim visible in the history instead of
 	// looking like a feature that was always there.
-	evidence := evaluateReadRequirement(requirement, factCoverage())
+	evidence := evaluateReadRequirement(requirement, factCoverage(), nil)
 	if evidence.Observed != 0 {
 		t.Fatalf("the fixture no longer reaches the not-read arm (observed=%d); this test would "+
 			"then be asserting something else entirely", evidence.Observed)

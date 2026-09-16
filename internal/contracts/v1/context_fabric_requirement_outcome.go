@@ -858,37 +858,25 @@ func ValidateContextFabricPlanRequirementOutcomeRow(row ContextFabricPlanRequire
 	if row.Outcome == ContextFabricRequirementNarrowed && row.Declared > 0 && row.Served >= row.Declared && !censusQualified && !truncationQualified {
 		return fmt.Errorf("outcome narrowed served %d of %d declared, which is not a reduction", row.Served, row.Declared)
 	}
-	// THE OTHER DIRECTION, NARROW BY CONSTRUCTION -- truncationQualified's
-	// mirror image, not its blanket negation.
+	// THE OTHER DIRECTION IS NOT REFUSED, AND THAT IS DELIBERATE.
 	//
 	// This function's own governing sentence (two comments up) reads "a row
 	// that served none of it is not narrowed -- it is unavailable", but that
-	// sentence is not total over the outcome vocabulary as written: a
-	// population-scope row (read_population.go's zero-of-N-committed arms)
-	// and a planner-narrowing row (a kind the plan itself narrowed to
-	// nothing) both legitimately publish `narrowed` at Served == 0 today --
-	// asserted by name in TestAPartiallyEnumeratedOperandSetIsNotAbsent and
-	// TestTheOutcomeRowFollowsTheEvidence's "still narrowed, never
-	// unavailable" case. Refusing every zero-served narrowed row would
-	// refuse both.
-	//
-	// ONE producer shape is the contradiction: a SOURCE
-	// TRUNCATION reported real facts (CauseObserved, coded
-	// `fact_provider_reported`, depth impact -- truncationQualified's own
-	// three conjuncts) and the row still claims it served none of them. That
-	// exact shape is refused here, symmetrically with truncationQualified's
-	// admission of its Served == Declared twin; every other zero-served
-	// narrowed shape is a different mechanism (population scope, planner
-	// narrowing) and stays legal.
-	if row.Outcome == ContextFabricRequirementNarrowed && row.Served == 0 &&
-		row.Impact == ContextFabricAnswerImpactDepth &&
-		row.CauseObserved &&
-		row.CauseNarrowing == "" &&
-		row.CauseOverrun == "" &&
-		row.CauseCoverage == ContextFabricCoverageDetailFactProviderReported {
-		return fmt.Errorf("outcome narrowed served 0 of %d declared with an observed, fact-bearing truncation cause; "+
-			"a row that served none of it is unavailable, not narrowed", row.Declared)
-	}
+	// sentence is not total over the outcome vocabulary: a population-scope
+	// row (read_population.go's zero-of-N-committed arms), a
+	// planner-narrowing row (a kind the plan itself narrowed to nothing),
+	// AND a source-truncation row whose provider retained zero facts (the
+	// registry's own bundle-wide cap can slice a result to empty and still
+	// mint the truncated state) all legitimately publish `narrowed` at
+	// Served == 0 -- asserted by name in
+	// TestAPartiallyEnumeratedOperandSetIsNotAbsent and
+	// TestFactBearingAgreesWithTheRegistrysOwnRule. The third shape is
+	// honest by construction at its producer
+	// (read_requirement_evaluation.go's TruncatedKindsWithFacts /
+	// factBearingKinds): the evaluator only credits Served for a truncated
+	// kind it can PROVE retained a fact, so a zero it emits for that shape
+	// is never a claim about facts nobody received, and this validator has
+	// no further test to make on it.
 	return validateContextFabricRequirementRefinements(row)
 }
 
