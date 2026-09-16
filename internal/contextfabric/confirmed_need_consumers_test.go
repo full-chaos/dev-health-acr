@@ -1240,7 +1240,7 @@ func TestRecordConfirmedNeedLedger_EmittedLines(t *testing.T) {
 		Outcome: ConfirmedNeedLedgerHit, SourceResultID: "result_need_parent_line",
 		Dropped: []ConfirmedNeedMemberDrop{{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, Reason: ConfirmedNeedMemberDropReverifyNotConfirmed}},
 	}
-	engine.recordConfirmedNeedLedger(context.Background(), acceptancePrincipal(), ledger, applied, CountPopulationScopeAnchorUnresolved, ConfirmedAnchorAgreementNotApplicable)
+	engine.recordConfirmedNeedLedger(context.Background(), acceptancePrincipal(), ledger, applied, CountPopulationScopeAnchorUnresolved, ConfirmedAnchorAgreementNotApplicable, contractsv1.ContextFabricStructureDispositionVetoedConflict)
 	engine.recordConfirmedNeedLedgerWindow(context.Background(), acceptancePrincipal(), ledgerWindowApplication{Present: true, Decision: ConfirmedNeedLedgerWindowApplied, AppliedValue: windowAbsoluteAppliedValuePrefix + "1:2", SourceResultID: "result_need_window_line"})
 	engine.recordConfirmedNeedLedgerWindow(context.Background(), acceptancePrincipal(), ledgerWindowApplication{})
 
@@ -1266,7 +1266,7 @@ func TestRecordConfirmedNeedLedger_EmittedLines(t *testing.T) {
 		"applied_candidate_kind": "repository", "applied_candidate_value_hash": confirmedNeedValueHash("repository:raw-candidate-id"),
 		"applied_handle_kind": "pull_request", "applied_handle_value_hash": confirmedNeedValueHash("raw-handle-532"),
 		"dropped_members":      "subject_anchor:reverify_not_confirmed",
-		"applied_anchor_basis": "", "anchor_agreement": "not_applicable", "capture_decision": "anchor_unresolved",
+		"applied_anchor_basis": "", "anchor_agreement": "not_applicable", "anchor_disposition": "vetoed_conflict", "capture_decision": "anchor_unresolved",
 	}
 	for key, want := range wantLedger {
 		if got, ok := ledgerLine[key]; !ok || got != want {

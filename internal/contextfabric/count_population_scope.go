@@ -225,7 +225,16 @@ func DecideCountPopulationScope(frame *QuestionFrame, sampleAnchorKind SubjectKi
 	switch {
 	case scope.ExpressionKind != SubjectExpressionChildrenOfScope:
 		scope.Decision = CountPopulationScopeOrganization
-	case scope.CommittedAnchors > 0:
+	case scope.CommittedAnchors > 1:
+		// More than one committed subject binds to the frame's own anchor --
+		// two distinct identity-proven subjects of the same kind, each
+		// individually satisfying anchorBound. Only one identity can be the
+		// requested scope; AnchorID above names whichever came first in
+		// resolution's own slice order, which is not a fact about the
+		// question, only about iteration order, so it is refused here rather
+		// than served as if it were a single answer.
+		scope.Decision = CountPopulationScopeAnchorAmbiguous
+	case scope.CommittedAnchors == 1:
 		scope.Decision = CountPopulationScopeAnchorCommitted
 	case scope.AnchorCandidates > 1:
 		scope.Decision = CountPopulationScopeAnchorAmbiguous

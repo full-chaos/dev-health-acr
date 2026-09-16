@@ -140,24 +140,33 @@ const (
 	ConfirmedAnchorAgreementNotApplicable ConfirmedAnchorAgreement = "not_applicable"
 	// ConfirmedAnchorAgreementAbsent: an entry applied, but this turn's own
 	// resolution committed nothing of the entry's own kind -- the carry
-	// played no role in what this turn actually served, so there is nothing
-	// to veto.
+	// played no role in what this turn actually served. Dropped exactly as a
+	// disagreement is: a later turn naming this one as parent must inherit
+	// only what THIS turn's own resolution actually stood behind, and a
+	// resolution that never touched the entry's kind at all never stood
+	// behind it.
 	ConfirmedAnchorAgreementAbsent ConfirmedAnchorAgreement = "absent"
 	// ConfirmedAnchorAgreementAgree: an entry applied, and this turn's own
-	// resolution independently committed the SAME (kind, canonical_id) --
-	// the carry and the proof point at one subject.
+	// resolution independently committed the SAME (kind, canonical_id) as
+	// the SOLE identity-proven commit of that kind -- the carry and the
+	// proof point at one subject, and nothing else this turn committed on a
+	// proven basis contests it.
 	ConfirmedAnchorAgreementAgree ConfirmedAnchorAgreement = "agree"
-	// ConfirmedAnchorAgreementDisagree: an entry applied, and this turn's own
-	// resolution committed a DIFFERENT canonical id of the SAME kind ON AN
-	// IDENTITY-PROVEN BASIS (CommitBasis.IdentityProven -- a caller canonical
-	// id or an authoritative keyed identity, never a score comparison). The
-	// entry is VETOED: never disclosed as applied, never carried forward to
-	// a later turn -- a served document must never claim a subject its own
-	// resolution disowned in the same breath. A same-kind, different-id
-	// STATISTICAL commit is never a conflict: anchorBound itself refuses to
-	// bind such a commit (count_population_scope.go), so treating it as
-	// grounds to drop a genuinely proven carry would let the weaker signal
-	// evict the stronger one.
+	// ConfirmedAnchorAgreementDisagree: this turn's own resolution committed
+	// a DIFFERENT canonical id of the SAME kind ON AN IDENTITY-PROVEN BASIS
+	// (CommitBasis.IdentityProven -- a caller canonical id or an
+	// authoritative keyed identity, never a score comparison) -- whether or
+	// not resolution ALSO re-committed the carried id itself alongside it: a
+	// turn that committed two identity-proven subjects of the same kind
+	// proved an ambiguity, never an agreement, so the carry can never read
+	// as confirmed beside a distinct proven commit. The entry is VETOED:
+	// never disclosed as applied, never carried forward to a later turn -- a
+	// served document must never claim a subject its own resolution
+	// disowned in the same breath. A same-kind, different-id STATISTICAL
+	// commit is never a conflict: anchorBound itself refuses to bind such a
+	// commit (count_population_scope.go), so treating it as grounds to drop
+	// a genuinely proven carry would let the weaker signal evict the
+	// stronger one.
 	ConfirmedAnchorAgreementDisagree ConfirmedAnchorAgreement = "disagree"
 )
 
@@ -168,30 +177,87 @@ const (
 // ResolveSubjects returned this turn -- only a same-kind, different-id
 // commit that basis itself reports IdentityProven can ever disagree; a
 // statistical or unrecorded-basis commit of the same kind is invisible to
-// this check, exactly as it is to anchorBound. Returns the agreement, the
-// entry itself (zero value when not_applicable), and vetoed=true exactly on
-// disagree -- the one case a caller must act on.
+// this check, exactly as it is to anchorBound. The whole committed set is
+// read before any verdict is chosen -- a distinct proven commit anywhere in
+// it outranks a same-id match found earlier in the slice, so agreement can
+// never turn on iteration order. Returns the agreement, the entry itself
+// (zero value when not_applicable), and drop=true on disagree OR absent --
+// the two cases a caller must remove from the outgoing ledger, whatever
+// wire disposition (anchorLedgerDisposition) each one discloses.
 func carriedAnchorAgreementFor(appliedNeeds map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember, resolution SubjectResolution, bases CommitBasisSet) (ConfirmedAnchorAgreement, confirmedStructureMember, bool) {
 	entry, ok := appliedNeeds[contractsv1.ContextFabricStructureNeedSubjectAnchor]
 	if !ok {
 		return ConfirmedAnchorAgreementNotApplicable, confirmedStructureMember{}, false
 	}
-	sawSameKind := false
+	matchedSelf := false
+	distinctProven := false
 	for _, subject := range resolution.Committed {
 		if subject.Kind != entry.AppliedKind {
 			continue
 		}
 		if subject.CanonicalID == entry.AppliedValue {
-			return ConfirmedAnchorAgreementAgree, entry, false
+			matchedSelf = true
+			continue
 		}
 		if bases.For(subject).IdentityProven() {
-			sawSameKind = true
+			distinctProven = true
 		}
 	}
-	if sawSameKind {
+	switch {
+	case distinctProven:
 		return ConfirmedAnchorAgreementDisagree, entry, true
+	case matchedSelf:
+		return ConfirmedAnchorAgreementAgree, entry, false
+	default:
+		return ConfirmedAnchorAgreementAbsent, entry, true
 	}
-	return ConfirmedAnchorAgreementAbsent, entry, false
+}
+
+// anchorLedgerDisposition is the ONE mapping from what happened to this
+// turn's own applied subject_anchor entry to the wire disposition its
+// carried-structure echo discloses and this axis's own ledger line reports.
+// superseded and a post-resolution agreement verdict can never both fire on
+// the same entry: a contest superseding it removes it from the ledger
+// before resolution ever runs, so the agreement check that runs after
+// always reads not_applicable for an entry the contest already took. Empty
+// when agreement is not_applicable and superseded is false: no subject_anchor
+// entry applied this turn at all, so there is nothing to disclose a
+// disposition for -- mirrors AppliedAnchorKind/AppliedAnchorBasis's own
+// empty-when-inapplicable convention (ConfirmedNeedLedgerEvent's own doc
+// comment).
+func anchorLedgerDisposition(agreement ConfirmedAnchorAgreement, superseded bool) contractsv1.ContextFabricStructureDisposition {
+	switch {
+	case superseded:
+		return contractsv1.ContextFabricStructureDispositionSupersededByCaller
+	case agreement == ConfirmedAnchorAgreementDisagree:
+		return contractsv1.ContextFabricStructureDispositionVetoedConflict
+	case agreement == ConfirmedAnchorAgreementAbsent:
+		return contractsv1.ContextFabricStructureDispositionVetoedUnresolved
+	case agreement == ConfirmedAnchorAgreementAgree:
+		return contractsv1.ContextFabricStructureDispositionApplied
+	default:
+		return ""
+	}
+}
+
+// callerSuppliedHintOfKind reports whether hints -- graphRequest's own
+// RequestedScope.SubjectHints as built before the engine's carry would
+// append to it, whatever reached it from the caller's own request or a
+// prior receipt this turn redeemed -- already names kind. Any one of them
+// can independently make resolve.go's caller-hint exact-commit channel
+// short-circuit-eligible (graphrank's AnyCallerSourced), and that channel
+// commits EVERY hint in the set once it fires, not only the one that
+// qualified it -- so a same-kind hint already present is the same identity
+// question this turn's own carry would also try to answer, and injecting
+// the carry beside it would let both commit CommitBasisCallerCanonicalID on
+// distinct identities.
+func callerSuppliedHintOfKind(hints []contractsv1.ContextFabricSubjectHint, kind contractsv1.ContextFabricSubjectKind) bool {
+	for _, hint := range hints {
+		if hint.Kind == kind {
+			return true
+		}
+	}
+	return false
 }
 
 // engineCommittedAnchorHint builds the SubjectHint that lets an
@@ -218,21 +284,21 @@ func engineCommittedAnchorHint(appliedNeeds map[contractsv1.ContextFabricStructu
 }
 
 // carriedStructureEntriesForDecisive replaces entries' subject_anchor member
-// with a vetoed_conflict disposition when vetoed is true, leaving every
-// other member (and entries itself, when not vetoed) unchanged. Applied only
-// at the call sites that can see a genuine post-resolution disagreement --
-// the decisive save and the supersession veto that can follow it -- so the
+// with disposition when dropped is true, leaving every other member (and
+// entries itself, when not dropped) unchanged. Applied only at the call
+// sites that can see this turn's own final word on the carry -- the
+// decisive save and the supersession veto that can follow it -- so the
 // served document's own confirmed-structure echo can never claim "applied"
-// for a subject this turn's own resolution disowned.
-func carriedStructureEntriesForDecisive(entries []*contractsv1.ContextFabricConfirmedStructureEntry, vetoedEntry confirmedStructureMember, vetoed bool) []*contractsv1.ContextFabricConfirmedStructureEntry {
-	if !vetoed {
+// for a subject this turn's own request or resolution took away.
+func carriedStructureEntriesForDecisive(entries []*contractsv1.ContextFabricConfirmedStructureEntry, droppedEntry confirmedStructureMember, dropped bool, disposition contractsv1.ContextFabricStructureDisposition) []*contractsv1.ContextFabricConfirmedStructureEntry {
+	if !dropped {
 		return entries
 	}
 	out := make([]*contractsv1.ContextFabricConfirmedStructureEntry, len(entries))
 	for i, entry := range entries {
-		if entry != nil && entry.Member == contractsv1.ContextFabricStructureNeedSubjectAnchor && entry.AppliedValue == vetoedEntry.AppliedValue {
+		if entry != nil && entry.Member == contractsv1.ContextFabricStructureNeedSubjectAnchor && entry.AppliedValue == droppedEntry.AppliedValue {
 			replaced := *entry
-			replaced.Disposition = contractsv1.ContextFabricStructureDispositionVetoedConflict
+			replaced.Disposition = disposition
 			out[i] = &replaced
 			continue
 		}
@@ -242,11 +308,11 @@ func carriedStructureEntriesForDecisive(entries []*contractsv1.ContextFabricConf
 }
 
 // confirmedNeedsForCaptureWithoutVetoedAnchor drops the subject_anchor member
-// from entries when vetoed is true -- a disagreement proven THIS turn must
-// not reach a LATER turn naming this one as parent either, exactly as final
-// for inheritance as a reverify-time drop already is.
-func confirmedNeedsForCaptureWithoutVetoedAnchor(entries []ConfirmedNeedEntry, vetoed bool) []ConfirmedNeedEntry {
-	if !vetoed {
+// from entries when dropped is true -- a contest, disagreement or absence
+// this turn -- must not reach a LATER turn naming this one as parent either,
+// exactly as final for inheritance as a reverify-time drop already is.
+func confirmedNeedsForCaptureWithoutVetoedAnchor(entries []ConfirmedNeedEntry, dropped bool) []ConfirmedNeedEntry {
+	if !dropped {
 		return entries
 	}
 	out := make([]ConfirmedNeedEntry, 0, len(entries))

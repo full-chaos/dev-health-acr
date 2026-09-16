@@ -1638,7 +1638,8 @@
         "applied",
         "vetoed_unresolved",
         "vetoed_conflict",
-        "vetoed_stale"
+        "vetoed_stale",
+        "superseded_by_caller"
       ]
     },
     "KindOption": {

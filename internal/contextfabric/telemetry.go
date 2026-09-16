@@ -394,13 +394,19 @@ func (t SlogEngineTelemetry) RecordKindCarry(ctx context.Context, principal stor
 // bound with no offer raised), and agreement compares it against what this
 // SAME turn's own resolution independently committed (not_applicable/absent/
 // agree/disagree -- ConfirmedAnchorAgreement's own doc comment). A disagree
-// means the entry was vetoed rather than disclosed as applied, so
-// applied_members/applied_anchor_kind/applied_anchor_value_hash above already
-// reflect the post-veto ledger. capture_decision is the SIBLING pre/decision
-// fact for the OTHER direction -- whether THIS turn's own resolution just
-// bound a brand new engine-committed anchor for a later turn to inherit
-// (CountPopulationScopeDecisionVocabulary's own closed vocabulary; empty only
-// when the turn never reached the check).
+// or an absent same-kind commit means the entry was dropped rather than
+// disclosed as applied, so applied_members/applied_anchor_kind/
+// applied_anchor_value_hash above already reflect the post-decision ledger.
+// anchor_disposition is the SAME wire value (ContextFabricStructureDisposition)
+// the entry's own carried-structure echo discloses -- "" when no entry
+// applied this turn, "applied" when it survived, "superseded_by_caller" when
+// a caller-supplied hint of its own kind contested it before resolution ever
+// ran, or one of the two vetoed_* values a post-resolution drop discloses
+// (anchorLedgerDisposition's own doc comment). capture_decision is the
+// SIBLING pre/decision fact for the OTHER direction -- whether THIS turn's
+// own resolution just bound a brand new engine-committed anchor for a later
+// turn to inherit (CountPopulationScopeDecisionVocabulary's own closed
+// vocabulary; empty only when the turn never reached the check).
 func (t SlogEngineTelemetry) RecordConfirmedNeedLedger(ctx context.Context, principal storage.Principal, event ConfirmedNeedLedgerEvent) {
 	args := append([]any{
 		"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(event.Outcome)),
@@ -416,6 +422,7 @@ func (t SlogEngineTelemetry) RecordConfirmedNeedLedger(ctx context.Context, prin
 		"applied_handle_value_hash", SanitizeLogAttr(event.AppliedHandleValueHash),
 		"dropped_members", SanitizeLogAttr(observableConfirmedNeedDrops(event.Dropped)),
 		"anchor_agreement", SanitizeLogAttr(string(event.AnchorAgreement)),
+		"anchor_disposition", SanitizeLogAttr(string(event.AnchorDisposition)),
 		"capture_decision", SanitizeLogAttr(string(event.CaptureDecision)),
 	}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric confirmed need ledger", args...)

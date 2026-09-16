@@ -274,6 +274,22 @@ func TestContextFabricConfirmedStructureEntry_Validate(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "superseded_by_caller disposition with no receipt identity is accepted",
+			entry: ContextFabricConfirmedStructureEntry{
+				Member: ContextFabricStructureNeedSubjectAnchor, AppliedValue: "n/a", Source: ContextFabricStructureSourceCarried,
+				PriorResultID: "result_12345678", Provenance: ContextFabricStructureEngineCommitted, Disposition: ContextFabricStructureDispositionSupersededByCaller,
+			},
+			wantErr: false,
+		},
+		{
+			name: "an out-of-vocabulary disposition is rejected",
+			entry: ContextFabricConfirmedStructureEntry{
+				Member: ContextFabricStructureNeedSubjectAnchor, AppliedValue: "n/a", Source: ContextFabricStructureSourceExplicit,
+				Provenance: ContextFabricStructureQuestionStated, Disposition: ContextFabricStructureDisposition("not_a_disposition"),
+			},
+			wantErr: true,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -1504,15 +1504,18 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// on an exit that ends the turn before any consumer ran, which is what
 	// the line then says.
 	var appliedNeeds map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember
-	// anchorAgreementForTelemetry/captureDecisionForTelemetry stay at their
-	// explicit not-applicable/empty defaults for a turn that never reaches
-	// resolution (an early gate, or a hard error) -- set once, immediately
-	// after resolution runs, by the SAME computation the decisive save and
-	// the disclosure echo below already consult.
+	// anchorAgreementForTelemetry/anchorDispositionForTelemetry/
+	// captureDecisionForTelemetry stay at their explicit
+	// not-applicable/empty defaults for a turn that never reaches resolution
+	// (an early gate, or a hard error) -- set once, immediately after
+	// resolution runs (or, for anchorDispositionForTelemetry's superseded
+	// case, immediately before it), by the SAME computation the decisive
+	// save and the disclosure echo below already consult.
 	anchorAgreementForTelemetry := ConfirmedAnchorAgreementNotApplicable
+	var anchorDispositionForTelemetry contractsv1.ContextFabricStructureDisposition
 	var captureDecisionForTelemetry CountPopulationScopeDecision
 	defer func() {
-		e.recordConfirmedNeedLedger(ctx, principal, confirmedNeedLedger, appliedNeeds, captureDecisionForTelemetry, anchorAgreementForTelemetry)
+		e.recordConfirmedNeedLedger(ctx, principal, confirmedNeedLedger, appliedNeeds, captureDecisionForTelemetry, anchorAgreementForTelemetry, anchorDispositionForTelemetry)
 	}()
 	windowCanon := e.canonicalizeEvidenceWindow(carryCtx, principal, request)
 	// CHAOS-5734: the confirmed-need ledger's window consumer, decided HERE,
@@ -2630,13 +2633,32 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// caller-hint exact-commit channel a caller-confirmed pick reaches
 	// (graphrank/resolve.go's RequestedScope.SubjectHints loop), so it
 	// COMMITS on a proven basis rather than merely widening the pool a
-	// same-named, lower-proof candidate could still win. Gated !workItemTuple:
-	// that shape's own resolution enforces exactly one committed project
-	// subject, and this hint's own kind is never that one.
-	if !workItemTuple {
-		// 50: the same ContextFabricRequestedScope.SubjectHints v1 bound
-		// resolvePriorSubjectHints' own cap above enforces.
-		if hint, ok := engineCommittedAnchorHint(appliedNeeds); ok && len(graphRequest.RequestedScope.SubjectHints) < 50 {
+	// same-named, lower-proof candidate could still win. Every continuation
+	// kind reaches this same injection: a work-item-tuple continuation's own
+	// resolution enforces exactly one committed project subject and this
+	// hint's own kind is never that one, so the injection is a safe no-op
+	// there by the shape of today's frames, and its own veto/drop below runs
+	// unconditionally regardless, so a carry this turn's resolution
+	// disagreed with can never ride an untouched ledger into a later turn.
+	//
+	// CONTEST BEFORE INJECTION, NEVER CO-COMMIT: a caller-supplied hint of
+	// the carry's own kind already reaching this exact-commit channel would
+	// let both commit CommitBasisCallerCanonicalID on distinct identities --
+	// DecideCountPopulationScope's own committed-anchors-over-one refusal
+	// (count_population_scope.go) catches that ambiguity if it ever occurs,
+	// but the caller's own hint is owed priority over a carry this engine
+	// merely remembered, so the carry is dropped here, before it ever
+	// reaches resolution, rather than left to compete with it.
+	var anchorSupersededEntry confirmedStructureMember
+	var anchorSupersededByCaller bool
+	if hint, ok := engineCommittedAnchorHint(appliedNeeds); ok {
+		if callerSuppliedHintOfKind(graphRequest.RequestedScope.SubjectHints, hint.Kind) {
+			anchorSupersededEntry = appliedNeeds[contractsv1.ContextFabricStructureNeedSubjectAnchor]
+			anchorSupersededByCaller = true
+			delete(appliedNeeds, contractsv1.ContextFabricStructureNeedSubjectAnchor)
+		} else if len(graphRequest.RequestedScope.SubjectHints) < 50 {
+			// 50: the same ContextFabricRequestedScope.SubjectHints v1 bound
+			// resolvePriorSubjectHints' own cap above enforces.
 			graphRequest.RequestedScope.SubjectHints = append(append([]SubjectHint(nil), graphRequest.RequestedScope.SubjectHints...), hint)
 		}
 	}
@@ -2706,17 +2728,30 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// Sibling decision, same timing rationale: whether THIS turn's own applied
 	// subject_anchor ledger entry (appliedNeeds, computed pre-resolution above)
 	// still agrees with what resolution just independently committed. A
-	// disagree here VETOES the entry -- vetoedAnchorEntry/haveVetoedAnchor feed
-	// both the disclosure echo and the outgoing ledger below, and
+	// disagree or an absent same-kind commit here DROPS the entry --
+	// resolutionDroppedAnchorEntry/resolutionDroppedAnchor feed both the
+	// disclosure echo and the outgoing ledger below, and
 	// anchorAgreementForTelemetry is read by the deferred ledger line above.
-	anchorAgreementForTelemetry, vetoedAnchorEntry, haveVetoedAnchor := carriedAnchorAgreementFor(appliedNeeds, resolution, commitBases)
-	carriedStructureEntriesForServed := carriedStructureEntriesForDecisive(carriedStructureEntries, vetoedAnchorEntry, haveVetoedAnchor)
-	if haveVetoedAnchor {
+	// anchorSupersededByCaller (above, before resolution ran) is the OTHER
+	// way this same entry can end without surviving: exactly one of the two
+	// can ever fire on it, since a superseded entry is removed from
+	// appliedNeeds before this check runs and so reads not_applicable here.
+	anchorAgreementForTelemetry, resolutionDroppedAnchorEntry, resolutionDroppedAnchor := carriedAnchorAgreementFor(appliedNeeds, resolution, commitBases)
+	droppedAnchorEntry := resolutionDroppedAnchorEntry
+	haveDroppedAnchor := resolutionDroppedAnchor
+	if anchorSupersededByCaller {
+		droppedAnchorEntry = anchorSupersededEntry
+		haveDroppedAnchor = true
+	}
+	anchorDispositionForTelemetry = anchorLedgerDisposition(anchorAgreementForTelemetry, anchorSupersededByCaller)
+	carriedStructureEntriesForServed := carriedStructureEntriesForDecisive(carriedStructureEntries, droppedAnchorEntry, haveDroppedAnchor, anchorDispositionForTelemetry)
+	if resolutionDroppedAnchor {
 		// The deferred ledger line above closes over appliedNeeds itself
-		// (a reference type): removing the vetoed entry HERE is what makes
-		// that line's own applied_anchor_kind/applied_anchor_value_hash
-		// read the POST-veto ledger, never the stale subject a disagreement
-		// just disowned.
+		// (a reference type): removing the dropped entry HERE is what makes
+		// that line's own applied_anchor_kind/applied_anchor_value_hash read
+		// the POST-decision ledger, never the stale subject a disagreement
+		// or an absent commit just disowned. The superseded case already
+		// removed its own entry before resolution ran, above.
 		delete(appliedNeeds, contractsv1.ContextFabricStructureNeedSubjectAnchor)
 	}
 	// priorEntries: fetched ABOVE, before this call (CHAOS-4040 reordering
@@ -3611,23 +3646,22 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}
 	if e.results != nil {
-		// The ONE point the outgoing ledger folds in what THIS
-		// turn's own resolution committed to the frame's anchor -- guarded to
-		// !workItemTuple because committedAnchorForCapture was computed
+		// The ONE point the outgoing ledger folds in what THIS turn's own
+		// resolution committed to the frame's anchor -- every continuation
+		// kind reaches both halves: committedAnchorForCapture was computed
 		// before restrictWorkItemTupleCandidate could narrow resolution
-		// further; a work-item-tuple question is never children_of_scope-
-		// shaped in the first place, so engineCommittedAnchorForCapture
-		// already returns ok=false for it in practice, and this guard makes
-		// that true by construction rather than by the shape of today's
-		// frames.
-		confirmedNeedsForDecisiveCapture := confirmedNeedsForCapture
-		if !workItemTuple {
-			confirmedNeedsForDecisiveCapture = confirmedNeedsForCaptureWithCommittedAnchor(remembered, confirmedThisTurn, request, confirmedNeedsForCapture, committedAnchorForCapture, haveCommittedAnchorForCapture)
-			// A disagreement proven this turn must not reach a later turn
-			// naming this one as parent either -- same finality as a
-			// reverify-time drop.
-			confirmedNeedsForDecisiveCapture = confirmedNeedsForCaptureWithoutVetoedAnchor(confirmedNeedsForDecisiveCapture, haveVetoedAnchor)
-		}
+		// further, and a work-item-tuple question is never
+		// children_of_scope-shaped in the first place, so
+		// engineCommittedAnchorForCapture already returns ok=false for it by
+		// the shape of today's frames -- never by a gate coded against that
+		// shape, which is what let a stale carry survive a work-item-tuple
+		// continuation's own disagreeing resolution before this file
+		// existed.
+		confirmedNeedsForDecisiveCapture := confirmedNeedsForCaptureWithCommittedAnchor(remembered, confirmedThisTurn, request, confirmedNeedsForCapture, committedAnchorForCapture, haveCommittedAnchorForCapture)
+		// A contest, a disagreement or an absence proven this turn must not
+		// reach a later turn naming this one as parent either -- same
+		// finality as a reverify-time drop.
+		confirmedNeedsForDecisiveCapture = confirmedNeedsForCaptureWithoutVetoedAnchor(confirmedNeedsForDecisiveCapture, haveDroppedAnchor)
 		// Keyed from the CLAMPED REQUEST context -- byte-for-byte the
 		// value tryReuse keyed its lookup with (round-3 F1). Save and
 		// FindReusable must agree or the saved row is unreachable, which

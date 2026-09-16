@@ -392,12 +392,22 @@ const (
 	ContextFabricStructureDispositionVetoedUnresolved ContextFabricStructureDisposition = "vetoed_unresolved"
 	ContextFabricStructureDispositionVetoedConflict   ContextFabricStructureDisposition = "vetoed_conflict"
 	ContextFabricStructureDispositionVetoedStale      ContextFabricStructureDisposition = "vetoed_stale"
+	// ContextFabricStructureDispositionSupersededByCaller: a carried member
+	// this turn's own request already contests -- a caller-supplied subject
+	// hint of the SAME kind reaches the same identity channel the carry would
+	// -- so the carry never reaches resolution to be compared at all. The
+	// caller's own hint always wins; this member is dropped here, before
+	// resolution runs, distinct from vetoed_conflict (resolution ran and
+	// proved a different identity) and vetoed_unresolved (resolution ran and
+	// found nothing of the member's own kind).
+	ContextFabricStructureDispositionSupersededByCaller ContextFabricStructureDisposition = "superseded_by_caller"
 )
 
 func ValidContextFabricStructureDisposition(value ContextFabricStructureDisposition) bool {
 	switch value {
 	case ContextFabricStructureDispositionApplied, ContextFabricStructureDispositionVetoedUnresolved,
-		ContextFabricStructureDispositionVetoedConflict, ContextFabricStructureDispositionVetoedStale:
+		ContextFabricStructureDispositionVetoedConflict, ContextFabricStructureDispositionVetoedStale,
+		ContextFabricStructureDispositionSupersededByCaller:
 		return true
 	default:
 		return false

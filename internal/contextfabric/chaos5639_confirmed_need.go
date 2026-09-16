@@ -769,6 +769,16 @@ type ConfirmedNeedLedgerEvent struct {
 	// AppliedMembers/AppliedAnchorKind/AppliedAnchorValueHash above already
 	// reflect that (they read the post-veto ledger, not the pre-veto one).
 	AnchorAgreement ConfirmedAnchorAgreement
+	// AnchorDisposition is the wire disposition (ContextFabricStructureDisposition)
+	// this turn's own applied subject_anchor entry disclosed on its
+	// carried-structure echo, read from the SAME decision
+	// (anchorLedgerDisposition) that echo itself renders: "" when no entry
+	// applied this turn at all, "applied" when it survived, and one of the
+	// three drop dispositions (superseded_by_caller/vetoed_conflict/
+	// vetoed_unresolved) when it did not -- always the post-decision value,
+	// never the pre-decision "applied" a dropped entry started this turn
+	// with.
+	AnchorDisposition contractsv1.ContextFabricStructureDisposition
 	// CaptureDecision is THIS turn's own capture-gate scope decision
 	// (engineCommittedAnchorForCapture's underlying CountPopulationScopeDecision):
 	// "anchor_committed" means this turn's own resolution bound a NEW
@@ -787,11 +797,11 @@ type ConfirmedNeedLedgerEvent struct {
 // facts appliedNeedLedgerEntries' own pre-resolution map cannot carry --
 // captured from the SAME (frame, resolution) pair this turn's own capture
 // gate and carry-agreement check already computed, never re-derived here.
-func confirmedNeedLedgerEventOf(ledger confirmedNeedLedgerResult, applied map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember, captureDecision CountPopulationScopeDecision, anchorAgreement ConfirmedAnchorAgreement) ConfirmedNeedLedgerEvent {
+func confirmedNeedLedgerEventOf(ledger confirmedNeedLedgerResult, applied map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember, captureDecision CountPopulationScopeDecision, anchorAgreement ConfirmedAnchorAgreement, anchorDisposition contractsv1.ContextFabricStructureDisposition) ConfirmedNeedLedgerEvent {
 	event := ConfirmedNeedLedgerEvent{
 		Outcome: ledger.Outcome, SourceResultID: ledger.SourceResultID,
 		AppliedMembers: appliedNeedLedgerMembers(applied), Dropped: ledger.Dropped,
-		CaptureDecision: captureDecision, AnchorAgreement: anchorAgreement,
+		CaptureDecision: captureDecision, AnchorAgreement: anchorAgreement, AnchorDisposition: anchorDisposition,
 	}
 	if entry, ok := applied[contractsv1.ContextFabricStructureNeedExpectedKind]; ok {
 		event.AppliedExpectedKind = contractsv1.ContextFabricSubjectKind(entry.AppliedValue)
@@ -819,9 +829,9 @@ func confirmedNeedLedgerEventOf(ledger confirmedNeedLedgerResult, applied map[co
 // hashed value, and each member dropped at reverify with its reason -- "a
 // drop reported without both sides is a decision an operator cannot check"
 // applies here exactly as it does to RecordKindCarry.
-func (e *Engine) recordConfirmedNeedLedger(ctx context.Context, principal storage.Principal, ledger confirmedNeedLedgerResult, applied map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember, captureDecision CountPopulationScopeDecision, anchorAgreement ConfirmedAnchorAgreement) {
+func (e *Engine) recordConfirmedNeedLedger(ctx context.Context, principal storage.Principal, ledger confirmedNeedLedgerResult, applied map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember, captureDecision CountPopulationScopeDecision, anchorAgreement ConfirmedAnchorAgreement, anchorDisposition contractsv1.ContextFabricStructureDisposition) {
 	if e.telemetry == nil {
 		return
 	}
-	e.telemetry.RecordConfirmedNeedLedger(ctx, principal, confirmedNeedLedgerEventOf(ledger, applied, captureDecision, anchorAgreement))
+	e.telemetry.RecordConfirmedNeedLedger(ctx, principal, confirmedNeedLedgerEventOf(ledger, applied, captureDecision, anchorAgreement, anchorDisposition))
 }

@@ -375,28 +375,40 @@ func TestCarriedAnchorAgreementForCoversItsInputDomain(t *testing.T) {
 		resolution  SubjectResolution
 		bases       CommitBasisSet
 		wantAgree   ConfirmedAnchorAgreement
-		wantVetoed  bool
+		wantDropped bool
 		wantEntryOK bool
 	}{
 		{"nothing applied this turn", false, SubjectResolution{Committed: []SubjectRef{committedAnchorRepoOther}}, nil, ConfirmedAnchorAgreementNotApplicable, false, false},
-		{"applied, nothing committed this turn", true, SubjectResolution{}, nil, ConfirmedAnchorAgreementAbsent, false, true},
-		{"applied, only a different kind committed", true, SubjectResolution{Committed: []SubjectRef{teamOther}}, nil, ConfirmedAnchorAgreementAbsent, false, true},
+		// R3: an entry with nothing of its own kind committed this turn is
+		// DROPPED (vetoed_unresolved), never left to ride an untouched
+		// ledger into a later turn as if this turn's own resolution had
+		// stood behind it.
+		{"applied, nothing committed this turn", true, SubjectResolution{}, nil, ConfirmedAnchorAgreementAbsent, true, true},
+		{"applied, only a different kind committed", true, SubjectResolution{Committed: []SubjectRef{teamOther}}, nil, ConfirmedAnchorAgreementAbsent, true, true},
 		{"applied, resolution committed the SAME subject", true, SubjectResolution{Committed: []SubjectRef{committedAnchorRepo}}, nil, ConfirmedAnchorAgreementAgree, false, true},
 		{"applied, resolution committed a DIFFERENT subject of the same kind on an identity-proven basis", true, SubjectResolution{Committed: []SubjectRef{committedAnchorRepoOther}}, CommitBasisSet{SubjectMapKey(committedAnchorRepoOther): CommitBasisCallerCanonicalID}, ConfirmedAnchorAgreementDisagree, true, true},
+		// R4, the exact bug this domain table now pins: resolution committed
+		// BOTH the carried id AND a distinct proven commit of the same kind
+		// -- a caller hint and the engine carry co-committing. A same-id
+		// match found before the distinct proven commit in the slice must
+		// never short-circuit to Agree: the distinct proven commit beside it
+		// is what decides, whatever the iteration order.
+		{"applied, resolution committed the SAME subject AND a distinct proven commit of the same kind", true, SubjectResolution{Committed: []SubjectRef{committedAnchorRepo, committedAnchorRepoOther}}, CommitBasisSet{SubjectMapKey(committedAnchorRepoOther): CommitBasisCallerCanonicalID}, ConfirmedAnchorAgreementDisagree, true, true},
 		// The exact gap a mislabeled veto would reopen: a same-kind,
 		// different-id STATISTICAL commit is never a conflict -- anchorBound
 		// itself refuses to bind such a commit, so it must not evict a
-		// genuinely proven carry either.
-		{"applied, resolution committed a DIFFERENT subject of the same kind on a statistical basis", true, SubjectResolution{Committed: []SubjectRef{committedAnchorRepoOther}}, CommitBasisSet{SubjectMapKey(committedAnchorRepoOther): CommitBasisStatistical}, ConfirmedAnchorAgreementAbsent, false, true},
-		{"applied, resolution committed a DIFFERENT subject of the same kind with no basis recorded at all", true, SubjectResolution{Committed: []SubjectRef{committedAnchorRepoOther}}, nil, ConfirmedAnchorAgreementAbsent, false, true},
+		// genuinely proven carry either. Nothing IDENTITY-PROVEN of the
+		// entry's own kind committed, so this still drops as absent.
+		{"applied, resolution committed a DIFFERENT subject of the same kind on a statistical basis", true, SubjectResolution{Committed: []SubjectRef{committedAnchorRepoOther}}, CommitBasisSet{SubjectMapKey(committedAnchorRepoOther): CommitBasisStatistical}, ConfirmedAnchorAgreementAbsent, true, true},
+		{"applied, resolution committed a DIFFERENT subject of the same kind with no basis recorded at all", true, SubjectResolution{Committed: []SubjectRef{committedAnchorRepoOther}}, nil, ConfirmedAnchorAgreementAbsent, true, true},
 		{"applied, resolution committed both the same subject and an unrelated one", true, SubjectResolution{Committed: []SubjectRef{teamOther, committedAnchorRepo}}, nil, ConfirmedAnchorAgreementAgree, false, true},
 	} {
 		row := row
 		t.Run(row.name, func(t *testing.T) {
 			t.Parallel()
-			gotAgreement, gotEntry, gotVetoed := carriedAnchorAgreementFor(applied(row.hasEntry), row.resolution, row.bases)
-			if gotAgreement != row.wantAgree || gotVetoed != row.wantVetoed {
-				t.Fatalf("carriedAnchorAgreementFor() = (%q, vetoed=%t), want (%q, vetoed=%t)", gotAgreement, gotVetoed, row.wantAgree, row.wantVetoed)
+			gotAgreement, gotEntry, gotDropped := carriedAnchorAgreementFor(applied(row.hasEntry), row.resolution, row.bases)
+			if gotAgreement != row.wantAgree || gotDropped != row.wantDropped {
+				t.Fatalf("carriedAnchorAgreementFor() = (%q, dropped=%t), want (%q, dropped=%t)", gotAgreement, gotDropped, row.wantAgree, row.wantDropped)
 			}
 			if row.wantEntryOK && gotEntry != entry {
 				t.Fatalf("entry = %#v, want %#v", gotEntry, entry)
@@ -405,6 +417,62 @@ func TestCarriedAnchorAgreementForCoversItsInputDomain(t *testing.T) {
 				t.Fatalf("entry = %#v, want the zero value", gotEntry)
 			}
 		})
+	}
+}
+
+// TestAnchorLedgerDispositionCoversItsInputDomain pins the wire disposition
+// each (agreement, superseded) pair renders -- the SAME mapping the
+// carried-structure echo and the ledger's own Info line both read, so
+// neither can disagree with the other about what happened to this turn's
+// applied subject_anchor entry.
+func TestAnchorLedgerDispositionCoversItsInputDomain(t *testing.T) {
+	t.Parallel()
+	for _, row := range []struct {
+		agreement  ConfirmedAnchorAgreement
+		superseded bool
+		want       contractsv1.ContextFabricStructureDisposition
+	}{
+		{ConfirmedAnchorAgreementNotApplicable, false, ""},
+		{ConfirmedAnchorAgreementAgree, false, contractsv1.ContextFabricStructureDispositionApplied},
+		{ConfirmedAnchorAgreementAbsent, false, contractsv1.ContextFabricStructureDispositionVetoedUnresolved},
+		{ConfirmedAnchorAgreementDisagree, false, contractsv1.ContextFabricStructureDispositionVetoedConflict},
+		// superseded wins even over an agreement value that could never
+		// actually co-occur with it in practice (the entry is removed from
+		// the ledger before resolution runs, so the post-resolution check
+		// always reads not_applicable for a superseded entry) -- pinned
+		// anyway, because the function's own contract is "superseded always
+		// wins," not "superseded happens to win given today's one caller."
+		{ConfirmedAnchorAgreementNotApplicable, true, contractsv1.ContextFabricStructureDispositionSupersededByCaller},
+		{ConfirmedAnchorAgreementAgree, true, contractsv1.ContextFabricStructureDispositionSupersededByCaller},
+	} {
+		if got := anchorLedgerDisposition(row.agreement, row.superseded); got != row.want {
+			t.Errorf("anchorLedgerDisposition(%q, %t) = %q, want %q", row.agreement, row.superseded, got, row.want)
+		}
+	}
+}
+
+// TestCallerSuppliedHintOfKind pins the contest check's own domain: an empty
+// set, a set with no matching kind, and a set with a matching kind whatever
+// its source or id.
+func TestCallerSuppliedHintOfKind(t *testing.T) {
+	t.Parallel()
+	repo := contractsv1.ContextFabricSubjectKind("repository")
+	team := contractsv1.ContextFabricSubjectKind("team")
+	for _, row := range []struct {
+		name  string
+		hints []contractsv1.ContextFabricSubjectHint
+		kind  contractsv1.ContextFabricSubjectKind
+		want  bool
+	}{
+		{"empty set", nil, repo, false},
+		{"no matching kind", []contractsv1.ContextFabricSubjectHint{{Kind: team, ID: "team:x", Source: "caller"}}, repo, false},
+		{"matching kind, caller source", []contractsv1.ContextFabricSubjectHint{{Kind: repo, ID: "repository:x", Source: "caller"}}, repo, true},
+		{"matching kind, engine-minted source", []contractsv1.ContextFabricSubjectHint{{Kind: repo, ID: "repository:x", Source: string(hintsource.PriorSubjectReceipt)}}, repo, true},
+		{"matching kind among several", []contractsv1.ContextFabricSubjectHint{{Kind: team, ID: "team:x", Source: "caller"}, {Kind: repo, ID: "repository:y", Source: "caller"}}, repo, true},
+	} {
+		if got := callerSuppliedHintOfKind(row.hints, row.kind); got != row.want {
+			t.Errorf("%s: callerSuppliedHintOfKind() = %t, want %t", row.name, got, row.want)
+		}
 	}
 }
 
@@ -428,16 +496,16 @@ func TestCarriedStructureEntriesForDecisiveVetoesOnlyTheDisagreeingAnchor(t *tes
 	entries := []*contractsv1.ContextFabricConfirmedStructureEntry{anchorEntry, kindEntry, nil}
 	vetoedEntry := confirmedStructureMember{AppliedValue: committedAnchorRepo.CanonicalID}
 
-	t.Run("not vetoed is a no-op returning the identical slice", func(t *testing.T) {
+	t.Run("not dropped is a no-op returning the identical slice", func(t *testing.T) {
 		t.Parallel()
-		got := carriedStructureEntriesForDecisive(entries, vetoedEntry, false)
+		got := carriedStructureEntriesForDecisive(entries, vetoedEntry, false, contractsv1.ContextFabricStructureDispositionVetoedConflict)
 		if &got[0] != &entries[0] || got[0] != anchorEntry {
-			t.Fatalf("not-vetoed must return entries unchanged, not a copy")
+			t.Fatalf("not-dropped must return entries unchanged, not a copy")
 		}
 	})
-	t.Run("vetoed replaces only the matching anchor entry's disposition", func(t *testing.T) {
+	t.Run("dropped replaces only the matching anchor entry's disposition", func(t *testing.T) {
 		t.Parallel()
-		got := carriedStructureEntriesForDecisive(entries, vetoedEntry, true)
+		got := carriedStructureEntriesForDecisive(entries, vetoedEntry, true, contractsv1.ContextFabricStructureDispositionVetoedConflict)
 		if got[0] == anchorEntry || got[0].Disposition != contractsv1.ContextFabricStructureDispositionVetoedConflict {
 			t.Fatalf("anchor entry = %#v, want a NEW pointer with disposition vetoed_conflict", got[0])
 		}
@@ -449,6 +517,13 @@ func TestCarriedStructureEntriesForDecisiveVetoesOnlyTheDisagreeingAnchor(t *tes
 		}
 		if got[2] != nil {
 			t.Fatalf("nil entry = %#v, want nil preserved", got[2])
+		}
+	})
+	t.Run("dropped renders the disposition it is given, not a fixed one", func(t *testing.T) {
+		t.Parallel()
+		got := carriedStructureEntriesForDecisive(entries, vetoedEntry, true, contractsv1.ContextFabricStructureDispositionSupersededByCaller)
+		if got[0].Disposition != contractsv1.ContextFabricStructureDispositionSupersededByCaller {
+			t.Fatalf("anchor entry disposition = %q, want superseded_by_caller", got[0].Disposition)
 		}
 	})
 }
@@ -558,6 +633,134 @@ func TestVetoedTurnsLedgerLineReadsThePostVetoLedger(t *testing.T) {
 	for _, member := range event.AppliedMembers {
 		if member == contractsv1.ContextFabricStructureNeedSubjectAnchor {
 			t.Fatalf("event.AppliedMembers = %v, must not list subject_anchor for a vetoed turn", event.AppliedMembers)
+		}
+	}
+}
+
+// TestAbsentCarryIsDroppedNotDisclosedAsApplied is the Absent sibling of
+// TestVetoedTurnsLedgerLineReadsThePostVetoLedger: a carry whose kind this
+// turn's own resolution never touches at all -- not a conflict, nothing to
+// agree or disagree with -- is dropped exactly as a genuine conflict is,
+// never left to ride an untouched ledger into a later turn as though this
+// turn had stood behind it.
+func TestAbsentCarryIsDroppedNotDisclosedAsApplied(t *testing.T) {
+	engine, graph, store, telemetry := buildCommittedAnchorEngineWithTelemetry(t)
+
+	one := needTurnRequest("request_5788_absent_one", true)
+	oneResponse := needTurnResponse{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{committedAnchorRepo}}, bases: provenCommitBases(committedAnchorRepo)}
+	oneResult, _ := committedAnchorTurn(t, engine, graph, store, one, oneResponse)
+
+	two := needTurnRequest("request_5788_absent_two", true)
+	two.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam}
+	two = continuingNeedTurn(two, oneResult.ResultID)
+	mark := len(telemetry.confirmedNeedLedgers)
+	// This turn's own resolution commits only the MEMBER kind (team) --
+	// nothing of the carried anchor's own kind (repository) at all, so
+	// there is nothing to agree or disagree with. Committing the member
+	// kind (rather than nothing) keeps this turn on the ordinary decisive
+	// path rather than the zero-subjects terminal, which is the shape a
+	// real confirmation turn actually has.
+	memberOnly := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:absent-turn-member"}
+	twoResponse := needTurnResponse{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{memberOnly}}}
+	twoResult, _ := committedAnchorTurn(t, engine, graph, store, two, twoResponse)
+
+	events := telemetry.confirmedNeedLedgers[mark:]
+	if len(events) != 1 {
+		t.Fatalf("confirmed-need-ledger events for turn two = %d, want exactly 1: %#v", len(events), events)
+	}
+	event := events[0]
+	if event.AnchorAgreement != ConfirmedAnchorAgreementAbsent {
+		t.Fatalf("event.AnchorAgreement = %q, want %q", event.AnchorAgreement, ConfirmedAnchorAgreementAbsent)
+	}
+	if event.AnchorDisposition != contractsv1.ContextFabricStructureDispositionVetoedUnresolved {
+		t.Fatalf("event.AnchorDisposition = %q, want vetoed_unresolved", event.AnchorDisposition)
+	}
+	if event.AppliedAnchorKind != "" || event.AppliedAnchorValueHash != "" {
+		t.Fatalf("event = %+v, want AppliedAnchorKind/AppliedAnchorValueHash both empty -- an absent entry must never read as applied", event)
+	}
+	for _, member := range event.AppliedMembers {
+		if member == contractsv1.ContextFabricStructureNeedSubjectAnchor {
+			t.Fatalf("event.AppliedMembers = %v, must not list subject_anchor for an absent turn", event.AppliedMembers)
+		}
+	}
+	twoSaved := store.states[twoResult.ResultID]
+	if twoSaved == nil {
+		t.Fatalf("fixture defect: turn two must persist a semantic state")
+	}
+	for _, entry := range twoSaved.ConfirmedNeeds {
+		if entry.Member == contractsv1.ContextFabricStructureNeedSubjectAnchor {
+			t.Fatalf("turn two ledger carries subject_anchor = %#v, want none: nothing of its kind was committed this turn", entry)
+		}
+	}
+}
+
+// TestCallerHintOfTheSameKindSupersedesTheEngineCommittedCarry is R2's own
+// end-to-end proof: a caller redeeming a PRIOR OFFER for a subject of the
+// carry's own kind (the ordinary way a caller-sourced hint reaches
+// resolve.go's caller-hint exact-commit channel, hintsource.PriorSubjectReceipt
+// -- SemanticRequestIdentityOf never digests PriorSubjectReceipts, unlike
+// RequestedScope.SubjectHints, so this is the shape that reaches the carry
+// still applied rather than dropping the whole remembered ledger as a
+// changed question) means the engine's own carry is never injected beside
+// it -- never a co-commit of two distinct identities on the SAME proven
+// basis -- and the carry's own disclosure reads superseded_by_caller, not
+// applied.
+func TestCallerHintOfTheSameKindSupersedesTheEngineCommittedCarry(t *testing.T) {
+	engine, graph, store := buildCommittedAnchorEngine(t)
+
+	one := needTurnRequest("request_5788_contest_one", true)
+	oneResponse := needTurnResponse{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{committedAnchorRepo}}, bases: provenCommitBases(committedAnchorRepo)}
+	oneResult, _ := committedAnchorTurn(t, engine, graph, store, one, oneResponse)
+
+	callerPicked := SubjectRef{Kind: committedAnchorRepo.Kind, CanonicalID: "repository:caller-picked-hint", Label: "caller picked"}
+	// A prior offer the caller now redeems -- a real candidate with a real
+	// receipt id, stored the way an earlier turn's own offer would be.
+	offerResult := validInvestigationResult()
+	offerResult.ResultID = "result_5788_contest_offer"
+	offerResult.SubjectResolution = SubjectResolution{
+		Candidates: []SubjectCandidate{{ReceiptID: "receipt_5788_contest_pick", Subject: callerPicked, State: ResolutionAmbiguous, MatchReasons: []string{"offered"}, Confidence: 0.5}},
+	}
+	store.results[offerResult.ResultID] = offerResult
+
+	two := needTurnRequest("request_5788_contest_two", true)
+	two.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam}
+	two = continuingNeedTurn(two, oneResult.ResultID)
+	two.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: offerResult.ResultID, ReceiptID: "receipt_5788_contest_pick"}}
+	twoResponse := needTurnResponse{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{callerPicked}},
+		bases:      provenCommitBases(callerPicked),
+	}
+	twoResult, call := committedAnchorTurn(t, engine, graph, store, two, twoResponse)
+
+	// Never co-committed: the engine's own carry hint must not join the
+	// caller's redeemed hint in the request ResolveSubjects actually saw.
+	if len(call.request.RequestedScope.SubjectHints) != 1 || call.request.RequestedScope.SubjectHints[0].Source != string(hintsource.PriorSubjectReceipt) {
+		t.Fatalf("turn two's ResolveSubjects request hints = %#v, want exactly the caller's own redeemed hint, nothing injected beside it", call.request.RequestedScope.SubjectHints)
+	}
+	// The contested entry is removed from the ledger BEFORE resolution
+	// runs, not only excluded from the injected hint: it must not narrow
+	// ResolveSubjects' own pool-selection parameter either, or a superseded
+	// carry would still bias the search toward the very identity the
+	// caller's own hint just contested.
+	if call.anchor != nil {
+		t.Fatalf("ResolveSubjects anchor selection = %#v, want nil: the superseded carry must not narrow the pool either", call.anchor)
+	}
+
+	got := memberEntries(twoResult, contractsv1.ContextFabricStructureNeedSubjectAnchor)
+	if len(got) != 1 {
+		t.Fatalf("turn two subject_anchor disclosure = %#v, want exactly one entry", got)
+	}
+	if got[0].Disposition != contractsv1.ContextFabricStructureDispositionSupersededByCaller || got[0].AppliedValue != committedAnchorRepo.CanonicalID {
+		t.Fatalf("turn two subject_anchor disclosure = %+v, want disposition superseded_by_caller on the carried (turn one) value %s", got[0], committedAnchorRepo.CanonicalID)
+	}
+
+	twoSaved := store.states[twoResult.ResultID]
+	if twoSaved == nil {
+		t.Fatalf("fixture defect: turn two must persist a semantic state")
+	}
+	for _, entry := range twoSaved.ConfirmedNeeds {
+		if entry.Member == contractsv1.ContextFabricStructureNeedSubjectAnchor {
+			t.Fatalf("turn two ledger carries subject_anchor = %#v, want none: the caller's own redeemed hint superseded it", entry)
 		}
 	}
 }

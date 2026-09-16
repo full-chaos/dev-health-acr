@@ -542,7 +542,18 @@ func TestDecideCountPopulationScopeCoversItsInputDomain(t *testing.T) {
 		{"statistical basis with a term match", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}, CommitBasisSet{SubjectMapKey(anchor): CommitBasisStatistical}, CountPopulationScopeAnchorUnresolved, 0, 1, ""},
 		{"no basis recorded at all, with a term match", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}, nil, CountPopulationScopeAnchorUnresolved, 0, 1, ""},
 		{"bound anchor beside an unbound subject", "", SubjectResolution{Committed: []SubjectRef{other, anchor, member}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}, CommitBasisSet{SubjectMapKey(anchor): CommitBasisAuthoritativeIdentity}, CountPopulationScopeAnchorCommitted, 1, 1, anchor.CanonicalID},
-		{"two bound anchors, first id reported", "", SubjectResolution{Committed: []SubjectRef{project, anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor), scopeAnchorMatch(project)}}, CommitBasisSet{SubjectMapKey(anchor): CommitBasisAuthoritativeIdentity, SubjectMapKey(project): CommitBasisAuthoritativeIdentity}, CountPopulationScopeAnchorCommitted, 2, 0, project.CanonicalID},
+		// R2: more than one bound anchor is refused, never served on
+		// whichever one happened to come first in resolution's own slice
+		// order -- AnchorID still reports the first bound one (a raw
+		// measurement, independent of the decision it feeds), but Decision
+		// itself is anchor_ambiguous, and Counts() is false, so nothing
+		// downstream can read this as a single, proven answer.
+		{"two bound anchors, refused ambiguous", "", SubjectResolution{Committed: []SubjectRef{project, anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor), scopeAnchorMatch(project)}}, CommitBasisSet{SubjectMapKey(anchor): CommitBasisAuthoritativeIdentity, SubjectMapKey(project): CommitBasisAuthoritativeIdentity}, CountPopulationScopeAnchorAmbiguous, 2, 0, project.CanonicalID},
+		// Isolates the CommittedAnchors>1 refusal from the pre-existing
+		// AnchorCandidates>1 one: both bind on the caller's own canonical id
+		// (no candidates at all, so AnchorCandidates stays 0), so only the
+		// committed-anchor count itself can be what refuses this cell.
+		{"two bound anchors on caller canonical id, no candidates at all", "", SubjectResolution{Committed: []SubjectRef{project, anchor}}, CommitBasisSet{SubjectMapKey(anchor): CommitBasisCallerCanonicalID, SubjectMapKey(project): CommitBasisCallerCanonicalID}, CountPopulationScopeAnchorAmbiguous, 2, 0, project.CanonicalID},
 		{"two member candidates", "", SubjectResolution{Candidates: []SubjectCandidate{scopeCandidate(member, "receipt_m1"), scopeCandidate(member, "receipt_m2")}}, nil, CountPopulationScopeAnchorUnresolved, 0, 0, ""},
 		{"one anchor candidate beside a member candidate", "", SubjectResolution{Candidates: []SubjectCandidate{offered, scopeCandidate(member, "receipt_m1")}}, nil, CountPopulationScopeAnchorUnresolved, 0, 0, ""},
 		{"two candidates of a kind the reading excludes", SubjectProject, SubjectResolution{Candidates: []SubjectCandidate{offered, offered}}, nil, CountPopulationScopeAnchorUnresolved, 0, 0, ""},
@@ -610,7 +621,7 @@ var domainRowAnchorCandidates = map[string]int{
 	"reading kind equal to member kind is dropped":   1,
 	"reading kind out of vocabulary is dropped":      1,
 	"bound anchor beside an unbound subject":         1,
-	"two bound anchors, first id reported":           2,
+	"two bound anchors, refused ambiguous":           2,
 	"one anchor candidate beside a member candidate": 1,
 	"two candidates of the reading's anchor kind":    2,
 	"statistical basis with a term match":            1,
