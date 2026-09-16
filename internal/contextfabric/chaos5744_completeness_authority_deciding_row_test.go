@@ -13,6 +13,36 @@ import (
 // change to either one's ordering is caught here rather than only in an
 // end-to-end fixture that happens to carry a single candidate.
 
+// TestUnavailableRequirementCauseNamesEachReasonDistinctly pins the wire
+// split: unavailableRequirementCause maps EACH of the four derivation
+// reasons to its own code, never collapsing no_declaring_producer and
+// table_shape_undeclared onto the shared fact_unconfigured they used to
+// share.
+func TestUnavailableRequirementCauseNamesEachReasonDistinctly(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		reason RequirementUnavailableReason
+		want   contractsv1.ContextFabricCoverageDetailCode
+	}{
+		{RequirementReasonSubjectKindUnsupported, contractsv1.ContextFabricCoverageDetailFactPruned},
+		{RequirementReasonNoDeclaringProducer, contractsv1.ContextFabricCoverageDetailFactNoDeclaringProducer},
+		{RequirementReasonTableShapeUndeclared, contractsv1.ContextFabricCoverageDetailFactTableShapeUndeclared},
+		{RequirementReasonComputedPopulationAbsent, contractsv1.ContextFabricCoverageDetailFactPruned},
+	} {
+		if got := unavailableRequirementCause(tc.reason); got != tc.want {
+			t.Errorf("unavailableRequirementCause(%q) = %q, want %q", tc.reason, got, tc.want)
+		}
+	}
+	// No two of the four reasons may collapse onto the same code, except
+	// the two the design deliberately shares (subject_kind_unsupported and
+	// computed_population_absent both name fact_pruned -- neither is
+	// actionable by a declaration or query change, so a shared code loses
+	// nothing there).
+	if unavailableRequirementCause(RequirementReasonNoDeclaringProducer) == unavailableRequirementCause(RequirementReasonTableShapeUndeclared) {
+		t.Fatal("no_declaring_producer and table_shape_undeclared still collapse onto one wire code")
+	}
+}
+
 func TestDecidingRequirementOutcomeRowPrecedence(t *testing.T) {
 	t.Parallel()
 	narrowedFirst := contractsv1.ContextFabricPlanRequirementOutcomeRow{
