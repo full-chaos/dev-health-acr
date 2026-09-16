@@ -68,6 +68,7 @@ func TestWorkItemSurveyGoalDispatchesMembershipRead(t *testing.T) {
 	graph := &dispatchGraphProbe{graphReaderStub: graphReaderStub{resolution: payload.SubjectResolution, bases: provenCommitBases(payload.SubjectResolution.Committed...)}}
 	membershipReads, factReads := 0, 0
 	stop := errors.New("membership phase observed")
+	telemetry := &recordingTelemetry{}
 	engine, err := NewEngine(EngineDependencies{
 		Interpreter: familyInterpreter{interpreted: InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "survey", TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: []FactRequirement{{Kind: FactStatus}}}, outcome: outcome},
 		Graph:       graph,
@@ -85,6 +86,7 @@ func TestWorkItemSurveyGoalDispatchesMembershipRead(t *testing.T) {
 		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
 			return InvestigationResult{}, stop
 		}),
+		Telemetry: telemetry,
 	}, EngineOptions{ServiceVersion: "test", NewResultID: func() string { return "result_tuple_survey_001" }})
 	if err != nil {
 		t.Fatal(err)
@@ -100,6 +102,19 @@ func TestWorkItemSurveyGoalDispatchesMembershipRead(t *testing.T) {
 	// negative control needs beside it.
 	if frame.HasObligation(ObligationRanking) {
 		t.Fatalf("engine-level strip did not run on an admitted, dispatched survey turn: obligations=%v", frame.Obligations)
+	}
+	// The SETTLED line: admitted=true, stripped_obligations carries what
+	// actually came off the frame -- the enforced outcome, not a
+	// prediction.
+	if len(telemetry.workItemTupleAdmissions) != 1 {
+		t.Fatalf("settled admission lines = %d, want exactly 1", len(telemetry.workItemTupleAdmissions))
+	}
+	settled := telemetry.workItemTupleAdmissions[0]
+	if !settled.Admitted {
+		t.Fatalf("settled admission = %+v, want Admitted=true", settled)
+	}
+	if !reflect.DeepEqual(settled.StrippedObligations, []AnswerObligation{ObligationRanking}) {
+		t.Fatalf("settled admission = %+v, want StrippedObligations=[ranking]", settled)
 	}
 }
 
@@ -185,6 +200,7 @@ func TestWorkItemLateFamilyDisallowReRefusesWithoutLosingObligations(t *testing.
 	payload := workItemTuplePayloadFixture(t)
 	graph := &dispatchGraphProbe{graphReaderStub: graphReaderStub{resolution: payload.SubjectResolution, bases: provenCommitBases(payload.SubjectResolution.Committed...)}}
 	membershipReads, factReads := 0, 0
+	telemetry := &recordingTelemetry{}
 	engine, err := NewEngine(EngineDependencies{
 		Interpreter: familyInterpreter{interpreted: InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "survey", TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: []FactRequirement{{Kind: FactStatus}}}, outcome: outcome},
 		Graph:       graph,
@@ -202,6 +218,7 @@ func TestWorkItemLateFamilyDisallowReRefusesWithoutLosingObligations(t *testing.
 		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
 			return InvestigationResult{}, errors.New("synthesis should not run on a re-refused frame")
 		}),
+		Telemetry: telemetry,
 	}, EngineOptions{ServiceVersion: "test", NewResultID: func() string { return "result_tuple_late_flip_001" }})
 	if err != nil {
 		t.Fatal(err)
@@ -218,6 +235,19 @@ func TestWorkItemLateFamilyDisallowReRefusesWithoutLosingObligations(t *testing.
 	}
 	if !reflect.DeepEqual(frame.Obligations, before) {
 		t.Fatalf("BUG: a gate the engine re-refused still lost obligations: before=%v after=%v", before, frame.Obligations)
+	}
+	// The SETTLED line: admitted=false, stripped_obligations empty -- the
+	// enforced outcome, distinct from whatever the interpretation-time
+	// prediction said before the engine's own family reading reversed it.
+	if len(telemetry.workItemTupleAdmissions) != 1 {
+		t.Fatalf("settled admission lines = %d, want exactly 1", len(telemetry.workItemTupleAdmissions))
+	}
+	settled := telemetry.workItemTupleAdmissions[0]
+	if settled.Admitted {
+		t.Fatalf("settled admission = %+v, want Admitted=false", settled)
+	}
+	if len(settled.StrippedObligations) != 0 {
+		t.Fatalf("settled admission = %+v, want StrippedObligations empty", settled)
 	}
 }
 

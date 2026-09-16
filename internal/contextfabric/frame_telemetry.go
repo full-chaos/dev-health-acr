@@ -148,7 +148,7 @@ type FrameValidationEvent struct {
 	// qualifies.
 	OrderingPresent bool
 
-	// StrippedObligations is the closed-vocabulary set THIS
+	// PredictedStrippedObligations is the closed-vocabulary set THIS
 	// INTERPRETATION'S promotion would remove from the frame's derived
 	// Obligations (workItemTupleObligationsToStrip), in the frame's own
 	// order. Nil, never an empty non-nil slice, on every line the tuple
@@ -163,7 +163,7 @@ type FrameValidationEvent struct {
 	// after that later call settles, in engine.go. This field is this
 	// interpretation's own observability for its own decision, not a
 	// report that a mutation was applied.
-	StrippedObligations []AnswerObligation
+	PredictedStrippedObligations []AnswerObligation
 
 	// DerivedObligationCount / WidenedObligationCount are counts, not
 	// lists: the obligation set is derivable from the goal set and the

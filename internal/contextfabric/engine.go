@@ -323,6 +323,10 @@ type EngineDependencies struct {
 type EngineTelemetry interface {
 	RecordWorkItemReuse(context.Context, storage.Principal, WorkItemReuseEvent)
 	RecordWorkItemStoredServing(context.Context, storage.Principal, WorkItemStoredServingEvent)
+	// RecordWorkItemTupleAdmission is the settled (enforced) counterpart to
+	// FrameValidationEvent's PredictedStrippedObligations -- see
+	// WorkItemTupleAdmissionEvent's own doc comment.
+	RecordWorkItemTupleAdmission(context.Context, storage.Principal, WorkItemTupleAdmissionEvent)
 	// QuestionFamilyTelemetry (CHAOS-4632 §4.3) is EMBEDDED, not offered
 	// as a separate optional interface a caller might or might not
 	// implement.
@@ -2176,7 +2180,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	familyAllowsWorkItemTuple := tupleFamilyKnown && tupleFamilyDefinition.allowsWorkItemTuple
 	familyOutcome.Gate = tightenWorkItemTupleFrameGate(familyOutcome.Gate, familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext)
 	workItemTuple := prospectiveWorkItemTupleAdmission(familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext) == workItemTupleProspective
-	// THE ONE POINT this arm's ranking-obligation strip actually runs.
+	// THE ONE POINT this arm's ranking-obligation strip actually runs, and
+	// the settled-admission Info line's one call site.
 	// workItemTuple, just above, is the LAST word: every earlier reading
 	// (resolveFrame's heuristic DeriveQuestionFamily projection, then
 	// finishFamilyResolution's routed-family tighten) has already been
@@ -2184,9 +2189,18 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// differed, and a frame this call refuses never reaches the mutation
 	// at all -- so a frame this arm ultimately declines to serve keeps
 	// every obligation it started with. See
-	// workItemTupleStripSurveyObligations's own doc comment for why.
-	if workItemTuple && familyOutcome.Frame != nil {
-		workItemTupleStripSurveyObligations(familyOutcome.Frame)
+	// workItemTupleStripSurveyObligations's own doc comment for why. The
+	// telemetry line fires for every frame this arm is structurally
+	// concerned with, admitted or not, so a refusal is as observable as an
+	// admission -- see WorkItemTupleAdmissionEvent's own doc comment.
+	if workItemTupleInScope(familyOutcome.Frame) {
+		var stripped []AnswerObligation
+		if workItemTuple {
+			stripped = workItemTupleStripSurveyObligations(familyOutcome.Frame)
+		}
+		if e.telemetry != nil {
+			e.telemetry.RecordWorkItemTupleAdmission(ctx, principal, WorkItemTupleAdmissionEvent{Admitted: workItemTuple, StrippedObligations: stripped})
+		}
 	}
 	// DERIVED ONCE, AND READ TWICE ON THIS LINE AND THE NEXT. The rows are an
 	// INPUT to the plan (planFactKinds reads a computed step's declared inputs

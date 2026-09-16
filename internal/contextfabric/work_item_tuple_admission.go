@@ -174,3 +174,31 @@ func tightenWorkItemTupleFrameGate(gate FrameGate, frame *QuestionFrame, familyA
 	}
 	return workItemTupleFrameGate(gate, frame, familyAllowsWorkItemTuple, timeContext)
 }
+
+// workItemTupleInScope reports whether frame is this arm's structural
+// concern at all -- children_of_scope over work_item -- independent of
+// whether it ends up admitted. This is the ONE condition
+// prospectiveWorkItemTupleAdmission's first guard clause already checks;
+// named here so the settled-admission telemetry call site (engine.go) can
+// ask it without re-deriving the whole admission decision just to decide
+// whether to log.
+func workItemTupleInScope(frame *QuestionFrame) bool {
+	return frame != nil && frame.SubjectExpression.Kind == SubjectExpressionChildrenOfScope && frame.SubjectExpression.Scoped != nil && frame.SubjectExpression.Scoped.MemberKind == SubjectWorkItem
+}
+
+// WorkItemTupleAdmissionEvent is the SETTLED half of this arm's admission
+// decision -- the ENFORCED outcome, recorded once every earlier and later
+// family reading (resolveFrame's heuristic, finishFamilyResolution's
+// routed-family tighten, the engine's own carry-adjusted-family tighten)
+// has already been through. Emitted only for a frame workItemTupleInScope
+// names as this arm's concern; StrippedObligations is nil/empty on every
+// line, admitted or refused, that removed nothing -- including every
+// refusal, since workItemTupleStripSurveyObligations never runs for one.
+// This is the settled counterpart to FrameValidationEvent's
+// PredictedStrippedObligations, which is stamped before this decision is
+// final and can therefore disagree with it on a turn whose family reading
+// changes between the two.
+type WorkItemTupleAdmissionEvent struct {
+	Admitted            bool
+	StrippedObligations []AnswerObligation
+}

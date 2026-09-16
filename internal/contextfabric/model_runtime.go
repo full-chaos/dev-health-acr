@@ -1749,7 +1749,7 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 		// engine.go) can still reverse this promotion, and the actual
 		// removal happens only once that is settled. See
 		// workItemTupleObligationsToStrip's own doc comment.
-		event.StrippedObligations = strippedObligations
+		event.PredictedStrippedObligations = strippedObligations
 		// The requested-versus-proposed half, from THIS receipt and THIS
 		// proposal, judged by the gate this event already carries -- one
 		// verdict, read once.
