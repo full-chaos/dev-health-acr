@@ -362,11 +362,20 @@ const (
 	ContextFabricStructureInferredDefault        ContextFabricStructureProvenance = "inferred_default"
 	ContextFabricStructureQuestionStated         ContextFabricStructureProvenance = "question_stated"
 	ContextFabricStructureClarificationConfirmed ContextFabricStructureProvenance = "clarification_confirmed"
+	// ContextFabricStructureEngineCommitted (CHAOS-5788, v1-additive -- see
+	// ContextFabricStructureSourceCarried's own doc comment above for why
+	// appending a member to this closed enum is not a new major contract) is
+	// a carried subject_anchor member the engine bound to the frame's own
+	// anchor by resolving it, with no clarification ever offered for a
+	// caller to confirm: distinct from ContextFabricStructureClarificationConfirmed,
+	// which always means a caller picked from an offer this engine raised.
+	ContextFabricStructureEngineCommitted ContextFabricStructureProvenance = "engine_committed"
 )
 
 func ValidContextFabricStructureProvenance(value ContextFabricStructureProvenance) bool {
 	switch value {
-	case ContextFabricStructureInferredDefault, ContextFabricStructureQuestionStated, ContextFabricStructureClarificationConfirmed:
+	case ContextFabricStructureInferredDefault, ContextFabricStructureQuestionStated, ContextFabricStructureClarificationConfirmed,
+		ContextFabricStructureEngineCommitted:
 		return true
 	default:
 		return false

@@ -2616,7 +2616,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 		return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, gateResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, gateMaterial, effectiveWindow, windowCarried, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, CohortMemberSourceNotApplicable, confirmedNeedsForCapture))
 	}
-	resolution, structureMaterial, commitBases, commitDigests, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, effectiveConfirmedKind(structureCanon.Confirmed, kindCarry), confirmedAnchorSelection(structureCanon.Confirmed, appliedNeeds), familyOutcome.Frame, ScopeAnchorRetrievalKind(familyOutcome.Frame, familyOutcome.WinningSample.ScopeAnchorKind))
+	scopeAnchorKind := ScopeAnchorRetrievalKind(familyOutcome.Frame, familyOutcome.WinningSample.ScopeAnchorKind)
+	resolution, structureMaterial, commitBases, commitDigests, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, effectiveConfirmedKind(structureCanon.Confirmed, kindCarry), confirmedAnchorSelection(structureCanon.Confirmed, appliedNeeds), familyOutcome.Frame, scopeAnchorKind)
 	if err != nil {
 		// CHAOS-4077: a never-projected org (ResolveSubjects queried a
 		// graph key that has never been created) degrades to the SAME
@@ -2667,6 +2668,16 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// deliberately does not cover.
 		return InvestigationResult{}, stageError(StageSubjectResolution, fmt.Errorf("resolve subjects: %w", err))
 	}
+	// CHAOS-5788: whether THIS turn's own resolution just bound a committed
+	// subject to the frame's own anchor -- computed here, once, from the
+	// exact (frame, resolution, commitBases) triple ResolveSubjects returned,
+	// before anything below can reset resolution to empty (an authorization
+	// failure, a work-item-kind mismatch, a group-axis collapse). Read only
+	// at the decisive persistence point near the end of this function; a
+	// branch that resets resolution before reaching there never consults it,
+	// which is correct -- a served document with no committed subject must
+	// never capture one as carried state for the next turn.
+	committedAnchorForCapture, haveCommittedAnchorForCapture := engineCommittedAnchorForCapture(familyOutcome.Frame, scopeAnchorKind, resolution, commitBases)
 	// priorEntries: fetched ABOVE, before this call (CHAOS-4040 reordering
 	// -- see that call site's own comment for why it moved), reused here
 	// unchanged -- still the SAME single I/O call site fetchPriorEntries'
@@ -3559,6 +3570,19 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		return InvestigationResult{}, stageError(StageValidation, fmt.Errorf("%w: %w", ErrInvalidResult, err))
 	}
 	if e.results != nil {
+		// The ONE point the outgoing ledger folds in what THIS
+		// turn's own resolution committed to the frame's anchor -- guarded to
+		// !workItemTuple because committedAnchorForCapture was computed
+		// before restrictWorkItemTupleCandidate could narrow resolution
+		// further; a work-item-tuple question is never children_of_scope-
+		// shaped in the first place, so engineCommittedAnchorForCapture
+		// already returns ok=false for it in practice, and this guard makes
+		// that true by construction rather than by the shape of today's
+		// frames.
+		confirmedNeedsForDecisiveCapture := confirmedNeedsForCapture
+		if !workItemTuple {
+			confirmedNeedsForDecisiveCapture = confirmedNeedsForCaptureWithCommittedAnchor(remembered, confirmedThisTurn, request, confirmedNeedsForCapture, committedAnchorForCapture, haveCommittedAnchorForCapture)
+		}
 		// Keyed from the CLAMPED REQUEST context -- byte-for-byte the
 		// value tryReuse keyed its lookup with (round-3 F1). Save and
 		// FindReusable must agree or the saved row is unreachable, which
@@ -3570,7 +3594,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// know the former, so keying Save on the latter would reopen the
 		// same asymmetry from the other side.
 		epochDeltaSample := e.sampleBindingEpochDelta(ctx, principal, binding)
-		if err := e.saveResult(ctx, principal, BudgetAssertDecisive, result, reuseWatermarkSnapshot, reuseEpoch, composeTimeAxisKey(TimeAxisKeyFor(clampedRequestTime), windowSaveKeyComponent(windowCanon, effectiveWindow, windowCarried)), binding.Epoch, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, graphContext.CohortMemberSource, confirmedNeedsForCapture, finalWorkItemTupleCensus(tupleCensus, result.Cohort))); err != nil {
+		if err := e.saveResult(ctx, principal, BudgetAssertDecisive, result, reuseWatermarkSnapshot, reuseEpoch, composeTimeAxisKey(TimeAxisKeyFor(clampedRequestTime), windowSaveKeyComponent(windowCanon, effectiveWindow, windowCarried)), binding.Epoch, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, graphContext.CohortMemberSource, confirmedNeedsForDecisiveCapture, finalWorkItemTupleCensus(tupleCensus, result.Cohort))); err != nil {
 			// CHAOS-3927 P4 (design brief §2.1): a decisive result carrying
 			// confirmed structure can still lose the atomic (org,
 			// prior_result_id, member) supersession claim to a concurrent
@@ -3601,7 +3625,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// naming THIS result as parent would admit a confirmation this
 				// exact Save call just refused (withoutSupersededConfirmedNeeds's
 				// own doc comment, chaos5639_confirmed_need.go).
-				superseding, supersededErr := e.structureSupersessionVetoResult(ctx, principal, request, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, CohortMemberSourceNotApplicable, confirmedNeedsForCapture))
+				superseding, supersededErr := e.structureSupersessionVetoResult(ctx, principal, request, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, CohortMemberSourceNotApplicable, confirmedNeedsForDecisiveCapture))
 				return superseding, supersededErr
 			}
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))

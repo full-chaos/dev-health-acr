@@ -1145,7 +1145,7 @@ func TestSemanticState_ConfirmedNeedsNewFieldsRoundTrip(t *testing.T) {
 	state := semanticFixture(t)
 	state.ConfirmedNeeds = []ConfirmedNeedEntry{
 		{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(SubjectTeam)},
-		{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: SubjectProject, AppliedValue: "p", MatchedTermHash: "h"},
+		{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: SubjectProject, AppliedValue: "p", MatchedTermHash: "h", Basis: ConfirmedNeedBasisEngineCommitted},
 		{Member: contractsv1.ContextFabricStructureNeedSubjectHandle, AppliedKind: SubjectPullRequest, AppliedValue: "532", PatternID: "pull_request_number"},
 		{Member: contractsv1.ContextFabricStructureNeedWindow, AppliedValue: string(RelativeWindowTrailing90D), WindowStart: &start, WindowEnd: &end},
 		{Member: contractsv1.ContextFabricStructureNeedSubjectCandidate, AppliedKind: SubjectRepository, AppliedValue: "repository:need-r2"},
@@ -1161,7 +1161,7 @@ func TestSemanticState_ConfirmedNeedsNewFieldsRoundTrip(t *testing.T) {
 	for i, entry := range decoded.ConfirmedNeeds {
 		original := state.ConfirmedNeeds[i]
 		if entry.Member != original.Member || entry.AppliedKind != original.AppliedKind || entry.AppliedValue != original.AppliedValue ||
-			entry.MatchedTermHash != original.MatchedTermHash || entry.PatternID != original.PatternID ||
+			entry.MatchedTermHash != original.MatchedTermHash || entry.PatternID != original.PatternID || entry.Basis != original.Basis ||
 			!sameWindowBounds(entry.WindowStart, original.WindowStart) || !sameWindowBounds(entry.WindowEnd, original.WindowEnd) {
 			t.Fatalf("entry %d read back as %#v, want %#v", i, entry, original)
 		}
@@ -1177,6 +1177,7 @@ func TestSemanticState_ConfirmedNeedsNewFieldsValidation(t *testing.T) {
 	handle := contractsv1.ContextFabricStructureNeedSubjectHandle
 	window := contractsv1.ContextFabricStructureNeedWindow
 	candidate := contractsv1.ContextFabricStructureNeedSubjectCandidate
+	anchor := contractsv1.ContextFabricStructureNeedSubjectAnchor
 	for _, tc := range []struct {
 		name   string
 		entry  ConfirmedNeedEntry
@@ -1200,6 +1201,12 @@ func TestSemanticState_ConfirmedNeedsNewFieldsValidation(t *testing.T) {
 		{"window empty value", ConfirmedNeedEntry{Member: window}, true},
 		{"bounds on a candidate", ConfirmedNeedEntry{Member: candidate, AppliedValue: "c", WindowStart: &start, WindowEnd: &end}, false},
 		{"bounds on a handle", ConfirmedNeedEntry{Member: handle, AppliedValue: "1", WindowStart: &start, WindowEnd: &end}, false},
+		{"anchor without basis", ConfirmedNeedEntry{Member: anchor, AppliedKind: SubjectRepository, AppliedValue: "r"}, true},
+		{"anchor, engine_committed basis", ConfirmedNeedEntry{Member: anchor, AppliedKind: SubjectRepository, AppliedValue: "r", Basis: ConfirmedNeedBasisEngineCommitted}, true},
+		{"basis out of vocabulary", ConfirmedNeedEntry{Member: anchor, AppliedKind: SubjectRepository, AppliedValue: "r", Basis: ConfirmedNeedBasis("not_a_basis")}, false},
+		{"basis on a candidate", ConfirmedNeedEntry{Member: candidate, AppliedValue: "c", Basis: ConfirmedNeedBasisEngineCommitted}, false},
+		{"basis on a handle", ConfirmedNeedEntry{Member: handle, AppliedValue: "1", Basis: ConfirmedNeedBasisEngineCommitted}, false},
+		{"basis on a window", ConfirmedNeedEntry{Member: window, AppliedValue: "all_time", Basis: ConfirmedNeedBasisEngineCommitted}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

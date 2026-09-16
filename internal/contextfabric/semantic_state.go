@@ -206,6 +206,13 @@ type ConfirmedNeedEntry struct {
 	// from the relative id at a later time.
 	WindowStart *time.Time `json:"window_start,omitempty"`
 	WindowEnd   *time.Time `json:"window_end,omitempty"`
+	// Basis (CHAOS-5788) is populated for subject_anchor only, copied from
+	// confirmedStructureMember.Basis: the closed vocabulary telling a
+	// caller-picked confirmation apart from a subject the engine bound to
+	// the frame's own anchor with no offer ever raised. Empty (the zero
+	// value) for every other member and for every subject_anchor entry
+	// redeemed from a receipt.
+	Basis ConfirmedNeedBasis `json:"basis,omitempty"`
 }
 
 // SemanticScopeAnchor is the scope anchor a reading resolved its subject under.
@@ -745,6 +752,15 @@ func validateSemanticState(s PersistedSemanticState) error {
 		}
 		if len(entry.MatchedTermHash) > SemanticStateMaxTermBytes {
 			return oversized(SemanticStateBoundTermBytes, "confirmed_needs[%d].matched_term_hash is %d bytes, exceeds %d", i, len(entry.MatchedTermHash), SemanticStateMaxTermBytes)
+		}
+		// Basis is meaningful for subject_anchor only, the same restriction
+		// MatchedTermHash carries just above -- a document this codec did not
+		// write for any other member.
+		if entry.Basis != "" && !ValidConfirmedNeedBasis(entry.Basis) {
+			return reject("confirmed_needs[%d].basis %q is not a vocabulary member", i, entry.Basis)
+		}
+		if entry.Basis != "" && entry.Member != contractsv1.ContextFabricStructureNeedSubjectAnchor {
+			return reject("confirmed_needs[%d].basis is set for member %q, only subject_anchor carries one", i, entry.Member)
 		}
 		// pattern_id is meaningful for subject_handle only (HandleVerifier's
 		// own pattern argument).

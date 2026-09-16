@@ -301,6 +301,7 @@ func (e *Engine) resolveConfirmedNeedLedger(ctx context.Context, principal stora
 			Member: entry.Member, AppliedKind: entry.AppliedKind, AppliedValue: entry.AppliedValue,
 			MatchedTermHash: entry.MatchedTermHash, PatternID: entry.PatternID,
 			WindowStart: cloneWindowBound(entry.WindowStart), WindowEnd: cloneWindowBound(entry.WindowEnd),
+			Basis: entry.Basis,
 		})
 	}
 	return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerHit, Entries: entries, Dropped: dropped, SourceResultID: parent}
@@ -313,6 +314,21 @@ func (e *Engine) resolveConfirmedNeedLedger(ctx context.Context, principal stora
 func (e *Engine) reverifyRememberedNeed(ctx context.Context, principal storage.Principal, request InvestigationRequest, binding ResolvedGraphBinding, schemaVersion string, entry ConfirmedNeedEntry) (ConfirmedNeedMemberDropReason, bool) {
 	switch entry.Member {
 	case contractsv1.ContextFabricStructureNeedSubjectAnchor:
+		// CHAOS-5788: an engine-committed anchor carries no offer's own
+		// matched_term_hash to replay -- there was never a census claim to
+		// re-check, only a resolution to re-run. It is not a live tampering
+		// vector the way a caller-picked offer is (that offer's own doc
+		// comment's reasoning): the SAME turn that consults this entry also
+		// re-resolves the frame's anchor terms from scratch through the
+		// ordinary fast path, and only a subject that resolution itself
+		// re-proves can ever reach Committed. This entry never stands in for
+		// that re-resolution; it only widens the pool it is allowed to
+		// survive into (decideAnchorPoolKindScope, graphrank). No reverify,
+		// exactly as expected_kind and window carry none (this function's
+		// own default case, below).
+		if entry.Basis == ConfirmedNeedBasisEngineCommitted {
+			return "", true
+		}
 		// The carrier's OWN schema_version selects the verifier, exactly as an
 		// ancr_ redemption dispatches on the issuing result's schema_version.
 		if !e.anchorReverifierWired(schemaVersion) {
@@ -468,6 +484,7 @@ func confirmedNeedEntryOf(member confirmedStructureMember) ConfirmedNeedEntry {
 		Member: member.Member, AppliedKind: member.AppliedKind, AppliedValue: member.AppliedValue,
 		MatchedTermHash: member.MatchedTermHash, PatternID: member.PatternID,
 		WindowStart: cloneWindowBound(member.WindowStart), WindowEnd: cloneWindowBound(member.WindowEnd),
+		Basis: member.Basis,
 	}
 }
 
@@ -624,8 +641,13 @@ func composeCarriedNeedEntry(member contractsv1.ContextFabricStructureNeedKind, 
 		Member: member, AppliedValue: entry.AppliedValue,
 		Source:        contractsv1.ContextFabricStructureSourceCarried,
 		PriorResultID: sourceResultID,
-		Provenance:    contractsv1.ContextFabricStructureClarificationConfirmed,
-		Disposition:   contractsv1.ContextFabricStructureDispositionApplied,
+		// Every member before this axis existed, and every member redeemed
+		// from a receipt, renders the ORIGINAL token
+		// (provenanceForConfirmedNeedBasis's own zero-value rule) -- only a
+		// subject_anchor the engine bound with no offer ever raised renders
+		// the new one.
+		Provenance:  provenanceForConfirmedNeedBasis(entry.Basis),
+		Disposition: contractsv1.ContextFabricStructureDispositionApplied,
 	}
 }
 

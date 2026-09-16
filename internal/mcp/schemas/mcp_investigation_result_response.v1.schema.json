@@ -4751,11 +4751,12 @@
           "type": "string"
         },
         "StructureProvenance": {
-          "description": "CHAOS-3900 P1: closed authority-tier vocabulary for a ConfirmedStructureEntry (design brief section 2.0's authority table). A distinct enum from WindowProvenance despite sharing the same three values -- each frame member owns its own authority vocabulary independently.",
+          "description": "CHAOS-3900 P1: closed authority-tier vocabulary for a ConfirmedStructureEntry (design brief section 2.0's authority table). A distinct enum from WindowProvenance despite sharing the same three values -- each frame member owns its own authority vocabulary independently. engine_committed (v1-additive) is a carried subject_anchor member the engine bound to the frame's own anchor with no clarification ever offered.",
           "enum": [
             "inferred_default",
             "question_stated",
-            "clarification_confirmed"
+            "clarification_confirmed",
+            "engine_committed"
           ],
           "type": "string"
         },
