@@ -32,9 +32,9 @@ func TestByIDRouteRepairsLegacyCardinalityClaimSubject(t *testing.T) {
 	// unconfirmed anchor.
 	stored.Result.SubjectResolution.Candidates[0].MatchedTerms = []string{"project"}
 	// CommitDecisionDigests: the wire-safe survivor of CommitBasis a real
-	// persisted row carries (chaos4085_commit_basis.go) -- without it the
-	// anchor's term match alone no longer binds (anchorBound now requires
-	// an identity-proven basis), and this repair would never fire.
+	// persisted row carries (chaos4085_commit_basis.go) -- anchorBound
+	// requires an identity-proven basis on a term match, so this is what
+	// lets the anchor bind and this repair fire.
 	stored.Result.SubjectResolution.CommitDecisionDigests = []contractsv1.ContextFabricCommitDecisionDigest{{
 		Subject: stored.Result.SubjectResolution.Committed[0], CommitGate: "identity_fast_path", IdentityProven: true,
 	}}
@@ -93,8 +93,8 @@ func TestByIDRouteLeavesAnAlreadyCorrectCardinalityClaimAlone(t *testing.T) {
 	// of stopping earlier at the "reading cannot re-derive the scope" gate.
 	stored.Result.SubjectResolution.Candidates[0].MatchedTerms = []string{"project"}
 	anchor := stored.Result.SubjectResolution.Committed[0]
-	// CommitDecisionDigests: see the sibling test above -- without it the
-	// anchor's term match alone no longer binds.
+	// CommitDecisionDigests: see the sibling test above -- this is what lets
+	// the anchor's term match bind.
 	stored.Result.SubjectResolution.CommitDecisionDigests = []contractsv1.ContextFabricCommitDecisionDigest{{
 		Subject: anchor, CommitGate: "identity_fast_path", IdentityProven: true,
 	}}

@@ -316,9 +316,9 @@ func (s CommitDecisionDigestSet) ResetTo(other CommitDecisionDigestSet) {
 // call site that decides a count's population scope over a STORED or
 // re-verified resolution reads this instead of passing a bare nil: a nil
 // bases set makes every committed subject read CommitBasisUnknown, which
-// anchorBound (count_population_scope.go) never treats as proof of anything
-// -- silently regressing a previously-served, previously-proven
-// anchor-committed count to anchor_unresolved on every reuse.
+// anchorBound (count_population_scope.go) never treats as proof of anything,
+// so a genuinely proven anchor_committed count must read anchor_unresolved
+// on reuse without this reconstruction.
 //
 // A digest renders CommitBasisAuthoritativeIdentity when IdentityProven is
 // true (never CommitBasisCallerCanonicalID specifically: the distinction

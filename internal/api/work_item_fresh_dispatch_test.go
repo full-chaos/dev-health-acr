@@ -160,11 +160,11 @@ func (g *freshTupleGraph) ResolveSubjects(_ context.Context, p storage.Principal
 	candidate.ReceiptID = "receipt_tuple_project"
 	// CommitBasisSet/CommitDecisionDigestSet: this fixture presents a real,
 	// authorized, uniquely resolved candidate exactly as identity_fast_path
-	// would. Without the live basis, anchorBound (count_population_scope.go)
-	// can no longer bind it on a term match alone; without the PERSISTED
-	// digest twin, a later turn naming this one's saved document as its
-	// reuse candidate can no longer bind it either (CommitBasisSetFromDigests,
-	// chaos4085_commit_basis.go) -- CommitBasis itself is never persisted.
+	// would. anchorBound (count_population_scope.go) requires the live basis
+	// to bind a term match; a later turn naming this one's saved document as
+	// its reuse candidate binds only through the PERSISTED digest twin
+	// (CommitBasisSetFromDigests, chaos4085_commit_basis.go), since
+	// CommitBasis itself is never persisted.
 	bases := contextfabric.CommitBasisSet{}
 	bases.Record(candidate.Subject, contextfabric.CommitBasisAuthoritativeIdentity)
 	digests := contextfabric.CommitDecisionDigestSet{}
