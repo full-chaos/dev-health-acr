@@ -164,17 +164,52 @@ func (f AnswerDisplayFields) SlogArgs() []any {
 // CompletenessAuthorityFields is contextfabric.completeness_authority's generated typed construction interface
 // (CHAOS-5516): one Go field per Field CompletenessAuthority.Fields declares in spec.go.
 type CompletenessAuthorityFields struct {
-	OrgID       string
-	ModelStatus string
-	Disposition string
-	Basis       string
-	ServerState string
-	Derived     bool
-	Disagreed   bool
-	WouldFlip   bool
-	Direction   string
-	Version     string
-	RequestID   string
+	OrgID                               string
+	ModelStatus                         string
+	Disposition                         string
+	Basis                               string
+	ServerState                         string
+	Derived                             bool
+	Disagreed                           bool
+	WouldFlip                           bool
+	Direction                           string
+	Version                             string
+	DecidingRequirement                 string
+	DecidingStage                       string
+	DecidingOutcome                     string
+	DecidingCauseOverrun                string
+	DecidingCauseCoverage               string
+	DecidingCauseNarrowing              string
+	DecidingReadEvaluationGap           bool
+	OutcomeRowsTotal                    int
+	OutcomeRowsSatisfied                int
+	OutcomeRowsNarrowed                 int
+	OutcomeRowsUnavailable              int
+	OutcomeRowsNotApplicable            int
+	OutcomeRowsNotAttempted             int
+	ClaimedFactsIdentity                int
+	ClaimedFactsMembership              int
+	ClaimedFactsStatus                  int
+	ClaimedFactsActualCompletion        int
+	ClaimedFactsWork                    int
+	ClaimedFactsBlockers                int
+	ClaimedFactsRequiredChildren        int
+	ClaimedFactsPullRequests            int
+	ClaimedFactsReviews                 int
+	ClaimedFactsContinuousIntegration   int
+	ClaimedFactsDeployments             int
+	ClaimedFactsIncidents               int
+	ClaimedFactsMetrics                 int
+	ClaimedFactsHealth                  int
+	ClaimedFactsWorkload                int
+	ClaimedFactsInvestment              int
+	ClaimedFactsReadiness               int
+	ClaimedFactsOperationalDeficiencies int
+	ClaimedFactsSourceHealth            int
+	ClaimedFactsEvidence                int
+	ClaimedFactsFlow                    int
+	ClaimedFactsLandscape               int
+	RequestID                           string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every CompletenessAuthorityFields uniformly, set ONLY by NewCompletenessAuthorityFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -188,20 +223,55 @@ type CompletenessAuthorityFields struct {
 
 // NewCompletenessAuthorityFields is the generated constructor for CompletenessAuthorityFields -- every
 // field CompletenessAuthority.Fields declares is a required parameter.
-func NewCompletenessAuthorityFields(orgID string, modelStatus string, disposition string, basis string, serverState string, derived bool, disagreed bool, wouldFlip bool, direction string, version string, requestID string) CompletenessAuthorityFields {
+func NewCompletenessAuthorityFields(orgID string, modelStatus string, disposition string, basis string, serverState string, derived bool, disagreed bool, wouldFlip bool, direction string, version string, decidingRequirement string, decidingStage string, decidingOutcome string, decidingCauseOverrun string, decidingCauseCoverage string, decidingCauseNarrowing string, decidingReadEvaluationGap bool, outcomeRowsTotal int, outcomeRowsSatisfied int, outcomeRowsNarrowed int, outcomeRowsUnavailable int, outcomeRowsNotApplicable int, outcomeRowsNotAttempted int, claimedFactsIdentity int, claimedFactsMembership int, claimedFactsStatus int, claimedFactsActualCompletion int, claimedFactsWork int, claimedFactsBlockers int, claimedFactsRequiredChildren int, claimedFactsPullRequests int, claimedFactsReviews int, claimedFactsContinuousIntegration int, claimedFactsDeployments int, claimedFactsIncidents int, claimedFactsMetrics int, claimedFactsHealth int, claimedFactsWorkload int, claimedFactsInvestment int, claimedFactsReadiness int, claimedFactsOperationalDeficiencies int, claimedFactsSourceHealth int, claimedFactsEvidence int, claimedFactsFlow int, claimedFactsLandscape int, requestID string) CompletenessAuthorityFields {
 	return CompletenessAuthorityFields{
-		OrgID:       orgID,
-		ModelStatus: modelStatus,
-		Disposition: disposition,
-		Basis:       basis,
-		ServerState: serverState,
-		Derived:     derived,
-		Disagreed:   disagreed,
-		WouldFlip:   wouldFlip,
-		Direction:   direction,
-		Version:     version,
-		RequestID:   requestID,
-		constructed: true,
+		OrgID:                               orgID,
+		ModelStatus:                         modelStatus,
+		Disposition:                         disposition,
+		Basis:                               basis,
+		ServerState:                         serverState,
+		Derived:                             derived,
+		Disagreed:                           disagreed,
+		WouldFlip:                           wouldFlip,
+		Direction:                           direction,
+		Version:                             version,
+		DecidingRequirement:                 decidingRequirement,
+		DecidingStage:                       decidingStage,
+		DecidingOutcome:                     decidingOutcome,
+		DecidingCauseOverrun:                decidingCauseOverrun,
+		DecidingCauseCoverage:               decidingCauseCoverage,
+		DecidingCauseNarrowing:              decidingCauseNarrowing,
+		DecidingReadEvaluationGap:           decidingReadEvaluationGap,
+		OutcomeRowsTotal:                    outcomeRowsTotal,
+		OutcomeRowsSatisfied:                outcomeRowsSatisfied,
+		OutcomeRowsNarrowed:                 outcomeRowsNarrowed,
+		OutcomeRowsUnavailable:              outcomeRowsUnavailable,
+		OutcomeRowsNotApplicable:            outcomeRowsNotApplicable,
+		OutcomeRowsNotAttempted:             outcomeRowsNotAttempted,
+		ClaimedFactsIdentity:                claimedFactsIdentity,
+		ClaimedFactsMembership:              claimedFactsMembership,
+		ClaimedFactsStatus:                  claimedFactsStatus,
+		ClaimedFactsActualCompletion:        claimedFactsActualCompletion,
+		ClaimedFactsWork:                    claimedFactsWork,
+		ClaimedFactsBlockers:                claimedFactsBlockers,
+		ClaimedFactsRequiredChildren:        claimedFactsRequiredChildren,
+		ClaimedFactsPullRequests:            claimedFactsPullRequests,
+		ClaimedFactsReviews:                 claimedFactsReviews,
+		ClaimedFactsContinuousIntegration:   claimedFactsContinuousIntegration,
+		ClaimedFactsDeployments:             claimedFactsDeployments,
+		ClaimedFactsIncidents:               claimedFactsIncidents,
+		ClaimedFactsMetrics:                 claimedFactsMetrics,
+		ClaimedFactsHealth:                  claimedFactsHealth,
+		ClaimedFactsWorkload:                claimedFactsWorkload,
+		ClaimedFactsInvestment:              claimedFactsInvestment,
+		ClaimedFactsReadiness:               claimedFactsReadiness,
+		ClaimedFactsOperationalDeficiencies: claimedFactsOperationalDeficiencies,
+		ClaimedFactsSourceHealth:            claimedFactsSourceHealth,
+		ClaimedFactsEvidence:                claimedFactsEvidence,
+		ClaimedFactsFlow:                    claimedFactsFlow,
+		ClaimedFactsLandscape:               claimedFactsLandscape,
+		RequestID:                           requestID,
+		constructed:                         true,
 	}
 }
 
@@ -228,6 +298,41 @@ func (f CompletenessAuthorityFields) SlogArgs() []any {
 		"would_flip", f.WouldFlip,
 		"direction", contextfabric.SanitizeLogAttr(f.Direction),
 		"version", contextfabric.SanitizeLogAttr(f.Version),
+		"deciding_requirement", contextfabric.SanitizeLogAttr(f.DecidingRequirement),
+		"deciding_stage", contextfabric.SanitizeLogAttr(f.DecidingStage),
+		"deciding_outcome", contextfabric.SanitizeLogAttr(f.DecidingOutcome),
+		"deciding_cause_overrun", contextfabric.SanitizeLogAttr(f.DecidingCauseOverrun),
+		"deciding_cause_coverage", contextfabric.SanitizeLogAttr(f.DecidingCauseCoverage),
+		"deciding_cause_narrowing", contextfabric.SanitizeLogAttr(f.DecidingCauseNarrowing),
+		"deciding_read_evaluation_gap", f.DecidingReadEvaluationGap,
+		"outcome_rows_total", f.OutcomeRowsTotal,
+		"outcome_rows_satisfied", f.OutcomeRowsSatisfied,
+		"outcome_rows_narrowed", f.OutcomeRowsNarrowed,
+		"outcome_rows_unavailable", f.OutcomeRowsUnavailable,
+		"outcome_rows_not_applicable", f.OutcomeRowsNotApplicable,
+		"outcome_rows_not_attempted", f.OutcomeRowsNotAttempted,
+		"claimed_facts_identity", f.ClaimedFactsIdentity,
+		"claimed_facts_membership", f.ClaimedFactsMembership,
+		"claimed_facts_status", f.ClaimedFactsStatus,
+		"claimed_facts_actual_completion", f.ClaimedFactsActualCompletion,
+		"claimed_facts_work", f.ClaimedFactsWork,
+		"claimed_facts_blockers", f.ClaimedFactsBlockers,
+		"claimed_facts_required_children", f.ClaimedFactsRequiredChildren,
+		"claimed_facts_pull_requests", f.ClaimedFactsPullRequests,
+		"claimed_facts_reviews", f.ClaimedFactsReviews,
+		"claimed_facts_continuous_integration", f.ClaimedFactsContinuousIntegration,
+		"claimed_facts_deployments", f.ClaimedFactsDeployments,
+		"claimed_facts_incidents", f.ClaimedFactsIncidents,
+		"claimed_facts_metrics", f.ClaimedFactsMetrics,
+		"claimed_facts_health", f.ClaimedFactsHealth,
+		"claimed_facts_workload", f.ClaimedFactsWorkload,
+		"claimed_facts_investment", f.ClaimedFactsInvestment,
+		"claimed_facts_readiness", f.ClaimedFactsReadiness,
+		"claimed_facts_operational_deficiencies", f.ClaimedFactsOperationalDeficiencies,
+		"claimed_facts_source_health", f.ClaimedFactsSourceHealth,
+		"claimed_facts_evidence", f.ClaimedFactsEvidence,
+		"claimed_facts_flow", f.ClaimedFactsFlow,
+		"claimed_facts_landscape", f.ClaimedFactsLandscape,
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

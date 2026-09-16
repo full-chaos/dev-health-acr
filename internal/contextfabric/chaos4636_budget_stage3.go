@@ -175,6 +175,12 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// refusals would show the rate exclusively when it was wrong.
 		fit.PredictedItems = PredictedItemsForPlan(*plan, cohortMemberCount(params.Graph.Cohort))
 		fit.DeadlineReserved = e.synthesisDeadlineReserve > 0
+		// SERVED AS-IS: `result` is exactly what this call returns below, so
+		// its own already-computed Completeness.State is what the served
+		// document will carry -- never re-derived here, for the same
+		// one-authority reason recordCandidateNarrowing reads
+		// attempt.Result.Completeness.State rather than recomputing it.
+		fit.OutcomeCompletenessState = result.Completeness.State
 		e.recordPlanNarrowing(ctx, principal, fit)
 		return result, firstPass, nil
 	}
@@ -344,6 +350,13 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		event.RetryFit = false
 		event.RetryFailed = true
 		event.DeadlineReserved = e.synthesisDeadlineReserve > 0
+		// The retry error propagates below, so nothing from this call is
+		// served -- but `measurementInput` is the document this stage
+		// measured before the retry ran, and its completeness is already
+		// computed, so disclosing it here costs nothing and keeps this
+		// field never-silently-empty on every assembled_result line, served
+		// or not.
+		event.OutcomeCompletenessState = measurementInput.Completeness.State
 		e.recordPlanNarrowing(ctx, principal, event)
 		// CHAOS-4726 codex round 1: the FIRST synthesis call's rejection is
 		// caught at the Investigate call site (engine.go), but this retry
@@ -504,6 +517,13 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		// advice they never received.
 		event.NarrowerContinuationAxis = narrowerContinuationAxisFor(*plan)
 	}
+	// `retried`, not `measurementInput`/`measured`: when the retry FITS
+	// without needing the candidate reduction (retryOverrun == Fits below),
+	// `retried` is exactly what this function returns as the served answer,
+	// and its Completeness.State is already computed by finalizeResult. On
+	// the refusal exit this same value is still the last real document this
+	// stage measured, so the field is never silently empty either way.
+	event.OutcomeCompletenessState = retried.Completeness.State
 	e.recordPlanNarrowing(ctx, principal, event)
 
 	if retryOverrun != contractsv1.ContextFabricBudgetFits {

@@ -534,6 +534,21 @@ func hasEvaluatedReadOutcome(rows []RequirementOutcomeRow, identity string) bool
 	return false
 }
 
+// evaluatedReadOutcome returns the assembled-result row's own Outcome for
+// identity, when the stored document carries one. It is the reused-answer
+// twin of the live evaluation's own row: readRequirementOutcomeRow decides
+// the outcome fresh, but a REUSED answer already has it, stamped on the
+// document being reused, and re-deciding it here from the same evidence
+// would be a second authority for a decision already made.
+func evaluatedReadOutcome(rows []RequirementOutcomeRow, identity string) (contractsv1.ContextFabricPlanRequirementOutcome, bool) {
+	for _, row := range rows {
+		if row.Requirement == identity && row.Stage == contractsv1.ContextFabricOutcomeStageAssembledResult {
+			return row.Outcome, true
+		}
+	}
+	return "", false
+}
+
 // appendReadRequirementEvaluations appends ONE assembled-result row per served
 // READ requirement, saying what the evidence made of it.
 //
@@ -913,6 +928,7 @@ func readRequirementOutcomeRow(
 		// leaves an operator unable to tell an EVALUATED ZERO from a decision
 		// that never ran. Missing is not zero; a cover of 0 over 0 observed
 		// kinds is a real measurement and it says so.
+		cover.Outcome = contractsv1.ContextFabricRequirementUnavailable
 		return RequirementOutcomeRow{
 			Stage:         contractsv1.ContextFabricOutcomeStageAssembledResult,
 			Requirement:   requirement.Requirement,
@@ -1023,7 +1039,9 @@ func readRequirementOutcomeRow(
 				cover.RowWithheld = RowWithheldNoPopulationOwner
 				return RequirementOutcomeRow{}, false, cover
 			}
-			return readPopulationOutcomeRow(row, population, populations, evidence.ServedKinds, threshold, requirement.Subject), true, cover
+			populationRow := readPopulationOutcomeRow(row, population, populations, evidence.ServedKinds, threshold, requirement.Subject)
+			cover.Outcome = populationRow.Outcome
+			return populationRow, true, cover
 		}
 		// Served in full at the declared standard. The counts are the
 		// OBSERVATIONS THAT SERVED, not the catalogue: a satisfied row
@@ -1038,6 +1056,7 @@ func readRequirementOutcomeRow(
 		// Declared to the catalogue would describe a loss that did not
 		// happen, per the comment above.
 		row.Declared = row.Served
+		cover.Outcome = row.Outcome
 		return row, true, cover
 	}
 
@@ -1081,6 +1100,7 @@ func readRequirementOutcomeRow(
 		// less detail about the things that remain -- none of it.
 		row.Outcome = contractsv1.ContextFabricRequirementUnavailable
 		row.Impact = contractsv1.ContextFabricAnswerImpactDimension
+		cover.Outcome = row.Outcome
 		return row, true, cover
 	}
 	// Served, over less than the standard asked for. Depth rather than scope:
@@ -1088,6 +1108,7 @@ func readRequirementOutcomeRow(
 	// them is thinner.
 	row.Outcome = contractsv1.ContextFabricRequirementNarrowed
 	row.Impact = contractsv1.ContextFabricAnswerImpactDepth
+	cover.Outcome = row.Outcome
 	if row.CauseCoverage == "" {
 		// A SOURCE SHORTFALL with nothing observed failing: every kind that
 		// was read came back usable, and there were fewer of them than the
@@ -1242,6 +1263,24 @@ type ReadRequirementObservationCoverEvent struct {
 	// decision: the answer that pass would have served, and why a later
 	// pass replaced it.
 	Served bool
+	// Outcome is the requirement row's own decision -- satisfied, narrowed
+	// or unavailable -- for the SAME requirement this cover event describes.
+	// It closes the gap a truncated source and a genuinely absent one used
+	// to share on this line: `health` narrowed by a truncation and `health`
+	// unavailable from no_data used to publish the identical cover numbers
+	// (observed_kinds=1 served_kinds=0), and only a join against the
+	// separate "context fabric fact read" line could tell them apart. Empty
+	// exactly when RowWithheld is not RowWithheldNone -- a withheld row
+	// names why it withheld one instead.
+	Outcome contractsv1.ContextFabricPlanRequirementOutcome
+	// Truncated, Failed and Narrowed are evidence.Truncated/evidence.Failed/
+	// evidence.Narrowed, carried onto the line so a truncation (fact-bearing,
+	// never `unavailable`) and a failure or absence (not fact-bearing) are
+	// distinguishable from the cover numbers alone, without reading the
+	// store. See readEvidence's own doc comment for what each counts.
+	Truncated int
+	Failed    int
+	Narrowed  int
 }
 
 // readRequirementObservationCoverEvent builds the observation-cover
@@ -1274,6 +1313,9 @@ func readRequirementObservationCoverEvent(
 		DeclaredRaisedToStandard: declared > observedCover,
 		MeetsThreshold:           servedCover >= threshold,
 		RowWithheld:              RowWithheldNone,
+		Truncated:                evidence.Truncated,
+		Failed:                   evidence.Failed,
+		Narrowed:                 evidence.Narrowed,
 	}
 }
 
@@ -1396,6 +1438,9 @@ func reusedObservationCoverEvents(result InvestigationResult, assignment observa
 		}
 		evidence := evaluateReadRequirement(requirement, result.Coverage, claimedFactKinds(result.ClaimedFacts))
 		_, _, event := readRequirementCoverDecision(requirement, threshold, evidence, assignment)
+		if outcome, ok := evaluatedReadOutcome(result.Completeness.Outcomes, requirement.Requirement); ok {
+			event.Outcome = outcome
+		}
 		switch {
 		case hasEvaluatedReadOutcome(result.Completeness.Outcomes, requirement.Requirement):
 			event.RowWithheld = RowWithheldNone

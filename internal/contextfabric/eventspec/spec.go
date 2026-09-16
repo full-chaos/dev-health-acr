@@ -1728,6 +1728,17 @@ var RequirementOutcomeTransition = Event{
 // and `direction` are populated unconditionally by the measurement,
 // independent of either gated flip's setting -- see
 // contextfabric.CompletenessAuthorityObservation's own doc comment.
+//
+// The `deciding_*` fields and `outcome_rows_total`/`outcome_rows_<token>`
+// (CHAOS-5744) close the completeness-authority line's own observability
+// gap: which requirement/stage/outcome/cause decided ServerState, and how
+// many rows of each outcome the derivation read to decide it -- both empty/
+// zero on a line with no outcome-derived basis or a decision the
+// read-evaluation pass alone made (contextfabric.decidingRequirementOutcomeRow's
+// own doc comment). `claimed_facts_<kind>` is the served half of
+// reader-level completeness: how many claimed facts of each closed FactKind
+// reached the document, joinable against the existing "context fabric fact
+// read" line's per-kind read counts by request_id and kind.
 var CompletenessAuthority = Event{
 	ID:                 "contextfabric.completeness_authority",
 	Msg:                "context fabric completeness authority",
@@ -1735,7 +1746,7 @@ var CompletenessAuthority = Event{
 	Multiplicity:       MultiplicityExactlyOnePerRequest,
 	Attribution:        []string{"request_id"},
 	BoundedAggregation: "exactly one line per investigation that reaches finalizeServed or the stored-read route, from the shared measurement site; a request that reaches neither emits none.",
-	Fields: []Field{
+	Fields: append([]Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "model_status", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CompletenessAuthorityLineVocabulary("model_status")},
 		{Key: "disposition", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CompletenessAuthorityLineVocabulary("disposition")},
@@ -1748,8 +1759,48 @@ var CompletenessAuthority = Event{
 		// Open: the derivation series identifier, expected to gain new
 		// values as the series is amended.
 		{Key: "version", Type: FieldString, Presence: PresenceRequired},
-		{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "deciding_requirement", Type: FieldString, Presence: PresenceRequired},
+		{Key: "deciding_stage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CompletenessAuthorityLineVocabulary("deciding_stage")},
+		{Key: "deciding_outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CompletenessAuthorityLineVocabulary("deciding_outcome")},
+		{Key: "deciding_cause_overrun", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CompletenessAuthorityLineVocabulary("deciding_cause_overrun")},
+		{Key: "deciding_cause_coverage", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CompletenessAuthorityLineVocabulary("deciding_cause_coverage")},
+		{Key: "deciding_cause_narrowing", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CompletenessAuthorityLineVocabulary("deciding_cause_narrowing")},
+		{Key: "deciding_read_evaluation_gap", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "outcome_rows_total", Type: FieldInt, Presence: PresenceRequired},
 	},
+		append(completenessAuthorityOutcomeRowFields(),
+			append(completenessAuthorityClaimedFactFields(),
+				Field{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+			)...,
+		)...,
+	),
+}
+
+// completenessAuthorityOutcomeRowFields declares one int field per member of
+// contextfabric.CompletenessAuthorityOutcomeTokens(), in that function's own
+// order, matching contextfabric.CompletenessAuthorityLogArgs's own loop --
+// the same derive-from-the-vocabulary discipline this package already
+// applies elsewhere so a new outcome token cannot reach the line without a
+// spec field to declare it.
+func completenessAuthorityOutcomeRowFields() []Field {
+	tokens := contextfabric.CompletenessAuthorityOutcomeTokens()
+	fields := make([]Field, 0, len(tokens))
+	for _, token := range tokens {
+		fields = append(fields, Field{Key: "outcome_rows_" + token, Type: FieldInt, Presence: PresenceRequired})
+	}
+	return fields
+}
+
+// completenessAuthorityClaimedFactFields declares one int field per member
+// of contextfabric.CompletenessAuthorityClaimedFactKinds(), matching
+// CompletenessAuthorityLogArgs's own loop.
+func completenessAuthorityClaimedFactFields() []Field {
+	kinds := contextfabric.CompletenessAuthorityClaimedFactKinds()
+	fields := make([]Field, 0, len(kinds))
+	for _, kind := range kinds {
+		fields = append(fields, Field{Key: "claimed_facts_" + kind, Type: FieldInt, Presence: PresenceRequired})
+	}
+	return fields
 }
 
 // SynthesisRetrySelection is the Info line emitted when the first synthesis

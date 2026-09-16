@@ -227,14 +227,22 @@ func planningStageOutcomeRow(identity, obligation string, unavailable Requiremen
 // vocabulary never declared. Anything this table does not name yields the
 // empty code, and the row still carries its outcome, impact and numbers --
 // an unnamed cause is a gap in this table, not a licence to invent one.
+//
+// NoDeclaringProducer and TableShapeUndeclared each get their OWN code
+// rather than sharing FactUnconfigured: the two reasons are actionable by
+// different parties (a declaration change versus a query change, per
+// RequirementUnavailableReason's own doc comment), and collapsing them onto
+// one wire code let an operator reading only the served document lose that
+// distinction -- the stored answer_plan requirement carried it, the coverage
+// cause did not.
 func unavailableRequirementCause(reason RequirementUnavailableReason) contractsv1.ContextFabricCoverageDetailCode {
 	switch reason {
 	case RequirementReasonNoDeclaringProducer:
-		return contractsv1.ContextFabricCoverageDetailFactUnconfigured
+		return contractsv1.ContextFabricCoverageDetailFactNoDeclaringProducer
 	case RequirementReasonSubjectKindUnsupported:
 		return contractsv1.ContextFabricCoverageDetailFactPruned
 	case RequirementReasonTableShapeUndeclared:
-		return contractsv1.ContextFabricCoverageDetailFactUnconfigured
+		return contractsv1.ContextFabricCoverageDetailFactTableShapeUndeclared
 	case RequirementReasonComputedPopulationAbsent:
 		return contractsv1.ContextFabricCoverageDetailFactPruned
 	default:

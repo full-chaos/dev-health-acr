@@ -235,6 +235,53 @@ type CompletenessAuthorityObservation struct {
 	Direction CompletenessAuthorityDirection
 	// Version identifies this derivation series.
 	Version string
+
+	// THE DECIDING ROW. Basis/ServerState/Derived say WHAT
+	// DeriveCompletenessAuthority concluded; these six fields say WHY --
+	// the one outcome row that decided it, by the same absorbing precedence
+	// DeriveContextFabricAnswerCompletenessStateBeforeReadEvaluation applies
+	// (the first unavailable row, or else the first narrowed/not_attempted
+	// row). Populated only when Basis is CompletenessAuthorityBasisOutcomeDerived
+	// and the state is not the vacuous `complete`; empty on every other
+	// line, matching Derived's own "honest absence" discipline.
+	DecidingRequirement    string
+	DecidingStage          contractsv1.ContextFabricOutcomeStage
+	DecidingOutcome        contractsv1.ContextFabricPlanRequirementOutcome
+	DecidingCauseOverrun   contractsv1.ContextFabricBudgetOverrun
+	DecidingCauseCoverage  contractsv1.ContextFabricCoverageDetailCode
+	DecidingCauseNarrowing contractsv1.ContextFabricNarrowingBasis
+	// DecidingReadEvaluationGap is true when the decision above has NO
+	// outcome row to name: the outcome pass alone said `complete` and the
+	// read-evaluation pass (hasPlanningOnlyReadRequirement) is what turned
+	// it to `partial`, because a READ requirement reached this set with
+	// nothing behind it but its own planning seed. DecidingRequirement still
+	// names that requirement's identity in this case; DecidingOutcome is
+	// `satisfied` (the seed's own, honest outcome) and the other cause
+	// fields stay empty, because nothing was reported -- the gap is an
+	// absence of evaluation, not a mechanism that fired.
+	DecidingReadEvaluationGap bool
+
+	// OUTCOME ROW COUNTS -- what the model's own status decision (or this
+	// derivation's) had to work with, joinable against ModelStatus without
+	// a stored-document read. OutcomeRowsTotal is len(rows); the per-token
+	// counts are indexed by ContextFabricPlanRequirementOutcomeVocabulary()
+	// order and sum to it. Zero (not populated) when Basis is not
+	// CompletenessAuthorityBasisOutcomeDerived -- there is no row set to
+	// count.
+	OutcomeRowsTotal  int
+	OutcomeRowsByKind [contractsv1.ContextFabricPlanRequirementOutcomeCount]int
+
+	// CLAIMED FACTS BY KIND -- how many claimed facts on the served
+	// document belong to each closed FactKind, indexed by
+	// contractsv1.ContextFabricFactKindVocabulary() order. Read counts and
+	// (non-degraded) served counts per kind already reach the trace on the
+	// "context fabric fact read" line; this is the missing CLAIMED half --
+	// whether a fact that was read actually reached the served document as
+	// evidence -- joinable against that line by request_id and kind.
+	// Populated for every disposition the corresponding InvestigationResult
+	// carries claims for, never re-derived: a nil/empty ClaimedFacts slice
+	// reports all zeroes honestly.
+	ClaimedFactsByKind [contractsv1.ContextFabricFactKindCount]int
 }
 
 // CompletenessAuthorityDirection names the ModelStatus -> mapped(ServerState)
@@ -394,7 +441,110 @@ func DeriveCompletenessAuthority(result InvestigationResult) CompletenessAuthori
 		observation.WouldFlip = observation.Disagreed
 		observation.Direction = deriveCompletenessAuthorityDirection(result.Status, mapped, observation.Disagreed)
 	}
+	rows := result.Completeness.Outcomes
+	observation.OutcomeRowsTotal = len(rows)
+	for _, row := range rows {
+		if index, ok := outcomeTokenIndex(row.Outcome); ok {
+			observation.OutcomeRowsByKind[index]++
+		}
+	}
+	if decidingRow, ok := decidingRequirementOutcomeRow(rows); ok {
+		observation.DecidingRequirement = decidingRow.Requirement
+		observation.DecidingStage = decidingRow.Stage
+		observation.DecidingOutcome = decidingRow.Outcome
+		observation.DecidingCauseOverrun = decidingRow.CauseOverrun
+		observation.DecidingCauseCoverage = decidingRow.CauseCoverage
+		observation.DecidingCauseNarrowing = decidingRow.CauseNarrowing
+	} else if identity, ok := decidingUnevaluatedReadRequirement(rows); ok {
+		observation.DecidingRequirement = identity
+		observation.DecidingStage = contractsv1.ContextFabricOutcomeStagePlanning
+		observation.DecidingOutcome = contractsv1.ContextFabricRequirementSatisfied
+		observation.DecidingReadEvaluationGap = true
+	}
+	for _, claim := range result.ClaimedFacts {
+		if index, ok := factKindIndex(claim.Kind); ok {
+			observation.ClaimedFactsByKind[index]++
+		}
+	}
 	return observation
+}
+
+// outcomeTokenIndex is row.Outcome's position in
+// ContextFabricPlanRequirementOutcomeVocabulary(), for the per-token row
+// counts. A token this vocabulary does not name (never emitted today; the
+// row validator refuses it) reports not-found rather than panicking or
+// silently miscounting.
+func outcomeTokenIndex(outcome contractsv1.ContextFabricPlanRequirementOutcome) (int, bool) {
+	for index, member := range contractsv1.ContextFabricPlanRequirementOutcomeVocabulary() {
+		if member == outcome {
+			return index, true
+		}
+	}
+	return 0, false
+}
+
+// decidingRequirementOutcomeRow returns the ONE outcome row that decided a
+// non-complete state, by the SAME absorbing precedence
+// DeriveContextFabricAnswerCompletenessStateBeforeReadEvaluation applies:
+// the first UNAVAILABLE row (degraded is absorbing, so the first one found
+// is the whole decision), else the first NARROWED or NOT_ATTEMPTED row (the
+// first cell that turned the running state to partial).
+//
+// It walks the SAME rows that derivation already read, in their own
+// published order, rather than re-deriving the state -- this is a second
+// pass over one authority's own input for a telemetry-only question ("which
+// row"), never a second opinion about what the state IS.
+//
+// ok is false when no row carries either outcome: the outcome pass alone
+// said `complete`, so any downgrade to `partial` came from the
+// read-evaluation pass instead (see decidingUnevaluatedReadRequirement).
+func decidingRequirementOutcomeRow(rows []contractsv1.ContextFabricPlanRequirementOutcomeRow) (contractsv1.ContextFabricPlanRequirementOutcomeRow, bool) {
+	var firstPartial *contractsv1.ContextFabricPlanRequirementOutcomeRow
+	for i := range rows {
+		switch rows[i].Outcome {
+		case contractsv1.ContextFabricRequirementUnavailable:
+			return rows[i], true
+		case contractsv1.ContextFabricRequirementNarrowed, contractsv1.ContextFabricRequirementNotAttempted:
+			if firstPartial == nil {
+				firstPartial = &rows[i]
+			}
+		}
+	}
+	if firstPartial != nil {
+		return *firstPartial, true
+	}
+	return contractsv1.ContextFabricPlanRequirementOutcomeRow{}, false
+}
+
+// decidingUnevaluatedReadRequirement names the first READ requirement whose
+// only account in rows is a planning-stage seed -- the same existence
+// hasPlanningOnlyReadRequirement checks for over a map, walked here in ROWS'
+// OWN EMISSION ORDER instead, so this diagnostic names the same requirement
+// every time it is asked about the same rows.
+func decidingUnevaluatedReadRequirement(rows []contractsv1.ContextFabricPlanRequirementOutcomeRow) (string, bool) {
+	evaluated := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		if row.Requirement != "" && row.Stage == contractsv1.ContextFabricOutcomeStageAssembledResult {
+			evaluated[row.Requirement] = true
+		}
+	}
+	for _, row := range rows {
+		if row.Requirement == "" || row.Stage != contractsv1.ContextFabricOutcomeStagePlanning {
+			continue
+		}
+		if evaluated[row.Requirement] {
+			continue
+		}
+		// READ obligations only, matching hasPlanningOnlyReadRequirement's
+		// own scope: nothing appends an assembled-result row for a computed
+		// obligation today, so an unscoped rule would name a computed
+		// seed's identity for a gap that rule does not close.
+		if contractsv1.ContextFabricAnswerObligationKindByObligation()[row.Obligation] != "read" {
+			continue
+		}
+		return row.Requirement, true
+	}
+	return "", false
 }
 
 // answerCompletenessStateToStatus is the ONE explicit, total crossing
@@ -507,7 +657,7 @@ func ApplyServerCompletenessAuthority(result InvestigationResult, enabled bool, 
 // eventspec describes one line rather than two that happen to agree today.
 // The caller appends its own request-id attribute.
 func CompletenessAuthorityLogArgs(event CompletenessAuthorityObservation, orgID string) []any {
-	return []any{
+	args := []any{
 		"org_id", SanitizeLogAttr(orgID),
 		"model_status", SanitizeLogAttr(string(event.ModelStatus)),
 		"disposition", SanitizeLogAttr(string(event.Disposition)),
@@ -518,7 +668,39 @@ func CompletenessAuthorityLogArgs(event CompletenessAuthorityObservation, orgID 
 		"would_flip", event.WouldFlip,
 		"direction", SanitizeLogAttr(string(event.Direction)),
 		"version", SanitizeLogAttr(event.Version),
+		// THE DECIDING ROW: which requirement, at which stage, with which
+		// outcome and cause, decided ServerState -- see
+		// CompletenessAuthorityObservation's own doc comment. Empty/false
+		// together on every line Basis is not outcome_derived, or where the
+		// state is the vacuous `complete`: an absent decision, not a lost
+		// one.
+		"deciding_requirement", SanitizeLogAttr(event.DecidingRequirement),
+		"deciding_stage", SanitizeLogAttr(string(event.DecidingStage)),
+		"deciding_outcome", SanitizeLogAttr(string(event.DecidingOutcome)),
+		"deciding_cause_overrun", SanitizeLogAttr(string(event.DecidingCauseOverrun)),
+		"deciding_cause_coverage", SanitizeLogAttr(string(event.DecidingCauseCoverage)),
+		"deciding_cause_narrowing", SanitizeLogAttr(string(event.DecidingCauseNarrowing)),
+		"deciding_read_evaluation_gap", event.DecidingReadEvaluationGap,
+		// THE ROWS THE STATUS DECISION HAD TO WORK WITH: what the model was
+		// given (today, nothing -- see genkitruntime's own synthesis input)
+		// and what this derivation itself read, both joinable against
+		// model_status above without a stored-document read. Every member
+		// present including the zeroes, same discipline as every other
+		// per-vocabulary count on this package's lines.
+		"outcome_rows_total", event.OutcomeRowsTotal,
 	}
+	for index, token := range contractsv1.ContextFabricPlanRequirementOutcomeVocabulary() {
+		args = append(args, "outcome_rows_"+string(token), event.OutcomeRowsByKind[index])
+	}
+	// READER-LEVEL COMPLETENESS, per kind: how many claimed facts of that
+	// kind reached the served document. The read and (non-degraded) served
+	// counts per kind already reach the trace on the "context fabric fact
+	// read" line; this is the missing CLAIMED half, joinable against it by
+	// request_id and kind.
+	for index, kind := range contractsv1.ContextFabricFactKindVocabulary() {
+		args = append(args, "claimed_facts_"+string(kind), event.ClaimedFactsByKind[index])
+	}
+	return args
 }
 
 // CompletenessAuthorityLineVocabulary returns the closed vocabulary of one
@@ -557,6 +739,58 @@ func CompletenessAuthorityLineVocabulary(key string) []string {
 	case "direction":
 		members := CompletenessAuthorityDirectionVocabulary()
 		return tokenStrings(members[:])
+	case "deciding_stage":
+		// Empty on every line with no deciding row (see
+		// DecidingRequirement's own doc comment), plus the domain vocabulary.
+		values := []string{""}
+		for _, stage := range contractsv1.ContextFabricOutcomeStageVocabulary() {
+			values = append(values, string(stage))
+		}
+		return values
+	case "deciding_outcome":
+		values := []string{""}
+		for _, outcome := range contractsv1.ContextFabricPlanRequirementOutcomeVocabulary() {
+			values = append(values, string(outcome))
+		}
+		return values
+	case "deciding_cause_overrun":
+		values := []string{""}
+		for _, overrun := range contractsv1.ContextFabricBudgetOverrunVocabulary() {
+			values = append(values, string(overrun))
+		}
+		return values
+	case "deciding_cause_coverage":
+		values := []string{""}
+		for _, code := range contractsv1.ContextFabricCoverageDetailCodeVocabulary() {
+			values = append(values, string(code))
+		}
+		return values
+	case "deciding_cause_narrowing":
+		values := []string{""}
+		for _, basis := range contractsv1.ContextFabricNarrowingBasisVocabulary() {
+			values = append(values, string(basis))
+		}
+		return values
 	}
 	return nil
+}
+
+// CompletenessAuthorityOutcomeTokens returns the closed
+// ContextFabricPlanRequirementOutcome vocabulary as strings, in the SAME
+// order CompletenessAuthorityLogArgs emits the "outcome_rows_<token>"
+// fields -- the field-name suffixes for that family, not one field's own
+// value domain, so the event specification can declare exactly one field
+// per member without a second, hand-maintained list.
+func CompletenessAuthorityOutcomeTokens() []string {
+	members := contractsv1.ContextFabricPlanRequirementOutcomeVocabulary()
+	return tokenStrings(members[:])
+}
+
+// CompletenessAuthorityClaimedFactKinds returns the closed FactKind
+// vocabulary as strings, in the SAME order CompletenessAuthorityLogArgs
+// emits the "claimed_facts_<kind>" fields -- the field-name suffixes for
+// that family, matching CompletenessAuthorityOutcomeTokens's own purpose.
+func CompletenessAuthorityClaimedFactKinds() []string {
+	members := contractsv1.ContextFabricFactKindVocabulary()
+	return tokenStrings(members[:])
 }

@@ -4965,6 +4965,8 @@
           "type": "string",
           "enum": [
             "fact_unconfigured",
+            "fact_no_declaring_producer",
+            "fact_table_shape_undeclared",
             "fact_scope_unexpanded",
             "fact_read_failed",
             "fact_provider_reported",
