@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -285,24 +284,6 @@ func TestSynthesisPromptCategoryListIsTheWholeVocabulary(t *testing.T) {
 
 	if strings.Join(got, ", ") != strings.Join(want, ", ") {
 		t.Errorf("the synthesis prompt's driver-category list is not the declared vocabulary, in order:\n  prompt: %v\n  go:     %v", got, want)
-	}
-}
-
-// TestSynthesisPromptSuperlativeTermsListMatchesGuardVocabulary proves the
-// synthesis prompt's parenthetical superlative-terms list and
-// contextfabric.CohortSuperlativeJudgmentTerms -- the SAME closed set
-// requireNoSuperlativeClaimOverUnrankableMember structurally enforces --
-// cannot read differently: they are rendered from one shared constant, and
-// this checks the rendering actually reached the final prompt bytes rather
-// than sitting in an unused variable.
-func TestSynthesisPromptSuperlativeTermsListMatchesGuardVocabulary(t *testing.T) {
-	want := strings.Join(contextfabric.CohortSuperlativeJudgmentTerms, ", ")
-	if contextFabricCohortSuperlativeTermsList != want {
-		t.Fatalf("contextFabricCohortSuperlativeTermsList = %q, want %q (the guard's own vocabulary, joined)", contextFabricCohortSuperlativeTermsList, want)
-	}
-	parenthetical := "(" + want + ")"
-	if !strings.Contains(synthesisSystemPrompt, parenthetical) {
-		t.Fatalf("synthesisSystemPrompt does not contain the rendered superlative-terms parenthetical %q -- the guard's vocabulary and what the model is told may have drifted apart", parenthetical)
 	}
 }
 

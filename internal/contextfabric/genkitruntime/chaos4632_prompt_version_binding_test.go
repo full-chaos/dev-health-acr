@@ -89,21 +89,10 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// are charged before per_member is published, a sentence an
 			// earlier revision stated while it was false. See
 			// DefaultSynthesisPromptVersion's own doc comment.
-			// v15 -> v16 (CHAOS-5774): the score_meaning/judgment_mismatch
-			// paragraph. See DefaultSynthesisPromptVersion's own doc comment.
-			// v16 -> v17: that paragraph's superlative-terms parenthetical is
-			// now interpolated. See DefaultSynthesisPromptVersion's own doc
-			// comment.
-			// v17 -> v18: the vocabulary widened and the paragraph gained two
-			// more phrase-construction sentences. See
-			// DefaultSynthesisPromptVersion's own doc comment.
-			// v18 -> v19: the vocabulary widened once more and the paragraph
-			// gained one more construction sentence. See
-			// DefaultSynthesisPromptVersion's own doc comment.
-			// v19 -> v20: most/least moved to its own construction sentence,
-			// shortening the interpolated list. See
-			// DefaultSynthesisPromptVersion's own doc comment.
-			digest: "3b9b4f1983440662424d460b1b20e91f5ba2ef0e153e35a9a8dce094fa7878c0",
+			// v15 -> v16: the score_meaning/judgment_mismatch paragraph and the
+			// instruction that an unrankable member is never given a ranking
+			// superlative. See DefaultSynthesisPromptVersion's own doc comment.
+			digest: "b9ffc74e66594954bdd2f0bb0a39513b8122949e085a2cebf6f4168b2a08ddef",
 		},
 		{
 			name:    "interpretation model-output schema",

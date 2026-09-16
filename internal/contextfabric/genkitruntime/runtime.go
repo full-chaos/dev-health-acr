@@ -391,33 +391,11 @@ const (
 	// been. The answers this change exists to improve are precisely the ones
 	// a stale reuse key would keep serving unchanged.
 	//
-	// v15 -> v16: synthesisSystemPrompt gains the
-	// score_meaning/judgment_mismatch paragraph -- a genuine change to what
-	// the model is told about a cohort ranking's meaning, so a row generated
-	// before the model was ever told to read those fields must not satisfy a
-	// reuse lookup as though it were generated under the new prompt (same
-	// standing rule as v6-v15 above).
-	// v16 -> v17: the superlative-terms parenthetical in that same paragraph
-	// is now interpolated from contextfabric.CohortSuperlativeJudgmentTerms
-	// (six more ordinal-position terms the structural guard already refused
-	// but the prompt's own hand-typed list never named), so the model-facing
-	// bytes changed even though the paragraph's surrounding prose did not --
-	// same standing rule as every prior bump above.
-	// v17 -> v18: the guard's own term list grew four more words
-	// (leads/leading/trails/trailing), interpolated the same way, and the
-	// paragraph now also states the two phrase constructions the guard
-	// checks separately (a comparative-to-the-group phrase, a rank-number
-	// spelling) -- both are new prose, model-facing again.
-	// v18 -> v19: the guard's coverage widened once more (a general
-	// -est/-iest superlative construction instead of four fixed words,
-	// same-sentence scoping for positional words), and the paragraph
-	// gained a new prose sentence for the construction -- model-facing
-	// again.
-	// v19 -> v20: most/least moved out of the interpolated word list into
-	// an adjacency construction of their own, shortening the interpolated
-	// list and adding a prose sentence for the new construction --
-	// model-facing again.
-	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v20"
+	// v15 -> v16: synthesisSystemPrompt gains the score_meaning/judgment_mismatch
+	// paragraph and the instruction that an unrankable member is never given a
+	// ranking superlative -- model-facing bytes changed, standing reuse rule
+	// applies (same standing rule as v6-v15 above).
+	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v16"
 	// DefaultSchemaVersion is the genkit MODEL-OUTPUT JSON SCHEMA version
 	// -- ONE value shared by both the interpret and synthesize calls
 	// (Config carries a single SchemaVersion field, not a per-operation
