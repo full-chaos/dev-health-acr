@@ -381,6 +381,14 @@ func TestWorkItemFreshDispatchMeasuredAndUnmeasured(t *testing.T) {
 					if claim.Value.Integer == nil || *claim.Value.Integer != int64(census.Value) {
 						t.Errorf("cardinality=%+v want=%d", claim.Value, census.Value)
 					}
+					// A WORK-ITEM TUPLE IS ALWAYS ANCHOR-BOUND: the claim's
+					// subject is the resolved project anchor, never the
+					// organization (count_population_scope.go's
+					// anchor_committed).
+					anchor := payload.SubjectResolution.Committed[0]
+					if claim.Subject.Kind != anchor.Kind || claim.Subject.CanonicalID != anchor.CanonicalID {
+						t.Errorf("cardinality claim subject = %s/%s, want the resolved anchor %s/%s", claim.Subject.Kind, claim.Subject.CanonicalID, anchor.Kind, anchor.CanonicalID)
+					}
 				}
 			}
 			wantCounts := 1

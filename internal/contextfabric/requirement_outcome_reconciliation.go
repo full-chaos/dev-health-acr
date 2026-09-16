@@ -297,8 +297,9 @@ func servedRequirementFactCount(result InvestigationResult, requirement contract
 // requirement's kind and keyed to its subject.
 //
 //   - `count`: the server-minted cardinality claim for the counted kind. That
-//     claim's subject is the organization by design (cardinalityClaim), so the
-//     kind being counted is matched on the claim's field, which names it.
+//     claim's subject is the counted POPULATION (cardinalityClaim), which
+//     varies with an anchor-bound count -- so the kind being counted is
+//     matched on the claim's field, which names it, never on the subject.
 //   - a READ requirement: a claim of one of its declared fact kinds about a
 //     subject of its subject kind.
 //   - any other COMPUTED requirement: a claim of one of the step's declared

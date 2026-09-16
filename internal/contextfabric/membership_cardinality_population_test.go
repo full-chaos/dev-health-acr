@@ -434,3 +434,210 @@ func TestTheCardinalityLineReportsWhetherTheCountWasClaimed(t *testing.T) {
 		})
 	}
 }
+
+// TestCardinalityClaimSubjectIsThePopulationTheCountDescribes enumerates
+// cardinalityClaimSubject's own input domain: every CountPopulationScope
+// decision this guard branches on, crossed with the identity fields that
+// decision depends on being present (absent, boundary and canonical
+// combinations of AnchorSubjectKind/AnchorID and principal.OrgID).
+func TestCardinalityClaimSubjectIsThePopulationTheCountDescribes(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name      string
+		principal storage.Principal
+		scope     CountPopulationScope
+		wantOK    bool
+		wantKind  SubjectKind
+		wantID    string
+	}{
+		{
+			name:      "anchor committed names the anchor, never the organization",
+			principal: storage.Principal{OrgID: "org_1"},
+			scope:     CountPopulationScope{Decision: CountPopulationScopeAnchorCommitted, AnchorSubjectKind: SubjectRepository, AnchorID: "repository:R"},
+			wantOK:    true, wantKind: SubjectRepository, wantID: "repository:R",
+		},
+		{
+			name:      "anchor committed with no organization still names the anchor",
+			principal: storage.Principal{},
+			scope:     CountPopulationScope{Decision: CountPopulationScopeAnchorCommitted, AnchorSubjectKind: SubjectTeam, AnchorID: "team:R"},
+			wantOK:    true, wantKind: SubjectTeam, wantID: "team:R",
+		},
+		{
+			name:      "anchor committed but the anchor id is empty (invariant violation) refuses",
+			principal: storage.Principal{OrgID: "org_1"},
+			scope:     CountPopulationScope{Decision: CountPopulationScopeAnchorCommitted, AnchorSubjectKind: SubjectRepository, AnchorID: ""},
+			wantOK:    false,
+		},
+		{
+			name:      "anchor committed but the anchor kind is empty (invariant violation) refuses",
+			principal: storage.Principal{OrgID: "org_1"},
+			scope:     CountPopulationScope{Decision: CountPopulationScopeAnchorCommitted, AnchorSubjectKind: "", AnchorID: "repository:R"},
+			wantOK:    false,
+		},
+		{
+			name:      "organization scope names the organization",
+			principal: storage.Principal{OrgID: "org_1"},
+			scope:     CountPopulationScope{Decision: CountPopulationScopeOrganization},
+			wantOK:    true, wantKind: SubjectOrganization, wantID: "org_1",
+		},
+		{
+			name:      "organization scope with no organization identity refuses",
+			principal: storage.Principal{},
+			scope:     CountPopulationScope{Decision: CountPopulationScopeOrganization},
+			wantOK:    false,
+		},
+		{
+			name:      "zero-value scope (a caller predating the decision) still names the organization",
+			principal: storage.Principal{OrgID: "org_1"},
+			scope:     CountPopulationScope{},
+			wantOK:    true, wantKind: SubjectOrganization, wantID: "org_1",
+		},
+		{
+			name:      "anchor unresolved is never reached with a mintable cardinality, and falls to the organization branch",
+			principal: storage.Principal{OrgID: "org_1"},
+			scope:     CountPopulationScope{Decision: CountPopulationScopeAnchorUnresolved},
+			wantOK:    true, wantKind: SubjectOrganization, wantID: "org_1",
+		},
+		{
+			name:      "frame absent is never reached with a mintable cardinality, and falls to the organization branch",
+			principal: storage.Principal{OrgID: "org_1"},
+			scope:     CountPopulationScope{Decision: CountPopulationScopeFrameAbsent},
+			wantOK:    true, wantKind: SubjectOrganization, wantID: "org_1",
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			subject, ok := cardinalityClaimSubject(tc.principal, tc.scope)
+			if ok != tc.wantOK {
+				t.Fatalf("cardinalityClaimSubject() ok = %t, want %t (subject %+v)", ok, tc.wantOK, subject)
+			}
+			if !ok {
+				return
+			}
+			if subject.Kind != tc.wantKind || subject.CanonicalID != tc.wantID {
+				t.Errorf("cardinalityClaimSubject() = %s/%s, want %s/%s", subject.Kind, subject.CanonicalID, tc.wantKind, tc.wantID)
+			}
+		})
+	}
+}
+
+// TestCountPopulationScopeEventSubjectReadsOnlyTheCardinalityClaim pins the
+// telemetry projector's own guard: it scans result.ClaimedFacts for the
+// FIRST claim of kind cardinality, never the first claim of any kind. A
+// non-cardinality claim listed before the cardinality claim must not leak
+// its subject onto the line.
+func TestCountPopulationScopeEventSubjectReadsOnlyTheCardinalityClaim(t *testing.T) {
+	t.Parallel()
+	row := RequirementOutcomeRow{
+		Stage: contractsv1.ContextFabricOutcomeStagePlanning, Requirement: "count/member/team", Obligation: string(ObligationCount),
+	}
+	served := int64(3)
+	other := ClaimedFact{
+		ClaimID: "claim-status", Kind: FactStatus,
+		Subject: SubjectRef{Kind: SubjectWorkItem, CanonicalID: "work-1", Label: "work-1"},
+		Field:   "status", Value: ScalarValue{String: stringPointer("open")},
+	}
+	cardinality := ClaimedFact{
+		ClaimID: "server:cardinality:team", Kind: contractsv1.ContextFabricFactCardinality,
+		Subject: SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:R", Label: "repository:R"},
+		Field:   "team_count", Value: ScalarValue{Integer: &served},
+	}
+	result := InvestigationResult{
+		Completeness: AnswerCompleteness{Outcomes: []RequirementOutcomeRow{row}},
+		// The non-cardinality claim comes FIRST -- the shape a naive
+		// "read result.ClaimedFacts[0]" guard would get wrong.
+		ClaimedFacts: []ClaimedFact{other, cardinality},
+	}
+	scope := CountPopulationScope{Decision: CountPopulationScopeAnchorCommitted, AnchorSubjectKind: SubjectRepository, AnchorID: "repository:R"}
+	event, owed := countPopulationScopeEventFrom(result, scope, false)
+	if !owed {
+		t.Fatal("countPopulationScopeEventFrom() owed = false, want true")
+	}
+	if event.SubjectKind != SubjectRepository || event.SubjectID != "repository:R" {
+		t.Errorf("event subject = %s/%s, want repository/repository:R -- a preceding non-cardinality claim must never be read", event.SubjectKind, event.SubjectID)
+	}
+}
+
+// TestCardinalityClaimSubjectRepairCoversItsInputDomain enumerates
+// cardinalityClaimSubjectRepair's own input domain directly -- the ONE
+// construction both the reuse path and the by-id route call through.
+func TestCardinalityClaimSubjectRepairCoversItsInputDomain(t *testing.T) {
+	t.Parallel()
+	served := int64(3)
+	stale := ClaimedFact{ClaimID: "server:cardinality:team", Kind: contractsv1.ContextFabricFactCardinality, Subject: SubjectRef{Kind: SubjectOrganization, CanonicalID: "org_1", Label: "org_1"}, Field: "team_count", Value: ScalarValue{Integer: &served}}
+	correct := stale
+	correct.Subject = SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:R", Label: "repository:R"}
+	anchoredReading := storedCountReading{
+		Frame:      &QuestionFrame{SubjectExpression: SubjectExpression{Kind: SubjectExpressionChildrenOfScope, Scoped: &ScopedSetExpression{AnchorTerms: []string{"a"}, MemberKind: SubjectTeam}}},
+		AnchorKind: "",
+	}
+	anchoredResolution := SubjectResolution{Committed: []SubjectRef{{Kind: SubjectRepository, CanonicalID: "repository:R", Label: "R"}}, Candidates: []SubjectCandidate{scopeAnchorMatch(SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:R", Label: "R"})}}
+	unresolvedResolution := SubjectResolution{}
+
+	for _, tc := range []struct {
+		name        string
+		claims      []ClaimedFact
+		resolution  SubjectResolution
+		reading     storedCountReading
+		wantChanged bool
+		wantSubject SubjectRef
+	}{
+		{
+			name:   "no claim present is a no-op",
+			claims: nil, resolution: anchoredResolution, reading: anchoredReading,
+			wantChanged: false,
+		},
+		{
+			// The claim here is deliberately the ANCHOR shape, not the
+			// organization one: if the "can this reading even be re-derived"
+			// guard is skipped, cardinalityClaimSubject's organization
+			// fallback would force this claim to organization/org_1 -- a
+			// stale-organization fixture here would make that exact bug
+			// invisible, since the fallback's output would coincidentally
+			// equal the fixture.
+			name:   "reading absent (frame_absent) leaves an anchor-shaped claim untouched, never forced to organization",
+			claims: []ClaimedFact{correct}, resolution: anchoredResolution, reading: storedCountReading{},
+			wantChanged: false, wantSubject: correct.Subject,
+		},
+		{
+			name:   "anchor unresolved leaves an anchor-shaped claim untouched, never forced to organization",
+			claims: []ClaimedFact{correct}, resolution: unresolvedResolution, reading: anchoredReading,
+			wantChanged: false, wantSubject: correct.Subject,
+		},
+		{
+			name:   "stale claim (organization) under a resolved anchor is corrected",
+			claims: []ClaimedFact{stale}, resolution: anchoredResolution, reading: anchoredReading,
+			wantChanged: true, wantSubject: correct.Subject,
+		},
+		{
+			name:   "already-correct claim is a true no-op",
+			claims: []ClaimedFact{correct}, resolution: anchoredResolution, reading: anchoredReading,
+			wantChanged: false, wantSubject: correct.Subject,
+		},
+		{
+			name:       "a non-cardinality claim ahead of the stale one is skipped, not mistaken for it",
+			claims:     []ClaimedFact{{Kind: FactStatus, Subject: SubjectRef{Kind: SubjectWorkItem, CanonicalID: "w1", Label: "w1"}, Field: "status", Value: ScalarValue{String: stringPointer("open")}}, stale},
+			resolution: anchoredResolution, reading: anchoredReading,
+			wantChanged: true, wantSubject: correct.Subject,
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			result := &InvestigationResult{ClaimedFacts: append([]ClaimedFact(nil), tc.claims...), SubjectResolution: tc.resolution}
+			changed := cardinalityClaimSubjectRepair(storage.Principal{OrgID: "org_1"}, result, tc.reading)
+			if changed != tc.wantChanged {
+				t.Errorf("cardinalityClaimSubjectRepair() changed = %t, want %t", changed, tc.wantChanged)
+			}
+			if idx := cardinalityClaimIndex(tc.claims); idx >= 0 {
+				if got := result.ClaimedFacts[idx].Subject; got != tc.wantSubject {
+					t.Errorf("served claim subject = %+v, want %+v", got, tc.wantSubject)
+				}
+			}
+			if len(result.ClaimedFacts) != len(tc.claims) {
+				t.Errorf("claim count = %d, want %d -- a repair must never add or remove a claim", len(result.ClaimedFacts), len(tc.claims))
+			}
+		})
+	}
+}

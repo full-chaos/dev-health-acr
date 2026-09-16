@@ -328,6 +328,16 @@
         "presence": "required"
       },
       {
+        "key": "subject_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "subject_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
         "key": "request_id",
         "type": "string",
         "presence": "conditional",

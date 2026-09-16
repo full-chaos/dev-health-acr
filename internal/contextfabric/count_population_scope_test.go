@@ -71,6 +71,12 @@ type scopeCell struct {
 	wantAnchorID  string
 	wantSentence  string
 	wantAssembled contractsv1.ContextFabricPlanRequirementOutcome
+	// wantSubjectKind/wantSubjectID are the served cardinality claim's own
+	// subject -- checked only when wantCounted, since an uncounted cell mints
+	// no claim at all. anchor_committed wants the resolved anchor's own kind
+	// and id; organization_scope wants the investigation's own organization.
+	wantSubjectKind SubjectKind
+	wantSubjectID   string
 }
 
 func newScopeEngine(t *testing.T, cell scopeCell, telemetry EngineTelemetry, gates ...AnswerReuseGate) *Engine {
@@ -207,6 +213,7 @@ func scopeCells() []scopeCell {
 			cohort:     kindCohort(SubjectTeam, 3), status: InvestigationComplete,
 			wantDecision: CountPopulationScopeAnchorCommitted, wantCounted: true, wantServed: 3, wantAnchors: 1, wantAnchorID: "repository:SCOPE_ANCHOR",
 			wantSentence: "Counted 3 teams.", wantAssembled: contractsv1.ContextFabricRequirementSatisfied,
+			wantSubjectKind: SubjectRepository, wantSubjectID: "repository:SCOPE_ANCHOR",
 		},
 		{
 			// A partial truth: retrieval counted more members than the answer
@@ -216,6 +223,7 @@ func scopeCells() []scopeCell {
 			cohort:     kindCohort(SubjectTeam, 3), population: 5, status: InvestigationComplete,
 			wantDecision: CountPopulationScopeAnchorCommitted, wantCounted: true, wantServed: 3, wantAnchors: 1, wantAnchorID: "repository:SCOPE_ANCHOR",
 			wantSentence: "Counted 3 teams of 5 found.", wantAssembled: contractsv1.ContextFabricRequirementNarrowed,
+			wantSubjectKind: SubjectRepository, wantSubjectID: "repository:SCOPE_ANCHOR",
 		},
 		{
 			// A MEANINGFUL ZERO: the anchor resolved and its measured member
@@ -225,6 +233,7 @@ func scopeCells() []scopeCell {
 			cohort:     &Cohort{Kind: SubjectTeam, Rationale: "scope census match", Members: []CohortMember{}, Complete: true}, status: InvestigationComplete,
 			wantDecision: CountPopulationScopeAnchorCommitted, wantCounted: true, wantServed: 0, wantAnchors: 1, wantAnchorID: "repository:SCOPE_ANCHOR",
 			wantSentence: "Counted 0 teams.", wantAssembled: contractsv1.ContextFabricRequirementSatisfied,
+			wantSubjectKind: SubjectRepository, wantSubjectID: "repository:SCOPE_ANCHOR",
 		},
 		{
 			name: "scoped count, anchor committed, population unmeasured", frame: countingFrame(SubjectTeam), family: QuestionFamilyScopedCohortStatus,
@@ -239,6 +248,7 @@ func scopeCells() []scopeCell {
 			cohort:     kindCohort(SubjectRepository, 2), status: InvestigationComplete,
 			wantDecision: CountPopulationScopeAnchorCommitted, wantCounted: true, wantServed: 2, wantAnchors: 1, wantAnchorID: "team:SCOPE_ANCHOR",
 			wantSentence: "Counted 2 repositorys.", wantAssembled: contractsv1.ContextFabricRequirementSatisfied,
+			wantSubjectKind: SubjectTeam, wantSubjectID: "team:SCOPE_ANCHOR",
 		},
 		{
 			name: "scoped project count, anchor unresolved", frame: countingFrame(SubjectProject), family: QuestionFamilyScopedCohortStatus,
@@ -274,6 +284,7 @@ func scopeCells() []scopeCell {
 			cohort:     kindCohort(SubjectTeam, 3), status: InvestigationComplete,
 			wantDecision: CountPopulationScopeAnchorCommitted, wantCounted: true, wantServed: 3, wantAnchors: 1, wantAnchorID: "repository:SCOPE_ANCHOR",
 			wantSentence: "Counted 3 teams.", wantAssembled: contractsv1.ContextFabricRequirementSatisfied,
+			wantSubjectKind: SubjectRepository, wantSubjectID: "repository:SCOPE_ANCHOR",
 		},
 		{
 			name: "scoped count, anchor committed on the caller's canonical id", frame: countingFrame(SubjectTeam), family: QuestionFamilyScopedCohortStatus,
@@ -282,6 +293,7 @@ func scopeCells() []scopeCell {
 			cohort:     kindCohort(SubjectTeam, 3), status: InvestigationComplete,
 			wantDecision: CountPopulationScopeAnchorCommitted, wantCounted: true, wantServed: 3, wantAnchors: 1, wantAnchorID: "repository:SCOPE_ANCHOR",
 			wantSentence: "Counted 3 teams.", wantAssembled: contractsv1.ContextFabricRequirementSatisfied,
+			wantSubjectKind: SubjectRepository, wantSubjectID: "repository:SCOPE_ANCHOR",
 		},
 		{
 			name: "scoped count, statistical basis without an anchor match", frame: countingFrame(SubjectTeam), family: QuestionFamilyScopedCohortStatus,
@@ -299,6 +311,7 @@ func scopeCells() []scopeCell {
 			cohort:     kindCohort(SubjectTeam, 3), status: InvestigationComplete,
 			wantDecision: CountPopulationScopeOrganization, wantCounted: true, wantServed: 3,
 			wantSentence: "Counted 3 teams.", wantAssembled: contractsv1.ContextFabricRequirementSatisfied,
+			wantSubjectKind: SubjectOrganization, wantSubjectID: "org_1",
 		},
 		{
 			// A LEGITIMATE ORGANIZATION COUNT: a discovered kind has no anchor
@@ -308,6 +321,7 @@ func scopeCells() []scopeCell {
 			cohort:     kindCohort(SubjectTeam, 5), status: InvestigationComplete,
 			wantDecision: CountPopulationScopeOrganization, wantCounted: true, wantServed: 5,
 			wantSentence: "Counted 5 teams.", wantAssembled: contractsv1.ContextFabricRequirementSatisfied,
+			wantSubjectKind: SubjectOrganization, wantSubjectID: "org_1",
 		},
 		{
 			name: "organization scope count, nothing committed", frame: frameWithPointer([]InvestigationGoal{GoalCountOrAggregate}, orgExpression(&orgTeam)), family: QuestionFamilySubjectInvestigation,
@@ -315,6 +329,7 @@ func scopeCells() []scopeCell {
 			cohort:     kindCohort(SubjectTeam, 2), status: InvestigationComplete,
 			wantDecision: CountPopulationScopeOrganization, wantCounted: true, wantServed: 2,
 			wantSentence: "Counted 2 teams.", wantAssembled: contractsv1.ContextFabricRequirementSatisfied,
+			wantSubjectKind: SubjectOrganization, wantSubjectID: "org_1",
 		},
 	}
 }
@@ -364,6 +379,13 @@ func TestACountIsServedOnlyOverTheRequestedPopulation(t *testing.T) {
 				if claim == nil || claim.Value.Integer == nil || *claim.Value.Integer != int64(cell.wantServed) {
 					t.Errorf("count claim = %+v, want value %d", claim, cell.wantServed)
 				}
+				// THE CLAIM'S SUBJECT IS THE COUNTED POPULATION: the resolved
+				// anchor under anchor_committed, the organization under
+				// organization_scope -- never a constant, and never the
+				// other decision's subject.
+				if claim != nil && (claim.Subject.Kind != cell.wantSubjectKind || claim.Subject.CanonicalID != cell.wantSubjectID) {
+					t.Errorf("claim subject = %s/%s, want %s/%s", claim.Subject.Kind, claim.Subject.CanonicalID, cell.wantSubjectKind, cell.wantSubjectID)
+				}
 				if rows[0].Served != cell.wantServed {
 					t.Errorf("row served = %d, want %d", rows[0].Served, cell.wantServed)
 				}
@@ -391,6 +413,12 @@ func TestACountIsServedOnlyOverTheRequestedPopulation(t *testing.T) {
 			event := telemetry.countPopulationScopes[0]
 			if event.Scope.Decision != cell.wantDecision {
 				t.Errorf("decision = %q, want %q", event.Scope.Decision, cell.wantDecision)
+			}
+			if cell.wantCounted && (event.SubjectKind != cell.wantSubjectKind || event.SubjectID != cell.wantSubjectID) {
+				t.Errorf("event subject = %s/%s, want %s/%s", event.SubjectKind, event.SubjectID, cell.wantSubjectKind, cell.wantSubjectID)
+			}
+			if !cell.wantCounted && (event.SubjectKind != "" || event.SubjectID != "") {
+				t.Errorf("event subject = %s/%s, want empty -- no claim was minted", event.SubjectKind, event.SubjectID)
 			}
 			if event.Counted != cell.wantCounted || event.Served != rows[0].Served || event.Assembly != rows[0].Outcome {
 				t.Errorf("event post-decision = counted %t served %d assembled %q; served document says counted %t served %d assembled %q",
@@ -634,15 +662,16 @@ func TestAReusedCountIsHeldToTheSameScopeDecision(t *testing.T) {
 	t.Parallel()
 	scopedTeams := countingFrame(SubjectTeam)
 	for _, cell := range []struct {
-		name         string
-		frame        *QuestionFrame
-		withAnchor   bool
-		wantDecision CountPopulationScopeDecision
-		wantCounted  bool
+		name            string
+		frame           *QuestionFrame
+		withAnchor      bool
+		wantDecision    CountPopulationScopeDecision
+		wantCounted     bool
+		wantSubjectKind SubjectKind
 	}{
-		{"anchor committed", scopedTeams, true, CountPopulationScopeAnchorCommitted, true},
-		{"anchor unresolved", scopedTeams, false, CountPopulationScopeAnchorUnresolved, false},
-		{"stored reading absent", nil, true, CountPopulationScopeFrameAbsent, false},
+		{"anchor committed", scopedTeams, true, CountPopulationScopeAnchorCommitted, true, SubjectProject},
+		{"anchor unresolved", scopedTeams, false, CountPopulationScopeAnchorUnresolved, false, ""},
+		{"stored reading absent", nil, true, CountPopulationScopeFrameAbsent, false, ""},
 	} {
 		cell := cell
 		t.Run(cell.name, func(t *testing.T) {
@@ -691,6 +720,13 @@ func TestAReusedCountIsHeldToTheSameScopeDecision(t *testing.T) {
 				if rows[0].Outcome != contractsv1.ContextFabricRequirementSatisfied || rows[0].Served != 3 || claim == nil || !sentence {
 					t.Errorf("reused count not stated: row %+v claim %+v answer %q", rows[0], claim, served.DeterministicAnswer)
 				}
+				// THE REUSE BACKFILL NAMES THE SAME ANCHOR THE FRESH PATH
+				// WOULD: the stored resolution's committed project, never the
+				// organization -- cardinalityClaim is the one authority both
+				// paths call through.
+				if claim != nil && (claim.Subject.Kind != cell.wantSubjectKind || claim.Subject.CanonicalID != project.CanonicalID) {
+					t.Errorf("reused claim subject = %s/%s, want %s/%s", claim.Subject.Kind, claim.Subject.CanonicalID, cell.wantSubjectKind, project.CanonicalID)
+				}
 			} else if rows[0].Outcome != contractsv1.ContextFabricRequirementUnavailable || claim != nil || sentence {
 				t.Errorf("reused count stated over an unestablished population: row %+v claim %+v answer %q", rows[0], claim, served.DeterministicAnswer)
 			}
@@ -725,6 +761,60 @@ func TestAnAnswerThatOwesNoCountEmitsNoScopeDecision(t *testing.T) {
 	}
 	if got := len(telemetry.countPopulationScopes); got != 0 {
 		t.Errorf("count population scope events = %d for an answer that owes no count, want 0", got)
+	}
+}
+
+// TestAReusedLegacyCardinalityClaimSubjectIsRepaired pins the invariant: a
+// stored document minted under an earlier authority carries a cardinality
+// claim whose subject is the organization, even though its own count is
+// anchor-bound. A reuse hit over that row must REPLACE the stale claim with
+// one naming the resolved anchor -- not leave it standing because a claim is
+// already present.
+func TestAReusedLegacyCardinalityClaimSubjectIsRepaired(t *testing.T) {
+	t.Parallel()
+	// The fixture's own stored claim is organization-subject BY CONSTRUCTION
+	// (storedScopedCountDoc always mints it that way, below) even though
+	// withAnchor=true means the count is anchor-bound -- the shape a legacy
+	// stored row carries.
+	stored, recheck := storedScopedCountDoc(true, true)
+	if stored.ClaimedFacts[len(stored.ClaimedFacts)-1].Subject.Kind != SubjectOrganization {
+		t.Fatalf("fixture control: stored claim subject = %q, want organization -- the fixture no longer carries the legacy shape this test targets", stored.ClaimedFacts[len(stored.ClaimedFacts)-1].Subject.Kind)
+	}
+	telemetry := &recordingTelemetry{}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph:     graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: recheck}},
+		Results:   &resultStoreStub{},
+		Telemetry: telemetry,
+		ReuseGate: readingReuseGate{stored: stored, frame: countingFrame(SubjectTeam)},
+	})
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if !result.Reused {
+		t.Fatal("the fixture did not take the reuse path, so it proves nothing about it")
+	}
+	claim := cardinalityClaimOf(result)
+	if claim == nil {
+		t.Fatal("no cardinality claim served on reuse")
+	}
+	anchor := recheck[0]
+	if claim.Subject.Kind != anchor.Kind || claim.Subject.CanonicalID != anchor.CanonicalID {
+		t.Errorf("reused claim subject = %s/%s, want the resolved anchor %s/%s -- a legacy claim survived the pass that should have corrected it", claim.Subject.Kind, claim.Subject.CanonicalID, anchor.Kind, anchor.CanonicalID)
+	}
+	// The claim's identity (id, field) is unchanged by the repair -- only its
+	// content moved -- and no second cardinality claim was minted alongside it.
+	count := 0
+	for _, c := range result.ClaimedFacts {
+		if c.Kind == contractsv1.ContextFabricFactCardinality {
+			count++
+			if c.ClaimID != stored.ClaimedFacts[len(stored.ClaimedFacts)-1].ClaimID {
+				t.Errorf("claim id = %q, want the stored claim's own id %q -- a repair must not mint a new id", c.ClaimID, stored.ClaimedFacts[len(stored.ClaimedFacts)-1].ClaimID)
+			}
+		}
+	}
+	if count != 1 {
+		t.Errorf("cardinality claims served = %d, want exactly 1 -- a repair replaces, it never appends a second", count)
 	}
 }
 

@@ -194,9 +194,9 @@
       "claim_id": "server:cardinality:work_item",
       "kind": "cardinality",
       "subject": {
-        "kind": "organization",
-        "canonical_id": "org_1",
-        "label": "org_1"
+        "kind": "project",
+        "canonical_id": "project.v2:linear:P1",
+        "label": "project.v2:linear:P1"
       },
       "field": "work_item_count",
       "value": {

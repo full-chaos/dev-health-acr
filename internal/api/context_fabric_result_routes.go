@@ -173,6 +173,19 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 			args = append(args, "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())))
 			a.logger.InfoContext(r.Context(), contextfabric.StoredAnswerabilityLogMessage, args...)
 		}
+		// A stored cardinality claim minted under an earlier mint authority
+		// keeps naming its old subject forever otherwise -- this route reads
+		// storage directly and never reaches the pass that mints the claim
+		// fresh, the same reason the two repairs above exist. Logged only
+		// when something actually moved, because "checked and it already
+		// matched" is not an event a reader needs to see repeated on every
+		// read of an already-correct row.
+		if beforeKind := cardinalityClaimSubjectKind(result); contextfabric.RepairStoredCardinalityClaimSubject(principal, &result, stored.SemanticState, stored.SemanticStateRead) {
+			a.logger.InfoContext(r.Context(), "context fabric legacy cardinality claim subject repaired",
+				"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())),
+				"stored_subject_kind", contextfabric.SanitizeLogAttr(string(beforeKind)),
+				"served_subject_kind", contextfabric.SanitizeLogAttr(string(cardinalityClaimSubjectKind(result))))
+		}
 		var rankingAccounting []contextfabric.RetainedRankingAccountingEvent
 		result, rankingAccounting = contextfabric.AccountForRetainedRanking(result)
 		for _, event := range rankingAccounting {
@@ -426,4 +439,16 @@ func (a *App) writeInvestigationResultError(w http.ResponseWriter, r *http.Reque
 	}
 	a.logger.ErrorContext(r.Context(), "context fabric investigation result read failed", "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "context_fabric_investigation_result")
 	writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation result read failed", false, nil)
+}
+
+// cardinalityClaimSubjectKind is the served document's cardinality claim's
+// own subject kind, "" when it carries none -- read fresh each call so a
+// before/after pair taken around a repair reports what actually moved.
+func cardinalityClaimSubjectKind(result contextfabric.InvestigationResult) contractsv1.ContextFabricSubjectKind {
+	for _, claim := range result.ClaimedFacts {
+		if claim.Kind == contractsv1.ContextFabricFactCardinality {
+			return claim.Subject.Kind
+		}
+	}
+	return ""
 }

@@ -94,30 +94,24 @@ func cardinalityOwedByFrame(frame *QuestionFrame, deriver RequirementDeriver, ca
 // cardinalityClaim builds the claim for a computed cardinality, or reports
 // false when there is nothing to claim.
 //
-// The SUBJECT is the ORGANIZATION the investigation is scoped to. A population
-// count is not a fact about any one member -- claiming it against a member
-// would assert that member has 36 of something -- and the organization is the
-// only subject the count is true of. Its canonical id is the principal's own
-// org id, which is the identity the whole investigation already runs under.
+// The SUBJECT is the counted population itself -- see cardinalityClaimSubject.
+// A population count is not a fact about any one MEMBER of that population --
+// claiming it against a member would assert that member has 36 of something --
+// so the subject is always the bounding population, never a member.
 func cardinalityClaim(principal storage.Principal, cardinality MembershipCardinality) (ClaimedFact, bool) {
 	if !cardinality.Resolved || cardinality.Kind == "" {
 		return ClaimedFact{}, false
 	}
-	if principal.OrgID == "" {
-		// No organization identity, no subject to claim against. Reported as
-		// an absence rather than claimed against a fabricated subject.
+	subject, ok := cardinalityClaimSubject(principal, cardinality.Scope)
+	if !ok {
 		return ClaimedFact{}, false
 	}
 	served := int64(cardinality.Served)
 	return ClaimedFact{
 		ClaimID: fmt.Sprintf("%s%s", cardinalityClaimIDPrefix, cardinality.Kind),
 		Kind:    contractsv1.ContextFabricFactCardinality,
-		Subject: SubjectRef{
-			Kind:        SubjectOrganization,
-			CanonicalID: principal.OrgID,
-			Label:       principal.OrgID,
-		},
-		Field: cardinalityClaimField(cardinality.Kind),
+		Subject: subject,
+		Field:   cardinalityClaimField(cardinality.Kind),
 		// SERVED, not Declared. The claim states what the answer CARRIES,
 		// which is what a reader can check against the members in front of
 		// them; the population it was cut from is disclosed on the outcome
@@ -127,6 +121,39 @@ func cardinalityClaim(principal storage.Principal, cardinality MembershipCardina
 			Integer: &served,
 		},
 	}, true
+}
+
+// cardinalityClaimSubject is the subject a cardinality claim is about: the
+// population the count describes, never a member of it.
+//
+// AN ANCHOR-BOUND COUNT NAMES THE ANCHOR. When the frame counts members under
+// an anchor and resolution committed one (count_population_scope.go's
+// anchor_committed), the counted population IS that anchor -- of the anchor's
+// OWN kind and canonical id, as resolution bound it, never the reading's
+// merely-stated kind (which the anchor's own AnchorSubjectKind can disagree
+// with when the question named no explicit kind).
+//
+// EVERY OTHER COUNTED POPULATION IS THE ORGANIZATION. organization_scope, and
+// the zero-value Scope a caller that predates this decision still passes, both
+// describe a population no anchor bounds -- a discovered kind, a grouped or
+// compared set, or the organization itself -- and the organization is the only
+// subject such a count is true of. Its canonical id is the principal's own org
+// id, the identity the whole investigation already runs under.
+func cardinalityClaimSubject(principal storage.Principal, scope CountPopulationScope) (SubjectRef, bool) {
+	if scope.Decision == CountPopulationScopeAnchorCommitted {
+		if scope.AnchorSubjectKind == "" || scope.AnchorID == "" {
+			// An invariant this file relies on elsewhere did not hold --
+			// report an absence rather than claim a fabricated subject.
+			return SubjectRef{}, false
+		}
+		return SubjectRef{Kind: scope.AnchorSubjectKind, CanonicalID: scope.AnchorID, Label: scope.AnchorID}, true
+	}
+	if principal.OrgID == "" {
+		// No organization identity, no subject to claim against. Reported as
+		// an absence rather than claimed against a fabricated subject.
+		return SubjectRef{}, false
+	}
+	return SubjectRef{Kind: SubjectOrganization, CanonicalID: principal.OrgID, Label: principal.OrgID}, true
 }
 
 // cardinalityAnswerSentence is the prose half: the number the claim asserts,
@@ -175,12 +202,22 @@ func cardinalityNoun(kind SubjectKind, count int) string {
 // Read off the document rather than remembered from the mint, so the telemetry
 // cannot say "claimed" about an answer that does not carry one.
 func resultCarriesCardinalityClaim(result InvestigationResult) bool {
-	for _, claim := range result.ClaimedFacts {
+	return cardinalityClaimIndex(result.ClaimedFacts) >= 0
+}
+
+// cardinalityClaimIndex returns the index of the first claim of kind
+// cardinality in claims, or -1 when none is present.
+//
+// SHARED BY THE MINT SITES so "does this document already carry one" and
+// "which one, to correct it" read the same claim -- never two predicates
+// that could disagree about which entry is the cardinality claim.
+func cardinalityClaimIndex(claims []ClaimedFact) int {
+	for i, claim := range claims {
 		if claim.Kind == contractsv1.ContextFabricFactCardinality {
-			return true
+			return i
 		}
 	}
-	return false
+	return -1
 }
 
 // cardinalityClaimAdmitted reports whether one more claim fits.
@@ -223,4 +260,65 @@ func appendCardinalitySentence(answer, sentence string) string {
 		return truncateAtSentenceBoundary(sentence, deterministicAnswerMaxLength)
 	}
 	return strings.TrimSpace(truncateAtSentenceBoundary(answer, room) + " " + sentence)
+}
+
+// cardinalityClaimSubjectRepair is the ONE construction that decides
+// whether, and how, to correct a stored document's EXISTING cardinality
+// claim subject -- shared by every serving surface that re-reads a stored
+// document, so a claim minted under an earlier authority is corrected the
+// same way wherever it is read again, not once per surface. Reading is
+// already derived here (storedCountReading, Frame + AnchorKind); the reuse
+// path already carries its own, RepairStoredCardinalityClaimSubject below
+// derives it for an external caller.
+//
+// IT REPAIRS, IT NEVER MINTS. A document with no cardinality claim at all --
+// predating the step entirely -- is untouched; that absence is the reuse
+// path's own backfill concern (engine.go), a different decision with a
+// different precondition. This function only corrects a claim that is
+// already there.
+//
+// THE IDENTITY IS UNCHANGED. Only Subject moves; ClaimID, Kind, Field and
+// Value are the claim's own and are never touched, so nothing that cites the
+// claim by id is disturbed and no second cardinality claim is ever minted.
+//
+// SILENT ON A READING THAT CANNOT RE-DERIVE THE SCOPE. When the stored
+// semantic reading is absent, unreadable, or the anchor it names cannot be
+// resolved from the document's own subject resolution, this function leaves
+// the claim exactly as stored -- a decision it has no evidence for is not a
+// decision it is entitled to force onto an already-served claim, and leaving
+// it is never worse than what was already being served.
+//
+// Reports whether it changed anything, so a caller that logs repairs (as the
+// by-id read route already does for other fields) has something to log.
+func cardinalityClaimSubjectRepair(principal storage.Principal, result *InvestigationResult, reading storedCountReading) bool {
+	if result == nil {
+		return false
+	}
+	idx := cardinalityClaimIndex(result.ClaimedFacts)
+	if idx < 0 {
+		return false
+	}
+	scope := DecideCountPopulationScope(reading.Frame, reading.AnchorKind, result.SubjectResolution, nil)
+	if !scope.Counts() {
+		return false
+	}
+	subject, ok := cardinalityClaimSubject(principal, scope)
+	if !ok || result.ClaimedFacts[idx].Subject == subject {
+		return false
+	}
+	result.ClaimedFacts[idx].Subject = subject
+	return true
+}
+
+// RepairStoredCardinalityClaimSubject is cardinalityClaimSubjectRepair for a
+// caller outside this package (the by-id read route), which holds the raw
+// persisted semantic state rather than an already-derived reading -- the
+// same two arguments RepairStoredClarification already takes, for the same
+// reason: this route never reaches the pass that would derive it fresh.
+func RepairStoredCardinalityClaimSubject(principal storage.Principal, result *InvestigationResult, state *PersistedSemanticState, read SemanticStateReadStatus) bool {
+	if result == nil {
+		return false
+	}
+	reading := storedCountReadingOf(StoredInvestigationResult{Result: *result, SemanticState: state, SemanticStateRead: read})
+	return cardinalityClaimSubjectRepair(principal, result, reading)
 }
