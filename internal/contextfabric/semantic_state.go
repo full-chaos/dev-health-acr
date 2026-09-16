@@ -221,6 +221,17 @@ type ConfirmedNeedEntry struct {
 type SemanticScopeAnchor struct {
 	Kind SubjectKind `json:"kind"`
 	Term string      `json:"term"`
+	// MemberSource is TOLERATED ON READ ONLY: DecodeSemanticState's
+	// DisallowUnknownFields decoder rejects any JSON key this struct has no
+	// matching field for, so a row a prior binary wrote with this key
+	// present must keep a field to land in, or that row becomes permanently
+	// undecodable (SemanticStateReadMalformed) the moment this binary reads
+	// it back -- a persisted format never loses a field under
+	// DisallowUnknownFields without a compatibility path. Never populated
+	// by BuildSemanticState (omitempty, and no input ever sets it): this
+	// field is accepted, ignored, and never consulted by anything -- ONLY
+	// for decoding rows an earlier binary already wrote.
+	MemberSource CohortMemberSource `json:"member_source,omitempty"`
 }
 
 // SemanticStateValidation is the frame's validation and gate verdict.

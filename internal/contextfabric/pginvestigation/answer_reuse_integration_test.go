@@ -1468,6 +1468,16 @@ func TestFindReusable_EmptyOwnershipRoutingVersionKeyFieldMissesWithoutQuerying(
 
 	missing := reuseKeyFor(result)
 	missing.OwnershipRoutingVersion = ""
+
+	// WITHOUT QUERYING, proven rather than named: close the connection
+	// BEFORE the lookup. FindReusable's own early empty-field guard must
+	// return before ever touching db -- any query attempted against a
+	// closed *sql.DB fails with a driver error, so a clean (false, nil)
+	// result here is only possible if no query ran. db.Close is documented
+	// idempotent, so the package's own t.Cleanup closing it again after
+	// this test is a safe no-op.
+	require.NoError(t, db.Close())
+
 	_, ok, _, err := store.FindReusable(ctx, principal, missing)
 	require.NoError(t, err)
 	require.False(t, ok, "expected an empty ownership-routing version in the key to miss")

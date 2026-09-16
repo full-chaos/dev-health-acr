@@ -228,7 +228,7 @@ func newFreshPGReuseEngine(t *testing.T, db *sql.DB, principal storage.Principal
 	options.ReuseModelIdentities = []string{"test-provider/test-model"}
 	options.ReuseRetrievalIdentity = contextfabric.ReuseRetrievalIdentity{EmbedRetrievalIdentity: "none", RetrievalPolicyVersion: "fresh-pg-v1"}
 	options.ReusePromptVersions = contextfabric.ReusePromptVersions{InterpretationPromptVersion: "fresh-pg-interpret-v1", SynthesisPromptVersion: "fresh-pg-synthesis-v1"}
-	options.ReuseVersionAuthorities = contextfabric.ReuseVersionAuthorities{QueryVersion: "query-v1", CanonicalServiceVersion: "fresh-pg-facts-v1", ModelOutputSchemaVersion: "fresh-pg-schema-v1", IdentityNormalizationVersion: "fresh-pg-identity-v1", WindowInferenceVersion: contextfabric.WindowInferenceVersion, CommitGateVersion: contextfabric.CommitGateVersion, RankingFormulaVersion: contextfabric.RankingFormulaVersion, QuestionFamilyVersion: contextfabric.QuestionFamilyTableVersion}
+	options.ReuseVersionAuthorities = contextfabric.ReuseVersionAuthorities{QueryVersion: "query-v1", CanonicalServiceVersion: "fresh-pg-facts-v1", ModelOutputSchemaVersion: "fresh-pg-schema-v1", IdentityNormalizationVersion: "fresh-pg-identity-v1", WindowInferenceVersion: contextfabric.WindowInferenceVersion, CommitGateVersion: contextfabric.CommitGateVersion, RankingFormulaVersion: contextfabric.RankingFormulaVersion, QuestionFamilyVersion: contextfabric.QuestionFamilyTableVersion, OwnershipRoutingVersion: contextfabric.OwnershipRoutingVersion}
 	fixture.engine, err = contextfabric.NewEngine(fixture.dependencies, options)
 	if err != nil {
 		t.Fatal(err)

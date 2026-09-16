@@ -826,6 +826,14 @@ func (s *Store) FindReusable(ctx context.Context, principal storage.Principal, k
 	if strings.TrimSpace(key.QuestionFamilyVersion) == "" {
 		return contextfabric.StoredInvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, nil
 	}
+	// Same fail-closed convention, one MORE dimension. A composition that
+	// never wired OwnershipRoutingVersion must MISS rather than run a
+	// lookup that ignores it: ignoring it would serve a repository-anchored
+	// team count computed under a different routing arm's rules, which is
+	// precisely the bypass this fence exists to close.
+	if strings.TrimSpace(key.OwnershipRoutingVersion) == "" {
+		return contextfabric.StoredInvestigationResult{}, false, contextfabric.ReuseMissNoCandidate, nil
+	}
 	// sol round-2 F4 (noted, not solved -- no telemetry vocabulary change):
 	// every "ordinary miss" this guard block produces -- a genuinely
 	// unconfigured dimension due to a composition bug, same as a normal

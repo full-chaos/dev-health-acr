@@ -245,15 +245,30 @@ func TestBuildContextFabricInvestigator_wiresEveryReuseKeyVersionAuthority(t *te
 		t.Errorf("reusePromptVersions.SynthesisPromptVersion = %q, want %q (CHAOS-3862): open.go's wiring diverged from the deployment-current constant", v, genkitruntime.DefaultSynthesisPromptVersion)
 	}
 
+	// EVERY string field of ReuseVersionAuthorities, by reflection over the
+	// struct itself -- not a named list of the dimensions this test's
+	// author happened to know about. A hand-enumerated list is exactly how
+	// this test stayed green after a later dimension (OwnershipRoutingVersion)
+	// was added to the struct and wired in open.go without a matching
+	// assertion here: the struct gained a field, this test did not, and a
+	// broken (or simply forgotten) wire for the new field would have passed.
+	// Iterating the struct's own fields means the NEXT dimension is covered
+	// automatically, with no edit to this test required.
 	authorities := mustField(t, engineValue, "reuseVersionAuthorities")
-	if v := mustField(t, authorities, "QueryVersion").String(); v == "" {
-		t.Error("reuseVersionAuthorities.QueryVersion is empty (CHAOS-3862 round 2): open.go's wiring silently disabled this dimension of reuse")
+	authorityType := authorities.Type()
+	checked := 0
+	for i := 0; i < authorityType.NumField(); i++ {
+		field := authorityType.Field(i)
+		if field.Type.Kind() != reflect.String {
+			continue
+		}
+		checked++
+		if v := authorities.Field(i).String(); v == "" {
+			t.Errorf("reuseVersionAuthorities.%s is empty: open.go's wiring silently disabled this dimension of reuse", field.Name)
+		}
 	}
-	if v := mustField(t, authorities, "CanonicalServiceVersion").String(); v == "" {
-		t.Error("reuseVersionAuthorities.CanonicalServiceVersion is empty (CHAOS-3862 round 2): open.go's wiring silently disabled this dimension of reuse")
-	}
-	if v := mustField(t, authorities, "ModelOutputSchemaVersion").String(); v == "" {
-		t.Error("reuseVersionAuthorities.ModelOutputSchemaVersion is empty (CHAOS-3862 round 2): open.go's wiring silently disabled this dimension of reuse")
+	if checked == 0 {
+		t.Fatal("reuseVersionAuthorities has no string fields to check -- ReuseVersionAuthorities' shape changed under this test")
 	}
 }
 

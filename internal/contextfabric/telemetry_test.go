@@ -15,10 +15,10 @@ func TestSlogEngineTelemetry_RecordAnswerReuseLogsOrgAndOutcome(t *testing.T) {
 	var buf bytes.Buffer
 	telemetry := NewSlogEngineTelemetry(slog.New(slog.NewTextHandler(&buf, nil)))
 
-	telemetry.RecordAnswerReuse(context.Background(), storage.Principal{OrgID: "org_telemetry_1"}, AnswerReuseHit)
+	telemetry.RecordAnswerReuse(context.Background(), storage.Principal{OrgID: "org_telemetry_1"}, AnswerReuseHit, "ownership-routing.v1")
 
 	line := buf.String()
-	for _, want := range []string{"org_id=org_telemetry_1", "outcome=hit"} {
+	for _, want := range []string{"org_id=org_telemetry_1", "outcome=hit", "ownership_routing_version=ownership-routing.v1"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("log line = %q, want it to contain %q", line, want)
 		}
@@ -40,7 +40,7 @@ func TestSlogEngineTelemetry_RecordAnswerReuseLogsMissReasons(t *testing.T) {
 		var buf bytes.Buffer
 		telemetry := NewSlogEngineTelemetry(slog.New(slog.NewTextHandler(&buf, nil)))
 
-		telemetry.RecordAnswerReuse(context.Background(), storage.Principal{OrgID: "org_telemetry_2"}, outcome)
+		telemetry.RecordAnswerReuse(context.Background(), storage.Principal{OrgID: "org_telemetry_2"}, outcome, "ownership-routing.v1")
 
 		want := "outcome=" + string(outcome)
 		if !strings.Contains(buf.String(), want) {
@@ -69,5 +69,20 @@ func TestNewSlogEngineTelemetry_NilLoggerFallsBackToDefault(t *testing.T) {
 	t.Parallel()
 	// Must not panic.
 	telemetry := NewSlogEngineTelemetry(nil)
-	telemetry.RecordAnswerReuse(context.Background(), storage.Principal{OrgID: "org_telemetry_4"}, AnswerReuseHit)
+	telemetry.RecordAnswerReuse(context.Background(), storage.Principal{OrgID: "org_telemetry_4"}, AnswerReuseHit, "ownership-routing.v1")
+}
+
+// TestRecordReuseOutcomeCarriesTheDeploymentCurrentOwnershipRoutingVersion
+// pins recordReuseOutcome's own wiring: EVERY reuse outcome it records --
+// hit or miss, whatever the outcome -- carries the same
+// e.reuseVersionAuthorities.OwnershipRoutingVersion value the Engine was
+// composed with, never a hardcoded or omitted one.
+func TestRecordReuseOutcomeCarriesTheDeploymentCurrentOwnershipRoutingVersion(t *testing.T) {
+	t.Parallel()
+	rec := &recordingTelemetry{}
+	e := &Engine{telemetry: rec, reuseVersionAuthorities: ReuseVersionAuthorities{OwnershipRoutingVersion: "ownership-routing.v7"}}
+	e.recordReuseOutcome(context.Background(), storage.Principal{OrgID: "org_reuse_version_wiring"}, AnswerReuseMissNoCandidate)
+	if len(rec.answerReuseOwnershipRoutingVersions) != 1 || rec.answerReuseOwnershipRoutingVersions[0] != "ownership-routing.v7" {
+		t.Fatalf("answerReuseOwnershipRoutingVersions = %v, want exactly [%q]", rec.answerReuseOwnershipRoutingVersions, "ownership-routing.v7")
+	}
 }

@@ -748,7 +748,12 @@ func (e *Engine) recordReuseOutcome(ctx context.Context, principal storage.Princ
 	if e.telemetry == nil {
 		return
 	}
-	e.telemetry.RecordAnswerReuse(ctx, principal, outcome)
+	// e.reuseVersionAuthorities is the SAME deployment-current bundle every
+	// lookup this call could have made keys with -- there is no per-call
+	// value to thread separately, so the line always names it, hit or miss,
+	// making a stale or never-wired dimension attributable at Info without
+	// correlating against build metadata out of band.
+	e.telemetry.RecordAnswerReuse(ctx, principal, outcome, e.reuseVersionAuthorities.OwnershipRoutingVersion)
 }
 
 // reuseAuthorizationStillHolds implements TRD §19.7.3 condition 6 --

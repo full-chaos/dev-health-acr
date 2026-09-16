@@ -382,7 +382,11 @@ type EngineTelemetry interface {
 	// own bounds are the problem, not real staleness) rather than an
 	// operator only ever seeing "reuse rarely happens" with no way to
 	// tell why.
-	RecordAnswerReuse(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome)
+	// ownershipRoutingVersion is the deployment-current
+	// contextfabric.OwnershipRoutingVersion this call's lookup matched or
+	// missed on -- carried so a stale or disabled dimension is attributable
+	// at Info without correlating against the binary's own build metadata.
+	RecordAnswerReuse(ctx context.Context, principal storage.Principal, outcome AnswerReuseOutcome, ownershipRoutingVersion string)
 	// RecordAnswerReuseBypass (CHAOS-4998) reports that ONE Investigate
 	// call never reached the reuse lookup at all, and which of the closed
 	// AnswerReuseBypassReason arms decided that. Deliberately a SEPARATE

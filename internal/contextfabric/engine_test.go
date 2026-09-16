@@ -161,6 +161,14 @@ type staticResultStore struct {
 	// noCarrierStates stops newContinuationHarness registering snapshots, so
 	// a pin can drive a LEGACY carrier.
 	noCarrierStates bool
+	// legacyStates, when set for a result id, serves the RAW bytes given
+	// (through DecodeSemanticState, exactly as a real store does) instead
+	// of encoding a value from states -- the one way this fixture can
+	// reproduce a row an EARLIER binary wrote carrying a JSON key this Go
+	// struct has no field for. Checked before states, and pair with
+	// noCarrierStates so the harness never overwrites it with a fresh
+	// carrier.
+	legacyStates map[string][]byte
 }
 
 func (s *staticResultStore) Save(_ context.Context, _ storage.Principal, result InvestigationResult, _ SourceWatermarkSnapshot, _ RebuildEpoch, _ string, _ ReuseRetrievalIdentity, _ ReusePromptVersions, _ ReuseVersionAuthorities, _ int64, _ string, semantic SemanticStateWrite) error {
@@ -184,6 +192,11 @@ func (s *staticResultStore) Get(_ context.Context, _ storage.Principal, resultID
 		epoch = &zero
 	}
 	stored := StoredInvestigationResult{Result: result, GraphEpoch: epoch, SemanticStateRead: SemanticStateReadAbsent}
+	if raw, ok := s.legacyStates[resultID]; ok {
+		decoded, status := DecodeSemanticState(raw)
+		stored.SemanticState, stored.SemanticStateRead = decoded, status
+		return stored, nil
+	}
 	if state, ok := s.states[resultID]; ok && state != nil {
 		// THROUGH THE CODEC, exactly as both real stores do, because the
 		// invariant a double has to keep is that every carrier it serves is
@@ -379,7 +392,11 @@ type recordingTelemetry struct {
 	semanticStatePersistences   []SemanticStatePersistenceEvent
 	priorSubjectReceiptsSkipped []int
 	answerReuseOutcomes         []AnswerReuseOutcome
-	answerReuseContainment      []AnswerReuseContainmentEvent
+	// answerReuseOwnershipRoutingVersions records, per RecordAnswerReuse
+	// call and in the same order as answerReuseOutcomes, the
+	// ownershipRoutingVersion argument that call carried.
+	answerReuseOwnershipRoutingVersions []string
+	answerReuseContainment              []AnswerReuseContainmentEvent
 
 	// answerReuseBypasses (CHAOS-4998) records every reuse BYPASS reason, in
 	// call order. Separate from answerReuseOutcomes for the same reason the
@@ -648,8 +665,9 @@ type dualTableFactsRecord struct {
 	secondaryRowsBytes int
 }
 
-func (r *recordingTelemetry) RecordAnswerReuse(_ context.Context, _ storage.Principal, outcome AnswerReuseOutcome) {
+func (r *recordingTelemetry) RecordAnswerReuse(_ context.Context, _ storage.Principal, outcome AnswerReuseOutcome, ownershipRoutingVersion string) {
 	r.answerReuseOutcomes = append(r.answerReuseOutcomes, outcome)
+	r.answerReuseOwnershipRoutingVersions = append(r.answerReuseOwnershipRoutingVersions, ownershipRoutingVersion)
 }
 
 func (r *recordingTelemetry) RecordAnswerReuseBypass(_ context.Context, _ storage.Principal, reason AnswerReuseBypassReason) {
