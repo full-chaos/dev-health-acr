@@ -292,6 +292,66 @@ func TestWorkItemTupleEngineKeepsPersistedPopulationWithoutBackfill(t *testing.T
 	}
 }
 
+// TestWorkItemTupleReuseHitSettlesAdmissionAndStrips pins that a reuse HIT
+// is this arm's admission decision settling too, exactly as the fresh
+// path's own settlement point does (engine.go, beside
+// workItemTupleStripSurveyObligations's own doc comment): a hit is this
+// decision's only settlement point on this path, since there is no later
+// tighten call left to still reverse it, so it owes the same observable
+// line and the same strip -- run here, on the reading persisted beside the
+// served row, because that reading is the one thing this path can still
+// mutate before serving.
+func TestWorkItemTupleReuseHitSettlesAdmissionAndStrips(t *testing.T) {
+	defer reportWorkItemMutationPanic(t)
+	principal, request, stored, current := tupleReuseFixture(t)
+	// AnchorTerms must match the payload fixture's own resolved candidate
+	// term ("project", workItemTuplePayloadFixture's MatchedTerms) -- the
+	// count-population-scope decision above the work-item branch binds the
+	// anchor by that term, and this scenario must still reach the work-item
+	// branch to exercise it.
+	surveyFrame := frameWith([]InvestigationGoal{GoalRankOrSurvey}, SubjectExpression{
+		Kind:   SubjectExpressionChildrenOfScope,
+		Scoped: &ScopedSetExpression{AnchorTerms: []string{"project"}, MemberKind: SubjectWorkItem},
+	}, TemporalIntentCurrent, nil)
+	stored.SemanticState.Frame = &surveyFrame
+	if !surveyFrame.HasObligation(ObligationRanking) {
+		t.Fatalf("fixture frame %+v does not carry ranking: cannot pin a strip with nothing to strip", surveyFrame)
+	}
+	gate, err := NewWorkItemMembershipGate(1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	telemetry := &recordingTelemetry{}
+	engine := mustReuseTestEngine(t, EngineDependencies{Telemetry: telemetry, ReuseGate: tupleReuseGate{stored}, CandidateVerifier: func(context.Context, storage.Principal, RequestedScope, ResolvedGraphBinding, SubjectKind, string) (bool, CandidateVerificationReason) {
+		return true, CandidateVerificationValid
+	}, WorkItemMembership: tupleMembershipFunc(func(c context.Context, _ storage.Principal, _ WorkItemMembershipRequest) (*WorkItemMembershipLease, WorkItemMembershipResult, error) {
+		lease, err := gate.Acquire(c)
+		return lease, current, err
+	})})
+	ctx, owner := NewWorkItemResponseOwnerContext(context.Background())
+	defer owner.Complete()
+	_, hit, tuple, _, reuseErr := engine.tryReuseWithReading(ctx, principal, request, TimeContext{Axis: TemporalCurrent}, "", windowKeyRederivable, ResolvedGraphBinding{})
+	if reuseErr != nil {
+		t.Fatalf("unexpected serving error: %v", reuseErr)
+	}
+	if !hit || !tuple {
+		t.Fatalf("hit=%t tuple=%t, want both true", hit, tuple)
+	}
+	if surveyFrame.HasObligation(ObligationRanking) {
+		t.Fatalf("reuse-hit strip did not run: the persisted reading's frame still carries ranking, obligations=%v", surveyFrame.Obligations)
+	}
+	if len(telemetry.workItemTupleAdmissions) != 1 {
+		t.Fatalf("settled admission lines = %d, want exactly 1", len(telemetry.workItemTupleAdmissions))
+	}
+	settled := telemetry.workItemTupleAdmissions[0]
+	if !settled.Admitted {
+		t.Fatalf("settled admission = %+v, want Admitted=true", settled)
+	}
+	if !reflect.DeepEqual(settled.StrippedObligations, []AnswerObligation{ObligationRanking}) {
+		t.Fatalf("settled admission = %+v, want StrippedObligations=[ranking]", settled)
+	}
+}
+
 func TestWorkItemTupleReuseDecisionUsesConfiguredLogger(t *testing.T) {
 	principal, request, stored, current := tupleReuseFixture(t)
 	request.RequestedScope.TeamIDs = []string{"team-new"}

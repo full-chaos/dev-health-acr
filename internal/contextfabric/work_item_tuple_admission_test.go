@@ -414,3 +414,36 @@ func TestWorkItemTupleStripSurveyObligationsRemovesRankingOnly(t *testing.T) {
 		})
 	}
 }
+
+// TestWorkItemTupleSyncFrameObligationsKeepsTheB8CopyInStep pins the
+// FrameObligations refresh beside the strip that can put it out of step: the
+// B8 shadow copy (chaos4632_question_family_consensus.go's own "kept in step
+// by construction... cannot drift") is a value taken before this arm's strip
+// runs, so only the strip's own mutation -- not construction, not any other
+// reader -- can separate the two. A stripped call must re-equal them; an
+// untouched (nothing-to-strip) call must change nothing.
+func TestWorkItemTupleSyncFrameObligationsKeepsTheB8CopyInStep(t *testing.T) {
+	defer reportWorkItemMutationPanic(t)
+	for _, tc := range []struct {
+		name  string
+		goals []InvestigationGoal
+	}{
+		{"has_ranking", []InvestigationGoal{GoalRankOrSurvey}},
+		{"no_ranking", []InvestigationGoal{GoalAssessState, GoalCountOrAggregate}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer reportWorkItemMutationPanic(t)
+			frame := prospectiveTupleFrame(tc.goals...)
+			staleCopy := append([]AnswerObligation(nil), frame.Obligations...)
+			outcome := QuestionFamilyOutcome{Frame: &frame, FrameObligations: staleCopy}
+			stripped := workItemTupleStripSurveyObligations(&frame)
+			workItemTupleSyncFrameObligations(&outcome, stripped)
+			if !reflect.DeepEqual(outcome.FrameObligations, frame.Obligations) {
+				t.Fatalf("FrameObligations %v disagrees with the stripped frame's %v", outcome.FrameObligations, frame.Obligations)
+			}
+			if len(stripped) == 0 && !reflect.DeepEqual(outcome.FrameObligations, staleCopy) {
+				t.Fatalf("a no-op strip still changed FrameObligations: before=%v after=%v", staleCopy, outcome.FrameObligations)
+			}
+		})
+	}
+}

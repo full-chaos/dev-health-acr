@@ -467,7 +467,15 @@ func runCell(t *testing.T, ev eventspec.Event, base map[string]any, attribution 
 			return row
 		}
 		row.applicable, row.wantAccept = true, false
-		_, err := certifyRecovered(t, mutate("sweep_undeclared_vocab_value"), Assertion{Event: ev, Want: wantFor("sweep_undeclared_vocab_value")})
+		// A FieldStringSlice's out-of-vocabulary value must stay a slice: a
+		// bare string fails the CONTAINER type check before the per-element
+		// vocabulary check ever runs, so it would certify the wrong guard --
+		// "wrong_container_type" already covers the bare-value case above.
+		var badValue any = "sweep_undeclared_vocab_value"
+		if f.Type == eventspec.FieldStringSlice {
+			badValue = []string{"sweep_undeclared_vocab_value"}
+		}
+		_, err := certifyRecovered(t, mutate(badValue), Assertion{Event: ev, Want: wantFor(badValue)})
 		row.gotAccept = err == nil
 	case "boundary":
 		return row // N/A for every field today: eventspec.Field declares no Min/Max/MaxItems.

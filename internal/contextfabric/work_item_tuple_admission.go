@@ -175,6 +175,21 @@ func tightenWorkItemTupleFrameGate(gate FrameGate, frame *QuestionFrame, familyA
 	return workItemTupleFrameGate(gate, frame, familyAllowsWorkItemTuple, timeContext)
 }
 
+// workItemTupleSyncFrameObligations keeps outcome.FrameObligations (the B8
+// shadow's own copy of the frame's Obligations, chaos4632_question_family_
+// consensus.go: "kept in step by construction... a test asserts they cannot
+// drift") in step with a frame workItemTupleStripSurveyObligations just
+// mutated in place. The copy is taken before this arm's strip can run, so
+// the strip alone -- among everything that touches Obligations after the
+// copy is made -- can put the two out of step; a no-op when stripped is
+// empty, since nothing moved the frame away from the copy already taken.
+func workItemTupleSyncFrameObligations(outcome *QuestionFamilyOutcome, stripped []AnswerObligation) {
+	if len(stripped) == 0 || outcome == nil || outcome.Frame == nil {
+		return
+	}
+	outcome.FrameObligations = append([]AnswerObligation(nil), outcome.Frame.Obligations...)
+}
+
 // workItemTupleInScope reports whether frame is this arm's structural
 // concern at all -- children_of_scope over work_item -- independent of
 // whether it ends up admitted. This is the ONE condition

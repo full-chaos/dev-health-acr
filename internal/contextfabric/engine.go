@@ -2197,6 +2197,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		var stripped []AnswerObligation
 		if workItemTuple {
 			stripped = workItemTupleStripSurveyObligations(familyOutcome.Frame)
+			workItemTupleSyncFrameObligations(&familyOutcome, stripped)
 		}
 		if e.telemetry != nil {
 			e.telemetry.RecordWorkItemTupleAdmission(ctx, principal, WorkItemTupleAdmissionEvent{Admitted: workItemTuple, StrippedObligations: stripped})
