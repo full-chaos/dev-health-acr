@@ -18,11 +18,10 @@ import "strings"
 //     and any consumer of the served result. The judgment's KIND is the
 //     INTERPRETER's classification (a closed enum picked alongside its own
 //     free-text RequestedJudgment), never re-derived downstream by pattern-
-//     matching that free text -- an earlier revision of this file did
-//     exactly that (a substring scan for "performance"/"productivity") and
-//     was refused: a keyword scan is fitted to wordings the same way a
-//     fabricated metric is fitted to a dataset, and the judgment's basis is
-//     the interpreter's job to name, not a downstream guess.
+//     matching that free text: a keyword scan over free text is fitted to
+//     wordings the same way a fabricated metric is fitted to a dataset, and
+//     the judgment's basis is the interpreter's job to name, not a
+//     downstream guess.
 //  2. requireNoSuperlativeClaimOverUnrankableMember is the structural
 //     backstop: a model-authored driver may never use a ranking superlative
 //     about a member the formula could not score at all.

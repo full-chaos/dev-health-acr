@@ -415,8 +415,8 @@ type contextFabricBounds struct {
 	completenessRequired bool
 	// cohortScoreMeaningRequired (CHAOS-5774) is the SAME write-only split
 	// as cohortMemberOutcomeRequired above: ScoreMeaning is a brand-new
-	// field, so every row persisted before this ticket carries its zero
-	// value. A freshly produced row (Validate(), write bounds) has no such
+	// field, so a row persisted before it existed carries its zero value.
+	// A freshly produced row (Validate(), write bounds) has no such
 	// excuse -- RankCohort always stamps it before Validate runs.
 	cohortScoreMeaningRequired bool
 }

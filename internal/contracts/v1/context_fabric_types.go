@@ -1698,9 +1698,8 @@ type ContextFabricInterpretedQuestion struct {
 	// on, the same "closed pick beside free text" shape WindowClass already
 	// uses beside the request's own time phrasing. Empty is legitimate --
 	// "the model made no pick" -- never derived from RequestedJudgment's
-	// text by any consumer (that substring-matching approach was tried and
-	// refused: a judgment's KIND is the interpreter's job, not a keyword
-	// scan downstream).
+	// own text by any downstream consumer: a judgment's KIND is the
+	// interpreter's job to name, never a keyword scan over free text.
 	RequestedJudgmentKind ContextFabricRequestedJudgmentKind `json:"requested_judgment_kind,omitempty"`
 }
 

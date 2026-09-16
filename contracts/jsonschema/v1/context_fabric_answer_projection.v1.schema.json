@@ -648,14 +648,14 @@
           "maxItems": 250
         },
         "score_meaning": {
-          "description": "CHAOS-5774: mirrors Cohort.score_meaning verbatim.",
+          "description": "mirrors Cohort.score_meaning verbatim.",
           "type": "string",
           "enum": [
             "attention"
           ]
         },
         "judgment_mismatch": {
-          "description": "CHAOS-5774: mirrors Cohort.judgment_mismatch verbatim.",
+          "description": "mirrors Cohort.judgment_mismatch verbatim.",
           "type": "boolean"
         }
       },

@@ -1060,14 +1060,14 @@
               "type": "boolean"
             },
             "score_meaning": {
-              "description": "CHAOS-5774: mirrors Cohort.score_meaning verbatim.",
+              "description": "mirrors Cohort.score_meaning verbatim.",
               "enum": [
                 "attention"
               ],
               "type": "string"
             },
             "judgment_mismatch": {
-              "description": "CHAOS-5774: mirrors Cohort.judgment_mismatch verbatim.",
+              "description": "mirrors Cohort.judgment_mismatch verbatim.",
               "type": "boolean"
             }
           },
@@ -4333,7 +4333,7 @@
               "type": "string"
             },
             "judgment_mismatch": {
-              "description": "CHAOS-5774: server-computed, true when the investigation's requested judgment asked for a comparison score_meaning does not support. Never set without score_meaning also present.",
+              "description": "server-computed, true when the investigation's requested judgment asked for a comparison score_meaning does not support. Never set without score_meaning also present.",
               "type": "boolean"
             }
           },
@@ -6394,7 +6394,7 @@
               "type": "string"
             },
             "requested_judgment_kind": {
-              "description": "CHAOS-5774: the model's own closed-vocabulary classification of what BASIS requested_judgment asks for. Absent means the model made no pick (equivalent to unspecified) -- never derived from requested_judgment's own text by a consumer.",
+              "description": "the model's own closed-vocabulary classification of what BASIS requested_judgment asks for. Absent means the model made no pick (equivalent to unspecified) -- never derived from requested_judgment's own text by a consumer.",
               "enum": [
                 "performance",
                 "attention"

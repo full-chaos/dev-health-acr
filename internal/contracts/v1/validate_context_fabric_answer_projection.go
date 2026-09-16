@@ -294,7 +294,8 @@ func (c ContextFabricProjectedCohort) Validate() error {
 	// ScoreMeaning/JudgmentMismatch (CHAOS-5774): checked only when present,
 	// same "no write/legacy split at the projection boundary" shape as
 	// Outcome above -- Project() copies whatever the source result carried,
-	// and a pre-ticket stored result re-projected here must stay readable.
+	// and a stored result written before score_meaning existed must stay
+	// readable.
 	if c.ScoreMeaning != "" && !validContextFabricCohortScoreMeaning(c.ScoreMeaning) {
 		return fmt.Errorf("projected cohort score meaning is not a recognized value")
 	}

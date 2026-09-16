@@ -409,7 +409,7 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// CHAOS-5732 (D47): 349 -> 350 -- the same new "kind" leaf, reached
 		// through the canonical result's $ref to CoverageDetail.
 		// 350 -> 351 -- Cohort's new score_meaning string leaf, same
-		// ticket and reasoning as the answer_projection surface above.
+		// reasoning as the answer_projection surface above.
 		// 351 -> 352 -- InterpretedQuestion's new requested_judgment_kind
 		// string leaf. answer_projection is unaffected: the projection
 		// carries no Interpretation at all.

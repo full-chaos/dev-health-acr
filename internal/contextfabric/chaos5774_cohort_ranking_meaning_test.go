@@ -9,14 +9,12 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-// CHAOS-5774: an executed-answer observation found a cohort ranking (an
-// ATTENTION/adverse-pressure measure) served as a best-to-worst PERFORMANCE
-// judgment, with an insufficient_evidence member named "weakest performer".
-// These tests cover the two independent mechanisms this ticket adds: the
-// deterministic score-meaning/judgment-mismatch data RankCohort and the
-// engine mint (never model-authored), and the structural guard that refuses
-// a model-authored driver's ranking superlative about a member the formula
-// never scored.
+// CHAOS-5774: these tests cover two independent mechanisms that keep a
+// cohort ranking's ATTENTION/adverse-pressure measure from being served as
+// a performance judgment: the deterministic score-meaning/judgment-mismatch
+// data RankCohort and the engine mint (never model-authored), and the
+// structural guard that refuses a model-authored driver's ranking
+// superlative about a member the formula never scored.
 
 // --- scoreMeaningSupportsJudgmentKind ---
 
@@ -226,10 +224,9 @@ func TestContainsWordRequiresWholeWordMatch(t *testing.T) {
 // interpreter's own RequestedJudgment/RequestedJudgmentKind, through the
 // REAL Engine.Investigate pipeline (RankCohort + applyCohortJudgmentMismatch
 // both run inside engine.go, never mocked). kind is set directly on the
-// stub interpretation -- exactly as a real interpreter call would set it,
-// per the team-lead's ruling that the judgment's KIND is the interpreter's
-// own closed-vocabulary pick, never re-derived downstream from the free
-// text.
+// stub interpretation -- exactly as a real interpreter call would set it:
+// the judgment's KIND is the interpreter's own closed-vocabulary pick,
+// never re-derived downstream from the free text.
 func judgmentFramingEngineFixture(t *testing.T, requestedJudgment string, kind RequestedJudgmentKind) InvestigationResult {
 	t.Helper()
 	strugglingTeam := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:STRUGGLING", Label: "Struggling"}
