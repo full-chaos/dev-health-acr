@@ -229,6 +229,7 @@ func scopeCells() []scopeCell {
 			status:       InvestigationComplete,
 			wantDecision: CountPopulationScopeAnchorCommitted, wantCounted: true, wantServed: 2, wantAnchors: 1, wantAnchorID: "repository:SCOPE_ANCHOR",
 			wantSentence: "Counted 2 teams.", wantAssembled: contractsv1.ContextFabricRequirementSatisfied,
+			wantSubjectKind: SubjectRepository, wantSubjectID: "repository:SCOPE_ANCHOR",
 		},
 		{
 			// A partial truth: retrieval counted more members than the answer
