@@ -93,6 +93,18 @@ func AuthorizedAttributes(principal storage.Principal, requested contextfabric.R
 	return true
 }
 
+// OwnsRepository reports whether a subject's own authorization_repositories
+// property names repoSlug -- the subject's DECLARED ownership signal, never
+// an authorization/visibility check against a principal or a caller-supplied
+// scope. Exported so a caller building a member set for a specific anchor
+// (falkorgraph's ownership-routed cohort discovery) can filter candidates by
+// what they themselves declare owning, independently of AuthorizedAttributes,
+// which answers a different question (is this principal allowed to see this
+// node) and must not be conflated with "does this node own repoSlug."
+func OwnsRepository(attributes map[string]interface{}, repoSlug string) bool {
+	return scopeContainsAttr(attributes, authorizationRepositoriesAttr, repoSlug)
+}
+
 func anyContainsAttr(attributes map[string]interface{}, key string, values []string) bool {
 	for _, value := range values {
 		if scopeContainsAttr(attributes, key, value) {

@@ -218,10 +218,10 @@ func scopeCells() []scopeCell {
 			wantSubjectKind: SubjectRepository, wantSubjectID: "repository:SCOPE_ANCHOR",
 		},
 		{
-			// CHAOS-5783: a repository-anchored team count served by the
-			// ownership arm (falkorgraph routes this pairing away from
-			// hopWalk) -- proves CohortMemberSource travels from the graph
-			// discovery result through to this decision's own certified line.
+			// A repository-anchored team count served by the ownership arm
+			// (falkorgraph routes this pairing away from hopWalk) -- proves
+			// CohortMemberSource travels from the graph discovery result
+			// through to this decision's own certified line.
 			name: "scoped count, anchor committed, ownership routed", frame: countingFrame(SubjectTeam), family: QuestionFamilyScopedCohortStatus,
 			resolution:   SubjectResolution{Candidates: []SubjectCandidate{scopeAnchorMatch(scopeAnchorRepository())}, Committed: []SubjectRef{scopeAnchorRepository()}},
 			cohort:       kindCohort(SubjectTeam, 2),
@@ -655,9 +655,10 @@ func TestStoredDocumentStatesCountReadsTheRowAndTheClaim(t *testing.T) {
 // readingReuseGate serves one stored row with the reading persisted beside it;
 // a nil frame serves the row with no readable reading.
 type readingReuseGate struct {
-	stored     InvestigationResult
-	frame      *QuestionFrame
-	anchorKind SubjectKind
+	stored       InvestigationResult
+	frame        *QuestionFrame
+	anchorKind   SubjectKind
+	memberSource CohortMemberSource
 }
 
 func (g readingReuseGate) FindReusable(context.Context, storage.Principal, ReuseKey) (StoredInvestigationResult, bool, ReuseMissReason, error) {
@@ -666,7 +667,7 @@ func (g readingReuseGate) FindReusable(context.Context, storage.Principal, Reuse
 	}
 	return StoredInvestigationResult{
 		Result:            g.stored,
-		SemanticState:     &PersistedSemanticState{FramePresent: true, Frame: g.frame, ScopeAnchor: SemanticScopeAnchor{Kind: g.anchorKind}},
+		SemanticState:     &PersistedSemanticState{FramePresent: true, Frame: g.frame, ScopeAnchor: SemanticScopeAnchor{Kind: g.anchorKind, MemberSource: g.memberSource}},
 		SemanticStateRead: SemanticStateReadAvailable,
 	}, true, "", nil
 }
@@ -755,6 +756,84 @@ func TestAReusedCountIsHeldToTheSameScopeDecision(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestReuseFencesARepositoryAnchoredTeamCountUntilItCarriesOwnership pins the
+// interim reuse fence (CHAOS-5783, no schema change): a stored repository-
+// anchored team count whose persisted reading does not carry
+// member_source=ownership is a miss -- indistinguishable, on purpose, from a
+// row genuinely served by hop-walk or one saved before the field existed --
+// and the request takes the fresh path; a stored document that DOES carry
+// member_source=ownership reuses normally.
+func TestReuseFencesARepositoryAnchoredTeamCountUntilItCarriesOwnership(t *testing.T) {
+	t.Parallel()
+	anchor := scopeAnchorRepository()
+	frame := countingFrame(SubjectTeam)
+	buildStored := func() (InvestigationResult, []SubjectRef) {
+		_, candidate := reusableCandidate()
+		candidate.Cohort = countingCohort(SubjectTeam, 2)
+		requirement := string(ObligationCount) + "/" + string(SubjectRoleMember) + "/" + string(SubjectTeam)
+		candidate.Completeness.Outcomes = []RequirementOutcomeRow{{
+			Stage: contractsv1.ContextFabricOutcomeStagePlanning, Requirement: requirement, Obligation: string(ObligationCount),
+			Outcome: contractsv1.ContextFabricRequirementSatisfied, Impact: contractsv1.ContextFabricAnswerImpactNone,
+		}}
+		committed := []SubjectRef{anchor}
+		for _, member := range candidate.Cohort.Members {
+			committed = append(committed, member.Subject)
+		}
+		candidate.SubjectResolution = SubjectResolution{Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}, Committed: committed}
+		candidate.Completeness = ComputeAnswerCompleteness(candidate)
+		return candidate, committed
+	}
+
+	t.Run("stored member_source absent (predates the field, or hop-walk) is a miss", func(t *testing.T) {
+		t.Parallel()
+		stored, committed := buildStored()
+		telemetry := &recordingTelemetry{}
+		// The FRESH path's own cell -- deliberately a DIFFERENT cohort size
+		// (3, not the stored 2) so a served fresh answer is distinguishable
+		// from a served stale one, same technique as the "reuse miss, stored
+		// count contradicts the decision" precedent above.
+		fresh := scopeCell{
+			frame: frame, family: QuestionFamilyScopedCohortStatus,
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}, Committed: committed},
+			cohort:     kindCohort(SubjectTeam, 3), status: InvestigationComplete,
+		}
+		served, err := newScopeEngine(t, fresh, telemetry, readingReuseGate{stored: stored, frame: frame, anchorKind: SubjectRepository, memberSource: ""}).
+			Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+		if err != nil {
+			t.Fatalf("Investigate() error = %v", err)
+		}
+		if served.Reused {
+			t.Fatalf("Reused = true, want false -- the interim fence must force the fresh path: outcomes %v", telemetry.answerReuseOutcomes)
+		}
+		if len(telemetry.answerReuseOutcomes) == 0 || telemetry.answerReuseOutcomes[0] != AnswerReuseMissMemberSource {
+			t.Fatalf("reuse outcomes = %v, want first %q", telemetry.answerReuseOutcomes, AnswerReuseMissMemberSource)
+		}
+	})
+
+	t.Run("stored member_source=ownership reuses normally", func(t *testing.T) {
+		t.Parallel()
+		stored, committed := buildStored()
+		telemetry := &recordingTelemetry{}
+		engine := mustReuseTestEngine(t, EngineDependencies{
+			Graph:   graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}, Committed: committed}},
+			Results: &resultStoreStub{}, Telemetry: telemetry,
+			ReuseGate: readingReuseGate{stored: stored, frame: frame, anchorKind: SubjectRepository, memberSource: CohortMemberSourceOwnership},
+		})
+		served, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+		if err != nil {
+			t.Fatalf("Investigate() error = %v", err)
+		}
+		if !served.Reused {
+			t.Fatalf("Reused = false, want true -- a document recorded as ownership-served must reuse: outcomes %v", telemetry.answerReuseOutcomes)
+		}
+		for _, outcome := range telemetry.answerReuseOutcomes {
+			if outcome == AnswerReuseMissMemberSource {
+				t.Fatalf("reuse outcomes = %v, must not contain %q for an ownership-recorded document", telemetry.answerReuseOutcomes, AnswerReuseMissMemberSource)
+			}
+		}
+	})
 }
 
 // TestAnAnswerThatOwesNoCountEmitsNoScopeDecision pins the line's trigger: the

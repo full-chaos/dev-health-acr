@@ -1249,6 +1249,16 @@ func (e *Engine) captureAcceptedReading(
 	acceptedShape InvestigationShape,
 	plan *AnswerPlan,
 	requirements []DerivedRequirement,
+	// memberSource is which graph discovery arm served this pass's member
+	// set, carried into the persisted reading (SemanticScopeAnchor.
+	// MemberSource) so a later reuse candidate's OWN stored shape can be
+	// checked against it -- see reusedCountIsRepositoryAnchoredTeamCount's
+	// call site for why this interim signal exists (no schema change: it
+	// rides the existing JSON-encoded semantic-state column). Every exit
+	// that has no live GraphContext of its own (every terminal/refusal path)
+	// passes CohortMemberSourceNotApplicable, matching what a reuse read of
+	// that row will see.
+	memberSource CohortMemberSource,
 	confirmedNeeds []ConfirmedNeedEntry,
 	censuses ...*WorkItemTupleCensus,
 ) semanticStateCapture {
@@ -1262,6 +1272,7 @@ func (e *Engine) captureAcceptedReading(
 		Requirements:    requirements,
 		RequestIdentity: identity,
 		ConfirmedNeeds:  confirmedNeeds,
+		MemberSource:    memberSource,
 	}
 	if plan != nil {
 		in.GroupKind = plan.GroupKind
@@ -2354,7 +2365,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// a confirmed window receipt whose interpretation moves the axis to
 		// historical lands here -- and the result is SAVED, so a plan
 		// omitted here is missing from a persisted answer permanently.
-		veto, vetoErr := e.windowVetoResult(ctx, principal, request, windowVetoAxisConflict, &interpretation, nil, binding, axisConflictDispositions, structureCanon.Explicit, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts)), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, axisConflictConfirmedNeeds(remembered, request)))
+		veto, vetoErr := e.windowVetoResult(ctx, principal, request, windowVetoAxisConflict, &interpretation, nil, binding, axisConflictDispositions, structureCanon.Explicit, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts)), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, CohortMemberSourceNotApplicable, axisConflictConfirmedNeeds(remembered, request)))
 		return veto, vetoErr
 	}
 	// CHAOS-3977 P5 (design brief §3.4): ONE prior consult per Investigate
@@ -2488,7 +2499,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		if len(gatedDispositions) > 0 {
 			e.recordPriorSubjectReceiptSkips(ctx, principal, gatedDispositions, priorHintsStaleGraphEpochDelta)
 		}
-		gated, gatedErr := e.windowConfirmationRequiredResult(ctx, principal, request, &interpretation, *effectiveWindow, &structureCanon, WindowCanonicalizationGatedClassDefault, binding, gatedMaterial, gatedMaterialWindowExpandUnavailable, carriedStructureEntries, gatedDispositions, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture))
+		gated, gatedErr := e.windowConfirmationRequiredResult(ctx, principal, request, &interpretation, *effectiveWindow, &structureCanon, WindowCanonicalizationGatedClassDefault, binding, gatedMaterial, gatedMaterialWindowExpandUnavailable, carriedStructureEntries, gatedDispositions, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, CohortMemberSourceNotApplicable, confirmedNeedsForCapture))
 		return gated, gatedErr
 	}
 	// CHAOS-3782 Codex round-1 F1: capture the reuse watermark snapshot
@@ -2590,7 +2601,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			gateResolution.PriorSubjectReceiptDispositions = composePriorSubjectReceiptDispositions(priorOutcomes, gateResolution)
 			e.recordPriorSubjectReceiptSkips(ctx, principal, gateResolution.PriorSubjectReceiptDispositions, priorHintsStaleGraphEpochDelta)
 		}
-		return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, gateResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, gateMaterial, effectiveWindow, windowCarried, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture))
+		return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, gateResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, gateMaterial, effectiveWindow, windowCarried, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, CohortMemberSourceNotApplicable, confirmedNeedsForCapture))
 	}
 	resolution, structureMaterial, commitBases, commitDigests, err := e.graph.ResolveSubjects(resolveCtx, principal, graphRequest, interpretation, binding, effectiveConfirmedKind(structureCanon.Confirmed, kindCarry), confirmedAnchorSelection(structureCanon.Confirmed, appliedNeeds), familyOutcome.Frame, ScopeAnchorRetrievalKind(familyOutcome.Frame, familyOutcome.WinningSample.ScopeAnchorKind))
 	if err != nil {
@@ -2634,7 +2645,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				emptyResolution.PriorSubjectReceiptDispositions = composePriorSubjectReceiptDispositions(priorOutcomes, emptyResolution)
 				e.recordPriorSubjectReceiptSkips(ctx, principal, emptyResolution.PriorSubjectReceiptDispositions, priorHintsStaleGraphEpochDelta)
 			}
-			terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, emptyResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture))
+			terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, emptyResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, CohortMemberSourceNotApplicable, confirmedNeedsForCapture))
 			return terminal, terminalErr
 		}
 		// CHAOS-4088: StageSubjectResolution, not StageResolution -- the
@@ -2703,7 +2714,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				familyOutcome.Gate = FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable, DeclaredMemberKind: SubjectWorkItem}
 				resolution.Committed = []SubjectRef{}
 			}
-			return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture))
+			return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, CohortMemberSourceNotApplicable, confirmedNeedsForCapture))
 		}
 		authorized := false
 		if e.candidateVerifier != nil {
@@ -2711,7 +2722,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		}
 		if !authorized || ctx.Err() != nil {
 			resolution = SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}
-			return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture))
+			return e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, CohortMemberSourceNotApplicable, confirmedNeedsForCapture))
 		}
 		resolution = restrictWorkItemTupleCandidate(resolution)
 		plan.MemberKind = SubjectWorkItem
@@ -2759,7 +2770,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		subjects = workItemTupleSubjects(graphContext.Cohort)
 	}
 	if len(subjects) == 0 && !workItemTuple {
-		terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture))
+		terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, resolution, graphContext, reuseWatermarkSnapshot, reuseEpoch, *subjectCandidatesAuthzDropped, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, CohortMemberSourceNotApplicable, confirmedNeedsForCapture))
 		return terminal, terminalErr
 	}
 
@@ -2904,7 +2915,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			// to describe. Both kinds are on the Info line above.
 			plan.MemberKind = ""
 			collapsedResolution := SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}
-			terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, collapsedResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture))
+			terminal, terminalErr := e.terminalResult(ctx, principal, request, interpretation, familyOutcome, collapsedResolution, GraphContext{}, reuseWatermarkSnapshot, reuseEpoch, 0, binding, windowCanon, structureCanon, structureMaterial, effectiveWindow, windowCarried, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, CohortMemberSourceNotApplicable, confirmedNeedsForCapture))
 			return terminal, terminalErr
 		}
 	}
@@ -3535,7 +3546,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// know the former, so keying Save on the latter would reopen the
 		// same asymmetry from the other side.
 		epochDeltaSample := e.sampleBindingEpochDelta(ctx, principal, binding)
-		if err := e.saveResult(ctx, principal, BudgetAssertDecisive, result, reuseWatermarkSnapshot, reuseEpoch, composeTimeAxisKey(TimeAxisKeyFor(clampedRequestTime), windowSaveKeyComponent(windowCanon, effectiveWindow, windowCarried)), binding.Epoch, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture, finalWorkItemTupleCensus(tupleCensus, result.Cohort))); err != nil {
+		if err := e.saveResult(ctx, principal, BudgetAssertDecisive, result, reuseWatermarkSnapshot, reuseEpoch, composeTimeAxisKey(TimeAxisKeyFor(clampedRequestTime), windowSaveKeyComponent(windowCanon, effectiveWindow, windowCarried)), binding.Epoch, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, graphContext.CohortMemberSource, confirmedNeedsForCapture, finalWorkItemTupleCensus(tupleCensus, result.Cohort))); err != nil {
 			// CHAOS-3927 P4 (design brief §2.1): a decisive result carrying
 			// confirmed structure can still lose the atomic (org,
 			// prior_result_id, member) supersession claim to a concurrent
@@ -3566,7 +3577,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// naming THIS result as parent would admit a confirmation this
 				// exact Save call just refused (withoutSupersededConfirmedNeeds's
 				// own doc comment, chaos5639_confirmed_need.go).
-				superseding, supersededErr := e.structureSupersessionVetoResult(ctx, principal, request, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, confirmedNeedsForCapture))
+				superseding, supersededErr := e.structureSupersessionVetoResult(ctx, principal, request, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, CohortMemberSourceNotApplicable, confirmedNeedsForCapture))
 				return superseding, supersededErr
 			}
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))

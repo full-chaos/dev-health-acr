@@ -606,7 +606,16 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			// projection time (devhealthsource/tables.go's queryRepositories)
 			// and never rewritten by resolution, so it is the same string
 			// authorization_repositories carries for a team that owns it.
-			if subject.Kind == contextfabric.SubjectRepository && subject.Label != "" {
+			//
+			// GATED ON THE SUBJECT BEING THE FRAME'S OWN BOUND ANCHOR, not on
+			// "any committed repository": a committed subject set can carry
+			// more than one identity for reasons unrelated to this question's
+			// anchor (an explicit comparison operand, a carried-over hint), and
+			// a repository committed for one of those reasons is not what "how
+			// many teams own repository R" is asking about: a project-anchored,
+			// team-member frame with an unrelated committed repository must
+			// never route through ownership on that repository's account.
+			if subject.Kind == contextfabric.SubjectRepository && subject.Label != "" && frameAnchorBound(request.Frame, subject, request.Resolution) {
 				ownershipRoutedRepoSlug = subject.Label
 				break
 			}
@@ -672,6 +681,21 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		for _, n := range ownershipNodes {
 			subject, ok := graphrank.NodeSubject(n)
 			if !ok {
+				continue
+			}
+			// Filtered to OWNERSHIP here, on the pool, never by narrowing the
+			// caller's own RequestedScope: the caller's own repository
+			// restriction is never widened by the anchor's slug. The
+			// caller's RequestedScope.RepositorySlugs is an AUTHORIZATION
+			// restriction (what this principal/request may see at all) and
+			// must reach AuthorizedAttributes below completely unmodified --
+			// overwriting it with the anchor's own slug let an ownership-
+			// routed cohort answer OUTSIDE a caller's explicit repository
+			// restriction. "Does this team own the anchor repository" is a
+			// POOL-MEMBERSHIP question, answered once here from the node's
+			// own declared signal, independently of whatever the caller may
+			// additionally be authorized to see.
+			if !graphrank.OwnsRepository(n.Attributes, ownershipRoutedRepoSlug) {
 				continue
 			}
 			nk := graphrank.SubjectKey(subject)
@@ -997,18 +1021,13 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	exactNameCutThisCohort := exactNameTruncated && !kindCensusRan
 	poolTruncationBasis, poolTruncationArms, cohortPoolTruncated := cohortPoolTruncation(
 		fulltextTruncated, hopWalkTruncated, exactNameCutThisCohort, kindCensusTruncated, failedLookups > 0, censusCoversThisCohort)
-	// For an ownership-routed call, membership is the anchor's OWN declared
-	// ownership signal, never the caller's own requested scope alone -- so
-	// the admission check below runs against a scope narrowed to
-	// the bound anchor's repository, on a COPY, never mutating the scope
-	// every other arm in this call already used to query and filter by.
-	cohortDiscovery := request
-	if ownershipRoutedRepoSlug != "" {
-		narrowed := cohortDiscovery.Request
-		narrowed.RequestedScope.RepositorySlugs = []string{ownershipRoutedRepoSlug}
-		cohortDiscovery.Request = narrowed
-	}
-	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis, cohortPopulation := graphrank.DiscoveredCohort(principal, cohortDiscovery, cohortNodes, cohortPoolTruncated, isInternalSubject)
+	// request's OWN RequestedScope reaches admission completely unmodified
+	// here -- see the ownership-census filter above (graphrank.OwnsRepository)
+	// for where an ownership-routed call's membership is actually decided.
+	// AuthorizedAttributes below still applies the caller's own scope/
+	// principal restriction, exactly as it does for every other arm; it is
+	// never widened or replaced for this pairing.
+	cohort, cohortAuthzDropped, cohortKindScopedAuthzDropped, cohortKind, cohortKindBasis, cohortPopulation := graphrank.DiscoveredCohort(principal, request, cohortNodes, cohortPoolTruncated, isInternalSubject)
 	// SEAM 7 (CHAOS-4736): what decided the cohort kind, or what prevented
 	// a cohort. This is the I/O boundary, so the telemetry call lives here
 	// and DiscoveredCohort stays pure -- the same split the authzDropped
@@ -1289,6 +1308,42 @@ func countUnboundedValidity(nodes []graphrank.CandidateNode, edges []graphrank.R
 func mustSubject(n graphrank.CandidateNode) contextfabric.SubjectRef {
 	subject, _ := graphrank.NodeSubject(n)
 	return subject
+}
+
+// frameAnchorBound reports whether subject is the frame's own scope anchor,
+// never merely a committed subject that happens to share its kind. Mirrors
+// contextfabric's own anchorBound (count_population_scope.go) term-matching
+// arm -- the one arm this package can evaluate without the reading's stated
+// anchor kind or the resolution's commit-basis set, neither of which reaches
+// GraphDiscoveryRequest. A subject committed on the caller's own canonical id
+// (anchorBound's other arm) is therefore not recognized here and falls back
+// to hopWalk -- narrower than the count decision's own anchor binding, never
+// wider: a real anchor this check misses costs the OLD (hop-based) behavior,
+// never a false ownership route.
+//
+// A frame that is not children_of_scope, or carries no scope, binds nothing:
+// "anchor" has no meaning outside that one expression shape.
+func frameAnchorBound(frame *contextfabric.QuestionFrame, subject contextfabric.SubjectRef, resolution contextfabric.SubjectResolution) bool {
+	if frame == nil || frame.SubjectExpression.Kind != contextfabric.SubjectExpressionChildrenOfScope || frame.SubjectExpression.Scoped == nil {
+		return false
+	}
+	terms := make(map[string]struct{}, len(frame.SubjectExpression.Scoped.AnchorTerms))
+	for _, term := range frame.SubjectExpression.Scoped.AnchorTerms {
+		if normalized := contextfabric.NormalizeRetrievalTerm(term); normalized != "" {
+			terms[normalized] = struct{}{}
+		}
+	}
+	for _, candidate := range resolution.Candidates {
+		if candidate.Subject.Kind != subject.Kind || candidate.Subject.CanonicalID != subject.CanonicalID {
+			continue
+		}
+		for _, matched := range candidate.MatchedTerms {
+			if _, anchor := terms[contextfabric.NormalizeRetrievalTerm(matched)]; anchor {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // sortCandidateNodesBySubjectKey sorts nodes in place by graphrank.SubjectKey
