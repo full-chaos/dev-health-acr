@@ -2,6 +2,7 @@ package falkorgraph
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -145,6 +146,102 @@ func TestDiscoverContextRepositoryAnchorWithNoSlugFallsBackToHopWalk(t *testing.
 	}
 	if result.CohortMemberSource != contextfabric.CohortMemberSourceHopWalk {
 		t.Fatalf("CohortMemberSource = %q, want %q", result.CohortMemberSource, contextfabric.CohortMemberSourceHopWalk)
+	}
+}
+
+// TestDiscoverContextTruncatedOwnershipCensusMakesTheCohortIncomplete proves
+// the ownership census's own truncation reaches Cohort.Complete exactly like
+// the subjectless kind-scoped census's truncation already does: an ownership
+// census cut before it finished enumerating every team must never let the
+// served cohort claim completeness over a population it did not finish
+// reading.
+func TestDiscoverContextTruncatedOwnershipCensusMakesTheCohortIncomplete(t *testing.T) {
+	overLimitRows := make([]row, exactNameCandidateQueryLimit+1)
+	for i := range overLimitRows {
+		id := fmt.Sprintf("team:over_%d", i)
+		overLimitRows[i] = fakeSubjectNodeRow("team", id, id)
+		overLimitRows[i]["n"].(*node).Properties[propAuthzRepos] = []string{"full-chaos/dev-health-acr"}
+	}
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:acr", Label: "full-chaos/dev-health-acr"}
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			return nil, nil
+		case strings.Contains(cypher, "$kinds"):
+			return overLimitRows, nil
+		default:
+			t.Fatal("hopWalk must not run for the routed anchor")
+			return nil, nil
+		}
+	}}
+	adapter := newFakeAdapter(t, fake)
+	principal := storage.Principal{OrgID: "org-1"}
+	request := ownershipRoutingRequest(repositoryAnchorFrame(), anchor)
+	request.Request.Options.MaxCohortMembers = exactNameCandidateQueryLimit + 100
+
+	result, err := adapter.DiscoverContext(context.Background(), principal, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort == nil {
+		t.Fatal("Cohort = nil, want members from the (truncated) ownership census")
+	}
+	if result.Cohort.Complete {
+		t.Fatal("Cohort.Complete = true, want false -- the ownership census that built this cohort was truncated")
+	}
+	if !result.Coverage.Partial {
+		t.Fatal("Coverage.Partial = false, want true -- a truncated ownership census is degradation, not an ordinary empty result")
+	}
+}
+
+// TestDiscoverContextCompleteOwnershipCensusCoversAnUnrelatedTruncatedArm
+// proves censusCoversThisCohort's ownership disjunct is load-bearing on its
+// own: a call whose full-text arm is truncated (an arm this cohort's kind
+// never draws members from) still reports Cohort.Complete when the
+// ownership census -- the actual source of this cohort's team members --
+// ran to completion and found some. Without that disjunct, an anchor whose
+// own team population is exhaustively known would incorrectly inherit an
+// unrelated arm's truncation.
+func TestDiscoverContextCompleteOwnershipCensusCoversAnUnrelatedTruncatedArm(t *testing.T) {
+	overFulltextRows := make([]row, 26) // adapter's MaxResults (25) + 1
+	for i := range overFulltextRows {
+		id := fmt.Sprintf("project:noise_%d", i)
+		overFulltextRows[i] = row{"node": &node{Properties: map[string]interface{}{
+			propKind: "project", propCanonicalID: id, propLabel: id,
+		}}, "score": 1.0}
+	}
+	anchor := contextfabric.SubjectRef{Kind: contextfabric.SubjectRepository, CanonicalID: "repository:acr", Label: "full-chaos/dev-health-acr"}
+	fake := &fakeConn{queryFunc: func(ctx context.Context, graphKey, cypher string, params map[string]interface{}, readOnly bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			return overFulltextRows, nil
+		case strings.Contains(cypher, "$kinds"):
+			owner := fakeSubjectNodeRow("team", "team:CHAOS", "Fullchaos")
+			owner["n"].(*node).Properties[propAuthzRepos] = []string{"full-chaos/dev-health-acr"}
+			return []row{owner}, nil
+		default:
+			// The full-text arm's own adjacent-edge gathering (one call per
+			// matched node) shares this fallback; hopWalk itself is proven
+			// skipped by the dedicated tests above and is not re-asserted here.
+			return nil, nil
+		}
+	}}
+	adapter := newFakeAdapter(t, fake)
+	principal := storage.Principal{OrgID: "org-1"}
+	request := ownershipRoutingRequest(repositoryAnchorFrame(), anchor)
+
+	result, err := adapter.DiscoverContext(context.Background(), principal, request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort == nil || len(result.Cohort.Members) != 1 {
+		t.Fatalf("Cohort = %#v, want the one real owner", result.Cohort)
+	}
+	if !result.Cohort.Complete {
+		t.Fatal("Cohort.Complete = false, want true -- the ownership census that produced this cohort's members ran to completion; the full-text arm's own truncation draws no team members and must not degrade this cohort")
+	}
+	if result.Coverage.Partial {
+		t.Fatal("Coverage.Partial = true, want false -- a completed, non-empty ownership census covers the unrelated truncated arm")
 	}
 }
 
