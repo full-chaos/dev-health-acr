@@ -97,7 +97,7 @@ func TestReusedObservationCoverEventCarriesTheStoredOutcome(t *testing.T) {
 		Completeness: contractsv1.ContextFabricAnswerCompleteness{
 			Outcomes: []contractsv1.ContextFabricPlanRequirementOutcomeRow{{
 				Requirement: requirement.Requirement, Obligation: requirement.Obligation,
-				Stage: contractsv1.ContextFabricOutcomeStageAssembledResult,
+				Stage:   contractsv1.ContextFabricOutcomeStageAssembledResult,
 				Outcome: contractsv1.ContextFabricRequirementNarrowed, Impact: contractsv1.ContextFabricAnswerImpactDepth,
 				CauseCoverage: contractsv1.ContextFabricCoverageDetailFactNarrowed, Served: 0, Declared: 1,
 			}},
