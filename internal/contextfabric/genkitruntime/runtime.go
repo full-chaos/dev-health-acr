@@ -408,7 +408,12 @@ const (
 	// paragraph now also states the two phrase constructions the guard
 	// checks separately (a comparative-to-the-group phrase, a rank-number
 	// spelling) -- both are new prose, model-facing again.
-	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v18"
+	// v18 -> v19: the guard's coverage widened once more (a general
+	// -est/-iest superlative construction instead of four fixed words,
+	// same-sentence scoping for positional words), and the paragraph
+	// gained a new prose sentence for the construction -- model-facing
+	// again.
+	DefaultSynthesisPromptVersion = "context-fabric-synthesis.v19"
 	// DefaultSchemaVersion is the genkit MODEL-OUTPUT JSON SCHEMA version
 	// -- ONE value shared by both the interpret and synthesize calls
 	// (Config carries a single SchemaVersion field, not a per-operation

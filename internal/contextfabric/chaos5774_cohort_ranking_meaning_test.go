@@ -181,12 +181,8 @@ func assertCoversCohortSuperlativeJudgmentTerms(t *testing.T, cases []superlativ
 func TestValidateAgainstRejectsSuperlativeAboutInsufficientEvidenceMember(t *testing.T) {
 	t.Parallel()
 	cases := []superlativeTermCase{
-		{"strongest", "Unrankable is the provisional strongest team"},
-		{"weakest", "Unrankable is provisionally the weakest team"},
 		{"best", "Unrankable is the best team in this cohort"},
 		{"worst", "Unrankable is the worst performer"},
-		{"highest", "Unrankable shows the highest attention pressure"},
-		{"lowest", "Unrankable shows the lowest attention pressure"},
 		{"top", "Unrankable is the top team in this cohort"},
 		{"bottom", "Unrankable is at the bottom of this cohort"},
 		{"first", "Unrankable ranks first in this cohort"},
@@ -223,12 +219,8 @@ func TestValidateAgainstRejectsSuperlativeAboutInsufficientEvidenceMember(t *tes
 func TestValidateAgainstAllowsSuperlativeAboutAQualifiedMember(t *testing.T) {
 	t.Parallel()
 	cases := []superlativeTermCase{
-		{"strongest", "Qualified is the strongest attention signal in this cohort"},
-		{"weakest", "Qualified is provisionally the weakest attention signal here"},
 		{"best", "Qualified is the best-supported attention signal in this cohort"},
 		{"worst", "Qualified shows the worst attention pressure in this cohort"},
-		{"highest", "Qualified shows the highest attention pressure in this cohort"},
-		{"lowest", "Qualified shows the lowest attention pressure in this cohort"},
 		{"top", "Qualified is the top attention signal in this cohort"},
 		{"bottom", "Qualified is at the bottom of this cohort's attention ranking"},
 		{"first", "Qualified ranks first in this cohort's attention ranking"},
@@ -345,6 +337,125 @@ func TestContainsWordRequiresWholeWordMatch(t *testing.T) {
 	draft.Drivers[0].Title = "Unrankable's asbestos remediation backlog is unrelated to ranking"
 	if err := draft.ValidateAgainst(input); err != nil {
 		t.Fatalf("ValidateAgainst() error = %v, want a substring-only match (asbestos contains \"best\") to be admitted", err)
+	}
+}
+
+// --- the general -est/-iest superlative CONSTRUCTION (isCohortSuperlativeEstSuffixWord) ---
+
+// TestValidateAgainstRejectsAnEstSuffixSuperlativeNearACohortNoun covers the
+// construction, not a fixed word list: strongest/weakest/highest/lowest
+// (the original 4) and four domain adjectives that form their superlative
+// the exact same way (riskiest/unhealthiest/neediest/readiest) all reject,
+// every one of them a WORD isCohortSuperlativeEstSuffixWord recognizes by
+// its own -est/-iest ending, never enumerated.
+func TestValidateAgainstRejectsAnEstSuffixSuperlativeNearACohortNoun(t *testing.T) {
+	t.Parallel()
+	cases := []superlativeTermCase{
+		{"strongest", "Unrankable is provisionally the strongest team in this cohort"},
+		{"weakest", "Unrankable is provisionally the weakest team in this cohort"},
+		{"highest", "Unrankable shows the highest attention pressure in this cohort"},
+		{"lowest", "Unrankable shows the lowest attention pressure in this cohort"},
+		{"riskiest", "Unrankable is provisionally the riskiest team in this cohort"},
+		{"unhealthiest", "Unrankable is provisionally the unhealthiest team in this cohort"},
+		{"neediest", "Unrankable is provisionally the neediest team in this cohort"},
+		{"readiest", "Unrankable is provisionally the readiest team in this cohort"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			input, draft, _, unrankable := unrankableMemberFixture()
+			draft.Drivers[0].AffectedSubjects = []SubjectRef{unrankable}
+			draft.Drivers[0].Title = c.title
+			err := draft.ValidateAgainst(input)
+			if err == nil {
+				t.Fatalf("ValidateAgainst() = nil, want a rejection for an -est-suffix superlative near a cohort noun")
+			}
+			if got := SynthesisRejectionReasonOf(err); got != RejectionReasonDriverSuperlativeOverUnrankableMember {
+				t.Fatalf("rejection reason = %q, want %q", got, RejectionReasonDriverSuperlativeOverUnrankableMember)
+			}
+		})
+	}
+}
+
+// TestValidateAgainstAllowsAnEstSuffixWordWithoutACohortNounNearby is the
+// scope control for the SAME construction: an -est/-iest word with no
+// cohort noun or rank word in its own sentence is not a ranking claim.
+func TestValidateAgainstAllowsAnEstSuffixWordWithoutACohortNounNearby(t *testing.T) {
+	t.Parallel()
+	input, draft, _, unrankable := unrankableMemberFixture()
+	draft.Drivers[0].AffectedSubjects = []SubjectRef{unrankable}
+	draft.Drivers[0].Title = "Unrankable's riskiest finding this cycle was a stale certificate"
+	if err := draft.ValidateAgainst(input); err != nil {
+		t.Fatalf("ValidateAgainst() error = %v, want an -est-suffix word with no cohort noun nearby to be admitted", err)
+	}
+}
+
+// TestValidateAgainstAllowsAnEstSuffixExceptionWordNearACohortNoun covers
+// EVERY word in cohortSuperlativeEstSuffixExceptions -- each is an ordinary
+// English word that happens to end in "est" and must never be treated as a
+// superlative, even sitting right next to a cohort noun.
+func TestValidateAgainstAllowsAnEstSuffixExceptionWordNearACohortNoun(t *testing.T) {
+	t.Parallel()
+	exceptions := []string{
+		"test", "rest", "request", "interest", "guest", "west", "chest",
+		"forest", "harvest", "invest", "digest", "manifest", "contest",
+		"protest", "arrest", "honest", "modest", "earnest", "suggest", "latest",
+	}
+	got := make(map[string]bool, len(exceptions))
+	for _, word := range exceptions {
+		got[word] = true
+	}
+	if len(got) != len(cohortSuperlativeEstSuffixExceptions) {
+		t.Fatalf("exceptions listed here = %d, cohortSuperlativeEstSuffixExceptions = %d -- every guard exception needs its own positive-control cell here", len(got), len(cohortSuperlativeEstSuffixExceptions))
+	}
+	for word := range cohortSuperlativeEstSuffixExceptions {
+		if !got[word] {
+			t.Fatalf("no positive-control cell for guard exception %q", word)
+		}
+	}
+	for _, word := range exceptions {
+		t.Run(word, func(t *testing.T) {
+			t.Parallel()
+			input, draft, _, unrankable := unrankableMemberFixture()
+			draft.Drivers[0].AffectedSubjects = []SubjectRef{unrankable}
+			draft.Drivers[0].Title = "Unrankable's team status update mentions " + word + " in this cohort's report"
+			if err := draft.ValidateAgainst(input); err != nil {
+				t.Fatalf("ValidateAgainst() error = %v, want the exception word %q (next to a cohort noun) to be admitted", err, word)
+			}
+		})
+	}
+}
+
+// --- positional-term same-sentence scoping: benign phrasing that must never reject ---
+
+// TestValidateAgainstAllowsAPositionalWordFarFromACohortNoun is the domain
+// table for every shape a bare positional word appears in ORDINARY English
+// prose that is not a ranking claim at all: a time span, a numeral-unit
+// span, and the fixed compounds/idioms "top-level", "bottom line", "first
+// turn", "at first", "at last", and "last-minute" -- none of these share a
+// sentence with a cohort noun or rank word, so none of them reject.
+func TestValidateAgainstAllowsAPositionalWordFarFromACohortNoun(t *testing.T) {
+	t.Parallel()
+	cases := []superlativeTermCase{
+		{"time-span", "Unrankable's history here covers the last 30 days"},
+		{"numeral-unit-span", "Unrankable's dashboard shows the top 5 open items from this week"},
+		{"top-level-compound", "Unrankable's summary sits at the top-level of the org chart"},
+		{"bottom-line-idiom", "Unrankable's report gives the bottom line up front"},
+		{"first-turn-idiom", "Unrankable's issue was the first turn in the rotation"},
+		{"at-first-idiom", "At first, Unrankable's numbers looked fine before the correction"},
+		{"at-last-idiom", "At last, Unrankable's pipeline stabilized after the fix"},
+		{"last-minute-compound", "This was a last-minute finding about a stale credential"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			input, draft, _, unrankable := unrankableMemberFixture()
+			draft.Drivers[0].AffectedSubjects = []SubjectRef{unrankable}
+			draft.Drivers[0].Title = c.title
+			if err := draft.ValidateAgainst(input); err != nil {
+				t.Fatalf("ValidateAgainst() error = %v, want %q (no cohort noun in the same sentence) to be admitted", err, c.title)
+			}
+		})
 	}
 }
 
@@ -522,5 +633,56 @@ func TestEngineJudgmentMismatchFalseWhenRequestedJudgmentIsBlank(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(RankingFormulaVersion), "cohort-ranking") {
 		t.Fatalf("fixture sanity: RankingFormulaVersion = %q", RankingFormulaVersion)
+	}
+}
+
+// --- narrowSynthesisInput's own re-rank call site ---
+
+// TestNarrowSynthesisInputCarriesTheJudgmentMismatchDecision drives the
+// narrowing-retry re-rank directly (narrowSynthesisInput, chaos4636_budget_stage3.go)
+// -- a SEPARATE RankCohort/applyCohortJudgmentMismatch call site from the
+// engine's primary rank, exercised only when stage 3 narrows a cohort that
+// no longer fits its budget. Both fields must land on the returned event
+// here too, not only on the primary rank's event.
+func TestNarrowSynthesisInputCarriesTheJudgmentMismatchDecision(t *testing.T) {
+	t.Parallel()
+	cohort := planFixtureCohort("a1", "b1", "c1", "d1")
+	params := synthesisAssemblyParams{
+		Graph: GraphContext{Cohort: cohort}, Facts: CanonicalFactBundle{},
+		Interpretation: InterpretedQuestion{RequestedJudgmentKind: RequestedJudgmentKindPerformance},
+	}
+	result := narrowSynthesisInput(params, &AnswerPlan{})
+	if !result.Narrow {
+		t.Fatalf("result.Narrow = false, want true -- a 4-member cohort narrowing to 2 must re-rank")
+	}
+	if result.Ranked.ScoreMeaning != CohortScoreMeaningAttention {
+		t.Fatalf("result.Ranked.ScoreMeaning = %q, want %q", result.Ranked.ScoreMeaning, CohortScoreMeaningAttention)
+	}
+	if !result.Ranked.JudgmentMismatch {
+		t.Fatalf("result.Ranked.JudgmentMismatch = false, want true -- a performance-kind request over an attention re-rank is a mismatch here too")
+	}
+	if result.Ranked.RequestedJudgmentKind != RequestedJudgmentKindPerformance {
+		t.Fatalf("result.Ranked.RequestedJudgmentKind = %q, want %q", result.Ranked.RequestedJudgmentKind, RequestedJudgmentKindPerformance)
+	}
+}
+
+// TestNarrowSynthesisInputJudgmentMismatchFalseForAttentionKind is the
+// control: an attention-kind request over the SAME re-rank never mismatches.
+func TestNarrowSynthesisInputJudgmentMismatchFalseForAttentionKind(t *testing.T) {
+	t.Parallel()
+	cohort := planFixtureCohort("a1", "b1", "c1", "d1")
+	params := synthesisAssemblyParams{
+		Graph: GraphContext{Cohort: cohort}, Facts: CanonicalFactBundle{},
+		Interpretation: InterpretedQuestion{RequestedJudgmentKind: RequestedJudgmentKindAttention},
+	}
+	result := narrowSynthesisInput(params, &AnswerPlan{})
+	if !result.Narrow {
+		t.Fatalf("result.Narrow = false, want true")
+	}
+	if result.Ranked.JudgmentMismatch {
+		t.Fatalf("result.Ranked.JudgmentMismatch = true, want false for an attention-kind request over an attention re-rank")
+	}
+	if result.Ranked.RequestedJudgmentKind != RequestedJudgmentKindAttention {
+		t.Fatalf("result.Ranked.RequestedJudgmentKind = %q, want %q", result.Ranked.RequestedJudgmentKind, RequestedJudgmentKindAttention)
 	}
 }

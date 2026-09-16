@@ -67,75 +67,37 @@ func applyCohortJudgmentMismatch(cohort *Cohort, requestedJudgmentKind Requested
 	cohort.JudgmentMismatch = !scoreMeaningSupportsJudgmentKind(cohort.ScoreMeaning, requestedJudgmentKind)
 }
 
-// CohortSuperlativeJudgmentTerms is the CLOSED, fixed set of single-word
-// ranking superlative/ordinal/comparative-position terms
-// requireNoSuperlativeClaimOverUnrankableMember refuses over an unrankable
-// member. Exported so genkitruntime's synthesis prompt can render this SAME
-// list as the terms it tells the model never to use there -- one constant
-// read by both the guard and the prompt, so they cannot list different
-// words. Not an invented pattern-match: strongest/weakest and best/worst are
-// the exact words this codebase's own AnswerEmphasis vocabulary already
-// names a ranking's two ends with (frame_vocab.go: EmphasisPositiveOutliers
-// "the strong end", EmphasisNegativeOutliers "the weak end"); highest/lowest,
-// top/bottom, and first/last are their ordinary ordinal-position synonyms;
-// most/least is the general English superlative construction for a
-// multi-syllable adjective (e.g. "most pressured", "least ready") that no
-// -est-suffixed or positional term above covers; leads/leading and
-// trails/trailing name a comparative-to-the-group position the same way
-// without an explicit "most"/"least" -- this cohort's own attention-domain
-// adjectives take exactly these shapes -- the system's own existing ranking
-// vocabulary, never a phrase fitted to one team, question, or dataset.
+// requireNoSuperlativeClaimOverUnrankableMember checks a driver's text for a
+// ranking superlative in THREE closed, general forms, never a phrase fitted
+// to one team, question, or dataset:
 //
-// Two constructions this list cannot express as single words are checked
-// separately, by cohortSuperlativeComparativeToGroupPattern and
-// cohortSuperlativeOrdinalPositionPattern below: "more <adjective> than
-// any/all/every other" (a comparative naming the SAME position "most"
-// would, spelled without that word) and "#1"/"number one" (an ordinal
-// naming the SAME position "first" would, spelled as a rank number rather
-// than a word).
-var CohortSuperlativeJudgmentTerms = []string{
-	"strongest", "weakest",
-	"best", "worst",
-	"highest", "lowest",
-	"top", "bottom",
-	"first", "last",
-	"most", "least",
-	"leads", "trails",
-	"leading", "trailing",
-}
-
-// cohortSuperlativeComparativeToGroupPattern matches "more <up to 6 words>
-// than any/all/every other", case-insensitive -- the comparative-to-the-group
-// construction "most" would otherwise express (e.g. "more pressured than any
-// other team", "more critically behind than every other project"). A closed
-// grammatical pattern, not a phrase fitted to one dataset: it never matches
-// on subject/adjective content, only on the surrounding English structure.
-var cohortSuperlativeComparativeToGroupPattern = regexp.MustCompile(`(?i)\bmore\b(?:\s+\S+){0,6}?\s+than\s+(?:any|all|every)\s+other\b`)
-
-// cohortSuperlativeOrdinalPositionPattern matches "#1" or "number one",
-// case-insensitive -- the SAME first-place position "first" already covers
-// as a word, spelled as a rank number instead.
-var cohortSuperlativeOrdinalPositionPattern = regexp.MustCompile(`(?i)(?:#\s?1\b|\bnumber\s+one\b)`)
-
-// requireNoSuperlativeClaimOverUnrankableMember is the structural backstop
-// SynthesisDraft.ValidateAgainst calls for every model-authored driver: a
-// driver whose affected_subjects cite a cohort member the ranking
-// formula could NOT score (Outcome insufficient_evidence or not_applicable)
-// must never use a ranking superlative -- any term in
-// CohortSuperlativeJudgmentTerms (in any case, matched as a whole word), the
-// comparative-to-the-group construction cohortSuperlativeComparativeToGroupPattern
-// matches, or the rank-number construction cohortSuperlativeOrdinalPositionPattern
-// matches -- in its own title or summary. The prompt
-// (genkitruntime's synthesisSystemPrompt) states this rule too, but a
-// deterministic guard applies even if a future prompt regresses -- the same
-// "guard, not the prompt, is what actually enforces this" discipline
-// phrasingSystemPrompt's own doc comment already states for a sibling
-// bounded call.
+//  1. an UNCONDITIONAL word (cohortSuperlativeUnconditionalTermsList) --
+//     best/worst/most/least read as a ranking claim in virtually any
+//     surrounding text about a cited cohort member, so these reject
+//     wherever they appear.
+//  2. a POSITIONAL word (cohortSuperlativePositionalTermsList) --
+//     top/bottom/first/last/leads/trails/leading/trailing -- but ONLY when
+//     a cohort noun or rank word (cohortNounOrRankWords) also appears in
+//     the SAME SENTENCE. A bare positional word in ordinary prose ("covers
+//     the last 30 days", "top-level of the org chart", "first turn in the
+//     rotation", "the bottom line") is not a ranking claim, and rejecting
+//     it anyway burns a re-synthesis draw over benign phrasing.
+//  3. a GENERAL -est/-iest SUPERLATIVE CONSTRUCTION
+//     (isCohortSuperlativeEstSuffixWord) -- strongest/weakest/highest/
+//     lowest and every other adjective this domain's own vocabulary forms
+//     the same way (riskiest, unhealthiest, neediest, readiest, ...) --
+//     under the SAME same-sentence cohort-noun requirement as a positional
+//     word, since an ordinary English word that happens to end in
+//     "-est"/"-iest" (test, rest, interest, guest, forest, honest, latest,
+//     ...) is excepted by cohortSuperlativeEstSuffixExceptions and never
+//     read as a superlative at all.
 //
-// A member with a real Score (qualified/provisional) is UNAFFECTED: this
-// rule is about a member the formula never scored at all, not about
-// disagreeing with a superlative over a member that DOES have a supported
-// attention position.
+// Two more constructions no single word can express are checked separately
+// against the whole text, not sentence-scoped: cohortSuperlativeComparativeToGroupPattern
+// ("more <X> than any/all/every other", the comparative-to-the-group
+// position "most" would otherwise express) and cohortSuperlativeOrdinalPositionPattern
+// ("#1"/"number one", the first-place position "first" would otherwise
+// express).
 func requireNoSuperlativeClaimOverUnrankableMember(driver DriverJudgment, cohort *Cohort) error {
 	if cohort == nil {
 		return nil
@@ -154,11 +116,27 @@ func requireNoSuperlativeClaimOverUnrankableMember(driver DriverJudgment, cohort
 	if !citesUnrankable {
 		return nil
 	}
-	text := strings.ToLower(driver.Title + " " + driver.Summary)
-	for _, term := range CohortSuperlativeJudgmentTerms {
-		if containsWord(text, term) {
-			return rejectSynthesis(RejectionReasonDriverSuperlativeOverUnrankableMember,
-				"driver uses a ranking superlative about a cohort member the ranking formula could not score (outcome insufficient_evidence/not_applicable)")
+	text := strings.ToLower(driver.Title + ". " + driver.Summary)
+	for _, sentence := range sentenceWords(text) {
+		hasCohortNoun := false
+		for _, word := range sentence {
+			if cohortNounOrRankWords[word] {
+				hasCohortNoun = true
+				break
+			}
+		}
+		for _, word := range sentence {
+			if cohortSuperlativeUnconditionalTerms[word] {
+				return rejectSynthesis(RejectionReasonDriverSuperlativeOverUnrankableMember,
+					"driver uses a ranking superlative about a cohort member the ranking formula could not score (outcome insufficient_evidence/not_applicable)")
+			}
+			if !hasCohortNoun {
+				continue
+			}
+			if cohortSuperlativePositionalTerms[word] || isCohortSuperlativeEstSuffixWord(word) {
+				return rejectSynthesis(RejectionReasonDriverSuperlativeOverUnrankableMember,
+					"driver uses a ranking superlative about a cohort member the ranking formula could not score (outcome insufficient_evidence/not_applicable)")
+			}
 		}
 	}
 	if cohortSuperlativeComparativeToGroupPattern.MatchString(text) || cohortSuperlativeOrdinalPositionPattern.MatchString(text) {
@@ -168,28 +146,140 @@ func requireNoSuperlativeClaimOverUnrankableMember(driver DriverJudgment, cohort
 	return nil
 }
 
-// containsWord reports whether term appears in text (already lowercased) as
-// a whole word -- not merely a substring -- so this guard never trips over
-// an unrelated word that happens to contain one of the fixed superlative
-// terms as a substring.
-func containsWord(text, term string) bool {
-	idx := 0
-	for {
-		pos := strings.Index(text[idx:], term)
-		if pos < 0 {
-			return false
-		}
-		start := idx + pos
-		end := start + len(term)
-		beforeOK := start == 0 || !isWordByte(text[start-1])
-		afterOK := end == len(text) || !isWordByte(text[end])
-		if beforeOK && afterOK {
-			return true
-		}
-		idx = start + 1
+// cohortSuperlativeUnconditionalTermsList are whole-word matched with NO
+// same-sentence scoping requirement: best/worst (the AnswerEmphasis-sourced
+// pair, frame_vocab.go's EmphasisPositiveOutliers "the strong end" /
+// EmphasisNegativeOutliers "the weak end") and most/least (the general
+// English superlative construction for a multi-syllable adjective, e.g.
+// "most pressured", "least ready" -- exactly the shape this cohort's own
+// attention-domain adjectives take).
+var cohortSuperlativeUnconditionalTermsList = []string{"best", "worst", "most", "least"}
+
+// cohortSuperlativePositionalTermsList are ordinal/comparative-position
+// words that read as a ranking claim only inside a sentence that also names
+// a cohort noun or rank word (cohortNounOrRankWords) -- see
+// requireNoSuperlativeClaimOverUnrankableMember's own doc comment for the
+// false-positive shapes this same-sentence scoping exists to admit.
+var cohortSuperlativePositionalTermsList = []string{"top", "bottom", "first", "last", "leads", "trails", "leading", "trailing"}
+
+// CohortSuperlativeJudgmentTerms is the union of the two lists above, in
+// order -- exported so genkitruntime's synthesis prompt can render this
+// SAME list as the words it tells the model never to use there, one
+// constant read by both the guard and the prompt so they cannot list
+// different words. The general -est/-iest superlative construction
+// (isCohortSuperlativeEstSuffixWord) is not a list and has no place in a
+// rendered word list; the prompt states that construction as prose instead.
+var CohortSuperlativeJudgmentTerms = append(
+	append([]string{}, cohortSuperlativeUnconditionalTermsList...),
+	cohortSuperlativePositionalTermsList...,
+)
+
+var cohortSuperlativeUnconditionalTerms = wordSet(cohortSuperlativeUnconditionalTermsList)
+var cohortSuperlativePositionalTerms = wordSet(cohortSuperlativePositionalTermsList)
+
+// cohortSuperlativeEstSuffixExceptions is the CLOSED set of ordinary
+// English words that end in "est"/"iest" but are never themselves a
+// superlative claim -- isCohortSuperlativeEstSuffixWord's general
+// CONSTRUCTION rule would otherwise flag every one of them.
+var cohortSuperlativeEstSuffixExceptions = wordSet([]string{
+	"test", "rest", "request", "interest", "guest", "west", "chest",
+	"forest", "harvest", "invest", "digest", "manifest", "contest",
+	"protest", "arrest", "honest", "modest", "earnest", "suggest", "latest",
+})
+
+// isCohortSuperlativeEstSuffixWord reports whether word (already lowercased)
+// is a general English -est/-iest superlative form: at least 5 letters,
+// ending in "est", and not one of the closed exceptions above. A
+// CONSTRUCTION rule, not a word list -- this domain's own adjectives (risk,
+// health, readiness, need, ...) form their superlatives the same way
+// strong/weak/high/low do ("riskiest", "unhealthiest", "neediest",
+// "readiest"), and a fixed word list can never anticipate every one.
+func isCohortSuperlativeEstSuffixWord(word string) bool {
+	if len(word) < 5 || !strings.HasSuffix(word, "est") {
+		return false
 	}
+	return !cohortSuperlativeEstSuffixExceptions[word]
 }
 
+// cohortNounOrRankWords is the closed set of nouns a positional or
+// -est-suffixed term must share a sentence with to read as a ranking claim
+// about THIS cohort, rather than an ordinary English sentence that happens
+// to use an ordinary word.
+var cohortNounOrRankWords = wordSet([]string{
+	"team", "teams",
+	"member", "members",
+	"project", "projects",
+	"repository", "repositories",
+	"rank", "ranks", "ranked", "ranking",
+	"place", "places", "placed",
+	"position", "positions", "positioned",
+	"cohort",
+})
+
+// cohortSuperlativeComparativeToGroupPattern matches "more <up to 6 words>
+// than any/all/every other", case-insensitive -- the comparative-to-the-group
+// construction "most" would otherwise express (e.g. "more pressured than any
+// other team", "more critically behind than every other project"). A closed
+// grammatical pattern, not a phrase fitted to one dataset: it never matches
+// on subject/adjective content, only on the surrounding English structure.
+var cohortSuperlativeComparativeToGroupPattern = regexp.MustCompile(`(?i)\bmore\b(?:\s+\S+){0,6}?\s+than\s+(?:any|all|every)\s+other\b`)
+
+// cohortSuperlativeOrdinalPositionPattern matches "#1" or "number one",
+// case-insensitive -- the SAME first-place position "first" already covers
+// as a word, spelled as a rank number instead.
+var cohortSuperlativeOrdinalPositionPattern = regexp.MustCompile(`(?i)(?:#\s?1\b|\bnumber\s+one\b)`)
+
+// wordSet builds a lookup set from a word list, for the several closed
+// vocabularies above that are consulted by membership rather than iterated
+// in order.
+func wordSet(words []string) map[string]bool {
+	set := make(map[string]bool, len(words))
+	for _, w := range words {
+		set[w] = true
+	}
+	return set
+}
+
+// sentenceWords splits text (already lowercased) into sentences on ".",
+// "!", "?", and newlines, and each sentence into whole words using the SAME
+// word-byte definition containsWord/isWordByte use elsewhere in this file --
+// so a hyphenated compound like "top-level" splits into "top" and "level"
+// as two separate words, neither of which is a cohort noun, rather than
+// surviving as one token a positional-term check could never match anyway.
+func sentenceWords(text string) [][]string {
+	var sentences [][]string
+	var current []string
+	var word strings.Builder
+	flushWord := func() {
+		if word.Len() > 0 {
+			current = append(current, word.String())
+			word.Reset()
+		}
+	}
+	for i := 0; i < len(text); i++ {
+		b := text[i]
+		switch {
+		case b == '.' || b == '!' || b == '?' || b == '\n':
+			flushWord()
+			if len(current) > 0 {
+				sentences = append(sentences, current)
+				current = nil
+			}
+		case isWordByte(b):
+			word.WriteByte(b)
+		default:
+			flushWord()
+		}
+	}
+	flushWord()
+	if len(current) > 0 {
+		sentences = append(sentences, current)
+	}
+	return sentences
+}
+
+// isWordByte reports whether b is part of an identifier-shaped word --
+// sentenceWords' own tokenizer boundary.
 func isWordByte(b byte) bool {
 	return b == '_' ||
 		(b >= 'a' && b <= 'z') ||

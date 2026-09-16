@@ -97,7 +97,10 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// v17 -> v18: the vocabulary widened and the paragraph gained two
 			// more phrase-construction sentences. See
 			// DefaultSynthesisPromptVersion's own doc comment.
-			digest: "ef7a9ccd1ffdabe1d30b0959a58171f3d863c4b0e90421be5e27105e5e84554c",
+			// v18 -> v19: the vocabulary widened once more and the paragraph
+			// gained one more construction sentence. See
+			// DefaultSynthesisPromptVersion's own doc comment.
+			digest: "5a93ea82aa418ef77830005f0342660713ffeb2a8e59dd3450663921cf59c730",
 		},
 		{
 			name:    "interpretation model-output schema",
