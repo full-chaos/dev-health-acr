@@ -401,13 +401,21 @@ const (
 	// proved a different identity) and vetoed_unresolved (resolution ran and
 	// found nothing of the member's own kind).
 	ContextFabricStructureDispositionSupersededByCaller ContextFabricStructureDisposition = "superseded_by_caller"
+	// ContextFabricStructureDispositionNotEvaluated: a carried member on a
+	// turn that ended before its own resolution ever ran (a window gate, a
+	// frame-gate refusal, a graph-not-projected degrade) -- the member is
+	// carried forward into the outgoing ledger unchanged, exactly as it
+	// arrived, because there was no resolution this turn to compare it
+	// against. Distinct from `applied`, which the served document may only
+	// claim for a member THIS turn's own resolution stood behind.
+	ContextFabricStructureDispositionNotEvaluated ContextFabricStructureDisposition = "not_evaluated"
 )
 
 func ValidContextFabricStructureDisposition(value ContextFabricStructureDisposition) bool {
 	switch value {
 	case ContextFabricStructureDispositionApplied, ContextFabricStructureDispositionVetoedUnresolved,
 		ContextFabricStructureDispositionVetoedConflict, ContextFabricStructureDispositionVetoedStale,
-		ContextFabricStructureDispositionSupersededByCaller:
+		ContextFabricStructureDispositionSupersededByCaller, ContextFabricStructureDispositionNotEvaluated:
 		return true
 	default:
 		return false

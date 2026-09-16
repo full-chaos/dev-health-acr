@@ -10,6 +10,7 @@ package contextfabric
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -763,4 +764,206 @@ func TestCallerHintOfTheSameKindSupersedesTheEngineCommittedCarry(t *testing.T) 
 			t.Fatalf("turn two ledger carries subject_anchor = %#v, want none: the caller's own redeemed hint superseded it", entry)
 		}
 	}
+}
+
+// TestZeroSubjectsTerminalReadsThePostVetoLedgerToo pins the class this
+// file's own carry sequence applies at EVERY exit, not only the decisive
+// save: an ordinary continuation whose own resolution commits nothing at
+// all (the zero-subjects terminal, reached AFTER resolution ran) still
+// discloses the carried entry's true post-decision state and drops it from
+// the outgoing ledger, never the pre-veto snapshot.
+func TestZeroSubjectsTerminalReadsThePostVetoLedgerToo(t *testing.T) {
+	engine, graph, store := buildCommittedAnchorEngine(t)
+
+	one := needTurnRequest("request_5788_zerosubjects_one", true)
+	oneResponse := needTurnResponse{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{committedAnchorRepo}}, bases: provenCommitBases(committedAnchorRepo)}
+	oneResult, _ := committedAnchorTurn(t, engine, graph, store, one, oneResponse)
+
+	two := needTurnRequest("request_5788_zerosubjects_two", true)
+	two.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam}
+	two = continuingNeedTurn(two, oneResult.ResultID)
+	// Nothing committed, nothing candidate, an empty cohort (needTurnGraph's
+	// own DiscoverContext) -- the zero-subjects terminal's own trigger.
+	twoResponse := needTurnResponse{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}}
+	twoResult, _ := committedAnchorTurn(t, engine, graph, store, two, twoResponse)
+
+	got := memberEntries(twoResult, contractsv1.ContextFabricStructureNeedSubjectAnchor)
+	if len(got) != 1 {
+		t.Fatalf("turn two subject_anchor disclosure = %#v, want exactly one entry", got)
+	}
+	if got[0].Disposition != contractsv1.ContextFabricStructureDispositionVetoedUnresolved {
+		t.Fatalf("turn two subject_anchor disclosure = %+v, want disposition vetoed_unresolved -- the zero-subjects terminal must read the same post-decision state the decisive save does", got[0])
+	}
+
+	twoSaved := store.states[twoResult.ResultID]
+	if twoSaved == nil {
+		t.Fatalf("fixture defect: turn two must persist a semantic state")
+	}
+	for _, entry := range twoSaved.ConfirmedNeeds {
+		if entry.Member == contractsv1.ContextFabricStructureNeedSubjectAnchor {
+			t.Fatalf("turn two ledger carries subject_anchor = %#v, want none: the zero-subjects terminal must drop it too", entry)
+		}
+	}
+}
+
+// TestFrameGateRefusalDiscloseNotEvaluatedNeverApplied pins the OTHER half
+// of the same class: a turn that ends BEFORE its own resolution ever runs
+// at all (a frame-gate refusal) has no post-decision verdict to disclose,
+// so the carried entry must never read as `applied` -- it reads
+// `not_evaluated`, and the outgoing ledger carries it forward UNCHANGED
+// (there was nothing to evaluate, let alone drop).
+func TestFrameGateRefusalDiscloseNotEvaluatedNeverApplied(t *testing.T) {
+	engine, graph, store, telemetry := buildCommittedAnchorEngineWithTelemetry(t)
+
+	one := needTurnRequest("request_5788_framegate_one", true)
+	oneResponse := needTurnResponse{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{committedAnchorRepo}}, bases: provenCommitBases(committedAnchorRepo)}
+	oneResult, _ := committedAnchorTurn(t, engine, graph, store, one, oneResponse)
+
+	two := needTurnRequest("request_5788_framegate_two", true)
+	two.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam}
+	two = continuingNeedTurn(two, oneResult.ResultID)
+
+	// The interpreter's own family outcome carries a refusing gate this
+	// time -- Investigate returns from the frame-gate-refusal terminal
+	// BEFORE ResolveSubjects is ever called, so graph.calls does not grow
+	// (committedAnchorTurn's own call-count assertion does not apply here).
+	engine.interpreter = twoTurnInterpreter{byRequestID: map[string]twoTurnInterpretation{
+		one.RequestID: {
+			interpreted: InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "count", TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: []FactRequirement{}},
+			outcome: QuestionFamilyOutcome{
+				Frame: committedAnchorFrame(), FrameObligations: committedAnchorFrame().Obligations,
+				Family: QuestionFamilyScopedCohortStatus, Source: QuestionFamilySourceModel,
+			},
+		},
+		two.RequestID: {
+			interpreted: InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "count", TimeContext: TimeContext{Axis: TemporalCurrent}, FactRequirements: []FactRequirement{}},
+			outcome: QuestionFamilyOutcome{
+				Frame: committedAnchorFrame(), FrameObligations: committedAnchorFrame().Obligations,
+				Family: QuestionFamilyScopedCohortStatus, Source: QuestionFamilySourceModel,
+				Gate: FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable, DeclaredMemberKind: SubjectTeam},
+			},
+		},
+	}}
+	callsMark := len(graph.calls)
+	twoResult, err := engine.Investigate(context.Background(), acceptancePrincipal(), two)
+	if err != nil {
+		t.Fatalf("Investigate(%s) error = %v", two.RequestID, err)
+	}
+	if len(graph.calls) != callsMark {
+		t.Fatalf("ResolveSubjects calls = %d, want %d: a frame-gate refusal must never reach resolution", len(graph.calls), callsMark)
+	}
+
+	got := memberEntries(twoResult, contractsv1.ContextFabricStructureNeedSubjectAnchor)
+	if len(got) != 1 {
+		t.Fatalf("turn two subject_anchor disclosure = %#v, want exactly one entry", got)
+	}
+	if got[0].Disposition != contractsv1.ContextFabricStructureDispositionNotEvaluated || got[0].AppliedValue != committedAnchorRepo.CanonicalID {
+		t.Fatalf("turn two subject_anchor disclosure = %+v, want disposition not_evaluated on the carried value %s -- this turn's own resolution never ran, so it can never read as applied", got[0], committedAnchorRepo.CanonicalID)
+	}
+
+	if len(telemetry.confirmedNeedLedgers) == 0 {
+		t.Fatalf("fixture defect: turn two must record a confirmed-need-ledger line")
+	}
+	event := telemetry.confirmedNeedLedgers[len(telemetry.confirmedNeedLedgers)-1]
+	if event.AppliedAnchorKind != committedAnchorRepo.Kind || confirmedNeedValueHash(committedAnchorRepo.CanonicalID) != event.AppliedAnchorValueHash {
+		t.Fatalf("event = %+v, want the carried anchor still applied_* on the ledger line -- nothing has evaluated it away yet", event)
+	}
+}
+
+// TestGraphNotProjectedTerminalDisclosesNotEvaluated is the third exit kind
+// this class covers: ResolveSubjects itself reports ErrGraphNotProjected,
+// so this turn's own resolution never meaningfully ran either -- the same
+// not_evaluated treatment the frame-gate refusal gets, not the post-veto
+// one the zero-subjects terminal gets (that one's own resolution DID run,
+// just to nothing).
+func TestGraphNotProjectedTerminalDisclosesNotEvaluated(t *testing.T) {
+	engine, graph, store := buildCommittedAnchorEngine(t)
+
+	one := needTurnRequest("request_5788_notprojected_one", true)
+	oneResponse := needTurnResponse{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{committedAnchorRepo}}, bases: provenCommitBases(committedAnchorRepo)}
+	oneResult, _ := committedAnchorTurn(t, engine, graph, store, one, oneResponse)
+
+	two := needTurnRequest("request_5788_notprojected_two", true)
+	two.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam}
+	two = continuingNeedTurn(two, oneResult.ResultID)
+	twoResponse := needTurnResponse{err: fmt.Errorf("query context graph: %w", ErrGraphNotProjected)}
+	twoResult, _ := committedAnchorTurn(t, engine, graph, store, two, twoResponse)
+
+	got := memberEntries(twoResult, contractsv1.ContextFabricStructureNeedSubjectAnchor)
+	if len(got) != 1 {
+		t.Fatalf("turn two subject_anchor disclosure = %#v, want exactly one entry", got)
+	}
+	if got[0].Disposition != contractsv1.ContextFabricStructureDispositionNotEvaluated || got[0].AppliedValue != committedAnchorRepo.CanonicalID {
+		t.Fatalf("turn two subject_anchor disclosure = %+v, want disposition not_evaluated on the carried value %s", got[0], committedAnchorRepo.CanonicalID)
+	}
+
+	twoSaved := store.states[twoResult.ResultID]
+	if twoSaved == nil {
+		t.Fatalf("fixture defect: turn two must persist a semantic state")
+	}
+	found := false
+	for _, entry := range twoSaved.ConfirmedNeeds {
+		if entry.Member == contractsv1.ContextFabricStructureNeedSubjectAnchor {
+			found = true
+			if entry.AppliedValue != committedAnchorRepo.CanonicalID || entry.Basis != ConfirmedNeedBasisEngineCommitted {
+				t.Fatalf("turn two ledger subject_anchor = %#v, want the carried value unchanged", entry)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("turn two ledger carries no subject_anchor entry, want the carried value passed through unchanged: this turn's own resolution never ran to disprove it")
+	}
+}
+
+// TestLedgerForExitCoversItsInputDomain is the unit-level pin under the
+// integration tests above: resolutionRan=false is always an identity
+// pass-through for the ledger and always not_evaluated for a present
+// subject_anchor disclosure entry, regardless of what dropped/disposition
+// the caller happens to pass (they are meaningless when resolution never
+// ran, and must never leak through); resolutionRan=true delegates to the
+// SAME two functions the decisive save and the supersession veto already
+// stand on.
+func TestLedgerForExitCoversItsInputDomain(t *testing.T) {
+	t.Parallel()
+	base := []ConfirmedNeedEntry{{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: committedAnchorRepo.Kind, AppliedValue: committedAnchorRepo.CanonicalID, Basis: ConfirmedNeedBasisEngineCommitted}}
+	anchorEntry := &contractsv1.ContextFabricConfirmedStructureEntry{
+		Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedValue: committedAnchorRepo.CanonicalID,
+		Source: contractsv1.ContextFabricStructureSourceCarried, PriorResultID: "result_parent",
+		Provenance: contractsv1.ContextFabricStructureEngineCommitted, Disposition: contractsv1.ContextFabricStructureDispositionApplied,
+	}
+	entries := []*contractsv1.ContextFabricConfirmedStructureEntry{anchorEntry}
+	dropped := confirmedStructureMember{AppliedValue: committedAnchorRepo.CanonicalID}
+
+	t.Run("resolution never ran: ledger unchanged, disclosure not_evaluated, whatever dropped/disposition say", func(t *testing.T) {
+		t.Parallel()
+		gotLedger, gotEntries := ledgerForExit(base, entries, false, dropped, true, contractsv1.ContextFabricStructureDispositionVetoedConflict)
+		if !reflect.DeepEqual(gotLedger, base) {
+			t.Fatalf("ledger = %#v, want base unchanged", gotLedger)
+		}
+		if gotEntries[0].Disposition != contractsv1.ContextFabricStructureDispositionNotEvaluated {
+			t.Fatalf("disclosure = %+v, want not_evaluated", gotEntries[0])
+		}
+	})
+	t.Run("resolution ran, not dropped: both pass through unchanged", func(t *testing.T) {
+		t.Parallel()
+		gotLedger, gotEntries := ledgerForExit(base, entries, true, confirmedStructureMember{}, false, "")
+		if !reflect.DeepEqual(gotLedger, base) {
+			t.Fatalf("ledger = %#v, want base unchanged", gotLedger)
+		}
+		if gotEntries[0] != anchorEntry {
+			t.Fatalf("disclosure = %#v, want the untouched original pointer", gotEntries[0])
+		}
+	})
+	t.Run("resolution ran, dropped: ledger drops subject_anchor, disclosure reads the given disposition", func(t *testing.T) {
+		t.Parallel()
+		gotLedger, gotEntries := ledgerForExit(base, entries, true, dropped, true, contractsv1.ContextFabricStructureDispositionVetoedConflict)
+		for _, entry := range gotLedger {
+			if entry.Member == contractsv1.ContextFabricStructureNeedSubjectAnchor {
+				t.Fatalf("ledger = %#v, want subject_anchor dropped", gotLedger)
+			}
+		}
+		if gotEntries[0].Disposition != contractsv1.ContextFabricStructureDispositionVetoedConflict {
+			t.Fatalf("disclosure = %+v, want vetoed_conflict", gotEntries[0])
+		}
+	})
 }

@@ -27,6 +27,11 @@ type needTurnResponse struct {
 	resolution SubjectResolution
 	material   StructureOfferMaterial
 	bases      CommitBasisSet
+	// err, when set, is what ResolveSubjects itself reports for this turn --
+	// e.g. a wrapped ErrGraphNotProjected -- instead of the scripted
+	// resolution succeeding. The zero value (nil) is every existing
+	// scenario's own unchanged behavior.
+	err error
 }
 
 type needTurnCall struct {
@@ -48,7 +53,7 @@ func (g *needTurnGraph) ResolveInvestigationBinding(context.Context, storage.Pri
 
 func (g *needTurnGraph) ResolveSubjects(_ context.Context, _ storage.Principal, request InvestigationRequest, _ InterpretedQuestion, _ ResolvedGraphBinding, kind *ConfirmedExpectedKind, anchor *ConfirmedAnchorSelection, _ *QuestionFrame, _ SubjectKind) (SubjectResolution, StructureOfferMaterial, CommitBasisSet, CommitDecisionDigestSet, error) {
 	g.calls = append(g.calls, needTurnCall{request: request, kind: kind, anchor: anchor})
-	return g.response.resolution, g.response.material, g.response.bases, nil, nil
+	return g.response.resolution, g.response.material, g.response.bases, nil, g.response.err
 }
 
 func (g *needTurnGraph) DiscoverContext(context.Context, storage.Principal, GraphDiscoveryRequest) (GraphContext, error) {

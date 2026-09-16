@@ -307,6 +307,46 @@ func carriedStructureEntriesForDecisive(entries []*contractsv1.ContextFabricConf
 	return out
 }
 
+// carriedStructureEntriesUnevaluated replaces entries' subject_anchor
+// member's disposition with not_evaluated, unconditionally, for a turn
+// that ends before its own resolution ever ran: there is no agreement
+// verdict to disclose yet, only the entry this turn inherited, so it must
+// never be echoed as `applied` -- the served document would then claim
+// this turn stood behind a subject it never got the chance to check.
+func carriedStructureEntriesUnevaluated(entries []*contractsv1.ContextFabricConfirmedStructureEntry) []*contractsv1.ContextFabricConfirmedStructureEntry {
+	out := make([]*contractsv1.ContextFabricConfirmedStructureEntry, len(entries))
+	for i, entry := range entries {
+		if entry != nil && entry.Member == contractsv1.ContextFabricStructureNeedSubjectAnchor {
+			replaced := *entry
+			replaced.Disposition = contractsv1.ContextFabricStructureDispositionNotEvaluated
+			out[i] = &replaced
+			continue
+		}
+		out[i] = entry
+	}
+	return out
+}
+
+// ledgerForExit is the ONE function every exit in Investigate reads the
+// outgoing per-need ledger and the served carried-structure disclosure
+// through -- never confirmedNeedsForCapture (the pre-veto snapshot merged
+// before resolution ever ran) directly, so no exit can regress to it by
+// omission. resolutionRan is false for a turn that ends before this turn's
+// own resolution ever ran (a window gate, a frame-gate refusal, a
+// graph-not-projected degrade): the ledger passes through UNCHANGED --
+// nothing has been evaluated to drop -- but the disclosure reads
+// not_evaluated rather than applied. resolutionRan true reads the SAME
+// post-decision verdict the decisive save and the supersession veto stand
+// on: droppedEntry/dropped/disposition name exactly what this turn's own
+// carriedAnchorAgreementFor (a post-resolution disagreement or absence) or
+// the pre-resolution caller contest (superseded_by_caller) decided.
+func ledgerForExit(base []ConfirmedNeedEntry, entries []*contractsv1.ContextFabricConfirmedStructureEntry, resolutionRan bool, droppedEntry confirmedStructureMember, dropped bool, disposition contractsv1.ContextFabricStructureDisposition) ([]ConfirmedNeedEntry, []*contractsv1.ContextFabricConfirmedStructureEntry) {
+	if !resolutionRan {
+		return base, carriedStructureEntriesUnevaluated(entries)
+	}
+	return confirmedNeedsForCaptureWithoutVetoedAnchor(base, dropped), carriedStructureEntriesForDecisive(entries, droppedEntry, dropped, disposition)
+}
+
 // confirmedNeedsForCaptureWithoutVetoedAnchor drops the subject_anchor member
 // from entries when dropped is true -- a contest, disagreement or absence
 // this turn -- must not reach a LATER turn naming this one as parent either,

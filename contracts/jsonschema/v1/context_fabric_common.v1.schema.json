@@ -1404,7 +1404,8 @@
         "vetoed_unresolved",
         "vetoed_conflict",
         "vetoed_stale",
-        "superseded_by_caller"
+        "superseded_by_caller",
+        "not_evaluated"
       ]
     },
     "FactScopeCensusRecord": {
