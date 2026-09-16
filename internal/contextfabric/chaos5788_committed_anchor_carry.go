@@ -74,21 +74,26 @@ func provenanceForConfirmedNeedBasis(basis ConfirmedNeedBasis) contractsv1.Conte
 // post-synthesis affirmation gate never retracts either) -- so the member
 // this composes can never describe a subject the served document goes on to
 // disown.
-func engineCommittedAnchorForCapture(frame *QuestionFrame, sampleAnchorKind SubjectKind, resolution SubjectResolution, bases CommitBasisSet) (confirmedStructureMember, bool) {
+// The third return is the underlying scope decision, always populated
+// whether or not capture happened -- a caller that logs it gets an honest
+// reason for a decline (organization_scope, anchor_unresolved,
+// anchor_ambiguous, frame_absent) for free, from the SAME predicate the
+// capture gate itself stands on, never a second guess about why.
+func engineCommittedAnchorForCapture(frame *QuestionFrame, sampleAnchorKind SubjectKind, resolution SubjectResolution, bases CommitBasisSet) (confirmedStructureMember, bool, CountPopulationScopeDecision) {
 	// CohortMemberSourceNotApplicable: this decision runs right after
 	// ResolveSubjects, before DiscoverContext ever produces a GraphContext --
 	// there is no member-source disclosure question in scope here, only
 	// whether resolution bound the frame's own anchor.
 	scope := DecideCountPopulationScope(frame, sampleAnchorKind, resolution, bases, CohortMemberSourceNotApplicable)
 	if scope.Decision != CountPopulationScopeAnchorCommitted {
-		return confirmedStructureMember{}, false
+		return confirmedStructureMember{}, false, scope.Decision
 	}
 	return confirmedStructureMember{
 		Member:       contractsv1.ContextFabricStructureNeedSubjectAnchor,
 		AppliedKind:  scope.AnchorSubjectKind,
 		AppliedValue: scope.AnchorID,
 		Basis:        ConfirmedNeedBasisEngineCommitted,
-	}, true
+	}, true, scope.Decision
 }
 
 // confirmedNeedsForCaptureWithCommittedAnchor is Investigate's own ONE
@@ -111,4 +116,107 @@ func confirmedNeedsForCaptureWithCommittedAnchor(remembered []confirmedStructure
 	}
 	augmented := append(append([]confirmedStructureMember{}, confirmedThisTurn...), member)
 	return mergeConfirmedNeedsLedger(remembered, augmented, request)
+}
+
+// ConfirmedAnchorAgreement is the closed, disclosure-safe verdict comparing a
+// turn's own APPLIED subject_anchor ledger entry -- receipt-redeemed or
+// engine-committed alike, this axis draws no distinction between the two --
+// against what THAT SAME TURN's own resolution actually committed. A carried
+// value is always advisory input INTO resolution (it narrows the pool
+// resolution is allowed to search, never a substitute for resolution
+// proving it); this is the one place that checks whether the advice and the
+// proof still agree.
+type ConfirmedAnchorAgreement string
+
+const (
+	// ConfirmedAnchorAgreementNotApplicable is the zero value: no
+	// subject_anchor ledger entry applied this turn at all, so there is
+	// nothing to compare. Named explicitly, matching ConfirmedNeedBasisConfirmed's
+	// own reasoning, so a log line never reads an unset axis as a key nobody
+	// wrote.
+	ConfirmedAnchorAgreementNotApplicable ConfirmedAnchorAgreement = "not_applicable"
+	// ConfirmedAnchorAgreementAbsent: an entry applied, but this turn's own
+	// resolution committed nothing of the entry's own kind -- the carry
+	// played no role in what this turn actually served, so there is nothing
+	// to veto.
+	ConfirmedAnchorAgreementAbsent ConfirmedAnchorAgreement = "absent"
+	// ConfirmedAnchorAgreementAgree: an entry applied, and this turn's own
+	// resolution independently committed the SAME (kind, canonical_id) --
+	// the carry and the proof point at one subject.
+	ConfirmedAnchorAgreementAgree ConfirmedAnchorAgreement = "agree"
+	// ConfirmedAnchorAgreementDisagree: an entry applied, and this turn's own
+	// resolution committed a DIFFERENT canonical id of the SAME kind. The
+	// entry is VETOED: never disclosed as applied, never carried forward to
+	// a later turn -- a served document must never claim a subject its own
+	// resolution disowned in the same breath.
+	ConfirmedAnchorAgreementDisagree ConfirmedAnchorAgreement = "disagree"
+)
+
+// carriedAnchorAgreementFor decides, once per turn immediately after
+// resolution runs, whether this turn's own applied subject_anchor ledger
+// entry (appliedNeeds, chaos5639_confirmed_need.go) still agrees with what
+// resolution independently committed. Returns the agreement, the entry
+// itself (zero value when not_applicable), and vetoed=true exactly on
+// disagree -- the one case a caller must act on.
+func carriedAnchorAgreementFor(appliedNeeds map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember, resolution SubjectResolution) (ConfirmedAnchorAgreement, confirmedStructureMember, bool) {
+	entry, ok := appliedNeeds[contractsv1.ContextFabricStructureNeedSubjectAnchor]
+	if !ok {
+		return ConfirmedAnchorAgreementNotApplicable, confirmedStructureMember{}, false
+	}
+	sawSameKind := false
+	for _, subject := range resolution.Committed {
+		if subject.Kind != entry.AppliedKind {
+			continue
+		}
+		if subject.CanonicalID == entry.AppliedValue {
+			return ConfirmedAnchorAgreementAgree, entry, false
+		}
+		sawSameKind = true
+	}
+	if sawSameKind {
+		return ConfirmedAnchorAgreementDisagree, entry, true
+	}
+	return ConfirmedAnchorAgreementAbsent, entry, false
+}
+
+// carriedStructureEntriesForDecisive replaces entries' subject_anchor member
+// with a vetoed_conflict disposition when vetoed is true, leaving every
+// other member (and entries itself, when not vetoed) unchanged. Applied only
+// at the call sites that can see a genuine post-resolution disagreement --
+// the decisive save and the supersession veto that can follow it -- so the
+// served document's own confirmed-structure echo can never claim "applied"
+// for a subject this turn's own resolution disowned.
+func carriedStructureEntriesForDecisive(entries []*contractsv1.ContextFabricConfirmedStructureEntry, vetoedEntry confirmedStructureMember, vetoed bool) []*contractsv1.ContextFabricConfirmedStructureEntry {
+	if !vetoed {
+		return entries
+	}
+	out := make([]*contractsv1.ContextFabricConfirmedStructureEntry, len(entries))
+	for i, entry := range entries {
+		if entry != nil && entry.Member == contractsv1.ContextFabricStructureNeedSubjectAnchor && entry.AppliedValue == vetoedEntry.AppliedValue {
+			replaced := *entry
+			replaced.Disposition = contractsv1.ContextFabricStructureDispositionVetoedConflict
+			out[i] = &replaced
+			continue
+		}
+		out[i] = entry
+	}
+	return out
+}
+
+// confirmedNeedsForCaptureWithoutVetoedAnchor drops the subject_anchor member
+// from entries when vetoed is true -- a disagreement proven THIS turn must
+// not reach a LATER turn naming this one as parent either, exactly as final
+// for inheritance as a reverify-time drop already is.
+func confirmedNeedsForCaptureWithoutVetoedAnchor(entries []ConfirmedNeedEntry, vetoed bool) []ConfirmedNeedEntry {
+	if !vetoed {
+		return entries
+	}
+	out := make([]ConfirmedNeedEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Member == contractsv1.ContextFabricStructureNeedSubjectAnchor {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
 }

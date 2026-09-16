@@ -1504,7 +1504,16 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// on an exit that ends the turn before any consumer ran, which is what
 	// the line then says.
 	var appliedNeeds map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember
-	defer func() { e.recordConfirmedNeedLedger(ctx, principal, confirmedNeedLedger, appliedNeeds) }()
+	// anchorAgreementForTelemetry/captureDecisionForTelemetry stay at their
+	// explicit not-applicable/empty defaults for a turn that never reaches
+	// resolution (an early gate, or a hard error) -- set once, immediately
+	// after resolution runs, by the SAME computation the decisive save and
+	// the disclosure echo below already consult.
+	anchorAgreementForTelemetry := ConfirmedAnchorAgreementNotApplicable
+	var captureDecisionForTelemetry CountPopulationScopeDecision
+	defer func() {
+		e.recordConfirmedNeedLedger(ctx, principal, confirmedNeedLedger, appliedNeeds, captureDecisionForTelemetry, anchorAgreementForTelemetry)
+	}()
 	windowCanon := e.canonicalizeEvidenceWindow(carryCtx, principal, request)
 	// CHAOS-5734: the confirmed-need ledger's window consumer, decided HERE,
 	// where a fresh winr_ redemption is decided, and entering the SAME
@@ -1743,7 +1752,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// The same scope decision the fresh path applies, over the frame
 				// of the reading persisted beside the stored row and that row's
 				// own resolution.
-				reusedCardinality = scopedMembershipCardinality(reusedCardinality, DecideCountPopulationScope(reusedReading.Frame, reusedReading.AnchorKind, reused.SubjectResolution, nil, CohortMemberSourceNotApplicable))
+				reusedCardinality = scopedMembershipCardinality(reusedCardinality, DecideCountPopulationScope(reusedReading.Frame, reusedReading.AnchorKind, reused.SubjectResolution, CommitBasisSetFromDigests(reused.SubjectResolution.CommitDecisionDigests), CohortMemberSourceNotApplicable))
 				if backfilled, _, _ := appendMembershipCardinality(reused.Completeness.Outcomes, reusedCardinality, reusedPlanNarrowing(reused)); len(backfilled) > 0 {
 					reused.Completeness.Outcomes = backfilled
 				}
@@ -1814,7 +1823,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// A stored document carries no pass to take a decision from, so
 				// the decision is the backfill's: the stored reading's frame and
 				// the stored resolution.
-				e.recordCountPopulationScope(ctx, principal, reused, DecideCountPopulationScope(reusedReading.Frame, reusedReading.AnchorKind, reused.SubjectResolution, nil, CohortMemberSourceNotApplicable), true)
+				e.recordCountPopulationScope(ctx, principal, reused, DecideCountPopulationScope(reusedReading.Frame, reusedReading.AnchorKind, reused.SubjectResolution, CommitBasisSetFromDigests(reused.SubjectResolution.CommitDecisionDigests), CohortMemberSourceNotApplicable), true)
 			}
 			// chris's promise of record, verbatim: "reuse and stored reads
 			// are re-validated against the current budget and refuse if they
@@ -2677,7 +2686,17 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// branch that resets resolution before reaching there never consults it,
 	// which is correct -- a served document with no committed subject must
 	// never capture one as carried state for the next turn.
-	committedAnchorForCapture, haveCommittedAnchorForCapture := engineCommittedAnchorForCapture(familyOutcome.Frame, scopeAnchorKind, resolution, commitBases)
+	var committedAnchorForCapture confirmedStructureMember
+	var haveCommittedAnchorForCapture bool
+	committedAnchorForCapture, haveCommittedAnchorForCapture, captureDecisionForTelemetry = engineCommittedAnchorForCapture(familyOutcome.Frame, scopeAnchorKind, resolution, commitBases)
+	// Sibling decision, same timing rationale: whether THIS turn's own applied
+	// subject_anchor ledger entry (appliedNeeds, computed pre-resolution above)
+	// still agrees with what resolution just independently committed. A
+	// disagree here VETOES the entry -- vetoedAnchorEntry/haveVetoedAnchor feed
+	// both the disclosure echo and the outgoing ledger below, and
+	// anchorAgreementForTelemetry is read by the deferred ledger line above.
+	anchorAgreementForTelemetry, vetoedAnchorEntry, haveVetoedAnchor := carriedAnchorAgreementFor(appliedNeeds, resolution)
+	carriedStructureEntriesForServed := carriedStructureEntriesForDecisive(carriedStructureEntries, vetoedAnchorEntry, haveVetoedAnchor)
 	// priorEntries: fetched ABOVE, before this call (CHAOS-4040 reordering
 	// -- see that call site's own comment for why it moved), reused here
 	// unchanged -- still the SAME single I/O call site fetchPriorEntries'
@@ -3381,7 +3400,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		Graph: graphContext, Facts: facts,
 		Resolution: resolution, CohortSignalCitations: cohortSignalCitations,
 		EffectiveWindow: effectiveWindow, WindowCanon: windowCanon, WindowCarried: windowCarried,
-		StructureCanon: structureCanon, CarriedStructureEntries: carriedStructureEntries,
+		StructureCanon: structureCanon, CarriedStructureEntries: carriedStructureEntriesForServed,
 		CommitBases: commitBases, CommitDigests: commitDigests,
 		GroupedNarrowingBasis: stage2GroupedBasis,
 		GroupingRefusal:       groupingRefusalForDisclosure,
@@ -3582,6 +3601,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		confirmedNeedsForDecisiveCapture := confirmedNeedsForCapture
 		if !workItemTuple {
 			confirmedNeedsForDecisiveCapture = confirmedNeedsForCaptureWithCommittedAnchor(remembered, confirmedThisTurn, request, confirmedNeedsForCapture, committedAnchorForCapture, haveCommittedAnchorForCapture)
+			// A disagreement proven this turn must not reach a later turn
+			// naming this one as parent either -- same finality as a
+			// reverify-time drop.
+			confirmedNeedsForDecisiveCapture = confirmedNeedsForCaptureWithoutVetoedAnchor(confirmedNeedsForDecisiveCapture, haveVetoedAnchor)
 		}
 		// Keyed from the CLAMPED REQUEST context -- byte-for-byte the
 		// value tryReuse keyed its lookup with (round-3 F1). Save and
@@ -3625,7 +3648,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// naming THIS result as parent would admit a confirmation this
 				// exact Save call just refused (withoutSupersededConfirmedNeeds's
 				// own doc comment, chaos5639_confirmed_need.go).
-				superseding, supersededErr := e.structureSupersessionVetoResult(ctx, principal, request, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions, carriedStructureEntries, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, CohortMemberSourceNotApplicable, confirmedNeedsForDecisiveCapture))
+				superseding, supersededErr := e.structureSupersessionVetoResult(ctx, principal, request, mergeConfirmedMembers(structureCanon.Confirmed, windowCanon.ConfirmedMember), superseded, binding, result.SubjectResolution.PriorSubjectReceiptDispositions, carriedStructureEntriesForServed, &plan, ancestryRoot(request, receiptsValidated(priorValidatedReceipts), driftRefusedParent), e.captureAcceptedReading(request, continuation, familyOutcome, acceptedShape, &plan, derivedRequirements, CohortMemberSourceNotApplicable, confirmedNeedsForDecisiveCapture))
 				return superseding, supersededErr
 			}
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))

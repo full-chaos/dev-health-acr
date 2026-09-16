@@ -212,6 +212,7 @@ func scopeCells() []scopeCell {
 		{
 			name: "scoped count, anchor committed", frame: countingFrame(SubjectTeam), family: QuestionFamilyScopedCohortStatus,
 			resolution: SubjectResolution{Candidates: []SubjectCandidate{scopeAnchorMatch(scopeAnchorRepository())}, Committed: []SubjectRef{scopeAnchorRepository()}},
+			bases:      provenCommitBases(scopeAnchorRepository()),
 			cohort:     kindCohort(SubjectTeam, 3), status: InvestigationComplete,
 			wantDecision: CountPopulationScopeAnchorCommitted, wantCounted: true, wantServed: 3, wantAnchors: 1, wantAnchorID: "repository:SCOPE_ANCHOR",
 			wantSentence: "Counted 3 teams.", wantAssembled: contractsv1.ContextFabricRequirementSatisfied,
@@ -224,6 +225,7 @@ func scopeCells() []scopeCell {
 			// through to this decision's own certified line.
 			name: "scoped count, anchor committed, ownership routed", frame: countingFrame(SubjectTeam), family: QuestionFamilyScopedCohortStatus,
 			resolution:   SubjectResolution{Candidates: []SubjectCandidate{scopeAnchorMatch(scopeAnchorRepository())}, Committed: []SubjectRef{scopeAnchorRepository()}},
+			bases:        provenCommitBases(scopeAnchorRepository()),
 			cohort:       kindCohort(SubjectTeam, 2),
 			memberSource: CohortMemberSourceOwnership,
 			status:       InvestigationComplete,
@@ -236,6 +238,7 @@ func scopeCells() []scopeCell {
 			// carries, under a committed anchor. Stated as narrowed, not withheld.
 			name: "scoped count, anchor committed, population larger than served", frame: countingFrame(SubjectTeam), family: QuestionFamilyScopedCohortStatus,
 			resolution: SubjectResolution{Candidates: []SubjectCandidate{scopeAnchorMatch(scopeAnchorRepository())}, Committed: []SubjectRef{scopeAnchorRepository()}},
+			bases:      provenCommitBases(scopeAnchorRepository()),
 			cohort:     kindCohort(SubjectTeam, 3), population: 5, status: InvestigationComplete,
 			wantDecision: CountPopulationScopeAnchorCommitted, wantCounted: true, wantServed: 3, wantAnchors: 1, wantAnchorID: "repository:SCOPE_ANCHOR",
 			wantSentence: "Counted 3 teams of 5 found.", wantAssembled: contractsv1.ContextFabricRequirementNarrowed,
@@ -246,6 +249,7 @@ func scopeCells() []scopeCell {
 			// set is empty.
 			name: "scoped count, anchor committed, empty measured population", frame: countingFrame(SubjectTeam), family: QuestionFamilyScopedCohortStatus,
 			resolution: SubjectResolution{Candidates: []SubjectCandidate{scopeAnchorMatch(scopeAnchorRepository())}, Committed: []SubjectRef{scopeAnchorRepository()}},
+			bases:      provenCommitBases(scopeAnchorRepository()),
 			cohort:     &Cohort{Kind: SubjectTeam, Rationale: "scope census match", Members: []CohortMember{}, Complete: true}, status: InvestigationComplete,
 			wantDecision: CountPopulationScopeAnchorCommitted, wantCounted: true, wantServed: 0, wantAnchors: 1, wantAnchorID: "repository:SCOPE_ANCHOR",
 			wantSentence: "Counted 0 teams.", wantAssembled: contractsv1.ContextFabricRequirementSatisfied,
@@ -254,6 +258,7 @@ func scopeCells() []scopeCell {
 		{
 			name: "scoped count, anchor committed, population unmeasured", frame: countingFrame(SubjectTeam), family: QuestionFamilyScopedCohortStatus,
 			resolution: SubjectResolution{Candidates: []SubjectCandidate{scopeAnchorMatch(scopeAnchorRepository())}, Committed: []SubjectRef{scopeAnchorRepository()}},
+			bases:      provenCommitBases(scopeAnchorRepository()),
 			cohort:     nil, status: InvestigationComplete,
 			wantDecision: CountPopulationScopeAnchorCommitted, wantAnchors: 1, wantAnchorID: "repository:SCOPE_ANCHOR", wantAssembled: contractsv1.ContextFabricRequirementUnavailable,
 		},
@@ -261,6 +266,7 @@ func scopeCells() []scopeCell {
 			// Structurally different: repositories under a team anchor.
 			name: "scoped repository count, team anchor committed", frame: countingFrame(SubjectRepository), family: QuestionFamilyScopedCohortStatus,
 			resolution: SubjectResolution{Candidates: []SubjectCandidate{scopeAnchorMatch(scopeTeamAnchor())}, Committed: []SubjectRef{scopeTeamAnchor()}},
+			bases:      provenCommitBases(scopeTeamAnchor()),
 			cohort:     kindCohort(SubjectRepository, 2), status: InvestigationComplete,
 			wantDecision: CountPopulationScopeAnchorCommitted, wantCounted: true, wantServed: 2, wantAnchors: 1, wantAnchorID: "team:SCOPE_ANCHOR",
 			wantSentence: "Counted 2 repositorys.", wantAssembled: contractsv1.ContextFabricRequirementSatisfied,
@@ -296,7 +302,12 @@ func scopeCells() []scopeCell {
 		{
 			name: "scoped count, anchor term matched under the reading's anchor kind, normalized", frame: countingFrame(SubjectTeam), family: QuestionFamilyScopedCohortStatus,
 			anchorKind: SubjectRepository,
+			// CommitBasisAuthoritativeIdentity, not provenCommitBases'
+			// CommitBasisCallerCanonicalID: that basis short-circuits anchorBound
+			// before the term-match/normalization branch this cell exists to
+			// exercise ever runs.
 			resolution: SubjectResolution{Candidates: []SubjectCandidate{scopeAnchorMatch(scopeAnchorRepository(), "A")}, Committed: []SubjectRef{scopeAnchorRepository()}},
+			bases:      CommitBasisSet{SubjectMapKey(scopeAnchorRepository()): CommitBasisAuthoritativeIdentity},
 			cohort:     kindCohort(SubjectTeam, 3), status: InvestigationComplete,
 			wantDecision: CountPopulationScopeAnchorCommitted, wantCounted: true, wantServed: 3, wantAnchors: 1, wantAnchorID: "repository:SCOPE_ANCHOR",
 			wantSentence: "Counted 3 teams.", wantAssembled: contractsv1.ContextFabricRequirementSatisfied,
@@ -314,6 +325,19 @@ func scopeCells() []scopeCell {
 		{
 			name: "scoped count, statistical basis without an anchor match", frame: countingFrame(SubjectTeam), family: QuestionFamilyScopedCohortStatus,
 			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{scopeAnchorRepository()}},
+			bases:      CommitBasisSet{SubjectMapKey(scopeAnchorRepository()): CommitBasisStatistical},
+			cohort:     kindCohort(SubjectTeam, 3), status: InvestigationComplete,
+			wantDecision: CountPopulationScopeAnchorUnresolved, wantUnbound: 1, wantAssembled: contractsv1.ContextFabricRequirementUnavailable,
+		},
+		{
+			// A term match alone never proves identity: a statistical commit
+			// can echo the anchor's own wording just as readily as a proven
+			// one (the exact-label tier is a heuristic, not a proof). Without
+			// this check the population would silently drift onto whatever
+			// subject retrieval scored highest, so long as its label happened
+			// to match the anchor's own terms.
+			name: "scoped count, statistical basis WITH an anchor term match", frame: countingFrame(SubjectTeam), family: QuestionFamilyScopedCohortStatus,
+			resolution: SubjectResolution{Candidates: []SubjectCandidate{scopeAnchorMatch(scopeAnchorRepository())}, Committed: []SubjectRef{scopeAnchorRepository()}},
 			bases:      CommitBasisSet{SubjectMapKey(scopeAnchorRepository()): CommitBasisStatistical},
 			cohort:     kindCohort(SubjectTeam, 3), status: InvestigationComplete,
 			wantDecision: CountPopulationScopeAnchorUnresolved, wantUnbound: 1, wantAssembled: contractsv1.ContextFabricRequirementUnavailable,
@@ -363,6 +387,7 @@ var engineCellAnchorCandidates = map[string]int{
 	"scoped repository count, team anchor committed":                                1,
 	"scoped count, committed subject matched a different term":                      1,
 	"scoped count, anchor term matched under the reading's anchor kind, normalized": 1,
+	"scoped count, statistical basis WITH an anchor term match":                     1,
 }
 
 func frameWithPointer(goals []InvestigationGoal, expression SubjectExpression) *QuestionFrame {
@@ -494,20 +519,30 @@ func TestDecideCountPopulationScopeCoversItsInputDomain(t *testing.T) {
 		{"unbound non-member committed, two candidates", "", SubjectResolution{Committed: []SubjectRef{other}, Candidates: []SubjectCandidate{offered, offered}}, nil, CountPopulationScopeAnchorAmbiguous, 0, 1, ""},
 		{"anchor match on another subject", "", SubjectResolution{Committed: []SubjectRef{other}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}, nil, CountPopulationScopeAnchorUnresolved, 0, 1, ""},
 		{"same id other kind matched", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(SubjectRef{Kind: SubjectProject, CanonicalID: anchor.CanonicalID, Label: "x"})}}, nil, CountPopulationScopeAnchorUnresolved, 0, 1, ""},
-		{"anchor matched", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}, nil, CountPopulationScopeAnchorCommitted, 1, 0, anchor.CanonicalID},
-		{"anchor matched after normalization", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor, "  A")}}, nil, CountPopulationScopeAnchorCommitted, 1, 0, anchor.CanonicalID},
-		{"anchor matched only the question marker", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor, "[full question]")}}, nil, CountPopulationScopeAnchorUnresolved, 0, 1, ""},
-		{"anchor matched an empty term", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor, "", " ")}}, nil, CountPopulationScopeAnchorUnresolved, 0, 1, ""},
-		{"anchor matched, reading kind agrees", SubjectRepository, SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}, nil, CountPopulationScopeAnchorCommitted, 1, 0, anchor.CanonicalID},
-		{"anchor matched, reading kind differs", SubjectProject, SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}, nil, CountPopulationScopeAnchorUnresolved, 0, 1, ""},
-		{"reading kind equal to member kind is dropped", SubjectTeam, SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}, nil, CountPopulationScopeAnchorCommitted, 1, 0, anchor.CanonicalID},
-		{"reading kind out of vocabulary is dropped", SubjectKind("not_a_kind"), SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}, nil, CountPopulationScopeAnchorCommitted, 1, 0, anchor.CanonicalID},
+		// CommitBasisAuthoritativeIdentity below (not the caller-canonical-id
+		// rows further down): these rows exist to exercise the TERM-MATCH
+		// branch itself (normalization, kind agreement/mismatch, candidate
+		// count) -- a caller-canonical-id basis would short-circuit anchorBound
+		// before that branch ever ran.
+		{"anchor matched", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}, CommitBasisSet{SubjectMapKey(anchor): CommitBasisAuthoritativeIdentity}, CountPopulationScopeAnchorCommitted, 1, 0, anchor.CanonicalID},
+		{"anchor matched after normalization", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor, "  A")}}, CommitBasisSet{SubjectMapKey(anchor): CommitBasisAuthoritativeIdentity}, CountPopulationScopeAnchorCommitted, 1, 0, anchor.CanonicalID},
+		{"anchor matched only the question marker", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor, "[full question]")}}, CommitBasisSet{SubjectMapKey(anchor): CommitBasisAuthoritativeIdentity}, CountPopulationScopeAnchorUnresolved, 0, 1, ""},
+		{"anchor matched an empty term", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor, "", " ")}}, CommitBasisSet{SubjectMapKey(anchor): CommitBasisAuthoritativeIdentity}, CountPopulationScopeAnchorUnresolved, 0, 1, ""},
+		{"anchor matched, reading kind agrees", SubjectRepository, SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}, CommitBasisSet{SubjectMapKey(anchor): CommitBasisAuthoritativeIdentity}, CountPopulationScopeAnchorCommitted, 1, 0, anchor.CanonicalID},
+		{"anchor matched, reading kind differs", SubjectProject, SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}, CommitBasisSet{SubjectMapKey(anchor): CommitBasisAuthoritativeIdentity}, CountPopulationScopeAnchorUnresolved, 0, 1, ""},
+		{"reading kind equal to member kind is dropped", SubjectTeam, SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}, CommitBasisSet{SubjectMapKey(anchor): CommitBasisAuthoritativeIdentity}, CountPopulationScopeAnchorCommitted, 1, 0, anchor.CanonicalID},
+		{"reading kind out of vocabulary is dropped", SubjectKind("not_a_kind"), SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}, CommitBasisSet{SubjectMapKey(anchor): CommitBasisAuthoritativeIdentity}, CountPopulationScopeAnchorCommitted, 1, 0, anchor.CanonicalID},
 		{"caller canonical id basis", "", SubjectResolution{Committed: []SubjectRef{anchor}}, CommitBasisSet{SubjectMapKey(anchor): CommitBasisCallerCanonicalID}, CountPopulationScopeAnchorCommitted, 1, 0, anchor.CanonicalID},
 		{"caller canonical id basis, reading kind differs", SubjectProject, SubjectResolution{Committed: []SubjectRef{anchor}}, CommitBasisSet{SubjectMapKey(anchor): CommitBasisCallerCanonicalID}, CountPopulationScopeAnchorUnresolved, 0, 1, ""},
 		{"authoritative identity basis alone", "", SubjectResolution{Committed: []SubjectRef{anchor}}, CommitBasisSet{SubjectMapKey(anchor): CommitBasisAuthoritativeIdentity}, CountPopulationScopeAnchorUnresolved, 0, 1, ""},
 		{"statistical basis alone", "", SubjectResolution{Committed: []SubjectRef{anchor}}, CommitBasisSet{SubjectMapKey(anchor): CommitBasisStatistical}, CountPopulationScopeAnchorUnresolved, 0, 1, ""},
-		{"bound anchor beside an unbound subject", "", SubjectResolution{Committed: []SubjectRef{other, anchor, member}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}, nil, CountPopulationScopeAnchorCommitted, 1, 1, anchor.CanonicalID},
-		{"two bound anchors, first id reported", "", SubjectResolution{Committed: []SubjectRef{project, anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor), scopeAnchorMatch(project)}}, nil, CountPopulationScopeAnchorCommitted, 2, 0, project.CanonicalID},
+		// A term match with NO identity-proven basis at all never binds --
+		// the exact gap the capture gate's own mislabeling defect exercised
+		// (chaos5788_committed_anchor_carry.go).
+		{"statistical basis with a term match", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}, CommitBasisSet{SubjectMapKey(anchor): CommitBasisStatistical}, CountPopulationScopeAnchorUnresolved, 0, 1, ""},
+		{"no basis recorded at all, with a term match", "", SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}, nil, CountPopulationScopeAnchorUnresolved, 0, 1, ""},
+		{"bound anchor beside an unbound subject", "", SubjectResolution{Committed: []SubjectRef{other, anchor, member}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}, CommitBasisSet{SubjectMapKey(anchor): CommitBasisAuthoritativeIdentity}, CountPopulationScopeAnchorCommitted, 1, 1, anchor.CanonicalID},
+		{"two bound anchors, first id reported", "", SubjectResolution{Committed: []SubjectRef{project, anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor), scopeAnchorMatch(project)}}, CommitBasisSet{SubjectMapKey(anchor): CommitBasisAuthoritativeIdentity, SubjectMapKey(project): CommitBasisAuthoritativeIdentity}, CountPopulationScopeAnchorCommitted, 2, 0, project.CanonicalID},
 		{"two member candidates", "", SubjectResolution{Candidates: []SubjectCandidate{scopeCandidate(member, "receipt_m1"), scopeCandidate(member, "receipt_m2")}}, nil, CountPopulationScopeAnchorUnresolved, 0, 0, ""},
 		{"one anchor candidate beside a member candidate", "", SubjectResolution{Candidates: []SubjectCandidate{offered, scopeCandidate(member, "receipt_m1")}}, nil, CountPopulationScopeAnchorUnresolved, 0, 0, ""},
 		{"two candidates of a kind the reading excludes", SubjectProject, SubjectResolution{Candidates: []SubjectCandidate{offered, offered}}, nil, CountPopulationScopeAnchorUnresolved, 0, 0, ""},
@@ -578,6 +613,8 @@ var domainRowAnchorCandidates = map[string]int{
 	"two bound anchors, first id reported":           2,
 	"one anchor candidate beside a member candidate": 1,
 	"two candidates of the reading's anchor kind":    2,
+	"statistical basis with a term match":            1,
+	"no basis recorded at all, with a term match":    1,
 }
 
 // TestNormalizeRetrievalTermIsResolutionsNormalization pins the comparison's
@@ -705,18 +742,20 @@ func TestAReusedCountIsHeldToTheSameScopeDecision(t *testing.T) {
 			}}
 			committed := []SubjectRef{}
 			storedCandidates := []SubjectCandidate{}
+			var storedDigests []contractsv1.ContextFabricCommitDecisionDigest
 			if cell.withAnchor {
 				committed = append(committed, project)
 				storedCandidates = append(storedCandidates, scopeAnchorMatch(project))
+				storedDigests = identityProvenDigests(project)
 			}
 			for _, member := range candidate.Cohort.Members {
 				committed = append(committed, member.Subject)
 			}
-			candidate.SubjectResolution = SubjectResolution{Candidates: storedCandidates, Committed: committed}
+			candidate.SubjectResolution = SubjectResolution{Candidates: storedCandidates, Committed: committed, CommitDecisionDigests: storedDigests}
 			candidate.Completeness = ComputeAnswerCompleteness(candidate)
 			telemetry := &recordingTelemetry{}
 			engine := mustReuseTestEngine(t, EngineDependencies{
-				Graph:     graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed}},
+				Graph:     graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed}, bases: provenCommitBases(committed...)},
 				Results:   &resultStoreStub{},
 				Telemetry: telemetry,
 				ReuseGate: readingReuseGate{stored: candidate, frame: cell.frame},
@@ -941,14 +980,16 @@ func storedScopedCountDoc(withAnchor, withSurfaces bool) (InvestigationResult, [
 	}
 	committed := []SubjectRef{}
 	candidates := []SubjectCandidate{}
+	var digests []contractsv1.ContextFabricCommitDecisionDigest
 	if withAnchor {
 		committed = append(committed, project)
 		candidates = append(candidates, scopeAnchorMatch(project))
+		digests = identityProvenDigests(project)
 	}
 	for _, member := range candidate.Cohort.Members {
 		committed = append(committed, member.Subject)
 	}
-	candidate.SubjectResolution = SubjectResolution{Candidates: candidates, Committed: committed}
+	candidate.SubjectResolution = SubjectResolution{Candidates: candidates, Committed: committed, CommitDecisionDigests: digests}
 	candidate.Completeness = ComputeAnswerCompleteness(candidate)
 	return candidate, append([]SubjectRef{project, org}, committed...)
 }
@@ -983,13 +1024,14 @@ func TestEveryCountSurfaceOnEveryPathFollowsTheScopeDecision(t *testing.T) {
 		{"fresh, bound anchor", func(t *testing.T, telemetry *recordingTelemetry) InvestigationResult {
 			cell := scopeCell{frame: countingFrame(SubjectTeam), family: QuestionFamilyScopedCohortStatus,
 				resolution: SubjectResolution{Candidates: []SubjectCandidate{scopeAnchorMatch(scopeAnchorRepository())}, Committed: []SubjectRef{scopeAnchorRepository()}},
+				bases:      provenCommitBases(scopeAnchorRepository()),
 				cohort:     kindCohort(SubjectTeam, 3), status: InvestigationComplete}
 			return runScopeCell(t, context.Background(), newScopeEngine(t, cell, telemetry))
 		}, want{row: contractsv1.ContextFabricRequirementSatisfied, claim: true, sentence: true, lines: 1}},
 		{"reuse hit, stored count over a bound anchor", func(t *testing.T, telemetry *recordingTelemetry) InvestigationResult {
 			stored, recheck := storedScopedCountDoc(true, true)
 			engine := mustReuseTestEngine(t, EngineDependencies{
-				Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: recheck}}, Results: &resultStoreStub{}, Telemetry: telemetry,
+				Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: recheck}, bases: provenCommitBases(recheck...)}, Results: &resultStoreStub{}, Telemetry: telemetry,
 				ReuseGate: readingReuseGate{stored: stored, frame: countingFrame(SubjectTeam)},
 			})
 			result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
@@ -1089,7 +1131,7 @@ func TestAnEmptyAnchorTermBindsNothing(t *testing.T) {
 			Scoped: &ScopedSetExpression{AnchorTerms: cell.anchorTerms, MemberKind: SubjectTeam},
 		})
 		resolution := SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor, cell.matched...)}}
-		got := DecideCountPopulationScope(frame, "", resolution, nil, CohortMemberSourceNotApplicable)
+		got := DecideCountPopulationScope(frame, "", resolution, CommitBasisSet{SubjectMapKey(anchor): CommitBasisAuthoritativeIdentity}, CohortMemberSourceNotApplicable)
 		if bound := got.Decision == CountPopulationScopeAnchorCommitted; bound != cell.wantBound {
 			t.Errorf("%s: decision %q (anchors=%d unbound=%d), want bound=%t", cell.name, got.Decision, got.CommittedAnchors, got.CommittedUnbound, cell.wantBound)
 		}

@@ -240,15 +240,30 @@ func DecideCountPopulationScope(frame *QuestionFrame, sampleAnchorKind SubjectKi
 //
 // KIND: when the reading states an anchor kind, only a subject of that kind can
 // be the anchor. PROVENANCE: the subject was committed on the caller's own
-// canonical id, or resolution recorded it as a match for one of the frame's
-// anchor terms. The terms are compared as retrieval pointers against
-// resolution's record of what each pointer matched, never as values.
+// canonical id, or on a proven identity (CommitBasis.IdentityProven) AND
+// resolution recorded it as a match for one of the frame's anchor terms. The
+// terms are compared as retrieval pointers against resolution's record of
+// what each pointer matched, never as values.
+//
+// THE IDENTITY-PROVEN REQUIREMENT ON THE TERM-MATCH BRANCH is deliberate, not
+// incidental: a term match alone is retrieval finding a subject whose LABEL
+// happened to echo the anchor's own wording, which a statistical (scored,
+// non-identity) commit produces just as readily as an identity-proven one --
+// the exact-label tier is a label heuristic, never a proof (CommitBasis's own
+// doc comment). Binding the count's own population, or any later carry of it,
+// to a subject the graph merely scored highest would let the requested scope
+// silently drift onto the wrong entity whenever the true anchor and a
+// same-named decoy both surface as candidates.
 func anchorBound(frame *QuestionFrame, anchorKind SubjectKind, subject SubjectRef, resolution SubjectResolution, bases CommitBasisSet) bool {
 	if anchorKind != "" && subject.Kind != anchorKind {
 		return false
 	}
-	if bases.For(subject) == CommitBasisCallerCanonicalID {
+	basis := bases.For(subject)
+	if basis == CommitBasisCallerCanonicalID {
 		return true
+	}
+	if !basis.IdentityProven() {
+		return false
 	}
 	if frame.SubjectExpression.Scoped == nil {
 		return false

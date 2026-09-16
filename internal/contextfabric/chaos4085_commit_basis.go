@@ -1,5 +1,7 @@
 package contextfabric
 
+import contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+
 // CHAOS-4085: the commit BASIS vocabulary -- an INTERNAL (never-wire) record
 // of WHAT KIND OF PROOF stood behind each subject a resolution committed.
 //
@@ -304,4 +306,36 @@ func (s CommitDecisionDigestSet) ResetTo(other CommitDecisionDigestSet) {
 	for key, digest := range other {
 		s[key] = digest
 	}
+}
+
+// CommitBasisSetFromDigests reconstructs the IDENTITY-PROVEN SUBSET of a live
+// CommitBasisSet from a STORED result's own wire-safe CommitDecisionDigests
+// (contractsv1.ContextFabricSubjectResolution) -- the one signal that
+// survives a reuse boundary, since CommitBasis itself is deliberately never
+// persisted (this file's own "NEVER WIRE" doc comment above). Every reuse
+// call site that decides a count's population scope over a STORED or
+// re-verified resolution reads this instead of passing a bare nil: a nil
+// bases set makes every committed subject read CommitBasisUnknown, which
+// anchorBound (count_population_scope.go) never treats as proof of anything
+// -- silently regressing a previously-served, previously-proven
+// anchor-committed count to anchor_unresolved on every reuse.
+//
+// A digest renders CommitBasisAuthoritativeIdentity when IdentityProven is
+// true (never CommitBasisCallerCanonicalID specifically: the distinction
+// between the two proven bases is not itself persisted, and every consumer
+// of IdentityProven treats them identically) and is otherwise skipped
+// entirely, which reads back as CommitBasisUnknown -- the same fail-closed
+// default a resolution with no digests at all already renders.
+func CommitBasisSetFromDigests(digests []contractsv1.ContextFabricCommitDecisionDigest) CommitBasisSet {
+	if len(digests) == 0 {
+		return nil
+	}
+	bases := make(CommitBasisSet, len(digests))
+	for _, digest := range digests {
+		if digest.CommitGate == "" || !digest.IdentityProven {
+			continue
+		}
+		bases.Record(digest.Subject, CommitBasisAuthoritativeIdentity)
+	}
+	return bases
 }

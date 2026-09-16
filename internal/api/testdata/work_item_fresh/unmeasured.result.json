@@ -56,7 +56,9 @@
           "kind": "project",
           "canonical_id": "project.v2:linear:P1",
           "label": "Project Alpha"
-        }
+        },
+        "commit_gate": "identity_fast_path",
+        "identity_proven": true
       }
     ]
   },

@@ -128,6 +128,7 @@ func newCountingEngineWithPopulation(t *testing.T, cohort *Cohort, population in
 			Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)},
 			Committed:  []SubjectRef{anchor},
 		},
+		bases: provenCommitBases(anchor),
 		context: GraphContext{
 			Cohort: cohort, CohortPopulation: population, Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
 			FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},

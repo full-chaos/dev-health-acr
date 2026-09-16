@@ -387,6 +387,20 @@ func (t SlogEngineTelemetry) RecordKindCarry(ctx context.Context, principal stor
 // applied value (applied_*_value_hash, confirmedNeedValueHash -- never the raw
 // canonical id or handle value), and dropped_members: member:reason pairs for
 // each member refused at reverify, or "none".
+//
+// applied_anchor_basis and anchor_agreement are this axis's own PRE-DECISION/
+// POST-DECISION pair for the subject_anchor member specifically: basis names
+// how the applied entry came to exist ("" receipt-redeemed, "engine_committed"
+// bound with no offer raised), and agreement compares it against what this
+// SAME turn's own resolution independently committed (not_applicable/absent/
+// agree/disagree -- ConfirmedAnchorAgreement's own doc comment). A disagree
+// means the entry was vetoed rather than disclosed as applied, so
+// applied_members/applied_anchor_kind/applied_anchor_value_hash above already
+// reflect the post-veto ledger. capture_decision is the SIBLING pre/decision
+// fact for the OTHER direction -- whether THIS turn's own resolution just
+// bound a brand new engine-committed anchor for a later turn to inherit
+// (CountPopulationScopeDecisionVocabulary's own closed vocabulary; empty only
+// when the turn never reached the check).
 func (t SlogEngineTelemetry) RecordConfirmedNeedLedger(ctx context.Context, principal storage.Principal, event ConfirmedNeedLedgerEvent) {
 	args := append([]any{
 		"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(event.Outcome)),
@@ -395,11 +409,14 @@ func (t SlogEngineTelemetry) RecordConfirmedNeedLedger(ctx context.Context, prin
 		"applied_expected_kind", SanitizeLogAttr(string(event.AppliedExpectedKind)),
 		"applied_anchor_kind", SanitizeLogAttr(string(event.AppliedAnchorKind)),
 		"applied_anchor_value_hash", SanitizeLogAttr(event.AppliedAnchorValueHash),
+		"applied_anchor_basis", SanitizeLogAttr(string(event.AppliedAnchorBasis)),
 		"applied_candidate_kind", SanitizeLogAttr(string(event.AppliedCandidateKind)),
 		"applied_candidate_value_hash", SanitizeLogAttr(event.AppliedCandidateValueHash),
 		"applied_handle_kind", SanitizeLogAttr(string(event.AppliedHandleKind)),
 		"applied_handle_value_hash", SanitizeLogAttr(event.AppliedHandleValueHash),
 		"dropped_members", SanitizeLogAttr(observableConfirmedNeedDrops(event.Dropped)),
+		"anchor_agreement", SanitizeLogAttr(string(event.AnchorAgreement)),
+		"capture_decision", SanitizeLogAttr(string(event.CaptureDecision)),
 	}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric confirmed need ledger", args...)
 }

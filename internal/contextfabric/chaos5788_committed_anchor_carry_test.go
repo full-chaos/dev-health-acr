@@ -232,12 +232,18 @@ func TestEngineCommittedAnchorForCaptureCoversItsInputDomain(t *testing.T) {
 		{"authoritative identity basis alone, no term match", frame, SubjectResolution{Committed: []SubjectRef{anchor}}, CommitBasisSet{SubjectMapKey(anchor): CommitBasisAuthoritativeIdentity}, false},
 		{"caller canonical id basis", frame, SubjectResolution{Committed: []SubjectRef{anchor}}, CommitBasisSet{SubjectMapKey(anchor): CommitBasisCallerCanonicalID}, true},
 		{"authoritative identity basis with a matching candidate term", frame, SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}, CommitBasisSet{SubjectMapKey(anchor): CommitBasisAuthoritativeIdentity}, true},
-		{"bound anchor beside an unrelated unbound subject", frame, SubjectResolution{Committed: []SubjectRef{other, anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}, nil, true},
+		{"bound anchor beside an unrelated unbound subject", frame, SubjectResolution{Committed: []SubjectRef{other, anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}, CommitBasisSet{SubjectMapKey(anchor): CommitBasisAuthoritativeIdentity}, true},
+		// The exact shape a mislabeled capture would produce: a matching
+		// candidate TERM alone never proves identity (a statistical/exact-label
+		// commit can echo the anchor's own wording just as readily as a proven
+		// one), so a term match must never substitute for CommitBasis.
+		{"statistical basis with a matching candidate term", frame, SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}, CommitBasisSet{SubjectMapKey(anchor): CommitBasisStatistical}, false},
+		{"no basis recorded at all, with a matching candidate term", frame, SubjectResolution{Committed: []SubjectRef{anchor}, Candidates: []SubjectCandidate{scopeAnchorMatch(anchor)}}, nil, false},
 	} {
 		row := row
 		t.Run(row.name, func(t *testing.T) {
 			t.Parallel()
-			got, ok := engineCommittedAnchorForCapture(row.frame, "", row.resolution, row.bases)
+			got, ok, _ := engineCommittedAnchorForCapture(row.frame, "", row.resolution, row.bases)
 			if ok != row.wantOK {
 				t.Fatalf("ok = %t, want %t (member %#v)", ok, row.wantOK, got)
 			}
@@ -312,6 +318,162 @@ func TestValidConfirmedNeedBasisAndProvenanceMapping(t *testing.T) {
 		}
 		if got := provenanceForConfirmedNeedBasis(row.basis); got != row.wantProvenance {
 			t.Errorf("provenanceForConfirmedNeedBasis(%q) = %q, want %q", row.basis, got, row.wantProvenance)
+		}
+	}
+}
+
+// TestCarriedAnchorAgreementForCoversItsInputDomain enumerates
+// carriedAnchorAgreementFor's own domain: whether a subject_anchor entry
+// applied this turn at all, crossed with what this turn's own resolution
+// committed (nothing, the same subject, a different subject of the same
+// kind, or only a different kind entirely).
+func TestCarriedAnchorAgreementForCoversItsInputDomain(t *testing.T) {
+	t.Parallel()
+	entry := confirmedStructureMember{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: committedAnchorRepo.Kind, AppliedValue: committedAnchorRepo.CanonicalID, Basis: ConfirmedNeedBasisEngineCommitted}
+	applied := func(has bool) map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember {
+		if !has {
+			return nil
+		}
+		return map[contractsv1.ContextFabricStructureNeedKind]confirmedStructureMember{contractsv1.ContextFabricStructureNeedSubjectAnchor: entry}
+	}
+	teamOther := SubjectRef{Kind: SubjectTeam, CanonicalID: "team:unrelated-kind", Label: "unrelated kind"}
+	for _, row := range []struct {
+		name        string
+		hasEntry    bool
+		resolution  SubjectResolution
+		wantAgree   ConfirmedAnchorAgreement
+		wantVetoed  bool
+		wantEntryOK bool
+	}{
+		{"nothing applied this turn", false, SubjectResolution{Committed: []SubjectRef{committedAnchorRepoOther}}, ConfirmedAnchorAgreementNotApplicable, false, false},
+		{"applied, nothing committed this turn", true, SubjectResolution{}, ConfirmedAnchorAgreementAbsent, false, true},
+		{"applied, only a different kind committed", true, SubjectResolution{Committed: []SubjectRef{teamOther}}, ConfirmedAnchorAgreementAbsent, false, true},
+		{"applied, resolution committed the SAME subject", true, SubjectResolution{Committed: []SubjectRef{committedAnchorRepo}}, ConfirmedAnchorAgreementAgree, false, true},
+		{"applied, resolution committed a DIFFERENT subject of the same kind", true, SubjectResolution{Committed: []SubjectRef{committedAnchorRepoOther}}, ConfirmedAnchorAgreementDisagree, true, true},
+		{"applied, resolution committed both the same subject and an unrelated one", true, SubjectResolution{Committed: []SubjectRef{teamOther, committedAnchorRepo}}, ConfirmedAnchorAgreementAgree, false, true},
+	} {
+		row := row
+		t.Run(row.name, func(t *testing.T) {
+			t.Parallel()
+			gotAgreement, gotEntry, gotVetoed := carriedAnchorAgreementFor(applied(row.hasEntry), row.resolution)
+			if gotAgreement != row.wantAgree || gotVetoed != row.wantVetoed {
+				t.Fatalf("carriedAnchorAgreementFor() = (%q, vetoed=%t), want (%q, vetoed=%t)", gotAgreement, gotVetoed, row.wantAgree, row.wantVetoed)
+			}
+			if row.wantEntryOK && gotEntry != entry {
+				t.Fatalf("entry = %#v, want %#v", gotEntry, entry)
+			}
+			if !row.wantEntryOK && gotEntry != (confirmedStructureMember{}) {
+				t.Fatalf("entry = %#v, want the zero value", gotEntry)
+			}
+		})
+	}
+}
+
+// TestCarriedStructureEntriesForDecisiveVetoesOnlyTheDisagreeingAnchor pins
+// the disclosure-side rewrite: not-vetoed is a byte-identical no-op, and a
+// veto replaces ONLY the matching subject_anchor entry's disposition,
+// leaving every other entry (including a different subject_anchor value, an
+// impossible but defensive case) untouched.
+func TestCarriedStructureEntriesForDecisiveVetoesOnlyTheDisagreeingAnchor(t *testing.T) {
+	t.Parallel()
+	anchorEntry := &contractsv1.ContextFabricConfirmedStructureEntry{
+		Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedValue: committedAnchorRepo.CanonicalID,
+		Source: contractsv1.ContextFabricStructureSourceCarried, PriorResultID: "result_parent",
+		Provenance: contractsv1.ContextFabricStructureEngineCommitted, Disposition: contractsv1.ContextFabricStructureDispositionApplied,
+	}
+	kindEntry := &contractsv1.ContextFabricConfirmedStructureEntry{
+		Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(SubjectTeam),
+		Source: contractsv1.ContextFabricStructureSourceCarried, PriorResultID: "result_parent",
+		Provenance: contractsv1.ContextFabricStructureClarificationConfirmed, Disposition: contractsv1.ContextFabricStructureDispositionApplied,
+	}
+	entries := []*contractsv1.ContextFabricConfirmedStructureEntry{anchorEntry, kindEntry, nil}
+	vetoedEntry := confirmedStructureMember{AppliedValue: committedAnchorRepo.CanonicalID}
+
+	t.Run("not vetoed is a no-op returning the identical slice", func(t *testing.T) {
+		t.Parallel()
+		got := carriedStructureEntriesForDecisive(entries, vetoedEntry, false)
+		if &got[0] != &entries[0] || got[0] != anchorEntry {
+			t.Fatalf("not-vetoed must return entries unchanged, not a copy")
+		}
+	})
+	t.Run("vetoed replaces only the matching anchor entry's disposition", func(t *testing.T) {
+		t.Parallel()
+		got := carriedStructureEntriesForDecisive(entries, vetoedEntry, true)
+		if got[0] == anchorEntry || got[0].Disposition != contractsv1.ContextFabricStructureDispositionVetoedConflict {
+			t.Fatalf("anchor entry = %#v, want a NEW pointer with disposition vetoed_conflict", got[0])
+		}
+		if got[0].Member != anchorEntry.Member || got[0].AppliedValue != anchorEntry.AppliedValue || got[0].Provenance != anchorEntry.Provenance {
+			t.Fatalf("anchor entry = %#v, want every other field unchanged from %#v", got[0], anchorEntry)
+		}
+		if got[1] != kindEntry {
+			t.Fatalf("expected_kind entry = %#v, want the untouched original pointer %#v", got[1], kindEntry)
+		}
+		if got[2] != nil {
+			t.Fatalf("nil entry = %#v, want nil preserved", got[2])
+		}
+	})
+}
+
+// TestConfirmedNeedsForCaptureWithoutVetoedAnchorDropsOnlyOnVeto pins the
+// outgoing-ledger side: not-vetoed returns entries unchanged, vetoed drops
+// exactly the subject_anchor member and nothing else.
+func TestConfirmedNeedsForCaptureWithoutVetoedAnchorDropsOnlyOnVeto(t *testing.T) {
+	t.Parallel()
+	entries := []ConfirmedNeedEntry{
+		{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(SubjectTeam)},
+		{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: committedAnchorRepo.Kind, AppliedValue: committedAnchorRepo.CanonicalID, Basis: ConfirmedNeedBasisEngineCommitted},
+	}
+	if got := confirmedNeedsForCaptureWithoutVetoedAnchor(entries, false); !reflect.DeepEqual(got, entries) {
+		t.Fatalf("not-vetoed: got %#v, want entries unchanged", got)
+	}
+	want := []ConfirmedNeedEntry{{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(SubjectTeam)}}
+	if got := confirmedNeedsForCaptureWithoutVetoedAnchor(entries, true); !reflect.DeepEqual(got, want) {
+		t.Fatalf("vetoed: got %#v, want %#v (subject_anchor dropped, expected_kind kept)", got, want)
+	}
+}
+
+// TestConfirmationTurnNeverDisclosesACarriedAnchorItsOwnResolutionDisowned is
+// the end-to-end pin for the disagreement veto: turn one commits an
+// engine-committed anchor with no offer ever raised; turn two's own
+// resolution independently commits a DIFFERENT repository of the same kind
+// (a realistic statistical rescue naming the wrong repository). The served
+// document must never disclose the CARRIED repository as applied while its
+// own resolution answered about another -- the disclosure is vetoed, and the
+// stale anchor does not reach a third turn either.
+func TestConfirmationTurnNeverDisclosesACarriedAnchorItsOwnResolutionDisowned(t *testing.T) {
+	engine, graph, store := buildCommittedAnchorEngine(t)
+
+	one := needTurnRequest("request_5788_conflict_one", true)
+	oneResponse := needTurnResponse{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{committedAnchorRepo}}, bases: provenCommitBases(committedAnchorRepo)}
+	oneResult, _ := committedAnchorTurn(t, engine, graph, store, one, oneResponse)
+
+	two := needTurnRequest("request_5788_conflict_two", true)
+	two.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam}
+	two = continuingNeedTurn(two, oneResult.ResultID)
+	twoResponse := needTurnResponse{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{committedAnchorRepoOther}},
+		bases:      CommitBasisSet{SubjectMapKey(committedAnchorRepoOther): CommitBasisStatistical},
+	}
+	twoResult, _ := committedAnchorTurn(t, engine, graph, store, two, twoResponse)
+
+	got := memberEntries(twoResult, contractsv1.ContextFabricStructureNeedSubjectAnchor)
+	if len(got) != 1 {
+		t.Fatalf("turn two subject_anchor disclosure = %#v, want exactly one entry", got)
+	}
+	if got[0].Disposition != contractsv1.ContextFabricStructureDispositionVetoedConflict {
+		t.Fatalf("disclosure = %+v, want disposition vetoed_conflict: turn two's own resolution disowned the carried repository", got[0])
+	}
+	if got[0].AppliedValue == committedAnchorRepoOther.CanonicalID {
+		t.Fatalf("disclosure = %+v, must echo the CARRIED (stale) value, not the newly-resolved one, so the veto is legible against what was carried", got[0])
+	}
+
+	twoSaved := store.states[twoResult.ResultID]
+	if twoSaved == nil {
+		t.Fatalf("fixture defect: turn two must persist a semantic state")
+	}
+	for _, entry := range twoSaved.ConfirmedNeeds {
+		if entry.Member == contractsv1.ContextFabricStructureNeedSubjectAnchor {
+			t.Fatalf("turn two's outgoing ledger carries subject_anchor = %#v, want none: a proven disagreement must not reach a third turn", entry)
 		}
 	}
 }
