@@ -764,6 +764,60 @@ func TestAnAnswerThatOwesNoCountEmitsNoScopeDecision(t *testing.T) {
 	}
 }
 
+// TestAReusedLegacyCardinalityClaimSubjectIsRepaired pins the invariant: a
+// stored document minted under an earlier authority carries a cardinality
+// claim whose subject is the organization, even though its own count is
+// anchor-bound. A reuse hit over that row must REPLACE the stale claim with
+// one naming the resolved anchor -- not leave it standing because a claim is
+// already present.
+func TestAReusedLegacyCardinalityClaimSubjectIsRepaired(t *testing.T) {
+	t.Parallel()
+	// The fixture's own stored claim is organization-subject BY CONSTRUCTION
+	// (storedScopedCountDoc always mints it that way, below) even though
+	// withAnchor=true means the count is anchor-bound -- the shape a legacy
+	// stored row carries.
+	stored, recheck := storedScopedCountDoc(true, true)
+	if stored.ClaimedFacts[len(stored.ClaimedFacts)-1].Subject.Kind != SubjectOrganization {
+		t.Fatalf("fixture control: stored claim subject = %q, want organization -- the fixture no longer carries the legacy shape this test targets", stored.ClaimedFacts[len(stored.ClaimedFacts)-1].Subject.Kind)
+	}
+	telemetry := &recordingTelemetry{}
+	engine := mustReuseTestEngine(t, EngineDependencies{
+		Graph:     graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: recheck}},
+		Results:   &resultStoreStub{},
+		Telemetry: telemetry,
+		ReuseGate: readingReuseGate{stored: stored, frame: countingFrame(SubjectTeam)},
+	})
+	result, err := engine.Investigate(context.Background(), reusePrincipal(), validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if !result.Reused {
+		t.Fatal("the fixture did not take the reuse path, so it proves nothing about it")
+	}
+	claim := cardinalityClaimOf(result)
+	if claim == nil {
+		t.Fatal("no cardinality claim served on reuse")
+	}
+	anchor := recheck[0]
+	if claim.Subject.Kind != anchor.Kind || claim.Subject.CanonicalID != anchor.CanonicalID {
+		t.Errorf("reused claim subject = %s/%s, want the resolved anchor %s/%s -- a legacy claim survived the pass that should have corrected it", claim.Subject.Kind, claim.Subject.CanonicalID, anchor.Kind, anchor.CanonicalID)
+	}
+	// The claim's identity (id, field) is unchanged by the repair -- only its
+	// content moved -- and no second cardinality claim was minted alongside it.
+	count := 0
+	for _, c := range result.ClaimedFacts {
+		if c.Kind == contractsv1.ContextFabricFactCardinality {
+			count++
+			if c.ClaimID != stored.ClaimedFacts[len(stored.ClaimedFacts)-1].ClaimID {
+				t.Errorf("claim id = %q, want the stored claim's own id %q -- a repair must not mint a new id", c.ClaimID, stored.ClaimedFacts[len(stored.ClaimedFacts)-1].ClaimID)
+			}
+		}
+	}
+	if count != 1 {
+		t.Errorf("cardinality claims served = %d, want exactly 1 -- a repair replaces, it never appends a second", count)
+	}
+}
+
 // storedScopedCountDoc is a stored answer to a scoped team count over a
 // three-team member set. withAnchor commits the project as resolution matched
 // it; withSurfaces carries an assembled satisfied count row, the cardinality

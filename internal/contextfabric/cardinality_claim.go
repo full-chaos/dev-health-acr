@@ -202,12 +202,22 @@ func cardinalityNoun(kind SubjectKind, count int) string {
 // Read off the document rather than remembered from the mint, so the telemetry
 // cannot say "claimed" about an answer that does not carry one.
 func resultCarriesCardinalityClaim(result InvestigationResult) bool {
-	for _, claim := range result.ClaimedFacts {
+	return cardinalityClaimIndex(result.ClaimedFacts) >= 0
+}
+
+// cardinalityClaimIndex returns the index of the first claim of kind
+// cardinality in claims, or -1 when none is present.
+//
+// SHARED BY THE MINT SITES so "does this document already carry one" and
+// "which one, to correct it" read the same claim -- never two predicates
+// that could disagree about which entry is the cardinality claim.
+func cardinalityClaimIndex(claims []ClaimedFact) int {
+	for i, claim := range claims {
 		if claim.Kind == contractsv1.ContextFabricFactCardinality {
-			return true
+			return i
 		}
 	}
-	return false
+	return -1
 }
 
 // cardinalityClaimAdmitted reports whether one more claim fits.
@@ -250,4 +260,65 @@ func appendCardinalitySentence(answer, sentence string) string {
 		return truncateAtSentenceBoundary(sentence, deterministicAnswerMaxLength)
 	}
 	return strings.TrimSpace(truncateAtSentenceBoundary(answer, room) + " " + sentence)
+}
+
+// cardinalityClaimSubjectRepair is the ONE construction that decides
+// whether, and how, to correct a stored document's EXISTING cardinality
+// claim subject -- shared by every serving surface that re-reads a stored
+// document, so a claim minted under an earlier authority is corrected the
+// same way wherever it is read again, not once per surface. Reading is
+// already derived here (storedCountReading, Frame + AnchorKind); the reuse
+// path already carries its own, RepairStoredCardinalityClaimSubject below
+// derives it for an external caller.
+//
+// IT REPAIRS, IT NEVER MINTS. A document with no cardinality claim at all --
+// predating the step entirely -- is untouched; that absence is the reuse
+// path's own backfill concern (engine.go), a different decision with a
+// different precondition. This function only corrects a claim that is
+// already there.
+//
+// THE IDENTITY IS UNCHANGED. Only Subject moves; ClaimID, Kind, Field and
+// Value are the claim's own and are never touched, so nothing that cites the
+// claim by id is disturbed and no second cardinality claim is ever minted.
+//
+// SILENT ON A READING THAT CANNOT RE-DERIVE THE SCOPE. When the stored
+// semantic reading is absent, unreadable, or the anchor it names cannot be
+// resolved from the document's own subject resolution, this function leaves
+// the claim exactly as stored -- a decision it has no evidence for is not a
+// decision it is entitled to force onto an already-served claim, and leaving
+// it is never worse than what was already being served.
+//
+// Reports whether it changed anything, so a caller that logs repairs (as the
+// by-id read route already does for other fields) has something to log.
+func cardinalityClaimSubjectRepair(principal storage.Principal, result *InvestigationResult, reading storedCountReading) bool {
+	if result == nil {
+		return false
+	}
+	idx := cardinalityClaimIndex(result.ClaimedFacts)
+	if idx < 0 {
+		return false
+	}
+	scope := DecideCountPopulationScope(reading.Frame, reading.AnchorKind, result.SubjectResolution, nil)
+	if !scope.Counts() {
+		return false
+	}
+	subject, ok := cardinalityClaimSubject(principal, scope)
+	if !ok || result.ClaimedFacts[idx].Subject == subject {
+		return false
+	}
+	result.ClaimedFacts[idx].Subject = subject
+	return true
+}
+
+// RepairStoredCardinalityClaimSubject is cardinalityClaimSubjectRepair for a
+// caller outside this package (the by-id read route), which holds the raw
+// persisted semantic state rather than an already-derived reading -- the
+// same two arguments RepairStoredClarification already takes, for the same
+// reason: this route never reaches the pass that would derive it fresh.
+func RepairStoredCardinalityClaimSubject(principal storage.Principal, result *InvestigationResult, state *PersistedSemanticState, read SemanticStateReadStatus) bool {
+	if result == nil {
+		return false
+	}
+	reading := storedCountReadingOf(StoredInvestigationResult{Result: *result, SemanticState: state, SemanticStateRead: read})
+	return cardinalityClaimSubjectRepair(principal, result, reading)
 }

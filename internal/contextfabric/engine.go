@@ -1740,11 +1740,23 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				// Under the SAME precondition the fresh path uses, read from the
 				// rows as they now stand -- so a reused answer that owes no count
 				// gains no claim and no sentence, exactly as a fresh one would not.
+				//
+				// A CLAIM ALREADY PRESENT IS CORRECTED, NEVER LEFT STANDING,
+				// through the ONE construction every surface that re-reads a
+				// stored document shares (cardinalityClaimSubjectRepair /
+				// RepairStoredCardinalityClaimSubject, cardinality_claim.go)
+				// -- the by-id read route repairs the identical shape on its
+				// own re-read, through the exported form of the same
+				// function. Only a document with NO claim at all reaches the
+				// mint call below; one already present is repaired, never
+				// re-minted, so its id and every other field survive.
 				if cardinalityOwed(reused.Completeness.Outcomes, reusedCardinality) {
-					if claim, ok := cardinalityClaim(principal, reusedCardinality); ok {
-						if !resultCarriesCardinalityClaim(reused) && cardinalityClaimAdmitted(len(reused.ClaimedFacts)) {
+					if !resultCarriesCardinalityClaim(reused) {
+						if claim, ok := cardinalityClaim(principal, reusedCardinality); ok && cardinalityClaimAdmitted(len(reused.ClaimedFacts)) {
 							reused.ClaimedFacts = append(reused.ClaimedFacts, claim)
 						}
+					} else {
+						cardinalityClaimSubjectRepair(principal, &reused, reusedReading)
 					}
 					if sentence := cardinalityAnswerSentence(reusedCardinality); sentence != "" && !strings.Contains(reused.DeterministicAnswer, sentence) {
 						reused.DeterministicAnswer = appendCardinalitySentence(reused.DeterministicAnswer, sentence)
