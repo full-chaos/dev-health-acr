@@ -12,7 +12,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -45,11 +47,14 @@ func recordFrameValidationJSON(requestID string, event contextfabric.FrameValida
 // other field already being at its zero value.
 func baseFrameValidationEvent() contextfabric.FrameValidationEvent {
 	return contextfabric.FrameValidationEvent{
-		Outcome:                      contextfabric.FrameValidationOutcomeRepaired,
-		ProposedKind:                 contextfabric.SubjectExpressionNamed,
-		ProposedGoals:                []contextfabric.InvestigationGoal{contextfabric.GoalAssessState},
-		AcceptedGoals:                []contextfabric.InvestigationGoal{contextfabric.GoalExplainChange},
-		AcceptedJudgment:             "the subject's own standing",
+		Outcome:       contextfabric.FrameValidationOutcomeRepaired,
+		ProposedKind:  contextfabric.SubjectExpressionNamed,
+		ProposedGoals: []contextfabric.InvestigationGoal{contextfabric.GoalAssessState},
+		AcceptedGoals: []contextfabric.InvestigationGoal{contextfabric.GoalExplainChange},
+		// AcceptedJudgment stays empty here: the repair below
+		// (count_kind_collapse) never touches Goals, so a real line for
+		// this exact shape carries none too (FrameRepairCarry's own rule).
+		AcceptedJudgment:             "",
 		OrderingPresent:              true,
 		PredictedStrippedObligations: []contextfabric.AnswerObligation{},
 		DerivedObligationCount:       2,
@@ -351,5 +356,123 @@ func TestFrameValidationRequirementAccountingCertifiesBothMembers(t *testing.T) 
 		}); err != nil {
 			t.Fatalf("%s: the certifier refused a real production line: %v", tc.name, err)
 		}
+	}
+}
+
+// frameJudgmentAlphabet is accepted_judgment's certified fragment alphabet
+// -- goalJudgmentPhrase's own range, read through the one accessor built
+// for this purpose, never a second, independently typed list.
+func frameJudgmentAlphabet() map[string]bool {
+	set := map[string]bool{}
+	for _, phrase := range contextfabric.GoalJudgmentPhraseVocabulary() {
+		set[phrase] = true
+	}
+	return set
+}
+
+// certifyAcceptedJudgmentAgainstAlphabet is accepted_judgment's own
+// certification. The field is OPEN at the whole-string level -- its
+// length and phrase order both follow the accepted Goals list, so no flat
+// ClosedVocabulary enumerates it (GoalJudgmentPhraseVocabulary's own doc
+// comment) -- so it is certified at the fragment level instead: "none"
+// certifies trivially; any other value must split on " and " into
+// fragments that are ALL members of the phrase alphabet, and the one
+// repair that ever changes Goals (repair_decision=applied,
+// repair=compare_grouped_collapse) must not leave it empty, per
+// FrameRepairCarry's own guarantee.
+func certifyAcceptedJudgmentAgainstAlphabet(line certify.Line) error {
+	value, _ := line["accepted_judgment"].(string)
+	goalChangingRepairApplied := line["repair_decision"] == string(contextfabric.FrameRepairApplied) &&
+		line["repair"] == string(contextfabric.FrameRepairCompareGroupedCollapse)
+	if value == "none" {
+		if goalChangingRepairApplied {
+			return fmt.Errorf("accepted_judgment = %q but the goal-changing repair applied", value)
+		}
+		return nil
+	}
+	alphabet := frameJudgmentAlphabet()
+	for _, fragment := range strings.Split(value, " and ") {
+		if !alphabet[fragment] {
+			return fmt.Errorf("accepted_judgment fragment %q is not a member of GoalJudgmentPhraseVocabulary()", fragment)
+		}
+	}
+	return nil
+}
+
+// TestAcceptedJudgmentCertifiesAgainstThePhraseAlphabet proves the
+// alphabet-level check above both accepts every real shape the sink
+// produces and refuses a fragment, or an emptiness, it should not.
+func TestAcceptedJudgmentCertifiesAgainstThePhraseAlphabet(t *testing.T) {
+	t.Parallel()
+	phrases := contextfabric.GoalJudgmentPhraseVocabulary()
+	if len(phrases) == 0 {
+		t.Fatal("GoalJudgmentPhraseVocabulary() is empty")
+	}
+
+	buildEvent := func(judgment string, goalChangingRepair bool) contextfabric.FrameValidationEvent {
+		event := baseFrameValidationEvent()
+		event.AcceptedJudgment = judgment
+		event.Repair.Decision = contextfabric.FrameRepairApplied
+		if goalChangingRepair {
+			event.Repair.Name = contextfabric.FrameRepairCompareGroupedCollapse
+		} else {
+			event.Repair.Name = contextfabric.FrameRepairCountKindCollapse
+		}
+		return event
+	}
+	parseFor := func(t *testing.T, judgment string, goalChangingRepair bool, tag string) (*certify.Log, certify.Line) {
+		t.Helper()
+		requestID := frameValidationTestRequestID("judgment_" + tag)
+		raw := recordFrameValidationJSON(requestID, buildEvent(judgment, goalChangingRepair))
+		log, err := certify.Parse(raw)
+		if err != nil {
+			t.Fatalf("certify.Parse(): %v", err)
+		}
+		lines := log.LinesWithMsg(eventspec.FrameValidation.Msg)
+		if len(lines) != 1 {
+			t.Fatalf("got %d lines, want 1", len(lines))
+		}
+		return log, lines[0]
+	}
+
+	for _, tc := range []struct {
+		name               string
+		judgment           string
+		goalChangingRepair bool
+	}{
+		{"empty_no_goal_changing_repair", "", false},
+		{"single_phrase", phrases[0], true},
+		{"three_phrase_join", strings.Join(phrases[:3], " and "), true},
+		{"every_phrase_join", strings.Join(phrases, " and "), true},
+	} {
+		t.Run("accept_"+tc.name, func(t *testing.T) {
+			log, line := parseFor(t, tc.judgment, tc.goalChangingRepair, "accept_"+tc.name)
+			if _, err := certify.Certify(log, certify.Assertion{
+				Event: eventspec.FrameValidation,
+				Want:  map[string]any{"org_id": "org_1"},
+			}); err != nil {
+				t.Fatalf("certify refused a real production line: %v", err)
+			}
+			if err := certifyAcceptedJudgmentAgainstAlphabet(line); err != nil {
+				t.Fatalf("accepted_judgment failed the alphabet check: %v", err)
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name               string
+		judgment           string
+		goalChangingRepair bool
+	}{
+		{"fragment_outside_alphabet", "the subject's own standing", true},
+		{"mixed_valid_and_invalid_fragment", phrases[0] + " and not a real phrase", true},
+		{"empty_despite_goal_changing_repair", "", true},
+	} {
+		t.Run("refuse_"+tc.name, func(t *testing.T) {
+			_, line := parseFor(t, tc.judgment, tc.goalChangingRepair, "refuse_"+tc.name)
+			if err := certifyAcceptedJudgmentAgainstAlphabet(line); err == nil {
+				t.Fatalf("the alphabet check accepted %q; it should have refused it", tc.judgment)
+			}
+		})
 	}
 }

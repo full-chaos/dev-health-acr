@@ -510,6 +510,23 @@ func requestedJudgmentForGoals(goals []InvestigationGoal) string {
 	return strings.Join(parts, " and ")
 }
 
+// GoalJudgmentPhraseVocabulary returns goalJudgmentPhrase's own closed
+// range, in InvestigationGoalVocabulary's declared order -- the fragment
+// alphabet requestedJudgmentForGoals composes accepted_judgment's
+// " and "-joined value from. The assembled value itself is not one of a
+// small closed set (its length and phrase order both follow the accepted
+// Goals list, which is a variable-length, variably-ordered subset of the
+// vocabulary), so a consumer certifies that field fragment-by-fragment
+// against this table rather than against one flat, unenumerable string
+// set -- this is the ONE table both readings come from.
+func GoalJudgmentPhraseVocabulary() []string {
+	out := make([]string, 0, InvestigationGoalCount)
+	for _, goal := range InvestigationGoalVocabulary() {
+		out = append(out, goalJudgmentPhrase[goal])
+	}
+	return out
+}
+
 // replaceCompareGoal is the I7 repair's goal transform: compare is dropped;
 // explain_change is guaranteed present; describe_trend is kept if the
 // proposal already stated it, otherwise assess_state is added so the
