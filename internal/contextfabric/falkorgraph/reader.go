@@ -885,6 +885,27 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	cohortFulltextTruncated := fulltextTruncated
 	if declaredCohortKindForRouting != "" && !censusAdmitted {
 		kindTextNodes, kindTruncated, kindErr := a.fulltextSearchNodesForKind(ctx, key, principal.OrgID, request.Request.Question, collectLimit, temporal, declaredCohortKindForRouting)
+		if kindErr != nil && (errors.Is(kindErr, context.Canceled) || errors.Is(kindErr, context.DeadlineExceeded)) {
+			// THE CALLER GIVING UP IS NOT A DEPENDENCY FAILURE THIS ARM CAN
+			// DEGRADE AROUND. Every other abort site in this method already
+			// propagates a cancelled/expired context exactly like any other
+			// error (there is nothing to degrade toward once the caller no
+			// longer wants an answer), so treating this arm's OWN
+			// cancellation as a "transient read failure" and serving a
+			// degraded answer anyway would swallow the caller's own signal
+			// instead of honoring it -- the one failure class this arm's
+			// degrade-not-abort rule was never meant to cover.
+			return contextfabric.GraphContext{}, kindErr
+		}
+		if kindErr != nil && ctx.Err() != nil {
+			// THE SAME EXCEPTION, from the OTHER direction: kindErr itself
+			// carries no context sentinel, but the context is ALREADY done
+			// by the time this arm's own read returns -- ctx.Err() is the
+			// authoritative signal of why, and degrading around it would
+			// hide the very cancellation/deadline this check exists to
+			// surface.
+			return contextfabric.GraphContext{}, ctx.Err()
+		}
 		if kindErr != nil {
 			// AN AUXILIARY ARM'S OWN FAILURE MUST DEGRADE, NEVER ABORT.
 			// Every OTHER query site in this method returns

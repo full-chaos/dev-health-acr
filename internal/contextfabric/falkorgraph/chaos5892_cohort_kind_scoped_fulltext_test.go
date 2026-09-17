@@ -112,6 +112,49 @@ func kindScopedFulltextErroringConn(generalRows []row) *fakeConn {
 	}}
 }
 
+// kindScopedFulltextContextErrorConn is kindScopedFulltextErroringConn's
+// twin for the OTHER failure class: the kind-scoped query's own context is
+// cancelled/expired mid-call (not a dependency read failure). Answers the
+// general full-text query normally, the kind-scoped query with kindErr,
+// every other query with nil/nil.
+func kindScopedFulltextContextErrorConn(generalRows []row, kindErr error) *fakeConn {
+	return &fakeConn{queryFunc: func(_ context.Context, _, cypher string, params map[string]interface{}, _ bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			if _, ok := params["kind"].(string); ok {
+				return nil, kindErr
+			}
+			return generalRows, nil
+		default:
+			return nil, nil
+		}
+	}}
+}
+
+// kindScopedFulltextOpaqueErrorAfterCancelConn proves the check reads
+// ctx.Err() itself, not merely errors.Is on kindErr: the kind-scoped
+// query's own context is cancelled by something else AT THE MOMENT it
+// returns an ORDINARY (non-context-sentinel) error -- the two are
+// unrelated by construction (an opaque fixture error, never
+// context.Canceled/DeadlineExceeded), yet ctx.Err() is already non-nil by
+// the time DiscoverContext looks. Answers the general full-text query
+// normally, the kind-scoped query by calling cancel() then returning an
+// opaque error, every other query with nil/nil.
+func kindScopedFulltextOpaqueErrorAfterCancelConn(generalRows []row, cancel context.CancelFunc) *fakeConn {
+	return &fakeConn{queryFunc: func(_ context.Context, _, cypher string, params map[string]interface{}, _ bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			if _, ok := params["kind"].(string); ok {
+				cancel()
+				return nil, errKindScopedReadFailed
+			}
+			return generalRows, nil
+		default:
+			return nil, nil
+		}
+	}}
+}
+
 // scopedCohortRequest builds a DiscoverContext request for a children_of_scope
 // cohort with a resolved scope anchor and no committed subject -- the exact
 // state cv-scoped-projects-by-team-bounded/qb-scoped trace at (per diagnosis:
@@ -708,6 +751,71 @@ func TestScopedProjectCohortKindScopedArmReadFailureDegradesInsteadOfAborting(t 
 	got := telemetry.cohortKindFulltexts[0]
 	if got.decision != CohortKindFulltextReadFailed || got.readErr == nil {
 		t.Errorf("cohortKindFulltexts[0] = %+v, want {decision:%q readErr:non-nil}", got, CohortKindFulltextReadFailed)
+	}
+}
+
+// TestScopedProjectCohortKindScopedArmPropagatesContextCancellationInsteadOfDegrading
+// is the degrade rule's OWN exception: a cancelled/expired context is the
+// caller giving up, not a dependency read failure this arm can degrade
+// around -- every other abort site in this method already propagates it
+// like any other error, and there is nothing to serve toward once the
+// caller has stopped waiting. The kind-scoped arm must propagate it
+// exactly the same way, never swallow it into a served-but-degraded
+// answer.
+func TestScopedProjectCohortKindScopedArmPropagatesContextCancellationInsteadOfDegrading(t *testing.T) {
+	general := []row{kindScopedFulltextRow("project", "project_from_general", "FromGeneral")}
+	fake := kindScopedFulltextContextErrorConn(general, context.Canceled)
+	telemetry := &recordingTelemetry{}
+	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
+
+	request := scopedCohortRequest(scopedProjectExpression(), "which projects does the platform team own", 30)
+	if _, err := adapter.DiscoverContext(context.Background(), repositoryPrincipal(), request); !errors.Is(err, context.Canceled) {
+		t.Fatalf("DiscoverContext() error = %v, want context.Canceled propagated, never degraded", err)
+	}
+	if len(telemetry.cohortKindFulltexts) != 0 {
+		t.Fatalf("cohortKindFulltexts = %+v, want zero records -- a propagated cancellation is not a decision the arm reports", telemetry.cohortKindFulltexts)
+	}
+}
+
+// TestScopedProjectCohortKindScopedArmPropagatesContextDeadlineInsteadOfDegrading
+// is the cancellation test's twin for the OTHER context-done sentinel: a
+// deadline exceeded mid-call must propagate exactly like a cancellation,
+// never degrade.
+func TestScopedProjectCohortKindScopedArmPropagatesContextDeadlineInsteadOfDegrading(t *testing.T) {
+	general := []row{kindScopedFulltextRow("project", "project_from_general", "FromGeneral")}
+	fake := kindScopedFulltextContextErrorConn(general, context.DeadlineExceeded)
+	telemetry := &recordingTelemetry{}
+	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
+
+	request := scopedCohortRequest(scopedProjectExpression(), "which projects does the platform team own", 30)
+	if _, err := adapter.DiscoverContext(context.Background(), repositoryPrincipal(), request); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("DiscoverContext() error = %v, want context.DeadlineExceeded propagated, never degraded", err)
+	}
+	if len(telemetry.cohortKindFulltexts) != 0 {
+		t.Fatalf("cohortKindFulltexts = %+v, want zero records -- a propagated deadline is not a decision the arm reports", telemetry.cohortKindFulltexts)
+	}
+}
+
+// TestScopedProjectCohortKindScopedArmPropagatesAnOpaqueErrorWhenTheContextIsAlreadyDone
+// proves the check reads ctx.Err() itself, not merely errors.Is on
+// kindErr: the fixture's own error is ordinary (never a context
+// sentinel), but the context is already cancelled by the time
+// DiscoverContext looks -- ctx.Err() must still take priority over
+// degrading around an error that merely coincides with it.
+func TestScopedProjectCohortKindScopedArmPropagatesAnOpaqueErrorWhenTheContextIsAlreadyDone(t *testing.T) {
+	general := []row{kindScopedFulltextRow("project", "project_from_general", "FromGeneral")}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fake := kindScopedFulltextOpaqueErrorAfterCancelConn(general, cancel)
+	telemetry := &recordingTelemetry{}
+	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
+
+	request := scopedCohortRequest(scopedProjectExpression(), "which projects does the platform team own", 30)
+	if _, err := adapter.DiscoverContext(ctx, repositoryPrincipal(), request); !errors.Is(err, context.Canceled) {
+		t.Fatalf("DiscoverContext() error = %v, want context.Canceled (ctx.Err()) propagated, never degraded around the fixture's own opaque error", err)
+	}
+	if len(telemetry.cohortKindFulltexts) != 0 {
+		t.Fatalf("cohortKindFulltexts = %+v, want zero records -- a propagated cancellation is not a decision the arm reports", telemetry.cohortKindFulltexts)
 	}
 }
 
