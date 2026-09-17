@@ -596,6 +596,23 @@ func compareRepairCells() []compareRepairCell {
 			wantLine:             compareAppliedLine(),
 		},
 		{
+			// A THIRD co-occurring goal outside {assess_state,
+			// describe_trend, explain_change} -- unevidenced today, but
+			// replaceCompareGoal passes any such goal through unchanged
+			// (it only ever removes compare), so requestedJudgmentForGoals
+			// must still name it rather than silently dropping it from the
+			// text synthesis and Info both read.
+			cell:    "a third co-occurring goal is passed through and named in the composed judgment",
+			receipt: func(*ModelExecutionReceipt) {},
+			frame: withFrame(func(frame *QuestionFrame) {
+				frame.Goals = []InvestigationGoal{GoalCompare, GoalExplainChange, GoalRankOrSurvey}
+			}),
+			wantOutcome:          FrameValidationOutcomeRepaired,
+			wantGoals:            []InvestigationGoal{GoalAssessState, GoalRankOrSurvey, GoalExplainChange},
+			wantAcceptedJudgment: "the current state and a ranking or survey and an explanation of the change",
+			wantLine:             compareAppliedLine(),
+		},
+		{
 			// A scoped cohort has no evidenced reading for this bound; the
 			// traces this repair answers show grouped_members only.
 			cell:    "compare over a scoped cohort has no evidenced reading and is declined",
@@ -748,6 +765,23 @@ func TestTheCompareGroupedRepairRunsAtMostOnce(t *testing.T) {
 	}
 }
 
+// compareGroupedPreRepairJudgment is the fixture's own pre-repair
+// InterpretedQuestion.RequestedJudgment -- a placeholder describing the
+// misread goal, never real corpus text, distinct from repairInterpretation's
+// own "count" placeholder (that one belongs to the I9 fixtures this file's
+// other tests share) so a synthesis-carry test can name its actual "before"
+// value instead of guessing at a shared helper's unrelated placeholder.
+const compareGroupedPreRepairJudgment = "compare"
+
+// compareGroupedInterpretation is repairInterpretation with RequestedJudgment
+// overridden to compareGroupedPreRepairJudgment, for the one test that reads
+// the field's pre-repair value.
+func compareGroupedInterpretation(flat []string) InterpretedQuestion {
+	interpretation := repairInterpretation(flat)
+	interpretation.RequestedJudgment = compareGroupedPreRepairJudgment
+	return interpretation
+}
+
 // newCompareRepairEngine drives the production engine over the misread
 // compare-grouped proposal, with a synthesizer SPY that captures the
 // SynthesisInput it received -- the one channel synthesis reads
@@ -772,7 +806,7 @@ func newCompareRepairEngine(t *testing.T) (*Engine, *[]SynthesisInput) {
 	captured := make([]SynthesisInput, 0, 1)
 	engine, err := NewEngine(EngineDependencies{
 		Interpreter: RuntimeQuestionInterpreter{
-			Runtime:        fakeModelRuntime{interpreted: repairInterpretation([]string{repairAnchorTerm}), receipt: receipt},
+			Runtime:        fakeModelRuntime{interpreted: compareGroupedInterpretation([]string{repairAnchorTerm}), receipt: receipt},
 			Sink:           &fakeReceiptSink{},
 			FrameTelemetry: logs.telemetry,
 			Requirements:   registryDeriver{},
@@ -836,8 +870,42 @@ func TestTheRepairedRequestedJudgmentReachesSynthesis(t *testing.T) {
 	got := (*captured)[0].Interpretation.RequestedJudgment
 	want := "the current state and an explanation of the change"
 	if got != want {
-		t.Fatalf("SynthesisInput.Interpretation.RequestedJudgment = %q, want %q (the model's own pre-repair text would have been %q)",
-			got, want, "compare")
+		t.Fatalf("SynthesisInput.Interpretation.RequestedJudgment = %q, want %q (the fixture's own pre-repair value was %q)",
+			got, want, compareGroupedPreRepairJudgment)
+	}
+	if got == compareGroupedPreRepairJudgment {
+		t.Fatal("SynthesisInput.Interpretation.RequestedJudgment still carries the fixture's pre-repair value: the carry never overwrote it")
+	}
+}
+
+// TestTheRepairedRequestedJudgmentReachesTheEnsembleWinner drives Interpret()
+// over the SampledRuntime path (interpretEnsemble), not interpretOneSample
+// directly -- both paths call interpretOneSample, but only a test that goes
+// through Interpret() itself proves the ensemble's own winner-selection
+// (interpretEnsemble's own `return winner.question, ...`) still returns the
+// PER-SAMPLE question interpretOneSample already fixed, not some other
+// sample's or a merged one. Every sample is given the identical
+// compare-grouped fixture, so whichever index wins carries the same
+// expectation.
+func TestTheRepairedRequestedJudgmentReachesTheEnsembleWinner(t *testing.T) {
+	receipt := compareGroupedReceipt()
+	proposal := compareOverGroupedCohort()
+	receipt.QuestionFrame = &proposal
+	question := compareGroupedInterpretation([]string{repairAnchorTerm})
+	sampled := &sampledRuntimeStub{
+		receipt: receipt,
+		perIdx:  map[int]InterpretedQuestion{0: question, 1: question, 2: question},
+	}
+	interpreter := RuntimeQuestionInterpreter{SampledRuntime: sampled, Sink: &concurrentReceiptSink{}, EnsembleSize: 3}
+
+	got, _, err := interpreter.Interpret(context.Background(), storage.Principal{OrgID: "org_repair"}, validInvestigationRequest())
+	if err != nil {
+		t.Fatalf("Interpret() error = %v", err)
+	}
+	want := "the current state and an explanation of the change"
+	if got.RequestedJudgment != want {
+		t.Fatalf("ensemble winner RequestedJudgment = %q, want %q (the fixture's own pre-repair value was %q)",
+			got.RequestedJudgment, want, compareGroupedPreRepairJudgment)
 	}
 }
 
@@ -854,6 +922,33 @@ func TestCompareGroupedRepairDecisionIsInTheClosedVocabulary(t *testing.T) {
 		}
 	}
 	t.Fatalf("%q is not a member of FrameRepairDecisionVocabulary()", FrameRepairDeclinedNotGroupedCohort)
+}
+
+// TestRequestedJudgmentCoversTheWholeGoalVocabulary walks
+// InvestigationGoalVocabulary() by enumeration: every declared Goal has a
+// non-empty fragment in goalJudgmentPhrase, so a ninth goal added to the
+// vocabulary with no fragment here fails this test instead of silently
+// composing a phrase that drops it out of the text synthesis and Info both
+// read.
+func TestRequestedJudgmentCoversTheWholeGoalVocabulary(t *testing.T) {
+	for _, goal := range InvestigationGoalVocabulary() {
+		if goalJudgmentPhrase[goal] == "" {
+			t.Errorf("goalJudgmentPhrase has no fragment for %q", goal)
+		}
+	}
+}
+
+// TestRequestedJudgmentForGoalsComposesEveryAcceptedGoal holds the
+// composition itself, not only the table: a goal a repair merely PASSES
+// THROUGH (never invents) still contributes its own fragment, and the
+// result names every accepted goal exactly once regardless of how many
+// co-occur.
+func TestRequestedJudgmentForGoalsComposesEveryAcceptedGoal(t *testing.T) {
+	got := requestedJudgmentForGoals([]InvestigationGoal{GoalAssessState, GoalRankOrSurvey, GoalExplainChange})
+	want := "the current state and a ranking or survey and an explanation of the change"
+	if got != want {
+		t.Fatalf("requestedJudgmentForGoals(...) = %q, want %q", got, want)
+	}
 }
 
 // TestEveryFrameRepairDecisionHasAnExecutedDriver holds, over the WHOLE

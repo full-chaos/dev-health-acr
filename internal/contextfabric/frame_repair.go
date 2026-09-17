@@ -439,24 +439,41 @@ func repairCompareGroupedCollapse(receipt ModelExecutionReceipt, proposed Questi
 	return FrameValidationResult{Frame: revalidated.Frame, Outcome: FrameValidationOutcomeRepaired, Repair: considered}
 }
 
-// requestedJudgmentForGoals renders a repaired Goals set as a closed-phrase
+// goalJudgmentPhrase is a TOTAL function over the closed Goal vocabulary
+// (frame_vocab.go, InvestigationGoalVocabulary): every member names its own
+// fragment, including GoalCompare's, which requestedJudgmentForGoals never
+// reaches from this repair's own output (replaceCompareGoal always removes
+// it) but which the vocabulary-completeness test below still requires --
+// the composition is a function of whatever accepted goal set a FUTURE
+// repair or caller passes, not only the shapes this repair happens to
+// produce today. TestRequestedJudgmentCoversTheWholeGoalVocabulary walks
+// InvestigationGoalVocabulary() by enumeration and fails closed on a
+// member with no entry here, so a ninth goal added to the vocabulary
+// without a fragment here fails the build's own test suite rather than
+// silently composing a phrase that drops it.
+var goalJudgmentPhrase = map[InvestigationGoal]string{
+	GoalAssessState:        "the current state",
+	GoalExplainDrivers:     "what is driving that state",
+	GoalCompare:            "a comparison",
+	GoalRankOrSurvey:       "a ranking or survey",
+	GoalDescribeTrend:      "the trend over time",
+	GoalExplainChange:      "an explanation of the change",
+	GoalAllocateInvestment: "where effort is going",
+	GoalCountOrAggregate:   "a count",
+}
+
+// requestedJudgmentForGoals renders an accepted Goals set as a closed-phrase
 // substitute for InterpretedQuestion.RequestedJudgment -- see
 // FrameRepairCarry.RequestedJudgment's own doc comment for why one is
-// needed at all. Built from a FIXED per-goal phrase table, joined in
-// vocabulary order; a goal this table does not name contributes nothing
-// (bounded: the table only needs to cover goals this repair's own output
-// can contain -- assess_state, describe_trend, explain_change today).
-// Never empty when called on this repair's own output, since
-// replaceCompareGoal always leaves explain_change in the set.
+// needed at all. A total function of the FULL accepted list through
+// goalJudgmentPhrase, composed in the list's own order, so a goal this
+// repair did not expect to see (a co-occurring goal replaceCompareGoal
+// only ever passes through, never invents) still contributes its own
+// fragment instead of vanishing from the composed text silently.
 func requestedJudgmentForGoals(goals []InvestigationGoal) string {
-	phrase := map[InvestigationGoal]string{
-		GoalAssessState:   "the current state",
-		GoalDescribeTrend: "the trend over time",
-		GoalExplainChange: "an explanation of the change",
-	}
 	parts := make([]string, 0, len(goals))
 	for _, goal := range goals {
-		if text, known := phrase[goal]; known {
+		if text, known := goalJudgmentPhrase[goal]; known {
 			parts = append(parts, text)
 		}
 	}
