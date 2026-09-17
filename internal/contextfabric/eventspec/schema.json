@@ -439,6 +439,236 @@
     ]
   },
   {
+    "id": "contextfabric.confirmed_need_ledger",
+    "msg": "context fabric confirmed need ledger",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "exactly one line per Investigate call: recordConfirmedNeedLedger is deferred above the ledger's own resolution, so every request -- on every exit, including one that ends before subject resolution or the capture check ever runs -- produces exactly one line.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "miss_no_reference",
+          "miss_unloadable",
+          "miss_empty",
+          "dropped_question_indeterminate",
+          "dropped_question_changed",
+          "dropped_identity_incomparable",
+          "dropped_identity_changed",
+          "dropped_stale_graph_epoch",
+          "hit"
+        ]
+      },
+      {
+        "key": "source_result_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "applied_members",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "applied_expected_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "applied_anchor_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "applied_anchor_value_hash",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "applied_anchor_basis",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "engine_committed"
+        ]
+      },
+      {
+        "key": "applied_candidate_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "applied_candidate_value_hash",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "applied_handle_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "applied_handle_value_hash",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "dropped_members",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "anchor_agreement",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_applicable",
+          "absent",
+          "agree",
+          "disagree"
+        ]
+      },
+      {
+        "key": "anchor_disposition",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "applied",
+          "vetoed_unresolved",
+          "vetoed_conflict",
+          "vetoed_stale",
+          "superseded_by_caller",
+          "not_evaluated"
+        ]
+      },
+      {
+        "key": "capture_decision",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "organization_scope",
+          "anchor_committed",
+          "anchor_unresolved",
+          "anchor_ambiguous",
+          "frame_absent"
+        ]
+      },
+      {
+        "key": "capture_skip_reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_applicable",
+          "window_confirmation_gated_discard",
+          "frame_gate_refused",
+          "graph_not_projected",
+          "resolution_error",
+          "window_vetoed",
+          "window_confirmation_required",
+          "structure_vetoed",
+          "reuse_validation_error",
+          "reuse_budget_refused",
+          "reuse_served",
+          "interpretation_failed",
+          "interpreted_time_unanswerable",
+          "continuation_refused",
+          "window_axis_conflict"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.count_population_scope",
     "msg": "context fabric count population scope",
     "level": "info",

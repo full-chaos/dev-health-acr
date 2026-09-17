@@ -2296,6 +2296,7 @@ var All = []Event{
 	WorkItemStoredServing,
 	CountPopulationScope,
 	FrameValidation,
+	ConfirmedNeedLedger,
 }
 
 // CountPopulationScope (CHAOS-5775) is the Info line for whether a served
@@ -2345,6 +2346,72 @@ var CountPopulationScope = Event{
 		// drawn from contextfabric.SubjectKind, or a free canonical id.
 		{Key: "subject_kind", Type: FieldString, Presence: PresenceRequired},
 		{Key: "subject_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// The reusable vocabulary slices ConfirmedNeedLedger's own fields below
+// share -- each one derived from the ONE canonical array its producer
+// package already declares, never retyped by hand here.
+var (
+	confirmedNeedLedgerOutcomeTokens      = arrayTokens(contextfabric.ConfirmedNeedLedgerOutcomeVocabulary())
+	confirmedNeedBasisArr                 = contextfabric.ConfirmedNeedBasisVocabulary()
+	confirmedNeedBasisTokens              = arrayTokens(confirmedNeedBasisArr[:])
+	confirmedAnchorAgreementArr           = contextfabric.ConfirmedAnchorAgreementVocabulary()
+	confirmedAnchorAgreementTokens        = arrayTokens(confirmedAnchorAgreementArr[:])
+	contextFabricStructureDispositionArr  = contractsv1.ContextFabricStructureDispositionVocabulary()
+	contextFabricStructureDispositionToks = arrayTokens(contextFabricStructureDispositionArr[:])
+	captureSkipReasonTokens               = arrayTokens(contextfabric.CaptureSkipReasonVocabulary())
+)
+
+// ConfirmedNeedLedger is the per-need confirmation ledger's own trace: the
+// admission outcome against the named parent, each member that applied
+// with its closed kind and hashed value, each member dropped at reverify
+// and why, the subject_anchor axis's own basis/agreement/disposition
+// triple, and the capture-gate decision for a later turn to inherit, plus
+// why that decision is empty on an exit that never reaches the check. See
+// contextfabric.SlogEngineTelemetry.RecordConfirmedNeedLedger's own doc
+// comment for what every field discloses and why it is emitted
+// unconditionally, on every exit, including the ones that never reach
+// resolution at all.
+var ConfirmedNeedLedger = Event{
+	ID:                 "contextfabric.confirmed_need_ledger",
+	Msg:                "context fabric confirmed need ledger",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityExactlyOnePerRequest,
+	Attribution:        []string{"org_id"},
+	BoundedAggregation: "exactly one line per Investigate call: recordConfirmedNeedLedger is deferred above the ledger's own resolution, so every request -- on every exit, including one that ends before subject resolution or the capture check ever runs -- produces exactly one line.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: confirmedNeedLedgerOutcomeTokens},
+		// Open: the caller-named parent result id, or empty on miss_no_reference.
+		{Key: "source_result_id", Type: FieldString, Presence: PresenceRequired},
+		// Open at this layer: a comma-joined list of ContextFabricStructureNeedKind
+		// members (or "none") the emitter checks one by one against that
+		// closed vocabulary -- the joined string itself has no finite
+		// vocabulary, the same reasoning WindowContinuationDecision's own
+		// conflict_fields field documents.
+		{Key: "applied_members", Type: FieldString, Presence: PresenceRequired},
+		{Key: "applied_expected_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, contextFabricSubjectKindTokens...)},
+		{Key: "applied_anchor_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, contextFabricSubjectKindTokens...)},
+		// Open: confirmedNeedValueHash's own SHA-256/6-byte hex digest, empty
+		// when the member did not apply.
+		{Key: "applied_anchor_value_hash", Type: FieldString, Presence: PresenceRequired},
+		{Key: "applied_anchor_basis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: confirmedNeedBasisTokens},
+		{Key: "applied_candidate_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, contextFabricSubjectKindTokens...)},
+		{Key: "applied_candidate_value_hash", Type: FieldString, Presence: PresenceRequired},
+		{Key: "applied_handle_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, contextFabricSubjectKindTokens...)},
+		{Key: "applied_handle_value_hash", Type: FieldString, Presence: PresenceRequired},
+		// Open at this layer: member:reason pairs (member a ContextFabricStructureNeedKind,
+		// reason a ConfirmedNeedMemberDropReason), comma-joined, or "none" --
+		// each side is closed and checked by observableConfirmedNeedDrops's
+		// own caller, the joined string is not enumerated here, same
+		// reasoning as applied_members above.
+		{Key: "dropped_members", Type: FieldString, Presence: PresenceRequired},
+		{Key: "anchor_agreement", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: confirmedAnchorAgreementTokens},
+		{Key: "anchor_disposition", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, contextFabricStructureDispositionToks...)},
+		{Key: "capture_decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, contextfabric.CountPopulationScopeDecisionVocabulary()...)},
+		{Key: "capture_skip_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: captureSkipReasonTokens},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }

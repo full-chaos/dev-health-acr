@@ -170,6 +170,12 @@ func ValidConfirmedNeedLedgerOutcome(value ConfirmedNeedLedgerOutcome) bool {
 	return false
 }
 
+// ConfirmedNeedLedgerOutcomeVocabulary is the closed vocabulary, in
+// declaration order, for the telemetry specification to read (CHAOS-5802).
+func ConfirmedNeedLedgerOutcomeVocabulary() []ConfirmedNeedLedgerOutcome {
+	return confirmedNeedLedgerOutcomes()
+}
+
 // ConfirmedNeedMemberDropReason is the closed vocabulary for why ONE member of
 // an admitted ledger was dropped at redemption time while the rest of the
 // ledger stayed admitted.
@@ -200,6 +206,12 @@ func ValidConfirmedNeedMemberDropReason(value ConfirmedNeedMemberDropReason) boo
 		}
 	}
 	return false
+}
+
+// ConfirmedNeedMemberDropReasonVocabulary is the closed vocabulary, in
+// declaration order, for the telemetry specification to read.
+func ConfirmedNeedMemberDropReasonVocabulary() []ConfirmedNeedMemberDropReason {
+	return confirmedNeedMemberDropReasons()
 }
 
 // ConfirmedNeedMemberDrop is one dropped member and why.
