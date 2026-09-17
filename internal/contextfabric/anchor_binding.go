@@ -441,9 +441,12 @@ func bindAnchor(in anchorBindingInput) (AnchorBinding, anchorBindingProposal) {
 	// A reuse serve runs no resolution, so a caller hint the replayed row
 	// never committed is unproven: one of the held kind naming another
 	// identity contests the held anchor. It never replaces it.
+	// A decided binding is the only proven anchor of its kind -- two would
+	// have left it unbound or contested above -- so a hint of that kind
+	// naming another identity is unproven by construction.
 	for _, hint := range in.CallerHints {
 		ref := anchorRef{Kind: hint.Kind, ID: hint.ID}
-		if ref.Kind != to.Kind || ref.ID == to.CanonicalID || memberOf(proposal.Proven, ref) {
+		if ref.Kind != to.Kind || ref.ID == to.CanonicalID {
 			continue
 		}
 		to.State, to.Reason, to.ContenderKind, to.ContenderID = AnchorBindingContested, AnchorBindingReasonAmbiguousProof, ref.Kind, ref.ID

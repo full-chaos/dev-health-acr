@@ -2209,7 +2209,6 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			}),
 		})
 		familyOutcome = e.applyAndRecordContinuation(ctx, principal, familyOutcome, continuation, accepted)
-		anchorShadow.observeReading(familyOutcome, graphRequest.RequestedScope.SubjectHints)
 		// A WITHHELD CONTINUATION ENDS THE TURN HERE, above the planning stage
 		// and above every retrieval: the carrier could not be established, and
 		// answering under the fresh reading would serve a reading the caller
@@ -2278,7 +2277,6 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		driftRefusedParent = carryParentSeed(request)
 	}
 	familyOutcome = e.applyAndRecordCarry(ctx, principal, familyOutcome, planCarry)
-	anchorShadow.observeReading(familyOutcome, graphRequest.RequestedScope.SubjectHints)
 	tupleFamilyDefinition, tupleFamilyKnown := LookupQuestionFamily(familyOutcome.Family)
 	familyAllowsWorkItemTuple := tupleFamilyKnown && tupleFamilyDefinition.allowsWorkItemTuple
 	familyOutcome.Gate = tightenWorkItemTupleFrameGate(familyOutcome.Gate, familyOutcome.Frame, familyAllowsWorkItemTuple, interpretation.TimeContext)
@@ -2559,8 +2557,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// reads through ledgerForExit too, resolutionRan=false: the ledger
 	// passes through unchanged, the disclosure reads not_evaluated.
 	confirmedNeedsForUnevaluatedExit, carriedStructureEntriesUnevaluatedExit := ledgerForExit(confirmedNeedsForCapture, carriedStructureEntries, false, confirmedStructureMember{}, false, "")
-	// The reading and the caller's own hints, before the engine's carry hint
-	// joins them below.
+	// The accepted reading, after every update to it, and the caller's own
+	// hints, before the engine's carry hint joins them below. An exit above
+	// this point carries no reading: it ended before one was accepted, and
+	// its binding is decided from the carry and the caller alone.
 	anchorShadow.observeReading(familyOutcome, graphRequest.RequestedScope.SubjectHints)
 	if effectiveWindow != nil && effectiveWindow.Provenance == WindowInferredDefault {
 		// CHAOS-4234: the gate still fires HERE, before anything decisive,

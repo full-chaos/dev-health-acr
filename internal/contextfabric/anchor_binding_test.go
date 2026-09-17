@@ -206,6 +206,12 @@ func bindTransitionTable() []bindCase {
 				b.ContenderKind, b.ContenderID = bindBeta.Kind, bindBeta.ID
 				return b
 			}(), wantProven: []anchorRef{bindAlpha}},
+		{name: "resolved, an unproven hint of the carried kind never contests", from: bound, evaluation: AnchorBindingEvaluationResolved, basis: id, proven: []anchorRef{bindAlpha}, hints: []anchorRef{bindGamma},
+			want: kept(bound, AnchorBindingBound, AnchorBindingReasonCarriedReconfirmed), wantEffective: SubjectRepository, wantProven: []anchorRef{bindAlpha}},
+		{name: "reused, a contested decision keeps the contender the proof named", from: bound, evaluation: AnchorBindingEvaluationReused, basis: id, proven: []anchorRef{bindBeta}, hints: []anchorRef{bindGamma},
+			want: contestedAfter(bindBeta, AnchorBindingReasonContestedByResolution), wantEffective: SubjectRepository, wantProven: []anchorRef{bindBeta}},
+		{name: "reused, a hint naming the held identity is not a contender", from: bound, evaluation: AnchorBindingEvaluationReused, basis: id, hints: []anchorRef{bindAlpha},
+			want: kept(bound, AnchorBindingBound, AnchorBindingReasonCarriedSilent), wantEffective: SubjectRepository},
 		{name: "reused, a pending carry, the replayed row re-proves it", from: pending, evaluation: AnchorBindingEvaluationReused, basis: id, proven: []anchorRef{bindAlpha},
 			want: kept(pending, AnchorBindingBound, AnchorBindingReasonWindowConfirmed), wantEffective: SubjectRepository, wantProven: []anchorRef{bindAlpha}},
 		{name: "carried kind outranks a conflicting model kind", from: bound, evaluation: AnchorBindingEvaluationResolved, modelKind: SubjectProject, basis: CommitBasisCallerCanonicalID, proven: []anchorRef{bindAlpha},
@@ -490,6 +496,11 @@ func TestTheBindingMemberKeepsEveryOtherExtensionMember(t *testing.T) {
 	out, event := semanticStateCapture{Write: SemanticStateOf(state)}.withAnchorShadow(tracker).attachAnchorBinding(BudgetAssertDecisive, InvestigationResult{ResultID: "result_members"})
 	if event == nil || event.Persisted != "" || out.Write.State == nil {
 		t.Fatalf("attach: event=%+v state=%v", event, out.Write.State)
+	}
+	// The member name is the contract with every other binary that reads
+	// this snapshot, so it is named here literally.
+	if _, ok := out.Write.State.Extensions["anchor_binding"]; !ok {
+		t.Fatalf("the binding is not under the anchor_binding member: %v", out.Write.State.Extensions)
 	}
 	if got := string(out.Write.State.Extensions["other_member"]); got != `{"kept":true}` {
 		t.Fatalf("the other member = %q", got)

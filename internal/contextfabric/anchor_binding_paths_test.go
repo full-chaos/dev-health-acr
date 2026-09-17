@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -459,5 +460,17 @@ func TestAnchorBindingLineCarriesEveryEpochTheDecisionRead(t *testing.T) {
 	absent := &anchorBindingTracker{parent: anchorBindingParent{Status: AnchorBindingParentAbsent, StoredEpoch: 4}}
 	if _, line := absent.decide(BudgetAssertDecisive, InvestigationResult{}, nil); line.ParentGraphEpoch != -1 {
 		t.Fatalf("a parent with no stored binding wrote epoch %d", line.ParentGraphEpoch)
+	}
+	// A member that does not decode has no epoch to report, and the line
+	// says so rather than publishing a zero.
+	undecodable := &PersistedSemanticState{Extensions: SemanticStateExtensions{anchorBindingExtension: json.RawMessage(`{"graph_epoch":"7"}`)}}
+	parent := anchorBindingParentOf("result_bind_parent", undecodable, 9)
+	if parent.Status != AnchorBindingParentInvalid || parent.storedEpoch() != -1 {
+		t.Fatalf("an undecodable member: status %s epoch %d, want invalid and -1", parent.Status, parent.storedEpoch())
+	}
+	// The counting frame's anchor terms are counted on the line; the terms
+	// themselves are corpus text and never published.
+	if line.AnchorTermCount != len(countingFrame(SubjectTeam).SubjectExpression.Scoped.AnchorTerms) || line.AnchorTermCount == 0 {
+		t.Fatalf("anchor term count = %d", line.AnchorTermCount)
 	}
 }
