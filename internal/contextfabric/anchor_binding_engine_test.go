@@ -524,7 +524,7 @@ func anchorSiteScenarios() []anchorSiteScenario {
 				request.PriorAnchorReceipts = []BoundSubjectReceipt{{ResultID: "result_does_not_exist_01", ReceiptID: "ancr_confirm0001"}}
 				return mustInvestigate(t, engine, reusePrincipal(), request)
 			}},
-		{name: "structure_veto_supersession_race", site: BudgetAssertStructureVeto, reach: AnchorBindingEvaluationResolved, zero: heldZero,
+		{name: "structure_veto_supersession_race", site: BudgetAssertStructureVeto, reach: AnchorBindingEvaluationResolved, zero: unboundZero,
 			run: func(t *testing.T, sink EngineTelemetry, _ *recordingTelemetry, off bool) InvestigationResult {
 				prior := validInvestigationResult()
 				prior.ResultID = "result_prior_structure_race"
@@ -567,8 +567,10 @@ func anchorSiteScenarios() []anchorSiteScenario {
 				if len(on.transitions) != 2 || on.transitions[0].Site != BudgetAssertDecisive || on.transitions[0].Persisted != AnchorBindingPersistence(SemanticStateSupersededDecision) {
 					t.Fatalf("the lost Save must report persisted=superseded at the decisive site: %+v", on.transitions)
 				}
-				if on.transitions[1].To.Proof != AnchorBindingProofCallerReceipt || on.transitions[1].To.CanonicalID != "repository_race" {
-					t.Fatalf("the veto Save's binding = %+v, want the redeemed receipt", on.transitions[1].To)
+				// The public decision vetoed the redeemed receipt, so the
+				// binding the veto Save stores asserts no anchor at all.
+				if on.transitions[1].To.State != AnchorBindingUnbound || on.transitions[1].To.Reason != AnchorBindingReasonNoProof {
+					t.Fatalf("the veto Save's binding = %+v, want unbound after the public veto", on.transitions[1].To)
 				}
 			}},
 		{name: "window_confirmation_required_explicit", site: BudgetAssertWindowConfirmationRequired, reach: AnchorBindingEvaluationNotResolved, zero: unboundZero,

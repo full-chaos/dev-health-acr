@@ -162,8 +162,14 @@ func bindTransitionTable() []bindCase {
 			want: kept(bound, AnchorBindingBound, AnchorBindingReasonCarriedNotEvaluated), wantEffective: SubjectProject},
 		{name: "carried, turn never resolved", from: bound, evaluation: AnchorBindingEvaluationNotResolved,
 			want: kept(bound, AnchorBindingBound, AnchorBindingReasonCarriedNotEvaluated), wantEffective: SubjectRepository},
-		{name: "carried pending, gated again", from: pending, evaluation: AnchorBindingEvaluationWindowGated, basis: id, proven: []anchorRef{bindBeta},
-			want: kept(pending, AnchorBindingPendingWindowConfirmation, AnchorBindingReasonCarriedNotEvaluated), wantEffective: SubjectRepository, wantProven: []anchorRef{bindBeta}},
+		{name: "carried pending, the gate proved a distinct identity", from: pending, evaluation: AnchorBindingEvaluationWindowGated, basis: id, proven: []anchorRef{bindBeta},
+			want: func() AnchorBinding {
+				b := kept(pending, AnchorBindingContested, AnchorBindingReasonContestedByResolution)
+				b.ContenderKind, b.ContenderID = bindBeta.Kind, bindBeta.ID
+				return b
+			}(), wantEffective: SubjectRepository, wantProven: []anchorRef{bindBeta}},
+		{name: "carried pending, the gate proved nothing", from: pending, evaluation: AnchorBindingEvaluationWindowGated, basis: id,
+			want: kept(pending, AnchorBindingPendingWindowConfirmation, AnchorBindingReasonCarriedNotEvaluated), wantEffective: SubjectRepository},
 		{name: "carried, re-proven", from: bound, evaluation: AnchorBindingEvaluationResolved, basis: CommitBasisCallerCanonicalID, proven: []anchorRef{bindAlpha},
 			want: kept(bound, AnchorBindingBound, AnchorBindingReasonCarriedReconfirmed), wantEffective: SubjectRepository, wantProven: []anchorRef{bindAlpha}},
 		{name: "carried, resolution silent", from: bound, evaluation: AnchorBindingEvaluationResolved, basis: id,
@@ -171,7 +177,11 @@ func bindTransitionTable() []bindCase {
 		{name: "carried, a distinct identity proven without a caller choice", from: bound, evaluation: AnchorBindingEvaluationResolved, basis: id, proven: []anchorRef{bindBeta},
 			want: contestedAfter(bindBeta, AnchorBindingReasonContestedByResolution), wantEffective: SubjectRepository, wantProven: []anchorRef{bindBeta}},
 		{name: "carried, the held and a distinct identity both proven", from: bound, evaluation: AnchorBindingEvaluationResolved, basis: id, proven: []anchorRef{bindAlpha, bindBeta},
-			want: contestedAfter(bindBeta, AnchorBindingReasonContestedByResolution), wantEffective: SubjectRepository, wantProven: []anchorRef{bindAlpha, bindBeta}},
+			want: contestedAfter(bindBeta, AnchorBindingReasonAmbiguousProof), wantEffective: SubjectRepository, wantProven: []anchorRef{bindAlpha, bindBeta}},
+		{name: "carried, the held identity and a caller's own second choice both proven", from: bound, evaluation: AnchorBindingEvaluationResolved, basis: CommitBasisCallerCanonicalID, proven: []anchorRef{bindAlpha, bindBeta}, hints: []anchorRef{bindAlpha, bindBeta},
+			want: contestedAfter(bindBeta, AnchorBindingReasonAmbiguousProof), wantEffective: SubjectRepository, wantProven: []anchorRef{bindAlpha, bindBeta}},
+		{name: "carried, a proof of another kind contradicts the carried identity", from: bound, evaluation: AnchorBindingEvaluationResolved, modelKind: SubjectRepository, basis: id, proven: []anchorRef{bindProject},
+			want: contestedAfter(bindProject, AnchorBindingReasonContestedByResolution), wantEffective: SubjectRepository},
 		{name: "carried, a caller hint proves a distinct identity", from: bound, evaluation: AnchorBindingEvaluationResolved, basis: CommitBasisCallerCanonicalID, proven: []anchorRef{bindBeta}, hints: []anchorRef{bindBeta},
 			want: fresh(AnchorBindingBound, bindBeta, AnchorBindingProofCallerHint, AnchorBindingReasonReplacedByCaller), wantEffective: SubjectRepository, wantProven: []anchorRef{bindBeta}},
 		{name: "carried, two caller hints prove distinct identities", from: bound, evaluation: AnchorBindingEvaluationResolved, basis: CommitBasisCallerCanonicalID, proven: []anchorRef{bindBeta, bindGamma}, hints: []anchorRef{bindBeta, bindGamma},

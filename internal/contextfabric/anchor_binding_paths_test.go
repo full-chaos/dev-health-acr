@@ -178,6 +178,11 @@ func TestASaveWithNoBindingDecisionIsReportedUnrecorded(t *testing.T) {
 		if len(telemetry.lines) != 1 || telemetry.lines[0].To.Reason != AnchorBindingReasonUnrecorded || telemetry.lines[0].Site != BudgetAssertContinuationRefusal || telemetry.lines[0].Persisted != AnchorBindingPersistence(SemanticStatePersisted) {
 			t.Fatalf("lines = %+v, want one unrecorded line for the continuation refusal save", telemetry.lines)
 		}
+		// A Save with no decision read no parent, so the line publishes no
+		// parent epoch rather than a zero that reads like one.
+		if line := telemetry.lines[0]; line.ParentGraphEpoch != -1 || len(line.CommittedSubjects) != 0 || line.AnchorTermCount != 0 {
+			t.Fatalf("unrecorded line = parent epoch %d, committed %v, terms %d", line.ParentGraphEpoch, line.CommittedSubjects, line.AnchorTermCount)
+		}
 	}
 }
 

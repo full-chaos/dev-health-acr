@@ -586,6 +586,7 @@ func (c semanticStateCapture) withoutSupersededNeeds(superseded []contractsv1.Co
 	if c.Write.State == nil || len(superseded) == 0 {
 		return c
 	}
+	c.anchorShadow.observeAnchorVeto(superseded)
 	kept := withoutSupersededConfirmedNeeds(c.Write.State.ConfirmedNeeds, superseded)
 	if len(kept) == len(c.Write.State.ConfirmedNeeds) {
 		return c

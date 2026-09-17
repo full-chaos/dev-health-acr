@@ -679,10 +679,23 @@ func sameDecodedJSON(a, b any) bool {
 	}
 }
 
+// servedExtensions is the members replay equality compares: a shadow member
+// is left out, so nothing decided in shadow can turn a Save the served path
+// would have made into a replay conflict.
+func servedExtensions(extensions SemanticStateExtensions) SemanticStateExtensions {
+	out := make(SemanticStateExtensions, len(extensions))
+	for name, value := range extensions {
+		if !semanticStateShadowMembers[name] {
+			out[name] = value
+		}
+	}
+	return out
+}
+
 // SemanticStatesEqual is replay equality: presence first, then the canonical
 // encodings of everything but the extension members, which are compared as
-// JSON values (a store may re-render them). Two absent snapshots are equal;
-// absent and present never are.
+// JSON values (a store may re-render them), the shadow members excepted.
+// Two absent snapshots are equal; absent and present never are.
 func SemanticStatesEqual(a, b *PersistedSemanticState) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
@@ -691,7 +704,7 @@ func SemanticStatesEqual(a, b *PersistedSemanticState) bool {
 	ac.Extensions, bc.Extensions = nil, nil
 	ae, aerr := json.Marshal(&ac)
 	be, berr := json.Marshal(&bc)
-	return aerr == nil && berr == nil && bytes.Equal(ae, be) && semanticStateExtensionsEqual(a.Extensions, b.Extensions)
+	return aerr == nil && berr == nil && bytes.Equal(ae, be) && semanticStateExtensionsEqual(servedExtensions(a.Extensions), servedExtensions(b.Extensions))
 }
 
 // cloneSemanticState returns an independent copy through the canonical

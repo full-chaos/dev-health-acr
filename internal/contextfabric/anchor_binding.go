@@ -430,6 +430,10 @@ type anchorBindingInput struct {
 type anchorBindingProposal struct {
 	EffectiveKind SubjectKind
 	Proven        []anchorRef
+	// Contradicting are identities the turn proved under their OWN kind that
+	// the effective kind excludes. They can never be bound, and they are
+	// never silence: a proof of another kind contradicts the held anchor.
+	Contradicting []anchorRef
 }
 
 // bindAnchor is the one binder. PURE.
@@ -471,6 +475,11 @@ func bindAnchorOnProof(in anchorBindingInput) (AnchorBinding, anchorBindingPropo
 	}
 	if in.Evaluation != AnchorBindingEvaluationNotResolved {
 		proposal.Proven = provenAnchors(in.Frame, proposal.EffectiveKind, in.Resolution, in.Bases)
+		for _, ref := range provenAnchors(in.Frame, "", in.Resolution, in.Bases) {
+			if !memberOf(proposal.Proven, ref) {
+				proposal.Contradicting = append(proposal.Contradicting, ref)
+			}
+		}
 	}
 	fresh := func(ref anchorRef, proof AnchorBindingProof, reason AnchorBindingReason) AnchorBinding {
 		return AnchorBinding{State: AnchorBindingBound, Kind: ref.Kind, CanonicalID: ref.ID, Proof: proof, Reason: reason, OriginResultID: in.ResultID, GraphEpoch: in.GraphEpoch}
@@ -504,6 +513,9 @@ func bindAnchorOnProof(in anchorBindingInput) (AnchorBinding, anchorBindingPropo
 	switch in.Evaluation {
 	case AnchorBindingEvaluationWindowGated:
 		if carried {
+			if contender, ok := firstOther(proposal, anchorRef{Kind: from.Kind, ID: from.CanonicalID}); ok {
+				return contest(contender, AnchorBindingReasonContestedByResolution), proposal
+			}
 			return keep(from.State, AnchorBindingReasonCarriedNotEvaluated), proposal
 		}
 		switch len(proposal.Proven) {
@@ -531,6 +543,9 @@ func bindAnchorOnProof(in anchorBindingInput) (AnchorBinding, anchorBindingPropo
 	if !carried {
 		switch len(proposal.Proven) {
 		case 0:
+			if len(proposal.Contradicting) > 1 {
+				return unbound(AnchorBindingReasonAmbiguousProof), proposal
+			}
 			return unbound(AnchorBindingReasonNoProof), proposal
 		case 1:
 			if caller[proposal.Proven[0]] {
@@ -543,11 +558,10 @@ func bindAnchorOnProof(in anchorBindingInput) (AnchorBinding, anchorBindingPropo
 	}
 
 	held := anchorRef{Kind: from.Kind, ID: from.CanonicalID}
-	reproven := false
+	reproven := memberOf(proposal.Proven, held)
 	var others, callerOthers []anchorRef
 	for _, ref := range proposal.Proven {
 		if ref == held {
-			reproven = true
 			continue
 		}
 		others = append(others, ref)
@@ -556,10 +570,15 @@ func bindAnchorOnProof(in anchorBindingInput) (AnchorBinding, anchorBindingPropo
 		}
 	}
 	switch {
+	// TWO PROVED IDENTITIES ARE NEVER BOUND, whoever named them: the turn
+	// proved more than one anchor, which is exactly what the served count
+	// reports as ambiguous. A caller's own choice does not break that tie.
+	case len(proposal.Proven) > 1:
+		return contest(others[0], AnchorBindingReasonAmbiguousProof), proposal
+	case len(proposal.Contradicting) > 0:
+		return contest(proposal.Contradicting[0], AnchorBindingReasonContestedByResolution), proposal
 	case len(callerOthers) == 1:
 		return fresh(callerOthers[0], AnchorBindingProofCallerHint, AnchorBindingReasonReplacedByCaller), proposal
-	case len(callerOthers) > 1:
-		return contest(callerOthers[0], AnchorBindingReasonAmbiguousProof), proposal
 	case len(others) > 0:
 		return contest(others[0], AnchorBindingReasonContestedByResolution), proposal
 	case from.State == AnchorBindingPendingWindowConfirmation:
@@ -569,6 +588,16 @@ func bindAnchorOnProof(in anchorBindingInput) (AnchorBinding, anchorBindingPropo
 	default:
 		return keep(from.State, AnchorBindingReasonCarriedSilent), proposal
 	}
+}
+
+// firstOther is the first proved or contradicting identity that is not held.
+func firstOther(proposal anchorBindingProposal, held anchorRef) (anchorRef, bool) {
+	for _, ref := range append(append([]anchorRef{}, proposal.Proven...), proposal.Contradicting...) {
+		if ref != held {
+			return ref, true
+		}
+	}
+	return anchorRef{}, false
 }
 
 // provenAnchors lists, in commit order and without duplicates, every
@@ -683,6 +712,20 @@ func (e *Engine) newAnchorBindingTracker(ctx context.Context, request Investigat
 	}
 }
 
+// observeAnchorVeto drops a redeemed anchor receipt the public decision
+// vetoed: a binding never asserts an anchor the served decision refused.
+func (t *anchorBindingTracker) observeAnchorVeto(vetoed []contractsv1.ContextFabricStructureNeedKind) {
+	if t == nil || t.receipt == nil {
+		return
+	}
+	for _, member := range vetoed {
+		if member == contractsv1.ContextFabricStructureNeedSubjectAnchor {
+			t.receipt = nil
+			return
+		}
+	}
+}
+
 func (t *anchorBindingTracker) observeReceipt(confirmed []confirmedStructureMember) {
 	if t == nil {
 		return
@@ -759,6 +802,12 @@ type AnchorBindingTransitionEvent struct {
 // decide runs the binder for one Save and returns the binding and the line
 // minus its persistence outcome.
 func (t *anchorBindingTracker) decide(site BudgetAssertStage, result InvestigationResult, state *PersistedSemanticState) (AnchorBinding, AnchorBindingTransitionEvent) {
+	// No tracker is no decision, here as well as at the capture: every
+	// reader of a turn's tracker holds it as a pointer that is nil while the
+	// shadow is off.
+	if t == nil {
+		return AnchorBinding{}, unrecordedAnchorBindingEvent(site, result)
+	}
 	in := anchorBindingInput{
 		From: t.parent.from(), Evaluation: t.evaluation, Frame: t.frame, ModelAnchorKind: t.modelAnchorKind,
 		Receipt: t.receipt, CallerHints: t.callerHints, Bases: t.bases,
@@ -776,7 +825,7 @@ func (t *anchorBindingTracker) decide(site BudgetAssertStage, result Investigati
 		event.Agreement, event.DisagreementField = AnchorBindingNotEvaluated, AnchorBindingFieldNone
 		return to, event
 	}
-	event.ServedAnchor = ledgerAnchor(state.ConfirmedNeeds)
+	event.ServedAnchor = ledgerAnchor(confirmedNeedsOf(state))
 	countEvaluated := false
 	if t.servedCount != nil && t.servedCount.ExpressionKind == SubjectExpressionChildrenOfScope {
 		countEvaluated = true
@@ -859,6 +908,15 @@ func servedResolutionProof(resolved, served SubjectResolution) SubjectResolution
 	return out
 }
 
+// confirmedNeedsOf is the snapshot's outgoing ledger, empty when there is no
+// snapshot to read one from.
+func confirmedNeedsOf(state *PersistedSemanticState) []ConfirmedNeedEntry {
+	if state == nil {
+		return nil
+	}
+	return state.ConfirmedNeeds
+}
+
 // ledgerAnchor is the outgoing ledger's subject_anchor entry, or none.
 func ledgerAnchor(entries []ConfirmedNeedEntry) anchorRef {
 	for _, entry := range entries {
@@ -922,6 +980,9 @@ func (c semanticStateCapture) attachAnchorBinding(site BudgetAssertStage, result
 // anchorBindingExtension is the snapshot extension member the binding is
 // stored under.
 const anchorBindingExtension = "anchor_binding"
+
+// semanticStateShadowMembers are the members replay equality never compares.
+var semanticStateShadowMembers = map[string]bool{anchorBindingExtension: true}
 
 // withAnchorBindingMember returns a copy of state carrying binding as its
 // extension member; state itself is not modified.
