@@ -233,7 +233,8 @@ func followUp(id, question string, mutate func(*InvestigationRequest)) func([]an
 	}
 }
 
-// TestShadowBindingKeepsTheProvenRepositoryAcrossANaturalFollowUp: turn one
+// TestShadowBindingKeepsTheProvenRepositoryAcrossANaturalFollowUp is the shadow counterpart of the design-review probe
+// TestAnchorDesignReviewNaturalFollowup. Turn one
 // proves alpha; the follow-up asks a different question naming the parent.
 // Served: the ledger drops alpha (question changed). Shadow: alpha stays
 // bound, and the line says the served ledger disagrees.
@@ -259,7 +260,8 @@ func TestShadowBindingKeepsTheProvenRepositoryAcrossANaturalFollowUp(t *testing.
 	}
 }
 
-// TestShadowBindingNeverBindsAnAliasThatWinsOnAFollowUp: the follow-up's
+// TestShadowBindingNeverBindsAnAliasThatWinsOnAFollowUp is the shadow counterpart of the design-review probe
+// TestAnchorDesignReviewWrongSubject. The follow-up's
 // resolution proves beta through the anchor term. Served: beta is captured
 // and counted. Shadow: alpha is retained, beta is recorded as the contender,
 // and nothing is effective.
@@ -286,7 +288,8 @@ func TestShadowBindingNeverBindsAnAliasThatWinsOnAFollowUp(t *testing.T) {
 	}
 }
 
-// TestShadowBindingKeepsWindowGatedProofAsPending: turn one ends on the
+// TestShadowBindingKeepsWindowGatedProofAsPending is the shadow counterpart of the design-review probe
+// TestAnchorDesignReviewWindowDiscard. Turn one ends on the
 // class-default window gate after its offers-only resolution proved alpha.
 // Served: the proof is discarded. Shadow: alpha is pending, and the
 // confirmation turn binds it.
@@ -320,7 +323,8 @@ func TestShadowBindingKeepsWindowGatedProofAsPending(t *testing.T) {
 	}
 }
 
-// TestShadowBindingHoldsOneAnchorWhenTheModelKindConflicts: turn two repeats
+// TestShadowBindingHoldsOneAnchorWhenTheModelKindConflicts is the shadow counterpart of the design-review probe
+// TestAnchorDesignReviewConflictingKind. Turn two repeats
 // the question, the carried alpha is recommitted, and the model states a
 // different anchor kind. Served: the ledger applies alpha while the count
 // decision refuses it. Shadow: alpha is the one bound anchor under its own
