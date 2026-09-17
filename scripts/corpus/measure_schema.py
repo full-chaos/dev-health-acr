@@ -23,6 +23,16 @@ that row needs. Round 10's reviewer supplied that resolution.
 `number` vs `int` is measured too, and bool is never either: Python's bool is an int
 subclass, so a JSON `true` passes an `int` check and a `number` check unless both are
 guarded. The guard belongs here, where the type is decided, not at each call site.
+
+CHAOS-5826: sampling alone can UNDER-type a field the canonical contract already settles.
+`cohort.members[].drivers[].value` is a genuine 0..1 ratio by design (declared `number` in
+contracts/jsonschema/v1, enforced 0..1 by acr's own write-path validator) -- every artefact
+this file had samples from at generation time happened to carry a whole-number value there,
+so pure observation locked it to `int`, and a later contractually-valid fraction then reads
+as a boundary violation instead of the served answer it is. `canonical_field_types` below
+walks the canonical schema itself for exactly the fields it declares, and `main` lets that
+walk override a sample-inferred type wherever the two disagree -- sampling stays the only
+authority for a field the canonical schema leaves open (oneOf, or not in the contract).
 """
 import argparse
 import json
@@ -97,6 +107,120 @@ def merge_types(counts):
     return None, nullable, dict(counts)
 
 
+_JSON_SCHEMA_TYPE_MAP = {"integer": "int", "number": "number", "string": "string",
+                          "boolean": "bool", "object": "object", "array": "array"}
+
+
+def _json_schema_scalar_type(schema):
+    """(type_or_None, nullable), reading ONLY the schema's own `type` keyword.
+
+    Never allOf/if/then/oneOf refinements: those narrow a VALUE under a condition (one
+    signal's fixed `weight`), not the type every instance of the field carries. A schema
+    with no single resolvable scalar type (oneOf, or no `type` at all) returns None, the
+    same "leave it to measurement" contract merge_types already keeps for polymorphic data.
+    """
+    t = schema.get("type")
+    if t is None:
+        return None, False
+    if isinstance(t, list):
+        nonnull = [x for x in t if x != "null"]
+        if len(nonnull) != 1:
+            return None, "null" in t
+        return _JSON_SCHEMA_TYPE_MAP.get(nonnull[0]), "null" in t
+    return _JSON_SCHEMA_TYPE_MAP.get(t), False
+
+
+def _resolve_json_schema_ref(ref, base_dir, doc, file_cache):
+    """(schema, doc, base_dir) a `$ref` points at -- same-file `#/$defs/X` or cross-file
+    `other.json#/$defs/X`, contracts/jsonschema/v1's own cross-reference shape (e.g.
+    CohortMemberDriver is defined once, in context_fabric_common.v1.schema.json, and every
+    investigation-result schema version reaches it by file ref rather than a second copy)."""
+    file_part, _, pointer = ref.partition("#")
+    if file_part:
+        key = str((base_dir / file_part).resolve())
+        if key not in file_cache:
+            file_cache[key] = json.loads(Path(key).read_text())
+        doc = file_cache[key]
+        base_dir = Path(key).parent
+    node = doc
+    for part in pointer.strip("/").split("/"):
+        if part:
+            node = node[part]
+    return node, doc, base_dir
+
+
+def canonical_field_types(entry_path, root_node_name):
+    """Walk a canonical contracts/jsonschema/v1 schema into the SAME
+    {node: {key: {"type":..., "minimum":..., "maximum":...}}} shape merge_types() infers
+    from artefact samples, keyed by the identical dotted node names walk() produces, so the
+    two merge field for field in main().
+
+    Scalar leaf `type` declarations are emitted for every field the schema settles. An
+    array-of-objects or nested-object field is also emitted, but only its LINK to the child
+    node the walk recurses into (`items`/`element_node` or `node`, the identical keys an
+    observed field carries) -- never the child's own key set or element counts, which stay
+    entirely sample-derived. Wiring the link is what keeps every child node this walk
+    reaches attached to the tree main() emits: an unwired child is a node no validator can
+    reach from the root, however precisely its own fields are typed. The canonical schema is
+    walked THROUGH every array/object property to reach the scalars nested inside it
+    (cohort.members[].drivers[].value is four levels down).
+    """
+    entry_path = Path(entry_path)
+    root_key = str(entry_path.resolve())
+    file_cache = {root_key: json.loads(entry_path.read_text())}
+    out = defaultdict(dict)
+    walked_nodes = set()
+
+    def walk_schema(schema, doc, base_dir, node_name):
+        if "$ref" in schema:
+            resolved, doc, base_dir = _resolve_json_schema_ref(
+                schema["$ref"], base_dir, doc, file_cache)
+            walk_schema(resolved, doc, base_dir, node_name)
+            return
+        props = schema.get("properties")
+        if not isinstance(props, dict) or node_name in walked_nodes:
+            return
+        walked_nodes.add(node_name)
+        for key, sub in props.items():
+            resolved, sub_doc, sub_base = sub, doc, base_dir
+            if "$ref" in sub:
+                resolved, sub_doc, sub_base = _resolve_json_schema_ref(
+                    sub["$ref"], base_dir, doc, file_cache)
+            t, nullable = _json_schema_scalar_type(resolved)
+            if t == "array":
+                items = resolved.get("items", {})
+                item_resolved, item_doc, item_base = items, sub_doc, sub_base
+                if "$ref" in items:
+                    item_resolved, item_doc, item_base = _resolve_json_schema_ref(
+                        items["$ref"], sub_base, sub_doc, file_cache)
+                if isinstance(item_resolved.get("properties"), dict):
+                    child = f"{node_name}.{key}[]"
+                    # The parent key is wired to its child exactly as an observed
+                    # array-of-objects field is wired -- setdefault-merged in main(), so a
+                    # sample-derived link this same field already carries always wins.
+                    out[node_name][key] = {"type": "array", "items": "object",
+                                           "element_node": child}
+                    walk_schema(item_resolved, item_doc, item_base, child)
+            elif t == "object":
+                if isinstance(resolved.get("properties"), dict):
+                    child = f"{node_name}.{key}"
+                    out[node_name][key] = {"type": "object", "node": child}
+                    walk_schema(resolved, sub_doc, sub_base, child)
+            elif t:
+                field = {"type": t}
+                if nullable:
+                    field["nullable"] = True
+                if "minimum" in resolved:
+                    field["minimum"] = resolved["minimum"]
+                if "maximum" in resolved:
+                    field["maximum"] = resolved["maximum"]
+                out[node_name][key] = field
+            # else: no single resolvable scalar type (oneOf, absent) -- sampling governs.
+
+    walk_schema(file_cache[root_key], file_cache[root_key], entry_path.parent, root_node_name)
+    return dict(out)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--roots", nargs="+", required=True,
@@ -115,6 +239,13 @@ def main():
                     help="declared paths that ADMIT an explicit null (see "
                          "schema_null_policy.json). Nullability the engine never emits and "
                          "measurement therefore cannot supply.")
+    ap.add_argument("--canonical-entry", default=None,
+                    help="a canonical contracts/jsonschema/v1 schema file "
+                         "whose own declared scalar types and numeric bounds govern over a "
+                         "sample-inferred type wherever it covers a field -- see "
+                         "canonical_field_types' own docstring.")
+    ap.add_argument("--canonical-node-prefix", default="attempt.response.result",
+                    help="the measured node --canonical-entry's root object corresponds to.")
     args = ap.parse_args()
 
     seen = defaultdict(Counter)
@@ -213,6 +344,44 @@ def main():
             entry["observed"] = {}
             declared.append(f'{e["node"]}.{e["key"]}')
 
+    # The canonical contract wins over a sample-inferred type wherever it
+    # covers a field, applied AFTER declared-paths so it overrides a stale "measurement
+    # wins" declared type too, not just a fresh sample-derived one. Only scalar `type`
+    # (and minimum/maximum) are ever touched here -- see canonical_field_types.
+    canonical_overridden = []
+    if args.canonical_entry:
+        canonical = canonical_field_types(args.canonical_entry, args.canonical_node_prefix)
+        for node, keys in canonical.items():
+            for key, decl in keys.items():
+                entry = nodes[node].setdefault(key, {})
+                if entry.get("type") != decl["type"]:
+                    canonical_overridden.append(
+                        f"{node}.{key} {entry.get('type')!r}->{decl['type']!r}")
+                entry["type"] = decl["type"]
+                entry["canonical_type"] = True
+                if "minimum" in decl:
+                    entry["minimum"] = decl["minimum"]
+                if "maximum" in decl:
+                    entry["maximum"] = decl["maximum"]
+                # Additive only, like every other canonical override here: a field the
+                # contract admits null on gains that admission if sampling never granted
+                # it (fact_scope_census[].authorized_population_count, absent from every
+                # sample the schema was generated from); a field sampling already saw
+                # null on keeps that, whatever the contract's own type list says.
+                if decl.get("nullable") and not entry.get("nullable"):
+                    entry["nullable"] = True
+                # A container field's own LINK to its child node is wired only where no
+                # sample ever wired one -- setdefault, never overwrite, so an observed
+                # field's own element_node/node keeps governing its own shape.
+                if decl["type"] == "array":
+                    entry.setdefault("items", decl.get("items", "object"))
+                    if decl.get("element_node"):
+                        entry.setdefault("element_node", decl["element_node"])
+                elif decl["type"] == "object" and decl.get("node"):
+                    entry.setdefault("node", decl["node"])
+                entry.pop("unmeasured", None)
+                unchecked = [u for u in unchecked if not u.startswith(f"{node}.{key} ")]
+
     # AFTER the declarations, deliberately: the sweep asks whether a field is declared
     # `unmeasured` so it can treat reads beneath it as a KNOWN gap rather than an
     # unresolvable base. Sweeping first made the generator exit on a hole it documents.
@@ -279,10 +448,13 @@ def main():
                            "-- never makes a key required."),
         "_generator_argv": ["--null-policy", args.null_policy or "",
                             "--declared-paths", args.declared_paths or "",
+                            "--canonical-entry", args.canonical_entry or "",
+                            "--canonical-node-prefix", args.canonical_node_prefix,
                             "--consumers", *args.consumers,
                             "--roots", *args.roots],
         "_declared_unmeasured": sorted(declared),
         "_declared_required": sorted(declared_required),
+        "_canonical_type_overrides": sorted(canonical_overridden),
         "_null_policy_applied": applied_policy,
         "_null_policy_unused": sorted(set(policy) - {a["path"] for a in applied_policy}),
         "nodes": {k: dict(sorted(v.items())) for k, v in sorted(nodes.items())},

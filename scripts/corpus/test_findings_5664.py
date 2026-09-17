@@ -62,7 +62,7 @@ def _stub_post(turns):
         calls.append(body)
         _require(remaining, f"post() called more times than scripted: {body!r}")
         status, result = remaining.pop(0)
-        return status, {"result": result}, 0.1, False
+        return status, {"result": result}, 0.1, False, None
 
     return _post, calls
 

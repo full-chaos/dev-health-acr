@@ -534,7 +534,7 @@ def _post_live(status=200, body=None, raw=False, truncate=None):
             srv.truncate_to = truncate
         try:
             with contextlib.redirect_stdout(io.StringIO()):
-                got_status, response, _dt, body_undecodable = harness.post({"question": "x"})
+                got_status, response, _dt, body_undecodable, _raw = harness.post({"question": "x"})
         finally:
             harness.BASE, harness.OUTDIR = saved_base, saved_out
     return {"request": {"question": "x"}, "status": got_status, "dt": 0.0,
@@ -551,7 +551,7 @@ def _post_live_closed_port():
     harness.BASE = f"http://127.0.0.1:{dead_port}/api/investigations"
     try:
         with contextlib.redirect_stdout(io.StringIO()):
-            status, response, _dt, body_undecodable = harness.post({"question": "x"})
+            status, response, _dt, body_undecodable, _raw = harness.post({"question": "x"})
     finally:
         harness.BASE = saved_base
     return {"request": {"question": "x"}, "status": status, "dt": 0.0,
@@ -2247,7 +2247,7 @@ def _trace_post(executed_lines, captured_bodies):
             def local_trace(frame, event, arg):
                 if event == "return":
                     executed_lines.add(frame.f_lineno)
-                    if isinstance(arg, tuple) and len(arg) == 4:
+                    if isinstance(arg, tuple) and len(arg) == 5:
                         captured_bodies.append((frame.f_lineno, arg[1]))
                 return local_trace
             return local_trace
