@@ -881,6 +881,66 @@ func RunSemanticStateCapSuite(t *testing.T, newStore func(t *testing.T) contextf
 	}
 }
 
+// RunSemanticStateExtensionReplaySuite is the shared extension-member
+// round trip: a snapshot whose member nests objects and numbers is saved,
+// read back equal, and replayed idempotently with its keys reordered and its
+// numbers rewritten to equal values; a different value is a replay conflict,
+// and a member outside the value contract is refused before any row exists.
+func RunSemanticStateExtensionReplaySuite(t *testing.T, newStore func(t *testing.T) contextfabric.InvestigationResultStore, isNotFound func(error) bool) {
+	t.Helper()
+	withMember := func(raw string) *contextfabric.PersistedSemanticState {
+		state := SemanticStateFixture(contextfabric.SubjectTeam, contextfabric.SubjectRepository)
+		state.Extensions = contextfabric.SemanticStateExtensions{"shadow_member": json.RawMessage(raw)}
+		return state
+	}
+	written := `{"b":{"y":1,"x":[1.50,"\u00e9",{"q":null,"p":true}]},"a":0.10,"big":123456789012345678901234567890}`
+	save := func(store contextfabric.InvestigationResultStore, row contextfabric.InvestigationResult, state *contextfabric.PersistedSemanticState) error {
+		return store.Save(context.Background(), orgA, row, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateOf(state))
+	}
+	t.Run("round trip and replay", func(t *testing.T) {
+		store := newStore(t)
+		row := result("result-extension-replay", "does a member survive the store?")
+		state := withMember(written)
+		if err := save(store, row, state); err != nil {
+			t.Fatalf("save: %v", err)
+		}
+		stored, err := store.Get(context.Background(), orgA, row.ResultID)
+		if err != nil || stored.SemanticStateRead != contextfabric.SemanticStateReadAvailable || !contextfabric.SemanticStatesEqual(stored.SemanticState, state) {
+			t.Fatalf("get err=%v read=%s equal=%v", err, stored.SemanticStateRead, err == nil && contextfabric.SemanticStatesEqual(stored.SemanticState, state))
+		}
+		t.Logf("stored member = %s", stored.SemanticState.Extensions["shadow_member"])
+		for _, replay := range []struct {
+			name     string
+			raw      string
+			conflict bool
+		}{
+			{"identical", written, false},
+			{"keys reordered, numbers rewritten to equal values", `{"big":123456789012345678901234567890.000,"a":0.1,"b":{"x":[1.5,"\u00e9",{"p":true,"q":null}],"y":1.0}}`, false},
+			{"the store's own rendering", string(stored.SemanticState.Extensions["shadow_member"]), false},
+			{"a different number", `{"b":{"y":1,"x":[1.50,"\u00e9",{"q":null,"p":true}]},"a":0.11,"big":123456789012345678901234567890}`, true},
+			{"a big number one unit apart", `{"b":{"y":1,"x":[1.50,"\u00e9",{"q":null,"p":true}]},"a":0.10,"big":123456789012345678901234567891}`, true},
+			{"array order changed", `{"b":{"y":1,"x":["\u00e9",1.50,{"q":null,"p":true}]},"a":0.10,"big":123456789012345678901234567890}`, true},
+			{"a number written as a string", `{"b":{"y":"1","x":[1.50,"\u00e9",{"q":null,"p":true}]},"a":0.10,"big":123456789012345678901234567890}`, true},
+		} {
+			err := save(store, row, withMember(replay.raw))
+			t.Logf("replay %-52s err=%v", replay.name, err)
+			if replay.conflict != errors.Is(err, contextfabric.ErrSemanticStateReplayConflict) || (!replay.conflict && err != nil) {
+				t.Fatalf("replay %q: err=%v, want conflict=%v", replay.name, err, replay.conflict)
+			}
+		}
+	})
+	t.Run("a member outside the contract is never written", func(t *testing.T) {
+		store := newStore(t)
+		row := result("result-extension-refused", "is a big exponent refused?")
+		err := save(store, row, withMember(`{"n":1e400}`))
+		_, getErr := store.Get(context.Background(), orgA, row.ResultID)
+		t.Logf("refused member -> save_err=%v get_err=%v", err, getErr)
+		if !errors.Is(err, contextfabric.ErrSemanticStateRejected) || !isNotFound(getErr) {
+			t.Fatalf("save err=%v get err=%v, want ErrSemanticStateRejected and no row", err, getErr)
+		}
+	})
+}
+
 // SemanticSeed plants a result row AND a raw semantic-state column value
 // directly into a store's backing storage, bypassing Save.
 type SemanticSeed func(t *testing.T, orgID, resultID string, payload, semanticState []byte)

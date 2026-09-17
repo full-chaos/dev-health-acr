@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -156,5 +157,208 @@ func TestSemanticStateExtensionMembersAreNeverNull(t *testing.T) {
 		if got := semanticStateExtensionMembers(extensions); got == nil || len(got) != 0 {
 			t.Fatalf("members of %v = %#v, want an empty non-nil list", extensions, got)
 		}
+	}
+}
+
+// columnWithMember returns fixture's encoded snapshot carrying one extension
+// member whose value is exactly raw, spliced in as bytes so an invalid value
+// reaches the reader unchanged.
+func columnWithMember(t *testing.T, fixture *PersistedSemanticState, raw []byte) []byte {
+	t.Helper()
+	encoded, err := EncodeSemanticState(fixture)
+	if err != nil {
+		t.Fatalf("fixture defect: %v", err)
+	}
+	const placeholder = `"MEMBER_VALUE_PLACEHOLDER"`
+	column := withExtensionsKey(t, fixture, `{"m":`+placeholder+`}`)
+	if !bytes.Contains(column, []byte(placeholder)) || len(encoded) == 0 {
+		t.Fatalf("fixture defect: no placeholder")
+	}
+	return bytes.Replace(column, []byte(placeholder), raw, 1)
+}
+
+// TestSemanticStateExtensionValueContract executes the member value domain on
+// both sides: a value the writer admits reads available and equal, and a
+// value the writer refuses reads malformed when found stored.
+func TestSemanticStateExtensionValueContract(t *testing.T) {
+	fixture := semanticFixture(t)
+	nested := func(depth int) string {
+		return strings.Repeat("[", depth) + strings.Repeat("]", depth)
+	}
+	bs := `\`
+	for _, cell := range []struct {
+		name  string
+		raw   string
+		admit bool
+		why   string
+	}{
+		{"an integer", `42`, true, ""},
+		{"a negative fraction", `-0.5`, true, ""},
+		{"zero", `0`, true, ""},
+		{"trailing fractional zeros", `1.500`, true, ""},
+		{"64 digits", strings.Repeat("9", 64), true, ""},
+		{"64 digits across the point", strings.Repeat("9", 32) + "." + strings.Repeat("9", 32), true, ""},
+		{"65 digits", strings.Repeat("9", 65), false, "more than 64 digits"},
+		{"a number beyond float64 range", "1" + strings.Repeat("0", 400), false, "more than 64 digits"},
+		{"an exponent", `1e400`, false, "not a plain decimal"},
+		{"an upper-case exponent", `1E2`, false, "not a plain decimal"},
+		{"a fractional exponent", `1.5e-3`, false, "not a plain decimal"},
+		{"negative zero", `-0`, false, "not a plain decimal"},
+		{"negative zero with a fraction", `-0.000`, false, "not a plain decimal"},
+		{"a leading zero", `01`, false, "not one valid JSON value"},
+		{"an empty object", `{}`, true, ""},
+		{"an empty array", `[]`, true, ""},
+		{"a string", `"x"`, true, ""},
+		{"null", `null`, true, ""},
+		{"a literal replacement character", "\"�\"", true, ""},
+		{"a surrogate pair escape", `"` + bs + `ud83d` + bs + `ude00"`, true, ""},
+		{"an escaped backslash before u", `"` + bs + bs + `ud800"`, true, ""},
+		{"a lone high surrogate escape", `"` + bs + `ud800"`, false, "lone UTF-16 surrogate"},
+		{"a lone low surrogate escape", `"` + bs + `udc00"`, false, "lone UTF-16 surrogate"},
+		{"a high surrogate before a non-surrogate escape", `"` + bs + `ud800` + bs + `u0041"`, false, "lone UTF-16 surrogate"},
+		{"a lone surrogate in a key", `{"` + bs + `udfff":1}`, false, "lone UTF-16 surrogate"},
+		{"invalid UTF-8 in a string", "\"a\xffb\"", false, "not valid UTF-8"},
+		{"invalid UTF-8 in a key", "{\"a\xff\":1}", false, "not valid UTF-8"},
+		{"a NUL escape in a string", `"a` + bs + `u0000"`, false, "NUL"},
+		{"a NUL escape in a key", `{"` + bs + `u0000":1}`, false, "NUL"},
+		{"nesting at the bound", nested(SemanticStateExtensionMaxDepth), true, ""},
+		{"nesting one past the bound", nested(SemanticStateExtensionMaxDepth + 1), false, "nests deeper"},
+		{"a repeated key", `{"a":1,"a":1}`, false, "repeats a key"},
+		{"a repeated key in a nested object", `{"o":{"a":1,"a":2}}`, false, "repeats a key"},
+		{"the same key in sibling objects", `[{"a":1},{"a":2}]`, true, ""},
+		{"the same key at two depths", `{"a":{"a":1}}`, true, ""},
+		{"a key equal to a string value", `{"a":"a","b":"a"}`, true, ""},
+	} {
+		t.Run(cell.name, func(t *testing.T) {
+			state := semanticFixture(t)
+			state.Extensions = SemanticStateExtensions{"m": json.RawMessage(cell.raw)}
+			_, writeErr := EncodeSemanticState(state)
+			read, status := DecodeSemanticState(columnWithMember(t, fixture, []byte(cell.raw)))
+			t.Logf("cell %-48s write_err=%v read=%s", cell.name, writeErr, status)
+			if cell.admit {
+				if writeErr != nil || status != SemanticStateReadAvailable {
+					t.Fatalf("an admitted value: write_err=%v read=%s", writeErr, status)
+				}
+				if !semanticStateExtensionValuesEqual(read.Extensions["m"], json.RawMessage(cell.raw)) {
+					t.Fatalf("the value read back is not the value written: %s", read.Extensions["m"])
+				}
+				return
+			}
+			if !errors.Is(writeErr, ErrSemanticStateRejected) || !strings.Contains(writeErr.Error(), cell.why) {
+				t.Fatalf("a refused value: write_err=%v, want a rejection naming %q", writeErr, cell.why)
+			}
+			if status != SemanticStateReadMalformed || read != nil {
+				t.Fatalf("a refused value found stored read %s", status)
+			}
+		})
+	}
+}
+
+// TestSemanticStateExtensionEquality: members are equal as JSON values.
+func TestSemanticStateExtensionEquality(t *testing.T) {
+	for _, cell := range []struct {
+		a, b  string
+		equal bool
+	}{
+		{`{"a":1,"b":2}`, `{"b":2,"a":1}`, true},
+		{`{"a": [1, 2]}`, `{"a":[1,2]}`, true},
+		{`1.50`, `1.5`, true},
+		{`1`, `1.000`, true},
+		{`0`, `0.0`, true},
+		{`123456789012345678901234567890`, `123456789012345678901234567891`, false},
+		{`"` + `\` + `u00e9"`, `"é"`, true},
+		{`[1,2]`, `[2,1]`, false},
+		{`1`, `"1"`, false},
+		{`null`, `false`, false},
+		{`{"a":1}`, `{"a":1,"b":null}`, false},
+		{`{}`, `[]`, false},
+	} {
+		if got := semanticStateExtensionValuesEqual(json.RawMessage(cell.a), json.RawMessage(cell.b)); got != cell.equal {
+			t.Errorf("%s vs %s: equal=%v, want %v", cell.a, cell.b, got, cell.equal)
+		}
+	}
+	one := SemanticStateExtensions{"m": json.RawMessage(`{"a":1}`)}
+	for name, cell := range map[string]struct {
+		a, b  SemanticStateExtensions
+		equal bool
+	}{
+		"nil and empty":        {nil, SemanticStateExtensions{}, true},
+		"a member and none":    {one, nil, false},
+		"another member name":  {one, SemanticStateExtensions{"n": json.RawMessage(`{"a":1}`)}, false},
+		"the same member":      {one, SemanticStateExtensions{"m": json.RawMessage(`{ "a" : 1.0 }`)}, true},
+		"an extra member":      {one, SemanticStateExtensions{"m": json.RawMessage(`{"a":1}`), "n": json.RawMessage(`1`)}, false},
+		"an unreadable member": {SemanticStateExtensions{"m": json.RawMessage(`{`)}, SemanticStateExtensions{"m": json.RawMessage(`{`)}, false},
+	} {
+		if got := semanticStateExtensionsEqual(cell.a, cell.b); got != cell.equal {
+			t.Errorf("%s: equal=%v, want %v", name, got, cell.equal)
+		}
+	}
+	a, b := semanticFixture(t), semanticFixture(t)
+	a.Extensions = SemanticStateExtensions{"m": json.RawMessage(`{"x":1,"y":[1.0]}`)}
+	b.Extensions = SemanticStateExtensions{"m": json.RawMessage(`{"y":[1],"x":1.00}`)}
+	if !SemanticStatesEqual(a, b) {
+		t.Fatalf("snapshots whose members differ only in rendering are not equal")
+	}
+	b.Extensions["m"] = json.RawMessage(`{"y":[2],"x":1}`)
+	if SemanticStatesEqual(a, b) {
+		t.Fatalf("snapshots whose members differ in value are equal")
+	}
+	b.Extensions = a.Extensions
+	b.Family = QuestionFamilyUnclassified
+	if SemanticStatesEqual(a, b) {
+		t.Fatalf("snapshots that differ outside the members are equal")
+	}
+}
+
+// TestSemanticStateExtensionsNeverDecideAContinuation: two readings that
+// differ only in their members produce no continuation difference, while a
+// difference in the reading itself still does.
+func TestSemanticStateExtensionsNeverDecideAContinuation(t *testing.T) {
+	carried, fresh := semanticFixture(t), semanticFixture(t)
+	carried.Extensions = SemanticStateExtensions{"m": json.RawMessage(`{"state":"bound"}`)}
+	fresh.Extensions = SemanticStateExtensions{"m": json.RawMessage(`{"state":"contested"}`), "n": json.RawMessage(`1`)}
+	for field, differs := range semanticStateDifferences(carried, fresh) {
+		if differs {
+			t.Errorf("readings that differ only in members differ on %s", field)
+		}
+	}
+	control := semanticFixture(t)
+	control.ScopeAnchor.Kind = SubjectProject
+	if !semanticStateDifferences(carried, control)[ContinuationConflictFieldScopeAnchor] {
+		t.Fatalf("control: a scope anchor difference was not reported")
+	}
+}
+
+// TestAStoredCensusOutsideItsDomainNeverErasesTheReading: the other raw
+// member of the snapshot, the work-item census, is read under the same number
+// and UTF-8 rules: a census value beyond float64 range or carrying invalid
+// UTF-8 makes the census unavailable while the reading stays available.
+func TestAStoredCensusOutsideItsDomainNeverErasesTheReading(t *testing.T) {
+	fixture := semanticFixture(t)
+	valid := `{"version":"` + WorkItemTupleCensusVersion + `","state":"measured","value":1,"retained":1,"requested_repository_scope":[],"authorization_digest":"d"}`
+	for _, cell := range []struct {
+		name       string
+		census     string
+		wantCensus WorkItemTupleCensusReadStatus
+	}{
+		{"a census beyond float64 range", strings.Replace(valid, `"value":1`, `"value":1e400`, 1), WorkItemTupleCensusReadMalformed},
+		{"a census with invalid UTF-8", strings.Replace(valid, `"d"`, "\"d\xff\"", 1), WorkItemTupleCensusReadMalformed},
+		{"a census of a later version", strings.Replace(valid, WorkItemTupleCensusVersion, "work-item-census.v9", 1), WorkItemTupleCensusReadUnsupportedVersion},
+	} {
+		t.Run(cell.name, func(t *testing.T) {
+			encoded, err := EncodeSemanticState(fixture)
+			if err != nil {
+				t.Fatalf("fixture defect: %v", err)
+			}
+			column := bytes.Replace(encoded, []byte(`{`), []byte(`{"work_item_census":`+cell.census+`,`), 1)
+			state, status := DecodeSemanticState(column)
+			t.Logf("cell %-32s read=%s", cell.name, status)
+			if status != SemanticStateReadAvailable || state.WorkItemCensus == nil {
+				t.Fatalf("read=%s census present=%v, want the reading available with its census kept", status, state != nil && state.WorkItemCensus != nil)
+			}
+			if got := ValidateWorkItemTupleCensus(state.WorkItemCensus); got != cell.wantCensus {
+				t.Fatalf("census status = %s, want %s", got, cell.wantCensus)
+			}
+		})
 	}
 }

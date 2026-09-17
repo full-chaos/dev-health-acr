@@ -613,24 +613,78 @@ func DecodeSemanticState(raw []byte) (*PersistedSemanticState, SemanticStateRead
 	return &state, SemanticStateReadAvailable
 }
 
-// sameJSONDocument compares two JSON documents as values.
+// sameJSONDocument compares two JSON documents as values. Numbers are read
+// as their literals, so no number is lost to float64 range: two literals are
+// equal when they are the same text or the same finite float64.
 func sameJSONDocument(a, b []byte) bool {
-	var av, bv any
-	if json.Unmarshal(a, &av) != nil || json.Unmarshal(b, &bv) != nil {
-		return false
+	decode := func(raw []byte) (any, bool) {
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		var value any
+		if decoder.Decode(&value) != nil {
+			return nil, false
+		}
+		return value, true
 	}
-	return reflect.DeepEqual(av, bv)
+	av, aok := decode(a)
+	bv, bok := decode(b)
+	return aok && bok && sameDecodedJSON(av, bv)
+}
+
+func sameDecodedJSON(a, b any) bool {
+	switch av := a.(type) {
+	case map[string]any:
+		bv, ok := b.(map[string]any)
+		if !ok || len(av) != len(bv) {
+			return false
+		}
+		for key, value := range av {
+			other, ok := bv[key]
+			if !ok || !sameDecodedJSON(value, other) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		bv, ok := b.([]any)
+		if !ok || len(av) != len(bv) {
+			return false
+		}
+		for i := range av {
+			if !sameDecodedJSON(av[i], bv[i]) {
+				return false
+			}
+		}
+		return true
+	case json.Number:
+		bv, ok := b.(json.Number)
+		if !ok {
+			return false
+		}
+		if av == bv {
+			return true
+		}
+		af, aerr := strconv.ParseFloat(string(av), 64)
+		bf, berr := strconv.ParseFloat(string(bv), 64)
+		return aerr == nil && berr == nil && af == bf
+	default:
+		return a == b
+	}
 }
 
 // SemanticStatesEqual is replay equality: presence first, then the canonical
-// encodings. Two absent snapshots are equal; absent and present never are.
+// encodings of everything but the extension members, which are compared as
+// JSON values (a store may re-render them). Two absent snapshots are equal;
+// absent and present never are.
 func SemanticStatesEqual(a, b *PersistedSemanticState) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
 	}
-	ae, aerr := json.Marshal(a)
-	be, berr := json.Marshal(b)
-	return aerr == nil && berr == nil && bytes.Equal(ae, be)
+	ac, bc := *a, *b
+	ac.Extensions, bc.Extensions = nil, nil
+	ae, aerr := json.Marshal(&ac)
+	be, berr := json.Marshal(&bc)
+	return aerr == nil && berr == nil && bytes.Equal(ae, be) && semanticStateExtensionsEqual(a.Extensions, b.Extensions)
 }
 
 // cloneSemanticState returns an independent copy through the canonical
@@ -664,6 +718,9 @@ func validateSemanticState(s PersistedSemanticState) error {
 	}
 	if s.FormatVersion != SemanticStateFormatVersion {
 		return reject("format_version %q is not %q", s.FormatVersion, SemanticStateFormatVersion)
+	}
+	if err := validateSemanticStateExtensions(s.Extensions); err != nil {
+		return reject("%v", err)
 	}
 	if !ValidQuestionFamily(s.Family) {
 		return reject("family %q is not a vocabulary member", s.Family)

@@ -32,6 +32,14 @@ func TestStore_semanticStateCap(t *testing.T) {
 	)
 }
 
+// TestStore_semanticStateExtensionReplay runs the shared extension-member cells.
+func TestStore_semanticStateExtensionReplay(t *testing.T) {
+	paritytest.RunSemanticStateExtensionReplaySuite(t,
+		func(t *testing.T) contextfabric.InvestigationResultStore { return memoryinvestigation.NewStore() },
+		func(err error) bool { return errors.Is(err, memoryinvestigation.ErrNotFound) },
+	)
+}
+
 func TestStore_getDefensiveCopyDoesNotLeakStoredState(t *testing.T) {
 	ctx := context.Background()
 	store := memoryinvestigation.NewStore()
