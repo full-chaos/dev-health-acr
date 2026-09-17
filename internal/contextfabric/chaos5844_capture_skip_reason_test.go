@@ -57,8 +57,18 @@ func assertCaptureSkipReasonJSON(t *testing.T, buf *bytes.Buffer, want CaptureSk
 	if level, _ := line["level"].(string); level != "INFO" {
 		t.Fatalf("level = %q, want INFO -- the reason must survive the production log level", level)
 	}
-	if got, _ := line["capture_skip_reason"].(string); got != string(want) {
+	got, _ := line["capture_skip_reason"].(string)
+	if got != string(want) {
 		t.Errorf("capture_skip_reason = %q, want %q -- the emitted production JSON line", got, want)
+	}
+	// The closed-vocabulary guard itself, not merely incidental to matching
+	// `want`: this exit's REAL, driven-through-Investigate emission must be a
+	// declared member, the same assertion captureSkipReasons() exists to make
+	// checkable. A mutation that swaps this exit's assignment for a valid-Go,
+	// undeclared CaptureSkipReason value fails HERE independently of the
+	// equality check above.
+	if !ValidCaptureSkipReason(CaptureSkipReason(got)) {
+		t.Errorf("capture_skip_reason = %q is not a declared member of captureSkipReasons() -- this real exit emitted an undeclared value", got)
 	}
 }
 
