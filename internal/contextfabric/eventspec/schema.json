@@ -1,5 +1,282 @@
 [
   {
+    "id": "contextfabric.anchor_binding_transition",
+    "msg": "context fabric anchor binding transition",
+    "level": "info",
+    "multiplicity": "exactly_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "exactly one line per Save and one per reuse serve while the shadow runs; a request that neither saves nor reuses emits none.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "result_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "parent_result_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "site",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "decisive",
+          "subjectless_terminal",
+          "window_veto",
+          "window_confirmation_required",
+          "structure_veto",
+          "reuse",
+          "interpreted_time_bound",
+          "continuation_refusal",
+          "unrecognised"
+        ]
+      },
+      {
+        "key": "evaluation",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_resolved",
+          "window_gated",
+          "resolved",
+          "reused",
+          "unrecognised"
+        ]
+      },
+      {
+        "key": "parent_binding",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "no_reference",
+          "unloadable",
+          "absent",
+          "invalid",
+          "stale_graph_epoch",
+          "present",
+          "unrecognised"
+        ]
+      },
+      {
+        "key": "from_state",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "unbound",
+          "bound",
+          "pending_window_confirmation",
+          "contested",
+          "unrecognised"
+        ]
+      },
+      {
+        "key": "from_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "from_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "model_anchor_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "named_expected_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "receipt_anchor_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "receipt_anchor_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "caller_hint_ids",
+        "type": "string_slice",
+        "presence": "required"
+      },
+      {
+        "key": "proven_anchor_ids",
+        "type": "string_slice",
+        "presence": "required"
+      },
+      {
+        "key": "effective_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "to_state",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "unbound",
+          "bound",
+          "pending_window_confirmation",
+          "contested",
+          "unrecognised"
+        ]
+      },
+      {
+        "key": "to_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "to_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "proof",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "caller_receipt",
+          "caller_hint",
+          "identity_proven",
+          "carried",
+          "unrecognised"
+        ]
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "no_proof",
+          "identity_proven",
+          "caller_receipt",
+          "caller_hint",
+          "carried_reconfirmed",
+          "carried_silent",
+          "carried_not_evaluated",
+          "replaced_by_caller",
+          "contested_by_resolution",
+          "ambiguous_proof",
+          "pending_window_confirmation",
+          "window_confirmed",
+          "reused_stored",
+          "unrecorded",
+          "unrecognised"
+        ]
+      },
+      {
+        "key": "origin_result_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "contender_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "contender_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "persisted",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "persisted",
+          "payload_rejected",
+          "replay_conflict",
+          "superseded",
+          "save_failed",
+          "state_absent",
+          "binding_unencodable",
+          "not_saved",
+          "unrecognised"
+        ]
+      },
+      {
+        "key": "shadow_agreement",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "agree",
+          "disagree",
+          "not_evaluated",
+          "unrecognised"
+        ]
+      },
+      {
+        "key": "disagreement_field",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "pending_proof",
+          "carried_anchor",
+          "count_anchor",
+          "unrecognised"
+        ]
+      },
+      {
+        "key": "served_anchor_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "served_anchor_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "served_count_decision",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_evaluated",
+          "organization_scope",
+          "anchor_committed",
+          "anchor_unresolved",
+          "anchor_ambiguous",
+          "frame_absent",
+          "unrecognised"
+        ]
+      },
+      {
+        "key": "served_count_kind",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "served_count_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.answer_display",
     "msg": "context fabric answer display",
     "level": "info",

@@ -594,9 +594,9 @@ func (c semanticStateCapture) withoutSupersededNeeds(superseded []contractsv1.Co
 	state.ConfirmedNeeds = kept
 	encoded, err := EncodeSemanticState(&state)
 	if err != nil {
-		return semanticStateCapture{Write: SemanticStateAbsent(SemanticStateAbsenceSnapshotInvalid)}
+		return semanticStateCapture{Write: SemanticStateAbsent(SemanticStateAbsenceSnapshotInvalid), anchorShadow: c.anchorShadow}
 	}
-	return semanticStateCapture{Write: SemanticStateOf(&state), EncodedBytes: len(encoded)}
+	return semanticStateCapture{Write: SemanticStateOf(&state), EncodedBytes: len(encoded), anchorShadow: c.anchorShadow}
 }
 
 // captureConfirmedNeedLedgerOnly builds the semantic-state capture for a

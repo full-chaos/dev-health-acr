@@ -343,6 +343,7 @@ func (e *Engine) interpretedTimeBoundResult(
 	// matches every sibling terminal and a later reordering cannot silently
 	// drop a plan that by then exists.
 	plan *AnswerPlan, ancestryParent string,
+	anchorShadow *anchorBindingTracker,
 ) (InvestigationResult, error) {
 	limitation, ok := interpretedTimeBoundLimitation(decision.Outcome)
 	if !ok {
@@ -421,7 +422,7 @@ func (e *Engine) interpretedTimeBoundResult(
 		// branch: a refused span must never become a lookup key, and the
 		// nil reuse snapshots below mean this row never becomes reusable
 		// anyway.
-		if err := e.saveResult(ctx, principal, BudgetAssertInterpretedTimeBound, result, nil, nil, TimeAxisKeyFor(request.TimeContext), binding.Epoch, ancestryParent, absentSemanticState(SemanticStateAbsenceInterpretedTimeUnanswerable)); err != nil {
+		if err := e.saveResult(ctx, principal, BudgetAssertInterpretedTimeBound, result, nil, nil, TimeAxisKeyFor(request.TimeContext), binding.Epoch, ancestryParent, absentSemanticState(SemanticStateAbsenceInterpretedTimeUnanswerable).withAnchorShadow(anchorShadow)); err != nil {
 			return InvestigationResult{}, stageError(StagePersistence, fmt.Errorf("save investigation result: %w", err))
 		}
 	}

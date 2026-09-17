@@ -2383,6 +2383,7 @@ var All = []Event{
 	FrameValidation,
 	ConfirmedNeedLedger,
 	CohortKindFulltext,
+	AnchorBindingTransition,
 }
 
 // CountPopulationScope (CHAOS-5775) is the Info line for whether a served
@@ -2500,4 +2501,64 @@ var ConfirmedNeedLedger = Event{
 		{Key: "capture_skip_reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: captureSkipReasonTokens},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
+}
+
+// AnchorBindingTransition is the Info line for one shadow anchor binding
+// decision: the binding the turn started from, what the binder read, the
+// binding it decided with its reason, and how that compares with the anchor
+// the served state carries. Built by contextfabric.AnchorBindingTransitionLogArgs,
+// emitted once per Save from the engine's single save site and once per reuse
+// serve.
+var AnchorBindingTransition = Event{
+	ID:                 "contextfabric.anchor_binding_transition",
+	Msg:                contextfabric.AnchorBindingTransitionLogMessage,
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityExactlyOnePerRequest,
+	Attribution:        []string{"request_id"},
+	BoundedAggregation: "exactly one line per Save and one per reuse serve while the shadow runs; a request that neither saves nor reuses emits none.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "result_id", Type: FieldString, Presence: PresenceRequired},
+		// Open: the parent the request names, empty when it names none.
+		{Key: "parent_result_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "site", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("site")},
+		{Key: "evaluation", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("evaluation")},
+		{Key: "parent_binding", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("parent_binding")},
+		{Key: "from_state", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("from_state")},
+		// Open: subject-kind tokens drawn from contextfabric.SubjectKind and
+		// free canonical ids, empty when absent.
+		{Key: "from_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "from_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "model_anchor_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "named_expected_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "receipt_anchor_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "receipt_anchor_id", Type: FieldString, Presence: PresenceRequired},
+		// Open: "<kind>:<canonical id>" tokens, empty lists when none.
+		{Key: "caller_hint_ids", Type: FieldStringSlice, Presence: PresenceRequired},
+		{Key: "proven_anchor_ids", Type: FieldStringSlice, Presence: PresenceRequired},
+		{Key: "effective_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "to_state", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("to_state")},
+		{Key: "to_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "to_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "proof", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("proof")},
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("reason")},
+		{Key: "origin_result_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "contender_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "contender_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "persisted", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("persisted")},
+		{Key: "shadow_agreement", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("shadow_agreement")},
+		{Key: "disagreement_field", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("disagreement_field")},
+		{Key: "served_anchor_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "served_anchor_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "served_count_decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("served_count_decision")},
+		{Key: "served_count_kind", Type: FieldString, Presence: PresenceRequired},
+		{Key: "served_count_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
+// anchorBindingVocabulary is the producer's closed vocabulary for key plus
+// the emitter's out-of-vocabulary token.
+func anchorBindingVocabulary(key string) []string {
+	return append(contextfabric.AnchorBindingTransitionLineVocabulary(key), "unrecognised")
 }

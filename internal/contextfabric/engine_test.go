@@ -521,7 +521,8 @@ type recordingTelemetry struct {
 	planCarryOutcomes []planCarryOutcomeRecord
 	// confirmedNeedLedgers (CHAOS-5639) mirrors the SAME list-not-count
 	// discipline.
-	confirmedNeedLedgers []ConfirmedNeedLedgerEvent
+	confirmedNeedLedgers     []ConfirmedNeedLedgerEvent
+	anchorBindingTransitions []AnchorBindingTransitionEvent
 	// confirmedNeedLedgerWindows (CHAOS-5734) mirrors the SAME list-not-count
 	// discipline.
 	confirmedNeedLedgerWindows []confirmedNeedLedgerWindowRecord
@@ -736,6 +737,15 @@ func (r *recordingTelemetry) RecordKindCarry(_ context.Context, _ storage.Princi
 
 func (r *recordingTelemetry) RecordStructureNeedsDisclosed(_ context.Context, _ storage.Principal, member contractsv1.ContextFabricStructureNeedKind) {
 	r.structureNeedsDisclosed = append(r.structureNeedsDisclosed, member)
+}
+
+func (r *recordingTelemetry) RecordAnchorBindingTransition(_ context.Context, _ storage.Principal, event AnchorBindingTransitionEvent) {
+	// Every engine test that records telemetry doubles as a sweep: a Save
+	// reaching persistence with no binding decision fails it.
+	if event.To.Reason == AnchorBindingReasonUnrecorded {
+		panic(fmt.Sprintf("anchor binding: a Save at site %q carried no binding decision", event.Site))
+	}
+	r.anchorBindingTransitions = append(r.anchorBindingTransitions, event)
 }
 
 func (r *recordingTelemetry) RecordConfirmedNeedLedger(_ context.Context, _ storage.Principal, event ConfirmedNeedLedgerEvent) {

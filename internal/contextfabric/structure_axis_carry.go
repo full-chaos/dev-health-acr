@@ -682,6 +682,15 @@ func withCarryResultCache(ctx context.Context) context.Context {
 	return context.WithValue(ctx, carryResultCacheKey{}, map[string]carryResultCacheEntry{})
 }
 
+// carryPeekResult reads one prior result from the request's carry cache
+// only, never from the store. ok is false when the request has no cache or
+// the result was never loaded successfully through it.
+func carryPeekResult(ctx context.Context, resultID string) (StoredInvestigationResult, bool) {
+	cache, _ := ctx.Value(carryResultCacheKey{}).(map[string]carryResultCacheEntry)
+	entry, ok := cache[resultID]
+	return entry.stored, ok
+}
+
 // carryLoadResult loads one prior result through the request's carry cache
 // when there is one, and straight from the store when there is not.
 func carryLoadResult(ctx context.Context, results InvestigationResultStore, principal storage.Principal, resultID string) (StoredInvestigationResult, error) {

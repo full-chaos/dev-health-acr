@@ -157,6 +157,7 @@ func TestSemanticState_EverySnapshotKeyIsComparedOrExemptByName(t *testing.T) {
 		"work_item_census":               "tuple membership metadata is bound and rechecked by work-item tuple reuse and by-id serving; it is not a component of semantic continuation reading, so the fresh side has no census to compare here.",
 		"extensions":                     "additive members no served path reads (shadow and telemetry state); each is read only by its own reader, never by this comparison.",
 		"confirmed_needs":                "CHAOS-5639: the per-need confirmation ledger, not a component of the reading itself -- it is read and extended by its own identity-keyed admission (chaos5639_confirmed_need.go), independent of this comparison, and the fresh side has no ledger of its own to disagree with.",
+		"anchor_binding":                 "shadow anchor binding, not a component of the reading: nothing served reads it, it is decided by its own binder (anchor_binding.go) at every Save, and the fresh side has no binding to disagree with.",
 	}
 	keys := func(prefix string, typ reflect.Type) []string {
 		out := []string{}

@@ -19,6 +19,7 @@ func FieldKeys(e Event) []string {
 // ByID is the generated lookup from Event.ID to its declaration -- generated
 // rather than hand-maintained so it can never drift from All.
 var ByID = map[string]Event{
+	"contextfabric.anchor_binding_transition":      AnchorBindingTransition,
 	"contextfabric.answer_display":                 AnswerDisplay,
 	"contextfabric.cohort_kind_fulltext":           CohortKindFulltext,
 	"contextfabric.completeness_authority":         CompletenessAuthority,
@@ -70,6 +71,150 @@ var ByID = map[string]Event{
 	"graphrank.search_question":                    SearchQuestion,
 	"graphrank.slice_b_survivor_verdict":           SliceBSurvivorVerdict,
 	"graphrank.slice_b_survivor_verdict_summary":   SliceBSurvivorVerdictSummary,
+}
+
+// AnchorBindingTransitionFields is contextfabric.anchor_binding_transition's generated typed construction interface
+// (CHAOS-5516): one Go field per Field AnchorBindingTransition.Fields declares in spec.go.
+type AnchorBindingTransitionFields struct {
+	OrgID               string
+	ResultID            string
+	ParentResultID      string
+	Site                string
+	Evaluation          string
+	ParentBinding       string
+	FromState           string
+	FromKind            string
+	FromID              string
+	ModelAnchorKind     string
+	NamedExpectedKind   string
+	ReceiptAnchorKind   string
+	ReceiptAnchorID     string
+	CallerHintIDs       []string
+	ProvenAnchorIDs     []string
+	EffectiveKind       string
+	ToState             string
+	ToKind              string
+	ToID                string
+	Proof               string
+	Reason              string
+	OriginResultID      string
+	ContenderKind       string
+	ContenderID         string
+	Persisted           string
+	ShadowAgreement     string
+	DisagreementField   string
+	ServedAnchorKind    string
+	ServedAnchorID      string
+	ServedCountDecision string
+	ServedCountKind     string
+	ServedCountID       string
+	RequestID           string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every AnchorBindingTransitionFields uniformly, set ONLY by NewAnchorBindingTransitionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewAnchorBindingTransitionFields is the generated constructor for AnchorBindingTransitionFields -- every
+// field AnchorBindingTransition.Fields declares is a required parameter.
+func NewAnchorBindingTransitionFields(orgID string, resultID string, parentResultID string, site string, evaluation string, parentBinding string, fromState string, fromKind string, fromID string, modelAnchorKind string, namedExpectedKind string, receiptAnchorKind string, receiptAnchorID string, callerHintIDs []string, provenAnchorIDs []string, effectiveKind string, toState string, toKind string, toID string, proof string, reason string, originResultID string, contenderKind string, contenderID string, persisted string, shadowAgreement string, disagreementField string, servedAnchorKind string, servedAnchorID string, servedCountDecision string, servedCountKind string, servedCountID string, requestID string) AnchorBindingTransitionFields {
+	valid := true
+	if callerHintIDs == nil {
+		valid = false
+	}
+	if provenAnchorIDs == nil {
+		valid = false
+	}
+	return AnchorBindingTransitionFields{
+		OrgID:               orgID,
+		ResultID:            resultID,
+		ParentResultID:      parentResultID,
+		Site:                site,
+		Evaluation:          evaluation,
+		ParentBinding:       parentBinding,
+		FromState:           fromState,
+		FromKind:            fromKind,
+		FromID:              fromID,
+		ModelAnchorKind:     modelAnchorKind,
+		NamedExpectedKind:   namedExpectedKind,
+		ReceiptAnchorKind:   receiptAnchorKind,
+		ReceiptAnchorID:     receiptAnchorID,
+		CallerHintIDs:       callerHintIDs,
+		ProvenAnchorIDs:     provenAnchorIDs,
+		EffectiveKind:       effectiveKind,
+		ToState:             toState,
+		ToKind:              toKind,
+		ToID:                toID,
+		Proof:               proof,
+		Reason:              reason,
+		OriginResultID:      originResultID,
+		ContenderKind:       contenderKind,
+		ContenderID:         contenderID,
+		Persisted:           persisted,
+		ShadowAgreement:     shadowAgreement,
+		DisagreementField:   disagreementField,
+		ServedAnchorKind:    servedAnchorKind,
+		ServedAnchorID:      servedAnchorID,
+		ServedCountDecision: servedCountDecision,
+		ServedCountKind:     servedCountKind,
+		ServedCountID:       servedCountID,
+		RequestID:           requestID,
+		constructed:         valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewAnchorBindingTransitionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f AnchorBindingTransitionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns AnchorBindingTransition's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f AnchorBindingTransitionFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"result_id", contextfabric.SanitizeLogAttr(f.ResultID),
+		"parent_result_id", contextfabric.SanitizeLogAttr(f.ParentResultID),
+		"site", contextfabric.SanitizeLogAttr(f.Site),
+		"evaluation", contextfabric.SanitizeLogAttr(f.Evaluation),
+		"parent_binding", contextfabric.SanitizeLogAttr(f.ParentBinding),
+		"from_state", contextfabric.SanitizeLogAttr(f.FromState),
+		"from_kind", contextfabric.SanitizeLogAttr(f.FromKind),
+		"from_id", contextfabric.SanitizeLogAttr(f.FromID),
+		"model_anchor_kind", contextfabric.SanitizeLogAttr(f.ModelAnchorKind),
+		"named_expected_kind", contextfabric.SanitizeLogAttr(f.NamedExpectedKind),
+		"receipt_anchor_kind", contextfabric.SanitizeLogAttr(f.ReceiptAnchorKind),
+		"receipt_anchor_id", contextfabric.SanitizeLogAttr(f.ReceiptAnchorID),
+		"caller_hint_ids", contextfabric.SanitizeLogStrings(f.CallerHintIDs),
+		"proven_anchor_ids", contextfabric.SanitizeLogStrings(f.ProvenAnchorIDs),
+		"effective_kind", contextfabric.SanitizeLogAttr(f.EffectiveKind),
+		"to_state", contextfabric.SanitizeLogAttr(f.ToState),
+		"to_kind", contextfabric.SanitizeLogAttr(f.ToKind),
+		"to_id", contextfabric.SanitizeLogAttr(f.ToID),
+		"proof", contextfabric.SanitizeLogAttr(f.Proof),
+		"reason", contextfabric.SanitizeLogAttr(f.Reason),
+		"origin_result_id", contextfabric.SanitizeLogAttr(f.OriginResultID),
+		"contender_kind", contextfabric.SanitizeLogAttr(f.ContenderKind),
+		"contender_id", contextfabric.SanitizeLogAttr(f.ContenderID),
+		"persisted", contextfabric.SanitizeLogAttr(f.Persisted),
+		"shadow_agreement", contextfabric.SanitizeLogAttr(f.ShadowAgreement),
+		"disagreement_field", contextfabric.SanitizeLogAttr(f.DisagreementField),
+		"served_anchor_kind", contextfabric.SanitizeLogAttr(f.ServedAnchorKind),
+		"served_anchor_id", contextfabric.SanitizeLogAttr(f.ServedAnchorID),
+		"served_count_decision", contextfabric.SanitizeLogAttr(f.ServedCountDecision),
+		"served_count_kind", contextfabric.SanitizeLogAttr(f.ServedCountKind),
+		"served_count_id", contextfabric.SanitizeLogAttr(f.ServedCountID),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
 }
 
 // AnswerDisplayFields is contextfabric.answer_display's generated typed construction interface
