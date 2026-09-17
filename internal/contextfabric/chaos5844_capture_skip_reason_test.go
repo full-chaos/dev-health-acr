@@ -154,10 +154,13 @@ func TestCaptureSkipReasonInterpretationFailed(t *testing.T) {
 		Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
 			return InterpretedQuestion{}, errors.New("interpreter failure (fixture)")
 		}),
-		Facts:       failingFactReader{t: t},
-		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) { t.Fatal("synthesizer should not be reached"); return InvestigationResult{}, nil }),
-		Results:     &staticResultStore{results: map[string]InvestigationResult{}, states: map[string]*PersistedSemanticState{}},
-		Telemetry:   telemetry,
+		Facts: failingFactReader{t: t},
+		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+			t.Fatal("synthesizer should not be reached")
+			return InvestigationResult{}, nil
+		}),
+		Results:   &staticResultStore{results: map[string]InvestigationResult{}, states: map[string]*PersistedSemanticState{}},
+		Telemetry: telemetry,
 	}, EngineOptions{ServiceVersion: "acr-test", Now: func() time.Time { return time.Unix(200, 0).UTC() }, NewResultID: func() string { return "result_5844_interp" }})
 	if err != nil {
 		t.Fatalf("NewEngine() error = %v", err)
