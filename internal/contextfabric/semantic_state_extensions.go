@@ -63,13 +63,14 @@ func validateSemanticStateExtensions(extensions SemanticStateExtensions) error {
 // semanticStateExtensionMaxNameBytes bounds a member name in an error.
 const semanticStateExtensionMaxNameBytes = 64
 
-// boundedMemberName is name, sanitized and cut to the bound, for an error a
-// caller may log.
+// boundedMemberName is name cut to the bound, for an error a caller may log.
+// The error renders it with %q, which escapes every control character and
+// every invalid byte, so the cut is the whole of what this adds.
 func boundedMemberName(name string) string {
 	if len(name) > semanticStateExtensionMaxNameBytes {
 		name = name[:semanticStateExtensionMaxNameBytes]
 	}
-	return SanitizeLogAttr(strings.ToValidUTF8(name, ""))
+	return name
 }
 
 var (

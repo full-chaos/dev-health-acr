@@ -291,7 +291,7 @@ func TestARefusalNamesABoundedMemberName(t *testing.T) {
 		t.Fatalf("the error does not name the member: %v", err)
 	}
 
-	// A SHORT name the cut cannot touch: only the sanitizer keeps a control
+	// A SHORT name the cut cannot touch: the %q rendering keeps a control
 	// character, a line break and invalid UTF-8 out of the error text.
 	for name, shape := range map[string]string{
 		"a\rb\ninjected": "a line break",
