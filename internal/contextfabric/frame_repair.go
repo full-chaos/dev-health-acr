@@ -177,6 +177,21 @@ type FrameRepairCarry struct {
 	// same shape would have stated as scope_anchor_kind. Set only when the
 	// repair applied.
 	ScopeAnchorKind SubjectKind
+	// RequestedJudgment is a repair's own closed-phrase substitute for the
+	// SAME interpretation's InterpretedQuestion.RequestedJudgment -- the
+	// free-text judgment field synthesis reads directly off the
+	// interpretation, never off the frame or the receipt (chaos4636_synthesis_assembly.go).
+	// A repair that changes Goals makes that free text stale (it still
+	// names the goal the repair dropped), and unlike ScopeAnchorKind there
+	// is no model-authored value to fall back on for the ACCEPTED shape --
+	// the model's own free text described the shape it proposed, not the
+	// shape the repair produced. Built from a small closed phrase table
+	// keyed on the accepted Goals (requestedJudgmentForGoals), never from
+	// model output, so it carries the same content-safety guarantee every
+	// other closed field on this struct has. Empty when the repair does
+	// not touch Goals (I9's count-kind repair: the model's own text still
+	// describes the accepted shape, since only SubjectExpression changed).
+	RequestedJudgment string
 }
 
 // FrameRepair records the bounded repair's decision on one proposal: the
@@ -417,7 +432,35 @@ func repairCompareGroupedCollapse(receipt ModelExecutionReceipt, proposed Questi
 		return FrameValidationResult{Outcome: revalidated.Outcome, Failure: revalidated.Failure, Repair: considered}
 	}
 	considered.Decision = FrameRepairApplied
+	// Derived from the NORMALIZED accepted Goals (revalidated.Frame.Goals),
+	// the same value the frame-validation line's own accepted_goals field
+	// reports, so the two never disagree about which shape they describe.
+	considered.Carry.RequestedJudgment = requestedJudgmentForGoals(revalidated.Frame.Goals)
 	return FrameValidationResult{Frame: revalidated.Frame, Outcome: FrameValidationOutcomeRepaired, Repair: considered}
+}
+
+// requestedJudgmentForGoals renders a repaired Goals set as a closed-phrase
+// substitute for InterpretedQuestion.RequestedJudgment -- see
+// FrameRepairCarry.RequestedJudgment's own doc comment for why one is
+// needed at all. Built from a FIXED per-goal phrase table, joined in
+// vocabulary order; a goal this table does not name contributes nothing
+// (bounded: the table only needs to cover goals this repair's own output
+// can contain -- assess_state, describe_trend, explain_change today).
+// Never empty when called on this repair's own output, since
+// replaceCompareGoal always leaves explain_change in the set.
+func requestedJudgmentForGoals(goals []InvestigationGoal) string {
+	phrase := map[InvestigationGoal]string{
+		GoalAssessState:   "the current state",
+		GoalDescribeTrend: "the trend over time",
+		GoalExplainChange: "an explanation of the change",
+	}
+	parts := make([]string, 0, len(goals))
+	for _, goal := range goals {
+		if text, known := phrase[goal]; known {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, " and ")
 }
 
 // replaceCompareGoal is the I7 repair's goal transform: compare is dropped;

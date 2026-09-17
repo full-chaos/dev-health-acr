@@ -523,7 +523,12 @@ type compareRepairCell struct {
 	// wantGoals is the carried frame's goal set, nil when the turn carries
 	// no frame.
 	wantGoals []InvestigationGoal
-	wantLine  map[string]any
+	// wantAcceptedJudgment is the frame-validation line's own
+	// accepted_judgment value, checked only when wantGoals is non-nil
+	// (there is no accepted frame otherwise). "" means the line must say
+	// `none` -- no repair populated it.
+	wantAcceptedJudgment string
+	wantLine             map[string]any
 }
 
 func compareRefusedI7Line(decision string) map[string]any {
@@ -560,12 +565,13 @@ func compareRepairCells() []compareRepairCell {
 			// NormalizeFrame sorts Goals into vocabulary order
 			// (assess_state precedes explain_change there), independent of
 			// the repair's own append order.
-			cell:        "compare with explain_change already stated adds assess_state",
-			receipt:     func(*ModelExecutionReceipt) {},
-			frame:       compareOverGroupedCohort,
-			wantOutcome: FrameValidationOutcomeRepaired,
-			wantGoals:   []InvestigationGoal{GoalAssessState, GoalExplainChange},
-			wantLine:    compareAppliedLine(),
+			cell:                 "compare with explain_change already stated adds assess_state",
+			receipt:              func(*ModelExecutionReceipt) {},
+			frame:                compareOverGroupedCohort,
+			wantOutcome:          FrameValidationOutcomeRepaired,
+			wantGoals:            []InvestigationGoal{GoalAssessState, GoalExplainChange},
+			wantAcceptedJudgment: "the current state and an explanation of the change",
+			wantLine:             compareAppliedLine(),
 		},
 		{
 			cell:    "compare with describe_trend already stated keeps it and adds explain_change",
@@ -573,9 +579,10 @@ func compareRepairCells() []compareRepairCell {
 			frame: withFrame(func(frame *QuestionFrame) {
 				frame.Goals = []InvestigationGoal{GoalCompare, GoalDescribeTrend}
 			}),
-			wantOutcome: FrameValidationOutcomeRepaired,
-			wantGoals:   []InvestigationGoal{GoalDescribeTrend, GoalExplainChange},
-			wantLine:    compareAppliedLine(),
+			wantOutcome:          FrameValidationOutcomeRepaired,
+			wantGoals:            []InvestigationGoal{GoalDescribeTrend, GoalExplainChange},
+			wantAcceptedJudgment: "the trend over time and an explanation of the change",
+			wantLine:             compareAppliedLine(),
 		},
 		{
 			cell:    "compare with describe_trend and explain_change both already stated only drops compare",
@@ -583,9 +590,10 @@ func compareRepairCells() []compareRepairCell {
 			frame: withFrame(func(frame *QuestionFrame) {
 				frame.Goals = []InvestigationGoal{GoalCompare, GoalDescribeTrend, GoalExplainChange}
 			}),
-			wantOutcome: FrameValidationOutcomeRepaired,
-			wantGoals:   []InvestigationGoal{GoalDescribeTrend, GoalExplainChange},
-			wantLine:    compareAppliedLine(),
+			wantOutcome:          FrameValidationOutcomeRepaired,
+			wantGoals:            []InvestigationGoal{GoalDescribeTrend, GoalExplainChange},
+			wantAcceptedJudgment: "the trend over time and an explanation of the change",
+			wantLine:             compareAppliedLine(),
 		},
 		{
 			// A scoped cohort has no evidenced reading for this bound; the
@@ -670,7 +678,41 @@ func TestTheCompareGroupedRepairIsBounded(t *testing.T) {
 				t.Errorf("gate %s refuses a turn that carries a frame", run.outcome.Gate.Observable())
 			}
 			assertRepairLine(t, run.line, testCase.wantLine)
+			assertGoalsLogValue(t, run.line, "accepted_goals", testCase.wantGoals)
+			assertRepairLine(t, run.line, map[string]any{"accepted_judgment": noneWhenEmpty(testCase.wantAcceptedJudgment)})
 		})
+	}
+}
+
+// assertGoalsLogValue compares a goalsLogValue-rendered log field
+// (decoded JSON: []any of string) against want, by string content --
+// straight `!=` panics on a slice-valued any, which is why this is not
+// folded into assertRepairLine.
+func assertGoalsLogValue(t *testing.T, line map[string]any, key string, want []InvestigationGoal) {
+	t.Helper()
+	raw, present := line[key]
+	if !present {
+		t.Errorf("%s is ABSENT from the frame-validation line", key)
+		return
+	}
+	got, ok := raw.([]any)
+	if !ok {
+		t.Fatalf("%s = %#v (%T), want a []any", key, raw, raw)
+	}
+	gotStrings := make([]string, len(got))
+	for i, v := range got {
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("%s[%d] = %#v (%T), want a string", key, i, v, v)
+		}
+		gotStrings[i] = s
+	}
+	wantStrings := make([]string, len(want))
+	for i, goal := range want {
+		wantStrings[i] = string(goal)
+	}
+	if !reflect.DeepEqual(gotStrings, wantStrings) {
+		t.Errorf("%s = %v, want %v", key, gotStrings, wantStrings)
 	}
 }
 
@@ -703,6 +745,99 @@ func TestTheCompareGroupedRepairRunsAtMostOnce(t *testing.T) {
 	}
 	if exhausted.Repair.Decision != FrameRepairDeclinedBoundReached || exhausted.Repair.Attempts != frameRepairBound || exhausted.Repair.KindAfter != "" {
 		t.Fatalf("repair at the bound = %+v, want declined_bound_reached with %d attempts and no repaired kind", exhausted.Repair, frameRepairBound)
+	}
+}
+
+// newCompareRepairEngine drives the production engine over the misread
+// compare-grouped proposal, with a synthesizer SPY that captures the
+// SynthesisInput it received -- the one channel synthesis reads
+// InterpretedQuestion.RequestedJudgment through (chaos4636_synthesis_assembly.go),
+// separate from the receipt and from the accepted frame the retrieval graph
+// below receives.
+func newCompareRepairEngine(t *testing.T) (*Engine, *[]SynthesisInput) {
+	t.Helper()
+	logs := captureEngineLogger(t)
+	receipt := compareGroupedReceipt()
+	proposal := compareOverGroupedCohort()
+	receipt.QuestionFrame = &proposal
+	store := &staticResultStore{results: map[string]InvestigationResult{}}
+	graph := &retrievalRecordingGraph{graphReaderStub: graphReaderStub{
+		resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
+		context: GraphContext{
+			Cohort: countingCohort(SubjectProject, 2), Paths: []RelationshipPath{}, DriverCandidates: []DriverJudgment{},
+			FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
+			Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+		},
+	}}
+	captured := make([]SynthesisInput, 0, 1)
+	engine, err := NewEngine(EngineDependencies{
+		Interpreter: RuntimeQuestionInterpreter{
+			Runtime:        fakeModelRuntime{interpreted: repairInterpretation([]string{repairAnchorTerm}), receipt: receipt},
+			Sink:           &fakeReceiptSink{},
+			FrameTelemetry: logs.telemetry,
+			Requirements:   registryDeriver{},
+		},
+		Graph: graph,
+		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+			return CanonicalFactBundle{
+				Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				Version: "ops-v1", Versions: map[FactKind]string{}, Watermarks: map[FactKind]string{},
+			}, nil
+		}),
+		Synthesizer: synthesizerFunc(func(_ context.Context, _ storage.Principal, input SynthesisInput) (InvestigationResult, error) {
+			captured = append(captured, input)
+			return InvestigationResult{
+				Status: InvestigationComplete, DirectJudgment: "Explained.", CurrentState: "Nominal.",
+				StrongestPressures: []string{}, Drivers: []DriverJudgment{}, RemainingWork: []Finding{}, ReadinessGaps: []Finding{},
+				Paths: []RelationshipPath{}, Conflicts: []Finding{}, Limitations: []string{}, EvidenceRefIDs: []string{},
+				ClaimedFacts: []ClaimedFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
+				DeterministicAnswer: "Explained.", Warnings: []string{},
+				Versions: VersionSet{
+					Backend: "test", ProjectionVersion: "projection-v1", QueryVersion: "query-v1",
+					InterpretationVersion: "interpret-v1", SynthesisVersion: "synthesis-v1",
+				},
+			}, nil
+		}),
+		Results:      store,
+		Telemetry:    &recordingTelemetry{},
+		Requirements: registryDeriver{},
+	}, EngineOptions{
+		ServiceVersion: "acr-test",
+		Now:            func() time.Time { return time.Unix(600, 0).UTC() },
+		NewResultID:    func() string { return "result_compare_repair_01" },
+	})
+	if err != nil {
+		t.Fatalf("NewEngine() error = %v", err)
+	}
+	return engine, &captured
+}
+
+// TestTheRepairedRequestedJudgmentReachesSynthesis drives Engine.Investigate
+// over the production interpreter: synthesis receives
+// Interpretation.RequestedJudgment stating the ACCEPTED shape (an
+// explanation of the change), never the model's pre-repair "compare" --
+// the P2 class this repair's carry exists to close, proven at the one call
+// site that actually reads the field.
+func TestTheRepairedRequestedJudgmentReachesSynthesis(t *testing.T) {
+	engine, captured := newCompareRepairEngine(t)
+	request := validInvestigationRequestWithConfirmedWindow()
+	request.RequestID = "request_compare_repair_01"
+
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_repair"}, request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if result.Status != InvestigationComplete {
+		t.Fatalf("status = %q (basis %q, limitations %#v), want complete: the repaired turn was not served", result.Status, result.RefusalBasis, result.Limitations)
+	}
+	if len(*captured) != 1 {
+		t.Fatalf("synthesizer calls = %d, want exactly 1", len(*captured))
+	}
+	got := (*captured)[0].Interpretation.RequestedJudgment
+	want := "the current state and an explanation of the change"
+	if got != want {
+		t.Fatalf("SynthesisInput.Interpretation.RequestedJudgment = %q, want %q (the model's own pre-repair text would have been %q)",
+			got, want, "compare")
 	}
 }
 
@@ -1102,11 +1237,12 @@ func repairTableFixtures() []repairTableFixture {
 	frame.SubjectExpression.Named.ExpectedKind = &kind
 	return []repairTableFixture{
 		{
-			name:    "count_kind_collapse",
-			receipt: classAReceipt(),
-			frame:   frame,
-			shape:   ShapeSingleSubject,
-			terms:   []string{repairAnchorTerm},
+			name:            "count_kind_collapse",
+			receipt:         classAReceipt(),
+			frame:           frame,
+			shape:           ShapeSingleSubject,
+			terms:           []string{repairAnchorTerm},
+			zeroCarryFields: map[string]bool{"RequestedJudgment": true},
 		},
 		{
 			name:            "compare_grouped_collapse",

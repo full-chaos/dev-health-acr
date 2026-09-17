@@ -1131,6 +1131,14 @@ func (t SlogEngineTelemetry) RecordFrameValidation(ctx context.Context, principa
 		"failure_detail", SanitizeLogAttr(string(event.FailureDetail)),
 		"proposed_kind", SanitizeLogAttr(string(event.ProposedKind)),
 		"proposed_goals", goalsLogValue(event.ProposedGoals),
+		// accepted_goals/accepted_judgment: the goal set (and, when a
+		// repair changed it, the closed-phrase judgment substitute) the
+		// turn actually acts on -- see AcceptedGoals/AcceptedJudgment's own
+		// doc comments. Present only on an accepted outcome, `none` for
+		// accepted_judgment whenever no repair populated it, matching this
+		// line's own `none`-for-empty-slot convention elsewhere.
+		"accepted_goals", goalsLogValue(event.AcceptedGoals),
+		"accepted_judgment", SanitizeLogAttr(noneWhenEmpty(event.AcceptedJudgment)),
 		"ordering_present", event.OrderingPresent,
 		"predicted_stripped_obligations", obligationsLogValue(event.PredictedStrippedObligations),
 		"derived_obligation_count", event.DerivedObligationCount,

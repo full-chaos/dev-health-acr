@@ -334,6 +334,17 @@ type ModelExecutionReceipt struct {
 	// an explicit carrier marker so this signal cannot be mistaken for an
 	// omitted, unqualified member set.
 	FrameMemberQualifierUnrecognized bool `json:"frame_member_qualifier_unrecognized,omitempty"`
+	// RequestedJudgmentRepair carries a bounded repair's
+	// FrameRepairCarry.RequestedJudgment out of resolveFrame's scope --
+	// interpretOneSample reads it, after resolveFrame returns, to overwrite
+	// the SAME interpretation's InterpretedQuestion.RequestedJudgment: that
+	// field is a separate return value resolveFrame cannot reach, and a
+	// repair that changes Goals leaves it stating the pre-repair goal (e.g.
+	// "compare") to every reader downstream that receives the
+	// interpretation, not the receipt -- synthesis's own input among them.
+	// Empty whenever no repair populated FrameRepairCarry.RequestedJudgment,
+	// which interpretOneSample treats as "leave the model's own text alone".
+	RequestedJudgmentRepair string `json:"requested_judgment_repair,omitempty"`
 	// InterpretationRejectionReason names WHICH rule in
 	// InterpretedQuestion.Validate() rejected this interpretation -- the
 	// interpret-side counterpart of the synthesis decision line's own
@@ -1671,6 +1682,18 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 	if result.Outcome == FrameValidationOutcomeRepaired && receipt.ScopeAnchorKind == "" {
 		receipt.ScopeAnchorKind = result.Repair.Carry.ScopeAnchorKind
 	}
+	// A repair that changes Goals (frame_repair.go's compare-over-a-grouped-
+	// cohort repair) leaves the SAME interpretation's InterpretedQuestion --
+	// a separate return value this function cannot reach -- stating its
+	// pre-repair RequestedJudgment free text. Stashed here so
+	// interpretOneSample, which has both values in scope after this call
+	// returns, can carry it across; see RequestedJudgmentRepair's own doc
+	// comment. Never runs for a repair whose carry leaves this empty (I9's
+	// count-kind repair changes SubjectExpression, not Goals, so the
+	// model's own RequestedJudgment already describes the accepted shape).
+	if result.Outcome == FrameValidationOutcomeRepaired && result.Repair.Carry.RequestedJudgment != "" {
+		receipt.RequestedJudgmentRepair = result.Repair.Carry.RequestedJudgment
+	}
 
 	// THE ORDERING DECISION, TAKEN HERE. §13.5.2 puts frame validity and
 	// the refuse basis strictly before resolution; this is the last point
@@ -1996,6 +2019,16 @@ func (r RuntimeQuestionInterpreter) interpretOneSample(
 		// invariant histogram.
 		if err == nil {
 			r.resolveFrame(ctx, principal, &receipt, question.Shape, question.SubjectTerms, question.TimeContext)
+			// See RequestedJudgmentRepair's own doc comment: this is the one
+			// place both the receipt a repair just wrote to and the SAME
+			// call's separately-returned `question` are in hand, so the
+			// interpretation this function returns -- which synthesis reads
+			// through SynthesisInput.Interpretation, never through the
+			// receipt -- carries the repaired judgment instead of the model's
+			// pre-repair free text.
+			if receipt.RequestedJudgmentRepair != "" {
+				question.RequestedJudgment = receipt.RequestedJudgmentRepair
+			}
 		}
 	}
 	if sinkErr := recordModelReceipt(ctx, principal, r.Sink, receipt); sinkErr != nil {

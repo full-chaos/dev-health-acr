@@ -34,6 +34,8 @@ var frameValidationEventLogKeys = map[string]string{
 	"FailureDetail":                "failure_detail",
 	"ProposedKind":                 "proposed_kind",
 	"ProposedGoals":                "proposed_goals",
+	"AcceptedGoals":                "accepted_goals",
+	"AcceptedJudgment":             "accepted_judgment",
 	"OrderingPresent":              "ordering_present",
 	"PredictedStrippedObligations": "predicted_stripped_obligations",
 	"DerivedObligationCount":       "derived_obligation_count",
