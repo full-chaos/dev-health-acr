@@ -71,11 +71,14 @@ func TestTheShadowBindingNeverDecidesASave(t *testing.T) {
 			}
 			err := engine.saveResult(context.Background(), acceptancePrincipal(), BudgetAssertStructureVeto, result, nil, nil, "", 0, "", second)
 			stored := bindingMember(store.saved[result.ResultID])
-			t.Logf("%-22s second save err=%v stored=%s", tc.name, err, stored.CanonicalID)
+			t.Logf("%-22s second save err=%v stored=%+v", tc.name, err, stored)
 			if err != nil {
 				t.Fatalf("the shadow failed a Save the served path would have made: %v", err)
 			}
-			if stored == nil || stored.CanonicalID != bindAlpha.ID {
+			if stored == nil {
+				t.Fatalf("no binding was stored at all")
+			}
+			if stored.CanonicalID != bindAlpha.ID {
 				t.Fatalf("stored binding = %+v, want the first Save's", stored)
 			}
 		})

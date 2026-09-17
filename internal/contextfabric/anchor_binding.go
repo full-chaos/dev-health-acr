@@ -574,10 +574,17 @@ func bindAnchorOnProof(in anchorBindingInput) (AnchorBinding, anchorBindingPropo
 	// proved more than one anchor, which is exactly what the served count
 	// reports as ambiguous. A caller's own choice does not break that tie.
 	case len(proposal.Proven) > 1:
-		return contest(others[0], AnchorBindingReasonAmbiguousProof), proposal
+		contender, ok := firstOther(proposal, held)
+		if !ok {
+			// Every proved identity is the held one, so there is nothing to
+			// contest it with.
+			return keep(AnchorBindingBound, AnchorBindingReasonCarriedReconfirmed), proposal
+		}
+		return contest(contender, AnchorBindingReasonAmbiguousProof), proposal
 	case len(proposal.Contradicting) > 0:
 		return contest(proposal.Contradicting[0], AnchorBindingReasonContestedByResolution), proposal
-	case len(callerOthers) == 1:
+	// Ambiguity is decided above, so at most one caller choice reaches here.
+	case len(callerOthers) > 0:
 		return fresh(callerOthers[0], AnchorBindingProofCallerHint, AnchorBindingReasonReplacedByCaller), proposal
 	case len(others) > 0:
 		return contest(others[0], AnchorBindingReasonContestedByResolution), proposal
