@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // withExtensionsKey returns fixture's encoded snapshot with its extensions key
@@ -288,6 +289,31 @@ func TestARefusalNamesABoundedMemberName(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), strings.Repeat("n", semanticStateExtensionMaxNameBytes)) {
 		t.Fatalf("the error does not name the member: %v", err)
+	}
+
+	// A SHORT name the cut cannot touch: only the sanitizer keeps a control
+	// character, a line break and invalid UTF-8 out of the error text.
+	for name, shape := range map[string]string{
+		"a\rb\ninjected": "a line break",
+		"a\x07b":         "a control character",
+		"a\xffb":         "invalid UTF-8",
+	} {
+		short := semanticFixture(t)
+		short.Extensions = SemanticStateExtensions{name: json.RawMessage(`1e2`)}
+		_, err := EncodeSemanticState(short)
+		if err == nil {
+			t.Fatalf("%s: the member was admitted", shape)
+		}
+		text := err.Error()
+		if len(name) > semanticStateExtensionMaxNameBytes {
+			t.Fatalf("%s: the fixture is long enough to be cut", shape)
+		}
+		if strings.ContainsAny(text, "\r\n\x07") || !utf8.ValidString(text) {
+			t.Fatalf("%s: the refusal carries it verbatim: %q", shape, text)
+		}
+		if !strings.Contains(text, "a") || !strings.Contains(text, "b") {
+			t.Fatalf("%s: the refusal does not name the member: %q", shape, text)
+		}
 	}
 }
 
