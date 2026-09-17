@@ -412,14 +412,32 @@ const (
 )
 
 func ValidContextFabricStructureDisposition(value ContextFabricStructureDisposition) bool {
-	switch value {
-	case ContextFabricStructureDispositionApplied, ContextFabricStructureDispositionVetoedUnresolved,
-		ContextFabricStructureDispositionVetoedConflict, ContextFabricStructureDispositionVetoedStale,
-		ContextFabricStructureDispositionSupersededByCaller, ContextFabricStructureDispositionNotEvaluated:
-		return true
-	default:
-		return false
+	for _, member := range contextFabricStructureDispositions {
+		if member == value {
+			return true
+		}
 	}
+	return false
+}
+
+// contextFabricStructureDispositions is the closed vocabulary, in declared
+// order. The empty value ("" -- no carried member applied this turn at
+// all) is deliberately NOT a member here: a field emitting this type
+// alongside "" declares that empty separately, in its own field-level
+// closed vocabulary.
+var contextFabricStructureDispositions = [...]ContextFabricStructureDisposition{
+	ContextFabricStructureDispositionApplied, ContextFabricStructureDispositionVetoedUnresolved,
+	ContextFabricStructureDispositionVetoedConflict, ContextFabricStructureDispositionVetoedStale,
+	ContextFabricStructureDispositionSupersededByCaller, ContextFabricStructureDispositionNotEvaluated,
+}
+
+// ContextFabricStructureDispositionCount is the closed vocabulary's size.
+const ContextFabricStructureDispositionCount = len(contextFabricStructureDispositions)
+
+// ContextFabricStructureDispositionVocabulary returns the closed vocabulary
+// in declared order, for the telemetry specification to read.
+func ContextFabricStructureDispositionVocabulary() [ContextFabricStructureDispositionCount]ContextFabricStructureDisposition {
+	return contextFabricStructureDispositions
 }
 
 // ContextFabricConfirmedStructureEntry is the wire-visible disposition for

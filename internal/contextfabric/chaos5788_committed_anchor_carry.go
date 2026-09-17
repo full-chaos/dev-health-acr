@@ -51,6 +51,18 @@ func ValidConfirmedNeedBasis(value ConfirmedNeedBasis) bool {
 	}
 }
 
+// confirmedNeedBases is the closed vocabulary, in declared order.
+var confirmedNeedBases = [...]ConfirmedNeedBasis{ConfirmedNeedBasisConfirmed, ConfirmedNeedBasisEngineCommitted}
+
+// ConfirmedNeedBasisCount is the closed vocabulary's size.
+const ConfirmedNeedBasisCount = len(confirmedNeedBases)
+
+// ConfirmedNeedBasisVocabulary returns the closed vocabulary in declared
+// order, for the telemetry specification to read.
+func ConfirmedNeedBasisVocabulary() [ConfirmedNeedBasisCount]ConfirmedNeedBasis {
+	return confirmedNeedBases
+}
+
 // provenanceForConfirmedNeedBasis renders the wire Provenance a carried
 // ledger entry discloses for basis. Every basis this axis does not recognize
 // (including the zero value) renders the ORIGINAL, pre-existing token --
@@ -232,6 +244,12 @@ func ValidCaptureSkipReason(value CaptureSkipReason) bool {
 	return false
 }
 
+// CaptureSkipReasonVocabulary is the closed vocabulary, in declaration
+// order, for the telemetry specification to read.
+func CaptureSkipReasonVocabulary() []CaptureSkipReason {
+	return captureSkipReasons()
+}
+
 // engineCommittedAnchorForCapture decides whether THIS turn's own resolution
 // bound a committed subject to the frame's own scope anchor strongly enough
 // to persist as carried state for a later turn. Reuses anchorBound's own
@@ -338,6 +356,31 @@ const (
 	// stronger one.
 	ConfirmedAnchorAgreementDisagree ConfirmedAnchorAgreement = "disagree"
 )
+
+// confirmedAnchorAgreements is the closed vocabulary, in declared order.
+var confirmedAnchorAgreements = [...]ConfirmedAnchorAgreement{
+	ConfirmedAnchorAgreementNotApplicable, ConfirmedAnchorAgreementAbsent,
+	ConfirmedAnchorAgreementAgree, ConfirmedAnchorAgreementDisagree,
+}
+
+// ConfirmedAnchorAgreementCount is the closed vocabulary's size.
+const ConfirmedAnchorAgreementCount = len(confirmedAnchorAgreements)
+
+// ConfirmedAnchorAgreementVocabulary returns the closed vocabulary in
+// declared order, for the telemetry specification to read (CHAOS-5802).
+func ConfirmedAnchorAgreementVocabulary() [ConfirmedAnchorAgreementCount]ConfirmedAnchorAgreement {
+	return confirmedAnchorAgreements
+}
+
+// ValidConfirmedAnchorAgreement reports membership in the closed vocabulary.
+func ValidConfirmedAnchorAgreement(value ConfirmedAnchorAgreement) bool {
+	for _, member := range confirmedAnchorAgreements {
+		if member == value {
+			return true
+		}
+	}
+	return false
+}
 
 // carriedAnchorAgreementFor decides, once per turn immediately after
 // resolution runs, whether this turn's own applied subject_anchor ledger
