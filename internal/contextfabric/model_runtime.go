@@ -1596,9 +1596,10 @@ type RuntimeQuestionInterpreter struct {
 // resolveFrame validates the frame a receipt proposed, records the outcome
 // on the receipt, and emits the telemetry event.
 //
-// ONE BOUNDED REPAIR, AND ONLY ONE. §13.6 admits one bounded repair attempt
-// on an invalid frame. validateProposedFrame applies the I9 repair under the
-// bound frame_repair.go states; every other invalid frame is REFUSED, which
+// EACH INVARIANT'S BOUNDED REPAIR RUNS AT MOST ONCE. §13.6 admits a bounded
+// repair attempt on an invalid frame. validateProposedFrame applies every
+// repair in frameRepairTable under the bound frame_repair.go states; a frame
+// no table entry addresses, or one a repair could not fix, is REFUSED, which
 // is the design's own fallback. The line records the repair decision beside
 // the refusal rate and the first-failed-invariant histogram.
 //
@@ -1789,11 +1790,10 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 // Here and not in ValidateFrame, because the hint is the receipt's and the
 // invariant table reads the frame alone; this is the one place both halves of
 // the same model call are in hand. The axis is never restored instead:
-// rewriting the model's frame from its group hint would be a repair, and the
-// one bounded repair is for I9 only (frame_repair.go), applied here to the
-// result of validateAgainstInterpretation. One function, called by
-// resolveFrame and by the input-domain table, so the table measures what
-// production decides.
+// rewriting the model's frame from its group hint would be a repair, and
+// every bounded repair (frame_repair.go) is applied here, to the result of
+// validateAgainstInterpretation. One function, called by resolveFrame and by
+// the input-domain table, so the table measures what production decides.
 func validateProposedFrame(receipt ModelExecutionReceipt, proposed QuestionFrame, emittedShape InvestigationShape, subjectTerms []string) FrameValidationResult {
 	result := validateAgainstInterpretation(receipt, proposed, emittedShape)
 	for _, repair := range frameRepairTable {

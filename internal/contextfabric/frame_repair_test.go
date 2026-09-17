@@ -410,9 +410,9 @@ func repairCells() []repairCell {
 
 // TestTheCountKindRepairIsBounded executes every clause of the bound through
 // the production interpreter, and holds that every decision the vocabulary
-// names has an executed driver.
+// names has an executed driver -- jointly with TestTheCompareGroupedRepairIsBounded,
+// held for the whole vocabulary by TestEveryFrameRepairDecisionHasAnExecutedDriver.
 func TestTheCountKindRepairIsBounded(t *testing.T) {
-	produced := map[string]bool{}
 	for _, testCase := range repairCells() {
 		t.Run(testCase.cell, func(t *testing.T) {
 			receipt := classAReceipt()
@@ -422,7 +422,6 @@ func TestTheCountKindRepairIsBounded(t *testing.T) {
 				flat = []string{repairAnchorTerm}
 			}
 			run := interpretForRepair(t, receipt, testCase.frame(), flat)
-			produced[run.line["repair_decision"].(string)] = true
 
 			if run.receipt.FrameOutcome != testCase.wantOutcome {
 				t.Errorf("receipt frame outcome = %q, want %q", run.receipt.FrameOutcome, testCase.wantOutcome)
@@ -453,15 +452,6 @@ func TestTheCountKindRepairIsBounded(t *testing.T) {
 				"shadow_frame_outcome":  string(testCase.wantOutcome),
 			})
 		})
-	}
-	for _, attempts := range []int{0, frameRepairBound} {
-		result := repairAtTheBound(t, attempts)
-		produced[string(result.Repair.Decision)] = true
-	}
-	for _, member := range FrameRepairDecisionVocabulary() {
-		if !produced[string(member)] {
-			t.Errorf("no executed driver produces repair decision %q", member)
-		}
 	}
 }
 
@@ -497,6 +487,258 @@ func TestTheRepairRunsAtMostOnce(t *testing.T) {
 	}
 	if exhausted.Frame.SubjectExpression.Kind != "" {
 		t.Fatalf("a refused result carries a frame: %+v", exhausted.Frame)
+	}
+}
+
+// THE BOUNDED I7 REPAIR, EXECUTED. compareGroupedReceipt/compareOverGroupedCohort
+// are the misread turn's fixtures: a compare goal over a grouped cohort
+// (group team, member project), the shape corpus row
+// cv-c3-grouped-explain-change's traces show -- no question text is
+// carried, only its columns.
+
+// compareGroupedReceipt is the misread turn's receipt: the group axis the
+// same call requested.
+func compareGroupedReceipt() ModelExecutionReceipt {
+	receipt := validModelReceiptFixture(ModelOperationInterpret)
+	receipt.GroupKind = SubjectTeam
+	receipt.RequestedSubjectKind = SubjectProject
+	return receipt
+}
+
+// compareOverGroupedCohort is the misread proposal: a compare goal over a
+// grouped cohort, paired with explain_change already stated.
+func compareOverGroupedCohort() QuestionFrame {
+	return QuestionFrame{
+		Goals:             []InvestigationGoal{GoalCompare, GoalExplainChange},
+		SubjectExpression: groupedExpression(SubjectProject, SubjectTeam),
+		Temporal:          TemporalIntentPeriodComparison,
+	}
+}
+
+type compareRepairCell struct {
+	cell        string
+	receipt     func(*ModelExecutionReceipt)
+	frame       func() QuestionFrame
+	wantOutcome FrameValidationOutcome
+	// wantGoals is the carried frame's goal set, nil when the turn carries
+	// no frame.
+	wantGoals []InvestigationGoal
+	wantLine  map[string]any
+}
+
+func compareRefusedI7Line(decision string) map[string]any {
+	return map[string]any{
+		"outcome": "refused_invalid", "failed_invariant": "i7", "failure_detail": "compare_requires_explicit_set",
+		"frame_gate": "rejected:i7", "repair_decision": decision, "repair": "compare_grouped_collapse", "repair_invariant": "i7",
+		"repair_kind_before": "grouped_members", "repair_kind_after": "none", "repair_member_kind": "none",
+		"repair_terms_match": "not_evaluated", "repair_attempts": float64(0),
+	}
+}
+
+func compareAppliedLine() map[string]any {
+	return map[string]any{
+		"outcome": "repaired", "failed_invariant": "", "frame_gate": "passed", "repair_decision": "applied",
+		"repair": "compare_grouped_collapse", "repair_invariant": "i7",
+		"repair_kind_before": "grouped_members", "repair_kind_after": "grouped_members",
+		"repair_member_kind": "none", "repair_terms_match": "not_evaluated", "repair_attempts": float64(1),
+	}
+}
+
+// compareRepairCells is the I7 bound's own domain table: every declared
+// clause, plus the two controls a shared table needs (an earlier invariant
+// failing first, and a proposal I7 never touches).
+func compareRepairCells() []compareRepairCell {
+	withFrame := func(mutate func(*QuestionFrame)) func() QuestionFrame {
+		return func() QuestionFrame {
+			frame := compareOverGroupedCohort()
+			mutate(&frame)
+			return frame
+		}
+	}
+	return []compareRepairCell{
+		{
+			// NormalizeFrame sorts Goals into vocabulary order
+			// (assess_state precedes explain_change there), independent of
+			// the repair's own append order.
+			cell:        "compare with explain_change already stated adds assess_state",
+			receipt:     func(*ModelExecutionReceipt) {},
+			frame:       compareOverGroupedCohort,
+			wantOutcome: FrameValidationOutcomeRepaired,
+			wantGoals:   []InvestigationGoal{GoalAssessState, GoalExplainChange},
+			wantLine:    compareAppliedLine(),
+		},
+		{
+			cell:    "compare with describe_trend already stated keeps it and adds explain_change",
+			receipt: func(*ModelExecutionReceipt) {},
+			frame: withFrame(func(frame *QuestionFrame) {
+				frame.Goals = []InvestigationGoal{GoalCompare, GoalDescribeTrend}
+			}),
+			wantOutcome: FrameValidationOutcomeRepaired,
+			wantGoals:   []InvestigationGoal{GoalDescribeTrend, GoalExplainChange},
+			wantLine:    compareAppliedLine(),
+		},
+		{
+			cell:    "compare with describe_trend and explain_change both already stated only drops compare",
+			receipt: func(*ModelExecutionReceipt) {},
+			frame: withFrame(func(frame *QuestionFrame) {
+				frame.Goals = []InvestigationGoal{GoalCompare, GoalDescribeTrend, GoalExplainChange}
+			}),
+			wantOutcome: FrameValidationOutcomeRepaired,
+			wantGoals:   []InvestigationGoal{GoalDescribeTrend, GoalExplainChange},
+			wantLine:    compareAppliedLine(),
+		},
+		{
+			// A scoped cohort has no evidenced reading for this bound; the
+			// traces this repair answers show grouped_members only.
+			cell:    "compare over a scoped cohort has no evidenced reading and is declined",
+			receipt: func(*ModelExecutionReceipt) {},
+			frame: withFrame(func(frame *QuestionFrame) {
+				frame.Goals = []InvestigationGoal{GoalCompare}
+				frame.SubjectExpression = scopedExpression(SubjectTeam)
+			}),
+			wantOutcome: FrameValidationOutcomeRefusedInvalid,
+			wantLine: func() map[string]any {
+				line := compareRefusedI7Line("declined_not_grouped_cohort")
+				line["repair_kind_before"] = "children_of_scope"
+				return line
+			}(),
+		},
+		{
+			// explain_change is added unconditionally; a repaired frame
+			// whose Temporal never left `current` still fails I8, and the
+			// turn is refused with the invariant the repair could not
+			// clear -- never relaxed to serve it anyway.
+			cell:    "the repaired frame still fails I8 without a trend-compatible temporal",
+			receipt: func(*ModelExecutionReceipt) {},
+			frame: withFrame(func(frame *QuestionFrame) {
+				frame.Temporal = TemporalIntentCurrent
+			}),
+			wantOutcome: FrameValidationOutcomeRefusedInvalid,
+			wantLine: map[string]any{
+				"outcome": "refused_invalid", "failed_invariant": "i8", "failure_detail": "trend_requires_non_current_temporal",
+				"frame_gate": "rejected:i8", "repair_decision": "refused_after_repair", "repair_invariant": "i7",
+				"repair_kind_before": "grouped_members", "repair_kind_after": "grouped_members",
+				"repair_member_kind": "none", "repair_terms_match": "not_evaluated", "repair_attempts": float64(1),
+			},
+		},
+		{
+			cell:    "an earlier A1 invariant (I6, group equals member) fails first",
+			receipt: func(*ModelExecutionReceipt) {},
+			frame: withFrame(func(frame *QuestionFrame) {
+				frame.SubjectExpression = groupedExpression(SubjectTeam, SubjectTeam)
+			}),
+			wantOutcome: FrameValidationOutcomeRefusedInvalid,
+			wantLine:    notApplicableLine("refused_invalid", "i6", "rejected:i6"),
+		},
+		{
+			cell:    "control: describe_trend and explain_change alone never fail I7",
+			receipt: func(*ModelExecutionReceipt) {},
+			frame: withFrame(func(frame *QuestionFrame) {
+				frame.Goals = []InvestigationGoal{GoalDescribeTrend, GoalExplainChange}
+			}),
+			wantOutcome: FrameValidationOutcomeValid,
+			wantGoals:   []InvestigationGoal{GoalDescribeTrend, GoalExplainChange},
+			wantLine:    notApplicableLine("valid", "", "passed"),
+		},
+	}
+}
+
+// TestTheCompareGroupedRepairIsBounded executes every clause of the I7
+// bound through the production interpreter.
+func TestTheCompareGroupedRepairIsBounded(t *testing.T) {
+	for _, testCase := range compareRepairCells() {
+		t.Run(testCase.cell, func(t *testing.T) {
+			receipt := compareGroupedReceipt()
+			testCase.receipt(&receipt)
+			run := interpretForRepair(t, receipt, testCase.frame(), []string{repairAnchorTerm})
+
+			if run.receipt.FrameOutcome != testCase.wantOutcome {
+				t.Errorf("receipt frame outcome = %q, want %q", run.receipt.FrameOutcome, testCase.wantOutcome)
+			}
+			switch {
+			case testCase.wantGoals == nil && run.outcome.Frame != nil:
+				t.Errorf("the turn carries a %v frame, want none", run.outcome.Frame.Goals)
+			case testCase.wantGoals != nil && run.outcome.Frame == nil:
+				t.Errorf("the turn carries no frame, want goals %v (gate %s)", testCase.wantGoals, run.outcome.Gate.Observable())
+			case testCase.wantGoals != nil && !reflect.DeepEqual(run.outcome.Frame.Goals, testCase.wantGoals):
+				t.Errorf("carried frame goals = %v, want %v", run.outcome.Frame.Goals, testCase.wantGoals)
+			}
+			if testCase.wantGoals == nil && !run.outcome.Gate.Refuses() {
+				t.Errorf("gate %s does not refuse a turn that carries no frame", run.outcome.Gate.Observable())
+			}
+			if testCase.wantGoals != nil && run.outcome.Gate.Refuses() {
+				t.Errorf("gate %s refuses a turn that carries a frame", run.outcome.Gate.Observable())
+			}
+			assertRepairLine(t, run.line, testCase.wantLine)
+		})
+	}
+}
+
+// compareRepairAtTheBound calls the production repair step on the
+// compare-grouped proposal's own refused result, carrying `attempts` prior
+// attempts.
+func compareRepairAtTheBound(t *testing.T, attempts int) FrameValidationResult {
+	t.Helper()
+	receipt := compareGroupedReceipt()
+	proposal := compareOverGroupedCohort()
+	refused := validateAgainstInterpretation(receipt, proposal, ShapeSingleSubject)
+	if refused.Outcome != FrameValidationOutcomeRefusedInvalid || refused.Failure.Invariant != FrameInvariantI7 {
+		t.Fatalf("fixture defect: the compare-grouped proposal validated to %q/%q without repair", refused.Outcome, refused.Failure.Invariant)
+	}
+	refused.Repair.Attempts = attempts
+	return repairCompareGroupedCollapse(receipt, proposal, ShapeSingleSubject, nil, refused)
+}
+
+// TestTheCompareGroupedRepairRunsAtMostOnce holds the bound on attempts, the
+// same shape TestTheRepairRunsAtMostOnce holds for the I9 repair.
+func TestTheCompareGroupedRepairRunsAtMostOnce(t *testing.T) {
+	t.Parallel()
+	fresh := compareRepairAtTheBound(t, 0)
+	if fresh.Outcome != FrameValidationOutcomeRepaired || fresh.Repair.Decision != FrameRepairApplied || fresh.Repair.Attempts != 1 {
+		t.Fatalf("control: fresh result outcome/decision/attempts = %q/%q/%d, want repaired/applied/1", fresh.Outcome, fresh.Repair.Decision, fresh.Repair.Attempts)
+	}
+	exhausted := compareRepairAtTheBound(t, frameRepairBound)
+	if exhausted.Outcome != FrameValidationOutcomeRefusedInvalid || exhausted.Failure.Invariant != FrameInvariantI7 {
+		t.Fatalf("a result at the bound was repaired again: outcome %q invariant %q", exhausted.Outcome, exhausted.Failure.Invariant)
+	}
+	if exhausted.Repair.Decision != FrameRepairDeclinedBoundReached || exhausted.Repair.Attempts != frameRepairBound || exhausted.Repair.KindAfter != "" {
+		t.Fatalf("repair at the bound = %+v, want declined_bound_reached with %d attempts and no repaired kind", exhausted.Repair, frameRepairBound)
+	}
+}
+
+// TestEveryFrameRepairDecisionHasAnExecutedDriver holds, over the WHOLE
+// closed vocabulary and both repairs together, what
+// TestTheCountKindRepairIsBounded and TestTheCompareGroupedRepairIsBounded
+// each hold only for their own repair's decisions: every decision the
+// vocabulary names has an executed driver somewhere in this file.
+func TestEveryFrameRepairDecisionHasAnExecutedDriver(t *testing.T) {
+	produced := map[FrameRepairDecision]bool{}
+	for _, testCase := range repairCells() {
+		receipt := classAReceipt()
+		testCase.receipt(&receipt)
+		flat := testCase.flat
+		if flat == nil {
+			flat = []string{repairAnchorTerm}
+		}
+		run := interpretForRepair(t, receipt, testCase.frame(), flat)
+		produced[FrameRepairDecision(run.line["repair_decision"].(string))] = true
+	}
+	for _, attempts := range []int{0, frameRepairBound} {
+		produced[repairAtTheBound(t, attempts).Repair.Decision] = true
+	}
+	for _, testCase := range compareRepairCells() {
+		receipt := compareGroupedReceipt()
+		testCase.receipt(&receipt)
+		run := interpretForRepair(t, receipt, testCase.frame(), []string{repairAnchorTerm})
+		produced[FrameRepairDecision(run.line["repair_decision"].(string))] = true
+	}
+	for _, attempts := range []int{0, frameRepairBound} {
+		produced[compareRepairAtTheBound(t, attempts).Repair.Decision] = true
+	}
+	for _, member := range FrameRepairDecisionVocabulary() {
+		if !produced[member] {
+			t.Errorf("no executed driver produces repair decision %q", member)
+		}
 	}
 }
 
@@ -823,6 +1065,15 @@ type repairTableFixture struct {
 	frame   QuestionFrame
 	shape   InvestigationShape
 	terms   []string
+	// zeroCarryFields names FrameRepairCarry fields this repair's shape
+	// never states -- e.g. ScopeAnchorKind for a repair that never touches
+	// SubjectExpression, since grouped_members has no scope anchor to state
+	// (scope_anchor_kind.go). Every field of FrameRepairCarry not named
+	// here is checked non-zero on the applied path instead; a field this
+	// struct declares here is checked EXACTLY zero, so a repair cannot
+	// silently skip a field it should populate by omitting it from both
+	// checks.
+	zeroCarryFields map[string]bool
 }
 
 // repairTableFixtures is ONE fixture per frameRepairTable entry, in the same
@@ -842,17 +1093,28 @@ func repairTableFixtures() []repairTableFixture {
 			shape:   ShapeSingleSubject,
 			terms:   []string{repairAnchorTerm},
 		},
+		{
+			name:            "compare_grouped_collapse",
+			receipt:         compareGroupedReceipt(),
+			frame:           compareOverGroupedCohort(),
+			shape:           ShapeSingleSubject,
+			terms:           []string{repairAnchorTerm},
+			zeroCarryFields: map[string]bool{"ScopeAnchorKind": true},
+		},
 	}
 }
 
 // TestEveryRepairPopulatesEveryCarriedField walks frameRepairTable by
 // reflection against FrameRepairCarry: every repair, driven to
-// FrameRepairApplied by its own fixture, must leave no FrameRepairCarry
-// field at its zero value. A repair added to the table without updating this
-// test's fixture list is caught by the length check below; a carried field
-// added to FrameRepairCarry without every repair populating it is caught by
-// the reflection loop -- shape-equivalence a repaired proposal must hold
-// with the direct proposal it repairs into.
+// FrameRepairApplied by its own fixture, must account for every field on
+// FrameRepairCarry -- populating it, or its fixture explicitly declaring
+// (zeroCarryFields) that this repair's shape never states it. A repair
+// added to the table without updating this test's fixture list is caught by
+// the length check below; a carried field added to FrameRepairCarry with no
+// fixture accounting for it defaults every existing repair to "must
+// populate", the same fail-closed direction the original single-repair
+// version of this test held -- shape-equivalence a repaired proposal must
+// hold with the direct proposal it repairs into.
 func TestEveryRepairPopulatesEveryCarriedField(t *testing.T) {
 	fixtures := repairTableFixtures()
 	if len(fixtures) != len(frameRepairTable) {
@@ -871,9 +1133,16 @@ func TestEveryRepairPopulatesEveryCarriedField(t *testing.T) {
 			carry := reflect.ValueOf(result.Repair.Carry)
 			carryType := carry.Type()
 			for f := 0; f < carry.NumField(); f++ {
-				if carry.Field(f).IsZero() {
+				name := carryType.Field(f).Name
+				isZero := carry.Field(f).IsZero()
+				wantZero := fixture.zeroCarryFields[name]
+				if isZero && !wantZero {
 					t.Errorf("repair %q left FrameRepairCarry field %q at its zero value on the applied path",
-						fixture.name, carryType.Field(f).Name)
+						fixture.name, name)
+				}
+				if !isZero && wantZero {
+					t.Errorf("repair %q populated FrameRepairCarry field %q, but its fixture declares that field never applies to this shape",
+						fixture.name, name)
 				}
 			}
 		})
