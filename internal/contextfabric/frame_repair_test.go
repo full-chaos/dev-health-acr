@@ -598,10 +598,20 @@ const repairedCountMembers = 3
 // that keeps what the turn saved.
 func newRepairEngine(t *testing.T, flat []string) (*Engine, *retrievalRecordingGraph, *staticResultStore) {
 	t.Helper()
+	return newRepairEngineWithReceipt(t, flat, func(*ModelExecutionReceipt, *QuestionFrame) {})
+}
+
+// newRepairEngineWithReceipt is newRepairEngine with a hook to mutate the
+// receipt and the proposed frame BEFORE the interpreter runs -- so a test can
+// drive a receipt shape the fixed Class A default does not cover (e.g. no
+// stated ScopeAnchorKind at all) through the SAME production engine.
+func newRepairEngineWithReceipt(t *testing.T, flat []string, mutate func(*ModelExecutionReceipt, *QuestionFrame)) (*Engine, *retrievalRecordingGraph, *staticResultStore) {
+	t.Helper()
 	logs := captureEngineLogger(t)
 	anchor := SubjectRef{Kind: SubjectRepository, CanonicalID: "repository:" + repairAnchorTerm, Label: repairAnchorTerm}
 	receipt := classAReceipt()
 	proposal := countOverNamedSubject()
+	mutate(&receipt, &proposal)
 	receipt.QuestionFrame = &proposal
 	store := &staticResultStore{results: map[string]InvestigationResult{}}
 	graph := &retrievalRecordingGraph{graphReaderStub: graphReaderStub{
@@ -723,6 +733,61 @@ func TestTheRepairedCountIsServedPersistedAndCarried(t *testing.T) {
 	assertRepairedCarriedFrame(t, "carried by the continuation", accepted.Frame)
 }
 
+// TestARepairedProposalWithNoStatedAnchorKindCarriesTheNamedSubjectsOwnKind
+// drives the production engine over a receipt that states NO top-level
+// ScopeAnchorKind at all (unlike classAReceipt's default) but DOES state the
+// named subject's own ExpectedKind -- exactly the shape a repaired proposal
+// carries when the model's own emission of the two is inconsistent.
+// CHAOS-5825: before the repair carried ScopeAnchorKind, retrieval received
+// no anchor-kind hint at all on this path; the assertion below is what the
+// anchor pool's "receipt" source (graphrank/chaos5393_anchor_pool.go) reads
+// downstream of it.
+func TestARepairedProposalWithNoStatedAnchorKindCarriesTheNamedSubjectsOwnKind(t *testing.T) {
+	engine, graph, _ := newRepairEngineWithReceipt(t, []string{repairAnchorTerm}, func(r *ModelExecutionReceipt, frame *QuestionFrame) {
+		r.ScopeAnchorKind = ""
+		kind := SubjectRepository
+		frame.SubjectExpression.Named.ExpectedKind = &kind
+	})
+	request := validInvestigationRequestWithConfirmedWindow()
+	request.RequestID = "request_i9_repair_03"
+	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_repair"}, request)
+	if err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	if len(graph.frames) == 0 {
+		t.Fatal("retrieval was never called for the repaired turn")
+	}
+	for call := range graph.frames {
+		if graph.anchorKinds[call] != SubjectRepository {
+			t.Fatalf("retrieval call %d anchor-kind hint = %q, want repository (carried from the named subject's own stated kind, not the absent receipt field)", call, graph.anchorKinds[call])
+		}
+	}
+	if result.Status != InvestigationComplete {
+		t.Fatalf("status = %q (basis %q, limitations %#v), want complete", result.Status, result.RefusalBasis, result.Limitations)
+	}
+}
+
+// TestARepairedProposalWithNoAnchorKindSignalAtAllCarriesNone drives the
+// same engine as above but with NEITHER the receipt's ScopeAnchorKind NOR the
+// named subject's own ExpectedKind stated: there is nothing for the repair to
+// carry, and it must carry nothing rather than invent a kind -- the anchor
+// hint stays empty.
+func TestARepairedProposalWithNoAnchorKindSignalAtAllCarriesNone(t *testing.T) {
+	engine, graph, _ := newRepairEngineWithReceipt(t, []string{repairAnchorTerm}, func(r *ModelExecutionReceipt, frame *QuestionFrame) {
+		r.ScopeAnchorKind = ""
+	})
+	request := validInvestigationRequestWithConfirmedWindow()
+	request.RequestID = "request_i9_repair_04"
+	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_repair"}, request); err != nil {
+		t.Fatalf("Investigate() error = %v", err)
+	}
+	for call := range graph.frames {
+		if graph.anchorKinds[call] != "" {
+			t.Fatalf("retrieval call %d anchor-kind hint = %q, want empty: no field named a kind for the repair to carry", call, graph.anchorKinds[call])
+		}
+	}
+}
+
 // TestADivergentTermsTurnIsRefusedBeforeRetrieval drives the same engine with
 // flat subject terms that differ from the named subject's term: the repair
 // declines, the turn is refused on I9, and retrieval never receives a
@@ -746,6 +811,72 @@ func TestADivergentTermsTurnIsRefusedBeforeRetrieval(t *testing.T) {
 	}
 	if result.RefusalBasis != contractsv1.ContextFabricRefusalBasisFrameInvariantViolated {
 		t.Fatalf("refusal basis = %q, want %q", result.RefusalBasis, contractsv1.ContextFabricRefusalBasisFrameInvariantViolated)
+	}
+}
+
+// repairTableFixture drives ONE frameRepairTable entry to its own
+// FrameRepairApplied path, so the parity test below can reflect over what it
+// carried.
+type repairTableFixture struct {
+	name    string
+	receipt ModelExecutionReceipt
+	frame   QuestionFrame
+	shape   InvestigationShape
+	terms   []string
+}
+
+// repairTableFixtures is ONE fixture per frameRepairTable entry, in the same
+// order. TestEveryRepairPopulatesEveryCarriedField fails closed if this list
+// and frameRepairTable ever have different lengths: a repair joining the
+// table without a fixture here is exactly the unproven-completeness gap
+// the parity test closes.
+func repairTableFixtures() []repairTableFixture {
+	frame := countOverNamedSubject()
+	kind := SubjectRepository
+	frame.SubjectExpression.Named.ExpectedKind = &kind
+	return []repairTableFixture{
+		{
+			name:    "count_kind_collapse",
+			receipt: classAReceipt(),
+			frame:   frame,
+			shape:   ShapeSingleSubject,
+			terms:   []string{repairAnchorTerm},
+		},
+	}
+}
+
+// TestEveryRepairPopulatesEveryCarriedField walks frameRepairTable by
+// reflection against FrameRepairCarry: every repair, driven to
+// FrameRepairApplied by its own fixture, must leave no FrameRepairCarry
+// field at its zero value. A repair added to the table without updating this
+// test's fixture list is caught by the length check below; a carried field
+// added to FrameRepairCarry without every repair populating it is caught by
+// the reflection loop -- shape-equivalence a repaired proposal must hold
+// with the direct proposal it repairs into.
+func TestEveryRepairPopulatesEveryCarriedField(t *testing.T) {
+	fixtures := repairTableFixtures()
+	if len(fixtures) != len(frameRepairTable) {
+		t.Fatalf("frameRepairTable has %d repair(s) but this test has %d fixture(s): "+
+			"a repair joined the table without a parity fixture", len(frameRepairTable), len(fixtures))
+	}
+	for i, repair := range frameRepairTable {
+		fixture := fixtures[i]
+		t.Run(fixture.name, func(t *testing.T) {
+			base := validateAgainstInterpretation(fixture.receipt, fixture.frame, fixture.shape)
+			result := repair(fixture.receipt, fixture.frame, fixture.shape, fixture.terms, base)
+			if result.Repair.Decision != FrameRepairApplied {
+				t.Fatalf("fixture %q must drive the repair to %q to exercise its carry, got %q",
+					fixture.name, FrameRepairApplied, result.Repair.Decision)
+			}
+			carry := reflect.ValueOf(result.Repair.Carry)
+			carryType := carry.Type()
+			for f := 0; f < carry.NumField(); f++ {
+				if carry.Field(f).IsZero() {
+					t.Errorf("repair %q left FrameRepairCarry field %q at its zero value on the applied path",
+						fixture.name, carryType.Field(f).Name)
+				}
+			}
+		})
 	}
 }
 

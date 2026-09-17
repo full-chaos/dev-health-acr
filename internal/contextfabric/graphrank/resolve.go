@@ -1523,13 +1523,21 @@ type ResolutionTraceEvent struct {
 	// admitted kind on the line and need entirely different fixes.
 	// DecisionMemberKindConfirmed is the confirmed MEMBER kind, or `none`;
 	// the scope means nothing without the kind it widened.
+	// DecisionAnchorPoolKindScopeNoneReason (CHAOS-5825) is `not_applicable`
+	// when a scope WAS admitted, and otherwise names which of this
+	// decision's own two inputs (a receipt-sourced kind, a confirmed
+	// anchor+kind pair) was missing -- so a trace showing scope=none can
+	// tell "the model never stated one and nothing was carried" apart from
+	// "a confirmed anchor existed but the member kind was never confirmed"
+	// without re-reading the code.
 	//
-	// ALL THREE ALWAYS SET, with explicit `none` tokens: a resolution that
-	// admitted no anchor kind must never read like a build that stopped
-	// deciding one.
-	DecisionAnchorPoolKindScope       string
-	DecisionAnchorPoolKindScopeSource string
-	DecisionMemberKindConfirmed       string
+	// ALL FOUR ALWAYS SET, with explicit `none`/`not_applicable` tokens: a
+	// resolution that admitted no anchor kind must never read like a build
+	// that stopped deciding one.
+	DecisionAnchorPoolKindScope           string
+	DecisionAnchorPoolKindScopeSource     string
+	DecisionMemberKindConfirmed           string
+	DecisionAnchorPoolKindScopeNoneReason string
 	// DecisionReservedKinds and DecisionFilterKinds are the WIRING itself,
 	// on the line. Without them a consumer silently reverting to the
 	// receipt-only value -- the exact defect an adversarial round found
@@ -2111,11 +2119,19 @@ func ResolveSubjectsWithCommitBasis(ctx context.Context, principal storage.Princ
 					// decided no anchor kind, admitted no scope, and reserved
 					// nothing -- the exact reading orNone/nonNil already give
 					// decisionSummaryBuffer's own never-fired case below.
-					DecisionAnchorPoolKindScope:       anchorPoolKindScopeNone,
-					DecisionAnchorPoolKindScopeSource: anchorPoolKindScopeNone,
-					DecisionMemberKindConfirmed:       confirmedMemberKindToken(confirmedKind),
-					DecisionReservedKinds:             []string{},
-					DecisionFilterKinds:               []string{},
+					// NoneReason is "not_evaluated", never
+					// NoReceiptNoConfirmedAnchor: this fallback covers EVERY
+					// early exit of resolveSubjects, including an
+					// organization-validation error, a cancelled context, or
+					// a caller-hint short circuit -- none of which prove the
+					// receipt and confirmed anchor were actually empty, only
+					// that the decision never ran to look.
+					DecisionAnchorPoolKindScope:           anchorPoolKindScopeNone,
+					DecisionAnchorPoolKindScopeSource:     anchorPoolKindScopeNone,
+					DecisionAnchorPoolKindScopeNoneReason: anchorPoolKindScopeNoneReasonNotEvaluated,
+					DecisionMemberKindConfirmed:           confirmedMemberKindToken(confirmedKind),
+					DecisionReservedKinds:                 []string{},
+					DecisionFilterKinds:                   []string{},
 				}
 			},
 		}
@@ -2646,12 +2662,13 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// defect an adversarial round found here, twice.
 	anchorScope := decideAnchorPoolKindScope(frame, scopeAnchorKind, confirmedAnchor, confirmedKind)
 	if deps.ResolutionTracer != nil {
-		scope, source := anchorScope.observable()
+		scope, source, noneReason := anchorScope.observable()
 		deps.ResolutionTracer.Trace(ResolutionTraceEvent{
 			RequestID: request.RequestID, Stage: "anchor_pool", AnchorPoolSummary: true,
-			DecisionAnchorPoolKindScope:       scope,
-			DecisionAnchorPoolKindScopeSource: source,
-			DecisionMemberKindConfirmed:       confirmedMemberKindToken(confirmedKind),
+			DecisionAnchorPoolKindScope:           scope,
+			DecisionAnchorPoolKindScopeSource:     source,
+			DecisionAnchorPoolKindScopeNoneReason: noneReason,
+			DecisionMemberKindConfirmed:           confirmedMemberKindToken(confirmedKind),
 			// Read off the SAME values the consumers are handed below, in
 			// the same statement, so the line reports the wiring rather
 			// than a second opinion about it.

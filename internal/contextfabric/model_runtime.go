@@ -1658,6 +1658,18 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 	if result.Outcome == FrameValidationOutcomeValid {
 		result.Frame = backfillNamedSubjectExpectedKind(result.Frame, receipt)
 	}
+	// CHAOS-5825: a repaired frame's receipt keeps whatever ScopeAnchorKind
+	// the model's raw output stated for its ORIGINAL (unrepaired) shape --
+	// typically absent for a named_subject proposal. The repair's own
+	// Carry states what a direct proposal of the repaired shape would have
+	// carried instead; backfilled here, once, before anything downstream
+	// (familySampleFrom, ScopeAnchorRetrievalKind) reads receipt.ScopeAnchorKind.
+	// Never overwrites a value the model itself stated (the receipt path
+	// graphrank's anchor pool reads is unconditional on a non-empty value,
+	// chaos5393_anchor_pool.go's own doc comment).
+	if result.Outcome == FrameValidationOutcomeRepaired && receipt.ScopeAnchorKind == "" {
+		receipt.ScopeAnchorKind = result.Repair.Carry.ScopeAnchorKind
+	}
 
 	// THE ORDERING DECISION, TAKEN HERE. §13.5.2 puts frame validity and
 	// the refuse basis strictly before resolution; this is the last point
@@ -1783,7 +1795,11 @@ func (r RuntimeQuestionInterpreter) resolveFrame(ctx context.Context, principal 
 // resolveFrame and by the input-domain table, so the table measures what
 // production decides.
 func validateProposedFrame(receipt ModelExecutionReceipt, proposed QuestionFrame, emittedShape InvestigationShape, subjectTerms []string) FrameValidationResult {
-	return repairCountKindCollapse(receipt, proposed, emittedShape, subjectTerms, validateAgainstInterpretation(receipt, proposed, emittedShape))
+	result := validateAgainstInterpretation(receipt, proposed, emittedShape)
+	for _, repair := range frameRepairTable {
+		result = repair(receipt, proposed, emittedShape, subjectTerms, result)
+	}
+	return result
 }
 
 // validateAgainstInterpretation is validation without repair: the frame's

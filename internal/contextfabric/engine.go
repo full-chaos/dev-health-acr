@@ -1507,8 +1507,13 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	anchorAgreementForTelemetry := ConfirmedAnchorAgreementNotApplicable
 	var anchorDispositionForTelemetry contractsv1.ContextFabricStructureDisposition
 	var captureDecisionForTelemetry CountPopulationScopeDecision
+	// CHAOS-5825: NotApplicable by default -- set only at the one early exit
+	// this axis names (the CHAOS-4234 class-default window gate below). See
+	// CaptureSkipReason's own doc comment for the scope of what this axis
+	// names and what it leaves at this same default.
+	captureSkipReasonForTelemetry := CaptureSkipReasonNotApplicable
 	defer func() {
-		e.recordConfirmedNeedLedger(ctx, principal, confirmedNeedLedger, appliedNeeds, captureDecisionForTelemetry, anchorAgreementForTelemetry, anchorDispositionForTelemetry)
+		e.recordConfirmedNeedLedger(ctx, principal, confirmedNeedLedger, appliedNeeds, captureDecisionForTelemetry, captureSkipReasonForTelemetry, anchorAgreementForTelemetry, anchorDispositionForTelemetry)
 	}()
 	windowCanon := e.canonicalizeEvidenceWindow(carryCtx, principal, request)
 	// CHAOS-5734: the confirmed-need ledger's window consumer, decided HERE,
@@ -2505,6 +2510,15 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// offers-only resolution whose commit-bearing outputs are discarded
 		// -- see chaos4234_offers_only.go for the ruling and the two
 		// safety layers.
+		//
+		// This is the one exit CaptureSkipReason names -- an
+		// identity-proven anchor the offers-only pass might have found is
+		// discarded with everything else this gate throws away, never
+		// captured for a later turn to inherit. The deferred
+		// recordConfirmedNeedLedger call above reads this value, so the
+		// ledger discloses the decision rather than a silent empty
+		// capture_decision.
+		captureSkipReasonForTelemetry = CaptureSkipReasonWindowConfirmationGatedDiscard
 		gatedMaterial, gatedMaterialWindowExpandUnavailable := e.gatedOfferMaterial(ctx, principal, request, graphRequest, interpretation, familyOutcome, binding, structureCanon, kindCarry, appliedNeeds, priorEntries)
 		// CHAOS-3478/CHAOS-4234: priorOutcomes was already computed above
 		// (resolvePriorSubjectHints runs before Interpret, this gate fires
@@ -2610,6 +2624,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// error -- a question whose frame the server will not act on is a real
 	// product outcome the caller must be able to read, not a 5xx.
 	if familyOutcome.Gate.Refuses() {
+		captureSkipReasonForTelemetry = CaptureSkipReasonFrameGateRefused
 		// Candidates/Committed non-nil empty for the same reason the
 		// branch below spells out: v1 bounds reject a nil array, and
 		// "resolved to zero" must stay distinguishable from "never
@@ -2673,6 +2688,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// is safe to degrade (a confirmed, unambiguous "no such graph
 		// key" classification, never a generic dependency failure).
 		if errors.Is(err, ErrGraphNotProjected) {
+			captureSkipReasonForTelemetry = CaptureSkipReasonGraphNotProjected
 			// Candidates/Committed must be non-nil empty slices, never a
 			// bare nil: ContextFabricSubjectResolution.Validate rejects a
 			// nil array as violating v1 bounds (it cannot tell "resolved
@@ -2709,6 +2725,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// binding above already succeeded, so this is the distinct
 		// commit-gate/subject-matching failure population StageGraphBinding
 		// deliberately does not cover.
+		captureSkipReasonForTelemetry = CaptureSkipReasonResolutionError
 		return InvestigationResult{}, stageError(StageSubjectResolution, fmt.Errorf("resolve subjects: %w", err))
 	}
 	// CHAOS-5788: whether THIS turn's own resolution just bound a committed

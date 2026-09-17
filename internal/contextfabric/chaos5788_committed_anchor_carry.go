@@ -63,6 +63,66 @@ func provenanceForConfirmedNeedBasis(basis ConfirmedNeedBasis) contractsv1.Conte
 	return contractsv1.ContextFabricStructureClarificationConfirmed
 }
 
+// CaptureSkipReason (CHAOS-5825) names WHY a turn's own capture_decision
+// (ConfirmedNeedLedgerEvent.CaptureDecision, engineCommittedAnchorForCapture's
+// underlying CountPopulationScopeDecision) is empty for a turn whose own
+// resolution never reached the capture check at all -- distinct from a
+// resolution that reached the check and decided anchor_unresolved/
+// anchor_ambiguous/organization_scope/frame_absent. Without this axis EVERY
+// early exit (a window gate, a frame-gate refusal, a graph-not-projected
+// degrade, an error) renders the identical empty capture_decision, so an
+// operator reading the ledger line cannot tell a turn that discarded a real
+// identity-proven commit apart from one that never had a chance to find
+// one.
+//
+// NAMED FOR EVERY EXIT BETWEEN THE LEDGER'S OWN RESOLUTION AND THE CAPTURE
+// CHECK: the class-default window gate, a frame-gate refusal, a
+// graph-not-projected degrade, and a hard subject-resolution error each end
+// the turn before engineCommittedAnchorForCapture ever runs, and each does
+// so for a DIFFERENT reason a reader needs told apart -- a gate that will
+// never resolve a subject at all reads nothing like a resolution that tried
+// and errored. Every exit BEFORE the per-need ledger's own ONE resolution
+// point (resolveConfirmedNeedLedger, earlier in Investigate: window veto,
+// structure veto, interpretation failure, continuation refusal, a reuse
+// hit) still renders the unnamed NotApplicable default -- those exits never
+// reach a subject resolution attempt of any kind, a qualitatively different
+// state from "attempted and stopped," and naming them is its own,
+// separately-scoped change.
+type CaptureSkipReason string
+
+const (
+	// CaptureSkipReasonNotApplicable is the zero value: either this turn's
+	// own resolution reached the capture check (CaptureDecision then carries
+	// the real decision), or the turn ended on an exit this axis does not
+	// name.
+	CaptureSkipReasonNotApplicable CaptureSkipReason = "not_applicable"
+	// CaptureSkipReasonWindowConfirmationGatedDiscard: this turn ended on
+	// the CHAOS-4234 class-default window gate, whose offers-only
+	// resolution's commit-bearing outputs are discarded by design before
+	// the capture check ever runs. This is the decision the ledger line
+	// discloses for the second mechanism this axis names: an
+	// identity-proven anchor this gate's own offers-only pass might have
+	// found is NOT captured for a later turn, and this is the ledger line
+	// saying so rather than leaving capture_decision silently
+	// empty.
+	CaptureSkipReasonWindowConfirmationGatedDiscard CaptureSkipReason = "window_confirmation_gated_discard"
+	// CaptureSkipReasonFrameGateRefused: the frame gate refused this turn
+	// (familyOutcome.Gate.Refuses()) before subject resolution ever ran --
+	// there is no resolution outcome of any kind for the capture check to
+	// read.
+	CaptureSkipReasonFrameGateRefused CaptureSkipReason = "frame_gate_refused"
+	// CaptureSkipReasonGraphNotProjected: this turn's own subject resolution
+	// queried a graph key that has never been created (ErrGraphNotProjected)
+	// and degraded to a clean empty terminal -- a confirmed absence of any
+	// graph to resolve against, not an unresolved anchor.
+	CaptureSkipReasonGraphNotProjected CaptureSkipReason = "graph_not_projected"
+	// CaptureSkipReasonResolutionError: subject resolution returned an error
+	// other than ErrGraphNotProjected (StageSubjectResolution) -- the
+	// resolution never completed, so there is no (frame, resolution,
+	// commitBases) triple for the capture check to read.
+	CaptureSkipReasonResolutionError CaptureSkipReason = "resolution_error"
+)
+
 // engineCommittedAnchorForCapture decides whether THIS turn's own resolution
 // bound a committed subject to the frame's own scope anchor strongly enough
 // to persist as carried state for a later turn. Reuses anchorBound's own

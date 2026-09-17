@@ -868,6 +868,10 @@ func TestFrameGateRefusalDiscloseNotEvaluatedNeverApplied(t *testing.T) {
 	if event.AppliedAnchorKind != committedAnchorRepo.Kind || confirmedNeedValueHash(committedAnchorRepo.CanonicalID) != event.AppliedAnchorValueHash {
 		t.Fatalf("event = %+v, want the carried anchor still applied_* on the ledger line -- nothing has evaluated it away yet", event)
 	}
+	if event.CaptureDecision != "" || event.CaptureSkipReason != CaptureSkipReasonFrameGateRefused {
+		t.Fatalf("event capture_decision/capture_skip_reason = %q/%q, want empty/%q -- a frame-gate refusal never reaches subject resolution, so it must say so rather than leave the reason silently blank",
+			event.CaptureDecision, event.CaptureSkipReason, CaptureSkipReasonFrameGateRefused)
+	}
 }
 
 // TestGraphNotProjectedTerminalDisclosesNotEvaluated is the third exit kind
@@ -877,7 +881,7 @@ func TestFrameGateRefusalDiscloseNotEvaluatedNeverApplied(t *testing.T) {
 // one the zero-subjects terminal gets (that one's own resolution DID run,
 // just to nothing).
 func TestGraphNotProjectedTerminalDisclosesNotEvaluated(t *testing.T) {
-	engine, graph, store := buildCommittedAnchorEngine(t)
+	engine, graph, store, telemetry := buildCommittedAnchorEngineWithTelemetry(t)
 
 	one := needTurnRequest("request_5788_notprojected_one", true)
 	oneResponse := needTurnResponse{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{committedAnchorRepo}}, bases: provenCommitBases(committedAnchorRepo)}
@@ -912,6 +916,47 @@ func TestGraphNotProjectedTerminalDisclosesNotEvaluated(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("turn two ledger carries no subject_anchor entry, want the carried value passed through unchanged: this turn's own resolution never ran to disprove it")
+	}
+
+	if len(telemetry.confirmedNeedLedgers) == 0 {
+		t.Fatalf("fixture defect: turn two must record a confirmed-need-ledger line")
+	}
+	event := telemetry.confirmedNeedLedgers[len(telemetry.confirmedNeedLedgers)-1]
+	if event.CaptureDecision != "" || event.CaptureSkipReason != CaptureSkipReasonGraphNotProjected {
+		t.Fatalf("event capture_decision/capture_skip_reason = %q/%q, want empty/%q -- a graph-not-projected degrade never reaches the capture check, so it must say so rather than leave the reason silently blank",
+			event.CaptureDecision, event.CaptureSkipReason, CaptureSkipReasonGraphNotProjected)
+	}
+}
+
+// TestResolutionErrorDisclosesTheReasonCaptureNeverRan is the fourth exit
+// kind this class covers: ResolveSubjects returns an error OTHER than
+// ErrGraphNotProjected (StageSubjectResolution) -- unlike the
+// graph-not-projected degrade, this exit surfaces as an Investigate error,
+// never a served terminal, but the deferred ledger line still fires and
+// must still say why capture never ran rather than leaving the reason
+// silently blank.
+func TestResolutionErrorDisclosesTheReasonCaptureNeverRan(t *testing.T) {
+	engine, graph, store, telemetry := buildCommittedAnchorEngineWithTelemetry(t)
+
+	one := needTurnRequest("request_5788_resolutionerror_one", true)
+	oneResponse := needTurnResponse{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{committedAnchorRepo}}, bases: provenCommitBases(committedAnchorRepo)}
+	oneResult, _ := committedAnchorTurn(t, engine, graph, store, one, oneResponse)
+
+	two := needTurnRequest("request_5788_resolutionerror_two", true)
+	two.ExpectedKinds = []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectTeam}
+	two = continuingNeedTurn(two, oneResult.ResultID)
+	graph.response = needTurnResponse{err: fmt.Errorf("authorization scope lookup failed")}
+	if _, err := engine.Investigate(context.Background(), acceptancePrincipal(), two); err == nil {
+		t.Fatal("Investigate() error = nil, want the resolve-subjects error this fixture is built to trigger")
+	}
+
+	if len(telemetry.confirmedNeedLedgers) == 0 {
+		t.Fatalf("fixture defect: turn two must record a confirmed-need-ledger line even on an error exit")
+	}
+	event := telemetry.confirmedNeedLedgers[len(telemetry.confirmedNeedLedgers)-1]
+	if event.CaptureDecision != "" || event.CaptureSkipReason != CaptureSkipReasonResolutionError {
+		t.Fatalf("event capture_decision/capture_skip_reason = %q/%q, want empty/%q -- a hard subject-resolution error never reaches the capture check, so it must say so rather than leave the reason silently blank",
+			event.CaptureDecision, event.CaptureSkipReason, CaptureSkipReasonResolutionError)
 	}
 }
 

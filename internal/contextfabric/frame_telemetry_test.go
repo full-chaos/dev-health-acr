@@ -87,6 +87,7 @@ var frameRepairLogKeys = map[string]string{
 	"MemberKind": "repair_member_kind",
 	"TermsMatch": "repair_terms_match",
 	"Attempts":   "repair_attempts",
+	"Carry":      "repair_carry_scope_anchor_kind",
 }
 
 // TestEveryFrameRepairFieldReachesTheLogLine is the structural half for the

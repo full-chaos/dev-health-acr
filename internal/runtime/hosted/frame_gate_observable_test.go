@@ -271,9 +271,10 @@ func TestTheDeployedAnchorPoolSummaryReachesTheProductionLogLevel(t *testing.T) 
 	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	defaultResolutionTracer(nil, logger).Trace(graphrank.ResolutionTraceEvent{
 		RequestID: "request_anchor_pool_stage", Stage: "anchor_pool", AnchorPoolSummary: true,
-		DecisionAnchorPoolKindScope:       "team",
-		DecisionAnchorPoolKindScopeSource: "confirmed_anchor",
-		DecisionMemberKindConfirmed:       "project",
+		DecisionAnchorPoolKindScope:           "team",
+		DecisionAnchorPoolKindScopeSource:     "confirmed_anchor",
+		DecisionAnchorPoolKindScopeNoneReason: "not_applicable",
+		DecisionMemberKindConfirmed:           "project",
 	})
 	if buf.Len() == 0 {
 		t.Fatal("the anchor_pool summary emitted nothing at the production log level")
@@ -287,5 +288,35 @@ func TestTheDeployedAnchorPoolSummaryReachesTheProductionLogLevel(t *testing.T) 
 	}
 	if got, _ := rec["anchor_pool_kind_scope_source"].(string); got != "confirmed_anchor" {
 		t.Errorf("anchor_pool_kind_scope_source = %q, want \"confirmed_anchor\" -- the fallback source must be distinguishable from the receipt in production", got)
+	}
+	// CHAOS-5825: the none-reason key reaches this SAME production emission
+	// call site -- checked here, not only against the decision function
+	// directly, so a dropped logger argument for this key is caught on the
+	// actual JSON line the deployed wiring writes.
+	if got, _ := rec["anchor_pool_kind_scope_none_reason"].(string); got != "not_applicable" {
+		t.Errorf("anchor_pool_kind_scope_none_reason = %q, want \"not_applicable\" -- present on the deployed line even when a scope was admitted", got)
+	}
+}
+
+// TestTheDeployedAnchorPoolSummaryStatesWhyANoneScopeIsNone is the sibling
+// of the test above for the "none" arm: the reason key must reach
+// production for the case it actually exists to explain, not only for the
+// not_applicable default.
+func TestTheDeployedAnchorPoolSummaryStatesWhyANoneScopeIsNone(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	defaultResolutionTracer(nil, logger).Trace(graphrank.ResolutionTraceEvent{
+		RequestID: "request_anchor_pool_none_reason", Stage: "anchor_pool", AnchorPoolSummary: true,
+		DecisionAnchorPoolKindScope:           "none",
+		DecisionAnchorPoolKindScopeSource:     "none",
+		DecisionAnchorPoolKindScopeNoneReason: "confirmed_anchor_no_confirmed_kind",
+		DecisionMemberKindConfirmed:           "none",
+	})
+	var rec map[string]any
+	if err := json.Unmarshal(bytes.TrimRight(buf.Bytes(), "\n"), &rec); err != nil {
+		t.Fatalf("captured line is not JSON: %v -- line: %s", err, buf.String())
+	}
+	if got, _ := rec["anchor_pool_kind_scope_none_reason"].(string); got != "confirmed_anchor_no_confirmed_kind" {
+		t.Errorf("anchor_pool_kind_scope_none_reason = %q, want \"confirmed_anchor_no_confirmed_kind\" on the deployed line -- an operator reading production Info must see WHY, not just that the scope was none", got)
 	}
 }

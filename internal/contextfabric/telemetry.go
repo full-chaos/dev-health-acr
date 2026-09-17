@@ -410,6 +410,12 @@ func (t SlogEngineTelemetry) RecordKindCarry(ctx context.Context, principal stor
 // own resolution just bound a brand new engine-committed anchor for a later
 // turn to inherit (CountPopulationScopeDecisionVocabulary's own closed
 // vocabulary; empty only when the turn never reached the check).
+// capture_skip_reason (CHAOS-5825) is why: `not_applicable` when
+// capture_decision carries a real decision (or the turn ended on an exit
+// this axis does not yet name), `window_confirmation_gated_discard` when
+// this turn ended on the CHAOS-4234 gate, whose offers-only resolution
+// discards everything the capture check would need before that check ever
+// runs (CaptureSkipReason's own doc comment).
 func (t SlogEngineTelemetry) RecordConfirmedNeedLedger(ctx context.Context, principal storage.Principal, event ConfirmedNeedLedgerEvent) {
 	args := append([]any{
 		"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(event.Outcome)),
@@ -427,6 +433,7 @@ func (t SlogEngineTelemetry) RecordConfirmedNeedLedger(ctx context.Context, prin
 		"anchor_agreement", SanitizeLogAttr(string(event.AnchorAgreement)),
 		"anchor_disposition", SanitizeLogAttr(string(event.AnchorDisposition)),
 		"capture_decision", SanitizeLogAttr(string(event.CaptureDecision)),
+		"capture_skip_reason", SanitizeLogAttr(noneWhenEmpty(string(event.CaptureSkipReason))),
 	}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric confirmed need ledger", args...)
 }
@@ -1172,6 +1179,12 @@ func (t SlogEngineTelemetry) RecordFrameValidation(ctx context.Context, principa
 		"repair_member_kind", SanitizeLogAttr(repairMemberKindToken(event.Repair.MemberKind)),
 		"repair_terms_match", SanitizeLogAttr(event.Repair.ObservableTermsMatch()),
 		"repair_attempts", SanitizeLogInt(int64(event.Repair.Attempts)),
+		// repair_carry_scope_anchor_kind: the anchor kind a repaired
+		// proposal states for the downstream consumer a direct proposal of
+		// the same shape would have stated it for -- `none` when the
+		// repair did not run or found nothing to carry (see
+		// FrameRepairCarry's own doc comment).
+		"repair_carry_scope_anchor_kind", SanitizeLogAttr(noneWhenEmpty(string(event.Repair.Carry.ScopeAnchorKind))),
 	}
 	args = append(args, requirementDerivationLogAttrs(event.RequirementDerivation)...)
 	args = append(args, requestIDLogAttrs(ctx)...)

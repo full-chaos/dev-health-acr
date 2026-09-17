@@ -143,6 +143,22 @@ func TestCHAOS4234_ClassDefaultGate_ComposesKindAndHandleOffersBesideTheWindowOf
 	if want := []bool{true}; !reflect.DeepEqual(telemetry.windowGateOfferDisclosures, want) {
 		t.Fatalf("windowGateOfferDisclosures = %#v, want %#v", telemetry.windowGateOfferDisclosures, want)
 	}
+	// CHAOS-5825: this gate's own offers-only resolution discards every
+	// commit-bearing output before the capture check ever runs, so
+	// capture_decision stays empty -- the ledger line states WHY rather
+	// than leaving it silently blank, so an operator reading this exact
+	// turn's own trace can tell it apart from a resolution that reached
+	// the check and found nothing to capture.
+	if len(telemetry.confirmedNeedLedgers) == 0 {
+		t.Fatal("no confirmed_need_ledger event was recorded for the gated turn")
+	}
+	ledgerEvent := telemetry.confirmedNeedLedgers[len(telemetry.confirmedNeedLedgers)-1]
+	if ledgerEvent.CaptureDecision != "" {
+		t.Fatalf("CaptureDecision = %q, want empty: this gate's own resolution never reaches the capture check", ledgerEvent.CaptureDecision)
+	}
+	if ledgerEvent.CaptureSkipReason != CaptureSkipReasonWindowConfirmationGatedDiscard {
+		t.Fatalf("CaptureSkipReason = %q, want %q", ledgerEvent.CaptureSkipReason, CaptureSkipReasonWindowConfirmationGatedDiscard)
+	}
 }
 
 // windowExpandTargetsExisting reports whether expand's ReceiptID/OptionID/
