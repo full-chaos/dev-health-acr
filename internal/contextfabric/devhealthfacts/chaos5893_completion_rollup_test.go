@@ -199,7 +199,15 @@ func TestActualCompletionProjectRollup_UnrequestedProjectRowNeverAppears(t *test
 	}
 }
 
-func TestActualCompletionProjectRollup_WindowActiveUsesAsOfExpression(t *testing.T) {
+// TestActualCompletionProjectRollup_WindowActiveRefusesRatherThanMisreportHistory
+// is class E (codex r1 P2, source-traced): the roll-up's cancelled/unknown
+// exclusion reads CURRENT w.status, a column with no recorded history, so
+// an as-of query cannot honestly compute "the roll-up as of T" -- it would
+// silently substitute today's status for the requested instant's. The
+// project branch refuses the whole non-current axis rather than serve that,
+// and the refusal is DISCLOSED (never a bare empty read): no query fires at
+// all, and the caller sees the closed-vocabulary reason.
+func TestActualCompletionProjectRollup_WindowActiveRefusesRatherThanMisreportHistory(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{{match: completionRollupQueryMatch, rows: [][]any{
 		completionRollupRow("linear", "proj-1", 5, 0, 0, 3),
@@ -213,15 +221,17 @@ func TestActualCompletionProjectRollup_WindowActiveUsesAsOfExpression(t *testing
 	if err != nil {
 		t.Fatalf("ReadFacts() error = %v", err)
 	}
-	if len(result.Facts) != 1 {
-		t.Fatalf("facts = %#v, want 1", result.Facts)
+	if len(result.Facts) != 0 {
+		t.Fatalf("facts = %#v, want none -- a historical project read must never serve a status-basis it cannot honestly claim", result.Facts)
 	}
-	statement := client.queries[0].statement
-	if !strings.Contains(statement, "w.completed_at <=") {
-		t.Fatalf("statement = %q, want the Tier-B as-of comparison for an active window", statement)
+	if len(client.queries) != 0 {
+		t.Fatalf("query count = %d, want 0 -- the project branch must not run its query on a historical axis at all", len(client.queries))
 	}
-	if !strings.Contains(statement, "w.created_at <=") {
-		t.Fatalf("statement = %q, want the existence predicate for an active window", statement)
+	if !result.Truncated {
+		t.Fatal("Truncated = false, want true -- the refused project subject is a disclosed omission, not a silent empty read")
+	}
+	if !strings.Contains(result.Reason, "project_completion_current_status_only") {
+		t.Fatalf("reason = %q, want it to name the historical-status limitation", result.Reason)
 	}
 }
 
@@ -291,4 +301,145 @@ func assertNumber(t *testing.T, fact contextfabric.CanonicalFact, field string, 
 	if got == nil || *got != want {
 		t.Fatalf("%s = %#v, want %v", field, fact.Fields[field], want)
 	}
+}
+
+// --- Class F (scan-583): no branch starves another on the shared budget ---
+
+// countFactsByKind counts the facts whose Subject is of kind.
+func countFactsByKind(facts []contextfabric.CanonicalFact, kind contextfabric.SubjectKind) int {
+	n := 0
+	for _, fact := range facts {
+		if fact.Subject.Kind == kind {
+			n++
+		}
+	}
+	return n
+}
+
+// projectRowsAndSubjects builds n distinct project rows/subjects for the
+// aggregate statement, one project each with 1 counted, 1 completed work
+// item (a minimal, always-servable shape -- the numerator/denominator
+// arithmetic itself is covered elsewhere).
+func projectRowsAndSubjects(n int) ([][]any, []contextfabric.SubjectRef) {
+	rows := make([][]any, n)
+	subjects := make([]contextfabric.SubjectRef, n)
+	for i := 0; i < n; i++ {
+		id := "PROJ-" + strconvItoa(i)
+		rows[i] = completionRollupRow("linear", id, 1, 0, 0, 1)
+		subjects[i] = projectSubject("linear", id)
+	}
+	return rows, subjects
+}
+
+func strconvItoa(i int) string {
+	// Local, dependency-free itoa: this file already imports no "strconv",
+	// and pulling it in for one call site is not worth a new import line.
+	if i == 0 {
+		return "0"
+	}
+	neg := i < 0
+	if neg {
+		i = -i
+	}
+	var buf [20]byte
+	pos := len(buf)
+	for i > 0 {
+		pos--
+		buf[pos] = byte('0' + i%10)
+		i /= 10
+	}
+	if neg {
+		pos--
+		buf[pos] = '-'
+	}
+	return string(buf[pos:])
+}
+
+// TestActualCompletionSharedBudgetNoBranchStarvesTheOther is class F
+// (scan-583 finding): the work-item and project branches share ONE
+// 200-row factBudget. Reading the work-item branch first let a large
+// work-item request silently exhaust the shared cap before the project
+// branch ever ran -- 200 work-item subjects alongside a single project
+// subject served all 200 work items, Truncated=true, and dropped the
+// project's own roll-up fact with nothing naming which kind was cut.
+//
+// This executes the full {0, 1, budget-1, budget, budget+1} work-item x
+// {0, 1, many} project cross, in BOTH caller-supplied subject orders, and
+// asserts: the project branch (bounded by its own small requested count)
+// is NEVER starved regardless of order or work-item volume; the work-item
+// branch is served up to whatever the shared budget has left AFTER the
+// project branch's own admissions; and a drop is disclosed by KIND, never
+// folded into an undifferentiated Truncated flag alone.
+func TestActualCompletionSharedBudgetNoBranchStarvesTheOther(t *testing.T) {
+	const budgetCap = 200 // must match devhealthfacts' own maxFactRowsPerQuery
+
+	workItemCells := []int{0, 1, budgetCap - 1, budgetCap, budgetCap + 1}
+	projectCells := []int{0, 1, 5} // "many" -- well under the cap by design
+
+	for _, wi := range workItemCells {
+		for _, pj := range projectCells {
+			if wi == 0 && pj == 0 {
+				continue
+			}
+			for _, workItemFirst := range []bool{true, false} {
+				wi, pj, workItemFirst := wi, pj, workItemFirst
+				order := "project_first"
+				if workItemFirst {
+					order = "work_item_first"
+				}
+				t.Run(fmtSharedBudgetCase(wi, pj, order), func(t *testing.T) {
+					workItemSubjs := workItemSubjects(wi)
+					workItemRows := make([][]any, wi)
+					for i := 0; i < wi; i++ {
+						workItemRows[i] = []any{workItemSubjs[i].Label, uint8(1), time.Unix(0, 0).UTC(), "repo-1"}
+					}
+					projectRows, projectSubjs := projectRowsAndSubjects(pj)
+
+					var tables []fakeTable
+					if pj > 0 {
+						tables = append(tables, fakeTable{match: completionRollupQueryMatch, rows: projectRows})
+					}
+					if wi > 0 {
+						tables = append(tables, fakeTable{match: "FROM work_items", rows: workItemRows})
+					}
+					client := &fakeClient{tables: tables}
+
+					var subjects []contextfabric.SubjectRef
+					if workItemFirst {
+						subjects = append(append(subjects, workItemSubjs...), projectSubjs...)
+					} else {
+						subjects = append(append(subjects, projectSubjs...), workItemSubjs...)
+					}
+
+					result := readProjectCompletion(t, client, subjects...)
+
+					if got := countFactsByKind(result.Facts, contextfabric.SubjectProject); got != pj {
+						t.Fatalf("project facts served = %d, want %d (every requested project) -- the project branch must never be starved by the work-item branch, regardless of caller order", got, pj)
+					}
+
+					remaining := budgetCap - pj
+					wantWorkItemFacts := wi
+					if wantWorkItemFacts > remaining {
+						wantWorkItemFacts = remaining
+					}
+					if got := countFactsByKind(result.Facts, contextfabric.SubjectWorkItem); got != wantWorkItemFacts {
+						t.Fatalf("work-item facts served = %d, want %d", got, wantWorkItemFacts)
+					}
+
+					if wi > remaining {
+						if !result.Truncated {
+							t.Fatal("Truncated = false, want true -- more work items were requested than the shared budget had left after the project branch's own admissions")
+						}
+						if !strings.Contains(result.Reason, "actual_completion_shared_budget_dropped:work_item") {
+							t.Fatalf("reason = %q, want it to name work_item as the kind the shared budget shorted", result.Reason)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func fmtSharedBudgetCase(wi, pj int, order string) string {
+	return "wi=" + strconvItoa(wi) + "/pj=" + strconvItoa(pj) + "/" + order
 }

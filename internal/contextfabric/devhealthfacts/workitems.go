@@ -211,6 +211,57 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 	// comment).
 	budget := newFactBudget()
 	totalRows := 0
+	historicalProjectRejected := 0
+	integrityViolations := 0
+	// workItemBudgetDropped/projectBudgetDropped (scan-583, class F): a
+	// per-branch delta over budget's own admit-refusal counter, so a
+	// shortfall is attributable to the KIND whose subjects were not read,
+	// never folded into one undifferentiated Truncated flag. See
+	// applySharedBudgetOmission below.
+	workItemBudgetDropped := 0
+	projectBudgetDropped := 0
+
+	// THE PROJECT BRANCH RUNS FIRST (scan-583, class F: "no branch starves
+	// another"). It reads at most one row per REQUESTED project -- bounded
+	// by the caller's own project count, ordinarily small -- while the
+	// work-item branch below can be asked about up to maxFactRowsProbe
+	// individual work items. Sharing one 200-row budget with the work-item
+	// branch reading FIRST let a large work-item request silently exhaust
+	// it before the project branch ever got a slot: 200 work-item subjects
+	// alongside a single project subject served the 200 work items,
+	// Truncated=true, and dropped the project's own roll-up fact with no
+	// disclosure naming which kind was cut. Reading the bounded, cheap
+	// branch first means the project root's own answer is never starved by
+	// a sibling branch spending the shared budget before it runs.
+	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
+		if timeBound.active {
+			// Class E (codex r1 P2, source-traced): the roll-up's
+			// cancelled/unknown exclusion reads CURRENT w.status, which has
+			// no recorded history -- the same limitation Tier C providers
+			// refuse outright (timebound.go's noHistoryUnsupportedReason).
+			// Running the as-of completed_at predicate anyway and labeling
+			// the result historical would misreport today's status as the
+			// status at the requested instant, so the project branch is
+			// refused wholesale on any non-current axis instead. The
+			// work-item branch below is unaffected: it never reads status.
+			historicalProjectRejected += len(projectSubjects)
+		} else {
+			droppedBefore := budget.dropped
+			rowCount, servedCount, projectRejected, projectIntegrityViolations, scanErr := p.readProjectActualCompletion(ctx, orgID, projectSubjects, &facts, scope, settings, budget)
+			if scanErr != nil {
+				return contextfabric.FactProviderResult{}, readFailure("query project actual completion", scanErr)
+			}
+			rejected += projectRejected
+			integrityViolations += projectIntegrityViolations
+			projectBudgetDropped += budget.dropped - droppedBefore
+			budget.observe(rowCount)
+			// totalRows drives retentionState (an AVAILABILITY signal), so it
+			// takes servedCount, not rowCount -- see readProjectActualCompletion's
+			// doc comment for why an all-cancelled project must not read as
+			// State=available with zero facts.
+			totalRows += servedCount
+		}
+	}
 
 	if workItemSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectWorkItem); len(workItemSubjects) > 0 {
 		ids, bySubject, workItemRejected := v2Index(workItemSubjects, identity.KindWorkItem)
@@ -225,6 +276,7 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query work item actual completion", scanErr)
 		}
+		droppedBefore := budget.dropped
 		for _, row := range rows {
 			subject, ok := bySubject[row.RepoID+":"+row.ID]
 			if !ok {
@@ -242,27 +294,35 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 				EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, row.RepoID+":"+row.ID)},
 			})
 		}
+		workItemBudgetDropped += budget.dropped - droppedBefore
 		budget.observe(len(rows))
 		totalRows += len(rows)
 	}
 
-	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
-		rowCount, servedCount, projectRejected, scanErr := p.readProjectActualCompletion(ctx, orgID, projectSubjects, &facts, timeBound, scope, settings, budget)
-		if scanErr != nil {
-			return contextfabric.FactProviderResult{}, readFailure("query project actual completion", scanErr)
-		}
-		rejected += projectRejected
-		budget.observe(rowCount)
-		// totalRows drives retentionState (an AVAILABILITY signal), so it
-		// takes servedCount, not rowCount -- see readProjectActualCompletion's
-		// doc comment for why an all-cancelled project must not read as
-		// State=available with zero facts.
-		totalRows += servedCount
-	}
-
 	state, retentionReason := timeBound.retentionState(totalRows)
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: budget.truncated()}
+	applyProjectCompletionHistoricalRejection(&result, historicalProjectRejected)
+	applyProjectCompletionIntegrityRejection(&result, integrityViolations)
+	applySharedBudgetOmission(&result, "project", projectBudgetDropped)
+	applySharedBudgetOmission(&result, "work_item", workItemBudgetDropped)
 	return result, nil
+}
+
+// applySharedBudgetOmission discloses that count subjects of kind's OWN
+// requested set were not read because the work-item and project branches
+// share one factBudget (scan-583, class F): a branch that runs after the
+// other has already spent the shared cap can be left with fewer admissions
+// than its own requested subject count, and that shortfall must name the
+// KIND it fell on rather than fold into the undifferentiated Truncated flag
+// every other omission on this budget already sets.
+func applySharedBudgetOmission(result *contextfabric.FactProviderResult, kind string, count int) {
+	if count <= 0 {
+		return
+	}
+	result.OmittedCount += count
+	result.Truncated = true
+	result.State = contextfabric.SourceTruncated
+	mergeFactReadReason(result, "actual_completion_shared_budget_dropped:"+kind)
 }
 
 // workItemCancelledStatus is work_items.status' one CANCELLED vocabulary
@@ -332,17 +392,26 @@ const (
 // NOT in servedCount (nothing servable came of it) -- collapsing the two
 // would report State=available for a project this producer served no fact
 // for, which is exactly the false-positive chris's ruling forbids.
-func (p *ActualCompletionProvider) readProjectActualCompletion(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, scope readers.AuthorizationScope, settings readers.Settings, budget *factBudget) (rowCount, servedCount, rejected int, err error) {
+//
+// CURRENT AXIS ONLY. The caller (ReadFacts) invokes this only when the
+// query's time bound is inactive: the exclusion below reads w.status, a
+// column with no recorded history, so there is no as-of variant of this
+// query to build -- see ReadFacts' historicalProjectRejected branch and
+// projectCompletionHistoricalUnsupportedReason.
+//
+// rowCount is read against maxFactRowsProbe (LIMIT+1), never
+// maxFactRowsPerQuery, so a project population sitting exactly at the
+// served cap is distinguishable from one that overflowed it -- see
+// withRowProbeLimit's own doc comment for why LIMIT N alone cannot tell
+// "there were exactly N" from "there were more".
+func (p *ActualCompletionProvider) readProjectActualCompletion(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, scope readers.AuthorizationScope, settings readers.Settings, budget *factBudget) (rowCount, servedCount, rejected, integrityViolations int, err error) {
 	ids, bySubject, rejected := v2Index(subjects, identity.KindProject)
 	if len(ids) == 0 {
-		return 0, 0, rejected, nil
+		return 0, 0, rejected, 0, nil
 	}
-	completedExpr := "isNotNull(w.completed_at)"
-	if timeBound.active {
-		completedExpr = "(w.completed_at IS NOT NULL AND w.completed_at <= " + timeBound.asOfExpression() + ")"
-	}
-	statement := readers.WithSettings(workItemProjectCompletionStatement(scope, completedExpr, timeBound.existencePredicate("w.created_at")), settings)
-	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+	statement, scopeBindings := workItemProjectCompletionStatement(scope)
+	statement = readers.WithSettings(statement, settings)
+	scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadProjectActualCompletion", statement, orgID, ids, func(row readers.RowScanner) error {
 		var projectKey string
 		var workItemCount, cancelledCount, unknownStatusCount, completedCount uint64
 		if scanErr := row.Scan(&projectKey, &workItemCount, &cancelledCount, &unknownStatusCount, &completedCount); scanErr != nil {
@@ -353,6 +422,18 @@ func (p *ActualCompletionProvider) readProjectActualCompletion(ctx context.Conte
 			return nil
 		}
 		rowCount++
+		// ONE POPULATION PARTITION (class A, codex r1 ruling): every count
+		// below is defined over the SAME work_item_count, and a served row
+		// must satisfy the arithmetic its own fields claim -- counted +
+		// cancelled == total, and completed/unknown are both subsets of
+		// counted. The shipped statement cannot violate this (every count is
+		// a plain countIf over one GROUP BY), so a violation here means a
+		// future edit broke that invariant; fail CLOSED (no fact, disclosed
+		// reason) rather than serve a ratio the row's own numbers disprove.
+		if cancelledCount > workItemCount || unknownStatusCount > workItemCount {
+			integrityViolations++
+			return nil
+		}
 		// countedWorkItems is the ratio's true denominator (chris: cancelled
 		// never counts, in EITHER direction; unknown-status items DO count
 		// -- disclosed separately, never excluded). A project whose members
@@ -360,6 +441,10 @@ func (p *ActualCompletionProvider) readProjectActualCompletion(ctx context.Conte
 		// count, so it is treated exactly like zero members: no fact.
 		countedWorkItems := workItemCount - cancelledCount
 		if countedWorkItems == 0 {
+			return nil
+		}
+		if completedCount > countedWorkItems || unknownStatusCount > countedWorkItems {
+			integrityViolations++
 			return nil
 		}
 		servedCount++
@@ -382,11 +467,11 @@ func (p *ActualCompletionProvider) readProjectActualCompletion(ctx context.Conte
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityProject, projectKey)},
 		})
 		return nil
-	}, timeBound.bindings()...)
+	}, scopeBindings...)
 	if scanErr != nil {
-		return 0, 0, rejected, scanErr
+		return 0, 0, rejected, 0, scanErr
 	}
-	return rowCount, servedCount, rejected, nil
+	return rowCount, servedCount, rejected, integrityViolations, nil
 }
 
 // workItemProjectCompletionStatement is the project-grain counterpart to
@@ -397,21 +482,43 @@ func (p *ActualCompletionProvider) readProjectActualCompletion(ctx context.Conte
 // item -- maxFactRowsPerQuery bounds project count here, never member
 // count). The same repository-authorization scope as the work-item read
 // applies, so a project's roll-up never counts a work item the requesting
-// principal could not otherwise see. completedExpr never overlaps the
-// cancelled countIf: a cancelled item's completed_at is irrelevant to the
-// ratio either way, since countedWorkItems (Go side) subtracts it from
-// the denominator regardless of what completedExpr would have said.
-func workItemProjectCompletionStatement(scope readers.AuthorizationScope, completedExpr, existencePredicate string) string {
+// principal could not otherwise see.
+//
+// The completed countIf is guarded with `AND w.status != 'canceled'`
+// (codex r1 P1): completed_count must be a SUBSET of counted_work_items,
+// and counted_work_items already excludes cancelled items, so a cancelled
+// item that also carries a completed_at can never inflate the numerator
+// past the denominator.
+//
+// CURRENT AXIS ONLY -- see readProjectActualCompletion's own doc comment
+// for why this never takes an as-of predicate. LIMIT+1 (withRowProbeLimit,
+// not withRowLimit): the caller distinguishes an exact-cap population from
+// a truncated one off the probe row, the same discipline every other
+// aggregate read in this package uses.
+//
+// Returns the scope's own bindings alongside the statement (the
+// work_item_membership.go S1 statement's own shape): WorkItemScopeSQL's
+// AuthorizationExpr can reference named parameters
+// (authorized_repo_all/_slugs/_owners and their requested-scope
+// counterparts) that exist ONLY when RepositorySelectors is set, and the
+// caller MUST bind them via readers.QueryOrgScopedNamed's extra bindings --
+// clickhouseFacts.query's own extra parameter is typed for time bindings
+// only and cannot carry them. Passing the SQL text without its own
+// bindings compiles and runs against a fakeClient double (which ignores
+// bindings entirely) but fails a real ClickHouse server with "Substitution
+// ... is not set" -- caught by this producer's own real-ClickHouse test,
+// never by the canned-row unit tests.
+func workItemProjectCompletionStatement(scope readers.AuthorizationScope) (string, []readers.Binding) {
 	rendered := readers.WorkItemScopeSQL(scope)
 	from := `FROM work_items AS w FINAL`
 	if rendered.JoinSQL != "" {
 		from += "\n" + rendered.JoinSQL
 	}
 	from += "\nINNER JOIN " + projectIdentityJoinSQL() + " ON " + projectIdentityMatchSQL("w", "project_id")
-	statement := `SELECT concat(p.provider, ':', p.id), count(), countIf(w.status = '` + workItemCancelledStatus + `'), countIf(w.status = '` + workItemUnknownStatus + `'), countIf(` + completedExpr + `)
+	statement := `SELECT concat(p.provider, ':', p.id), count(), countIf(w.status = '` + workItemCancelledStatus + `'), countIf(w.status = '` + workItemUnknownStatus + `'), countIf(isNotNull(w.completed_at) AND w.status != '` + workItemCancelledStatus + `')
 ` + from + `
-WHERE w.org_id = {org_id:String} AND w.project_id != '' AND (` + rendered.AuthorizationExpr + `)` + existencePredicate + `
+WHERE w.org_id = {org_id:String} AND w.project_id != '' AND (` + rendered.AuthorizationExpr + `)
 GROUP BY p.provider, p.id
 ORDER BY p.id`
-	return withRowLimit(statement)
+	return withRowProbeLimit(statement), rendered.Bindings
 }

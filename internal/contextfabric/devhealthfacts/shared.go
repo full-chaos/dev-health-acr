@@ -1157,12 +1157,76 @@ func applySubjectShapeRejection(result *contextfabric.FactProviderResult, produc
 	result.OmittedCount += rejected
 	result.Truncated = true
 	result.State = contextfabric.SourceTruncated
+	mergeFactReadReason(result, subjectIDShapeRejectedReason)
+}
+
+// mergeFactReadReason folds an additional closed-vocabulary reason token
+// into result.Reason without discarding whatever reason a prior decision
+// already recorded, and without repeating a token that is already present.
+// Extracted from applySubjectShapeRejection so every OmittedCount-style
+// disclosure this package adds shares the ONE merge rule -- two independently
+// hand-written copies is exactly how the subject-shape and (CHAOS-5893)
+// project-completion disclosures could silently drift on what "already
+// recorded" means.
+func mergeFactReadReason(result *contextfabric.FactProviderResult, reason string) {
 	switch {
 	case strings.TrimSpace(result.Reason) == "":
-		result.Reason = subjectIDShapeRejectedReason
-	case !strings.Contains(result.Reason, subjectIDShapeRejectedReason):
-		result.Reason = subjectIDShapeRejectedReason + "; " + result.Reason
+		result.Reason = reason
+	case !strings.Contains(result.Reason, reason):
+		result.Reason = reason + "; " + result.Reason
 	}
+}
+
+// projectCompletionHistoricalUnsupportedReason is the closed-vocabulary
+// token readProjectActualCompletion's caller discloses when a project
+// subject is requested on a historical/as-of axis. The roll-up's
+// cancelled/unknown exclusion is a CURRENT w.status read (the same
+// no-recorded-history column noHistoryUnsupportedReason already refuses
+// for the Tier C providers in timebound.go) layered on an as-of
+// completed_at predicate; serving that combination under a historical
+// label would report today's cancellation/unknown state as though it were
+// true at the requested instant. Rather than invent a second sentence for
+// the same limitation, the project branch is refused wholesale on any
+// non-current axis and folded into this SAME OmittedCount/Reason
+// disclosure applySubjectShapeRejection uses, so a caller sees exactly one
+// partial-coverage shape regardless of which reason produced it.
+const projectCompletionHistoricalUnsupportedReason = "project_completion_current_status_only"
+
+// applyProjectCompletionHistoricalRejection discloses that count project
+// subjects were not read because the requested axis was not current -- see
+// projectCompletionHistoricalUnsupportedReason.
+func applyProjectCompletionHistoricalRejection(result *contextfabric.FactProviderResult, count int) {
+	if count <= 0 {
+		return
+	}
+	result.OmittedCount += count
+	result.Truncated = true
+	result.State = contextfabric.SourceTruncated
+	mergeFactReadReason(result, projectCompletionHistoricalUnsupportedReason)
+}
+
+// projectCompletionPartitionInvalidReason is the closed-vocabulary token
+// readProjectActualCompletion's caller discloses when a served row would
+// violate its own population partition (counted_work_items +
+// cancelled_count == work_item_count; completed_count and
+// unknown_status_count both <= counted_work_items). Defensive: the shipped
+// statement cannot produce such a row (each count is a plain countIf over
+// the same GROUP BY), so this exists to fail a future edit CLOSED -- no
+// fact served under a contradiction the served fields' own arithmetic
+// disproves -- rather than serve a ratio outside [0, 1].
+const projectCompletionPartitionInvalidReason = "project_completion_partition_invalid"
+
+// applyProjectCompletionIntegrityRejection discloses that count rows the
+// project completion query returned were withheld because they failed
+// their own partition invariant -- see projectCompletionPartitionInvalidReason.
+func applyProjectCompletionIntegrityRejection(result *contextfabric.FactProviderResult, count int) {
+	if count <= 0 {
+		return
+	}
+	result.OmittedCount += count
+	result.Truncated = true
+	result.State = contextfabric.SourceTruncated
+	mergeFactReadReason(result, projectCompletionPartitionInvalidReason)
 }
 
 func stringOrNull(value string) contextfabric.FactValue {
