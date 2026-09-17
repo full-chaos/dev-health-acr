@@ -102,7 +102,7 @@ func TestAnchorBindingDecideReadsTheSavedDocumentAndTheReading(t *testing.T) {
 
 	dropped := InvestigationResult{ResultID: "result_dropped", SubjectResolution: SubjectResolution{Committed: []SubjectRef{}}}
 	if binding, _ := tracker.decide(BudgetAssertSubjectlessTerminal, dropped, nil); binding.State != AnchorBindingUnbound {
-		t.Fatalf("dropped: a commit the saved document no longer carries was proof: %+v", binding)
+		t.Fatalf("dropped: a commit absent from the saved document was taken as proof: %+v", binding)
 	}
 
 	tracker.observeResolution(AnchorBindingEvaluationWindowGated, resolution, bases)
