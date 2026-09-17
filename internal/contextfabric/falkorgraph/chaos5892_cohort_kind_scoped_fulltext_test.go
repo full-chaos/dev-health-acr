@@ -3,6 +3,7 @@ package falkorgraph
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"reflect"
 	"strings"
@@ -65,12 +66,46 @@ func kindCrowdedAnchorSetConn(t *testing.T, generalRows []row, kindRows map[stri
 		switch {
 		case strings.Contains(cypher, "fulltext"):
 			if kind, ok := params["kind"].(string); ok {
+				// Binding the $kind PARAMETER proves nothing on its own -- a
+				// mutant that drops the Cypher predicate while leaving the
+				// parameter bound would still reach here. The query's own
+				// kind-scoping predicate (queries.go's runFulltextQuery,
+				// propKind="subject_kind") must be present in the text too.
+				if !strings.Contains(cypher, "node.subject_kind = $kind") {
+					t.Fatalf("params[\"kind\"]=%q was bound but the Cypher carries no node.subject_kind = $kind predicate: %s", kind, cypher)
+				}
 				return kindRows[kind], nil
 			}
 			return generalRows, nil
 		case strings.Contains(cypher, "$kinds"):
 			t.Error("the exact-name/kind-scoped census ran for an anchor-set cohort -- the anchor-set comparison carve-out must stay denied; the lexical arm alone is in scope here, never the census gate")
 			return nil, nil
+		default:
+			return nil, nil
+		}
+	}}
+}
+
+// errKindScopedReadFailed is the sentinel error kindScopedFulltextErroringConn
+// returns for the kind-scoped query alone -- distinct from any error a
+// production call site might itself construct, so a test asserting on it
+// can tell "the fixture's own injected failure surfaced" from "some other
+// error happened to match".
+var errKindScopedReadFailed = errors.New("kind-scoped fulltext read failed (test fixture)")
+
+// kindScopedFulltextErroringConn answers the general full-text query
+// normally and the kind-scoped query with errKindScopedReadFailed, every
+// other query with nil/nil -- the fixture for proving an AUXILIARY arm's
+// own read failure degrades the cohort's completeness claim instead of
+// aborting DiscoverContext.
+func kindScopedFulltextErroringConn(generalRows []row) *fakeConn {
+	return &fakeConn{queryFunc: func(_ context.Context, _, cypher string, params map[string]interface{}, _ bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			if _, ok := params["kind"].(string); ok {
+				return nil, errKindScopedReadFailed
+			}
+			return generalRows, nil
 		default:
 			return nil, nil
 		}
@@ -411,15 +446,12 @@ func TestCohortKindFulltextCertifiesFromTheRealProducerNotTruncated(t *testing.T
 	}); err != nil {
 		t.Fatalf("certify.Certify() error = %v", err)
 	}
-	// request_id is present but empty when the context carries no request
-	// id -- RecordCohortKindFulltext's own doc comment explains why this
-	// line cannot drop the key the way its siblings do (the scanner-safe
-	// single-spread shape leaves no room to post-process the generated
-	// args). eventspec.CohortKindFulltext still declares it
-	// PresenceConditional, so an empty value here is not a contract breach.
+	// request_id must be ABSENT (never emitted empty) when the context
+	// carries no request id -- the "missing != measured zero" invariant
+	// RecordCohortKindFulltext's own doc comment states.
 	for _, line := range log.LinesWithMsg(eventspec.CohortKindFulltext.Msg) {
-		if got, present := line["request_id"]; !present || got != "" {
-			t.Errorf("line %+v request_id = %v (present=%v), want present and empty (no request id was ever supplied to this call)", line, got, present)
+		if _, present := line["request_id"]; present {
+			t.Errorf("line %+v carries request_id, want the key entirely absent (no request id was ever supplied to this call)", line)
 		}
 	}
 }
@@ -499,21 +531,25 @@ func TestCohortKindFulltextCertifiesTruncatedFromTheRealProducer(t *testing.T) {
 	}
 }
 
-// TestScopedProjectCohortKindScopedArmMergesDeterministically proves the
-// determinism discipline the kind-scoped arm's own doc comment claims
-// (reader.go, beside its sortCandidateNodesBySubjectKey call): the arm's OWN
-// return order must not leak into cohort member rank order. The general arm
-// is crowded out entirely (only decoys), so every member below arrives
-// through the kind-scoped arm alone, and the fake hands them back
-// deliberately OUT of canonical order.
-func TestScopedProjectCohortKindScopedArmMergesDeterministically(t *testing.T) {
+// TestScopedProjectCohortKindScopedArmPreservesQueryRelevanceOrder proves
+// ORDER PARITY with the general arm: runFulltextQuery (queries.go) already
+// returns candidates in a TOTAL, deterministic order (score DESC, subject
+// kind ASC, canonical id ASC) -- the SAME query-building authority the
+// general arm uses and never re-orders after retrieval. The kind-scoped
+// arm's own contribution must reach the cohort in exactly that order, not
+// re-sorted by canonical id alone. The general arm is crowded out entirely
+// (only decoys), so every member below arrives through the kind-scoped arm
+// alone, and the fake hands them back in descending-relevance order
+// (already NOT alphabetical) -- the same shape a real ORDER BY score DESC
+// query returns when relevance and canonical id disagree.
+func TestScopedProjectCohortKindScopedArmPreservesQueryRelevanceOrder(t *testing.T) {
 	general := decoyRows(25) // crowds every project row out of the general arm
-	outOfOrder := []row{
-		kindScopedFulltextRow("project", "project_c", "C"),
+	byRelevance := []row{
+		kindScopedFulltextRow("project", "project_c", "C"), // highest-ranked
 		kindScopedFulltextRow("project", "project_a", "A"),
-		kindScopedFulltextRow("project", "project_b", "B"),
+		kindScopedFulltextRow("project", "project_b", "B"), // lowest-ranked
 	}
-	fake := kindCrowdedAnchorSetConn(t, general, map[string][]row{"project": outOfOrder})
+	fake := kindCrowdedAnchorSetConn(t, general, map[string][]row{"project": byRelevance})
 	adapter := newFakeAdapterWithTelemetry(t, fake, &recordingTelemetry{})
 
 	request := scopedCohortRequest(scopedProjectExpression(), "which projects does the platform team own", 30)
@@ -521,9 +557,64 @@ func TestScopedProjectCohortKindScopedArmMergesDeterministically(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DiscoverContext() error = %v", err)
 	}
-	wantIDs := []string{"project_a", "project_b", "project_c"}
+	wantIDs := []string{"project_c", "project_a", "project_b"}
 	if gotIDs := cohortMemberIDs(result.Cohort); !reflect.DeepEqual(gotIDs, wantIDs) {
-		t.Fatalf("member ids = %v, want %v (canonical subject-key order, independent of the arm's own return order)", gotIDs, wantIDs)
+		t.Fatalf("member ids = %v, want %v (the query's own relevance order, unmodified)", gotIDs, wantIDs)
+	}
+}
+
+// TestScopedProjectCohortKindScopedArmCapCutKeepsTopRankedSurvivors is the
+// order-parity defect's own reproduction, pinned as a permanent regression
+// test: when the kind-scoped arm's contribution exceeds MaxCohortMembers,
+// the survivors must be the query's own TOP-ranked candidates, never an
+// artifact of re-sorting by canonical id. A re-sort here would let an
+// alphabetically-first, lower-relevance candidate win the capped slot over
+// the highest-ranked one.
+func TestScopedProjectCohortKindScopedArmCapCutKeepsTopRankedSurvivors(t *testing.T) {
+	general := decoyRows(25) // crowds every project row out of the general arm
+	byRelevance := []row{
+		kindScopedFulltextRow("project", "project_z", "Z"), // highest-ranked
+		kindScopedFulltextRow("project", "project_y", "Y"),
+		kindScopedFulltextRow("project", "project_x", "X"), // lowest-ranked, alphabetically first
+	}
+	fake := kindCrowdedAnchorSetConn(t, general, map[string][]row{"project": byRelevance})
+	adapter := newFakeAdapterWithTelemetry(t, fake, &recordingTelemetry{})
+
+	request := scopedCohortRequest(scopedProjectExpression(), "which projects does the platform team own", 1)
+	result, err := adapter.DiscoverContext(context.Background(), repositoryPrincipal(), request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	wantIDs := []string{"project_z"}
+	if gotIDs := cohortMemberIDs(result.Cohort); !reflect.DeepEqual(gotIDs, wantIDs) {
+		t.Fatalf("member ids = %v, want %v (the top-ranked candidate, not the alphabetically-first one)", gotIDs, wantIDs)
+	}
+	if result.Cohort == nil || !result.Cohort.Truncated || result.Cohort.Complete {
+		t.Fatalf("Cohort = %#v, want {Complete:false Truncated:true} -- the cap cut a genuine population and must disclose it", result.Cohort)
+	}
+}
+
+// TestScopedProjectCohortDedupAcrossArmsKeepsFirstEncounteredRank proves a
+// node both arms return is admitted exactly once, at the position the
+// GENERAL arm (which runs first) gave it -- the kind-scoped arm's own
+// occurrence of the same node is a harmless, order-preserving no-op, never a
+// second entry or a reordering.
+func TestScopedProjectCohortDedupAcrossArmsKeepsFirstEncounteredRank(t *testing.T) {
+	shared := kindScopedFulltextRow("project", "project_shared", "Shared")
+	onlyGeneral := kindScopedFulltextRow("project", "project_general_only", "GeneralOnly")
+	general := []row{shared, onlyGeneral} // general arm's own relevance order
+	kindScoped := []row{shared}           // same node, found again by the kind-scoped arm
+	fake := kindCrowdedAnchorSetConn(t, general, map[string][]row{"project": kindScoped})
+	adapter := newFakeAdapterWithTelemetry(t, fake, &recordingTelemetry{})
+
+	request := scopedCohortRequest(scopedProjectExpression(), "which projects does the platform team own", 30)
+	result, err := adapter.DiscoverContext(context.Background(), repositoryPrincipal(), request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	wantIDs := []string{"project_shared", "project_general_only"}
+	if gotIDs := cohortMemberIDs(result.Cohort); !reflect.DeepEqual(gotIDs, wantIDs) {
+		t.Fatalf("member ids = %v, want %v exactly once each, in the general arm's own order", gotIDs, wantIDs)
 	}
 }
 
@@ -542,4 +633,205 @@ func TestCohortKindFulltextDeclaresMemberKindAsAClosedVocabulary(t *testing.T) {
 		return
 	}
 	t.Fatal("eventspec.CohortKindFulltext declares no member_kind field")
+}
+
+// TestScopedProjectCohortSkipsKindScopedArmWhenCensusIsAdmitted proves the
+// kind-scoped full-text arm never runs at all when the exact-name/kind-scoped
+// census is admitted (not merely that its contribution would be redundant,
+// already shown by the byte-identical test above): the fake here fails the
+// test outright if a kind-scoped fulltext query is ever issued, and the
+// census alone still serves a complete cohort. This is what makes a
+// transient failure in the (now-skipped) lexical arm harmless whenever the
+// census could complete the call on its own.
+func TestScopedProjectCohortSkipsKindScopedArmWhenCensusIsAdmitted(t *testing.T) {
+	censusRow := fakeSubjectNodeRow("project", "project_from_census", "FromCensus")
+	censusRow["n"].(*node).Properties["authorization_repositories"] = []string{"full-chaos/dev-health-acr"}
+	fake := &fakeConn{queryFunc: func(_ context.Context, _, cypher string, params map[string]interface{}, _ bool) ([]row, error) {
+		switch {
+		case strings.Contains(cypher, "fulltext"):
+			if _, ok := params["kind"]; ok {
+				t.Fatal("the kind-scoped full-text arm ran even though the exact-name census was admitted -- it must be skipped entirely, not merely redundant")
+			}
+			return nil, nil
+		case strings.Contains(cypher, "$kinds"):
+			return []row{censusRow}, nil
+		default:
+			return nil, nil
+		}
+	}}
+	adapter := newFakeAdapterWithTelemetry(t, fake, &recordingTelemetry{})
+
+	// discovered_kind: "no term to match, give me the kind's whole census"
+	// -- always census-eligible, and with no committed subject the census
+	// is admitted (cohortExactNameCensusEligibility).
+	request := repositoryCohortRequest(
+		contextfabric.SubjectExpression{Kind: contextfabric.SubjectExpressionDiscoveredKind, Discovered: &contextfabric.DiscoveredSetExpression{MemberKind: contextfabric.SubjectProject}},
+		"which projects need attention", 30)
+
+	result, err := adapter.DiscoverContext(context.Background(), repositoryPrincipal(), request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if result.Cohort == nil || len(result.Cohort.Members) != 1 || result.Cohort.Members[0].Subject.CanonicalID != "project_from_census" {
+		t.Fatalf("Cohort = %#v, want exactly one member (project_from_census) served by the census alone", result.Cohort)
+	}
+}
+
+// TestScopedProjectCohortKindScopedArmReadFailureDegradesInsteadOfAborting is
+// the reproduction: the kind-scoped arm's OWN read fails (census not
+// admitted, so this arm is the only route to the declared kind), and
+// DiscoverContext must still return a served, honestly-truncated cohort
+// (the general arm's own contribution, if any) rather than aborting the
+// call the way every other retrieval arm's own failure does -- a call this
+// arm exists to rescue must never end up worse off than the code it
+// replaces.
+func TestScopedProjectCohortKindScopedArmReadFailureDegradesInsteadOfAborting(t *testing.T) {
+	general := []row{kindScopedFulltextRow("project", "project_from_general", "FromGeneral")}
+	fake := kindScopedFulltextErroringConn(general)
+	telemetry := &recordingTelemetry{}
+	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
+
+	request := scopedCohortRequest(scopedProjectExpression(), "which projects does the platform team own", 30)
+	result, err := adapter.DiscoverContext(context.Background(), repositoryPrincipal(), request)
+	if err != nil {
+		t.Fatalf("DiscoverContext() error = %v, want no error -- an auxiliary arm's own read failure must degrade, never abort", err)
+	}
+	if result.Cohort == nil || len(result.Cohort.Members) != 1 || result.Cohort.Members[0].Subject.CanonicalID != "project_from_general" {
+		t.Fatalf("Cohort = %#v, want exactly one member (project_from_general) -- the general arm's own contribution must still be served", result.Cohort)
+	}
+	if !result.Cohort.Truncated || result.Cohort.Complete {
+		t.Fatalf("Cohort = {Complete:%v Truncated:%v}, want {Complete:false Truncated:true} -- an unmeasured arm can never claim completeness", result.Cohort.Complete, result.Cohort.Truncated)
+	}
+	if len(telemetry.cohortKindFulltexts) != 1 {
+		t.Fatalf("cohortKindFulltexts = %+v, want exactly 1 record", telemetry.cohortKindFulltexts)
+	}
+	got := telemetry.cohortKindFulltexts[0]
+	if got.decision != CohortKindFulltextReadFailed || got.readErr == nil {
+		t.Errorf("cohortKindFulltexts[0] = %+v, want {decision:%q readErr:non-nil}", got, CohortKindFulltextReadFailed)
+	}
+}
+
+// TestCohortKindFulltextCertifiesReadFailedFromTheRealProducer certifies the
+// decision=read_failed shape through the real producer: only org_id,
+// decision, member_kind and error are present -- members/truncated/
+// added_by_kind_arm/duplicates_with_general carry no meaning for a read
+// that never completed and must be genuinely absent, not zero.
+func TestCohortKindFulltextCertifiesReadFailedFromTheRealProducer(t *testing.T) {
+	fake := kindScopedFulltextErroringConn(nil)
+	var buf bytes.Buffer
+	telemetry := SlogTelemetry{Logger: slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))}
+	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
+
+	request := scopedCohortRequest(scopedProjectExpression(), "which projects does the platform team own", 30)
+	if _, err := adapter.DiscoverContext(context.Background(), repositoryPrincipal(), request); err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+
+	log, err := certify.Parse(buf.Bytes())
+	if err != nil {
+		t.Fatalf("certify.Parse() error = %v", err)
+	}
+	if _, err := certify.Certify(log, certify.Assertion{
+		Event: eventspec.CohortKindFulltext,
+		Want: map[string]any{
+			"org_id": "org-1", "decision": string(CohortKindFulltextReadFailed), "member_kind": "project",
+		},
+	}); err != nil {
+		t.Fatalf("certify.Certify() error = %v", err)
+	}
+	for _, line := range log.LinesWithMsg(eventspec.CohortKindFulltext.Msg) {
+		for _, absentKey := range []string{"members", "truncated", "added_by_kind_arm", "duplicates_with_general"} {
+			if _, present := line[absentKey]; present {
+				t.Errorf("line %+v carries %q, want it absent on decision=read_failed (a failed read measured nothing)", line, absentKey)
+			}
+		}
+		if _, present := line["error"]; !present {
+			t.Errorf("line %+v carries no error key, want the failure reason present", line)
+		}
+	}
+}
+
+// TestScopedProjectCohortKindScopedArmReportsMergeDelta proves
+// added_by_kind_arm/duplicates_with_general: 2 of the kind-scoped arm's 3
+// candidates are genuinely new (the general arm never saw them, crowded
+// out), 1 is a duplicate the general arm already found.
+func TestScopedProjectCohortKindScopedArmReportsMergeDelta(t *testing.T) {
+	shared := kindScopedFulltextRow("project", "project_shared", "Shared")
+	newA := kindScopedFulltextRow("project", "project_new_a", "NewA")
+	newB := kindScopedFulltextRow("project", "project_new_b", "NewB")
+	general := []row{shared} // the general arm already found "shared"
+	kindScoped := []row{shared, newA, newB}
+	fake := kindCrowdedAnchorSetConn(t, general, map[string][]row{"project": kindScoped})
+	telemetry := &recordingTelemetry{}
+	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
+
+	request := scopedCohortRequest(scopedProjectExpression(), "which projects does the platform team own", 30)
+	if _, err := adapter.DiscoverContext(context.Background(), repositoryPrincipal(), request); err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+	if len(telemetry.cohortKindFulltexts) != 1 {
+		t.Fatalf("cohortKindFulltexts = %+v, want exactly 1 record", telemetry.cohortKindFulltexts)
+	}
+	got := telemetry.cohortKindFulltexts[0]
+	if got.addedByKindArm != 2 || got.duplicatesWithGeneral != 1 {
+		t.Errorf("cohortKindFulltexts[0] = %+v, want {addedByKindArm:2 duplicatesWithGeneral:1}", got)
+	}
+}
+
+// TestCohortKindFulltextCertifiesMergeDeltaFromTheRealProducer certifies
+// added_by_kind_arm/duplicates_with_general through the real producer, the
+// same fixture TestScopedProjectCohortKindScopedArmReportsMergeDelta uses.
+func TestCohortKindFulltextCertifiesMergeDeltaFromTheRealProducer(t *testing.T) {
+	shared := kindScopedFulltextRow("project", "project_shared", "Shared")
+	newA := kindScopedFulltextRow("project", "project_new_a", "NewA")
+	general := []row{shared}
+	kindScoped := []row{shared, newA}
+	fake := kindCrowdedAnchorSetConn(t, general, map[string][]row{"project": kindScoped})
+
+	var buf bytes.Buffer
+	telemetry := SlogTelemetry{Logger: slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))}
+	adapter := newFakeAdapterWithTelemetry(t, fake, telemetry)
+
+	request := scopedCohortRequest(scopedProjectExpression(), "which projects does the platform team own", 30)
+	if _, err := adapter.DiscoverContext(context.Background(), repositoryPrincipal(), request); err != nil {
+		t.Fatalf("DiscoverContext() error = %v", err)
+	}
+
+	log, err := certify.Parse(buf.Bytes())
+	if err != nil {
+		t.Fatalf("certify.Parse() error = %v", err)
+	}
+	if _, err := certify.Certify(log, certify.Assertion{
+		Event: eventspec.CohortKindFulltext,
+		Want: map[string]any{
+			"org_id": "org-1", "decision": string(CohortKindFulltextRan), "member_kind": "project",
+			"added_by_kind_arm": 1, "duplicates_with_general": 1,
+		},
+	}); err != nil {
+		t.Fatalf("certify.Certify() error = %v", err)
+	}
+}
+
+// TestCohortKindFulltextDecisionClosedVocabularyMatchesEventspec proves the
+// real producer's own decision vocabulary (CohortKindFulltextDecisionVocabulary)
+// never drifts from eventspec.CohortKindFulltext's declared closed vocabulary
+// for "decision" -- the same cross-package parity CohortKindCensusDecision
+// already needs, checked here for this sibling event too.
+func TestCohortKindFulltextDecisionClosedVocabularyMatchesEventspec(t *testing.T) {
+	var declared []string
+	for _, f := range eventspec.CohortKindFulltext.Fields {
+		if f.Key == "decision" {
+			declared = f.ClosedVocabulary
+		}
+	}
+	if declared == nil {
+		t.Fatal("eventspec.CohortKindFulltext declares no closed vocabulary for \"decision\"")
+	}
+	var real []string
+	for _, d := range CohortKindFulltextDecisionVocabulary() {
+		real = append(real, string(d))
+	}
+	if !reflect.DeepEqual(declared, real) {
+		t.Fatalf("eventspec declares %v, CohortKindFulltextDecisionVocabulary() returns %v -- must match exactly, in order", declared, real)
+	}
 }

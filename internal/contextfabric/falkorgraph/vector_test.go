@@ -1241,10 +1241,14 @@ type cohortKindCensusRecord struct {
 // cohortKindFulltextRecord is one RecordCohortKindFulltext call, verbatim
 // (CHAOS-5892).
 type cohortKindFulltextRecord struct {
-	orgID      string
-	memberKind contextfabric.SubjectKind
-	members    int
-	truncated  bool
+	orgID                 string
+	decision              CohortKindFulltextDecision
+	memberKind            contextfabric.SubjectKind
+	members               int
+	truncated             bool
+	addedByKindArm        int
+	duplicatesWithGeneral int
+	readErr               error
 }
 
 // cohortExactNameCensusGateRecord is one recorded
@@ -1340,9 +1344,10 @@ func (r *recordingTelemetry) RecordCohortKindCensus(_ context.Context, orgID str
 	})
 }
 
-func (r *recordingTelemetry) RecordCohortKindFulltext(_ context.Context, orgID string, memberKind contextfabric.SubjectKind, members int, truncated bool) {
+func (r *recordingTelemetry) RecordCohortKindFulltext(_ context.Context, orgID string, decision CohortKindFulltextDecision, memberKind contextfabric.SubjectKind, members int, truncated bool, addedByKindArm, duplicatesWithGeneral int, readErr error) {
 	r.cohortKindFulltexts = append(r.cohortKindFulltexts, cohortKindFulltextRecord{
-		orgID: orgID, memberKind: memberKind, members: members, truncated: truncated,
+		orgID: orgID, decision: decision, memberKind: memberKind, members: members, truncated: truncated,
+		addedByKindArm: addedByKindArm, duplicatesWithGeneral: duplicatesWithGeneral, readErr: readErr,
 	})
 }
 

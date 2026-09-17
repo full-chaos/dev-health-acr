@@ -167,11 +167,15 @@ func (f AnswerDisplayFields) SlogArgs() []any {
 // CohortKindFulltextFields is contextfabric.cohort_kind_fulltext's generated typed construction interface
 // (CHAOS-5516): one Go field per Field CohortKindFulltext.Fields declares in spec.go.
 type CohortKindFulltextFields struct {
-	OrgID      string
-	MemberKind string
-	Members    int
-	Truncated  bool
-	RequestID  string
+	OrgID                 string
+	Decision              string
+	MemberKind            string
+	Members               int
+	Truncated             bool
+	AddedByKindArm        int
+	DuplicatesWithGeneral int
+	Error                 string
+	RequestID             string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every CohortKindFulltextFields uniformly, set ONLY by NewCohortKindFulltextFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -185,14 +189,18 @@ type CohortKindFulltextFields struct {
 
 // NewCohortKindFulltextFields is the generated constructor for CohortKindFulltextFields -- every
 // field CohortKindFulltext.Fields declares is a required parameter.
-func NewCohortKindFulltextFields(orgID string, memberKind string, members int, truncated bool, requestID string) CohortKindFulltextFields {
+func NewCohortKindFulltextFields(orgID string, decision string, memberKind string, members int, truncated bool, addedByKindArm int, duplicatesWithGeneral int, error string, requestID string) CohortKindFulltextFields {
 	return CohortKindFulltextFields{
-		OrgID:       orgID,
-		MemberKind:  memberKind,
-		Members:     members,
-		Truncated:   truncated,
-		RequestID:   requestID,
-		constructed: true,
+		OrgID:                 orgID,
+		Decision:              decision,
+		MemberKind:            memberKind,
+		Members:               members,
+		Truncated:             truncated,
+		AddedByKindArm:        addedByKindArm,
+		DuplicatesWithGeneral: duplicatesWithGeneral,
+		Error:                 error,
+		RequestID:             requestID,
+		constructed:           true,
 	}
 }
 
@@ -210,9 +218,13 @@ func (f CohortKindFulltextFields) IsConstructed() bool { return f.constructed }
 func (f CohortKindFulltextFields) SlogArgs() []any {
 	return []any{
 		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"decision", contextfabric.SanitizeLogAttr(f.Decision),
 		"member_kind", contextfabric.SanitizeLogAttr(f.MemberKind),
 		"members", f.Members,
 		"truncated", f.Truncated,
+		"added_by_kind_arm", f.AddedByKindArm,
+		"duplicates_with_general", f.DuplicatesWithGeneral,
+		"error", contextfabric.SanitizeLogAttr(f.Error),
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

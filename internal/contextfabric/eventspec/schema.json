@@ -120,12 +120,21 @@
     "attribution": [
       "org_id"
     ],
-    "bounded_aggregation": "at most one line per DiscoverContext call, emitted only when the frame declares a servable cohort member kind",
+    "bounded_aggregation": "at most one line per DiscoverContext call, emitted only when the frame declares a servable cohort member kind and the census is not already admitted for it",
     "fields": [
       {
         "key": "org_id",
         "type": "string",
         "presence": "required"
+      },
+      {
+        "key": "decision",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "ran",
+          "read_failed"
+        ]
       },
       {
         "key": "member_kind",
@@ -152,12 +161,32 @@
       {
         "key": "members",
         "type": "int",
-        "presence": "required"
+        "presence": "conditional",
+        "applicability": "written when decision=ran"
       },
       {
         "key": "truncated",
         "type": "bool",
-        "presence": "required"
+        "presence": "conditional",
+        "applicability": "written when decision=ran"
+      },
+      {
+        "key": "added_by_kind_arm",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when decision=ran"
+      },
+      {
+        "key": "duplicates_with_general",
+        "type": "int",
+        "presence": "conditional",
+        "applicability": "written when decision=ran"
+      },
+      {
+        "key": "error",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when decision=read_failed"
       },
       {
         "key": "request_id",

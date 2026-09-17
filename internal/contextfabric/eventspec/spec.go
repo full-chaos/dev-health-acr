@@ -2267,11 +2267,22 @@ func frameValidationRequirementDerivationFields() []Field {
 	return fields
 }
 
+// cohortKindFulltextDecision is the closed vocabulary for CohortKindFulltext's
+// own "decision" field -- see falkorgraph.CohortKindFulltextDecisionVocabulary,
+// the real producer's own array this list must never drift from (grep-checked
+// by TestCohortKindFulltextDecisionClosedVocabularyMatchesEventspec, the same
+// cross-package parity discipline CohortKindCensusDecision already proves for
+// its own sibling arm).
+var cohortKindFulltextDecision = []string{"ran", "read_failed"}
+
 // CohortKindFulltext is the Info line for falkorgraph's kind-scoped lexical
 // arm on one DiscoverContext call: whether a cohort's own declared member
-// kind was given its own full-text budget, how many candidates it returned,
+// kind was given its own full-text budget, how many candidates it returned
+// and how many of them the merge actually added versus had already seen,
 // and whether THAT budget (not the shared, mixed-kind one "cohort kind
-// basis" also reports) was itself exhausted.
+// basis" also reports) was itself exhausted -- or, on decision=read_failed,
+// that the arm's own read failed and why, with no members/truncated/merge
+// count implied (a failed read measured nothing).
 //
 // WHY THIS IS ITS OWN LINE, not more fields on the pre-existing "cohort kind
 // basis"/"cohort kind census" lines (falkorgraph/config.go's
@@ -2282,23 +2293,42 @@ func frameValidationRequirementDerivationFields() []Field {
 // "cohort kind census" line rather than folding into "cohort kind basis".
 //
 // Emitted once per DiscoverContext call that declares a servable cohort
-// member kind (falkorgraph/reader.go, right after the kind-scoped
-// fulltextSearchNodesForKind call) -- never for a call with no declared kind,
-// since there is no budget to report. members is the candidate count that
-// query returned (post-truncation, matching CohortKindCensus's own
-// convention); truncated is exactly the value cohortPoolTruncation's
-// fulltext-arm input now derives from (a true value here is what makes
+// member kind AND the exact-name/kind-scoped census is not already admitted
+// for that kind (falkorgraph/reader.go, right after the kind-scoped
+// fulltextSearchNodesForKind call) -- never for a call with no declared
+// kind, and never when the census already covers it: whichever census runs
+// there (chaos4348ExactNameCandidates for a kind in exactNameKinds, or
+// cohortKindCensusCandidates otherwise) already fetches that kind
+// exhaustively, so this arm would only duplicate it.
+//
+// AN AUXILIARY ARM'S OWN FAILURE MUST DEGRADE, NEVER ABORT. decision
+// distinguishes a completed read (decision=ran, carrying members/truncated/
+// added_by_kind_arm/duplicates_with_general) from a failed one
+// (decision=read_failed, carrying only error) -- DiscoverContext never
+// returns an error for THIS arm's own failure; it forces the pool-
+// truncation input honest instead and keeps serving whatever the other
+// arms can. members is the candidate count that query returned
+// (post-truncation, matching CohortKindCensus's own convention); truncated
+// is exactly the value cohortPoolTruncation's fulltext-arm input now
+// derives from (a true value here is what makes
 // pool_truncation="truncated"/arms="fulltext" honest for this cohort's own
 // kind, rather than inherited from the unrelated, mixed-kind general arm).
+// added_by_kind_arm/duplicates_with_general are the merge's own delta: how
+// many of this arm's own candidates were genuinely new to the cohort versus
+// already seen (by the general arm, hop-walk, or an ownership census that
+// ran earlier in the same call) -- without them, a regression that changes
+// WHICH candidates this arm contributes, or their order, while leaving
+// members/truncated unchanged, would be invisible at Info.
 var CohortKindFulltext = Event{
 	ID:                 "contextfabric.cohort_kind_fulltext",
 	Msg:                "context_fabric: cohort kind fulltext",
 	Level:              LevelInfo,
 	Multiplicity:       MultiplicityZeroOrOnePerRequest,
 	Attribution:        []string{"org_id"},
-	BoundedAggregation: "at most one line per DiscoverContext call, emitted only when the frame declares a servable cohort member kind",
+	BoundedAggregation: "at most one line per DiscoverContext call, emitted only when the frame declares a servable cohort member kind and the census is not already admitted for it",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: cohortKindFulltextDecision},
 		// CLOSED against contractsv1.ContextFabricSubjectKindVocabulary()
 		// (contextFabricSubjectKindTokens, reused rather than a second,
 		// independently typed list -- see tokenStrings' own doc comment).
@@ -2312,8 +2342,11 @@ var CohortKindFulltext = Event{
 		// cohort-kind allow-list but still inside SubjectKind is
 		// CohortMemberKindForFrame's own concern, not this field's.
 		{Key: "member_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextFabricSubjectKindTokens},
-		{Key: "members", Type: FieldInt, Presence: PresenceRequired},
-		{Key: "truncated", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "members", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when decision=ran"},
+		{Key: "truncated", Type: FieldBool, Presence: PresenceConditional, Applicability: "written when decision=ran"},
+		{Key: "added_by_kind_arm", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when decision=ran"},
+		{Key: "duplicates_with_general", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when decision=ran"},
+		{Key: "error", Type: FieldString, Presence: PresenceConditional, Applicability: "written when decision=read_failed"},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
 	},
 }
