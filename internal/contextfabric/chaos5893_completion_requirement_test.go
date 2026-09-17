@@ -107,11 +107,10 @@ func TestCompletionMemberRequirementServedForProject(t *testing.T) {
 			continue
 		}
 		completionRows++
-		// The planning-time gap this ticket closes: it must NEVER be
-		// fact_no_declaring_producer again for this requirement, now that
-		// shared.go declares SubjectProject: {ObligationCompletion}.
+		// shared.go declares SubjectProject: {ObligationCompletion}, so a
+		// declaring producer always exists for this requirement.
 		if row.CauseCoverage == v1.ContextFabricCoverageDetailFactNoDeclaringProducer {
-			t.Fatalf("outcome row = %+v, want CauseCoverage != fact_no_declaring_producer -- the registry declaration exists now, the planning-time gap must not recur", row)
+			t.Fatalf("outcome row = %+v, want CauseCoverage != fact_no_declaring_producer -- a declaring producer is registered for this subject kind", row)
 		}
 		if row.Outcome != v1.ContextFabricRequirementSatisfied || row.Served != 1 || row.Declared != 1 {
 			t.Fatalf("outcome row = %+v, want Outcome=satisfied Served=1 Declared=1 -- the roll-up actually served data", row)

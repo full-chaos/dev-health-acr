@@ -177,13 +177,12 @@ func (p *ActualCompletionProvider) Capability() contextfabric.FactCapability {
 }
 
 // ReadFacts branches by subject kind, mirroring readiness.go/health.go's
-// multi-kind ReadFacts shape: the work-item branch is CHAOS-4377/5438's
-// existing per-item read, unchanged; the project branch is CHAOS-5893's
-// roll-up, a distinct query over the same completed_at definition. Both
-// branches share ONE factBudget so Truncated means the same thing (at
-// least one authorized candidate fact was not served) regardless of which
-// branch produced it -- the shared-guard ruling shared.go's factBudget doc
-// comment states.
+// multi-kind shape: the work-item branch reads one work item's own
+// completed_at; the project branch (CHAOS-5893) computes the roll-up over
+// the same completed_at definition. Both branches share ONE factBudget so
+// Truncated means the same thing (at least one authorized candidate fact
+// was not served) regardless of which branch produced it -- the
+// shared-guard rule shared.go's factBudget doc comment states.
 func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
 	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
 	if unsupported {
@@ -207,21 +206,21 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 		}
 	}()
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
-	// CHAOS-5438: ONE owner for the output bound and the truncation verdict --
-	// see factBudget. Shared across both branches below (see the ReadFacts
-	// doc comment).
+	// ONE owner for the output bound and the truncation verdict -- see
+	// factBudget. Shared across both branches below (see the ReadFacts doc
+	// comment).
 	budget := newFactBudget()
 	totalRows := 0
 
 	if workItemSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectWorkItem); len(workItemSubjects) > 0 {
 		ids, bySubject, workItemRejected := v2Index(workItemSubjects, identity.KindWorkItem)
 		rejected += workItemRejected
-		// CHAOS-4377: the SQL build + scan half (the isNotNull/ifNull
-		// coalescing, the Tier B "was it done at T" derivation) moved to
+		// The SQL build + scan half (the isNotNull/ifNull coalescing, the
+		// Tier B "was it done at T" derivation) lives in
 		// github.com/full-chaos/dev-health-go/readers.ReadWorkItemCompletion;
-		// its doc comment carries that reasoning now.
-		// CHAOS-5438: PROBE one row past the output bound so a full page and a
-		// truncated one are distinguishable -- see shared.go's maxFactRowsProbe.
+		// see its doc comment for that derivation. Probes one row past the
+		// output bound so a full page and a truncated one are
+		// distinguishable -- see shared.go's maxFactRowsProbe.
 		rows, scanErr := readers.ReadWorkItemCompletionWithScopeAndRowLimit(ctx, p.facts.client, orgID, ids, timeBound.neutral(), scope, settings, maxFactRowsProbe)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query work item actual completion", scanErr)
@@ -268,8 +267,8 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 
 // workItemCancelledStatus is work_items.status' one CANCELLED vocabulary
 // member (the normalized column devhealthsource already relies on, not
-// status_raw, which is a per-provider free-text label -- CHAOS-5654's
-// "never infer from free text" discipline). Verified against the live
+// status_raw, a per-provider free-text label this package never infers a
+// closed-vocabulary value from). Verified against the live
 // vocabulary (dh_0906, read-only, counts only): status is a closed set
 // {backlog, canceled, done, in_progress, todo, unknown} across every
 // seeded provider (github, gitlab, jira, linear, synthetic); "canceled" is

@@ -98,7 +98,7 @@ func TestChaos4099_RealProviderSubjectKindsStayUnwidened(t *testing.T) {
 // flow.go/landscape.go both roll up to project via a real
 // team_project_ownership join.
 //
-// FactActualCompletion is ALSO excluded (CHAOS-5893): it now answers for a
+// FactActualCompletion is ALSO excluded (CHAOS-5893): it answers for a
 // project directly, by a real work_items->projects join keyed on project
 // identity (never a team_project_ownership hop -- work_items carries its
 // own project_id/project_key columns), aggregating the same completed_at
