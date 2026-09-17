@@ -135,6 +135,32 @@ const (
 	FrameValidationPhaseC FrameValidationPhase = "c"
 )
 
+var frameValidationPhases = [...]FrameValidationPhase{
+	FrameValidationPhaseA1,
+	FrameValidationPhaseA2,
+	FrameValidationPhaseB,
+	FrameValidationPhaseC,
+}
+
+// FrameValidationPhaseCount is the closed vocabulary's size.
+const FrameValidationPhaseCount = len(frameValidationPhases)
+
+// FrameValidationPhaseVocabulary returns the closed phase vocabulary in
+// declared order.
+func FrameValidationPhaseVocabulary() [FrameValidationPhaseCount]FrameValidationPhase {
+	return frameValidationPhases
+}
+
+// ValidFrameValidationPhase reports membership in the closed vocabulary.
+func ValidFrameValidationPhase(value FrameValidationPhase) bool {
+	for _, member := range frameValidationPhases {
+		if member == value {
+			return true
+		}
+	}
+	return false
+}
+
 // FrameField names a field an invariant reads. Closed vocabulary, and it
 // exists FOR law L4's property test: "every invariant declares the fields
 // it reads; assert no A1 invariant names a derived field."
@@ -357,6 +383,43 @@ const (
 	FrameFailureOperandMemberKind      FrameFailureDetail = "operand_member_kind_invalid"
 	FrameFailureOperandMemberQualifier FrameFailureDetail = "operand_member_qualifier_invalid"
 )
+
+// frameFailureDetails is the closed vocabulary, in declared order.
+var frameFailureDetails = [...]FrameFailureDetail{
+	FrameFailureNoVariant, FrameFailureMultipleVariants, FrameFailureVariantKindMismatch,
+	FrameFailureKindUnset, FrameFailureTooFewOperands, FrameFailureNoTerms, FrameFailureBlankTerm,
+	FrameFailureNoAnchorTerms, FrameFailureMemberKindUnset, FrameFailureMemberKindInvalid,
+	FrameFailureMemberQualifierInvalid, FrameFailureGroupKindUnset, FrameFailureGroupKindInvalid,
+	FrameFailureGroupEqualsMember, FrameFailureGroupAxisNotExpressed, FrameFailureCompareNeedsSet,
+	FrameFailureTrendNeedsTemporal, FrameFailureCountNeedsSetKind, FrameFailureOrgCountNeedsMember,
+	FrameFailureNoGoals, FrameFailureGoalOutsideVocabulary, FrameFailureNoObligations,
+	FrameFailureObligationInvalid, FrameFailureEmphasisNeedsRanking, FrameFailureAxisUndischarged,
+	FrameFailureOperandKindUnset, FrameFailureOperandNoVariant, FrameFailureOperandMultiVariant,
+	FrameFailureOperandKindMismatch, FrameFailureOperandNoTerms, FrameFailureOperandNoAnchor,
+	FrameFailureOperandMemberKind, FrameFailureOperandMemberQualifier,
+}
+
+// FrameFailureDetailCount is the closed vocabulary's size.
+const FrameFailureDetailCount = len(frameFailureDetails)
+
+// FrameFailureDetailVocabulary returns the closed failure-detail vocabulary
+// in declared order, the same discipline FrameInvariantSpecs already
+// applies to the invariant table beside it.
+func FrameFailureDetailVocabulary() [FrameFailureDetailCount]FrameFailureDetail {
+	return frameFailureDetails
+}
+
+// ValidFrameFailureDetail reports membership in the closed vocabulary. The
+// empty value is not a member -- a valid or repaired frame's zero detail is
+// read off FrameValidationOutcome.Accepted(), never off this predicate.
+func ValidFrameFailureDetail(value FrameFailureDetail) bool {
+	for _, member := range frameFailureDetails {
+		if member == value {
+			return true
+		}
+	}
+	return false
+}
 
 // ValidateFramePhaseA1 evaluates the SYNTACTIC invariants over the fields
 // the model EMITTED, and returns the FIRST failure in table order.

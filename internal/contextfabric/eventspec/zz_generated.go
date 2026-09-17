@@ -22,6 +22,7 @@ var ByID = map[string]Event{
 	"contextfabric.answer_display":                 AnswerDisplay,
 	"contextfabric.completeness_authority":         CompletenessAuthority,
 	"contextfabric.count_population_scope":         CountPopulationScope,
+	"contextfabric.frame_validation":               FrameValidation,
 	"contextfabric.requirement_outcome_transition": RequirementOutcomeTransition,
 	"contextfabric.retained_ranking_accounting":    RetainedRankingAccounting,
 	"contextfabric.semantic_state_persistence":     SemanticStatePersistence,
@@ -437,6 +438,369 @@ func (f CountPopulationScopeFields) SlogArgs() []any {
 		"reused", f.Reused,
 		"subject_kind", contextfabric.SanitizeLogAttr(f.SubjectKind),
 		"subject_id", contextfabric.SanitizeLogAttr(f.SubjectID),
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// FrameValidationFields is contextfabric.frame_validation's generated typed construction interface
+// (CHAOS-5516): one Go field per Field FrameValidation.Fields declares in spec.go.
+type FrameValidationFields struct {
+	OrgID                                                        string
+	Outcome                                                      string
+	FailedInvariant                                              string
+	FailedPhase                                                  string
+	FailureDetail                                                string
+	ProposedKind                                                 string
+	ProposedGoals                                                []string
+	AcceptedGoals                                                []string
+	AcceptedJudgment                                             string
+	OrderingPresent                                              bool
+	PredictedStrippedObligations                                 []string
+	DerivedObligationCount                                       int
+	WidenedObligationCount                                       int
+	ShapeDiverged                                                bool
+	EmittedShape                                                 string
+	DerivedShape                                                 string
+	FrameVersion                                                 string
+	CohortDiscoverability                                        string
+	FrameGate                                                    string
+	RefuseBasis                                                  string
+	RequestedGroupHint                                           string
+	RequestedMemberHint                                          string
+	ProposedGroupKind                                            string
+	ProposedMemberKind                                           string
+	GroupAxis                                                    string
+	RepairDecision                                               string
+	Repair                                                       string
+	RepairInvariant                                              string
+	RepairKindBefore                                             string
+	RepairKindAfter                                              string
+	RepairMemberKind                                             string
+	RepairTermsMatch                                             string
+	RepairAttempts                                               int
+	RepairCarryScopeAnchorKind                                   string
+	RequirementDerivationVersion                                 string
+	RequirementCellsDerived                                      int
+	RequirementCellsServed                                       int
+	RequirementCellsUnserved                                     int
+	RequirementAccounting                                        string
+	RequirementUnavailableSubjectKindUnsupported                 int
+	RequirementUnavailableNoDeclaringProducer                    int
+	RequirementUnavailableTableShapeUndeclared                   int
+	RequirementUnavailableComputedPopulationAbsent               int
+	RequirementComputedPopulationAbsentNotAPopulation            int
+	RequirementComputedPopulationAbsentUnresolvableMemberSet     int
+	RequirementComputedPopulationAbsentNonComputedRow            int
+	RequirementComputedInputKindUnplannedIdentity                int
+	RequirementComputedInputKindUnplannedMembership              int
+	RequirementComputedInputKindUnplannedStatus                  int
+	RequirementComputedInputKindUnplannedActualCompletion        int
+	RequirementComputedInputKindUnplannedWork                    int
+	RequirementComputedInputKindUnplannedBlockers                int
+	RequirementComputedInputKindUnplannedRequiredChildren        int
+	RequirementComputedInputKindUnplannedPullRequests            int
+	RequirementComputedInputKindUnplannedReviews                 int
+	RequirementComputedInputKindUnplannedContinuousIntegration   int
+	RequirementComputedInputKindUnplannedDeployments             int
+	RequirementComputedInputKindUnplannedIncidents               int
+	RequirementComputedInputKindUnplannedMetrics                 int
+	RequirementComputedInputKindUnplannedHealth                  int
+	RequirementComputedInputKindUnplannedWorkload                int
+	RequirementComputedInputKindUnplannedInvestment              int
+	RequirementComputedInputKindUnplannedReadiness               int
+	RequirementComputedInputKindUnplannedOperationalDeficiencies int
+	RequirementComputedInputKindUnplannedSourceHealth            int
+	RequirementComputedInputKindUnplannedEvidence                int
+	RequirementComputedInputKindUnplannedFlow                    int
+	RequirementComputedInputKindUnplannedLandscape               int
+	RequirementQuantifierAtLeastOne                              int
+	RequirementQuantifierCorroborated                            int
+	RequirementQuantifierExact                                   int
+	RequirementQuantifierAll                                     int
+	RequirementQuantifierNone                                    int
+	RequirementRoleSubject                                       int
+	RequirementRoleMember                                        int
+	RequirementRoleGroup                                         int
+	RequirementRoleOperand                                       int
+	RequirementComputedRowsWithInputs                            int
+	RequirementComputedInputClassFactKinds                       int
+	RequirementComputedInputClassResolvedMemberSet               int
+	RequirementComputedInputKindIdentity                         int
+	RequirementComputedInputKindMembership                       int
+	RequirementComputedInputKindStatus                           int
+	RequirementComputedInputKindActualCompletion                 int
+	RequirementComputedInputKindWork                             int
+	RequirementComputedInputKindBlockers                         int
+	RequirementComputedInputKindRequiredChildren                 int
+	RequirementComputedInputKindPullRequests                     int
+	RequirementComputedInputKindReviews                          int
+	RequirementComputedInputKindContinuousIntegration            int
+	RequirementComputedInputKindDeployments                      int
+	RequirementComputedInputKindIncidents                        int
+	RequirementComputedInputKindMetrics                          int
+	RequirementComputedInputKindHealth                           int
+	RequirementComputedInputKindWorkload                         int
+	RequirementComputedInputKindInvestment                       int
+	RequirementComputedInputKindReadiness                        int
+	RequirementComputedInputKindOperationalDeficiencies          int
+	RequirementComputedInputKindSourceHealth                     int
+	RequirementComputedInputKindEvidence                         int
+	RequirementComputedInputKindFlow                             int
+	RequirementComputedInputKindLandscape                        int
+	RequirementComputedStepServerExecuted                        int
+	RequirementComputedStepDeclaredOnly                          int
+	RequestID                                                    string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every FrameValidationFields uniformly, set ONLY by NewFrameValidationFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewFrameValidationFields is the generated constructor for FrameValidationFields -- every
+// field FrameValidation.Fields declares is a required parameter.
+func NewFrameValidationFields(orgID string, outcome string, failedInvariant string, failedPhase string, failureDetail string, proposedKind string, proposedGoals []string, acceptedGoals []string, acceptedJudgment string, orderingPresent bool, predictedStrippedObligations []string, derivedObligationCount int, widenedObligationCount int, shapeDiverged bool, emittedShape string, derivedShape string, frameVersion string, cohortDiscoverability string, frameGate string, refuseBasis string, requestedGroupHint string, requestedMemberHint string, proposedGroupKind string, proposedMemberKind string, groupAxis string, repairDecision string, repair string, repairInvariant string, repairKindBefore string, repairKindAfter string, repairMemberKind string, repairTermsMatch string, repairAttempts int, repairCarryScopeAnchorKind string, requirementDerivationVersion string, requirementCellsDerived int, requirementCellsServed int, requirementCellsUnserved int, requirementAccounting string, requirementUnavailableSubjectKindUnsupported int, requirementUnavailableNoDeclaringProducer int, requirementUnavailableTableShapeUndeclared int, requirementUnavailableComputedPopulationAbsent int, requirementComputedPopulationAbsentNotAPopulation int, requirementComputedPopulationAbsentUnresolvableMemberSet int, requirementComputedPopulationAbsentNonComputedRow int, requirementComputedInputKindUnplannedIdentity int, requirementComputedInputKindUnplannedMembership int, requirementComputedInputKindUnplannedStatus int, requirementComputedInputKindUnplannedActualCompletion int, requirementComputedInputKindUnplannedWork int, requirementComputedInputKindUnplannedBlockers int, requirementComputedInputKindUnplannedRequiredChildren int, requirementComputedInputKindUnplannedPullRequests int, requirementComputedInputKindUnplannedReviews int, requirementComputedInputKindUnplannedContinuousIntegration int, requirementComputedInputKindUnplannedDeployments int, requirementComputedInputKindUnplannedIncidents int, requirementComputedInputKindUnplannedMetrics int, requirementComputedInputKindUnplannedHealth int, requirementComputedInputKindUnplannedWorkload int, requirementComputedInputKindUnplannedInvestment int, requirementComputedInputKindUnplannedReadiness int, requirementComputedInputKindUnplannedOperationalDeficiencies int, requirementComputedInputKindUnplannedSourceHealth int, requirementComputedInputKindUnplannedEvidence int, requirementComputedInputKindUnplannedFlow int, requirementComputedInputKindUnplannedLandscape int, requirementQuantifierAtLeastOne int, requirementQuantifierCorroborated int, requirementQuantifierExact int, requirementQuantifierAll int, requirementQuantifierNone int, requirementRoleSubject int, requirementRoleMember int, requirementRoleGroup int, requirementRoleOperand int, requirementComputedRowsWithInputs int, requirementComputedInputClassFactKinds int, requirementComputedInputClassResolvedMemberSet int, requirementComputedInputKindIdentity int, requirementComputedInputKindMembership int, requirementComputedInputKindStatus int, requirementComputedInputKindActualCompletion int, requirementComputedInputKindWork int, requirementComputedInputKindBlockers int, requirementComputedInputKindRequiredChildren int, requirementComputedInputKindPullRequests int, requirementComputedInputKindReviews int, requirementComputedInputKindContinuousIntegration int, requirementComputedInputKindDeployments int, requirementComputedInputKindIncidents int, requirementComputedInputKindMetrics int, requirementComputedInputKindHealth int, requirementComputedInputKindWorkload int, requirementComputedInputKindInvestment int, requirementComputedInputKindReadiness int, requirementComputedInputKindOperationalDeficiencies int, requirementComputedInputKindSourceHealth int, requirementComputedInputKindEvidence int, requirementComputedInputKindFlow int, requirementComputedInputKindLandscape int, requirementComputedStepServerExecuted int, requirementComputedStepDeclaredOnly int, requestID string) FrameValidationFields {
+	valid := true
+	if proposedGoals == nil {
+		valid = false
+	}
+	if acceptedGoals == nil {
+		valid = false
+	}
+	if predictedStrippedObligations == nil {
+		valid = false
+	}
+	return FrameValidationFields{
+		OrgID:                        orgID,
+		Outcome:                      outcome,
+		FailedInvariant:              failedInvariant,
+		FailedPhase:                  failedPhase,
+		FailureDetail:                failureDetail,
+		ProposedKind:                 proposedKind,
+		ProposedGoals:                proposedGoals,
+		AcceptedGoals:                acceptedGoals,
+		AcceptedJudgment:             acceptedJudgment,
+		OrderingPresent:              orderingPresent,
+		PredictedStrippedObligations: predictedStrippedObligations,
+		DerivedObligationCount:       derivedObligationCount,
+		WidenedObligationCount:       widenedObligationCount,
+		ShapeDiverged:                shapeDiverged,
+		EmittedShape:                 emittedShape,
+		DerivedShape:                 derivedShape,
+		FrameVersion:                 frameVersion,
+		CohortDiscoverability:        cohortDiscoverability,
+		FrameGate:                    frameGate,
+		RefuseBasis:                  refuseBasis,
+		RequestedGroupHint:           requestedGroupHint,
+		RequestedMemberHint:          requestedMemberHint,
+		ProposedGroupKind:            proposedGroupKind,
+		ProposedMemberKind:           proposedMemberKind,
+		GroupAxis:                    groupAxis,
+		RepairDecision:               repairDecision,
+		Repair:                       repair,
+		RepairInvariant:              repairInvariant,
+		RepairKindBefore:             repairKindBefore,
+		RepairKindAfter:              repairKindAfter,
+		RepairMemberKind:             repairMemberKind,
+		RepairTermsMatch:             repairTermsMatch,
+		RepairAttempts:               repairAttempts,
+		RepairCarryScopeAnchorKind:   repairCarryScopeAnchorKind,
+		RequirementDerivationVersion: requirementDerivationVersion,
+		RequirementCellsDerived:      requirementCellsDerived,
+		RequirementCellsServed:       requirementCellsServed,
+		RequirementCellsUnserved:     requirementCellsUnserved,
+		RequirementAccounting:        requirementAccounting,
+		RequirementUnavailableSubjectKindUnsupported:                 requirementUnavailableSubjectKindUnsupported,
+		RequirementUnavailableNoDeclaringProducer:                    requirementUnavailableNoDeclaringProducer,
+		RequirementUnavailableTableShapeUndeclared:                   requirementUnavailableTableShapeUndeclared,
+		RequirementUnavailableComputedPopulationAbsent:               requirementUnavailableComputedPopulationAbsent,
+		RequirementComputedPopulationAbsentNotAPopulation:            requirementComputedPopulationAbsentNotAPopulation,
+		RequirementComputedPopulationAbsentUnresolvableMemberSet:     requirementComputedPopulationAbsentUnresolvableMemberSet,
+		RequirementComputedPopulationAbsentNonComputedRow:            requirementComputedPopulationAbsentNonComputedRow,
+		RequirementComputedInputKindUnplannedIdentity:                requirementComputedInputKindUnplannedIdentity,
+		RequirementComputedInputKindUnplannedMembership:              requirementComputedInputKindUnplannedMembership,
+		RequirementComputedInputKindUnplannedStatus:                  requirementComputedInputKindUnplannedStatus,
+		RequirementComputedInputKindUnplannedActualCompletion:        requirementComputedInputKindUnplannedActualCompletion,
+		RequirementComputedInputKindUnplannedWork:                    requirementComputedInputKindUnplannedWork,
+		RequirementComputedInputKindUnplannedBlockers:                requirementComputedInputKindUnplannedBlockers,
+		RequirementComputedInputKindUnplannedRequiredChildren:        requirementComputedInputKindUnplannedRequiredChildren,
+		RequirementComputedInputKindUnplannedPullRequests:            requirementComputedInputKindUnplannedPullRequests,
+		RequirementComputedInputKindUnplannedReviews:                 requirementComputedInputKindUnplannedReviews,
+		RequirementComputedInputKindUnplannedContinuousIntegration:   requirementComputedInputKindUnplannedContinuousIntegration,
+		RequirementComputedInputKindUnplannedDeployments:             requirementComputedInputKindUnplannedDeployments,
+		RequirementComputedInputKindUnplannedIncidents:               requirementComputedInputKindUnplannedIncidents,
+		RequirementComputedInputKindUnplannedMetrics:                 requirementComputedInputKindUnplannedMetrics,
+		RequirementComputedInputKindUnplannedHealth:                  requirementComputedInputKindUnplannedHealth,
+		RequirementComputedInputKindUnplannedWorkload:                requirementComputedInputKindUnplannedWorkload,
+		RequirementComputedInputKindUnplannedInvestment:              requirementComputedInputKindUnplannedInvestment,
+		RequirementComputedInputKindUnplannedReadiness:               requirementComputedInputKindUnplannedReadiness,
+		RequirementComputedInputKindUnplannedOperationalDeficiencies: requirementComputedInputKindUnplannedOperationalDeficiencies,
+		RequirementComputedInputKindUnplannedSourceHealth:            requirementComputedInputKindUnplannedSourceHealth,
+		RequirementComputedInputKindUnplannedEvidence:                requirementComputedInputKindUnplannedEvidence,
+		RequirementComputedInputKindUnplannedFlow:                    requirementComputedInputKindUnplannedFlow,
+		RequirementComputedInputKindUnplannedLandscape:               requirementComputedInputKindUnplannedLandscape,
+		RequirementQuantifierAtLeastOne:                              requirementQuantifierAtLeastOne,
+		RequirementQuantifierCorroborated:                            requirementQuantifierCorroborated,
+		RequirementQuantifierExact:                                   requirementQuantifierExact,
+		RequirementQuantifierAll:                                     requirementQuantifierAll,
+		RequirementQuantifierNone:                                    requirementQuantifierNone,
+		RequirementRoleSubject:                                       requirementRoleSubject,
+		RequirementRoleMember:                                        requirementRoleMember,
+		RequirementRoleGroup:                                         requirementRoleGroup,
+		RequirementRoleOperand:                                       requirementRoleOperand,
+		RequirementComputedRowsWithInputs:                            requirementComputedRowsWithInputs,
+		RequirementComputedInputClassFactKinds:                       requirementComputedInputClassFactKinds,
+		RequirementComputedInputClassResolvedMemberSet:               requirementComputedInputClassResolvedMemberSet,
+		RequirementComputedInputKindIdentity:                         requirementComputedInputKindIdentity,
+		RequirementComputedInputKindMembership:                       requirementComputedInputKindMembership,
+		RequirementComputedInputKindStatus:                           requirementComputedInputKindStatus,
+		RequirementComputedInputKindActualCompletion:                 requirementComputedInputKindActualCompletion,
+		RequirementComputedInputKindWork:                             requirementComputedInputKindWork,
+		RequirementComputedInputKindBlockers:                         requirementComputedInputKindBlockers,
+		RequirementComputedInputKindRequiredChildren:                 requirementComputedInputKindRequiredChildren,
+		RequirementComputedInputKindPullRequests:                     requirementComputedInputKindPullRequests,
+		RequirementComputedInputKindReviews:                          requirementComputedInputKindReviews,
+		RequirementComputedInputKindContinuousIntegration:            requirementComputedInputKindContinuousIntegration,
+		RequirementComputedInputKindDeployments:                      requirementComputedInputKindDeployments,
+		RequirementComputedInputKindIncidents:                        requirementComputedInputKindIncidents,
+		RequirementComputedInputKindMetrics:                          requirementComputedInputKindMetrics,
+		RequirementComputedInputKindHealth:                           requirementComputedInputKindHealth,
+		RequirementComputedInputKindWorkload:                         requirementComputedInputKindWorkload,
+		RequirementComputedInputKindInvestment:                       requirementComputedInputKindInvestment,
+		RequirementComputedInputKindReadiness:                        requirementComputedInputKindReadiness,
+		RequirementComputedInputKindOperationalDeficiencies:          requirementComputedInputKindOperationalDeficiencies,
+		RequirementComputedInputKindSourceHealth:                     requirementComputedInputKindSourceHealth,
+		RequirementComputedInputKindEvidence:                         requirementComputedInputKindEvidence,
+		RequirementComputedInputKindFlow:                             requirementComputedInputKindFlow,
+		RequirementComputedInputKindLandscape:                        requirementComputedInputKindLandscape,
+		RequirementComputedStepServerExecuted:                        requirementComputedStepServerExecuted,
+		RequirementComputedStepDeclaredOnly:                          requirementComputedStepDeclaredOnly,
+		RequestID:                                                    requestID,
+		constructed:                                                  valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewFrameValidationFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f FrameValidationFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns FrameValidation's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f FrameValidationFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"failed_invariant", contextfabric.SanitizeLogAttr(f.FailedInvariant),
+		"failed_phase", contextfabric.SanitizeLogAttr(f.FailedPhase),
+		"failure_detail", contextfabric.SanitizeLogAttr(f.FailureDetail),
+		"proposed_kind", contextfabric.SanitizeLogAttr(f.ProposedKind),
+		"proposed_goals", contextfabric.SanitizeLogStrings(f.ProposedGoals),
+		"accepted_goals", contextfabric.SanitizeLogStrings(f.AcceptedGoals),
+		"accepted_judgment", contextfabric.SanitizeLogAttr(f.AcceptedJudgment),
+		"ordering_present", f.OrderingPresent,
+		"predicted_stripped_obligations", contextfabric.SanitizeLogStrings(f.PredictedStrippedObligations),
+		"derived_obligation_count", f.DerivedObligationCount,
+		"widened_obligation_count", f.WidenedObligationCount,
+		"shape_diverged", f.ShapeDiverged,
+		"emitted_shape", contextfabric.SanitizeLogAttr(f.EmittedShape),
+		"derived_shape", contextfabric.SanitizeLogAttr(f.DerivedShape),
+		"frame_version", contextfabric.SanitizeLogAttr(f.FrameVersion),
+		"cohort_discoverability", contextfabric.SanitizeLogAttr(f.CohortDiscoverability),
+		"frame_gate", contextfabric.SanitizeLogAttr(f.FrameGate),
+		"refuse_basis", contextfabric.SanitizeLogAttr(f.RefuseBasis),
+		"requested_group_hint", contextfabric.SanitizeLogAttr(f.RequestedGroupHint),
+		"requested_member_hint", contextfabric.SanitizeLogAttr(f.RequestedMemberHint),
+		"proposed_group_kind", contextfabric.SanitizeLogAttr(f.ProposedGroupKind),
+		"proposed_member_kind", contextfabric.SanitizeLogAttr(f.ProposedMemberKind),
+		"group_axis", contextfabric.SanitizeLogAttr(f.GroupAxis),
+		"repair_decision", contextfabric.SanitizeLogAttr(f.RepairDecision),
+		"repair", contextfabric.SanitizeLogAttr(f.Repair),
+		"repair_invariant", contextfabric.SanitizeLogAttr(f.RepairInvariant),
+		"repair_kind_before", contextfabric.SanitizeLogAttr(f.RepairKindBefore),
+		"repair_kind_after", contextfabric.SanitizeLogAttr(f.RepairKindAfter),
+		"repair_member_kind", contextfabric.SanitizeLogAttr(f.RepairMemberKind),
+		"repair_terms_match", contextfabric.SanitizeLogAttr(f.RepairTermsMatch),
+		"repair_attempts", f.RepairAttempts,
+		"repair_carry_scope_anchor_kind", contextfabric.SanitizeLogAttr(f.RepairCarryScopeAnchorKind),
+		"requirement_derivation_version", contextfabric.SanitizeLogAttr(f.RequirementDerivationVersion),
+		"requirement_cells_derived", f.RequirementCellsDerived,
+		"requirement_cells_served", f.RequirementCellsServed,
+		"requirement_cells_unserved", f.RequirementCellsUnserved,
+		"requirement_accounting", contextfabric.SanitizeLogAttr(f.RequirementAccounting),
+		"requirement_unavailable_subject_kind_unsupported", f.RequirementUnavailableSubjectKindUnsupported,
+		"requirement_unavailable_no_declaring_producer", f.RequirementUnavailableNoDeclaringProducer,
+		"requirement_unavailable_table_shape_undeclared", f.RequirementUnavailableTableShapeUndeclared,
+		"requirement_unavailable_computed_population_absent", f.RequirementUnavailableComputedPopulationAbsent,
+		"requirement_computed_population_absent_not_a_population", f.RequirementComputedPopulationAbsentNotAPopulation,
+		"requirement_computed_population_absent_unresolvable_member_set", f.RequirementComputedPopulationAbsentUnresolvableMemberSet,
+		"requirement_computed_population_absent_non_computed_row", f.RequirementComputedPopulationAbsentNonComputedRow,
+		"requirement_computed_input_kind_unplanned_identity", f.RequirementComputedInputKindUnplannedIdentity,
+		"requirement_computed_input_kind_unplanned_membership", f.RequirementComputedInputKindUnplannedMembership,
+		"requirement_computed_input_kind_unplanned_status", f.RequirementComputedInputKindUnplannedStatus,
+		"requirement_computed_input_kind_unplanned_actual_completion", f.RequirementComputedInputKindUnplannedActualCompletion,
+		"requirement_computed_input_kind_unplanned_work", f.RequirementComputedInputKindUnplannedWork,
+		"requirement_computed_input_kind_unplanned_blockers", f.RequirementComputedInputKindUnplannedBlockers,
+		"requirement_computed_input_kind_unplanned_required_children", f.RequirementComputedInputKindUnplannedRequiredChildren,
+		"requirement_computed_input_kind_unplanned_pull_requests", f.RequirementComputedInputKindUnplannedPullRequests,
+		"requirement_computed_input_kind_unplanned_reviews", f.RequirementComputedInputKindUnplannedReviews,
+		"requirement_computed_input_kind_unplanned_continuous_integration", f.RequirementComputedInputKindUnplannedContinuousIntegration,
+		"requirement_computed_input_kind_unplanned_deployments", f.RequirementComputedInputKindUnplannedDeployments,
+		"requirement_computed_input_kind_unplanned_incidents", f.RequirementComputedInputKindUnplannedIncidents,
+		"requirement_computed_input_kind_unplanned_metrics", f.RequirementComputedInputKindUnplannedMetrics,
+		"requirement_computed_input_kind_unplanned_health", f.RequirementComputedInputKindUnplannedHealth,
+		"requirement_computed_input_kind_unplanned_workload", f.RequirementComputedInputKindUnplannedWorkload,
+		"requirement_computed_input_kind_unplanned_investment", f.RequirementComputedInputKindUnplannedInvestment,
+		"requirement_computed_input_kind_unplanned_readiness", f.RequirementComputedInputKindUnplannedReadiness,
+		"requirement_computed_input_kind_unplanned_operational_deficiencies", f.RequirementComputedInputKindUnplannedOperationalDeficiencies,
+		"requirement_computed_input_kind_unplanned_source_health", f.RequirementComputedInputKindUnplannedSourceHealth,
+		"requirement_computed_input_kind_unplanned_evidence", f.RequirementComputedInputKindUnplannedEvidence,
+		"requirement_computed_input_kind_unplanned_flow", f.RequirementComputedInputKindUnplannedFlow,
+		"requirement_computed_input_kind_unplanned_landscape", f.RequirementComputedInputKindUnplannedLandscape,
+		"requirement_quantifier_at_least_one", f.RequirementQuantifierAtLeastOne,
+		"requirement_quantifier_corroborated", f.RequirementQuantifierCorroborated,
+		"requirement_quantifier_exact", f.RequirementQuantifierExact,
+		"requirement_quantifier_all", f.RequirementQuantifierAll,
+		"requirement_quantifier_none", f.RequirementQuantifierNone,
+		"requirement_role_subject", f.RequirementRoleSubject,
+		"requirement_role_member", f.RequirementRoleMember,
+		"requirement_role_group", f.RequirementRoleGroup,
+		"requirement_role_operand", f.RequirementRoleOperand,
+		"requirement_computed_rows_with_inputs", f.RequirementComputedRowsWithInputs,
+		"requirement_computed_input_class_fact_kinds", f.RequirementComputedInputClassFactKinds,
+		"requirement_computed_input_class_resolved_member_set", f.RequirementComputedInputClassResolvedMemberSet,
+		"requirement_computed_input_kind_identity", f.RequirementComputedInputKindIdentity,
+		"requirement_computed_input_kind_membership", f.RequirementComputedInputKindMembership,
+		"requirement_computed_input_kind_status", f.RequirementComputedInputKindStatus,
+		"requirement_computed_input_kind_actual_completion", f.RequirementComputedInputKindActualCompletion,
+		"requirement_computed_input_kind_work", f.RequirementComputedInputKindWork,
+		"requirement_computed_input_kind_blockers", f.RequirementComputedInputKindBlockers,
+		"requirement_computed_input_kind_required_children", f.RequirementComputedInputKindRequiredChildren,
+		"requirement_computed_input_kind_pull_requests", f.RequirementComputedInputKindPullRequests,
+		"requirement_computed_input_kind_reviews", f.RequirementComputedInputKindReviews,
+		"requirement_computed_input_kind_continuous_integration", f.RequirementComputedInputKindContinuousIntegration,
+		"requirement_computed_input_kind_deployments", f.RequirementComputedInputKindDeployments,
+		"requirement_computed_input_kind_incidents", f.RequirementComputedInputKindIncidents,
+		"requirement_computed_input_kind_metrics", f.RequirementComputedInputKindMetrics,
+		"requirement_computed_input_kind_health", f.RequirementComputedInputKindHealth,
+		"requirement_computed_input_kind_workload", f.RequirementComputedInputKindWorkload,
+		"requirement_computed_input_kind_investment", f.RequirementComputedInputKindInvestment,
+		"requirement_computed_input_kind_readiness", f.RequirementComputedInputKindReadiness,
+		"requirement_computed_input_kind_operational_deficiencies", f.RequirementComputedInputKindOperationalDeficiencies,
+		"requirement_computed_input_kind_source_health", f.RequirementComputedInputKindSourceHealth,
+		"requirement_computed_input_kind_evidence", f.RequirementComputedInputKindEvidence,
+		"requirement_computed_input_kind_flow", f.RequirementComputedInputKindFlow,
+		"requirement_computed_input_kind_landscape", f.RequirementComputedInputKindLandscape,
+		"requirement_computed_step_server_executed", f.RequirementComputedStepServerExecuted,
+		"requirement_computed_step_declared_only", f.RequirementComputedStepDeclaredOnly,
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 	}
 }

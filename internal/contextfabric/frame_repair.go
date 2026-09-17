@@ -148,6 +148,36 @@ const FrameRepairCountKindCollapse FrameRepairName = "count_kind_collapse"
 // FrameRepairCompareGroupedCollapse is the I7 repair this file implements.
 const FrameRepairCompareGroupedCollapse FrameRepairName = "compare_grouped_collapse"
 
+var frameRepairNames = [...]FrameRepairName{
+	FrameRepairCountKindCollapse,
+	FrameRepairCompareGroupedCollapse,
+}
+
+// FrameRepairNameCount is the closed vocabulary's size.
+const FrameRepairNameCount = len(frameRepairNames)
+
+// FrameRepairNameVocabulary returns the closed vocabulary of bounded
+// repairs, in declared order.
+func FrameRepairNameVocabulary() [FrameRepairNameCount]FrameRepairName {
+	return frameRepairNames
+}
+
+var frameRepairTermsMatches = [...]FrameRepairTermsMatch{
+	FrameRepairTermsSame,
+	FrameRepairTermsDiverge,
+}
+
+// FrameRepairTermsMatchCount is the closed vocabulary's size.
+const FrameRepairTermsMatchCount = len(frameRepairTermsMatches)
+
+// FrameRepairTermsMatchVocabulary returns the closed vocabulary in declared
+// order. The empty value (the comparison did not run) is not a member --
+// FrameRepair.ObservableTermsMatch renders it as `not_evaluated` for a log
+// line rather than as a member of this type.
+func FrameRepairTermsMatchVocabulary() [FrameRepairTermsMatchCount]FrameRepairTermsMatch {
+	return frameRepairTermsMatches
+}
+
 // frameRepairBound is the most repair attempts one proposal gets.
 const frameRepairBound = 1
 
@@ -478,6 +508,23 @@ func requestedJudgmentForGoals(goals []InvestigationGoal) string {
 		}
 	}
 	return strings.Join(parts, " and ")
+}
+
+// GoalJudgmentPhraseVocabulary returns goalJudgmentPhrase's own closed
+// range, in InvestigationGoalVocabulary's declared order -- the fragment
+// alphabet requestedJudgmentForGoals composes accepted_judgment's
+// " and "-joined value from. The assembled value itself is not one of a
+// small closed set (its length and phrase order both follow the accepted
+// Goals list, which is a variable-length, variably-ordered subset of the
+// vocabulary), so a consumer certifies that field fragment-by-fragment
+// against this table rather than against one flat, unenumerable string
+// set -- this is the ONE table both readings come from.
+func GoalJudgmentPhraseVocabulary() []string {
+	out := make([]string, 0, InvestigationGoalCount)
+	for _, goal := range InvestigationGoalVocabulary() {
+		out = append(out, goalJudgmentPhrase[goal])
+	}
+	return out
 }
 
 // replaceCompareGoal is the I7 repair's goal transform: compare is dropped;
