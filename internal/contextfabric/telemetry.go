@@ -412,10 +412,9 @@ func (t SlogEngineTelemetry) RecordKindCarry(ctx context.Context, principal stor
 // vocabulary; empty only when the turn never reached the check).
 // capture_skip_reason (CHAOS-5825) is why: `not_applicable` when
 // capture_decision carries a real decision (or the turn ended on an exit
-// this axis does not yet name), `window_confirmation_gated_discard` when
-// this turn ended on the CHAOS-4234 gate, whose offers-only resolution
-// discards everything the capture check would need before that check ever
-// runs (CaptureSkipReason's own doc comment).
+// this axis does not yet name), and one closed-vocabulary value per named
+// exit otherwise -- see captureSkipReasons() and CaptureSkipReason's own doc
+// comment for the full set and what each one names.
 func (t SlogEngineTelemetry) RecordConfirmedNeedLedger(ctx context.Context, principal storage.Principal, event ConfirmedNeedLedgerEvent) {
 	args := append([]any{
 		"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(event.Outcome)),

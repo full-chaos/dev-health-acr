@@ -159,6 +159,12 @@ func TestCHAOS4234_ClassDefaultGate_ComposesKindAndHandleOffersBesideTheWindowOf
 	if ledgerEvent.CaptureSkipReason != CaptureSkipReasonWindowConfirmationGatedDiscard {
 		t.Fatalf("CaptureSkipReason = %q, want %q", ledgerEvent.CaptureSkipReason, CaptureSkipReasonWindowConfirmationGatedDiscard)
 	}
+	// The closed-vocabulary guard itself: this REAL exit's driven-through-
+	// Investigate emission must be a declared member, independently of the
+	// equality check above.
+	if !ValidCaptureSkipReason(ledgerEvent.CaptureSkipReason) {
+		t.Fatalf("CaptureSkipReason = %q is not a declared member of captureSkipReasons()", ledgerEvent.CaptureSkipReason)
+	}
 }
 
 // windowExpandTargetsExisting reports whether expand's ReceiptID/OptionID/

@@ -1528,6 +1528,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if windowCanon.Veto != windowVetoNone {
 		// D-e: a window veto is CHAOS-5271's mechanism, not this one.
 		continuation = continuation.withReason(ContinuationReasonWindowVeto)
+		// This turn short-circuits above tryReuse and Interpret -- no subject
+		// resolution of any kind was ever attempted.
+		captureSkipReasonForTelemetry = CaptureSkipReasonWindowVetoed
 		// CHAOS-3478: nil -- resolvePriorSubjectHints has not run yet at
 		// this call site (see engine.go's ordering comment at its own call
 		// site below), the same "nothing attempted yet" convention every
@@ -1552,6 +1555,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// class-table/binder default) cannot be known yet at this point --
 	// see the second gate, after Interpret, below.
 	if windowCanon.ExplicitUnconfirmed {
+		// This gate fires before tryReuse and Interpret -- no subject
+		// resolution of any kind was ever attempted.
+		captureSkipReasonForTelemetry = CaptureSkipReasonWindowConfirmationRequired
 		// CHAOS-3478: nil, not an empty slice -- resolvePriorSubjectHints has
 		// not run yet at this gate (it sits below, after Interpret), so
 		// there is genuinely nothing to echo yet, the same "nothing
@@ -1577,6 +1583,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	structureCanon := e.canonicalizeStructure(ctx, principal, request, binding)
 	if structureCanon.Veto != structureVetoNone {
 		continuation = continuation.withReason(ContinuationReasonStructureVeto)
+		// This turn short-circuits above tryReuse and Interpret -- no subject
+		// resolution of any kind was ever attempted.
+		captureSkipReasonForTelemetry = CaptureSkipReasonStructureVetoed
 		// CHAOS-3900 P1.F: a PRE-FLIGHT veto is FINAL the instant
 		// canonicalizeStructure returns it -- nothing downstream can still
 		// change this outcome, so telemetry records it immediately here,
@@ -1705,9 +1714,18 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	} else {
 		reused, ok, workItemTuple, reusedReading, reuseErr := e.tryReuseWithReading(ctx, principal, request, clampedRequestTime, windowCanon.KeyComponent, windowCanon.KeyEncoding, binding)
 		if reuseErr != nil {
+			// A matched candidate could not be served (e.g. its stored
+			// coverage fails validation) -- this turn is served from
+			// neither the stored row nor its own resolution, which never
+			// ran.
+			captureSkipReasonForTelemetry = CaptureSkipReasonReuseValidationError
 			return InvestigationResult{}, stageError(StageValidation, reuseErr)
 		}
 		if ok {
+			// Overwritten below if budget re-validation goes on to refuse
+			// this candidate -- this turn's own resolution never runs either
+			// way.
+			captureSkipReasonForTelemetry = CaptureSkipReasonReuseServed
 			// CHAOS-4413 (codex xhigh round-1 P1, confirmed): a reuse hit
 			// can serve a row persisted before Completeness existed --
 			// ValidateStored's legacy exemption lets it stay in storage,
@@ -1852,6 +1870,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			cover.events = reusedObservationCoverEvents(reused, reuseKeys)
 			reused, reuseBudgetErr := e.finalizeServed(ctx, principal, BudgetAssertReuse, reused, nil, e.effectiveResponseBudget(request))
 			if reuseBudgetErr != nil {
+				// The matched row does not fit the current budget and is
+				// refused rather than served stale -- this turn's own
+				// resolution never ran either.
+				captureSkipReasonForTelemetry = CaptureSkipReasonReuseBudgetRefused
 				return InvestigationResult{}, reuseBudgetErr
 			}
 			cover.answered = true
@@ -1971,6 +1993,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// emitter tells an operator nothing about which path they are looking
 		// at. Caught here by the enumeration pin, not by review.
 		continuation = continuation.withReason(ContinuationReasonFreshContextUnavailable)
+		// No interpreted question exists for ResolveSubjects to run against,
+		// so it never ran.
+		captureSkipReasonForTelemetry = CaptureSkipReasonInterpretationFailed
 		return InvestigationResult{}, stageError(StageInterpretation, fmt.Errorf("interpret question: %w", err))
 	}
 	// Bound the INTERPRETED question too, not just the wire request
@@ -2053,6 +2078,8 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// The INTERPRETER produced an unanswerable bound; its own member,
 		// distinct from the caller-side one above.
 		continuation = continuation.withReason(ContinuationReasonAsOfUnresolvable)
+		// This turn returns before ResolveSubjects ever runs.
+		captureSkipReasonForTelemetry = CaptureSkipReasonInterpretedTimeUnanswerable
 		// Returns before ResolveSubjects, DiscoverContext, ReadFacts and
 		// Synthesize ever run -- the same "no capability call pays for a
 		// question this engine will not answer" guarantee the refusal it
@@ -2172,6 +2199,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// keeps that refusal and its own basis -- see refusesTurn.
 		if continuation.refusesTurn(familyOutcome.Gate) {
 			continuation.RefusalBasis = contractsv1.ContextFabricRefusalBasisContinuationContextUnverifiable
+			// The confirmed carrier could not be composed into a valid
+			// frame and this turn is refused above planning and every
+			// retrieval -- its own resolution never ran.
+			captureSkipReasonForTelemetry = CaptureSkipReasonContinuationRefused
 			refusalDispositions := composePriorSubjectReceiptDispositions(priorOutcomes, SubjectResolution{})
 			if len(refusalDispositions) > 0 {
 				e.recordPriorSubjectReceiptSkips(ctx, principal, refusalDispositions, priorHintsStaleGraphEpochDelta)
@@ -2362,6 +2393,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// there the fresh interpretation is the only reading and the disagreement
 	// is named.
 	if windowCanon.Effective != nil && clampedInterpretedTime.Axis != TemporalCurrent {
+		// This veto returns before ResolveSubjects ever runs -- distinct
+		// from the pre-Interpret window veto above (that one fires before
+		// this disagreement could even be known).
+		captureSkipReasonForTelemetry = CaptureSkipReasonWindowAxisConflict
 		// CHAOS-3478/CHAOS-3813 (codex round-1 finding): this veto returns
 		// before ResolveSubjects ever runs, so it is a never-resolved
 		// terminal exactly like the ErrGraphNotProjected/CHAOS-4234 gated

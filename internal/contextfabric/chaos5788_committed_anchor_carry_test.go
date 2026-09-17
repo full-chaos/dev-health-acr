@@ -872,6 +872,12 @@ func TestFrameGateRefusalDiscloseNotEvaluatedNeverApplied(t *testing.T) {
 		t.Fatalf("event capture_decision/capture_skip_reason = %q/%q, want empty/%q -- a frame-gate refusal never reaches subject resolution, so it must say so rather than leave the reason silently blank",
 			event.CaptureDecision, event.CaptureSkipReason, CaptureSkipReasonFrameGateRefused)
 	}
+	// The closed-vocabulary guard itself: this REAL exit's driven-through-
+	// Investigate emission must be a declared member, independently of the
+	// equality check above.
+	if !ValidCaptureSkipReason(event.CaptureSkipReason) {
+		t.Fatalf("event.CaptureSkipReason = %q is not a declared member of captureSkipReasons()", event.CaptureSkipReason)
+	}
 }
 
 // TestGraphNotProjectedTerminalDisclosesNotEvaluated is the third exit kind
@@ -926,6 +932,12 @@ func TestGraphNotProjectedTerminalDisclosesNotEvaluated(t *testing.T) {
 		t.Fatalf("event capture_decision/capture_skip_reason = %q/%q, want empty/%q -- a graph-not-projected degrade never reaches the capture check, so it must say so rather than leave the reason silently blank",
 			event.CaptureDecision, event.CaptureSkipReason, CaptureSkipReasonGraphNotProjected)
 	}
+	// The closed-vocabulary guard itself: this REAL exit's driven-through-
+	// Investigate emission must be a declared member, independently of the
+	// equality check above.
+	if !ValidCaptureSkipReason(event.CaptureSkipReason) {
+		t.Fatalf("event.CaptureSkipReason = %q is not a declared member of captureSkipReasons()", event.CaptureSkipReason)
+	}
 }
 
 // TestResolutionErrorDisclosesTheReasonCaptureNeverRan is the fourth exit
@@ -957,6 +969,12 @@ func TestResolutionErrorDisclosesTheReasonCaptureNeverRan(t *testing.T) {
 	if event.CaptureDecision != "" || event.CaptureSkipReason != CaptureSkipReasonResolutionError {
 		t.Fatalf("event capture_decision/capture_skip_reason = %q/%q, want empty/%q -- a hard subject-resolution error never reaches the capture check, so it must say so rather than leave the reason silently blank",
 			event.CaptureDecision, event.CaptureSkipReason, CaptureSkipReasonResolutionError)
+	}
+	// The closed-vocabulary guard itself: this REAL exit's driven-through-
+	// Investigate emission must be a declared member, independently of the
+	// equality check above.
+	if !ValidCaptureSkipReason(event.CaptureSkipReason) {
+		t.Fatalf("event.CaptureSkipReason = %q is not a declared member of captureSkipReasons()", event.CaptureSkipReason)
 	}
 }
 
