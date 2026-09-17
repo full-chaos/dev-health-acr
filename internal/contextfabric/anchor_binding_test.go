@@ -477,6 +477,31 @@ func TestReadAnchorBindingParentNeverCallsTheStore(t *testing.T) {
 // TestAnchorBindingOverTheCapLeavesTheCaptureUnchanged: a snapshot the binding
 // would push over the cap is saved exactly as captured, and the line says the
 // binding was left out.
+// TestTheBindingMemberKeepsEveryOtherExtensionMember: attaching the binding
+// keeps the snapshot's other members and never writes into the source map.
+func TestTheBindingMemberKeepsEveryOtherExtensionMember(t *testing.T) {
+	state := BuildSemanticState(SemanticStateInput{
+		Outcome:         QuestionFamilyOutcome{Family: QuestionFamilyUnclassified, Source: QuestionFamilySourceNone},
+		FamilyVersion:   QuestionFamilyTableVersion,
+		RequestIdentity: SemanticRequestIdentityOf(validInvestigationRequest(), ""),
+	})
+	state.Extensions = SemanticStateExtensions{"other_member": json.RawMessage(`{"kept":true}`)}
+	tracker := &anchorBindingTracker{parent: anchorBindingParent{Status: AnchorBindingParentNoReference}, evaluation: AnchorBindingEvaluationNotResolved, epoch: 7}
+	out, event := semanticStateCapture{Write: SemanticStateOf(state)}.withAnchorShadow(tracker).attachAnchorBinding(BudgetAssertDecisive, InvestigationResult{ResultID: "result_members"})
+	if event == nil || event.Persisted != "" || out.Write.State == nil {
+		t.Fatalf("attach: event=%+v state=%v", event, out.Write.State)
+	}
+	if got := string(out.Write.State.Extensions["other_member"]); got != `{"kept":true}` {
+		t.Fatalf("the other member = %q", got)
+	}
+	if binding := bindingMember(out.Write.State); binding == nil || binding.Reason != AnchorBindingReasonNoProof {
+		t.Fatalf("binding member = %+v", binding)
+	}
+	if len(state.Extensions) != 1 || bindingMember(state) != nil {
+		t.Fatalf("the source snapshot's members changed: %v", state.Extensions)
+	}
+}
+
 func TestAnAnchorBindingThatCannotEncodeLeavesTheCaptureUnchanged(t *testing.T) {
 	// A carried identity larger than the whole cap: the binder copies it into
 	// the decision, and the snapshot with that binding cannot encode.

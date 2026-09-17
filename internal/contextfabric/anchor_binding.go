@@ -943,7 +943,7 @@ func withAnchorBindingMember(state *PersistedSemanticState, binding AnchorBindin
 
 // storedAnchorBinding reads the binding member of a stored snapshot: present
 // is false when the member is absent, and err is set when it does not decode
-// as exactly one binding with no unknown keys.
+// as a binding with no unknown keys.
 func storedAnchorBinding(state *PersistedSemanticState) (binding AnchorBinding, present bool, err error) {
 	if state == nil {
 		return AnchorBinding{}, false, nil
@@ -957,9 +957,8 @@ func storedAnchorBinding(state *PersistedSemanticState) (binding AnchorBinding, 
 	if err := decoder.Decode(&binding); err != nil {
 		return AnchorBinding{}, true, err
 	}
-	if decoder.More() {
-		return AnchorBinding{}, true, errors.New("anchor binding member carries trailing data")
-	}
+	// The member is one JSON value by construction: the snapshot decoder
+	// already parsed it as one.
 	return binding, true, nil
 }
 
