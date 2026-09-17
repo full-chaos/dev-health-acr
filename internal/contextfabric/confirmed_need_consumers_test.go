@@ -1336,7 +1336,7 @@ func TestConfirmedNeedVocabularies(t *testing.T) {
 		}
 	}
 	if ValidConfirmedNeedMemberDropReason("reverify_refused") || ValidConfirmedNeedLedgerWindowDecision("carried") ||
-		len(confirmedNeedMemberDropReasons()) != 3 || len(confirmedNeedLedgerWindowDecisions()) != 2 {
+		len(confirmedNeedMemberDropReasons()) != 2 || len(confirmedNeedLedgerWindowDecisions()) != 2 {
 		t.Fatal("vocabulary membership is not closed")
 	}
 	if got := observableConfirmedNeedDrops(nil); got != "none" {
@@ -1361,7 +1361,7 @@ func TestCaptureSkipReasonVocabularyIsClosed(t *testing.T) {
 			t.Fatalf("%q not valid", reason)
 		}
 	}
-	if ValidCaptureSkipReason("unassigned_exit") || ValidCaptureSkipReason("") || len(captureSkipReasons()) != 16 {
+	if ValidCaptureSkipReason("unassigned_exit") || ValidCaptureSkipReason("") || len(captureSkipReasons()) != 15 {
 		t.Fatal("CaptureSkipReason vocabulary membership is not closed")
 	}
 }

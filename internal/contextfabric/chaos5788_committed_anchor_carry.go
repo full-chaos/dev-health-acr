@@ -39,36 +39,16 @@ const (
 	// (count_population_scope.go), gated to the SAME identity-proven bases
 	// that predicate already requires.
 	ConfirmedNeedBasisEngineCommitted ConfirmedNeedBasis = "engine_committed"
-	// ConfirmedNeedBasisUndeclared is the closed, disclosure-safe stand-in a
-	// telemetry emitter renders in place of a value outside this vocabulary
-	// -- never the zero value (that is ConfirmedNeedBasisConfirmed, above),
-	// only a value this switch's default arm would otherwise pass through
-	// unrecognized. See closedConfirmedNeedBasis.
-	ConfirmedNeedBasisUndeclared ConfirmedNeedBasis = "undeclared"
 )
 
 // ValidConfirmedNeedBasis reports membership.
 func ValidConfirmedNeedBasis(value ConfirmedNeedBasis) bool {
 	switch value {
-	case ConfirmedNeedBasisConfirmed, ConfirmedNeedBasisEngineCommitted, ConfirmedNeedBasisUndeclared:
+	case ConfirmedNeedBasisConfirmed, ConfirmedNeedBasisEngineCommitted:
 		return true
 	default:
 		return false
 	}
-}
-
-// closedConfirmedNeedBasis is the disclosure-safe form of a
-// ConfirmedNeedBasis for a telemetry emitter: a value ValidConfirmedNeedBasis
-// does not recognize is never logged raw (a constant added to the type
-// without a matching case in ValidConfirmedNeedBasis's switch would
-// otherwise reach Info verbatim, indistinguishable from a real member) --
-// it renders as ConfirmedNeedBasisUndeclared instead. The raw token still
-// reaches the line, through the emitter's own companion "_raw" key.
-func closedConfirmedNeedBasis(basis ConfirmedNeedBasis) ConfirmedNeedBasis {
-	if ValidConfirmedNeedBasis(basis) {
-		return basis
-	}
-	return ConfirmedNeedBasisUndeclared
 }
 
 // provenanceForConfirmedNeedBasis renders the wire Provenance a carried
@@ -215,14 +195,6 @@ const (
 	// under a window commitment the interpretation disagrees with, so this
 	// turn's own resolution never ran.
 	CaptureSkipReasonWindowAxisConflict CaptureSkipReason = "window_axis_conflict"
-	// CaptureSkipReasonUndeclared is the closed, disclosure-safe stand-in a
-	// telemetry emitter renders in place of a value outside this vocabulary
-	// -- a constant assigned at some exit without a matching addition to
-	// captureSkipReasons() would otherwise reach Info verbatim,
-	// indistinguishable from a real, reviewed member. See
-	// closedCaptureSkipReason. A member in its own right (this list includes
-	// it), not merely a sentinel two functions agree on by convention.
-	CaptureSkipReasonUndeclared CaptureSkipReason = "undeclared"
 )
 
 // captureSkipReasons is the closed vocabulary CaptureSkipReason draws from --
@@ -247,7 +219,6 @@ func captureSkipReasons() []CaptureSkipReason {
 		CaptureSkipReasonInterpretedTimeUnanswerable,
 		CaptureSkipReasonContinuationRefused,
 		CaptureSkipReasonWindowAxisConflict,
-		CaptureSkipReasonUndeclared,
 	}
 }
 
@@ -259,22 +230,6 @@ func ValidCaptureSkipReason(value CaptureSkipReason) bool {
 		}
 	}
 	return false
-}
-
-// closedCaptureSkipReason is the disclosure-safe form of a CaptureSkipReason
-// for a telemetry emitter: a value ValidCaptureSkipReason does not recognize
-// is never logged raw -- it renders as CaptureSkipReasonUndeclared instead,
-// with the raw token still reaching the line through the emitter's own
-// companion "_raw" key. The zero value ("", never itself declared -- see
-// CaptureSkipReasonNotApplicable's own non-empty string) passes through
-// unchanged: the emitter's existing noneWhenEmpty already renders it "none",
-// the pre-existing, unrelated convention for "nothing was assigned at all",
-// distinct from "something was assigned that this vocabulary does not know."
-func closedCaptureSkipReason(reason CaptureSkipReason) CaptureSkipReason {
-	if reason == "" || ValidCaptureSkipReason(reason) {
-		return reason
-	}
-	return CaptureSkipReasonUndeclared
 }
 
 // engineCommittedAnchorForCapture decides whether THIS turn's own resolution
