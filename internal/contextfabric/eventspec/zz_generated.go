@@ -82,6 +82,7 @@ type AnchorBindingTransitionFields struct {
 	Site                string
 	Evaluation          string
 	ParentBinding       string
+	CarryChecks         string
 	FromState           string
 	FromKind            string
 	FromID              string
@@ -122,7 +123,7 @@ type AnchorBindingTransitionFields struct {
 
 // NewAnchorBindingTransitionFields is the generated constructor for AnchorBindingTransitionFields -- every
 // field AnchorBindingTransition.Fields declares is a required parameter.
-func NewAnchorBindingTransitionFields(orgID string, resultID string, parentResultID string, site string, evaluation string, parentBinding string, fromState string, fromKind string, fromID string, modelAnchorKind string, namedExpectedKind string, receiptAnchorKind string, receiptAnchorID string, callerHintIDs []string, provenAnchorIDs []string, effectiveKind string, toState string, toKind string, toID string, proof string, reason string, originResultID string, contenderKind string, contenderID string, persisted string, shadowAgreement string, disagreementField string, servedAnchorKind string, servedAnchorID string, servedCountDecision string, servedCountKind string, servedCountID string, requestID string) AnchorBindingTransitionFields {
+func NewAnchorBindingTransitionFields(orgID string, resultID string, parentResultID string, site string, evaluation string, parentBinding string, carryChecks string, fromState string, fromKind string, fromID string, modelAnchorKind string, namedExpectedKind string, receiptAnchorKind string, receiptAnchorID string, callerHintIDs []string, provenAnchorIDs []string, effectiveKind string, toState string, toKind string, toID string, proof string, reason string, originResultID string, contenderKind string, contenderID string, persisted string, shadowAgreement string, disagreementField string, servedAnchorKind string, servedAnchorID string, servedCountDecision string, servedCountKind string, servedCountID string, requestID string) AnchorBindingTransitionFields {
 	valid := true
 	if callerHintIDs == nil {
 		valid = false
@@ -137,6 +138,7 @@ func NewAnchorBindingTransitionFields(orgID string, resultID string, parentResul
 		Site:                site,
 		Evaluation:          evaluation,
 		ParentBinding:       parentBinding,
+		CarryChecks:         carryChecks,
 		FromState:           fromState,
 		FromKind:            fromKind,
 		FromID:              fromID,
@@ -187,6 +189,7 @@ func (f AnchorBindingTransitionFields) SlogArgs() []any {
 		"site", contextfabric.SanitizeLogAttr(f.Site),
 		"evaluation", contextfabric.SanitizeLogAttr(f.Evaluation),
 		"parent_binding", contextfabric.SanitizeLogAttr(f.ParentBinding),
+		"carry_checks", contextfabric.SanitizeLogAttr(f.CarryChecks),
 		"from_state", contextfabric.SanitizeLogAttr(f.FromState),
 		"from_kind", contextfabric.SanitizeLogAttr(f.FromKind),
 		"from_id", contextfabric.SanitizeLogAttr(f.FromID),

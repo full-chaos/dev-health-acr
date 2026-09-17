@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -740,10 +741,11 @@ func (r *recordingTelemetry) RecordStructureNeedsDisclosed(_ context.Context, _ 
 }
 
 func (r *recordingTelemetry) RecordAnchorBindingTransition(_ context.Context, _ storage.Principal, event AnchorBindingTransitionEvent) {
-	// Every engine test that records telemetry doubles as a sweep: a Save
-	// reaching persistence with no binding decision fails it.
-	if event.To.Reason == AnchorBindingReasonUnrecorded {
-		panic(fmt.Sprintf("anchor binding: a Save at site %q carried no binding decision", event.Site))
+	// Every engine test that records telemetry doubles as a sweep: a Save an
+	// Investigate exit makes with no binding decision fails it. A direct
+	// saveResult call from a unit test has no turn to decide from.
+	if event.To.Reason == AnchorBindingReasonUnrecorded && calledFromInvestigate() {
+		panic(fmt.Sprintf("anchor binding: an Investigate Save at site %q carried no binding decision", event.Site))
 	}
 	r.anchorBindingTransitions = append(r.anchorBindingTransitions, event)
 }
@@ -2284,4 +2286,19 @@ func (r *recordingTelemetry) RecordWorkItemTupleAdmission(_ context.Context, _ s
 
 func (r *recordingTelemetry) RecordRetainedRankingAccounting(_ context.Context, _ storage.Principal, event RetainedRankingAccountingEvent) {
 	r.retainedRankingAccounting = append(r.retainedRankingAccounting, event)
+}
+
+// calledFromInvestigate reports whether Engine.Investigate is on the stack.
+func calledFromInvestigate() bool {
+	pcs := make([]uintptr, 128)
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs)])
+	for {
+		frame, more := frames.Next()
+		if strings.HasSuffix(frame.Function, ".(*Engine).Investigate") {
+			return true
+		}
+		if !more {
+			return false
+		}
+	}
 }

@@ -88,6 +88,8 @@ func bindTransitionTable() []bindCase {
 	id := CommitBasisAuthoritativeIdentity
 	return []bindCase{
 		{name: "nothing carried, turn never resolved", from: unboundFrom, evaluation: AnchorBindingEvaluationNotResolved, want: unbound(AnchorBindingReasonNoProof)},
+		{name: "nothing carried, a commit on a turn that never resolved is no proof", from: unboundFrom, evaluation: AnchorBindingEvaluationNotResolved, basis: id, proven: []anchorRef{bindAlpha},
+			want: unbound(AnchorBindingReasonNoProof)},
 		{name: "nothing carried, nothing proven", from: unboundFrom, evaluation: AnchorBindingEvaluationResolved, basis: id, want: unbound(AnchorBindingReasonNoProof)},
 		{name: "nothing carried, one identity proven", from: unboundFrom, evaluation: AnchorBindingEvaluationResolved, basis: id, proven: []anchorRef{bindAlpha},
 			want: fresh(AnchorBindingBound, bindAlpha, AnchorBindingProofIdentityProven, AnchorBindingReasonIdentityProven), wantProven: []anchorRef{bindAlpha}},
@@ -262,7 +264,7 @@ func TestValidateAnchorBindingInputDomain(t *testing.T) {
 		{"bound carries only a contender kind", with(held, func(b *AnchorBinding) { b.ContenderKind = bindBeta.Kind }), false},
 		{"unbound carries a kind", with(unbound, func(b *AnchorBinding) { b.Kind = SubjectRepository }), false},
 		{"unbound carries an id", with(unbound, func(b *AnchorBinding) { b.CanonicalID = bindAlpha.ID }), false},
-		{"unbound carries a proof", with(unbound, func(b *AnchorBinding) { b.Proof = AnchorBindingProofCarried }), false},
+		{"unbound carries a proof", with(unbound, func(b *AnchorBinding) { b.Proof = AnchorBindingProofIdentityProven }), false},
 		{"unbound carries a contender", with(unbound, func(b *AnchorBinding) { b.ContenderID = bindBeta.ID }), false},
 		{"unbound carries an origin", with(unbound, func(b *AnchorBinding) { b.OriginResultID = "result_x" }), true},
 		{"contested contender kind empty", with(contested, func(b *AnchorBinding) { b.ContenderKind = "" }), false},
@@ -477,12 +479,13 @@ func TestAnchorBindingLineVocabularyIsClosedOverItsProducers(t *testing.T) {
 		"shadow_agreement":      {"agree", "disagree", "not_evaluated"},
 		"disagreement_field":    {"none", "pending_proof", "carried_anchor", "count_anchor"},
 		"persisted":             {"persisted", "payload_rejected", "replay_conflict", "superseded", "save_failed", "state_absent", "binding_unencodable", "not_saved"},
-		"served_count_decision": append([]string{"not_evaluated"}, CountPopulationScopeDecisionVocabulary()...),
+		"served_count_decision": {"not_evaluated", "anchor_committed", "anchor_ambiguous", "anchor_unresolved"},
+		"carry_checks":          {"not_applicable", "not_evaluated"},
 	} {
 		if got := AnchorBindingTransitionLineVocabulary(key); !reflect.DeepEqual(got, members) {
 			t.Errorf("vocabulary %q = %v, want %v", key, got, members)
 		}
-		if got := anchorBindingClosedToken(key, "not-a-member"); got != continuationTelemetryUnrecognised {
+		if got := anchorBindingClosedToken(key, "not-a-member"); got != "undeclared" {
 			t.Errorf("key %q renders an unknown value as %q", key, got)
 		}
 	}
@@ -495,7 +498,31 @@ func TestAnchorBindingLineVocabularyIsClosedOverItsProducers(t *testing.T) {
 	for i := 0; i+1 < len(args); i += 2 {
 		fields[args[i].(string)] = args[i+1]
 	}
-	if fields["reason"] != "unrecorded" || fields["site"] != "decisive" || fields["persisted"] != continuationTelemetryUnrecognised {
+	if fields["reason"] != "unrecorded" || fields["site"] != "decisive" || fields["persisted"] != "undeclared" || fields["carry_checks"] != "not_applicable" {
 		t.Fatalf("unrecorded line fields = %v", fields)
+	}
+}
+
+// TestASupersededCaptureKeepsItsTracker: removing refused members from a
+// capture keeps the tracker on both of its outcomes.
+func TestASupersededCaptureKeepsItsTracker(t *testing.T) {
+	tracker := &anchorBindingTracker{}
+	entries := []ConfirmedNeedEntry{{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: SubjectRepository, AppliedValue: bindAlpha.ID}}
+	valid := BuildSemanticState(SemanticStateInput{
+		Outcome:         QuestionFamilyOutcome{Family: QuestionFamilyUnclassified, Source: QuestionFamilySourceNone},
+		FamilyVersion:   QuestionFamilyTableVersion,
+		RequestIdentity: SemanticRequestIdentityOf(validInvestigationRequest(), ""),
+		ConfirmedNeeds:  entries,
+	})
+	unencodable := *valid
+	unencodable.FormatVersion = "semantic-state.v0"
+	for name, state := range map[string]*PersistedSemanticState{"re-encoded": valid, "refused on re-encode": &unencodable} {
+		out := semanticStateCapture{Write: SemanticStateOf(state)}.withAnchorShadow(tracker).withoutSupersededNeeds([]contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor})
+		if out.anchorShadow != tracker {
+			t.Errorf("%s: the capture lost its tracker", name)
+		}
+	}
+	if out := (semanticStateCapture{Write: SemanticStateOf(&unencodable)}).withoutSupersededNeeds([]contractsv1.ContextFabricStructureNeedKind{contractsv1.ContextFabricStructureNeedSubjectAnchor}); out.Write.State != nil {
+		t.Fatalf("premise: the refused re-encode must yield an absence, got %+v", out.Write)
 	}
 }

@@ -2514,8 +2514,8 @@ var AnchorBindingTransition = Event{
 	Msg:                contextfabric.AnchorBindingTransitionLogMessage,
 	Level:              LevelInfo,
 	Multiplicity:       MultiplicityExactlyOnePerRequest,
-	Attribution:        []string{"request_id"},
-	BoundedAggregation: "exactly one line per Save and one per reuse serve while the shadow runs; a request that neither saves nor reuses emits none.",
+	Attribution:        []string{"org_id", "result_id", "site"},
+	BoundedAggregation: "exactly one line per (result, site): each Save and each reuse serve emits one while the shadow runs. A request whose decisive Save loses a structure claim saves again at the structure_veto site, so one request can carry two lines, never two for one result at one site.",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "result_id", Type: FieldString, Presence: PresenceRequired},
@@ -2524,6 +2524,10 @@ var AnchorBindingTransition = Event{
 		{Key: "site", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("site")},
 		{Key: "evaluation", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("evaluation")},
 		{Key: "parent_binding", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("parent_binding")},
+		// not_evaluated whenever a parent binding was used: the shadow carries
+		// on the parent reference without same-question admission or live
+		// re-authorization.
+		{Key: "carry_checks", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("carry_checks")},
 		{Key: "from_state", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: anchorBindingVocabulary("from_state")},
 		// Open: subject-kind tokens drawn from contextfabric.SubjectKind and
 		// free canonical ids, empty when absent.
@@ -2558,7 +2562,7 @@ var AnchorBindingTransition = Event{
 }
 
 // anchorBindingVocabulary is the producer's closed vocabulary for key plus
-// the emitter's out-of-vocabulary token.
+// the emitter's fail-closed token for a value outside it.
 func anchorBindingVocabulary(key string) []string {
-	return append(contextfabric.AnchorBindingTransitionLineVocabulary(key), "unrecognised")
+	return append(contextfabric.AnchorBindingTransitionLineVocabulary(key), contextfabric.AnchorBindingUndeclaredToken)
 }

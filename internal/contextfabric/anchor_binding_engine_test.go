@@ -7,9 +7,11 @@ package contextfabric
 // the shadow on and off.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"testing"
 	"time"
@@ -164,7 +166,9 @@ type anchorProbeStep struct {
 	anchorKind SubjectKind
 	windowed   bool
 	gate       *FrameGate
-	response   needTurnResponse
+	// seed, when set, edits the store before the turn runs.
+	seed     func(*staticResultStore)
+	response needTurnResponse
 }
 
 // runAnchorProbe runs the same script on a shadow-on and a shadow-off rig and
@@ -354,35 +358,56 @@ func TestShadowBindingHoldsOneAnchorWhenTheModelKindConflicts(t *testing.T) {
 	}
 }
 
+// anchorTeeTelemetry records every call and writes the transition line
+// through the production slog sink as well.
+type anchorTeeTelemetry struct {
+	*recordingTelemetry
+	sink SlogEngineTelemetry
+}
+
+func (a anchorTeeTelemetry) RecordAnchorBindingTransition(ctx context.Context, principal storage.Principal, event AnchorBindingTransitionEvent) {
+	a.recordingTelemetry.RecordAnchorBindingTransition(ctx, principal, event)
+	a.sink.RecordAnchorBindingTransition(ctx, principal, event)
+}
+
 // anchorSiteOutcome is one arm of one save-site scenario.
 type anchorSiteOutcome struct {
 	served      []byte
 	states      []*PersistedSemanticState
 	saves       int
 	transitions []AnchorBindingTransitionEvent
+	rec         *recordingTelemetry
 }
 
-// anchorSiteScenario drives one exit with the shadow on or off.
+// anchorSiteScenario drives one exit with the shadow on or off. run builds
+// its engine with sink as the engine's telemetry and rec as the recorder the
+// scenario's own harness reads.
 type anchorSiteScenario struct {
 	name  string
 	site  BudgetAssertStage
 	reach AnchorBindingEvaluation
-	run   func(t *testing.T, telemetry *recordingTelemetry, shadowOff bool) InvestigationResult
+	run   func(t *testing.T, sink EngineTelemetry, rec *recordingTelemetry, off bool) InvestigationResult
 	// zero names the AnchorBinding fields this exit leaves at their zero
 	// value on the shadow-on arm; every other field must be populated.
 	zero map[string]bool
+	// check, when set, asserts scenario-specific facts on the shadow-on arm.
+	check func(t *testing.T, on anchorSiteOutcome)
 }
 
-func anchorSiteArm(t *testing.T, scenario anchorSiteScenario, shadowOff bool) anchorSiteOutcome {
+func anchorSiteArm(t *testing.T, scenario anchorSiteScenario, shadowOff bool, log *bytes.Buffer) anchorSiteOutcome {
 	t.Helper()
-	telemetry := &recordingTelemetry{}
-	result := scenario.run(t, telemetry, shadowOff)
+	rec := &recordingTelemetry{}
+	var sink EngineTelemetry = rec
+	if log != nil {
+		sink = anchorTeeTelemetry{recordingTelemetry: rec, sink: NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(log, &slog.HandlerOptions{Level: slog.LevelInfo})))}
+	}
+	result := scenario.run(t, sink, rec, shadowOff)
 	served, err := json.Marshal(result)
 	if err != nil {
 		t.Fatalf("marshal served result: %v", err)
 	}
-	out := anchorSiteOutcome{served: served, saves: len(telemetry.semanticStatePersistences), transitions: telemetry.anchorBindingTransitions}
-	for _, event := range telemetry.semanticStatePersistences {
+	out := anchorSiteOutcome{served: served, saves: len(rec.semanticStatePersistences), transitions: rec.anchorBindingTransitions, rec: rec}
+	for _, event := range rec.semanticStatePersistences {
 		out.states = append(out.states, event.State)
 	}
 	return out
@@ -396,100 +421,230 @@ var unboundZero = map[string]bool{"Kind": true, "CanonicalID": true, "OriginResu
 // engine whose graph epoch is zero.
 var heldZero = map[string]bool{"GraphEpoch": true, "ContenderKind": true, "ContenderID": true}
 
+// anchorProbeScenario runs scripted probe turns on a fresh rig; the last
+// turn's served document is the scenario's.
+func anchorProbeScenario(steps ...anchorProbeStep) func(*testing.T, EngineTelemetry, *recordingTelemetry, bool) InvestigationResult {
+	return func(t *testing.T, sink EngineTelemetry, rec *recordingTelemetry, off bool) InvestigationResult {
+		rig := newAnchorProbeRig(t, off)
+		rig.telemetry = rec
+		rig.engine.telemetry = sink
+		var turns []anchorProbeTurn
+		for _, step := range steps {
+			rig.interpreter.read(step.anchorKind, step.windowed)
+			if step.gate != nil {
+				rig.interpreter.outcome.Gate = *step.gate
+			}
+			if step.seed != nil {
+				step.seed(rig.store)
+			}
+			turns = append(turns, rig.turn(t, step.request(turns), step.response))
+		}
+		return turns[len(turns)-1].result
+	}
+}
+
+func lastLineHas(field string, want func(AnchorBindingTransitionEvent) bool) func(*testing.T, anchorSiteOutcome) {
+	return func(t *testing.T, on anchorSiteOutcome) {
+		t.Helper()
+		if line := on.transitions[len(on.transitions)-1]; !want(line) {
+			t.Fatalf("last line %s check failed: %+v", field, line)
+		}
+	}
+}
+
+// anchorWorkItemTupleScenario runs one work-item-tuple turn whose own
+// resolution ends on a pre-discovery terminal.
+func anchorWorkItemTupleScenario(committed []SubjectRef, authorized bool) func(*testing.T, EngineTelemetry, *recordingTelemetry, bool) InvestigationResult {
+	return func(t *testing.T, sink EngineTelemetry, _ *recordingTelemetry, off bool) InvestigationResult {
+		engine, graph, store, _ := buildWorkItemTupleCarryEngine(t, "request_site_tuple_unused", "request_site_tuple")
+		engine.telemetry, engine.anchorBindingShadowDisabled = sink, off
+		if !authorized {
+			engine.candidateVerifier = func(context.Context, storage.Principal, RequestedScope, ResolvedGraphBinding, SubjectKind, string) (bool, CandidateVerificationReason) {
+				return false, CandidateVerificationValid
+			}
+		}
+		graph.response = needTurnResponse{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: committed}, bases: provenCommitBases(committed...)}
+		result := mustInvestigate(t, engine, acceptancePrincipal(), needTurnRequest("request_site_tuple", true))
+		if store.saved == nil {
+			t.Fatalf("fixture defect: the tuple terminal must save")
+		}
+		if len(result.SubjectResolution.Committed) != 0 {
+			t.Fatalf("premise: the tuple terminal committed %+v", result.SubjectResolution.Committed)
+		}
+		return result
+	}
+}
+
 func anchorSiteScenarios() []anchorSiteScenario {
 	const maxItems = 500
 	flip := func(engine *Engine, off bool) *Engine {
 		engine.anchorBindingShadowDisabled = off
 		return engine
 	}
-	probe := func(steps ...anchorProbeStep) func(*testing.T, *recordingTelemetry, bool) InvestigationResult {
-		return func(t *testing.T, telemetry *recordingTelemetry, off bool) InvestigationResult {
-			rig := newAnchorProbeRig(t, off)
-			rig.telemetry = telemetry
-			rig.engine.telemetry = telemetry
-			var turns []anchorProbeTurn
-			for _, step := range steps {
-				rig.interpreter.read(step.anchorKind, step.windowed)
-				if step.gate != nil {
-					rig.interpreter.outcome.Gate = *step.gate
-				}
-				turns = append(turns, rig.turn(t, step.request(turns), step.response))
-			}
-			return turns[len(turns)-1].result
-		}
-	}
 	notProjected := emptyProbeResponse()
 	notProjected.err = fmt.Errorf("probe graph: %w", ErrGraphNotProjected)
 	refused := FrameGate{Outcome: FrameGateRefusedBasis, RefuseBasis: CohortMemberKindUnservable, DeclaredMemberKind: SubjectTeam}
 	return []anchorSiteScenario{
-		{name: "window_veto", site: BudgetAssertWindowVeto, reach: AnchorBindingEvaluationNotResolved, zero: unboundZero,
-			run: func(t *testing.T, telemetry *recordingTelemetry, off bool) InvestigationResult {
-				engine := flip(buildVetoEngineWithBudget(t, telemetry, maxItems), off)
+		{name: "window_veto_pre_interpretation", site: BudgetAssertWindowVeto, reach: AnchorBindingEvaluationNotResolved, zero: unboundZero,
+			run: func(t *testing.T, sink EngineTelemetry, _ *recordingTelemetry, off bool) InvestigationResult {
+				engine := flip(buildVetoEngineWithBudget(t, sink, maxItems), off)
 				request := validInvestigationRequest()
 				request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: "result_does_not_exist_01", ReceiptID: "winr_confirm0001"}}
 				return mustInvestigate(t, engine, reusePrincipal(), request)
 			}},
+		{name: "window_veto_axis_conflict", site: BudgetAssertWindowVeto, reach: AnchorBindingEvaluationNotResolved, zero: unboundZero,
+			run: func(t *testing.T, sink EngineTelemetry, rec *recordingTelemetry, off bool) InvestigationResult {
+				h := newNeedTurnHarness(t, nil)
+				h.telemetry, h.engine.telemetry, h.engine.anchorBindingShadowDisabled = rec, sink, off
+				one, option := windowTurnOne(t, h, "request_site_axis_one")
+				h.historical = true
+				request := needTurnRequest("request_site_axis_two", false)
+				request.PriorWindowReceipts = []BoundSubjectReceipt{{ResultID: one.result.ResultID, ReceiptID: option.ReceiptID}}
+				request.ParentResultID = one.result.ResultID
+				two := h.turn(request, committingNeedResponse())
+				axis := false
+				for _, outcome := range two.windowCanons {
+					axis = axis || outcome == WindowCanonicalizationVetoAxisConflict
+				}
+				if !axis || two.result.Status != InvestigationNoMatch {
+					t.Fatalf("premise: turn two is not the axis-conflict veto (status %s)", two.result.Status)
+				}
+				return two.result
+			},
+			check: lastLineHas("parent", func(l AnchorBindingTransitionEvent) bool {
+				return l.ParentBinding == AnchorBindingParentPresent && l.CarryChecks == AnchorBindingCarryChecksNotEvaluated && l.From.State == AnchorBindingUnbound
+			})},
 		{name: "structure_veto", site: BudgetAssertStructureVeto, reach: AnchorBindingEvaluationNotResolved, zero: unboundZero,
-			run: func(t *testing.T, telemetry *recordingTelemetry, off bool) InvestigationResult {
-				engine := flip(buildVetoEngineWithBudget(t, telemetry, maxItems), off)
+			run: func(t *testing.T, sink EngineTelemetry, _ *recordingTelemetry, off bool) InvestigationResult {
+				engine := flip(buildVetoEngineWithBudget(t, sink, maxItems), off)
 				request := validInvestigationRequest()
 				request.PriorAnchorReceipts = []BoundSubjectReceipt{{ResultID: "result_does_not_exist_01", ReceiptID: "ancr_confirm0001"}}
 				return mustInvestigate(t, engine, reusePrincipal(), request)
 			}},
+		{name: "structure_veto_supersession_race", site: BudgetAssertStructureVeto, reach: AnchorBindingEvaluationResolved, zero: heldZero,
+			run: func(t *testing.T, sink EngineTelemetry, _ *recordingTelemetry, off bool) InvestigationResult {
+				prior := validInvestigationResult()
+				prior.ResultID = "result_prior_structure_race"
+				prior.StructureNeeds = &StructureNeeds{
+					Missing: []StructureNeedKind{"subject_anchor"},
+					AnchorOptions: []AnchorOption{{ReceiptID: "ancr_confirm0001", OptionID: "opt_anchor", Label: "the race repository",
+						Kind: SubjectRepository, CanonicalID: "repository_race", MatchedTermHash: "aa11bb22cc33dd44ee55ff66", OfferSource: "engine"}},
+				}
+				store := &supersessionRacingResultStore{
+					staticResultStore: &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}},
+					conflictMembers:   []contractsv1.ContextFabricStructureNeedKind{"subject_anchor"},
+				}
+				project := SubjectRef{Kind: SubjectProject, CanonicalID: "project_ask_dev", Label: "Ask Dev"}
+				engine := mustReuseTestEngine(t, EngineDependencies{
+					Graph: graphReaderStub{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{project}}},
+					Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
+						return CanonicalFactBundle{}, nil
+					}),
+					Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
+						return validInvestigationResult(), nil
+					}),
+					Interpreter: interpreterFunc(func(context.Context, storage.Principal, InvestigationRequest) (InterpretedQuestion, error) {
+						return InterpretedQuestion{Shape: ShapeOpen, RequestedJudgment: "status", TimeContext: TimeContext{Axis: TemporalCurrent}}, nil
+					}),
+					AnchorVerifier: func(context.Context, string, contractsv1.ContextFabricSubjectKind, string, string) (bool, AnchorVerificationReason) {
+						return true, AnchorVerificationValid
+					},
+					Results: store,
+				})
+				engine.telemetry, engine.anchorBindingShadowDisabled = sink, off
+				request := validInvestigationRequest()
+				request.PriorAnchorReceipts = []BoundSubjectReceipt{{ResultID: prior.ResultID, ReceiptID: "ancr_confirm0001"}}
+				result := mustInvestigate(t, engine, reusePrincipal(), request)
+				if store.saveCalls != 2 {
+					t.Fatalf("premise: the race must save twice, saved %d times", store.saveCalls)
+				}
+				return result
+			},
+			check: func(t *testing.T, on anchorSiteOutcome) {
+				if len(on.transitions) != 2 || on.transitions[0].Site != BudgetAssertDecisive || on.transitions[0].Persisted != AnchorBindingPersistence(SemanticStateSupersededDecision) {
+					t.Fatalf("the lost Save must report persisted=superseded at the decisive site: %+v", on.transitions)
+				}
+				if on.transitions[1].To.Proof != AnchorBindingProofCallerReceipt || on.transitions[1].To.CanonicalID != "repository_race" {
+					t.Fatalf("the veto Save's binding = %+v, want the redeemed receipt", on.transitions[1].To)
+				}
+			}},
 		{name: "window_confirmation_required_explicit", site: BudgetAssertWindowConfirmationRequired, reach: AnchorBindingEvaluationNotResolved, zero: unboundZero,
-			run: func(t *testing.T, telemetry *recordingTelemetry, off bool) InvestigationResult {
+			run: func(t *testing.T, sink EngineTelemetry, _ *recordingTelemetry, off bool) InvestigationResult {
 				interpreter := &countingInterpreter{interpretation: bootstrapInterpretation()}
 				graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext()}
-				engine := flip(buildWindowGateEngineWithBudget(t, interpreter, graph, newMapResultStore(), maxItems, telemetry), off)
+				engine := flip(buildWindowGateEngineWithBudget(t, interpreter, graph, newMapResultStore(), maxItems, sink), off)
 				request := validInvestigationRequest()
 				request.Consumer.Surface = "mcp"
 				request.TimeContext.EvidenceWindow = &RequestedEvidenceWindow{RelativeID: RelativeWindowTrailing90D}
 				return mustInvestigate(t, engine, acceptancePrincipal(), request)
 			}},
 		{name: "window_confirmation_required_class_default", site: BudgetAssertWindowConfirmationRequired, reach: AnchorBindingEvaluationWindowGated, zero: heldZero,
-			run: probe(anchorProbeStep{request: firstTurnRequest("request_site_gate", false), windowed: true, response: identityProvenResponse(probeAlpha)})},
+			run: anchorProbeScenario(anchorProbeStep{request: firstTurnRequest("request_site_gate", false), windowed: true, response: identityProvenResponse(probeAlpha)})},
 		{name: "interpreted_time_bound", site: BudgetAssertInterpretedTimeBound, reach: AnchorBindingEvaluationNotResolved, zero: unboundZero,
-			run: func(t *testing.T, telemetry *recordingTelemetry, off bool) InvestigationResult {
+			run: func(t *testing.T, sink EngineTelemetry, _ *recordingTelemetry, off bool) InvestigationResult {
 				ancient := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC).Add(-3000 * 24 * time.Hour)
 				end := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
 				unanswerable := bootstrapInterpretation()
 				unanswerable.TimeContext = TimeContext{Axis: TemporalRange, Start: &ancient, End: &end}
 				graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext()}
-				engine := flip(buildWindowGateEngineWithBudget(t, &countingInterpreter{interpretation: unanswerable}, graph, newMapResultStore(), maxItems, telemetry), off)
+				engine := flip(buildWindowGateEngineWithBudget(t, &countingInterpreter{interpretation: unanswerable}, graph, newMapResultStore(), maxItems, sink), off)
 				return mustInvestigate(t, engine, acceptancePrincipal(), validInvestigationRequest())
-			}},
+			},
+			check: lastLineHas("persisted", func(l AnchorBindingTransitionEvent) bool { return l.Persisted == AnchorBindingStateAbsent })},
 		{name: "continuation_refusal", site: BudgetAssertContinuationRefusal, reach: AnchorBindingEvaluationNotResolved, zero: unboundZero,
-			run: func(t *testing.T, telemetry *recordingTelemetry, off bool) InvestigationResult {
+			run: func(t *testing.T, sink EngineTelemetry, _ *recordingTelemetry, off bool) InvestigationResult {
 				question := validInvestigationRequest().Question
 				prior := continuationPrior(t, continuationPriorID, question, QuestionFamilyDiscoveredCohortRanking, "")
 				stale := int64(97)
 				store := &staticResultStore{results: map[string]InvestigationResult{prior.ResultID: prior}, graphEpoch: &stale}
 				graph := &acceptanceGraphReader{resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}, context: emptyGraphContext()}
-				engine := flip(buildWindowGateEngineWithBudget(t, forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: SubjectTeam}, graph, store, maxItems, telemetry), off)
+				engine := flip(buildWindowGateEngineWithBudget(t, forcedFamilyInterpreter{family: QuestionFamilyGroupedCohortStatus, groupKind: SubjectTeam}, graph, store, maxItems, sink), off)
 				return mustInvestigate(t, engine, acceptancePrincipal(), continuationRequest(question))
 			}},
 		{name: "reuse", site: BudgetAssertReuse, reach: AnchorBindingEvaluationReused, zero: unboundZero,
-			run: func(t *testing.T, telemetry *recordingTelemetry, off bool) InvestigationResult {
+			run: func(t *testing.T, sink EngineTelemetry, _ *recordingTelemetry, off bool) InvestigationResult {
 				project, candidate := reusableCandidate()
-				engine := flip(buildReuseEngineWithBudget(t, project, candidate, maxItems, telemetry), off)
+				engine := flip(buildReuseEngineWithBudget(t, project, candidate, maxItems, sink), off)
 				return mustInvestigate(t, engine, reusePrincipal(), validInvestigationRequest())
 			}},
 		{name: "subjectless_terminal_ambiguous", site: BudgetAssertSubjectlessTerminal, reach: AnchorBindingEvaluationResolved, zero: unboundZero,
-			run: func(t *testing.T, telemetry *recordingTelemetry, off bool) InvestigationResult {
+			run: func(t *testing.T, sink EngineTelemetry, _ *recordingTelemetry, off bool) InvestigationResult {
 				graphCtx := emptyGraphContext()
 				graphCtx.Coverage.Sources = []SourceObservation{{Source: "context-fabric:graph", State: SourceAvailable}}
 				graph := &acceptanceGraphReader{resolution: manyAmbiguousCandidates(2, "Which subject did you mean?"), context: graphCtx}
-				engine := flip(buildTerminalEngineWithBudgetAndTelemetry(t, graph, newMapResultStore(), maxItems, telemetry), off)
+				engine := flip(buildTerminalEngineWithBudgetAndTelemetry(t, graph, newMapResultStore(), maxItems, sink), off)
 				return mustInvestigate(t, engine, acceptancePrincipal(), validInvestigationRequestWithConfirmedWindow())
 			}},
 		{name: "subjectless_terminal_frame_refused", site: BudgetAssertSubjectlessTerminal, reach: AnchorBindingEvaluationNotResolved, zero: unboundZero,
-			run: probe(anchorProbeStep{request: firstTurnRequest("request_site_refused", true), gate: &refused, response: identityProvenResponse(probeAlpha)})},
+			run: anchorProbeScenario(anchorProbeStep{request: firstTurnRequest("request_site_refused", true), gate: &refused, response: identityProvenResponse(probeAlpha)})},
 		{name: "subjectless_terminal_graph_not_projected", site: BudgetAssertSubjectlessTerminal, reach: AnchorBindingEvaluationNotResolved, zero: unboundZero,
-			run: probe(anchorProbeStep{request: firstTurnRequest("request_site_unprojected", true), response: notProjected})},
+			run: anchorProbeScenario(anchorProbeStep{request: firstTurnRequest("request_site_unprojected", true), response: notProjected})},
+		{name: "subjectless_terminal_work_item_tuple_refused", site: BudgetAssertSubjectlessTerminal, reach: AnchorBindingEvaluationResolved, zero: unboundZero,
+			run: anchorWorkItemTupleScenario([]SubjectRef{workItemTupleCarryAnchor, workItemTupleCarryAnchorOther}, true)},
+		{name: "subjectless_terminal_work_item_tuple_unauthorized", site: BudgetAssertSubjectlessTerminal, reach: AnchorBindingEvaluationResolved, zero: unboundZero,
+			run: anchorWorkItemTupleScenario([]SubjectRef{workItemTupleCarryAnchor}, false)},
+		{name: "subjectless_terminal_group_axis_collapsed", site: BudgetAssertSubjectlessTerminal, reach: AnchorBindingEvaluationResolved, zero: unboundZero,
+			run: func(t *testing.T, sink EngineTelemetry, _ *recordingTelemetry, off bool) InvestigationResult {
+				recorder := &groupReadRecorder{facts: func(CanonicalFactRequest) CanonicalFactBundle {
+					bundle := emptyFactBundle()
+					bundle.Coverage.Sources = []SourceObservation{{Source: "canonical_fact:metrics", State: SourceAvailable}}
+					return bundle
+				}}
+				engine, request := groupReadEngineFixtureSelfGroup(t, sink, recorder)
+				engine.anchorBindingShadowDisabled = off
+				if engine.results == nil {
+					engine.results = newMapResultStore()
+				}
+				result := mustInvestigate(t, engine, storage.Principal{OrgID: "org_1"}, request)
+				if result.RefusalBasis != contractsv1.ContextFabricRefusalBasisFrameInvariantViolated {
+					t.Fatalf("premise: not the collapsed-axis refusal (basis %q)", result.RefusalBasis)
+				}
+				return result
+			}},
 		{name: "decisive_identity_proven", site: BudgetAssertDecisive, reach: AnchorBindingEvaluationResolved, zero: heldZero,
-			run: probe(anchorProbeStep{request: firstTurnRequest("request_site_decisive", true), response: identityProvenResponse(probeAlpha)})},
+			run: anchorProbeScenario(anchorProbeStep{request: firstTurnRequest("request_site_decisive", true), response: identityProvenResponse(probeAlpha)})},
 		{name: "decisive_contested", site: BudgetAssertDecisive, reach: AnchorBindingEvaluationResolved, zero: map[string]bool{"GraphEpoch": true},
-			run: probe(
+			run: anchorProbeScenario(
 				anchorProbeStep{request: firstTurnRequest("request_site_contest_one", true), response: identityProvenResponse(probeAlpha)},
 				anchorProbeStep{request: followUp("request_site_contest_two", "And how many teams contribute to it?", nil), response: identityProvenResponse(probeBeta)},
 			)},
@@ -518,7 +673,7 @@ func TestAnchorBindingShadowParityAtEverySaveSite(t *testing.T) {
 	for _, scenario := range anchorSiteScenarios() {
 		scenario := scenario
 		t.Run(scenario.name, func(t *testing.T) {
-			on, off := anchorSiteArm(t, scenario, false), anchorSiteArm(t, scenario, true)
+			on, off := anchorSiteArm(t, scenario, false, nil), anchorSiteArm(t, scenario, true, nil)
 			if string(on.served) != string(off.served) {
 				t.Fatalf("served bytes differ with the shadow on:\n on=%s\noff=%s", on.served, off.served)
 			}
@@ -551,6 +706,9 @@ func TestAnchorBindingShadowParityAtEverySaveSite(t *testing.T) {
 				if line.To.Reason == AnchorBindingReasonUnrecorded {
 					t.Fatalf("a Save reached persistence with no binding decision: %+v", line)
 				}
+				if (line.CarryChecks == AnchorBindingCarryChecksNotEvaluated) != (line.ParentBinding == AnchorBindingParentPresent) {
+					t.Fatalf("carry_checks %s disagrees with parent_binding %s", line.CarryChecks, line.ParentBinding)
+				}
 			}
 			binding := last.To
 			if scenario.site != BudgetAssertReuse {
@@ -559,13 +717,11 @@ func TestAnchorBindingShadowParityAtEverySaveSite(t *testing.T) {
 					if last.Persisted != AnchorBindingStateAbsent {
 						t.Fatalf("a Save with no snapshot reported persisted=%s", last.Persisted)
 					}
-				} else {
-					if state.AnchorBinding == nil || !reflect.DeepEqual(*state.AnchorBinding, binding) || last.Persisted != AnchorBindingPersistence(SemanticStatePersisted) {
-						t.Fatalf("persisted binding %+v / persisted=%s, want the line's decision %+v persisted", state.AnchorBinding, last.Persisted, binding)
-					}
+				} else if state.AnchorBinding == nil || !reflect.DeepEqual(*state.AnchorBinding, binding) || last.Persisted != AnchorBindingPersistence(SemanticStatePersisted) {
+					t.Fatalf("persisted binding %+v / persisted=%s, want the line's decision %+v persisted", state.AnchorBinding, last.Persisted, binding)
 				}
 			}
-			if err := ValidateAnchorBinding(binding); binding.Reason != AnchorBindingReasonReusedStored && err != nil {
+			if err := ValidateAnchorBinding(binding); err != nil {
 				t.Fatalf("decided binding invalid: %v", err)
 			}
 			value := reflect.ValueOf(binding)
@@ -574,6 +730,9 @@ func TestAnchorBindingShadowParityAtEverySaveSite(t *testing.T) {
 				if isZero, wantZero := value.Field(f).IsZero(), scenario.zero[name]; isZero != wantZero {
 					t.Errorf("binding field %s zero=%v, the exit declares zero=%v (binding %+v)", name, isZero, wantZero, binding)
 				}
+			}
+			if scenario.check != nil {
+				scenario.check(t, on)
 			}
 			seen[scenario.site] = true
 			reached[scenario.reach] = true

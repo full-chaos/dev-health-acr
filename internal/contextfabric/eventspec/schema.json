@@ -5,9 +5,11 @@
     "level": "info",
     "multiplicity": "exactly_one_per_request",
     "attribution": [
-      "request_id"
+      "org_id",
+      "result_id",
+      "site"
     ],
-    "bounded_aggregation": "exactly one line per Save and one per reuse serve while the shadow runs; a request that neither saves nor reuses emits none.",
+    "bounded_aggregation": "exactly one line per (result, site): each Save and each reuse serve emits one while the shadow runs. A request whose decisive Save loses a structure claim saves again at the structure_veto site, so one request can carry two lines, never two for one result at one site.",
     "fields": [
       {
         "key": "org_id",
@@ -37,7 +39,7 @@
           "reuse",
           "interpreted_time_bound",
           "continuation_refusal",
-          "unrecognised"
+          "undeclared"
         ]
       },
       {
@@ -49,7 +51,7 @@
           "window_gated",
           "resolved",
           "reused",
-          "unrecognised"
+          "undeclared"
         ]
       },
       {
@@ -63,7 +65,17 @@
           "invalid",
           "stale_graph_epoch",
           "present",
-          "unrecognised"
+          "undeclared"
+        ]
+      },
+      {
+        "key": "carry_checks",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_applicable",
+          "not_evaluated",
+          "undeclared"
         ]
       },
       {
@@ -75,7 +87,7 @@
           "bound",
           "pending_window_confirmation",
           "contested",
-          "unrecognised"
+          "undeclared"
         ]
       },
       {
@@ -132,7 +144,7 @@
           "bound",
           "pending_window_confirmation",
           "contested",
-          "unrecognised"
+          "undeclared"
         ]
       },
       {
@@ -154,8 +166,7 @@
           "caller_receipt",
           "caller_hint",
           "identity_proven",
-          "carried",
-          "unrecognised"
+          "undeclared"
         ]
       },
       {
@@ -177,7 +188,7 @@
           "window_confirmed",
           "reused_stored",
           "unrecorded",
-          "unrecognised"
+          "undeclared"
         ]
       },
       {
@@ -208,7 +219,7 @@
           "state_absent",
           "binding_unencodable",
           "not_saved",
-          "unrecognised"
+          "undeclared"
         ]
       },
       {
@@ -219,7 +230,7 @@
           "agree",
           "disagree",
           "not_evaluated",
-          "unrecognised"
+          "undeclared"
         ]
       },
       {
@@ -231,7 +242,7 @@
           "pending_proof",
           "carried_anchor",
           "count_anchor",
-          "unrecognised"
+          "undeclared"
         ]
       },
       {
@@ -250,12 +261,10 @@
         "presence": "required",
         "closed_vocabulary": [
           "not_evaluated",
-          "organization_scope",
           "anchor_committed",
-          "anchor_unresolved",
           "anchor_ambiguous",
-          "frame_absent",
-          "unrecognised"
+          "anchor_unresolved",
+          "undeclared"
         ]
       },
       {

@@ -194,17 +194,28 @@ func TestAReuseServeReportsTheStoredBinding(t *testing.T) {
 		RequestIdentity: SemanticRequestIdentityOf(validInvestigationRequest(), ""),
 	})
 	state.AnchorBinding = &stored
+	framed := BuildSemanticState(SemanticStateInput{
+		Outcome:         QuestionFamilyOutcome{Family: QuestionFamilyScopedCohortStatus, Source: QuestionFamilySourceModel, Frame: countingFrame(SubjectTeam), Gate: FrameGate{Outcome: FrameGatePassed}},
+		EmittedShape:    ShapeOpen,
+		FamilyVersion:   QuestionFamilyTableVersion,
+		RequestIdentity: SemanticRequestIdentityOf(validInvestigationRequest(), ""),
+	})
+	if !framed.FramePresent {
+		t.Fatalf("fixture defect: the framed row carries no frame")
+	}
 	for _, tc := range []struct {
 		name    string
+		base    *PersistedSemanticState
 		binding *AnchorBinding
 		want    AnchorBinding
 	}{
-		{"stored binding", &stored, func() AnchorBinding { b := stored; b.Reason = AnchorBindingReasonReusedStored; return b }()},
-		{"no stored binding", nil, AnchorBinding{State: AnchorBindingUnbound, Proof: AnchorBindingProofNone, Reason: AnchorBindingReasonReusedStored}},
-		{"invalid stored binding", &AnchorBinding{State: "unknown_state"}, AnchorBinding{State: AnchorBindingUnbound, Proof: AnchorBindingProofNone, Reason: AnchorBindingReasonReusedStored}},
+		{"stored binding", state, &stored, func() AnchorBinding { b := stored; b.Reason = AnchorBindingReasonReusedStored; return b }()},
+		{"stored binding beside a frame", framed, &stored, func() AnchorBinding { b := stored; b.Reason = AnchorBindingReasonReusedStored; return b }()},
+		{"no stored binding", state, nil, AnchorBinding{State: AnchorBindingUnbound, Proof: AnchorBindingProofNone, Reason: AnchorBindingReasonReusedStored}},
+		{"invalid stored binding", state, &AnchorBinding{State: "unknown_state"}, AnchorBinding{State: AnchorBindingUnbound, Proof: AnchorBindingProofNone, Reason: AnchorBindingReasonReusedStored}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rowState := cloneSemanticState(state)
+			rowState := cloneSemanticState(tc.base)
 			rowState.AnchorBinding = tc.binding
 			telemetry := &recordingTelemetry{}
 			engine, err := NewEngine(EngineDependencies{

@@ -73,11 +73,10 @@ const (
 	AnchorBindingProofCallerReceipt  AnchorBindingProof = "caller_receipt"
 	AnchorBindingProofCallerHint     AnchorBindingProof = "caller_hint"
 	AnchorBindingProofIdentityProven AnchorBindingProof = "identity_proven"
-	AnchorBindingProofCarried        AnchorBindingProof = "carried"
 )
 
 func anchorBindingProofs() []AnchorBindingProof {
-	return []AnchorBindingProof{AnchorBindingProofNone, AnchorBindingProofCallerReceipt, AnchorBindingProofCallerHint, AnchorBindingProofIdentityProven, AnchorBindingProofCarried}
+	return []AnchorBindingProof{AnchorBindingProofNone, AnchorBindingProofCallerReceipt, AnchorBindingProofCallerHint, AnchorBindingProofIdentityProven}
 }
 
 // AnchorBindingReason is the closed reason for one transition.
@@ -308,6 +307,36 @@ const (
 	AnchorBindingNotSaved AnchorBindingPersistence = "not_saved"
 )
 
+// anchorBindingUndeclared is the token the transition line writes for a
+// value outside its key's closed vocabulary. It is declared with every closed
+// key and never produced by the binder.
+const anchorBindingUndeclared = "undeclared"
+
+// AnchorBindingUndeclaredToken exports anchorBindingUndeclared for the
+// eventspec declaration.
+const AnchorBindingUndeclaredToken = anchorBindingUndeclared
+
+// AnchorBindingCarryChecks is the closed statement of which admission checks
+// a carried binding passed before the binder used it. The shadow carries on
+// the parent reference alone: no same-question admission, no live
+// re-authorization of the carried identity.
+type AnchorBindingCarryChecks string
+
+const (
+	// AnchorBindingCarryChecksNotApplicable: no parent binding was used.
+	AnchorBindingCarryChecksNotApplicable AnchorBindingCarryChecks = "not_applicable"
+	// AnchorBindingCarryChecksNotEvaluated: a parent binding was used, and
+	// neither admission check was evaluated.
+	AnchorBindingCarryChecksNotEvaluated AnchorBindingCarryChecks = "not_evaluated"
+)
+
+func (p anchorBindingParent) carryChecks() AnchorBindingCarryChecks {
+	if p.Status == AnchorBindingParentPresent {
+		return AnchorBindingCarryChecksNotEvaluated
+	}
+	return AnchorBindingCarryChecksNotApplicable
+}
+
 // AnchorBindingTransitionLineVocabulary is the transition line's closed
 // vocabulary for one key, read from the producers. The eventspec declaration
 // reads this one list.
@@ -352,7 +381,11 @@ func AnchorBindingTransitionLineVocabulary(key string) []string {
 		}
 		return out
 	case "served_count_decision":
-		return append([]string{"not_evaluated"}, CountPopulationScopeDecisionVocabulary()...)
+		// Only a children_of_scope count is compared, so the organization and
+		// frame-absent decisions never reach the line.
+		return []string{"not_evaluated", string(CountPopulationScopeAnchorCommitted), string(CountPopulationScopeAnchorAmbiguous), string(CountPopulationScopeAnchorUnresolved)}
+	case "carry_checks":
+		return []string{string(AnchorBindingCarryChecksNotApplicable), string(AnchorBindingCarryChecksNotEvaluated)}
 	default:
 		return nil
 	}
@@ -411,9 +444,6 @@ func bindAnchor(in anchorBindingInput) (AnchorBinding, anchorBindingProposal) {
 		kept.State, kept.Reason = state, reason
 		if state != AnchorBindingContested {
 			kept.ContenderKind, kept.ContenderID = "", ""
-		}
-		if kept.Proof == AnchorBindingProofNone {
-			kept.Proof = AnchorBindingProofCarried
 		}
 		return kept
 	}
@@ -660,6 +690,7 @@ type AnchorBindingTransitionEvent struct {
 	Site           BudgetAssertStage
 	Evaluation     AnchorBindingEvaluation
 	ParentBinding  AnchorBindingParentStatus
+	CarryChecks    AnchorBindingCarryChecks
 	From           AnchorBinding
 	// Proposal.
 	ModelAnchorKind   SubjectKind
@@ -696,7 +727,7 @@ func (t *anchorBindingTracker) decide(site BudgetAssertStage, result Investigati
 	to, proposal := bindAnchor(in)
 	event := AnchorBindingTransitionEvent{
 		ResultID: result.ResultID, ParentResultID: t.parent.ResultID, Site: site,
-		Evaluation: t.evaluation, ParentBinding: t.parent.Status, From: in.From,
+		Evaluation: t.evaluation, ParentBinding: t.parent.Status, CarryChecks: t.parent.carryChecks(), From: in.From,
 		ModelAnchorKind: t.modelAnchorKind, NamedExpectedKind: t.namedKind,
 		CallerHintIDs: hintIDs(t.callerHints), ProvenAnchorIDs: refIDs(proposal.Proven),
 		EffectiveKind: proposal.EffectiveKind, To: to, ServedCount: "not_evaluated",
@@ -814,7 +845,7 @@ func unrecordedAnchorBindingEvent(site BudgetAssertStage, result InvestigationRe
 	none := AnchorBinding{State: AnchorBindingUnbound, Proof: AnchorBindingProofNone, Reason: AnchorBindingReasonUnrecorded}
 	return AnchorBindingTransitionEvent{
 		ResultID: result.ResultID, Site: site, Evaluation: AnchorBindingEvaluationNotResolved,
-		ParentBinding: AnchorBindingParentNoReference, From: none, To: none,
+		ParentBinding: AnchorBindingParentNoReference, CarryChecks: AnchorBindingCarryChecksNotApplicable, From: none, To: none,
 		CallerHintIDs: []string{}, ProvenAnchorIDs: []string{},
 		Agreement: AnchorBindingNotEvaluated, DisagreementField: AnchorBindingFieldNone, ServedCount: "not_evaluated",
 	}
@@ -830,7 +861,7 @@ func (t *anchorBindingTracker) reuseEvent(result InvestigationResult, stored *An
 	}
 	return AnchorBindingTransitionEvent{
 		ResultID: result.ResultID, ParentResultID: t.parent.ResultID, Site: BudgetAssertReuse,
-		Evaluation: AnchorBindingEvaluationReused, ParentBinding: t.parent.Status, From: t.parent.from(),
+		Evaluation: AnchorBindingEvaluationReused, ParentBinding: t.parent.Status, CarryChecks: t.parent.carryChecks(), From: t.parent.from(),
 		ModelAnchorKind: t.modelAnchorKind, NamedExpectedKind: t.namedKind,
 		CallerHintIDs: hintIDs(t.callerHints), ProvenAnchorIDs: []string{},
 		To: to, Persisted: AnchorBindingNotSaved,
@@ -857,6 +888,7 @@ func AnchorBindingTransitionLogArgs(event AnchorBindingTransitionEvent, orgID st
 		"evaluation", SanitizeLogAttr(closed("evaluation", string(event.Evaluation))),
 		// PRE-ENTRY: the binding this turn started from.
 		"parent_binding", SanitizeLogAttr(closed("parent_binding", string(event.ParentBinding))),
+		"carry_checks", SanitizeLogAttr(closed("carry_checks", string(event.CarryChecks))),
 		"from_state", SanitizeLogAttr(closed("from_state", string(event.From.State))),
 		"from_kind", SanitizeLogAttr(string(event.From.Kind)),
 		"from_id", SanitizeLogAttr(event.From.CanonicalID),
@@ -895,7 +927,7 @@ func anchorBindingClosedToken(key, value string) string {
 	if memberOf(AnchorBindingTransitionLineVocabulary(key), value) {
 		return value
 	}
-	return continuationTelemetryUnrecognised
+	return anchorBindingUndeclared
 }
 
 func nonNilStrings(values []string) []string {
