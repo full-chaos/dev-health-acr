@@ -22,6 +22,7 @@ sys.path.insert(0, str(HERE))
 
 import measure_schema as MS  # noqa: E402
 import validators as V  # noqa: E402
+import harness  # noqa: E402
 
 
 def _cohort_driver_response(value):
@@ -82,6 +83,74 @@ def test_a_bool_driver_value_is_still_rejected_under_the_widened_type():
     ok, reason = V.validate_response(_cohort_driver_response(True))
     assert not ok
     assert "got bool" in reason, reason
+
+
+def test_raw_payload_to_persist_on_failure():
+    """Identity, not a field on either side, decides what gets persisted: the SAME
+    object back from validate_live_payload means nothing to save; a NEW object (the
+    failure envelope) means the raw body that produced it is worth keeping."""
+    served = {"result": {"status": "complete"}}
+    assert harness.raw_payload_to_persist_on_failure(served, served) is None
+    failed = {"cohort": "not schema-shaped"}
+    envelope = {"failure": {"code": "acr_malformed_response"}}
+    assert harness.raw_payload_to_persist_on_failure(failed, envelope) is failed
+    assert harness.raw_payload_to_persist_on_failure(None, {"failure": {}}) is None
+
+
+def test_persist_raw_response_writes_on_failure_and_is_absent_on_success():
+    """The one file-level pin: a failed turn's raw 200 body lands beside the attempt
+    artefact, unmutated; a served turn leaves no such sibling file, and a stale one
+    from an earlier attempt at the SAME filename is cleaned up rather than left to lie
+    about the current attempt."""
+    with tempfile.TemporaryDirectory() as tmp:
+        fname = Path(tmp) / "row-rep1-t1-a1.json"
+        sibling = Path(tmp) / "row-rep1-t1-a1.json.raw-response.json"
+
+        raw = {"cohort": {"members": [{"drivers": [{"value": 0.67}]}]}}
+        harness.persist_raw_response(fname, raw)
+        assert sibling.exists()
+        assert json.loads(sibling.read_text()) == raw
+
+        harness.persist_raw_response(fname, None)
+        assert not sibling.exists(), "a served turn must leave no raw-response sibling"
+
+
+def test_run_replicate_persists_the_raw_body_only_for_the_malformed_turn():
+    """End to end through `run_replicate`, a stubbed transport standing in for the live
+    HTTP call: turn 1's body fails schema validation (a `drivers[].value` shaped like the
+    pre-fix defect, on the UNFIXED base schema this stub simulates by returning a body
+    `validate_response` never accepts) and must leave a `.raw-response.json` sibling with
+    the exact body the stub returned; turn 2 serves cleanly and must leave none."""
+    calls = []
+
+    def stub_post(body):
+        calls.append(body)
+        if len(calls) == 1:
+            bad = {"result": {"request_id": "r", "result_id": "res", "status": "complete",
+                              "cohort": "not an object, unresolvable by the schema"}}
+            return 200, harness.validate_live_payload(200, bad), 0.1, False, \
+                harness.raw_payload_to_persist_on_failure(
+                    bad, harness.validate_live_payload(200, bad))
+        good = {"result": {"request_id": "r", "result_id": "res", "status": "complete"}}
+        return 200, good, 0.1, False, None
+
+    real_post, real_outdir = harness.post, harness.OUTDIR
+    real_requested = dict(harness.REQUESTED_KIND)
+    with tempfile.TemporaryDirectory() as tmp:
+        harness.post = stub_post
+        harness.OUTDIR = Path(tmp)
+        harness.REQUESTED_KIND = {"row": ""}
+        try:
+            harness.run_replicate("row", "fixture question text", 1, warn=lambda *_a, **_k: None)
+        finally:
+            harness.post = real_post
+            harness.OUTDIR = real_outdir
+            harness.REQUESTED_KIND = real_requested
+
+        assert (Path(tmp) / "row-rep1-t1-a1.json.raw-response.json").exists(), \
+            "the malformed turn's raw body must be persisted"
+        assert not (Path(tmp) / "row-rep1-t2-a1.json.raw-response.json").exists(), \
+            "a served turn must leave no raw-response sibling"
 
 
 def _write_synthetic_schema(tmp):

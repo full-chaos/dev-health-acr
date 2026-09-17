@@ -217,8 +217,23 @@ def validate_live_payload(status, payload):
     return payload
 
 
+def raw_payload_to_persist_on_failure(payload, validated):
+    """The raw decoded payload to persist alongside a failed live validation (CHAOS-5826),
+    or None when there is nothing to persist.
+
+    `validate_live_payload` returns the SAME object back on success and a brand new
+    `{"failure": ...}` dict on failure -- so identity, not a field on either side, is the
+    only test that cannot be fooled by a genuine acr-side failure body that happens to
+    carry a `code` matching ours. `payload=None` (nothing decoded at all) also persists
+    nothing; there is no raw body to save.
+    """
+    if payload is None or validated is payload:
+        return None
+    return payload
+
+
 def post(body):
-    """Returns (status, response, dt, body_undecodable).
+    """Returns (status, response, dt, body_undecodable, raw_payload_to_persist).
 
     r4 (astra) found two defects in the r3 P1-1 fix, both fixed here together because
     they are the same shape of mistake: a failure inside the "we got a response" path
@@ -240,6 +255,12 @@ def post(body):
        field the server's own JSON content can never touch, because the server only
        controls what is INSIDE the response body, not the envelope the harness writes
        around it.
+
+    A FIFTH return value, `raw_payload_to_persist`, is non-None exactly when
+    `validate_live_payload` replaced a decoded body with a failure envelope -- see
+    `raw_payload_to_persist_on_failure`'s own doc comment. `run_replicate` writes it
+    beside the attempt artefact so a later validator fix can re-score the row without a
+    re-run; it never changes what `response` itself holds.
     """
     # CHAOS-5562: refuse before the first byte goes anywhere near a socket.
     require_base()
@@ -264,7 +285,7 @@ def post(body):
         # NO STATUS EVER CAME BACK (connection refused, DNS, read timeout before a
         # response line was received): the only arm that writes status 0.
         _report_first_response(0, {contract.ERROR_BODY_KEY: str(e)})
-        return 0, {contract.ERROR_BODY_KEY: str(e)}, time.time() - t0, False
+        return 0, {contract.ERROR_BODY_KEY: str(e)}, time.time() - t0, False, None
     # An exchange COMPLETED -- `status` is real. A body that could not be READ (raw is
     # None) or could not be DECODED is the same fact from here: the exchange happened,
     # the body did not. Neither ever falls back into the transport arm's status=0.
@@ -275,7 +296,7 @@ def post(body):
             raw = None
     if raw is None:
         _report_first_response(status, {})
-        return status, {}, time.time() - t0, True
+        return status, {}, time.time() - t0, True, None
     # CHAOS-5562 r2: check against the RAW decoded payload, never the validated one.
     # r2 review found a payload that is malformed by SOME OTHER measure (an unrelated
     # required field missing/wrong-shaped) but genuinely carries a real
@@ -287,7 +308,8 @@ def post(body):
     # reported as indeterminate and leaves the check armed, same as before.
     _report_first_response(status, payload)
     validated = validate_live_payload(status, payload)
-    return status, validated, time.time() - t0, False
+    return (status, validated, time.time() - t0, False,
+            raw_payload_to_persist_on_failure(payload, validated))
 
 
 def is_retryable(status, payload):
@@ -408,6 +430,21 @@ def update_memory_and_build_receipts(prev_result, memory, want_kind, anchor_kind
     return out, set(sn.get("missing") or []), wrong_kind, wrong_subject, subject_kind_mismatch
 
 
+def persist_raw_response(fname, raw_payload):
+    """Writes `raw_payload` beside `fname` as `<fname>.raw-response.json`, or removes
+    any stale one, when `raw_payload` is None -- so a re-run over the same filenames
+    (a retry, a re-collected turn) never leaves a raw-response file next to an attempt
+    artefact whose own `response` field records something else. Only ever touches that
+    sibling file; the artefact `fname` itself, and what it writes into `response`, are
+    unaffected."""
+    sibling = fname.with_name(fname.name + ".raw-response.json")
+    if raw_payload is None:
+        sibling.unlink(missing_ok=True)
+        return
+    with open(sibling, "w") as f:
+        json.dump(raw_payload, f, indent=2)
+
+
 def run_replicate(qid, question, rep, warn=print):
     tag = f"{qid} rep{rep}"
     want_kind = REQUESTED_KIND.get(qid, "")
@@ -426,7 +463,7 @@ def run_replicate(qid, question, rep, warn=print):
     for turn in range(1, MAX_TURNS + 1):
         status, payload, attempts_used = None, None, 0
         for attempt in range(1, MAX_ATTEMPTS_PER_TURN + 1):
-            status, payload, dt, body_undecodable = post(body)
+            status, payload, dt, body_undecodable, raw_payload = post(body)
             attempts_used += 1
             fname = OUTDIR / f"{qid}-rep{rep}-t{turn}-a{attempt}.json"
             with open(fname, "w") as f:
@@ -437,6 +474,7 @@ def run_replicate(qid, question, rep, warn=print):
                 json.dump({"request": body, "status": status, "response": payload,
                           "dt": round(dt, 1), "body_undecodable": body_undecodable},
                          f, indent=2)
+            persist_raw_response(fname, raw_payload)
             print(f"  [{tag}] t{turn} a{attempt}: http={status} dt={dt:.1f}s", flush=True)
             if contract.is_success_status(status) or not is_retryable(status, payload):
                 break
@@ -583,7 +621,7 @@ def check_only():
     row = CORPUS[0]
     print(f"[corpus] check-only: probing with {row['id']!r}", flush=True)
     try:
-        status, response, _dt, _undecodable = post({"question": row["text"]})
+        status, response, _dt, _undecodable, _raw = post({"question": row["text"]})
     except ServedBuildMismatch as e:
         sys.exit(str(e))
     if not contract.is_success_status(status):
