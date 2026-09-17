@@ -1154,6 +1154,10 @@ type recordingTelemetry struct {
 	// (CHAOS-5654).
 	cohortKindCensuses []cohortKindCensusRecord
 
+	// cohortKindFulltexts records every RecordCohortKindFulltext call
+	// verbatim.
+	cohortKindFulltexts []cohortKindFulltextRecord
+
 	// vectorFences/lexiconExpansions record every RecordVectorFence/
 	// RecordLexiconExpansion call verbatim (CHAOS-3890) -- slices, so a
 	// test can assert the exact reason/memoized or fired/batch/added/
@@ -1232,6 +1236,15 @@ type cohortKindCensusRecord struct {
 	poolBound  int
 	truncated  bool
 	readErr    error
+}
+
+// cohortKindFulltextRecord is one RecordCohortKindFulltext call, verbatim
+// (CHAOS-5892).
+type cohortKindFulltextRecord struct {
+	orgID      string
+	memberKind contextfabric.SubjectKind
+	members    int
+	truncated  bool
 }
 
 // cohortExactNameCensusGateRecord is one recorded
@@ -1324,6 +1337,12 @@ func (r *recordingTelemetry) RecordCohortKindCensus(_ context.Context, orgID str
 	r.cohortKindCensuses = append(r.cohortKindCensuses, cohortKindCensusRecord{
 		orgID: orgID, decision: decision, memberKind: memberKind, kinds: append([]string(nil), kinds...),
 		poolSize: poolSize, poolBound: poolBound, truncated: truncated, readErr: readErr,
+	})
+}
+
+func (r *recordingTelemetry) RecordCohortKindFulltext(_ context.Context, orgID string, memberKind contextfabric.SubjectKind, members int, truncated bool) {
+	r.cohortKindFulltexts = append(r.cohortKindFulltexts, cohortKindFulltextRecord{
+		orgID: orgID, memberKind: memberKind, members: members, truncated: truncated,
 	})
 }
 

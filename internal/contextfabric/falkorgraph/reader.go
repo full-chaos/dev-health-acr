@@ -824,6 +824,78 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		textAdmitted++
 	}
 
+	// cohortFulltextTruncated is the signal cohortPoolTruncation
+	// actually needs -- "did the lexical arm drop a member OF THE COHORT'S
+	// OWN DECLARED KIND" -- which fulltextTruncated above does NOT answer. It
+	// answers "did the lexical arm drop a row of ANY kind", and a graph where
+	// one kind vastly outnumbers the declared cohort kind (57094 CiPipelineRun
+	// nodes against 36 Project nodes, observed live-venue counts) can spend
+	// the WHOLE shared collectLimit on that other kind
+	// before a single row of the declared kind is ranked in, well within a
+	// cohort that would otherwise fit its allowance completely. That crowd-out
+	// happens BEFORE DiscoveredCohort's own `subject.Kind == kind` filter ever
+	// runs (discover.go), so filtering after the fact cannot see it -- by the
+	// time DiscoveredCohort looks, the dropped rows are simply gone.
+	//
+	// declaredCohortKindForRouting is known here (computed above, before this
+	// call), so the arm this cohort's OWN completeness depends on can be given
+	// its own budget rather than inferring it from a query that answers a
+	// different question. This is not a wider fetch than fulltextSearchNodes
+	// already runs -- same text, same collect budget size -- only scoped so a
+	// numerous OTHER kind cannot spend it. It runs regardless of the exact-
+	// name/kind census's own admission decision (cohortExactNameCensusEligibility
+	// below): a denied census (basis=cohort_expression_anchor_set or
+	// already_committed) is exactly the state that leaves this arm as the
+	// ONLY route to the declared kind's population; when the census IS
+	// admitted the census already covers the kind and this arm's members
+	// merge in as harmless duplicates, deduped below the same way the
+	// census's own additions are.
+	//
+	// It does NOT widen scope the way admitting the org-wide census for an
+	// anchor-set cohort would (see cohortExactNameCensusEligibility's own doc
+	// comment on why that carve-out exists) -- it is the same lexical
+	// question-text match the plain arm already runs, merely not forced to
+	// share its budget with kinds this cohort never asked about.
+	cohortFulltextTruncated := fulltextTruncated
+	if declaredCohortKindForRouting != "" {
+		kindTextNodes, kindTruncated, kindErr := a.fulltextSearchNodesForKind(ctx, key, principal.OrgID, request.Request.Question, collectLimit, temporal, declaredCohortKindForRouting)
+		if kindErr != nil {
+			// CHAOS-4077: same never-projected-graph degrade-gracefully
+			// discipline as every other query site in this method.
+			return contextfabric.GraphContext{}, graphNotProjectedError(kindErr)
+		}
+		cohortFulltextTruncated = kindTruncated
+		// The determinism discipline the exact-name/kind-scoped censuses
+		// below already apply, for the same reason: this query carries no
+		// ORDER BY over the declared kind alone (only runFulltextQuery's own
+		// score/kind/id tie-break), and DiscoveredCohort ranks members in
+		// INPUT order and stops at MaxCohortMembers, so an unsorted merge
+		// could select different members across otherwise-identical calls.
+		sortCandidateNodesBySubjectKey(kindTextNodes)
+		for _, n := range kindTextNodes {
+			subject, ok := graphrank.NodeSubject(n)
+			if !ok {
+				continue
+			}
+			nk := graphrank.SubjectKey(subject)
+			if seenNode[nk] {
+				continue
+			}
+			seenNode[nk] = true
+			resolvedNodes = append(resolvedNodes, n)
+		}
+		// eventspec.CohortKindFulltext: members is the RAW
+		// candidate count this arm returned (post-truncation, before the
+		// seenNode admission above narrows it further) -- the
+		// same "what the arm itself measured" convention
+		// RecordCohortKindCensus's poolSize already uses, so a reader can
+		// tell "the arm found N and Y were admitted" from "the arm found
+		// nothing" without conflating retrieval with admission.
+		if a.config.Telemetry != nil {
+			a.config.Telemetry.RecordCohortKindFulltext(ctx, principal.OrgID, declaredCohortKindForRouting, len(kindTextNodes), kindTruncated)
+		}
+	}
+
 	candidateEdges := make([]graphrank.CandidateEdge, 0, len(resolvedEdges))
 	for _, r := range resolvedEdges {
 		candidateEdges = append(candidateEdges, graphrank.CandidateEdge{
@@ -1033,7 +1105,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// census, so the exact-name cut is not a loss from this cohort's pool.
 	exactNameCutThisCohort := exactNameTruncated && !kindCensusRan
 	poolTruncationBasis, poolTruncationArms, cohortPoolTruncated := cohortPoolTruncation(
-		fulltextTruncated, hopWalkTruncated, exactNameCutThisCohort, kindCensusTruncated, failedLookups > 0, censusCoversThisCohort)
+		cohortFulltextTruncated, hopWalkTruncated, exactNameCutThisCohort, kindCensusTruncated, failedLookups > 0, censusCoversThisCohort)
 	// request's OWN RequestedScope reaches admission completely unmodified
 	// here -- see the ownership-census filter above (graphrank.OwnsRepository)
 	// for where an ownership-routed call's membership is actually decided.

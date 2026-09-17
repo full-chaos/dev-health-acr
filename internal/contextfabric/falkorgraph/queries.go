@@ -258,6 +258,46 @@ func (a *Adapter) fulltextSearchNodes(ctx context.Context, key, orgID, text stri
 	return a.runFulltextQuery(ctx, key, orgID, query, limit, temporal, matchTerms, termCount, "")
 }
 
+// fulltextSearchNodesForKind is fulltextSearchNodes with ONE declared subject
+// kind applied at the query, via runFulltextQuery's own kindFilter parameter
+// -- already threaded through that shared query-building authority, unused by
+// any caller until CHAOS-5892.
+//
+// WHY THIS EXISTS BESIDE THE PLAIN ARM, NOT INSTEAD OF IT. fulltextSearchNodes
+// runs ONE query across every kind the lexical index holds, under ONE shared
+// a.config.MaxResults budget (reader.go's collectLimit). That budget is sized
+// for the edge/driver-discovery role that arm also serves (see its own doc
+// comment), and a question's raw text has no idea which kinds are numerous --
+// a graph where one kind (say CiPipelineRun) vastly outnumbers a cohort's
+// declared kind (say Project) can fill the shared budget with that OTHER
+// kind's matches before a single row of the declared kind is even considered,
+// SOLELY because RediSearch's relevance ranking mixes kinds together with no
+// notion of "the caller only cares about one of them." DiscoverContext's own
+// declaredCohortKindForRouting already knows, at this call, exactly which
+// kind a cohort is being assembled for -- reader.go's cohort path uses this
+// arm to give that kind its OWN budget, so a genuinely small, well-fitting
+// population of the declared kind is never crowded out of the general arm's
+// truncation accounting by an unrelated kind's popularity. It does not
+// replace the plain arm (edges/drivers still come from every kind the
+// question's text matches) and it does not widen scope the way an org-wide
+// census would (see cohortExactNameCensusEligibility's doc comment for that
+// carve-out) -- it is the SAME lexical match, over the SAME text, merely not
+// forced to share its collect budget with kinds the caller did not ask a
+// cohort of.
+func (a *Adapter) fulltextSearchNodesForKind(ctx context.Context, key, orgID, text string, limit int, temporal temporalFilter, kind contextfabric.SubjectKind) ([]graphrank.CandidateNode, bool, error) {
+	terms := tokenizeForFulltext(text)
+	if len(terms) == 0 {
+		return nil, false, nil
+	}
+	if limit <= 0 || limit > a.config.MaxResults {
+		limit = a.config.MaxResults
+	}
+	matchTerms := fulltextWords(text)
+	termCount := len(matchTerms)
+	query := strings.Join(terms, "|")
+	return a.runFulltextQuery(ctx, key, orgID, query, limit, temporal, matchTerms, termCount, kind)
+}
+
 // fulltextSearchNodesForResolution is fulltextSearchNodes' CHAOS-3838 (spec
 // L13) union/lexicon-expansion-aware counterpart -- codex round-6 P2, fix
 // A: subject RESOLUTION's "over-return, let graphrank's downstream

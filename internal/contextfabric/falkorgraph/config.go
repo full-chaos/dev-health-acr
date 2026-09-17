@@ -34,6 +34,7 @@ import (
 	acrconfig "github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 )
@@ -550,6 +551,18 @@ type GraphTelemetry interface {
 	// (CohortKindCensusReadFailed). The pool truncation that follows from a
 	// fetch is reported on RecordCohortKindBasis for the same call.
 	RecordCohortKindCensus(ctx context.Context, orgID string, decision CohortKindCensusDecision, memberKind contextfabric.SubjectKind, kinds []string, poolSize, poolBound int, truncated bool, readErr error)
+	// RecordCohortKindFulltext (eventspec.CohortKindFulltext) reports ONE
+	// DiscoverContext call's kind-scoped lexical arm: memberKind
+	// is the servable declared cohort kind that arm was scoped to (this
+	// method is never called when no kind is declared -- there is no budget
+	// to give its own arm), members is the candidate count that arm
+	// returned (post-truncation, matching RecordCohortKindCensus's own
+	// convention), and truncated is exactly the value that now feeds
+	// cohortPoolTruncation's fulltext-arm input for this call -- the field
+	// that makes pool_truncation/pool_truncation_arms on RecordCohortKindBasis
+	// honest for THIS cohort's own kind, rather than inherited from the
+	// general, mixed-kind arm's own (differently-scoped) truncation.
+	RecordCohortKindFulltext(ctx context.Context, orgID string, memberKind contextfabric.SubjectKind, members int, truncated bool)
 	// RecordNeighborLookupFailed reports ONE neighbour the hop walk reached
 	// through an admitted edge and then could not read back.
 	//
@@ -632,6 +645,8 @@ func (NoopTelemetry) RecordCohortExactNameCensusGate(context.Context, string, bo
 func (NoopTelemetry) RecordCohortKindBasis(context.Context, string, contextfabric.SubjectKind, graphrank.CohortKindBasis, bool, CohortPoolTruncationBasis, []CohortPoolTruncationArm) {
 }
 func (NoopTelemetry) RecordCohortKindCensus(context.Context, string, CohortKindCensusDecision, contextfabric.SubjectKind, []string, int, int, bool, error) {
+}
+func (NoopTelemetry) RecordCohortKindFulltext(context.Context, string, contextfabric.SubjectKind, int, bool) {
 }
 
 func (NoopTelemetry) RecordNeighborLookupFailed(context.Context, string, string, string, NeighborLookupFailureSite, error) {
@@ -880,6 +895,33 @@ func (t SlogTelemetry) RecordCohortKindCensus(ctx context.Context, orgID string,
 		return
 	}
 	t.logger().Info("context_fabric: cohort kind census", append(args, graphRequestIDLogAttrs(ctx)...)...)
+}
+
+// RecordCohortKindFulltext is this package's FIRST cohort-family line built
+// through eventspec's generated typed construction interface rather than a
+// hand-built []any{} literal -- the other cohort lines above predate
+// eventspec's declaration authority and are grandfathered; this one is
+// declared from its first emission (eventspec.CohortKindFulltext), so its
+// shape can never drift from what a real-producer certify test asserts.
+//
+// request_id is always passed through the generated constructor (empty when
+// the context carries none) rather than dropped from the emitted line --
+// unlike every OTHER line in this file, this one is built by spreading a
+// SINGLE call into eventspec (`NewCohortKindFulltextFields(...).SlogArgs()`),
+// and TestNoUnsanitizedLogAttributeInContextFabric only traces a spread that
+// is exactly that shape (a call inside the scanned tree) or a same-function
+// composite-literal/append build -- post-processing the returned slice (e.g.
+// re-slicing off a trailing pair) is neither, and reads as an opaque,
+// unsanitized spread. eventspec.CohortKindFulltext still declares request_id
+// PresenceConditional (certify does not require it present), so this is a
+// declaration-compatible simplification, not a contract change.
+func (t SlogTelemetry) RecordCohortKindFulltext(ctx context.Context, orgID string, memberKind contextfabric.SubjectKind, members int, truncated bool) {
+	requestID := ""
+	if idAttrs := graphRequestIDLogAttrs(ctx); len(idAttrs) == 2 {
+		requestID, _ = idAttrs[1].(string)
+	}
+	t.logger().Info(eventspec.CohortKindFulltext.Msg,
+		eventspec.NewCohortKindFulltextFields(orgID, string(memberKind), members, truncated, requestID).SlogArgs()...)
 }
 
 // RecordNeighborLookupFailed logs at Warn: unlike the cohort-kind basis, this

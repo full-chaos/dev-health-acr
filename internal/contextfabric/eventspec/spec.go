@@ -2267,6 +2267,57 @@ func frameValidationRequirementDerivationFields() []Field {
 	return fields
 }
 
+// CohortKindFulltext is the Info line for falkorgraph's kind-scoped lexical
+// arm on one DiscoverContext call: whether a cohort's own declared member
+// kind was given its own full-text budget, how many candidates it returned,
+// and whether THAT budget (not the shared, mixed-kind one "cohort kind
+// basis" also reports) was itself exhausted.
+//
+// WHY THIS IS ITS OWN LINE, not more fields on the pre-existing "cohort kind
+// basis"/"cohort kind census" lines (falkorgraph/config.go's
+// RecordCohortKindBasis/RecordCohortKindCensus): those two predate this
+// package's declaration authority and are grandfathered legacy lines; a
+// newly-emitted value is declared here from its first emission, the same
+// choice CHAOS-5654's own kind-scoped census made with its dedicated
+// "cohort kind census" line rather than folding into "cohort kind basis".
+//
+// Emitted once per DiscoverContext call that declares a servable cohort
+// member kind (falkorgraph/reader.go, right after the kind-scoped
+// fulltextSearchNodesForKind call) -- never for a call with no declared kind,
+// since there is no budget to report. members is the candidate count that
+// query returned (post-truncation, matching CohortKindCensus's own
+// convention); truncated is exactly the value cohortPoolTruncation's
+// fulltext-arm input now derives from (a true value here is what makes
+// pool_truncation="truncated"/arms="fulltext" honest for this cohort's own
+// kind, rather than inherited from the unrelated, mixed-kind general arm).
+var CohortKindFulltext = Event{
+	ID:                 "contextfabric.cohort_kind_fulltext",
+	Msg:                "context_fabric: cohort kind fulltext",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"org_id"},
+	BoundedAggregation: "at most one line per DiscoverContext call, emitted only when the frame declares a servable cohort member kind",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		// CLOSED against contractsv1.ContextFabricSubjectKindVocabulary()
+		// (contextFabricSubjectKindTokens, reused rather than a second,
+		// independently typed list -- see tokenStrings' own doc comment).
+		// The real producer only ever calls this with
+		// declaredCohortKindForRouting, itself restricted to the seam's
+		// current servable-cohort-kind allow-list (team/project today) --
+		// but the DECLARATION is closed against the full SubjectKind
+		// vocabulary, not that narrower, still-growing allow-list, so a
+		// value outside SubjectKind entirely is what this field's closed
+		// vocabulary exists to catch; a value outside the narrower servable-
+		// cohort-kind allow-list but still inside SubjectKind is
+		// CohortMemberKindForFrame's own concern, not this field's.
+		{Key: "member_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextFabricSubjectKindTokens},
+		{Key: "members", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "truncated", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
 var All = []Event{
 	AnswerDisplay,
 	RetainedRankingAccounting,
@@ -2298,6 +2349,7 @@ var All = []Event{
 	CountPopulationScope,
 	FrameValidation,
 	ConfirmedNeedLedger,
+	CohortKindFulltext,
 }
 
 // CountPopulationScope (CHAOS-5775) is the Info line for whether a served
