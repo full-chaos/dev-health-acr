@@ -27,6 +27,7 @@ import (
 	"io"
 	"math/big"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -46,10 +47,9 @@ func validateSemanticStateExtensions(extensions SemanticStateExtensions) error {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	for i, name := range names {
-		if !utf8.ValidString(name) || strings.ContainsRune(name, 0) {
-			return fmt.Errorf("extension member %d has a name that is not valid UTF-8 or carries a NUL character", i)
-		}
+	// A member name is held to UTF-8 and NUL by the snapshot's own string
+	// checks at capture, and by the raw read check on the way back.
+	for _, name := range names {
 		if err := validateSemanticStateExtensionValue(extensions[name]); err != nil {
 			return fmt.Errorf("extension member %q %w", name, err)
 		}
@@ -154,7 +154,8 @@ func checkPlainDecimal(literal string) error {
 		}
 		return true
 	}
-	if !allDigits(integer) || (len(integer) > 1 && integer[0] == '0') || (hasFraction && !allDigits(fraction)) {
+	// JSON's own grammar already refuses a leading zero.
+	if !allDigits(integer) || (hasFraction && !allDigits(fraction)) {
 		return errExtensionNumberForm
 	}
 	if len(integer)+len(fraction) > SemanticStateExtensionMaxNumberDigits {
@@ -168,7 +169,8 @@ func checkPlainDecimal(literal string) error {
 
 // checkSurrogateEscapes refuses a \uD800-\uDFFF escape that is not a high
 // surrogate immediately followed by a low one: the JSON decoder would
-// silently read it as U+FFFD.
+// silently read it as U+FFFD. raw is valid JSON, so every backslash starts a
+// complete escape.
 func checkSurrogateEscapes(raw []byte) error {
 	inString := false
 	for i := 0; i < len(raw); i++ {
@@ -183,17 +185,11 @@ func checkSurrogateEscapes(raw []byte) error {
 		case '"':
 			inString = false
 		case '\\':
-			if i+1 >= len(raw) {
-				return errExtensionNotJSON
-			}
 			if raw[i+1] != 'u' {
 				i++
 				continue
 			}
-			code, ok := hexEscape(raw, i)
-			if !ok {
-				return errExtensionNotJSON
-			}
+			code, _ := hexEscape(raw, i)
 			i += 5
 			switch {
 			case code >= 0xDC00 && code <= 0xDFFF:
@@ -210,26 +206,15 @@ func checkSurrogateEscapes(raw []byte) error {
 	return nil
 }
 
-// hexEscape reads the \uXXXX escape starting at raw[at].
+// hexEscape reads the \uXXXX escape starting at raw[at]; ok is false when
+// no such escape starts there. Valid JSON guarantees the four hex digits of
+// any escape that does.
 func hexEscape(raw []byte, at int) (rune, bool) {
 	if at+6 > len(raw) || raw[at] != '\\' || raw[at+1] != 'u' {
 		return 0, false
 	}
-	var code rune
-	for _, h := range raw[at+2 : at+6] {
-		code <<= 4
-		switch {
-		case h >= '0' && h <= '9':
-			code |= rune(h - '0')
-		case h >= 'a' && h <= 'f':
-			code |= rune(h-'a') + 10
-		case h >= 'A' && h <= 'F':
-			code |= rune(h-'A') + 10
-		default:
-			return 0, false
-		}
-	}
-	return code, true
+	code, _ := strconv.ParseUint(string(raw[at+2:at+6]), 16, 32)
+	return rune(code), true
 }
 
 // semanticStateExtensionsEqual is member equality: the same names, and

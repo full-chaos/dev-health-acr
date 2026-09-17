@@ -607,15 +607,27 @@ func DecodeSemanticState(raw []byte) (*PersistedSemanticState, SemanticStateRead
 	// (a store may reorder keys). A missing key decodes to its zero value and
 	// an explicit null to an empty value, and both would otherwise read back as
 	// a snapshot this codec never wrote -- MISSING IS NOT ZERO.
-	if !sameJSONDocument(raw, canonical) {
+	if !sameJSONDocument(raw, canonical) || !rawExtensionsAreUTF8(raw) {
 		return nil, SemanticStateReadMalformed
 	}
 	return &state, SemanticStateReadAvailable
 }
 
+// rawExtensionsAreUTF8 reports whether the stored extensions object, names
+// included, is valid UTF-8 as stored: the decoder would otherwise read an
+// invalid member name as U+FFFD and admit a member that was never written.
+func rawExtensionsAreUTF8(raw []byte) bool {
+	var document struct {
+		Extensions json.RawMessage `json:"extensions"`
+	}
+	if err := json.Unmarshal(raw, &document); err != nil {
+		return false
+	}
+	return utf8.Valid(document.Extensions)
+}
+
 // sameJSONDocument compares two JSON documents as values. Numbers are read
-// as their literals, so no number is lost to float64 range: two literals are
-// equal when they are the same text or the same finite float64.
+// as their literals, so no number is lost to float64 range.
 func sameJSONDocument(a, b []byte) bool {
 	decode := func(raw []byte) (any, bool) {
 		decoder := json.NewDecoder(bytes.NewReader(raw))
@@ -657,16 +669,11 @@ func sameDecodedJSON(a, b any) bool {
 		}
 		return true
 	case json.Number:
+		// The snapshot writes no float: every number it holds is an integer
+		// or an extension member's plain decimal, which a store renders back
+		// as the same text.
 		bv, ok := b.(json.Number)
-		if !ok {
-			return false
-		}
-		if av == bv {
-			return true
-		}
-		af, aerr := strconv.ParseFloat(string(av), 64)
-		bf, berr := strconv.ParseFloat(string(bv), 64)
-		return aerr == nil && berr == nil && af == bf
+		return ok && av == bv
 	default:
 		return a == b
 	}

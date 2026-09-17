@@ -73,6 +73,7 @@ func TestSemanticStateExtensionsReadDomain(t *testing.T) {
 		{"wrong scalar type: bool", `true`, SemanticStateReadMalformed, nil},
 		{"a NUL in a member value", `{"m":"a` + nul + `b"}`, SemanticStateReadMalformed, nil},
 		{"a NUL in a member name", `{"a` + nul + `b":1}`, SemanticStateReadMalformed, nil},
+		{"invalid UTF-8 in a member name", "{\"a\xffb\":1}", SemanticStateReadMalformed, nil},
 	} {
 		t.Run(cell.name, func(t *testing.T) {
 			state, status := DecodeSemanticState(withExtensionsKey(t, fixture, cell.raw))
@@ -226,6 +227,9 @@ func TestSemanticStateExtensionValueContract(t *testing.T) {
 		{"a repeated key", `{"a":1,"a":1}`, false, "repeats a key"},
 		{"a repeated key in a nested object", `{"o":{"a":1,"a":2}}`, false, "repeats a key"},
 		{"the same key in sibling objects", `[{"a":1},{"a":2}]`, true, ""},
+		{"a repeated key after a nested object", `{"o":{},"o":1}`, false, "repeats a key"},
+		{"an upper-case lone surrogate escape", `"` + bs + `uDC00"`, false, "lone UTF-16 surrogate"},
+		{"an upper-case surrogate pair escape", `"` + bs + `uD83D` + bs + `uDE00"`, true, ""},
 		{"the same key at two depths", `{"a":{"a":1}}`, true, ""},
 		{"a key equal to a string value", `{"a":"a","b":"a"}`, true, ""},
 	} {
@@ -268,6 +272,7 @@ func TestSemanticStateExtensionEquality(t *testing.T) {
 		{`123456789012345678901234567890`, `123456789012345678901234567891`, false},
 		{`"` + `\` + `u00e9"`, `"é"`, true},
 		{`[1,2]`, `[2,1]`, false},
+		{`1e2`, `100`, false},
 		{`1`, `"1"`, false},
 		{`null`, `false`, false},
 		{`{"a":1}`, `{"a":1,"b":null}`, false},
