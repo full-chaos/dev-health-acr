@@ -232,6 +232,15 @@ func TestSemanticStateExtensionValueContract(t *testing.T) {
 		{"a repeated key after a nested object", `{"o":{},"o":1}`, false, "repeats a key"},
 		{"an upper-case lone surrogate escape", `"` + bs + `uDC00"`, false, "lone UTF-16 surrogate"},
 		{"an upper-case surrogate pair escape", `"` + bs + `uD83D` + bs + `uDE00"`, true, ""},
+		{"the escape just below the surrogate range", `"` + bs + `ud7ff"`, true, ""},
+		{"the escape just above the surrogate range", `"` + bs + `ue000"`, true, ""},
+		{"the highest escape", `"` + bs + `uffff"`, true, ""},
+		{"the lowest escape", `"` + bs + `u0001"`, true, ""},
+		{"the first high surrogate", `"` + bs + `ud800"`, false, "lone UTF-16 surrogate"},
+		{"the last high surrogate", `"` + bs + `udbff"`, false, "lone UTF-16 surrogate"},
+		{"the first low surrogate", `"` + bs + `udc00"`, false, "lone UTF-16 surrogate"},
+		{"the last low surrogate", `"` + bs + `udfff"`, false, "lone UTF-16 surrogate"},
+		{"the boundary pair", `"` + bs + `udbff` + bs + `udfff"`, true, ""},
 		{"the same key at two depths", `{"a":{"a":1}}`, true, ""},
 		{"a key equal to a string value", `{"a":"a","b":"a"}`, true, ""},
 	} {
@@ -260,6 +269,25 @@ func TestSemanticStateExtensionValueContract(t *testing.T) {
 				t.Fatalf("a refused value found stored read %s", status)
 			}
 		})
+	}
+}
+
+// TestARefusalNamesABoundedMemberName: the name in a refusal is cut to the
+// bound and carries no control character, even though a writer's own name is
+// a constant.
+func TestARefusalNamesABoundedMemberName(t *testing.T) {
+	long := strings.Repeat("n", semanticStateExtensionMaxNameBytes+40)
+	state := semanticFixture(t)
+	state.Extensions = SemanticStateExtensions{long + "\r\ninjected": json.RawMessage(`1e2`)}
+	_, err := EncodeSemanticState(state)
+	if err == nil {
+		t.Fatalf("the member was admitted")
+	}
+	if strings.Contains(err.Error(), "injected") || strings.Contains(err.Error(), "\n") || strings.Contains(err.Error(), "\r") {
+		t.Fatalf("the error carries the whole name: %v", err)
+	}
+	if !strings.Contains(err.Error(), strings.Repeat("n", semanticStateExtensionMaxNameBytes)) {
+		t.Fatalf("the error does not name the member: %v", err)
 	}
 }
 

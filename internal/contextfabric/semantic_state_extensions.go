@@ -51,10 +51,25 @@ func validateSemanticStateExtensions(extensions SemanticStateExtensions) error {
 	// checks at capture, and by the raw read check on the way back.
 	for _, name := range names {
 		if err := validateSemanticStateExtensionValue(extensions[name]); err != nil {
-			return fmt.Errorf("extension member %q %w", name, err)
+			// The name is a writer's own constant, but it reaches an error
+			// string a caller may log: bounded and sanitized like any other
+			// value on that path.
+			return fmt.Errorf("extension member %q %w", boundedMemberName(name), err)
 		}
 	}
 	return nil
+}
+
+// semanticStateExtensionMaxNameBytes bounds a member name in an error.
+const semanticStateExtensionMaxNameBytes = 64
+
+// boundedMemberName is name, sanitized and cut to the bound, for an error a
+// caller may log.
+func boundedMemberName(name string) string {
+	if len(name) > semanticStateExtensionMaxNameBytes {
+		name = name[:semanticStateExtensionMaxNameBytes]
+	}
+	return SanitizeLogAttr(strings.ToValidUTF8(name, ""))
 }
 
 var (
@@ -208,13 +223,14 @@ func checkSurrogateEscapes(raw []byte) error {
 
 // hexEscape reads the \uXXXX escape starting at raw[at]; ok is false when
 // no such escape starts there. Valid JSON guarantees the four hex digits of
-// any escape that does.
+// any escape that does. The escape is four hex digits, so it is parsed at the
+// width it can hold -- 16 bits -- and that width fits a rune whole.
 func hexEscape(raw []byte, at int) (rune, bool) {
 	if at+6 > len(raw) || raw[at] != '\\' || raw[at+1] != 'u' {
 		return 0, false
 	}
-	code, _ := strconv.ParseUint(string(raw[at+2:at+6]), 16, 32)
-	return rune(code), true
+	code, _ := strconv.ParseUint(string(raw[at+2:at+6]), 16, 16)
+	return rune(uint16(code)), true
 }
 
 // semanticStateExtensionsEqual is member equality: the same names, and
