@@ -199,6 +199,8 @@ func TestSemanticStateExtensionValueContract(t *testing.T) {
 		{"trailing fractional zeros", `1.500`, true, ""},
 		{"64 digits", strings.Repeat("9", 64), true, ""},
 		{"64 digits across the point", strings.Repeat("9", 32) + "." + strings.Repeat("9", 32), true, ""},
+		{"65 digits across the point", "9." + strings.Repeat("9", 64), false, "more than 64 digits"},
+		{"one integer digit and 63 fraction digits", "9." + strings.Repeat("9", 63), true, ""},
 		{"65 digits", strings.Repeat("9", 65), false, "more than 64 digits"},
 		{"a number beyond float64 range", "1" + strings.Repeat("0", 400), false, "more than 64 digits"},
 		{"an exponent", `1e400`, false, "not a plain decimal"},
@@ -248,8 +250,11 @@ func TestSemanticStateExtensionValueContract(t *testing.T) {
 				}
 				return
 			}
-			if !errors.Is(writeErr, ErrSemanticStateRejected) || !strings.Contains(writeErr.Error(), cell.why) {
-				t.Fatalf("a refused value: write_err=%v, want a rejection naming %q", writeErr, cell.why)
+			// The rejection names the member and the reason, so a refusal
+			// that another check happens to produce is not mistaken for
+			// this contract's.
+			if !errors.Is(writeErr, ErrSemanticStateRejected) || !strings.Contains(writeErr.Error(), cell.why) || !strings.Contains(writeErr.Error(), `extension member "m"`) {
+				t.Fatalf("a refused value: write_err=%v, want the member named and %q", writeErr, cell.why)
 			}
 			if status != SemanticStateReadMalformed || read != nil {
 				t.Fatalf("a refused value found stored read %s", status)

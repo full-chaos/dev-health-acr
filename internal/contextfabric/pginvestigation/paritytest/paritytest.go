@@ -909,6 +909,28 @@ func RunSemanticStateExtensionReplaySuite(t *testing.T, newStore func(t *testing
 			t.Fatalf("get err=%v read=%s equal=%v", err, stored.SemanticStateRead, err == nil && contextfabric.SemanticStatesEqual(stored.SemanticState, state))
 		}
 		t.Logf("stored member = %s", stored.SemanticState.Extensions["shadow_member"])
+		// The member's content, read as JSON, is the content written: the
+		// store may re-render it, never change it.
+		var content map[string]any
+		decoder := json.NewDecoder(bytes.NewReader(stored.SemanticState.Extensions["shadow_member"]))
+		decoder.UseNumber()
+		if err := decoder.Decode(&content); err != nil {
+			t.Fatalf("stored member does not decode: %v", err)
+		}
+		inner, _ := content["b"].(map[string]any)
+		list, _ := inner["x"].([]any)
+		last, _ := func() (map[string]any, bool) {
+			if len(list) != 3 {
+				return nil, false
+			}
+			m, ok := list[2].(map[string]any)
+			return m, ok
+		}()
+		if len(content) != 3 || content["a"] != json.Number("0.10") || content["big"] != json.Number("123456789012345678901234567890") ||
+			len(inner) != 2 || inner["y"] != json.Number("1") || len(list) != 3 || list[0] != json.Number("1.50") || list[1] != "\u00e9" ||
+			len(last) != 2 || last["p"] != true || last["q"] != nil {
+			t.Fatalf("stored member content = %#v, want the written content", content)
+		}
 		for _, replay := range []struct {
 			name     string
 			raw      string
@@ -929,16 +951,29 @@ func RunSemanticStateExtensionReplaySuite(t *testing.T, newStore func(t *testing
 			}
 		}
 	})
-	t.Run("a member outside the contract is never written", func(t *testing.T) {
-		store := newStore(t)
-		row := result("result-extension-refused", "is a big exponent refused?")
-		err := save(store, row, withMember(`{"n":1e400}`))
-		_, getErr := store.Get(context.Background(), orgA, row.ResultID)
-		t.Logf("refused member -> save_err=%v get_err=%v", err, getErr)
-		if !errors.Is(err, contextfabric.ErrSemanticStateRejected) || !isNotFound(getErr) {
-			t.Fatalf("save err=%v get err=%v, want ErrSemanticStateRejected and no row", err, getErr)
-		}
-	})
+	// Every shape a store would reject or re-render into a different value
+	// is refused by the writer, with the snapshot's own error, before any
+	// row exists -- never as a driver error.
+	for i, refused := range []struct{ name, raw string }{
+		{"a big exponent", `{"n":1e400}`},
+		{"an exponent a store renders as a plain number", `{"n":1e2}`},
+		{"negative zero", `{"n":-0}`},
+		{"invalid UTF-8", "{\"s\":\"a\xff\xfeb\"}"},
+		{"a lone surrogate escape", `{"s":"\ud800"}`},
+		{"a NUL escape", `{"s":"a\u0000b"}`},
+		{"a repeated key", `{"k":1,"k":2}`},
+	} {
+		t.Run("refused: "+refused.name, func(t *testing.T) {
+			store := newStore(t)
+			row := result(fmt.Sprintf("result-extension-refused-%d", i), "is a member outside the contract refused?")
+			err := save(store, row, withMember(refused.raw))
+			_, getErr := store.Get(context.Background(), orgA, row.ResultID)
+			t.Logf("refused %-48s save_err=%v get_err=%v", refused.name, err, getErr)
+			if !errors.Is(err, contextfabric.ErrSemanticStateRejected) || !isNotFound(getErr) {
+				t.Fatalf("save err=%v get err=%v, want ErrSemanticStateRejected and no row", err, getErr)
+			}
+		})
+	}
 }
 
 // SemanticSeed plants a result row AND a raw semantic-state column value
