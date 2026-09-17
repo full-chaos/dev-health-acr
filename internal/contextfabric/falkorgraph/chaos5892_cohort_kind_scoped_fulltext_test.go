@@ -684,7 +684,7 @@ func TestCohortKindFulltextDeclaresMemberKindAsAClosedVocabulary(t *testing.T) {
 // already shown by the byte-identical test above): the fake here fails the
 // test outright if a kind-scoped fulltext query is ever issued, and the
 // census alone still serves a complete cohort. This is what makes a
-// transient failure in the (now-skipped) lexical arm harmless whenever the
+// transient failure in the skipped lexical arm harmless whenever the
 // census could complete the call on its own.
 func TestScopedProjectCohortSkipsKindScopedArmWhenCensusIsAdmitted(t *testing.T) {
 	censusRow := fakeSubjectNodeRow("project", "project_from_census", "FromCensus")

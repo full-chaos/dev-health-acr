@@ -937,11 +937,11 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 			// query order, unchanged). A re-sort here MUST NOT happen:
 			// DiscoveredCohort (graphrank) admits members in INPUT order
 			// and stops at MaxCohortMembers, so re-ordering this arm's own
-			// contribution by canonical id alone (as an earlier version of
-			// this code did) would let an alphabetically-first,
-			// lower-relevance candidate win a capped slot over the query's
-			// own highest-ranked one -- corrupting exactly the admission
-			// order this cohort's members are supposed to share with every
+			// contribution by canonical id alone would let an
+			// alphabetically-first, lower-relevance candidate win a capped
+			// slot over the query's own highest-ranked one -- corrupting
+			// exactly the admission order this cohort's members are
+			// supposed to share with every
 			// other arm. No sort call belongs on this slice; its order IS
 			// the arm's own relevance ranking, unmodified, same as the
 			// general arm's.
@@ -1035,10 +1035,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// Shape/anchor say "census" (see cohortExactNameCensusEligibility's own
 	// doc comment -- CHAOS-4622 remainder widened this past Shape ==
 	// ShapeDiscoveredCohort alone), AND nothing was already committed.
-	// shapeAnchorEligible/censusBasis/censusAdmitted are computed earlier in
-	// this method now (see that computation's own doc comment) so the
-	// kind-scoped full-text arm above can gate on censusAdmitted directly;
-	// the values themselves are unchanged by moving the computation.
+	// shapeAnchorEligible/censusBasis/censusAdmitted are computed above,
+	// before every retrieval arm (see that computation's own doc comment),
+	// so the kind-scoped full-text arm can gate on censusAdmitted directly.
 	// CHAOS-5168 (r3 finding 4): "the census ran" and "the census can cover
 	// what a bounded arm dropped" are DIFFERENT claims, and only the second
 	// licenses covered_by_census. A census that returns ZERO rows is a

@@ -2309,7 +2309,7 @@ var cohortKindFulltextDecision = []string{"ran", "read_failed"}
 // truncation input honest instead and keeps serving whatever the other
 // arms can. members is the candidate count that query returned
 // (post-truncation, matching CohortKindCensus's own convention); truncated
-// is exactly the value cohortPoolTruncation's fulltext-arm input now
+// is exactly the value cohortPoolTruncation's fulltext-arm input
 // derives from (a true value here is what makes
 // pool_truncation="truncated"/arms="fulltext" honest for this cohort's own
 // kind, rather than inherited from the unrelated, mixed-kind general arm).

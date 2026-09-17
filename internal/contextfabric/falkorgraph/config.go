@@ -559,7 +559,7 @@ type GraphTelemetry interface {
 	//
 	// decision=CohortKindFulltextRan carries members (the candidate count
 	// that arm returned, post-truncation, matching RecordCohortKindCensus's
-	// own convention), truncated (exactly the value that now feeds
+	// own convention), truncated (exactly the value that feeds
 	// cohortPoolTruncation's fulltext-arm input for this call -- the field
 	// that makes pool_truncation/pool_truncation_arms on RecordCohortKindBasis
 	// honest for THIS cohort's own kind, rather than inherited from the
