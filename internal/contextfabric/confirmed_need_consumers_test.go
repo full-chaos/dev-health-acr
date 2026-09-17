@@ -1298,16 +1298,13 @@ func TestRecordConfirmedNeedLedger_EmittedLines(t *testing.T) {
 // the event struct) -- a mutation dropping the emitter's own
 // capture_skip_reason key from telemetry.go's arg list is caught here, on
 // the ACTUAL JSON line, the same class of gap a struct-only assertion
-// cannot close.
+// cannot close. Enumerated from captureSkipReasons(), the closed vocabulary
+// itself, not a hand-copied list -- a value added to the type but not to
+// that function fails TestCaptureSkipReasonVocabularyIsClosed instead of
+// silently sitting outside this pin.
 func TestRecordConfirmedNeedLedger_CaptureSkipReasonEmittedLines(t *testing.T) {
 	t.Parallel()
-	for _, reason := range []CaptureSkipReason{
-		CaptureSkipReasonNotApplicable,
-		CaptureSkipReasonWindowConfirmationGatedDiscard,
-		CaptureSkipReasonFrameGateRefused,
-		CaptureSkipReasonGraphNotProjected,
-		CaptureSkipReasonResolutionError,
-	} {
+	for _, reason := range captureSkipReasons() {
 		t.Run(string(reason), func(t *testing.T) {
 			t.Parallel()
 			var buf bytes.Buffer
@@ -1347,6 +1344,25 @@ func TestConfirmedNeedVocabularies(t *testing.T) {
 	}
 	if got := confirmedNeedValueHash(""); got != "" {
 		t.Fatalf("confirmedNeedValueHash(\"\") = %q, want empty", got)
+	}
+}
+
+// TestCaptureSkipReasonVocabularyIsClosed pins captureSkipReasons() as the
+// one place CaptureSkipReason's membership is declared: every value the type
+// carries validates, an unassigned string does not, and the count is exact --
+// so a reason added to the const block without a matching addition here, or
+// dropped from the const block while still listed here, fails this test
+// rather than silently drifting the emitted-lines pin above out of sync with
+// the type.
+func TestCaptureSkipReasonVocabularyIsClosed(t *testing.T) {
+	t.Parallel()
+	for _, reason := range captureSkipReasons() {
+		if !ValidCaptureSkipReason(reason) {
+			t.Fatalf("%q not valid", reason)
+		}
+	}
+	if ValidCaptureSkipReason("unassigned_exit") || ValidCaptureSkipReason("") || len(captureSkipReasons()) != 15 {
+		t.Fatal("CaptureSkipReason vocabulary membership is not closed")
 	}
 }
 

@@ -81,13 +81,18 @@ func provenanceForConfirmedNeedBasis(basis ConfirmedNeedBasis) contractsv1.Conte
 // the turn before engineCommittedAnchorForCapture ever runs, and each does
 // so for a DIFFERENT reason a reader needs told apart -- a gate that will
 // never resolve a subject at all reads nothing like a resolution that tried
-// and errored. Every exit BEFORE the per-need ledger's own ONE resolution
-// point (resolveConfirmedNeedLedger, earlier in Investigate: window veto,
-// structure veto, interpretation failure, continuation refusal, a reuse
-// hit) still renders the unnamed NotApplicable default -- those exits never
-// reach a subject resolution attempt of any kind, a qualitatively different
-// state from "attempted and stopped," and naming them is its own,
-// separately-scoped change.
+// and errored. Every exit BETWEEN the per-need ledger's own ONE resolution
+// point (resolveConfirmedNeedLedger) and the capture check is named too: the
+// pre-Interpret window veto, the explicit-unconfirmed window gate, the
+// structure veto, a reuse-serve failure at any of its three shapes (a hard
+// lookup/serving error, a budget refusal, a clean hit), an interpretation
+// failure, the post-Interpret unanswerable-time terminal, a continuation
+// refusal, and the post-planning window/axis-conflict veto -- each ends the
+// turn before a subject resolution of any kind is attempted, a qualitatively
+// different state from the four exits above that DID attempt one and
+// stopped. NotApplicable remains correct for exactly two states: the capture
+// check ran (CaptureDecision then carries the real decision), or a future
+// exit this axis has not yet been extended to name.
 type CaptureSkipReason string
 
 const (
@@ -121,7 +126,111 @@ const (
 	// resolution never completed, so there is no (frame, resolution,
 	// commitBases) triple for the capture check to read.
 	CaptureSkipReasonResolutionError CaptureSkipReason = "resolution_error"
+	// CaptureSkipReasonWindowVetoed: the request-side evidence-window
+	// receipt failed pre-Interpret canonicalization (windowCanon.Veto --
+	// unresolved, conflicting, or a stale superseded offer) -- this turn
+	// short-circuits above tryReuse, Interpret and every capability call, so
+	// no subject resolution of any kind was ever attempted.
+	CaptureSkipReasonWindowVetoed CaptureSkipReason = "window_vetoed"
+	// CaptureSkipReasonWindowConfirmationRequired: an MCP caller's bare
+	// explicit evidence_window field has no decisive authority of its own
+	// (windowCanon.ExplicitUnconfirmed, CHAOS-4040 precedence step 1) and
+	// this turn asks the caller to confirm it -- gated before tryReuse and
+	// Interpret, the same "no subject resolution attempted" state the
+	// pre-Interpret window veto is in, for a different reason.
+	CaptureSkipReasonWindowConfirmationRequired CaptureSkipReason = "window_confirmation_required"
+	// CaptureSkipReasonStructureVetoed: a structure receipt (kindr_/ancr_/
+	// handr_) failed pre-Interpret canonicalization (structureCanon.Veto) --
+	// this turn short-circuits above tryReuse, Interpret and every
+	// capability call, the same "no subject resolution attempted" state the
+	// two window gates above are in.
+	CaptureSkipReasonStructureVetoed CaptureSkipReason = "structure_vetoed"
+	// CaptureSkipReasonReuseValidationError: tryReuseWithReading found a
+	// matching stored candidate but could not serve it -- a hard
+	// error distinct from an ordinary reuse miss (every ordinary miss fails
+	// closed to a fresh investigation with no error at all). This turn is
+	// served from neither the stored row nor this turn's own resolution,
+	// which never ran.
+	CaptureSkipReasonReuseValidationError CaptureSkipReason = "reuse_validation_error"
+	// CaptureSkipReasonReuseBudgetRefused: a stored candidate matched, but
+	// re-validation against the CURRENT response budget (finalizeServed,
+	// BudgetAssertReuse -- chris's promise of record that a stored row no
+	// longer fitting its budget is refused, not served stale) refused it.
+	// This turn's own resolution never ran; the row it would have served
+	// instead is discarded, not this turn's own committed subject.
+	CaptureSkipReasonReuseBudgetRefused CaptureSkipReason = "reuse_budget_refused"
+	// CaptureSkipReasonReuseServed: a stored candidate matched, passed
+	// re-validation, and was served unchanged (AC-3782-1's zero-model-call
+	// guarantee) -- this turn's own resolution never ran because no fresh
+	// investigation ran at all; the committed subject the ledger might
+	// otherwise capture belongs to the turn that produced the stored row,
+	// already captured (or not) at ITS OWN exit, not this one.
+	CaptureSkipReasonReuseServed CaptureSkipReason = "reuse_served"
+	// CaptureSkipReasonInterpretationFailed: the QuestionInterpreter
+	// returned an error (StageInterpretation) -- there is no interpreted
+	// question for ResolveSubjects to run against, so it never ran.
+	CaptureSkipReasonInterpretationFailed CaptureSkipReason = "interpretation_failed"
+	// CaptureSkipReasonInterpretedTimeUnanswerable: the SECOND time-bound
+	// check (resolveInterpretedTimeContext on the INTERPRETED question,
+	// after the wire-request check that runs before Interpret) found a
+	// bound this engine will not answer -- this turn returns before
+	// ResolveSubjects, DiscoverContext, ReadFacts and Synthesize all run,
+	// the same "no capability call pays for an unanswerable question"
+	// guarantee the wire-side check buys, applied to what Interpret
+	// resolved the question to mean instead of what the caller literally
+	// sent.
+	CaptureSkipReasonInterpretedTimeUnanswerable CaptureSkipReason = "interpreted_time_unanswerable"
+	// CaptureSkipReasonContinuationRefused: an admitted window continuation
+	// could not be composed into a valid frame (continuation.refusesTurn)
+	// and the turn is refused above the planning stage and above every
+	// retrieval -- the carrier the caller confirmed could not be
+	// established, and this turn's own resolution never ran to supply a
+	// fresh one instead.
+	CaptureSkipReasonContinuationRefused CaptureSkipReason = "continuation_refused"
+	// CaptureSkipReasonWindowAxisConflict: a confirmed evidence window no
+	// longer applies once Interpret moved the question to a non-current time
+	// axis (windowVetoAxisConflict, POST-planning -- distinct from the
+	// pre-Interpret window veto above, which fires before Interpret ever
+	// runs and can never see this disagreement). No canonical facts are read
+	// under a window commitment the interpretation disagrees with, so this
+	// turn's own resolution never ran.
+	CaptureSkipReasonWindowAxisConflict CaptureSkipReason = "window_axis_conflict"
 )
+
+// captureSkipReasons is the closed vocabulary CaptureSkipReason draws from --
+// every value the ledger line's own completeness pin
+// (TestRecordConfirmedNeedLedger_CaptureSkipReasonEmittedLines) drives
+// through the real emitter, so an exit assigned a reason missing from this
+// list fails that test rather than shipping unobserved.
+func captureSkipReasons() []CaptureSkipReason {
+	return []CaptureSkipReason{
+		CaptureSkipReasonNotApplicable,
+		CaptureSkipReasonWindowConfirmationGatedDiscard,
+		CaptureSkipReasonFrameGateRefused,
+		CaptureSkipReasonGraphNotProjected,
+		CaptureSkipReasonResolutionError,
+		CaptureSkipReasonWindowVetoed,
+		CaptureSkipReasonWindowConfirmationRequired,
+		CaptureSkipReasonStructureVetoed,
+		CaptureSkipReasonReuseValidationError,
+		CaptureSkipReasonReuseBudgetRefused,
+		CaptureSkipReasonReuseServed,
+		CaptureSkipReasonInterpretationFailed,
+		CaptureSkipReasonInterpretedTimeUnanswerable,
+		CaptureSkipReasonContinuationRefused,
+		CaptureSkipReasonWindowAxisConflict,
+	}
+}
+
+// ValidCaptureSkipReason reports membership.
+func ValidCaptureSkipReason(value CaptureSkipReason) bool {
+	for _, reason := range captureSkipReasons() {
+		if reason == value {
+			return true
+		}
+	}
+	return false
+}
 
 // engineCommittedAnchorForCapture decides whether THIS turn's own resolution
 // bound a committed subject to the frame's own scope anchor strongly enough
