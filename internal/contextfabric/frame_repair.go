@@ -55,6 +55,16 @@ import (
 // table reads the frame alone; validateProposedFrame is the one place both
 // halves of one model call are in hand. A carried frame is revalidated, never
 // repaired (composeAcceptedContext).
+//
+// A SECOND BOUNDED REPAIR, FOR I7 (CHAOS-5839): a compare goal proposed over
+// a grouped cohort names no explicit operand set to compare -- the same
+// interpretation's own remaining goals already say what the question is
+// asking instead. See repairCompareGroupedCollapse's own doc comment below
+// for its bound. Every repair in frameRepairTable answers exactly one
+// invariant, runs at most once per proposal (frameRepairBound), and
+// revalidates through validateAgainstInterpretation unrelaxed -- the shape
+// this file's first repair established, extended here rather than
+// replaced.
 
 // FrameRepairDecision is what the bounded repair decided for one proposal.
 // Closed, because it reaches a log field operators group on.
@@ -90,6 +100,9 @@ const (
 	// FrameRepairDeclinedBoundReached: the result already carries the bounded
 	// number of attempts. Refused on the failure it carries.
 	FrameRepairDeclinedBoundReached FrameRepairDecision = "declined_bound_reached"
+	// FrameRepairDeclinedNotGroupedCohort: the I7 failure is not over a
+	// grouped_members expression. Refused on I7.
+	FrameRepairDeclinedNotGroupedCohort FrameRepairDecision = "declined_not_grouped_cohort"
 )
 
 var frameRepairDecisions = [...]FrameRepairDecision{
@@ -103,6 +116,7 @@ var frameRepairDecisions = [...]FrameRepairDecision{
 	FrameRepairDeclinedTermsDiverge,
 	FrameRepairDeclinedHintUnservable,
 	FrameRepairDeclinedBoundReached,
+	FrameRepairDeclinedNotGroupedCohort,
 }
 
 // FrameRepairTermsMatch is whether the named subject's terms equal the flat
@@ -125,11 +139,14 @@ func FrameRepairDecisionVocabulary() [FrameRepairDecisionCount]FrameRepairDecisi
 	return frameRepairDecisions
 }
 
-// FrameRepairName names a bounded repair. One member today.
+// FrameRepairName names a bounded repair.
 type FrameRepairName string
 
 // FrameRepairCountKindCollapse is the I9 repair this file implements.
 const FrameRepairCountKindCollapse FrameRepairName = "count_kind_collapse"
+
+// FrameRepairCompareGroupedCollapse is the I7 repair this file implements.
+const FrameRepairCompareGroupedCollapse FrameRepairName = "compare_grouped_collapse"
 
 // frameRepairBound is the most repair attempts one proposal gets.
 const frameRepairBound = 1
@@ -141,21 +158,40 @@ const frameRepairBound = 1
 //
 // TestEveryRepairPopulatesEveryCarriedField (frame_repair_test.go) walks
 // frameRepairTable by reflection against this struct's own fields: a repair
-// that reaches FrameRepairApplied while leaving any field here at its zero
-// value fails that test, and a field added here without every repair being
-// updated to populate it fails the same way -- CHAOS-5825: repairCountKindCollapse
-// shipped changing only SubjectExpression and left the receipt's own
-// ScopeAnchorKind at whatever the model's raw output happened to state
-// (typically absent for a named_subject proposal), so graphrank's anchor-pool
-// "receipt" source (chaos5393_anchor_pool.go) read none/none for a repaired
-// children_of_scope proposal a direct one would have carried a real anchor
-// kind for.
+// that reaches FrameRepairApplied must explicitly account for every field
+// here, either populating it or declaring in its own fixture that its
+// repaired shape never states it (a field this struct gains later, with no
+// repair's fixture updated for it, fails the same way) -- CHAOS-5825:
+// repairCountKindCollapse shipped changing only SubjectExpression and left
+// the receipt's own ScopeAnchorKind at whatever the model's raw output
+// happened to state (typically absent for a named_subject proposal), so
+// graphrank's anchor-pool "receipt" source (chaos5393_anchor_pool.go) read
+// none/none for a repaired children_of_scope proposal a direct one would
+// have carried a real anchor kind for. ScopeAnchorKind is itself scoped to
+// children_of_scope (scope_anchor_kind.go: grouped_members has a grouping
+// axis, never a scope anchor), so a repair whose shape stays grouped_members
+// declares this field zero rather than fabricating one.
 type FrameRepairCarry struct {
 	// ScopeAnchorKind is the anchor's own kind for a repaired
 	// children_of_scope expression -- the value a direct proposal of the
 	// same shape would have stated as scope_anchor_kind. Set only when the
 	// repair applied.
 	ScopeAnchorKind SubjectKind
+	// RequestedJudgment is a repair's own closed-phrase substitute for the
+	// SAME interpretation's InterpretedQuestion.RequestedJudgment -- the
+	// free-text judgment field synthesis reads directly off the
+	// interpretation, never off the frame or the receipt (chaos4636_synthesis_assembly.go).
+	// A repair that changes Goals makes that free text stale (it still
+	// names the goal the repair dropped), and unlike ScopeAnchorKind there
+	// is no model-authored value to fall back on for the ACCEPTED shape --
+	// the model's own free text described the shape it proposed, not the
+	// shape the repair produced. Built from a small closed phrase table
+	// keyed on the accepted Goals (requestedJudgmentForGoals), never from
+	// model output, so it carries the same content-safety guarantee every
+	// other closed field on this struct has. Empty when the repair does
+	// not touch Goals (I9's count-kind repair: the model's own text still
+	// describes the accepted shape, since only SubjectExpression changed).
+	RequestedJudgment string
 }
 
 // FrameRepair records the bounded repair's decision on one proposal: the
@@ -326,17 +362,169 @@ func repairCountKindCollapse(receipt ModelExecutionReceipt, proposed QuestionFra
 	return FrameValidationResult{Frame: revalidated.Frame, Outcome: FrameValidationOutcomeRepaired, Repair: considered}
 }
 
+// repairCompareGroupedCollapse applies the I7 bound above to one
+// validation result and returns the result the turn acts on. A compare
+// goal read over a grouped cohort names no explicit operand set -- the
+// question is not asking to set two or more named things side by side, and
+// the same proposal's own remaining goals (or their absence) already say
+// what it is asking instead.
+//
+// THE BOUND, every clause pinned by frame_repair_test.go:
+//
+//   - Only an I7 failure. A frame that fails any other invariant first is
+//     refused exactly as before.
+//   - Only from grouped_members. compare over children_of_scope,
+//     discovered_kind, named_subject or organization_scope has no evidenced
+//     reading and is refused as before; widening to those kinds without
+//     evidence would risk a frame class this repair was never proven
+//     against.
+//   - Only Goals changes. SubjectExpression, Temporal, Dimensions,
+//     Emphasis and every other field are the proposal's own -- I7 reads
+//     Goals and the expression kind, so this is the field the violated
+//     invariant itself names.
+//   - Compare is dropped; explain_change is added when the proposal did not
+//     already state it; describe_trend is kept when the proposal already
+//     stated it, otherwise assess_state is added -- never both, and never a
+//     goal the proposal did not already carry beyond that one slot. Nothing
+//     about a trend the proposal never signalled is invented.
+//   - The repaired frame passes the SAME validation, unrelaxed. If it does
+//     not (I8's temporal requirement not met, most often), the turn is
+//     refused with the invariant the repaired frame failed, and the event
+//     says a repair ran.
+//   - At most frameRepairBound attempts.
+//
+// CARRY: this repair never touches SubjectExpression, and grouped_members
+// never carries a scope anchor kind (scope_anchor_kind.go) -- its Carry
+// stays the zero value, exactly what a direct proposal of this same shape
+// would also carry. See FrameRepairCarry's own doc comment and this
+// repair's fixture in repairTableFixtures (frame_repair_test.go).
+func repairCompareGroupedCollapse(receipt ModelExecutionReceipt, proposed QuestionFrame, emittedShape InvestigationShape, subjectTerms []string, result FrameValidationResult) FrameValidationResult {
+	if result.Failure.Invariant != FrameInvariantI7 {
+		if result.Repair.Decision == "" {
+			result.Repair.Decision = FrameRepairNotApplicable
+		}
+		return result
+	}
+	considered := FrameRepair{
+		Name:       FrameRepairCompareGroupedCollapse,
+		Invariant:  FrameInvariantI7,
+		KindBefore: proposed.SubjectExpression.Kind,
+		Attempts:   result.Repair.Attempts,
+	}
+	declined := func(decision FrameRepairDecision) FrameValidationResult {
+		considered.Decision = decision
+		result.Repair = considered
+		return result
+	}
+	if result.Repair.Attempts >= frameRepairBound {
+		return declined(FrameRepairDeclinedBoundReached)
+	}
+	if proposed.SubjectExpression.Kind != SubjectExpressionGroupedMembers {
+		return declined(FrameRepairDeclinedNotGroupedCohort)
+	}
+	repaired := proposed
+	repaired.Goals = replaceCompareGoal(proposed.Goals)
+	considered.Attempts++
+	considered.KindAfter = repaired.SubjectExpression.Kind
+	revalidated := validateAgainstInterpretation(receipt, repaired, emittedShape)
+	if revalidated.Outcome != FrameValidationOutcomeValid {
+		considered.Decision = FrameRepairRefusedAfterRepair
+		return FrameValidationResult{Outcome: revalidated.Outcome, Failure: revalidated.Failure, Repair: considered}
+	}
+	considered.Decision = FrameRepairApplied
+	// Derived from the NORMALIZED accepted Goals (revalidated.Frame.Goals),
+	// the same value the frame-validation line's own accepted_goals field
+	// reports, so the two never disagree about which shape they describe.
+	considered.Carry.RequestedJudgment = requestedJudgmentForGoals(revalidated.Frame.Goals)
+	return FrameValidationResult{Frame: revalidated.Frame, Outcome: FrameValidationOutcomeRepaired, Repair: considered}
+}
+
+// goalJudgmentPhrase is a TOTAL function over the closed Goal vocabulary
+// (frame_vocab.go, InvestigationGoalVocabulary): every member names its own
+// fragment, including GoalCompare's, which requestedJudgmentForGoals never
+// reaches from this repair's own output (replaceCompareGoal always removes
+// it) but which the vocabulary-completeness test below still requires --
+// the composition is a function of whatever accepted goal set a FUTURE
+// repair or caller passes, not only the shapes this repair happens to
+// produce today. TestRequestedJudgmentCoversTheWholeGoalVocabulary walks
+// InvestigationGoalVocabulary() by enumeration and fails closed on a
+// member with no entry here, so a ninth goal added to the vocabulary
+// without a fragment here fails the build's own test suite rather than
+// silently composing a phrase that drops it.
+var goalJudgmentPhrase = map[InvestigationGoal]string{
+	GoalAssessState:        "the current state",
+	GoalExplainDrivers:     "what is driving that state",
+	GoalCompare:            "a comparison",
+	GoalRankOrSurvey:       "a ranking or survey",
+	GoalDescribeTrend:      "the trend over time",
+	GoalExplainChange:      "an explanation of the change",
+	GoalAllocateInvestment: "where effort is going",
+	GoalCountOrAggregate:   "a count",
+}
+
+// requestedJudgmentForGoals renders an accepted Goals set as a closed-phrase
+// substitute for InterpretedQuestion.RequestedJudgment -- see
+// FrameRepairCarry.RequestedJudgment's own doc comment for why one is
+// needed at all. A total function of the FULL accepted list through
+// goalJudgmentPhrase, composed in the list's own order, so a goal this
+// repair did not expect to see (a co-occurring goal replaceCompareGoal
+// only ever passes through, never invents) still contributes its own
+// fragment instead of vanishing from the composed text silently.
+func requestedJudgmentForGoals(goals []InvestigationGoal) string {
+	parts := make([]string, 0, len(goals))
+	for _, goal := range goals {
+		if text, known := goalJudgmentPhrase[goal]; known {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, " and ")
+}
+
+// replaceCompareGoal is the I7 repair's goal transform: compare is dropped;
+// explain_change is guaranteed present; describe_trend is kept if the
+// proposal already stated it, otherwise assess_state is added so the
+// repaired set never loses the "what is the subject's standing" reading a
+// direct proposal of this shape would carry alongside explain_change.
+// Every other goal the proposal stated (unevidenced today, since compare
+// was observed paired only with describe_trend and/or explain_change) is
+// kept, in the proposal's own order.
+func replaceCompareGoal(goals []InvestigationGoal) []InvestigationGoal {
+	hasTrend, hasState, hasChange := false, false, false
+	kept := make([]InvestigationGoal, 0, len(goals)+2)
+	for _, goal := range goals {
+		switch goal {
+		case GoalCompare:
+			continue
+		case GoalDescribeTrend:
+			hasTrend = true
+		case GoalAssessState:
+			hasState = true
+		case GoalExplainChange:
+			hasChange = true
+		}
+		kept = append(kept, goal)
+	}
+	if !hasChange {
+		kept = append(kept, GoalExplainChange)
+	}
+	if !hasTrend && !hasState {
+		kept = append(kept, GoalAssessState)
+	}
+	return kept
+}
+
 // frameRepairFunc is one bounded repair's shape -- exactly
 // repairCountKindCollapse's own signature, so every repair in
 // frameRepairTable is invoked identically by validateProposedFrame.
 type frameRepairFunc func(receipt ModelExecutionReceipt, proposed QuestionFrame, emittedShape InvestigationShape, subjectTerms []string, result FrameValidationResult) FrameValidationResult
 
 // frameRepairTable is every bounded repair this package runs, tried in
-// order against the same evolving result. ONE MEMBER today.
-// TestEveryRepairPopulatesEveryCarriedField (frame_repair_test.go) walks
-// this slice by reflection against FrameRepairCarry's own fields, so a
-// second repair joins production only once it is proven to populate every
-// field the first repair's carry already promises a downstream consumer.
+// order against the same evolving result. TestEveryRepairPopulatesEveryCarriedField
+// (frame_repair_test.go) walks this slice by reflection against
+// FrameRepairCarry's own fields, so a repair joins production only once its
+// fixture proves it, for every field on that struct, either populates the
+// field or declares that its shape never states it.
 var frameRepairTable = []frameRepairFunc{
 	repairCountKindCollapse,
+	repairCompareGroupedCollapse,
 }

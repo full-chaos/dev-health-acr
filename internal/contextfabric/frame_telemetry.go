@@ -139,6 +139,28 @@ type FrameValidationEvent struct {
 	// sentence rather than a mechanism.
 	ProposedGoals []InvestigationGoal
 
+	// AcceptedGoals is the goal set of the frame the turn actually acts on
+	// -- the repaired set for a repaired outcome, ProposedGoals's own
+	// canonicalization for a valid one, empty on a refusal (there is no
+	// accepted frame). A repair that changes Goals (frame_repair.go's
+	// compare-over-a-grouped-cohort repair) makes ProposedGoals alone
+	// insufficient to say what the turn served: two lines with identical
+	// ProposedGoals can diverge in AcceptedGoals depending on whether the
+	// repair ran, and a reader who only sees ProposedGoals cannot tell
+	// which the served answer's obligations, facts and synthesis input
+	// were actually derived from.
+	AcceptedGoals []InvestigationGoal
+
+	// AcceptedJudgment is a repair's closed-phrase substitute for
+	// InterpretedQuestion.RequestedJudgment when the repair changed Goals
+	// (FrameRepairCarry.RequestedJudgment's own doc comment says why one is
+	// needed and how it is built), empty whenever no repair populated it --
+	// including every valid (unrepaired) frame and every repair that
+	// leaves Goals untouched. Never model-authored free text: a fixed
+	// per-goal phrase table joined in vocabulary order, the same
+	// content-safety guarantee every other field on this event has.
+	AcceptedJudgment string
+
 	// OrderingPresent reports whether the proposal names an END of an
 	// ordering (Emphasis non-empty) -- the one signal that tells "rank"
 	// apart from "survey" within GoalRankOrSurvey (see
@@ -292,6 +314,8 @@ func FrameValidationEventFrom(proposed QuestionFrame, result FrameValidationResu
 		event.DerivedObligationCount = len(result.Frame.Obligations)
 		event.WidenedObligationCount = len(result.Frame.WidenedObligations)
 		event.FrameVersion = result.Frame.Version
+		event.AcceptedGoals = vocabularyGoalsOnly(result.Frame.Goals)
+		event.AcceptedJudgment = result.Repair.Carry.RequestedJudgment
 		// Requirement rows are derived from the VALIDATED frame only. A
 		// refused frame has no derived obligation set to cross with the
 		// registry, and summarising one would report cells for a question

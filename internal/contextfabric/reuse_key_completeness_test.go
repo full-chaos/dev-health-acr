@@ -265,6 +265,7 @@ var modelExecutionReceiptAuthorities = map[string]versionAuthority{
 	"FrameMemberKindUnrecognized":      {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as FrameKindUnrecognized"},
 	"FrameGroupKindUnrecognized":       {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as FrameKindUnrecognized"},
 	"FrameMemberQualifierUnrecognized": {reason: "per-call sanitize-outcome boolean (telemetry only), not a version identity -- same reasoning as FrameKindUnrecognized"},
+	"RequestedJudgmentRepair":          {reason: "per-call repair-derived carry, receipt-only, that exists solely to hand a value from resolveFrame's scope to interpretOneSample's within the SAME call (RequestedJudgmentRepair's own doc comment); derived entirely from the accepted frame's Goals, itself excluded from ReuseKey on the QuestionFrame shadow ground above -- not an independent version identity"},
 	// InterpretationRejectionReason names WHICH validator rule rejected one
 	// interpretation. It is a per-call diagnostic, not a version authority,
 	// and the exclusion is stronger than "it merely seems unimportant": a
