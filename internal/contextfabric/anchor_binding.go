@@ -1004,7 +1004,11 @@ func withAnchorBindingMember(state *PersistedSemanticState, binding AnchorBindin
 		return nil, fmt.Errorf("%w: %v", ErrSemanticStateRejected, err)
 	}
 	out := *state
-	out.Extensions = make(SemanticStateExtensions, len(state.Extensions)+1)
+	// No computed capacity. The member count comes from a decoded snapshot, so
+	// sizing the map by len(...)+1 would derive an allocation size from an
+	// input-controlled sum; the map grows on its own and the hint bought
+	// nothing.
+	out.Extensions = make(SemanticStateExtensions)
 	for name, value := range state.Extensions {
 		out.Extensions[name] = value
 	}
