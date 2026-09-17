@@ -171,7 +171,18 @@ type PersistedSemanticState struct {
 	// TestSemanticState_EverySnapshotKeyIsComparedOrExemptByName's own exempt
 	// entry for why.
 	ConfirmedNeeds []ConfirmedNeedEntry `json:"confirmed_needs,omitempty"`
+
+	// Extensions carries additive members no served path reads -- shadow and
+	// telemetry state -- so a binary that predates a member still decodes a
+	// row that carries it. Each member is raw JSON, kept as written and never
+	// interpreted by this codec; only the member's own reader decodes it.
+	// Omitted when empty, bounded by the snapshot's encoded-size cap, and
+	// never part of the continuation comparison.
+	Extensions SemanticStateExtensions `json:"extensions,omitempty"`
 }
+
+// SemanticStateExtensions maps a member name to its raw JSON value.
+type SemanticStateExtensions map[string]json.RawMessage
 
 // ConfirmedNeedEntry is one structure need's remembered confirmation
 // (CHAOS-5639): the value a receipt confirmed for one StructureNeedKind
@@ -596,30 +607,91 @@ func DecodeSemanticState(raw []byte) (*PersistedSemanticState, SemanticStateRead
 	// (a store may reorder keys). A missing key decodes to its zero value and
 	// an explicit null to an empty value, and both would otherwise read back as
 	// a snapshot this codec never wrote -- MISSING IS NOT ZERO.
-	if !sameJSONDocument(raw, canonical) {
+	if !sameJSONDocument(raw, canonical) || !rawExtensionsAreUTF8(raw) {
 		return nil, SemanticStateReadMalformed
 	}
 	return &state, SemanticStateReadAvailable
 }
 
-// sameJSONDocument compares two JSON documents as values.
-func sameJSONDocument(a, b []byte) bool {
-	var av, bv any
-	if json.Unmarshal(a, &av) != nil || json.Unmarshal(b, &bv) != nil {
+// rawExtensionsAreUTF8 reports whether the stored extensions object, names
+// included, is valid UTF-8 as stored: the decoder would otherwise read an
+// invalid member name as U+FFFD and admit a member that was never written.
+func rawExtensionsAreUTF8(raw []byte) bool {
+	var document struct {
+		Extensions json.RawMessage `json:"extensions"`
+	}
+	if err := json.Unmarshal(raw, &document); err != nil {
 		return false
 	}
-	return reflect.DeepEqual(av, bv)
+	return utf8.Valid(document.Extensions)
+}
+
+// sameJSONDocument compares two JSON documents as values. Numbers are read
+// as their literals, so no number is lost to float64 range.
+func sameJSONDocument(a, b []byte) bool {
+	decode := func(raw []byte) (any, bool) {
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		var value any
+		if decoder.Decode(&value) != nil {
+			return nil, false
+		}
+		return value, true
+	}
+	av, aok := decode(a)
+	bv, bok := decode(b)
+	return aok && bok && sameDecodedJSON(av, bv)
+}
+
+func sameDecodedJSON(a, b any) bool {
+	switch av := a.(type) {
+	case map[string]any:
+		bv, ok := b.(map[string]any)
+		if !ok || len(av) != len(bv) {
+			return false
+		}
+		for key, value := range av {
+			other, ok := bv[key]
+			if !ok || !sameDecodedJSON(value, other) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		bv, ok := b.([]any)
+		if !ok || len(av) != len(bv) {
+			return false
+		}
+		for i := range av {
+			if !sameDecodedJSON(av[i], bv[i]) {
+				return false
+			}
+		}
+		return true
+	case json.Number:
+		// The snapshot writes no float: every number it holds is an integer
+		// or an extension member's plain decimal, which a store renders back
+		// as the same text.
+		bv, ok := b.(json.Number)
+		return ok && av == bv
+	default:
+		return a == b
+	}
 }
 
 // SemanticStatesEqual is replay equality: presence first, then the canonical
-// encodings. Two absent snapshots are equal; absent and present never are.
+// encodings of everything but the extension members, which are compared as
+// JSON values (a store may re-render them). Two absent snapshots are equal;
+// absent and present never are.
 func SemanticStatesEqual(a, b *PersistedSemanticState) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
 	}
-	ae, aerr := json.Marshal(a)
-	be, berr := json.Marshal(b)
-	return aerr == nil && berr == nil && bytes.Equal(ae, be)
+	ac, bc := *a, *b
+	ac.Extensions, bc.Extensions = nil, nil
+	ae, aerr := json.Marshal(&ac)
+	be, berr := json.Marshal(&bc)
+	return aerr == nil && berr == nil && bytes.Equal(ae, be) && semanticStateExtensionsEqual(a.Extensions, b.Extensions)
 }
 
 // cloneSemanticState returns an independent copy through the canonical
@@ -653,6 +725,9 @@ func validateSemanticState(s PersistedSemanticState) error {
 	}
 	if s.FormatVersion != SemanticStateFormatVersion {
 		return reject("format_version %q is not %q", s.FormatVersion, SemanticStateFormatVersion)
+	}
+	if err := validateSemanticStateExtensions(s.Extensions); err != nil {
+		return reject("%v", err)
 	}
 	if !ValidQuestionFamily(s.Family) {
 		return reject("family %q is not a vocabulary member", s.Family)

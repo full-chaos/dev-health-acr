@@ -236,6 +236,7 @@ var semanticStateGroupFields = []Field{
 	{Key: "requirement_derivation_version", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true"},
 	{Key: "request_identity_version", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true; the recipe that produced the digest, empty on a snapshot written before one existed"},
 	{Key: "request_identity_digest", Type: FieldString, Presence: PresenceConditional, Applicability: "written when present=true; a hash, never the inputs it was taken over"},
+	{Key: "extension_members", Type: FieldStringSlice, Presence: PresenceConditional, Applicability: "written when present=true; the names of the snapshot's extension members, sorted, empty when none; never their values"},
 }
 
 // Event is one canonical, named production log line: its identity, every

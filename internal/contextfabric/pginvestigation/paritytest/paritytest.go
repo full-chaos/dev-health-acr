@@ -881,6 +881,101 @@ func RunSemanticStateCapSuite(t *testing.T, newStore func(t *testing.T) contextf
 	}
 }
 
+// RunSemanticStateExtensionReplaySuite is the shared extension-member
+// round trip: a snapshot whose member nests objects and numbers is saved,
+// read back equal, and replayed idempotently with its keys reordered and its
+// numbers rewritten to equal values; a different value is a replay conflict,
+// and a member outside the value contract is refused before any row exists.
+func RunSemanticStateExtensionReplaySuite(t *testing.T, newStore func(t *testing.T) contextfabric.InvestigationResultStore, isNotFound func(error) bool) {
+	t.Helper()
+	withMember := func(raw string) *contextfabric.PersistedSemanticState {
+		state := SemanticStateFixture(contextfabric.SubjectTeam, contextfabric.SubjectRepository)
+		state.Extensions = contextfabric.SemanticStateExtensions{"shadow_member": json.RawMessage(raw)}
+		return state
+	}
+	written := `{"b":{"y":1,"x":[1.50,"\u00e9",{"q":null,"p":true}]},"a":0.10,"big":123456789012345678901234567890}`
+	save := func(store contextfabric.InvestigationResultStore, row contextfabric.InvestigationResult, state *contextfabric.PersistedSemanticState) error {
+		return store.Save(context.Background(), orgA, row, nil, nil, contextfabric.TimeAxisKeyFor(contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}), contextfabric.ReuseRetrievalIdentity{}, contextfabric.ReusePromptVersions{}, contextfabric.ReuseVersionAuthorities{}, 0, "", contextfabric.SemanticStateOf(state))
+	}
+	t.Run("round trip and replay", func(t *testing.T) {
+		store := newStore(t)
+		row := result("result-extension-replay", "does a member survive the store?")
+		state := withMember(written)
+		if err := save(store, row, state); err != nil {
+			t.Fatalf("save: %v", err)
+		}
+		stored, err := store.Get(context.Background(), orgA, row.ResultID)
+		if err != nil || stored.SemanticStateRead != contextfabric.SemanticStateReadAvailable || !contextfabric.SemanticStatesEqual(stored.SemanticState, state) {
+			t.Fatalf("get err=%v read=%s equal=%v", err, stored.SemanticStateRead, err == nil && contextfabric.SemanticStatesEqual(stored.SemanticState, state))
+		}
+		t.Logf("stored member = %s", stored.SemanticState.Extensions["shadow_member"])
+		// The member's content, read as JSON, is the content written: the
+		// store may re-render it, never change it.
+		var content map[string]any
+		decoder := json.NewDecoder(bytes.NewReader(stored.SemanticState.Extensions["shadow_member"]))
+		decoder.UseNumber()
+		if err := decoder.Decode(&content); err != nil {
+			t.Fatalf("stored member does not decode: %v", err)
+		}
+		inner, _ := content["b"].(map[string]any)
+		list, _ := inner["x"].([]any)
+		last, _ := func() (map[string]any, bool) {
+			if len(list) != 3 {
+				return nil, false
+			}
+			m, ok := list[2].(map[string]any)
+			return m, ok
+		}()
+		if len(content) != 3 || content["a"] != json.Number("0.10") || content["big"] != json.Number("123456789012345678901234567890") ||
+			len(inner) != 2 || inner["y"] != json.Number("1") || len(list) != 3 || list[0] != json.Number("1.50") || list[1] != "\u00e9" ||
+			len(last) != 2 || last["p"] != true || last["q"] != nil {
+			t.Fatalf("stored member content = %#v, want the written content", content)
+		}
+		for _, replay := range []struct {
+			name     string
+			raw      string
+			conflict bool
+		}{
+			{"identical", written, false},
+			{"keys reordered, numbers rewritten to equal values", `{"big":123456789012345678901234567890.000,"a":0.1,"b":{"x":[1.5,"\u00e9",{"p":true,"q":null}],"y":1.0}}`, false},
+			{"the store's own rendering", string(stored.SemanticState.Extensions["shadow_member"]), false},
+			{"a different number", `{"b":{"y":1,"x":[1.50,"\u00e9",{"q":null,"p":true}]},"a":0.11,"big":123456789012345678901234567890}`, true},
+			{"a big number one unit apart", `{"b":{"y":1,"x":[1.50,"\u00e9",{"q":null,"p":true}]},"a":0.10,"big":123456789012345678901234567891}`, true},
+			{"array order changed", `{"b":{"y":1,"x":["\u00e9",1.50,{"q":null,"p":true}]},"a":0.10,"big":123456789012345678901234567890}`, true},
+			{"a number written as a string", `{"b":{"y":"1","x":[1.50,"\u00e9",{"q":null,"p":true}]},"a":0.10,"big":123456789012345678901234567890}`, true},
+		} {
+			err := save(store, row, withMember(replay.raw))
+			t.Logf("replay %-52s err=%v", replay.name, err)
+			if replay.conflict != errors.Is(err, contextfabric.ErrSemanticStateReplayConflict) || (!replay.conflict && err != nil) {
+				t.Fatalf("replay %q: err=%v, want conflict=%v", replay.name, err, replay.conflict)
+			}
+		}
+	})
+	// Every shape a store would reject or re-render into a different value
+	// is refused by the writer, with the snapshot's own error, before any
+	// row exists -- never as a driver error.
+	for i, refused := range []struct{ name, raw string }{
+		{"a big exponent", `{"n":1e400}`},
+		{"an exponent a store renders as a plain number", `{"n":1e2}`},
+		{"negative zero", `{"n":-0}`},
+		{"invalid UTF-8", "{\"s\":\"a\xff\xfeb\"}"},
+		{"a lone surrogate escape", `{"s":"\ud800"}`},
+		{"a NUL escape", `{"s":"a\u0000b"}`},
+		{"a repeated key", `{"k":1,"k":2}`},
+	} {
+		t.Run("refused: "+refused.name, func(t *testing.T) {
+			store := newStore(t)
+			row := result(fmt.Sprintf("result-extension-refused-%d", i), "is a member outside the contract refused?")
+			err := save(store, row, withMember(refused.raw))
+			_, getErr := store.Get(context.Background(), orgA, row.ResultID)
+			t.Logf("refused %-48s save_err=%v get_err=%v", refused.name, err, getErr)
+			if !errors.Is(err, contextfabric.ErrSemanticStateRejected) || !isNotFound(getErr) {
+				t.Fatalf("save err=%v get err=%v, want ErrSemanticStateRejected and no row", err, getErr)
+			}
+		})
+	}
+}
+
 // SemanticSeed plants a result row AND a raw semantic-state column value
 // directly into a store's backing storage, bypassing Save.
 type SemanticSeed func(t *testing.T, orgID, resultID string, payload, semanticState []byte)
@@ -902,12 +997,15 @@ func RunSemanticStateReadSuite(t *testing.T, newStore func(t *testing.T) (contex
 		t.Fatalf("marshal oversized: %v", err)
 	}
 	missingKey := bytes.Replace(canonical, []byte(`"narrowing_basis":"",`), nil, 1)
+	// A member a later build writes that this one knows nothing about.
+	extended := bytes.Replace(reordered, []byte(`{`), []byte(`{"extensions":{"member_from_a_later_build":{"state":"bound","epoch":7}},`), 1)
 	for _, tc := range []struct {
 		name   string
 		column []byte
 		want   contextfabric.SemanticStateReadStatus
 	}{
 		{"canonical, keys reordered", reordered, contextfabric.SemanticStateReadAvailable},
+		{"canonical with an unknown extension member", extended, contextfabric.SemanticStateReadAvailable},
 		{"an unsupported format", []byte(`{"format_version":"semantic-state.v9","anything":true}`), contextfabric.SemanticStateReadUnsupportedVersion},
 		{"a malformed document", []byte(`{"format_version":"semantic-state.v1","family":"not-a-family"}`), contextfabric.SemanticStateReadMalformed},
 		{"a canonical document missing one key", missingKey, contextfabric.SemanticStateReadMalformed},
@@ -935,8 +1033,16 @@ func RunSemanticStateReadSuite(t *testing.T, newStore func(t *testing.T) (contex
 			if (stored.SemanticState != nil) != (tc.want == contextfabric.SemanticStateReadAvailable) {
 				t.Fatalf("snapshot present=%v beside status %s", stored.SemanticState != nil, stored.SemanticStateRead)
 			}
-			if tc.want == contextfabric.SemanticStateReadAvailable && !contextfabric.SemanticStatesEqual(stored.SemanticState, canonicalState) {
-				t.Fatalf("the reordered document did not decode to the canonical snapshot")
+			if tc.want == contextfabric.SemanticStateReadAvailable {
+				reading := *stored.SemanticState
+				members := len(reading.Extensions)
+				reading.Extensions = nil
+				if !contextfabric.SemanticStatesEqual(&reading, canonicalState) {
+					t.Fatalf("the document did not decode to the canonical snapshot")
+				}
+				if wantMembers := bytes.Count(tc.column, []byte(`"member_from_a_later_build"`)); members != wantMembers {
+					t.Fatalf("extension members = %d, want %d", members, wantMembers)
+				}
 			}
 			// And a replay of the row against an unreadable snapshot is a
 			// conflict, never an idempotent success.

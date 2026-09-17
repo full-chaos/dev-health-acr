@@ -155,6 +155,7 @@ func TestSemanticState_EverySnapshotKeyIsComparedOrExemptByName(t *testing.T) {
 		"frame":                          "container: each frame key is decided below",
 		"validation":                     "container: each validation key is decided below",
 		"work_item_census":               "tuple membership metadata is bound and rechecked by work-item tuple reuse and by-id serving; it is not a component of semantic continuation reading, so the fresh side has no census to compare here.",
+		"extensions":                     "additive members no served path reads (shadow and telemetry state); each is read only by its own reader, never by this comparison.",
 		"confirmed_needs":                "CHAOS-5639: the per-need confirmation ledger, not a component of the reading itself -- it is read and extended by its own identity-keyed admission (chaos5639_confirmed_need.go), independent of this comparison, and the fresh side has no ledger of its own to disagree with.",
 	}
 	keys := func(prefix string, typ reflect.Type) []string {
@@ -217,6 +218,8 @@ func TestSemanticState_TheLinesCarryValuesAndNeverARetrievalTerm(t *testing.T) {
 	state.GroupKind = ""
 	state.Roles = semanticRoleSlots(state.Frame.SubjectExpression)
 	state.Requirements = []SemanticRequirement{}
+	const extensionValue = "EXTENSION-VALUE-MARKER"
+	state.Extensions = SemanticStateExtensions{"zeta_member": json.RawMessage(`"` + extensionValue + `"`), "alpha_member": json.RawMessage(`1`)}
 	if _, err := EncodeSemanticState(state); err != nil {
 		t.Fatalf("fixture defect: %v", err)
 	}
@@ -232,8 +235,8 @@ func TestSemanticState_TheLinesCarryValuesAndNeverARetrievalTerm(t *testing.T) {
 	decision.CarriedStateConsulted, decision.CarriedStateRead = true, SemanticStateReadAvailable
 	sink.RecordWindowContinuationDecision(context.Background(), acceptancePrincipal(), decision)
 	out := buf.String()
-	if strings.Contains(out, secret) {
-		t.Fatalf("a retrieval term reached a log line:\n%s", out)
+	if strings.Contains(out, secret) || strings.Contains(out, extensionValue) {
+		t.Fatalf("a retrieval term or an extension value reached a log line:\n%s", out)
 	}
 	var persistence, decisionLine map[string]any
 	for _, raw := range strings.Split(strings.TrimSpace(out), "\n") {
@@ -258,6 +261,9 @@ func TestSemanticState_TheLinesCarryValuesAndNeverARetrievalTerm(t *testing.T) {
 		if values["present"] != true || values["retrieval_term_count"] != float64(3) || len(operands) != 2 ||
 			operands[0] != "0:named_subject:repository" || operands[1] != "1:children_of_scope:repository" {
 			t.Errorf("%s does not carry the operand slots and term count: %v", name, values)
+		}
+		if members, _ := values["extension_members"].([]any); len(members) != 2 || members[0] != "alpha_member" || members[1] != "zeta_member" {
+			t.Errorf("%s extension_members=%v, want the two names sorted", name, values["extension_members"])
 		}
 		if goals, _ := values["goals"].([]any); len(goals) != len(state.Frame.Goals) {
 			t.Errorf("%s goals=%v, want %d values", name, values["goals"], len(state.Frame.Goals))

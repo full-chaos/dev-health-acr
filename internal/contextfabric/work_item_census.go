@@ -8,6 +8,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"unicode/utf8"
 )
 
 // WorkItemTupleCensusVersion is the only census encoding this build writes
@@ -129,6 +130,11 @@ func ValidateWorkItemTupleCensus(census *WorkItemTupleCensus) WorkItemTupleCensu
 func decodeWorkItemTupleCensus(raw []byte) (WorkItemTupleCensus, WorkItemTupleCensusReadStatus) {
 	if len(bytes.TrimSpace(raw)) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return WorkItemTupleCensus{}, WorkItemTupleCensusReadAbsent
+	}
+	// The decoder reads invalid UTF-8 as U+FFFD, which would admit a census
+	// other than the one stored.
+	if !utf8.Valid(raw) {
+		return WorkItemTupleCensus{}, WorkItemTupleCensusReadMalformed
 	}
 	var version struct {
 		Version *string `json:"version"`

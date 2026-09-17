@@ -260,6 +260,19 @@ VALUES ($1, $2, $3, $4)`, resultID, orgID, payload, time.Date(2026, 1, 15, 9, 30
 // TestStore_semanticStateCap runs the shared byte-cap cells against REAL
 // Postgres: 65,535 and 65,536 bytes round-trip whole through jsonb, 65,537 is
 // refused before any SQL runs and leaves no row.
+func TestStore_semanticStateExtensionReplay(t *testing.T) {
+	ctx := context.Background()
+	db := newInvestigationTestDatabase(t, ctx)
+	paritytest.RunSemanticStateExtensionReplaySuite(t,
+		func(t *testing.T) contextfabric.InvestigationResultStore {
+			store, err := pginvestigation.NewStore(db)
+			require.NoError(t, err)
+			return store
+		},
+		func(err error) bool { return errors.Is(err, pginvestigation.ErrNotFound) },
+	)
+}
+
 func TestStore_semanticStateCap(t *testing.T) {
 	ctx := context.Background()
 	db := newInvestigationTestDatabase(t, ctx)
