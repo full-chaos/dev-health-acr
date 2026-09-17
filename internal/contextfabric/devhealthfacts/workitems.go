@@ -171,9 +171,19 @@ func newActualCompletionProvider(client contextpacket.ClickHouseQueryClient) *Ac
 }
 
 func (p *ActualCompletionProvider) Capability() contextfabric.FactCapability {
-	return newCapability(contextfabric.FactActualCompletion, "devhealthfacts.actual_completion", []contextfabric.SubjectKind{contextfabric.SubjectWorkItem})
+	return newCapability(contextfabric.FactActualCompletion, "devhealthfacts.actual_completion", []contextfabric.SubjectKind{
+		contextfabric.SubjectWorkItem, contextfabric.SubjectProject,
+	})
 }
 
+// ReadFacts branches by subject kind, mirroring readiness.go/health.go's
+// multi-kind ReadFacts shape: the work-item branch is CHAOS-4377/5438's
+// existing per-item read, unchanged; the project branch is CHAOS-5893's
+// roll-up, a distinct query over the same completed_at definition. Both
+// branches share ONE factBudget so Truncated means the same thing (at
+// least one authorized candidate fact was not served) regardless of which
+// branch produced it -- the shared-guard ruling shared.go's factBudget doc
+// comment states.
 func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal storage.Principal, query contextfabric.FactQuery) (result contextfabric.FactProviderResult, err error) {
 	timeBound, unsupportedResult, unsupported := resolveTimeBound(query)
 	if unsupported {
@@ -183,7 +193,12 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 	if err != nil {
 		return contextfabric.FactProviderResult{}, err
 	}
-	ids, bySubject, rejected := v2Index(query.Subjects, identity.KindWorkItem)
+	scope := workItemRepositoryAuthorization(principal, query.RequestedRepositoryScope)
+	settings, settingsErr := workItemReaderSettings(ctx)
+	if settingsErr != nil {
+		return contextfabric.FactProviderResult{}, readFailure("query work item actual completion", settingsErr)
+	}
+	rejected := 0
 	// CHAOS-5026: deferred so every return path passes through the
 	// disclosure -- see ci.go's identical note.
 	defer func() {
@@ -191,47 +206,198 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 			applySubjectShapeRejection(&result, "devhealthfacts.actual_completion", contextfabric.FactActualCompletion, rejected)
 		}
 	}()
-	facts := make([]contextfabric.CanonicalFact, 0, len(ids))
+	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
 	// CHAOS-5438: ONE owner for the output bound and the truncation verdict --
-	// see factBudget. This provider reads a single branch, so the two could
-	// not drift here the way they did in the two multi-branch providers; it
-	// uses the same helper anyway, because leaving a hand-rolled copy beside
-	// the owner is how a second mechanism becomes a second defect.
+	// see factBudget. Shared across both branches below (see the ReadFacts
+	// doc comment).
 	budget := newFactBudget()
-	// CHAOS-4377: the SQL build + scan half (the isNotNull/ifNull
-	// coalescing, the Tier B "was it done at T" derivation) moved to
-	// github.com/full-chaos/dev-health-go/readers.ReadWorkItemCompletion;
-	// its doc comment carries that reasoning now.
-	// CHAOS-5438: PROBE one row past the output bound so a full page and a
-	// truncated one are distinguishable -- see shared.go's maxFactRowsProbe.
-	scope := workItemRepositoryAuthorization(principal, query.RequestedRepositoryScope)
-	settings, settingsErr := workItemReaderSettings(ctx)
-	if settingsErr != nil {
-		return contextfabric.FactProviderResult{}, readFailure("query work item actual completion", settingsErr)
-	}
-	rows, scanErr := readers.ReadWorkItemCompletionWithScopeAndRowLimit(ctx, p.facts.client, orgID, ids, timeBound.neutral(), scope, settings, maxFactRowsProbe)
-	if scanErr != nil {
-		return contextfabric.FactProviderResult{}, readFailure("query work item actual completion", scanErr)
-	}
-	for _, row := range rows {
-		subject, ok := bySubject[row.RepoID+":"+row.ID]
-		if !ok {
-			continue
+	totalRows := 0
+
+	if workItemSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectWorkItem); len(workItemSubjects) > 0 {
+		ids, bySubject, workItemRejected := v2Index(workItemSubjects, identity.KindWorkItem)
+		rejected += workItemRejected
+		// CHAOS-4377: the SQL build + scan half (the isNotNull/ifNull
+		// coalescing, the Tier B "was it done at T" derivation) moved to
+		// github.com/full-chaos/dev-health-go/readers.ReadWorkItemCompletion;
+		// its doc comment carries that reasoning now.
+		// CHAOS-5438: PROBE one row past the output bound so a full page and a
+		// truncated one are distinguishable -- see shared.go's maxFactRowsProbe.
+		rows, scanErr := readers.ReadWorkItemCompletionWithScopeAndRowLimit(ctx, p.facts.client, orgID, ids, timeBound.neutral(), scope, settings, maxFactRowsProbe)
+		if scanErr != nil {
+			return contextfabric.FactProviderResult{}, readFailure("query work item actual completion", scanErr)
 		}
-		if !budget.admit() {
-			continue
+		for _, row := range rows {
+			subject, ok := bySubject[row.RepoID+":"+row.ID]
+			if !ok {
+				continue
+			}
+			if !budget.admit() {
+				continue
+			}
+			fields := map[string]contextfabric.FactValue{"completed": contextfabric.BooleanFactValue(row.IsCompleted != 0)}
+			if row.IsCompleted != 0 {
+				fields["completed_at"] = contextfabric.StringFactValue(row.CompletedAt.UTC().Format(time.RFC3339))
+			}
+			facts = append(facts, contextfabric.CanonicalFact{
+				Kind: contextfabric.FactActualCompletion, Subject: subject, Fields: fields,
+				EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, row.RepoID+":"+row.ID)},
+			})
 		}
-		fields := map[string]contextfabric.FactValue{"completed": contextfabric.BooleanFactValue(row.IsCompleted != 0)}
-		if row.IsCompleted != 0 {
-			fields["completed_at"] = contextfabric.StringFactValue(row.CompletedAt.UTC().Format(time.RFC3339))
-		}
-		facts = append(facts, contextfabric.CanonicalFact{
-			Kind: contextfabric.FactActualCompletion, Subject: subject, Fields: fields,
-			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityWorkItem, row.RepoID+":"+row.ID)},
-		})
+		budget.observe(len(rows))
+		totalRows += len(rows)
 	}
-	budget.observe(len(rows))
-	state, retentionReason := timeBound.retentionState(len(rows))
+
+	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
+		rowCount, projectRejected, scanErr := p.readProjectActualCompletion(ctx, orgID, projectSubjects, &facts, timeBound, scope, settings, budget)
+		if scanErr != nil {
+			return contextfabric.FactProviderResult{}, readFailure("query project actual completion", scanErr)
+		}
+		rejected += projectRejected
+		budget.observe(rowCount)
+		totalRows += rowCount
+	}
+
+	state, retentionReason := timeBound.retentionState(totalRows)
 	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: budget.truncated()}
 	return result, nil
+}
+
+// workItemCancelledStatus is work_items.status' one CANCELLED vocabulary
+// member (the normalized column devhealthsource already relies on, not
+// status_raw, which is a per-provider free-text label -- CHAOS-5654's
+// "never infer from free text" discipline). Verified against the live
+// vocabulary (dh_0906, read-only, counts only): status is a closed set
+// {backlog, canceled, done, in_progress, todo, unknown} across every
+// seeded provider (github, gitlab, jira, linear, synthetic); "canceled" is
+// the one member matching chris's ruling's "cancelled".
+//
+// ARCHIVED (chris's ruling's other exclusion) has NO representation
+// anywhere in this venue: not in status, not in status_raw, not in a work
+// item label, and projects.state (a DIFFERENT, project-grain column) has
+// no archived member either. Chris's ruling on this gap: defer the
+// exclusion (no invented signal), but disclose the gap itself, never a
+// zero count that reads as "none archived" -- archivedSignalUnavailable
+// below is what the basis carries instead. Adding a real exclusion later,
+// once a source signal exists, is an additive countIf column plus
+// flipping this constant, not a reshape.
+//
+// workItemUnknownStatus is NOT excluded (chris/team-lead: counted in the
+// denominator, only disclosed) -- it is a distinct, disclosed count, never
+// folded into cancelled_count or silently dropped.
+const (
+	workItemCancelledStatus = "canceled"
+	workItemUnknownStatus   = "unknown"
+
+	// archivedSignalUnavailable is the fixed, closed-vocabulary value the
+	// basis' archived_signal field always carries today: this venue has no
+	// work-item-grain archived column, so the fact says so honestly rather
+	// than defaulting archived_count to 0 (which would read as "measured,
+	// none archived" -- a false claim, not an absence of one).
+	archivedSignalUnavailable = "not_available_in_source"
+)
+
+// readProjectActualCompletion is the project roll-up: a project's
+// completion is the ROLL-UP of its own work items' completion (chris's
+// ruling -- a computed, factual aggregate, never deployment completion),
+// excluding cancelled work items from both the numerator and the
+// denominator (chris: "Cancelled should not [count]"). It is one GROUP BY
+// aggregate over the SAME completed_at definition ReadWorkItemCompletion
+// uses, never a second notion of "done" -- the exclusion is a status
+// filter layered on top, not a redefinition of completion itself. The
+// join resolving which work items belong to a project reuses
+// projectIdentityJoinSQL/projectIdentityMatchSQL (shared.go) against
+// work_items.project_id, the same collision-safe id/key identity
+// resolution readiness.go's project rollup already trusts (live-schema
+// verified: work_items.project_id already carries whichever identity
+// space -- Linear id or GitLab key -- a row's provider uses, the same
+// "work_scope_id" convention readers.ProjectIdentityMatchSQL documents).
+//
+// A project with zero matching work items gets NO ROW from the GROUP BY,
+// never a row with a zero count; a project whose work items are ALL
+// cancelled gets a row with countedWorkItems == 0 and is likewise not
+// emitted as a fact below. Either way the caller's existing empty-result
+// state machinery (retentionState) reports it honestly as no_data, so this
+// producer never defaults a project's completion to 0% or 100%.
+func (p *ActualCompletionProvider) readProjectActualCompletion(ctx context.Context, orgID string, subjects []contextfabric.SubjectRef, facts *[]contextfabric.CanonicalFact, timeBound factTimeBound, scope readers.AuthorizationScope, settings readers.Settings, budget *factBudget) (rowCount int, rejected int, err error) {
+	ids, bySubject, rejected := v2Index(subjects, identity.KindProject)
+	if len(ids) == 0 {
+		return 0, rejected, nil
+	}
+	completedExpr := "isNotNull(w.completed_at)"
+	if timeBound.active {
+		completedExpr = "(w.completed_at IS NOT NULL AND w.completed_at <= " + timeBound.asOfExpression() + ")"
+	}
+	statement := readers.WithSettings(workItemProjectCompletionStatement(scope, completedExpr, timeBound.existencePredicate("w.created_at")), settings)
+	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		var projectKey string
+		var workItemCount, cancelledCount, unknownStatusCount, completedCount uint64
+		if scanErr := row.Scan(&projectKey, &workItemCount, &cancelledCount, &unknownStatusCount, &completedCount); scanErr != nil {
+			return scanErr
+		}
+		subject, ok := bySubject[projectKey]
+		if !ok {
+			return nil
+		}
+		rowCount++
+		// countedWorkItems is the ratio's true denominator (chris: cancelled
+		// never counts, in EITHER direction; unknown-status items DO count,
+		// per team-lead's RISK-NOTES instruction -- only disclosed, never
+		// excluded). A project whose members are all cancelled is not "0%
+		// complete" -- it has nothing left to count, so it is treated
+		// exactly like zero members: no fact.
+		countedWorkItems := workItemCount - cancelledCount
+		if countedWorkItems == 0 {
+			return nil
+		}
+		if !budget.admit() {
+			return nil
+		}
+		fields := map[string]contextfabric.FactValue{
+			"rollup_basis":         contextfabric.StringFactValue("project_work_item_completion"),
+			"member_kind":          contextfabric.StringFactValue("work_item"),
+			"work_item_count":      contextfabric.IntegerFactValue(int64(workItemCount)),
+			"cancelled_count":      contextfabric.IntegerFactValue(int64(cancelledCount)),
+			"unknown_status_count": contextfabric.IntegerFactValue(int64(unknownStatusCount)),
+			"counted_work_items":   contextfabric.IntegerFactValue(int64(countedWorkItems)),
+			"completed_count":      contextfabric.IntegerFactValue(int64(completedCount)),
+			"completion_ratio":     contextfabric.NumberFactValue(float64(completedCount) / float64(countedWorkItems)),
+			"archived_signal":      contextfabric.StringFactValue(archivedSignalUnavailable),
+		}
+		*facts = append(*facts, contextfabric.CanonicalFact{
+			Kind: contextfabric.FactActualCompletion, Subject: subject, Fields: fields,
+			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityProject, projectKey)},
+		})
+		return nil
+	}, timeBound.bindings()...)
+	if scanErr != nil {
+		return 0, rejected, scanErr
+	}
+	return rowCount, rejected, nil
+}
+
+// workItemProjectCompletionStatement is the project-grain counterpart to
+// ReadWorkItemCompletion's per-item statement: one GROUP BY aggregate,
+// never a fetch-then-count in Go, so a project's true population is never
+// silently narrowed by an output-row cap the way a per-item fetch would be
+// (this query's output is one row per REQUESTED project, not per work
+// item -- maxFactRowsPerQuery bounds project count here, never member
+// count). The same repository-authorization scope as the work-item read
+// applies, so a project's roll-up never counts a work item the requesting
+// principal could not otherwise see. completedExpr never overlaps the
+// cancelled countIf: a cancelled item's completed_at is irrelevant to the
+// ratio either way, since countedWorkItems (Go side) subtracts it from
+// the denominator regardless of what completedExpr would have said.
+func workItemProjectCompletionStatement(scope readers.AuthorizationScope, completedExpr, existencePredicate string) string {
+	rendered := readers.WorkItemScopeSQL(scope)
+	from := `FROM work_items AS w FINAL`
+	if rendered.JoinSQL != "" {
+		from += "\n" + rendered.JoinSQL
+	}
+	from += "\nINNER JOIN " + projectIdentityJoinSQL() + " ON " + projectIdentityMatchSQL("w", "project_id")
+	statement := `SELECT concat(p.provider, ':', p.id), count(), countIf(w.status = '` + workItemCancelledStatus + `'), countIf(w.status = '` + workItemUnknownStatus + `'), countIf(` + completedExpr + `)
+` + from + `
+WHERE w.org_id = {org_id:String} AND w.project_id != '' AND (` + rendered.AuthorizationExpr + `)` + existencePredicate + `
+GROUP BY p.provider, p.id
+ORDER BY p.id`
+	return withRowLimit(statement)
 }

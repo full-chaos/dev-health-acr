@@ -12,6 +12,7 @@ allocation_breakdown
   project              investment
 
 completion
+  project              actual_completion
   work_item            actual_completion
 
 health

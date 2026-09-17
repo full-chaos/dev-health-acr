@@ -63,7 +63,13 @@ import (
 // DIFFERENT row set -- empty, or another project's -- and answer reuse runs
 // before any fact provider, so without this bump the gate would keep
 // serving exactly the answers this change exists to replace.
-const QueryVersion = "devhealthfacts.clickhouse.v5"
+//
+// v5 -> v6 (CHAOS-5893): FactActualCompletion widens to SubjectProject, a
+// new aggregate read (work_items grouped by project identity) that did not
+// exist under v5 -- the same over-invalidation rationale as every prior
+// bump: a candidate saved before this change never ran the new project
+// query, so it must not be served as though it had.
+const QueryVersion = "devhealthfacts.clickhouse.v6"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
@@ -560,9 +566,17 @@ func factKindObligations(kind contextfabric.FactKind) map[contextfabric.SubjectK
 		return map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
 			contextfabric.SubjectWorkItem: {contextfabric.ObligationState},
 		}
+	// A project's completion is the ROLL-UP of its own work items'
+	// completion -- a computed, factual aggregate, never a stand-in for
+	// deployment completion. It is not a composition-family member (no
+	// state/principal_drivers/trend/period_delta claim): the producer
+	// answers exactly one obligation for a project, the same as it does
+	// for a work item, so it is declared directly rather than through
+	// compositionMember.
 	case contextfabric.FactActualCompletion:
 		return map[contextfabric.SubjectKind][]contextfabric.AnswerObligation{
 			contextfabric.SubjectWorkItem: {contextfabric.ObligationCompletion},
+			contextfabric.SubjectProject:  {contextfabric.ObligationCompletion},
 		}
 	// WorkProvider emits a TITLE and nothing else (workitems.go: Fields is
 	// {"title": ...} off readers.ReadWorkItemTitle). A title cannot

@@ -42,20 +42,20 @@
 # coverage claim that overclaims is itself a defect.
 
 FactActualCompletion
-  reached_funcs      25
+  reached_funcs      35
   dynamic_key_sites  0
-  leaked_call_sites  2
-    leak interface_method     2
-    leak external_func_value  0
+  leaked_call_sites  8
+    leak interface_method     7
+    leak external_func_value  1
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         0
-    calls followed            28
+    calls followed            46
     calls accounted           13
-    calls not_a_call          4
-    calls excluded_by_design  45
-    calls leaked              2
-  fields             completed completed_at
+    calls not_a_call          11
+    calls excluded_by_design  71
+    calls leaked              8
+  fields             archived_signal cancelled_count completed completed_at completed_count completion_ratio counted_work_items member_kind rollup_basis unknown_status_count work_item_count
 
 FactBlockers
   reached_funcs      22

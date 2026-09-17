@@ -316,13 +316,13 @@ func TestEveryProviderDisclosesShapeRejectionAlongsideItsOwnSubjectKind(t *testi
 	}
 	// Salted positive: a (provider, kind) pair count that stayed at 21
 	// would mean the inner loop silently degenerated back to "first kind
-	// only" -- this package's providers declare 35 (provider, kind) pairs
+	// only" -- this package's providers declare 36 (provider, kind) pairs
 	// in total (most support 1-3 kinds each), so this must exceed the
 	// provider count.
 	if exercisedPairs <= wantProviderCount {
 		t.Fatalf("exercisedPairs = %d, want > %d (provider count) -- the per-kind loop did not run for any multi-kind provider", exercisedPairs, wantProviderCount)
 	}
-	if exercisedPairs != 35 {
-		t.Fatalf("exercisedPairs = %d, want exactly 35 -- a provider's SupportedSubjectKinds list changed; update this pin", exercisedPairs)
+	if exercisedPairs != 36 {
+		t.Fatalf("exercisedPairs = %d, want exactly 36 -- a provider's SupportedSubjectKinds list changed; update this pin", exercisedPairs)
 	}
 }
