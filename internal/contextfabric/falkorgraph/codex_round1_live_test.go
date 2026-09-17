@@ -21,7 +21,7 @@ import (
 // fulltextSearchNodes, so it cannot itself live in that package).
 const codexRoundFalkordbImage = "falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3"
 
-func newCodexRoundLiveAdapter(t *testing.T, ctx context.Context) (*Adapter, string) {
+func newLiveFalkorAdapter(t *testing.T, ctx context.Context) (*Adapter, string) {
 	t.Helper()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -58,7 +58,7 @@ func newCodexRoundLiveAdapter(t *testing.T, ctx context.Context) (*Adapter, stri
 // this predicate look like it worked even if it silently didn't).
 func TestLiveOrgIDPredicateExcludesNodesPlantedInSameGraphKeyAcrossReadPaths(t *testing.T) {
 	ctx := context.Background()
-	adapter, addr := newCodexRoundLiveAdapter(t, ctx)
+	adapter, addr := newLiveFalkorAdapter(t, ctx)
 	orgID := "live-org-predicate-" + time.Now().UTC().Format("20060102T150405.000000000")
 	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
 	key := graphKey(adapter.config.GraphPrefix, orgID)
@@ -100,7 +100,7 @@ func TestLiveOrgIDPredicateExcludesNodesPlantedInSameGraphKeyAcrossReadPaths(t *
 // happened to enumerate first, not the N most relevant ones.
 func TestLiveFulltextSearchOrdersByScoreServerSide(t *testing.T) {
 	ctx := context.Background()
-	adapter, _ := newCodexRoundLiveAdapter(t, ctx)
+	adapter, _ := newLiveFalkorAdapter(t, ctx)
 	orgID := "live-fulltext-order-" + time.Now().UTC().Format("20060102T150405.000000000")
 	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
 
@@ -142,5 +142,67 @@ func TestLiveFulltextSearchOrdersByScoreServerSide(t *testing.T) {
 	}
 	if got, _ := graphrank.NodeSubject(results[0]); got != strong {
 		t.Fatalf("top result = %#v, want the higher-relevance node (%q, term repeated many times) to rank first, not %q", got, strong.Label, weak.Label)
+	}
+}
+
+// TestLiveFulltextSearchForKindFiltersServerSide proves
+// fulltextSearchNodesForKind's kind predicate genuinely runs server-side,
+// against a real FalkorDB: a project and a team node are projected with the
+// IDENTICAL search text, so a kind-agnostic query would match both, and the
+// kind-scoped query must still return the project alone. This is the live
+// counterpart TestLiveFulltextSearchOrdersByScoreServerSide already proves
+// for the plain arm's own ORDER BY, for the kind-scoped arm's own predicate
+// -- a fake conn can assert the Cypher TEXT carries the predicate (see
+// kindCrowdedAnchorSetConn in chaos5892_cohort_kind_scoped_fulltext_test.go)
+// but never that RediSearch actually HONOURS it.
+func TestLiveFulltextSearchForKindFiltersServerSide(t *testing.T) {
+	ctx := context.Background()
+	adapter, _ := newLiveFalkorAdapter(t, ctx)
+	orgID := "live-fulltext-kind-" + time.Now().UTC().Format("20060102T150405.000000000")
+	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
+
+	observed := time.Now().UTC()
+	project := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project_shared_term", Label: "Escalation Project"}
+	team := contextfabric.SubjectRef{Kind: contextfabric.SubjectTeam, CanonicalID: "team_shared_term", Label: "Escalation Team"}
+	batch := contextfabric.ProjectionBatch{
+		SchemaVersion: contextfabric.ProjectionBatchSchemaV1, BatchID: "batch_kind_filter_1", OrgID: orgID, Source: "live-test",
+		SourceVersion: "v1", Cursor: "", NextCursor: "cursor-1", GeneratedAt: observed,
+		Entities: []contextfabric.EntityProjection{
+			{
+				Subject: project, Aliases: []string{"shared escalation search term"},
+				Authorization:  contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/allowed"}},
+				EvidenceRefIDs: []string{"evidence_project"}, ObservedAt: observed, SourceVersion: "v1",
+			},
+			{
+				Subject: team, Aliases: []string{"shared escalation search term"},
+				Authorization:  contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/allowed"}},
+				EvidenceRefIDs: []string{"evidence_team"}, ObservedAt: observed, SourceVersion: "v1",
+			},
+		},
+		Relationships: []contextfabric.RelationshipProjection{}, Contents: []contextfabric.ContentProjection{}, Episodes: []contextfabric.EpisodeProjection{},
+		Tombstones: []contextfabric.ProjectionTombstone{},
+	}
+	if _, err := adapter.ApplyProjectionBatch(ctx, batch); err != nil {
+		t.Fatalf("ApplyProjectionBatch() error = %v", err)
+	}
+
+	key := graphKey(adapter.config.GraphPrefix, orgID)
+	kindAgnostic, _, err := adapter.fulltextSearchNodes(ctx, key, orgID, "escalation", 10, temporalFilter{})
+	if err != nil {
+		t.Fatalf("fulltextSearchNodes() error = %v", err)
+	}
+	if len(kindAgnostic) != 2 {
+		t.Fatalf("fulltextSearchNodes() (kind-agnostic control) returned %d results, want 2 -- both nodes share the search term", len(kindAgnostic))
+	}
+
+	kindScoped, _, err := adapter.fulltextSearchNodesForKind(ctx, key, orgID, "escalation", 10, temporalFilter{}, contextfabric.SubjectProject)
+	if err != nil {
+		t.Fatalf("fulltextSearchNodesForKind() error = %v", err)
+	}
+	if len(kindScoped) != 1 {
+		t.Fatalf("fulltextSearchNodesForKind() returned %d results, want exactly 1: %#v", len(kindScoped), kindScoped)
+	}
+	if got, _ := graphrank.NodeSubject(kindScoped[0]); got != project {
+		t.Fatalf("fulltextSearchNodesForKind() result = %#v, want the project alone -- the team shares the identical search term and must be excluded server-side", got)
 	}
 }

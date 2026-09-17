@@ -47,7 +47,7 @@ func chaos4298LiveBatch(orgID, batchID, source, cursor, nextCursor string) conte
 // whether backend_watermark's value actually changed.
 func TestLiveWatermarkGenerationAdvancesOnEveryWriteEvenWithIdenticalHash(t *testing.T) {
 	ctx := context.Background()
-	adapter, _ := newCodexRoundLiveAdapter(t, ctx)
+	adapter, _ := newLiveFalkorAdapter(t, ctx)
 	orgID := "live-org-4298-generation-" + time.Now().UTC().Format("20060102T150405.000000000")
 	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
 
@@ -93,7 +93,7 @@ func TestLiveWatermarkGenerationAdvancesOnEveryWriteEvenWithIdenticalHash(t *tes
 // next purge.
 func TestLiveWatermarkGenerationSelfHealsFromAPreCHAOS4298Node(t *testing.T) {
 	ctx := context.Background()
-	adapter, addr := newCodexRoundLiveAdapter(t, ctx)
+	adapter, addr := newLiveFalkorAdapter(t, ctx)
 	orgID := "live-org-4298-selfheal-" + time.Now().UTC().Format("20060102T150405.000000000")
 	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
 	source := "chaos4298-selfheal-source"
@@ -161,7 +161,7 @@ func TestLiveWatermarkGenerationSelfHealsFromAPreCHAOS4298Node(t *testing.T) {
 // branch again) tells the two apart.
 func TestLiveWatermarkEpochDetectsPurgeAndRebuildLandingOnSameGeneration(t *testing.T) {
 	ctx := context.Background()
-	adapter, _ := newCodexRoundLiveAdapter(t, ctx)
+	adapter, _ := newLiveFalkorAdapter(t, ctx)
 	orgID := "live-org-4298-purge-epoch-" + time.Now().UTC().Format("20060102T150405.000000000")
 	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
 	source := "chaos4298-purge-source"

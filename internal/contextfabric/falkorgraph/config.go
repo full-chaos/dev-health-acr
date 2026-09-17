@@ -34,6 +34,7 @@ import (
 	acrconfig "github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
 )
@@ -550,6 +551,29 @@ type GraphTelemetry interface {
 	// (CohortKindCensusReadFailed). The pool truncation that follows from a
 	// fetch is reported on RecordCohortKindBasis for the same call.
 	RecordCohortKindCensus(ctx context.Context, orgID string, decision CohortKindCensusDecision, memberKind contextfabric.SubjectKind, kinds []string, poolSize, poolBound int, truncated bool, readErr error)
+	// RecordCohortKindFulltext (eventspec.CohortKindFulltext) reports ONE
+	// DiscoverContext call's kind-scoped lexical arm: memberKind is the
+	// servable declared cohort kind that arm was scoped to (this method is
+	// never called when no kind is declared, or when the census already
+	// covers it -- there is no budget, or no need, for an arm of its own).
+	//
+	// decision=CohortKindFulltextRan carries members (the candidate count
+	// that arm returned, post-truncation, matching RecordCohortKindCensus's
+	// own convention), truncated (exactly the value that feeds
+	// cohortPoolTruncation's fulltext-arm input for this call -- the field
+	// that makes pool_truncation/pool_truncation_arms on RecordCohortKindBasis
+	// honest for THIS cohort's own kind, rather than inherited from the
+	// general, mixed-kind arm's own truncation), addedByKindArm (candidates
+	// genuinely new to the cohort) and duplicatesWithGeneral (candidates
+	// already seen by an earlier arm in the same call).
+	//
+	// decision=CohortKindFulltextReadFailed carries only readErr: an
+	// AUXILIARY arm's own read failure degrades this cohort's completeness
+	// claim honestly (the caller forces cohortFulltextTruncated) but never
+	// aborts the call the way every OTHER retrieval arm's own failure still
+	// does -- a call this arm exists to rescue must never end up worse off
+	// than the code it replaces.
+	RecordCohortKindFulltext(ctx context.Context, orgID string, decision CohortKindFulltextDecision, memberKind contextfabric.SubjectKind, members int, truncated bool, addedByKindArm, duplicatesWithGeneral int, readErr error)
 	// RecordNeighborLookupFailed reports ONE neighbour the hop walk reached
 	// through an admitted edge and then could not read back.
 	//
@@ -632,6 +656,8 @@ func (NoopTelemetry) RecordCohortExactNameCensusGate(context.Context, string, bo
 func (NoopTelemetry) RecordCohortKindBasis(context.Context, string, contextfabric.SubjectKind, graphrank.CohortKindBasis, bool, CohortPoolTruncationBasis, []CohortPoolTruncationArm) {
 }
 func (NoopTelemetry) RecordCohortKindCensus(context.Context, string, CohortKindCensusDecision, contextfabric.SubjectKind, []string, int, int, bool, error) {
+}
+func (NoopTelemetry) RecordCohortKindFulltext(context.Context, string, CohortKindFulltextDecision, contextfabric.SubjectKind, int, bool, int, int, error) {
 }
 
 func (NoopTelemetry) RecordNeighborLookupFailed(context.Context, string, string, string, NeighborLookupFailureSite, error) {
@@ -880,6 +906,75 @@ func (t SlogTelemetry) RecordCohortKindCensus(ctx context.Context, orgID string,
 		return
 	}
 	t.logger().Info("context_fabric: cohort kind census", append(args, graphRequestIDLogAttrs(ctx)...)...)
+}
+
+// CohortKindFulltextDecision is the closed vocabulary RecordCohortKindFulltext
+// reports for one DiscoverContext call: whether the kind-scoped lexical arm's
+// own read completed or failed.
+type CohortKindFulltextDecision string
+
+const (
+	// CohortKindFulltextRan: the arm's own query returned; members/truncated/
+	// addedByKindArm/duplicatesWithGeneral describe what it found.
+	CohortKindFulltextRan CohortKindFulltextDecision = "ran"
+	// CohortKindFulltextReadFailed: the arm's own query errored. Unlike every
+	// OTHER retrieval arm in DiscoverContext, this failure does not abort the
+	// call -- see RecordCohortKindFulltext's own doc comment for why an
+	// AUXILIARY arm must degrade rather than reduce availability.
+	CohortKindFulltextReadFailed CohortKindFulltextDecision = "read_failed"
+)
+
+// CohortKindFulltextDecisionVocabulary returns every declared decision, in
+// declaration order, so a test quantifies over what the line can carry
+// rather than over a hand-typed list beside it.
+func CohortKindFulltextDecisionVocabulary() []CohortKindFulltextDecision {
+	return []CohortKindFulltextDecision{CohortKindFulltextRan, CohortKindFulltextReadFailed}
+}
+
+// RecordCohortKindFulltext logs at Info: its own declaration
+// (eventspec.CohortKindFulltext) is the first falkorgraph cohort-family line
+// declared under eventspec's authority from its first emission, so its
+// shape can never drift from what a real-producer certify test asserts --
+// the other cohort lines in this file predate that authority and are
+// grandfathered. The fetch fields (members/truncated/addedByKindArm/
+// duplicatesWithGeneral) ride only on decision=CohortKindFulltextRan, and
+// error only on decision=CohortKindFulltextReadFailed, the same "a field
+// rides only on the outcome that measured it" convention
+// RecordCohortKindCensus immediately above already uses.
+//
+// Built as a hand-literal []any{} plus a conditional request_id append, the
+// SAME shape RecordCohortKindBasis/RecordCohortKindCensus immediately above
+// and RecordWorkItemReuse/RecordWorkItemTupleAdmission (telemetry.go) all
+// use, rather than eventspec's generated NewCohortKindFulltextFields(...)
+// constructor: that constructor makes EVERY declared field a required
+// parameter, including request_id, so a call through it can only ever pass
+// a real string or "" -- never omit the key -- and request_id is declared
+// PresenceConditional ("written when the request context carries a request
+// ID") precisely because DiscoverContext is genuinely called with no
+// request id in context (every unit test in this package does). A hand
+// literal restores real conditional omission (graphRequestIDLogAttrs
+// contributes nothing when absent) while staying inside
+// TestNoUnsanitizedLogAttributeInContextFabric's traceable shapes (a
+// same-function composite literal plus a simple append).
+func (t SlogTelemetry) RecordCohortKindFulltext(ctx context.Context, orgID string, decision CohortKindFulltextDecision, memberKind contextfabric.SubjectKind, members int, truncated bool, addedByKindArm, duplicatesWithGeneral int, readErr error) {
+	args := []any{
+		"org_id", contextfabric.SanitizeLogAttr(orgID),
+		"decision", contextfabric.SanitizeLogAttr(string(decision)),
+		"member_kind", contextfabric.SanitizeLogAttr(string(memberKind)),
+	}
+	switch decision {
+	case CohortKindFulltextRan:
+		args = append(args,
+			"members", members,
+			"truncated", truncated,
+			"added_by_kind_arm", addedByKindArm,
+			"duplicates_with_general", duplicatesWithGeneral)
+	case CohortKindFulltextReadFailed:
+		if readErr != nil {
+			args = append(args, "error", contextfabric.SanitizeLogAttr(readErr.Error()))
+		}
+	}
+	t.logger().Info(eventspec.CohortKindFulltext.Msg, append(args, graphRequestIDLogAttrs(ctx)...)...)
 }
 
 // RecordNeighborLookupFailed logs at Warn: unlike the cohort-kind basis, this

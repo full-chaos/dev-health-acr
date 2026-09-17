@@ -599,6 +599,25 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	if request.Frame != nil {
 		declaredCohortKindForRouting, _, _ = contextfabric.CohortMemberKindForFrame(*request.Frame)
 	}
+	// shapeAnchorEligible/censusBasis/censusAdmitted are computed HERE, ahead
+	// of every retrieval arm, so the kind-scoped full-text arm below can gate
+	// on censusAdmitted directly: whichever census this request is eligible
+	// for (chaos4348ExactNameCandidates for a kind in exactNameKinds, or
+	// cohortKindCensusCandidates otherwise, both reached further down through
+	// this SAME censusAdmitted value) already fetches this cohort's declared
+	// kind exhaustively when admitted, so a second, redundant fetch of the
+	// identical kind through the lexical arm would only duplicate work the
+	// census already does -- and, worse, a transient failure in that
+	// redundant fetch would abort a call the census alone could have
+	// completed. censusAdmitted depends only on request.Frame/
+	// ScopeAnchorResolved/Resolution.Committed -- inputs fixed before any
+	// retrieval arm runs and unaffected by anything between here and the
+	// census's own admitted-branch below -- so computing it at this point
+	// carries the identical value it would carry anywhere else in this
+	// call. RecordCohortExactNameCensusGate's own emission point stays
+	// where cohortExactNameCensusEligibility's doc comment documents it.
+	shapeAnchorEligible, censusBasis := cohortExactNameCensusEligibility(request.Frame, request.ScopeAnchorResolved)
+	censusAdmitted := shapeAnchorEligible && len(request.Resolution.Committed) == 0
 	var ownershipRoutedRepoSlug string
 	if declaredCohortKindForRouting == contextfabric.SubjectTeam {
 		for _, subject := range request.Resolution.Committed {
@@ -824,6 +843,139 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 		textAdmitted++
 	}
 
+	// cohortFulltextTruncated is the signal cohortPoolTruncation
+	// actually needs -- "did the lexical arm drop a member OF THE COHORT'S
+	// OWN DECLARED KIND" -- which fulltextTruncated above does NOT answer. It
+	// answers "did the lexical arm drop a row of ANY kind", and a graph where
+	// one kind vastly outnumbers the declared cohort kind (57094 CiPipelineRun
+	// nodes against 36 Project nodes, observed live-venue counts) can spend
+	// the WHOLE shared collectLimit on that other kind
+	// before a single row of the declared kind is ranked in, well within a
+	// cohort that would otherwise fit its allowance completely. That crowd-out
+	// happens BEFORE DiscoveredCohort's own `subject.Kind == kind` filter ever
+	// runs (discover.go), so filtering after the fact cannot see it -- by the
+	// time DiscoveredCohort looks, the dropped rows are simply gone.
+	//
+	// declaredCohortKindForRouting is known here (computed above, before this
+	// call), so the arm this cohort's OWN completeness depends on can be given
+	// its own budget rather than inferring it from a query that answers a
+	// different question. This is not a wider fetch than fulltextSearchNodes
+	// already runs -- same text, same collect budget size -- only scoped so a
+	// numerous OTHER kind cannot spend it.
+	//
+	// GATED ON !censusAdmitted, deliberately. A denied census
+	// (basis=cohort_expression_anchor_set or already_committed) is exactly
+	// the state that leaves this arm as the ONLY route to the declared
+	// kind's population -- the state this arm exists for. When the census
+	// IS admitted, whichever one runs further down (the exact-name census
+	// for a kind in exactNameKinds, or the kind-scoped census otherwise)
+	// already fetches this exact kind exhaustively, so a second, redundant
+	// fetch through the lexical arm would add nothing (proved by
+	// TestScopedProjectCohortByteIdenticalWithAndWithoutKindScopedQuery
+	// while this arm still ran unconditionally) and, worse, a transient
+	// failure in that redundant fetch could abort a call the census alone
+	// would have completed. Skipping it entirely when the census is
+	// admitted removes both costs at once.
+	//
+	// It does NOT widen scope the way admitting the org-wide census for an
+	// anchor-set cohort would (see cohortExactNameCensusEligibility's own doc
+	// comment on why that carve-out exists) -- it is the same lexical
+	// question-text match the plain arm already runs, merely not forced to
+	// share its budget with kinds this cohort never asked about.
+	cohortFulltextTruncated := fulltextTruncated
+	if declaredCohortKindForRouting != "" && !censusAdmitted {
+		kindTextNodes, kindTruncated, kindErr := a.fulltextSearchNodesForKind(ctx, key, principal.OrgID, request.Request.Question, collectLimit, temporal, declaredCohortKindForRouting)
+		if kindErr != nil && (errors.Is(kindErr, context.Canceled) || errors.Is(kindErr, context.DeadlineExceeded)) {
+			// THE CALLER GIVING UP IS NOT A DEPENDENCY FAILURE THIS ARM CAN
+			// DEGRADE AROUND. Every other abort site in this method already
+			// propagates a cancelled/expired context exactly like any other
+			// error (there is nothing to degrade toward once the caller no
+			// longer wants an answer), so treating this arm's OWN
+			// cancellation as a "transient read failure" and serving a
+			// degraded answer anyway would swallow the caller's own signal
+			// instead of honoring it -- the one failure class this arm's
+			// degrade-not-abort rule was never meant to cover.
+			return contextfabric.GraphContext{}, kindErr
+		}
+		if kindErr != nil && ctx.Err() != nil {
+			// THE SAME EXCEPTION, from the OTHER direction: kindErr itself
+			// carries no context sentinel, but the context is ALREADY done
+			// by the time this arm's own read returns -- ctx.Err() is the
+			// authoritative signal of why, and degrading around it would
+			// hide the very cancellation/deadline this check exists to
+			// surface.
+			return contextfabric.GraphContext{}, ctx.Err()
+		}
+		if kindErr != nil {
+			// AN AUXILIARY ARM'S OWN FAILURE MUST DEGRADE, NEVER ABORT.
+			// Every OTHER query site in this method returns
+			// graphNotProjectedError(err) unconditionally (CHAOS-4077's
+			// discipline) because each of THOSE arms is the sole, essential
+			// source of its own coverage -- there is no fallback to lose.
+			// This arm is different: it exists ONLY for the two bases
+			// (cohort_expression_anchor_set, already_committed) a denied
+			// census leaves uncovered, and before this arm existed, a
+			// crowded-out cohort on those same bases still served a
+			// truncated-but-non-erroring answer from the general arm alone.
+			// Hard-failing the whole call on THIS arm's own transient error
+			// would make that call strictly WORSE than the code it
+			// replaces. Force the pool-truncation input honest instead
+			// (cohortFulltextTruncated=true: an unmeasured arm can never
+			// claim completeness) and report the failure by name, then
+			// keep serving whatever the rest of the call can.
+			cohortFulltextTruncated = true
+			if a.config.Telemetry != nil {
+				a.config.Telemetry.RecordCohortKindFulltext(ctx, principal.OrgID, CohortKindFulltextReadFailed, declaredCohortKindForRouting, 0, false, 0, 0, kindErr)
+			}
+		} else {
+			// ORDER PARITY WITH THE GENERAL ARM. runFulltextQuery already
+			// returns kindTextNodes in a TOTAL, deterministic order (score
+			// DESC, subject kind ASC, canonical id ASC -- queries.go's own
+			// ORDER BY), the identical query-building authority the
+			// general arm above shares and never re-sorts after retrieval
+			// (see its own loop: textNodes is appended to resolvedNodes in
+			// query order, unchanged). A re-sort here MUST NOT happen:
+			// DiscoveredCohort (graphrank) admits members in INPUT order
+			// and stops at MaxCohortMembers, so re-ordering this arm's own
+			// contribution by canonical id alone would let an
+			// alphabetically-first, lower-relevance candidate win a capped
+			// slot over the query's own highest-ranked one -- corrupting
+			// exactly the admission order this cohort's members are
+			// supposed to share with every
+			// other arm. No sort call belongs on this slice; its order IS
+			// the arm's own relevance ranking, unmodified, same as the
+			// general arm's.
+			addedByKindArm := 0
+			duplicatesWithGeneral := 0
+			for _, n := range kindTextNodes {
+				subject, ok := graphrank.NodeSubject(n)
+				if !ok {
+					continue
+				}
+				nk := graphrank.SubjectKey(subject)
+				if seenNode[nk] {
+					duplicatesWithGeneral++
+					continue
+				}
+				seenNode[nk] = true
+				resolvedNodes = append(resolvedNodes, n)
+				addedByKindArm++
+			}
+			cohortFulltextTruncated = kindTruncated
+			// eventspec.CohortKindFulltext: members is the RAW candidate
+			// count this arm returned (post-truncation, before the
+			// seenNode admission above narrows it further) -- the same
+			// "what the arm itself measured" convention
+			// RecordCohortKindCensus's poolSize already uses, so a reader
+			// can tell "the arm found N, Y were genuinely new, Z were
+			// already seen" from "the arm found nothing" without
+			// conflating retrieval with admission.
+			if a.config.Telemetry != nil {
+				a.config.Telemetry.RecordCohortKindFulltext(ctx, principal.OrgID, CohortKindFulltextRan, declaredCohortKindForRouting, len(kindTextNodes), kindTruncated, addedByKindArm, duplicatesWithGeneral, nil)
+			}
+		}
+	}
+
 	candidateEdges := make([]graphrank.CandidateEdge, 0, len(resolvedEdges))
 	for _, r := range resolvedEdges {
 		candidateEdges = append(candidateEdges, graphrank.CandidateEdge{
@@ -883,8 +1035,9 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// Shape/anchor say "census" (see cohortExactNameCensusEligibility's own
 	// doc comment -- CHAOS-4622 remainder widened this past Shape ==
 	// ShapeDiscoveredCohort alone), AND nothing was already committed.
-	shapeAnchorEligible, censusBasis := cohortExactNameCensusEligibility(request.Frame, request.ScopeAnchorResolved)
-	censusAdmitted := shapeAnchorEligible && len(request.Resolution.Committed) == 0
+	// shapeAnchorEligible/censusBasis/censusAdmitted are computed above,
+	// before every retrieval arm (see that computation's own doc comment),
+	// so the kind-scoped full-text arm can gate on censusAdmitted directly.
 	// CHAOS-5168 (r3 finding 4): "the census ran" and "the census can cover
 	// what a bounded arm dropped" are DIFFERENT claims, and only the second
 	// licenses covered_by_census. A census that returns ZERO rows is a
@@ -1033,7 +1186,7 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// census, so the exact-name cut is not a loss from this cohort's pool.
 	exactNameCutThisCohort := exactNameTruncated && !kindCensusRan
 	poolTruncationBasis, poolTruncationArms, cohortPoolTruncated := cohortPoolTruncation(
-		fulltextTruncated, hopWalkTruncated, exactNameCutThisCohort, kindCensusTruncated, failedLookups > 0, censusCoversThisCohort)
+		cohortFulltextTruncated, hopWalkTruncated, exactNameCutThisCohort, kindCensusTruncated, failedLookups > 0, censusCoversThisCohort)
 	// request's OWN RequestedScope reaches admission completely unmodified
 	// here -- see the ownership-census filter above (graphrank.OwnsRepository)
 	// for where an ownership-routed call's membership is actually decided.

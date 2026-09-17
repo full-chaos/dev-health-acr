@@ -25,7 +25,7 @@ import (
 // deletes the named edge, but the "work_item_ref" case must conditionally
 // refuse to delete the node while any edge still remains on it.
 func TestLiveWorkItemRefTombstoneOnlyDeletesTheStubOnceOrphaned(t *testing.T) {
-	adapter, _ := newCodexRoundLiveAdapter(t, context.Background())
+	adapter, _ := newLiveFalkorAdapter(t, context.Background())
 	ctx := context.Background()
 	orgID := "live-work-item-ref-" + time.Now().UTC().Format("20060102T150405.000000000")
 	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
@@ -142,7 +142,7 @@ func TestLiveWorkItemRefTombstoneOnlyDeletesTheStubOnceOrphaned(t *testing.T) {
 // resolved row (design brief §1.5), so this MUST NOT error against a key
 // that was never written.
 func TestLiveWorkItemRefTombstoneIsIdempotentAgainstAnUnmintedStub(t *testing.T) {
-	adapter, _ := newCodexRoundLiveAdapter(t, context.Background())
+	adapter, _ := newLiveFalkorAdapter(t, context.Background())
 	ctx := context.Background()
 	orgID := "live-work-item-ref-noop-" + time.Now().UTC().Format("20060102T150405.000000000")
 	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })

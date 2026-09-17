@@ -42,7 +42,7 @@ func (a *Adapter) edgeByRelationshipID(ctx context.Context, key, relationshipID 
 // graphrank.CandidateEdge.ValidAt/InvalidAt.
 func TestLiveReprojectedRelationshipClearsAStaleValidityWindow(t *testing.T) {
 	ctx := context.Background()
-	adapter, _ := newCodexRoundLiveAdapter(t, ctx)
+	adapter, _ := newLiveFalkorAdapter(t, ctx)
 	orgID := "live-r41-" + time.Now().UTC().Format("20060102T150405.000000000")
 	key := graphKey(adapter.config.GraphPrefix, orgID)
 	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
@@ -134,7 +134,7 @@ func TestLiveReprojectedRelationshipClearsAStaleValidityWindow(t *testing.T) {
 // the ON-CREATE-seeded label is the only thing that could be there.
 func TestLiveRelationshipStubCreationDoesNotSwapEndpointLabels(t *testing.T) {
 	ctx := context.Background()
-	adapter, _ := newCodexRoundLiveAdapter(t, ctx)
+	adapter, _ := newLiveFalkorAdapter(t, ctx)
 	orgID := "live-r42-label-" + time.Now().UTC().Format("20060102T150405.000000000")
 	key := graphKey(adapter.config.GraphPrefix, orgID)
 	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
@@ -197,7 +197,7 @@ func TestLiveRelationshipStubCreationDoesNotSwapEndpointLabels(t *testing.T) {
 // clobber observable.
 func TestLiveContentReferencedWriteNeverOverwritesTheAttachedSubjectsOwnLabelOrTemporalFields(t *testing.T) {
 	ctx := context.Background()
-	adapter, _ := newCodexRoundLiveAdapter(t, ctx)
+	adapter, _ := newLiveFalkorAdapter(t, ctx)
 	orgID := "live-r42-content-" + time.Now().UTC().Format("20060102T150405.000000000")
 	key := graphKey(adapter.config.GraphPrefix, orgID)
 	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })

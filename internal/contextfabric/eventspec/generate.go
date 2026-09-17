@@ -184,6 +184,8 @@ func goVarName(e Event) string {
 		return "FrameValidation"
 	case ConfirmedNeedLedger.ID:
 		return "ConfirmedNeedLedger"
+	case CohortKindFulltext.ID:
+		return "CohortKindFulltext"
 	default:
 		panic("eventspec: goVarName has no mapping for " + e.ID + " -- add one before regenerating")
 	}
