@@ -237,6 +237,8 @@ func TestValidateAnchorBindingInputDomain(t *testing.T) {
 		valid bool
 	}{
 		{"canonical unbound", unbound, true},
+		{"state out of vocabulary on an unbound shape", with(unbound, func(b *AnchorBinding) { b.State = "unknown_state" }), false},
+		{"state empty on an unbound shape", with(unbound, func(b *AnchorBinding) { b.State = "" }), false},
 		{"canonical bound", held, true},
 		{"canonical pending", with(held, func(b *AnchorBinding) { b.State = AnchorBindingPendingWindowConfirmation }), true},
 		{"canonical contested", contested, true},

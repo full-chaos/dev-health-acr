@@ -250,3 +250,107 @@ func TestAReuseServeReportsTheStoredBinding(t *testing.T) {
 		})
 	}
 }
+
+// TestAnchorBindingDecideComparesTheHeldAnchorWithWhatWasServed: the
+// comparison reads the ledger's subject_anchor entry wherever it sits, never
+// treats a contested binding as effective, and takes the served count's
+// anchor only from a committed decision.
+func TestAnchorBindingDecideComparesTheHeldAnchorWithWhatWasServed(t *testing.T) {
+	alpha := ConfirmedNeedEntry{Member: contractsv1.ContextFabricStructureNeedSubjectAnchor, AppliedKind: bindAlpha.Kind, AppliedValue: bindAlpha.ID}
+	expected := ConfirmedNeedEntry{Member: contractsv1.ContextFabricStructureNeedExpectedKind, AppliedValue: string(SubjectTeam)}
+	carried := func(binding AnchorBinding) *anchorBindingTracker {
+		return &anchorBindingTracker{parent: anchorBindingParent{ResultID: "result_bind_parent", Status: AnchorBindingParentPresent, Binding: binding}, evaluation: AnchorBindingEvaluationNotResolved, epoch: 7}
+	}
+	result := InvestigationResult{ResultID: "result_compare"}
+	scoped := func(decision CountPopulationScopeDecision) CountPopulationScope {
+		return CountPopulationScope{ExpressionKind: SubjectExpressionChildrenOfScope, Decision: decision, AnchorID: bindAlpha.ID, AnchorSubjectKind: bindAlpha.Kind}
+	}
+	for _, tc := range []struct {
+		name      string
+		binding   AnchorBinding
+		ledger    []ConfirmedNeedEntry
+		count     *CountPopulationScope
+		wantState AnchorBindingState
+		wantAgree AnchorBindingAgreement
+		wantField AnchorBindingDisagreementField
+		wantCount anchorRef
+	}{
+		{"the anchor entry after another member", heldBinding(AnchorBindingBound, bindAlpha), []ConfirmedNeedEntry{expected, alpha}, nil,
+			AnchorBindingBound, AnchorBindingAgree, AnchorBindingFieldNone, anchorRef{}},
+		{"a contested binding is not effective", contestedBinding(bindAlpha, bindBeta), []ConfirmedNeedEntry{alpha}, nil,
+			AnchorBindingContested, AnchorBindingDisagree, AnchorBindingFieldCarriedAnchor, anchorRef{}},
+		{"a committed count names its anchor", heldBinding(AnchorBindingBound, bindAlpha), []ConfirmedNeedEntry{alpha}, ptrTo(scoped(CountPopulationScopeAnchorCommitted)),
+			AnchorBindingBound, AnchorBindingAgree, AnchorBindingFieldNone, bindAlpha},
+		{"an ambiguous count names no anchor", heldBinding(AnchorBindingBound, bindAlpha), []ConfirmedNeedEntry{alpha}, ptrTo(scoped(CountPopulationScopeAnchorAmbiguous)),
+			AnchorBindingBound, AnchorBindingDisagree, AnchorBindingFieldCountAnchor, anchorRef{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tracker := carried(tc.binding)
+			if tc.count != nil {
+				tracker.observeServedCount(*tc.count)
+			}
+			binding, line := tracker.decide(BudgetAssertDecisive, result, &PersistedSemanticState{ConfirmedNeeds: tc.ledger})
+			if binding.State != tc.wantState || binding.CanonicalID != bindAlpha.ID {
+				t.Fatalf("binding = %+v, want %s on alpha", binding, tc.wantState)
+			}
+			if line.ServedAnchor != bindAlpha {
+				t.Fatalf("served anchor = %+v, want alpha", line.ServedAnchor)
+			}
+			if line.Agreement != tc.wantAgree || line.DisagreementField != tc.wantField || line.ServedCountAnchor != tc.wantCount {
+				t.Fatalf("line = %s/%s count anchor %+v, want %s/%s %+v", line.Agreement, line.DisagreementField, line.ServedCountAnchor, tc.wantAgree, tc.wantField, tc.wantCount)
+			}
+		})
+	}
+}
+
+// brokenReadStore attaches a decoded snapshot beside a read status that says
+// it is unavailable -- a pairing DecodeSemanticState never returns, so the
+// parent reader must not trust the snapshot on the status's word.
+type brokenReadStore struct{ *staticResultStore }
+
+func (s brokenReadStore) Get(ctx context.Context, principal storage.Principal, resultID string) (StoredInvestigationResult, error) {
+	stored, err := s.staticResultStore.Get(ctx, principal, resultID)
+	stored.SemanticStateRead = SemanticStateReadMalformed
+	return stored, err
+}
+
+func TestReadAnchorBindingParentRefusesASnapshotBesideAnUnavailableRead(t *testing.T) {
+	bound := heldBinding(AnchorBindingBound, bindAlpha)
+	state := BuildSemanticState(SemanticStateInput{
+		Outcome:         QuestionFamilyOutcome{Family: QuestionFamilyUnclassified, Source: QuestionFamilySourceNone},
+		FamilyVersion:   QuestionFamilyTableVersion,
+		RequestIdentity: SemanticRequestIdentityOf(validInvestigationRequest(), ""),
+	})
+	state.AnchorBinding = &bound
+	store := brokenReadStore{&staticResultStore{results: map[string]InvestigationResult{"result_broken": validInvestigationResult()}, states: map[string]*PersistedSemanticState{"result_broken": state}}}
+	ctx := withCarryResultCache(context.Background())
+	stored, err := carryLoadResult(ctx, store, acceptancePrincipal(), "result_broken")
+	if err != nil || stored.SemanticState == nil || stored.SemanticStateRead == SemanticStateReadAvailable {
+		t.Fatalf("premise: the memo must hold a snapshot beside an unavailable read, got state=%v read=%s err=%v", stored.SemanticState != nil, stored.SemanticStateRead, err)
+	}
+	request := validInvestigationRequest()
+	request.ParentResultID = "result_broken"
+	if got := readAnchorBindingParent(ctx, request, 7); got.Status != AnchorBindingParentUnloadable {
+		t.Fatalf("status = %s, want unloadable", got.Status)
+	}
+}
+
+// TestAnchorBindingLineWritesAbsentListsAsEmptyLists: a line built from an
+// event whose lists were never set writes empty lists, never null.
+func TestAnchorBindingLineWritesAbsentListsAsEmptyLists(t *testing.T) {
+	args := AnchorBindingTransitionLogArgs(AnchorBindingTransitionEvent{}, "org_x")
+	checked := 0
+	for i := 0; i+1 < len(args); i += 2 {
+		key := args[i].(string)
+		if key != "caller_hint_ids" && key != "proven_anchor_ids" {
+			continue
+		}
+		checked++
+		if list, ok := args[i+1].([]string); !ok || list == nil || len(list) != 0 {
+			t.Errorf("%s = %#v, want an empty non-nil list", key, args[i+1])
+		}
+	}
+	if checked != 2 {
+		t.Fatalf("found %d list keys, want 2", checked)
+	}
+}
