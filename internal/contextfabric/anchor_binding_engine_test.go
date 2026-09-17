@@ -136,7 +136,7 @@ func withoutBinding(state *PersistedSemanticState) *PersistedSemanticState {
 		return nil
 	}
 	copied := cloneSemanticState(state)
-	copied.AnchorBinding = nil
+	setBindingMember(copied, nil)
 	return copied
 }
 
@@ -189,8 +189,8 @@ func runAnchorProbe(t *testing.T, steps []anchorProbeStep) []anchorProbeTurn {
 		if !SemanticStatesEqual(withoutBinding(onTurn.saved), offTurn.saved) {
 			t.Fatalf("turn %d persisted snapshot differs beyond the binding:\n on=%+v\noff=%+v", i+1, withoutBinding(onTurn.saved), offTurn.saved)
 		}
-		if offTurn.saved != nil && offTurn.saved.AnchorBinding != nil {
-			t.Fatalf("turn %d: the shadow-off arm persisted a binding %+v", i+1, offTurn.saved.AnchorBinding)
+		if offTurn.saved != nil && bindingMember(offTurn.saved) != nil {
+			t.Fatalf("turn %d: the shadow-off arm persisted a binding %+v", i+1, bindingMember(offTurn.saved))
 		}
 		if len(offTurn.transitions) != 0 {
 			t.Fatalf("turn %d: the shadow-off arm emitted %d transition lines", i+1, len(offTurn.transitions))
@@ -198,13 +198,13 @@ func runAnchorProbe(t *testing.T, steps []anchorProbeStep) []anchorProbeTurn {
 		if len(onTurn.transitions) != 1 {
 			t.Fatalf("turn %d: the shadow-on arm emitted %d transition lines, want exactly 1", i+1, len(onTurn.transitions))
 		}
-		if onTurn.saved == nil || onTurn.saved.AnchorBinding == nil {
+		if onTurn.saved == nil || bindingMember(onTurn.saved) == nil {
 			t.Fatalf("turn %d: the shadow-on arm persisted no binding", i+1)
 		}
-		if err := ValidateAnchorBinding(*onTurn.saved.AnchorBinding); err != nil {
+		if err := ValidateAnchorBinding(*bindingMember(onTurn.saved)); err != nil {
 			t.Fatalf("turn %d: persisted binding invalid: %v", i+1, err)
 		}
-		if got, want := *onTurn.saved.AnchorBinding, onTurn.transitions[0].To; !reflect.DeepEqual(got, want) {
+		if got, want := *bindingMember(onTurn.saved), onTurn.transitions[0].To; !reflect.DeepEqual(got, want) {
 			t.Fatalf("turn %d: persisted binding %+v differs from the line's decision %+v", i+1, got, want)
 		}
 		onTurns, offTurns = append(onTurns, onTurn), append(offTurns, offTurn)
@@ -248,13 +248,13 @@ func TestShadowBindingKeepsTheProvenRepositoryAcrossANaturalFollowUp(t *testing.
 		{request: followUp("request_probe_nat_two", "And how many teams contribute to it?", nil), response: emptyProbeResponse()},
 	})
 	one, two := turns[0], turns[1]
-	if got := *one.saved.AnchorBinding; got.State != AnchorBindingBound || got.CanonicalID != probeAlpha.CanonicalID || got.Reason != AnchorBindingReasonIdentityProven {
+	if got := *bindingMember(one.saved); got.State != AnchorBindingBound || got.CanonicalID != probeAlpha.CanonicalID || got.Reason != AnchorBindingReasonIdentityProven {
 		t.Fatalf("turn one binding = %+v, want bound alpha on identity_proven", got)
 	}
 	if got := servedLedgerAnchor(two); !got.none() {
 		t.Fatalf("premise: the served follow-up ledger holds %+v; the reproduced seam drops the anchor", got)
 	}
-	binding := *two.saved.AnchorBinding
+	binding := *bindingMember(two.saved)
 	if binding.State != AnchorBindingBound || binding.CanonicalID != probeAlpha.CanonicalID || binding.Reason != AnchorBindingReasonCarriedSilent || binding.OriginResultID != one.result.ResultID {
 		t.Fatalf("follow-up binding = %+v, want alpha bound, carried_silent, origin %s", binding, one.result.ResultID)
 	}
@@ -278,7 +278,7 @@ func TestShadowBindingNeverBindsAnAliasThatWinsOnAFollowUp(t *testing.T) {
 	if got := servedLedgerAnchor(two); got.ID != probeBeta.CanonicalID {
 		t.Fatalf("premise: the served follow-up ledger holds %+v; the reproduced seam captures beta", got)
 	}
-	binding := *two.saved.AnchorBinding
+	binding := *bindingMember(two.saved)
 	want := AnchorBinding{
 		State: AnchorBindingContested, Kind: probeAlpha.Kind, CanonicalID: probeAlpha.CanonicalID,
 		Proof: AnchorBindingProofIdentityProven, Reason: AnchorBindingReasonContestedByResolution,
@@ -311,7 +311,7 @@ func TestShadowBindingKeepsWindowGatedProofAsPending(t *testing.T) {
 	if got := servedLedgerAnchor(one); !got.none() {
 		t.Fatalf("premise: the gated turn's served ledger holds %+v; the reproduced seam discards it", got)
 	}
-	pending := *one.saved.AnchorBinding
+	pending := *bindingMember(one.saved)
 	if pending.State != AnchorBindingPendingWindowConfirmation || pending.CanonicalID != probeAlpha.CanonicalID || pending.Proof != AnchorBindingProofIdentityProven {
 		t.Fatalf("gated binding = %+v, want alpha pending on identity proof", pending)
 	}
@@ -321,7 +321,7 @@ func TestShadowBindingKeepsWindowGatedProofAsPending(t *testing.T) {
 	if got := servedLedgerAnchor(two); !got.none() {
 		t.Fatalf("premise: the confirmation turn's served ledger holds %+v", got)
 	}
-	bound := *two.saved.AnchorBinding
+	bound := *bindingMember(two.saved)
 	if bound.State != AnchorBindingBound || bound.CanonicalID != probeAlpha.CanonicalID || bound.Reason != AnchorBindingReasonWindowConfirmed || bound.OriginResultID != one.result.ResultID {
 		t.Fatalf("confirmation binding = %+v, want alpha bound on window_confirmed from %s", bound, one.result.ResultID)
 	}
@@ -349,7 +349,7 @@ func TestShadowBindingHoldsOneAnchorWhenTheModelKindConflicts(t *testing.T) {
 	if line.ServedCount != string(CountPopulationScopeAnchorUnresolved) {
 		t.Fatalf("premise: served count decision = %q, want anchor_unresolved", line.ServedCount)
 	}
-	binding := *two.saved.AnchorBinding
+	binding := *bindingMember(two.saved)
 	if binding.State != AnchorBindingBound || binding.CanonicalID != probeAlpha.CanonicalID || binding.Kind != SubjectRepository || binding.Reason != AnchorBindingReasonCarriedReconfirmed {
 		t.Fatalf("binding = %+v, want alpha bound as a repository, carried_reconfirmed", binding)
 	}
@@ -687,7 +687,7 @@ func TestAnchorBindingShadowParityAtEverySaveSite(t *testing.T) {
 				if !SemanticStatesEqual(withoutBinding(on.states[i]), off.states[i]) {
 					t.Fatalf("save %d snapshot differs beyond the binding", i)
 				}
-				if off.states[i] != nil && off.states[i].AnchorBinding != nil {
+				if off.states[i] != nil && bindingMember(off.states[i]) != nil {
 					t.Fatalf("save %d: the shadow-off arm persisted a binding", i)
 				}
 			}
@@ -723,8 +723,8 @@ func TestAnchorBindingShadowParityAtEverySaveSite(t *testing.T) {
 					if last.Persisted != AnchorBindingStateAbsent {
 						t.Fatalf("a Save with no snapshot reported persisted=%s", last.Persisted)
 					}
-				} else if state.AnchorBinding == nil || !reflect.DeepEqual(*state.AnchorBinding, binding) || last.Persisted != AnchorBindingPersistence(SemanticStatePersisted) {
-					t.Fatalf("persisted binding %+v / persisted=%s, want the line's decision %+v persisted", state.AnchorBinding, last.Persisted, binding)
+				} else if bindingMember(state) == nil || !reflect.DeepEqual(*bindingMember(state), binding) || last.Persisted != AnchorBindingPersistence(SemanticStatePersisted) {
+					t.Fatalf("persisted binding %+v / persisted=%s, want the line's decision %+v persisted", bindingMember(state), last.Persisted, binding)
 				}
 			}
 			if err := ValidateAnchorBinding(binding); err != nil {

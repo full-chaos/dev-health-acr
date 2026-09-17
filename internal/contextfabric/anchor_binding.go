@@ -23,17 +23,20 @@ package contextfabric
 //   - A window gate keeps proof as pending. An identity-proven anchor an
 //     offers-only resolution found is recorded pending_window_confirmation,
 //     and becomes bound on the first later turn that passes the gate.
-//   - Additive persistence. The binding rides in the semantic snapshot under
-//     an omitempty key; a row without it reads back with no binding, a row
-//     whose binding fails validation keeps its reading and reports the binding
-//     invalid, and a binding that would make the snapshot unencodable is left
-//     out while the capture stays exactly what it was.
+//   - Additive persistence. The binding rides in the semantic snapshot as its
+//     "anchor_binding" extension member, decoded only here; a row without it
+//     reads back with no binding, a member that does not decode or validate
+//     reports the parent binding invalid while the reading stays available,
+//     and a binding that would make the snapshot unencodable is left out
+//     while the capture stays exactly what it was.
 //   - One line per decision. Every Save and every reuse serve emits exactly
 //     one transition line carrying the pre-entry state, the proposal, the
 //     decision with its reason, and the served decision it is compared to.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -626,20 +629,24 @@ func readAnchorBindingParent(ctx context.Context, request InvestigationRequest, 
 	if !ok || stored.SemanticStateRead != SemanticStateReadAvailable || stored.SemanticState == nil {
 		return anchorBindingParent{ResultID: parent, Status: AnchorBindingParentUnloadable}
 	}
-	return anchorBindingParentOf(parent, stored.SemanticState.AnchorBinding, epoch)
+	return anchorBindingParentOf(parent, stored.SemanticState, epoch)
 }
 
-func anchorBindingParentOf(parent string, binding *AnchorBinding, epoch int64) anchorBindingParent {
-	if binding == nil {
+func anchorBindingParentOf(parent string, state *PersistedSemanticState, epoch int64) anchorBindingParent {
+	binding, present, err := storedAnchorBinding(state)
+	switch {
+	case !present:
 		return anchorBindingParent{ResultID: parent, Status: AnchorBindingParentAbsent}
+	case err != nil:
+		return anchorBindingParent{ResultID: parent, Status: AnchorBindingParentInvalid, StoredEpoch: -1}
 	}
-	if ValidateAnchorBinding(*binding) != nil {
+	if ValidateAnchorBinding(binding) != nil {
 		return anchorBindingParent{ResultID: parent, Status: AnchorBindingParentInvalid, StoredEpoch: binding.GraphEpoch}
 	}
 	if binding.GraphEpoch != epoch {
 		return anchorBindingParent{ResultID: parent, Status: AnchorBindingParentStaleGraphEpoch, StoredEpoch: binding.GraphEpoch}
 	}
-	return anchorBindingParent{ResultID: parent, Status: AnchorBindingParentPresent, Binding: *binding, StoredEpoch: binding.GraphEpoch}
+	return anchorBindingParent{ResultID: parent, Status: AnchorBindingParentPresent, Binding: binding, StoredEpoch: binding.GraphEpoch}
 }
 
 // anchorBindingTracker collects, across one Investigate call, the inputs the
@@ -894,17 +901,66 @@ func (c semanticStateCapture) attachAnchorBinding(site BudgetAssertStage, result
 		event.Persisted = AnchorBindingStateAbsent
 		return c, &event
 	}
-	state := *c.Write.State
-	state.AnchorBinding = &binding
-	encoded, err := EncodeSemanticState(&state)
+	state, err := withAnchorBindingMember(c.Write.State, binding)
+	var encoded []byte
+	if err == nil {
+		encoded, err = EncodeSemanticState(state)
+	}
 	if err != nil {
 		event.Persisted = AnchorBindingUnencodable
 		return c, &event
 	}
 	out := c
-	out.Write = SemanticStateOf(&state)
+	out.Write = SemanticStateOf(state)
 	out.EncodedBytes = len(encoded)
 	return out, &event
+}
+
+// anchorBindingExtension is the snapshot extension member the binding is
+// stored under.
+const anchorBindingExtension = "anchor_binding"
+
+// withAnchorBindingMember returns a copy of state carrying binding as its
+// extension member; state itself is not modified.
+func withAnchorBindingMember(state *PersistedSemanticState, binding AnchorBinding) (*PersistedSemanticState, error) {
+	// encoding/json rewrites invalid UTF-8 silently, so the member would hold
+	// a different identity than the one decided: refused before encoding.
+	if path, ok := firstUnencodableString(anchorBindingExtension, binding); !ok {
+		return nil, fmt.Errorf("%w: %s is not valid UTF-8", ErrSemanticStateRejected, path)
+	}
+	raw, err := json.Marshal(binding)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrSemanticStateRejected, err)
+	}
+	out := *state
+	out.Extensions = make(SemanticStateExtensions, len(state.Extensions)+1)
+	for name, value := range state.Extensions {
+		out.Extensions[name] = value
+	}
+	out.Extensions[anchorBindingExtension] = raw
+	return &out, nil
+}
+
+// storedAnchorBinding reads the binding member of a stored snapshot: present
+// is false when the member is absent, and err is set when it does not decode
+// as exactly one binding with no unknown keys.
+func storedAnchorBinding(state *PersistedSemanticState) (binding AnchorBinding, present bool, err error) {
+	if state == nil {
+		return AnchorBinding{}, false, nil
+	}
+	raw, ok := state.Extensions[anchorBindingExtension]
+	if !ok {
+		return AnchorBinding{}, false, nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&binding); err != nil {
+		return AnchorBinding{}, true, err
+	}
+	if decoder.More() {
+		return AnchorBinding{}, true, errors.New("anchor binding member carries trailing data")
+	}
+	return binding, true, nil
 }
 
 // unrecordedAnchorBindingEvent is the line a Save emits when no tracker was

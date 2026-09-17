@@ -129,16 +129,12 @@ func anchorVocabularyScenarios() []anchorSiteScenario {
 		{name: "parent unloadable", run: anchorProbeScenario(anchorProbeStep{request: withMutate("request_vocab_unloadable", func(r *InvestigationRequest) {
 			r.ParentResultID = "result_vocab_missing"
 		}), response: emptyProbeResponse()})},
-		{name: "parent absent", run: anchorProbeScenario(first, follow("request_vocab_absent", mutateStoredBindings(func(s *PersistedSemanticState) { s.AnchorBinding = nil })))},
+		{name: "parent absent", run: anchorProbeScenario(first, follow("request_vocab_absent", mutateStoredBindings(func(s *PersistedSemanticState) { setBindingMember(s, nil) })))},
 		{name: "parent invalid", run: anchorProbeScenario(first, follow("request_vocab_invalid", mutateStoredBindings(func(s *PersistedSemanticState) {
-			if s.AnchorBinding != nil {
-				s.AnchorBinding.State = "unknown_state"
-			}
+			editBindingMember(s, func(b *AnchorBinding) { b.State = "unknown_state" })
 		})))},
 		{name: "parent stale epoch", run: anchorProbeScenario(first, follow("request_vocab_stale", mutateStoredBindings(func(s *PersistedSemanticState) {
-			if s.AnchorBinding != nil {
-				s.AnchorBinding.GraphEpoch = 5
-			}
+			editBindingMember(s, func(b *AnchorBinding) { b.GraphEpoch = 5 })
 		})))},
 		{name: "caller receipt", run: func(t *testing.T, sink EngineTelemetry, rec *recordingTelemetry, off bool) InvestigationResult {
 			h := newNeedTurnHarness(t, nil, func(d *EngineDependencies) {
@@ -168,17 +164,13 @@ func anchorVocabularyScenarios() []anchorSiteScenario {
 		}
 		reason := reason
 		scenarios = append(scenarios, anchorSiteScenario{name: "parent reason " + string(reason), run: anchorProbeScenario(first, follow("request_vocab_from_"+string(reason), mutateStoredBindings(func(s *PersistedSemanticState) {
-			if s.AnchorBinding != nil {
-				s.AnchorBinding.Reason = reason
-			}
+			editBindingMember(s, func(b *AnchorBinding) { b.Reason = reason })
 		})))})
 	}
 	for _, proof := range []AnchorBindingProof{AnchorBindingProofCallerReceipt, AnchorBindingProofCallerHint} {
 		proof := proof
 		scenarios = append(scenarios, anchorSiteScenario{name: "parent proof " + string(proof), run: anchorProbeScenario(first, follow("request_vocab_proof_"+string(proof), mutateStoredBindings(func(s *PersistedSemanticState) {
-			if s.AnchorBinding != nil {
-				s.AnchorBinding.Proof = proof
-			}
+			editBindingMember(s, func(b *AnchorBinding) { b.Proof = proof })
 		})))})
 	}
 	return scenarios

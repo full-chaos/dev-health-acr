@@ -20,6 +20,44 @@ var (
 
 // proofOf builds a resolution committing refs on basis, each a candidate
 // matched on the counting frame's anchor term.
+// bindingMember is the snapshot's decoded binding member, nil when it is
+// absent or does not decode.
+func bindingMember(state *PersistedSemanticState) *AnchorBinding {
+	binding, present, err := storedAnchorBinding(state)
+	if !present || err != nil {
+		return nil
+	}
+	return &binding
+}
+
+// setBindingMember writes binding as the snapshot's member, or removes the
+// member when binding is nil.
+func setBindingMember(state *PersistedSemanticState, binding *AnchorBinding) {
+	if binding == nil {
+		delete(state.Extensions, anchorBindingExtension)
+		if len(state.Extensions) == 0 {
+			state.Extensions = nil
+		}
+		return
+	}
+	raw, err := json.Marshal(binding)
+	if err != nil {
+		panic(err)
+	}
+	if state.Extensions == nil {
+		state.Extensions = SemanticStateExtensions{}
+	}
+	state.Extensions[anchorBindingExtension] = raw
+}
+
+// editBindingMember applies edit to the snapshot's member when it decodes.
+func editBindingMember(state *PersistedSemanticState, edit func(*AnchorBinding)) {
+	if binding := bindingMember(state); binding != nil {
+		edit(binding)
+		setBindingMember(state, binding)
+	}
+}
+
 func proofOf(basis CommitBasis, refs ...anchorRef) (SubjectResolution, CommitBasisSet) {
 	resolution := SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}}
 	bases := CommitBasisSet{}
@@ -321,7 +359,11 @@ func decodeWithBinding(t *testing.T, raw string) (*PersistedSemanticState, Seman
 		t.Fatalf("fixture defect: %v", err)
 	}
 	if raw != "" {
-		document["anchor_binding"] = json.RawMessage(raw)
+		extensions, err := json.Marshal(map[string]json.RawMessage{anchorBindingExtension: json.RawMessage(raw)})
+		if err != nil {
+			t.Fatalf("fixture defect: %v", err)
+		}
+		document["extensions"] = extensions
 	}
 	column, err := json.Marshal(document)
 	if err != nil {
@@ -343,24 +385,31 @@ func TestAnchorBindingReadDomain(t *testing.T) {
 		{"key absent", "", SemanticStateReadAvailable, AnchorBindingParentAbsent},
 		{"canonical", string(canonical), SemanticStateReadAvailable, AnchorBindingParentPresent},
 		{"state token outside this build's vocabulary", strings.Replace(string(canonical), `"bound"`, `"unknown_state"`, 1), SemanticStateReadAvailable, AnchorBindingParentInvalid},
-		{"empty object", `{}`, SemanticStateReadMalformed, ""},
-		{"null", `null`, SemanticStateReadMalformed, ""},
-		{"wrong container type", `[]`, SemanticStateReadMalformed, ""},
-		{"wrong scalar type", `"bound"`, SemanticStateReadMalformed, ""},
-		{"wrong field type", strings.Replace(string(canonical), `"graph_epoch":7`, `"graph_epoch":"7"`, 1), SemanticStateReadMalformed, ""},
-		{"fractional epoch", strings.Replace(string(canonical), `"graph_epoch":7`, `"graph_epoch":7.5`, 1), SemanticStateReadMalformed, ""},
-		{"unknown inner key", strings.Replace(string(canonical), `{`, `{"future_key":1,`, 1), SemanticStateReadMalformed, ""},
+		{"empty object", `{}`, SemanticStateReadAvailable, AnchorBindingParentInvalid},
+		{"null", `null`, SemanticStateReadAvailable, AnchorBindingParentInvalid},
+		{"wrong container type", `[]`, SemanticStateReadAvailable, AnchorBindingParentInvalid},
+		{"wrong scalar type", `"bound"`, SemanticStateReadAvailable, AnchorBindingParentInvalid},
+		{"wrong field type", strings.Replace(string(canonical), `"graph_epoch":7`, `"graph_epoch":"7"`, 1), SemanticStateReadAvailable, AnchorBindingParentInvalid},
+		{"fractional epoch", strings.Replace(string(canonical), `"graph_epoch":7`, `"graph_epoch":7.5`, 1), SemanticStateReadAvailable, AnchorBindingParentInvalid},
+		{"unknown inner key", strings.Replace(string(canonical), `{`, `{"future_key":1,`, 1), SemanticStateReadAvailable, AnchorBindingParentInvalid},
 		{"stale epoch", strings.Replace(string(canonical), `"graph_epoch":7`, `"graph_epoch":8`, 1), SemanticStateReadAvailable, AnchorBindingParentStaleGraphEpoch},
 	} {
 		state, status := decodeWithBinding(t, cell.raw)
 		var parent AnchorBindingParentStatus
 		if status == SemanticStateReadAvailable {
-			parent = anchorBindingParentOf("result_parent", state.AnchorBinding, 7).Status
+			parent = anchorBindingParentOf("result_parent", state, 7).Status
 		}
 		t.Logf("cell %-22s read=%s parent=%s", cell.name, status, parent)
 		if status != cell.wantRead || parent != cell.wantParent {
 			t.Errorf("cell %q: read=%s parent=%s, want read=%s parent=%s", cell.name, status, parent, cell.wantRead, cell.wantParent)
 		}
+	}
+	other := &PersistedSemanticState{Extensions: SemanticStateExtensions{"another_member": json.RawMessage(`{"state":"bound"}`)}}
+	if got := anchorBindingParentOf("result_parent", other, 7).Status; got != AnchorBindingParentAbsent {
+		t.Errorf("a snapshot carrying only another member: parent=%s, want absent", got)
+	}
+	if got := anchorBindingParentOf("result_parent", nil, 7).Status; got != AnchorBindingParentAbsent {
+		t.Errorf("no snapshot: parent=%s, want absent", got)
 	}
 }
 
@@ -383,7 +432,7 @@ func TestReadAnchorBindingParentNeverCallsTheStore(t *testing.T) {
 			FamilyVersion:   QuestionFamilyTableVersion,
 			RequestIdentity: SemanticRequestIdentityOf(validInvestigationRequest(), ""),
 		})
-		state.AnchorBinding = binding
+		setBindingMember(state, binding)
 		store.states[id] = state
 	}
 	ctx := withCarryResultCache(context.Background())
@@ -449,8 +498,8 @@ func TestAnAnchorBindingThatCannotEncodeLeavesTheCaptureUnchanged(t *testing.T) 
 	if event == nil || event.Persisted != AnchorBindingUnencodable {
 		t.Fatalf("event = %+v, want persisted=binding_unencodable", event)
 	}
-	if out.Write.State != state || out.EncodedBytes != len(encoded) || state.AnchorBinding != nil {
-		t.Fatalf("the capture changed: state=%p (want %p) bytes=%d (want %d) binding=%+v", out.Write.State, state, out.EncodedBytes, len(encoded), state.AnchorBinding)
+	if out.Write.State != state || out.EncodedBytes != len(encoded) || bindingMember(state) != nil {
+		t.Fatalf("the capture changed: state=%p (want %p) bytes=%d (want %d) binding=%+v", out.Write.State, state, out.EncodedBytes, len(encoded), bindingMember(state))
 	}
 	if event.To.CanonicalID != long {
 		t.Fatalf("the line lost the decision: %+v", event.To)
@@ -460,7 +509,7 @@ func TestAnAnchorBindingThatCannotEncodeLeavesTheCaptureUnchanged(t *testing.T) 
 	// the binding, and the source snapshot is not modified.
 	ordinary := &anchorBindingTracker{parent: anchorBindingParent{ResultID: "result_parent", Status: AnchorBindingParentPresent, Binding: contestedBinding(bindAlpha, bindBeta)}, evaluation: AnchorBindingEvaluationNotResolved, epoch: 7}
 	attached, smallEvent := capture.withAnchorShadow(ordinary).attachAnchorBinding(BudgetAssertDecisive, InvestigationResult{ResultID: "result_small"})
-	if smallEvent.Persisted != "" || attached.Write.State == nil || attached.Write.State.AnchorBinding == nil || state.AnchorBinding != nil || attached.EncodedBytes <= len(encoded) {
+	if smallEvent.Persisted != "" || attached.Write.State == nil || bindingMember(attached.Write.State) == nil || bindingMember(state) != nil || attached.EncodedBytes <= len(encoded) {
 		t.Fatalf("control: persisted=%q attached=%+v bytes=%d; the source snapshot must stay unmodified", smallEvent.Persisted, attached.Write.State, attached.EncodedBytes)
 	}
 

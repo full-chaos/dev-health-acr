@@ -42,7 +42,7 @@ func TestShadowBindingBindsARedeemedAnchorReceipt(t *testing.T) {
 	line := lines[1]
 	want := AnchorBinding{State: AnchorBindingBound, Kind: SubjectRepository, CanonicalID: "repository:need-r2", Proof: AnchorBindingProofCallerReceipt,
 		Reason: AnchorBindingReasonCallerReceipt, OriginResultID: two.result.ResultID}
-	if !reflect.DeepEqual(line.To, want) || two.saved == nil || two.saved.AnchorBinding == nil || !reflect.DeepEqual(*two.saved.AnchorBinding, want) {
+	if !reflect.DeepEqual(line.To, want) || two.saved == nil || bindingMember(two.saved) == nil || !reflect.DeepEqual(*bindingMember(two.saved), want) {
 		t.Fatalf("binding = %+v (persisted %+v), want %+v", line.To, two.saved, want)
 	}
 	if line.ReceiptAnchor != (anchorRef{Kind: SubjectRepository, ID: "repository:need-r2"}) || line.EffectiveKind != SubjectRepository {
@@ -344,7 +344,7 @@ func TestReadAnchorBindingParentRefusesASnapshotBesideAnUnavailableRead(t *testi
 		FamilyVersion:   QuestionFamilyTableVersion,
 		RequestIdentity: SemanticRequestIdentityOf(validInvestigationRequest(), ""),
 	})
-	state.AnchorBinding = &bound
+	setBindingMember(state, &bound)
 	store := brokenReadStore{&staticResultStore{results: map[string]InvestigationResult{"result_broken": validInvestigationResult()}, states: map[string]*PersistedSemanticState{"result_broken": state}}}
 	ctx := withCarryResultCache(context.Background())
 	stored, err := carryLoadResult(ctx, store, acceptancePrincipal(), "result_broken")
@@ -436,7 +436,9 @@ func TestAnchorBindingLineCarriesEveryEpochTheDecisionRead(t *testing.T) {
 	stale := heldBinding(AnchorBindingBound, bindAlpha)
 	stale.GraphEpoch = 5
 	resolution, bases := proofOf(CommitBasisAuthoritativeIdentity, bindBeta)
-	tracker := &anchorBindingTracker{parent: anchorBindingParentOf("result_bind_parent", &stale, 9), epoch: 9, frame: countingFrame(SubjectTeam)}
+	parentState := &PersistedSemanticState{}
+	setBindingMember(parentState, &stale)
+	tracker := &anchorBindingTracker{parent: anchorBindingParentOf("result_bind_parent", parentState, 9), epoch: 9, frame: countingFrame(SubjectTeam)}
 	tracker.observeResolution(AnchorBindingEvaluationResolved, resolution, bases)
 	result := InvestigationResult{ResultID: "result_epochs", SubjectResolution: SubjectResolution{Committed: resolution.Committed}}
 	to, line := tracker.decide(BudgetAssertDecisive, result, nil)

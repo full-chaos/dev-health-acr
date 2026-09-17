@@ -179,12 +179,6 @@ type PersistedSemanticState struct {
 	// Omitted when empty, bounded by the snapshot's encoded-size cap, and
 	// never part of the continuation comparison.
 	Extensions SemanticStateExtensions `json:"extensions,omitempty"`
-
-	// AnchorBinding is the shadow anchor binding (anchor_binding.go). ADDITIVE
-	// like ConfirmedNeeds: a row without the key reads back nil. Validated by
-	// its own reader, never by validateSemanticState, so a binding that fails
-	// validation leaves the rest of the reading available.
-	AnchorBinding *AnchorBinding `json:"anchor_binding,omitempty"`
 }
 
 // SemanticStateExtensions maps a member name to its raw JSON value.
