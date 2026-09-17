@@ -21,7 +21,7 @@ import (
 // fulltextSearchNodes, so it cannot itself live in that package).
 const codexRoundFalkordbImage = "falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3"
 
-func newCodexRoundLiveAdapter(t *testing.T, ctx context.Context) (*Adapter, string) {
+func newLiveFalkorAdapter(t *testing.T, ctx context.Context) (*Adapter, string) {
 	t.Helper()
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -58,7 +58,7 @@ func newCodexRoundLiveAdapter(t *testing.T, ctx context.Context) (*Adapter, stri
 // this predicate look like it worked even if it silently didn't).
 func TestLiveOrgIDPredicateExcludesNodesPlantedInSameGraphKeyAcrossReadPaths(t *testing.T) {
 	ctx := context.Background()
-	adapter, addr := newCodexRoundLiveAdapter(t, ctx)
+	adapter, addr := newLiveFalkorAdapter(t, ctx)
 	orgID := "live-org-predicate-" + time.Now().UTC().Format("20060102T150405.000000000")
 	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
 	key := graphKey(adapter.config.GraphPrefix, orgID)
@@ -100,7 +100,7 @@ func TestLiveOrgIDPredicateExcludesNodesPlantedInSameGraphKeyAcrossReadPaths(t *
 // happened to enumerate first, not the N most relevant ones.
 func TestLiveFulltextSearchOrdersByScoreServerSide(t *testing.T) {
 	ctx := context.Background()
-	adapter, _ := newCodexRoundLiveAdapter(t, ctx)
+	adapter, _ := newLiveFalkorAdapter(t, ctx)
 	orgID := "live-fulltext-order-" + time.Now().UTC().Format("20060102T150405.000000000")
 	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
 
@@ -157,7 +157,7 @@ func TestLiveFulltextSearchOrdersByScoreServerSide(t *testing.T) {
 // but never that RediSearch actually HONOURS it.
 func TestLiveFulltextSearchForKindFiltersServerSide(t *testing.T) {
 	ctx := context.Background()
-	adapter, _ := newCodexRoundLiveAdapter(t, ctx)
+	adapter, _ := newLiveFalkorAdapter(t, ctx)
 	orgID := "live-fulltext-kind-" + time.Now().UTC().Format("20060102T150405.000000000")
 	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
 

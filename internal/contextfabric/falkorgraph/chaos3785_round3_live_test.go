@@ -36,7 +36,7 @@ import (
 // a second migration.
 func TestLiveCanonicalEntityWriteClearsAStaleValidityWindow(t *testing.T) {
 	ctx := context.Background()
-	adapter, _ := newCodexRoundLiveAdapter(t, ctx)
+	adapter, _ := newLiveFalkorAdapter(t, ctx)
 	orgID := "live-r31-" + time.Now().UTC().Format("20060102T150405.000000000")
 	key := graphKey(adapter.config.GraphPrefix, orgID)
 	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
@@ -118,7 +118,7 @@ func TestLiveCanonicalEntityWriteClearsAStaleValidityWindow(t *testing.T) {
 // order.
 func TestLiveReferencedStubsCarryNoValidityWindowAtAll(t *testing.T) {
 	ctx := context.Background()
-	adapter, _ := newCodexRoundLiveAdapter(t, ctx)
+	adapter, _ := newLiveFalkorAdapter(t, ctx)
 	orgID := "live-f3-" + time.Now().UTC().Format("20060102T150405.000000000")
 	key := graphKey(adapter.config.GraphPrefix, orgID)
 	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })

@@ -609,13 +609,13 @@ func (a *Adapter) DiscoverContext(ctx context.Context, principal storage.Princip
 	// identical kind through the lexical arm would only duplicate work the
 	// census already does -- and, worse, a transient failure in that
 	// redundant fetch would abort a call the census alone could have
-	// completed. Moving the computation earlier changes nothing about its
-	// OWN value (it reads only request.Frame/ScopeAnchorResolved/
-	// Resolution.Committed, none of which any arm between here and the
-	// census's own admitted-branch below can affect) or about
-	// RecordCohortExactNameCensusGate's own emission point, which stays
-	// where cohortExactNameCensusEligibility's doc comment already
-	// documents it.
+	// completed. censusAdmitted depends only on request.Frame/
+	// ScopeAnchorResolved/Resolution.Committed -- inputs fixed before any
+	// retrieval arm runs and unaffected by anything between here and the
+	// census's own admitted-branch below -- so computing it at this point
+	// carries the identical value it would carry anywhere else in this
+	// call. RecordCohortExactNameCensusGate's own emission point stays
+	// where cohortExactNameCensusEligibility's doc comment documents it.
 	shapeAnchorEligible, censusBasis := cohortExactNameCensusEligibility(request.Frame, request.ScopeAnchorResolved)
 	censusAdmitted := shapeAnchorEligible && len(request.Resolution.Committed) == 0
 	var ownershipRoutedRepoSlug string
