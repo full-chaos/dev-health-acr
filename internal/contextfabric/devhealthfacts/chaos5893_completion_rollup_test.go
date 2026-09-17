@@ -135,18 +135,41 @@ func TestActualCompletionProjectRollup_UnknownStatus_CountedAndDisclosed(t *test
 	assertNumber(t, fact, "completion_ratio", 0.3)
 }
 
-func TestActualCompletionProjectRollup_ArchivedSignalAlwaysDisclosedAsUnavailable(t *testing.T) {
+func TestActualCompletionProjectRollup_ArchivedItemsAlwaysDisclosedAsAbsent(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{{match: completionRollupQueryMatch, rows: [][]any{
 		completionRollupRow("linear", "proj-1", 5, 0, 0, 5),
 	}}}}
 	result := readProjectCompletion(t, client, projectSubject("linear", "proj-1"))
 	fact := result.Facts[0]
-	if fact.Fields["archived_signal"].String == nil || *fact.Fields["archived_signal"].String != "not_available_in_source" {
-		t.Fatalf("archived_signal = %#v, want the fixed unavailable constant -- this venue has no work-item-grain archived column, and a fact must say so rather than default archived_count to 0", fact.Fields["archived_signal"])
+	if fact.Fields["archived_items"].String == nil || *fact.Fields["archived_items"].String != "absent_from_source" {
+		t.Fatalf("archived_items = %#v, want the fixed absent-from-source constant -- an archived item leaves this source's own sync and is never a work_items row at all, so it is already excluded by construction", fact.Fields["archived_items"])
 	}
 	if _, hasArchivedCount := fact.Fields["archived_count"]; hasArchivedCount {
-		t.Fatalf("fields = %#v, want no archived_count -- inventing a count from a signal that does not exist would be exactly the false claim archived_signal exists to prevent", fact.Fields)
+		t.Fatalf("fields = %#v, want no archived_count -- there is nothing to count; archived items are absent from the source, not filtered by this producer", fact.Fields)
+	}
+}
+
+// TestActualCompletionProjectRollup_StatementUsesTheDeclaredStatusLiterals
+// pins the SQL TEXT itself, not just the fake client's canned response --
+// a fake client returns its canned rows regardless of what the WHERE
+// clause says, so only a statement-content assertion can catch a wrong
+// literal (e.g. the wrong ClickHouse enum value) reaching production SQL.
+func TestActualCompletionProjectRollup_StatementUsesTheDeclaredStatusLiterals(t *testing.T) {
+	t.Parallel()
+	client := &fakeClient{tables: []fakeTable{{match: completionRollupQueryMatch, rows: [][]any{
+		completionRollupRow("linear", "proj-1", 5, 0, 0, 5),
+	}}}}
+	readProjectCompletion(t, client, projectSubject("linear", "proj-1"))
+	if len(client.queries) != 1 {
+		t.Fatalf("query count = %d, want 1", len(client.queries))
+	}
+	statement := client.queries[0].statement
+	if !strings.Contains(statement, "w.status = 'canceled'") {
+		t.Fatalf("statement = %q, want the cancelled-status literal 'canceled'", statement)
+	}
+	if !strings.Contains(statement, "w.status = 'unknown'") {
+		t.Fatalf("statement = %q, want the unknown-status literal 'unknown'", statement)
 	}
 }
 

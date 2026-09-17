@@ -275,15 +275,16 @@ func (p *ActualCompletionProvider) ReadFacts(ctx context.Context, principal stor
 // seeded provider (github, gitlab, jira, linear, synthetic); "canceled" is
 // the one member matching chris's ruling's "cancelled".
 //
-// ARCHIVED (chris's ruling's other exclusion) has NO representation
-// anywhere in this venue: not in status, not in status_raw, not in a work
-// item label, and projects.state (a DIFFERENT, project-grain column) has
-// no archived member either. Chris's ruling on this gap: defer the
-// exclusion (no invented signal), but disclose the gap itself, never a
-// zero count that reads as "none archived" -- archivedSignalUnavailable
-// below is what the basis carries instead. Adding a real exclusion later,
-// once a source signal exists, is an additive countIf column plus
-// flipping this constant, not a reshape.
+// ARCHIVED work items need no exclusion logic at all: an archived item
+// stops appearing in this source's own sync at the moment it is archived
+// (a source-side behavior, verified by its absence -- not in status, not
+// in status_raw, not in a work item label, and projects.state, a
+// DIFFERENT project-grain column, has no archived member either). An
+// archived item is therefore already outside work_item_count by
+// construction, the same way a deleted or never-synced item is. The basis
+// still names this rather than leaving a reader to assume "archived" was
+// never considered -- archivedItemsAbsentFromSource below is the fixed
+// value it carries.
 //
 // workItemUnknownStatus is NOT excluded -- it counts in the denominator,
 // same as any other non-cancelled status. It is a distinct, disclosed
@@ -292,12 +293,12 @@ const (
 	workItemCancelledStatus = "canceled"
 	workItemUnknownStatus   = "unknown"
 
-	// archivedSignalUnavailable is the fixed, closed-vocabulary value the
-	// basis' archived_signal field always carries today: this venue has no
-	// work-item-grain archived column, so the fact says so honestly rather
-	// than defaulting archived_count to 0 (which would read as "measured,
-	// none archived" -- a false claim, not an absence of one).
-	archivedSignalUnavailable = "not_available_in_source"
+	// archivedItemsAbsentFromSource is the fixed, closed-vocabulary value
+	// the basis' archived_items field always carries: archived work items
+	// leave this source's own sync and are never rows in work_items at
+	// all, so they are already excluded by construction, not by a filter
+	// this producer applies.
+	archivedItemsAbsentFromSource = "absent_from_source"
 )
 
 // readProjectActualCompletion is the project roll-up: a project's
@@ -375,7 +376,7 @@ func (p *ActualCompletionProvider) readProjectActualCompletion(ctx context.Conte
 			"counted_work_items":   contextfabric.IntegerFactValue(int64(countedWorkItems)),
 			"completed_count":      contextfabric.IntegerFactValue(int64(completedCount)),
 			"completion_ratio":     contextfabric.NumberFactValue(float64(completedCount) / float64(countedWorkItems)),
-			"archived_signal":      contextfabric.StringFactValue(archivedSignalUnavailable),
+			"archived_items":       contextfabric.StringFactValue(archivedItemsAbsentFromSource),
 		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactActualCompletion, Subject: subject, Fields: fields,

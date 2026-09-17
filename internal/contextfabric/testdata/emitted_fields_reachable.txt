@@ -55,7 +55,7 @@ FactActualCompletion
     calls not_a_call          11
     calls excluded_by_design  71
     calls leaked              8
-  fields             archived_signal cancelled_count completed completed_at completed_count completion_ratio counted_work_items member_kind rollup_basis unknown_status_count work_item_count
+  fields             archived_items cancelled_count completed completed_at completed_count completion_ratio counted_work_items member_kind rollup_basis unknown_status_count work_item_count
 
 FactBlockers
   reached_funcs      22
