@@ -169,8 +169,13 @@ def test_already_answered_empty_receipts_still_bare_reasks_unchanged():
     with a bare `{"question": ...}` re-ask, exactly as before."""
     row, calls = _run([_T1_REDEEMABLE_WINDOW, _T2_ALREADY_ANSWERED, _T3_TERMINAL_NO_MATCH])
     _require(len(calls) == 3, f"the bare re-ask for THIS cause must still happen: {calls}")
-    _require(calls[2] == {"question": "fixture question text"},
-              f"turn 3 must be a bare re-ask (no receipts survive an already-answered turn): {calls[2]}")
+    # CHAOS-5838: turn 3 (turn>=2) also carries the parent-result reference derived
+    # from turn 2's own result (r2, nothing committed) -- no receipts survive an
+    # already-answered turn, but the carry is independent of the receipt mechanism.
+    _require(calls[2] == {"question": "fixture question text",
+                           "parentResultId": "r2", "subjectHints": []},
+              f"turn 3 must be a bare re-ask plus the parent-result carry (no receipts "
+              f"survive an already-answered turn): {calls[2]}")
     _require(row["no_redeemable_offer_flag"] is False, row)
     _require(row["stop_reason"] is None, row)
     _require(row["chain"] == "t1=clarification_required -> t2=clarification_required -> t3=no_match", row)
@@ -186,8 +191,11 @@ def test_a_candidate_of_the_declared_kind_still_redeems_and_continues():
     })
     row, calls = _run([_T1_REDEEMABLE_WINDOW, t2, _T3_TERMINAL_NO_MATCH])
     _require(len(calls) == 3, calls)
+    # Same carry addition as the sibling test above, alongside the redeemed subject
+    # receipt (the two mechanisms are independent).
     _require(calls[2] == {"question": "fixture question text", "priorSubjectReceipts": [
-        {"result_id": "r2", "receipt_id": "c1"}]}, calls[2])
+        {"result_id": "r2", "receipt_id": "c1"}],
+        "parentResultId": "r2", "subjectHints": []}, calls[2])
     _require(row["no_redeemable_offer_flag"] is False, row)
 
 

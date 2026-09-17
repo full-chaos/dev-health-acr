@@ -104,6 +104,20 @@ MAX_ATTEMPTS_PER_TURN = 5
 SERVED_STATUSES = {"complete", "partial", "degraded", "answered"}
 TERMINAL_STATUSES = SERVED_STATUSES | {"no_match", "refused"}
 
+# CHAOS-5838: turn 2+ of a replicate's own chain mirrors the parent-result carry Ask
+# Dev's chat surface sends on a follow-up (`deriveParentReference`, ask-dev
+# src/lib/conversation.ts) -- otherwise this instrument never exercises acr's
+# ParentResultID-keyed confirmed-need ledger path, and every multi-turn row scores
+# miss_no_reference regardless of the engine. `CORPUS_HARNESS_LEGACY_NO_CARRY` unset
+# (default) sends the new shape; set to any non-empty value to revert to the old shape
+# (neither field sent), so the same acr sha can be run old-vs-new.
+LEGACY_NO_CARRY = bool(os.environ.get("CORPUS_HARNESS_LEGACY_NO_CARRY"))
+# Same literal ask-dev's conversation.ts stamps on every hint it derives -- a
+# caller-authored source, never one of acr's own engine-minted hintsource constants.
+PARENT_SUBJECT_HINT_SOURCE = "ask_dev_parent_result_subject"
+# Same bound as ask-dev's MAX_SUBJECT_HINTS_ON_WIRE / MAX_SUBJECT_HINTS.
+MAX_SUBJECT_HINTS_ON_WIRE = 50
+
 
 class MissingCorpusBase(RuntimeError):
     """CORPUS_BASE is unset. Refuse to start rather than default to a rig leg."""
@@ -325,6 +339,29 @@ def is_retryable(status, payload):
     return bool((payload or {}).get("failure", {}).get("retryable"))
 
 
+def derive_parent_reference(result):
+    """Mirrors ask-dev's `deriveParentReference` (src/lib/conversation.ts): the request
+    fields a follow-up turn carries so it can be told what turn it follows.
+
+    `result` is the response THIS turn just received -- the turn that is about to become
+    the previous one. `parentResultId` is that turn's own `result_id`; `subjectHints`
+    restates its `subject_resolution.committed` list, mapped kind/canonical_id/label
+    straight across with the caller-authored `source` every hint from this instrument
+    carries, capped at MAX_SUBJECT_HINTS_ON_WIRE. A result with nothing committed still
+    yields a defined `parentResultId` alongside an empty hints list -- itself a fact
+    worth sending, same as ask-dev's own producer.
+
+    Never called for the turn-1 request: there is no previous turn to name yet.
+    """
+    committed = ((result.get("subject_resolution") or {}).get("committed") or [])
+    subject_hints = [
+        {"kind": s.get("kind"), "id": s.get("canonical_id"), "label": s.get("label"),
+         "source": PARENT_SUBJECT_HINT_SOURCE}
+        for s in committed[:MAX_SUBJECT_HINTS_ON_WIRE]
+    ]
+    return {"parentResultId": result.get("result_id"), "subjectHints": subject_hints}
+
+
 def update_memory_and_build_receipts(prev_result, memory, want_kind, anchor_kind, warn):
     """Record every offer prev_result makes, then answer every need in its
     `missing` list for which memory (this turn's or an earlier turn's offer)
@@ -527,6 +564,12 @@ def run_replicate(qid, question, rep, warn=print):
             wrong_subject_flag = True
         if this_turn_mismatch:
             subject_kind_mismatch_flag = True
+        # This turn just COMPLETED with a real, non-terminal `result` -- it becomes the
+        # previous turn the NEXT request (if any) follows. Turn 1's own request above is
+        # never touched by this: parent_ref is computed from turn 1's result and applied
+        # only to turn 2's body, same "turn N>=2 carries it" shape as ask-dev's chat
+        # surface (a re-ask never carries a reference to itself).
+        parent_ref = {} if LEGACY_NO_CARRY else derive_parent_reference(result)
         if not receipts and turn > 1:
             if this_turn_wrong_kind or this_turn_wrong_subject:
                 # Every offer THIS turn failed one of the two redemption rules
@@ -556,9 +599,9 @@ def run_replicate(qid, question, rep, warn=print):
             # identical re-ask is itself a terminal data point (the engine
             # cannot get unstuck without the unmet need) and MAX_TURNS
             # bounds the cost.
-            body = {"question": question}
+            body = {"question": question, **parent_ref}
         else:
-            body = {"question": question, **receipts}
+            body = {"question": question, **receipts, **parent_ref}
 
     # final_payload_status is always the ENGINE's own terminal outcome, never
     # overwritten by the harness -- wrong_kind_flag/no_redeemable_offer_flag
