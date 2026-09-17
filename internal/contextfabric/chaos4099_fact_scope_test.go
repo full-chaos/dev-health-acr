@@ -547,13 +547,18 @@ func TestChaos4099_ADirectlySupportedSubjectEmitsNoEventAndNoGap(t *testing.T) {
 	}
 }
 
-// TestChaos4099_MixedDirectAndUnreachableSubjectsNarrowRatherThanGap pins
-// the boundary between the two mechanisms. When SOME root is directly
-// supported the capability RUNS, and CHAOS-3783's narrowing note is what
-// explains the dropped subjects -- expansion is not needed and must not
-// fire, because widening a requirement that already has a live answer would
-// change what the caller asked for.
-func TestChaos4099_MixedDirectAndUnreachableSubjectsNarrowRatherThanGap(t *testing.T) {
+// TestChaos4099_MixedDirectAndUnreachableSubjectsAlsoDecidesTheOtherRoot
+// pins the boundary between the two mechanisms: a root's own live direct
+// answer says nothing about whether a SEPARATE, unsupported root in the
+// same requirement was ever looked at. Conflating the two -- treating "the
+// capability runs" as proof that expansion is not needed for ANY root in
+// the requirement -- silently drops the unreachable root with no disclosed
+// gap at all, worse than a project-only request, which correctly gets one.
+// This pins the corrected boundary: the repository root still answers
+// directly (one query, the narrowing note), and the project root
+// independently gets its own expansion decision, unaffected by the
+// repository root's live answer.
+func TestChaos4099_MixedDirectAndUnreachableSubjectsAlsoDecidesTheOtherRoot(t *testing.T) {
 	t.Parallel()
 
 	registry, stubs := scopeRegistry(t)
@@ -563,13 +568,23 @@ func TestChaos4099_MixedDirectAndUnreachableSubjectsNarrowRatherThanGap(t *testi
 		t.Fatalf("ReadFacts: %v", err)
 	}
 	if len(stubs[FactMetrics].queries) != 1 {
-		t.Fatalf("metrics queried %d time(s), want 1 -- a mixed set still runs", len(stubs[FactMetrics].queries))
-	}
-	if len(bundle.Scope.Events) != 0 {
-		t.Fatalf("events = %+v, want none when the requirement is answerable directly", bundle.Scope.Events)
+		t.Fatalf("metrics queried %d time(s), want 1 -- the directly-supported root still runs", len(stubs[FactMetrics].queries))
 	}
 	if !strings.HasPrefix(bundle.Coverage.Sources[0].Reason, FactNarrowReasonSubjectKindUnsupported) {
-		t.Fatalf("reason = %q, want the narrowing note", bundle.Coverage.Sources[0].Reason)
+		t.Fatalf("reason = %q, want the narrowing note for the served repository answer", bundle.Coverage.Sources[0].Reason)
+	}
+	if len(bundle.Scope.Events) != 1 {
+		t.Fatalf("events = %+v, want exactly one -- the unsupported project root still gets its own expansion decision even though the repository root already answered", bundle.Scope.Events)
+	}
+	event := bundle.Scope.Events[0]
+	if event.OriginKind != SubjectProject {
+		t.Fatalf("origin = %q, want project -- the repository root needed no decision, it already answered directly", event.OriginKind)
+	}
+	if event.Policy != FactScopePolicyProjectWorkItemRepository {
+		t.Fatalf("policy = %q, want %q", event.Policy, FactScopePolicyProjectWorkItemRepository)
+	}
+	if event.Outcome != FactScopePolicyUnavailable {
+		t.Fatalf("outcome = %q, want policy_unavailable -- an enabled policy with no expander wired fails closed, same as every other policy in this table", event.Outcome)
 	}
 }
 

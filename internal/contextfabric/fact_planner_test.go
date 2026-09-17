@@ -465,6 +465,16 @@ func TestReadFactsPruningIsNotADegradation(t *testing.T) {
 // subjects it could not be asked about are still explained. Coverage source
 // names must be unique, so the narrowing has to ride on the capability's own
 // observation rather than getting an entry of its own.
+//
+// The narrowed-out team subject is not merely dropped, either (codex r1 P1,
+// CHAOS-5893 round): FactMetrics carries a REAL, enabled team-origin
+// expansion policy in the production scope table
+// (team_primary_attribution_repository_v1), so the resolver independently
+// decides that root too, unaffected by the repository root's own live
+// direct answer -- Coverage.Partial is true because a real, enabled policy
+// exists and could not run (fact_scope.go's Resolve decides every
+// unsupported root's own kind independently of any other root's direct
+// answer in the same requirement).
 func TestReadFactsNarrowsSubjectsAndSaysSo(t *testing.T) {
 	t.Parallel()
 
@@ -493,11 +503,18 @@ func TestReadFactsNarrowsSubjectsAndSaysSo(t *testing.T) {
 	if len(bundle.Coverage.Sources) != 1 {
 		t.Fatalf("coverage = %+v, want exactly one entry -- source names must stay unique", bundle.Coverage.Sources)
 	}
-	if !strings.HasPrefix(bundle.Coverage.Sources[0].Reason, FactNarrowReasonSubjectKindUnsupported) {
-		t.Fatalf("reason = %q, want the narrowing code recorded", bundle.Coverage.Sources[0].Reason)
+	reason := bundle.Coverage.Sources[0].Reason
+	if !strings.HasPrefix(reason, FactNarrowReasonSubjectKindUnsupported) {
+		t.Fatalf("reason = %q, want the narrowing code recorded first", reason)
 	}
-	if bundle.Coverage.Partial {
-		t.Fatal("Coverage.Partial = true, want false -- narrowing is not a gap either")
+	if !strings.Contains(reason, string(FactScopePolicyUnavailable)) {
+		t.Fatalf("reason = %q, want it to ALSO name the team root's own expansion decision, not just the narrowed repository answer", reason)
+	}
+	if !bundle.Coverage.Partial {
+		t.Fatal("Coverage.Partial = false, want true -- a real, enabled expansion policy exists for the narrowed-out team root and could not run (no expander wired); that is a genuine gap, not merely a narrowed answer")
+	}
+	if len(bundle.Scope.Events) != 1 || bundle.Scope.Events[0].OriginKind != SubjectTeam {
+		t.Fatalf("Scope.Events = %+v, want exactly one event for the team origin", bundle.Scope.Events)
 	}
 }
 
