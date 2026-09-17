@@ -180,6 +180,8 @@ func goVarName(e Event) string {
 		return "CountPopulationScope"
 	case WorkItemTupleAdmission.ID:
 		return "WorkItemTupleAdmission"
+	case FrameValidation.ID:
+		return "FrameValidation"
 	default:
 		panic("eventspec: goVarName has no mapping for " + e.ID + " -- add one before regenerating")
 	}

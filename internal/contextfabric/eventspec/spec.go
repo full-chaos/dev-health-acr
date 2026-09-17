@@ -13,7 +13,27 @@
 // are never hand-edited (regen_test.go pins that byte-for-byte).
 package eventspec
 
-import "github.com/full-chaos/dev-health-acr/internal/contextfabric"
+import (
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+)
+
+// tokenStrings converts one of this repository's many closed-vocabulary
+// arrays (a fixed-size array of a ~string type, exactly what every
+// contextfabric/contracts-v1 "XVocabulary() [N]X" accessor returns) into
+// this package's own ClosedVocabulary shape, in the array's own declared
+// order. It never retypes a vocabulary member -- every value still comes
+// from the ONE array the producer package declares -- so a member added
+// there reaches a field's ClosedVocabulary without a second, independently
+// typed list here. Mirrors contextfabric's own unexported tokenStrings,
+// which the producer side already uses for the same purpose.
+func tokenStrings[T ~string](values []T) []string {
+	out := make([]string, len(values))
+	for i, v := range values {
+		out[i] = string(v)
+	}
+	return out
+}
 
 //go:generate go run ./gen
 
@@ -2053,6 +2073,199 @@ var WorkItemTupleAdmission = Event{
 	},
 }
 
+// arrayTokens is tokenStrings' own counterpart for a "XVocabulary() [N]X"
+// accessor: those return an array BY VALUE, which Go will not let a caller
+// slice directly off the call result (unaddressable), so this copies it
+// into an addressable local first. Still the ONE canonical array in every
+// case -- copying is not retyping.
+func arrayTokens[T ~string](values []T) []string { return tokenStrings(values) }
+
+// The reusable vocabulary slices FrameValidation's own fields below share --
+// each one derived from the ONE canonical array its producer package
+// already declares, never retyped by hand here.
+var (
+	frameValidationOutcomeArr      = contextfabric.FrameValidationOutcomeVocabulary()
+	frameValidationOutcomeTokens   = arrayTokens(frameValidationOutcomeArr[:])
+	frameValidationPhaseArr        = contextfabric.FrameValidationPhaseVocabulary()
+	frameValidationPhaseTokens     = arrayTokens(frameValidationPhaseArr[:])
+	frameFailureDetailArr          = contextfabric.FrameFailureDetailVocabulary()
+	frameFailureDetailTokens       = arrayTokens(frameFailureDetailArr[:])
+	subjectExpressionKindArr       = contextfabric.SubjectExpressionKindVocabulary()
+	subjectExpressionKindTokens    = arrayTokens(subjectExpressionKindArr[:])
+	investigationGoalArr           = contextfabric.InvestigationGoalVocabulary()
+	investigationGoalTokens        = arrayTokens(investigationGoalArr[:])
+	cohortDiscoverabilityArr       = contextfabric.CohortDiscoverabilityVocabulary()
+	cohortDiscoverabilityTokens    = arrayTokens(cohortDiscoverabilityArr[:])
+	investigationShapeArr          = contractsv1.ContextFabricInvestigationShapeVocabulary()
+	investigationShapeTokens       = arrayTokens(investigationShapeArr[:])
+	groupAxisDecisionArr           = contextfabric.GroupAxisDecisionVocabulary()
+	groupAxisDecisionTokens        = arrayTokens(groupAxisDecisionArr[:])
+	frameRepairDecisionArr         = contextfabric.FrameRepairDecisionVocabulary()
+	frameRepairDecisionTokens      = arrayTokens(frameRepairDecisionArr[:])
+	frameRepairNameArr             = contextfabric.FrameRepairNameVocabulary()
+	frameRepairNameTokens          = arrayTokens(frameRepairNameArr[:])
+	frameRepairTermsMatchArr       = contextfabric.FrameRepairTermsMatchVocabulary()
+	frameRepairTermsMatchTokens    = arrayTokens(frameRepairTermsMatchArr[:])
+	contextFabricSubjectKindArr    = contractsv1.ContextFabricSubjectKindVocabulary()
+	contextFabricSubjectKindTokens = arrayTokens(contextFabricSubjectKindArr[:])
+	// The interpretation-boundary hint/slot kind fields (chaos5390_interpretation_boundary.go)
+	// render a subject-kind token through closedKindToken PLUS the boundary's
+	// own explicit absence tokens -- a hint slot (requested_*) can read
+	// "absent" (no hint stated) or "unrecognized" (sanitizer dropped it); a
+	// frame slot (proposed_*) can read "not_applicable" (the variant has no
+	// such slot) or "unset" (the slot exists and is empty), beside the same
+	// "unrecognized". Both add "unclassified" for a kind outside the
+	// published registry (closedKindToken's own fallback).
+	frameValidationRequestedHintKindTokens = append([]string{"absent", "unrecognized", "unclassified"}, contextFabricSubjectKindTokens...)
+	frameValidationProposedSlotKindTokens  = append([]string{"not_applicable", "unset", "unrecognized", "unclassified"}, contextFabricSubjectKindTokens...)
+)
+
+// frameInvariantTokens is the closed vocabulary of invariant identifiers,
+// in the SAME evaluation order contextfabric.FrameInvariantSpecs declares
+// (the order RecordFrameValidation's own "first failure in table order"
+// rule depends on) -- projected from that one registry rather than
+// retyped, so a twentieth invariant reaches this declaration without an
+// edit here.
+func frameInvariantTokens() []string {
+	specs := contextfabric.FrameInvariantSpecs()
+	out := make([]string, len(specs))
+	for i, spec := range specs {
+		out[i] = string(spec.ID)
+	}
+	return out
+}
+
+// FrameValidation (design §13.6) is the operator's only trace of how a
+// proposed frame was validated, repaired or refused: the outcome,
+// the failed invariant (first failure in table order), the bounded
+// repair's decision, the interpretation boundary (what the model's hints
+// requested versus what the frame proposed), and the requirement
+// derivation the validated frame produced. See
+// contextfabric.SlogEngineTelemetry.RecordFrameValidation's own doc
+// comment for why every field below -- including the ones a valid frame
+// leaves at its zero value -- reaches this line unconditionally.
+var FrameValidation = Event{
+	ID:                 "contextfabric.frame_validation",
+	Msg:                "context fabric frame validation",
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"org_id"},
+	BoundedAggregation: "at most one line per request: RecordFrameValidation fires once per frame that reaches validation (including a valid one), from validateProposedFrame, the one call site the model's interpretation attempt runs through; a request whose answer never reaches a fresh interpretation (a reuse hit, a request that never investigates) emits none.",
+	Fields: append([]Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: frameValidationOutcomeTokens},
+		// failed_invariant/failed_phase/failure_detail: empty on a valid or
+		// repaired-and-passing frame -- FrameValidationResult's own zero
+		// value, never omitted (clause 3's missing-vs-zero rule).
+		{Key: "failed_invariant", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, frameInvariantTokens()...)},
+		{Key: "failed_phase", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, frameValidationPhaseTokens...)},
+		{Key: "failure_detail", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, frameFailureDetailTokens...)},
+		// proposed_kind: the MODEL'S OWN proposal, before normalization --
+		// empty when the model emitted no recognised variant (kind_unset,
+		// or a kind outside the published registry).
+		{Key: "proposed_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, subjectExpressionKindTokens...)},
+		{Key: "proposed_goals", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: investigationGoalTokens},
+		// accepted_goals: the goal set the turn actually acts on -- an empty
+		// array on a refused frame, never a missing key.
+		{Key: "accepted_goals", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: investigationGoalTokens},
+		// accepted_judgment: OPEN. Composed from a small closed phrase table
+		// keyed on the accepted Goals (requestedJudgmentForGoals), joined
+		// with " and " when more than one goal contributes a phrase -- never
+		// model text, but not a single closed token either, the same reason
+		// `frame_gate` below is open rather than enumerated. "none" when no
+		// repair populated it (noneWhenEmpty).
+		{Key: "accepted_judgment", Type: FieldString, Presence: PresenceRequired},
+		{Key: "ordering_present", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "predicted_stripped_obligations", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: contextfabric.WorkItemTupleAdmissionStrippedObligationsVocabulary()},
+		{Key: "derived_obligation_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "widened_obligation_count", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "shape_diverged", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "emitted_shape", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, investigationShapeTokens...)},
+		{Key: "derived_shape", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, investigationShapeTokens...)},
+		// frame_version: Open, the same "expected to gain new values" reason
+		// CompletenessAuthority's own `version` field documents.
+		{Key: "frame_version", Type: FieldString, Presence: PresenceRequired},
+		{Key: "cohort_discoverability", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, cohortDiscoverabilityTokens...)},
+		// frame_gate: OPEN. FrameGate.Observable() renders a composite token
+		// -- "passed" / "not_proposed" / "not_evaluated" on their own, or
+		// "rejected:<failed_invariant>" / "refused:<refuse_basis>" carrying
+		// one of THOSE closed vocabularies embedded after the colon. The
+		// prefix is the declared, non-open half; enumerating every
+		// combination here would be the invariant/discoverability
+		// vocabularies restated a second time under a different key.
+		{Key: "frame_gate", Type: FieldString, Presence: PresenceRequired},
+		{Key: "refuse_basis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none"}, cohortDiscoverabilityTokens...)},
+		{Key: "requested_group_hint", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: frameValidationRequestedHintKindTokens},
+		{Key: "requested_member_hint", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: frameValidationRequestedHintKindTokens},
+		{Key: "proposed_group_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: frameValidationProposedSlotKindTokens},
+		{Key: "proposed_member_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: frameValidationProposedSlotKindTokens},
+		{Key: "group_axis", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"unset", "unclassified"}, groupAxisDecisionTokens...)},
+		{Key: "repair_decision", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"not_evaluated"}, frameRepairDecisionTokens...)},
+		{Key: "repair", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none"}, frameRepairNameTokens...)},
+		{Key: "repair_invariant", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none"}, frameInvariantTokens()...)},
+		{Key: "repair_kind_before", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none"}, subjectExpressionKindTokens...)},
+		{Key: "repair_kind_after", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none"}, subjectExpressionKindTokens...)},
+		{Key: "repair_member_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none", "unclassified"}, contextFabricSubjectKindTokens...)},
+		{Key: "repair_terms_match", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"not_evaluated"}, frameRepairTermsMatchTokens...)},
+		{Key: "repair_attempts", Type: FieldInt, Presence: PresenceRequired},
+		// repair_carry_scope_anchor_kind: the anchor kind a repaired
+		// proposal states for the downstream consumer a direct proposal of
+		// the same shape would have stated it for -- "none" when the
+		// repair did not run or carried nothing.
+		{Key: "repair_carry_scope_anchor_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none", "unclassified"}, contextFabricSubjectKindTokens...)},
+	},
+		append(frameValidationRequirementDerivationFields(),
+			Field{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+		)...,
+	),
+}
+
+// frameValidationRequirementDerivationFields declares requirementDerivationLogAttrs'
+// own tail, in its exact emission order: the static requirement-summary
+// fields, then one int field per member of each closed vocabulary the
+// derivation counts over -- matching that function's own per-vocabulary
+// loops so a member added to any of the six underlying vocabularies
+// reaches this declaration without an edit here.
+func frameValidationRequirementDerivationFields() []Field {
+	fields := []Field{
+		// requirement_derivation_version: Open, the derivation series
+		// identifier, matching CompletenessAuthority's own `version` field.
+		{Key: "requirement_derivation_version", Type: FieldString, Presence: PresenceRequired},
+		{Key: "requirement_cells_derived", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "requirement_cells_served", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "requirement_cells_unserved", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "requirement_accounting", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"ok", "violated"}},
+	}
+	for _, reason := range contextfabric.RequirementUnavailableReasonVocabulary() {
+		fields = append(fields, Field{Key: "requirement_unavailable_" + string(reason), Type: FieldInt, Presence: PresenceRequired})
+	}
+	fields = append(fields,
+		Field{Key: "requirement_computed_population_absent_not_a_population", Type: FieldInt, Presence: PresenceRequired},
+		Field{Key: "requirement_computed_population_absent_unresolvable_member_set", Type: FieldInt, Presence: PresenceRequired},
+		Field{Key: "requirement_computed_population_absent_non_computed_row", Type: FieldInt, Presence: PresenceRequired},
+	)
+	for _, kind := range contractsv1.ContextFabricFactKindVocabulary() {
+		fields = append(fields, Field{Key: "requirement_computed_input_kind_unplanned_" + string(kind), Type: FieldInt, Presence: PresenceRequired})
+	}
+	for _, quantifier := range contextfabric.CompletionQuantifierVocabulary() {
+		fields = append(fields, Field{Key: "requirement_quantifier_" + string(quantifier), Type: FieldInt, Presence: PresenceRequired})
+	}
+	for _, role := range contextfabric.SubjectRoleVocabulary() {
+		fields = append(fields, Field{Key: "requirement_role_" + string(role), Type: FieldInt, Presence: PresenceRequired})
+	}
+	fields = append(fields, Field{Key: "requirement_computed_rows_with_inputs", Type: FieldInt, Presence: PresenceRequired})
+	for _, class := range contextfabric.ComputedStepInputClassVocabulary() {
+		fields = append(fields, Field{Key: "requirement_computed_input_class_" + string(class), Type: FieldInt, Presence: PresenceRequired})
+	}
+	for _, kind := range contractsv1.ContextFabricFactKindVocabulary() {
+		fields = append(fields, Field{Key: "requirement_computed_input_kind_" + string(kind), Type: FieldInt, Presence: PresenceRequired})
+	}
+	for _, execution := range contextfabric.ComputedStepExecutionVocabulary() {
+		fields = append(fields, Field{Key: "requirement_computed_step_" + string(execution), Type: FieldInt, Presence: PresenceRequired})
+	}
+	return fields
+}
+
 var All = []Event{
 	AnswerDisplay,
 	RetainedRankingAccounting,
@@ -2082,6 +2295,7 @@ var All = []Event{
 	WorkItemReuse,
 	WorkItemStoredServing,
 	CountPopulationScope,
+	FrameValidation,
 }
 
 // CountPopulationScope (CHAOS-5775) is the Info line for whether a served

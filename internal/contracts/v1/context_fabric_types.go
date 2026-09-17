@@ -78,6 +78,35 @@ const (
 	ContextFabricShapeOpen             ContextFabricInvestigationShape = "open"
 )
 
+var contextFabricInvestigationShapes = [...]ContextFabricInvestigationShape{
+	ContextFabricShapeSingleSubject,
+	ContextFabricShapeExplicitCohort,
+	ContextFabricShapeDiscoveredCohort,
+	ContextFabricShapeOpen,
+}
+
+// ContextFabricInvestigationShapeCount is the closed vocabulary's size.
+const ContextFabricInvestigationShapeCount = len(contextFabricInvestigationShapes)
+
+// ContextFabricInvestigationShapeVocabulary returns the closed
+// investigation-shape vocabulary in published order, per
+// ContextFabricSubjectKindVocabulary's own precedent.
+func ContextFabricInvestigationShapeVocabulary() [ContextFabricInvestigationShapeCount]ContextFabricInvestigationShape {
+	return contextFabricInvestigationShapes
+}
+
+// ValidContextFabricInvestigationShape reports membership in the closed
+// vocabulary. The empty value is not a member, matching
+// ValidContextFabricSubjectKind's own rule.
+func ValidContextFabricInvestigationShape(value ContextFabricInvestigationShape) bool {
+	for _, member := range contextFabricInvestigationShapes {
+		if member == value {
+			return true
+		}
+	}
+	return false
+}
+
 type ContextFabricSubjectKind string
 
 const (

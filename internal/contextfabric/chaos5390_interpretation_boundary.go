@@ -63,12 +63,32 @@ const (
 	GroupAxisDroppedAtInterpretation GroupAxisDecision = "dropped_at_interpretation"
 )
 
-var canonicalGroupAxisDecisions = map[GroupAxisDecision]struct{}{
-	GroupAxisNotRequested:            {},
-	GroupAxisKept:                    {},
-	GroupAxisRefused:                 {},
-	GroupAxisDroppedAtInterpretation: {},
+// groupAxisDecisions is the closed vocabulary in declared order -- the ONE
+// list; canonicalGroupAxisDecisions (the membership map below) is built
+// from it rather than retyped, so the two cannot drift apart.
+var groupAxisDecisions = [...]GroupAxisDecision{
+	GroupAxisNotRequested,
+	GroupAxisKept,
+	GroupAxisRefused,
+	GroupAxisDroppedAtInterpretation,
 }
+
+// GroupAxisDecisionCount is the closed vocabulary's size.
+const GroupAxisDecisionCount = len(groupAxisDecisions)
+
+// GroupAxisDecisionVocabulary returns the closed vocabulary in declared
+// order.
+func GroupAxisDecisionVocabulary() [GroupAxisDecisionCount]GroupAxisDecision {
+	return groupAxisDecisions
+}
+
+var canonicalGroupAxisDecisions = func() map[GroupAxisDecision]struct{} {
+	set := make(map[GroupAxisDecision]struct{}, len(groupAxisDecisions))
+	for _, member := range groupAxisDecisions {
+		set[member] = struct{}{}
+	}
+	return set
+}()
 
 // ValidGroupAxisDecision reports membership in the closed vocabulary.
 func ValidGroupAxisDecision(value GroupAxisDecision) bool {

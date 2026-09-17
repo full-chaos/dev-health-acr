@@ -582,6 +582,883 @@
     ]
   },
   {
+    "id": "contextfabric.frame_validation",
+    "msg": "context fabric frame validation",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "org_id"
+    ],
+    "bounded_aggregation": "at most one line per request: RecordFrameValidation fires once per frame that reaches validation (including a valid one), from validateProposedFrame, the one call site the model's interpretation attempt runs through; a request whose answer never reaches a fresh interpretation (a reuse hit, a request that never investigates) emits none.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "valid",
+          "repaired",
+          "refused_invalid",
+          "refused_kind_change"
+        ]
+      },
+      {
+        "key": "failed_invariant",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "i1",
+          "i17",
+          "i2",
+          "i3",
+          "i19",
+          "i4",
+          "i5",
+          "i6",
+          "i7",
+          "i8",
+          "i9",
+          "i15",
+          "i10",
+          "i14",
+          "i18",
+          "i16",
+          "i11",
+          "i12",
+          "i13"
+        ]
+      },
+      {
+        "key": "failed_phase",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "a1",
+          "a2",
+          "b",
+          "c"
+        ]
+      },
+      {
+        "key": "failure_detail",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "no_variant_set",
+          "multiple_variants_set",
+          "variant_disagrees_with_kind",
+          "kind_unset",
+          "too_few_operands",
+          "no_terms",
+          "blank_term",
+          "no_anchor_terms",
+          "member_kind_unset",
+          "member_kind_invalid",
+          "member_qualifier_invalid",
+          "group_kind_unset",
+          "group_kind_invalid",
+          "group_kind_equals_member_kind",
+          "requested_group_axis_not_expressed",
+          "compare_requires_explicit_set",
+          "trend_requires_non_current_temporal",
+          "count_requires_set_valued_kind",
+          "org_count_requires_member_kind",
+          "goal_set_empty",
+          "goal_outside_vocabulary",
+          "obligation_set_empty",
+          "obligation_outside_vocabulary",
+          "emphasis_requires_ranking_obligation",
+          "axis_undischarged",
+          "operand_kind_unset",
+          "operand_no_variant_set",
+          "operand_multiple_variants_set",
+          "operand_disagrees_with_kind",
+          "operand_no_terms",
+          "operand_no_anchor_terms",
+          "operand_member_kind_invalid",
+          "operand_member_qualifier_invalid"
+        ]
+      },
+      {
+        "key": "proposed_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "named_subject",
+          "explicit_set",
+          "discovered_kind",
+          "children_of_scope",
+          "grouped_members",
+          "organization_scope"
+        ]
+      },
+      {
+        "key": "proposed_goals",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "assess_state",
+          "explain_drivers",
+          "compare",
+          "rank_or_survey",
+          "describe_trend",
+          "explain_change",
+          "allocate_investment",
+          "count_or_aggregate"
+        ]
+      },
+      {
+        "key": "accepted_goals",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "assess_state",
+          "explain_drivers",
+          "compare",
+          "rank_or_survey",
+          "describe_trend",
+          "explain_change",
+          "allocate_investment",
+          "count_or_aggregate"
+        ]
+      },
+      {
+        "key": "accepted_judgment",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "ordering_present",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "predicted_stripped_obligations",
+        "type": "string_slice",
+        "presence": "required",
+        "closed_vocabulary": [
+          "state",
+          "completion",
+          "readiness",
+          "health",
+          "principal_drivers",
+          "ranking",
+          "remaining_work",
+          "evidence",
+          "coverage",
+          "count",
+          "allocation_breakdown",
+          "trend_series",
+          "period_delta"
+        ]
+      },
+      {
+        "key": "derived_obligation_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "widened_obligation_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "shape_diverged",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "emitted_shape",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "single_subject",
+          "explicit_cohort",
+          "discovered_cohort",
+          "open"
+        ]
+      },
+      {
+        "key": "derived_shape",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "single_subject",
+          "explicit_cohort",
+          "discovered_cohort",
+          "open"
+        ]
+      },
+      {
+        "key": "frame_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "cohort_discoverability",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "discoverable",
+          "not_a_cohort_variant",
+          "no_member_kind",
+          "member_kind_unservable"
+        ]
+      },
+      {
+        "key": "frame_gate",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "refuse_basis",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "discoverable",
+          "not_a_cohort_variant",
+          "no_member_kind",
+          "member_kind_unservable"
+        ]
+      },
+      {
+        "key": "requested_group_hint",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "absent",
+          "unrecognized",
+          "unclassified",
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "requested_member_hint",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "absent",
+          "unrecognized",
+          "unclassified",
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "proposed_group_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_applicable",
+          "unset",
+          "unrecognized",
+          "unclassified",
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "proposed_member_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_applicable",
+          "unset",
+          "unrecognized",
+          "unclassified",
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "group_axis",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "unset",
+          "unclassified",
+          "not_requested",
+          "kept",
+          "refused",
+          "dropped_at_interpretation"
+        ]
+      },
+      {
+        "key": "repair_decision",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_evaluated",
+          "not_applicable",
+          "applied",
+          "refused_after_repair",
+          "declined_not_named_subject",
+          "declined_hint_absent",
+          "declined_hint_unrecognized",
+          "declined_hint_is_subject_kind",
+          "declined_terms_diverge",
+          "declined_hint_unservable",
+          "declined_bound_reached",
+          "declined_not_grouped_cohort"
+        ]
+      },
+      {
+        "key": "repair",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "count_kind_collapse",
+          "compare_grouped_collapse"
+        ]
+      },
+      {
+        "key": "repair_invariant",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "i1",
+          "i17",
+          "i2",
+          "i3",
+          "i19",
+          "i4",
+          "i5",
+          "i6",
+          "i7",
+          "i8",
+          "i9",
+          "i15",
+          "i10",
+          "i14",
+          "i18",
+          "i16",
+          "i11",
+          "i12",
+          "i13"
+        ]
+      },
+      {
+        "key": "repair_kind_before",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "named_subject",
+          "explicit_set",
+          "discovered_kind",
+          "children_of_scope",
+          "grouped_members",
+          "organization_scope"
+        ]
+      },
+      {
+        "key": "repair_kind_after",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "named_subject",
+          "explicit_set",
+          "discovered_kind",
+          "children_of_scope",
+          "grouped_members",
+          "organization_scope"
+        ]
+      },
+      {
+        "key": "repair_member_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "unclassified",
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "repair_terms_match",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_evaluated",
+          "match",
+          "diverge"
+        ]
+      },
+      {
+        "key": "repair_attempts",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "repair_carry_scope_anchor_kind",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "unclassified",
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
+      },
+      {
+        "key": "requirement_derivation_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_cells_derived",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_cells_served",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_cells_unserved",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_accounting",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "ok",
+          "violated"
+        ]
+      },
+      {
+        "key": "requirement_unavailable_subject_kind_unsupported",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_unavailable_no_declaring_producer",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_unavailable_table_shape_undeclared",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_unavailable_computed_population_absent",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_population_absent_not_a_population",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_population_absent_unresolvable_member_set",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_population_absent_non_computed_row",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_unplanned_identity",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_unplanned_membership",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_unplanned_status",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_unplanned_actual_completion",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_unplanned_work",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_unplanned_blockers",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_unplanned_required_children",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_unplanned_pull_requests",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_unplanned_reviews",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_unplanned_continuous_integration",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_unplanned_deployments",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_unplanned_incidents",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_unplanned_metrics",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_unplanned_health",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_unplanned_workload",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_unplanned_investment",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_unplanned_readiness",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_unplanned_operational_deficiencies",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_unplanned_source_health",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_unplanned_evidence",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_unplanned_flow",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_unplanned_landscape",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_quantifier_at_least_one",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_quantifier_corroborated",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_quantifier_exact",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_quantifier_all",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_quantifier_none",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_role_subject",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_role_member",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_role_group",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_role_operand",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_rows_with_inputs",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_class_fact_kinds",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_class_resolved_member_set",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_identity",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_membership",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_status",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_actual_completion",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_work",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_blockers",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_required_children",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_pull_requests",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_reviews",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_continuous_integration",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_deployments",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_incidents",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_metrics",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_health",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_workload",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_investment",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_readiness",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_operational_deficiencies",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_source_health",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_evidence",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_flow",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_input_kind_landscape",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_step_server_executed",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "requirement_computed_step_declared_only",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.requirement_outcome_transition",
     "msg": "context fabric requirement outcome transition",
     "level": "info",
